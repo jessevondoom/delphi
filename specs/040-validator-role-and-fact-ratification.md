@@ -1,6 +1,6 @@
 ---
 id: spec-040-validator-role-and-fact-ratification
-title: "040: The Validator Role (Horkos) & Fact Ratification"
+title: "040: The Validator Role & Fact Ratification"
 author: architect
 timestamp: 2026-10-26T12:00:00Z
 status: approved   # approved 2026-10-28 by the operator ("merge and approve all, follow the rest of your recommendations. approve and improve the validator"); V1 may be built as scoped in §23; V2 and any scoring claim wait for the operator-labelled set (§23.4)
@@ -9,10 +9,10 @@ review_rubric: "REVIEW.md"
 source_type: internal_generated
 confidence: low   # the significance rule (§5) and the source classes (§6) are untested guesses
 source_mission: 2026-10-26-validator
-tags: [spec, validator, horkos, fact-checking, provenance, ratification, skills]
+tags: [spec, validator, fact-checking, provenance, ratification, skills]
 ---
 
-# Spec 040: The Validator Role (Horkos) & Fact Ratification
+# Spec 040: The Validator Role & Fact Ratification
 
 > **Revision 2** after review (§14). Changes from the first draft: facts are stamped **L3 "web-corroborated"** by default, with no hidden exception to `specs/001` §5.1 (§7); origin keys, the contradiction search and the fetch are done by the daemon, not the model (§6.2, §7.2); a second-model entailment judge replaces the substring-only check (§7.2); slices reordered so the skill ships first (§11); Council seat is opt-in only (§3); several items deferred (§11.1).
 
@@ -26,7 +26,7 @@ The operator asked for a role that sits **equally between the strategist and the
 Add only the skill and let the Scout or Investigator run it (`primary-source-verification` already exists for the Investigator). That gives checking but no standing role, no peer voice in Council, no record and no path into the knowledge base, and the model that wrote a claim would still be the one judging it. The skill alone is the fallback if the Council rejects the role (§13, Q1).
 
 ## 2. Charter
-Canonical role ID **`validator`**. Greek default theme name **Horkos** (§10).
+Canonical role ID **`validator`**. The Greek default theme name and its rationale are in `themes/greek/theme.md` (§10).
 
 1. **Verify.** For a claim from inbound reading (a Scout note, a fetched page, a lesson proposal, another agent's output), find independent corroboration and report a verdict (§4).
 2. **Disprove.** Mark claims that no source supports, or that a source contradicts, as `refuted` or `unsupported`, and say which agent's text carried them. A hallucination caught is a finding, not an embarrassment to smooth over.
@@ -233,12 +233,12 @@ Personal, reputational or legal claims about a living person (a song's writer is
 An approval card (`specs/005`, relayable under `specs/014`): the claim, the verdict, the sources with quotes, the one recommended action and a one-keystroke ratify or reject. A pending card sits in `delphi needs`. The operator ratifying a fact this way is L5, as for any proposal.
 
 ## 10. Theme Entry
-Role ID `validator`; Greek default **Horkos** (Ὅρκος), the personified Oath, a child of Eris who punishes perjury (Hesiod, *Theogony* 231–232; *Works and Days* 219, 803–804). The figure is the right one: the one who binds a speaker to what they swore and punishes the false oath.
+Role ID `validator`; the Greek default is the personified Oath (Ὅρκος), a child of Eris who punishes perjury (Hesiod, *Theogony* 231–232; *Works and Days* 219, 803–804). The figure is the right one: the one who binds a speaker to what they swore and punishes the false oath. Built in V1a: the entry is in `themes/greek/theme.md`, where theme names live (the canonical-names lint, REV-ARCH-05, forbids them elsewhere).
 
 ```yaml
-  validator:     { name: "Horkos",     epithet: "keeper of the oath",       persona: "You are Horkos: you bind every claim to its proof. You say what you can show, name what you cannot, and never swear to what you have not checked." }
+  validator:     { name: "<theme name>", epithet: "keeper of the oath", persona: "<one voice line: bind every claim to its proof; say what can be shown, name what cannot>" }   # the shipped text is in themes/greek/theme.md
 ```
-**Mythic echo of the blind spot:** Horkos is an *enforcer* with no mercy for the near-true; the counterweight is the explicit `partial` / `needs_operator` outcomes, so doubt has somewhere honest to go.
+**Mythic echo of the blind spot:** The Oath is an *enforcer* with no mercy for the near-true; the counterweight is the explicit `partial` / `needs_operator` outcomes, so doubt has somewhere honest to go.
 
 Adding the role bumps `theme_schema` (the schema requires exactly the canonical roles, `specs/001` §6.2, the same prerequisite `specs/013` §8 already notes for the librarian). Both new roles should land in one bump.
 
@@ -248,7 +248,7 @@ Reordered after review: value first, the unproven guesses tested early, the role
 | :-- | :-- |
 | **V1** | `fact-validation` skill, **advisory**: verdict + mission record + escalation to the operator, run by the orchestrator or Scout; the labelled claim set (true, false, unverifiable, commonly misremembered) and the "One" and poisoned-page fixtures. Tests the significance rule and the source classes before any machinery exists. |
 | **V2** | Minimal ratification: `ratify_fact`, `daemon-fetch` with snapshots, `delphi check fact` (origin derivation, independence, entailment judge, daemon-run contradiction search), `context/facts/**` pathguard zone, frontmatter extension, `provenance.stamp`, per-mission caps; stamped L3 `web_corroborated`. |
-| **V3** | Role: `validator` in `ROLES`, manifest, lint rules, `specs/001` §5/§6 and GOVERNANCE §2 updates, **theme_schema bump together with the librarian** (the validator is the eleventh role if the librarian lands first), Horkos entry. |
+| **V3** | Role: `validator` in `ROLES`, manifest, lint rules, `specs/001` §5/§6 and GOVERNANCE §2 updates, **theme_schema bump together with the librarian** (the validator is the eleventh role if the librarian lands first), Greek theme entry. |
 | **V4** | Opt-in Council seat with the wiring in §3. Only after V1 evidence. |
 | **V5** | Only if used: TTL re-check, digest, `delphi facts` commands, source-class config surface, D-1 if accepted. |
 

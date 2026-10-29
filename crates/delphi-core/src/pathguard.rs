@@ -104,7 +104,7 @@ fn is_ratified_kind(key: &str) -> bool {
 }
 
 /// Logical paths no agent may read (§2.2 + 001-A1): event log, Council barrier, daemon state,
-/// the error log (`logs/`, `specs/039`: it holds hostile text echoed from tools and stores), staged proposals, ratification and provenance state, other roles' memory, the operator home.
+/// the error log (`logs/`, `specs/039`: it holds hostile text echoed from tools and stores), ratified facts (`context/facts/`, reached only through the knowledge-base tool, `specs/040` §15.2), staged proposals, ratification and provenance state, other roles' memory, the operator home.
 fn never_readable(key: &str, role: &str) -> Option<String> {
     // `missions/<id>/events…` is the whole segmented log: segments, rotation files and the writer lock.
     if key.ends_with("events.jsonl") || key.starts_with("missions/") && segments(key).nth(2) == Some("events") {
@@ -113,7 +113,7 @@ fn never_readable(key: &str, role: &str) -> Option<String> {
     if segments(key).any(|s| s == ".barrier") {
         return Some("Council barrier".into());
     }
-    for p in ["run/", "state.db", "local/", "proposals/", "operator/", "ratified", "provenance", "memory/operator/", "config.toml", "logs/"] {
+    for p in ["run/", "state.db", "local/", "proposals/", "operator/", "ratified", "provenance", "memory/operator/", "config.toml", "logs/", "context/facts/"] {
         if key.starts_with(p) {
             return Some(p.trim_end_matches('/').into());
         }
@@ -552,6 +552,14 @@ mod tests {
             assert!(never_readable(k, "builder").is_some() && never_writable(k).is_some(), "{}", k);
         }
         assert!(never_readable("missions/m1/notes/events-plan.md", "builder").is_none());
+    }
+
+    #[test]
+    fn ratified_facts_are_never_read_or_written_directly() {
+        for role in ["validator", "scout", "orchestrator"] {
+            assert!(never_readable("context/facts/x.md", role).is_some() && never_writable("context/facts/x.md").is_some());
+        }
+        assert!(never_readable("context/domains/x.md", "scout").is_none());
     }
 
     use super::*;
