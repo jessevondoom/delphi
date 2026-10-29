@@ -1,0 +1,20 @@
+
+ sources  claims   ctrl+l switch
+────────────────────────────────────────────────────────────────────────────────
+ › ● The sky is blue because of Rayleigh scattering            validated    2 d
+   ✕ Water boils at 90C                                        disproved    8 w
+   ○ A new note                                                noted      today
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ↑ ↓ pick · enter open · r reload · esc back · 3 claims
