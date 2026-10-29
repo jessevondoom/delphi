@@ -409,7 +409,7 @@ impl Engine {
     /// Run the whole span in the subscription CLI.
     pub(crate) async fn run_harness(self: &Arc<Self>, sc: &mut SpanCtx, ipr: &Ipr, ep: &Endpoint) -> Result<Result<String, HarnessErr>, EngineError> {
         let Some(cli) = ep.harness.as_deref().and_then(Cli::from_harness) else {
-            return Ok(Err(HarnessErr::retry(format!("the `{}` harness is not implemented (only `claude` and `agy`)", ep.harness.as_deref().unwrap_or("?")))));
+            return Ok(Err(HarnessErr::retry(format!("the `{}` harness is not implemented (only `claude`, `agy` and `codex`)", ep.harness.as_deref().unwrap_or("?")))));
         };
         let Some(model) = self.cfg.get().resolve_model(ep, &sc.tier) else { return Ok(Err(HarnessErr::retry(format!("endpoint `{}` has no model for the `{}` tier", ep.id, sc.tier)))) };
         let wt: Option<Worktree> = self.exec.known_worktree(&sc.task_id);
@@ -418,6 +418,16 @@ impl Engine {
             Cli::Claude => {
                 if sc.span.ceiling() <= Tier::L1 {
                     return Ok(Err(HarnessErr::retry("launch refused: this span's inputs are untrusted (taint L1 or lower), and a harness runs its own loop")));
+                }
+            }
+            Cli::Codex => {
+                // Until the approval bridge over `app-server` is proven (`specs/047` S2, OD-1) a Codex seat is a reader.
+                if builder {
+                    return Ok(Err(HarnessErr::retry("the codex harness cannot run a Builder yet: its approvals are not bridged (specs/047 S2); it serves read-only roles")));
+                }
+                // Its own tools cannot be turned off and nothing here judges them, so what it returns is not vouched for.
+                if sc.span.observe_input(Tier::L0) {
+                    sc.m.append(sc.ev("span.taint", json!({"ceiling": sc.span.ceiling().as_str(), "cause": "codex harness: its tools are not gated by Delphi"}))).await?;
                 }
             }
             Cli::Agy => {
@@ -457,9 +467,17 @@ impl Engine {
                 (d, Tools::None)
             }
         };
-        let program = if cli == Cli::Agy { self.settings.agy_program.clone() } else { self.settings.harness_program.clone() };
+        let program = match cli {
+            Cli::Agy => self.settings.agy_program.clone(),
+            Cli::Codex => self.settings.codex_program.clone(),
+            Cli::Claude => self.settings.harness_program.clone(),
+        };
         // An endpoint whose credential is a key source runs the CLI on that key instead of the operator's login.
-        let mut opts = if cli == Cli::Agy { self.settings.harness_agy.clone() } else { self.settings.harness_claude.clone() };
+        let mut opts = match cli {
+            Cli::Agy => self.settings.harness_agy.clone(),
+            Cli::Codex => self.settings.harness_codex.clone(),
+            Cli::Claude => self.settings.harness_claude.clone(),
+        };
         if ep.credential != "harness-login" {
             if cli == Cli::Agy {
                 return Ok(Err(HarnessErr::retry(format!("endpoint `{}`: the agy harness has no API-key mode; use a `path = \"api\"` Gemini endpoint for a key", ep.id))));
@@ -488,12 +506,13 @@ impl Engine {
         let streamed = opts.partial_messages && cli == Cli::Claude;
         let persist = opts.session != SessionMode::Ephemeral;
         // `[harness.<cli>]` (ratified): how this CLI is equipped and who answers its permission questions (`specs/020`).
-        let profile: HarnessProfile = self.cfg.get().harness.get(if cli == Cli::Agy { "agy" } else { "claude" }).cloned().unwrap_or_default();
+        let profile: HarnessProfile = self.cfg.get().harness.get(cli.program()).cloned().unwrap_or_default();
         let delegate = cli == Cli::Claude && !builder && profile.approvals == ApprovalSource::Delegate;
         // Delphi's tools for this role, offered over the bridge: to the Claude CLI as an MCP config, to the Antigravity CLI
         // as a plugin in the span's own `.agents/` with a hook that gates its other tools (`specs/020` §8). A Builder keeps
         // the Claude CLI's own file and shell tools (every request still answered here), so those Delphi tools are not duplicated.
-        let mut bridge_defs: Vec<ToolDef> = if profile.bridge { self.span_tool_defs(sc).await? } else { vec![] };
+        // A Codex seat has no bridge yet (`specs/047` S2).
+        let mut bridge_defs: Vec<ToolDef> = if profile.bridge && cli != Cli::Codex { self.span_tool_defs(sc).await? } else { vec![] };
         if builder {
             // An agy Builder keeps Delphi's `run_command`: its own shell cannot be approved when it runs headless.
             bridge_defs.retain(|d| !DUPLICATED_FOR_BUILDERS.contains(&d.name.as_str()) || (cli == Cli::Agy && d.name == "run_command"));
@@ -503,7 +522,7 @@ impl Engine {
         let expect_servers: Vec<String> = self.inventory.seats().into_iter().find(|r| r.endpoint_id == ep.id).map(|r| r.mcp_servers.into_iter().filter(|(n, st)| n != crate::bridge::SERVER_NAME && st == "connected").map(|(n, _)| n).collect()).unwrap_or_default();
         // The CLI's own tools the span may use: for the Claude CLI they are given with `--tools`; for `agy` they are what its gate lets through.
         let agy_native = if cli == Cli::Agy { agy_native_tools(&profile.native_tools) } else { vec![] };
-        let mut lp = LaunchProfile { native_tools: if builder || cli == Cli::Agy { vec![] } else { profile.native_tools.clone() }, auto_approve: delegate, claudeai_connectors: connectors, mcp_config: None, settle: self.settings.connector_settle, expect_servers };
+        let mut lp = LaunchProfile { native_tools: if builder || cli != Cli::Claude { vec![] } else { profile.native_tools.clone() }, auto_approve: delegate, claudeai_connectors: connectors, mcp_config: None, settle: self.settings.connector_settle, expect_servers };
         let (mut _bridge, mut bridge_rx): (Option<Bridge>, Option<tokio::sync::mpsc::Receiver<BridgeCall>>) = (None, None);
         let mut gate_rx: Option<tokio::sync::mpsc::UnboundedReceiver<HookNote>> = None;
         let mut gate_policy: Option<HookPolicy> = None;
@@ -621,7 +640,7 @@ impl Engine {
             };
             match ev {
                 Event::Init { ref tools, ref mcp_servers, ref session_id } => {
-                    self.inventory.record(crate::inventory::SeatRecord { endpoint_id: ep.id.clone(), harness: if cli == Cli::Agy { "agy" } else { "claude" }.into(), model: launch.model.clone(), tools: tools.clone(), mcp_servers: mcp_servers.clone().unwrap_or_default(), bridge: bridge_on, seen_unix: (self.clock_unix)() });
+                    self.inventory.record(crate::inventory::SeatRecord { endpoint_id: ep.id.clone(), harness: cli.program().into(), model: launch.model.clone(), tools: tools.clone(), mcp_servers: mcp_servers.clone().unwrap_or_default(), bridge: bridge_on, seen_unix: (self.clock_unix)() });
                     // A saved session can be resumed by a later span; the log is where its id is kept.
                     if persist && !session_id.is_empty() {
                         sc.m.append(sc.agent_ev("harness.session", json!({"cli": launch.program, "session_id": session_id}), ep, &launch.model)).await?;
@@ -763,7 +782,12 @@ impl Engine {
             _ => (crate::harness::Tokens { output: metered, ..Default::default() }, 0.0),
         };
         let payload = UsagePayload {
-            provider: if cli == Cli::Agy { "google" } else { "anthropic" }.into(),
+            provider: match cli {
+                Cli::Agy => "google",
+                Cli::Codex => "openai",
+                Cli::Claude => "anthropic",
+            }
+            .into(),
             input_tokens: usage.input,
             cache_read_tokens: usage.cache_read,
             cache_write_tokens: usage.cache_write,
@@ -837,7 +861,7 @@ impl Engine {
         let text = final_text.filter(|t| !t.trim().is_empty()).unwrap_or_else(|| text_parts.join("\n"));
         let block = delphi_adapter::blocks::ContentBlock::Text { text: text.clone() };
         batch.push(sc.agent_ev("agent.block.complete", json!({"turn_index": 1, "role": "assistant", "block_index": 0, "block": serde_json::to_value(&block).expect("serializes")}), ep, &launch.model));
-        batch.push(sc.agent_ev("agent.turn.complete", json!({"turn_index": 1, "stop_reason": "end_turn", "blocks": 1, "provider": if cli == Cli::Agy { "agy-cli" } else { "claude-cli" }}), ep, &launch.model));
+        batch.push(sc.agent_ev("agent.turn.complete", json!({"turn_index": 1, "stop_reason": "end_turn", "blocks": 1, "provider": match cli { Cli::Agy => "agy-cli", Cli::Codex => "codex-cli", Cli::Claude => "claude-cli" }}), ep, &launch.model));
         sc.m.append_batch(batch).await?;
         if self.pool.record_success(&ep.id, &launch.model) {
             sc.m.append(sc.ev("model.recovered", json!({"endpoint_id": ep.id, "model_id": launch.model}))).await?;
@@ -1532,9 +1556,13 @@ open(sys.argv[1], "w").write(json.dumps(out))
 
     /// One Claude harness endpoint whose credential is a key source instead of the CLI's own login.
     fn use_keyed_harness(f: &Fx, cli: &str) {
-        let (family, id) = if cli == "agy" { ("gemini", "agy-sub") } else { ("claude", "claude-sub") };
+        let (family, id) = match cli {
+            "agy" => ("gemini", "agy-sub"),
+            "codex" => ("openai", "codex-sub"),
+            _ => ("claude", "claude-sub"),
+        };
         let text = crate::testkit::CONFIG
-            .replace("[access]", &format!("[[endpoints]]\nid = \"{id}\"\nfamily = \"{family}\"\npath = \"harness\"\nharness = \"{cli}\"\ncredential = \"env:HARNESS_KEY\"\n[access]\nrole_family = {{ architect = \"{family}\" }}"))
+            .replace("[access]", &format!("[[endpoints]]\nid = \"{id}\"\nfamily = \"{family}\"\npath = \"harness\"\nharness = \"{cli}\"\ncredential = \"env:HARNESS_KEY\"\nmodels = {{ fast = \"m-1\", workhorse = \"m-1\", frontier = \"m-1\" }}\n[access]\nrole_family = {{ architect = \"{family}\" }}"))
             .replace("order = { claude = [\"direct\", \"backup\"] }", &format!("order = {{ {family} = [\"{id}\"] }}"))
             .replace("allowed_endpoints = [\"direct\", \"backup\"]", &format!("allowed_endpoints = [\"{id}\"]"));
         f.engine.cfg.set(delphi_adapter::config::Config::parse(&text).unwrap());
@@ -1567,6 +1595,29 @@ open(sys.argv[1], "w").write(json.dumps(out))
         let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
         assert!(matches!(out.status, Status::Escalated(_)), "{:?}", out.status);
         assert!(events_of(&f, "harness.started").is_empty(), "the CLI never started");
+    }
+
+    #[tokio::test]
+    async fn a_codex_seat_answers_a_reading_role_untrusted_on_its_key_and_is_billed_as_openai() {
+        let scripts = tempfile::tempdir().unwrap();
+        let dump = scripts.path().join("dump");
+        let body = format!(
+            "cat > /dev/null\necho \"$CODEX_API_KEY|$*\" > {}\necho '{{\"type\":\"thread.started\",\"thread_id\":\"t1\"}}'\necho '{{\"type\":\"item.completed\",\"item\":{{\"type\":\"agent_message\",\"text\":\"Plan: ship it.\"}}}}'\necho '{{\"type\":\"turn.completed\",\"usage\":{{\"input_tokens\":10,\"output_tokens\":4}}}}'",
+            dump.display()
+        );
+        let prog = fake_cli(scripts.path(), &body);
+        let f = setup_with_exec(vec![], 5.0, |s| s.codex_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        use_keyed_harness(&f, "codex");
+        *f.model.harness_key.lock().unwrap() = Some("sk-cx-1".into());
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "Plan: ship it."), "{}", out.text);
+        let seen = fs::read_to_string(&dump).unwrap();
+        assert!(seen.starts_with("sk-cx-1|exec --json --ephemeral"), "{}", seen);
+        assert!(seen.contains("--sandbox read-only") && !seen.split('|').nth(1).unwrap().contains("sk-cx-1"), "{}", seen);
+        assert!(events_of(&f, "span.taint").iter().any(|e| e.payload["ceiling"] == "L0" && e.payload["cause"].as_str().unwrap().contains("codex")), "its output is untrusted");
+        let u = &events_of(&f, "agent.usage")[0].payload;
+        assert_eq!(u["provider"], "openai");
+        assert!(!format!("{:?}", f.m.replay().unwrap()).contains("sk-cx-1"), "the key never reaches the log");
     }
 
     #[tokio::test]

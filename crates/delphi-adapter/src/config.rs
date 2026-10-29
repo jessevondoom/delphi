@@ -308,7 +308,7 @@ pub struct Access {
     pub order: BTreeMap<String, Vec<String>>,
     #[serde(default)]
     pub allowed_endpoints: Option<Vec<String>>,
-    /// Role → model family (`claude`, `gemini` or `local`) for roles that should not use the default (`primary`).
+    /// Role → model family (`claude`, `gemini`, `openai` or `local`) for roles that should not use the default (`primary`).
     #[serde(default)]
     pub role_family: BTreeMap<String, String>,
     /// The family roles are served by unless `role_family` says otherwise (`specs/035` D-1). Unset: `claude` when an allowed
@@ -673,8 +673,8 @@ impl Config {
             }
         }
         for (name, h) in &self.harness {
-            if !matches!(name.as_str(), "claude" | "agy") {
-                errs.push(format!("[harness.{}] only `claude` and `agy` are known harnesses", name));
+            if !matches!(name.as_str(), "claude" | "agy" | "codex") {
+                errs.push(format!("[harness.{}] only `claude`, `agy` and `codex` are known harnesses", name));
             }
             let ident = |s: &str| !s.is_empty() && s.len() <= 64 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
             for t in &h.native_tools {
@@ -763,15 +763,15 @@ impl Config {
             }
         }
         for (role, family) in &self.access.role_family {
-            if !matches!(family.as_str(), "claude" | "gemini" | "local") {
-                errs.push(format!("[access] role_family.{} names unknown family `{}` (use `claude`, `gemini` or `local`)", role, family));
+            if !matches!(family.as_str(), "claude" | "gemini" | "openai" | "local") {
+                errs.push(format!("[access] role_family.{} names unknown family `{}` (use `claude`, `gemini`, `openai` or `local`)", role, family));
             } else if !self.endpoints.iter().any(|e| &e.family == family && allowed.contains(&e.id)) {
                 errs.push(format!("[access] role_family.{} = `{}`, but no allowed endpoint serves that family", role, family));
             }
         }
         for (what, family) in self.access.primary.iter().map(|p| ("primary", p)).chain(self.access.failover.iter().map(|f| ("failover", f))) {
-            if !matches!(family.as_str(), "claude" | "gemini" | "local") {
-                errs.push(format!("[access] {} names unknown family `{}` (use `claude`, `gemini` or `local`)", what, family));
+            if !matches!(family.as_str(), "claude" | "gemini" | "openai" | "local") {
+                errs.push(format!("[access] {} names unknown family `{}` (use `claude`, `gemini`, `openai` or `local`)", what, family));
             } else if !self.endpoints.iter().any(|e| &e.family == family && allowed.contains(&e.id)) {
                 errs.push(format!("[access] {} = `{}`, but no allowed endpoint serves that family", what, family));
             }
@@ -1090,7 +1090,7 @@ allowed_endpoints = ["corp-gateway", "bedrock-us"]
             ("[harness.claude]\nnative_tools = [\"Web Search\"]\n", "must be a tool name"),
             ("[harness.claude]\nconnector_reads = [\"slack_search\"]\n", "exact tool name"),
             ("[harness.claude]\nsurprise = 1\n", "unknown field"),
-            ("[harness.codex]\n", "only `claude` and `agy`"),
+            ("[harness.gemini]\n", "only `claude`, `agy` and `codex`"),
         ] {
             let errs = Config::parse(&format!("{}\n{}", SAMPLE, bad)).unwrap_err().join("; ");
             assert!(errs.contains(needle), "{} -> {}", bad, errs);

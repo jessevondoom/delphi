@@ -28,6 +28,9 @@ pub enum Cli {
     /// `agy` (the Antigravity CLI, the Gemini subscription's CLI now that the Gemini CLI refuses personal
     /// sign-in): stream-json events, no permission bridge, tools cannot be turned off.
     Agy,
+    /// `codex` (the Codex CLI, `specs/047`): `exec --json` events, one prompt on stdin, no permission bridge yet, so
+    /// read-only roles only.
+    Codex,
 }
 
 impl Cli {
@@ -35,6 +38,7 @@ impl Cli {
         match name {
             "claude" => Some(Cli::Claude),
             "agy" => Some(Cli::Agy),
+            "codex" => Some(Cli::Codex),
             _ => None,
         }
     }
@@ -44,6 +48,7 @@ impl Cli {
         match self {
             Cli::Claude => "claude",
             Cli::Agy => "agy",
+            Cli::Codex => "codex",
         }
     }
 }
@@ -331,6 +336,66 @@ pub fn parse_agy_line(line: &str) -> Vec<Event> {
     out
 }
 
+/// The schema file a Codex span with a `json_schema` is given, inside the span's own scratch directory.
+pub const CODEX_SCHEMA_FILE: &str = "delphi-output-schema.json";
+
+/// `codex exec --json` output (`specs/047` §5): `thread.started`, `turn.started`, `item.completed` (an `agent_message`,
+/// or a `command_execution`), `turn.completed` with the usage, and `turn.failed` / `error` when it cannot answer. It
+/// keeps the last message, which is the answer, to put in the result.
+#[derive(Debug, Default)]
+pub struct CodexParser {
+    /// Whether a schema was asked for, so the final message is also returned parsed.
+    structured: bool,
+    last: String,
+    failure: Option<String>,
+}
+
+impl CodexParser {
+    pub fn new(structured: bool) -> CodexParser {
+        CodexParser { structured, ..Default::default() }
+    }
+
+    pub fn line(&mut self, line: &str) -> Vec<Event> {
+        let Ok(m) = serde_json::from_str::<Value>(line) else { return vec![] };
+        let mut out = Vec::new();
+        match m["type"].as_str() {
+            Some("thread.started") => out.push(Event::Init { session_id: m["thread_id"].as_str().unwrap_or("").into(), tools: vec![], mcp_servers: None }),
+            Some("item.started") if m["item"]["type"] == "command_execution" => {
+                out.push(Event::ToolUse { id: m["item"]["id"].as_str().unwrap_or("").into(), name: "command_execution".into(), input: json!({"command": m["item"]["command"]}) });
+            }
+            Some("item.completed") => {
+                let it = &m["item"];
+                match it["type"].as_str() {
+                    Some("agent_message") => {
+                        let t = it["text"].as_str().unwrap_or("");
+                        self.last = t.into();
+                        out.push(Event::Text(t.into()));
+                    }
+                    Some("command_execution") => {
+                        out.push(Event::ToolResult { id: it["id"].as_str().unwrap_or("").into(), is_error: it["exit_code"].as_i64().is_some_and(|c| c != 0) || it["status"] == "failed" });
+                    }
+                    _ => {}
+                }
+            }
+            Some("error") => self.failure = Some(m["message"].as_str().unwrap_or("error").into()),
+            Some("turn.failed") => {
+                let why = m["error"]["message"].as_str().map(String::from).or_else(|| self.failure.clone()).unwrap_or_else(|| "the turn failed".into());
+                out.push(Event::Result { text: why, is_error: true, stop_reason: None, total_cost_usd: 0.0, usage: Tokens::default(), subtype: "turn_failed".into(), structured: None });
+            }
+            Some("turn.completed") => {
+                let u = &m["usage"];
+                let n = |k: &str| u[k].as_u64().unwrap_or(0);
+                // `input_tokens` includes the cached ones; reasoning tokens are billed as output.
+                let usage = Tokens { input: n("input_tokens").saturating_sub(n("cached_input_tokens")), cache_read: n("cached_input_tokens"), cache_write: n("cache_write_input_tokens"), output: n("output_tokens") + n("reasoning_output_tokens") };
+                let structured = if self.structured { serde_json::from_str::<Value>(self.last.trim()).ok() } else { None };
+                out.push(Event::Result { text: self.last.clone(), is_error: false, stop_reason: None, total_cost_usd: 0.0, usage, subtype: "success".into(), structured });
+            }
+            _ => {}
+        }
+        out
+    }
+}
+
 /// The `control_response` line for a decision. Never carries `updatedPermissions`.
 pub fn response_line(p: &Permission, d: &Decision) -> String {
     let body = match d {
@@ -350,6 +415,9 @@ fn first_turn(l: &Launch) -> String {
         // `agy` has no system-prompt flag: the governance and role come first in the user turn. It cannot turn
         // its tools off either, so a role that should have none is told so (a request, not an enforcement: the
         // engine treats every agy span as untrusted and checks the projects afterwards).
+        // `codex exec` reads a plain-text prompt from stdin. It has no system-prompt flag either, and its tools cannot be
+        // switched off, so the role is told to answer in text (a request: the sandbox is read-only and the span untrusted).
+        Cli::Codex => return format!("{}\n\nDo not run commands or call tools. Answer in text only.\n\n{}\n", l.system_prompt, l.user_prompt),
         Cli::Agy => {
             // With the Delphi bridge there is something to call (a gate denies the rest), so the sentence would be false.
             let no_tools = if l.tools == Tools::None && l.profile.mcp_config.is_none() { "Do not call any tools. Answer in text only.\n\n" } else { "" };
@@ -422,6 +490,21 @@ fn args(l: &Launch) -> Vec<String> {
         if o.sandbox {
             a.push("--sandbox".into());
         }
+        return a;
+    }
+    if l.cli == Cli::Codex {
+        // Nothing persisted, none of the operator's own configuration, and a read-only sandbox: this seat reads, it does
+        // not act. The prompt arrives on stdin (`-`). The git check is skipped because a span runs in Delphi's scratch directory.
+        // The read-only sandbox stops writes but not reads outside the directory (probe, specs/047 §5), so the shell is
+        // switched off: a reader seat has no way to run a command at all.
+        let mut a = strings(&["exec", "--json", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check", "--sandbox", "read-only", "--model", l.model.as_str(), "--config", "features.shell_tool=false"]);
+        if let Some(e) = &o.effort {
+            push_flag(&mut a, "--config", Some(format!("model_reasoning_effort=\"{}\"", e)));
+        }
+        if o.json_schema.is_some() {
+            push_flag(&mut a, "--output-schema", Some(l.cwd.join(CODEX_SCHEMA_FILE).display().to_string()));
+        }
+        a.push("-".into());
         return a;
     }
     let p = &l.profile;
@@ -518,8 +601,18 @@ impl Session {
     pub async fn start(l: &Launch) -> Result<Session, String> {
         // The key goes into this child's environment only, never into `Launch.env` (which is logged in tests) or an argument.
         let mut env = l.env.clone();
-        if let (Cli::Claude, Some(k)) = (l.cli, &l.opts.api_key) {
-            env.insert("ANTHROPIC_API_KEY".into(), k.expose().to_string());
+        match (l.cli, &l.opts.api_key) {
+            (Cli::Claude, Some(k)) => {
+                env.insert("ANTHROPIC_API_KEY".into(), k.expose().to_string());
+            }
+            (Cli::Codex, Some(k)) => {
+                env.insert("CODEX_API_KEY".into(), k.expose().to_string());
+            }
+            _ => {}
+        }
+        if let (Cli::Codex, Some(schema)) = (l.cli, &l.opts.json_schema) {
+            // `--output-schema` takes a file: it goes in the span's own scratch directory.
+            std::fs::write(l.cwd.join(CODEX_SCHEMA_FILE), schema).map_err(|e| format!("cannot write the output schema: {}", e))?;
         }
         let std_cmd = plain_command(Limits { cpu_secs: None, max_file_bytes: None, max_open_files: Some(4096) }, &env, &l.program, args(l));
         let mut cmd = tokio::process::Command::from(std_cmd);
@@ -552,6 +645,7 @@ impl Session {
         }
         let first = first_turn(l);
         let cli = l.cli;
+        let mut codex = CodexParser::new(l.opts.json_schema.is_some());
         let (tx, mut rx) = mpsc::channel(256);
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout);
@@ -563,7 +657,12 @@ impl Session {
                     continue;
                 }
                 let line = String::from_utf8_lossy(&buf);
-                for ev in if cli == Cli::Agy { parse_agy_line(&line) } else { parse_line(&line) } {
+                let events = match cli {
+                    Cli::Agy => parse_agy_line(&line),
+                    Cli::Codex => codex.line(&line),
+                    Cli::Claude => parse_line(&line),
+                };
+                for ev in events {
                     if tx.send(ev).await.is_err() {
                         return;
                     }
@@ -576,7 +675,9 @@ impl Session {
         }
         stdin.write_all(first.as_bytes()).await.map_err(|e| e.to_string())?;
         stdin.flush().await.map_err(|e| e.to_string())?;
-        Ok(Session { child, stdin: Some(stdin), rx, pgid, exited: false, stderr_tail, stderr_task })
+        // `codex exec` reads its prompt to the end of stdin, so the input closes with the one turn.
+        let stdin = if cli == Cli::Codex { None } else { Some(stdin) };
+        Ok(Session { child, stdin, rx, pgid, exited: false, stderr_tail, stderr_task })
     }
 
     /// The tail of the CLI's stderr (empty unless the error log was on when it started). Raw: the caller redacts it.
@@ -1055,6 +1156,83 @@ echo '{"type":"result","subtype":"success","result":"fin","total_cost_usd":0.01,
             assert!(seen.iter().any(|e| matches!(e, Event::Result { text, .. } if text == "fin")));
             assert!(matches!(seen.last(), Some(Event::Exit { code: Some(0) })));
         }
+    }
+
+    #[test]
+    fn codex_lines_become_events_and_the_last_message_is_the_result() {
+        let mut p = CodexParser::new(true);
+        let lines = [
+            r#"{"type":"thread.started","thread_id":"t1"}"#,
+            r#"{"type":"turn.started"}"#,
+            r#"{"type":"item.completed","item":{"id":"i0","type":"agent_message","text":"{\"ok\":true}"}}"#,
+            r#"{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":60,"cache_write_input_tokens":0,"output_tokens":5,"reasoning_output_tokens":3}}"#,
+        ];
+        let ev: Vec<Event> = lines.iter().flat_map(|l| p.line(l)).collect();
+        assert!(matches!(&ev[0], Event::Init { session_id, .. } if session_id == "t1"));
+        assert_eq!(ev[1], Event::Text("{\"ok\":true}".into()));
+        match &ev[2] {
+            Event::Result { text, is_error: false, usage, structured, .. } => {
+                assert_eq!(text, "{\"ok\":true}");
+                assert_eq!((usage.input, usage.cache_read, usage.output), (40, 60, 8), "cached input is not counted as input");
+                assert_eq!(structured.as_ref().unwrap()["ok"], true);
+            }
+            other => panic!("{:?}", other),
+        }
+        assert_eq!(ev.len(), 3);
+        assert!(CodexParser::new(false).line("not json").is_empty());
+        // Without a schema the answer is text only.
+        let mut q = CodexParser::new(false);
+        q.line(r#"{"type":"item.completed","item":{"type":"agent_message","text":"{\"a\":1}"}}"#);
+        assert!(matches!(&q.line(r#"{"type":"turn.completed","usage":{}}"#)[0], Event::Result { structured: None, .. }));
+    }
+
+    #[test]
+    fn a_codex_failure_is_an_error_result_and_a_command_is_a_tool_use() {
+        let mut p = CodexParser::new(false);
+        assert!(p.line(r#"{"type":"error","message":"usage limit reached"}"#).is_empty());
+        match &p.line(r#"{"type":"turn.failed","error":{"message":"You've hit your usage limit"}}"#)[0] {
+            Event::Result { is_error: true, text, .. } => assert!(text.contains("usage limit")),
+            other => panic!("{:?}", other),
+        }
+        let started = p.line(r#"{"type":"item.started","item":{"id":"c1","type":"command_execution","command":"ls"}}"#);
+        assert!(matches!(&started[0], Event::ToolUse { name, input, .. } if name == "command_execution" && input["command"] == "ls"));
+        assert_eq!(p.line(r#"{"type":"item.completed","item":{"id":"c1","type":"command_execution","exit_code":2}}"#), vec![Event::ToolResult { id: "c1".into(), is_error: true }]);
+    }
+
+    #[test]
+    fn codex_is_launched_read_only_and_ephemeral_with_the_prompt_on_stdin() {
+        let mk = |tools, opts| Launch { cli: Cli::Codex, program: "codex".into(), model: "gpt-x".into(), system_prompt: "SYS".into(), user_prompt: "hi".into(), cwd: PathBuf::from("/scratch"), tools, env: BTreeMap::new(), profile: Default::default(), opts };
+        let a = args(&mk(Tools::None, Opts::default()));
+        assert_eq!(a, ["exec", "--json", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check", "--sandbox", "read-only", "--model", "gpt-x", "--config", "features.shell_tool=false", "-"]);
+        let o = Opts { effort: Some("low".into()), json_schema: Some("{}".into()), add_dirs: vec![PathBuf::from("/x")], sandbox: true, api_key: Some(delphi_adapter::credential::Secret::new("k".into(), None)), ..Default::default() };
+        let a = args(&mk(Tools::Standard, o)).join(" ");
+        assert!(a.contains("--config model_reasoning_effort=\"low\"") && a.contains("--output-schema /scratch/delphi-output-schema.json"), "{}", a);
+        assert!(!a.contains("--add-dir") && !a.contains("dangerously") && !a.contains(" k"), "{}", a);
+        let t = first_turn(&mk(Tools::None, Opts::default()));
+        assert!(t.starts_with("SYS") && t.contains("Answer in text only") && t.trim_end().ends_with("hi"));
+    }
+
+    #[tokio::test]
+    async fn a_codex_session_reads_the_prompt_from_stdin_and_the_key_stays_in_the_environment() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let prog = d.path().join("fake-codex");
+        // It records its arguments and environment, reads the prompt to the end of stdin (so the input must close), then answers.
+        std::fs::write(&prog, "#!/bin/sh\nprintf '%s\\n' \"$@\" > args.txt\nprintf '%s' \"$CODEX_API_KEY\" > key.txt\ncat > prompt.txt\ncat delphi-output-schema.json > schema.txt\necho '{\"type\":\"thread.started\",\"thread_id\":\"t9\"}'\necho '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"{\\\"v\\\":1}\"}}'\necho '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":4,\"output_tokens\":2}}'\n").unwrap();
+        std::fs::set_permissions(&prog, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let opts = Opts { json_schema: Some("{\"type\":\"object\"}".into()), api_key: Some(delphi_adapter::credential::Secret::new("sk-codex".into(), None)), ..Default::default() };
+        let l = Launch { cli: Cli::Codex, program: prog.display().to_string(), model: "m".into(), system_prompt: "SYS".into(), user_prompt: "question".into(), cwd: d.path().to_path_buf(), tools: Tools::None, env: BTreeMap::new(), profile: Default::default(), opts };
+        let mut s = Session::start(&l).await.unwrap();
+        let mut seen = Vec::new();
+        while let Some(ev) = s.next(Duration::from_secs(10)).await {
+            seen.push(ev);
+        }
+        assert!(seen.iter().any(|e| matches!(e, Event::Result { structured: Some(v), is_error: false, .. } if v["v"] == 1)), "{:?}", seen);
+        assert!(matches!(seen.last(), Some(Event::Exit { code: Some(0) })));
+        let read = |f: &str| std::fs::read_to_string(d.path().join(f)).unwrap();
+        assert!(read("prompt.txt").contains("question") && read("schema.txt") == "{\"type\":\"object\"}");
+        assert_eq!(read("key.txt"), "sk-codex");
+        assert!(!read("args.txt").contains("sk-codex"), "the key is never an argument");
     }
 
     #[tokio::test]

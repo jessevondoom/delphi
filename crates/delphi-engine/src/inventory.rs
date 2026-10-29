@@ -174,6 +174,7 @@ pub fn render(cfg: &Config, seen: &[SeatRecord]) -> String {
         out.push_str(&match (e.path, e.harness.as_deref().unwrap_or("claude")) {
             (AccessPath::Harness, "claude") => claude_seat(e, &cfg.harness.get("claude").cloned().unwrap_or_default(), rec),
             (AccessPath::Harness, "agy") => agy_seat(e, &cfg.harness.get("agy").cloned().unwrap_or_default(), rec),
+            (AccessPath::Harness, "codex") => format!("- `{}` (family openai; the Codex CLI `codex`{}): READ-ONLY, UNPROVEN. It answers in text from the prompt alone: no Delphi tools reach it, its output is untrusted (L0), and a Builder task is refused (specs/047 S1). Good for: a second opinion or a Council seat; a fallback when another family's quota is out.\n", e.id, if models(e).is_empty() { String::new() } else { format!("; models {}", models(e)) }),
             (AccessPath::Harness, other) => format!("- `{}` (harness `{}`): not supported; Delphi cannot run it.\n", e.id, other),
             _ => api_seat(e),
         });

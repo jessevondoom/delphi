@@ -176,6 +176,10 @@ default_peer_trust_ceiling = "federated_peer"
 # and are never a Builder until `delphi endpoints test --probe` has watched the hook deny every kind of tool on the installed agy
 # version; then they start trusted (falling to L0 when they read the web) and a Builder's file edits go through the hook and
 # Delphi's approval cards, its commands through Delphi's own run_command tool.
+# The Codex CLI is [harness.codex] (`harness = "codex"`, `family = "openai"` on the endpoint; specs/047 S1). A seat is read-only and
+# untrusted (L0): `codex exec` in a read-only sandbox, nothing saved, your own ~/.codex config ignored, no Delphi tools, and never a
+# Builder. Keys: `effort` ("low", "medium" or "high"), `json_schema`, `env_allow`. A key source as the endpoint's credential
+# (`keychain:`, `env:`) runs it on CODEX_API_KEY; `harness-login` uses your ChatGPT sign-in.
 # [harness.claude]
 # bridge = true                        # false: roles without a worktree run text-only (no timer, dispatch or file tools)
 # approvals = "delegate"               # "delphi": Delphi's own tiers and cards answer every request instead

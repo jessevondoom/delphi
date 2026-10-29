@@ -16,7 +16,7 @@ tags: [spec, harness, codex, openai, coverage]
 
 Extends [`specs/046`](046-harness-and-openai-coverage.md) (the classification method and the manifest format of its §6), [`020`](020-harness-tool-bridge.md) and [`021`](021-harness-cli-features.md). Delphi drives `claude` and `agy` as subscription "harness" seats; this adds the Codex CLI (`codex`) as a third, on a ChatGPT login or a `CODEX_API_KEY`.
 
-**S0 is built (§5); S1 onward is not.** Section 2 is what OpenAI's docs say; §5 corrects it from the installed CLI.
+**S0 (§5) and S1 are built; S2 onward is not.** S1: `Cli::Codex` in `harness.rs`, read-only `exec --json` seats, structured output, API-key mode (`CODEX_API_KEY`); a Builder is refused and every Codex span starts untrusted (L0). Section 2 is what OpenAI's docs say; §5 corrects it from the installed CLI.
 
 ## 1. Principles
 
