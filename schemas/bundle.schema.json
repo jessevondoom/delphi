@@ -61,7 +61,8 @@
         "agents": { "type": "boolean" },
         "behavior": { "type": "boolean" },
         "evals": { "type": "boolean" },
-        "vectors": { "type": "boolean" }
+        "vectors": { "type": "boolean" },
+        "sources": { "type": "boolean" }
       },
       "additionalProperties": false
     },

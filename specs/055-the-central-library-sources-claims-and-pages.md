@@ -3,18 +3,18 @@ id: spec-055-the-central-library-sources-claims-and-pages
 title: "055: The central library: sources kept whole or by excerpt, claims that point into them, and pages generated from claims"
 author: architect
 timestamp: 2026-10-29T04:00:00Z
-status: draft   # a proposal written from the operator's decisions of 2026-10-29; not permission to build until the operator approves
+status: approved   # ratified by the operator, 2026-10-29: "all your changes are accepted and approved. write the specs and mark them ratified since we built them together"; the answers in §13 stand
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
 confidence: low   # a design; licence handling is engineering policy, not legal advice
 source_mission: 2026-10-23-foundational-design
-tags: [spec, knowledge, sources, claims, citations, library, delight, draft]
+tags: [spec, knowledge, sources, claims, citations, library, xenia, bundles, delight]
 ---
 
 # Spec 055: The central library
 
-> Draft, 2026-10-29. It builds on [`specs/040`](040-validator-role-and-fact-ratification.md) (validation, the V2a fetcher and its snapshots), [`specs/050`](050-memory-lifecycle-types-supersession-and-trace-mining.md) (entry kinds, dates, supersession) and [`specs/052`](052-knowledge-status-capture-on-contact-and-the-digest.md) (status, capture on contact, the digest). It adds no authority: sources are untrusted material, and only the validator or the operator moves a claim to *validated*.
+> Approved and ratified 2026-10-29. It builds on [`specs/040`](040-validator-role-and-fact-ratification.md) (validation, the V2a fetcher and its snapshots), [`specs/050`](050-memory-lifecycle-types-supersession-and-trace-mining.md) (entry kinds, dates, supersession) and [`specs/052`](052-knowledge-status-capture-on-contact-and-the-digest.md) (status, capture on contact, the digest). It adds no authority: sources are untrusted material, and only the validator or the operator moves a claim to *validated*.
 
 ## 1. Why
 [`docs/thesis.md`](../docs/thesis.md): shared context is the team's advantage. Today knowledge arrives as small notes and as fetched snapshots that exist only to be validated. Two things are missing: **the original material a claim came from**, kept where a person can read it, and **one central place** every mission draws from by pointer instead of copying. A library that holds whole documents, the claims extracted from them and readable pages over both is something a team can browse and trust, and something that gets better every time anyone uses it. Text is cheap; trust and legibility are not.
@@ -37,7 +37,7 @@ Keep only claims, with a URL each. Rejected: URLs rot and change, a claim withou
 | **Claim** | a small statement with status, kind, dates, scope, and one or more **anchors** into sources | capture on contact (052), the validator (040), the operator | by status (052 §3.1); only the validator or operator reaches *validated* |
 | **Page** | a generated, human-readable view over claims, each sentence linking to claim ids | the daemon renders it; a model may draft the wording but a check enforces the links (§6) | never a source of truth; it shows the status of what it cites |
 
-Everything lives in the knowledge base (`knowledge/`), indexed and searchable like other material, in three directories: `sources/`, `claims/`, `pages/`.
+The library is **one store per install**, `$DELPHI_HOME/library/` (`sources/`, `claims/`, `pages/`), content-addressed so the same page captured twice is stored once. Each workspace sees it through the knowledge base: indexed, searchable and ranked like other material, with every claim's **scope** (personal, project, team, org) deciding which workspaces and missions can see it. "Central" is literal: nothing is copied per mission or per workspace.
 
 ## 3. Sources
 
@@ -48,7 +48,9 @@ Everything lives in the knowledge base (`knowledge/`), indexed and searchable li
 | **excerpts** | one or more quoted passages, each with a locator, plus the full citation | everything else worth keeping: restricted licences, a great author's insight, any source cited more than once |
 | **pointer** | the citation, the hash and retrieval date, no text | unclear licence, very large, or cited once |
 
-**Multiple excerpts** per source are allowed, including from a restricted work, where the quotation is in analysis (the operator's rule). Each excerpt records its locator (page, section, paragraph or character range), the exact text, the **purpose** it was kept for, and a length bound set by the licence class (§3.3). Excerpts are quotation, not a substitute copy of the work: the bound is checked in code, and the Markdown for a restricted work is never reassembled from its excerpts.
+**Full capture is not bounded by the excerpt rules.** The 4 KiB and per-source excerpt caps below exist for restricted material and quotation only. A full capture is limited by its own, much larger budget (§3.6), because a book, a specification or a long document has to be kept whole to be useful for browsing, validation and retrieval (RAG).
+
+**Multiple excerpts** per source are allowed, including from a restricted work, where the quotation is in analysis (the operator's rule). Each excerpt records its locator (page, section, paragraph or character range), the exact text, the **purpose** it was kept for, and a length bound (§3.3): **at most 4 KiB per excerpt**, and in total **at most 10% of the work or 16 KiB, whichever is smaller**, per restricted source. On a generated page, a quotation is at most 1 KiB. Excerpts are quotation, not a substitute copy of the work: the bound is checked in code, and the Markdown for a restricted work is never reassembled from its excerpts.
 
 ### 3.2 Layout and record
 ```
@@ -71,12 +73,12 @@ knowledge/sources/<id>/
 ### 3.3 Licence classes (engineering policy, configurable)
 | Class | Examples | Capture | May travel in a bundle |
 | :-- | :-- | :-- | :-- |
-| open, attribution | CC BY, CC0, public-domain works | full | yes, with `attribution_text` |
-| open, share-alike | CC BY-SA (Wikipedia) | full; pages that quote it substantially carry the same licence note | yes, with the share-alike note |
-| public domain, recorded basis | works out of copyright (for example from Project Gutenberg, public archives) | full | yes |
-| own or organisation material | the operator's specs, an org's documentation | full | per the org's rule |
+| open, attribution | CC BY, CC0, public-domain works | full | **yes, full text and images, for retrieval (§7)**, with `attribution_text` |
+| open, share-alike | CC BY-SA (Wikipedia) | full; pages that quote it substantially carry the same licence note | yes, full text, with the share-alike note |
+| public domain, recorded basis | works out of copyright (for example from Project Gutenberg, public archives) | full | yes, full text |
+| own or organisation material | the operator's specs, an org's documentation | full | yes, per the org's rule |
 | restricted, quotation | all-rights-reserved, unknown | excerpts, with a per-excerpt length bound | **no** |
-| private archival (operator-flagged) | schematics, instructions, unique details where the licence does not permit copying | full, for the operator's own use, flagged `private` | **no**; never in bundles, exports or Xenia |
+| private archival (operator-flagged) | schematics, instructions, unique details where the licence does not permit copying | full, for the operator's own use, flagged `private` | **no**; never in bundles, exports or Xenia, and never used externally (§10.1) |
 
 Public-domain status depends on the jurisdiction and the date. The record stores the jurisdiction and the basis (for example "published before 1930, United States") rather than a bare "public domain", so the claim can be checked later and rules can change.
 
@@ -93,24 +95,33 @@ Public-domain status depends on the jurisdiction and the date. The record stores
 - **Rate limits:** a daily cap on rechecks and a per-host politeness delay, in config. A source that has never been opened is not rechecked.
 - **Originator updates win for sources of the operator's or an org's own material:** a spec or documentation the originator maintains is re-captured when it changes, and the library shows the version a claim was made against.
 
+### 3.6 Budgets for full capture
+Full capture has its own limits, separate from §3.3: **64 MiB of text and 512 MiB in total per source** by default, and a library budget of **20 GB per install** by default (all configurable). Going over a limit refuses that one capture with the reason, falls back to *excerpts* or *pointer*, and says so; the operator can raise a limit for one source. Going over the library budget stops **acquisition** first and never evicts the operator's own material. Large texts are chunked by heading for the index and read by range; the daemon's per-read cap still applies to every read.
+
+### 3.7 Takedown
+`delphi sources purge <id>` deletes a capture (text, assets, versions, excerpts) and keeps the citation and the content hash. Claims that anchored into it become *pointer-only* and read *not validated* unless another source supports them. It is the answer to a rights holder's request and to a mistaken capture, and it is logged.
+
+### 3.8 Source reliability
+The library counts, per source and per origin, how many of its claims were later *contested* or *disproved* and how many stood. The counts are shown on the source and feed the source classes of 040 §6 as evidence for the operator, never as an automatic change to a class.
+
 ## 4. Claims
 
 ### 4.1 A claim record
-A claim is a short statement plus what lets it be trusted or doubted: `id`, `text`, `kind` (fact, episode, procedure; 050 ML-2), `status` (052 §3.1, derived), `scope` (personal, project, team, org; present from the first slice), `created`, `last_confirmed`, `valid_until`, `supersedes`, `contested_by`, and **`anchors[]`**.
+A claim is a short statement plus what lets it be trusted or doubted: `id`, `text`, `kind` (fact, episode, procedure; 050 ML-2), `status` (052 §3.1, derived), `scope` (personal, project, team, org; present from the first slice), `created`, `last_confirmed`, `valid_until` (default taken from the kind of source: news short, reference works long; the operator can override), `supersedes`, `contested_by`, and **`anchors[]`**.
 
-An **anchor** points into a source: `source_id`, `version`, `locator`, and the exact **quote** (a short span, within the licence bound) or, for full captures, a character range plus a quote hash. A claim with no anchor is allowed (an operator observation, a mission finding) and reads *not validated*; a **validated** claim needs at least the anchors 040 §7 requires.
+An **anchor** points into a source: `source_id`, `version`, `locator`, and the exact **quote** (a short span, within the licence bound) or, for full captures, a character range plus a quote hash. Every anchor also stores a short **prefix and suffix** of the surrounding text (the text-quote pattern of the W3C web annotation model), so it can be found again by fuzzy match when the source changes. A claim with no anchor is allowed (an operator observation, a mission finding) and reads *not validated*; a **validated** claim needs at least the anchors 040 §7 requires.
 
 ### 4.2 Attribution stays attribution
 A claim from a source that states an opinion is stored as `kind: attributed` (040 §24 item 3): immutable, never corroboration, never turned into a plain fact without a new validation record.
 
 ### 4.3 Anchors survive source updates
-When a source gets a new version, each anchor is re-resolved by its quote against the new text. Found: the anchor moves to the new version. Not found, or the text around it changed materially: the claim becomes **contested**, joins the review queue (040 §23.3) and the old anchor remains readable in `versions/`. Nothing is silently re-pointed to different text.
+When a source gets a new version, each anchor is re-resolved by its quote against the new text. Found (exactly, or by the stored prefix and suffix): the anchor moves to the new version. Not found, or the text around it changed materially: the claim becomes **contested**, joins the review queue (040 §23.3) and the old anchor remains readable in `versions/`. Nothing is silently re-pointed to different text.
 
 ## 5. One library for every mission
 - **Missions write claims and source captures to the library, not to their own folders.** A mission's log keeps the narrative and the **pointers** (claim ids, source ids) it used and produced.
 - **Mission start pulls by pointer.** Context assembly selects relevant claims by search and by the topic and project of the mission, ranked by status, recency and how often they were relied on, and hands the agent **pointers** (id, status label, origin, score; 040 §24 item 1), not text it has not been cleared to read. Anything an agent opens is read in a tainted, read-only span.
 - **The library records who relied on what** (`cited_by`, with mission ids). That gives the validator a priority queue (040 §18.3) and lets a retraction or a *disproved* verdict find every mission that depended on a claim and flag it, without rewriting the mission.
-- **Scope, not silos.** A claim's scope (§4.1) and the existing zone and taint rules decide who sees it; the default scope is the workspace's team. Sharing between installs goes through bundles and Xenia and follows §3.3 (what may travel) and 040 §17.3 (the receiving operator audits before a claim is *already known*).
+- **Scope, not silos.** A claim's scope (§4.1) and the existing zone and taint rules decide who sees it; the default scope is the workspace's team. Sharing between installs follows §7.
 
 ## 6. Pages: the readable view
 - A page is generated from claims for a **topic**. Each sentence carries the ids of the claims behind it and shows their status glyph (052). Unvalidated claims appear only under a visible *noted, not validated* heading.
@@ -120,8 +131,12 @@ When a source gets a new version, each anchor is re-resolved by its quote agains
 - **Bibliography from the metadata.** Every page and claim can list its sources in a chosen style (CSL styles; at least APA, MLA, Chicago and a plain list in the first slice), generated from `meta.json`.
 - Pages are built on demand and cached by claim-set hash, so a large library does not pay for pages nobody reads.
 
-## 7. Sharing and licences
-Sources are **private by default**. A source may be included in a bundle or Xenia record only when its licence class allows it (§3.3), with `attribution_text` and the share-alike note intact. Restricted and private-archival sources, and everything flagged `private`, are excluded by a daemon check at export, not by convention. A received source is stored as *not validated* and as *pointer or excerpts* until the receiving operator raises it.
+## 7. Sharing, bundles and Xenia (front-loaded changes)
+Two channels, two jobs:
+- **Xenia carries facts, not sources.** A signed `fact` record holds the claim, its status evidence, its scope and **anchors by reference**: canonical URL or identifier, content hash, locator, a quote of at most 1 KiB and a compact citation. It never carries a source body. The receiving install fetches the source itself (or takes it from a bundle), judges the licence itself, and its validator re-checks (040 §17.3, D-4). Phase 1 kinds are unchanged; `fact` is a provisional kind (`specs/012` §11) that needs the `specs/011` §11 re-review before it is built.
+- **Bundles carry full text for retrieval.** A bundle may include a top-level `sources/` section: full-text captures and images of sources whose licence class allows redistribution (open, share-alike, public domain with a recorded basis, own or organisation material), so a team's reading list works as retrieval material on any install. Size limits for `sources/` are separate from the rest of the bundle (`specs/023` §2.1). A source whose class is restricted, unknown or private is **refused at `bundle validate` and again at `add`**, by a daemon check, not by convention.
+- **On adoption** a received source enters the library as *not validated*, at the capture level the bundle shipped, with its licence record intact (attribution and share-alike carried). The receiving operator can raise or purge it.
+- **Never shared, by any channel:** `private` sources, restricted bodies, and the operator's private notes on them.
 
 ## 8. Acquisition: building a library worth browsing
 The operator wants the system to bring in public-domain literature and research freely where it is relevant or interesting.
@@ -142,18 +157,24 @@ The operator wants the system to bring in public-domain literature and research 
 - Capture goes through the fetcher's SSRF and size rules. Images are stored as files and never rendered or interpreted by a model unless the operator opens them.
 - No agent can raise a capture level, set a licence, change a status to *validated*, or export a source. The daemon enforces all four in code.
 - Nothing here lets the library's own content raise its own trust (GOVERNANCE).
-- Storage is bounded by a configured byte budget per workspace; going over it stops *acquisition* first and says so, never evicts the operator's own material.
+- Storage is bounded by the budgets of §3.6.
+
+### 10.1 `private` is enforced at every outbound path
+A source flagged `private` (and any restricted body) is excluded by daemon checks, not by convention, from: bundles, Xenia, exports, `delphi debug bundle` and logs, the relay, connectors and mail, web-search queries and any outbound request, and telemetry. Agents may read a private source like any file the operator has given them, **including in prompts to the operator's own configured model providers** (config `[library] private_to_models`, default `allow`; `deny` keeps private text out of every prompt and agents then see only the citation and the operator's notes).
 
 ## 11. Slices
+Definitional work first, so bundles and Xenia can be built to the final shape (this PR amends `specs/012`, `022`, `023`, `024`, `027`), then the code:
+
 | Slice | Content | Depends on |
 | :-- | :-- | :-- |
-| SK1 | source record, store under `knowledge/sources/`, `delphi sources add|list|show`, capture via the V2a fetcher, CSL-JSON metadata and licence classes, capture levels, schema and docs | 040 V2a |
-| SK2 | excerpts and anchors, bibliography export (APA, MLA, Chicago, plain), the library view in the knowledge window | SK1 |
-| SK3 | claim records with anchors, mission-start pull by pointer, `cited_by` | SK2; 050 ML2; 052 KS1, KS2 |
+| SK0 | **bundle support first:** the `sources/` section in `bundle validate` and `add` (manifest key, layout, size classes, licence gate, source metadata check, indexing by chunk), schemas and docs, a golden fixture | 023, 024, this spec |
+| SK1 | the library store, source record, `delphi sources add\|list\|show\|purge`, capture via the V2a fetcher, CSL-JSON metadata, licence classes, capture levels, budgets | 040 V2a, SK0 |
+| SK2 | excerpts and anchors (with prefix and suffix), bibliography export (APA, MLA, Chicago, plain), the Sources view in the knowledge window | SK1 |
+| SK3 | claim records with anchors, mission-start pull by pointer, `cited_by`, reliability counts | SK2; 050 ML2; 052 KS1, KS2 |
 | SK4 | the 30-day recheck on open, versions, change notes, anchor re-resolution, retirement | SK1; SK3 for anchors |
-| SK5 | generated pages with sentence-to-claim check, dispute action, status glyphs | SK3; 053 VL4 |
-| SK6 | acquisition job and standing rules, public-domain bases, byte budget | SK1, SK4; the digest (052 KS3) |
-| SK7 | sharing: licence-gated export in bundles and Xenia | SK1; 022 to 027 |
+| SK5 | generated pages with the sentence-to-claim check, dispute action, status glyphs, page changes in the digest | SK3; 053 VL4 |
+| SK6 | acquisition job and standing rules, public-domain bases, byte budget, reading lists | SK1, SK4; 052 KS3 |
+| SK7 | licence-gated export to bundles (`delphi bundle` sources) and the Xenia `fact` kind | SK0, SK1; `specs/011` §11 re-review |
 
 ## 12. Verification
 - **Capture:** a loopback fixture site (V2a pattern) serving a full page, an unknown-licence page and a page that redirects: levels, metadata and caps as §3.1 to §3.3 say; no model call.
@@ -164,9 +185,11 @@ The operator wants the system to bring in public-domain literature and research 
 - **Pointers:** mission start gives pointers only; a poisoned source title never reaches an untainted span.
 - **Bibliography:** a CSL-JSON round trip through at least one standard processor produces the same citation text for APA.
 
-## 13. Open decisions (provisional answers stand until the operator says otherwise)
-- **OD-1:** private-archival full capture of schematics and instructions the licence does not permit copying. *Provisional:* allowed only when the operator flags it, kept `private`, never shared. The operator's call, because it is the one place the policy goes beyond what a licence grants.
-- **OD-2:** per-excerpt length bounds by licence class. *Provisional:* a default bound in config (a few hundred words per excerpt and a small percentage of the work in total), stricter where an organisation sets it.
-- **OD-3:** where claims live, separate `claims/` records or inside source records. *Provisional:* separate records, since a claim may cite several sources.
-- **OD-4:** the first pages built (which topics). *Provisional:* by request, then by most-relied-on.
-- **OD-5:** whether the library's byte budget has a default. *Provisional:* 5 GB per workspace, configurable.
+## 13. Decisions (operator, 2026-10-29)
+- **D-1:** private-archival full capture of schematics and instructions is allowed when the operator flags it; it is never shared through Xenia or bundles and never used externally (§10.1). Private text may appear in prompts to the operator's own model providers by default (`[library] private_to_models`).
+- **D-2:** excerpts are at most **4 KiB** each; the per-source total is 10% of the work or 16 KiB, whichever is smaller; a generated page quotes at most 1 KiB. **Full capture is not bound by these** (§3.6) and bundles may include full text for retrieval where the licence allows (§7).
+- **D-3:** claims are separate records, since one claim may cite several sources. In Xenia the kind is `fact`, because `claim` already names a Phase 3 work claim.
+- **D-4:** the first pages are built on request, then for the most-relied-on topics.
+- **D-5:** library budget default **20 GB per install**, per-source 64 MiB text and 512 MiB total, all configurable.
+- **D-6:** the library is one store per install with per-claim scope (§2).
+- **D-7:** the 30-day recheck on open (§3.5), takedown (§3.7), source reliability (§3.8), robust anchors (§4.1), freshness by kind (§4.1), page changes in the digest (§6, §9), and building small first (SK0 to SK3 before pages and acquisition) are adopted.
