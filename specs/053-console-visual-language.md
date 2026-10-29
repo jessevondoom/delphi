@@ -1,9 +1,9 @@
 ---
 id: spec-053-console-visual-language
-title: "053: Console visual language: one vocabulary of colour, glyph and weight, status bullets in a gutter, and a composer that shows where you are (draft)"
+title: "053: Console visual language: one vocabulary of colour, glyph and weight, status bullets in a gutter, and a composer that shows where you are"
 author: architect
 timestamp: 2026-10-28T21:10:00Z
-status: draft   # a proposal, not permission to build (No Spec, No Build). Needs operator approval; open decisions in §8.
+status: approved   # by the operator, 2026-10-28 ("merge and approve all, follow the rest of your recommendations"); the provisional answers in §8 stand; nothing is built
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +14,7 @@ tags: [spec, ui, console, colour, accessibility, delight, draft]
 
 # Spec 053: Console visual language
 
-> Draft. It amends nothing yet; it proposes a single vocabulary on top of [`specs/005a`](005a-terminal-avatar-system.md), [`005e`](005e-console-ux-review-and-redesign.md) and `skills/tui-design`, and gives the status glyphs of `specs/052` (knowledge status; open PR) their home. The operator's observation (2026-10-28): the GitHub Copilot CLI's coloured prompt bar and coloured bullets show how well colour and layout can carry a terminal interface.
+> Approved 2026-10-28. It amends nothing yet; it proposes a single vocabulary on top of [`specs/005a`](005a-terminal-avatar-system.md), [`005e`](005e-console-ux-review-and-redesign.md) and `skills/tui-design`, and gives the status glyphs of [`specs/052`](052-knowledge-status-capture-on-contact-and-the-digest.md) their home. The operator's observation (2026-10-28): the GitHub Copilot CLI's coloured prompt bar and coloured bullets show how well colour and layout can carry a terminal interface.
 
 ## 1. Why
 `ui/src/theme.ts` already does the hard parts: colour depth from `COLORTERM` and `TERM`, `NO_COLOR`, dark and light, tinted message blocks, a no-boxes rule. What is missing is a **rule for what each colour and glyph means**, so a person learns it once and reads the whole screen at a glance. Today the styles are named by appearance (`accent`, `warn`, `crimson`) and used by feel; about 130 call sites use colour directly.
