@@ -46,11 +46,21 @@ fn source_words(trigger: &str) -> &'static str {
     }
 }
 
+/// The ids of everything the operator has already acted on in this mission.
+pub fn acted(events: &[EventEnvelope]) -> Vec<&str> {
+    events.iter().filter(|e| e.kind == "learn.digested").filter_map(|e| e.payload["id"].as_str()).collect()
+}
+
+/// How many items were acted on today; the quota of [`DAILY`] counts all kinds.
+pub fn used_today(events: &[EventEnvelope], now: &str) -> usize {
+    events.iter().filter(|e| e.kind == "learn.digested" && day_of(&e.timestamp) == day_of(now)).count()
+}
+
 /// The candidate to show now, and how many more wait today: the oldest live captured note nobody has acted on, unless
 /// today's quota is used. `now` is an RFC 3339 timestamp.
 pub fn next(mission: &str, events: &[EventEnvelope], now: &str) -> Option<(LiveNote, usize)> {
-    let acted: Vec<&str> = events.iter().filter(|e| e.kind == "learn.digested").filter_map(|e| e.payload["id"].as_str()).collect();
-    let today = events.iter().filter(|e| e.kind == "learn.digested" && day_of(&e.timestamp) == day_of(now)).count();
+    let acted = acted(events);
+    let today = used_today(events, now);
     if today >= DAILY {
         return None;
     }

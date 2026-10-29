@@ -76,6 +76,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
   const [mode, setMode] = useState('default');
   const [panel, setPanel] = useState<P.Panel | null>(null);
   const [noModel, setNoModel] = useState(false);
+  const [bundles, setBundles] = useState(0);
   const [search, setSearch] = useState<{ q: string; at: number; match: string | null } | null>(null);
 
   // Several keys can arrive in one read, so the key handler works on refs it updates itself, not on the last render.
@@ -366,13 +367,14 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
       .catch((er: any) => setArch((a) => A.researchRefused(a, er?.message ?? 'could not start the research')));
   };
   useEffect(() => stopPolling, []);
+  useEffect(() => { cmd.whenReady().then(() => cmd.call('org.view', {})).then((v: any) => setBundles(Array.isArray(v?.bundles) ? v.bundles.length : 0)).catch(() => {}); }, []);
 
   const openPanel = (p: P.Panel | null) => { panelRef.current = p; setPanel(p); if (p) { deckRef.current = 1; setDeck(1); } };
   // The organization deck: `org.view` is a read; `org.action` is the operator's own add, update or remove, which runs
   // the `delphi bundle` command and returns what it printed. The deck is re-read afterwards. No card is involved.
   const onOrg = (f: (cur: O.OrgPanel) => O.OrgPanel) => { const cur = panelRef.current; if (cur?.kind === 'org') openPanel(f(cur)); };
   const loadOrg = () => {
-    cmd.call('org.view', {}).then((view: any) => onOrg((cur) => ({ ...cur, view, error: '' })))
+    cmd.call('org.view', {}).then((view: any) => { setBundles(Array.isArray(view?.bundles) ? view.bundles.length : 0); return view; }).then((view: any) => onOrg((cur) => ({ ...cur, view, error: '' })))
       .catch((e) => onOrg((cur) => ({ ...cur, error: String(e?.message ?? JSON.stringify(e)) })));
   };
   const runOrg = (body: { action: O.Verb; path?: string; name?: string }) => {
@@ -687,8 +689,8 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
   }, [lineCount]);
 
   const comps = search ? null : completions(composer.chars, composer.cur, info, listDir);
-  const model: Model = { ...base, still, quitArmed, now, back, arch, links: lm ?? undefined, reader: rdr, help, menu: comps ? { items: comps.items, sel } : null, search: search ? { q: search.q, match: search.match } : null };
-  const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, arch, lm, rdr, sel, help, size, pal, expandTools, queue, search, inbox, mode, panel, noModel, still, quitArmed]);
+  const model: Model = { ...base, review: inbox.items.filter((d) => d.kind === 'learn').length, bundles, still, quitArmed, now, back, arch, links: lm ?? undefined, reader: rdr, help, menu: comps ? { items: comps.items, sel } : null, search: search ? { q: search.q, match: search.match } : null };
+  const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, arch, lm, rdr, sel, help, size, pal, expandTools, queue, search, inbox, mode, panel, noModel, still, quitArmed, bundles]);
   const shown = useSelection(term, lines);
   return (
     <Box flexDirection="column" height={size.h} width={size.w}>

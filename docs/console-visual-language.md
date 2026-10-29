@@ -36,4 +36,4 @@ Every transcript block has a one-column gutter at the left (a glyph and one pad 
 
 Claim glyphs (VL4): a result in the knowledge window and the reader show its 052 status as `theme.statusMark` (`○ noted`, `◐ checking`, `● validated`, `◆ contested`, `✕ disproved`, `· retired`) with its age; under 80 columns the word goes and the glyph stays.
 
-Not yet built (spec 053 VL3): the composer's scope line.
+Scope line and library counter (VL3): the footer under the composer carries, after tokens, mode and session, the scope (`workspace/mission`), the number of installed bundles, and the library counter `+N noted · M to review` (notes staged this session, learn decisions awaiting review). The counter is dim, never alert-coloured, and is dropped first, then bundles, then scope, when the line is narrow; tokens and mode stay.

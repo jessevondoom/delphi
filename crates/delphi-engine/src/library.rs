@@ -29,6 +29,8 @@ mod export;
 pub use export::Exported;
 #[path = "library_pages.rs"]
 pub mod pages;
+#[path = "library_review.rs"]
+pub mod review;
 #[path = "library_recheck.rs"]
 mod recheck;
 pub use recheck::Recheck;

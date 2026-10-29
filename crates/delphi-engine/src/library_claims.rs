@@ -80,7 +80,7 @@ fn today() -> String {
     delphi_core::time::now_rfc3339()[..10].to_string()
 }
 
-fn words(s: &str) -> HashSet<String> {
+pub(super) fn words(s: &str) -> HashSet<String> {
     s.split(|c: char| !c.is_alphanumeric()).filter(|w| w.chars().count() >= 4).map(|w| w.to_lowercase()).collect()
 }
 
@@ -442,11 +442,11 @@ impl Library {
         r
     }
 
-    fn origin_of(&self, c: &Value) -> String {
+    pub fn origin_of(&self, c: &Value) -> String {
         anchors_of(c).iter().filter_map(|a| a["source_id"].as_str()).filter_map(|s| self.read_meta(s)).find_map(|m| m["origin"].as_str().map(String::from)).unwrap_or_else(|| if anchors_of(c).is_empty() { "operator".into() } else { "library".into() })
     }
 
-    pub(super) fn rests_on_private(&self, c: &Value) -> bool {
+    pub fn rests_on_private(&self, c: &Value) -> bool {
         anchors_of(c).iter().filter_map(|a| a["source_id"].as_str()).filter_map(|s| self.read_meta(s)).any(|m| is_private(&m))
     }
 
