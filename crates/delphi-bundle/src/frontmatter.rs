@@ -87,8 +87,16 @@ fn pointers(v: &Value, path: &str, r: &mut Report) {
         }
         let pin_kind = map.get(Value::String("pin".into())).and_then(|x| x.as_mapping()).and_then(|x| get_str(x, "kind")).unwrap_or("none");
         let lower = locator.to_ascii_lowercase();
-        if lower.starts_with("file:") || locator.starts_with('/') || locator.starts_with('~') || locator.starts_with('.') || lower.starts_with("delphi://") || locator.contains('\\') {
-            r.fail(7, &at, "file:, local-path and delphi:// locators are refused (specs/012 §4)");
+        if lower.starts_with("file:") || locator.starts_with('/') || locator.starts_with('~') || locator.starts_with('.') || locator.contains('\\') {
+            r.fail(7, &at, "file: and local-path locators are refused (specs/012 §4)");
+            continue;
+        }
+        if lower.starts_with("delphi:") {
+            r.fail(7, &at, "delphi:// is not a pointer scheme; use xenia:// (specs/012 §4)");
+            continue;
+        }
+        if lower == "xenia://cap" || lower.starts_with("xenia://cap/") {
+            r.fail(7, &at, "xenia://cap/ is reserved for capability URIs (specs/007 Plane 2), not built");
             continue;
         }
         let allowed: &[&str] = match scheme {
@@ -103,6 +111,9 @@ fn pointers(v: &Value, path: &str, r: &mut Report) {
         };
         if !allowed.contains(&pin_kind) {
             r.fail(7, &at, format!("pin.kind `{}` is not allowed for scheme `{}`", pin_kind, scheme));
+        }
+        if scheme == "xenia" && !lower.starts_with("xenia://") {
+            r.fail(7, &at, "a xenia locator is xenia://<kind>/<id>[@rev]");
         }
         if matches!(scheme, "https" | "git") {
             if !(lower.starts_with("https://") || (scheme == "git" && lower.starts_with("ssh://"))) {
