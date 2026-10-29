@@ -88,7 +88,21 @@ pub fn run(tree: &Tree) -> Report {
     check_links(tree, &mut r);
     check_abs_paths(tree, &mut r);
     check_councils(tree, &mut r);
+    check_memory_writes(tree, &mut r);
     r
+}
+
+// ── memory write paths (specs/050 ML-6) ─────────────────────────────────────
+
+/// Every path that writes memory must be listed, with its proof, in `delphi_engine::memory_audit`. Source repo only.
+fn check_memory_writes(tree: &Tree, r: &mut Report) {
+    if tree.mode != Mode::Repo || !tree.files.contains_key("crates/delphi-engine/src/memory_audit.rs") {
+        return;
+    }
+    let sources: Vec<(String, String)> = tree.with_ext(&[".rs"]).filter(|k| k.starts_with("crates/")).filter_map(|k| Some((k.clone(), tree.read(k)?))).collect();
+    for (path, msg) in delphi_engine::memory_audit::audit(&sources) {
+        r.fail("memory-write-sites", path, msg);
+    }
 }
 
 // ── Council artifacts (specs/003 §4.1) ──────────────────────────────────────
