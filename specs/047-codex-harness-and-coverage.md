@@ -16,7 +16,7 @@ tags: [spec, harness, codex, openai, coverage]
 
 Extends [`specs/046`](046-harness-and-openai-coverage.md) (the classification method and the manifest format of its §6), [`020`](020-harness-tool-bridge.md) and [`021`](021-harness-cli-features.md). Delphi drives `claude` and `agy` as subscription "harness" seats; this adds the Codex CLI (`codex`) as a third, on a ChatGPT login or a `CODEX_API_KEY`.
 
-**S0 (§5), S1 and the introspection half of S2 (S2a: detection in `setup`, `doctor` and `capabilities`) are built; the approval bridge (S2b) and S3 are not.** S1: `Cli::Codex` in `harness.rs`, read-only `exec --json` seats, structured output, API-key mode (`CODEX_API_KEY`); a Builder is refused and every Codex span starts untrusted (L0). Section 2 is what OpenAI's docs say; §5 corrects it from the installed CLI.
+**S0 (§5), S1, S2a (detection in `setup`, `doctor` and `capabilities`) and the S2b transport (§5.1) are built; the Codex Builder and S3 are not.** S1: `Cli::Codex` in `harness.rs`, read-only `exec --json` seats, structured output, API-key mode (`CODEX_API_KEY`); a Builder is refused and every Codex span starts untrusted (L0). Section 2 is what OpenAI's docs say; §5 corrects it from the installed CLI.
 
 ## 1. Principles
 
@@ -123,6 +123,8 @@ What a tool-using span does, and whether `app-server` can carry Delphi's approva
 - **Unprobed**: a file-change approval, `workspace-write` with a `writableRoots` list for a Builder's worktree, an approval left unanswered (timeout behavior), and whether a Delphi-side deny of an `acceptForSession`-style proposal is respected.
 
 **S2b build plan.** A second transport for the Codex seat, `codex app-server --stdio`, behind the same `Session`/`Event` surface: the JSON-RPC client maps notifications to `Event`s (Init, Text/Delta, ToolUse/ToolResult, Usage, Result), maps each approval request to `Event::Permission` (a command to `Bash`, a file change to `Edit`) so the existing `harness_decide` judges it, and `Session::decide` answers with `accept` or `decline` only. A Builder runs `workspace-write` with `writableRoots` = its worktree and `approvalPolicy = on-request`; readers keep the `exec` path. A Codex Builder stays refused until the file-change and `writableRoots` rows above have been probed and a `delphi endpoints test --probe` conformance record exists (OD-1), as with agy.
+
+**S2b as built (2026-10-29).** `CodexAppServer` in `harness.rs` is the JSON-RPC client; `Opts.app_server` selects it (off by default, nothing sets it yet) and `Session::decide` answers with `accept` or `decline` only. Probed again on `codex-cli 0.165.0`: `initialize` answers `{userAgent, codexHome, ...}`; `thread/start` answers `{thread:{id,...}}`; `thread/tokenUsage/updated` carries `tokenUsage.total` and `.last` as `{totalTokens, inputTokens, cachedInputTokens, cacheWriteInputTokens, outputTokens, reasoningOutputTokens}`; a `commandExecution` item has `command`, `status` (`inProgress`, `completed`, `failed`, `declined`), `aggregatedOutput`, `exitCode`. Deviations from the plan above, both because they are unprobed: the thread is always `read-only` (no `workspace-write` or `writableRoots`, so no Builder), and `json_schema` is refused on this transport (`turn/start` `outputSchema` is unprobed; use `exec`). A file-change approval is mapped to `Edit` from its documented shape, not a captured one. Every server request other than the two approvals gets a JSON-RPC error, never a grant. The seat is still *unproven* until `delphi endpoints test --probe` has run it.
 
 ## 6. What this spec does not claim
 
