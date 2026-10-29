@@ -157,6 +157,9 @@ history = [                                    # every hash this install has had
 ]
 ```
 
+### 4.1a Sources in a bundle (amendment, 2026-10-29)
+A bundle's `sources/` section ([`specs/023`](023-org-bundle-standard.md) §2.1) is re-checked at `add` exactly as at `validate`, including the **licence gate**: a source whose licence is not in a redistributable class refuses the whole `add`. Accepted sources are imported into the install's library (`specs/055` §2) **as *not validated*** with their licence record, `attribution_text` and share-alike notice intact, and are indexed for retrieval in the workspace zone `bundles` at the tier of §3 (L2). `bundle remove` removes the import; a source the operator has since cited, raised or annotated is kept and marked *no longer in a bundle*. Nothing in `sources/` can raise a tier (§3.3).
+
 ### 4.2 `delphi bundle add <source> [--order N] [--no-vectors] [--skill-roles <skill>=<roles>] [--replace-publisher]`
 1. Fetch or open the source (directory, archive, marketplace entry, or a xenia `bundle` record's pinned tree). No network for a directory or archive.
 2. Run every step of `specs/023` §10 on the install. An integrity failure stops here with the report.
