@@ -70,7 +70,8 @@ CREATE TABLE IF NOT EXISTS kb_documents (
     status          TEXT NOT NULL DEFAULT 'active',
     updated_at      TEXT NOT NULL,
     mtime_ns        INTEGER NOT NULL DEFAULT 0,
-    size            INTEGER NOT NULL DEFAULT 0
+    size            INTEGER NOT NULL DEFAULT 0,
+    web_corroborated INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS kb_chunks (
     chunk_id        INTEGER PRIMARY KEY,
@@ -457,6 +458,11 @@ fn frontmatter_field(text: &str, key: &str) -> Option<String> {
     fm?.get(key)?.as_str().map(String::from)
 }
 
+fn frontmatter_flag(text: &str, key: &str) -> bool {
+    let (fm, _) = crate::workspace::split_frontmatter(text);
+    fm.and_then(|f| f.get(key).and_then(|v| v.as_bool())).unwrap_or(false)
+}
+
 const SOURCE_TYPES: [&str; 6] = ["user_ratified", "internal_empirical", "internal_generated", "federated_verified", "federated_peer", "external_untrusted"];
 
 impl Kb {
@@ -481,7 +487,7 @@ impl Kb {
         xenia::ensure(&conn)?;
         // An index made before files were compared by modification time gains the columns; 0 means "read it once".
         let columns: Vec<String> = conn.prepare("PRAGMA table_info(kb_documents)")?.query_map([], |r| r.get::<_, String>(1))?.flatten().collect();
-        for (name, ddl) in [("mtime_ns", "ALTER TABLE kb_documents ADD COLUMN mtime_ns INTEGER NOT NULL DEFAULT 0"), ("size", "ALTER TABLE kb_documents ADD COLUMN size INTEGER NOT NULL DEFAULT 0")] {
+        for (name, ddl) in [("mtime_ns", "ALTER TABLE kb_documents ADD COLUMN mtime_ns INTEGER NOT NULL DEFAULT 0"), ("size", "ALTER TABLE kb_documents ADD COLUMN size INTEGER NOT NULL DEFAULT 0"), ("web_corroborated", "ALTER TABLE kb_documents ADD COLUMN web_corroborated INTEGER NOT NULL DEFAULT 0")] {
             if !columns.iter().any(|c| c == name) {
                 conn.execute(ddl, [])?;
             }
@@ -529,7 +535,10 @@ impl Kb {
             drop_vectors(&tx, Some(*id))?;
             tx.execute("DELETE FROM kb_documents WHERE doc_id = ?1", [id])?; // cascades to the chunks, whose trigger clears both indexes
         }
-        tx.execute("INSERT INTO kb_documents(rel_path, zone, content_blake3, author, source_type, confidence, status, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)", params![rel_path, zone, hash, author, source_type, confidence, status, now])?;
+        // Only the daemon's fact store writes `context/facts/` (pathguard denies every agent), so only there is the
+        // marker read; anywhere else a file claiming `web_corroborated` is ignored (`specs/040` §7.3).
+        let web_corroborated = rel_path.starts_with("context/facts/") && frontmatter_flag(text, "web_corroborated") && frontmatter_field(text, "ratified_by").as_deref() == Some("validator") && frontmatter_field(text, "kind").as_deref() == Some("fact");
+        tx.execute("INSERT INTO kb_documents(rel_path, zone, content_blake3, author, source_type, confidence, status, updated_at, web_corroborated) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)", params![rel_path, zone, hash, author, source_type, confidence, status, now, web_corroborated as i64])?;
         let doc_id = tx.last_insert_rowid();
         for (i, c) in chunks_for(zone, text).into_iter().enumerate() {
             let ids = identifiers(&c.raw);
@@ -753,6 +762,11 @@ fn allowed_sql(opts: &SearchOpts) -> String {
     let mut allowed = String::from("1=1");
     if !opts.include_untrusted {
         allowed.push_str(" AND d.status = 'active' AND d.source_type NOT IN ('external_untrusted', 'federated_peer')");
+    }
+    // An attribution ("SOURCE states X") is not a fact: it is invisible to search, listing and reading, whatever else
+    // is asked for, unless `include_attributed` is (`specs/040` §24.3).
+    if !opts.include_attributed {
+        allowed.push_str(" AND d.status != 'attributed'");
     }
     if let Some(r) = &opts.role {
         // An agent sees only its own private memory (a whole path segment, not a prefix). A role name that is
@@ -1066,6 +1080,8 @@ pub struct SearchOpts {
     pub limit: usize,
     /// Include documents whose provenance is untrusted or federated-peer, and inactive ones.
     pub include_untrusted: bool,
+    /// Include `kind: attributed` records, which are otherwise never returned (`specs/040` §24.3).
+    pub include_attributed: bool,
     /// Which rankings take part. Everything by default; the recall eval compares them.
     pub legs: Legs,
     /// Weight of the vector ranking in the fusion (lexical rankings weigh 1.0; definitions 2.0).
@@ -1130,7 +1146,7 @@ pub enum Legs {
 
 impl Default for SearchOpts {
     fn default() -> Self {
-        SearchOpts { role: None, limit: 10, include_untrusted: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false, xenia: XeniaView::Off }
+        SearchOpts { role: None, limit: 10, include_untrusted: false, include_attributed: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false, xenia: XeniaView::Off }
     }
 }
 
@@ -1284,8 +1300,8 @@ impl Kb {
         let mut hits = Vec::new();
         let mut readiness: HashMap<String, Option<String>> = HashMap::new();
         for (id, s) in order.into_iter().take(opts.limit.min(10)) {
-            let row = self.conn.query_row("SELECT c.rel_path, c.start_line, c.end_line, c.heading_path, c.raw_content, d.content_blake3, d.zone, d.source_type, d.status FROM kb_chunks c JOIN kb_documents d ON d.doc_id = c.doc_id WHERE c.chunk_id = ?1", [id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?, r.get::<_, String>(7)?, r.get::<_, String>(8)?)));
-            let Ok((rel_path, a, b, heading_path, raw, blake3, zone, tier_name, doc_status)) = row else { continue };
+            let row = self.conn.query_row("SELECT c.rel_path, c.start_line, c.end_line, c.heading_path, c.raw_content, d.content_blake3, d.zone, d.source_type, d.status, d.web_corroborated FROM kb_chunks c JOIN kb_documents d ON d.doc_id = c.doc_id WHERE c.chunk_id = ?1", [id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?, r.get::<_, String>(7)?, r.get::<_, String>(8)?, r.get::<_, i64>(9)? != 0)));
+            let Ok((rel_path, a, b, heading_path, raw, blake3, zone, tier_name, doc_status, web_corroborated)) = row else { continue };
             let preview = raw.lines().filter(|l| !l.trim().is_empty()).take(3).map(|l| l.chars().take(160).collect::<String>()).collect::<Vec<_>>().join("\n");
             let pointer = match rel_path.strip_prefix("bundles/") {
                 Some(rest) => format!("@bundle/{}#L{}-L{}", rest, a, b), // the logical path an agent reads it by
@@ -1298,7 +1314,7 @@ impl Kb {
                     .clone(),
                 None => None,
             };
-            let ks = delphi_core::knowledge_status::derive(&zone, &tier_name, &doc_status);
+            let ks = if rel_path.starts_with("context/facts/") { delphi_core::knowledge_status::derive_fact(&tier_name, &doc_status, web_corroborated) } else { delphi_core::knowledge_status::derive(&zone, &tier_name, &doc_status) };
             hits.push(Hit { pointer, rel_path, start_line: a as usize, end_line: b as usize, heading_path, blake3, preview, score: s, note, status: ks.as_str(), label: ks.label() });
         }
         Ok((hits, best_rerank))
@@ -1983,6 +1999,32 @@ mod tests {
         assert_eq!(of("memory/agents/builder/lessons.md"), ("noted", "not validated"), "its frontmatter says user_ratified; that is a claim");
         assert_eq!(of("knowledge/web.md"), ("noted", "not validated"), "research output at L2");
         assert_eq!(of("agents/a/AGENT.md"), ("validated", "validated"));
+    }
+
+    #[test]
+    fn facts_are_validated_only_by_the_daemons_marker_attributions_stay_out_and_lowered_records_say_so() {
+        let fact = |id: &str, kind: &str, status: &str, marker: &str, by: &str| format!("---\nid: {id}\nsource_type: internal_generated\nstatus: {status}\nkind: {kind}\nratified_by: {by}\n{marker}---\n# L\n\nquokka claim\n");
+        let kb = kb_with(&[
+            ("context/facts/fact-a.md", "context", &fact("fact-a", "fact", "active", "web_corroborated: true\n", "validator")),
+            ("context/facts/fact-b.md", "context", &fact("fact-b", "fact", "contested", "web_corroborated: true\n", "validator")),
+            ("context/facts/attr-c.md", "context", &fact("attr-c", "attributed", "attributed", "", "validator")),
+            ("context/facts/disp-d.md", "context", &fact("disp-d", "disproved", "disproved", "", "validator")),
+            ("context/facts/fact-e.md", "context", &fact("fact-e", "fact", "active", "web_corroborated: true\n", "someone")),
+            ("team/notes.md", "team", &fact("notes", "fact", "active", "web_corroborated: true\n", "validator")),
+        ]);
+        let ask = |o: SearchOpts| -> Vec<(String, &'static str)> { kb.search("quokka", &o).unwrap().into_iter().map(|h| (h.rel_path, h.label)).collect() };
+        let default = ask(SearchOpts::default());
+        assert_eq!(default.iter().find(|g| g.0 == "context/facts/fact-a.md").map(|g| g.1), Some("validated"));
+        assert!(default.iter().all(|g| !g.0.contains("attr-c") && !g.0.contains("fact-b") && !g.0.contains("disp-d")), "lowered and attributed records are not in the default view");
+        let all = ask(SearchOpts { include_untrusted: true, ..Default::default() });
+        let of = |p: &str| all.iter().find(|g| g.0 == p).map(|g| g.1);
+        assert_eq!(of("context/facts/fact-b.md"), Some("not validated"), "contested");
+        assert_eq!(of("context/facts/disp-d.md"), Some("disproved"));
+        assert_eq!(of("context/facts/fact-e.md"), Some("not validated"), "the marker needs the daemon's ratified_by");
+        assert_eq!(of("team/notes.md"), Some("not validated"), "the marker counts only under context/facts/");
+        assert!(of("context/facts/attr-c.md").is_none(), "include_untrusted does not admit an attribution");
+        let with = ask(SearchOpts { include_untrusted: true, include_attributed: true, ..Default::default() });
+        assert!(with.iter().any(|g| g.0 == "context/facts/attr-c.md" && g.1 == "not validated"));
     }
 
     #[test]
