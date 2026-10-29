@@ -374,7 +374,7 @@ const SWITCH = { search: 'shift+tab  expand', expand: 'shift+tab  search' } as c
 
 export const KIND_ORDER = ['research', 'docs', 'spec', 'lesson', 'mission', 'skill', 'memory', 'other'];
 const KIND_LABEL: Record<string, string> = { research: 'research', docs: 'docs', spec: 'specs', lesson: 'lessons', mission: 'missions', skill: 'skills', memory: 'memory', other: 'other' };
-const kindStyle = (k: string): ((s: string) => string) => (k === 'research' ? T.warn : k === 'docs' ? T.ok : k === 'spec' ? T.accent : k === 'lesson' ? chalk.magenta : k === 'mission' ? chalk.blue : T.dim);
+const kindStyle = (k: string): ((s: string) => string) => (k === 'research' ? T.warn : k === 'docs' ? T.ok : k === 'spec' ? T.accent : k === 'lesson' ? T.lesson : k === 'mission' ? T.mission : T.dim);
 
 /** The kinds that have results, in the spec's order: the chips after `all`. */
 export function chipKinds(a: Arch): string[] {

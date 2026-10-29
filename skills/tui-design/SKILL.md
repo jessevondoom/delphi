@@ -58,6 +58,7 @@ Terminal user interfaces for AI developer tools must solve for **developer cogni
 ### 1.3 Zero Emojis
 - **Strict ban on graphical emojis:** Emojis (`🏛️`, `📐`, `⭐`, `🔴`, `🤖`) vary widely in display width across terminal emulators (Ghostty, iTerm2, WezTerm, Kitty, Alacritty), causing misaligned columns and visual noise.
 - **Express state through typography:** Use Unicode geometric glyphs (`○`, `●`, `►`, `❯`, `✔`, `✖`), weight differentiation, and ANSI color palettes to communicate status cleanly.
+- **One vocabulary (spec 053):** colour and glyph follow the table in `docs/console-visual-language.md`; call sites use the semantic styles in `ui/src/theme.ts` (`alert`, `ok`, `accent`, `warn`, `auto`, `link`, `mark(...)`), never a raw colour, and every meaning has a glyph or weight form for no colour.
 
 ### 1.4 Single Full-Window Observer (No Internal Panes)
 - **No window multiplexing inside the client:** Delphi never tiles or splits panes internally. Every view in `delphi observe` expands dynamically to 100% of the terminal geometry, reacting cleanly to `SIGWINCH`.

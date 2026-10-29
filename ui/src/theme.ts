@@ -63,20 +63,57 @@ const plainStyle = chalk as ChalkInstance;
 /** `colour` normally; `none` when there is no colour, so structure and emphasis survive. */
 const by = (colour: Style, none: Style = (s) => s): Style => (s) => (caps.color === 'none' ? none : colour)(s);
 
-// The semantic palette. Delphi draws with the terminal's own foreground and background, the ANSI colours and
-// attributes (`005e` §4.1), so every theme the person has chosen is the palette; role colours are the one exception.
+// The semantic vocabulary (`specs/053` §3, docs/console-visual-language.md). Each style answers one
+// question and has three looks: `rich` (256 and true colour), `basic` (16 colours) and `none` (no colour: weight
+// or a glyph carries the meaning). Delphi draws with the terminal's own foreground and background, the ANSI colours
+// and attributes (`005e` §4.1), so every theme the person has chosen is the palette; role colours are the one exception.
+type Look = { rich: Style; basic?: Style; none?: Style };
+const look = (l: Look): Style => (s) => (caps.color === 'none' ? l.none ?? ((x: string) => x) : caps.color === '16' ? l.basic ?? l.rich : l.rich)(s);
+
 export const body: Style = (s) => s;
 export const muted: Style = (s) => chalk.dim(s);
 /** The operator's own words step back. */
 export const operator: Style = muted;
-export const accent: Style = by((s) => chalk.cyan(s));
-export const link: Style = by((s) => chalk.cyan.underline(s), (s) => chalk.underline(s));
-export const ok: Style = by((s) => chalk.green(s));
-export const warn: Style = by((s) => chalk.yellow(s), (s) => chalk.bold(s));
-export const alert: Style = by((s) => chalk.red.bold(s), (s) => chalk.bold(s));
+/** Working, in progress; also the pointer and the keys: the one calm colour. */
+export const accent: Style = look({ rich: (s) => chalk.cyan(s) });
+/** A link or pointer: underlined, so it reads without colour. */
+export const link: Style = look({ rich: (s) => chalk.cyan.underline(s), none: (s) => chalk.underline(s) });
+/** Done, validated. */
+export const ok: Style = look({ rich: (s) => chalk.green(s) });
+/** Contested, caution. */
+export const warn: Style = look({ rich: (s) => chalk.yellow(s), none: (s) => chalk.bold(s) });
+/** Needs you, disproved, failed: the loudest style, reserved for what is waiting. */
+export const alert: Style = look({ rich: (s) => chalk.red.bold(s), none: (s) => chalk.bold(s) });
 /** Approval mode `auto`: the warning-red colour, bold, never reverse video. */
-export const auto: Style = (s) => (caps.color === 'none' ? chalk.bold(s) : caps.color === 'truecolor' ? chalk.bold.hex('#f97316')(s) : chalk.bold.redBright(s));
-export const heading: Style = by((s) => chalk.bold.yellow(s), (s) => chalk.bold(s));
+export const auto: Style = look({ rich: (s) => chalk.bold.hex('#f97316')(s), basic: (s) => chalk.bold.redBright(s), none: (s) => chalk.bold(s) });
+export const heading: Style = look({ rich: (s) => chalk.bold.yellow(s), none: (s) => chalk.bold(s) });
+/** Retired, superseded: dim, struck through where the terminal supports it. */
+export const retired: Style = (s) => chalk.dim.strikethrough(s);
+/** The kinds of archive entry that have a colour of their own (`043`). */
+export const lesson: Style = look({ rich: (s) => chalk.magenta(s) });
+export const mission: Style = look({ rich: (s) => chalk.blue(s) });
+const bold: Style = (s) => chalk.bold(s);
+
+export type Meaning = 'role' | 'needs-you' | 'working' | 'done' | 'noted' | 'contested' | 'disproved' | 'retired' | 'link' | 'mode';
+/** The table of spec 053 §3: what each meaning looks like with colour and without. `glyph` is `null` where there is none. */
+export const VOCABULARY: Record<Meaning, { style: Style; glyph: string | null; plain: string | null }> = {
+  'role': { style: bold, glyph: '●', plain: '●' },
+  'needs-you': { style: alert, glyph: '▲', plain: '!' },
+  'working': { style: accent, glyph: '◐', plain: '…' },
+  'done': { style: ok, glyph: '●', plain: '✔' },
+  'noted': { style: muted, glyph: '○', plain: '○' },
+  'contested': { style: warn, glyph: '◆', plain: '◆' },
+  'disproved': { style: alert, glyph: '✕', plain: '✕' },
+  'retired': { style: retired, glyph: '·', plain: '·' },
+  'link': { style: link, glyph: null, plain: null },
+  'mode': { style: auto, glyph: null, plain: null },
+};
+/** The glyph of a meaning in its style, or its no-colour form (`!`, `…`, `✔`) under no colour. */
+export const mark = (m: Meaning): string => {
+  const v = VOCABULARY[m];
+  const g = (caps.color === 'none' ? v.plain : v.glyph) ?? '';
+  return g ? v.style(g) : '';
+};
 
 /** Code and diffs in replies: colour only, never text. */
 export const syntax = {
