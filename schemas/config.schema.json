@@ -266,7 +266,8 @@
         "env_allow": { "type": "array", "items": { "type": "string" } },
         "profile": { "type": "string" },
         "effort": {}, "json_schema": {}, "session": {}, "add_dirs": {}, "sandbox": {}, "print_timeout_secs": {},
-        "max_turns": {}, "max_budget_usd": {}, "fallback_models": {}, "partial_messages": {}, "agents": {}, "settings": {}, "mode": {}
+        "max_turns": {}, "max_budget_usd": {}, "fallback_models": {}, "partial_messages": {}, "agents": {}, "settings": {}, "mode": {},
+        "quota_source": { "enum": ["gh", "off"] }
       },
       "additionalProperties": false
     }

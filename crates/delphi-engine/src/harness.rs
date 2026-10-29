@@ -200,6 +200,9 @@ pub enum Event {
     Permission(Permission),
     /// One assistant message's usage (the sum of these is the live meter).
     Usage(Tokens),
+    /// The vendor's own meter for the span (Copilot: `totalPremiumRequests`, `totalNanoAiu`), the input of the seat ledger
+    /// (`specs/051` §8). Counts only, never a price.
+    Meter { premium_requests: u64, nano_aiu: u64 },
     /// Share of the subscription's window used, 0 to 1.
     /// `status` is `allowed`, `allowed_warning` or `rejected` (empty when the CLI does not say); `resets_at` is Unix seconds or milliseconds, as the CLI sent it.
     RateLimit { utilization: f64, window: String, status: String, resets_at: Option<i64> },
@@ -422,6 +425,7 @@ pub struct CopilotParser {
     last: String,
     failure: Option<String>,
     tokens: Tokens,
+    meter: Option<(u64, u64)>,
     tools_seen: bool,
 }
 
@@ -459,6 +463,7 @@ impl CopilotParser {
                     let tools = d["promptCacheBreakState"].as_array().into_iter().flatten().flat_map(|s| s["models"].as_object().into_iter().flat_map(|ms| ms.values())).next().map(|mm| mm["tools"].as_array().into_iter().flatten().filter_map(|t| t["name"].as_str().map(String::from)).collect::<Vec<_>>()).unwrap_or_default();
                     out.push(Event::Init { session_id: String::new(), tools, mcp_servers: None });
                 }
+                self.meter = Some((d["totalPremiumRequests"].as_u64().unwrap_or(0), d["totalNanoAiu"].as_u64().unwrap_or(0)));
                 let t = &d["accountingSnapshot"]["tokenDetails"];
                 let n = |k: &str| t[k]["tokenCount"].as_u64().unwrap_or(0);
                 self.tokens = Tokens { input: n("input"), cache_read: n("cache_read"), cache_write: n("cache_write"), output: n("output") };
@@ -477,6 +482,9 @@ impl CopilotParser {
                 } else {
                     (self.last.clone(), false, "success")
                 };
+                if let Some((premium_requests, nano_aiu)) = self.meter.take() {
+                    out.push(Event::Meter { premium_requests, nano_aiu });
+                }
                 out.push(Event::Result { text, is_error, stop_reason: None, total_cost_usd: 0.0, usage: self.tokens, subtype: subtype.into(), structured: None });
             }
             _ => {}
@@ -1381,14 +1389,15 @@ echo '{"type":"result","subtype":"success","result":"fin","total_cost_usd":0.01,
         assert_eq!(ev[1], Event::ToolResult { id: "c1".into(), is_error: true });
         assert_eq!(ev[2], Event::Text("the answer".into()), "an empty tool-turn message is not text");
         assert!(matches!(&ev[3], Event::Init { tools, .. } if tools == &["view", "grep"]), "the seat record shows the tools really offered");
-        match &ev[4] {
+        assert_eq!(ev[4], Event::Meter { premium_requests: 1, nano_aiu: 1000 }, "the vendor's own count of the span, for the seat ledger");
+        match &ev[5] {
             Event::Result { text, is_error: false, usage, subtype, .. } => {
                 assert_eq!((text.as_str(), subtype.as_str()), ("the answer", "success"));
                 assert_eq!((usage.input, usage.cache_read, usage.cache_write, usage.output), (4, 7, 23045, 9));
             }
             other => panic!("{:?}", other),
         }
-        assert_eq!(ev.len(), 5);
+        assert_eq!(ev.len(), 6);
         assert!(CopilotParser::new("m-1").line("not json").is_empty());
     }
 

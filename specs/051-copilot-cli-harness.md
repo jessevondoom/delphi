@@ -18,7 +18,7 @@ Extends [`specs/046`](046-harness-and-openai-coverage.md) (the disposition metho
 
 > The operator's request, 2026-10-28: add or extend a spec for Copilot support. The operator believed both the OpenAI and Copilot accounts to be on a free tier; §6 shows the Copilot login is an organization-granted Business seat and the Codex login a Free plan. Quota is not transparent to the end user on either, and other operators will be on other tiers, so the design discovers it (§1.2) and assumes no tier.
 
-**S0 is built (§6): the manifest `crates/delphi-engine/coverage/copilot.cov`, its help snapshot, and the quota probes. S1 onward is not.** §2 is what the installed CLI says; §6 corrects it. The two facts that shape the design are in §1.
+**S0 is built (§6): the manifest `crates/delphi-engine/coverage/copilot.cov`, its help snapshot, and the quota probes. S1 (§7) and S1b (§8) are built; S2 onward is not.** §2 is what the installed CLI says; §6 corrects it. The two facts that shape the design are in §1.
 
 ## 1. What is different about this harness
 
@@ -199,4 +199,11 @@ Stacked on Codex S1 (#304, which generalised the seat plumbing) and S0 (#307). `
 
 **Verified:** unit tests on realistic stream lines, the model mismatch, the launch arguments (including that no allow flag or `-p` is ever passed and the allowlist is never empty), a session against a stand-in CLI (stdin, scratch home, token only in the environment), an engine run of a reading role (untrusted, billed to the service, token never in the log) and one refused for a wrong model; and one live run through `Session` on `claude-haiku-4.5` with the allowlisted environment: it answered, offered zero tools, metered tokens, kept its session in the scratch home and added nothing to `~/.copilot/session-state` (`cargo test -p delphi-engine --lib live_copilot -- --ignored`).
 
-**Not done, and not claimed:** the nano-AIU ledger and quota probe (S1b); that the seat is *proven* (`delphi endpoints test --probe` has not been run against it); a Builder (S2); the exhausted-quota text; behaviour on a machine where the login is not in the keychain. The task scratch directory is per task, not per span, so retries share one `.copilot-home`, and it is not deleted by this change.
+**Not done, and not claimed:** that the seat is *proven* (`delphi endpoints test --probe` has not been run against it); a Builder (S2); the exhausted-quota text; behaviour on a machine where the login is not in the keychain. The task scratch directory is per task, not per span, so retries share one `.copilot-home`, and it is not deleted by this change.
+
+## 8. S1b as built (2026-10-29)
+
+- **The ledger is the event log.** `CopilotParser` emits `Event::Meter {premium_requests, nano_aiu}` from the last `session.usage_checkpoint` (before the `result`), and `harness.cost` carries `premium_requests` and `nano_aiu` for a span whose vendor counts its own units (no other seat adds them). No new store: the sum over the log is Delphi's own live number, and the server's snapshot is a reconciliation only (§6.1 finding 2).
+- **The quota probe** is `crates/delphi-engine/src/quota.rs`: `Reading` (every field optional; missing is *unknown*), `codex_reading` and `copilot_reading` (one per meter kind), `describe`, `exhaustion` (a limit the vendor says is reached, and not a pool that bills past its end, which is the operator's call), `read_codex` (Codex's app-server on stdio, no model call, killed at a timeout) and `read_copilot_via_gh` (`gh api /copilot_internal/user`). No plan name is ever branched on.
+- **`delphi doctor`** shows each Codex seat's meter, and a Copilot seat's only when `[harness.copilot] quota_source = "gh"` (off by default: a second credential and an undocumented endpoint, read-only). A seat that reports nothing is *skipped as unknown*, never failed or demoted.
+- **Not done:** routing and failover reading `Reading` and the ledger (`exhaustion` has no caller outside the probe yet, so a seat's position is unchanged: OD-3 is met by "nothing is ranked", not yet by headroom); the 20 % ceiling of OD-2; a per-span cost check against a known balance (§6.1 finding 3); the exhausted-quota text (probe g). These need a design for where the router reads the log, so they are the next slice.
