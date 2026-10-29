@@ -55,6 +55,18 @@ pub fn unquarantine(ws: &Path, fact: &str, reason: &str) -> Result<String, Strin
     Ok(format!("{fact} is out of quarantine; the reason is journaled as yours\n"))
 }
 
+pub fn more(ws: &Path, mission: &str, reason: &str) -> Result<String, String> {
+    Ok(format!("{}; the raise is journaled as yours\n", fact_audit::raise_share(&state_dir(ws), mission, reason, now())?))
+}
+
+pub fn queue(ws: &Path) -> String {
+    let q = fact_audit::queue(&state_dir(ws));
+    if q.is_empty() {
+        return "no claim is waiting for review\n".into();
+    }
+    q.iter().map(|(f, n)| format!("{f}  referenced {n} time(s)  not validated (budget reached)\n")).collect()
+}
+
 pub fn retract(ws: &Path) -> String {
     let r = fact_audit::retract_all(ws, &state_dir(ws), &FactStore::new(ws), now());
     let mut out = format!("retracted {} fact(s); none was deleted, each is marked superseded by its retraction\n", r.retracted.len());

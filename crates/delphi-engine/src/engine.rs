@@ -1436,8 +1436,16 @@ impl Engine {
     /// The tools this span is offered: the built-ins its scope allows, then the ones its manifest's `execute` list
     /// adds, then connector tools. An API span sends them with every turn; a harness span gets them over the bridge
     /// (`bridge.rs`), so both seats have the same Delphi tools for the same role.
+    /// The validator's mode now (`min(config, latch)`), so tools follow a mode change without a restart (§25 V2d-2).
+    fn validator_off(&self) -> bool {
+        crate::fact_mode::effective(self.cfg.get().validator.mode, &crate::fact_mode::state_dir(&self.ws.dir)).mode == delphi_adapter::config::ValidatorMode::Off
+    }
+
     pub(crate) async fn span_tool_defs(&self, sc: &SpanCtx) -> Result<Vec<ToolDef>, EngineError> {
         let mut defs = self.tools.defs(!sc.manifest.write.is_empty());
+        if self.validator_off() {
+            defs.retain(|d| !crate::fact_tools::NAMES.contains(&d.name.as_str()));
+        }
         if sc.manifest.execute.iter().any(|e| e == "agent-dispatch") {
             defs.push(dispatch_def());
         }
@@ -1522,6 +1530,9 @@ impl Engine {
         }
         if let Some((connector, tool)) = self.connectors.parse_wire(name) {
             return self.exec_connector(sc, call_id, &connector, &tool, args).await;
+        }
+        if self.validator_off() && crate::fact_tools::NAMES.contains(&name) {
+            return Ok(tool_result_error("the validator is off".to_string()));
         }
         let mut c = match self.tools.classify(name, args) {
             Ok(c) => c,

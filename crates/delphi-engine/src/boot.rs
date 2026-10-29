@@ -302,7 +302,6 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
     // A hook left out for being malformed is Delphi less strict than the operator meant: say so on attach.
     notices.extend(crate::hooks::parse(&root).1.into_iter().map(|p| format!("hooks: {}", p)));
     let pool = Arc::new(crate::pool::Pool::open(Some(ws_dir.join("local/pool-state.json")), cfg.get().routing.tuning.clone(), crate::pool::system_clock()));
-    let validator_mode = cfg.get().validator.mode;
     let engine = Arc::new(Engine {
         validator: Default::default(),
         ws: WorkspacePaths { home: home.to_path_buf(), dir: ws_dir.to_path_buf() },
@@ -317,7 +316,7 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
         projects: project_roots(&root),
         rules,
         clock: Arc::new(now_rfc3339),
-        tools: Arc::new(crate::tools::Registry::builtin().with_validator(crate::fact_mode::effective(validator_mode, &crate::fact_mode::state_dir(ws_dir)).mode)),
+        tools: Arc::new(crate::tools::Registry::builtin().with_validator(delphi_adapter::config::ValidatorMode::Advisory)),
         exec: Arc::new(crate::exec::ExecEnv::new(ws_dir, crate::exec::ExecConfig::from_root(&root, &std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default()), delphi_sandbox::Sandbox::detect().ok())),
         injected: Default::default(),
         bundle_seen: Default::default(),
