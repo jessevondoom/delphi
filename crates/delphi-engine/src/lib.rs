@@ -3,10 +3,14 @@
 pub mod approval;
 pub mod fact_check;
 pub mod fact_fetch;
+pub mod fact_intake;
 pub mod fact_judge;
 pub mod fact_mode;
+pub mod fact_ratify;
 pub mod fact_run;
 pub mod fact_sources;
+pub mod fact_store;
+pub mod fact_tools;
 pub mod session;
 pub mod settings_run;
 pub mod settings_store;

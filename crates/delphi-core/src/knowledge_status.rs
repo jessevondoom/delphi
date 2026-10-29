@@ -61,6 +61,20 @@ pub fn derive(zone: &str, tier_name: &str, doc_status: &str) -> Status {
     }
 }
 
+/// The status of a record under `context/facts/` (`specs/040` §7.3, §23.1, §24.4). `web_corroborated` is the marker the
+/// daemon's fact store writes into a ratified fact (nothing else may write that directory); an `internal_generated`
+/// (L3) record with it and an active status reads as validated, and L3 without it stays `noted`. A `contested` or
+/// `disproved` status is the daemon lowering a record, and lowering always wins. An attribution is never validated.
+pub fn derive_fact(tier_name: &str, doc_status: &str, web_corroborated: bool) -> Status {
+    match doc_status {
+        "superseded" | "retired" | "expired" => Status::Retired,
+        "contested" => Status::Contested,
+        "disproved" => Status::Disproved,
+        "active" if web_corroborated && tier_name == Tier::L3.name() => Status::Validated,
+        _ => Status::Noted,
+    }
+}
+
 /// The operator label for a context slice read from a handoff pointer, from the tier the daemon stamped on it
 /// (`L0`..`L5`; anything else, such as `unavailable`, is not validated). The tier comes from the provenance index,
 /// never from the file's own frontmatter, so a file cannot label itself. Only slices read from a pointer carry a
@@ -79,6 +93,17 @@ pub fn slice_label(slice_label: &str, tier: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_ratified_fact_is_validated_only_with_the_marker_and_lowering_wins() {
+        assert_eq!(derive_fact("internal_generated", "active", true), Status::Validated);
+        assert_eq!(derive_fact("internal_generated", "active", false), Status::Noted);
+        assert_eq!(derive_fact("external_untrusted", "active", true), Status::Noted);
+        assert_eq!(derive_fact("internal_generated", "attributed", false).label(), "not validated");
+        assert_eq!(derive_fact("internal_generated", "contested", true), Status::Contested);
+        assert_eq!(derive_fact("internal_generated", "disproved", true).label(), "disproved");
+        assert_eq!(derive_fact("internal_generated", "superseded", true), Status::Retired);
+    }
 
     #[test]
     fn a_slice_read_from_a_pointer_is_labelled_by_its_stamped_tier() {
