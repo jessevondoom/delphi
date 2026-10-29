@@ -98,6 +98,11 @@ pub struct LiveNote {
 }
 
 impl LiveNote {
+    /// `fact` or `episode`, from the capture trigger (`specs/050` ML-1).
+    pub fn kind(&self) -> &'static str {
+        crate::frontmatter::kind_for_trigger(&self.trigger)
+    }
+
     /// `<mission>/<id>`: what `delphi learn show` and `drop` take.
     pub fn reference(&self) -> String {
         format!("{}/{}", self.mission, self.id)
@@ -347,8 +352,10 @@ pub fn source_type_for(tier: &str) -> &'static str {
 /// One note as a Markdown document for the knowledge base: labelled with where it came from and how far to trust it.
 pub fn note_document(n: &LiveNote) -> String {
     format!(
-        "---\nsource_type: {}\nauthor: daemon\nconfidence: low\nstatus: active\n---\n# Staged note {}\n\nStaged note ({} · tier {} · {} · mission {}{}{}). A candidate lesson only: not ratified, not guidance.\n\n{}\n",
+        "---\nsource_type: {}\nauthor: daemon\nconfidence: low\nstatus: active\nkind: {}\n{}---\n# Staged note {}\n\nStaged note ({} · tier {} · {} · mission {}{}{}). A candidate lesson only: not ratified, not guidance.\n\n{}\n",
         source_type_for(&n.tier),
+        n.kind(),
+        if n.timestamp.is_empty() { String::new() } else { format!("created: {0}\nlast_confirmed: {0}\n", n.timestamp) },
         n.id,
         n.trigger,
         n.tier,

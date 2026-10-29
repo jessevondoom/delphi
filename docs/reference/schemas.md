@@ -12,6 +12,7 @@
 | [`xenia-sidecar.schema.json`](../../schemas/xenia-sidecar.schema.json) | a record's `.sig.json` | [`specs/012`](../../specs/012-xenia-record-schema.md) §3 |
 | [`agent-manifest.schema.json`](../../schemas/agent-manifest.schema.json) | the frontmatter of `agents/<role>/AGENT.md` | [`specs/001`](../../specs/001-governance-and-manifests.md) |
 | [`skill-manifest.schema.json`](../../schemas/skill-manifest.schema.json) | the frontmatter of `skills/<name>/SKILL.md` | [`specs/001`](../../specs/001-governance-and-manifests.md) |
+| [`memory-entry.schema.json`](../../schemas/memory-entry.schema.json) | the optional `kind`, `created`, `last_confirmed`, `valid_until` frontmatter of a staged note, lesson or rules file | [`specs/050`](../../specs/050-memory-lifecycle-types-supersession-and-trace-mining.md) ML-1; the program also checks the date order |
 
 Where the program is stricter than a schema can say (cross-references, hashes, signatures, dates relative to today), the program wins. A schema is a contract for what a file *looks like*, not a promise that Delphi will accept it.
 

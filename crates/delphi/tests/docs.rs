@@ -53,7 +53,7 @@ fn every_schema_is_a_valid_json_schema() {
             n += 1;
         }
     }
-    assert!(n >= 8, "expected the schemas in {}", dir.display());
+    assert!(n >= 9, "expected the schemas in {}", dir.display());
 }
 
 #[test]
@@ -342,4 +342,13 @@ fn documentation_links_resolve() {
         }
     }
     assert!(broken.is_empty(), "broken links:\n{}", broken.join("\n"));
+}
+
+#[test]
+fn memory_entry_metadata_satisfies_its_schema() {
+    let ok = serde_json::json!({"source_type": "agent_note", "kind": "episode", "created": "2026-10-28T10:00:00.000Z", "last_confirmed": "2026-10-29", "valid_until": "2027-01-01"});
+    must_pass("memory-entry.schema.json", "staged note", &ok);
+    must_pass("memory-entry.schema.json", "old entry", &serde_json::json!({"status": "active"}));
+    must_fail("memory-entry.schema.json", "bad kind", &serde_json::json!({"kind": "opinion"}));
+    must_fail("memory-entry.schema.json", "bad date", &serde_json::json!({"created": "2026-13-01"}));
 }

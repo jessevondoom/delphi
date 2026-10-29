@@ -244,7 +244,7 @@ Drafted from a review of LangChain / LangSmith benchmarking, memory and context 
 | 049 | CX5 | structured session digest (amends 030 §4.3) | not started |
 | 049 | CX6 | compaction threshold arms; default decisions | not started |
 | 050 | ML1 | memory write-path audit and lint (first, before 045 H3 adds a write path) | not started |
-| 050 | ML2 | entry types and dates, schemas | not started |
+| 050 | ML2 | entry types and dates, schemas | built: `kind`/`created`/`last_confirmed`/`valid_until` validated in `frontmatter.rs`, written on staged notes, excluded from the rule byte cap, `schemas/memory-entry.schema.json` |
 | 050 | ML3 | validity, stale list in `/retro`, type-aware selection | not started |
 | 050 | ML4 | supersession candidates and ratification | not started |
 | 050 | ML5 | trace mining report; wires 045 T11 / H8 | not started |
