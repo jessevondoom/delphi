@@ -940,6 +940,25 @@ impl EngineService {
         Ok(json!({"status": r.status, "body": r.body}))
     }
 
+    /// `answer.accept`: the operator kept the last answer (`/pin`, `/export`). It only marks the answer in the mission log; the daemon
+    /// stages its opening sentence as a `noted` candidate (`specs/052` KS-2). Silent: the console fires it and shows nothing.
+    async fn answer_accept(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let how = p["how"].as_str().unwrap_or("");
+        if !["pin", "export"].contains(&how) {
+            return Err(err(code::INVALID_PARAMS, "`how` must be pin or export"));
+        }
+        let m = self.mission(p["mission_id"].as_str()).await?;
+        let events = m.replay().map_err(engine_err)?;
+        let Some(out) = events.iter().rev().find(|e| e.kind == "task.output" && e.task_id.is_some() && e.payload["status"] != "escalated") else {
+            return Ok(json!({"marked": false}));
+        };
+        let mut ev = EventEnvelope::new(&m.id, "answer.accepted", json!({"how": how, "output_seq": out.seq}));
+        ev.task_id = out.task_id.clone();
+        m.append(ev).await.map_err(|e| err(-32000, e.to_string()))?;
+        Ok(json!({"marked": true}))
+    }
+
     /// `research.start`: expand the knowledge base with what the trusted sources say about a topic (`specs/028` §10). Returns at once;
     /// `research.status` reports progress and, when the job ends, the report. One job at a time. Console only: it sends the topic to a
     /// search engine and writes into the workspace.
@@ -968,8 +987,13 @@ impl EngineService {
             }
         };
         let (engine, ws, home) = (self.engine.clone(), self.engine.ws.dir.clone(), self.engine.ws.home.clone());
+        let mission = self.mission(None).await.ok();
         tokio::spawn(async move {
             crate::research::run(deps, &topic, shared.clone()).await;
+            // The run is marked in the mission log so the daemon can stage a `noted` candidate for it (`specs/052` KS-2); silent.
+            if let (Some(m), Some(r)) = (&mission, shared.snapshot().report) {
+                let _ = m.append(EventEnvelope::new(&m.id, "research.finished", json!({"topic": topic, "new": r.new.len(), "updated": r.updated.len()}))).await;
+            }
             // What was written is searchable now: bring the index up to date (the words at once, the vectors in the background).
             if shared.snapshot().report.is_some_and(|r| !r.new.is_empty() || !r.updated.is_empty()) {
                 let _ = tokio::task::spawn_blocking(move || -> Result<(), crate::kb::KbError> {
@@ -1516,6 +1540,7 @@ impl Extension for ServiceExt {
                 "build.start" => svc.build_start(params, ctx).await,
                 "build.merge" => svc.build_merge(params, ctx).await,
                 "research.start" => svc.research_start(params, ctx).await,
+                "answer.accept" => svc.answer_accept(params, ctx).await,
                 "research.status" => svc.research_status(ctx).await,
                 "research.cancel" => svc.research_cancel(ctx).await,
                 "decisions.list" => svc.decisions_list(params).await,
