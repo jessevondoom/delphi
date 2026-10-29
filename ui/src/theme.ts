@@ -115,6 +115,12 @@ export const mark = (m: Meaning): string => {
   return g ? v.style(g) : '';
 };
 
+/** The six rungs of knowledge status (`specs/052` §3.1) and the vocabulary meaning each one is drawn as. */
+export type KnowledgeStatus = 'noted' | 'checking' | 'validated' | 'contested' | 'disproved' | 'retired';
+const STATUS_MEANING: Record<KnowledgeStatus, Meaning> = { noted: 'noted', checking: 'working', validated: 'done', contested: 'contested', disproved: 'disproved', retired: 'retired' };
+/** The glyph of a knowledge status in its style; static, so reduce motion has nothing to answer for. */
+export const statusMark = (k: KnowledgeStatus): string => mark(STATUS_MEANING[k]);
+
 /** Code and diffs in replies: colour only, never text. */
 export const syntax = {
   kw: by((s) => chalk.magenta(s)), str: by((s) => chalk.green(s)), num: by((s) => chalk.yellow(s)), com: muted, ty: by((s) => chalk.cyan(s)),
