@@ -154,7 +154,8 @@ fn parse_connect(head: &[u8]) -> Result<(String, u16), Denied> {
     Ok((host.to_ascii_lowercase(), port))
 }
 
-fn is_public(ip: IpAddr) -> bool {
+/// True for a globally routable address; the one address rule the daemon's fetchers share.
+pub fn is_public(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v) => {
             let o = v.octets();
