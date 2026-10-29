@@ -58,7 +58,7 @@ pub fn run(ws_dir: &Path, args: &[String]) -> i32 {
             for k in &entries {
                 let Some(ep) = cfg.endpoint(&k.endpoint_id) else { continue };
                 let (ok, note) = if ep.path == AccessPath::Harness {
-                    let program = if ep.harness.as_deref() == Some("agy") { "agy" } else { "claude" };
+                    let program = ep.harness.as_deref().and_then(crate::harness::Cli::from_harness).map_or("claude", |c| c.program());
                     let cap = probe_harness(&cfg, ep, program, clock()).await;
                     (cap.auth == "ok", cap.auth)
                 } else {

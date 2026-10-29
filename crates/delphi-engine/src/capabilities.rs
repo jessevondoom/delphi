@@ -321,7 +321,7 @@ pub async fn probe_harness_full(cfg: &Config, ep: &Endpoint, program: &str, now:
     // Any tier's model will do for a connectivity probe; the cheapest configured one.
     let model = ["fast", "workhorse", "frontier"].iter().find_map(|t| cfg.resolve_model(ep, t)).unwrap_or_default();
     cap.model_id = model.clone();
-    let profile = cfg.harness.get(if cli == Cli::Agy { "agy" } else { "claude" }).cloned().unwrap_or_default();
+    let profile = cfg.harness.get(cli.program()).cloned().unwrap_or_default();
     let gate_wanted = cli == Cli::Agy && profile.bridge;
     if cli == Cli::Agy && !gate_wanted {
         cap.degraded = true;
@@ -411,7 +411,7 @@ pub async fn probe_harness_full(cfg: &Config, ep: &Endpoint, program: &str, now:
                                 cap.notes.push(format!("account connectors loaded: {}", others.join(", ")));
                             }
                         }
-                        seat = Some(crate::inventory::SeatRecord { endpoint_id: ep.id.clone(), harness: if cli == Cli::Agy { "agy" } else { "claude" }.into(), model: model.clone(), tools, mcp_servers: mcp_servers.unwrap_or_default(), bridge: _bridge.is_some(), seen_unix: now });
+                        seat = Some(crate::inventory::SeatRecord { endpoint_id: ep.id.clone(), harness: cli.program().into(), model: model.clone(), tools, mcp_servers: mcp_servers.unwrap_or_default(), bridge: _bridge.is_some(), seen_unix: now });
                     }
                     Event::Usage(t) => cap.tokens_used += t.metered(),
                     Event::RateLimit { utilization, window, .. } => cap.notes.push(format!("{} window {:.0}% used", window.replace('_', "-"), utilization * 100.0)),

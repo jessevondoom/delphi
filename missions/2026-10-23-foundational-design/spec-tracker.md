@@ -33,12 +33,12 @@ One row per spec. Three separate questions, because they diverge: **Approved** (
 | 011 Xenia trust model | yes (text, by "ratify all") | yes (X0-X10) | tests, fuzz, scratch-store drill | Phase 1 build: X0-X10 merged (plan: xenia-phase-1-plan.md; gates in xenia-x10-verification.md). Gates 1-7 of 011 §1.4 met by automated tests; gate 8 (3-human, 2-week dogfood, X11), the independent red-team sweep and a live store with real admin identities are the operator's |
 | 012 Xenia record schema | yes (text, by "ratify all") | yes (kinds `memory`, `endorsement`, `tombstone`, and `bundle` from B8) | tests, fuzz | same; not exercised on a live store |
 | 013 Librarian and internal retrieval | yes | no ("scoped, not yet built") | n/a | after 011/012 |
-| 022 The sharing layer (overview, plan, decisions) | yes (decisions OD-1..OD-9, 2026-10-25; text on merge of PR #155) | no | n/a | B0: apply the 022 §5 amendments; then the slices below |
-| 023 Org bundle standard (manifest, layout, knowledge, skills, agents, behavior, vectors) | yes (2026-10-25) | no | n/a | B1 |
-| 024 Bundle provenance, adding, precedence, lifecycle | yes (2026-10-25) | no | n/a | B2, B4, B6 |
-| 025 Plugin, skill, agent and tool compatibility (incl. `delphi bundle serve`) | yes (2026-10-25) | no | n/a | B7, B12 |
-| 026 Team alignment and strategist integration | yes (2026-10-25) | no | n/a | B5, B9 |
-| 027 Authoring, transports, vector pipeline, evaluation | yes (2026-10-25) | no | n/a | B3, B8 (needs xenia X7/X8), B10, B11 |
+| 022 The sharing layer (overview, plan, decisions) | yes (decisions OD-1..OD-9, 2026-10-25; text on merge of PR #155; ratified in full 2026-10-28) | no | n/a | B0: apply the 022 §5 amendments; then the slices below |
+| 023 Org bundle standard (manifest, layout, knowledge, skills, agents, behavior, vectors) | yes (2026-10-25; ratified in full 2026-10-28) | no | n/a | B1 |
+| 024 Bundle provenance, adding, precedence, lifecycle | yes (2026-10-25; ratified in full 2026-10-28) | no | n/a | B2, B4, B6 |
+| 025 Plugin, skill, agent and tool compatibility (incl. `delphi bundle serve`) | yes (2026-10-25; ratified in full 2026-10-28) | no | n/a | B7, B12 |
+| 026 Team alignment and strategist integration | yes (2026-10-25; ratified in full 2026-10-28) | no | n/a | B5, B9 |
+| 027 Authoring, transports, vector pipeline, evaluation | yes (2026-10-25; ratified in full 2026-10-28) | no | n/a | B3, B8 (needs xenia X7/X8), B10, B11 |
 
 ### Sharing-layer slices (specs 022–027; estimates ±30%, nothing started)
 
@@ -59,7 +59,7 @@ One row per spec. Three separate questions, because they diverge: **Approved** (
 | B11 | evaluation: `kb eval --bundle` advisory gate (frozen R@10 ≥ 0.80, MRR ≥ 0.50, 0 controls), bench arm A3b / task set T8 with `--pilot`, pre-registration file format and hash pin, `bundle.cited` and `align.finding` telemetry, `bundle report` | 027 §10 | B2, B9, bench runner open items | 16 h | built (PR open): `kb eval --bundle <dir>` (frozen thresholds as constants, advisory, exit 0) and `package` writes `.delphi-bundle/eval.json` (outside `files.json`, shown in the add summary as publisher-reported); `bundle.cited` derived from the log at acceptance (card approved or merge approved) and `align.finding` added to observer `KINDS` (46); `bundle report <name>` (counts only); pre-registration nine-heading check in step 14, hash pin (`delphi bundle prereg check/digest`); bench A3b / T8 / `--pilot` / confirmatory refusals with a CI self-test; see 027 §10.3. Deferred: the blind grader and analysis (McNemar, bootstrap), any live paid run, the first pre-registration file and its pin, `kb eval --bundle <name>`, `bundle.cited` for harness spans, disputes and endorsement latency in the report |
 | B12 | `delphi bundle serve`: read-only stdio MCP server (resources = knowledge docs; tools = `search`, `get_doc`) over added bundles | 025 §10 | B3, B4 | 10 h | built (PR open; lexical search, vectors deferred; see 025 §10.2) |
 
-Total about 188 h. Critical path B0 → B1 → B2 → B4 → B5 → B9; B3, B6, B7 branch from B2; B8 waits on the xenia plan; B12 last. Resolved questions (2026-10-25): B-1 yes; B-2 L2 for unsigned local bundles; B-3 guidance block loads on add, no ratification; B-7 scripts never executed; B-8 serve as MCP yes (B12); B-12 rollback from lock history, no cards; B-14 agent `distill` yes with staging and scan; B-15 retrieval gate frozen now, bench thresholds frozen after a pilot in a hash-pinned pre-registration, telemetry descriptive; B-16 ship vectors when the embedder is Delphi's default. Still proposed (recommendations stand, operator may revisit): B-4 (`bundle` kind supersedes `skill`), B-5 (transport order), B-6 (person scope later), B-9 (`--agents-md` path), B-10 (slice caps), B-11 (`summary`/`domain` in 001 §5), B-13 (lenses opt-in), B-17 (no default host role).
+Total about 188 h. Critical path B0 → B1 → B2 → B4 → B5 → B9; B3, B6, B7 branch from B2; B8 waits on the xenia plan; B12 last. Resolved questions (2026-10-25): B-1 yes; B-2 L2 for unsigned local bundles; B-3 guidance block loads on add, no ratification; B-7 scripts never executed; B-8 serve as MCP yes (B12); B-12 rollback from lock history, no cards; B-14 agent `distill` yes with staging and scan; B-15 retrieval gate frozen now, bench thresholds frozen after a pilot in a hash-pinned pre-registration, telemetry descriptive; B-16 ship vectors when the embedder is Delphi's default. Ratified 2026-10-28 as recommended: B-4 (`bundle` kind supersedes `skill`), B-5 (transport order), B-6 (person scope later), B-9 (`--agents-md` path), B-10 (slice caps), B-11 (`summary`/`domain` in 001 §5), B-13 (lenses opt-in), B-17 (no default host role).
 
 ## Layered learning and training mode (spec 031, approved, 2026-10-26)
 
@@ -123,7 +123,7 @@ Council 011 (Haiku + two Gemini 3.8 Flash High): build with changes. Approved by
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
-| S0 | report truncation of the 20-agent catalog | not started |
+| S0 | report truncation of the 20-agent catalog | built (this PR): the slice ends with the "... and N more" note; `/org` open items and `delphi doctor` check 12 give the count |
 | S1 | registry entry, `[domains]`, validation | not started |
 | S2 | index, `search_agent_registry`, `delphi route`, eval set | not started |
 | S3 | `[extends.<role>]`: skills, guidance, team | not started |
@@ -152,9 +152,21 @@ Asked for by the operator on 2026-10-28. `codex` is not installed on this machin
 | Slice | Content | State |
 | :-- | :-- | :-- |
 | S0 | manifest from the real `--help`, probes (approval events, app-server stability) | manifest and first probe built (this PR); approval events and app-server not yet probed |
-| S1 | `Cli::Codex`, `exec --json` for read-only roles, structured output, API-key mode | not started |
+| S1 | `Cli::Codex`, `exec --json` for read-only roles, structured output, API-key mode | built (this PR): stand-in CLI tests plus one live `exec --json` probe on `codex-cli 0.165.0` (prompt on stdin via `-`, effort via `-c`); the seat is unproven until `delphi endpoints test --probe` has run it; `family = "openai"` is now accepted in `[access]` |
 | S2 | read-only introspection; approval bridge over `app-server`; Builder only after it is proven | not started |
 | S3 | `review` lane, vision, `execpolicy` lint | not started |
+
+## GitHub Copilot CLI harness (spec 051, approved 2026-10-28)
+
+Asked for and approved by the operator on 2026-10-28. `copilot` 1.0.105 is logged in on an organization-granted Business seat (not free; OD-7 asks whether work may go through it); `codex` 0.165.0 on a ChatGPT Free plan. OD-3: no fixed failover position, routing reads each vendor's quota meter. Only S0 is built.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| S0 | manifest from the real `--help`, nine probes (tool narrowing, stdin prompt, tool events, model catalog, multipliers, exhausted quota, `--acp`) | built (#307): `copilot.cov`, snapshot, quota reads of both CLIs, probes a-f, h, i (spec 051 §6.4: stdin prompt, tool narrowing, fail-closed writes, ACP approval bridge, model catalog with multipliers, `COPILOT_HOME` isolation); plus round 3 (§6.5): `allow_once`, MCP tool bridge via `--additional-mcp-config`, Codex `app-server` approvals; open: g (exhausted-quota text), `session/cancel`, ACP `session/new` `mcpServers` ignored |
+| S1 | `Cli::Copilot`, the stdin + `--output-format json` driver for read-only roles, model check, token mode | built (stacked on #304 and #307): spec 051 §7; one live run passed on `claude-haiku-4.5` |
+| S1b | per-seat nano-AIU ledger, `QuotaProbe`, doctor shows the plan, optional `gh api` reconciliation | not started |
+| S2 | read-only introspection; approval bridge; Builder only after it is proven | not started |
+| S3 | `--plan` lane, vision | not started |
 
 ## Knowledge window round 2 (spec 043, approved 2026-10-28)
 
@@ -166,7 +178,7 @@ Approved by the operator 2026-10-28 with the mockups in `specs/assets/kb-decisio
 | K2 | index PDF, DOCX, EPUB text; list media by name | not started |
 | K3 | reader provenance banner, `↗` rows, browser handoff with allow-list | not started |
 | K4 | summarize for me, with the cache | not started |
-| K5 | thin-reference hint, query carried into expand, expand pages' visuals | built (PR pending): the results line says `thin on reference: shift+tab to research this topic` under 3 `research`/`docs` results (console only; counts from the facets when present); `shift+tab` carries the query and starts nothing; the expand pages keep the box and show one line per source (`✔ ● ○ ✖`, form, licence; `research.status` gains `sources`) and the results table with `read, not kept` and `seen, not read`. Matches the mockups kb-8/kb-9 in text; unproven in a real terminal and against a live job |
+| K5 | thin-reference hint, query carried into expand, expand pages' visuals | merged (#299): the results line says `thin on reference: shift+tab to research this topic` under 3 `research`/`docs` results (console only; counts from the facets when present); `shift+tab` carries the query and starts nothing; the expand pages keep the box and show one line per source (`✔ ● ○ ✖`, form, licence; `research.status` gains `sources`) and the results table with `read, not kept` and `seen, not read`. Matches the mockups kb-8/kb-9 in text; unproven in a real terminal and against a live job |
 | K6 | docs regenerated, tracker | not started |
 
 ## The decisions pane (spec 044, approved 2026-10-28)
@@ -209,6 +221,34 @@ Approved by the operator 2026-10-28 ("make a plan, write a spec, and let's go").
 | H7 | family overlays | not started |
 | H8 | trace review skill | not started |
 | H9 | measure H1 to H5; set defaults | not started |
+
+## Benchmarking, context and memory (specs 048, 049, 050; drafted 2026-10-28)
+
+Drafted from a review of LangChain / LangSmith benchmarking, memory and context practice (recollection, unverified). Delphi uses no LangChain code; these take methods. **049 and 050 were approved by the operator on 2026-10-28**, with their provisional decisions accepted and the source check waived (every technique ships `off` or proposes only, and 048 measures it). **048 is still a draft**: its open decisions (efficiency flag threshold, external benchmark choice, CI use of behavior evals) are unanswered, and the GAIA-style anchor is under consideration. 049 refines slices H2/H3 of spec 045 and §4.3 of spec 030; 048 supplies the measuring instruments 045 H9 needs. A 049 or 050 slice that *measures* against 048 (CX2's retention numbers, CX4, CX5, CX6, ML6) waits for 048 BM1-BM3 to be approved and built; ML1, ML2, ML3 and CX1's code can start now, with defaults `off`.
+
+| Spec | Slice | Content | State |
+| :-- | :-- | :-- | :-- |
+| 048 | BM1 | harness arm kind (fixed model) and efficiency columns in the 037 report | draft |
+| 048 | BM2 | handoff fidelity eval (paraphrase loss) | draft |
+| 048 | BM3 | context retention eval | draft |
+| 048 | BM4 | tool-count degradation eval | draft |
+| 048 | BM5 | behavior suites (nudge, verify gate, budget, name_thread, record_change) | draft |
+| 048 | BM6 | external benchmark anchor (operator picks the subset) | draft |
+| 048 | BM7 | phase-effort arm (after 045 H4) | draft |
+| 049 | CX1 | argument trimming and offload previews (folded into 045 H2); handoff design check | not started |
+| 049 | CX2 | recoverable compaction (folded into 045 H3) | not started |
+| 049 | CX3 | context composition in accounting | not started |
+| 049 | CX4 | result summary plus handles between seats | not started |
+| 049 | CX5 | structured session digest (amends 030 §4.3) | not started |
+| 049 | CX6 | compaction threshold arms; default decisions | not started |
+| 050 | ML1 | memory write-path audit and lint (first, before 045 H3 adds a write path) | not started |
+| 050 | ML2 | entry types and dates, schemas | not started |
+| 050 | ML3 | validity, stale list in `/retro`, type-aware selection | not started |
+| 050 | ML4 | supersession candidates and ratification | not started |
+| 050 | ML5 | trace mining report; wires 045 T11 / H8 | not started |
+| 050 | ML6 | retention probes in the learning-loop suite | not started |
+
+Suggested order if approved: 048 BM1, 050 ML1, 049 CX1 with 045 H2, 048 BM2/BM3, then the rest.
 
 ## The validator role and fact ratification (spec 040, draft, merged 2026-10-28)
 

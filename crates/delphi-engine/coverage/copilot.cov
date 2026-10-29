@@ -1,0 +1,80 @@
+# Coverage of the GitHub `copilot` CLI, 1.0.105 (specs/051). Format and rules: crates/delphi-engine/src/coverage.rs.
+# Nothing is used yet: Copilot is not a Delphi harness until spec 051 S1 lands. `-C <dir>` has no long form, so it has no row: S1 passes it as the span's working directory.
+# kind | path | names | disposition | slice | reason
+
+# ── Flags that appear on several pages ──
+flag | * | --help, --version | na | | every CLI prints its help and version
+
+# ── Launch: one non-interactive prompt, JSONL out ──
+flag | . | --output-format | used | S1 | `json`: the span's event stream (spec 051 §2.1)
+flag | . | --prompt | refused | | the prompt goes on stdin with no `-p` (probed: `-p -` is a literal "-"), so it never reaches `ps`
+flag | . | --interactive, --silent, --stream, --plain-diff, --screen-reader, --banner, --no-color, --mouse, --no-mouse, --no-eager-powershell-resolution | na | | interactive display or text output a span does not use
+flag | . | --usage-output-file | planned | S2 | final usage as JSON; a cross-check of the stream's `session.usage_checkpoint`
+flag | . | --log-dir | used | S1 | the span's scratch directory for log files (probed: it does not move session state, which needs `COPILOT_HOME`)
+flag | . | --log-level | na | | the span keeps the default; hiding errors would hide the exhausted-quota output
+flag | . | --max-ai-credits | planned | S2 | a backstop only (minimum 30, a soft cap checked after each response); the real ceiling is Delphi's own ledger
+
+# ── Model and effort ──
+flag | . | --model | used | S1 | always explicit: the seat's family is the model's, never `auto` (spec 051 §1.1)
+flag | . | --reasoning-effort | used | S1 | the neutral `effort`
+flag | . | --context | planned | S2 | `long_context` off by default; S0 measures its cost
+flag | . | --auto-tier | refused | | Auto routing hides which model, and so which family, answered
+
+# ── Tools, paths, URLs: the narrowing gate ──
+flag | . | --available-tools | used | S1 | what the model can see. Probed: a list narrows to exactly those tools; an empty value (`=` or `""`) narrows nothing; a name that matches nothing yields zero tools plus a `session.info` warning. Never an empty list: a span with no tools gets a name that matches nothing, and the seat record shows the tools the stream reports
+flag | . | --excluded-tools | na | | the allowlist already decides what is offered
+flag | . | --deny-tool, --deny-url, --disallow-temp-dir | planned | S2 | always passed; deny beats allow
+flag | . | --allow-tool | planned | S2 | only for a ratified Builder in its worktree, after the approval bridge (S2) is proven
+flag | . | --allow-url, --add-dir | planned | S2 | only from a ratified block, as spec 021
+flag | . | --allow-all-tools, --allow-all, --yolo, --allow-all-paths, --allow-all-urls | refused | | grants every permission; never passed. `--allow-all-tools` is not needed: probed 2026-10-28, a headless run without it reads inside the working directory and denies everything else with a clean error
+flag | . | --assisted-approval | refused | | a probabilistic judge answers approvals; Delphi's approvals stay Delphi's (spec 047 §1.1)
+flag | . | --secret-env-vars | planned | S2 | the names of any variable Delphi puts in the child's environment
+flag | . | --attachment | planned | S3 | vision, off by default
+
+# ── Quiet and contained ──
+flag | . | --no-custom-instructions | used | S1 | always: Delphi supplies the governance text, the checkout's AGENTS.md is not a second voice
+flag | . | --disable-builtin-mcps | used | S1 | always: the built-in github-mcp-server reaches GitHub's cloud
+flag | . | --no-auto-update, --disable-client-telemetry, --no-ask-user, --no-experimental, --no-bash-env | used | S1 | always: a span must not change the binary, phone home, stall on a question nobody can answer, or enable experiments
+flag | . | --bash-env | refused | | sources the operator's BASH_ENV script into the span's shell
+flag | . | --sync-session | used | S1 | as `--sync-session=off`, always: no account-history sync from a span
+flag | . | --trust-folder | na | | not needed: every probe ran in a scratch directory without it
+
+# ── Sessions ──
+flag | . | --session-id, --resume, --name | planned | S2 | Delphi chooses the UUID and resumes by id only; picker and name forms are refused by omission
+flag | . | --continue | refused | | resumes the most recent session in the directory; directory-dependent, as Claude's `--continue`
+
+# ── MCP, plugins, protocol ──
+flag | . | --additional-mcp-config | planned | S2 | the transport for Delphi's tool bridge (spec 020), probed: a stdio server loads, its tools are `<server>-<tool>`, and `--allow-tool '<server>(<tool>)'` pre-approves one; the rest stay denied
+flag | . | --acp | planned | S2 | Agent Client Protocol on stdio: probed, it sends `session/request_permission` to the client and honors `reject`; it also lists the account's models. The approval bridge and the catalog read
+flag | . | --plugin-dir | planned | S2 | candidate for bundle skills, as Claude's; needs probing, hooks and bin never included
+flag | . | --disable-mcp-server | na | | the built-in servers are disabled wholesale
+flag | . | --enable-mcp-server, --mcp-github-auth, --allow-all-mcp-server-instructions, --enable-all-github-mcp-tools, --add-github-mcp-toolset, --add-github-mcp-tool | refused | | widens what reaches GitHub's cloud or the system prompt
+flag | . | --extension-sdk-path, --dynamic-retrieval, --experimental | refused | | loads other code or persists a choice in the operator's config
+
+# ── Modes and the vendor's own orchestration ──
+flag | . | --mode, --plan | planned | S3 | a read-only planning lane if S0 shows it cannot write; autopilot is refused
+flag | . | --autopilot, --max-autopilot-continues, --fleet, --agent | refused | | the CLI orchestrating its own continuations or sub-agents uses requests unseen; roles are Delphi's (spec 041)
+flag | . | --enable-memory | refused | | shared memory is Xenia's (spec 022)
+flag | . | --share, --share-gist | refused | | writes or publishes a transcript outside the sandbox
+flag | . | --connect, --host-environment, --host-compute-id | refused | | a remote session or the vendor's cloud is not a seat
+
+# ── Commands ──
+cmd | . | version | read-only | S0 | the manifest records the version
+cmd | . | completion | na | | shell completion
+cmd | . | app | refused | | opens the vendor's desktop app
+cmd | . | init, update, config | operator-only | | writes repository instructions, the installed CLI, or the operator's settings
+group | login | | operator-only | | signs in (browser, device code, token on stdin)
+group | memories | | refused | | the vendor's memory store; shared memory is Xenia's
+group | sessions | | operator-only | | imports into the operator's saved sessions
+group | workflow | | refused | | the CLI's own dynamic workflows
+group | sandbox | | na | | the CLI's own command sandbox; Delphi has its own sandbox crate
+group | mcp | | operator-only | | writes ~/.copilot/mcp-config.json
+cmd | mcp | list, get | read-only | S2 | the configured servers
+group | plugin | | operator-only | | installs or removes plugins and marketplaces
+cmd | plugin | list | read-only | S2 | the installed plugins
+cmd | plugin marketplace | list, browse | read-only | S2 | the registered marketplaces
+group | skill | | operator-only | | writes the operator's skills
+cmd | skill | list | read-only | S2 | the installed skills
+cmd | . | instruction, lsp | read-only | S2 | inspection groups; only their `list` is run
+cmd | instruction | list | read-only | S2 | which instruction files would load
+cmd | lsp | list | read-only | S2 | the language servers configured
