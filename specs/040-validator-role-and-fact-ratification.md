@@ -1,6 +1,6 @@
 ---
 id: spec-040-validator-role-and-fact-ratification
-title: "040: The Validator Role (Horkos) & Fact Ratification "
+title: "040: The Validator Role (Horkos) & Fact Ratification"
 author: architect
 timestamp: 2026-10-26T12:00:00Z
 status: approved   # approved 2026-10-28 by the operator ("merge and approve all, follow the rest of your recommendations. approve and improve the validator"); V1 may be built as scoped in §23; V2 and any scoring claim wait for the operator-labelled set (§23.4)
