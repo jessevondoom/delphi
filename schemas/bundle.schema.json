@@ -73,9 +73,28 @@
       "additionalProperties": {
         "type": "object",
         "required": ["role"],
-        "properties": { "role": { "$ref": "#/$defs/role" } },
+        "properties": {
+          "role": { "$ref": "#/$defs/role" },
+          "domain": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,31}$", "description": "One id from [domains]; default `general` (specs/041 section 3.1)." },
+          "tags": { "type": "array", "maxItems": 8, "items": { "type": "string", "pattern": "^[a-z0-9-]{1,24}$" } },
+          "not_for": { "type": "array", "maxItems": 8, "items": { "type": "string", "pattern": "^[a-z0-9-]{1,24}$" }, "description": "Anti-affinity tags: ranking is penalized when the query matches." },
+          "summary": { "type": "string", "maxLength": 200, "description": "Plain text; refused, never cut, when longer. Default: the first line of the agent's description." }
+        },
         "additionalProperties": false
-      }
+      },
+      "maxProperties": 100
+    },
+    "domains": {
+      "type": "object",
+      "description": "Named groups of specialists for the agent registry (specs/041 section 3.2). At most 12.",
+      "maxProperties": 12,
+      "additionalProperties": {
+        "type": "object",
+        "required": ["summary"],
+        "properties": { "summary": { "type": "string", "minLength": 1, "maxLength": 120 } },
+        "additionalProperties": false
+      },
+      "propertyNames": { "pattern": "^[a-z0-9][a-z0-9-]{0,31}$" }
     },
     "touches": {
       "type": "object",

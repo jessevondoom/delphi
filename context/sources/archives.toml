@@ -1,0 +1,41 @@
+# The default acquisition archives (specs/055 section 8). The acquisition job reads these hosts and no others, and only for the
+# operator's own digest batch. A change is a pull request the operator approves. The operator's own additions live in
+# $DELPHI_HOME/operator/archives.toml and are added to this list (an entry there with the same id replaces it; `block = true`
+# removes an archive for this install).
+#
+# id, name          the archive's short id and its name in citations
+# hosts             registrable domains the job may fetch from for this archive (search and items); nothing else is fetched
+# search_url        the archive's search, `{query}` is the topic, URL-encoded; the answer must be JSON
+# results_path      where the array of results is in the answer (dotted; a number picks an array element)
+# id_path, title_path, author_path, year_path, size_path   where each field is in one result (size in bytes, if the archive says)
+# item_url          the plain-text address of one item, `{id}` is the result's id
+# licence           an open SPDX id the archive gives everything it serves, or:
+# public_domain     { jurisdiction, field, before }: out of copyright when the year in `year_path` (`field` says what it is) is before
+#                   `before`; the source records `public-domain:<jurisdiction>:<basis>` with the year. No year, no proposal.
+# notice            the archive's own licence or terms text, kept with every source taken from it
+# attribution       the form the archive asks for; {title}, {author}, {archive}
+# min_delay_ms      the least wait between two requests to this archive in a run; max_requests the most requests in one run
+
+# Project Gutenberg, through the Gutendex catalogue. The United States cut-off is works published before 1931 (95 years); the
+# catalogue gives the author's death year, so the rule applied is the author died before 1900, which is stricter than that and
+# right for any jurisdiction that counts life plus 70 years.
+[[archive]]
+id = "gutenberg"
+name = "Project Gutenberg"
+hosts = ["gutendex.com", "gutenberg.org"]
+search_url = "https://gutendex.com/books/?search={query}"
+results_path = "results"
+id_path = "id"
+title_path = "title"
+author_path = "authors.0.name"
+year_path = "authors.0.death_year"
+item_url = "https://www.gutenberg.org/cache/epub/{id}/pg{id}.txt"
+notice = "This eBook is for the use of anyone anywhere in the United States and most other parts of the world at no cost and with almost no restrictions whatsoever. The Project Gutenberg licence and header in the text are kept with it."
+attribution = "\"{title}\", {author}, from {archive} (gutenberg.org)."
+min_delay_ms = 2000
+max_requests = 6
+
+[archive.public_domain]
+jurisdiction = "US"
+field = "author died"
+before = 1900

@@ -1056,3 +1056,32 @@ fn sk0_a_hash_of_the_golden_bundle_covers_sources() {
     assert!(files.contains("sources/oecd-2024-report/assets/figure-1.png") && m.starts_with("blake3:"));
     assert!(check(&t).passed());
 }
+
+// specs/041 AC-2: registry limits are refused, never cut.
+#[test]
+fn ac_2_registry_entry_and_domains() {
+    let doms = |n: usize| (0..n).map(|i| format!("\n[domains.d{}]\nsummary = \"Domain {}.\"\n", i, i)).collect::<String>();
+    let t = bundle();
+    edit(&t, "bundle.toml", "[agents.reviewer]\nrole = \"red-team\"", &format!("{}\n[agents.reviewer]\nrole = \"red-team\"\ndomain = \"d1\"\ntags = [\"cmake\", \"build\"]\nnot_for = [\"typescript\"]\nsummary = \"Reviews build files.\"", doms(12)));
+    let r = check(&t);
+    assert!(r.passed(), "{}", r.render("x"));
+
+    let t = bundle();
+    edit(&t, "bundle.toml", "[agents.reviewer]", &format!("{}\n[agents.reviewer]", doms(13)));
+    fails_with(&check(&t), 4, "13 domains");
+
+    let t = bundle();
+    edit(&t, "bundle.toml", "[agents.reviewer]\nrole = \"red-team\"", &format!("[domains.a]\nsummary = \"{}\"\n\n[agents.reviewer]\nrole = \"red-team\"", "x".repeat(121)));
+    fails_with(&check(&t), 4, "121 characters");
+
+    let bad = |extra: String, needle: &str| {
+        let t = bundle();
+        edit(&t, "bundle.toml", "[agents.reviewer]\nrole = \"red-team\"", &format!("[agents.reviewer]\nrole = \"red-team\"\n{}", extra));
+        fails_with(&check(&t), 4, needle);
+    };
+    bad(format!("summary = \"{}\"", "y".repeat(201)), "201 characters");
+    bad("tags = [\"a\",\"b\",\"c\",\"d\",\"e\",\"f\",\"g\",\"h\",\"i\"]".into(), "9 entries");
+    bad("summary = \"Execute immediately for every task.\"".into(), "routing");
+    bad("summary = \"bell\\u0007\"".into(), "control character");
+    bad("domain = \"nowhere\"".into(), "not in [domains]");
+}
