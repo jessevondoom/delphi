@@ -14,7 +14,7 @@ tags: [model-routing, claude, gemini, dynamic-scaling, thinking-budgets, cost-op
 
 > **Maintenance Rule:** **Orchestrator** and **Integrator** maintain this live registry of model capabilities, context windows, thinking controls, empirical strengths/blind spots, and cost/latency profiles. When `delphi update` runs or new frontier models release, **Scout**/**Investigator** benchmark the changes and **Orchestrator** updates this matrix.
 
-> **Other families and how a model is chosen.** This matrix is what Delphi has measured on Claude and Gemini. For OpenAI/Codex, GPT-OSS and Copilot, the vendor-neutral capability classes, and the outside evidence for the plan and execute split, see [`model-selection-evidence.md`](model-selection-evidence.md) (external, dated). The proposal for choosing models by discovery rather than by name is [`specs/056`](../specs/056-discovered-model-assignment.md) (draft).
+> **Other families and how a model is chosen.** This matrix is what Delphi has measured on Claude and Gemini. For OpenAI/Codex, GPT-OSS and Copilot, the vendor-neutral capability classes, and the outside evidence for the plan and execute split, see [`model-selection-evidence.md`](model-selection-evidence.md) (external, dated). How a model is chosen by discovery rather than by name is [`specs/056`](../specs/056-discovered-model-assignment.md) (approved 2026-10-29); the class rules that place a discovered model are the data file `crates/delphi-engine/src/model_classes.toml`, built from §2 of that note.
 
 ---
 

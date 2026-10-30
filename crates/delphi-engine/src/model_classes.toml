@@ -1,0 +1,30 @@
+# Model class rules (specs/056 §2.2). A ratified data file: a new vendor needs a row here, not a release.
+# The first rule whose conditions all hold places a model. No model names: only attributes.
+# Attributes: local (runs on this machine), tier (the endpoint's mapping: fast, workhorse, frontier),
+# can_think (the catalog allows a thinking budget), cost_class (metered, subscription, local), min_context (tokens).
+# A workspace may replace this file with <workspace>/model-classes.toml (a ratified edit).
+version = 1
+
+# A model whose context window is at least this many times the median of its family (three or more known) is also wide.
+[wide]
+min_context_ratio = 3.0
+
+[[rule]]
+id = "open-weights-here"
+local = true
+class = "local"
+
+[[rule]]
+id = "top-tier"
+tier = "frontier"
+class = "deep"
+
+[[rule]]
+id = "mid-tier"
+tier = "workhorse"
+class = "steady"
+
+[[rule]]
+id = "smallest-tier"
+tier = "fast"
+class = "quick"
