@@ -566,7 +566,7 @@ impl PtyConsole {
             cmd.current_dir(d);
         }
         // A console on a pty counts as interactive: without DELPHI_NO_WINDOWS a test that reached `/observe` would open a real Terminal window.
-        cmd.args(args).arg("--home").arg(home).env("DELPHI_E2E_KEY", KEY).env("TERM", "xterm-256color").env("DELPHI_NO_WINDOWS", "1").env_remove("TMUX").envs(envs.iter().copied()).stdin(dup(slave)).stdout(dup(slave)).stderr(dup(slave));
+        cmd.args(args).arg("--home").arg(home).env("DELPHI_E2E_KEY", KEY).env("TERM", "xterm-256color").env("DELPHI_NO_WINDOWS", "1").env_remove("TMUX").env_remove("NO_COLOR").envs(envs.iter().copied()).stdin(dup(slave)).stdout(dup(slave)).stderr(dup(slave));
         unsafe {
             cmd.pre_exec(|| {
                 libc::setsid();

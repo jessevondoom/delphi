@@ -50,29 +50,29 @@ fn outside_a_repository_it_uses_a_default_workspace_with_only_the_built_in_conte
     let (code, out) = run_bare(&home, &cwd, &[]);
     stop_daemon(&home, "default");
     assert_eq!(code, 0, "{}", out);
-    assert!(out.contains("created the `default` workspace"), "{}", out);
+    assert!(out.contains("Created the `default` workspace"), "{}", out);
     assert!(out.contains("/help for commands"), "the console opened: {}", out);
     assert!(home.join("workspaces/default/config.toml").exists());
 }
 
 #[test]
-fn in_a_new_project_it_creates_the_workspace_and_writes_nothing_into_the_project() {
+fn in_an_unregistered_project_it_uses_the_default_workspace_and_writes_nothing_into_the_project() {
     let t = tempfile::tempdir().unwrap();
     let home = t.path().join("home");
     let _reap = common::DaemonReaper::new(&home);
     let proj = t.path().join("app");
     std::fs::create_dir_all(proj.join(".git")).unwrap();
     let (code, out) = run_bare(&home, &proj, &[]);
-    stop_daemon(&home, "app");
+    stop_daemon(&home, "default");
     assert_eq!(code, 0, "{}", out);
-    assert!(out.contains("created the workspace `app`"), "{}", out);
-    assert!(home.join("workspaces/app/config.toml").exists());
+    assert!(out.contains("Created the `default` workspace"), "{}", out);
+    assert!(home.join("workspaces/default/config.toml").exists());
+    assert!(!home.join("workspaces/app").exists());
     let names: Vec<_> = std::fs::read_dir(&proj).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
     assert_eq!(names, vec![".git"], "the project is untouched");
-    // The second launch finds it: no note.
     let (_, again) = run_bare(&home, &proj, &[]);
-    stop_daemon(&home, "app");
-    assert!(!again.contains("First time in"), "{}", again);
+    stop_daemon(&home, "default");
+    assert!(again.contains("Using the `default` workspace"), "{}", again);
 }
 
 #[test]

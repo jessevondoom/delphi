@@ -54,6 +54,20 @@ Create a workspace for a project.
   delphi init [--non-interactive] [--workspace <name>] [--project <path>]... [--theme <name>] [--home <dir>]
 ```
 
+### `delphi project`
+
+Register, scaffold, and inspect directory project scopes.
+
+```
+  delphi project register [path] [--workspace <name>] [--home <dir>]
+  delphi project init [path] [--yes] [--workspace <name>] [--home <dir>]
+  delphi project list | scope [--workspace <name>] [--home <dir>]
+  delphi project relink <project-id> <new-path> [--home <dir>]
+  delphi project clone [path] [--home <dir>]
+```
+
+A project is a directory scope; Git is optional. `register` writes the identity marker and central project record. `init` lists paths first, asks for confirmation, and creates only missing project folders and `_index.md`; in non-interactive use, pass `--yes`. Existing files are preserved.
+
 ### `delphi auth`
 
 Sign in to, or out of, a model endpoint.

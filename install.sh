@@ -130,7 +130,7 @@ esac
 if [ "$SETUP" -eq 1 ] && ( : < /dev/tty ) 2>/dev/null; then
   printf '\nRun `delphi` now to finish setting up? [Y/n] ' > /dev/tty
   read -r answer < /dev/tty || answer=""
-  case "$answer" in n|N|no|No) say "Run \`delphi\` in a project whenever you are ready." ;; *) "$DIR/delphi" < /dev/tty || say "Setup did not finish; run \`delphi\` again when you are ready." ;; esac
+  case "$answer" in n|N|no|No) say "Run \`delphi\` in any directory whenever you are ready." ;; *) "$DIR/delphi" < /dev/tty || say "Setup did not finish; run \`delphi\` again when you are ready." ;; esac
 else
-  say ""; say "Next: cd into a project and run \`delphi\`."
+  say ""; say "Next: run \`delphi\` in any directory."
 fi

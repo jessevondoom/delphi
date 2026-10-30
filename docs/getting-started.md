@@ -12,12 +12,13 @@ The installer checks the download against its SHA-256 and the release's build at
 
 Check it: `delphi --version`. To build from source instead, see the README's [Install](../README.md#install).
 
-## 2. Open the console in your project
+## 2. Open the console
 
 ```sh
-cd ~/code/my-project
 delphi
 ```
+
+You can run Delphi from any directory. `cd` into a Git project first if you want to use it as the project for Git-backed build workflows; a Git repository is not required to open the console.
 
 The first time, Delphi:
 
@@ -26,7 +27,7 @@ The first time, Delphi:
 3. runs the doctor and offers to fix what it can;
 4. opens the console.
 
-Outside a git repository it uses a `default` workspace with only the built-in knowledge.
+Outside a git repository it uses a `default` workspace. Run `delphi setup` later if you deferred model setup.
 
 ## 3. Ask, then build
 
