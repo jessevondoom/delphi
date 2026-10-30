@@ -2,6 +2,7 @@
 
 use crate::ids::{frontmatter_of, get_str};
 use crate::manifest::Manifest;
+use crate::registry;
 use crate::relax::no_relaxation_doc;
 use crate::tree::Tree;
 use crate::{Host, Report, ROLES};
@@ -48,6 +49,7 @@ pub fn check(tree: &Tree, m: Option<&Manifest>, host: &dyn Host, r: &mut Report)
         if get_str(&fm, "description").is_none_or(|n| n.trim().is_empty()) {
             r.fail(9, path, "frontmatter needs a `description`");
         }
+        registry_summary(m, stem, &fm, path, r);
         let from_manifest = m.and_then(|m| m.agents.get(stem)).filter(|s| !s.is_empty()).cloned();
         let from_file = get_str(&fm, "delphi-role").map(String::from);
         if let (Some(a), Some(b)) = (&from_manifest, &from_file) {
@@ -83,6 +85,35 @@ pub fn check(tree: &Tree, m: Option<&Manifest>, host: &dyn Host, r: &mut Report)
         }
         for (line, quote) in no_relaxation_doc(&text) {
             r.fail(9, &format!("{}:{}", path, line), format!("tries to relax a rule (`{}`); an agent body cannot skip approvals or gates", quote));
+        }
+    }
+}
+
+/// The registry summary defaults to the first line of the description and is refused, never cut, when it is over the cap
+/// (`specs/041` §3.1). A bundle that declares no `[domains]` has not opted into the registry, so there it is a warning.
+fn registry_summary(m: Option<&Manifest>, stem: &str, fm: &serde_yaml::Mapping, path: &str, r: &mut Report) {
+    let Some(m) = m.filter(|m| m.agents.contains_key(stem)) else { return };
+    let explicit = m.agent_meta.get(stem).and_then(|a| a.summary.as_deref());
+    let text = explicit.map(String::from).or_else(|| get_str(fm, "description").map(|d| registry::first_line(d).to_string()));
+    let Some(text) = text else { return };
+    let n = text.chars().count();
+    if explicit.is_none() {
+        if n > registry::MAX_SUMMARY {
+            let msg = format!("the first line of the description is {} characters (registry summary cap {}); add `summary` to [agents.{}]", n, registry::MAX_SUMMARY, stem);
+            if m.domains.is_empty() {
+                r.warn(9, path, msg);
+            } else {
+                r.fail(9, path, msg);
+            }
+            return;
+        }
+        if let Some(why) = registry::refuse_text(&text) {
+            let msg = format!("the first line of the description {} (it is the registry summary; add `summary` to [agents.{}])", why, stem);
+            if m.domains.is_empty() {
+                r.warn(9, path, msg);
+            } else {
+                r.fail(9, path, msg);
+            }
         }
     }
 }
