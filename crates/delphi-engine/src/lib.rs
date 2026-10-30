@@ -23,6 +23,8 @@ pub mod summary;
 pub mod checkpoint;
 pub mod changelog;
 pub mod thread_nudge;
+pub mod ctxacct;
+pub mod ctxhist;
 pub mod loopctl;
 pub mod toolreport;
 pub mod artifacts;
