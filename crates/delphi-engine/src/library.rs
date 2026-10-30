@@ -31,6 +31,8 @@ pub use export::Exported;
 mod page_check;
 #[path = "library_pages.rs"]
 pub mod pages;
+#[path = "library_page_validate.rs"]
+pub mod page_validate;
 #[path = "library_review.rs"]
 pub mod review;
 #[path = "library_recheck.rs"]

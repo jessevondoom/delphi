@@ -443,7 +443,7 @@ impl Library {
 
     /// The stored text of a source (or its kept excerpts), after checking it against the recorded hash where that hash
     /// is of the stored bytes (a file capture).
-    fn stored_text(&self, id: &str) -> Result<String, Finding> {
+    pub(super) fn stored_text(&self, id: &str) -> Result<String, Finding> {
         let meta = self.read_meta(id).unwrap_or(Value::Null);
         match std::fs::read(self.source_dir(id).join("source.md")) {
             Ok(bytes) => {
