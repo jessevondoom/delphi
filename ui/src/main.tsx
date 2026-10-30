@@ -113,7 +113,7 @@ let cmd: Rpc, ev: Rpc, mission: string, history = initial(Date.now());
 try {
   cmd = await Rpc.connect(info.console_socket);
   await cmd.attachAsConsole();
-  mission = (await cmd.call('mission.open', { mission_id: info.mission })).mission_id as string;
+  mission = (await cmd.call('mission.open', { mission_id: info.mission, cwd: process.cwd() })).mission_id as string;
   ev = await Rpc.connect(info.console_socket);
   await ev.attachAsConsole();
   await ev.call('events.subscribe', {});

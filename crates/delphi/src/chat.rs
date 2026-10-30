@@ -680,7 +680,7 @@ pub(crate) fn connect(home: &Path, ws_dir: &Path, mission: Option<String>, names
     if let Some(n) = daemon_note(&attached) {
         say(&format!("{}\n", n));
     }
-    let opened = match attached.client.call("mission.open", json!({"mission_id": mission})) {
+    let opened = match attached.client.call("mission.open", json!({"mission_id": mission, "cwd": std::env::current_dir().ok().map(|p| p.display().to_string())})) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("delphi chat: {}", rpc_error(&e));

@@ -372,7 +372,7 @@ pub fn run(home: &Path, ws_dir: &Path, opts: Opts) -> i32 {
 
 fn drive(attached: &mut delphi_core::spawn::Attached, opts: &Opts, started: Instant) -> i32 {
     let cmd = &mut attached.client;
-    let opened = match cmd.call("mission.open", json!({"mission_id": opts.mission})) {
+    let opened = match cmd.call("mission.open", json!({"mission_id": opts.mission, "cwd": std::env::current_dir().ok().map(|p| p.display().to_string())})) {
         Ok(v) => v,
         Err(e) => {
             say_err(&rpc(&e));

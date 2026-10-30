@@ -690,6 +690,11 @@ impl Engine {
                     Err(e) => slices.push(ContextSlice { label: p.uri.clone(), tier: "unavailable".into(), text: format!("(could not be read: {})", e) }),
                 }
             }
+            // The mission's project layer (`specs/058` §4): labelled, and untrusted like any project content.
+            if let Some(text) = crate::scope::prompt_layer(&self.ws.dir, &m.dir, &sc.role) {
+                sc.span.observe_input(delphi_core::provenance::Tier::L0);
+                slices.push(ContextSlice { label: "@runtime/project-layer".into(), tier: delphi_core::provenance::Tier::L0.as_str().into(), text });
+            }
             // Council seats are the spans with injected slices; their Round 1 stays blind, so they get a lens, not the slice.
             let council_seat = {
                 let injected = self.injected.lock().unwrap();
@@ -3840,6 +3845,26 @@ mod tests {
     async fn kill(task: tokio::task::JoinHandle<Result<TaskOutcome, EngineError>>) {
         task.abort();
         let _ = task.await;
+    }
+
+    // specs/058 §4: a mission stamped with a project reads that project's layer, labelled and untrusted, and a mission
+    // without a scope reads nothing of it.
+    #[tokio::test]
+    async fn a_scoped_missions_prompt_carries_its_project_layer_labelled_and_a_plain_mission_does_not() {
+        const PA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let f = setup(vec![Step::text("ok"), Step::text("ok")], 5.0, |_| {});
+        let ws = f.engine.ws.dir.clone();
+        std::fs::write(ws.join("local/projects.json"), json!({"schema": 1, "projects": {PA: {"project_id": PA, "root": "/nowhere"}}}).to_string()).unwrap();
+        let ctx = ws.join("local/projects").join(PA).join("context");
+        std::fs::create_dir_all(&ctx).unwrap();
+        std::fs::write(ctx.join("conv.md"), "Use tabs in this project.").unwrap();
+        f.engine.run_task(&f.m, "architect", "Draft the spec").await.unwrap();
+        let sent = |i: usize| f.model.requests()[i].body.to_string();
+        assert!(!sent(0).contains("Use tabs in this project"), "no scope file: today's behavior");
+        std::fs::write(f.m.dir.join("scope"), PA).unwrap();
+        f.engine.run_task(&f.m, "architect", "Draft again").await.unwrap();
+        let second = sent(1);
+        assert!(second.contains("Use tabs in this project") && second.contains(&format!("layer: project:{}", PA)), "{}", second);
     }
 
     // specs/024 AC-3 (behavior part): an added bundle's guidance, rules and skills reach the system prompt of the roles
