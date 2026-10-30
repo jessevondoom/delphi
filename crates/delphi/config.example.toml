@@ -117,6 +117,14 @@ sandbox = "off"
 # [update]
 # require_signed = true
 
+# Learning loop (specs/031 section 3.6). Staged notes are kept for your review and never loaded into a prompt. Each number is clamped
+# to a floor and ceiling the core sets; turning capture off is allowed, loading unratified content is not.
+# [learning]
+# capture = true                     # stage notes from denials, corrections, retries and escalations
+# max_notes = 200                    # per mission, 10 to 1000; the oldest is dropped
+# triggers = ["denied_card", "correction", "recovery", "escalation", "rejected_decision"]
+# retro_min_tasks = 10               # finished tasks before `delphi needs` says the coaching pass has material (3 to 200)
+
 # Fact validator (specs/040 section 15.1). off: no fetch of any kind. advisory (default): the full fact path as a dry run; it uses the
 # network, records what it would ratify and writes nothing validated. ratify: real writes, allowed only while the daemon's latch and the
 # PROMOTE conditions permit; the effective mode is the lower of this value and the latch.

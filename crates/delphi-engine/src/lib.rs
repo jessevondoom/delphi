@@ -96,6 +96,7 @@ pub mod research;
 pub mod research_images;
 pub mod research_setup;
 pub mod route;
+pub mod customize;
 pub mod ratify;
 pub mod retro;
 pub mod service;
