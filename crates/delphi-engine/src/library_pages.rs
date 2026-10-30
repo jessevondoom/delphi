@@ -19,7 +19,7 @@ pub use super::page_check::{banner, markers, shown_status, Checked, Cite, Findin
 use super::page_check::{glyph, norm, Rec};
 
 /// Bumped when the page layout changes, so cached pages of an older layout are rebuilt.
-const TEMPLATE_VERSION: &str = "2";
+pub(super) const TEMPLATE_VERSION: &str = "2";
 
 pub const NOTED_HEADING: &str = "Noted, not validated";
 const NOTE_MAX: usize = 500;
@@ -49,7 +49,7 @@ pub struct Page {
     pub flags: Vec<String>,
 }
 
-fn content_words(s: &str) -> BTreeSet<String> {
+pub(super) fn content_words(s: &str) -> BTreeSet<String> {
     s.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(|w| w.to_lowercase()).filter(|w| w.chars().any(|c| c.is_ascii_digit()) || (w.chars().count() >= 3 && !FUNCTION_WORDS.contains(&w.as_str()))).collect()
 }
 
