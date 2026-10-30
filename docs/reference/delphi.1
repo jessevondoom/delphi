@@ -183,9 +183,12 @@ a readable page generated from the library's claims, and dispute from it.
   delphi pages show <topic words...> [\-\-draft <file>] [\-\-style apa|mla|chicago|plain] [\-\-home <dir>]
   delphi pages check <file> [\-\-home <dir>]
   delphi pages dispute <claim> \-\-note <what is wrong> [\-\-home <dir>]
+  delphi pages search <question words...> [\-\-internal | \-\-external] [\-\-json] [\-\-home <dir>]
+  delphi pages list [\-\-json] [\-\-home <dir>]
+  delphi pages pin|unpin <key> [\-\-home <dir>]
 .fi
 .PP
-A page is generated, never a source, never edited and never trusted text (spec 057). The daemon writes the banner on top ("Generated page. Not authoritative. ...") and, at the bottom, a bibliography and citations table with one row per cited source or claim (or "no sources cited", marked unsupported in the banner). The body cites with [s\-source\-id] and [c\-claim\-id] markers after the sentences or paragraph they support; the glyphs ● validated, ○ not validated, ◆ contested, ✕ disproved are derived by the daemon. Without \-\-draft the body is the library's claims, the unvalidated ones under a visible "Noted, not validated" heading. With \-\-draft a file of body text someone proposed (a model, say), the daemon runs the mechanical check and rejects the page, listing each finding, exit 1, if a marker names a missing, retired, purged, disproved or (on an external page) private record or misstates its status; a quotation is not verbatim in a cited source's stored text (checked against the recorded hash) or a quote block cites no source; a table has no citation; an image is not an asset of a cited library source (written lib: then the source id, a slash and the file name); a link is in no cited source's record; or the text carries its own banner or table. Numbers, dates and proper names found in no cited material are not rejected but reported as unverified figures. `check` runs the same check on a whole page file (banner, body, table) and prints the findings. Pages are cached by a hash of the claims they were built from, so a changed or disputed claim rebuilds them. A claim resting on a private source is left off. `dispute` is your "this is wrong" on a sentence: it files a contested mark with your note on the cited claim, which then reads not validated until the contest is resolved, and is refused inside an agent seat. Exit codes: 0 ok · 1 rejected or failed · 2 usage.
+A page is generated, never a source, never edited and never trusted text (spec 057). The daemon writes the banner on top ("Generated page. Not authoritative. ...") and, at the bottom, a bibliography and citations table with one row per cited source or claim (or "no sources cited", marked unsupported in the banner). The body cites with [s\-source\-id] and [c\-claim\-id] markers after the sentences or paragraph they support; the glyphs ● validated, ○ not validated, ◆ contested, ✕ disproved are derived by the daemon. Without \-\-draft the body is the library's claims, the unvalidated ones under a visible "Noted, not validated" heading. With \-\-draft a file of body text someone proposed (a model, say), the daemon runs the mechanical check and rejects the page, listing each finding, exit 1, if a marker names a missing, retired, purged, disproved or (on an external page) private record or misstates its status; a quotation is not verbatim in a cited source's stored text (checked against the recorded hash) or a quote block cites no source; a table has no citation; an image is not an asset of a cited library source (written lib: then the source id, a slash and the file name); a link is in no cited source's record; or the text carries its own banner or table. Numbers, dates and proper names found in no cited material are not rejected but reported as unverified figures. `check` runs the same check on a whole page file (banner, body, table) and prints the findings. Pages are cached by a hash of the claims they were built from, so a changed or disputed claim rebuilds them. A claim resting on a private source is left off. `dispute` is your "this is wrong" on a sentence: it files a contested mark with your note on the cited claim, which then reads not validated until the contest is resolved, and is refused inside an agent seat. `search` finds what the library holds for the words and has the writer role compose a page from it, which the daemon then checks mechanically and the validator checks sentence by sentence; a page that fails twice is shown as the claims alone (exit 1). \-\-internal never touches the web; \-\-external also searches the engines in [search] and captures a few results as noted, not validated, sources (a query that names a private source is not sent, and a private source never reaches an external page). Without either, [library.pages] external decides (ask means internal unless you say \-\-external). Pages are cached by the material's hashes: a changed source, an expired external page ([library.pages] external_ttl) or a new matching record marks the page stale and it is rebuilt on the next search; `pin` keeps a page out of eviction. A page costs a writer call and a validator call, counted against the validator's share of the week (spec 040 §20) and [library.pages] per_day; a cached page costs nothing. Exit codes: 0 ok · 1 rejected, failed or claims only · 2 usage · 4 infrastructure.
 .SS delphi sources
 the library's sources: capture, excerpts, bibliography.
 .PP
@@ -295,6 +298,19 @@ rules the Orchestrator proposed, waiting for your review.
 .fi
 .PP
 Proposals are made with the Orchestrator's `suggest_rule` tool and are never loaded into a prompt until you ratify them. `accept` and `reject` need a terminal and a typed yes, and `accept` needs the daemon stopped; `\-\-scope` ratifies at a different scope than proposed.
+.SS delphi retro
+rules the Orchestrator proposed, waiting for your review.
+.PP
+.nf
+  delphi retro list [\-\-mission <id>] [\-\-json]
+  delphi retro show <mission>/<id> [\-\-json]
+  delphi retro stale [\-\-json]
+  delphi retro accept <mission>/<id> [\-\-scope workspace|operator]
+  delphi retro reject <mission>/<id>
+    [\-\-workspace <name>] [\-\-home <dir>]
+.fi
+.PP
+Proposals are made with the Orchestrator's `suggest_rule` tool and are never loaded into a prompt until you ratify them. `accept` and `reject` need a terminal and a typed yes, and `accept` needs the daemon stopped; `\-\-scope` ratifies at a different scope than proposed. `stale` lists staged notes past their `valid_until` date and rules files not confirmed within 90 days; it changes nothing.
 .SS delphi learn
 notes staged from denials, corrections, retries and escalations.
 .PP

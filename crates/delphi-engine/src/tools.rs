@@ -196,7 +196,7 @@ impl Registry {
             exec: ToolExec::Local(record_change),
         });
         r.register(ToolSpec {
-            def: read_def("note", "Stage a lesson for the operator to review later: one plain sentence about something that surprised you or that a future run should know (`the CI image has no python3, use python`). Staged notes are never loaded into any prompt, not even yours; the operator reads them with `delphi learn list` and decides what becomes a rule. At most three per task are kept. Do not use it to report finished work (that is `record_change`) or to store anything sensitive.", json!({"type": "object", "required": ["text"], "properties": {"text": {"type": "string", "maxLength": 280}}})),
+            def: read_def("note", "Stage a lesson for the operator to review later: one plain sentence about something that surprised you or that a future run should know (`the CI image has no python3, use python`). Staged notes are never loaded into any prompt, not even yours; the operator reads them with `delphi learn list` and decides what becomes a rule. If the fact stops being true on a known date, set `valid_until` (YYYY-MM-DD): the note is not retrieved after it. At most three per task are kept. Do not use it to report finished work (that is `record_change`) or to store anything sensitive.", json!({"type": "object", "required": ["text"], "properties": {"text": {"type": "string", "maxLength": 280}, "valid_until": {"type": "string", "description": "YYYY-MM-DD: the last day the note holds"}}})),
             requires_write_scope: false,
             classify: classify_note,
             exec: ToolExec::Local(note),
@@ -405,7 +405,16 @@ fn note(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
     // What an agent writes is the daemon's lowest trusted tier at best (L3), and lower still once the span has read
     // untrusted content: the note inherits the span's ceiling, so web text cannot launder itself into a lesson.
     let tier = ctx.span.ceiling().min(Tier::L3);
-    ctx.events.push(("learn.note".into(), json!({"text": text, "tier": tier.as_str()})));
+    let mut payload = json!({"text": text, "tier": tier.as_str()});
+    // An expiry date narrows what a note can do (it is retrieved for less time), and stays on a staged note (`specs/050` OD-5).
+    if let Some(v) = args.get("valid_until").filter(|v| !v.is_null()) {
+        let Some(d) = v.as_str().filter(|d| d.len() == 10 && crate::frontmatter::entry_date_ok(d)) else { return ToolResult::err("`valid_until` must be a date, YYYY-MM-DD") };
+        if d < delphi_core::bundles::today().as_str() {
+            return ToolResult::err("`valid_until` is already past; omit it, or give the last day the note holds");
+        }
+        payload["valid_until"] = json!(d);
+    }
+    ctx.events.push(("learn.note".into(), payload));
     ToolResult::ok("staged for the operator's review; it is not loaded into any prompt".to_string())
 }
 
@@ -1204,6 +1213,11 @@ mod tests {
         assert!(!r.is_error, "{}", r.content);
         assert_eq!(ctx.events, vec![("learn.note".to_string(), json!({"text": "the CI image has no python3", "tier": "L3"}))]);
         assert!(run_tool(&mut f, "note", json!({"text": "  "})).is_error);
+        let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "builder", mission_id: "m1", now_rfc3339: "t", stamps: vec![], events: vec![] };
+        let dated = run(&mut ctx, "note", &json!({"text": "freeze until the release", "valid_until": "2999-01-31"}));
+        assert!(!dated.is_error && ctx.events.iter().any(|(k, p)| k == "learn.note" && p["valid_until"] == "2999-01-31"), "{:?}", dated.content);
+        assert!(run_tool(&mut f, "note", json!({"text": "x", "valid_until": "soon"})).is_error);
+        assert!(run_tool(&mut f, "note", json!({"text": "x", "valid_until": "2001-01-01"})).is_error, "a date already past is refused");
         assert!(run_tool(&mut f, "note", json!({"text": "x".repeat(281)})).is_error, "one sentence, not an essay");
         assert!(f.span.observe_input(Tier::L0));
         let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "builder", mission_id: "m1", now_rfc3339: "t", stamps: vec![], events: vec![] };

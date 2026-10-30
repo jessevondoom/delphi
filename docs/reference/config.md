@@ -34,6 +34,9 @@ Defaults are those of the template; "—" means no default.
 | `[routing] max_parallel_agents` | `4` | |
 | `[routing] degrade_prompt_secs` | `300` | how long the "run on a weaker model?" card waits |
 | `[routing] max_park_secs` | wait forever | how long a task waits for a model; `0` escalates at once |
+| `[routing] assignment` | `"static"` | `"static"`: a role's tier picks the model. `"discovered"`: a model is assigned by capability class, measured results and quota (spec 056); becomes the default only after a benchmark shows it no worse |
+| `[routing] evidence_enough` | `8` | measured results per `(role, kind, model)` after which a model is scored by them alone |
+| `[routing.reserve] <role>` | none | the share (0 to 1) of the mission budget kept for that role, so planning cannot starve the validator; applies with `assignment = "discovered"` |
 | `[routing.pool] order` | every configured tier, family by family | models in preference order |
 | `[routing.pool] throttle_attempts`, `throttle_window_secs` | `3`, `600` | this many throttles in a row over at least this long count as a spent quota |
 | `[routing.pool] reprobe_first_secs`, `reprobe_max_secs` | `900`, `14400` | when an exhausted model with no known reset time is probed again, doubling up to the maximum |
@@ -93,6 +96,16 @@ Which sites the job may read is not here: it is `context/sources/trusted.toml` (
 | `[library.acquire] token_share_percent` ◆ | `5` | the scout's share of the install's tokens over the trailing week (at most 10; `specs/040` §20.2). The scout only suggests topics; `0` keeps the job model-free |
 | `[library.acquire] interests` ◆ | `[]` | topics you want, beside your projects' names (at most 50) |
 
+## Generated pages
+
+| Key | Default | Meaning |
+| :-- | :-- | :-- |
+| `[library.pages] enabled` | `true` | `false`: no page is written (`delphi pages search` still lists what the library holds) |
+| `[library.pages] external` | `ask` | `ask`: the web is searched only when you ask (`--external`, or the console's key); `off`: never; `on`: every page also searches the web unless `--internal`. Queries go only to the engines in the ratified `[search]` table; `private` sources are never put on an external page or in its query ([`specs/057`](../../specs/057-search-pages-generated-and-checked.md)) |
+| `[library.pages] max_tokens` | `3000` | the longest page the writer may write |
+| `[library.pages] external_ttl` | `7d` | a page that used the web is stale after this (days as a number, or `12h`, `7d`) |
+| `[library.pages] per_day` | `20` | pages built in one day (a cache hit costs nothing). The validator tokens a page uses also count against the validator's share ([`specs/040`](../../specs/040-validator-role-and-fact-ratification.md) §20) |
+
 ## Away mode and hooks ◆
 
 | Section | Meaning |
@@ -107,7 +120,7 @@ Which sites the job may read is not here: it is `context/sources/trusted.toml` (
 | :-- | :-- |
 | `[session] summary` | `off`, `local` or `fast`: how a finished console session is summarized for `delphi sessions` ([`specs/030`](../../specs/030-console-sessions-and-conversation-context.md)) |
 | `[session] conversation_tokens` | how much of your session a task is told; `0` tells nothing |
-| `[learning] capture`, `max_notes`, `triggers` | whether notes are staged from denials, corrections, retries and escalations, how many, and which triggers. Staged notes are never loaded into a prompt ([`specs/031`](../../specs/031-layered-learning-and-training-mode.md)) |
+| `[learning] capture`, `max_notes`, `triggers`, `retro_min_tasks` | whether notes are staged from denials, corrections, retries and escalations (default on), how many per mission (10 to 1000, default 200), which triggers, and how many finished tasks `delphi needs` waits for before calling the coaching pass worth building (3 to 200, default 10). A value outside its bounds is clamped and reported at boot. No key loads staged text into a prompt; turning capture off is allowed, loading unratified content is not ([`specs/031`](../../specs/031-layered-learning-and-training-mode.md) §3.6) |
 | `[loop] nudge`, `nudge_edits`, `budget_warnings`, `verify_gate`, `workspace_bootstrap` | what the engine adds around a role's model calls: a nudge when it goes round in circles (and a stop if it carries on), a warning at 75 % and 90 % of its turns, one check against the task before a role that writes or runs commands may finish, and a map of its worktree. All on by default; `nudge_edits` is 4 ([`specs/045`](../../specs/045-harness-loop-techniques.md)) |
 | `[optimistic] approver`, `second_seat`, `max_decisions`, `max_approver_calls`, `unseconded`, `review_wait_sec` | how `/build --optimistic` records and reviews provisional decisions ([`specs/015`](../../specs/015-provisional-decisions.md)) |
 

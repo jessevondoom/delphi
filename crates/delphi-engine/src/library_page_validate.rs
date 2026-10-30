@@ -85,9 +85,20 @@ pub trait PageValidator: Send + Sync {
     fn validate<'a>(&'a self, q: &'a PageQuery) -> ValidatorFuture<'a>;
 }
 
-/// The writer role's rewrite of a failed draft, given the findings. The writer span itself belongs to SK8c.
+/// The writer role: a first draft from the gathered material (SK8c), and the rewrite of a failed draft, given the findings.
+/// Both calls are tainted, read-only and tool-less; what comes back is a draft the daemon still checks.
 pub trait PageWriter: Send + Sync {
     fn rewrite<'a>(&'a self, draft: &'a str, findings: &'a [String]) -> WriterFuture<'a>;
+
+    /// The first draft for `brief` (the query and the records the writer may use).
+    fn write<'a>(&'a self, _brief: &'a str) -> WriterFuture<'a> {
+        Box::pin(async { Err("this writer only rewrites".to_string()) })
+    }
+
+    /// The role and model that write, for the cache key: a page is rebuilt when they change.
+    fn identity(&self) -> String {
+        "writer".into()
+    }
 }
 
 fn flat(s: &str) -> String {
@@ -435,6 +446,13 @@ impl Library {
                 }
             }
         }
+        self.claims_only_page(&topic, &reason, last_reply.as_ref(), records, rewrites, style, scope)
+    }
+
+    /// The claims-only page (`specs/057` §3.4): one line per claim, the banner saying why nothing richer was built.
+    #[allow(clippy::too_many_arguments)]
+    pub fn claims_only_page(&self, topic: &str, reason: &str, last_reply: Option<&ValidatorReply>, records: Vec<AssertionRecord>, rewrites: u32, style: bib::Format, scope: Scope) -> Result<CheckedPage, String> {
+        let topic = norm_ws(topic);
         let (claims, withheld) = self.topic_claims(&topic);
         let (validated, noted) = claim_lines(&claims);
         let body = render_body(&topic, &validated, &noted);
@@ -442,11 +460,11 @@ impl Library {
         if !checked.findings.is_empty() {
             return Err(format!("the claims-only page failed its own check: {}", checked.findings.iter().map(|f| f.to_string()).collect::<Vec<_>>().join("; ")));
         }
-        let reason = reason_text(&reason);
+        let reason = reason_text(reason);
         let note = format!("claims-only page: {}", reason);
         let ran = last_reply.is_some();
         let at = delphi_core::time::now_rfc3339().chars().take(10).collect::<String>();
-        let verdict = PageVerdict { outcome: Outcome::ClaimsOnly, reason: Some(reason), model: last_reply.as_ref().map(|r| r.model.clone()).unwrap_or_default(), family: last_reply.as_ref().map(|r| r.family.clone()).unwrap_or_default(), tokens: last_reply.as_ref().map(|r| r.tokens).unwrap_or(0), rewrites, assertions: records, at };
+        let verdict = PageVerdict { outcome: Outcome::ClaimsOnly, reason: Some(reason), model: last_reply.map(|r| r.model.clone()).unwrap_or_default(), family: last_reply.map(|r| r.family.clone()).unwrap_or_default(), tokens: last_reply.map(|r| r.tokens).unwrap_or(0), rewrites, assertions: records, at };
         let stamp = if ran { Stamp::Validator { result: note } } else { Stamp::NotRun { note } };
         let extra = json!({"validator": verdict.to_json()});
         let page = self.finish_page(PageParts { topic: topic.clone(), body, lines: Some((validated, noted)), checked, hash_claims: Some(&claims), hash_draft: Some(format!("claims-only fallback {}", slug(&topic))), style, scope, withheld, stamp, extra, use_cache: false });

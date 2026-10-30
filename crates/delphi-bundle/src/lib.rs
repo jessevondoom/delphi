@@ -23,6 +23,7 @@ mod manifest;
 pub mod marketplace;
 pub mod provenance;
 mod relax;
+pub mod registry;
 pub mod redaction;
 pub mod scan;
 mod skills;

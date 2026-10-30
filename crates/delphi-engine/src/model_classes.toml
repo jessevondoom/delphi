@@ -2,6 +2,9 @@
 # The first rule whose conditions all hold places a model. No model names: only attributes.
 # Attributes: local (runs on this machine), tier (the endpoint's mapping: fast, workhorse, frontier),
 # can_think (the catalog allows a thinking budget), cost_class (metered, subscription, local), min_context (tokens).
+# [roles.<id>]: the lowest class that can do the role's job (floor), the class it starts at (preferred), and whether it makes plans
+# (plan_making: bought at high quality) or follows one (plan_following: may start below preferred by the ratchet, and may trial an
+# unclassified model on a task with a deterministic gate). A role not listed uses [roles.default]. The floor is never crossed.
 # A workspace may replace this file with <workspace>/model-classes.toml (a ratified edit).
 version = 1
 
@@ -28,3 +31,55 @@ class = "steady"
 id = "smallest-tier"
 tier = "fast"
 class = "quick"
+
+[roles.default]
+floor = "steady"
+preferred = "steady"
+
+[roles.architect]
+floor = "steady"
+preferred = "deep"
+plan_making = true
+
+[roles.strategist]
+floor = "steady"
+preferred = "deep"
+plan_making = true
+
+[roles.red-team]
+floor = "steady"
+preferred = "deep"
+plan_making = true
+
+[roles.orchestrator]
+floor = "steady"
+preferred = "steady"
+
+[roles.validator]
+floor = "steady"
+preferred = "steady"
+
+[roles.builder]
+floor = "quick"
+preferred = "steady"
+plan_following = true
+
+[roles.integrator]
+floor = "quick"
+preferred = "steady"
+plan_following = true
+
+[roles.writer]
+floor = "quick"
+preferred = "steady"
+plan_following = true
+
+[roles.investigator]
+floor = "quick"
+preferred = "quick"
+plan_following = true
+
+[roles.scout]
+floor = "quick"
+preferred = "quick"
+plan_following = true

@@ -419,15 +419,49 @@ impl Default for PoolTuning {
     }
 }
 
+/// How a dispatch picks its model (`specs/056`): `static` is the role's tier as before (the default, until a benchmark shows
+/// `discovered` no worse, 056 OD-5); `discovered` assigns by capability class, evidence and quota.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Assignment {
+    #[default]
+    Static,
+    Discovered,
+}
+
+impl Assignment {
+    pub fn parse(s: &str) -> Option<Assignment> {
+        match s {
+            "static" => Some(Assignment::Static),
+            "discovered" => Some(Assignment::Discovered),
+            _ => None,
+        }
+    }
+}
+
+/// Results per `(role, kind, model)` that make measured evidence "enough" (`specs/056` OD-3).
+pub const DEFAULT_EVIDENCE_ENOUGH: u32 = 8;
+
 /// `[routing]`: the model pool and per-role targets (`specs/002` §4.1, D-26). Other keys in the table
 /// (`enable_dynamic_scaling`, …) are not read here.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Routing {
     /// Model IDs in preference order, as written; `None` when `[routing.pool]` has no `order`.
     pub pool: Option<Vec<String>>,
     /// Role → target model ID.
     pub targets: BTreeMap<String, String>,
     pub tuning: PoolTuning,
+    /// `[routing] assignment` (`specs/056`).
+    pub assignment: Assignment,
+    /// `[routing] evidence_enough`: measured results that make a model scored by them alone.
+    pub evidence_enough: u32,
+    /// `[routing.reserve] <role>`: the share (0 to 1) of the mission budget kept for that role; other roles cannot spend it.
+    pub reserve: BTreeMap<String, f64>,
+}
+
+impl Default for Routing {
+    fn default() -> Routing {
+        Routing { pool: None, targets: BTreeMap::new(), tuning: PoolTuning::default(), assignment: Assignment::Static, evidence_enough: DEFAULT_EVIDENCE_ENOUGH, reserve: BTreeMap::new() }
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -464,8 +498,99 @@ pub struct Config {
     pub search: crate::research::SearchConfig,
     /// `[validator]`: the fact validator's mode and the operator's additions to the source list (`specs/040` §15.1, §6.1).
     pub validator: ValidatorConfig,
-    /// `[library]`: the central library's acquisition job (`specs/055` §8).
+    /// `[library]`: generated search pages (`specs/057` §5, §6) and the acquisition job (`specs/055` §8).
     pub library: LibraryConfig,
+    /// `[learning]`: capture and the bounds on the learning loop (`specs/031` §3.6). The engine clamps each value to the core's bounds.
+    pub learning: LearningConfig,
+}
+
+/// `[library]`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LibraryConfig {
+    pub pages: PagesConfig,
+    pub acquire: AcquireConfig,
+}
+
+/// Whether a page may use external search: `ask` (the default) needs `--external` or the console's key each time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PagesExternal {
+    #[default]
+    Ask,
+    Off,
+    On,
+}
+
+/// `[library.pages]` (`specs/057` §6). `external_ttl` is how long a page that used external search stays fresh.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PagesConfig {
+    pub enabled: bool,
+    #[serde(deserialize_with = "de_external")]
+    pub external: PagesExternal,
+    pub max_tokens: u64,
+    #[serde(deserialize_with = "de_ttl", rename = "external_ttl")]
+    pub external_ttl_secs: u64,
+    /// Pages the daemon builds in one day; a cache hit is free. They also count against the validator's share (`specs/040` §20).
+    pub per_day: u32,
+}
+
+impl Default for PagesConfig {
+    fn default() -> Self {
+        PagesConfig { enabled: true, external: PagesExternal::Ask, max_tokens: 3000, external_ttl_secs: 7 * 86_400, per_day: 20 }
+    }
+}
+
+fn de_external<'de, D: serde::Deserializer<'de>>(d: D) -> Result<PagesExternal, D::Error> {
+    let s = <String as serde::Deserialize>::deserialize(d)?;
+    match s.as_str() {
+        "ask" => Ok(PagesExternal::Ask),
+        "off" => Ok(PagesExternal::Off),
+        "on" => Ok(PagesExternal::On),
+        _ => Err(serde::de::Error::custom(format!("external `{}` is not one of ask, off, on", s))),
+    }
+}
+
+/// `"7d"`, `"12h"`, `"90m"` or a bare number of days.
+pub fn parse_ttl(s: &str) -> Option<u64> {
+    let s = s.trim();
+    let (n, unit) = match s.char_indices().find(|(_, c)| !c.is_ascii_digit()) {
+        Some((i, _)) => s.split_at(i),
+        None => (s, "d"),
+    };
+    let n: u64 = n.parse().ok()?;
+    let per = match unit.trim() {
+        "d" => 86_400,
+        "h" => 3_600,
+        "m" => 60,
+        _ => return None,
+    };
+    n.checked_mul(per).filter(|v| *v > 0)
+}
+
+fn de_ttl<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum V {
+        N(u64),
+        S(String),
+    }
+    let secs = match <V as serde::Deserialize>::deserialize(d)? {
+        V::N(n) => parse_ttl(&n.to_string()),
+        V::S(s) => parse_ttl(&s),
+    };
+    secs.ok_or_else(|| serde::de::Error::custom("external_ttl is a duration such as \"7d\", \"12h\" or \"90m\""))
+}
+
+/// `[learning]`. Types are checked here so `delphi doctor` names a wrong one; the floors and ceilings are the engine's
+/// (`delphi_engine::learn::LearningSettings`). No key loads unratified content, and an unknown key is a boot notice.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(default)]
+pub struct LearningConfig {
+    pub capture: Option<bool>,
+    pub max_notes: Option<i64>,
+    pub triggers: Option<Vec<String>>,
+    pub retro_min_tasks: Option<i64>,
 }
 
 /// `[validator] mode` (`specs/040` §15.1). Ordered so that `min` is the stricter of two.
@@ -516,13 +641,6 @@ pub struct ValidatorSources {
 fn de_mode<'de, D: serde::Deserializer<'de>>(d: D) -> Result<ValidatorMode, D::Error> {
     let s = <String as serde::Deserialize>::deserialize(d)?;
     ValidatorMode::parse(&s).ok_or_else(|| serde::de::Error::custom(format!("mode `{}` is not one of off, advisory, ratify", s)))
-}
-
-/// `[library]` (`specs/055`). Only `acquire` so far.
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct LibraryConfig {
-    pub acquire: AcquireConfig,
 }
 
 /// `[library.acquire]` (`specs/055` §8): the acquisition job proposes public-domain and research sources, in one batch in the digest.
@@ -628,6 +746,12 @@ impl Config {
                 Err(e) => errs.push(format!("[library]: {}", e)),
             }
         }
+        if let Some(v) = root.get("learning") {
+            match v.clone().try_into::<LearningConfig>() {
+                Ok(v) => cfg.learning = v,
+                Err(e) => errs.push(format!("[learning]: {}", e)),
+            }
+        }
         // `[harness]` also carries scalar settings of its own (`subscription_budget_tokens`); only its sub-tables are profiles.
         if let Some(h) = root.get("harness").and_then(|h| h.as_table()) {
             for (name, v) in h.iter().filter(|(_, v)| v.is_table()) {
@@ -660,6 +784,25 @@ impl Config {
                     // Template placeholders such as "<model id>" count as unset, like `[models.*]`.
                     Ok(v) => cfg.routing.targets = v.into_iter().filter(|(_, id)| !id.trim().is_empty() && !id.starts_with('<')).collect(),
                     Err(e) => errs.push(format!("[routing.targets]: {}", e)),
+                }
+            }
+            if let Some(a) = r.get("assignment") {
+                match a.as_str().and_then(Assignment::parse) {
+                    Some(v) => cfg.routing.assignment = v,
+                    None => errs.push("[routing] assignment must be \"static\" or \"discovered\"".into()),
+                }
+            }
+            if let Some(n) = r.get("evidence_enough") {
+                match n.as_integer().filter(|n| *n >= 1) {
+                    Some(n) => cfg.routing.evidence_enough = n as u32,
+                    None => errs.push("[routing] evidence_enough must be a whole number of at least 1".into()),
+                }
+            }
+            if let Some(t) = r.get("reserve") {
+                match t.clone().try_into::<BTreeMap<String, f64>>() {
+                    Ok(v) if v.values().all(|x| (0.0..=1.0).contains(x)) && v.values().sum::<f64>() <= 1.0 => cfg.routing.reserve = v,
+                    Ok(_) => errs.push("[routing.reserve] each share must be between 0 and 1, and together at most 1".into()),
+                    Err(e) => errs.push(format!("[routing.reserve]: {}", e)),
                 }
             }
             if let Some(list) = &cfg.routing.pool {
@@ -1113,6 +1256,19 @@ impl Config {
 pub(crate) mod tests {
     use super::*;
 
+    #[test]
+    fn library_pages_defaults_and_ttl_forms() {
+        let d = Config::parse(SAMPLE).unwrap().library.pages;
+        assert!(d.enabled && d.external == PagesExternal::Ask);
+        assert_eq!((d.max_tokens, d.external_ttl_secs, d.per_day), (3000, 7 * 86_400, 20));
+        for (v, secs) in [("3", 3 * 86_400), ("\"12h\"", 12 * 3600), ("\"90m\"", 5400), ("\"7d\"", 7 * 86_400)] {
+            let c = Config::parse(&format!("{}\n[library.pages]\nexternal = \"off\"\nexternal_ttl = {}\n", SAMPLE, v)).unwrap().library.pages;
+            assert_eq!((c.external, c.external_ttl_secs), (PagesExternal::Off, secs), "{v}");
+        }
+        assert!(Config::parse(&format!("{}\n[library.pages]\nexternal = \"maybe\"\n", SAMPLE)).is_err());
+        assert!(Config::parse(&format!("{}\n[library.pages]\nexternal_ttl = \"soon\"\n", SAMPLE)).is_err());
+    }
+
     pub const SAMPLE: &str = r#"
 [models.claude]
 fast = "haiku-x"
@@ -1241,6 +1397,17 @@ allowed_endpoints = ["corp-gateway", "bedrock-us"]
         assert_eq!(c.routing, Routing::default());
         assert_eq!(slots(&c), vec!["corp-gateway/sonnet-x", "bedrock-us/bedrock-sonnet-x", "corp-gateway/haiku-x", "bedrock-us/haiku-x"]);
         assert_eq!(c.routing.tuning, PoolTuning { throttle_attempts: 3, throttle_window_secs: 600, reprobe_first_secs: 900, reprobe_max_secs: 14_400 });
+    }
+
+    #[test]
+    fn assignment_defaults_to_static_and_its_keys_are_checked() {
+        let c = with_routing("").unwrap();
+        assert_eq!((c.routing.assignment, c.routing.evidence_enough), (Assignment::Static, 8));
+        let c = with_routing("[routing]\nassignment = \"discovered\"\nevidence_enough = 3\n[routing.reserve]\nvalidator = 0.2").unwrap();
+        assert_eq!((c.routing.assignment, c.routing.evidence_enough, c.routing.reserve["validator"]), (Assignment::Discovered, 3, 0.2));
+        for bad in ["[routing]\nassignment = \"auto\"", "[routing]\nevidence_enough = 0", "[routing.reserve]\nvalidator = 1.5", "[routing.reserve]\nvalidator = 0.6\nbuilder = 0.6"] {
+            assert!(with_routing(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

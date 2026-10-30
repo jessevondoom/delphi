@@ -638,6 +638,79 @@ impl EngineService {
 
     /// `digest.act`: the operator acts on the digest's candidate (`specs/052` §3.3): keep, check, promote or dismiss. Promote only writes a proposal
     /// for `/retro`; no choice resolves a card or satisfies a gate. The payload hash must be the one shown.
+    fn pages_now(&self) -> u64 {
+        (self.engine.clock_unix)().max(0) as u64
+    }
+
+    /// The instant half of a page search (`specs/057` §2): what the library holds for the words, no model and no network.
+    async fn pages_results(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let query = p["query"].as_str().unwrap_or("").trim().to_string();
+        if query.is_empty() {
+            return Err(err(code::INVALID_PARAMS, "a search needs words"));
+        }
+        let lib = crate::library::Library::in_home(&self.engine.ws.home);
+        let scope = if p["external"].as_bool() == Some(true) { crate::library::pages::Scope::External } else { crate::library::pages::Scope::Internal };
+        let g = lib.gather(&query, scope, &[]);
+        let hits: Vec<Value> = g.hits().into_iter().map(|h| json!({"kind": h.kind, "id": h.id, "title": h.title, "status": h.status, "private": h.private})).collect();
+        let ttl = self.engine.cfg.get().library.pages.external_ttl_secs;
+        let pages: Vec<Value> = lib.pages(self.pages_now(), ttl).iter().map(|e| e.to_json()).collect();
+        Ok(json!({"query": query, "hits": hits, "pages": pages}))
+    }
+
+    async fn pages_search(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let query = p["query"].as_str().unwrap_or("").trim().to_string();
+        if query.is_empty() {
+            return Err(err(code::INVALID_PARAMS, "a search needs words"));
+        }
+        let run = self.engine.clone().page_search(&query, p["external"].as_bool()).await.map_err(|e| err(code::INVALID_PARAMS, e))?;
+        let mut v = run.page.entry.to_json();
+        v["markdown"] = json!(run.page.markdown);
+        v["path"] = json!(run.page.path.display().to_string());
+        v["cached"] = json!(run.page.cached);
+        v["notes"] = json!(run.notes);
+        Ok(v)
+    }
+
+    async fn pages_list(&self, _p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let lib = crate::library::Library::in_home(&self.engine.ws.home);
+        let ttl = self.engine.cfg.get().library.pages.external_ttl_secs;
+        Ok(json!({"pages": lib.pages(self.pages_now(), ttl).iter().map(|e| e.to_json()).collect::<Vec<_>>()}))
+    }
+
+    async fn pages_open(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let lib = crate::library::Library::in_home(&self.engine.ws.home);
+        let ttl = self.engine.cfg.get().library.pages.external_ttl_secs;
+        let key = p["key"].as_str().unwrap_or("");
+        let Some((e, md)) = lib.open_page(key, self.pages_now(), ttl) else { return Err(err(code::NOT_FOUND, "no such page")) };
+        let mut v = e.to_json();
+        v["markdown"] = json!(md);
+        Ok(v)
+    }
+
+    async fn pages_pin(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let lib = crate::library::Library::in_home(&self.engine.ws.home);
+        let ttl = self.engine.cfg.get().library.pages.external_ttl_secs;
+        let e = lib.pin_page(p["key"].as_str().unwrap_or(""), p["pinned"].as_bool().unwrap_or(true), self.pages_now(), ttl).map_err(|e| err(code::NOT_FOUND, e))?;
+        Ok(e.to_json())
+    }
+
+    async fn pages_dispute(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let lib = crate::library::Library::in_home(&self.engine.ws.home);
+        lib.dispute_claim(p["claim"].as_str().unwrap_or(""), p["note"].as_str().unwrap_or("")).map_err(|e| err(code::INVALID_PARAMS, e))
+    }
+
+    async fn pages_promote(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let lib = crate::library::Library::in_home(&self.engine.ws.home);
+        lib.promote_statement(p["page"].as_str().unwrap_or(""), p["statement"].as_str().unwrap_or("")).map_err(|e| err(code::INVALID_PARAMS, e))
+    }
+
     async fn digest_act(&self, p: Value, ctx: CallContext) -> RpcOutcome {
         need_console(&ctx)?;
         let m = self.mission(p["mission_id"].as_str()).await?;
@@ -1352,6 +1425,12 @@ impl EngineService {
         ))
     }
 
+    /// Expired staged notes and rules files past their review window (`specs/050` ML-3). A read; nothing here changes an entry.
+    fn retro_stale(&self, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        Ok(Value::Array(crate::retro::stale(&self.engine.ws.home, &self.engine.ws.dir, &delphi_core::bundles::today()).iter().map(|s| s.to_json()).collect()))
+    }
+
     /// Accept or reject one proposal by its `ref` (`<mission>/<id>`). Accepting writes the scope's `heuristics.md` through the
     /// compare-and-swap path, then the proposal's own mission records `learn.proposal_resolved` and the file is stamped L5,
     /// as `ratify.apply` does. `scope` is the operator's choice at ratification. The call is the operator's act: console only.
@@ -1669,6 +1748,13 @@ impl Extension for ServiceExt {
                 "decision.confirm" => svc.decision_confirm(params, ctx).await,
                 "decision.retry_brief" => svc.decision_retry_brief(params, ctx).await,
                 "decision.resolve" => svc.decision_resolve(params, ctx).await,
+                "pages.results" => svc.pages_results(params, ctx).await,
+                "pages.search" => svc.pages_search(params, ctx).await,
+                "pages.list" => svc.pages_list(params, ctx).await,
+                "pages.open" => svc.pages_open(params, ctx).await,
+                "pages.pin" => svc.pages_pin(params, ctx).await,
+                "pages.dispute" => svc.pages_dispute(params, ctx).await,
+                "pages.promote" => svc.pages_promote(params, ctx).await,
                 "digest.act" => svc.digest_act(params, ctx).await,
                 "library.acquire" => svc.library_acquire(ctx).await,
                 "decisions.review" => svc.decisions_review(params, ctx).await,
@@ -1710,6 +1796,7 @@ impl Extension for ServiceExt {
                 "ratify.list" => svc.ratify_list(),
                 "ratify.apply" => svc.ratify_change(params, ctx, false).await,
                 "retro.list" => svc.retro_list(ctx),
+                "retro.stale" => svc.retro_stale(ctx),
                 "retro.accept" => svc.retro_resolve(params, ctx, true).await,
                 "retro.reject" => svc.retro_resolve(params, ctx, false).await,
                 "ratify.reject" => svc.ratify_change(params, ctx, true).await,
@@ -2520,7 +2607,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "research.start", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "retro.list", "retro.accept", "retro.reject", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
+            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "research.start", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "retro.list", "retro.stale", "retro.accept", "retro.reject", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
             for m in every_mutating_method_the_daemon_has {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }

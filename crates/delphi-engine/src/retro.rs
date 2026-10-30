@@ -181,6 +181,59 @@ pub fn collect(ws_dir: &Path) -> Vec<LiveProposal> {
     all
 }
 
+/// Days after `last_confirmed` (or `created`) that a ratified rules file is listed for review (`specs/050` OD-3).
+pub const REVIEW_WINDOW_DAYS: i64 = 90;
+
+/// One entry the operator should look at again: a staged note past its `valid_until`, or a rules file whose
+/// `last_confirmed` is older than the review window. Listed, never removed or reloaded differently (`specs/050` ML-3).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Stale {
+    /// `note` or `rules`.
+    pub kind: &'static str,
+    /// `<mission>/<id>` for a note, the file's name for rules.
+    pub reference: String,
+    pub since: String,
+    pub detail: String,
+}
+
+impl Stale {
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({"kind": self.kind, "ref": self.reference, "since": self.since, "detail": self.detail})
+    }
+}
+
+fn day_number(date: &str) -> Option<i64> {
+    delphi_core::time::parse_rfc3339(&format!("{}T00:00:00Z", date.get(..10)?)).map(|s| s.div_euclid(86_400))
+}
+
+/// The stale list as of `today` (`YYYY-MM-DD`): expired notes, newest expiry first, then rules files past the window.
+/// A note without a date and a file without `last_confirmed` or `created` are never listed.
+pub fn stale(home: &Path, ws_dir: &Path, today: &str) -> Vec<Stale> {
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(ws_dir.join("local/missions")).into_iter().flatten().flatten() {
+        let Some(id) = entry.file_name().to_str().map(String::from) else { continue };
+        let Ok(events) = delphi_core::log::replay(&entry.path()) else { continue };
+        for n in crate::learn::live_notes(&id, &events) {
+            if let Some(until) = n.valid_until.as_deref().filter(|u| *u < today) {
+                out.push(Stale { kind: "note", reference: n.reference(), since: until.to_string(), detail: format!("expired {}: {}", until, n.summary) });
+            }
+        }
+    }
+    out.sort_by(|a, b| b.since.cmp(&a.since).then_with(|| a.reference.cmp(&b.reference)));
+    let now = day_number(today);
+    for (name, path) in [("local/heuristics.md", ws_dir.join("local/ratified/heuristics.md")), ("operator/heuristics.md", home.join("operator/ratified/heuristics.md"))] {
+        let Ok(text) = std::fs::read_to_string(path) else { continue };
+        let Some(fm) = crate::workspace::split_frontmatter(&text).0 else { continue };
+        let Some(since) = ["last_confirmed", "created"].iter().find_map(|k| fm.get(*k).and_then(|v| v.as_str())).and_then(|d| d.get(..10)) else { continue };
+        if let (Some(a), Some(b)) = (day_number(since), now) {
+            if b - a > REVIEW_WINDOW_DAYS {
+                out.push(Stale { kind: "rules", reference: name.into(), since: since.to_string(), detail: format!("last confirmed {} ({} days; review window {})", since, b - a, REVIEW_WINDOW_DAYS) });
+            }
+        }
+    }
+    out
+}
+
 /// What stands in the way of ratifying `p`, for `delphi retro show`.
 pub fn check(home: &Path, ws_dir: &Path, p: &LiveProposal) -> Vec<String> {
     problems(p, &crate::distill::privacy(ws_dir), &current_rules(home, ws_dir, p))
@@ -280,6 +333,31 @@ mod tests {
         let op = accept(&ws.home, &ws.dir, &prop("add", "operator", "Prefer rg over grep.", "")).unwrap();
         assert_eq!(op.file, "operator/heuristics.md");
         assert!(std::fs::read_to_string(ws.home.join("operator/ratified/heuristics.md")).unwrap().contains("[O-002] Prefer rg over grep"));
+    }
+
+    #[test]
+    fn stale_lists_expired_notes_and_rules_past_the_window_and_nothing_else() {
+        use crate::workspace::tests::make_workspace;
+        use delphi_core::event::EventEnvelope;
+        let t = tempfile::tempdir().unwrap();
+        let ws = make_workspace(t.path());
+        let dir = ws.dir.join("local/missions/m1");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut log = delphi_core::log::EventLog::open(&dir, delphi_core::log::LogOptions::default()).unwrap();
+        for (id, until) in [("n1", Some("2026-10-01")), ("n2", Some("2026-12-01")), ("n3", None)] {
+            let mut p = serde_json::json!({"id": id, "trigger": "agent_note", "summary": format!("note {}", id), "event_seqs": [1], "tier": "L3"});
+            if let Some(u) = until {
+                p["valid_until"] = serde_json::json!(u);
+            }
+            log.append(EventEnvelope::new("m1", "learn.staged", p)).unwrap();
+        }
+        drop(log);
+        std::fs::write(ws.dir.join("local/ratified/heuristics.md"), "---\nid: w\nlast_confirmed: 2026-06-01\n---\n\n### [W-001] x\n- **D:** y\n").unwrap();
+        let got = stale(&ws.home, &ws.dir, "2026-10-29");
+        let refs: Vec<_> = got.iter().map(|s| s.reference.as_str()).collect();
+        assert_eq!(refs, ["m1/n1", "local/heuristics.md"], "{:?}", got);
+        assert!(stale(&ws.home, &ws.dir, "2026-10-01").iter().all(|s| s.kind == "rules"), "the last valid day is not stale");
+        assert!(stale(&ws.home, &ws.dir, "2026-08-01").is_empty(), "inside the window");
     }
 
     #[test]
