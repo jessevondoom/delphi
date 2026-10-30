@@ -176,7 +176,7 @@ mod tests {
 
     #[test]
     fn the_card_is_a_learn_decision_that_is_not_validated_recommends_keep_and_offers_promote_only_at_l4_or_above() {
-        let low = to_decision(&LiveNote { mission: "m1".into(), id: "n2".into(), trigger: "council_verdict".into(), summary: "build the table".into(), tier: "L3".into(), task_id: None, role: None, timestamp: NOW.into(), event_seqs: vec![2] }, 0, NOW);
+        let low = to_decision(&LiveNote { mission: "m1".into(), id: "n2".into(), trigger: "council_verdict".into(), summary: "build the table".into(), tier: "L3".into(), task_id: None, role: None, timestamp: NOW.into(), event_seqs: vec![2], valid_until: None }, 0, NOW);
         let ids = |d: &Value| d["choices"].as_array().unwrap().iter().map(|c| c["id"].as_str().unwrap().to_string()).collect::<Vec<_>>();
         assert_eq!((low["kind"].as_str(), low["tier"].as_str(), low["source"].as_str(), low["id"].as_str()), (Some("learn"), Some("open"), Some("digest"), Some("digest:2026-10-29")));
         assert_eq!(ids(&low), ["keep", "check", "dismiss"]);
@@ -184,14 +184,14 @@ mod tests {
         assert_eq!(low["brief"]["recommendation"]["choice_id"], "keep");
         assert_eq!(low["items"][0]["type"], "claim", "the card carries typed items");
         assert_eq!(low["items"][0]["label"], "not validated");
-        let high = to_decision(&LiveNote { mission: "m1".into(), id: "n3".into(), trigger: "decision_resolved".into(), summary: "ship it".into(), tier: "L5".into(), task_id: None, role: None, timestamp: NOW.into(), event_seqs: vec![3] }, 2, NOW);
+        let high = to_decision(&LiveNote { mission: "m1".into(), id: "n3".into(), trigger: "decision_resolved".into(), summary: "ship it".into(), tier: "L5".into(), task_id: None, role: None, timestamp: NOW.into(), event_seqs: vec![3], valid_until: None }, 2, NOW);
         assert_eq!(ids(&high), ["keep", "check", "promote", "dismiss"]);
-        assert_ne!(payload_hash(&LiveNote { mission: "m1".into(), id: "n3".into(), trigger: "x".into(), summary: "a".into(), tier: "L5".into(), task_id: None, role: None, timestamp: NOW.into(), event_seqs: vec![] }), high["payload_blake3"].as_str().unwrap());
+        assert_ne!(payload_hash(&LiveNote { mission: "m1".into(), id: "n3".into(), trigger: "x".into(), summary: "a".into(), tier: "L5".into(), task_id: None, role: None, timestamp: NOW.into(), event_seqs: vec![], valid_until: None }), high["payload_blake3"].as_str().unwrap());
     }
 
     #[test]
     fn promote_only_proposes_for_the_retro_review_and_never_a_card_or_a_rule_and_a_low_tier_cannot_promote() {
-        let mut n = LiveNote { mission: "m1".into(), id: "n3".into(), trigger: "decision_resolved".into(), summary: "ship it".into(), tier: "L5".into(), task_id: None, role: None, timestamp: NOW.into(), event_seqs: vec![3] };
+        let mut n = LiveNote { mission: "m1".into(), id: "n3".into(), trigger: "decision_resolved".into(), summary: "ship it".into(), tier: "L5".into(), task_id: None, role: None, timestamp: NOW.into(), event_seqs: vec![3], valid_until: None };
         let evs = act("m1", &n, "promote").unwrap();
         let kinds: Vec<&str> = evs.iter().map(|e| e.kind.as_str()).collect();
         assert_eq!(kinds, ["learn.proposed", "learn.digested"], "a proposal waits for /retro; no rule is written here");

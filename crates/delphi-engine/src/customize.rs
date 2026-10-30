@@ -46,6 +46,7 @@ fn direct(op: &str, scope: &str, text: &str, why: &str, target: &str) -> LivePro
         tier: "L5".into(),
         task_id: None,
         timestamp: String::new(),
+        supersedes: vec![],
     }
 }
 

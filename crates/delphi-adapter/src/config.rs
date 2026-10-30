@@ -438,6 +438,26 @@ impl Assignment {
     }
 }
 
+/// How the orchestrator learns of bundle agents (`specs/041` §4, §5.7): `flat` is the one-line-per-agent list as before (the
+/// default, until the labeled set meets the recall bar); `auto` swaps in the domain index and `search_agent_registry` once
+/// there are more agents than the list holds.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RegistryMode {
+    #[default]
+    Flat,
+    Auto,
+}
+
+impl RegistryMode {
+    pub fn parse(s: &str) -> Option<RegistryMode> {
+        match s {
+            "flat" => Some(RegistryMode::Flat),
+            "auto" => Some(RegistryMode::Auto),
+            _ => None,
+        }
+    }
+}
+
 /// Results per `(role, kind, model)` that make measured evidence "enough" (`specs/056` OD-3).
 pub const DEFAULT_EVIDENCE_ENOUGH: u32 = 8;
 
@@ -508,11 +528,13 @@ pub struct Routing {
     pub evidence_enough: u32,
     /// `[routing.reserve] <role>`: the share (0 to 1) of the mission budget kept for that role; other roles cannot spend it.
     pub reserve: BTreeMap<String, f64>,
+    /// `[routing] registry` (`specs/041`).
+    pub registry: RegistryMode,
 }
 
 impl Default for Routing {
     fn default() -> Routing {
-        Routing { pool: None, targets: BTreeMap::new(), tuning: PoolTuning::default(), assignment: Assignment::Static, evidence_enough: DEFAULT_EVIDENCE_ENOUGH, reserve: BTreeMap::new() }
+        Routing { pool: None, targets: BTreeMap::new(), tuning: PoolTuning::default(), assignment: Assignment::Static, evidence_enough: DEFAULT_EVIDENCE_ENOUGH, reserve: BTreeMap::new(), registry: RegistryMode::Flat }
     }
 }
 
@@ -804,6 +826,12 @@ impl Config {
                 match a.as_str().and_then(Assignment::parse) {
                     Some(v) => cfg.routing.assignment = v,
                     None => errs.push("[routing] assignment must be \"static\" or \"discovered\"".into()),
+                }
+            }
+            if let Some(a) = r.get("registry") {
+                match a.as_str().and_then(RegistryMode::parse) {
+                    Some(v) => cfg.routing.registry = v,
+                    None => errs.push("[routing] registry must be \"flat\" or \"auto\"".into()),
                 }
             }
             if let Some(n) = r.get("evidence_enough") {
@@ -1419,6 +1447,13 @@ allowed_endpoints = ["corp-gateway", "bedrock-us"]
         assert_eq!((c.grades.of("architect", None), c.grades.of("builder", None), c.grades.of("builder", Some("docs")), c.grades.of("builder", Some("code")), c.grades.of("writer", None)), (1, -1, -2, -1, 0));
         assert!(with_routing("[grades]\narchitect = 3").is_err());
         assert!(with_routing("[grades]\narchitect = \"high\"").is_err());
+    }
+
+    #[test]
+    fn the_agent_registry_is_flat_unless_asked_for() {
+        assert_eq!(with_routing("").unwrap().routing.registry, RegistryMode::Flat);
+        assert_eq!(with_routing("[routing]\nregistry = \"auto\"").unwrap().routing.registry, RegistryMode::Auto);
+        assert!(with_routing("[routing]\nregistry = \"on\"").is_err());
     }
 
     #[test]

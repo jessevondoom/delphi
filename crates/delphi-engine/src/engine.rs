@@ -705,9 +705,13 @@ impl Engine {
                 if let Some(text) = m.replay().ok().and_then(|events| crate::thread_nudge::reminder(&events)) {
                     slices.push(ContextSlice { label: "@runtime/unnamed-threads".into(), tier: "L3".into(), text });
                 }
-                let agents = crate::bundle_load::catalog(&self.ws);
-                if !agents.is_empty() {
-                    slices.push(ContextSlice { label: "@runtime/bundle-agents".into(), tier: "L3".into(), text: agents });
+                if self.registry_routes() {
+                    slices.push(ContextSlice { label: "@runtime/agent-domains".into(), tier: "L3".into(), text: crate::agent_registry::domain_index(&crate::agent_registry::registry(&self.ws)) });
+                } else {
+                    let agents = crate::bundle_load::catalog(&self.ws);
+                    if !agents.is_empty() {
+                        slices.push(ContextSlice { label: "@runtime/bundle-agents".into(), tier: "L3".into(), text: agents });
+                    }
                 }
             }
             // The organization's stated goals and perspectives, for the roles whose manifest says so (`specs/026` §3).
@@ -1491,6 +1495,11 @@ impl Engine {
         crate::fact_mode::effective(self.cfg.get().validator.mode, &crate::fact_mode::state_dir(&self.ws.dir)).mode == delphi_adapter::config::ValidatorMode::Off
     }
 
+    /// Whether bundle agents are found by search rather than listed: asked for, and more of them than the list holds.
+    fn registry_routes(&self) -> bool {
+        self.cfg.get().routing.registry == delphi_adapter::config::RegistryMode::Auto && crate::bundle_load::catalog_counts(&self.ws).0 > crate::bundle_load::CATALOG_MAX
+    }
+
     pub(crate) async fn span_tool_defs(&self, sc: &SpanCtx) -> Result<Vec<ToolDef>, EngineError> {
         let mut defs = self.tools.defs(!sc.manifest.write.is_empty());
         if self.validator_off() {
@@ -1498,6 +1507,9 @@ impl Engine {
         }
         if sc.manifest.execute.iter().any(|e| e == "agent-dispatch") {
             defs.push(dispatch_def());
+            if self.registry_routes() {
+                defs.push(crate::agent_registry::tool_def());
+            }
         }
         if sc.manifest.execute.iter().any(|e| e == "timers") {
             defs.push(timer_def());
@@ -1561,6 +1573,26 @@ impl Engine {
                 return Ok(tool_result_error("this role's manifest does not authorize agent-dispatch"));
             }
             return self.exec_dispatch(sc, call_id, args, rec).await;
+        }
+        if name == crate::agent_registry::TOOL {
+            if !sc.manifest.execute.iter().any(|e| e == "agent-dispatch") {
+                return Ok(tool_result_error("this role's manifest does not authorize agent-dispatch"));
+            }
+            if !self.registry_routes() {
+                return Ok(tool_result_error("the agent registry is not in use: the list of bundle agents is in your context"));
+            }
+            let key = format!("{}/{}", sc.m.id, sc.task_id);
+            let emb = crate::embed::open_default(Some(&self.ws.home)).ok().flatten();
+            return match crate::agent_registry::run_search(&self.ws, &key, args, emb.as_deref()) {
+                Ok((out, logged)) => {
+                    sc.m.append(sc.ev("registry.search", logged)).await?;
+                    Ok(tools::ToolResult { content: out.to_string(), is_error: false })
+                }
+                Err(e) => {
+                    sc.m.append(sc.ev("registry.search", json!({"refused": e}))).await?;
+                    Ok(tool_result_error(e))
+                }
+            };
         }
         if name == crate::align_run::TOOL {
             return self.exec_align(sc, args).await;
@@ -2002,6 +2034,11 @@ impl Engine {
             (role.to_string(), None)
         };
         let role = host_role.as_str();
+        if bundle_agent.is_some() {
+            if let Some(rec) = crate::agent_registry::dispatch_record(&self.ws, &format!("{}/{}", sc.m.id, sc.task_id), target, role) {
+                sc.m.append(sc.ev("registry.dispatch", rec)).await?;
+            }
+        }
         if !self.settings.enabled_agents.iter().any(|a| a == role) {
             return Ok((tool_result_error(format!("`{}` is not an enabled role (enabled: {})", role, self.settings.enabled_agents.join(", "))), None));
         }

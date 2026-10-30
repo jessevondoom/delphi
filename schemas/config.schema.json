@@ -46,6 +46,7 @@
         "max_parallel_agents": { "type": "integer", "minimum": 1 },
         "degrade_prompt_secs": { "type": "integer", "minimum": 0 },
         "max_park_secs": { "type": "integer", "minimum": 0 },
+        "registry": { "enum": ["flat", "auto"], "description": "How the orchestrator learns of bundle agents (specs/041). flat: one line per agent, up to 20. auto: past 20, a domain index and the search_agent_registry tool." },
         "assignment": { "enum": ["static", "discovered"], "description": "How a dispatch picks its model (specs/056). static: the role's tier. discovered: capability class, measured results and quota." },
         "evidence_enough": { "type": "integer", "minimum": 1, "description": "Measured results per (role, kind, model) after which a model is scored by them alone." },
         "reserve": { "type": "object", "additionalProperties": { "type": "number", "minimum": 0, "maximum": 1 }, "description": "Role to the share of the mission budget no other role may spend." },

@@ -69,6 +69,15 @@ pub fn render_one(p: &LiveProposal) -> String {
     )
 }
 
+/// The rules a ratified `add` would retire (named) or resembles (similar). Shown only; the operator's ratification applies.
+pub fn render_candidates(c: &[retro::Candidate]) -> String {
+    if c.is_empty() {
+        return String::new();
+    }
+    let lines: String = c.iter().map(|c| format!("  - [{}] {} ({:.0}% of the same words)\n", c.id, if c.named { "named as superseded: ratifying retires it" } else { "similar, not named: stays unless you retire it" }, c.overlap * 100.0)).collect();
+    format!("\nsupersession candidates:\n{}", lines)
+}
+
 /// The proposal a reference names: `<mission>/<id>`, or a bare id when exactly one mission has it.
 pub fn find<'a>(items: &'a [LiveProposal], reference: &str) -> Result<&'a LiveProposal, String> {
     let hits: Vec<&LiveProposal> = items.iter().filter(|p| p.reference() == reference || p.id == reference).collect();
@@ -79,7 +88,23 @@ pub fn find<'a>(items: &'a [LiveProposal], reference: &str) -> Result<&'a LivePr
     }
 }
 
+/// The stale list (`specs/050` ML-3): expired notes and rules past their review window. Listed, never changed.
+pub fn render_stale(items: &[retro::Stale], json: bool) -> Result<String, String> {
+    if json {
+        return serde_json::to_string_pretty(&items.iter().map(retro::Stale::to_json).collect::<Vec<_>>()).map(|s| s + "\n").map_err(|e| e.to_string());
+    }
+    if items.is_empty() {
+        return Ok("nothing is stale: no staged note is past its date and no rules file is past its review window\n".into());
+    }
+    let mut out: String = items.iter().map(|s| format!("{:<6} {}  {}\n", s.kind, s.reference, s.detail)).collect();
+    out.push_str(&format!("{} stale entr(ies). Nothing was removed; an expired note is no longer retrieved, and a rules file is reviewed by editing its `last_confirmed`.\n", items.len()));
+    Ok(out)
+}
+
 pub fn run_in(ws_dir: &Path, verb: &str, reference: Option<&str>, opts: &Options) -> Result<String, String> {
+    if verb == "stale" {
+        return render_stale(&retro::stale(&opts.home, ws_dir, &delphi_core::bundles::today()), opts.json);
+    }
     let items = collect(ws_dir, opts)?;
     match verb {
         "list" if opts.json => serde_json::to_string_pretty(&items.iter().map(LiveProposal::to_json).collect::<Vec<_>>()).map(|s| s + "\n").map_err(|e| e.to_string()),
@@ -90,13 +115,14 @@ pub fn run_in(ws_dir: &Path, verb: &str, reference: Option<&str>, opts: &Options
                 return serde_json::to_string_pretty(&p.to_json()).map(|s| s + "\n").map_err(|e| e.to_string());
             }
             let mut out = render_one(p);
+            out.push_str(&render_candidates(&retro::candidates_for(&opts.home, ws_dir, p)));
             let blocked = retro::check(&opts.home, ws_dir, p);
             if !blocked.is_empty() {
                 out.push_str(&format!("\nnot ratifiable as it stands:\n{}", blocked.iter().map(|b| format!("  - {}\n", b)).collect::<String>()));
             }
             Ok(out)
         }
-        other => Err(format!("`{}` is not a retro verb (list, show, accept, reject)", other)),
+        other => Err(format!("`{}` is not a retro verb (list, show, stale, accept, reject)", other)),
     }
 }
 
@@ -132,7 +158,7 @@ pub fn resolve(ws_dir: &Path, p: &LiveProposal, accept: bool, opts: &Options) ->
     let mut log = open_log(ws_dir, &p.mission)?;
     let (resolution, detail) = if accept {
         let done = retro::accept(&opts.home, ws_dir, &p)?;
-        ("accepted", serde_json::json!({"scope": p.scope, "file": done.file, "pin": done.pin}))
+        ("accepted", serde_json::json!({"scope": p.scope, "file": done.file, "pin": done.pin, "retired": done.retired.iter().map(|(id, text)| serde_json::json!({"id": id, "text": text})).collect::<Vec<_>>()}))
     } else {
         ("rejected", serde_json::json!({}))
     };
@@ -158,7 +184,7 @@ pub(crate) fn confirm(question: &str) -> bool {
 pub fn cli(ws_dir: &Path, args: &[String], opts: &Options) -> i32 {
     let positional: Vec<&str> = args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && (*i == 0 || !["--mission", "--workspace", "--home", "--scope"].contains(&args[*i - 1].as_str()))).map(|(_, a)| a.as_str()).collect();
     let Some(verb) = positional.first() else {
-        eprintln!("delphi retro: list | show <mission>/<id>");
+        eprintln!("delphi retro: list | show <mission>/<id> | stale");
         return 2;
     };
     if matches!(*verb, "accept" | "reject") {
@@ -173,6 +199,7 @@ pub fn cli(ws_dir: &Path, args: &[String], opts: &Options) -> i32 {
             }
             print!("{}", render_one(&shown));
             if *verb == "accept" {
+                print!("{}", render_candidates(&retro::candidates_for(&opts.home, ws_dir, &shown)));
                 let blocked = retro::check(&opts.home, ws_dir, &shown);
                 if !blocked.is_empty() {
                     return Err(blocked.join("; "));

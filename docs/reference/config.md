@@ -34,6 +34,7 @@ Defaults are those of the template; "—" means no default.
 | `[routing] max_parallel_agents` | `4` | |
 | `[routing] degrade_prompt_secs` | `300` | how long the "run on a weaker model?" card waits |
 | `[routing] max_park_secs` | wait forever | how long a task waits for a model; `0` escalates at once |
+| `[routing] registry` | `"flat"` | `"flat"`: the orchestrator sees one line per bundle agent, up to 20, with a note of how many are not listed. `"auto"`: past 20 agents it sees a domain index and gets `search_agent_registry` (spec 041); becomes the default only after the labeled set meets the recall bar |
 | `[routing] assignment` | `"static"` | `"static"`: a role's tier picks the model. `"discovered"`: a model is assigned by capability class, measured results and quota (spec 056); becomes the default only after a benchmark shows it no worse |
 | `[routing] evidence_enough` | `8` | measured results per `(role, kind, model)` after which a model is scored by them alone |
 | `[routing.reserve] <role>` | none | the share (0 to 1) of the mission budget kept for that role, so planning cannot starve the validator; applies with `assignment = "discovered"` |

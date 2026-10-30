@@ -95,6 +95,8 @@ pub struct LiveNote {
     pub role: Option<String>,
     pub timestamp: String,
     pub event_seqs: Vec<u64>,
+    /// The last day the note may be retrieved (`specs/050` ML-3); `None` for a note that does not expire.
+    pub valid_until: Option<String>,
 }
 
 impl LiveNote {
@@ -110,7 +112,7 @@ impl LiveNote {
 
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::json!({"ref": self.reference(), "mission": self.mission, "id": self.id, "trigger": self.trigger, "summary": self.summary, "tier": self.tier,
-                           "task_id": self.task_id, "role": self.role, "at": self.timestamp, "event_seqs": self.event_seqs})
+                           "task_id": self.task_id, "role": self.role, "at": self.timestamp, "event_seqs": self.event_seqs, "valid_until": self.valid_until})
     }
 }
 
@@ -131,6 +133,7 @@ pub fn live_notes(mission: &str, events: &[EventEnvelope]) -> Vec<LiveNote> {
                     role: e.agent.clone(),
                     timestamp: e.timestamp.clone(),
                     event_seqs: e.payload["event_seqs"].as_array().into_iter().flatten().filter_map(|v| v.as_u64()).collect(),
+                    valid_until: e.payload["valid_until"].as_str().filter(|d| crate::frontmatter::entry_date_ok(d)).map(|d| d[..10].to_string()),
                 });
             }
             "learn.dropped" => {
@@ -165,6 +168,8 @@ pub struct LiveProposal {
     pub tier: String,
     pub task_id: Option<String>,
     pub timestamp: String,
+    /// Rule ids an `add` replaces when the operator ratifies it (`specs/050` ML-2); empty for most proposals.
+    pub supersedes: Vec<String>,
 }
 
 impl LiveProposal {
@@ -175,7 +180,7 @@ impl LiveProposal {
 
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::json!({"ref": self.reference(), "mission": self.mission, "id": self.id, "op": self.op, "scope": self.scope, "text": self.text,
-                           "rationale": self.rationale, "target": self.target, "tier": self.tier, "task_id": self.task_id, "at": self.timestamp})
+                           "rationale": self.rationale, "target": self.target, "tier": self.tier, "task_id": self.task_id, "at": self.timestamp, "supersedes": self.supersedes})
     }
 }
 
@@ -192,7 +197,7 @@ pub fn live_proposals(mission: &str, events: &[EventEnvelope]) -> Vec<LivePropos
                     continue;
                 }
                 let tier = e.payload["tier"].as_str().and_then(Tier::parse).unwrap_or(Tier::L0).min(Tier::L3);
-                out.push(LiveProposal { mission: mission.to_string(), id: format!("p{}", e.seq), op: s("op"), scope: s("scope"), text: s("text"), rationale: s("rationale"), target: s("target"), tier: tier.as_str().to_string(), task_id: e.task_id.clone(), timestamp: e.timestamp.clone() });
+                out.push(LiveProposal { mission: mission.to_string(), id: format!("p{}", e.seq), op: s("op"), scope: s("scope"), text: s("text"), rationale: s("rationale"), target: s("target"), tier: tier.as_str().to_string(), task_id: e.task_id.clone(), timestamp: e.timestamp.clone(), supersedes: e.payload["supersedes"].as_array().into_iter().flatten().filter_map(|v| v.as_str()).filter(|id| crate::retro::is_rule_id(id)).take(crate::retro::MAX_SUPERSEDES).map(String::from).collect() });
             }
             "learn.proposal_resolved" => {
                 if let Some(id) = e.payload["id"].as_str() {
@@ -337,6 +342,8 @@ pub struct StagedNote {
     pub tier: Tier,
     /// Tells apart two notes made from one event (a verdict and its minority report).
     pub id_suffix: &'static str,
+    /// Set only by the agent `note` tool (`specs/050` OD-5): the note stops being retrieved after this date.
+    pub valid_until: Option<String>,
 }
 
 impl StagedNote {
@@ -346,7 +353,11 @@ impl StagedNote {
     }
 
     pub fn to_event(&self, mission_id: &str) -> EventEnvelope {
-        let mut e = EventEnvelope::new(mission_id, "learn.staged", serde_json::json!({"id": self.id(), "trigger": self.trigger, "summary": self.summary, "event_seqs": self.event_seqs, "tier": self.tier.as_str()}));
+        let mut payload = serde_json::json!({"id": self.id(), "trigger": self.trigger, "summary": self.summary, "event_seqs": self.event_seqs, "tier": self.tier.as_str()});
+        if let Some(d) = &self.valid_until {
+            payload["valid_until"] = serde_json::json!(d);
+        }
+        let mut e = EventEnvelope::new(mission_id, "learn.staged", payload);
         e.task_id = self.task_id.clone();
         e.agent = self.role.clone();
         e
@@ -408,10 +419,11 @@ pub fn source_type_for(tier: &str) -> &'static str {
 /// One note as a Markdown document for the knowledge base: labelled with where it came from and how far to trust it.
 pub fn note_document(n: &LiveNote) -> String {
     format!(
-        "---\nsource_type: {}\nauthor: daemon\nconfidence: low\nstatus: active\nkind: {}\n{}---\n# Staged note {}\n\nStaged note ({} · tier {} · {} · mission {}{}{}). A candidate lesson only: not ratified, not guidance.\n\n{}\n",
+        "---\nsource_type: {}\nauthor: daemon\nconfidence: low\nstatus: active\nkind: {}\n{}{}---\n# Staged note {}\n\nStaged note ({} · tier {} · {} · mission {}{}{}). A candidate lesson only: not ratified, not guidance.\n\n{}\n",
         source_type_for(&n.tier),
         n.kind(),
         if n.timestamp.is_empty() { String::new() } else { format!("created: {0}\nlast_confirmed: {0}\n", n.timestamp) },
+        n.valid_until.as_ref().map(|d| format!("valid_until: {}\n", d)).unwrap_or_default(),
         n.id,
         n.trigger,
         n.tier,
@@ -568,13 +580,13 @@ impl Stager {
         if !self.on(trigger) || self.contact_seen.len() >= CONTACT_CAP || !self.contact_seen.insert(key) {
             return None;
         }
-        Some(Capture::Note(StagedNote { trigger, task_id: task.map(String::from), role: e.agent.clone(), event_seqs: vec![e.seq], summary, tier: self.tier(task, base), id_suffix }))
+        Some(Capture::Note(StagedNote { trigger, task_id: task.map(String::from), role: e.agent.clone(), event_seqs: vec![e.seq], summary, tier: self.tier(task, base), id_suffix, valid_until: None }))
     }
 
     pub fn observe(&mut self, e: &EventEnvelope) -> Vec<Capture> {
         let task = e.task_id.as_deref();
         let mk = |s: &Stager, trigger: &'static str, summary: String, seqs: Vec<u64>, base: Tier| {
-            Capture::Note(StagedNote { trigger, task_id: task.map(String::from), role: e.agent.clone(), event_seqs: seqs, summary: clip(&summary), tier: s.tier(task, base), id_suffix: "" })
+            Capture::Note(StagedNote { trigger, task_id: task.map(String::from), role: e.agent.clone(), event_seqs: seqs, summary: clip(&summary), tier: s.tier(task, base), id_suffix: "", valid_until: None })
         };
         let mut out = Vec::new();
         match e.kind.as_str() {
@@ -606,6 +618,9 @@ impl Stager {
                     // Never above L3, whatever the payload claims.
                     let base = e.payload["tier"].as_str().and_then(Tier::parse).unwrap_or(Tier::L3).min(Tier::L3);
                     out.push(mk(self, "agent_note", text.to_string(), vec![e.seq], base));
+                    if let Some(Capture::Note(n)) = out.last_mut() {
+                        n.valid_until = e.payload["valid_until"].as_str().filter(|d| crate::frontmatter::entry_date_ok(d)).map(|d| d[..10].to_string());
+                    }
                 }
             }
             k if k.starts_with("learn.") => return out,
@@ -982,6 +997,19 @@ mod tests {
         assert_eq!(tainted[0].tier, Tier::L1);
         let off = Stager::new(LearningSettings { triggers: ["escalation".to_string()].into(), ..Default::default() }).observe(&note(1, "t", "L3"));
         assert!(off.is_empty());
+    }
+
+    #[test]
+    fn an_agent_notes_valid_until_reaches_the_staged_event_and_the_note_file_and_only_the_agent_can_set_it() {
+        let dated = at(1, Some("t"), "learn.note", json!({"text": "freeze", "tier": "L3", "valid_until": "2026-11-30"}));
+        let bogus = at(2, Some("t"), "learn.note", json!({"text": "other", "tier": "L3", "valid_until": "someday"}));
+        let notes = stage(&[dated, bogus]);
+        assert_eq!((notes[0].valid_until.as_deref(), notes[1].valid_until.as_deref()), (Some("2026-11-30"), None));
+        let live = live_notes("m1", &[notes[0].to_event("m1")]);
+        assert_eq!(live[0].valid_until.as_deref(), Some("2026-11-30"));
+        assert!(note_document(&live[0]).contains("kind: fact\n") && note_document(&live[0]).contains("valid_until: 2026-11-30\n"));
+        let denied = stage(&[at(3, Some("t"), "approval.resolved", json!({"resolution": "denied", "reason": "no", "valid_until": "2026-11-30"}))]);
+        assert!(denied.iter().all(|n| n.valid_until.is_none()));
     }
 
     #[test]
