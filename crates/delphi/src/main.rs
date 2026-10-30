@@ -60,6 +60,7 @@ mod setup;
 mod skills_cmd;
 mod claims_cmd;
 mod pages_cmd;
+mod project;
 mod sources_cmd;
 mod start;
 mod status;
@@ -90,6 +91,7 @@ const CMDS: &[Cmd] = &[
     Cmd { group: "Start", name: "run", about: "one task without a terminal, then a summary", synopsis: "  delphi run \"<task>\" [--on-card deny|policy:<file>] [--permissions <mode>] [--budget <usd>] [--timeout <dur>]\n    [--json|--jsonl] [--mission <id>] [--keep-daemon] [--workspace <name>] [--home <dir>]", detail: "Exit codes: 0 ok · 1 gates failed · 2 a card was denied · 3 budget · 4 infrastructure ·\n5 an optimistic build awaits decision review." },
     Cmd { group: "Set up", name: "setup", about: "find the model tools you have and connect them", synopsis: "  delphi setup [--yes] [--check] [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Set up", name: "init", about: "create a workspace for a project", synopsis: "  delphi init [--non-interactive] [--workspace <name>] [--project <path>]... [--theme <name>] [--home <dir>]", detail: "" },
+    Cmd { group: "Set up", name: "project", about: "register and inspect directory project scopes", synopsis: "  delphi project register [path] [--workspace <name>] [--home <dir>]\n  delphi project list | scope [--workspace <name>] [--home <dir>]\n  delphi project relink <project-id> <new-path> [--home <dir>]\n  delphi project clone [path] [--home <dir>]", detail: "A project is a directory scope; Git is optional. Registration writes a small `.delphi-project` identity marker and stores the root in the workspace registry. It does not scaffold project artifact folders yet." },
     Cmd { group: "Set up", name: "auth", about: "sign in to, or out of, a model endpoint", synopsis: "  delphi auth login <name> [--manual] | status | logout <name> [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Set up", name: "endpoints", about: "check that each model endpoint answers", synopsis: "  delphi endpoints test [<endpoint id>] [--probe] [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Set up", name: "connectors", about: "the connectors that are configured, logged in and pinned", synopsis: "  delphi connectors status | test <name> | pin <name> [--workspace <name>] [--home <dir>]", detail: "" },
@@ -268,6 +270,7 @@ fn main() {
         Some("setup") => cmd_setup(&args),
         Some("update") => cmd_update(&args),
         Some("init") => cmd_init(&args),
+        Some("project") => project::cli(&args),
         Some("doctor") => cmd_doctor(&args),
         Some("logs") => logs_cmd::logs(&args),
         Some("debug") => logs_cmd::debug(&args),
@@ -596,8 +599,9 @@ fn resolve_ws(cmd: &str, args: &[String]) -> Result<(PathBuf, home::Workspace), 
             eprintln!("delphi {}: several workspaces register this project ({}); pass --workspace or set DELPHI_WORKSPACE", cmd, v.join(", "));
             return Err(2);
         }
+        home::Resolve::NoneRegistered(_) if home.join("workspaces").join(start::DEFAULT_WORKSPACE).join("config.toml").exists() => start::DEFAULT_WORKSPACE.to_string(),
         home::Resolve::NoneRegistered(root) => {
-            eprintln!("delphi {}: no workspace registers {}; run `delphi init --project {}`", cmd, root.display(), root.display());
+            eprintln!("delphi {}: no project scope contains {}; run `delphi` to initialize Delphi or `delphi project register {}` to register it", cmd, root.display(), root.display());
             return Err(2);
         }
         // Outside any project, the workspace that bare `delphi` made for that case, if it exists.

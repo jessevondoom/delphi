@@ -590,25 +590,27 @@ pub fn run(ui: &mut dyn Ui, env: &dyn Env, o: &Opts) -> Result<Outcome> {
     if let (Some(r), Some(k)) = (&root, &kind) {
         ui.say(&format!("  ✓ project: {} ({})", r.display(), k.name));
     } else if root.is_none() {
-        ui.say("  • not inside a git repository (run this from your project, or use `delphi init --project <path>`)");
+        ui.say("  • no Git repository detected; Delphi can still run here using the default workspace.");
     }
 
-    // The workspace for this project, created if none registers it.
+    // Use the matching project workspace, or the persistent default workspace when none matches.
     let ws_name = match home::resolve_workspace(&o.home, &o.cwd, o.workspace.clone()) {
         home::Resolve::Found(n) => n,
-        home::Resolve::NoneRegistered(r) => {
-            if o.check {
-                ui.say("\nNo workspace registers this project yet. Run `delphi setup` to create one.");
+        home::Resolve::NoneRegistered(_) | home::Resolve::NotInGitRepo => {
+            let default = crate::start::DEFAULT_WORKSPACE;
+            let dir = o.home.join("workspaces").join(default);
+            if dir.join("config.toml").exists() {
+                default.to_string()
+            } else if o.check {
+                ui.say("\nNo default workspace yet. Run `delphi` to create one, then resume setup.");
                 return Ok(Outcome::default());
+            } else {
+                let ws = home::init(&InitOptions { home: o.home.clone(), workspace: default.into(), projects: vec![], theme: "greek".into() })?;
+                ui.say(&format!("  Created default workspace `{}`.", ws.name));
+                ws.name
             }
-            let default = r.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "default".into());
-            let name = if o.yes { default } else { ui.line("\nNo workspace registers this project. Name for a new one", &default) };
-            let ws = home::init(&InitOptions { home: o.home.clone(), workspace: name, projects: vec![r.clone()], theme: "greek".into() })?;
-            ui.say(&format!("  Created workspace `{}` (nothing is written into your project).", ws.name));
-            ws.name
         }
         home::Resolve::Ambiguous(v) => return Err(anyhow!("several workspaces register this project ({}); pass --workspace", v.join(", "))),
-        home::Resolve::NotInGitRepo => return Err(anyhow!("run this inside a git repository, or pass --workspace <name>")),
         home::Resolve::NoSuchWorkspace(n) => return Err(anyhow!("no workspace named `{}`", n)),
     };
     let ws_dir = o.home.join("workspaces").join(&ws_name);
@@ -1037,7 +1039,7 @@ mod tests {
         let mut env = machine(false, false, false);
         env.http.insert("https://generativelanguage.googleapis.com/v1beta/models".into(), (200, r#"{"models":[{"name":"models/gemini-2.5-flash","supportedGenerationMethods":["generateContent"]},{"name":"models/gemini-2.5-pro","supportedGenerationMethods":["generateContent"]}]}"#.into()));
         let key = "AIzaSyFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE0";
-        let mut ui = Script { yes: VecDeque::from([true, false, false]), secrets: VecDeque::from([key.to_string()]), lines: VecDeque::from(["proj".to_string(), "0.30".into(), "2.50".into(), "1.25".into(), "10.00".into()]), ..Default::default() };
+        let mut ui = Script { yes: VecDeque::from([true, false, false]), secrets: VecDeque::from([key.to_string()]), lines: VecDeque::from(["0.30".into(), "2.50".into(), "1.25".into(), "10.00".into()]), ..Default::default() };
         let out = run(&mut ui, &env, &opts(t.path(), &proj)).unwrap();
         assert_eq!(out.added, ["gemini-key"]);
         assert_eq!(env.stored.borrow().as_slice(), [("gemini-api-key".to_string(), key.to_string())]);
@@ -1061,7 +1063,7 @@ mod tests {
         let proj = project(t.path(), false);
         let mut env = machine(false, false, false);
         env.http.insert("https://generativelanguage.googleapis.com/v1beta/models".into(), (200, GEMINI_MODELS.into()));
-        let mut ui = Script { yes: VecDeque::from([true, false, false, false]), secrets: VecDeque::from([key.to_string()]), lines: VecDeque::from(["proj".to_string(), "".into(), "".into(), "1.25".into(), "10.00".into()]), ..Default::default() };
+        let mut ui = Script { yes: VecDeque::from([true, false, false, false]), secrets: VecDeque::from([key.to_string()]), lines: VecDeque::from(["".into(), "".into(), "1.25".into(), "10.00".into()]), ..Default::default() };
         run(&mut ui, &env, &opts(t.path(), &proj)).unwrap();
         let parsed = delphi_adapter::config::Config::parse(&config(t.path())).unwrap();
         assert!(parsed.catalog_entry("gemini-2.5-flash").is_none() && parsed.catalog_entry("gemini-2.5-pro").is_some_and(|e| e.has_prices()));
@@ -1070,7 +1072,7 @@ mod tests {
         // Confirmed free: a near-zero placeholder, on purpose.
         let t = tempfile::tempdir().unwrap();
         let proj = project(t.path(), false);
-        let mut ui = Script { yes: VecDeque::from([true, true, false, false]), secrets: VecDeque::from([key.to_string()]), lines: VecDeque::from(["proj".to_string(), "".into(), "".into(), "1.25".into(), "10.00".into()]), ..Default::default() };
+        let mut ui = Script { yes: VecDeque::from([true, true, false, false]), secrets: VecDeque::from([key.to_string()]), lines: VecDeque::from(["".into(), "".into(), "1.25".into(), "10.00".into()]), ..Default::default() };
         run(&mut ui, &env, &opts(t.path(), &proj)).unwrap();
         let parsed = delphi_adapter::config::Config::parse(&config(t.path())).unwrap();
         assert!(parsed.catalog_entry("gemini-2.5-flash").is_some_and(|e| e.has_prices() && e.input_usd_per_mtok < 0.001));
@@ -1087,7 +1089,7 @@ mod tests {
         let mut ui = Script {
             yes: VecDeque::from([true, true]),
             secrets: VecDeque::from(["AIzaSyFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE0".to_string(), "sk-ant-fakefakefakefake".into()]),
-            lines: VecDeque::from(["proj".to_string(), "0.30".into(), "2.50".into(), "1.25".into(), "10.00".into()]),
+            lines: VecDeque::from(["0.30".into(), "2.50".into(), "1.25".into(), "10.00".into()]),
             ..Default::default()
         };
         let err = run(&mut ui, &env, &opts(t.path(), &proj)).unwrap_err();
@@ -1121,7 +1123,7 @@ mod tests {
         let env = machine(false, false, false);
         let mut ui = Script {
             yes: VecDeque::from([false, false, true]),
-            lines: VecDeque::from(["proj".to_string(), "my-gcp-project".into(), "1234-abcd.apps.googleusercontent.com".into()]),
+            lines: VecDeque::from(["my-gcp-project".into(), "1234-abcd.apps.googleusercontent.com".into()]),
             secrets: VecDeque::from(["GOCSPX-fakesecret".to_string()]),
             ..Default::default()
         };

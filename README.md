@@ -87,11 +87,10 @@ Put `ui/dist/delphi-ui` next to `delphi` or point `$DELPHI_UI` at it; without it
 ## Quick start
 
 ```sh
-cd ~/code/my-project
 delphi
 ```
 
-The first time, `delphi` creates a workspace for the project under `~/.delphi/workspaces/`, runs a guided model setup if no model access exists (it finds `claude` and `agy`, asks only for what it cannot find, and ratifies the config), runs the doctor and offers to fix what it can, then opens the console. After that it just opens the console. Outside a git repository it uses a `default` workspace that holds only the built-in knowledge.
+You can run `delphi` from any directory; a Git repository is not required to open the console. The first time, it creates or resolves a workspace under `~/.delphi/workspaces/`, runs guided model setup if no model access exists (it finds `claude` and `agy`, asks only for what it cannot find, and ratifies the config), runs the doctor and offers to fix what it can, then opens the console. After that it just opens the console. Outside a Git repository it uses the `default` workspace.
 
 Paths in the prompt are logical: `@project/<name>/…` for a project repo, `@worktree/…` inside a build, `specs/…`, `missions/…` and `context/…` for the workspace's own files. A new user should read [Getting started](docs/getting-started.md) next.
 

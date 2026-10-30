@@ -14,24 +14,18 @@ use std::path::{Path, PathBuf};
 /// The workspace used outside any project.
 pub const DEFAULT_WORKSPACE: &str = "default";
 
-/// Find the workspace for `cwd`, creating it if none exists. The returned notes say what was created.
+/// Find the workspace for `cwd`, creating the default workspace when no project scope matches.
 pub fn ensure_workspace(home: &Path, cwd: &Path, explicit: Option<String>) -> Result<(Workspace, Vec<String>)> {
     let mut notes = Vec::new();
     let ws_dir = |n: &str| home.join("workspaces").join(n);
     let name = match home::resolve_workspace(home, cwd, explicit) {
         Resolve::Found(n) => n,
-        Resolve::NoneRegistered(root) => {
-            let name = free_name(home, &root);
-            home::init(&InitOptions { home: home.to_path_buf(), workspace: name.clone(), projects: vec![root.clone()], theme: "greek".into() })?;
-            notes.push(format!("First time in {}: created the workspace `{}` under {} (nothing is written into your project).", root.display(), name, home.join("workspaces").display()));
-            name
-        }
-        Resolve::NotInGitRepo => {
+        Resolve::NoneRegistered(_) | Resolve::NotInGitRepo => {
             if !ws_dir(DEFAULT_WORKSPACE).join("config.toml").exists() {
                 home::init(&InitOptions { home: home.to_path_buf(), workspace: DEFAULT_WORKSPACE.into(), projects: vec![], theme: "greek".into() })?;
-                notes.push(format!("Not inside a git repository: created the `{}` workspace, which has only the built-in memories and context.", DEFAULT_WORKSPACE));
+                notes.push(format!("Created the `{}` workspace under {}.", DEFAULT_WORKSPACE, home.join("workspaces").display()));
             } else {
-                notes.push(format!("Not inside a git repository: using the `{}` workspace (built-in memories and context only).", DEFAULT_WORKSPACE));
+                notes.push(format!("Using the `{}` workspace; no registered project contains this directory.", DEFAULT_WORKSPACE));
             }
             DEFAULT_WORKSPACE.into()
         }
@@ -39,22 +33,6 @@ pub fn ensure_workspace(home: &Path, cwd: &Path, explicit: Option<String>) -> Re
         Resolve::NoSuchWorkspace(n) => return Err(anyhow!("no workspace named `{}` in {}", n, home.display())),
     };
     Ok((Workspace { dir: ws_dir(&name), name }, notes))
-}
-
-/// A workspace name from the project directory that no existing workspace uses.
-fn free_name(home: &Path, root: &Path) -> String {
-    let base: String = root
-        .file_name()
-        .map(|n| n.to_string_lossy().chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '-' }).collect())
-        .filter(|s: &String| !s.is_empty() && !s.starts_with('.'))
-        .unwrap_or_else(|| "project".into());
-    let mut name = base.clone();
-    let mut n = 2;
-    while home.join("workspaces").join(&name).exists() {
-        name = format!("{}-{}", base, n);
-        n += 1;
-    }
-    name
 }
 
 pub fn endpoint_count(ws_dir: &Path) -> usize {
@@ -250,27 +228,31 @@ mod tests {
     }
 
     #[test]
-    fn creates_a_workspace_for_a_new_project_then_reuses_it() {
+    fn an_unregistered_git_project_uses_the_default_workspace_without_writes() {
         let t = tempfile::tempdir().unwrap();
         let home = t.path().join("home");
         let proj = git_dir(t.path(), "my app");
+        let before = home::projects(&home.join("workspaces/default"));
         let (ws, notes) = ensure_workspace(&home, &proj, None).unwrap();
-        assert_eq!(ws.name, "my-app");
+        assert_eq!(ws.name, DEFAULT_WORKSPACE);
         assert_eq!(notes.len(), 1);
         assert!(ws.dir.join("config.toml").exists());
+        assert!(home::projects(&ws.dir).is_empty());
+        assert!(!proj.join(".delphi-project").exists());
+        assert_eq!(before, home::projects(&home.join("workspaces/default")));
         let (again, notes) = ensure_workspace(&home, &proj, None).unwrap();
-        assert_eq!(again.name, "my-app");
-        assert!(notes.is_empty());
+        assert_eq!(again.name, DEFAULT_WORKSPACE);
+        assert!(notes[0].contains("Using"));
     }
 
     #[test]
-    fn a_name_clash_with_another_project_gets_a_suffix() {
+    fn unrelated_unregistered_git_directories_share_default_workspace() {
         let t = tempfile::tempdir().unwrap();
         let home = t.path().join("home");
         let a = git_dir(&t.path().join("a"), "app");
         let b = git_dir(&t.path().join("b"), "app");
-        assert_eq!(ensure_workspace(&home, &a, None).unwrap().0.name, "app");
-        assert_eq!(ensure_workspace(&home, &b, None).unwrap().0.name, "app-2");
+        assert_eq!(ensure_workspace(&home, &a, None).unwrap().0.name, DEFAULT_WORKSPACE);
+        assert_eq!(ensure_workspace(&home, &b, None).unwrap().0.name, DEFAULT_WORKSPACE);
     }
 
     #[test]
@@ -281,11 +263,11 @@ mod tests {
         std::fs::create_dir_all(&plain).unwrap();
         let (ws, notes) = ensure_workspace(&home, &plain, None).unwrap();
         assert_eq!(ws.name, DEFAULT_WORKSPACE);
-        assert!(notes[0].contains("created"));
+        assert!(notes[0].contains("Created"));
         assert!(home::projects(&ws.dir).is_empty());
         assert!(ws.dir.join("local/memory/agents").is_dir());
         let (_, notes) = ensure_workspace(&home, &plain, None).unwrap();
-        assert!(notes[0].contains("using"));
+        assert!(notes[0].contains("Using"));
     }
 
     #[test]

@@ -316,7 +316,7 @@ Approved by the operator 2026-10-28. FR1 is small and buildable now; FR2 waits f
 
 ## The central library (spec 055, approved: ratified 2026-10-29)
 
-Proposed from the operator's decisions of 2026-10-29: sources in the knowledge base (full, excerpts or pointer), claims that anchor into them, pages generated from claims, one library for every mission, a 30-day recheck on open, CSL-JSON metadata, and public-domain acquisition. Not approved; nothing is built from it.
+Ratified by the operator 2026-10-29. Sources in the knowledge base (full, excerpts or pointer), claims that anchor into them, pages generated from claims, one library for every mission, a 30-day recheck on open, CSL-JSON metadata, and public-domain acquisition. Implementation is tracked by the slices below.
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
@@ -352,3 +352,30 @@ Asked for by the operator on 2026-10-28: no hard-coded favorites; discover what 
 | M4 | ratchet and suggestions from retrospectives | not started |
 | M5 | `delphi models calibrate` | not started |
 | M6 | `emergency` local class: save state when every seat is exhausted, re-verify on recovery, doctor line | not started |
+
+## Project scopes, scaffolding, indexes and promotion (spec 058, approved 2026-10-30)
+
+Approved and ratified by the operator on 2026-10-30. Delphi always runs; registered directory scopes add project-specific context and memory to the shared home layer, including from subdirectories. Unregistered directories use a persistent default-project layer plus shared home memory. Git is optional. Project roots are centrally registered, and explicit registration/init scaffolds project files and the generated `_index.md`. `/promote` aliases `/retro` for reviewed project-to-home memory promotion, optionally carrying references to eligible trusted sources.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| PS1 | Registry schema, project IDs, registration/list/scope/relink/clone, deterministic nested-root resolution; amend 006 | approved, not built |
+| PS2 | Home + project memory/context routing, provenance labels, project isolation | approved, not built |
+| PS3 | Explicit no-Git scaffold, project marker, collision handling and migration; amend 006 clean-repo rule | approved, not built |
+| PS4 | Generated `_index.md` and category indexes, complete eligible-file/knowledge coverage, exclusions, deterministic output and edit detection | approved, not built |
+| PS5 | Project-to-home promotion proposals, summary/provenance, duplicate/conflict review, accept/reject/withdraw | approved, not built |
+| PS6 | Optional eligible trusted-source references, source status/licence preservation and revocation handling | approved, not built |
+| PS7 | `/promote` alias, scope/index UX, docs and migration polish | approved, not built |
+
+## Operator lifecycle experience (spec 059, approved 2026-10-30)
+
+Approved for implementation by the operator on 2026-10-30. Defines the run-anywhere install and first-run experience, explicit project choice, resumable model setup, quiet routine startup, and deliberate update flow. Upgrade rollback and recovery redesign are explicitly deferred.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| OE1 | Align lifecycle docs and installer completion language; make default-workspace setup resumable from any directory | built (installer guidance, run-anywhere docs, and `delphi setup` outside Git; not exercised end-to-end) |
+| OE2 | First-run choice for default vs explicit directory project; resumable project/model setup | approved, not built |
+| OE3 | Startup health-state rules and concise actionable notices | approved, not built |
+| OE4 | Public release attestation verification without GitHub CLI login prerequisite | approved, not built |
+| OE5 | Update preview/notice alignment; exclude rollback and recovery redesign | approved, not built |
+| OE6 | Integration, reference docs and terminal walkthrough | approved, not built |
