@@ -150,7 +150,7 @@ pub fn check_entry_meta(m: &Mapping) -> Vec<String> {
 /// The kind a staged note has when it does not say: what the capture trigger records (`specs/050` ML-1). An agent's own
 /// `note` is a claim about the world (`fact`); everything the daemon saw happen is an `episode`.
 pub fn kind_for_trigger(trigger: &str) -> &'static str {
-    if trigger == "agent_note" {
+    if matches!(trigger, "agent_note" | "operator_note") {
         "fact"
     } else {
         "episode"

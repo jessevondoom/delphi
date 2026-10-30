@@ -419,15 +419,49 @@ impl Default for PoolTuning {
     }
 }
 
+/// How a dispatch picks its model (`specs/056`): `static` is the role's tier as before (the default, until a benchmark shows
+/// `discovered` no worse, 056 OD-5); `discovered` assigns by capability class, evidence and quota.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Assignment {
+    #[default]
+    Static,
+    Discovered,
+}
+
+impl Assignment {
+    pub fn parse(s: &str) -> Option<Assignment> {
+        match s {
+            "static" => Some(Assignment::Static),
+            "discovered" => Some(Assignment::Discovered),
+            _ => None,
+        }
+    }
+}
+
+/// Results per `(role, kind, model)` that make measured evidence "enough" (`specs/056` OD-3).
+pub const DEFAULT_EVIDENCE_ENOUGH: u32 = 8;
+
 /// `[routing]`: the model pool and per-role targets (`specs/002` §4.1, D-26). Other keys in the table
 /// (`enable_dynamic_scaling`, …) are not read here.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Routing {
     /// Model IDs in preference order, as written; `None` when `[routing.pool]` has no `order`.
     pub pool: Option<Vec<String>>,
     /// Role → target model ID.
     pub targets: BTreeMap<String, String>,
     pub tuning: PoolTuning,
+    /// `[routing] assignment` (`specs/056`).
+    pub assignment: Assignment,
+    /// `[routing] evidence_enough`: measured results that make a model scored by them alone.
+    pub evidence_enough: u32,
+    /// `[routing.reserve] <role>`: the share (0 to 1) of the mission budget kept for that role; other roles cannot spend it.
+    pub reserve: BTreeMap<String, f64>,
+}
+
+impl Default for Routing {
+    fn default() -> Routing {
+        Routing { pool: None, targets: BTreeMap::new(), tuning: PoolTuning::default(), assignment: Assignment::Static, evidence_enough: DEFAULT_EVIDENCE_ENOUGH, reserve: BTreeMap::new() }
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -464,6 +498,19 @@ pub struct Config {
     pub search: crate::research::SearchConfig,
     /// `[validator]`: the fact validator's mode and the operator's additions to the source list (`specs/040` §15.1, §6.1).
     pub validator: ValidatorConfig,
+    /// `[learning]`: capture and the bounds on the learning loop (`specs/031` §3.6). The engine clamps each value to the core's bounds.
+    pub learning: LearningConfig,
+}
+
+/// `[learning]`. Types are checked here so `delphi doctor` names a wrong one; the floors and ceilings are the engine's
+/// (`delphi_engine::learn::LearningSettings`). No key loads unratified content, and an unknown key is a boot notice.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(default)]
+pub struct LearningConfig {
+    pub capture: Option<bool>,
+    pub max_notes: Option<i64>,
+    pub triggers: Option<Vec<String>>,
+    pub retro_min_tasks: Option<i64>,
 }
 
 /// `[validator] mode` (`specs/040` §15.1). Ordered so that `min` is the stricter of two.
@@ -568,6 +615,12 @@ impl Config {
                 Err(e) => errs.push(format!("[validator]: {}", e)),
             }
         }
+        if let Some(v) = root.get("learning") {
+            match v.clone().try_into::<LearningConfig>() {
+                Ok(v) => cfg.learning = v,
+                Err(e) => errs.push(format!("[learning]: {}", e)),
+            }
+        }
         // `[harness]` also carries scalar settings of its own (`subscription_budget_tokens`); only its sub-tables are profiles.
         if let Some(h) = root.get("harness").and_then(|h| h.as_table()) {
             for (name, v) in h.iter().filter(|(_, v)| v.is_table()) {
@@ -600,6 +653,25 @@ impl Config {
                     // Template placeholders such as "<model id>" count as unset, like `[models.*]`.
                     Ok(v) => cfg.routing.targets = v.into_iter().filter(|(_, id)| !id.trim().is_empty() && !id.starts_with('<')).collect(),
                     Err(e) => errs.push(format!("[routing.targets]: {}", e)),
+                }
+            }
+            if let Some(a) = r.get("assignment") {
+                match a.as_str().and_then(Assignment::parse) {
+                    Some(v) => cfg.routing.assignment = v,
+                    None => errs.push("[routing] assignment must be \"static\" or \"discovered\"".into()),
+                }
+            }
+            if let Some(n) = r.get("evidence_enough") {
+                match n.as_integer().filter(|n| *n >= 1) {
+                    Some(n) => cfg.routing.evidence_enough = n as u32,
+                    None => errs.push("[routing] evidence_enough must be a whole number of at least 1".into()),
+                }
+            }
+            if let Some(t) = r.get("reserve") {
+                match t.clone().try_into::<BTreeMap<String, f64>>() {
+                    Ok(v) if v.values().all(|x| (0.0..=1.0).contains(x)) && v.values().sum::<f64>() <= 1.0 => cfg.routing.reserve = v,
+                    Ok(_) => errs.push("[routing.reserve] each share must be between 0 and 1, and together at most 1".into()),
+                    Err(e) => errs.push(format!("[routing.reserve]: {}", e)),
                 }
             }
             if let Some(list) = &cfg.routing.pool {
@@ -1181,6 +1253,17 @@ allowed_endpoints = ["corp-gateway", "bedrock-us"]
         assert_eq!(c.routing, Routing::default());
         assert_eq!(slots(&c), vec!["corp-gateway/sonnet-x", "bedrock-us/bedrock-sonnet-x", "corp-gateway/haiku-x", "bedrock-us/haiku-x"]);
         assert_eq!(c.routing.tuning, PoolTuning { throttle_attempts: 3, throttle_window_secs: 600, reprobe_first_secs: 900, reprobe_max_secs: 14_400 });
+    }
+
+    #[test]
+    fn assignment_defaults_to_static_and_its_keys_are_checked() {
+        let c = with_routing("").unwrap();
+        assert_eq!((c.routing.assignment, c.routing.evidence_enough), (Assignment::Static, 8));
+        let c = with_routing("[routing]\nassignment = \"discovered\"\nevidence_enough = 3\n[routing.reserve]\nvalidator = 0.2").unwrap();
+        assert_eq!((c.routing.assignment, c.routing.evidence_enough, c.routing.reserve["validator"]), (Assignment::Discovered, 3, 0.2));
+        for bad in ["[routing]\nassignment = \"auto\"", "[routing]\nevidence_enough = 0", "[routing.reserve]\nvalidator = 1.5", "[routing.reserve]\nvalidator = 0.6\nbuilder = 0.6"] {
+            assert!(with_routing(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

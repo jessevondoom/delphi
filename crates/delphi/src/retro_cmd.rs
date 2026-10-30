@@ -118,7 +118,7 @@ pub fn run_in(ws_dir: &Path, verb: &str, reference: Option<&str>, opts: &Options
 
 /// The mission's log, for writing. A lock held by a live daemon stays held, so the wait is short: it only covers the
 /// moment after a writer in this process closed the log, when a forked child may still carry a copy of the descriptor.
-fn open_log(ws_dir: &Path, mission: &str) -> Result<EventLog, String> {
+pub(crate) fn open_log(ws_dir: &Path, mission: &str) -> Result<EventLog, String> {
     let dir = ws_dir.join("local/missions").join(mission);
     let mut tries = 0;
     loop {
@@ -160,7 +160,7 @@ pub fn resolve(ws_dir: &Path, p: &LiveProposal, accept: bool, opts: &Options) ->
 
 /// Ask on the terminal. Ratifying is the operator's decision, so it needs a person typing: a piped or scripted run, such
 /// as an agent's shell, cannot approve its own proposal.
-fn confirm(question: &str) -> bool {
+pub(crate) fn confirm(question: &str) -> bool {
     use std::io::{BufRead, Write};
     if !unsafe { libc::isatty(0) == 1 && libc::isatty(1) == 1 } {
         return false;

@@ -1,6 +1,7 @@
 //! `delphi-engine`: what runs inside the daemon: tools, approvals and the agent loop.
 
 pub mod approval;
+pub mod assign;
 pub mod fact_check;
 pub mod fact_fetch;
 pub mod library;
@@ -66,6 +67,7 @@ pub mod learn;
 pub mod memory_audit;
 pub mod embed;
 pub mod kb;
+pub mod kb_docs;
 pub mod kbserve;
 pub mod xenia_read;
 #[cfg(test)]
@@ -94,6 +96,7 @@ pub mod research;
 pub mod research_images;
 pub mod research_setup;
 pub mod route;
+pub mod customize;
 pub mod ratify;
 pub mod retro;
 pub mod service;

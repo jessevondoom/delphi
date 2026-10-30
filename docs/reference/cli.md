@@ -342,6 +342,20 @@ Rules the Orchestrator proposed, waiting for your review.
 ```
   delphi retro list [--mission <id>] [--json]
   delphi retro show <mission>/<id> [--json]
+  delphi retro accept <mission>/<id> [--scope workspace|operator]
+  delphi retro reject <mission>/<id>
+    [--workspace <name>] [--home <dir>]
+```
+
+Proposals are made with the Orchestrator's `suggest_rule` tool and are never loaded into a prompt until you ratify them. `accept` and `reject` need a terminal and a typed yes, and `accept` needs the daemon stopped; `--scope` ratifies at a different scope than proposed.
+
+### `delphi retro`
+
+Rules the Orchestrator proposed, waiting for your review.
+
+```
+  delphi retro list [--mission <id>] [--json]
+  delphi retro show <mission>/<id> [--json]
   delphi retro stale [--json]
   delphi retro accept <mission>/<id> [--scope workspace|operator]
   delphi retro reject <mission>/<id>
