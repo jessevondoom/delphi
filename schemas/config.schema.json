@@ -79,7 +79,11 @@
         "nudge_edits": { "type": "integer", "minimum": 1, "description": "Writes to one file before the nudge; twice this ends the span." },
         "budget_warnings": { "type": "boolean" },
         "verify_gate": { "type": "boolean" },
-        "workspace_bootstrap": { "type": "boolean" }
+        "workspace_bootstrap": { "type": "boolean" },
+        "tool_result_limit_kb": { "type": "integer", "minimum": 0, "description": "A tool result over this many KB is stored in the payload store and the history keeps a handle and a preview. 0 is off." },
+        "clear_after_kb": { "type": "integer", "minimum": 0, "description": "Old tool results are replaced by a handle in batches of about this many KB. 0 is off." },
+        "trim_arguments_kb": { "type": "integer", "minimum": 0, "description": "Old tool calls whose arguments reach this many KB keep a handle in place of their large text fields. 0 is off." },
+        "keep_recent_turns": { "type": "integer", "minimum": 1, "description": "Assistant turns, counted from the end, that clearing and trimming leave whole." }
       }
     },
     "hitl": { "type": "object", "properties": { "approval_timeout_sec": { "type": "integer", "minimum": 1, "description": "Unanswered approvals resolve to deny." } } },
@@ -201,6 +205,16 @@
     },
     "session": { "type": "object" },
     "relay": { "type": "object" },
+    "grades": {
+      "type": "object",
+      "description": "Promote and nerf (specs/056 §4): a role's grade from -2 to 2, or a table of grades per task kind with `default` for the role itself. Ratified: an edit is a pending proposal until /ratify.",
+      "additionalProperties": {
+        "oneOf": [
+          { "type": "integer", "minimum": -2, "maximum": 2 },
+          { "type": "object", "additionalProperties": { "type": "integer", "minimum": -2, "maximum": 2 } }
+        ]
+      }
+    },
     "away": { "type": "object" },
     "optimistic": { "type": "object" },
     "learning": {

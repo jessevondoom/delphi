@@ -215,7 +215,7 @@ Approved by the operator 2026-10-28 ("make a plan, write a spec, and let's go").
 | Slice | Content | State |
 | :-- | :-- | :-- |
 | H1 | loop nudge and hard stop, budget warnings, verification gate (API spans), workspace bootstrap, `[loop]` | built (draft PR); tests only, no live run; not yet measured (H9) |
-| H2 | tool-result offload and clearing, cache accounting | not started |
+| H2 | tool-result offload and clearing, cache accounting (folds in 049 CX1) | built 2026-10-29 (`ctxhist.rs`: offload with a 400-byte fenced preview at tool time, argument trimming and batched clearing as a pure `view` of the history at request time, so the log and a resumed span are untouched; `ctxacct.rs`: per-span cache and prefix-change report in `observe.state`; `[loop] tool_result_limit_kb`, `clear_after_kb`, `trim_arguments_kb`, `keep_recent_turns`, all off; events `loop.offload`, `loop.prefix`). Not built: a console display of the report; not measured (H9) |
 | H3 | compaction with flush and its check | not started |
 | H4 | phase reasoning (037 arm first) | not started |
 | H5 | progressive tools (`find_tool`) | not started |
@@ -237,7 +237,7 @@ Drafted from a review of LangChain / LangSmith benchmarking, memory and context 
 | 048 | BM5 | behavior suites (nudge, verify gate, budget, name_thread, record_change) | draft |
 | 048 | BM6 | external benchmark anchor (operator picks the subset) | draft |
 | 048 | BM7 | phase-effort arm (after 045 H4) | draft |
-| 049 | CX1 | argument trimming and offload previews (folded into 045 H2); handoff design check | not started |
+| 049 | CX1 | argument trimming and offload previews (folded into 045 H2); handoff design check | built 2026-10-29 with 045 H2 (trimming, previews, handles). Handoff design check for CX-6: `handoff.rs` carries the envelope as-is, so handles ride in `context_pointers`/result text within the 2,000-token limit; CX4 builds it. Not measured (048 unbuilt) |
 | 049 | CX2 | recoverable compaction (folded into 045 H3) | not started |
 | 049 | CX3 | context composition in accounting | not started |
 | 049 | CX4 | result summary plus handles between seats | not started |
@@ -348,7 +348,7 @@ Asked for by the operator on 2026-10-28: no hard-coded favorites; discover what 
 | M0 | candidate inventory in `delphi capabilities` | built (`delphi-engine/src/models.rs`, `delphi capabilities --models [--json]`): candidates from the configured pool and the CLIs' model lists (Codex, Claude, Agy, Ollama; Copilot seats appear as pool endpoints), attributes as reported, all `unclassified` until M1, a vanished model kept as `gone` in `local/model-candidates.json` |
 | M1 | class rules as a ratified data file, classifier | built (`delphi-engine/src/model_classes.toml`, `models::{ClassRules, classify}`, workspace override `model-classes.toml`; doctor check 11 warns on an unclassified model; KB note linked from `model-capabilities.md`; `tests/no_model_names.rs` keeps the 056 files name-free) |
 | M2 | assignment in `resolve_route` behind `[routing] assignment` | built (`delphi-engine/src/assign.rs`, `[roles]` in `model_classes.toml`, `[routing] assignment = static\|discovered` default `static`, `evidence_enough`, `[routing.reserve]`; `model.assigned` event names class and evidence; council label says low diversity) |
-| M3 | `[grades]`, `delphi agent promote`, `nerf`, `grades` | not started |
+| M3 | `[grades]`, `delphi agent promote`, `nerf`, `grades` | built (`[grades]` is a ratified access block; `delphi-engine/src/grades.rs`, `delphi/src/agent_cmd.rs`; `agent.graded` journaled in `local/grades.jsonl`; the engine applies a role's grade as a step in `assign_for`) |
 | M4 | ratchet and suggestions from retrospectives | not started |
 | M5 | `delphi models calibrate` | not started |
 | M6 | `emergency` local class: save state when every seat is exhausted, re-verify on recovery, doctor line | not started |

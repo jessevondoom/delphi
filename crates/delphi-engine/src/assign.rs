@@ -374,6 +374,21 @@ assignment = "discovered"
         assert!(route.key().is_some() && route.homogeneous(), "{route:?}");
     }
 
+    #[test]
+    fn a_grade_moves_the_wanted_class_but_never_past_the_floor_or_the_pools_top() {
+        let c = cfg();
+        let class_of = |role: &str, step: i32| {
+            let mut a = assign_for(&c, role);
+            a.step = step;
+            let r = resolve(&c, &[], &req(role, a));
+            r.key().unwrap().model_id.clone()
+        };
+        assert!(class_of("builder", 1).starts_with("m-big"), "promoted from steady to deep");
+        assert!(class_of("builder", -1).starts_with("m-small"), "nerfed to quick, which is its floor");
+        assert!(class_of("builder", 2).starts_with("m-big"), "the pool has nothing above deep");
+        assert!(class_of("validator", -2).starts_with("m-mid"), "a floor of steady holds");
+    }
+
     fn resolve(c: &Config, st: &[Entry], r: &RouteRequest) -> Route {
         crate::route::resolve_route(c, st, NOW, r)
     }
