@@ -79,6 +79,7 @@ pub mod xenia_read;
 mod xenia_scope_tests;
 pub mod vecext;
 pub mod mission;
+pub mod grades;
 pub mod models;
 pub mod models_cli;
 pub mod model;
