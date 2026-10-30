@@ -61,6 +61,11 @@ max_parallel_agents = 4
 # degrade_prompt_secs = 300           # how long the "run on a weaker model?" card waits; no answer means look again, then ask again
 # max_park_secs = 0                  # omit to wait as long as it takes; 0 = never wait (escalate at once); N = give up after N seconds
 
+# Bundle agents (specs/041). "flat" (default): the orchestrator is shown one line per bundle agent, up to 20, and told how many
+# are not listed. "auto": past 20 agents it is shown a short index of domains and gets the `search_agent_registry` tool instead.
+# `delphi route "<task>"` shows what the search would return, without a model call.
+# registry = "flat"
+
 # Model assignment (specs/056). "static" (default): a role's tier picks the model, as always. "discovered": each dispatch is
 # assigned by capability class (role floor and preferred class), measured results and quota, from the pool you ratified;
 # a card only when no pool member meets a role's floor. `delphi capabilities --models` shows each model's class.
