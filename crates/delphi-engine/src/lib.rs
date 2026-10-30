@@ -67,6 +67,7 @@ pub mod learn;
 pub mod memory_audit;
 pub mod embed;
 pub mod kb;
+pub mod kb_docs;
 pub mod kbserve;
 pub mod xenia_read;
 #[cfg(test)]
