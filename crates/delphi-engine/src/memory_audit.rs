@@ -74,6 +74,21 @@ pub const SITES: &[Site] = &[
         proofs: &[("crates/delphi-engine/src/digest.rs", "promote_only_proposes_for_the_retro_review_and_never_a_card_or_a_rule_and_a_low_tier_cannot_promote")],
     },
     Site {
+        name: "project-to-home promotion (`specs/058` §7): a data-only proposal, the operator's acceptance as a tainted home entry, a withdrawal that retires it",
+        files: &["crates/delphi-engine/src/promote.rs"],
+        events: &["learn.proposed", "learn.proposal_resolved"],
+        proofs: &[
+            ("crates/delphi-engine/src/promote.rs", "preflight_refuses_each_ineligible_record_with_a_stable_code"),
+            ("crates/delphi-engine/src/promote.rs", "a_proposal_is_data_in_the_retro_flow_and_leaves_rules_and_home_untouched"),
+            ("crates/delphi-engine/src/promote.rs", "accepting_writes_a_home_entry_with_provenance_that_stays_tainted_and_unvalidated"),
+            ("crates/delphi-engine/src/promote.rs", "a_record_that_turned_private_revoked_or_secret_after_the_proposal_is_refused_at_accept"),
+            ("crates/delphi-engine/src/promote.rs", "two_concurrent_accepts_of_one_proposal_land_once"),
+            ("crates/delphi-engine/src/promote.rs", "rejecting_records_the_outcome_and_the_reason_and_copies_no_proposal_text"),
+            ("crates/delphi-engine/src/promote.rs", "withdrawing_retires_the_entry_with_an_audit_reference_and_deletes_nothing"),
+            ("crates/delphi-engine/src/service.rs", "a_promotion_over_rpc_is_console_only_cas_protected_and_withdrawable"),
+        ],
+    },
+    Site {
         name: "the checkpoint summary (`specs/030` §4.3): no model text for a task that read content that is not validated",
         files: &["crates/delphi-engine/src/checkpoint.rs"],
         events: &[],

@@ -219,11 +219,23 @@ pub(crate) fn confirm(question: &str) -> bool {
 }
 
 pub fn cli(ws_dir: &Path, args: &[String], opts: &Options) -> i32 {
-    let positional: Vec<&str> = args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && (*i == 0 || !["--mission", "--workspace", "--home", "--scope"].contains(&args[*i - 1].as_str()))).map(|(_, a)| a.as_str()).collect();
+    let positional: Vec<&str> = args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && (*i == 0 || !["--mission", "--workspace", "--home", "--scope", "--summary", "--uncertainty", "--reason"].contains(&args[*i - 1].as_str()))).map(|(_, a)| a.as_str()).collect();
     let Some(verb) = positional.first() else {
-        eprintln!("delphi retro: list | show <mission>/<id> | stale | mine");
+        eprintln!("delphi retro: list | show <mission>/<id> | stale | mine | promote | promotions | accept | reject | withdraw");
         return 2;
     };
+    if let Some(result) = crate::promote_cmd::cli(ws_dir, &positional, args, opts) {
+        return match result {
+            Ok(text) => {
+                print!("{}", text);
+                0
+            }
+            Err(e) => {
+                eprintln!("delphi retro: {}", e);
+                1
+            }
+        };
+    }
     if matches!(*verb, "accept" | "reject") {
         let result = collect(ws_dir, opts).and_then(|items| {
             let p = find(&items, positional.get(1).copied().ok_or(format!("{} needs a proposal: delphi retro {} <mission>/<id>", verb, verb))?)?.clone();

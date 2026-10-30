@@ -399,11 +399,14 @@ Rules the Orchestrator proposed, waiting for your review.
   delphi retro stale [--json]
   delphi retro mine [--mission <id>] [--json]
   delphi retro accept <mission>/<id> [--scope workspace|operator]
-  delphi retro reject <mission>/<id>
+  delphi retro reject <mission>/<id> [--reason <text>]
+  delphi retro promote <project-id> <record>... --summary <text> --mission <id> [--uncertainty <text>]
+  delphi retro promotions [--json]
+  delphi retro withdraw <entry> [--reason <text>]
     [--workspace <name>] [--home <dir>]
 ```
 
-Proposals are made with the Orchestrator's `suggest_rule` tool and are never loaded into a prompt until you ratify them. `accept` and `reject` need a terminal and a typed yes, and `accept` needs the daemon stopped; `--scope` ratifies at a different scope than proposed. `stale` lists staged notes past their `valid_until` date and rules files not confirmed within 90 days; it changes nothing. `mine` ranks the failed or looping spans of a mission (a loop stop, a red gate, a denied card, an escalation, repeated tool failures) by a cause computed from event kinds and codes, never from text, and writes the report to the mission's `reports/trace-mining.json`; it applies nothing.
+Proposals are made with the Orchestrator's `suggest_rule` tool and are never loaded into a prompt until you ratify them. `accept` and `reject` need a terminal and a typed yes, and `accept` needs the daemon stopped; `--scope` ratifies at a different scope than proposed. A promotion (`promote`) is a proposal to keep a summary of eligible project memory records as home memory: it records the summary, the records, their hashes and the home records it was checked against, and shows any duplicate or conflicting home entry without merging it. Accepting one runs the checks again and refuses if a record became private, retired or secret-bearing or if the proposal or home memory changed since; the entry keeps its provenance and its source tier and validates nothing. `reject` records only the outcome and your reason. `withdraw` retires a promoted entry with an audit reference and deletes nothing. `stale` lists staged notes past their `valid_until` date and rules files not confirmed within 90 days; it changes nothing. `mine` ranks the failed or looping spans of a mission (a loop stop, a red gate, a denied card, an escalation, repeated tool failures) by a cause computed from event kinds and codes, never from text, and writes the report to the mission's `reports/trace-mining.json`; it applies nothing.
 
 ### `delphi agent`
 
