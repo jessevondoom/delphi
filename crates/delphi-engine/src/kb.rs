@@ -445,6 +445,8 @@ pub fn sources(ws: &Path) -> Vec<SourceFile> {
     // What the archives pane's research job stored (`specs/028` §10): external pages kept at one fixed tier (`upsert_with`).
     md_files(&ws.join("local/knowledge"), "knowledge", "knowledge", crate::research::TIER, &mut all);
     md_files(&ws.join("local/memory/agents"), "memory/agents", "memory", UNTRUSTED, &mut all);
+    // Summaries the operator accepted from a project (`promote::accept`): home memory, each file naming its own tier.
+    md_files(&ws.join("local/promoted"), "memory/promoted", "memory", UNTRUSTED, &mut all);
     // Staged notes (`learn::project_staged` writes them): each file names its own source_type from its tier.
     md_files(&ws.join("local/staged"), "staged", "staged", UNTRUSTED, &mut all);
     bundle_files(ws, &mut all);

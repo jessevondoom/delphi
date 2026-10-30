@@ -85,7 +85,7 @@ pub fn parse_rules(text: &str) -> (String, Vec<Rule>) {
     (header, rules)
 }
 
-fn words(s: &str) -> BTreeSet<String> {
+pub(crate) fn words(s: &str) -> BTreeSet<String> {
     s.split(|c: char| !c.is_alphanumeric()).filter(|w| w.chars().count() >= 3).map(str::to_lowercase).collect()
 }
 
