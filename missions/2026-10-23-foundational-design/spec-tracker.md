@@ -247,7 +247,7 @@ Drafted from a review of LangChain / LangSmith benchmarking, memory and context 
 | 050 | ML2 | entry types and dates, schemas | built: `kind`/`created`/`last_confirmed`/`valid_until` validated in `frontmatter.rs`, written on staged notes, excluded from the rule byte cap, `schemas/memory-entry.schema.json` |
 | 050 | ML3 | validity, stale list in `/retro`, type-aware selection | built: `valid_until` on a staged note (agent `note` tool only, OD-5) is excluded from kb search after its date; `delphi retro stale` and `/retro stale` list expired notes and rules files past 90 days; `kb search --staged --kind` filters by kind, facts outrank episodes, optional episode budget |
 | 050 | ML4 | supersession candidates and ratification | built: `suggest_rule` `add` may name up to 3 rule ids in `supersedes`; `delphi retro show`/`/retro` list candidates (named, or at least 30% word overlap with the new text), shown never applied; ratifying the `add` retires only the named rules from `heuristics.md` and records their text in `learn.proposal_resolved` (`detail.retired`); security rules are never retired. `delphi lint` does not list pairs yet |
-| 050 | ML5 | trace mining report; wires 045 T11 / H8 | not started |
+| 050 | ML5 | trace mining report; wires 045 T11 / H8 | not started; not gated on 048 (council 012); next after SK8e |
 | 050 | ML6 | retention probes in the learning-loop suite | not started |
 
 Suggested order if approved: 048 BM1, 050 ML1, 049 CX1 with 045 H2, 048 BM2/BM3, then the rest.
@@ -333,6 +333,8 @@ Ratified by the operator 2026-10-29. Sources in the knowledge base (full, excerp
 | SK8b | spec 057: validator pass (contradiction and fabricated-citation checks), one rewrite, claims-only fallback | built (`library_page_validate.rs`, `claims add --origin`): `build_page_checked` runs the validator (V2b judge pattern, tool-less, role `validator`, budget reserved first) over the page and its material; the daemon classifies findings from its own records (a contradiction with a validated or cited record, or a fabricated citation, fails; a noted-record contradiction passes under Contested; unplaceable records fail closed); one rewrite with the findings, then the claims-only page with the reason in the banner; verdict in the sidecar; status stays `generated`; promote-to-claim makes a noted claim with `origin: page:<key>`. The CLI stays mechanical-only; engine and writer-span wiring is SK8c |
 | SK8c | spec 057: search, gather, write, cache by source hash, `delphi pages search` | built (`library_page_search.rs`, `page_run.rs`, `pages.*` RPCs, `delphi pages search\|list\|pin\|unpin`, `[library.pages]`): gather by content words (claims ≤ 12, sources ≤ 6; private left out of external pages and queries, and a query naming a private source is not sent); the writer span on role `writer` writes the draft, `build_page_checked` checks it; cache `pages/<key>.md` + sidecar keyed by query, material hashes, writer identity, template version and scope, stale on changed or gone material, expired `external_ttl`, or a new matching record; pinning, LRU eviction under one twentieth of the library budget, history kept first; a double failure cached 1 hour; `per_day` and the validator share (040 §20, journal) gate a new page, never a cached one; external search through the ratified `[search]` engines, captures noted, not validated |
 | SK8d | spec 057: console page view, keys, Pages in the library, digest line | built (`ui/src/pages.ts`, `ui/test/pages.test.ts`, `digest_review.rs`): the Pages view after Claims in the library cycle (`ctrl+l`): the question, the records found at once (`pages.results`), the page beside them (`pages.search`) with the banner, status glyphs and the bibliography table as the daemon wrote them; saved pages listed as pages; keys `s` pin, `d` dispute a statement's cited claim (SK5 action), `p` promote to a noted claim, `o` open a cited source in Sources; a saved page whose material changed is one digest card (keep, dismiss); the wait spinner takes `stillMotion` from `motion.ts` |
+| SK8e | spec 057 §5.1 (057-A1, council 012): gather counters, parity fixtures, baseline measurement | approved 2026-10-30, not built |
+| SK8f | spec 057 §5.1: word-set cache behind `[library.pages] word_cache`, only if SK8e shows read, hash and tokenize at 70% or more of gather time | approved 2026-10-30, not built |
 
 Amended with 055 (2026-10-29, additive): 012 §11 (`fact` kind, provisional), 022 §5, 023 §2.1 and step 7a, 024 §4.1a, 027 §2.3a, `schemas/bundle.schema.json` (`sections.sources`).
 
@@ -359,11 +361,11 @@ Approved and ratified by the operator on 2026-10-30. Delphi always runs; registe
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
-| PS1 | Registry schema, project IDs, registration/list/scope/relink/clone, deterministic nested-root resolution; amend 006 | approved, not built |
+| PS1 | Registry schema, project IDs, registration/list/scope/relink/clone, deterministic nested-root resolution; amend 006 | built 2026-10-30 (#381: `project.rs`, `home.rs`; register, list, scope, relink, clone, nested-root resolution) |
 | PS2 | Home + project memory/context routing, provenance labels, project isolation | approved, not built |
-| PS3 | Explicit no-Git scaffold, project marker, collision handling and migration; amend 006 clean-repo rule | approved, not built |
-| PS4 | Generated `_index.md` and category indexes, complete eligible-file/knowledge coverage, exclusions, deterministic output and edit detection | approved, not built |
-| PS5 | Project-to-home promotion proposals, summary/provenance, duplicate/conflict review, accept/reject/withdraw | approved, not built |
+| PS3 | Explicit no-Git scaffold, project marker, collision handling and migration; amend 006 clean-repo rule | built in part 2026-10-30 (#381: `project init`, marker, create-only `_index.md` stub that records no hash; migration not done) |
+| PS4 | Generated `_index.md` and category indexes, complete eligible-file/knowledge coverage, exclusions, deterministic output and edit detection | approved, not built; write protocol amended by 058-A1 (council 012): lock, move-aside, link-into-place, adopt the stub only if equal; needs a `.gitignore`-aware walker |
+| PS5 | Project-to-home promotion proposals, summary/provenance, duplicate/conflict review, accept/reject/withdraw | approved, not built; the deterministic eligibility preflight belongs here and is re-run inside acceptance (058-A1) |
 | PS6 | Optional eligible trusted-source references, source status/licence preservation and revocation handling | approved, not built |
 | PS7 | `/promote` alias, scope/index UX, docs and migration polish | approved, not built |
 

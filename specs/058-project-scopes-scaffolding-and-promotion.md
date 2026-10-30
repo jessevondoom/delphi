@@ -155,6 +155,7 @@ Every eligible indexed file and knowledge entry must be directly discoverable th
 
 - Before writing or refreshing, the daemon applies exclusion rules to both path names and content-derived metadata. Secret detection is a secondary rejection layer, not a substitute for default-deny classes.
 - The generator records a hash of its last complete output in central metadata. A changed on-disk `_index.md` with a mismatched hash is treated as operator-edited: preserve it and write a `.delphi-index/proposed-index.md` candidate for review.
+- Write protocol (amendment 058-A1, council 012): take an exclusive lock under `local/projects/<project-id>/index/`; refuse if `_index.md` is a symbolic link; rename the current file aside to `.delphi-index/prev.md`; hash it. If it matches the recorded hash, or no hash is recorded and it equals the stub the scaffold writes, write the new file to a temporary path, flush it, and `link` it into place (which fails rather than replace a file an editor has recreated); otherwise link the original back and write `.delphi-index/proposed-index.md`. Record the new hash by temporary file and rename, then release the lock. Ignore rules, symbolic links, secrets and private titles are re-evaluated on every pass.
 - The generated notice states that the file is generated, may be incomplete, and does not confer trust or authority on listed content.
 - The index is not itself used as input to build another index, a knowledge claim, a generated research page, or a prompt instruction. When agents need its navigation, it is opened in a tainted, read-only span and links are independently resolved against the project root.
 
@@ -182,7 +183,7 @@ The operator may accept the summary without references, or accept the summary wi
 
 ### 7.3 Apply, deduplication and reversal
 
-- Acceptance performs a daemon-side compare-and-swap against the proposal version and target home records. A stale proposal must be reviewed again.
+- Acceptance performs a daemon-side compare-and-swap against the proposal version and target home records. A stale proposal must be reviewed again. The eligibility checks of §7.1 and §7.2 (private flag, library status, bundle revocation, secret scan) run at proposal time and again inside acceptance under that compare-and-swap, so a record that became private or revoked after the proposal cannot be promoted (amendment 058-A1).
 - The daemon checks for likely duplicates and contradictions against home memory/claims. It presents matches; it does not silently overwrite, merge or supersede a home record.
 - The accepted home entry preserves provenance to the project and original records, plus the operator and acceptance time. It retains the original taint/status constraints; operator acceptance ratifies the *summary as home memory* but does not validate factual claims or raise any cited source's status.
 - Rejection records only the proposal outcome and operator-provided reason subject to existing privacy rules; it does not copy proposal text into an always-loaded store.

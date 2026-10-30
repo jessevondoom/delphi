@@ -70,6 +70,13 @@ A page has status **generated**. It is never *validated*, whatever its checks sa
 - A page that used external search is also stale after `[library.pages] external_ttl` (default 7 days).
 - The cache is bounded by the library budget (055 D-5), with least recently opened pages evicted first; pinned pages are exempt. Pages are never exported or shared, since they are views; their claims and sources are.
 
+### 5.1 Gather efficiency (amendment 057-A1, council 012, 2026-10-30)
+Gather and the full stale check read and hash every source's whole text before taking the scan window, so their cost grows with the size of the library. Two changes, in this order:
+- **Measure first.** Gather reports counters (sources and claims seen, bytes read, `stored_text` reads, time in meta parsing, reading, hashing and tokenizing, total time), and a parity fixture set fixes today's results as the oracle. Fixtures cover private-internal, private-on-external (`rests_on_private`), retired, oversized, excerpt, pointer, tampered and `extra` sources.
+- **Word-set cache, only if measured.** If reading, hashing and tokenizing take 70% or more of gather time on a 1k-source library, a disposable cache of each source's word set (the scan window and the title) is kept in one file under the library, never inside a source directory, never in `meta.json`, never in an export. An entry is keyed on the source's print including its excerpts, the title hash, and the file length and mtime. Visibility (private, retired, purged, disproved, `rests_on_private`) is always read from fresh meta, so the cache can change ranking candidates and nothing else. The winning sources still go through `stored_text`, hash check included; a winner that fails it falls back to a title-only score and the ranking is redone, which is today's result. Purge and bundle revocation evict entries. Behind `[library.pages] word_cache`, default off until parity and measurements pass.
+- The knowledge index (`kb`) is not used for gather: it omits private, pointer, oversized and claim records, includes retired sources, and is workspace-scoped while the library is not.
+- A dirty-set or watcher refresh of `Kb::refresh` stays out of scope: 004 §3.7 requires a refresh before every search. It is reconsidered only if a measured stat walk exceeds about 50 ms p95 at 5,000 files, and then only with a synchronous freshness guarantee or an approved 004 amendment.
+
 ## 6. Cost and limits
 - A page is a writer call plus a validator call. Config: `[library.pages] enabled`, `external = "ask" | "off" | "on"` (default `ask`), `max_tokens`, and a per-day page budget that counts against 040 §20's validator share.
 - The writer uses the model assigned to the `writer` role; the validator uses its own span. The daemon enforces the caps, not the agents.
@@ -95,6 +102,8 @@ A page has status **generated**. It is never *validated*, whatever its checks sa
 | SK8b | the validator pass (§3.2, §3.3), one rewrite, the claims-only fallback, the verdict record | SK8a; 040 V2b |
 | SK8c | gather and write: search, material bundle, writer span, the cache and staleness (§5), `delphi pages search`, config keys | SK8b |
 | SK8d | console views, keys, Pages in the library, digest line for changed pages | SK8c; 053 VL4 |
+| SK8e | §5.1 gather counters, parity fixtures, baseline measurement | SK8c |
+| SK8f | §5.1 word-set cache behind `[library.pages] word_cache`, when SK8e shows it is warranted | SK8e |
 
 ## 10. Verification
 - **Banner:** a page whose writer output omits or alters the banner is rejected; the table is present on every page, including one with no citations.
@@ -106,6 +115,7 @@ A page has status **generated**. It is never *validated*, whatever its checks sa
 - **Cache:** a second search is a hit with no model call; changing a cited source's hash marks the page stale; an external page expires at the TTL.
 - **Privacy:** a `private` source never appears on, or in the query of, an external page.
 - **Authority:** nothing on a page raises a status; the promote action creates a *noted* claim.
+- **Gather parity (§5.1):** with the word-set cache on, the chosen sources, the page key and the stale verdict equal the uncached path on every fixture; editing an excerpt, purging a source and revoking a bundle each invalidate or evict the entry; a tampered document is still reported; a private source never reaches an external page through the cache.
 
 ## 11. Decisions (operator, 2026-10-29)
 - **D-1:** every page is labelled generated and not authoritative, with a bibliography and citations table.
