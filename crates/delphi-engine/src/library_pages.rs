@@ -54,13 +54,13 @@ fn content_words(s: &str) -> BTreeSet<String> {
 }
 
 impl Library {
-    fn pages_dir(&self) -> PathBuf {
+    pub(super) fn pages_dir(&self) -> PathBuf {
         self.root().join("pages")
     }
 
     /// Claims on a topic: those whose text shares a word with it, or whose project is named like it. Disproved, retired,
     /// superseded and private-source claims are left out (the last counted).
-    fn topic_claims(&self, topic: &str) -> (Vec<Value>, usize) {
+    pub(super) fn topic_claims(&self, topic: &str) -> (Vec<Value>, usize) {
         let q = content_words(topic);
         let mut withheld = 0;
         let mut out = Vec::new();
@@ -111,56 +111,74 @@ impl Library {
     /// Build the page for `topic`. With a `draft` (the body a model wrote, `[c-…]` and `[s-…]` markers after the sentences
     /// they support) the page is banner, draft and table if the mechanical check passes, and an error naming every finding
     /// if not; without one the body is the claims' own text. A page built from the same material is read from the cache,
-    /// so a library pays only for pages somebody reads.
+    /// so a library pays only for pages somebody reads. This is the mechanical page only: its banner says the validator
+    /// has not run (`build_page_checked` runs it).
     pub fn build_page_scoped(&self, topic: &str, draft: Option<&str>, style: Format, scope: Scope) -> Result<Page, Vec<Finding>> {
         let topic = topic.split_whitespace().collect::<Vec<_>>().join(" ");
         let (claims, withheld) = self.topic_claims(&topic);
-        let mut validated = Vec::new();
-        let mut noted = Vec::new();
-        let body = match draft {
-            Some(d) => d.trim().to_string(),
+        let (body, lines) = match draft {
+            Some(d) => (d.trim().to_string(), None),
             None => {
-                for c in &claims {
-                    let id = c["id"].as_str().unwrap_or("").to_string();
-                    let line = Line { text: norm(c["text"].as_str().unwrap_or("")), claims: vec![(id, status(c))] };
-                    if line.claims.iter().all(|(_, st)| *st == Status::Validated) { validated.push(line) } else { noted.push(line) }
-                }
-                render_body(&topic, &validated, &noted)
+                let lines = claim_lines(&claims);
+                (render_body(&topic, &lines.0, &lines.1), Some(lines))
             }
         };
         let checked = self.check_body(&body, scope);
         if !checked.findings.is_empty() {
             return Err(checked.findings);
         }
-        if draft.is_some() {
-            for block in body.split("\n\n") {
-                let cites = markers(block);
-                let claim_status: Vec<(String, Status)> = cites.iter().filter(|c| !c.source).filter_map(|c| self.claim(&c.id).map(|cl| (c.id.clone(), status(&cl)))).collect();
-                if cites.is_empty() {
-                    continue;
-                }
-                let line = Line { text: norm(block), claims: claim_status };
-                if !line.claims.is_empty() && line.claims.iter().all(|(_, st)| *st == Status::Validated) { validated.push(line) } else { noted.push(line) }
-            }
-        }
+        let hash_claims: Option<&[Value]> = if draft.is_some() { None } else { Some(&claims) };
+        Ok(self.finish_page(PageParts { topic, body, lines, checked, hash_claims, hash_draft: draft.map(str::to_string), style, scope, withheld, stamp: Stamp::Mechanical, extra: Value::Null, use_cache: true }))
+    }
+
+    /// Lay the page out and store it: the banner for `parts.stamp`, the body, the table; the file and its sidecar go to
+    /// `pages/`. The status is always `generated`.
+    pub(super) fn finish_page(&self, p: PageParts) -> Page {
+        let PageParts { topic, body, lines, checked, hash_claims, hash_draft, style, scope, withheld, stamp, extra, use_cache } = p;
+        let (validated, noted) = lines.unwrap_or_else(|| self.body_lines(&body));
         let recs: Vec<Rec> = checked.cited.iter().filter_map(|c| self.resolve(c, scope).ok()).collect();
         let sources: Vec<String> = recs.iter().flat_map(Self::rec_sources).collect::<BTreeSet<_>>().into_iter().collect();
         let used: Vec<Value> = recs.iter().filter_map(|r| if let Rec::Claim(c) = r { Some(c.clone()) } else { None }).collect();
-        let hash = self.set_hash(&topic, if draft.is_some() { &used } else { &claims }, &sources, draft, scope);
+        let hash = self.set_hash(&topic, hash_claims.unwrap_or(&used), &sources, hash_draft.as_deref(), scope);
         let cache = self.pages_dir().join(format!("{}-{}.md", slug(&topic), hash));
-        if let Ok(md) = std::fs::read_to_string(&cache) {
-            return Ok(Page { topic, validated, noted, sources, withheld, hash, markdown: md, cached: true, flags: checked.flags });
+        if use_cache {
+            if let Ok(md) = std::fs::read_to_string(&cache) {
+                return Page { topic, validated, noted, sources, withheld, hash, markdown: md, cached: true, flags: checked.flags };
+            }
         }
         let date = delphi_core::time::now_rfc3339().chars().take(10).collect::<String>();
-        let note = if checked.cited.is_empty() { format!("mechanical checks passed on {}; unsupported: {}", date, NO_SOURCES) } else { format!("mechanical checks passed on {}", date) };
-        let markdown = format!("{}\n\n{}\n\n{}", banner(&date, None, &note), body, self.bibliography_table(&checked.cited, style, scope));
+        let unsupported = if checked.cited.is_empty() { format!("; unsupported: {}", NO_SOURCES) } else { String::new() };
+        let head = match &stamp {
+            Stamp::Mechanical => banner(&date, None, &format!("mechanical checks passed on {}{}", date, unsupported)),
+            Stamp::Validator { result } => banner(&date, Some((&date, &format!("{}{}", result, unsupported))), ""),
+            Stamp::NotRun { note } => banner(&date, None, &format!("{}{}", note, unsupported)),
+        };
+        let markdown = format!("{}\n\n{}\n\n{}", head, body, self.bibliography_table(&checked.cited, style, scope));
         if self.ensure().is_ok() {
             let _ = std::fs::create_dir_all(self.pages_dir());
             let _ = std::fs::write(&cache, &markdown);
-            let sidecar = json!({"topic": topic, "template": TEMPLATE_VERSION, "written": date, "scope": format!("{:?}", scope).to_lowercase(), "cited": checked.cited.iter().map(Cite::label).collect::<Vec<_>>(), "unverified_figures": checked.flags, "status": "generated"});
+            let mut sidecar = json!({"topic": topic, "template": TEMPLATE_VERSION, "written": date, "scope": format!("{:?}", scope).to_lowercase(), "cited": checked.cited.iter().map(Cite::label).collect::<Vec<_>>(), "unverified_figures": checked.flags, "status": "generated"});
+            if let (Some(o), Some(e)) = (sidecar.as_object_mut(), extra.as_object()) {
+                o.extend(e.clone());
+            }
             let _ = std::fs::write(cache.with_extension("json"), serde_json::to_vec_pretty(&sidecar).unwrap_or_default());
         }
-        Ok(Page { topic, validated, noted, sources, withheld, hash, markdown, cached: false, flags: checked.flags })
+        Page { topic, validated, noted, sources, withheld, hash, markdown, cached: false, flags: checked.flags }
+    }
+
+    /// The paragraphs of a written body that carry a marker, split by whether every claim they cite is validated.
+    fn body_lines(&self, body: &str) -> (Vec<Line>, Vec<Line>) {
+        let (mut validated, mut noted) = (Vec::new(), Vec::new());
+        for block in body.split("\n\n") {
+            let cites = markers(block);
+            if cites.is_empty() {
+                continue;
+            }
+            let claims: Vec<(String, Status)> = cites.iter().filter(|c| !c.source).filter_map(|c| self.claim(&c.id).map(|cl| (c.id.clone(), status(&cl)))).collect();
+            let line = Line { text: norm(block), claims };
+            if !line.claims.is_empty() && line.claims.iter().all(|(_, st)| *st == Status::Validated) { validated.push(line) } else { noted.push(line) }
+        }
+        (validated, noted)
     }
 
     /// "This is wrong" on a sentence: a contested mark on the cited claim with the operator's note. The claim reads
@@ -184,10 +202,44 @@ impl Library {
     }
 }
 
-fn slug(topic: &str) -> String {
+pub(super) fn slug(topic: &str) -> String {
     let s: String = topic.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' }).collect();
     let s = s.split('-').filter(|p| !p.is_empty()).collect::<Vec<_>>().join("-");
     s.chars().take(40).collect::<String>().trim_end_matches('-').to_string()
+}
+
+/// What the banner says about the check.
+pub(super) enum Stamp {
+    Mechanical,
+    /// The validator ran; `result` goes in the banner's parentheses.
+    Validator { result: String },
+    /// The validator did not run (`note` says why).
+    NotRun { note: String },
+}
+
+pub(super) struct PageParts<'a> {
+    pub topic: String,
+    pub body: String,
+    pub lines: Option<(Vec<Line>, Vec<Line>)>,
+    pub checked: Checked,
+    pub hash_claims: Option<&'a [Value]>,
+    pub hash_draft: Option<String>,
+    pub style: Format,
+    pub scope: Scope,
+    pub withheld: usize,
+    pub stamp: Stamp,
+    pub extra: Value,
+    pub use_cache: bool,
+}
+
+pub(super) fn claim_lines(claims: &[Value]) -> (Vec<Line>, Vec<Line>) {
+    let (mut validated, mut noted) = (Vec::new(), Vec::new());
+    for c in claims {
+        let id = c["id"].as_str().unwrap_or("").to_string();
+        let line = Line { text: norm(c["text"].as_str().unwrap_or("")), claims: vec![(id, status(c))] };
+        if line.claims.iter().all(|(_, st)| *st == Status::Validated) { validated.push(line) } else { noted.push(line) }
+    }
+    (validated, noted)
 }
 
 fn cite(line: &Line) -> String {
@@ -195,7 +247,7 @@ fn cite(line: &Line) -> String {
     format!("{} [{}]", line.text, ids.join("; "))
 }
 
-fn render_body(topic: &str, validated: &[Line], noted: &[Line]) -> String {
+pub(super) fn render_body(topic: &str, validated: &[Line], noted: &[Line]) -> String {
     let mut s = format!("# {}\n\n", topic);
     for l in validated {
         s.push_str(&format!("{}\n\n", cite(l)));

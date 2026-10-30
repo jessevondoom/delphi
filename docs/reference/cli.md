@@ -197,7 +197,7 @@ The library's claims: statements anchored in sources, pulled by pointer.
 
 ```
   delphi claims add <text> [--kind fact|episode|procedure|attributed] [--scope personal|project|team|org] [--project <name>]
-    [--valid-until YYYY-MM-DD] [--supersedes <claim>] [--source <id> --locator <where> --quote <passage>] [--home <dir>]
+    [--valid-until YYYY-MM-DD] [--supersedes <claim>] [--origin <page>] [--source <id> --locator <where> --quote <passage>] [--home <dir>]
   delphi claims anchor <claim> --source <id> --quote <passage> [--locator <where>] [--prefix <t>] [--suffix <t>] [--home <dir>]
   delphi claims list [--json] [--home <dir>]
   delphi claims show <claim> [--json] [--home <dir>]

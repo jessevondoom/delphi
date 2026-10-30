@@ -11,7 +11,7 @@ use std::path::Path;
 
 const USAGE: &str = "usage:
   delphi claims add <text> [--kind fact|episode|procedure|attributed] [--scope personal|project|team|org] [--project <name>]
-    [--valid-until YYYY-MM-DD] [--supersedes <claim>] [--source <id> --locator <where> --quote <passage>] [--home <dir>]
+    [--valid-until YYYY-MM-DD] [--supersedes <claim>] [--origin <page>] [--source <id> --locator <where> --quote <passage>] [--home <dir>]
   delphi claims anchor <claim> --source <id> --quote <passage> [--locator <where>] [--prefix <t>] [--suffix <t>] [--home <dir>]
   delphi claims list [--json] [--home <dir>]
   delphi claims show <claim> [--json] [--home <dir>]
@@ -20,7 +20,7 @@ const USAGE: &str = "usage:
   delphi claims review [--json] [--home <dir>]
   delphi claims pull <words...> [--project <name>] [--json] [--home <dir>]";
 
-const WITH_VALUE: [&str; 13] = ["--kind", "--scope", "--project", "--valid-until", "--supersedes", "--source", "--locator", "--quote", "--prefix", "--suffix", "--home", "--workspace", "--limit"];
+const WITH_VALUE: [&str; 14] = ["--kind", "--scope", "--project", "--valid-until", "--supersedes", "--origin", "--source", "--locator", "--quote", "--prefix", "--suffix", "--home", "--workspace", "--limit"];
 
 fn clean(s: &str, n: usize) -> String {
     let one: String = s.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
@@ -84,7 +84,7 @@ fn add(lib: &Library, args: &[String]) -> i32 {
         return 2;
     };
     let parsed = (|| -> Result<(ClaimOpts, Vec<AnchorSpec>), String> {
-        let opts = ClaimOpts { kind: value_of(args, "--kind")?, scope: value_of(args, "--scope")?, project: value_of(args, "--project")?, valid_until: value_of(args, "--valid-until")?, supersedes: value_of(args, "--supersedes")? };
+        let opts = ClaimOpts { kind: value_of(args, "--kind")?, scope: value_of(args, "--scope")?, project: value_of(args, "--project")?, valid_until: value_of(args, "--valid-until")?, supersedes: value_of(args, "--supersedes")?, origin: value_of(args, "--origin")? };
         Ok((opts, spec_from(args)?.into_iter().collect()))
     })();
     let (opts, specs) = match parsed {

@@ -752,3 +752,198 @@ mod export {
         assert!(!bundle.path().join("sources").join(&s).join("source.md").exists());
     }
 }
+
+mod page_validation {
+    use super::*;
+    use crate::fact_judge::TokenLedger;
+    use crate::library::bib::Format;
+    use crate::library::claims::{status, AnchorSpec, ClaimOpts, Validator};
+    use crate::library::page_validate::*;
+    use crate::library::page_validate::Outcome;
+    use crate::library::pages::Scope;
+    use delphi_core::knowledge_status::Status;
+    use std::sync::Mutex;
+
+    struct Fake {
+        replies: Mutex<Vec<Result<Vec<Assertion>, String>>>,
+        seen: Mutex<Vec<PageQuery>>,
+    }
+    impl Fake {
+        fn new(r: Vec<Result<Vec<Assertion>, String>>) -> Fake {
+            Fake { replies: Mutex::new(r), seen: Mutex::new(vec![]) }
+        }
+    }
+    impl PageValidator for Fake {
+        fn validate<'a>(&'a self, q: &'a PageQuery) -> ValidatorFuture<'a> {
+            self.seen.lock().unwrap().push(q.clone());
+            let r = self.replies.lock().unwrap().remove(0);
+            Box::pin(async move { r.map(|assertions| ValidatorReply { assertions, model: "m/x".into(), family: "f".into(), tokens: 50 }) })
+        }
+    }
+    struct Rewriter {
+        out: Result<String, String>,
+        calls: Mutex<Vec<Vec<String>>>,
+    }
+    impl PageWriter for Rewriter {
+        fn rewrite<'a>(&'a self, _d: &'a str, f: &'a [String]) -> WriterFuture<'a> {
+            self.calls.lock().unwrap().push(f.to_vec());
+            let r = self.out.clone();
+            Box::pin(async move { r })
+        }
+    }
+
+    fn a(j: Judgement, rec: Option<&str>, t: &str) -> Assertion {
+        Assertion { text: t.into(), judgement: j, record: rec.map(String::from) }
+    }
+
+    /// (dir, library, validated claim, noted claim)
+    fn setup() -> (tempfile::TempDir, Library, String, String) {
+        let (d, l) = lib();
+        let s = l.add_file(&file(d.path(), "t.md", "# Tides\n\nThe tide comes in twice a day.\n"), &open("CC0-1.0"), &Budgets::default()).unwrap().id;
+        let spec = AnchorSpec { source_id: s, locator: Some("§1".into()), quote: "twice a day".into(), ..Default::default() };
+        let v = l.add_claim("Tides come twice a day.", &ClaimOpts::default(), &[spec]).unwrap()["id"].as_str().unwrap().to_string();
+        l.validate_claim(&v, Validator::Operator).unwrap();
+        let n = l.add_claim("Spring tides are the highest tides.", &ClaimOpts::default(), &[]).unwrap()["id"].as_str().unwrap().to_string();
+        (d, l, v, n)
+    }
+
+    fn run(l: &Library, draft: &str, v: &Fake, w: &Rewriter, cap: u64) -> Result<CheckedPage, String> {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        rt.block_on(l.build_page_checked("tides", draft, Format::Plain, Scope::External, v, w, &TokenLedger::new(cap)))
+    }
+
+    fn side(l: &Library, p: &CheckedPage) -> Value {
+        serde_json::from_slice(&std::fs::read(l.root().join("pages").join(format!("tides-{}.json", p.page.hash))).unwrap()).unwrap()
+    }
+
+    fn rw(out: Result<&str, &str>) -> Rewriter {
+        Rewriter { out: out.map(String::from).map_err(String::from), calls: Mutex::new(vec![]) }
+    }
+
+    #[test]
+    fn a_clean_page_passes_stays_generated_and_records_the_verdict() {
+        let (_d, l, v, _n) = setup();
+        let f = Fake::new(vec![Ok(vec![a(Judgement::Supported, None, "Tides come twice a day."), a(Judgement::UncitedConsistent, None, "The moon matters.")])]);
+        let w = rw(Err("unused"));
+        let p = run(&l, &format!("Tides come twice a day [{v}]."), &f, &w, 1_000_000).unwrap();
+        assert_eq!(p.verdict.outcome, Outcome::Pass);
+        assert!(p.page.markdown.lines().next().unwrap().contains("checked by the validator on") && p.page.markdown.contains("1 unchecked"));
+        assert!(!p.page.markdown.contains("validated by"));
+        assert!(p.page.markdown.contains("## Unchecked") && p.page.markdown.contains("- The moon matters."));
+        let s = side(&l, &p);
+        assert_eq!(s["status"], "generated");
+        assert_eq!(s["validator"]["result"], "pass");
+        assert_eq!(s["validator"]["family"], "f");
+        assert!(w.calls.lock().unwrap().is_empty());
+        assert!(l.check_page_text(&p.page.markdown, Scope::External).findings.is_empty());
+    }
+
+    #[test]
+    fn a_contradiction_with_a_validated_claim_fails_once_is_rewritten_with_the_findings_and_is_not_shown() {
+        let (_d, l, v, _n) = setup();
+        let bad = Assertion { text: "Tides come once a day.".into(), judgement: Judgement::Contradicts, record: Some(v.clone()) };
+        let f = Fake::new(vec![Ok(vec![bad]), Ok(vec![a(Judgement::Supported, None, "ok")])]);
+        let w = Rewriter { out: Ok(format!("Tides come twice a day, again [{v}].")), calls: Mutex::new(vec![]) };
+        let p = run(&l, &format!("Tides come once a day [{v}]."), &f, &w, 1_000_000).unwrap();
+        assert_eq!(w.calls.lock().unwrap().len(), 1);
+        assert!(w.calls.lock().unwrap()[0][0].contains("contradicts a validated record"));
+        assert_eq!((p.verdict.outcome.clone(), p.verdict.rewrites), (Outcome::Pass, 1));
+        assert!(!p.page.markdown.contains("once a day"));
+    }
+
+    #[test]
+    fn two_failures_give_the_claims_only_page_with_the_reason_in_the_banner() {
+        let (_d, l, v, _n) = setup();
+        let bad = || Assertion { text: "Cited text says nothing like it.".into(), judgement: Judgement::FabricatedCitation, record: Some(v.clone()) };
+        let f = Fake::new(vec![Ok(vec![bad()]), Ok(vec![bad()])]);
+        let w = Rewriter { out: Ok(format!("Another try [{v}].")), calls: Mutex::new(vec![]) };
+        let p = run(&l, &format!("Made up [{v}]."), &f, &w, 1_000_000).unwrap();
+        assert_eq!(p.verdict.outcome, Outcome::ClaimsOnly);
+        assert_eq!(w.calls.lock().unwrap().len(), 1, "one rewrite, no more");
+        let first = p.page.markdown.lines().next().unwrap();
+        assert!(first.contains("claims-only page: the draft failed the check twice") && first.contains("fabricated citation"), "{first}");
+        assert!(!p.page.markdown.contains("Made up") && !p.page.markdown.contains("Another try"));
+        assert!(p.page.markdown.contains("Tides come twice a day."));
+        assert_eq!(side(&l, &p)["validator"]["result"], "claims_only");
+        assert_eq!(side(&l, &p)["status"], "generated");
+    }
+
+    #[test]
+    fn a_contradiction_with_only_a_noted_claim_passes_under_contested() {
+        let (_d, l, v, n) = setup();
+        let c = Assertion { text: "Spring tides are the lowest.".into(), judgement: Judgement::Contradicts, record: Some(n.clone()) };
+        let f = Fake::new(vec![Ok(vec![c])]);
+        let w = rw(Err("unused"));
+        let p = run(&l, &format!("Tides come twice a day [{v}]. Spring tides are the lowest."), &f, &w, 1_000_000).unwrap();
+        assert_eq!(p.verdict.outcome, Outcome::PassContested);
+        let (_, tail) = p.page.markdown.split_once("## Contested").expect("contested section");
+        assert!(tail.contains("Table 1:") && tail.contains(&format!("[{n}]")) && tail.contains("Spring tides are the lowest."));
+        assert!(l.check_page_text(&p.page.markdown, Scope::External).findings.is_empty());
+        assert_eq!(status(&l.claim(&n).unwrap()), Status::Noted);
+    }
+
+    #[test]
+    fn a_contradiction_naming_an_unknown_record_fails_closed_and_an_unavailable_validator_falls_back() {
+        let (_d, l, v, _n) = setup();
+        let c = Assertion { text: "x".into(), judgement: Judgement::Contradicts, record: Some("c-nope".into()) };
+        let f = Fake::new(vec![Ok(vec![c.clone()]), Ok(vec![c])]);
+        let w = Rewriter { out: Ok(format!("Again [{v}].")), calls: Mutex::new(vec![]) };
+        assert_eq!(run(&l, &format!("T [{v}]."), &f, &w, 1_000_000).unwrap().verdict.outcome, Outcome::ClaimsOnly);
+        let down = Fake::new(vec![Err("no model".into())]);
+        let w = rw(Err("unused"));
+        let p = run(&l, &format!("T [{v}]."), &down, &w, 1_000_000).unwrap();
+        assert!(p.page.markdown.lines().next().unwrap().contains("not yet checked by the validator") && p.page.markdown.lines().next().unwrap().contains("claims-only page: the validator could not run"));
+        assert!(w.calls.lock().unwrap().is_empty());
+        let none = Fake::new(vec![]);
+        let p = run(&l, &format!("T [{v}]."), &none, &w, 1).unwrap();
+        assert!(p.page.markdown.lines().next().unwrap().contains("token budget was reached"));
+        assert!(none.seen.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_mechanical_failure_never_reaches_the_validator() {
+        let (_d, l, _v, _n) = setup();
+        let f = Fake::new(vec![]);
+        let w = rw(Err("no writer"));
+        let p = run(&l, "Tides [c-missing].", &f, &w, 1_000_000).unwrap();
+        assert!(f.seen.lock().unwrap().is_empty() && w.calls.lock().unwrap().len() == 1);
+        assert_eq!(p.verdict.outcome, Outcome::ClaimsOnly);
+    }
+
+    #[test]
+    fn replies_are_parsed_strictly_and_validator_text_is_made_safe() {
+        assert!(parse_reply("I think the page is fine.").is_none());
+        assert_eq!(parse_reply("NO ASSERTIONS").unwrap().len(), 0);
+        let r = parse_reply("ASSERTION fabricated | c-1 | see [c-9](http://x.test/y) `bad` | table\nASSERTION maybe | - | ignored\nASSERTION supported | - | fine").unwrap();
+        assert_eq!(r.len(), 2);
+        assert_eq!(r[0].record.as_deref(), Some("c-1"));
+        assert!(!r[0].text.contains(['[', ']', '(', ')', '`', '|']) && !r[0].text.contains("://"), "{}", r[0].text);
+    }
+
+    #[test]
+    fn a_private_record_never_reaches_the_validator_of_an_external_page() {
+        let (d, l) = lib();
+        let mut o = open("CC0-1.0");
+        o.private = true;
+        let s = l.add_file(&file(d.path(), "p.md", "Secret tide table.\n"), &o, &Budgets::default()).unwrap().id;
+        let spec = AnchorSpec { source_id: s, locator: Some("§1".into()), quote: "Secret".into(), ..Default::default() };
+        let c = l.add_claim("tides secret figure", &ClaimOpts { scope: Some("personal".into()), ..Default::default() }, &[spec]).unwrap();
+        let _ = c;
+        let f = Fake::new(vec![Ok(vec![])]);
+        let w = rw(Err("unused"));
+        let _ = run(&l, "Tides are regular.", &f, &w, 1_000_000);
+        for q in f.seen.lock().unwrap().iter() {
+            assert!(q.material.iter().all(|m| !m.text.contains("secret") && !m.text.contains("Secret")), "{:?}", q.material);
+        }
+    }
+
+    #[test]
+    fn promoting_a_statement_creates_a_noted_claim_with_the_page_as_origin() {
+        let (_d, l, _v, _n) = setup();
+        let c = l.promote_statement("tides-abc.md", "Neap tides are the lowest.").unwrap();
+        let id = c["id"].as_str().unwrap();
+        let got = l.claim(id).unwrap();
+        assert_eq!(status(&got), Status::Noted);
+        assert_eq!(l.origin_of(&got), "page:tides-abc.md");
+    }
+}

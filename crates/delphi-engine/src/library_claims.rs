@@ -29,6 +29,9 @@ pub struct ClaimOpts {
     pub project: Option<String>,
     pub valid_until: Option<String>,
     pub supersedes: Option<String>,
+    /// Where the statement came from when it is promoted from a generated page (`specs/057` §3.5): `page:<key>`. The claim
+    /// still starts *noted*; the page raises nothing.
+    pub origin: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -70,6 +73,15 @@ pub struct Reliability {
     pub stood: usize,
     pub contested: usize,
     pub disproved: usize,
+}
+
+/// `page:<key>`, the key being the page's file name or id the operator names: one line, at most 200 characters.
+fn norm_origin(o: &str) -> Result<String, String> {
+    let key = o.trim().strip_prefix("page:").unwrap_or(o.trim()).trim();
+    if key.is_empty() || key.chars().count() > 200 || key.chars().any(char::is_control) {
+        return Err("an origin is the page the statement came from: one line, at most 200 characters".into());
+    }
+    Ok(format!("page:{}", key))
 }
 
 fn valid_claim_id(id: &str) -> bool {
@@ -153,6 +165,7 @@ impl Library {
         if text.len() > TEXT_MAX {
             return Err(format!("a claim is a short statement: {} bytes, over the {}-byte limit", text.len(), TEXT_MAX));
         }
+        let origin = opts.origin.as_deref().map(norm_origin).transpose()?;
         let kind = opts.kind.clone().unwrap_or_else(|| "fact".into());
         let scope = opts.scope.clone().unwrap_or_else(|| "team".into());
         if !KINDS.contains(&kind.as_str()) {
@@ -180,6 +193,9 @@ impl Library {
             let now = delphi_core::time::now_rfc3339();
             json!({"id": id, "text": text, "kind": kind, "scope": scope, "created": now, "last_confirmed": now, "contested_by": [], "anchors": [], "cited_by": []})
         });
+        if let (Some(o), true) = (&origin, claim["origin"].is_null()) {
+            claim["origin"] = json!(o);
+        }
         if let Some(p) = &opts.project {
             claim["project"] = json!(p.trim());
         }
@@ -443,6 +459,9 @@ impl Library {
     }
 
     pub fn origin_of(&self, c: &Value) -> String {
+        if let Some(o) = c["origin"].as_str() {
+            return o.to_string();
+        }
         anchors_of(c).iter().filter_map(|a| a["source_id"].as_str()).filter_map(|s| self.read_meta(s)).find_map(|m| m["origin"].as_str().map(String::from)).unwrap_or_else(|| if anchors_of(c).is_empty() { "operator".into() } else { "library".into() })
     }
 
