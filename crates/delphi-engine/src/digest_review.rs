@@ -146,9 +146,82 @@ pub fn act(mission_id: &str, i: &ReviewItem, action: &str) -> Result<Vec<EventEn
     Ok(vec![EventEnvelope::new(mission_id, "learn.digested", json!({"id": i.id, "action": action}))])
 }
 
+pub const ACQUIRE_ACTIONS: [&str; 4] = ["accept", "skip", "rule", "keep"];
+
+/// The acquisition batch the job proposed (`specs/055` §8): one card, the sources as typed items. `accept` takes them all, `skip`
+/// declines them all and they are not proposed again, `rule` takes them and records a standing rule from the batch's topics and
+/// archives, `keep` leaves them for later. The daemon captures what is accepted; nothing here sets a licence, level or status.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AcquireItem {
+    pub id: String,
+    pub batch: String,
+    pub sources: Vec<Value>,
+}
+
+pub fn acquire_item(lib: &Library, events: &[EventEnvelope]) -> Option<AcquireItem> {
+    let b = lib.open_batch()?;
+    let batch = b["id"].as_str()?.to_string();
+    let id = format!("acq:{}", batch);
+    if acted(events).contains(&id.as_str()) {
+        return None;
+    }
+    let sources: Vec<Value> = b["items"]
+        .as_array()?
+        .iter()
+        .filter(|i| i["status"] == "proposed")
+        .map(|i| {
+            json!({
+                "type": "source", "id": i["id"], "title": clean(i["title"].as_str().unwrap_or(""), 160), "author": clean(i["author"].as_str().unwrap_or(""), 120),
+                "from": i["archive"], "year": i["year"], "size": i["size"], "topic": i["topic"],
+                "licence": i["licence"], "basis": clean(i["basis"].as_str().unwrap_or(""), 200),
+                "status": "noted", "label": delphi_core::knowledge_status::Status::Noted.label(),
+            })
+        })
+        .collect();
+    (!sources.is_empty()).then_some(AcquireItem { id, batch, sources })
+}
+
+pub fn acquire_hash(i: &AcquireItem) -> String {
+    let ids: Vec<&str> = i.sources.iter().filter_map(|s| s["id"].as_str()).collect();
+    blake3::hash(format!("{}\n{}", i.id, ids.join("\n")).as_bytes()).to_hex().to_string()
+}
+
+pub fn acquire_decision(i: &AcquireItem, left: usize, now: &str) -> Value {
+    let label = |a: &str| match a {
+        "accept" => "Add these to the library",
+        "skip" => "Skip these: do not propose them again",
+        "rule" => "Add them, and take anything like them from these archives",
+        _ => "Not now",
+    };
+    let choices: Vec<Value> = ACQUIRE_ACTIONS.iter().map(|a| json!({"id": a, "label": label(a), "effect": "digest", "reversible": *a == "keep"})).collect();
+    let more = if left == 0 { String::new() } else { format!(" {} more wait.", left) };
+    json!({
+        "id": crate::digest::card_id(now), "source": "digest", "source_id": i.id, "label": "DIGEST",
+        "kind": "learn", "tier": "open", "title": clean(&format!("{} sources found for the library", i.sources.len()), TITLE_MAX),
+        "requester": "daemon", "task": "", "raised_at": now, "timeout_secs": Value::Null, "payload_blake3": acquire_hash(i),
+        "brief": {
+            "summary": clean(&format!("The library scout found public-domain and research sources that match your projects and interests. They are not fetched until you accept. Nothing waits on this.{}", more), 400),
+            "changes": ["accepted sources are captured in full under the archive's own terms and kept with its notice", "they arrive not validated; their claims start as noted"],
+            "state": "plain",
+            "recommendation": {"choice_id": "keep", "why": "nothing is fetched until you accept"},
+        },
+        "items": i.sources,
+        "choices": choices,
+        "tickable": true, "tickable_reason": "keeping fetches nothing",
+    })
+}
+
+pub fn acquire_act(mission_id: &str, i: &AcquireItem, action: &str) -> Result<Vec<EventEnvelope>, String> {
+    if !ACQUIRE_ACTIONS.contains(&action) {
+        return Err(format!("`{}` is not an action of this item ({})", action, ACQUIRE_ACTIONS.join(", ")));
+    }
+    Ok(vec![EventEnvelope::new(mission_id, "learn.digested", json!({"id": i.id, "action": action}))])
+}
+
 /// What the next card shows, and how many more wait today: a library item if there is one, else a captured candidate.
 pub enum Pick {
     Review(ReviewItem),
+    Acquire(AcquireItem),
     Note(crate::learn::LiveNote),
 }
 
@@ -159,13 +232,17 @@ pub fn pick(mission: &str, lib: &Library, events: &[EventEnvelope], now: &str) -
     }
     let mut reviews = items(lib, events, now);
     let note = crate::digest::next(mission, events, now);
-    let total = reviews.len() + note.as_ref().map_or(0, |(_, l)| l + 1);
+    let acq = acquire_item(lib, events);
+    let total = reviews.len() + usize::from(acq.is_some()) + note.as_ref().map_or(0, |(_, l)| l + 1);
     if total == 0 {
         return None;
     }
     let left = total.min(DAILY - used) - 1;
     if !reviews.is_empty() {
         return Some((Pick::Review(reviews.remove(0)), left));
+    }
+    if let Some(a) = acq {
+        return Some((Pick::Acquire(a), left));
     }
     note.map(|(n, _)| (Pick::Note(n), left))
 }

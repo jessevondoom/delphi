@@ -86,6 +86,17 @@ Which sites the job may read is not here: it is `context/sources/trusted.toml` (
 | `[validator] mode` ◆ | `advisory` | `off`: the validator fetches nothing, anywhere. `advisory`: the full fact path runs as a dry run (**it does use the network**: it fetches, snapshots, judges and records what it would ratify) and writes nothing validated. `ratify`: real writes to `context/facts/**`, honoured only while the daemon's latch allows it and the PROMOTE conditions hold. The effective mode is the lower of this value and the latch |
 | `[validator.sources] primary`, `reputable`, `weak` ◆ | — | registrable domains the operator adds to the default source list (`specs/040` appendix A); they win over the defaults. Only the operator can edit them |
 
+## Library acquisition ◆
+
+| Key | Default | Meaning |
+| :-- | :-- | :-- |
+| `[library.acquire] enabled` ◆ | `false` | turns on the daily acquisition job (`specs/055` §8). It fetches from the archives in `context/sources/archives.toml` plus your `operator/archives.toml`, and only from those hosts. Proposals arrive as one batch in the digest; nothing is fetched until you accept or a standing rule (`delphi sources acquire rule add`) covers it |
+| `[library.acquire] byte_budget_mib` ◆ | `2048` | what acquisition may hold; reaching it stops acquiring and evicts nothing |
+| `[library.acquire] max_item_mib` ◆ | `16` | the largest text one acquired source may have; also the ceiling of a standing rule |
+| `[library.acquire] batch_size` ◆ | `8` | sources in one batch (1 to 20) |
+| `[library.acquire] token_share_percent` ◆ | `5` | the scout's share of the install's tokens over the trailing week (at most 10; `specs/040` §20.2). The scout only suggests topics; `0` keeps the job model-free |
+| `[library.acquire] interests` ◆ | `[]` | topics you want, beside your projects' names (at most 50) |
+
 ## Generated pages
 
 | Key | Default | Meaning |

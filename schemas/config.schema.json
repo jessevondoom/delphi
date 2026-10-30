@@ -107,6 +107,26 @@
         "google": { "$ref": "#/$defs/searchEngine" }
       }
     },
+    "library": {
+      "type": "object",
+      "description": "The central library (specs/055).",
+      "additionalProperties": false,
+      "properties": {
+        "acquire": {
+          "type": "object",
+          "description": "Library acquisition (specs/055 section 8): a daily job proposes public-domain and research sources in ONE digest batch. Off until enabled; it reaches out to the archives listed in context/sources/archives.toml.",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "byte_budget_mib": { "type": "integer", "minimum": 1, "default": 2048, "description": "Bytes acquisition may hold; reaching it stops acquiring and evicts nothing." },
+            "max_item_mib": { "type": "integer", "minimum": 1, "default": 16, "description": "The largest text one acquired source may have." },
+            "batch_size": { "type": "integer", "minimum": 1, "maximum": 20, "default": 8 },
+            "token_share_percent": { "type": "integer", "minimum": 0, "maximum": 10, "default": 5, "description": "The scout's share of the install's tokens over the trailing week (specs/040 section 20.2). 0 keeps the job model-free." },
+            "interests": { "type": "array", "maxItems": 50, "items": { "type": "string", "minLength": 1, "maxLength": 80 }, "description": "Topics you want, beside the workspace's project names." }
+          }
+        }
+      }
+    },
     "validator": {
       "type": "object",
       "description": "The fact validator (specs/040 section 15.1). The effective mode is the lower of this value and the daemon's latch.",
