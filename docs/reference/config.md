@@ -85,6 +85,16 @@ Which sites the job may read is not here: it is `context/sources/trusted.toml` (
 | `[validator] mode` ◆ | `advisory` | `off`: the validator fetches nothing, anywhere. `advisory`: the full fact path runs as a dry run (**it does use the network**: it fetches, snapshots, judges and records what it would ratify) and writes nothing validated. `ratify`: real writes to `context/facts/**`, honoured only while the daemon's latch allows it and the PROMOTE conditions hold. The effective mode is the lower of this value and the latch |
 | `[validator.sources] primary`, `reputable`, `weak` ◆ | — | registrable domains the operator adds to the default source list (`specs/040` appendix A); they win over the defaults. Only the operator can edit them |
 
+## Generated pages
+
+| Key | Default | Meaning |
+| :-- | :-- | :-- |
+| `[library.pages] enabled` | `true` | `false`: no page is written (`delphi pages search` still lists what the library holds) |
+| `[library.pages] external` | `ask` | `ask`: the web is searched only when you ask (`--external`, or the console's key); `off`: never; `on`: every page also searches the web unless `--internal`. Queries go only to the engines in the ratified `[search]` table; `private` sources are never put on an external page or in its query ([`specs/057`](../../specs/057-search-pages-generated-and-checked.md)) |
+| `[library.pages] max_tokens` | `3000` | the longest page the writer may write |
+| `[library.pages] external_ttl` | `7d` | a page that used the web is stale after this (days as a number, or `12h`, `7d`) |
+| `[library.pages] per_day` | `20` | pages built in one day (a cache hit costs nothing). The validator tokens a page uses also count against the validator's share ([`specs/040`](../../specs/040-validator-role-and-fact-ratification.md) §20) |
+
 ## Away mode and hooks ◆
 
 | Section | Meaning |

@@ -12,6 +12,7 @@ pub mod fact_ratify;
 pub mod fact_run;
 pub mod fact_audit;
 pub mod fact_serve;
+pub mod page_run;
 pub mod fact_span;
 pub mod fact_sources;
 pub mod fact_store;

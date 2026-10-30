@@ -498,8 +498,87 @@ pub struct Config {
     pub search: crate::research::SearchConfig,
     /// `[validator]`: the fact validator's mode and the operator's additions to the source list (`specs/040` §15.1, §6.1).
     pub validator: ValidatorConfig,
+    /// `[library.pages]`: generated search pages (`specs/057` §5, §6).
+    pub library: LibraryConfig,
     /// `[learning]`: capture and the bounds on the learning loop (`specs/031` §3.6). The engine clamps each value to the core's bounds.
     pub learning: LearningConfig,
+}
+
+/// `[library]`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LibraryConfig {
+    pub pages: PagesConfig,
+}
+
+/// Whether a page may use external search: `ask` (the default) needs `--external` or the console's key each time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PagesExternal {
+    #[default]
+    Ask,
+    Off,
+    On,
+}
+
+/// `[library.pages]` (`specs/057` §6). `external_ttl` is how long a page that used external search stays fresh.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PagesConfig {
+    pub enabled: bool,
+    #[serde(deserialize_with = "de_external")]
+    pub external: PagesExternal,
+    pub max_tokens: u64,
+    #[serde(deserialize_with = "de_ttl", rename = "external_ttl")]
+    pub external_ttl_secs: u64,
+    /// Pages the daemon builds in one day; a cache hit is free. They also count against the validator's share (`specs/040` §20).
+    pub per_day: u32,
+}
+
+impl Default for PagesConfig {
+    fn default() -> Self {
+        PagesConfig { enabled: true, external: PagesExternal::Ask, max_tokens: 3000, external_ttl_secs: 7 * 86_400, per_day: 20 }
+    }
+}
+
+fn de_external<'de, D: serde::Deserializer<'de>>(d: D) -> Result<PagesExternal, D::Error> {
+    let s = <String as serde::Deserialize>::deserialize(d)?;
+    match s.as_str() {
+        "ask" => Ok(PagesExternal::Ask),
+        "off" => Ok(PagesExternal::Off),
+        "on" => Ok(PagesExternal::On),
+        _ => Err(serde::de::Error::custom(format!("external `{}` is not one of ask, off, on", s))),
+    }
+}
+
+/// `"7d"`, `"12h"`, `"90m"` or a bare number of days.
+pub fn parse_ttl(s: &str) -> Option<u64> {
+    let s = s.trim();
+    let (n, unit) = match s.char_indices().find(|(_, c)| !c.is_ascii_digit()) {
+        Some((i, _)) => s.split_at(i),
+        None => (s, "d"),
+    };
+    let n: u64 = n.parse().ok()?;
+    let per = match unit.trim() {
+        "d" => 86_400,
+        "h" => 3_600,
+        "m" => 60,
+        _ => return None,
+    };
+    n.checked_mul(per).filter(|v| *v > 0)
+}
+
+fn de_ttl<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum V {
+        N(u64),
+        S(String),
+    }
+    let secs = match <V as serde::Deserialize>::deserialize(d)? {
+        V::N(n) => parse_ttl(&n.to_string()),
+        V::S(s) => parse_ttl(&s),
+    };
+    secs.ok_or_else(|| serde::de::Error::custom("external_ttl is a duration such as \"7d\", \"12h\" or \"90m\""))
 }
 
 /// `[learning]`. Types are checked here so `delphi doctor` names a wrong one; the floors and ceilings are the engine's
@@ -613,6 +692,12 @@ impl Config {
             match v.clone().try_into::<ValidatorConfig>() {
                 Ok(v) => cfg.validator = v,
                 Err(e) => errs.push(format!("[validator]: {}", e)),
+            }
+        }
+        if let Some(v) = root.get("library") {
+            match v.clone().try_into::<LibraryConfig>() {
+                Ok(v) => cfg.library = v,
+                Err(e) => errs.push(format!("[library]: {}", e)),
             }
         }
         if let Some(v) = root.get("learning") {
@@ -1124,6 +1209,19 @@ impl Config {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn library_pages_defaults_and_ttl_forms() {
+        let d = Config::parse(SAMPLE).unwrap().library.pages;
+        assert!(d.enabled && d.external == PagesExternal::Ask);
+        assert_eq!((d.max_tokens, d.external_ttl_secs, d.per_day), (3000, 7 * 86_400, 20));
+        for (v, secs) in [("3", 3 * 86_400), ("\"12h\"", 12 * 3600), ("\"90m\"", 5400), ("\"7d\"", 7 * 86_400)] {
+            let c = Config::parse(&format!("{}\n[library.pages]\nexternal = \"off\"\nexternal_ttl = {}\n", SAMPLE, v)).unwrap().library.pages;
+            assert_eq!((c.external, c.external_ttl_secs), (PagesExternal::Off, secs), "{v}");
+        }
+        assert!(Config::parse(&format!("{}\n[library.pages]\nexternal = \"maybe\"\n", SAMPLE)).is_err());
+        assert!(Config::parse(&format!("{}\n[library.pages]\nexternal_ttl = \"soon\"\n", SAMPLE)).is_err());
+    }
 
     pub const SAMPLE: &str = r#"
 [models.claude]

@@ -947,3 +947,152 @@ mod page_validation {
         assert_eq!(l.origin_of(&got), "page:tides-abc.md");
     }
 }
+
+mod page_search_cache {
+    use super::*;
+    use crate::fact_judge::TokenLedger;
+    use crate::library::bib::Format;
+    use crate::library::claims::{AnchorSpec, ClaimOpts, Validator};
+    use crate::library::page_search::PageRequest;
+    use crate::library::page_validate::*;
+    use crate::library::pages::Scope;
+    use delphi_adapter::config::PagesConfig;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    struct W {
+        draft: String,
+        writes: AtomicUsize,
+    }
+    impl PageWriter for W {
+        fn write<'a>(&'a self, _b: &'a str) -> WriterFuture<'a> {
+            self.writes.fetch_add(1, Ordering::SeqCst);
+            let d = self.draft.clone();
+            Box::pin(async move { Ok(d) })
+        }
+        fn rewrite<'a>(&'a self, _d: &'a str, _f: &'a [String]) -> WriterFuture<'a> {
+            let d = self.draft.clone();
+            Box::pin(async move { Ok(d) })
+        }
+    }
+    struct V(Mutex<Vec<Judgement>>);
+    impl PageValidator for V {
+        fn validate<'a>(&'a self, _q: &'a PageQuery) -> ValidatorFuture<'a> {
+            let j = { let mut g = self.0.lock().unwrap(); if g.len() > 1 { g.remove(0) } else { g[0] } };
+            Box::pin(async move { Ok(ValidatorReply { assertions: vec![Assertion { text: "x".into(), judgement: j, record: None }], model: "m".into(), family: "f".into(), tokens: 10 }) })
+        }
+    }
+
+    fn setup() -> (tempfile::TempDir, Library, W) {
+        let (d, l) = lib();
+        let s = l.add_file(&file(d.path(), "t.md", "# Tides\n\nThe tide comes in twice a day.\n"), &open("CC0-1.0"), &Budgets::default()).unwrap().id;
+        let spec = AnchorSpec { source_id: s, locator: Some("§1".into()), quote: "twice a day".into(), ..Default::default() };
+        let c = l.add_claim("Tides come twice a day.", &ClaimOpts::default(), &[spec]).unwrap()["id"].as_str().unwrap().to_string();
+        l.validate_claim(&c, Validator::Operator).unwrap();
+        (d, l, W { draft: format!("Tides come twice a day [{c}]."), writes: AtomicUsize::new(0) })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn go(l: &Library, q: &str, external: bool, now: u64, cfg: &PagesConfig, w: &W, v: &V, gate: &(dyn Fn() -> Result<(), String> + Sync)) -> Result<crate::library::page_search::SearchedPage, String> {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        rt.block_on(l.search_page(&PageRequest { query: q, external, extra_sources: &[], style: Format::Plain, now, settings: cfg }, w, v, &TokenLedger::new(1_000_000), gate))
+    }
+
+    fn pass() -> V {
+        V(Mutex::new(vec![Judgement::Supported]))
+    }
+
+    #[test]
+    fn a_second_search_is_served_from_the_cache_and_calls_no_model() {
+        let (_d, l, w) = setup();
+        let cfg = PagesConfig::default();
+        let a = go(&l, "tides", false, 100, &cfg, &w, &pass(), &|| Ok(())).unwrap();
+        assert!(!a.cached && a.markdown.contains("Tides come twice a day"));
+        let b = go(&l, "tides", false, 200, &cfg, &w, &pass(), &|| Err("gate must not be asked".into())).unwrap();
+        assert!(b.cached);
+        assert_eq!(w.writes.load(Ordering::SeqCst), 1);
+        assert_eq!(a.entry.key, b.entry.key);
+    }
+
+    #[test]
+    fn a_changed_claim_is_a_new_page_and_the_old_one_goes_to_history_or_is_stale() {
+        let (_d, l, w) = setup();
+        let cfg = PagesConfig::default();
+        let a = go(&l, "tides", false, 100, &cfg, &w, &pass(), &|| Ok(())).unwrap();
+        l.add_claim("Tides follow the moon.", &ClaimOpts::default(), &[]).unwrap();
+        let b = go(&l, "tides", false, 200, &cfg, &w, &pass(), &|| Ok(())).unwrap();
+        assert!(!b.cached && b.entry.key != a.entry.key);
+        assert_eq!(w.writes.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn an_external_page_expires_after_its_ttl_and_is_rebuilt() {
+        let (_d, l, w) = setup();
+        let cfg = PagesConfig { external_ttl_secs: 1000, ..Default::default() };
+        let a = go(&l, "tides", true, 100, &cfg, &w, &pass(), &|| Ok(())).unwrap();
+        assert!(go(&l, "tides", true, 600, &cfg, &w, &pass(), &|| Ok(())).unwrap().cached);
+        let late = go(&l, "tides", true, 1200, &cfg, &w, &pass(), &|| Ok(())).unwrap();
+        assert!(!late.cached);
+        assert_eq!(late.entry.key, a.entry.key);
+        assert_eq!(w.writes.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn a_double_failure_is_cached_as_failed_for_an_hour() {
+        let (_d, l, w) = setup();
+        let cfg = PagesConfig::default();
+        let bad = || V(Mutex::new(vec![Judgement::FabricatedCitation]));
+        let a = go(&l, "tides", false, 100, &cfg, &w, &bad(), &|| Ok(())).unwrap();
+        assert_eq!(a.entry.outcome, "claims_only");
+        assert!(a.entry.failed);
+        assert!(go(&l, "tides", false, 200, &cfg, &w, &bad(), &|| Ok(())).unwrap().cached);
+        assert!(!go(&l, "tides", false, 100 + 3601, &cfg, &w, &bad(), &|| Ok(())).unwrap().cached);
+    }
+
+    #[test]
+    fn the_per_day_budget_and_the_share_gate_refuse_a_new_page_but_not_a_cached_one() {
+        let (_d, l, w) = setup();
+        let cfg = PagesConfig { per_day: 1, ..Default::default() };
+        go(&l, "tides", false, 100, &cfg, &w, &pass(), &|| Ok(())).unwrap();
+        let e = go(&l, "spring tides", false, 200, &cfg, &w, &pass(), &|| Ok(())).unwrap_err();
+        assert!(e.contains("per_day") || e.contains("today"), "{e}");
+        assert!(go(&l, "tides", false, 300, &cfg, &w, &pass(), &|| Err("no".into())).unwrap().cached);
+        let cfg = PagesConfig::default();
+        assert!(go(&l, "spring tides", false, 200, &cfg, &w, &pass(), &|| Err("share spent".into())).unwrap_err().contains("share spent"));
+    }
+
+    #[test]
+    fn external_off_and_disabled_refuse_before_any_work() {
+        let (_d, l, w) = setup();
+        let off = PagesConfig { external: delphi_adapter::config::PagesExternal::Off, ..Default::default() };
+        assert!(go(&l, "tides", true, 1, &off, &w, &pass(), &|| Ok(())).is_err());
+        let dis = PagesConfig { enabled: false, ..Default::default() };
+        assert!(go(&l, "tides", false, 1, &dis, &w, &pass(), &|| Ok(())).is_err());
+        assert_eq!(w.writes.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_private_source_is_left_out_of_external_material_and_named_queries_are_caught() {
+        let (d, l, _w) = setup();
+        let o = AddOpts { private: true, level: Some(Level::Full), title: Some("Secret tides ledger".into()), ..open("all-rights-reserved") };
+        let s = l.add_file(&file(d.path(), "p.md", "tides secret valve schematic"), &o, &Budgets::default()).unwrap().id;
+        let ext = l.gather("tides", Scope::External, std::slice::from_ref(&s));
+        assert!(ext.sources.iter().all(|(id, _, _)| *id != s));
+        let int = l.gather("tides", Scope::Internal, &[]);
+        assert!(int.sources.iter().any(|(id, _, _)| *id == s));
+        assert_eq!(l.private_named_in("what is in the Secret tides ledger"), Some(s));
+        assert_eq!(l.private_named_in("tides"), None);
+    }
+
+    #[test]
+    fn eviction_drops_the_least_recently_opened_and_never_a_pinned_page() {
+        let (_d, l, w) = setup();
+        let cfg = PagesConfig::default();
+        let a = go(&l, "tides", false, 100, &cfg, &w, &pass(), &|| Ok(())).unwrap();
+        let b = go(&l, "spring tides", false, 200, &cfg, &w, &pass(), &|| Ok(())).unwrap();
+        l.pin_page(&a.entry.key, true, 300, cfg.external_ttl_secs).unwrap();
+        let dropped = l.evict_pages(1);
+        assert!(dropped.contains(&b.entry.key) && !dropped.contains(&a.entry.key), "{dropped:?}");
+        assert!(l.open_page(&a.entry.key, 400, cfg.external_ttl_secs).is_some());
+    }
+}
