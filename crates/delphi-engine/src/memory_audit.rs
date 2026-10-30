@@ -29,6 +29,8 @@ pub const SITES: &[Site] = &[
             ("crates/delphi-engine/src/learn.rs", "a_note_from_a_task_that_read_untrusted_content_stays_below_empirical"),
             ("crates/delphi-engine/src/learn.rs", "a_verdict_from_a_tainted_span_is_staged_below_empirical"),
             ("crates/delphi-engine/src/kb.rs", "staged_notes_are_a_zone_that_only_an_explicit_search_sees_and_taint_still_applies"),
+            ("crates/delphi-engine/src/learn.rs", "a_staged_note_of_a_project_mission_lands_in_that_projects_layer_and_never_in_home_or_another_project"),
+            ("crates/delphi-engine/src/learn.rs", "a_mission_scoped_to_a_spoofed_or_unregistered_project_is_staged_nowhere"),
         ],
     },
     Site {

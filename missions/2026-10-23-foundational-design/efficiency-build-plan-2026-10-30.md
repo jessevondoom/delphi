@@ -36,3 +36,4 @@ Updated in the tracker as each slice merges.
 - Slice 2 (SK8f): closed unbuilt on that number, per the 70% bar in spec 057 §5.1. Gather stays at 151 ms at 1,000 sources and 479 ms at 3,000.
 - [x] ML5 (050): trace mining report and `delphi retro mine` built 2026-10-30; the T11 skill wiring is not built.
 - Slice 4 (PS4) built 2026-10-30 in part: `delphi project index [--refresh]`, `.gitignore`/`.delphiignore`-aware walker (`ignore` crate), deterministic generator, §6.3 write protocol with tests for the concurrent-editor, stub-adoption and conflict cases. Deferred: recent activity, knowledge-base entries, incremental refresh, content secret scan (see the tracker row).
+- [~] PS2 (058): scope resolution, labelled home+project read merge, staged write routing and isolation checks built 2026-10-30 in `scope.rs` and `learn::project_staged`; daemon stamping of mission scope and Kb/prompt loading of the project layer are not built.
