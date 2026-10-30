@@ -32,7 +32,10 @@ test('ctrl+l walks search, sources, claims and back, asking for each list', () =
   const c = walk(s.a, ctrlL);
   assert.equal(c.a.mode, 'claims');
   assert.deepEqual(c.action, { t: 'library', what: 'claims' });
-  assert.equal(walk(c.a, ctrlL).a.mode, 'search');
+  const pg = walk(c.a, ctrlL);
+  assert.equal(pg.a.mode, 'pages');
+  assert.deepEqual(pg.action, { t: 'pages-list' });
+  assert.equal(walk(pg.a, ctrlL).a.mode, 'search');
   assert.equal(walk(s.a, k('esc')).a.mode, 'search');
   assert.equal(walk(s.a, k('left')).used, false, '← → still change the view of the window');
 });

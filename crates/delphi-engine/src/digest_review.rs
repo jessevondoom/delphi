@@ -18,11 +18,14 @@ use serde_json::{json, Value};
 
 pub const PAIR_ACTIONS: [&str; 3] = ["keep", "check", "dismiss"];
 pub const DUE_ACTIONS: [&str; 4] = ["keep", "check", "confirm", "dismiss"];
+pub const PAGE_ACTIONS: [&str; 2] = ["keep", "dismiss"];
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Kind {
     Pair,
     Due(String),
+    /// A pinned search page whose material changed since it was written (`specs/057` §5): the query and what changed.
+    Page(String, String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -71,12 +74,23 @@ pub fn items(lib: &Library, events: &[EventEnvelope], now: &str) -> Vec<ReviewIt
         }
         out.push(ReviewItem { id, kind: Kind::Due(d.reason.clone()), claims: vec![view(lib, &c, now_days, false)], age_days: d.age_days });
     }
+    // Pages the operator saved whose sources or claims changed. Expiry of an external page is not a change, so no ttl applies.
+    for p in lib.pages(now_days.max(0) as u64 * 86_400, u64::MAX).into_iter().filter(|p| p.pinned) {
+        let Some(why) = p.stale.clone() else { continue };
+        let id = format!("page:{}:{}", p.key, p.created);
+        if !done.contains(&id.as_str()) {
+            out.push(ReviewItem { id, kind: Kind::Page(clean(&p.query, 200), clean(&why, 200)), claims: Vec::new(), age_days: 0 });
+        }
+    }
     out
 }
 
 /// What the operator is asked to judge, hashed: it changes with the claims' text, so an answer to a stale card is refused.
 pub fn payload_hash(i: &ReviewItem) -> String {
-    let texts: Vec<&str> = i.claims.iter().filter_map(|c| c["text"].as_str()).collect();
+    let mut texts: Vec<&str> = i.claims.iter().filter_map(|c| c["text"].as_str()).collect();
+    if let Kind::Page(q, why) = &i.kind {
+        texts.extend([q.as_str(), why.as_str()]);
+    }
     blake3::hash(format!("{}\n{}", i.id, texts.join("\n")).as_bytes()).to_hex().to_string()
 }
 
@@ -92,6 +106,7 @@ pub fn to_decision(i: &ReviewItem, left: usize, now: &str) -> Value {
             },
             format!("Possible conflict: {}", i.claims.first().and_then(|c| c["text"].as_str()).unwrap_or("")),
         ),
+        Kind::Page(q, why) => (&PAGE_ACTIONS[..], "A page you saved was written from records that have changed since. It is shown as it was, marked stale; searching again writes a new one.".to_string(), vec![why.clone(), "the saved page stays as it is until you search again".to_string()], format!("Saved page changed: {}", q)),
         Kind::Due(why) => (&DUE_ACTIONS[..], format!("This claim is due for review: {}. It is still shown and still pulled; confirm it if it holds.", why), vec![why.clone(), "confirming moves only its date; it does not validate it".to_string()], format!("Review due: {}", i.claims.first().and_then(|c| c["text"].as_str()).unwrap_or(""))),
     };
     let label = |a: &str| match a {
@@ -120,7 +135,11 @@ pub fn to_decision(i: &ReviewItem, left: usize, now: &str) -> Value {
 /// The events one action writes: the `learn.digested` mark that takes the item off the list. `Err` for an action the
 /// item does not offer. `confirm` has a side effect the caller performs with `Library::confirm_claim`.
 pub fn act(mission_id: &str, i: &ReviewItem, action: &str) -> Result<Vec<EventEnvelope>, String> {
-    let allowed: &[&str] = if i.kind == Kind::Pair { &PAIR_ACTIONS } else { &DUE_ACTIONS };
+    let allowed: &[&str] = match i.kind {
+        Kind::Pair => &PAIR_ACTIONS,
+        Kind::Page(..) => &PAGE_ACTIONS,
+        Kind::Due(_) => &DUE_ACTIONS,
+    };
     if !allowed.contains(&action) {
         return Err(format!("`{}` is not an action of this item ({})", action, allowed.join(", ")));
     }
@@ -215,6 +234,30 @@ mod tests {
         assert!(act("m1", &i, "confirm").is_ok());
         l.confirm_claim(&id).unwrap();
         assert!(items(&l, &[], &delphi_core::time::now_rfc3339()).is_empty(), "a confirmed claim is not due");
+    }
+
+    #[test]
+    fn a_saved_page_whose_material_changed_is_offered_and_an_unsaved_or_fresh_one_is_not() {
+        let (_d, l, a, _b) = setup();
+        let dir = l.root().join("pages");
+        std::fs::create_dir_all(&dir).unwrap();
+        let put = |key: &str, pinned: bool, id: &str| {
+            let v = json!({"kind": "search_page", "query": "billing retries", "created": 100, "pinned": pinned, "material": [{"id": id, "hash": "old"}]});
+            std::fs::write(dir.join(format!("{}.json", key)), serde_json::to_vec(&v).unwrap()).unwrap();
+        };
+        let (k1, k2) = ("a".repeat(24), "b".repeat(24));
+        put(&k1, true, &a);
+        put(&k2, false, &a);
+        let found = items(&l, &[], NOW);
+        let pages: Vec<&ReviewItem> = found.iter().filter(|i| matches!(i.kind, Kind::Page(..))).collect();
+        assert_eq!(pages.len(), 1, "only the saved page");
+        let i = pages[0];
+        let card = to_decision(i, 0, NOW);
+        assert_eq!(card["choices"].as_array().unwrap().iter().map(|c| c["id"].as_str().unwrap()).collect::<Vec<_>>(), ["keep", "dismiss"]);
+        assert!(card["title"].as_str().unwrap().contains("billing retries"));
+        assert!(act("m1", i, "check").is_err() && act("m1", i, "confirm").is_err());
+        assert!(act("m1", i, "dismiss").is_ok());
+        assert!(items(&l, &[digested(&i.id)], NOW).iter().all(|x| !matches!(x.kind, Kind::Page(..))));
     }
 
     #[test]
