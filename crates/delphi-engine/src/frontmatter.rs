@@ -122,7 +122,7 @@ pub const KINDS: [&str; 3] = ["fact", "episode", "procedure"];
 pub const ENTRY_META_KEYS: [&str; 4] = ["kind", "created", "last_confirmed", "valid_until"];
 
 /// `YYYY-MM-DD`, or a full UTC timestamp, with a real month and day.
-fn entry_date_ok(s: &str) -> bool {
+pub fn entry_date_ok(s: &str) -> bool {
     let re = regex::Regex::new(r"^(\d{4})-(\d{2})-(\d{2})(T\d{2}:\d{2}:\d{2}(\.\d+)?Z)?$").unwrap();
     re.captures(s).is_some_and(|c| matches!(c[2].parse::<u32>(), Ok(1..=12)) && matches!(c[3].parse::<u32>(), Ok(1..=31)))
 }

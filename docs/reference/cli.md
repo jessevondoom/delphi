@@ -338,24 +338,6 @@ How tools are used, and how often models record their changes.
 
 Per model: runs that changed something and recorded a change. --prom: Prometheus text. Counts only.
 
-## Set up
-
-### `delphi customize`
-
-Teach Delphi a note, a rule, a skill or a profile line yourself.
-
-```
-  delphi customize note "<text>" [--mission <id>]
-  delphi customize rule "<text>" [--scope workspace|operator] [--why "…"] [--replace <ID> | --remove <ID>]
-  delphi customize skill <dir> --agents <role,role> [--description "…"]
-  delphi customize profile ["<line>" | --file <path>]
-    [--yes] [--workspace <name>] [--home <dir>]
-```
-
-What you write is yours: a rule, a skill or a profile line is ratified as you write it, after the same checks a proposal gets (no relaxing a rule, the caps, no near-duplicate). `note` only stages a note for review. Each verb needs a terminal; `--yes` skips the typed yes, not the terminal. A rule applies from the next task.
-
-## Inspect
-
 ### `delphi retro`
 
 Rules the Orchestrator proposed, waiting for your review.
@@ -369,6 +351,21 @@ Rules the Orchestrator proposed, waiting for your review.
 ```
 
 Proposals are made with the Orchestrator's `suggest_rule` tool and are never loaded into a prompt until you ratify them. `accept` and `reject` need a terminal and a typed yes, and `accept` needs the daemon stopped; `--scope` ratifies at a different scope than proposed.
+
+### `delphi retro`
+
+Rules the Orchestrator proposed, waiting for your review.
+
+```
+  delphi retro list [--mission <id>] [--json]
+  delphi retro show <mission>/<id> [--json]
+  delphi retro stale [--json]
+  delphi retro accept <mission>/<id> [--scope workspace|operator]
+  delphi retro reject <mission>/<id>
+    [--workspace <name>] [--home <dir>]
+```
+
+Proposals are made with the Orchestrator's `suggest_rule` tool and are never loaded into a prompt until you ratify them. `accept` and `reject` need a terminal and a typed yes, and `accept` needs the daemon stopped; `--scope` ratifies at a different scope than proposed. `stale` lists staged notes past their `valid_until` date and rules files not confirmed within 90 days; it changes nothing.
 
 ### `delphi learn`
 
