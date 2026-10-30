@@ -59,6 +59,13 @@ Defaults are those of the template; "—" means no default.
 | `[harness] connector_settle_secs` | seconds a span waits for the account's connectors to load before its first turn |
 | `[connectors.<name>]` | an MCP connector: `url`, `hosts`, `login`, `account`, `roles`, `tools` (each `read`, `draft` or `write`), `max_arg_chars`, `first_use` (`ask` or `allow`), `calls_per_minute`, `max_result_chars`, `identity` |
 
+## Promote and nerf ◆
+
+| Key | Default | Meaning |
+| :-- | :-- | :-- |
+| `[grades] <role>` ◆ | `0` | a whole number from -2 to 2 that moves the class of model a role is assigned (spec 056 §4): positive promotes, negative nerfs, never past the top or bottom the pool has, never below the role's floor. `delphi agent promote\|nerf <role>` writes it as a pending proposal; `/ratify` applies it. Applies with `[routing] assignment = "discovered"` |
+| `[grades.<role>] <kind>`, `default` ◆ | — | the same per task kind; `default` is the role's own grade. Stored and shown now; the engine applies the role's grade (a task's kind is not yet known at dispatch) |
+
 ## Commands and updates
 
 | Key | Default | Meaning |

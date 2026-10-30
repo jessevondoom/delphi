@@ -1466,7 +1466,7 @@ impl Engine {
         a.evidence = crate::assign::read_evidence(&self.ws.dir, &sc.role);
         a.near_cap = crate::assign::read_near_cap(&self.ws.dir);
         let rank = |t: &str| match t { "fast" => 0, "frontier" => 2, _ => 1 };
-        a.step = rank(&sc.tier) - rank(&self.default_tier_of(&sc.role, &sc.manifest));
+        a.step = rank(&sc.tier) - rank(&self.default_tier_of(&sc.role, &sc.manifest)) + cfg.grades.of(&sc.role, None);
         Some(a)
     }
 

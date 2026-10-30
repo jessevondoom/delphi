@@ -461,6 +461,58 @@ impl RegistryMode {
 /// Results per `(role, kind, model)` that make measured evidence "enough" (`specs/056` OD-3).
 pub const DEFAULT_EVIDENCE_ENOUGH: u32 = 8;
 
+/// Largest grade, up or down (`specs/056` §4).
+pub const GRADE_LIMIT: i32 = 2;
+
+/// One role's grades: the role's own and one per task kind (`specs/056` §4).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RoleGrade {
+    pub role: i32,
+    pub kinds: BTreeMap<String, i32>,
+}
+
+/// `[grades]` (ratified): a small signed integer per role, `architect = 1`, or per kind, `[grades.builder] docs = -1` with
+/// `default` for the role itself. Positive promotes, negative nerfs, within ±2.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Grades {
+    pub roles: BTreeMap<String, RoleGrade>,
+}
+
+impl Grades {
+    /// The grade for `role`, for `kind` when one is named and set, else the role's own; 0 when none.
+    pub fn of(&self, role: &str, kind: Option<&str>) -> i32 {
+        let Some(g) = self.roles.get(role) else { return 0 };
+        kind.and_then(|k| g.kinds.get(k).copied()).unwrap_or(g.role)
+    }
+
+    pub fn parse(v: &toml::Value) -> Result<Grades, Vec<String>> {
+        let Some(t) = v.as_table() else { return Err(vec!["[grades] must be a table".into()]) };
+        let mut out = Grades::default();
+        let mut errs = Vec::new();
+        let mut one = |what: String, x: &toml::Value| match x.as_integer() {
+            Some(n) if n.abs() <= GRADE_LIMIT as i64 => Some(n as i32),
+            _ => {
+                errs.push(format!("[grades] {what} must be a whole number from -{GRADE_LIMIT} to {GRADE_LIMIT}"));
+                None
+            }
+        };
+        for (role, x) in t {
+            let mut g = RoleGrade::default();
+            match x {
+                toml::Value::Table(kinds) => {
+                    for (k, n) in kinds {
+                        let Some(n) = one(format!("{role}.{k}"), n) else { continue };
+                        if k == "default" { g.role = n } else { g.kinds.insert(k.clone(), n); }
+                    }
+                }
+                n => g.role = one(role.clone(), n).unwrap_or(0),
+            }
+            out.roles.insert(role.clone(), g);
+        }
+        if errs.is_empty() { Ok(out) } else { Err(errs) }
+    }
+}
+
 /// `[routing]`: the model pool and per-role targets (`specs/002` §4.1, D-26). Other keys in the table
 /// (`enable_dynamic_scaling`, …) are not read here.
 #[derive(Debug, Clone, PartialEq)]
@@ -520,6 +572,8 @@ pub struct Config {
     pub search: crate::research::SearchConfig,
     /// `[validator]`: the fact validator's mode and the operator's additions to the source list (`specs/040` §15.1, §6.1).
     pub validator: ValidatorConfig,
+    /// `[grades]`: promote and nerf, per role and optionally per task kind (`specs/056` §4).
+    pub grades: Grades,
     /// `[library]`: generated search pages (`specs/057` §5, §6) and the acquisition job (`specs/055` §8).
     pub library: LibraryConfig,
     /// `[learning]`: capture and the bounds on the learning loop (`specs/031` §3.6). The engine clamps each value to the core's bounds.
@@ -745,6 +799,12 @@ impl Config {
             match c.clone().try_into::<BTreeMap<String, Connector>>() {
                 Ok(v) => cfg.connectors = v,
                 Err(e) => errs.push(format!("[connectors.*]: {}", e)),
+            }
+        }
+        if let Some(g) = root.get("grades") {
+            match Grades::parse(g) {
+                Ok(v) => cfg.grades = v,
+                Err(es) => errs.extend(es),
             }
         }
         if let Some(s) = root.get("search") {
@@ -1425,6 +1485,14 @@ allowed_endpoints = ["corp-gateway", "bedrock-us"]
         assert_eq!(c.routing, Routing::default());
         assert_eq!(slots(&c), vec!["corp-gateway/sonnet-x", "bedrock-us/bedrock-sonnet-x", "corp-gateway/haiku-x", "bedrock-us/haiku-x"]);
         assert_eq!(c.routing.tuning, PoolTuning { throttle_attempts: 3, throttle_window_secs: 600, reprobe_first_secs: 900, reprobe_max_secs: 14_400 });
+    }
+
+    #[test]
+    fn grades_are_per_role_or_kind_and_bounded() {
+        let c = with_routing("[grades]\narchitect = 1\n[grades.builder]\ndefault = -1\ndocs = -2").unwrap();
+        assert_eq!((c.grades.of("architect", None), c.grades.of("builder", None), c.grades.of("builder", Some("docs")), c.grades.of("builder", Some("code")), c.grades.of("writer", None)), (1, -1, -2, -1, 0));
+        assert!(with_routing("[grades]\narchitect = 3").is_err());
+        assert!(with_routing("[grades]\narchitect = \"high\"").is_err());
     }
 
     #[test]
