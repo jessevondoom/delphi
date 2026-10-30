@@ -39,6 +39,40 @@ pub fn collect(ws_dir: &Path, opts: &Options) -> Result<Vec<LiveProposal>, Strin
     Ok(all)
 }
 
+/// `delphi retro mine`: rank the failure causes in a mission's events and write the report to
+/// `<mission>/reports/trace-mining.json`. Reads the log and writes that one file; nothing is applied (`specs/050` ML-5).
+pub fn mine(ws_dir: &Path, opts: &Options) -> Result<String, String> {
+    let ids = match &opts.mission {
+        Some(m) => {
+            if m.is_empty() || m.contains(['/', '\\']) || m.starts_with('.') || !ws_dir.join("local/missions").join(m).is_dir() {
+                return Err(format!("no mission `{}` in this workspace (see `delphi missions`)", m));
+            }
+            vec![m.clone()]
+        }
+        None => crate::missions::list(ws_dir).into_iter().map(|r| r.id).collect(),
+    };
+    let (mut out, mut reports) = (String::new(), Vec::new());
+    for id in &ids {
+        let dir = ws_dir.join("local/missions").join(id);
+        let events = replay(&dir).map_err(|e| format!("could not read the log of {}: {}", id, e))?;
+        let report = delphi_engine::trace_mine::mine(id, &events);
+        let body = serde_json::to_string_pretty(&report.to_json()).map_err(|e| e.to_string())? + "\n";
+        let path = dir.join("reports/trace-mining.json");
+        delphi_core::lock::write_atomic(&path, body.as_bytes()).map_err(|e| format!("could not write {}: {}", path.display(), e))?;
+        out.push_str(&report.render());
+        out.push_str(&format!("  report: {}\n", path.display()));
+        reports.push(report.to_json());
+    }
+    if opts.json {
+        return serde_json::to_string_pretty(&reports).map(|s| s + "\n").map_err(|e| e.to_string());
+    }
+    if ids.is_empty() {
+        return Ok("no missions to mine\n".into());
+    }
+    out.push_str("Nothing was applied; a cause is a lead for a harness change, proposed and ratified like any other.\n");
+    Ok(out)
+}
+
 pub fn render_list(items: &[LiveProposal]) -> String {
     if items.is_empty() {
         return "no proposals: the Orchestrator proposes rules after a mission, and they wait here for your review\n".into();
@@ -105,6 +139,9 @@ pub fn run_in(ws_dir: &Path, verb: &str, reference: Option<&str>, opts: &Options
     if verb == "stale" {
         return render_stale(&retro::stale(&opts.home, ws_dir, &delphi_core::bundles::today()), opts.json);
     }
+    if verb == "mine" {
+        return mine(ws_dir, opts);
+    }
     let items = collect(ws_dir, opts)?;
     match verb {
         "list" if opts.json => serde_json::to_string_pretty(&items.iter().map(LiveProposal::to_json).collect::<Vec<_>>()).map(|s| s + "\n").map_err(|e| e.to_string()),
@@ -122,7 +159,7 @@ pub fn run_in(ws_dir: &Path, verb: &str, reference: Option<&str>, opts: &Options
             }
             Ok(out)
         }
-        other => Err(format!("`{}` is not a retro verb (list, show, stale, accept, reject)", other)),
+        other => Err(format!("`{}` is not a retro verb (list, show, stale, mine, accept, reject)", other)),
     }
 }
 
@@ -184,7 +221,7 @@ pub(crate) fn confirm(question: &str) -> bool {
 pub fn cli(ws_dir: &Path, args: &[String], opts: &Options) -> i32 {
     let positional: Vec<&str> = args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && (*i == 0 || !["--mission", "--workspace", "--home", "--scope"].contains(&args[*i - 1].as_str()))).map(|(_, a)| a.as_str()).collect();
     let Some(verb) = positional.first() else {
-        eprintln!("delphi retro: list | show <mission>/<id> | stale");
+        eprintln!("delphi retro: list | show <mission>/<id> | stale | mine");
         return 2;
     };
     if matches!(*verb, "accept" | "reject") {
@@ -249,6 +286,23 @@ mod tests {
         e.agent = Some("orchestrator".into());
         log.append(e).unwrap();
         ws
+    }
+
+    #[test]
+    fn mine_writes_one_report_under_the_mission_and_changes_nothing_else() {
+        let ws = workspace_with_proposal();
+        let dir = ws.path().join("local/missions/m1");
+        let mut log = EventLog::open(&dir, LogOptions::default()).unwrap();
+        let mut e = EventEnvelope::new("m1", "loop.action", json!({"action": "stop"}));
+        e.span_id = Some("sp1".into());
+        log.append(e).unwrap();
+        drop(log);
+        let opts = Options { home: PathBuf::new(), scope: None, mission: Some("m1".into()), json: false };
+        let text = run_in(ws.path(), "mine", None, &opts).unwrap();
+        assert!(text.contains("loop.hard_stop") && text.contains("Nothing was applied"), "{}", text);
+        let report: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("reports/trace-mining.json")).unwrap()).unwrap();
+        assert_eq!((report["causes"][0]["key"].as_str(), report["causes"][0]["events"][0]["seq"].as_u64()), (Some("loop.hard_stop"), Some(2)));
+        assert!(run_in(ws.path(), "mine", None, &Options { mission: Some("../x".into()), ..opts }).is_err());
     }
 
     #[test]

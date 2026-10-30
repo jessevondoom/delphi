@@ -30,3 +30,5 @@ Slices 1 and 2 are checked against the measurement in slice 1: if the cache is n
 ## Status
 
 Updated in the tracker as each slice merges.
+
+- [x] ML5 (050): trace mining report and `delphi retro mine` built 2026-10-30; the T11 skill wiring is not built.

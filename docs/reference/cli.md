@@ -396,12 +396,13 @@ Rules the Orchestrator proposed, waiting for your review.
   delphi retro list [--mission <id>] [--json]
   delphi retro show <mission>/<id> [--json]
   delphi retro stale [--json]
+  delphi retro mine [--mission <id>] [--json]
   delphi retro accept <mission>/<id> [--scope workspace|operator]
   delphi retro reject <mission>/<id>
     [--workspace <name>] [--home <dir>]
 ```
 
-Proposals are made with the Orchestrator's `suggest_rule` tool and are never loaded into a prompt until you ratify them. `accept` and `reject` need a terminal and a typed yes, and `accept` needs the daemon stopped; `--scope` ratifies at a different scope than proposed. `stale` lists staged notes past their `valid_until` date and rules files not confirmed within 90 days; it changes nothing.
+Proposals are made with the Orchestrator's `suggest_rule` tool and are never loaded into a prompt until you ratify them. `accept` and `reject` need a terminal and a typed yes, and `accept` needs the daemon stopped; `--scope` ratifies at a different scope than proposed. `stale` lists staged notes past their `valid_until` date and rules files not confirmed within 90 days; it changes nothing. `mine` ranks the failed or looping spans of a mission (a loop stop, a red gate, a denied card, an escalation, repeated tool failures) by a cause computed from event kinds and codes, never from text, and writes the report to the mission's `reports/trace-mining.json`; it applies nothing.
 
 ### `delphi agent`
 

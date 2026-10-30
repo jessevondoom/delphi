@@ -105,6 +105,7 @@ pub mod route;
 pub mod customize;
 pub mod ratify;
 pub mod retro;
+pub mod trace_mine;
 pub mod service;
 pub mod status;
 pub mod timers;
