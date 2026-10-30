@@ -109,6 +109,10 @@ per_watch_max_wakes_per_day = 10
 # budget_warnings = true             # tell a role when 75 % and 90 % of its turns are used
 # verify_gate = true                 # one check against the task before a role that writes or runs commands may finish
 # workspace_bootstrap = true         # give a role with a worktree a map of it
+# tool_result_limit_kb = 0           # a tool result over this size is stored; the history keeps a handle and a short preview (0 = off)
+# clear_after_kb = 0                 # old tool results are replaced by a handle in batches of about this size (0 = off)
+# trim_arguments_kb = 0              # old tool calls with arguments this large lose the bulk of them, kept at a handle (0 = off)
+# keep_recent_turns = 6              # the newest assistant turns that clearing and trimming leave whole
 
 [hitl]
 approval_timeout_sec = 600           # Unanswered approvals resolve to DENY

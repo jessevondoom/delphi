@@ -215,7 +215,7 @@ Approved by the operator 2026-10-28 ("make a plan, write a spec, and let's go").
 | Slice | Content | State |
 | :-- | :-- | :-- |
 | H1 | loop nudge and hard stop, budget warnings, verification gate (API spans), workspace bootstrap, `[loop]` | built (draft PR); tests only, no live run; not yet measured (H9) |
-| H2 | tool-result offload and clearing, cache accounting | not started |
+| H2 | tool-result offload and clearing, cache accounting (folds in 049 CX1) | built 2026-10-29 (`ctxhist.rs`: offload with a 400-byte fenced preview at tool time, argument trimming and batched clearing as a pure `view` of the history at request time, so the log and a resumed span are untouched; `ctxacct.rs`: per-span cache and prefix-change report in `observe.state`; `[loop] tool_result_limit_kb`, `clear_after_kb`, `trim_arguments_kb`, `keep_recent_turns`, all off; events `loop.offload`, `loop.prefix`). Not built: a console display of the report; not measured (H9) |
 | H3 | compaction with flush and its check | not started |
 | H4 | phase reasoning (037 arm first) | not started |
 | H5 | progressive tools (`find_tool`) | not started |
@@ -237,7 +237,7 @@ Drafted from a review of LangChain / LangSmith benchmarking, memory and context 
 | 048 | BM5 | behavior suites (nudge, verify gate, budget, name_thread, record_change) | draft |
 | 048 | BM6 | external benchmark anchor (operator picks the subset) | draft |
 | 048 | BM7 | phase-effort arm (after 045 H4) | draft |
-| 049 | CX1 | argument trimming and offload previews (folded into 045 H2); handoff design check | not started |
+| 049 | CX1 | argument trimming and offload previews (folded into 045 H2); handoff design check | built 2026-10-29 with 045 H2 (trimming, previews, handles). Handoff design check for CX-6: `handoff.rs` carries the envelope as-is, so handles ride in `context_pointers`/result text within the 2,000-token limit; CX4 builds it. Not measured (048 unbuilt) |
 | 049 | CX2 | recoverable compaction (folded into 045 H3) | not started |
 | 049 | CX3 | context composition in accounting | not started |
 | 049 | CX4 | result summary plus handles between seats | not started |
