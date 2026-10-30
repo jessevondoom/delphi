@@ -40,7 +40,7 @@ pub struct Host {
 }
 
 impl Host {
-    fn ledger(&self) -> Arc<TokenLedger> {
+    pub(crate) fn ledger(&self) -> Arc<TokenLedger> {
         self.ledger.get_or_init(|| Arc::new(TokenLedger::new(TOKEN_ALLOWANCE))).clone()
     }
 
@@ -52,7 +52,7 @@ impl Host {
 }
 
 /// The ledger's view for the caps: other roles' tokens in this mission, and the install's tokens in the last 7 days.
-fn shares_of(ws_dir: &std::path::Path, mission: &str) -> Shares {
+pub(crate) fn shares_of(ws_dir: &std::path::Path, mission: &str) -> Shares {
     use delphi_core::ledger::{GroupBy, Ledger};
     let Ok(l) = Ledger::open(&ws_dir.join("local/state.db")) else { return Shares::default() };
     let sum = |t: &delphi_core::ledger::Totals| t.input_tokens + t.output_tokens + t.thinking_tokens;

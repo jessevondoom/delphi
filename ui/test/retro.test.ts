@@ -85,3 +85,13 @@ test('/retro run asks the Orchestrator for proposals and carries no staged note'
   assert.match(RETRO_PROMPT, /suggest_rule/);
   assert.doesNotMatch(RETRO_PROMPT, /staged/i, 'staged notes are never put in a prompt');
 });
+
+test('/retro stale lists expired notes and says nothing was removed', async () => {
+  const r = ctx(() => [{ kind: 'note', ref: 'm1/n1', since: '2026-10-01', detail: 'expired 2026-10-01: the CI image has no python3' }]);
+  await runSlash('/retro stale', r.c);
+  assert.deepEqual(r.calls, [['retro.stale', {}]]);
+  assert.match(r.out[0]!, /1 stale entry\. Nothing was removed.*note m1\/n1\s+expired 2026-10-01/s);
+  const none = ctx(() => []);
+  await runSlash('/retro stale', none.c);
+  assert.match(none.out[0]!, /nothing is stale/);
+});

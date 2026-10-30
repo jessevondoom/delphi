@@ -30,7 +30,7 @@ Ask these in order, one group at a time. Write the answers into the file named o
 | Who is it for: the whole org, one team, one project? Which repos, technologies and paths does it apply to? | `audience`, `[applies_to]` (routing, not secrecy) |
 | What should an agent be able to *look up*? Architecture, decisions and why, runbooks, glossary, gotchas. Which existing documents are safe to distill from? | `knowledge/`, plus the allow-list for `distill` |
 | What do you do the same way every time, as a procedure? | `skills/<name>/SKILL.md` |
-| Is there a reviewer or specialist persona the org already uses? Which host role should it run as? | `agents/<name>.md` and `[agents.<name>] role = "<role id>"` |
+| Is there a reviewer or specialist persona the org already uses? Which host role should it run as? | `agents/<name>.md` and `[agents.<name>] role = "<role id>"`; with many agents, give each a `domain`, up to 8 `tags`, `not_for` tags and a `summary` of at most 200 characters, and declare the groups in `[domains.<id>] summary = "..."` (at most 12, 120 characters each; over a cap is refused, never cut) |
 | What does each planning role need to remember about *this* org? (a few lines each) | `behavior/roles/<role>.md` |
 | What does the org want achieved this year? What does it believe about how to build? | `behavior/goals.md`, `behavior/perspectives.md` (quoted from sources) |
 | Is there anything an agent must never do here? (commands, paths, connector tools) | `behavior/policies.toml` (it can only refuse) |

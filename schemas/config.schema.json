@@ -46,6 +46,7 @@
         "max_parallel_agents": { "type": "integer", "minimum": 1 },
         "degrade_prompt_secs": { "type": "integer", "minimum": 0 },
         "max_park_secs": { "type": "integer", "minimum": 0 },
+        "registry": { "enum": ["flat", "auto"], "description": "How the orchestrator learns of bundle agents (specs/041). flat: one line per agent, up to 20. auto: past 20, a domain index and the search_agent_registry tool." },
         "assignment": { "enum": ["static", "discovered"], "description": "How a dispatch picks its model (specs/056). static: the role's tier. discovered: capability class, measured results and quota." },
         "evidence_enough": { "type": "integer", "minimum": 1, "description": "Measured results per (role, kind, model) after which a model is scored by them alone." },
         "reserve": { "type": "object", "additionalProperties": { "type": "number", "minimum": 0, "maximum": 1 }, "description": "Role to the share of the mission budget no other role may spend." },
@@ -110,6 +111,26 @@
         "google": { "$ref": "#/$defs/searchEngine" }
       }
     },
+    "library": {
+      "type": "object",
+      "description": "The central library (specs/055).",
+      "additionalProperties": false,
+      "properties": {
+        "acquire": {
+          "type": "object",
+          "description": "Library acquisition (specs/055 section 8): a daily job proposes public-domain and research sources in ONE digest batch. Off until enabled; it reaches out to the archives listed in context/sources/archives.toml.",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "byte_budget_mib": { "type": "integer", "minimum": 1, "default": 2048, "description": "Bytes acquisition may hold; reaching it stops acquiring and evicts nothing." },
+            "max_item_mib": { "type": "integer", "minimum": 1, "default": 16, "description": "The largest text one acquired source may have." },
+            "batch_size": { "type": "integer", "minimum": 1, "maximum": 20, "default": 8 },
+            "token_share_percent": { "type": "integer", "minimum": 0, "maximum": 10, "default": 5, "description": "The scout's share of the install's tokens over the trailing week (specs/040 section 20.2). 0 keeps the job model-free." },
+            "interests": { "type": "array", "maxItems": 50, "items": { "type": "string", "minLength": 1, "maxLength": 80 }, "description": "Topics you want, beside the workspace's project names." }
+          }
+        }
+      }
+    },
     "validator": {
       "type": "object",
       "description": "The fact validator (specs/040 section 15.1). The effective mode is the lower of this value and the daemon's latch.",
@@ -124,6 +145,25 @@
             "primary": { "type": "array", "items": { "type": "string" } },
             "reputable": { "type": "array", "items": { "type": "string" } },
             "weak": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    },
+    "library": {
+      "type": "object",
+      "description": "The central library (specs/055).",
+      "additionalProperties": false,
+      "properties": {
+        "pages": {
+          "type": "object",
+          "description": "Generated search pages (specs/057 sections 5 and 6). A page is always labelled generated and not authoritative.",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": true, "description": "false: no page is written; searches still list the library's results." },
+            "external": { "enum": ["ask", "off", "on"], "default": "ask", "description": "ask: external search only when the operator asks (--external, or the console's key). off: never. on: every page also searches the web, unless --internal. Private sources never leave the install." },
+            "max_tokens": { "type": "integer", "minimum": 200, "default": 3000, "description": "The longest page the writer may write, in tokens." },
+            "external_ttl": { "type": ["string", "integer"], "default": "7d", "description": "How long a page that used external search stays fresh: a number of days, or a duration such as 12h or 7d." },
+            "per_day": { "type": "integer", "minimum": 0, "default": 20, "description": "Pages the daemon builds in one day (a cache hit is free). Their validator tokens also count against the validator's share (specs/040 section 20)." }
           }
         }
       }
@@ -167,7 +207,16 @@
     "relay": { "type": "object" },
     "away": { "type": "object" },
     "optimistic": { "type": "object" },
-    "learning": { "type": "object" },
+    "learning": {
+      "type": "object",
+      "description": "The learning loop (specs/031 section 3.6). Each number is clamped to the core's floor and ceiling at boot. No key loads unratified content; an unknown key is a boot notice.",
+      "properties": {
+        "capture": { "type": "boolean", "description": "Stage notes from denials, corrections, retries and escalations. Default true. Turning it off is allowed." },
+        "max_notes": { "type": "integer", "minimum": 10, "maximum": 1000, "description": "Staged notes kept per mission; the oldest is dropped. Default 200." },
+        "triggers": { "type": "array", "items": { "type": "string" }, "description": "Which capture triggers are on. Default all." },
+        "retro_min_tasks": { "type": "integer", "minimum": 3, "maximum": 200, "description": "Finished tasks before `delphi needs` says the coaching pass has material. Default 10." }
+      }
+    },
     "hooks": { "type": "object", "description": "`[[hooks.observe]]` and `[[hooks.deny]]` (specs/018): commands that can only watch or refuse." }
   },
   "additionalProperties": true,

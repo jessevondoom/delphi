@@ -122,7 +122,7 @@ pub const KINDS: [&str; 3] = ["fact", "episode", "procedure"];
 pub const ENTRY_META_KEYS: [&str; 4] = ["kind", "created", "last_confirmed", "valid_until"];
 
 /// `YYYY-MM-DD`, or a full UTC timestamp, with a real month and day.
-fn entry_date_ok(s: &str) -> bool {
+pub fn entry_date_ok(s: &str) -> bool {
     let re = regex::Regex::new(r"^(\d{4})-(\d{2})-(\d{2})(T\d{2}:\d{2}:\d{2}(\.\d+)?Z)?$").unwrap();
     re.captures(s).is_some_and(|c| matches!(c[2].parse::<u32>(), Ok(1..=12)) && matches!(c[3].parse::<u32>(), Ok(1..=31)))
 }
@@ -150,7 +150,7 @@ pub fn check_entry_meta(m: &Mapping) -> Vec<String> {
 /// The kind a staged note has when it does not say: what the capture trigger records (`specs/050` ML-1). An agent's own
 /// `note` is a claim about the world (`fact`); everything the daemon saw happen is an `episode`.
 pub fn kind_for_trigger(trigger: &str) -> &'static str {
-    if trigger == "agent_note" {
+    if matches!(trigger, "agent_note" | "operator_note") {
         "fact"
     } else {
         "episode"
