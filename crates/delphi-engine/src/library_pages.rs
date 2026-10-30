@@ -1,59 +1,31 @@
-//! Generated pages and the dispute action (`specs/055` §6; slice SK5).
+//! Generated pages and the dispute action (`specs/055` §6, amended by `specs/057`; slices SK5, SK8a).
 //!
-//! A page is a view of claims for a topic, never a source and never trusted text. Every sentence on it carries the ids of
-//! the claims behind it and the status the daemon derives for them; a sentence with no claim is not on the page, it is
-//! flagged. A model may propose wording (`draft`), but the check below rejects the whole page if any sentence is uncited,
-//! cites a claim that is not there or not citable, or uses a word none of its cited claims use. Without a draft the page
-//! is the claims' own text, one sentence per claim. Unvalidated claims sit under a visible *noted, not validated* heading.
-//! A page cannot be edited: `dispute` files a contested mark on the claim, which changes the next build. Pages are cached
-//! by the hash of the claim set they were built from.
+//! A page is a generated view for a topic, never a source and never trusted text: the daemon writes the banner that says
+//! so and the bibliography and citations table, and a model may propose only the body between them (`draft`). The check
+//! (`library_page_check.rs`) is mechanical: it rejects a body that cites a record that is missing, retired, disproved or
+//! private on an external page, quotes text a cited source does not hold, or points at a table, image or link the library
+//! does not know. It no longer asks that every sentence be cited or use a cited claim's words; a marker supports the
+//! sentences back to the previous marker. Without a draft the page is the claims' own text, one line per claim, with the
+//! unvalidated ones under a visible *noted, not validated* heading. A page cannot be edited: `dispute` files a contested
+//! mark on the claim, which changes the next build. Pages are cached by the hash of what they were built from.
 
-use super::bib::{self, Format};
+use super::bib::Format;
 use super::claims::status;
 use super::*;
 use delphi_core::knowledge_status::Status;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
+
+pub use super::page_check::{banner, markers, shown_status, Checked, Cite, Finding, Scope, NO_SOURCES, TABLE_HEADING};
+use super::page_check::{glyph, norm, Rec};
+
+/// Bumped when the page layout changes, so cached pages of an older layout are rebuilt.
+const TEMPLATE_VERSION: &str = "2";
 
 pub const NOTED_HEADING: &str = "Noted, not validated";
 const NOTE_MAX: usize = 500;
 const FUNCTION_WORDS: [&str; 40] = [
     "the", "and", "for", "are", "was", "were", "has", "have", "had", "with", "that", "this", "from", "its", "not", "but", "can", "may", "will", "also", "than", "then", "into", "per", "who", "which", "when", "where", "while", "their", "there", "these", "those", "been", "being", "such", "each", "any", "all", "our",
 ];
-
-/// What the check found wrong with one sentence of a draft.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Finding {
-    /// No claim id: prose the library cannot account for.
-    Uncited(String),
-    UnknownClaim { sentence: String, id: String },
-    /// The claim exists but may not be cited (disproved, retired, or resting on a private source).
-    NotCitable { sentence: String, id: String },
-    /// Words in the sentence that none of its cited claims contain.
-    AddsContent { sentence: String, words: Vec<String> },
-}
-
-impl std::fmt::Display for Finding {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Finding::Uncited(s) => write!(f, "uncited sentence: {}", short(s)),
-            Finding::UnknownClaim { sentence, id } => write!(f, "unknown claim `{}` in: {}", id, short(sentence)),
-            Finding::NotCitable { sentence, id } => write!(f, "claim `{}` may not be cited (disproved, retired or private) in: {}", id, short(sentence)),
-            Finding::AddsContent { sentence, words } => write!(f, "adds content no cited claim states ({}) in: {}", words.join(", "), short(sentence)),
-        }
-    }
-}
-
-fn short(s: &str) -> String {
-    let one: String = s.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
-    if one.chars().count() > 80 { format!("{}…", one.chars().take(79).collect::<String>()) } else { one }
-}
-
-/// One sentence of a draft: its text without markers and the claim ids it cites.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Sentence {
-    pub text: String,
-    pub claims: Vec<String>,
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Line {
@@ -73,129 +45,17 @@ pub struct Page {
     pub hash: String,
     pub markdown: String,
     pub cached: bool,
-}
-
-fn glyph(s: Status) -> &'static str {
-    match s {
-        Status::Validated => "●",
-        Status::Checking => "◐",
-        Status::Disproved => "✕",
-        Status::Contested => "◆",
-        _ => "○",
-    }
+    /// Numbers, dates and proper names no cited material contains (`unverified figure`), kept in the sidecar.
+    pub flags: Vec<String>,
 }
 
 fn content_words(s: &str) -> BTreeSet<String> {
     s.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(|w| w.to_lowercase()).filter(|w| w.chars().any(|c| c.is_ascii_digit()) || (w.chars().count() >= 3 && !FUNCTION_WORDS.contains(&w.as_str()))).collect()
 }
 
-/// `[c-1]`, `[c-1, c-2]`, or the form the page itself prints, `[c-1 ● validated; c-2 ○ not validated]`.
-fn marker(s: &str) -> Option<Vec<String>> {
-    let inner = s.strip_prefix('[')?.strip_suffix(']')?;
-    let shown = ["● validated", "○ not validated", "◆ not validated", "◐ not validated", "✕ disproved"];
-    let mut ids = Vec::new();
-    for seg in inner.split([',', ';']) {
-        let seg = seg.trim();
-        let (id, rest) = seg.split_once(' ').map_or((seg, ""), |(a, b)| (a, b.trim()));
-        if !id.starts_with("c-") || !(rest.is_empty() || shown.contains(&rest)) {
-            return None;
-        }
-        ids.push(id.to_string());
-    }
-    Some(ids)
-}
-
-/// Split a draft into sentences and their `[c-…]` markers. A marker belongs to the sentence it is in, or to the one just
-/// ended when it follows the full stop.
-pub fn parse_draft(draft: &str) -> Vec<Sentence> {
-    let mut out: Vec<Sentence> = Vec::new();
-    let mut cur = String::new();
-    let mut ids: Vec<String> = Vec::new();
-    let chars: Vec<char> = draft.chars().collect();
-    let flush = |out: &mut Vec<Sentence>, cur: &mut String, ids: &mut Vec<String>| {
-        let t = cur.split_whitespace().collect::<Vec<_>>().join(" ");
-        if !t.is_empty() {
-            out.push(Sentence { text: t, claims: std::mem::take(ids) });
-        }
-        cur.clear();
-    };
-    let mut i = 0;
-    while i < chars.len() {
-        let c = chars[i];
-        if c == '[' {
-            if let Some(end) = chars[i..].iter().position(|&x| x == ']') {
-                let tok: String = chars[i..=i + end].iter().collect();
-                if let Some(found) = marker(&tok) {
-                    if cur.trim().is_empty() {
-                        if let Some(last) = out.last_mut() {
-                            last.claims.extend(found);
-                        } else {
-                            ids.extend(found);
-                        }
-                    } else {
-                        ids.extend(found);
-                    }
-                    i += end + 1;
-                    continue;
-                }
-            }
-        }
-        cur.push(c);
-        let ends = matches!(c, '.' | '!' | '?') && chars.get(i + 1).is_none_or(|n| n.is_whitespace() || *n == '[');
-        if ends || c == '\n' && chars.get(i + 1) == Some(&'\n') {
-            flush(&mut out, &mut cur, &mut ids);
-        }
-        i += 1;
-    }
-    flush(&mut out, &mut cur, &mut ids);
-    for s in &mut out {
-        let mut seen = HashSet::new();
-        s.claims.retain(|c| seen.insert(c.clone()));
-    }
-    out
-}
-
 impl Library {
     fn pages_dir(&self) -> PathBuf {
         self.root().join("pages")
-    }
-
-    fn citable(&self, c: &Value) -> bool {
-        !matches!(status(c), Status::Disproved | Status::Retired) && c["superseded_by"].is_null() && !self.rests_on_private(c)
-    }
-
-    /// The check at the heart of §6. Every sentence must cite claims that exist and may be cited, and may use only words
-    /// that one of them uses. It reads claim text and the sentence text and nothing else, so it needs no model.
-    pub fn check_page(&self, sentences: &[Sentence]) -> Vec<Finding> {
-        let mut found = Vec::new();
-        for s in sentences {
-            if s.claims.is_empty() {
-                found.push(Finding::Uncited(s.text.clone()));
-                continue;
-            }
-            let mut allowed: BTreeSet<String> = BTreeSet::new();
-            let mut ok = true;
-            for id in &s.claims {
-                match self.claim(id) {
-                    None => {
-                        found.push(Finding::UnknownClaim { sentence: s.text.clone(), id: id.clone() });
-                        ok = false;
-                    }
-                    Some(c) if !self.citable(&c) => {
-                        found.push(Finding::NotCitable { sentence: s.text.clone(), id: id.clone() });
-                        ok = false;
-                    }
-                    Some(c) => allowed.extend(content_words(c["text"].as_str().unwrap_or(""))),
-                }
-            }
-            if ok {
-                let extra: Vec<String> = content_words(&s.text).difference(&allowed).cloned().collect();
-                if !extra.is_empty() {
-                    found.push(Finding::AddsContent { sentence: s.text.clone(), words: extra });
-                }
-            }
-        }
-        found
     }
 
     /// Claims on a topic: those whose text shares a word with it, or whose project is named like it. Disproved, retired,
@@ -218,8 +78,10 @@ impl Library {
         (out, withheld)
     }
 
-    fn set_hash(topic: &str, claims: &[Value], draft: Option<&str>) -> String {
+    fn set_hash(&self, topic: &str, claims: &[Value], sources: &[String], draft: Option<&str>, scope: Scope) -> String {
         let mut h = Sha256::new();
+        h.update(TEMPLATE_VERSION.as_bytes());
+        h.update([scope as u8]);
         h.update(topic.as_bytes());
         for c in claims {
             h.update([0]);
@@ -228,6 +90,12 @@ impl Library {
                 h.update([0]);
             }
         }
+        for s in sources {
+            h.update(b"source\0");
+            h.update(s.as_bytes());
+            h.update(self.read_meta(s).and_then(|m| m["content_hash"].as_str().map(String::from)).unwrap_or_default().as_bytes());
+            h.update([0]);
+        }
         if let Some(d) = draft {
             h.update(b"draft\0");
             h.update(d.as_bytes());
@@ -235,48 +103,64 @@ impl Library {
         h.finalize().iter().take(8).map(|b| format!("{:02x}", b)).collect()
     }
 
-    /// Build the page for `topic`. With a `draft` (wording a model proposed, `[c-…]` after each sentence) the page is the
-    /// draft if the check passes and an error naming every finding if not; without one it is the claims' own sentences.
-    /// A page built from the same claim set is read from the cache, so a library pays only for pages somebody reads.
+    /// Build the page for `topic` with the strictest scope: a private record never appears (`Scope::External`).
     pub fn build_page(&self, topic: &str, draft: Option<&str>, style: Format) -> Result<Page, Vec<Finding>> {
+        self.build_page_scoped(topic, draft, style, Scope::External)
+    }
+
+    /// Build the page for `topic`. With a `draft` (the body a model wrote, `[c-…]` and `[s-…]` markers after the sentences
+    /// they support) the page is banner, draft and table if the mechanical check passes, and an error naming every finding
+    /// if not; without one the body is the claims' own text. A page built from the same material is read from the cache,
+    /// so a library pays only for pages somebody reads.
+    pub fn build_page_scoped(&self, topic: &str, draft: Option<&str>, style: Format, scope: Scope) -> Result<Page, Vec<Finding>> {
         let topic = topic.split_whitespace().collect::<Vec<_>>().join(" ");
         let (claims, withheld) = self.topic_claims(&topic);
-        let sentences: Vec<Sentence> = match draft {
-            Some(d) => parse_draft(d),
-            None => claims.iter().map(|c| Sentence { text: c["text"].as_str().unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" "), claims: vec![c["id"].as_str().unwrap_or("").into()] }).collect(),
-        };
-        let findings = self.check_page(&sentences);
-        if !findings.is_empty() {
-            return Err(findings);
-        }
         let mut validated = Vec::new();
         let mut noted = Vec::new();
-        let mut cited_sources: BTreeSet<String> = BTreeSet::new();
-        for s in &sentences {
-            let with: Vec<(String, Status)> = s.claims.iter().filter_map(|id| self.claim(id).map(|c| (id.clone(), status(&c)))).collect();
-            for id in &s.claims {
-                for a in self.claim(id).iter().flat_map(|c| c["anchors"].as_array().cloned().unwrap_or_default()) {
-                    if let Some(sid) = a["source_id"].as_str() {
-                        cited_sources.insert(sid.to_string());
-                    }
+        let body = match draft {
+            Some(d) => d.trim().to_string(),
+            None => {
+                for c in &claims {
+                    let id = c["id"].as_str().unwrap_or("").to_string();
+                    let line = Line { text: norm(c["text"].as_str().unwrap_or("")), claims: vec![(id, status(c))] };
+                    if line.claims.iter().all(|(_, st)| *st == Status::Validated) { validated.push(line) } else { noted.push(line) }
                 }
+                render_body(&topic, &validated, &noted)
             }
-            let line = Line { text: s.text.clone(), claims: with };
-            if line.claims.iter().all(|(_, st)| *st == Status::Validated) { validated.push(line) } else { noted.push(line) }
+        };
+        let checked = self.check_body(&body, scope);
+        if !checked.findings.is_empty() {
+            return Err(checked.findings);
         }
-        let used: Vec<Value> = sentences.iter().flat_map(|s| s.claims.iter()).filter_map(|id| self.claim(id)).collect();
-        let hash = Self::set_hash(&topic, if draft.is_some() { &used } else { &claims }, draft);
+        if draft.is_some() {
+            for block in body.split("\n\n") {
+                let cites = markers(block);
+                let claim_status: Vec<(String, Status)> = cites.iter().filter(|c| !c.source).filter_map(|c| self.claim(&c.id).map(|cl| (c.id.clone(), status(&cl)))).collect();
+                if cites.is_empty() {
+                    continue;
+                }
+                let line = Line { text: norm(block), claims: claim_status };
+                if !line.claims.is_empty() && line.claims.iter().all(|(_, st)| *st == Status::Validated) { validated.push(line) } else { noted.push(line) }
+            }
+        }
+        let recs: Vec<Rec> = checked.cited.iter().filter_map(|c| self.resolve(c, scope).ok()).collect();
+        let sources: Vec<String> = recs.iter().flat_map(Self::rec_sources).collect::<BTreeSet<_>>().into_iter().collect();
+        let used: Vec<Value> = recs.iter().filter_map(|r| if let Rec::Claim(c) = r { Some(c.clone()) } else { None }).collect();
+        let hash = self.set_hash(&topic, if draft.is_some() { &used } else { &claims }, &sources, draft, scope);
         let cache = self.pages_dir().join(format!("{}-{}.md", slug(&topic), hash));
         if let Ok(md) = std::fs::read_to_string(&cache) {
-            return Ok(Page { topic, validated, noted, sources: cited_sources.into_iter().collect(), withheld, hash, markdown: md, cached: true });
+            return Ok(Page { topic, validated, noted, sources, withheld, hash, markdown: md, cached: true, flags: checked.flags });
         }
-        let sources: Vec<String> = cited_sources.into_iter().collect();
-        let bibliography = bib::export(self, &sources, style).map(|e| e.text).unwrap_or_default();
-        let markdown = render(&topic, &validated, &noted, &bibliography);
+        let date = delphi_core::time::now_rfc3339().chars().take(10).collect::<String>();
+        let note = if checked.cited.is_empty() { format!("mechanical checks passed on {}; unsupported: {}", date, NO_SOURCES) } else { format!("mechanical checks passed on {}", date) };
+        let markdown = format!("{}\n\n{}\n\n{}", banner(&date, None, &note), body, self.bibliography_table(&checked.cited, style, scope));
         if self.ensure().is_ok() {
+            let _ = std::fs::create_dir_all(self.pages_dir());
             let _ = std::fs::write(&cache, &markdown);
+            let sidecar = json!({"topic": topic, "template": TEMPLATE_VERSION, "written": date, "scope": format!("{:?}", scope).to_lowercase(), "cited": checked.cited.iter().map(Cite::label).collect::<Vec<_>>(), "unverified_figures": checked.flags, "status": "generated"});
+            let _ = std::fs::write(cache.with_extension("json"), serde_json::to_vec_pretty(&sidecar).unwrap_or_default());
         }
-        Ok(Page { topic, validated, noted, sources, withheld, hash, markdown, cached: false })
+        Ok(Page { topic, validated, noted, sources, withheld, hash, markdown, cached: false, flags: checked.flags })
     }
 
     /// "This is wrong" on a sentence: a contested mark on the cited claim with the operator's note. The claim reads
@@ -311,8 +195,8 @@ fn cite(line: &Line) -> String {
     format!("{} [{}]", line.text, ids.join("; "))
 }
 
-fn render(topic: &str, validated: &[Line], noted: &[Line], bibliography: &str) -> String {
-    let mut s = format!("# {}\n\n_Generated from the library's claims. A view, not a source: it cannot be edited; change a claim or dispute it._\n\n", topic);
+fn render_body(topic: &str, validated: &[Line], noted: &[Line]) -> String {
+    let mut s = format!("# {}\n\n", topic);
     for l in validated {
         s.push_str(&format!("{}\n\n", cite(l)));
     }
@@ -325,8 +209,5 @@ fn render(topic: &str, validated: &[Line], noted: &[Line], bibliography: &str) -
     if validated.is_empty() && noted.is_empty() {
         s.push_str("No claims on this topic yet.\n\n");
     }
-    if !bibliography.trim().is_empty() {
-        s.push_str(&format!("## Sources\n\n{}", bibliography));
-    }
-    s
+    s.trim_end().to_string()
 }

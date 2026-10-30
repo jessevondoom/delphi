@@ -1,11 +1,12 @@
 //! `delphi pages show|check|dispute` (`specs/055` §6): the readable view of the library's claims.
 //!
-//! A page is generated, never edited and never trusted text: each sentence carries its claim ids and their derived
-//! status, and the daemon's check rejects a page with a sentence no claim accounts for. `dispute` is the operator's
+//! A page is generated, never edited and never trusted text: it carries a banner and a bibliography table the daemon
+//! writes, and the daemon's mechanical check (`specs/057` §3.1) rejects a page that cites what the library does not hold
+//! or quotes what a source does not say. `dispute` is the operator's
 //! "this is wrong" on a sentence (refused inside an agent seat): it files a contested mark on the cited claim.
 
 use delphi_engine::library::bib::Format;
-use delphi_engine::library::pages::Finding;
+use delphi_engine::library::pages::{Finding, Scope};
 use delphi_engine::library::Library;
 use std::path::Path;
 
@@ -26,7 +27,7 @@ fn positional(args: &[String]) -> Vec<&String> {
 }
 
 fn report(findings: &[Finding]) {
-    eprintln!("the page is rejected: {} sentence(s) are not accounted for by claims", findings.len());
+    eprintln!("the page is rejected: {} finding(s)", findings.len());
     for f in findings {
         eprintln!("  {}", f);
     }
@@ -60,6 +61,9 @@ pub fn cli(args: &[String], home: &Path) -> i32 {
             match lib.build_page(&topic, draft.as_deref(), style) {
                 Ok(p) => {
                     print!("{}", p.markdown);
+                    if !p.flags.is_empty() {
+                        eprintln!("unverified figure (in no cited material): {}", p.flags.join(", "));
+                    }
                     if p.withheld > 0 {
                         eprintln!("{} claim(s) rest on a private source and are left off", p.withheld);
                     }
@@ -73,12 +77,15 @@ pub fn cli(args: &[String], home: &Path) -> i32 {
         }
         Some("check") if pos.len() == 1 => match std::fs::read_to_string(pos[0]) {
             Ok(t) => {
-                let findings = lib.check_page(&delphi_engine::library::pages::parse_draft(&t));
-                if findings.is_empty() {
-                    println!("every sentence maps to claims");
+                let checked = lib.check_page_text(&t, Scope::External);
+                if checked.findings.is_empty() {
+                    println!("the page passes the mechanical check");
+                    if !checked.flags.is_empty() {
+                        println!("unverified figure (in no cited material): {}", checked.flags.join(", "));
+                    }
                     0
                 } else {
-                    report(&findings);
+                    report(&checked.findings);
                     1
                 }
             }

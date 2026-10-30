@@ -560,7 +560,7 @@ mod pages {
     use super::*;
     use crate::library::bib::Format;
     use crate::library::claims::{status, AnchorSpec, ClaimOpts, Validator};
-    use crate::library::pages::{parse_draft, Finding, NOTED_HEADING};
+    use crate::library::pages::{Finding, Scope, NOTED_HEADING, NO_SOURCES, TABLE_HEADING};
     use delphi_core::knowledge_status::Status;
 
     const BODY: &str = "# Tides\n\nThe tide comes in twice a day, driven mostly by the moon.\n\nSpring tides are the highest.\n";
@@ -575,28 +575,120 @@ mod pages {
         (d, l, a, b)
     }
 
-    #[test]
-    fn every_sentence_carries_its_claim_and_unvalidated_ones_sit_under_the_noted_heading() {
-        let (_d, l, a, b) = setup();
-        let p = l.build_page("tides", None, Format::Plain).unwrap();
-        let (head, tail) = p.markdown.split_once(&format!("## {}", NOTED_HEADING)).expect("noted heading");
-        assert!(head.contains(&format!("[{} ● validated]", a)) && !head.contains(&b));
-        assert!(tail.contains(&format!("[{} ○ not validated]", b)));
-        assert!(p.markdown.contains("## Sources"));
-        assert!(l.check_page(&parse_draft(&p.markdown.lines().filter(|x| x.contains("[c-")).collect::<Vec<_>>().join("\n"))).is_empty(), "a built page passes its own check");
+    fn src(l: &Library) -> String {
+        l.list().into_iter().find(|(_, m)| m["title"] == "t.md").map(|(id, _)| id).unwrap()
+    }
+
+    fn page_of(l: &Library, body: &str) -> String {
+        l.build_page("tides", Some(body), Format::Plain).unwrap().markdown
     }
 
     #[test]
-    fn the_check_rejects_uncited_unknown_and_content_adding_sentences() {
+    fn a_built_page_has_the_banner_the_noted_heading_and_a_table_row_per_claim_and_passes_its_own_check() {
+        let (_d, l, a, b) = setup();
+        let p = l.build_page("tides", None, Format::Plain).unwrap();
+        assert!(p.markdown.starts_with("Generated page. Not authoritative. Written by the writer role on "));
+        let (head, tail) = p.markdown.split_once(&format!("## {}", NOTED_HEADING)).expect("noted heading");
+        assert!(head.contains(&format!("[{} ● validated]", a)) && !head.contains(&b));
+        assert!(tail.contains(&format!("[{} ○ not validated]", b)));
+        let (_, table) = p.markdown.split_once(&format!("## {}", TABLE_HEADING)).expect("table");
+        assert!(table.contains(&format!("| {} | ● validated |", a)) && table.contains(&format!("| {} | ○ not validated |", b)) && table.contains("§1"));
+        let c = l.check_page_text(&p.markdown, Scope::External);
+        assert!(c.findings.is_empty(), "{:?}", c.findings);
+        let side: Value = serde_json::from_slice(&std::fs::read(l.root().join("pages").join(format!("tides-{}.json", p.hash))).unwrap()).unwrap();
+        assert_eq!(side["status"], "generated");
+    }
+
+    #[test]
+    fn the_banner_and_the_table_are_the_daemons_and_a_page_with_no_citation_says_so() {
         let (_d, l, a, _b) = setup();
-        let draft = format!("Tides come twice a day [{a}]. The moon is made of cheese. Tides come twice a day, usually near harbours [{a}]. Tides come twice a day [c-0000].");
-        let f = l.build_page("tides", Some(&draft), Format::Plain).unwrap_err();
-        assert!(f.iter().any(|x| matches!(x, Finding::Uncited(s) if s.contains("cheese"))));
-        assert!(f.iter().any(|x| matches!(x, Finding::AddsContent { words, .. } if words.contains(&"harbours".to_string()))));
-        assert!(f.iter().any(|x| matches!(x, Finding::UnknownClaim { .. })));
-        assert_eq!(f.len(), 3);
-        let ok = l.build_page("tides", Some(&format!("The tides come twice a day [{a}].")), Format::Plain).unwrap();
-        assert_eq!(ok.validated.len(), 1);
+        let md = page_of(&l, &format!("Tides come twice a day [{a}]."));
+        let ok = |t: &str| l.check_page_text(t, Scope::External).findings;
+        assert!(ok(&md).is_empty());
+        let rest = md.split_once("\n\n").unwrap().1;
+        assert!(ok(rest).contains(&Finding::BannerMissing));
+        assert!(matches!(ok(&md.replace("Not authoritative", "Authoritative"))[..], [Finding::BannerAltered(_)]));
+        assert!(ok(&md.replace("Read the cited sources before relying on it.", "Trust it.")).iter().any(|f| matches!(f, Finding::BannerAltered(_))));
+        assert!(ok(md.split_once(&format!("## {}", TABLE_HEADING)).unwrap().0).contains(&Finding::TableMissing));
+        assert!(ok(&md.replace(&format!("| {} |", a), "| gone |")).contains(&Finding::TableRowMissing(a.clone())));
+        let banner = md.lines().next().unwrap();
+        assert_eq!(l.build_page("tides", Some(&format!("{banner}\n\nTides [{a}].")), Format::Plain).unwrap_err(), vec![Finding::BannerInBody]);
+        assert_eq!(l.build_page("tides", Some(&format!("Tides [{a}].\n\n## {TABLE_HEADING}\n")), Format::Plain).unwrap_err(), vec![Finding::BannerInBody]);
+        let none = page_of(&l, "Tides are interesting.");
+        assert!(none.lines().next().unwrap().contains("unsupported") && none.contains(&format!("| {} |", NO_SOURCES)));
+        assert!(ok(&none).is_empty());
+        assert!(!ok(&none.replace("unsupported", "fine")).is_empty());
+    }
+
+    #[test]
+    fn one_marker_supports_a_paragraph_and_a_missing_retired_or_disproved_record_fails() {
+        let (_d, l, a, b) = setup();
+        let s = src(&l);
+        let many = format!("The tide comes in twice a day. It is driven by the moon, and the sun too. Nothing else is claimed here. [{a}]");
+        l.build_page("tides", Some(&many), Format::Plain).unwrap();
+        l.build_page("tides", Some(&format!("A source says so. [s-{s}]")), Format::Plain).unwrap();
+        let err = |body: &str| l.build_page("tides", Some(body), Format::Plain).unwrap_err();
+        assert_eq!(err("Tides [c-0000]."), vec![Finding::UnknownRecord("c-0000".into())]);
+        assert_eq!(err("Tides [s-nope]."), vec![Finding::UnknownRecord("s-nope".into())]);
+        assert!(matches!(err(&format!("Tides [{a} ○ not validated]"))[..], [Finding::StatusMisstated { .. }]), "a marker cannot misstate its status");
+        l.build_page("tides", Some(&format!("Tides [{b} ○ not validated].")), Format::Plain).unwrap();
+        let mut c = l.claim(&b).unwrap();
+        c["lifecycle"] = json!("disproved");
+        l.save_claim(&c).unwrap();
+        assert!(matches!(err(&format!("Tides [{b}]."))[..], [Finding::NotCitable { .. }]));
+        let mut m = l.read_meta(&s).unwrap();
+        m["retired"] = json!("2026-10-29T00:00:00Z");
+        l.write_json(&l.source_dir(&s).join("meta.json"), &m).unwrap();
+        assert!(matches!(err(&format!("Tides [s-{s}]."))[..], [Finding::NotCitable { .. }]));
+    }
+
+    #[test]
+    fn a_quotation_must_be_verbatim_in_a_cited_source_and_a_quote_block_must_cite_one() {
+        let (_d, l, a, _b) = setup();
+        let s = src(&l);
+        l.build_page("tides", Some(&format!("The page says \"driven mostly by the moon\". [s-{s}]")), Format::Plain).unwrap();
+        l.build_page("tides", Some(&format!("> The tide comes in twice\n> a day, driven mostly by the moon. [s-{s}]")), Format::Plain).unwrap();
+        let err = |body: &str| l.build_page("tides", Some(body), Format::Plain).unwrap_err();
+        assert!(matches!(err(&format!("The page says \"driven entirely by the sun\". [s-{s}]"))[..], [Finding::QuoteNotFound { .. }]));
+        assert!(matches!(err(&format!("> Spring tides are the lowest. [s-{s}]"))[..], [Finding::QuoteNotFound { .. }]));
+        assert!(matches!(err("> The tide comes in twice a day.")[..], [Finding::QuoteUnattributed { .. }]));
+        assert!(matches!(err(&format!("> {} [s-{s}]", "tide ".repeat(300)))[..], [Finding::QuoteTooLong { .. }]));
+        l.build_page("tides", Some(&format!("A scare \"quote\" and \"two words\" are not checked. [{a}]")), Format::Plain).unwrap();
+        std::fs::write(l.source_dir(&s).join("source.md"), "# Tides\n\nChanged after capture.\n").unwrap();
+        assert!(err(&format!("The page says \"driven mostly by the moon\". [s-{s}]")).contains(&Finding::SourceAltered(s.clone())));
+    }
+
+    #[test]
+    fn tables_images_and_links_must_be_known_to_the_library() {
+        let (d, l, a, _b) = setup();
+        let s = src(&l);
+        let err = |body: &str| l.build_page("tides", Some(body), Format::Plain).unwrap_err();
+        let table = "| Day | Tides |\n| --- | --- |\n| Mon | 2 |";
+        assert_eq!(err(table), vec![Finding::TableUncited]);
+        l.build_page("tides", Some(&format!("{table}\n\nTable 1: tides per day. [{a}]")), Format::Plain).unwrap();
+        assert!(matches!(err(&format!("![chart](lib:{s}/chart.png) [s-{s}]"))[..], [Finding::UnknownImage(_)]));
+        assert!(matches!(err(&format!("![chart](https://example.org/c.png) [s-{s}]"))[..], [Finding::UnknownImage(_)]));
+        let assets = d.path().join("assets-in");
+        std::fs::create_dir_all(&assets).unwrap();
+        std::fs::write(assets.join("chart.png"), b"png").unwrap();
+        std::fs::create_dir_all(l.source_dir(&s).join("assets")).unwrap();
+        std::fs::copy(assets.join("chart.png"), l.source_dir(&s).join("assets").join("chart.png")).unwrap();
+        l.build_page("tides", Some(&format!("![Tide chart](lib:{s}/chart.png)\n\nFigure: tide chart. [s-{s}]")), Format::Plain).unwrap();
+        assert_eq!(err(&format!("![Tide chart](lib:{s}/chart.png) [{a}]")), vec![Finding::ImageUncited(s.clone())]);
+        assert_eq!(err(&format!("![x](lib:{s}/../meta.json) [s-{s}]")), vec![Finding::UnknownImage(format!("lib:{s}/../meta.json"))]);
+        assert_eq!(err(&format!("See [the tides](https://example.org/tides). [s-{s}]")), vec![Finding::UnknownLink("https://example.org/tides".into())]);
+        let mut m = l.read_meta(&s).unwrap();
+        m["URL"] = json!("https://example.org/tides/");
+        l.write_json(&l.source_dir(&s).join("meta.json"), &m).unwrap();
+        l.build_page("tides", Some(&format!("See [the tides](https://example.org/tides). [s-{s}]")), Format::Plain).unwrap();
+    }
+
+    #[test]
+    fn numbers_and_names_in_no_material_are_flagged_not_rejected() {
+        let (_d, l, a, _b) = setup();
+        let p = l.build_page("tides", Some(&format!("Tides come twice a day, said Jacques Cousteau in 1953, with 14 metres at Fundy. [{a}]")), Format::Plain).unwrap();
+        assert!(p.flags.contains(&"1953".to_string()) && p.flags.contains(&"14".to_string()) && p.flags.contains(&"Jacques Cousteau".to_string()) && p.flags.contains(&"Fundy".to_string()), "{:?}", p.flags);
+        assert!(!p.flags.iter().any(|f| f == "Tides" || f == "twice"));
     }
 
     #[test]
@@ -629,7 +721,11 @@ mod pages {
         let c = l.add_claim("The vault code is long.", &ClaimOpts::default(), &[spec]).unwrap()["id"].as_str().unwrap().to_string();
         let page = l.build_page("vault", None, Format::Plain).unwrap();
         assert!(!page.markdown.contains("vault code") && page.withheld == 1);
-        assert!(l.build_page("vault", Some(&format!("The vault code is long [{}].", c)), Format::Plain).is_err());
+        let body = format!("The vault code is long [{}].", c);
+        assert!(matches!(l.build_page("vault", Some(&body), Format::Plain).unwrap_err()[..], [Finding::NotCitable { .. }]));
+        let internal = l.build_page_scoped("vault", Some(&body), Format::Plain, Scope::Internal).unwrap();
+        assert!(internal.markdown.contains(&format!("| {} |", c)) && !internal.markdown.contains("§1\n"));
+        assert!(!l.check_page_text(&internal.markdown, Scope::External).findings.is_empty());
     }
 }
 

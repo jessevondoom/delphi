@@ -27,6 +27,8 @@ pub mod meta;
 #[path = "library_export.rs"]
 mod export;
 pub use export::Exported;
+#[path = "library_page_check.rs"]
+mod page_check;
 #[path = "library_pages.rs"]
 pub mod pages;
 #[path = "library_review.rs"]
