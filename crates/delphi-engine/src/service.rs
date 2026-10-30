@@ -983,6 +983,45 @@ impl EngineService {
         Ok(json!({"status": r.status, "body": r.body}))
     }
 
+    /// `kb.open`: the operator asked to hand a file of the archives to their own viewer (`specs/043` §6.3). Console only. The
+    /// daemon checks that the path is a visible indexed document with an allow-listed extension whose canonical path is inside the
+    /// workspace, logs `kb.opened` (path, blake3, extension; never the content) and returns the canonical path for the console to
+    /// pass, as one argument, to the system opener. The daemon itself spawns nothing and never reads the file's content for anyone.
+    async fn kb_open(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let path = p["path"].as_str().unwrap_or("").to_string();
+        if path.is_empty() || path.len() > 1024 || path.contains('\0') {
+            return Err(err(code::INVALID_PARAMS, "`path` must be a document path of at most 1024 characters"));
+        }
+        let ws = self.engine.ws.dir.clone();
+        let which = path.clone();
+        let opened = tokio::task::spawn_blocking(move || -> Result<Result<crate::kb_docs::Opened, String>, crate::kb::KbError> {
+            let mut kb = crate::kb::Kb::open(&ws.join("local/state.db"))?;
+            kb.refresh(&ws, "")?;
+            Ok(crate::kb_docs::openable(&ws, &kb, &which))
+        })
+        .await
+        .map_err(|e| err(-32000, e.to_string()))?
+        .map_err(|e| err(-32000, e.to_string()))?
+        .map_err(|e| err(code::INVALID_PARAMS, e))?;
+        if let Ok(m) = self.mission(None).await {
+            let _ = m.append(EventEnvelope::new(&m.id, "kb.opened", json!({"path": path, "blake3": opened.blake3, "extension": opened.extension}))).await;
+        }
+        Ok(json!({"file": opened.file.to_string_lossy(), "extension": opened.extension, "blake3": opened.blake3, "trust": opened.trust}))
+    }
+
+    /// `kb.allows`: whether an address is one the operator's trusted-source lists allow. The console asks before it hands any link to the
+    /// browser (`specs/043` §6.3); it reads only and spawns nothing, and a list that cannot be read allows nothing.
+    async fn kb_allows(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let url = p["url"].as_str().unwrap_or("");
+        if url.is_empty() || url.len() > 4096 {
+            return Err(err(code::INVALID_PARAMS, "`url` must be an address of at most 4096 characters"));
+        }
+        let allowed = crate::research_setup::lists(&self.engine.ws.dir, &self.engine.ws.home).ok().is_some_and(|t| t.allows_url(url).is_some());
+        Ok(json!({"allowed": allowed}))
+    }
+
     /// `answer.accept`: the operator kept the last answer (`/pin`, `/export`). It only marks the answer in the mission log; the daemon
     /// stages its opening sentence as a `noted` candidate (`specs/052` KS-2). Silent: the console fires it and shows nothing.
     async fn answer_accept(&self, p: Value, ctx: CallContext) -> RpcOutcome {
@@ -1624,6 +1663,8 @@ impl Extension for ServiceExt {
                 "bundle.distill" => svc.distill_start(params, ctx).await,
                 "kb.search" => svc.kb_search(params).await,
                 "kb.get" => svc.kb_get(params).await,
+                "kb.open" => svc.kb_open(params, ctx).await,
+                "kb.allows" => svc.kb_allows(params, ctx).await,
                 "observe.snapshot" => svc.observe_snapshot(params).await,
                 "observe.state" => svc.observe_state(params).await,
                 "kb.index" => svc.kb_index(ctx).await,
@@ -2378,7 +2419,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            for (m, p) in [("task.submit", json!({"prompt": "hi"})), ("task.cancel", json!({})), ("build.start", json!({"prompt": "hi"})), ("council.start", json!({"proposition": "hi"})), ("bundle.distill", json!({})), ("kb.index", json!({})), ("xenia.quarantine", json!({"query": "x"})), ("xenia.status", json!({})), ("xenia.attest.prepare", json!({"action": "endorse"})), ("xenia.attest.decide", json!({"code": "x", "decision": "sign"})), ("xenia.admin.prepare", json!({"action": "refresh"})), ("xenia.admin.decide", json!({"code": "x", "decision": "sign"})), ("org.action", json!({"action": "remove", "name": "x"})), ("org.trust", json!({"action": "raise", "name": "x", "confirm": "x"})), ("validation.latch", json!({"to": "advisory", "reason": "a good reason", "confirm": "advisory"})), ("org.view", json!({})), ("approval.resolve", json!({"approval_id": "a", "payload_blake3": "b", "decision": "allow"})), ("budget.set", json!({"usd": 99})), ("permissions.set", json!({"mode": "mission-auto"})), ("mission.open", json!({})), ("session.new", json!({})), ("session.context", json!({})), ("council.follow", json!({})), ("settings.get", json!({})), ("settings.set", json!({})), ("settings.accept", json!({})), ("settings.dismiss", json!({}))] {
+            for (m, p) in [("task.submit", json!({"prompt": "hi"})), ("task.cancel", json!({})), ("build.start", json!({"prompt": "hi"})), ("council.start", json!({"proposition": "hi"})), ("bundle.distill", json!({})), ("kb.index", json!({})), ("kb.open", json!({"path": "context/a.pdf"})), ("kb.allows", json!({"url": "https://example.com/"})), ("xenia.quarantine", json!({"query": "x"})), ("xenia.status", json!({})), ("xenia.attest.prepare", json!({"action": "endorse"})), ("xenia.attest.decide", json!({"code": "x", "decision": "sign"})), ("xenia.admin.prepare", json!({"action": "refresh"})), ("xenia.admin.decide", json!({"code": "x", "decision": "sign"})), ("org.action", json!({"action": "remove", "name": "x"})), ("org.trust", json!({"action": "raise", "name": "x", "confirm": "x"})), ("validation.latch", json!({"to": "advisory", "reason": "a good reason", "confirm": "advisory"})), ("org.view", json!({})), ("approval.resolve", json!({"approval_id": "a", "payload_blake3": "b", "decision": "allow"})), ("budget.set", json!({"usd": 99})), ("permissions.set", json!({"mode": "mission-auto"})), ("mission.open", json!({})), ("session.new", json!({})), ("session.context", json!({})), ("council.follow", json!({})), ("settings.get", json!({})), ("settings.set", json!({})), ("settings.accept", json!({})), ("settings.dismiss", json!({}))] {
                 assert_eq!(rpc_code(c.call(m, p)), Some(code::FORBIDDEN), "{}", m);
             }
             for m in ["usage.get", "approval.list", "permissions.get", "budget.get", "session.snapshot", "observe.snapshot", "observe.state"] {
@@ -2468,7 +2509,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "research.start", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "retro.list", "retro.accept", "retro.reject", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
+            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "kb.open", "research.start", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "retro.list", "retro.accept", "retro.reject", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
             for m in every_mutating_method_the_daemon_has {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }
@@ -2525,7 +2566,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let everything_a_relay_must_not_reach = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "research.start", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","kb.search", "kb.get", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "models.get", "anything.else"];
+            let everything_a_relay_must_not_reach = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "kb.open", "research.start", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","kb.search", "kb.get", "kb.allows", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "models.get", "anything.else"];
             for m in everything_a_relay_must_not_reach {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }
