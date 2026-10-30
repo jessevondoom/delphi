@@ -30,7 +30,7 @@ pub struct BundleRule {
     pub text: String,
 }
 
-fn cache_of(ws: &WorkspacePaths, e: &Entry) -> std::path::PathBuf {
+pub(crate) fn cache_of(ws: &WorkspacePaths, e: &Entry) -> std::path::PathBuf {
     bundles::cache_dir(&ws.home, &e.org, &e.name, &e.hash)
 }
 
@@ -171,7 +171,7 @@ pub fn fit(mut rules: Vec<BundleRule>, budget: usize, max_count: usize) -> (Stri
 /// One agent file, at most (`specs/023` §2).
 pub const AGENT_BYTES: usize = 8192;
 /// Agents listed to a dispatching role.
-const CATALOG_MAX: usize = 20;
+pub const CATALOG_MAX: usize = 20;
 
 /// A bundle agent ready to run as a span of its host role.
 #[derive(Debug, Clone)]

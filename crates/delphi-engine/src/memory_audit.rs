@@ -32,6 +32,15 @@ pub const SITES: &[Site] = &[
         ],
     },
     Site {
+        name: "`delphi customize note` (the operator's own note, tier L5, staged and never loaded)",
+        files: &["crates/delphi-engine/src/customize.rs"],
+        events: &["learn.staged"],
+        proofs: &[
+            ("crates/delphi-engine/src/customize.rs", "a_note_is_tier_l5_staged_and_named_by_its_sequence_number"),
+            ("crates/delphi/src/customize_cmd.rs", "a_script_cannot_write_a_rule_a_skill_or_a_profile_line"),
+        ],
+    },
+    Site {
         name: "the agent `note` tool",
         files: &["crates/delphi-engine/src/tools.rs"],
         events: &["learn.note"],

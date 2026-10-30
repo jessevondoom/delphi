@@ -6,7 +6,6 @@ import type { Ev } from './input.ts';
 import { SAMPLE_SECS } from './meters.ts';
 import { emptyState, epicOrder, feedLinks, observeFrame, parseView, stepView, type OModel, type OState, type View } from './observe-screen.ts';
 import * as A from './archives.ts';
-import { openExternal } from './external.ts';
 import { copyText, stepFocus } from './links.ts';
 import type { Rpc } from './rpc.ts';
 import { copyToClipboard, useSelection } from './select.ts';
@@ -102,7 +101,7 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }
     else if (act.t === 'open') {
       const t = act.target;
       kb(`/v1/doc?path=${enc(t.path)}${tp}`).then((r) => { if (r.status === 200) setFeed((f) => ({ ...f, note: '' })); setArch((a) => (r.status === 200 ? A.gotDoc(a, r.body, t, R.current.size.w) : A.withNote(a, r.status === 404 ? `${t.path} is not in the knowledge base` : r.body?.error ?? 'could not open it'))); }).catch(() => fail('could not open it'));
-    } else if (act.t === 'browser') fail(openExternal(act.url) ? `opened ${act.url} in your browser` : 'could not open the browser');
+    } else if (act.t === 'browser') fail('this window only reads: open links from the console, which checks your lists first');
     else if (act.t === 'copy') { copyToClipboard(act.text); fail('copied'); }
   };
 

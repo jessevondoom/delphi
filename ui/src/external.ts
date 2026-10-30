@@ -22,3 +22,11 @@ export function openExternal(url: string, run: Run = detached, platform: string 
   run(opener[0]!, [...opener.slice(1), url]);
   return true;
 }
+
+/** Open a file the daemon has vouched for (`kb.open`) in the system's viewer or browser; the path is an argument, never shell text. */
+export function openFile(file: string, run: Run = detached, platform: string = process.platform): boolean {
+  const opener = OPENERS[platform];
+  if (!opener || !file.startsWith('/') || /[\x00-\x1f\x7f]/.test(file)) return false;
+  run(opener[0]!, [...opener.slice(1), file]);
+  return true;
+}

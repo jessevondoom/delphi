@@ -49,6 +49,8 @@ pub struct EngineService {
     research: Mutex<Option<Arc<crate::research::Shared>>>,
     /// The briefs being written and the ones that failed, by cache key (`decision_run.rs`): each is tried once until `r` asks again.
     briefs: Arc<Mutex<Briefs>>,
+    /// When the acquisition job was last looked at (unix seconds): it is considered once an hour.
+    acquire_checked: Mutex<i64>,
 }
 
 #[derive(Default)]
@@ -106,7 +108,7 @@ fn engine_err(e: EngineError) -> RpcError {
 
 impl EngineService {
     pub fn new(engine: Arc<Engine>, default_mission: &str) -> Arc<EngineService> {
-        Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())) })
+        Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())), acquire_checked: Mutex::new(0) })
     }
 
     /// Run `org.action` through this binary instead of the current executable (tests, where that is the test binary).
@@ -279,8 +281,27 @@ impl EngineService {
             loop {
                 every.tick().await;
                 svc.timer_tick().await;
+                svc.acquire_tick().await;
             }
         });
+    }
+
+    /// Once an hour, and only when the operator turned it on: a daily acquisition run if one is due (`specs/055` §8).
+    async fn acquire_tick(&self) {
+        let now = (self.engine.clock_unix)();
+        {
+            let mut last = self.acquire_checked.lock().unwrap();
+            if now - *last < 3600 {
+                return;
+            }
+            *last = now;
+        }
+        if self.engine.cfg.get().library.acquire.enabled && crate::library::Library::in_home(&self.engine.ws.home).job_due(now) {
+            let e = self.engine.clone();
+            tokio::spawn(async move {
+                e.run_acquisition().await;
+            });
+        }
     }
 
     fn timers_json(&self) -> Value {
@@ -546,6 +567,7 @@ impl EngineService {
         let lib = crate::library::Library::in_home(&self.engine.ws.home);
         list.extend(crate::digest_review::pick(&m.id, &lib, &events, &now).map(|(p, left)| match p {
             crate::digest_review::Pick::Review(i) => crate::digest_review::to_decision(&i, left, &now),
+            crate::digest_review::Pick::Acquire(a) => crate::digest_review::acquire_decision(&a, left, &now),
             crate::digest_review::Pick::Note(n) => crate::digest::to_decision(&n, left, &now),
         }));
         list.sort_by_key(|d| crate::decision_model::rank(d["tier"].as_str().unwrap_or("")));
@@ -590,8 +612,105 @@ impl EngineService {
         });
     }
 
+    /// What an answer to the acquisition card sets going: the accepted sources are captured in the background by the daemon.
+    fn acquire_decided(&self, lib: &crate::library::Library, a: &crate::digest_review::AcquireItem, action: &str) -> Result<(), String> {
+        if self.engine.apply_acquire_choice(lib, &a.batch, action)? {
+            let e = self.engine.clone();
+            tokio::spawn(async move {
+                e.run_accepted_sources().await;
+            });
+        }
+        Ok(())
+    }
+
+    /// `library.acquire`: the operator asks for a run of the acquisition job now. Console only; the batch arrives in the digest.
+    async fn library_acquire(&self, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        if !self.engine.cfg.get().library.acquire.enabled {
+            return Err(err(code::INVALID_PARAMS, "library acquisition is off: set `[library.acquire] enabled = true`"));
+        }
+        let e = self.engine.clone();
+        tokio::spawn(async move {
+            e.run_acquisition().await;
+        });
+        Ok(json!({"started": true}))
+    }
+
     /// `digest.act`: the operator acts on the digest's candidate (`specs/052` §3.3): keep, check, promote or dismiss. Promote only writes a proposal
     /// for `/retro`; no choice resolves a card or satisfies a gate. The payload hash must be the one shown.
+    fn pages_now(&self) -> u64 {
+        (self.engine.clock_unix)().max(0) as u64
+    }
+
+    /// The instant half of a page search (`specs/057` §2): what the library holds for the words, no model and no network.
+    async fn pages_results(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let query = p["query"].as_str().unwrap_or("").trim().to_string();
+        if query.is_empty() {
+            return Err(err(code::INVALID_PARAMS, "a search needs words"));
+        }
+        let lib = crate::library::Library::in_home(&self.engine.ws.home);
+        let scope = if p["external"].as_bool() == Some(true) { crate::library::pages::Scope::External } else { crate::library::pages::Scope::Internal };
+        let g = lib.gather(&query, scope, &[]);
+        let hits: Vec<Value> = g.hits().into_iter().map(|h| json!({"kind": h.kind, "id": h.id, "title": h.title, "status": h.status, "private": h.private})).collect();
+        let ttl = self.engine.cfg.get().library.pages.external_ttl_secs;
+        let pages: Vec<Value> = lib.pages(self.pages_now(), ttl).iter().map(|e| e.to_json()).collect();
+        Ok(json!({"query": query, "hits": hits, "pages": pages}))
+    }
+
+    async fn pages_search(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let query = p["query"].as_str().unwrap_or("").trim().to_string();
+        if query.is_empty() {
+            return Err(err(code::INVALID_PARAMS, "a search needs words"));
+        }
+        let run = self.engine.clone().page_search(&query, p["external"].as_bool()).await.map_err(|e| err(code::INVALID_PARAMS, e))?;
+        let mut v = run.page.entry.to_json();
+        v["markdown"] = json!(run.page.markdown);
+        v["path"] = json!(run.page.path.display().to_string());
+        v["cached"] = json!(run.page.cached);
+        v["notes"] = json!(run.notes);
+        Ok(v)
+    }
+
+    async fn pages_list(&self, _p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let lib = crate::library::Library::in_home(&self.engine.ws.home);
+        let ttl = self.engine.cfg.get().library.pages.external_ttl_secs;
+        Ok(json!({"pages": lib.pages(self.pages_now(), ttl).iter().map(|e| e.to_json()).collect::<Vec<_>>()}))
+    }
+
+    async fn pages_open(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let lib = crate::library::Library::in_home(&self.engine.ws.home);
+        let ttl = self.engine.cfg.get().library.pages.external_ttl_secs;
+        let key = p["key"].as_str().unwrap_or("");
+        let Some((e, md)) = lib.open_page(key, self.pages_now(), ttl) else { return Err(err(code::NOT_FOUND, "no such page")) };
+        let mut v = e.to_json();
+        v["markdown"] = json!(md);
+        Ok(v)
+    }
+
+    async fn pages_pin(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let lib = crate::library::Library::in_home(&self.engine.ws.home);
+        let ttl = self.engine.cfg.get().library.pages.external_ttl_secs;
+        let e = lib.pin_page(p["key"].as_str().unwrap_or(""), p["pinned"].as_bool().unwrap_or(true), self.pages_now(), ttl).map_err(|e| err(code::NOT_FOUND, e))?;
+        Ok(e.to_json())
+    }
+
+    async fn pages_dispute(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let lib = crate::library::Library::in_home(&self.engine.ws.home);
+        lib.dispute_claim(p["claim"].as_str().unwrap_or(""), p["note"].as_str().unwrap_or("")).map_err(|e| err(code::INVALID_PARAMS, e))
+    }
+
+    async fn pages_promote(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let lib = crate::library::Library::in_home(&self.engine.ws.home);
+        lib.promote_statement(p["page"].as_str().unwrap_or(""), p["statement"].as_str().unwrap_or("")).map_err(|e| err(code::INVALID_PARAMS, e))
+    }
+
     async fn digest_act(&self, p: Value, ctx: CallContext) -> RpcOutcome {
         need_console(&ctx)?;
         let m = self.mission(p["mission_id"].as_str()).await?;
@@ -603,6 +722,7 @@ impl EngineService {
         };
         let (hash, id) = match &pick {
             crate::digest_review::Pick::Review(i) => (crate::digest_review::payload_hash(i), i.id.clone()),
+            crate::digest_review::Pick::Acquire(a) => (crate::digest_review::acquire_hash(a), a.id.clone()),
             crate::digest_review::Pick::Note(n) => (crate::digest::payload_hash(n), n.id.clone()),
         };
         if p["payload_blake3"].as_str() != Some(hash.as_str()) {
@@ -611,6 +731,7 @@ impl EngineService {
         let action = p["choice_id"].as_str().unwrap_or("");
         let evs = match &pick {
             crate::digest_review::Pick::Review(i) => crate::digest_review::act(&m.id, i, action),
+            crate::digest_review::Pick::Acquire(a) => crate::digest_review::acquire_act(&m.id, a, action),
             crate::digest_review::Pick::Note(n) => crate::digest::act(&m.id, n, action),
         };
         let evs = evs.map_err(|e| err(code::INVALID_PARAMS, e))?;
@@ -619,6 +740,9 @@ impl EngineService {
             if let Some(c) = i.claims.first().and_then(|c| c["id"].as_str()) {
                 lib.confirm_claim(c).map_err(|e| err(code::INVALID_PARAMS, e))?;
             }
+        }
+        if let crate::digest_review::Pick::Acquire(a) = &pick {
+            self.acquire_decided(&lib, a, action).map_err(|e| err(code::INVALID_PARAMS, e))?;
         }
         for ev in evs {
             m.append(ev).await.map_err(|e| err(-32000, e.to_string()))?;
@@ -861,6 +985,7 @@ impl EngineService {
         let tools = crate::observe::tool_stats(&events);
         let adoption = crate::toolreport::report(&events);
         let files = crate::observe::file_heat(&events);
+        let context = crate::ctxacct::report(&events);
         events.retain(|e| crate::observe::KINDS.contains(&e.kind.as_str()));
         let skip = events.len().saturating_sub(4000);
         let mut st = crate::observe::ObserverState::new(&self.engine.settings.enabled_agents);
@@ -875,6 +1000,7 @@ impl EngineService {
         v["token_cap"] = json!(self.engine.settings.harness_token_cap);
         v["adoption"] = serde_json::to_value(&adoption).expect("adoption serializes");
         v["files"] = serde_json::to_value(&files).expect("file heat serializes");
+        v["context"] = serde_json::to_value(&context).expect("context report serializes");
         v["mission_id"] = json!(m.id);
         v["budget"] = Self::budget_json(&m);
         v["pending_proposals"] = json!(crate::ratify::list(&self.engine.ws.home, &self.engine.ws.dir).len());
@@ -981,6 +1107,45 @@ impl EngineService {
         .map_err(|e| err(-32000, e.to_string()))?
         .map_err(|e| err(-32000, e.to_string()))?;
         Ok(json!({"status": r.status, "body": r.body}))
+    }
+
+    /// `kb.open`: the operator asked to hand a file of the archives to their own viewer (`specs/043` §6.3). Console only. The
+    /// daemon checks that the path is a visible indexed document with an allow-listed extension whose canonical path is inside the
+    /// workspace, logs `kb.opened` (path, blake3, extension; never the content) and returns the canonical path for the console to
+    /// pass, as one argument, to the system opener. The daemon itself spawns nothing and never reads the file's content for anyone.
+    async fn kb_open(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let path = p["path"].as_str().unwrap_or("").to_string();
+        if path.is_empty() || path.len() > 1024 || path.contains('\0') {
+            return Err(err(code::INVALID_PARAMS, "`path` must be a document path of at most 1024 characters"));
+        }
+        let ws = self.engine.ws.dir.clone();
+        let which = path.clone();
+        let opened = tokio::task::spawn_blocking(move || -> Result<Result<crate::kb_docs::Opened, String>, crate::kb::KbError> {
+            let mut kb = crate::kb::Kb::open(&ws.join("local/state.db"))?;
+            kb.refresh(&ws, "")?;
+            Ok(crate::kb_docs::openable(&ws, &kb, &which))
+        })
+        .await
+        .map_err(|e| err(-32000, e.to_string()))?
+        .map_err(|e| err(-32000, e.to_string()))?
+        .map_err(|e| err(code::INVALID_PARAMS, e))?;
+        if let Ok(m) = self.mission(None).await {
+            let _ = m.append(EventEnvelope::new(&m.id, "kb.opened", json!({"path": path, "blake3": opened.blake3, "extension": opened.extension}))).await;
+        }
+        Ok(json!({"file": opened.file.to_string_lossy(), "extension": opened.extension, "blake3": opened.blake3, "trust": opened.trust}))
+    }
+
+    /// `kb.allows`: whether an address is one the operator's trusted-source lists allow. The console asks before it hands any link to the
+    /// browser (`specs/043` §6.3); it reads only and spawns nothing, and a list that cannot be read allows nothing.
+    async fn kb_allows(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let url = p["url"].as_str().unwrap_or("");
+        if url.is_empty() || url.len() > 4096 {
+            return Err(err(code::INVALID_PARAMS, "`url` must be an address of at most 4096 characters"));
+        }
+        let allowed = crate::research_setup::lists(&self.engine.ws.dir, &self.engine.ws.home).ok().is_some_and(|t| t.allows_url(url).is_some());
+        Ok(json!({"allowed": allowed}))
     }
 
     /// `answer.accept`: the operator kept the last answer (`/pin`, `/export`). It only marks the answer in the mission log; the daemon
@@ -1295,10 +1460,17 @@ impl EngineService {
                 .map(|p| {
                     let mut v = p.to_json();
                     v["blocked"] = json!(crate::retro::check(home, ws, p));
+                    v["candidates"] = json!(crate::retro::candidates_for(home, ws, p).iter().map(|c| c.to_json()).collect::<Vec<_>>());
                     v
                 })
                 .collect(),
         ))
+    }
+
+    /// Expired staged notes and rules files past their review window (`specs/050` ML-3). A read; nothing here changes an entry.
+    fn retro_stale(&self, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        Ok(Value::Array(crate::retro::stale(&self.engine.ws.home, &self.engine.ws.dir, &delphi_core::bundles::today()).iter().map(|s| s.to_json()).collect()))
     }
 
     /// Accept or reject one proposal by its `ref` (`<mission>/<id>`). Accepting writes the scope's `heuristics.md` through the
@@ -1321,7 +1493,7 @@ impl EngineService {
         if accept {
             let f = found.clone();
             let done = tokio::task::spawn_blocking(move || crate::retro::accept(&home, &ws, &f)).await.map_err(|e| err(-32000, e.to_string()))?.map_err(|e| err(code::INVALID_PARAMS, e))?;
-            detail = json!({"by": by, "scope": found.scope, "file": done.file, "pin": done.pin});
+            detail = json!({"by": by, "scope": found.scope, "file": done.file, "pin": done.pin, "retired": done.retired.iter().map(|(id, text)| json!({"id": id, "text": text})).collect::<Vec<_>>()});
             let (zone, path) = if found.scope == "operator" { (delphi_core::provenance::Zone::Local, "heuristics.md".to_string()) } else { crate::tools::zone_of("heuristics.md") };
             m.append(EventEnvelope::new(&m.id, "provenance.stamp", delphi_core::provenance::Index::stamp_payload(zone, &path, &done.pin, delphi_core::provenance::Tier::L5))).await.map_err(engine_err)?;
         }
@@ -1618,12 +1790,22 @@ impl Extension for ServiceExt {
                 "decision.confirm" => svc.decision_confirm(params, ctx).await,
                 "decision.retry_brief" => svc.decision_retry_brief(params, ctx).await,
                 "decision.resolve" => svc.decision_resolve(params, ctx).await,
+                "pages.results" => svc.pages_results(params, ctx).await,
+                "pages.search" => svc.pages_search(params, ctx).await,
+                "pages.list" => svc.pages_list(params, ctx).await,
+                "pages.open" => svc.pages_open(params, ctx).await,
+                "pages.pin" => svc.pages_pin(params, ctx).await,
+                "pages.dispute" => svc.pages_dispute(params, ctx).await,
+                "pages.promote" => svc.pages_promote(params, ctx).await,
                 "digest.act" => svc.digest_act(params, ctx).await,
+                "library.acquire" => svc.library_acquire(ctx).await,
                 "decisions.review" => svc.decisions_review(params, ctx).await,
                 "council.start" => svc.council_start(params, ctx).await,
                 "bundle.distill" => svc.distill_start(params, ctx).await,
                 "kb.search" => svc.kb_search(params).await,
                 "kb.get" => svc.kb_get(params).await,
+                "kb.open" => svc.kb_open(params, ctx).await,
+                "kb.allows" => svc.kb_allows(params, ctx).await,
                 "observe.snapshot" => svc.observe_snapshot(params).await,
                 "observe.state" => svc.observe_state(params).await,
                 "kb.index" => svc.kb_index(ctx).await,
@@ -1658,6 +1840,7 @@ impl Extension for ServiceExt {
                 "ratify.list" => svc.ratify_list(),
                 "ratify.apply" => svc.ratify_change(params, ctx, false).await,
                 "retro.list" => svc.retro_list(ctx),
+                "retro.stale" => svc.retro_stale(ctx),
                 "retro.accept" => svc.retro_resolve(params, ctx, true).await,
                 "retro.reject" => svc.retro_resolve(params, ctx, false).await,
                 "ratify.reject" => svc.ratify_change(params, ctx, true).await,
@@ -2378,7 +2561,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            for (m, p) in [("task.submit", json!({"prompt": "hi"})), ("task.cancel", json!({})), ("build.start", json!({"prompt": "hi"})), ("council.start", json!({"proposition": "hi"})), ("bundle.distill", json!({})), ("kb.index", json!({})), ("xenia.quarantine", json!({"query": "x"})), ("xenia.status", json!({})), ("xenia.attest.prepare", json!({"action": "endorse"})), ("xenia.attest.decide", json!({"code": "x", "decision": "sign"})), ("xenia.admin.prepare", json!({"action": "refresh"})), ("xenia.admin.decide", json!({"code": "x", "decision": "sign"})), ("org.action", json!({"action": "remove", "name": "x"})), ("org.trust", json!({"action": "raise", "name": "x", "confirm": "x"})), ("validation.latch", json!({"to": "advisory", "reason": "a good reason", "confirm": "advisory"})), ("org.view", json!({})), ("approval.resolve", json!({"approval_id": "a", "payload_blake3": "b", "decision": "allow"})), ("budget.set", json!({"usd": 99})), ("permissions.set", json!({"mode": "mission-auto"})), ("mission.open", json!({})), ("session.new", json!({})), ("session.context", json!({})), ("council.follow", json!({})), ("settings.get", json!({})), ("settings.set", json!({})), ("settings.accept", json!({})), ("settings.dismiss", json!({}))] {
+            for (m, p) in [("task.submit", json!({"prompt": "hi"})), ("task.cancel", json!({})), ("build.start", json!({"prompt": "hi"})), ("council.start", json!({"proposition": "hi"})), ("bundle.distill", json!({})), ("kb.index", json!({})), ("kb.open", json!({"path": "context/a.pdf"})), ("kb.allows", json!({"url": "https://example.com/"})), ("xenia.quarantine", json!({"query": "x"})), ("xenia.status", json!({})), ("xenia.attest.prepare", json!({"action": "endorse"})), ("xenia.attest.decide", json!({"code": "x", "decision": "sign"})), ("xenia.admin.prepare", json!({"action": "refresh"})), ("xenia.admin.decide", json!({"code": "x", "decision": "sign"})), ("org.action", json!({"action": "remove", "name": "x"})), ("org.trust", json!({"action": "raise", "name": "x", "confirm": "x"})), ("validation.latch", json!({"to": "advisory", "reason": "a good reason", "confirm": "advisory"})), ("org.view", json!({})), ("approval.resolve", json!({"approval_id": "a", "payload_blake3": "b", "decision": "allow"})), ("budget.set", json!({"usd": 99})), ("permissions.set", json!({"mode": "mission-auto"})), ("mission.open", json!({})), ("session.new", json!({})), ("session.context", json!({})), ("council.follow", json!({})), ("settings.get", json!({})), ("settings.set", json!({})), ("settings.accept", json!({})), ("settings.dismiss", json!({}))] {
                 assert_eq!(rpc_code(c.call(m, p)), Some(code::FORBIDDEN), "{}", m);
             }
             for m in ["usage.get", "approval.list", "permissions.get", "budget.get", "session.snapshot", "observe.snapshot", "observe.state"] {
@@ -2468,7 +2651,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "research.start", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "retro.list", "retro.accept", "retro.reject", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
+            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "kb.open", "research.start", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "retro.list", "retro.stale", "retro.accept", "retro.reject", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
             for m in every_mutating_method_the_daemon_has {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }
@@ -2525,7 +2708,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let everything_a_relay_must_not_reach = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "research.start", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","kb.search", "kb.get", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "models.get", "anything.else"];
+            let everything_a_relay_must_not_reach = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "kb.open", "research.start", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","kb.search", "kb.get", "kb.allows", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "models.get", "anything.else"];
             for m in everything_a_relay_must_not_reach {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }

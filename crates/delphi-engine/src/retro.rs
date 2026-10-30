@@ -18,6 +18,49 @@ pub const MAX_RULES: usize = 25;
 pub const MAX_BYTES: usize = 6144;
 /// Jaccard overlap of the words of two rules at or above which an `add` is refused as a duplicate.
 pub const DUPLICATE_AT: f64 = 0.6;
+/// Word overlap at or above which an existing rule is *shown* beside an `add` as a supersession candidate (`specs/050` ML-2).
+pub const SUPERSESSION_AT: f64 = 0.3;
+/// Most rules one `add` may name as replaced.
+pub const MAX_SUPERSEDES: usize = 3;
+
+/// A rule id as this file numbers them: `W-` or `O-` and digits.
+pub fn is_rule_id(id: &str) -> bool {
+    id.strip_prefix("W-").or_else(|| id.strip_prefix("O-")).is_some_and(|n| (1..=6).contains(&n.len()) && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// An active rule a proposed `add` may replace: named by the proposal, or close to it by shared words. Shown, never applied.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Candidate {
+    pub id: String,
+    pub named: bool,
+    pub overlap: f64,
+}
+
+impl Candidate {
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({"id": self.id, "named": self.named, "overlap": (self.overlap * 100.0).round() / 100.0})
+    }
+}
+
+/// The rules in `rules` that `p` names in `supersedes` or resembles, named first, then by overlap. Only an `add` has any.
+pub fn candidates(p: &LiveProposal, rules: &[Rule]) -> Vec<Candidate> {
+    if p.op != "add" {
+        return vec![];
+    }
+    let a = words(&p.text);
+    let mut out: Vec<Candidate> = rules
+        .iter()
+        .filter_map(|r| {
+            let b = words(r.block.lines().skip(1).collect::<Vec<_>>().join(" ").as_str());
+            let (i, u) = (a.intersection(&b).count() as f64, a.union(&b).count() as f64);
+            let overlap = if u == 0.0 { 0.0 } else { i / u };
+            let named = p.supersedes.contains(&r.id);
+            (named || overlap >= SUPERSESSION_AT).then(|| Candidate { id: r.id.clone(), named, overlap })
+        })
+        .collect();
+    out.sort_by(|x, y| y.named.cmp(&x.named).then(y.overlap.total_cmp(&x.overlap)).then(x.id.cmp(&y.id)));
+    out
+}
 
 /// One `### [ID] title` block of a rules file, with everything up to the next block.
 #[derive(Debug, Clone, PartialEq)]
@@ -84,10 +127,18 @@ pub fn problems(p: &LiveProposal, privacy: &Privacy, rules: &[Rule]) -> Vec<Stri
     }
     match p.op.as_str() {
         "add" => {
-            if let Some((id, score)) = nearest(&p.text, rules).filter(|(_, s)| *s >= DUPLICATE_AT) {
+            let kept: Vec<Rule> = rules.iter().filter(|r| !p.supersedes.contains(&r.id)).cloned().collect();
+            for id in &p.supersedes {
+                match rules.iter().find(|r| &r.id == id) {
+                    None => out.push(format!("it supersedes [{}], which is not in the {} file", id, p.scope)),
+                    Some(r) if r.block.to_lowercase().contains("security") => out.push(format!("[{}] is a security rule; those are never retired here", id)),
+                    Some(_) => {}
+                }
+            }
+            if let Some((id, score)) = nearest(&p.text, &kept).filter(|(_, s)| *s >= DUPLICATE_AT) {
                 out.push(format!("it repeats [{}] ({:.0}% of the same words); use `merge` with target {}", id, score * 100.0, id));
             }
-            if rules.len() >= MAX_RULES {
+            if kept.len() >= MAX_RULES {
                 out.push(format!("the file already holds {} rules (the cap); demote or merge one first", rules.len()));
             }
         }
@@ -116,6 +167,8 @@ pub fn edited(current: Option<&str>, p: &LiveProposal) -> Result<String, String>
     let (header, mut rules) = parse_rules(current.unwrap_or(&stub));
     match p.op.as_str() {
         "add" => {
+            let retired: Vec<&String> = p.supersedes.iter().collect();
+            rules.retain(|r| !retired.contains(&&r.id));
             let next = rules.iter().filter_map(|r| r.id.strip_prefix(&format!("{}-", prefix))?.parse::<u32>().ok()).max().unwrap_or(0) + 1;
             rules.push(Rule { id: format!("{}-{:03}", prefix, next), block: render(&format!("{}-{:03}", prefix, next), p) });
         }
@@ -151,6 +204,8 @@ pub struct Accepted {
     pub scope: Scope,
     pub file: String,
     pub pin: String,
+    /// Rules this ratification retired (`specs/050` ML-2): id and full text, for the log, which is their history.
+    pub retired: Vec<(String, String)>,
 }
 
 fn scope_of(p: &LiveProposal) -> Scope {
@@ -181,6 +236,64 @@ pub fn collect(ws_dir: &Path) -> Vec<LiveProposal> {
     all
 }
 
+/// Days after `last_confirmed` (or `created`) that a ratified rules file is listed for review (`specs/050` OD-3).
+pub const REVIEW_WINDOW_DAYS: i64 = 90;
+
+/// One entry the operator should look at again: a staged note past its `valid_until`, or a rules file whose
+/// `last_confirmed` is older than the review window. Listed, never removed or reloaded differently (`specs/050` ML-3).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Stale {
+    /// `note` or `rules`.
+    pub kind: &'static str,
+    /// `<mission>/<id>` for a note, the file's name for rules.
+    pub reference: String,
+    pub since: String,
+    pub detail: String,
+}
+
+impl Stale {
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({"kind": self.kind, "ref": self.reference, "since": self.since, "detail": self.detail})
+    }
+}
+
+fn day_number(date: &str) -> Option<i64> {
+    delphi_core::time::parse_rfc3339(&format!("{}T00:00:00Z", date.get(..10)?)).map(|s| s.div_euclid(86_400))
+}
+
+/// The stale list as of `today` (`YYYY-MM-DD`): expired notes, newest expiry first, then rules files past the window.
+/// A note without a date and a file without `last_confirmed` or `created` are never listed.
+pub fn stale(home: &Path, ws_dir: &Path, today: &str) -> Vec<Stale> {
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(ws_dir.join("local/missions")).into_iter().flatten().flatten() {
+        let Some(id) = entry.file_name().to_str().map(String::from) else { continue };
+        let Ok(events) = delphi_core::log::replay(&entry.path()) else { continue };
+        for n in crate::learn::live_notes(&id, &events) {
+            if let Some(until) = n.valid_until.as_deref().filter(|u| *u < today) {
+                out.push(Stale { kind: "note", reference: n.reference(), since: until.to_string(), detail: format!("expired {}: {}", until, n.summary) });
+            }
+        }
+    }
+    out.sort_by(|a, b| b.since.cmp(&a.since).then_with(|| a.reference.cmp(&b.reference)));
+    let now = day_number(today);
+    for (name, path) in [("local/heuristics.md", ws_dir.join("local/ratified/heuristics.md")), ("operator/heuristics.md", home.join("operator/ratified/heuristics.md"))] {
+        let Ok(text) = std::fs::read_to_string(path) else { continue };
+        let Some(fm) = crate::workspace::split_frontmatter(&text).0 else { continue };
+        let Some(since) = ["last_confirmed", "created"].iter().find_map(|k| fm.get(*k).and_then(|v| v.as_str())).and_then(|d| d.get(..10)) else { continue };
+        if let (Some(a), Some(b)) = (day_number(since), now) {
+            if b - a > REVIEW_WINDOW_DAYS {
+                out.push(Stale { kind: "rules", reference: name.into(), since: since.to_string(), detail: format!("last confirmed {} ({} days; review window {})", since, b - a, REVIEW_WINDOW_DAYS) });
+            }
+        }
+    }
+    out
+}
+
+/// Supersession candidates for `p` against the rules of its target file, for `delphi retro show` and `/retro`.
+pub fn candidates_for(home: &Path, ws_dir: &Path, p: &LiveProposal) -> Vec<Candidate> {
+    candidates(p, &current_rules(home, ws_dir, p))
+}
+
 /// What stands in the way of ratifying `p`, for `delphi retro show`.
 pub fn check(home: &Path, ws_dir: &Path, p: &LiveProposal) -> Vec<String> {
     problems(p, &crate::distill::privacy(ws_dir), &current_rules(home, ws_dir, p))
@@ -194,11 +307,12 @@ pub fn accept(home: &Path, ws_dir: &Path, p: &LiveProposal) -> Result<Accepted, 
         return Err(found.join("; "));
     }
     let scope = scope_of(p);
+    let retired: Vec<(String, String)> = current_rules(home, ws_dir, p).into_iter().filter(|r| p.op == "add" && p.supersedes.contains(&r.id)).map(|r| (r.id, r.block.trim_end().to_string())).collect();
     let pin = ratify::edit_pinned(home, ws_dir, scope, "heuristics.md", |cur| edited(cur, p)).map_err(|e| match e {
         RatifyError::Stale { .. } => "the rules file has edits that were never ratified; review them with /ratify first".to_string(),
         other => other.to_string(),
     })?;
-    Ok(Accepted { scope, file: if scope == Scope::Operator { "operator/heuristics.md".into() } else { "local/heuristics.md".into() }, pin })
+    Ok(Accepted { scope, file: if scope == Scope::Operator { "operator/heuristics.md".into() } else { "local/heuristics.md".into() }, pin, retired })
 }
 
 #[cfg(test)]
@@ -206,7 +320,7 @@ mod tests {
     use super::*;
 
     fn prop(op: &str, scope: &str, text: &str, target: &str) -> LiveProposal {
-        LiveProposal { mission: "m1".into(), id: "p1".into(), op: op.into(), scope: scope.into(), text: text.into(), rationale: "two builds failed".into(), target: target.into(), tier: "L3".into(), task_id: None, timestamp: "t".into() }
+        LiveProposal { mission: "m1".into(), id: "p1".into(), op: op.into(), scope: scope.into(), text: text.into(), rationale: "two builds failed".into(), target: target.into(), tier: "L3".into(), task_id: None, timestamp: "t".into(), supersedes: vec![] }
     }
 
     const FILE: &str = "---\nid: w\n---\n\n### [W-001] Format first\n- **D:** Run the formatter before the tests.\n\n### [W-002] Security: no secrets in logs\n- **D:** Never log tokens. security\n";
@@ -280,6 +394,61 @@ mod tests {
         let op = accept(&ws.home, &ws.dir, &prop("add", "operator", "Prefer rg over grep.", "")).unwrap();
         assert_eq!(op.file, "operator/heuristics.md");
         assert!(std::fs::read_to_string(ws.home.join("operator/ratified/heuristics.md")).unwrap().contains("[O-002] Prefer rg over grep"));
+    }
+
+    #[test]
+    fn stale_lists_expired_notes_and_rules_past_the_window_and_nothing_else() {
+        use crate::workspace::tests::make_workspace;
+        use delphi_core::event::EventEnvelope;
+        let t = tempfile::tempdir().unwrap();
+        let ws = make_workspace(t.path());
+        let dir = ws.dir.join("local/missions/m1");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut log = delphi_core::log::EventLog::open(&dir, delphi_core::log::LogOptions::default()).unwrap();
+        for (id, until) in [("n1", Some("2026-10-01")), ("n2", Some("2026-12-01")), ("n3", None)] {
+            let mut p = serde_json::json!({"id": id, "trigger": "agent_note", "summary": format!("note {}", id), "event_seqs": [1], "tier": "L3"});
+            if let Some(u) = until {
+                p["valid_until"] = serde_json::json!(u);
+            }
+            log.append(EventEnvelope::new("m1", "learn.staged", p)).unwrap();
+        }
+        drop(log);
+        std::fs::write(ws.dir.join("local/ratified/heuristics.md"), "---\nid: w\nlast_confirmed: 2026-06-01\n---\n\n### [W-001] x\n- **D:** y\n").unwrap();
+        let got = stale(&ws.home, &ws.dir, "2026-10-29");
+        let refs: Vec<_> = got.iter().map(|s| s.reference.as_str()).collect();
+        assert_eq!(refs, ["m1/n1", "local/heuristics.md"], "{:?}", got);
+        assert!(stale(&ws.home, &ws.dir, "2026-10-01").iter().all(|s| s.kind == "rules"), "the last valid day is not stale");
+        assert!(stale(&ws.home, &ws.dir, "2026-08-01").is_empty(), "inside the window");
+    }
+
+    #[test]
+    fn a_superseding_add_retires_only_what_it_names_and_only_when_ratified() {
+        use crate::workspace::tests::make_workspace;
+        let mut p = prop("add", "workspace", "Run the formatter and the linter before the tests.", "");
+        p.supersedes = vec!["W-001".into()];
+        let (_, rules) = parse_rules(FILE);
+        let c = candidates(&p, &rules);
+        assert_eq!((c[0].id.as_str(), c[0].named), ("W-001", true));
+        assert!(problems(&p, &Privacy::default(), &rules).is_empty(), "repeating the rule it replaces is not a duplicate");
+        p.supersedes = vec!["W-002".into()];
+        assert!(problems(&p, &Privacy::default(), &rules).iter().any(|d| d.contains("security rule")));
+        p.supersedes = vec!["W-077".into()];
+        assert!(problems(&p, &Privacy::default(), &rules).iter().any(|d| d.contains("not in the workspace file")));
+        let mut unnamed = prop("add", "workspace", "Run the formatter and the linter before the tests.", "");
+        assert!(candidates(&unnamed, &rules).iter().all(|c| !c.named) && !candidates(&unnamed, &rules).is_empty(), "a similar rule is shown, not retired");
+        unnamed.supersedes = vec![];
+        assert!(edited(Some(FILE), &unnamed).unwrap().contains("W-001"));
+        let t = tempfile::tempdir().unwrap();
+        let ws = make_workspace(t.path());
+        let first = accept(&ws.home, &ws.dir, &prop("add", "workspace", "Pin the toolchain in CI images.", "")).unwrap();
+        assert!(first.retired.is_empty());
+        let mut q = prop("add", "workspace", "Pin the toolchain and the base image in CI.", "");
+        q.supersedes = vec!["W-002".into()];
+        let done = accept(&ws.home, &ws.dir, &q).unwrap();
+        assert_eq!(done.retired.len(), 1);
+        assert!(done.retired[0].1.contains("Pin the toolchain in CI images"));
+        let live = std::fs::read_to_string(ws.dir.join("local/heuristics.md")).unwrap();
+        assert!(!live.contains("Pin the toolchain in CI images") && live.contains("and the base image"), "{}", live);
     }
 
     #[test]

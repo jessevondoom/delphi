@@ -29,15 +29,28 @@ pub struct LoopConfig {
     pub budget_warnings: bool,
     pub verify_gate: bool,
     pub workspace_bootstrap: bool,
+    /// A tool result over this many KB is stored and the history holds a handle and a preview; 0 = off (T5, CX-2).
+    pub tool_result_limit_kb: u32,
+    /// Old tool results are cleared in batches of about this many KB; 0 = off (T5).
+    pub clear_after_kb: u32,
+    /// Large string arguments of old tool calls are trimmed when a call's arguments reach this many KB; 0 = off (CX-1).
+    pub trim_arguments_kb: u32,
+    /// Assistant turns, counted from the end, that clearing and trimming leave whole.
+    pub keep_recent_turns: u32,
 }
 
 impl Default for LoopConfig {
     fn default() -> LoopConfig {
-        LoopConfig { nudge: true, nudge_edits: 4, budget_warnings: true, verify_gate: true, workspace_bootstrap: true }
+        LoopConfig { nudge: true, nudge_edits: 4, budget_warnings: true, verify_gate: true, workspace_bootstrap: true, tool_result_limit_kb: 0, clear_after_kb: 0, trim_arguments_kb: 0, keep_recent_turns: crate::ctxhist::DEFAULT_KEEP_TURNS as u32 }
     }
 }
 
 impl LoopConfig {
+    /// What the request's copy of the history gives up (`ctxhist::view`).
+    pub fn view_opts(&self) -> crate::ctxhist::ViewOpts {
+        crate::ctxhist::ViewOpts { clear_after: self.clear_after_kb as usize * 1024, trim_args: self.trim_arguments_kb as usize * 1024, keep_turns: self.keep_recent_turns as usize }
+    }
+
     pub fn from_root(root: &toml::Value) -> LoopConfig {
         let mut c = LoopConfig::default();
         let Some(t) = root.get("loop") else { return c };
@@ -46,6 +59,11 @@ impl LoopConfig {
         c.budget_warnings = flag("budget_warnings", c.budget_warnings);
         c.verify_gate = flag("verify_gate", c.verify_gate);
         c.workspace_bootstrap = flag("workspace_bootstrap", c.workspace_bootstrap);
+        let count = |k: &str, d: u32| t.get(k).and_then(|v| v.as_integer()).filter(|n| *n >= 0).map(|n| n.min(u32::MAX as i64) as u32).unwrap_or(d);
+        c.tool_result_limit_kb = count("tool_result_limit_kb", c.tool_result_limit_kb);
+        c.clear_after_kb = count("clear_after_kb", c.clear_after_kb);
+        c.trim_arguments_kb = count("trim_arguments_kb", c.trim_arguments_kb);
+        c.keep_recent_turns = count("keep_recent_turns", c.keep_recent_turns).max(1);
         if let Some(n) = t.get("nudge_edits").and_then(|v| v.as_integer()).filter(|n| *n > 0) {
             c.nudge_edits = n as u32;
         }
@@ -73,6 +91,8 @@ pub struct SpanLoop {
     pub calls: u32,
     /// The verification turn was given.
     pub gated: bool,
+    /// What the last request's copy of the history had given up (`ctxhist::ViewStats::signature`), to say when the cached prefix changed.
+    pub view_sig: (u32, u32),
 }
 
 /// The file a write-type tool call names, if it is one.
@@ -234,6 +254,9 @@ mod tests {
         assert!(!c.nudge && !c.verify_gate && c.budget_warnings && c.workspace_bootstrap);
         assert_eq!(c.nudge_edits, 7);
         assert_eq!(LoopConfig::from_root(&toml::from_str("[loop]\nnudge_edits = 0\n").unwrap()).nudge_edits, 4);
+        let h = LoopConfig::from_root(&toml::from_str("[loop]\ntool_result_limit_kb = 16\nclear_after_kb = 64\ntrim_arguments_kb = 4\nkeep_recent_turns = 0\n").unwrap());
+        assert_eq!((h.tool_result_limit_kb, h.clear_after_kb, h.trim_arguments_kb, h.keep_recent_turns), (16, 64, 4, 1));
+        assert!(cfg().view_opts().is_off(), "context hygiene is off until measured");
     }
 
     #[test]

@@ -15,9 +15,10 @@ import * as I from './inbox.ts';
 import * as D from './decisions-pane.ts';
 import * as P from './panel.ts';
 import * as A from './archives.ts';
+import * as PG from './pages.ts';
 import { imageRefs } from './markdown.ts';
 import { pictureStyle, rasterOf, styleOf, usePictureStyle } from './image.ts';
-import { openExternal } from './external.ts';
+import { openExternal, openFile } from './external.ts';
 import * as O from './org.ts';
 import { noteSources, passageOf, pin, previewOf, readNotes } from './research.ts';
 import { copyText, firstVisible, stepFocus, type Target } from './links.ts';
@@ -151,7 +152,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
     const t = setInterval(() => {
       const n = Date.now(), s = stateRef.current;
       const ty = typingOf(s);
-      const key = tickKey(s.agents, STRIP_ROLES.filter((r) => info.roles[r]), n, still, Object.keys(s.running).length > 0, ty ? String(typingFrame(ty.since, ty.id, n, still)) : '');
+      const key = tickKey(s.agents, STRIP_ROLES.filter((r) => info.roles[r]), n, still, Object.keys(s.running).length > 0 || archRef.current.pg.busy !== null, ty ? String(typingFrame(ty.since, ty.id, n, still)) : '');
       if (key !== last) { last = key; setNow(n); }
     }, TICK_MS);
     return () => clearInterval(t);
@@ -347,10 +348,27 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
         if (r.status !== 200 && on === 'rdr') fail(r.status === 404 ? `${t.path} is not in the knowledge base` : r.body?.error ?? 'could not open it');
       }).catch(() => fail('could not open it'));
     } else if (act.t === 'pin') pinTarget(act.target);
-    else if (act.t === 'browser') fail(openExternal(act.url) ? `opened ${act.url} in your browser` : 'could not open the browser');
+    else if (act.t === 'browser') {
+      // Every handoff asks the daemon first: only an address on the operator's lists is opened.
+      void cmd.call('kb.allows', { url: act.url }).then((r: any) => fail(r?.allowed !== true ? 'seen, not read: that address is not on your list' : openExternal(act.url) ? `opened ${act.url} in your browser` : 'could not open the browser')).catch(() => fail('could not check your list: not opened'));
+    }
+    else if (act.t === 'file') {
+      // The console asks the daemon to vouch for the file (indexed, allowed type, inside the workspace); the viewer is the system's, and Delphi never runs it.
+      void cmd.call('kb.open', { path: act.path }).then((r: any) => fail(openFile(String(r?.file ?? '')) ? `✔ opened in your browser · read-only, Delphi never runs it${r?.trust && r.trust !== 'internal_generated' ? ' · untrusted' : ''}` : 'could not open the browser')).catch((er) => fail(er?.message ?? 'could not open it'));
+    }
     else if (act.t === 'copy') { copyToClipboard(act.text); fail('copied'); }
     else if (act.t === 'research') startResearch(act.topic);
     else if (act.t === 'research-cancel') void cmd.call('research.cancel', {}).catch(() => {});
+    else if (act.t === 'pages-list') cmd.call('pages.list', {}).then((r: any) => setArch((a) => A.gotPages(a, (p) => PG.gotList(p, r)))).catch(() => {});
+    else if (act.t === 'pages-search') {
+      // What the library holds shows at once (no model); the page follows when the writer and the checks are done.
+      const { q, external } = act;
+      cmd.call('pages.results', { query: q, external }).then((r: any) => setArch((a) => A.gotPages(a, (p) => PG.gotResults(p, q, r)))).catch((e: any) => setArch((a) => A.gotPages(a, (p) => PG.failed(p, e?.message ?? 'could not search the library'))));
+      cmd.call('pages.search', { query: q, external }).then((r: any) => setArch((a) => A.gotPages(a, (p) => PG.gotPage(p, q, r)))).catch((e: any) => setArch((a) => A.gotPages(a, (p) => PG.failed(p, e?.message ?? 'the page could not be made'))));
+    } else if (act.t === 'pages-open') cmd.call('pages.open', { key: act.key }).then((r: any) => setArch((a) => A.gotPages(a, (p) => PG.gotOpened(p, r)))).catch((e: any) => setArch((a) => A.gotPages(a, (p) => PG.failed(p, e?.message ?? 'could not open the page'))));
+    else if (act.t === 'pages-pin') cmd.call('pages.pin', { key: act.key, pinned: act.pinned }).then((r: any) => setArch((a) => A.gotPages(a, (p) => PG.gotPinned(p, r)))).catch((e: any) => setArch((a) => A.gotPages(a, (p) => PG.withNote(p, e?.message ?? 'could not save it'))));
+    else if (act.t === 'pages-dispute') cmd.call('pages.dispute', { claim: act.claim, note: act.note }).then(() => setArch((a) => A.gotPages(a, (p) => PG.withNote(p, `${act.claim} is contested: it reads not validated until the contest is resolved`)))).catch((e: any) => setArch((a) => A.gotPages(a, (p) => PG.withNote(p, e?.message ?? 'could not file the dispute'))));
+    else if (act.t === 'pages-promote') cmd.call('pages.promote', { page: act.page, statement: act.statement }).then((r: any) => setArch((a) => A.gotPages(a, (p) => PG.withNote(p, `noted claim ${String(r?.id ?? '')} made: not validated until someone checks it`)))).catch((e: any) => setArch((a) => A.gotPages(a, (p) => PG.withNote(p, e?.message ?? 'could not make the claim'))));
     else if (act.t === 'library' || act.t === 'excerpts') {
       // The library's own CLI answers; both calls only read. `--home` keeps it on this console's install.
       const args = act.t === 'library' ? [act.what === 'sources' ? 'sources' : 'claims', 'list', '--json'] : ['sources', 'excerpt', 'list', act.id, '--json'];
@@ -360,6 +378,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
         try { body = JSON.parse(out); } catch { /* reported below */ }
         if (err || body === null) { setArch((a) => A.libraryFailed(a, 'could not read the library')); return; }
         setArch((a) => (act.t === 'library' ? A.gotLibrary(a, act.what, body) : A.gotExcerpts(a, act.id, body)));
+        if (act.t === 'library' && act.open) execFile(info.delphi_exe!, ['sources', 'excerpt', 'list', act.open, '--json', '--home', info.home ?? ''], { timeout: 15000, maxBuffer: 16 * 1024 * 1024 }, (e2, o2) => { try { const ex = JSON.parse(o2); if (!e2) setArch((a) => A.gotExcerpts(a, act.open!, ex)); } catch { /* the detail stays "reading" */ } });
       });
     }
   };

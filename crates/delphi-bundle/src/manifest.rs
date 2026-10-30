@@ -1,6 +1,7 @@
 //! Step 4 of `specs/023` §10 (`bundle.toml`), `plugin.json` generation (step 13 itself is `claude_plugin.rs`), step 14 (the evals
 //! section) and the `--against` version-bump check of §9.
 
+use crate::registry;
 use crate::tree::Tree;
 use crate::{Host, Options, Report, ROLES, SCHEMA};
 use regex::Regex;
@@ -29,6 +30,10 @@ pub struct Manifest {
     pub sections: BTreeMap<String, bool>,
     /// `[agents.<name>] role`: the host role of each bundle agent.
     pub agents: BTreeMap<String, String>,
+    /// `[domains.<id>] summary` (`specs/041` §3.2).
+    pub domains: BTreeMap<String, String>,
+    /// Registry keys of each `[agents.<name>]` (`specs/041` §3.1).
+    pub agent_meta: BTreeMap<String, crate::registry::AgentMeta>,
     pub touches_roles: Vec<String>,
     pub touches_connectors: Vec<String>,
     pub keywords: Vec<String>,
@@ -149,6 +154,75 @@ fn valid_date(s: &str) -> bool {
     (1..=12).contains(&m) && d >= 1 && d <= days[(m - 1) as usize]
 }
 
+/// `[domains.<id>] summary`: at most 12 domains, each summary at most 120 characters (`specs/041` §3.2). Never cut.
+fn domains(root: &Table, r: &mut Report) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    let Some(d) = sub(root, "domains", r) else { return out };
+    if d.len() > registry::MAX_DOMAINS {
+        r.fail(4, "bundle.toml", format!("{} domains (at most {})", d.len(), registry::MAX_DOMAINS));
+    }
+    let id_re = Regex::new(r"^[a-z0-9][a-z0-9-]{0,31}$").unwrap();
+    for (id, v) in d {
+        let Value::Table(t) = v else {
+            r.fail(4, "bundle.toml", format!("[domains.{}] must be a table", id));
+            continue;
+        };
+        let table = format!("domains.{}", id);
+        unknown_keys(t, &["summary"], &table, r);
+        if !id_re.is_match(id) {
+            r.fail(4, "bundle.toml", format!("[domains.{}]: the id is lowercase letters, digits and hyphens, at most 32", id));
+        }
+        let summary = required(t, "summary", &table, r);
+        let n = summary.chars().count();
+        if n > registry::MAX_DOMAIN_SUMMARY {
+            r.fail(4, "bundle.toml", format!("[domains.{}] summary is {} characters (cap {}; it is refused, never cut)", id, n, registry::MAX_DOMAIN_SUMMARY));
+        }
+        if let Some(why) = registry::refuse_text(&summary) {
+            r.fail(4, "bundle.toml", format!("[domains.{}] summary {}", id, why));
+        }
+        out.insert(id.clone(), summary);
+    }
+    out
+}
+
+/// The registry keys of one `[agents.<name>]` table (`specs/041` §3.1).
+fn agent_meta(name: &str, t: &Table, r: &mut Report) -> registry::AgentMeta {
+    let table = format!("agents.{}", name);
+    let domain = string(t, "domain", &table, r).unwrap_or_else(|| registry::GENERAL.into());
+    let mut meta = registry::AgentMeta { domain, summary: string(t, "summary", &table, r), ..Default::default() };
+    for (key, dst) in [("tags", 0), ("not_for", 1)] {
+        let list = strings(t, key, &table, r);
+        if list.len() > registry::MAX_TAGS {
+            r.fail(4, "bundle.toml", format!("[{}] {} has {} entries (at most {})", table, key, list.len(), registry::MAX_TAGS));
+        }
+        for tag in &list {
+            if let Some(why) = registry::tag_problem(tag) {
+                r.fail(4, "bundle.toml", format!("[{}] {}: {}", table, key, why));
+            }
+        }
+        if dst == 0 {
+            meta.tags = list;
+        } else {
+            meta.not_for = list;
+        }
+    }
+    if let Some(s) = &meta.summary {
+        let n = s.chars().count();
+        if n > registry::MAX_SUMMARY {
+            r.fail(4, "bundle.toml", format!("[{}] summary is {} characters (cap {}; it is refused, never cut)", table, n, registry::MAX_SUMMARY));
+        }
+        if let Some(why) = registry::refuse_text(s) {
+            r.fail(4, "bundle.toml", format!("[{}] summary {}", table, why));
+        }
+    }
+    for tag in meta.tags.iter().chain(&meta.not_for) {
+        if let Some(why) = registry::refuse_text(tag) {
+            r.fail(4, "bundle.toml", format!("[{}] tag `{}` {}", table, tag, why));
+        }
+    }
+    meta
+}
+
 pub fn check(tree: &Tree, opts: &Options, r: &mut Report) -> Option<Manifest> {
     let Some(text) = tree.text("bundle.toml") else {
         r.fail(4, "bundle.toml", "missing");
@@ -162,7 +236,7 @@ pub fn check(tree: &Tree, opts: &Options, r: &mut Report) -> Option<Manifest> {
         }
     };
     scan_rejected(&Value::Table(root.clone()), "", r);
-    unknown_keys(&root, &["bundle", "compat", "publisher", "applies_to", "sections", "agents", "touches", "overlays"], "(top level)", r);
+    unknown_keys(&root, &["bundle", "compat", "publisher", "applies_to", "sections", "agents", "domains", "touches", "overlays"], "(top level)", r);
 
     let mut m = Manifest::default();
     let empty = Table::new();
@@ -306,7 +380,7 @@ pub fn check(tree: &Tree, opts: &Options, r: &mut Report) -> Option<Manifest> {
                 r.fail(4, "bundle.toml", format!("[agents.{}] must be a table", name));
                 continue;
             };
-            unknown_keys(t, &["role"], &format!("agents.{}", name), r);
+            unknown_keys(t, &["role", "domain", "tags", "not_for", "summary"], &format!("agents.{}", name), r);
             let role = required(t, "role", &format!("agents.{}", name), r);
             if !role.is_empty() && !ROLES.contains(&role.as_str()) {
                 r.fail(4, "bundle.toml", format!("[agents.{}] role `{}` is not a canonical role id", name, role));
@@ -315,6 +389,17 @@ pub fn check(tree: &Tree, opts: &Options, r: &mut Report) -> Option<Manifest> {
                 r.fail(4, "bundle.toml", format!("[agents.{}] has no agents/{}.md", name, name));
             }
             m.agents.insert(name.clone(), role);
+            let meta = agent_meta(name, t, r);
+            m.agent_meta.insert(name.clone(), meta);
+        }
+        if m.agents.len() > registry::MAX_AGENTS {
+            r.fail(4, "bundle.toml", format!("{} bundle agents (the registry holds at most {} per bundle)", m.agents.len(), registry::MAX_AGENTS));
+        }
+    }
+    m.domains = domains(&root, r);
+    for (name, meta) in &m.agent_meta {
+        if meta.domain != registry::GENERAL && !m.domains.contains_key(&meta.domain) {
+            r.fail(4, "bundle.toml", format!("[agents.{}] domain `{}` is not in [domains]", name, meta.domain));
         }
     }
 

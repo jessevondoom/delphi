@@ -80,6 +80,9 @@ test('the reader: tab walks the links, enter opens a document link, an external 
   const open1 = A.key(a, k('enter'), W, H);
   assert.deepEqual(open1.action, { t: 'open', target: { k: 'doc', path: 'specs/beta.md', anchor: 'intro' } });
   a = A.key(A.key(a, k('tab'), W, H).a, k('tab'), W, H).a;
+  const unlisted = A.key(a, k('enter'), W, H);
+  assert.deepEqual([unlisted.action, unlisted.a.note], [{ t: 'none' }, 'seen, not read: that address is not on your list'], 'an address not on the list is not followed');
+  a = { ...a, trail: [{ ...a.trail[0]!, listed: { 'https://example.com/x': true } }] };
   assert.deepEqual(A.key(a, k('enter'), W, H).action, { t: 'browser', url: 'https://example.com/x' });
   assert.deepEqual(A.key(a, { t: 'text', s: 'y' }, W, H).action, { t: 'copy', text: 'https://example.com/x' });
   assert.equal(A.key(A.key(a, k('tab'), W, H).a, k('tab'), W, H).a.trail[0]!.focus, 2, 'stops at the last link');
@@ -524,4 +527,29 @@ test('every status has its own glyph, and the reader says the status and age of 
   let a = A.gotHits(type(shelf(), 'zebra'), 'zebra', { results: [{ path: 'bundles/acme/x.md', kind: 'docs', trust: 'external_untrusted', knowledge_status: 'validated', vouched_by: 'acme', updated: day(2), heading: '', preview: 'zebra' }] });
   a = A.gotDoc(a, { path: 'bundles/acme/x.md', collection: 'bundles', trust: 'external_untrusted', text: '# X\n' }, null, 100);
   assert.match(plain(A.view(a, 100, 27, { dark: true }, undefined, NOW).join('\n')), /bundles · ● validated · vouched by acme · edited 2 d/);
+});
+
+test('a picture, a PDF or a recording opens in the browser from a row marked ↗; the console only, and an untrusted one says so', () => {
+  const hit = (path: string, trust: string) => ({ path, collection: 'context', kind: 'docs', updated: '2026-10-25T10:00:00Z', trust, heading: '', preview: 'a scan' });
+  let a = A.gotHits({ ...type(shelf(), 'scan'), pins: true }, 'scan', { results: [hit('context/a.pdf', 'external_untrusted'), hit('context/b.md', 'internal_generated')] });
+  assert.equal(A.opensInBrowser('context/a.pdf') && A.opensInBrowser('x/Y.PNG') && !A.opensInBrowser('b.md') && !A.opensInBrowser('pdf'), true);
+  const text = A.view(a, 100, 40, { dark: true }).join('\n').replace(/\x1b\[[0-9;]*m/g, '');
+  assert.match(text, /docs ↗/);
+  assert.match(text, /↗ opens in your browser, everything else opens here/);
+  assert.match(text, /open in your browser · read-only, Delphi never runs it · untrusted/);
+  assert.deepEqual(A.key(a, k('enter'), W, H).action, { t: 'file', path: 'context/a.pdf' });
+  assert.deepEqual(A.key({ ...a, sel: 1 }, k('enter'), W, H).action, { t: 'open', target: { k: 'doc', path: 'context/b.md' } });
+  const narrator = A.key({ ...a, pins: false }, k('enter'), W, H);
+  assert.deepEqual(narrator.action, { t: 'none' });
+});
+
+test('the reader says where a page came from, and that outside content is untrusted', () => {
+  const fm = '---\nsource_url: https://en.wikipedia.org/wiki/Zebra\npublisher: Wikipedia\nretrieved: 2026-10-20T10:00:00Z\nlicence: CC-BY-SA-4.0\nshare_alike: true\n---\n# Zebra\n';
+  const r = A.gotDoc(A.emptyArch(), { path: 'knowledge/web/z.md', collection: 'knowledge', trust: 'trusted_source', text: fm }, null, W);
+  assert.equal(A.provenance(r.trail[0]!), 'Wikipedia · licence CC-BY-SA-4.0 · retrieved 2026-10-20 · share-alike · listed source, not curated by you');
+  const o = A.gotDoc(A.emptyArch(), { path: 'context/a.md', collection: 'context', trust: 'external_untrusted', text: '# A\n' }, null, W);
+  assert.match(A.provenance(o.trail[0]!)!, /untrusted: read-only, never run/);
+  const own = A.gotDoc(A.emptyArch(), { path: 'specs/a.md', collection: 'specs', trust: 'user_ratified', text: '# A\n' }, null, W);
+  assert.equal(A.provenance(own.trail[0]!), null);
+  assert.match(A.view(r, 100, 30, { dark: true }).join('\n').replace(/\x1b\[[0-9;]*m/g, ''), /Wikipedia · licence CC-BY-SA-4\.0/);
 });

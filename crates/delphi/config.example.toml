@@ -61,6 +61,11 @@ max_parallel_agents = 4
 # degrade_prompt_secs = 300           # how long the "run on a weaker model?" card waits; no answer means look again, then ask again
 # max_park_secs = 0                  # omit to wait as long as it takes; 0 = never wait (escalate at once); N = give up after N seconds
 
+# Bundle agents (specs/041). "flat" (default): the orchestrator is shown one line per bundle agent, up to 20, and told how many
+# are not listed. "auto": past 20 agents it is shown a short index of domains and gets the `search_agent_registry` tool instead.
+# `delphi route "<task>"` shows what the search would return, without a model call.
+# registry = "flat"
+
 # Model assignment (specs/056). "static" (default): a role's tier picks the model, as always. "discovered": each dispatch is
 # assigned by capability class (role floor and preferred class), measured results and quota, from the pool you ratified;
 # a card only when no pool member meets a role's floor. `delphi capabilities --models` shows each model's class.
@@ -68,6 +73,13 @@ max_parallel_agents = 4
 # evidence_enough = 8                # measured results per (role, kind, model) after which a model is scored by them alone
 # [routing.reserve]                  # share of the mission budget no other role may spend (assignment = "discovered")
 # validator = 0.15
+
+# Promote and nerf (specs/056 §4; ratified): a role's grade from -2 to 2. `delphi agent promote|nerf <role>` proposes the edit; /ratify applies it.
+# [grades]
+# architect = 1
+# [grades.builder]
+# default = 0
+# docs = -1
 
 # Model pool (specs/002 §4.1, D-26: ratified). Models in preference order; when the first eligible
 # model is exhausted (quota, subscription window or budget) the next one takes over and work continues.
@@ -97,6 +109,10 @@ per_watch_max_wakes_per_day = 10
 # budget_warnings = true             # tell a role when 75 % and 90 % of its turns are used
 # verify_gate = true                 # one check against the task before a role that writes or runs commands may finish
 # workspace_bootstrap = true         # give a role with a worktree a map of it
+# tool_result_limit_kb = 0           # a tool result over this size is stored; the history keeps a handle and a short preview (0 = off)
+# clear_after_kb = 0                 # old tool results are replaced by a handle in batches of about this size (0 = off)
+# trim_arguments_kb = 0              # old tool calls with arguments this large lose the bulk of them, kept at a handle (0 = off)
+# keep_recent_turns = 6              # the newest assistant turns that clearing and trimming leave whole
 
 [hitl]
 approval_timeout_sec = 600           # Unanswered approvals resolve to DENY
@@ -117,6 +133,14 @@ sandbox = "off"
 # [update]
 # require_signed = true
 
+# Learning loop (specs/031 section 3.6). Staged notes are kept for your review and never loaded into a prompt. Each number is clamped
+# to a floor and ceiling the core sets; turning capture off is allowed, loading unratified content is not.
+# [learning]
+# capture = true                     # stage notes from denials, corrections, retries and escalations
+# max_notes = 200                    # per mission, 10 to 1000; the oldest is dropped
+# triggers = ["denied_card", "correction", "recovery", "escalation", "rejected_decision"]
+# retro_min_tasks = 10               # finished tasks before `delphi needs` says the coaching pass has material (3 to 200)
+
 # Fact validator (specs/040 section 15.1). off: no fetch of any kind. advisory (default): the full fact path as a dry run; it uses the
 # network, records what it would ratify and writes nothing validated. ratify: real writes, allowed only while the daemon's latch and the
 # PROMOTE conditions permit; the effective mode is the lower of this value and the latch.
@@ -126,6 +150,16 @@ sandbox = "off"
 # primary = []
 # reputable = []
 # weak = []
+
+# Generated search pages (specs/057). `delphi pages search "<question>"` has the writer role write a page from the library and checks it
+# with the validator; a page is always labelled generated and not authoritative. external = "ask" searches the web only when you ask
+# (--external); private sources never leave the install. A cache hit costs nothing; per_day caps the pages built in a day.
+# [library.pages]
+# enabled = true
+# external = "ask"        # ask | off | on
+# max_tokens = 3000
+# external_ttl = "7d"     # a page that used the web is rebuilt after this
+# per_day = 20
 
 # Research (specs/028 section 10): the web search engines the archives pane's expand mode asks, in order, one at a time (the next only if
 # the last failed). Ratified, because it names who receives your queries. Which sites may be read is context/sources/trusted.toml plus your
@@ -138,6 +172,17 @@ sandbox = "off"
 # credential = "env:MOJEEK_API_KEY"
 # [search.searxng]
 # url = "https://searx.example.org"
+
+# Library acquisition (specs/055 section 8): once a day, the library scout proposes public-domain and research sources that match your projects
+# and these interests, as ONE batch in the digest. Nothing is fetched until you accept (or a standing rule covers it). Ratified, because it
+# names where the daemon fetches from (the archives in context/sources/archives.toml and your operator/archives.toml). Off by default.
+# [library.acquire]
+# enabled = false
+# byte_budget_mib = 2048          # reaching it stops acquiring; nothing is evicted
+# max_item_mib = 16
+# batch_size = 8
+# token_share_percent = 5         # the scout's share of the trailing week's tokens (at most 10); 0 = no model call
+# interests = ["medieval siege engineering"]
 
 [rag]
 engine = "sqlite-hybrid"             # informational: FTS5 + sqlite-vec + RRF + reranker (spec 004). What runs depends on the models installed;

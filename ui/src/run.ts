@@ -292,9 +292,14 @@ async function retro(ctx: Ctx, args: string[]): Promise<string> {
     if (act === 'list') {
       lastRetro = (await ctx.cmd.call('retro.list', {})) ?? [];
       if (!lastRetro.length) return 'no proposals yet. The Orchestrator proposes rules after a mission; /retro run asks it to look at this one now.';
-      return [`${lastRetro.length} proposed rule(s). Nothing below is in any prompt until you accept it.`, ...lastRetro.map(line), '/retro show <n> · accept <n…> [workspace|operator] · reject <n…> · run'].join('\n');
+      return [`${lastRetro.length} proposed rule(s). Nothing below is in any prompt until you accept it.`, ...lastRetro.map(line), '/retro show <n> · accept <n…> [workspace|operator] · reject <n…> · stale · run'].join('\n');
     }
-    if (!['show', 'accept', 'reject'].includes(act)) return `unknown /retro action \`${act}\` (list, show, accept, reject, run)`;
+    if (act === 'stale') {
+      const items: any[] = (await ctx.cmd.call('retro.stale', {})) ?? [];
+      if (!items.length) return 'nothing is stale: no staged note is past its date and no rules file is past its review window.';
+      return [`${items.length} stale entr${items.length === 1 ? 'y' : 'ies'}. Nothing was removed; an expired note is no longer retrieved.`, ...items.map((s) => `  ${sanitize(String(s.kind))} ${sanitize(String(s.ref))}  ${sanitize(String(s.detail))}`)].join('\n');
+    }
+    if (!['show', 'accept', 'reject'].includes(act)) return `unknown /retro action \`${act}\` (list, show, accept, reject, stale, run)`;
     const nums = args.slice(1).filter((a) => /^\d+$/.test(a)).map(Number);
     const scope = args.slice(1).find((a) => a === 'workspace' || a === 'operator');
     if (!nums.length || nums.some((n) => n < 1)) return `usage: /retro ${act} <number…>${act === 'accept' ? ' [workspace|operator]' : ''}`;

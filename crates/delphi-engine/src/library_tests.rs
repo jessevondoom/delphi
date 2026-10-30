@@ -947,3 +947,408 @@ mod page_validation {
         assert_eq!(l.origin_of(&got), "page:tides-abc.md");
     }
 }
+
+mod acquisition {
+    use super::*;
+    use crate::fact_fetch::FetchPolicy;
+    use crate::library::acquire::{ArchiveList, JobConfig, Scout, ScoutFuture};
+    use std::sync::{Arc, Mutex};
+
+    const BOOK: &str = "The Project Gutenberg eBook of Siege Craft\n\nThis eBook is for the use of anyone anywhere at no cost.\n\n*** START ***\nThe ram is hung from chains and swung against the gate.\n*** END ***\n";
+
+    /// A loopback archive: `/search` answers JSON, `/book/<id>.txt` answers plain text. Every request path is recorded.
+    fn site() -> (SocketAddr, Arc<Mutex<Vec<String>>>, FetchPolicy) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = seen.clone();
+        std::thread::spawn(move || {
+            for mut st in listener.incoming().flatten() {
+                let mut buf = [0u8; 4096];
+                let n = st.read(&mut buf).unwrap_or(0);
+                let path = String::from_utf8_lossy(&buf[..n]).split_whitespace().nth(1).unwrap_or("").to_string();
+                log.lock().unwrap().push(path.clone());
+                let (ct, body) = if path.starts_with("/search") {
+                    ("application/json", r#"{"results":[
+                        {"id":1,"title":"Siege Craft","author":"A. Old","died":1850,"size":2000},
+                        {"id":2,"title":"Modern Sieges","author":"B. New","died":1950,"size":2000},
+                        {"id":3,"title":"Huge Siege Atlas","author":"C. Old","died":1800,"size":900000000},
+                        {"id":4,"title":"Undated Sieges","author":"D. Unknown","size":2000}]}"#
+                        .to_string())
+                } else {
+                    ("text/plain", BOOK.to_string())
+                };
+                let r = format!("HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: {}\r\nContent-Length: {}\r\n\r\n{}", ct, body.len(), body);
+                let _ = st.write_all(r.as_bytes());
+            }
+        });
+        (addr, seen, FetchPolicy::default().with_fixture_addrs([addr]))
+    }
+
+    fn archives(addr: SocketAddr, max_requests: usize) -> ArchiveList {
+        ArchiveList::fixture(&format!(
+            r#"[[archive]]
+id = "fix"
+name = "Fixture Archive"
+hosts = ["127.0.0.1"]
+search_url = "http://127.0.0.1:{p}/search?q={{query}}"
+results_path = "results"
+id_path = "id"
+title_path = "title"
+author_path = "author"
+year_path = "died"
+size_path = "size"
+item_url = "http://127.0.0.1:{p}/book/{{id}}.txt"
+notice = "Free to use; keep this notice."
+attribution = "{{title}} by {{author}} from {{archive}}"
+min_delay_ms = 0
+max_requests = {m}
+[archive.public_domain]
+jurisdiction = "US"
+field = "author died"
+before = 1900
+"#,
+            p = addr.port(),
+            m = max_requests
+        ))
+    }
+
+    fn cfg() -> JobConfig {
+        JobConfig { byte_budget: 10 * 1024 * 1024, max_item: 1024 * 1024, batch_size: 8, token_share_percent: 5 }
+    }
+
+    fn topics(t: &[&str]) -> Vec<String> {
+        t.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[tokio::test]
+    async fn a_proposal_is_one_batch_with_the_public_domain_basis_and_only_what_the_archives_rule_clears() {
+        let (_d, l) = lib();
+        let (addr, _seen, policy) = site();
+        let a = archives(addr, 3);
+        let b = l.propose(&policy, &a, &cfg(), &topics(&["siege craft"])).await.unwrap().unwrap();
+        let items = b["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1, "a 1950 author, an undated work and an over-size item are not proposed: {:?}", items);
+        assert_eq!(items[0]["title"], "Siege Craft");
+        assert!(items[0]["licence"].as_str().unwrap().starts_with("public-domain:US:"));
+        assert!(items[0]["basis"].as_str().unwrap().contains("author died 1850"));
+        assert_eq!(items[0]["status"], "proposed");
+        assert!(l.propose(&policy, &a, &cfg(), &topics(&["siege craft"])).await.unwrap().is_none(), "one batch waits at a time");
+        assert!(!l.job_due(0) || l.open_batch().is_some());
+        assert!(l.list().is_empty(), "nothing is fetched or stored until accepted");
+    }
+
+    #[tokio::test]
+    async fn an_accepted_source_is_captured_whole_with_notice_attribution_and_stays_not_validated() {
+        let (_d, l) = lib();
+        let (addr, _seen, policy) = site();
+        let a = archives(addr, 3);
+        let b = l.propose(&policy, &a, &cfg(), &topics(&["siege craft"])).await.unwrap().unwrap();
+        let bid = b["id"].as_str().unwrap();
+        assert!(l.decide_batch(bid, "approve", &[]).is_err(), "only accept or skip");
+        assert_eq!(l.decide_batch(bid, "accept", &[]).unwrap().len(), 1);
+        let done = l.run_accepted(&policy, &a, &cfg()).await;
+        assert_eq!(done.len(), 1);
+        let s = done[0].1.as_ref().unwrap();
+        assert_eq!(s.level, Level::Full);
+        let m = l.read_meta(&s.id).unwrap();
+        assert!(m["licence"].as_str().unwrap().starts_with("public-domain:US:"), "{}", m["licence"]);
+        assert_eq!(m["capture_level"], "full");
+        assert_eq!(m["archive_notice"], "Free to use; keep this notice.");
+        assert_eq!(m["acquired"]["validated"], false);
+        assert!(m["acquired"]["basis"].as_str().unwrap().contains("1850"));
+        assert!(m["private"] != true);
+        assert!(std::fs::read_to_string(l.source_dir(&s.id).join("source.md")).unwrap().contains("This eBook is for the use of anyone"), "the archive's header stays");
+        assert!(l.acquired_bytes() > 0);
+        assert_eq!(l.reading_list("acquired-siege-craft").unwrap()["items"][0]["source"], s.id.as_str());
+        // a claim made from it starts noted
+        let c = l.add_claim("a ram is swung from chains", &crate::library::claims::ClaimOpts::default(), &[]).unwrap();
+        assert_eq!(crate::library::claims::status(&l.claim(c["id"].as_str().unwrap()).unwrap()), delphi_core::knowledge_status::Status::Noted);
+    }
+
+    #[tokio::test]
+    async fn a_skipped_item_is_not_proposed_again() {
+        let (_d, l) = lib();
+        let (addr, _s, policy) = site();
+        let a = archives(addr, 3);
+        let b = l.propose(&policy, &a, &cfg(), &topics(&["siege craft"])).await.unwrap().unwrap();
+        l.decide_batch(b["id"].as_str().unwrap(), "skip", &[]).unwrap();
+        assert!(l.propose(&policy, &a, &cfg(), &topics(&["siege craft"])).await.unwrap().is_none());
+        assert!(l.list().is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_byte_budget_stops_acquisition_and_evicts_nothing() {
+        let (_d, l) = lib();
+        let (addr, _s, policy) = site();
+        let a = archives(addr, 3);
+        let keep = l.add_file(&file(_d.path(), "k.md", &"k".repeat(500)), &open("CC0-1.0"), &Budgets::default()).unwrap();
+        let b = l.propose(&policy, &a, &cfg(), &topics(&["siege craft"])).await.unwrap().unwrap();
+        l.decide_batch(b["id"].as_str().unwrap(), "accept", &[]).unwrap();
+        let tight = JobConfig { byte_budget: 1000, ..cfg() };
+        assert!(l.run_accepted(&policy, &a, &tight).await.is_empty());
+        let after = l.batch(b["id"].as_str().unwrap()).unwrap();
+        assert_eq!(after["items"][0]["status"], "budget");
+        assert!(after["items"][0]["reason"].as_str().unwrap().contains("byte budget"));
+        assert!(l.read_meta(&keep.id).is_some() && l.list().len() == 1, "nothing is evicted and nothing was added");
+    }
+
+    #[tokio::test]
+    async fn a_standing_rule_takes_matching_items_up_to_its_size_and_only_the_operator_adds_one() {
+        let (_d, l) = lib();
+        let (addr, _s, policy) = site();
+        let a = archives(addr, 3);
+        assert!(l.add_rule(&topics(&["sieges"]), &topics(&["nowhere"]), 5000, Some(&a)).is_err(), "an unlisted archive is refused");
+        l.add_rule(&topics(&["siege craft"]), &topics(&["fix"]), 1000, Some(&a)).unwrap();
+        let b = l.propose(&policy, &a, &cfg(), &topics(&["siege craft"])).await.unwrap().unwrap();
+        assert_eq!(b["items"][0]["status"], "proposed", "the item is larger than the rule allows, so it still asks");
+        l.decide_batch(b["id"].as_str().unwrap(), "skip", &[]).unwrap();
+        let (_d2, l2) = lib();
+        l2.add_rule(&topics(&["siege craft"]), &topics(&["fix"]), 5000, Some(&a)).unwrap();
+        let b = l2.propose(&policy, &a, &cfg(), &topics(&["siege craft"])).await.unwrap().unwrap();
+        assert_eq!((b["items"][0]["status"].as_str(), b["items"][0]["rule"].as_str()), (Some("accepted"), Some("rule-1")));
+        assert_eq!(l2.run_accepted(&policy, &a, &cfg()).await.len(), 1);
+        let rid = l2.rules()[0].id.clone();
+        l2.remove_rule(&rid).unwrap();
+        assert!(l2.rules().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_archive_is_asked_politely_and_nothing_else_is_asked() {
+        let (_d, l) = lib();
+        let (addr, seen, policy) = site();
+        let a = archives(addr, 2);
+        l.propose(&policy, &a, &cfg(), &topics(&["alpha topic", "beta topic", "gamma topic"])).await.unwrap();
+        let paths = seen.lock().unwrap().clone();
+        assert_eq!(paths.len(), 2, "max_requests holds across topics: {:?}", paths);
+        assert!(paths.iter().all(|p| p.starts_with("/search?q=")));
+        // an archive's item address off its own hosts is refused when the list is read
+        let bad = ArchiveList::parse(
+            "[[archive]]\nid=\"x\"\nname=\"X\"\nhosts=[\"a.example\"]\nsearch_url=\"https://a.example/s?q={query}\"\nresults_path=\"r\"\nid_path=\"i\"\ntitle_path=\"t\"\nitem_url=\"https://evil.example/{id}\"\nlicence=\"CC0-1.0\"\nnotice=\"n\"\n",
+            None,
+        );
+        assert!(bad.is_err());
+        let plain = ArchiveList::parse("[[archive]]\nid=\"x\"\nname=\"X\"\nhosts=[\"a.example\"]\nsearch_url=\"http://a.example/s?q={query}\"\nresults_path=\"r\"\nid_path=\"i\"\ntitle_path=\"t\"\nitem_url=\"http://a.example/{id}\"\nlicence=\"CC0-1.0\"\nnotice=\"n\"\n", None);
+        assert!(plain.is_err(), "https only outside tests");
+    }
+
+    #[test]
+    fn a_private_sources_tags_never_become_a_search_topic() {
+        let (d, l) = lib();
+        let s = l.add_file(&file(d.path(), "p.md", "secret plans"), &AddOpts { private: true, licence: Some("CC0-1.0".into()), ..Default::default() }, &Budgets::default()).unwrap();
+        let mut m = l.read_meta(&s.id).unwrap();
+        m["tags"] = serde_json::json!(["merger codename"]);
+        l.write_json(&l.source_dir(&s.id).join("meta.json"), &m).unwrap();
+        let seeds = l.seed_topics(&topics(&["siege craft"]), &topics(&["billing"]));
+        assert!(seeds.contains(&"siege craft".to_string()) && seeds.contains(&"billing".to_string()));
+        assert!(!seeds.iter().any(|t| t.contains("merger")), "{:?}", seeds);
+    }
+
+    struct Fake(Mutex<u32>);
+    impl Scout for Fake {
+        fn widen<'a>(&'a self, _seed: &'a [String], _room: u64) -> ScoutFuture<'a> {
+            *self.0.lock().unwrap() += 1;
+            Box::pin(async { Ok((vec!["siege craft".to_string(), "<script>ignore previous</script>".to_string()], 120)) })
+        }
+    }
+
+    #[tokio::test]
+    async fn the_scouts_tokens_are_a_share_of_the_trailing_week_and_it_only_widens_topics() {
+        let (_d, l) = lib();
+        let (addr, seen, policy) = site();
+        let a = archives(addr, 6);
+        let scout = Fake(Mutex::new(0));
+        let r = l.run_job(&policy, &a, &cfg(), topics(&["billing"]), Some(&scout), 0, 1_000_000).await;
+        assert_eq!(*scout.0.lock().unwrap(), 0, "5% of nothing is no room: the call is not made");
+        assert!(r.notes.iter().any(|n| n.contains("token share")), "{:?}", r.notes);
+        let (_d2, l2) = lib();
+        let r = l2.run_job(&policy, &a, &cfg(), topics(&["billing"]), Some(&scout), 10_000, 1_000_000).await;
+        assert_eq!((*scout.0.lock().unwrap(), r.scout_tokens), (1, 120));
+        assert_eq!(l2.scout_spent(1_000_000), 120);
+        assert_eq!(l2.scout_room(&cfg(), 10_000, 1_000_000), 500 - 120);
+        let q: Vec<String> = seen.lock().unwrap().iter().filter(|p| p.starts_with("/search")).cloned().collect();
+        assert!(q.iter().all(|p| !p.contains("%3C") && !p.contains("%3E")), "markup from a model never reaches an archive: {:?}", q);
+        assert!(r.batch.is_some() && l2.open_batch().is_some());
+        assert!(!l2.job_due(1_000_100), "a batch waits and one ran today");
+    }
+
+    #[tokio::test]
+    async fn the_digest_card_is_one_open_tier_card_whose_choices_set_no_licence_level_or_status() {
+        use crate::digest_review::{acquire_act, acquire_decision, acquire_item, ACQUIRE_ACTIONS};
+        let (_d, l) = lib();
+        let (addr, _s, policy) = site();
+        let a = archives(addr, 3);
+        assert!(acquire_item(&l, &[]).is_none());
+        l.propose(&policy, &a, &cfg(), &topics(&["siege craft"])).await.unwrap();
+        let i = acquire_item(&l, &[]).unwrap();
+        let card = acquire_decision(&i, 0, "2026-10-29T09:00:00.000Z");
+        assert_eq!((card["kind"].as_str(), card["tier"].as_str()), (Some("learn"), Some("open")));
+        assert_eq!(card["choices"].as_array().unwrap().iter().map(|c| c["id"].as_str().unwrap()).collect::<Vec<_>>(), ACQUIRE_ACTIONS);
+        assert_eq!(card["items"][0]["status"], "noted");
+        assert!(acquire_act("m1", &i, "licence=cc0").is_err() && acquire_act("m1", &i, "validate").is_err());
+        let ev = acquire_act("m1", &i, "keep").unwrap();
+        assert_eq!(ev.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>(), ["learn.digested"]);
+        assert!(acquire_item(&l, &ev).is_none(), "an acted card is not shown again");
+    }
+
+    #[test]
+    fn reading_lists_hold_existing_source_ids_only() {
+        let (d, l) = lib();
+        let s = l.add_file(&file(d.path(), "r.md", "text"), &open("CC0-1.0"), &Budgets::default()).unwrap();
+        assert!(l.reading_add("tides", Some("Tides"), &["no-such-source".to_string()]).is_err());
+        l.reading_add("tides", Some("Tides"), &[s.id.clone(), s.id.clone()]).unwrap();
+        assert_eq!(l.reading_list("tides").unwrap()["items"].as_array().unwrap().len(), 1);
+        assert_eq!(l.reading_lists().len(), 1);
+        l.reading_remove("tides", &s.id).unwrap();
+        assert!(l.reading_list("tides").unwrap()["items"].as_array().unwrap().is_empty());
+    }
+}
+
+mod page_search_cache {
+    use super::*;
+    use crate::fact_judge::TokenLedger;
+    use crate::library::bib::Format;
+    use crate::library::claims::{AnchorSpec, ClaimOpts, Validator};
+    use crate::library::page_search::PageRequest;
+    use crate::library::page_validate::*;
+    use crate::library::pages::Scope;
+    use delphi_adapter::config::PagesConfig;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    struct W {
+        draft: String,
+        writes: AtomicUsize,
+    }
+    impl PageWriter for W {
+        fn write<'a>(&'a self, _b: &'a str) -> WriterFuture<'a> {
+            self.writes.fetch_add(1, Ordering::SeqCst);
+            let d = self.draft.clone();
+            Box::pin(async move { Ok(d) })
+        }
+        fn rewrite<'a>(&'a self, _d: &'a str, _f: &'a [String]) -> WriterFuture<'a> {
+            let d = self.draft.clone();
+            Box::pin(async move { Ok(d) })
+        }
+    }
+    struct V(Mutex<Vec<Judgement>>);
+    impl PageValidator for V {
+        fn validate<'a>(&'a self, _q: &'a PageQuery) -> ValidatorFuture<'a> {
+            let j = { let mut g = self.0.lock().unwrap(); if g.len() > 1 { g.remove(0) } else { g[0] } };
+            Box::pin(async move { Ok(ValidatorReply { assertions: vec![Assertion { text: "x".into(), judgement: j, record: None }], model: "m".into(), family: "f".into(), tokens: 10 }) })
+        }
+    }
+
+    fn setup() -> (tempfile::TempDir, Library, W) {
+        let (d, l) = lib();
+        let s = l.add_file(&file(d.path(), "t.md", "# Tides\n\nThe tide comes in twice a day.\n"), &open("CC0-1.0"), &Budgets::default()).unwrap().id;
+        let spec = AnchorSpec { source_id: s, locator: Some("§1".into()), quote: "twice a day".into(), ..Default::default() };
+        let c = l.add_claim("Tides come twice a day.", &ClaimOpts::default(), &[spec]).unwrap()["id"].as_str().unwrap().to_string();
+        l.validate_claim(&c, Validator::Operator).unwrap();
+        (d, l, W { draft: format!("Tides come twice a day [{c}]."), writes: AtomicUsize::new(0) })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn go(l: &Library, q: &str, external: bool, now: u64, cfg: &PagesConfig, w: &W, v: &V, gate: &(dyn Fn() -> Result<(), String> + Sync)) -> Result<crate::library::page_search::SearchedPage, String> {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        rt.block_on(l.search_page(&PageRequest { query: q, external, extra_sources: &[], style: Format::Plain, now, settings: cfg }, w, v, &TokenLedger::new(1_000_000), gate))
+    }
+
+    fn pass() -> V {
+        V(Mutex::new(vec![Judgement::Supported]))
+    }
+
+    #[test]
+    fn a_second_search_is_served_from_the_cache_and_calls_no_model() {
+        let (_d, l, w) = setup();
+        let cfg = PagesConfig::default();
+        let a = go(&l, "tides", false, 100, &cfg, &w, &pass(), &|| Ok(())).unwrap();
+        assert!(!a.cached && a.markdown.contains("Tides come twice a day"));
+        let b = go(&l, "tides", false, 200, &cfg, &w, &pass(), &|| Err("gate must not be asked".into())).unwrap();
+        assert!(b.cached);
+        assert_eq!(w.writes.load(Ordering::SeqCst), 1);
+        assert_eq!(a.entry.key, b.entry.key);
+    }
+
+    #[test]
+    fn a_changed_claim_is_a_new_page_and_the_old_one_goes_to_history_or_is_stale() {
+        let (_d, l, w) = setup();
+        let cfg = PagesConfig::default();
+        let a = go(&l, "tides", false, 100, &cfg, &w, &pass(), &|| Ok(())).unwrap();
+        l.add_claim("Tides follow the moon.", &ClaimOpts::default(), &[]).unwrap();
+        let b = go(&l, "tides", false, 200, &cfg, &w, &pass(), &|| Ok(())).unwrap();
+        assert!(!b.cached && b.entry.key != a.entry.key);
+        assert_eq!(w.writes.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn an_external_page_expires_after_its_ttl_and_is_rebuilt() {
+        let (_d, l, w) = setup();
+        let cfg = PagesConfig { external_ttl_secs: 1000, ..Default::default() };
+        let a = go(&l, "tides", true, 100, &cfg, &w, &pass(), &|| Ok(())).unwrap();
+        assert!(go(&l, "tides", true, 600, &cfg, &w, &pass(), &|| Ok(())).unwrap().cached);
+        let late = go(&l, "tides", true, 1200, &cfg, &w, &pass(), &|| Ok(())).unwrap();
+        assert!(!late.cached);
+        assert_eq!(late.entry.key, a.entry.key);
+        assert_eq!(w.writes.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn a_double_failure_is_cached_as_failed_for_an_hour() {
+        let (_d, l, w) = setup();
+        let cfg = PagesConfig::default();
+        let bad = || V(Mutex::new(vec![Judgement::FabricatedCitation]));
+        let a = go(&l, "tides", false, 100, &cfg, &w, &bad(), &|| Ok(())).unwrap();
+        assert_eq!(a.entry.outcome, "claims_only");
+        assert!(a.entry.failed);
+        assert!(go(&l, "tides", false, 200, &cfg, &w, &bad(), &|| Ok(())).unwrap().cached);
+        assert!(!go(&l, "tides", false, 100 + 3601, &cfg, &w, &bad(), &|| Ok(())).unwrap().cached);
+    }
+
+    #[test]
+    fn the_per_day_budget_and_the_share_gate_refuse_a_new_page_but_not_a_cached_one() {
+        let (_d, l, w) = setup();
+        let cfg = PagesConfig { per_day: 1, ..Default::default() };
+        go(&l, "tides", false, 100, &cfg, &w, &pass(), &|| Ok(())).unwrap();
+        let e = go(&l, "spring tides", false, 200, &cfg, &w, &pass(), &|| Ok(())).unwrap_err();
+        assert!(e.contains("per_day") || e.contains("today"), "{e}");
+        assert!(go(&l, "tides", false, 300, &cfg, &w, &pass(), &|| Err("no".into())).unwrap().cached);
+        let cfg = PagesConfig::default();
+        assert!(go(&l, "spring tides", false, 200, &cfg, &w, &pass(), &|| Err("share spent".into())).unwrap_err().contains("share spent"));
+    }
+
+    #[test]
+    fn external_off_and_disabled_refuse_before_any_work() {
+        let (_d, l, w) = setup();
+        let off = PagesConfig { external: delphi_adapter::config::PagesExternal::Off, ..Default::default() };
+        assert!(go(&l, "tides", true, 1, &off, &w, &pass(), &|| Ok(())).is_err());
+        let dis = PagesConfig { enabled: false, ..Default::default() };
+        assert!(go(&l, "tides", false, 1, &dis, &w, &pass(), &|| Ok(())).is_err());
+        assert_eq!(w.writes.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_private_source_is_left_out_of_external_material_and_named_queries_are_caught() {
+        let (d, l, _w) = setup();
+        let o = AddOpts { private: true, level: Some(Level::Full), title: Some("Secret tides ledger".into()), ..open("all-rights-reserved") };
+        let s = l.add_file(&file(d.path(), "p.md", "tides secret valve schematic"), &o, &Budgets::default()).unwrap().id;
+        let ext = l.gather("tides", Scope::External, std::slice::from_ref(&s));
+        assert!(ext.sources.iter().all(|(id, _, _)| *id != s));
+        let int = l.gather("tides", Scope::Internal, &[]);
+        assert!(int.sources.iter().any(|(id, _, _)| *id == s));
+        assert_eq!(l.private_named_in("what is in the Secret tides ledger"), Some(s));
+        assert_eq!(l.private_named_in("tides"), None);
+    }
+
+    #[test]
+    fn eviction_drops_the_least_recently_opened_and_never_a_pinned_page() {
+        let (_d, l, w) = setup();
+        let cfg = PagesConfig::default();
+        let a = go(&l, "tides", false, 100, &cfg, &w, &pass(), &|| Ok(())).unwrap();
+        let b = go(&l, "spring tides", false, 200, &cfg, &w, &pass(), &|| Ok(())).unwrap();
+        l.pin_page(&a.entry.key, true, 300, cfg.external_ttl_secs).unwrap();
+        let dropped = l.evict_pages(1);
+        assert!(dropped.contains(&b.entry.key) && !dropped.contains(&a.entry.key), "{dropped:?}");
+        assert!(l.open_page(&a.entry.key, 400, cfg.external_ttl_secs).is_some());
+    }
+}

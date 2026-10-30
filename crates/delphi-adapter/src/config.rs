@@ -438,8 +438,80 @@ impl Assignment {
     }
 }
 
+/// How the orchestrator learns of bundle agents (`specs/041` §4, §5.7): `flat` is the one-line-per-agent list as before (the
+/// default, until the labeled set meets the recall bar); `auto` swaps in the domain index and `search_agent_registry` once
+/// there are more agents than the list holds.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RegistryMode {
+    #[default]
+    Flat,
+    Auto,
+}
+
+impl RegistryMode {
+    pub fn parse(s: &str) -> Option<RegistryMode> {
+        match s {
+            "flat" => Some(RegistryMode::Flat),
+            "auto" => Some(RegistryMode::Auto),
+            _ => None,
+        }
+    }
+}
+
 /// Results per `(role, kind, model)` that make measured evidence "enough" (`specs/056` OD-3).
 pub const DEFAULT_EVIDENCE_ENOUGH: u32 = 8;
+
+/// Largest grade, up or down (`specs/056` §4).
+pub const GRADE_LIMIT: i32 = 2;
+
+/// One role's grades: the role's own and one per task kind (`specs/056` §4).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RoleGrade {
+    pub role: i32,
+    pub kinds: BTreeMap<String, i32>,
+}
+
+/// `[grades]` (ratified): a small signed integer per role, `architect = 1`, or per kind, `[grades.builder] docs = -1` with
+/// `default` for the role itself. Positive promotes, negative nerfs, within ±2.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Grades {
+    pub roles: BTreeMap<String, RoleGrade>,
+}
+
+impl Grades {
+    /// The grade for `role`, for `kind` when one is named and set, else the role's own; 0 when none.
+    pub fn of(&self, role: &str, kind: Option<&str>) -> i32 {
+        let Some(g) = self.roles.get(role) else { return 0 };
+        kind.and_then(|k| g.kinds.get(k).copied()).unwrap_or(g.role)
+    }
+
+    pub fn parse(v: &toml::Value) -> Result<Grades, Vec<String>> {
+        let Some(t) = v.as_table() else { return Err(vec!["[grades] must be a table".into()]) };
+        let mut out = Grades::default();
+        let mut errs = Vec::new();
+        let mut one = |what: String, x: &toml::Value| match x.as_integer() {
+            Some(n) if n.abs() <= GRADE_LIMIT as i64 => Some(n as i32),
+            _ => {
+                errs.push(format!("[grades] {what} must be a whole number from -{GRADE_LIMIT} to {GRADE_LIMIT}"));
+                None
+            }
+        };
+        for (role, x) in t {
+            let mut g = RoleGrade::default();
+            match x {
+                toml::Value::Table(kinds) => {
+                    for (k, n) in kinds {
+                        let Some(n) = one(format!("{role}.{k}"), n) else { continue };
+                        if k == "default" { g.role = n } else { g.kinds.insert(k.clone(), n); }
+                    }
+                }
+                n => g.role = one(role.clone(), n).unwrap_or(0),
+            }
+            out.roles.insert(role.clone(), g);
+        }
+        if errs.is_empty() { Ok(out) } else { Err(errs) }
+    }
+}
 
 /// `[routing]`: the model pool and per-role targets (`specs/002` §4.1, D-26). Other keys in the table
 /// (`enable_dynamic_scaling`, …) are not read here.
@@ -456,11 +528,13 @@ pub struct Routing {
     pub evidence_enough: u32,
     /// `[routing.reserve] <role>`: the share (0 to 1) of the mission budget kept for that role; other roles cannot spend it.
     pub reserve: BTreeMap<String, f64>,
+    /// `[routing] registry` (`specs/041`).
+    pub registry: RegistryMode,
 }
 
 impl Default for Routing {
     fn default() -> Routing {
-        Routing { pool: None, targets: BTreeMap::new(), tuning: PoolTuning::default(), assignment: Assignment::Static, evidence_enough: DEFAULT_EVIDENCE_ENOUGH, reserve: BTreeMap::new() }
+        Routing { pool: None, targets: BTreeMap::new(), tuning: PoolTuning::default(), assignment: Assignment::Static, evidence_enough: DEFAULT_EVIDENCE_ENOUGH, reserve: BTreeMap::new(), registry: RegistryMode::Flat }
     }
 }
 
@@ -498,6 +572,101 @@ pub struct Config {
     pub search: crate::research::SearchConfig,
     /// `[validator]`: the fact validator's mode and the operator's additions to the source list (`specs/040` §15.1, §6.1).
     pub validator: ValidatorConfig,
+    /// `[grades]`: promote and nerf, per role and optionally per task kind (`specs/056` §4).
+    pub grades: Grades,
+    /// `[library]`: generated search pages (`specs/057` §5, §6) and the acquisition job (`specs/055` §8).
+    pub library: LibraryConfig,
+    /// `[learning]`: capture and the bounds on the learning loop (`specs/031` §3.6). The engine clamps each value to the core's bounds.
+    pub learning: LearningConfig,
+}
+
+/// `[library]`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LibraryConfig {
+    pub pages: PagesConfig,
+    pub acquire: AcquireConfig,
+}
+
+/// Whether a page may use external search: `ask` (the default) needs `--external` or the console's key each time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PagesExternal {
+    #[default]
+    Ask,
+    Off,
+    On,
+}
+
+/// `[library.pages]` (`specs/057` §6). `external_ttl` is how long a page that used external search stays fresh.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PagesConfig {
+    pub enabled: bool,
+    #[serde(deserialize_with = "de_external")]
+    pub external: PagesExternal,
+    pub max_tokens: u64,
+    #[serde(deserialize_with = "de_ttl", rename = "external_ttl")]
+    pub external_ttl_secs: u64,
+    /// Pages the daemon builds in one day; a cache hit is free. They also count against the validator's share (`specs/040` §20).
+    pub per_day: u32,
+}
+
+impl Default for PagesConfig {
+    fn default() -> Self {
+        PagesConfig { enabled: true, external: PagesExternal::Ask, max_tokens: 3000, external_ttl_secs: 7 * 86_400, per_day: 20 }
+    }
+}
+
+fn de_external<'de, D: serde::Deserializer<'de>>(d: D) -> Result<PagesExternal, D::Error> {
+    let s = <String as serde::Deserialize>::deserialize(d)?;
+    match s.as_str() {
+        "ask" => Ok(PagesExternal::Ask),
+        "off" => Ok(PagesExternal::Off),
+        "on" => Ok(PagesExternal::On),
+        _ => Err(serde::de::Error::custom(format!("external `{}` is not one of ask, off, on", s))),
+    }
+}
+
+/// `"7d"`, `"12h"`, `"90m"` or a bare number of days.
+pub fn parse_ttl(s: &str) -> Option<u64> {
+    let s = s.trim();
+    let (n, unit) = match s.char_indices().find(|(_, c)| !c.is_ascii_digit()) {
+        Some((i, _)) => s.split_at(i),
+        None => (s, "d"),
+    };
+    let n: u64 = n.parse().ok()?;
+    let per = match unit.trim() {
+        "d" => 86_400,
+        "h" => 3_600,
+        "m" => 60,
+        _ => return None,
+    };
+    n.checked_mul(per).filter(|v| *v > 0)
+}
+
+fn de_ttl<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum V {
+        N(u64),
+        S(String),
+    }
+    let secs = match <V as serde::Deserialize>::deserialize(d)? {
+        V::N(n) => parse_ttl(&n.to_string()),
+        V::S(s) => parse_ttl(&s),
+    };
+    secs.ok_or_else(|| serde::de::Error::custom("external_ttl is a duration such as \"7d\", \"12h\" or \"90m\""))
+}
+
+/// `[learning]`. Types are checked here so `delphi doctor` names a wrong one; the floors and ceilings are the engine's
+/// (`delphi_engine::learn::LearningSettings`). No key loads unratified content, and an unknown key is a boot notice.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(default)]
+pub struct LearningConfig {
+    pub capture: Option<bool>,
+    pub max_notes: Option<i64>,
+    pub triggers: Option<Vec<String>>,
+    pub retro_min_tasks: Option<i64>,
 }
 
 /// `[validator] mode` (`specs/040` §15.1). Ordered so that `min` is the stricter of two.
@@ -550,6 +719,48 @@ fn de_mode<'de, D: serde::Deserializer<'de>>(d: D) -> Result<ValidatorMode, D::E
     ValidatorMode::parse(&s).ok_or_else(|| serde::de::Error::custom(format!("mode `{}` is not one of off, advisory, ratify", s)))
 }
 
+/// `[library.acquire]` (`specs/055` §8): the acquisition job proposes public-domain and research sources, in one batch in the digest.
+/// Off until the operator turns it on, because it reaches out to archives. Ratified, since it names where the daemon fetches from.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AcquireConfig {
+    pub enabled: bool,
+    /// Bytes acquisition may hold in the library, in MiB. The library budget (`specs/055` §3.6) still applies; nothing is evicted.
+    pub byte_budget_mib: u64,
+    /// The largest text one acquired source may have, in MiB.
+    pub max_item_mib: u64,
+    /// Sources in one proposed batch.
+    pub batch_size: usize,
+    /// The scout's share of the install's tokens over the trailing week, in percent (`specs/040` §20.2). 0 keeps the job model-free.
+    pub token_share_percent: u64,
+    /// Topics the operator wants, beside the workspace's project names.
+    pub interests: Vec<String>,
+}
+
+impl Default for AcquireConfig {
+    fn default() -> Self {
+        AcquireConfig { enabled: false, byte_budget_mib: 2048, max_item_mib: 16, batch_size: 8, token_share_percent: 5, interests: Vec::new() }
+    }
+}
+
+impl AcquireConfig {
+    fn check(&self) -> Result<(), String> {
+        if self.byte_budget_mib == 0 || self.max_item_mib == 0 {
+            return Err("byte_budget_mib and max_item_mib must be at least 1".into());
+        }
+        if !(1..=20).contains(&self.batch_size) {
+            return Err("batch_size must be between 1 and 20".into());
+        }
+        if self.token_share_percent > 10 {
+            return Err("token_share_percent is at most 10 (specs/040 section 20.2)".into());
+        }
+        if self.interests.len() > 50 || self.interests.iter().any(|i| i.trim().is_empty() || i.chars().count() > 80) {
+            return Err("interests: at most 50 topics of 1 to 80 characters".into());
+        }
+        Ok(())
+    }
+}
+
 const TIERS: [&str; 3] = ["fast", "workhorse", "frontier"];
 
 pub(crate) fn is_loopback(url: &str) -> bool {
@@ -590,6 +801,12 @@ impl Config {
                 Err(e) => errs.push(format!("[connectors.*]: {}", e)),
             }
         }
+        if let Some(g) = root.get("grades") {
+            match Grades::parse(g) {
+                Ok(v) => cfg.grades = v,
+                Err(es) => errs.extend(es),
+            }
+        }
         if let Some(s) = root.get("search") {
             match crate::research::SearchConfig::parse(s, cfg.endpoints.iter().any(|e| e.family == "gemini")) {
                 Ok(v) => cfg.search = v,
@@ -600,6 +817,21 @@ impl Config {
             match v.clone().try_into::<ValidatorConfig>() {
                 Ok(v) => cfg.validator = v,
                 Err(e) => errs.push(format!("[validator]: {}", e)),
+            }
+        }
+        if let Some(v) = root.get("library") {
+            match v.clone().try_into::<LibraryConfig>() {
+                Ok(v) => match v.acquire.check() {
+                    Ok(()) => cfg.library = v,
+                    Err(e) => errs.push(format!("[library.acquire]: {}", e)),
+                },
+                Err(e) => errs.push(format!("[library]: {}", e)),
+            }
+        }
+        if let Some(v) = root.get("learning") {
+            match v.clone().try_into::<LearningConfig>() {
+                Ok(v) => cfg.learning = v,
+                Err(e) => errs.push(format!("[learning]: {}", e)),
             }
         }
         // `[harness]` also carries scalar settings of its own (`subscription_budget_tokens`); only its sub-tables are profiles.
@@ -640,6 +872,12 @@ impl Config {
                 match a.as_str().and_then(Assignment::parse) {
                     Some(v) => cfg.routing.assignment = v,
                     None => errs.push("[routing] assignment must be \"static\" or \"discovered\"".into()),
+                }
+            }
+            if let Some(a) = r.get("registry") {
+                match a.as_str().and_then(RegistryMode::parse) {
+                    Some(v) => cfg.routing.registry = v,
+                    None => errs.push("[routing] registry must be \"flat\" or \"auto\"".into()),
                 }
             }
             if let Some(n) = r.get("evidence_enough") {
@@ -1106,6 +1344,19 @@ impl Config {
 pub(crate) mod tests {
     use super::*;
 
+    #[test]
+    fn library_pages_defaults_and_ttl_forms() {
+        let d = Config::parse(SAMPLE).unwrap().library.pages;
+        assert!(d.enabled && d.external == PagesExternal::Ask);
+        assert_eq!((d.max_tokens, d.external_ttl_secs, d.per_day), (3000, 7 * 86_400, 20));
+        for (v, secs) in [("3", 3 * 86_400), ("\"12h\"", 12 * 3600), ("\"90m\"", 5400), ("\"7d\"", 7 * 86_400)] {
+            let c = Config::parse(&format!("{}\n[library.pages]\nexternal = \"off\"\nexternal_ttl = {}\n", SAMPLE, v)).unwrap().library.pages;
+            assert_eq!((c.external, c.external_ttl_secs), (PagesExternal::Off, secs), "{v}");
+        }
+        assert!(Config::parse(&format!("{}\n[library.pages]\nexternal = \"maybe\"\n", SAMPLE)).is_err());
+        assert!(Config::parse(&format!("{}\n[library.pages]\nexternal_ttl = \"soon\"\n", SAMPLE)).is_err());
+    }
+
     pub const SAMPLE: &str = r#"
 [models.claude]
 fast = "haiku-x"
@@ -1234,6 +1485,21 @@ allowed_endpoints = ["corp-gateway", "bedrock-us"]
         assert_eq!(c.routing, Routing::default());
         assert_eq!(slots(&c), vec!["corp-gateway/sonnet-x", "bedrock-us/bedrock-sonnet-x", "corp-gateway/haiku-x", "bedrock-us/haiku-x"]);
         assert_eq!(c.routing.tuning, PoolTuning { throttle_attempts: 3, throttle_window_secs: 600, reprobe_first_secs: 900, reprobe_max_secs: 14_400 });
+    }
+
+    #[test]
+    fn grades_are_per_role_or_kind_and_bounded() {
+        let c = with_routing("[grades]\narchitect = 1\n[grades.builder]\ndefault = -1\ndocs = -2").unwrap();
+        assert_eq!((c.grades.of("architect", None), c.grades.of("builder", None), c.grades.of("builder", Some("docs")), c.grades.of("builder", Some("code")), c.grades.of("writer", None)), (1, -1, -2, -1, 0));
+        assert!(with_routing("[grades]\narchitect = 3").is_err());
+        assert!(with_routing("[grades]\narchitect = \"high\"").is_err());
+    }
+
+    #[test]
+    fn the_agent_registry_is_flat_unless_asked_for() {
+        assert_eq!(with_routing("").unwrap().routing.registry, RegistryMode::Flat);
+        assert_eq!(with_routing("[routing]\nregistry = \"auto\"").unwrap().routing.registry, RegistryMode::Auto);
+        assert!(with_routing("[routing]\nregistry = \"on\"").is_err());
     }
 
     #[test]
@@ -1418,5 +1684,17 @@ tools = { search = "read", note = "draft", send = "write" }
         assert!(bad(&|t| t.replace("[connectors.docs]", "[connectors.Docs_X]")).contains("lowercase"));
         assert!(bad(&|t| t.replace("[connectors.docs]", "[connectors.docs]\nfirst_use = \"sometimes\"")).contains("first_use"));
         assert!(bad(&|t| t.replace("[connectors.docs]", "[connectors.docs]\nmax_arg_chars = 100000")).contains("max_arg_chars"));
+    }
+
+    #[test]
+    fn library_acquisition_is_off_by_default_and_its_keys_are_checked() {
+        let off = Config::parse(SAMPLE).unwrap().library.acquire;
+        assert!(!off.enabled && off.token_share_percent == 5 && off.interests.is_empty());
+        let on = Config::parse(&format!("{}\n[library.acquire]\nenabled = true\ninterests = [\"siege engines\"]\nbatch_size = 4\n", SAMPLE)).unwrap().library.acquire;
+        assert!(on.enabled && on.batch_size == 4 && on.interests == ["siege engines"]);
+        for (bad, why) in [("batch_size = 0", "batch_size"), ("token_share_percent = 11", "token_share_percent"), ("interests = [\"\"]", "interests"), ("byte_budget_mib = 0", "byte_budget_mib"), ("licence = \"cc0\"", "licence")] {
+            let errs = Config::parse(&format!("{}\n[library.acquire]\n{}\n", SAMPLE, bad)).unwrap_err().join("\n");
+            assert!(errs.contains(why), "{}: {}", bad, errs);
+        }
     }
 }
