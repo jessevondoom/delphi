@@ -51,11 +51,12 @@ register, scaffold, and inspect directory project scopes.
   delphi project register [path] [\-\-workspace <name>] [\-\-home <dir>]
   delphi project init [path] [\-\-yes] [\-\-workspace <name>] [\-\-home <dir>]
   delphi project list | scope [\-\-workspace <name>] [\-\-home <dir>]
+  delphi project index [path] [\-\-refresh] [\-\-workspace <name>] [\-\-home <dir>]
   delphi project relink <project\-id> <new\-path> [\-\-home <dir>]
   delphi project clone [path] [\-\-home <dir>]
 .fi
 .PP
-A project is a directory scope; Git is optional. `register` writes the identity marker and central project record. `init` lists paths first, asks for confirmation, and creates only missing project folders and `_index.md`; in non\-interactive use, pass `\-\-yes`. Existing files are preserved.
+A project is a directory scope; Git is optional. `register` writes the identity marker and central project record. `init` lists paths first, asks for confirmation, and creates only missing project folders and `_index.md`; in non\-interactive use, pass `\-\-yes`. Existing files are preserved. `index` reports whether `_index.md` is current; `index \-\-refresh` regenerates it (and `.delphi\-index/` category indexes for large projects) from the files allowed by `.gitignore`, `.delphiignore` and the default exclusions (credentials, hidden files, caches, build and dependency trees, files over 2 MiB; symlinks are not followed). A hand\-edited `_index.md` is never overwritten: a proposed replacement goes to `.delphi\-index/proposed\-index.md` and the command exits 3.
 .SS delphi auth
 sign in to, or out of, a model endpoint.
 .PP
