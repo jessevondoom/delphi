@@ -102,6 +102,14 @@ pub enum Rec {
     Source(String, Value),
 }
 
+/// What reading one source's stored text cost (`specs/057` §5.1).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct TextCost {
+    pub bytes: u64,
+    pub read_ns: u64,
+    pub hash_ns: u64,
+}
+
 #[derive(Debug, Default)]
 pub struct Checked {
     pub findings: Vec<Finding>,
@@ -444,16 +452,33 @@ impl Library {
     /// The stored text of a source (or its kept excerpts), after checking it against the recorded hash where that hash
     /// is of the stored bytes (a file capture).
     pub(super) fn stored_text(&self, id: &str) -> Result<String, Finding> {
+        self.stored_text_measured(id).0
+    }
+
+    /// `stored_text` with what it cost: bytes read, and time reading and hashing (`specs/057` §5.1).
+    pub(super) fn stored_text_measured(&self, id: &str) -> (Result<String, Finding>, TextCost) {
+        let mut cost = TextCost::default();
         let meta = self.read_meta(id).unwrap_or(Value::Null);
-        match std::fs::read(self.source_dir(id).join("source.md")) {
+        let t = std::time::Instant::now();
+        let read = std::fs::read(self.source_dir(id).join("source.md"));
+        cost.read_ns = t.elapsed().as_nanos() as u64;
+        let out = match read {
             Ok(bytes) => {
-                if meta["type"] == "document" && meta["content_hash"].as_str().is_some_and(|h| h != format!("sha256:{}", sha256_hex(&bytes))) {
-                    return Err(Finding::SourceAltered(id.to_string()));
+                cost.bytes = bytes.len() as u64;
+                let t = std::time::Instant::now();
+                let altered = meta["type"] == "document" && meta["content_hash"].as_str().is_some_and(|h| h != format!("sha256:{}", sha256_hex(&bytes)));
+                if meta["type"] == "document" {
+                    cost.hash_ns = t.elapsed().as_nanos() as u64;
                 }
-                Ok(String::from_utf8_lossy(&bytes).into_owned())
+                if altered {
+                    Err(Finding::SourceAltered(id.to_string()))
+                } else {
+                    Ok(String::from_utf8_lossy(&bytes).into_owned())
+                }
             }
             Err(_) => Ok(self.excerpts(id).iter().filter_map(|e| e["text"].as_str()).collect::<Vec<_>>().join("\n")),
-        }
+        };
+        (out, cost)
     }
 
     /// The body checks of §3.1: records, quotations, tables, images, links; plus the unverified-figure flags.

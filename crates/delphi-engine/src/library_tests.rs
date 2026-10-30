@@ -1213,6 +1213,7 @@ mod page_search_cache {
     use crate::library::page_validate::*;
     use crate::library::pages::Scope;
     use delphi_adapter::config::PagesConfig;
+    use std::collections::BTreeSet;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
 
@@ -1338,6 +1339,90 @@ mod page_search_cache {
         assert!(int.sources.iter().any(|(id, _, _)| *id == s));
         assert_eq!(l.private_named_in("what is in the Secret tides ledger"), Some(s));
         assert_eq!(l.private_named_in("tides"), None);
+    }
+
+    fn edit_meta(l: &Library, id: &str, f: impl Fn(&mut Value)) {
+        let path = l.source_dir(id).join("meta.json");
+        let mut m: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        f(&mut m);
+        std::fs::write(&path, serde_json::to_vec_pretty(&m).unwrap()).unwrap();
+    }
+
+    /// The oracle for `specs/057` §5.1: what gather chooses today, for every kind of source it has to handle.
+    #[test]
+    fn gather_parity_fixtures_fix_what_each_kind_of_source_does() {
+        let (d, l, _w) = setup();
+        let b = Budgets::default();
+        let add = |name: &str, text: &str, o: &AddOpts| l.add_file(&file(d.path(), name, text), o, &b).unwrap().id;
+        let public = l.list().into_iter().find(|(_, m)| m["title"] == "t.md").map(|(id, _)| id).unwrap();
+        let private = add("p.md", "tides in the private ledger", &AddOpts { private: true, level: Some(Level::Full), title: Some("Private ledger".into()), ..open("all-rights-reserved") });
+        let retired = add("r.md", "tides in a retired source", &open("CC0-1.0"));
+        edit_meta(&l, &retired, |m| m["retired"] = json!("2026-10-30"));
+        let big = add("big.md", &format!("tides {}{}", "filler ".repeat(100_000), "lunarwave"), &open("CC0-1.0"));
+        let tampered = add("tamper.md", "tides in a document that changes", &open("CC0-1.0"));
+        std::fs::write(l.source_dir(&tampered).join("source.md"), "something else entirely").unwrap();
+        let pointer = add("ptr.md", "tides pointer body", &AddOpts { level: Some(Level::Pointer), title: Some("Tides pointer".into()), ..open("CC0-1.0") });
+        let unrelated = add("u.md", "gardening notes", &open("CC0-1.0"));
+        let on_private = l.add_claim("Tides rest on the private ledger.", &ClaimOpts::default(), &[AnchorSpec { source_id: private.clone(), locator: Some("§1".into()), quote: "private ledger".into(), ..Default::default() }]).unwrap()["id"].as_str().unwrap().to_string();
+
+        let internal = l.gather("tides", Scope::Internal, &[]);
+        let ids = |g: &crate::library::page_search::Gathered| g.sources.iter().map(|(id, _, _)| id.clone()).collect::<BTreeSet<_>>();
+        let want: BTreeSet<String> = [&public, &private, &big, &pointer].into_iter().cloned().collect();
+        assert_eq!(ids(&internal), want, "retired, tampered (empty text, no title match) and unrelated sources are left out");
+        assert!(internal.claims.iter().any(|c| c["id"] == on_private.as_str()));
+        assert_eq!(internal.withheld, 0);
+        assert!(internal.sources.iter().find(|(id, _, _)| *id == big).unwrap().2.chars().count() <= 3 * 1024);
+        assert!(l.gather("lunarwave", Scope::Internal, &[]).sources.is_empty(), "only the first 20 KiB of text is scanned");
+
+        let external = l.gather("tides", Scope::External, &[]);
+        let want: BTreeSet<String> = [&public, &big, &pointer].into_iter().cloned().collect();
+        assert_eq!(ids(&external), want, "a private source is left out of an external page");
+        assert!(external.claims.iter().all(|c| c["id"] != on_private.as_str()));
+        assert_eq!(external.withheld, 1, "a claim resting on a private source is withheld, and counted");
+
+        let forced = l.gather("tides", Scope::Internal, std::slice::from_ref(&unrelated));
+        assert_eq!(forced.sources.first().map(|s| s.0.clone()), Some(unrelated), "a source a search just captured joins whether or not it matches");
+    }
+
+    /// The baseline of `specs/057` §5.1: run with `cargo test -p delphi-engine --release --lib gather_baseline -- --ignored --nocapture`.
+    /// It records where gather's time goes; it asserts nothing about speed.
+    #[test]
+    #[ignore]
+    fn gather_baseline_report() {
+        for (sources, claims) in [(100usize, 100usize), (1_000, 1_000), (3_000, 3_000)] {
+            let (d, l) = lib();
+            let b = Budgets::default();
+            for i in 0..sources {
+                let body = if i % 50 == 0 { format!("tides {}", "filler words here ".repeat(60_000)) } else { format!("source {i} about tides and harbours. {}", "ordinary words ".repeat(200)) };
+                l.add_file(&file(d.path(), &format!("s{i}.md"), &body), &open("CC0-1.0"), &b).unwrap();
+            }
+            for i in 0..claims {
+                l.add_claim(&format!("Claim {i} says the tide turns at the harbour."), &ClaimOpts::default(), &[]).unwrap();
+            }
+            let mut best = None;
+            for _ in 0..5 {
+                let g = l.gather("tides harbour", Scope::Internal, &[]);
+                if best.is_none_or(|b: crate::library::page_search::GatherStats| g.stats.total_ns < b.total_ns) {
+                    best = Some(g.stats);
+                }
+            }
+            let st = best.unwrap();
+            let ms = |n: u64| n as f64 / 1e6;
+            println!("sources {sources:>5} claims {claims:>5}: total {:>8.1} ms | list {:>7.1} read {:>7.1} hash {:>7.1} tokenize {:>7.1} | {} MiB read, {} reads", ms(st.total_ns), ms(st.list_ns), ms(st.read_ns), ms(st.hash_ns), ms(st.tokenize_ns), st.bytes_read >> 20, st.text_reads);
+        }
+    }
+
+    #[test]
+    fn gather_counts_what_it_reads() {
+        let (d, l, _w) = setup();
+        for i in 0..3 {
+            l.add_file(&file(d.path(), &format!("n{i}.md"), &format!("note {i} about tides and more words")), &open("CC0-1.0"), &Budgets::default()).unwrap();
+        }
+        let g = l.gather("tides", Scope::Internal, &[]);
+        let st = g.stats;
+        assert_eq!((st.sources_seen, st.text_reads, st.claims_seen), (4, 4, 1));
+        assert!(st.bytes_read > 0 && st.total_ns >= st.read_ns + st.hash_ns);
+        assert_eq!(st.to_json()["text_reads"], 4);
     }
 
     #[test]

@@ -30,3 +30,7 @@ Slices 1 and 2 are checked against the measurement in slice 1: if the cache is n
 ## Status
 
 Updated in the tracker as each slice merges.
+
+- Slice 0: merged (#382).
+- Slice 1 (SK8e): built; the baseline puts read, hash and tokenize at about 51% of gather at 1,000 sources.
+- Slice 2 (SK8f): closed unbuilt on that number, per the 70% bar in spec 057 §5.1. Gather stays at 151 ms at 1,000 sources and 479 ms at 3,000.

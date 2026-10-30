@@ -655,7 +655,7 @@ impl EngineService {
         let hits: Vec<Value> = g.hits().into_iter().map(|h| json!({"kind": h.kind, "id": h.id, "title": h.title, "status": h.status, "private": h.private})).collect();
         let ttl = self.engine.cfg.get().library.pages.external_ttl_secs;
         let pages: Vec<Value> = lib.pages(self.pages_now(), ttl).iter().map(|e| e.to_json()).collect();
-        Ok(json!({"query": query, "hits": hits, "pages": pages}))
+        Ok(json!({"query": query, "hits": hits, "pages": pages, "gather": g.stats.to_json()}))
     }
 
     async fn pages_search(&self, p: Value, ctx: CallContext) -> RpcOutcome {
