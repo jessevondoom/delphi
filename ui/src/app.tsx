@@ -18,7 +18,7 @@ import * as A from './archives.ts';
 import * as PG from './pages.ts';
 import { imageRefs } from './markdown.ts';
 import { pictureStyle, rasterOf, styleOf, usePictureStyle } from './image.ts';
-import { openExternal } from './external.ts';
+import { openExternal, openFile } from './external.ts';
 import * as O from './org.ts';
 import { noteSources, passageOf, pin, previewOf, readNotes } from './research.ts';
 import { copyText, firstVisible, stepFocus, type Target } from './links.ts';
@@ -348,7 +348,14 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
         if (r.status !== 200 && on === 'rdr') fail(r.status === 404 ? `${t.path} is not in the knowledge base` : r.body?.error ?? 'could not open it');
       }).catch(() => fail('could not open it'));
     } else if (act.t === 'pin') pinTarget(act.target);
-    else if (act.t === 'browser') fail(openExternal(act.url) ? `opened ${act.url} in your browser` : 'could not open the browser');
+    else if (act.t === 'browser') {
+      // Every handoff asks the daemon first: only an address on the operator's lists is opened.
+      void cmd.call('kb.allows', { url: act.url }).then((r: any) => fail(r?.allowed !== true ? 'seen, not read: that address is not on your list' : openExternal(act.url) ? `opened ${act.url} in your browser` : 'could not open the browser')).catch(() => fail('could not check your list: not opened'));
+    }
+    else if (act.t === 'file') {
+      // The console asks the daemon to vouch for the file (indexed, allowed type, inside the workspace); the viewer is the system's, and Delphi never runs it.
+      void cmd.call('kb.open', { path: act.path }).then((r: any) => fail(openFile(String(r?.file ?? '')) ? `✔ opened in your browser · read-only, Delphi never runs it${r?.trust && r.trust !== 'internal_generated' ? ' · untrusted' : ''}` : 'could not open the browser')).catch((er) => fail(er?.message ?? 'could not open it'));
+    }
     else if (act.t === 'copy') { copyToClipboard(act.text); fail('copied'); }
     else if (act.t === 'research') startResearch(act.topic);
     else if (act.t === 'research-cancel') void cmd.call('research.cancel', {}).catch(() => {});

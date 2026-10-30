@@ -18,7 +18,7 @@ export type Shelf = {
   stats: { documents: number; passages: number; vectors: number } | null;
 };
 /** One document in the reader, with where the operator is in it. */
-export type Entry = { path: string; collection: string; trust: string; /** The status the result it was opened from carried (specs/052), and when it last changed. */ knowledge?: string; vouched?: string; status?: string; updated?: string; stale: boolean; text: string; scroll: number; focus: number | null; /** The pictures fetched for it, by the file they were written as; null where one could not be drawn. */ images?: Record<string, Raster | null>; /** The lines a pointer cited, when the document was opened by one. */ range?: { from: number; to: number } };
+export type Entry = { path: string; collection: string; trust: string; /** The status the result it was opened from carried (specs/052), and when it last changed. */ knowledge?: string; vouched?: string; status?: string; updated?: string; stale: boolean; text: string; scroll: number; focus: number | null; /** The pictures fetched for it, by the file they were written as; null where one could not be drawn. */ images?: Record<string, Raster | null>; /** The lines a pointer cited, when the document was opened by one. */ range?: { from: number; to: number }; /** Which outside addresses in it are on the operator's lists (`/v1/doc` `links`); one not named here is treated as not listed. */ listed?: Record<string, boolean> };
 /** One entry the research job wrote (`delphi-engine/src/research.rs`). */
 export type Made = { path: string; title: string; publisher: string; url: string; form: string; licence: string };
 export type Report = { new: Made[]; updated: Made[]; unchanged: number; notKept: [string, string][]; unlisted: string[]; provider: string | null; tokens: number; stopped: string | null };
@@ -87,6 +87,7 @@ export type Action =
   | { t: 'excerpts'; id: string }
   | { t: 'open'; target: Extract<Target, { k: 'doc' | 'pointer' }> }
   | { t: 'browser'; url: string }
+  | { t: 'file'; path: string }
   | { t: 'copy'; text: string }
   | { t: 'pin'; target: Extract<Target, { k: 'doc' | 'pointer' }> };
 
@@ -131,13 +132,26 @@ export const statusLabel = (h: { trust: string; status?: string; knowledge?: str
   const k = statusOf(h);
   return k === 'validated' && h.vouched ? `validated · vouched by ${h.vouched}` : k ?? '';
 };
+/** The files the browser opens (specs/043 §6.3); the daemon's `kb.open` checks the same list and the file itself. */
+const OPENABLE = new Set(['pdf', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'mp3', 'm4a', 'wav', 'mp4', 'mov']);
+export const opensInBrowser = (path: string): boolean => OPENABLE.has((path.split('.').pop() ?? '').toLowerCase()) && path.includes('.');
+
+/** The provenance line of the reader (specs/043 §3.4): where a researched page came from, or that a document is not the operator's own. */
+export function provenance(e: Entry): string | null {
+  const fm = /^---\n([\s\S]*?)\n---/.exec(e.text)?.[1] ?? '';
+  const get = (k: string) => sanitize(new RegExp(`^${k}:\\s*"?([^\\n"]*)"?\\s*$`, 'm').exec(fm)?.[1] ?? '');
+  const research = !!get('source_url');
+  if (!research && !OUTSIDE.has(e.trust)) return null;
+  const parts = research ? [get('publisher') || 'a listed source', get('licence') && `licence ${get('licence')}`, get('retrieved') && `retrieved ${get('retrieved').slice(0, 10)}`, /^true$/i.test(get('share_alike')) ? 'share-alike' : '', 'listed source, not curated by you'] : ['from outside your own documents', 'untrusted: read-only, never run'];
+  return parts.filter(Boolean).join(' · ');
+}
 const slug = (s: string) => s.toLowerCase().replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '-');
 const day = (iso: string) => (iso || '').slice(0, 10);
 const READER_MARGIN = 4;
 
 /** The reader's body: the document rendered at `w`, and the links in it (focus is drawn by the caller's `focus`). */
 export const layout = (e: Entry, w: number, focus: number | null = null) => renderMarkdownLinks(e.text, Math.max(10, w - READER_MARGIN), { base: e.path, focus, images: e.images });
-const bodyRows = (h: number) => Math.max(1, h - 5); // the header, two rules, the status row and the hint
+const bodyRows = (h: number, e?: Entry) => Math.max(1, h - 5 - (e && provenance(e) ? 1 : 0)); // the header, two rules, the status row, the hint and the provenance line
 
 /** The row a section or a line range starts on, in the rendered document: by heading text, or by how far down the source it is. */
 function startRow(e: Entry, w: number, target: Target | null): number {
@@ -178,7 +192,7 @@ export function gotShelf(a: Arch, kinds: any[], health: any): Arch {
 /** A document arrived: show it, after the entry now on screen (anything forward of it in the history is dropped). */
 export function gotDoc(a: Arch, body: any, target: Target | null, w: number): Arch {
   const from = a.hits.find((h) => h.path === String(body.path));
-  const entry: Entry = { path: String(body.path), collection: String(body.collection ?? ''), trust: String(body.trust ?? ''), status: body.status ? String(body.status) : undefined, knowledge: from?.knowledge, vouched: from?.vouched, updated: from?.updated, stale: !!body.stale, text: String(body.text ?? ''), scroll: 0, focus: null, ...(target?.k === 'pointer' ? { range: { from: target.from, to: target.to } } : {}) };
+  const entry: Entry = { path: String(body.path), collection: String(body.collection ?? ''), trust: String(body.trust ?? ''), status: body.status ? String(body.status) : undefined, knowledge: from?.knowledge, vouched: from?.vouched, updated: from?.updated, stale: !!body.stale, text: String(body.text ?? ''), scroll: 0, focus: null, listed: Object.fromEntries((Array.isArray(body.links) ? body.links : []).filter((l: any) => l?.kind === 'external').map((l: any) => [String(l.target ?? l.url ?? ''), l.listed === true])), ...(target?.k === 'pointer' ? { range: { from: target.from, to: target.to } } : {}) };
   entry.scroll = startRow(entry, w, target);
   const trail = [...a.trail.slice(0, a.at + 1), entry];
   return { ...a, trail, at: trail.length - 1, note: '' };
@@ -352,6 +366,7 @@ function expandKey(a: Arch, e: Ev, used: (n: Arch, act?: Action) => ReturnType<t
 function open(a: Arch, r: Row, used: (n: Arch, act?: Action) => ReturnType<typeof key>) {
   if (r.k === 'kind') return used({ ...a, note: 'opening…' }, { t: 'browse', name: r.kind });
   const path = r.hit.path;
+  if (opensInBrowser(path)) return a.pins ? used({ ...a, note: 'opening…' }, { t: 'file', path }) : used({ ...a, note: 'this window only reads: open it from the console' });
   const target: Target = r.hit.start_line ? { k: 'pointer', path, from: r.hit.start_line, to: r.hit.end_line ?? r.hit.start_line } : { k: 'doc', path };
   return used({ ...a, note: 'opening…' }, { t: 'open', target });
 }
@@ -359,7 +374,7 @@ function open(a: Arch, r: Row, used: (n: Arch, act?: Action) => ReturnType<typeo
 function reader(a: Arch, e: Ev, w: number, h: number, used: (n: Arch, act?: Action) => ReturnType<typeof key>) {
   const cur = a.trail[a.at]!;
   const { lines, links } = layout(cur, w);
-  const rowsHigh = bodyRows(h), max = Math.max(0, lines.length - rowsHigh);
+  const rowsHigh = bodyRows(h, cur), max = Math.max(0, lines.length - rowsHigh);
   const set = (p: Partial<Entry>): Arch => ({ ...a, trail: a.trail.map((x, i) => (i === a.at ? { ...x, ...p } : x)) });
   const scrollTo = (n: number) => used(set({ scroll: Math.max(0, Math.min(max, n)) }));
   const back = () => used(a.at > 0 ? { ...a, at: a.at - 1 } : { ...a, at: -1, trail: [] });
@@ -387,7 +402,8 @@ function reader(a: Arch, e: Ev, w: number, h: number, used: (n: Arch, act?: Acti
     case 'enter': {
       const l = cur.focus === null ? undefined : links[cur.focus];
       if (!l) return used(a);
-      return l.target.k === 'external' ? used(a, { t: 'browser', url: l.target.url }) : used({ ...a, note: 'opening…' }, { t: 'open', target: l.target });
+      if (l.target.k === 'external') return cur.listed?.[l.target.url] === true ? used(a, { t: 'browser', url: l.target.url }) : used({ ...a, note: 'seen, not read: that address is not on your list' });
+      return used({ ...a, note: 'opening…' }, { t: 'open', target: l.target });
     }
     case 'esc': case 'backspace': return back();
     case 'up': return scrollTo(cur.scroll - 1);
@@ -581,10 +597,11 @@ function listRow(a: Arch, x: Hit, i: number, w: number, now: number): string[] {
   const on = i === a.sel && a.focus === 'list';
   const mid = w >= 90, full = w >= 80;
   const tw = statusWord(x);
-  const tail = kindStyle(x.kind)(x.kind.padEnd(8)) + (full ? '  ' + statusGlyph(x) + ' ' + T.dim(tw.padEnd(9)) : ' ' + statusGlyph(x)) + (mid ? ' ' + T.dim(ago(x.updated, now).padStart(6)) : '');
+  const tail = kindStyle(x.kind)((x.kind + (opensInBrowser(x.path) ? ' ↗' : '')).padEnd(8)) + (full ? '  ' + statusGlyph(x) + ' ' + T.dim(tw.padEnd(9)) : ' ' + statusGlyph(x)) + (mid ? ' ' + T.dim(ago(x.updated, now).padStart(6)) : '');
   const room = Math.max(10, w - 8 - 10 - (full ? 13 : 2) - (mid ? 7 : 0) - 1);
   const title = T.clip(titleOf(x), Math.min(64, room));
-  const first = sanitize(x.preview).split('\n').filter((l) => !/^#+\s/.test(l)).map((l) => l.trim()).filter(Boolean)[0] ?? '';
+  const body1 = sanitize(x.preview).split('\n').filter((l) => !/^#+\s/.test(l)).map((l) => l.trim()).filter(Boolean)[0] ?? '';
+  const first = (opensInBrowser(x.path) && OUTSIDE.has(x.trust) ? 'untrusted: opens in your browser, read-only · ' : '') + body1;
   const q = a.browse ? '' : a.searched ?? '';
   return [
     T.spread(` ${mark(i === a.sel, a)} ${String(i + 1).padStart(2)}  ${a.browse ? (on ? chalk.bold(title) : title) : emphasize(title, q, on ? chalk.bold : (z) => z)}`, tail + ' ', w),
@@ -602,12 +619,12 @@ function bestCard(a: Arch, x: Hit, w: number, h: number, now: number, pal: T.Pal
   const compact = h < 30;
   const sum = wrapText(bestSummary(x.preview, a.searched ?? ''), w - 11).slice(0, compact ? 2 : 4);
   const L = [
-    T.spread(chalk.bold(T.dim('BEST MATCH')), kindStyle(x.kind)(x.kind) + T.dim([...(statusOf(x) ? [`${statusGlyph(x)}${T.dim(' ' + statusLabel(x))}`] : []), edited ? `edited ${edited}` : ''].filter(Boolean).map((t) => ` · ${t}`).join('')), w - 7),
+    T.spread(chalk.bold(T.dim('BEST MATCH')), kindStyle(x.kind)(x.kind + (opensInBrowser(x.path) ? ' ↗' : '')) + T.dim([...(statusOf(x) ? [`${statusGlyph(x)}${T.dim(' ' + statusLabel(x))}`] : []), edited ? `edited ${edited}` : ''].filter(Boolean).map((t) => ` · ${t}`).join('')), w - 7),
     (on ? T.accent('❯ ') : '') + chalk.bold(T.accent(T.clip(titleOf(x), w - 11))),
     ...sum.map((l) => emphasize(l, a.searched ?? '')),
   ];
   if (!compact) L.push('', T.dim(x.start_line ? `lines ${x.start_line}–${x.end_line ?? x.start_line}` : x.collection));
-  L.push(T.accent('enter') + ' read');
+  L.push(T.accent('enter') + (opensInBrowser(x.path) ? ` open in your browser · read-only, Delphi never runs it${OUTSIDE.has(x.trust) ? ' · untrusted' : ''}` : ' read'));
   return L.map(fill);
 }
 
@@ -625,7 +642,7 @@ function results(a: Arch, w: number, h: number, now: number, pal: T.Pal): string
     ? `${a.hits.length} documents · ${KIND_LABEL[a.browse] ?? a.browse}, newest first${a.trustedOnly ? ' · trusted only' : ''}`
     : a.hits.length ? `${a.hits.length >= RESULTS ? 'top ' : ''}${a.hits.length} result${a.hits.length === 1 ? '' : 's'}${a.took !== null ? ` · ${(a.took / 1000).toFixed(2)} s` : ''} · 0 tokens${where}`
       : `nothing in the knowledge base matches${where}`;
-  out.push(T.dim('  ' + head + (thinOnReference(a) ? ' · thin on reference: shift+tab to research this topic' : '')));
+  out.push(T.dim('  ' + head + (a.hits.some((x) => opensInBrowser(x.path)) ? ' · ↗ opens in your browser, everything else opens here' : '') + (thinOnReference(a) ? ' · thin on reference: shift+tab to research this topic' : '')));
   if (!a.browse && a.facets && Object.keys(a.facets).length) {
     const total = Object.values(a.facets).reduce((s, n) => s + n, 0);
     const chip = (k: string | null, label: string, n: number) => { const on = a.kind === k; const t = `${on ? '●' : '○'} ${label} ${n}`; return k === null ? (on ? chalk.bold(t) : T.dim(t)) : on ? chalk.bold(kindStyle(k)(t)) : kindStyle(k)(t); };
@@ -648,16 +665,17 @@ function results(a: Arch, w: number, h: number, now: number, pal: T.Pal): string
 function readerView(a: Arch, w: number, h: number, pal: T.Pal, now: number): string[] {
   const cur = a.trail[a.at]!;
   const { lines, links } = layout(cur, w, cur.focus);
-  const rowsHigh = bodyRows(h), top = Math.min(cur.scroll, Math.max(0, lines.length - rowsHigh));
+  const rowsHigh = bodyRows(h, cur), top = Math.min(cur.scroll, Math.max(0, lines.length - rowsHigh));
   const where = `${cur.path}`;
   const k = statusOf(cur), age = ago(cur.updated ?? '', now);
   const tags = [cur.collection, k ? `${T.statusMark(k)}${T.dim(' ' + statusLabel(cur))}` : '', age ? `edited ${age}` : '', cur.stale ? 'changed since indexed' : ''].filter(Boolean).join(T.dim(' · '));
   const f = cur.focus === null ? null : links.find((l) => l.id === cur.focus);
   const body = lines.slice(top, top + rowsHigh).map((l) => '  ' + l);
   const pct = lines.length <= rowsHigh ? 100 : Math.round(((top + rowsHigh) / lines.length) * 100);
-  const status = f ? `${describe(f.target)}${f.target.k === 'external' ? '  (enter opens it in your browser)' : ''}` : links.length ? `${links.length} link${links.length === 1 ? '' : 's'} · tab to focus` : 'no links in this document';
+  const status = f ? `${describe(f.target)}${f.target.k === 'external' ? (cur.listed?.[f.target.url] === true ? '  (enter opens it in your browser)' : '  (seen, not read: not on your list)') : ''}` : links.length ? `${links.length} link${links.length === 1 ? '' : 's'} · tab to focus` : 'no links in this document';
   return [
     T.spread(' ' + chalk.bold(where), tags + ' ', w),
+    ...(provenance(cur) ? [T.dim(T.clip(' ' + provenance(cur), w))] : []),
     T.hairline(pal, w),
     ...pad(body, rowsHigh),
     T.hairline(pal, w),

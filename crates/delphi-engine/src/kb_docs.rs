@@ -7,8 +7,8 @@
 //!
 //! The text is made here and nowhere else, so the reader (`kb.get`) shows exactly what the index holds.
 
-use crate::kb::SourceFile;
-use std::path::Path;
+use crate::kb::{Kb, SearchOpts, SourceFile};
+use std::path::{Path, PathBuf};
 
 /// A document over this is listed, not read.
 pub const MAX_EXTRACT_BYTES: u64 = 20 * 1024 * 1024;
@@ -105,6 +105,43 @@ pub fn text_of(path: &Path) -> Option<String> {
     }
 }
 
+/// The only extensions handed to the operator's viewer (`specs/043` §6.3). `svg`, `html`, `htm`, `xml`, `js`, programs,
+/// archives and everything else are never handed over; they are shown as text in the reader.
+pub const OPENABLE: [&str; 11] = ["pdf", "png", "jpg", "jpeg", "gif", "webp", "mp3", "m4a", "wav", "mp4", "mov"];
+
+/// What the daemon vouches for when the operator asks to open a file: the canonical path, and what to log.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Opened {
+    pub file: PathBuf,
+    pub extension: String,
+    pub blake3: String,
+    pub trust: String,
+}
+
+/// May `rel_path` be handed to the operator's viewer? Only a document the index lists as visible (the path is looked up
+/// there, never taken from a document's text or a link), with an allow-listed extension, that is a regular file whose
+/// canonical path lies under the workspace. Reads nothing but the file's bytes, to name its hash for the event.
+pub fn openable(ws: &Path, kb: &Kb, rel_path: &str) -> Result<Opened, String> {
+    let extension = extension(rel_path);
+    if !OPENABLE.contains(&extension.as_str()) {
+        return Err(format!("a .{} file is never handed to a viewer; the reader shows what Delphi can read of it", extension));
+    }
+    let view = SearchOpts { role: None, include_untrusted: true, ..SearchOpts::default() };
+    let info = kb.document(rel_path, &view).map_err(|e| e.to_string())?.ok_or("not in the knowledge base")?;
+    let src = crate::kb::sources(ws).into_iter().find(|s| s.rel_path == info.rel_path).ok_or("no longer on disk")?;
+    if std::fs::symlink_metadata(&src.path).map_err(|e| e.to_string())?.file_type().is_symlink() {
+        return Err("a link is never opened".into());
+    }
+    let file = src.path.canonicalize().map_err(|e| e.to_string())?;
+    let root = ws.canonicalize().map_err(|e| e.to_string())?;
+    if !file.starts_with(&root) || !file.is_file() {
+        return Err("the file is not inside the workspace".into());
+    }
+    let mut h = blake3::Hasher::new();
+    h.update_reader(std::fs::File::open(&file).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    Ok(Opened { file, extension, blake3: h.finalize().to_hex().to_string(), trust: info.source_type })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,5 +169,29 @@ mod tests {
         doc_files(d.path(), "context", "context", "external_untrusted", &mut out);
         let names: Vec<&str> = out.iter().map(|f| f.rel_path.as_str()).collect();
         assert_eq!(names, ["context/a.pdf", "context/b.docx", "context/c.epub", "context/d.mp3"]);
+    }
+
+    #[test]
+    fn only_an_indexed_file_with_an_allowed_extension_inside_the_workspace_is_opened() {
+        let d = tempfile::tempdir().unwrap();
+        let ws = d.path().join("ws");
+        let ctx = ws.join("base/context");
+        std::fs::create_dir_all(&ctx).unwrap();
+        for n in ["a.pdf", "b.mp3", "c.svg"] {
+            std::fs::write(ctx.join(n), b"x").unwrap();
+        }
+        std::fs::write(d.path().join("outside.pdf"), b"secret").unwrap();
+        std::os::unix::fs::symlink(d.path().join("outside.pdf"), ctx.join("link.pdf")).unwrap();
+        let mut kb = Kb::open_in_memory().unwrap();
+        kb.sync(&crate::kb::sources(&ws), "t").unwrap();
+        let ok = openable(&ws, &kb, "context/a.pdf").unwrap();
+        assert_eq!((ok.extension.as_str(), ok.trust.as_str()), ("pdf", "external_untrusted"));
+        assert!(ok.file.starts_with(ws.canonicalize().unwrap()) && ok.blake3.len() == 64);
+        assert!(openable(&ws, &kb, "context/b.mp3").is_ok());
+        assert!(openable(&ws, &kb, "context/c.svg").unwrap_err().contains("never handed"), "indexed, listed, but not on the allow-list");
+        assert!(openable(&ws, &kb, "context/link.pdf").is_err(), "a symlink is not even indexed");
+        for path in ["../outside.pdf", "/etc/hosts", "context/../../outside.pdf", "context/nothing.pdf", "readme.html", "context/run.exe"] {
+            assert!(openable(&ws, &kb, path).is_err(), "{path}");
+        }
     }
 }
