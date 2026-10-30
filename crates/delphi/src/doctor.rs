@@ -178,7 +178,7 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
     check_mcp_policy(&cfg, &delphi_engine::policy::local_policy(&std::env::current_exe().unwrap_or_default()), &std::env::current_exe().unwrap_or_default(), &mut r);
 
     // 11. Model pool (specs/002 §4.1): which models are out of quota right now, from the daemon's saved state.
-    check_pool(ws, &cfg, &mut r);
+    check_pool(ws, home, &cfg, &mut r);
 
     // 9. Sandbox (D-24): optional. Reported, never a warning unless the config asks for it and it is missing.
     let wanted = toml::from_str::<toml::Value>(&cfg).ok().and_then(|v| v.get("exec").and_then(|e| e.get("sandbox")).and_then(|s| s.as_str().map(String::from))).unwrap_or_else(|| "off".into());
@@ -372,7 +372,7 @@ fn check_coverage_drift(cfg_text: &str, help: &dyn Fn(&str, &[&str]) -> Option<S
     }
 }
 
-fn check_pool(ws: &Workspace, cfg_text: &str, r: &mut Report) {
+fn check_pool(ws: &Workspace, home: &Path, cfg_text: &str, r: &mut Report) {
     let Ok(cfg) = delphi_adapter::config::Config::parse(cfg_text) else { return }; // a bad config is reported by the checks above
     let configured = cfg.pool_entries().len();
     if configured == 0 {
@@ -386,6 +386,21 @@ fn check_pool(ws: &Workspace, cfg_text: &str, r: &mut Report) {
     }
     for e in stuck {
         r.warn("11 model pool", format!("{}/{}", e.endpoint_id, e.model_id), delphi_engine::pool::describe(&e, now));
+    }
+    // Spec 056 M1: a model no class rule places is trialled on low-risk tasks only, until its results or the operator place it.
+    match delphi_engine::models::ClassRules::load(&ws.dir) {
+        Err(e) => r.warn("11 model pool", "model-classes.toml", e),
+        Ok(rules) => {
+            let mut list = delphi_engine::models::discover(&cfg, delphi_engine::hostmap::load(home).as_ref(), now);
+            delphi_engine::models::classify(&rules, &mut list);
+            let (pooled, listed): (Vec<_>, Vec<_>) = delphi_engine::models::unclassified(&list).into_iter().partition(|c| c.source == "pool");
+            for c in pooled {
+                r.warn("11 model pool", format!("{}/{}", c.endpoint_id, c.model_id), "no class rule places this model: it is trialled on low-risk tasks only; add a rule to model-classes.toml or assign it (specs/056)");
+            }
+            if !listed.is_empty() {
+                r.warn("11 model pool", "CLI model lists", format!("{} model(s) listed by a CLI are not in the pool and have no class; they are never used until configured (`delphi capabilities --models` lists them)", listed.len()));
+            }
+        }
     }
 }
 
