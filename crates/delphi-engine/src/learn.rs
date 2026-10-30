@@ -168,6 +168,8 @@ pub struct LiveProposal {
     pub tier: String,
     pub task_id: Option<String>,
     pub timestamp: String,
+    /// Rule ids an `add` replaces when the operator ratifies it (`specs/050` ML-2); empty for most proposals.
+    pub supersedes: Vec<String>,
 }
 
 impl LiveProposal {
@@ -178,7 +180,7 @@ impl LiveProposal {
 
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::json!({"ref": self.reference(), "mission": self.mission, "id": self.id, "op": self.op, "scope": self.scope, "text": self.text,
-                           "rationale": self.rationale, "target": self.target, "tier": self.tier, "task_id": self.task_id, "at": self.timestamp})
+                           "rationale": self.rationale, "target": self.target, "tier": self.tier, "task_id": self.task_id, "at": self.timestamp, "supersedes": self.supersedes})
     }
 }
 
@@ -195,7 +197,7 @@ pub fn live_proposals(mission: &str, events: &[EventEnvelope]) -> Vec<LivePropos
                     continue;
                 }
                 let tier = e.payload["tier"].as_str().and_then(Tier::parse).unwrap_or(Tier::L0).min(Tier::L3);
-                out.push(LiveProposal { mission: mission.to_string(), id: format!("p{}", e.seq), op: s("op"), scope: s("scope"), text: s("text"), rationale: s("rationale"), target: s("target"), tier: tier.as_str().to_string(), task_id: e.task_id.clone(), timestamp: e.timestamp.clone() });
+                out.push(LiveProposal { mission: mission.to_string(), id: format!("p{}", e.seq), op: s("op"), scope: s("scope"), text: s("text"), rationale: s("rationale"), target: s("target"), tier: tier.as_str().to_string(), task_id: e.task_id.clone(), timestamp: e.timestamp.clone(), supersedes: e.payload["supersedes"].as_array().into_iter().flatten().filter_map(|v| v.as_str()).filter(|id| crate::retro::is_rule_id(id)).take(crate::retro::MAX_SUPERSEDES).map(String::from).collect() });
             }
             "learn.proposal_resolved" => {
                 if let Some(id) = e.payload["id"].as_str() {

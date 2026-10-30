@@ -7,6 +7,7 @@ import { copyText, describe, firstVisible, stepFocus, type Link, type Target } f
 import { renderMarkdownLinks } from './markdown.ts';
 import type { Raster } from './image.ts';
 import * as L from './library.ts';
+import * as P from './pages.ts';
 import * as T from './theme.ts';
 import { sanitize } from './theme.ts';
 
@@ -56,9 +57,11 @@ export type Arch = {
   /** The console can pin a passage to the operator's notebook (`p`); the narrator is read-only and cannot. */
   pins: boolean;
   /** `search` is the page as it was (local, zero-token); `expand` is the clean research page of spec 028-A1 (`shift+tab` switches). Remembered for the session. */
-  mode: 'search' | 'expand' | 'sources' | 'claims';
+  mode: 'search' | 'expand' | 'sources' | 'claims' | 'pages';
   /** The library's Sources and Claims views (specs/055 SK2, SK3): what the daemon listed, and where the operator is in it. */
   lib: L.Lib;
+  /** The Pages view (specs/057 SK8d): the question, the records found, and the page beside them. */
+  pg: P.Pages;
   /** The research job started from the expand page, running or finished; null on the clean page. */
   research: Research | null;
 };
@@ -66,7 +69,7 @@ export type Arch = {
 /** How many results one search asks for. */
 export const RESULTS = 30;
 
-export const emptyArch = (pins = false): Arch => ({ q: '', focus: 'box', sel: 0, searched: null, hits: [], took: null, engine: null, browse: null, note: '', shelf: null, trail: [], at: -1, kind: null, facets: null, trustedOnly: false, history: [], hist: null, pins, mode: 'search', lib: L.emptyLib(), research: null });
+export const emptyArch = (pins = false): Arch => ({ q: '', focus: 'box', sel: 0, searched: null, hits: [], took: null, engine: null, browse: null, note: '', shelf: null, trail: [], at: -1, kind: null, facets: null, trustedOnly: false, history: [], hist: null, pins, mode: 'search', lib: L.emptyLib(), pg: P.emptyPages(), research: null });
 
 /** What every request to the daemon adds: the trust filter. */
 export const trustParam = (a: Arch): string => (a.trustedOnly ? '&trusted_only=1' : '');
@@ -78,7 +81,9 @@ export type Action =
   | { t: 'browse'; name: string }
   | { t: 'research'; topic: string }
   | { t: 'research-cancel' }
-  | { t: 'library'; what: L.LibKind }
+  | { t: 'library'; what: L.LibKind; open?: string }
+  | Exclude<P.PagesAction, { t: 'none' | 'leave' | 'open-source' }>
+  | { t: 'pages-list' }
   | { t: 'excerpts'; id: string }
   | { t: 'open'; target: Extract<Target, { k: 'doc' | 'pointer' }> }
   | { t: 'browser'; url: string }
@@ -219,6 +224,7 @@ export function key(a: Arch, e: Ev, w: number, h: number): { a: Arch; action: Ac
   if (a.at >= 0) return reader(a, e, w, h, used);
   const list = rows(a);
   if (a.mode === 'expand') return expandKey(a, e, used);
+  if (a.mode === 'pages') return pagesKey(a, e, h, used);
   if (a.mode === 'sources' || a.mode === 'claims') return libraryKey(a, a.mode, e, h, used);
   if (e.t === 'ctrl' && e.c === 'l') return a.pins ? goLibrary(a, 'sources', used) : used({ ...a, note: 'the library views are in the console: this window only reads' });
   if (e.t === 'text' || e.t === 'paste') {
@@ -277,13 +283,26 @@ function goLibrary(a: Arch, what: L.LibKind, used: (n: Arch, act?: Action) => Re
 }
 
 function libraryKey(a: Arch, what: L.LibKind, e: Ev, h: number, used: (n: Arch, act?: Action) => ReturnType<typeof key>) {
-  if (e.t === 'ctrl' && e.c === 'l') return what === 'sources' ? goLibrary(a, 'claims', used) : used({ ...a, mode: 'search', note: '' }, a.shelf ? none : { t: 'reload' });
+  if (e.t === 'ctrl' && e.c === 'l') return what === 'sources' ? goLibrary(a, 'claims', used) : used({ ...a, mode: 'pages', focus: 'box', note: '' }, { t: 'pages-list' });
   if (L.wantsReload(e) && !a.lib.detail) return used({ ...a, lib: { ...a.lib, note: 'reading…' } }, { t: 'library', what });
   const r = L.key(a.lib, what, e, h - 7);
   if (!r.used) return NOT_USED(a);
   if (r.action.t === 'leave') return used({ ...a, mode: 'search', note: '' }, a.shelf ? none : { t: 'reload' });
   return used({ ...a, lib: r.l }, r.action.t === 'none' ? none : r.action);
 }
+
+function pagesKey(a: Arch, e: Ev, h: number, used: (n: Arch, act?: Action) => ReturnType<typeof key>) {
+  if (e.t === 'ctrl' && e.c === 'l') return used({ ...a, mode: 'search', note: '' }, a.shelf ? none : { t: 'reload' });
+  const r = P.key(a.pg, e, h - 7);
+  if (!r.used) return NOT_USED(a);
+  const act = r.action;
+  if (act.t === 'leave') return used({ ...a, mode: 'search', note: '' }, a.shelf ? none : { t: 'reload' });
+  // Opening a cited source goes to the Sources view with that source's detail, once the list is read.
+  if (act.t === 'open-source') return used({ ...a, mode: 'sources', pg: r.p, lib: { ...a.lib, sel: 0, detail: null, want: act.id, note: 'reading…' } }, { t: 'library', what: 'sources', open: act.id });
+  return used({ ...a, pg: r.p }, act.t === 'none' ? none : act);
+}
+
+export const gotPages = (a: Arch, f: (p: P.Pages) => P.Pages): Arch => ({ ...a, pg: f(a.pg) });
 
 export const gotLibrary = (a: Arch, what: L.LibKind, body: unknown): Arch => ({ ...a, lib: what === 'sources' ? L.gotSources(a.lib, body) : L.gotClaims(a.lib, body) });
 export const gotExcerpts = (a: Arch, id: string, body: unknown): Arch => ({ ...a, lib: L.gotExcerpts(a.lib, id, body) });
@@ -647,8 +666,8 @@ function readerView(a: Arch, w: number, h: number, pal: T.Pal, now: number): str
 }
 
 /** The pane's body: `h` rows of at most `w` columns. */
-export function view(a: Arch, w: number, h: number, pal: T.Pal, info?: T.Info, now: number = Date.now()): string[] {
-  const lines = a.at >= 0 ? readerView(a, w, h, pal, now) : a.mode === 'expand' ? expandView(a, w, h, info, pal) : a.mode === 'sources' || a.mode === 'claims' ? L.view(a.lib, a.mode, w, h, now, ago) : a.searched !== null ? results(a, w, h, now, pal) : home(a, w, h, info, pal);
+export function view(a: Arch, w: number, h: number, pal: T.Pal, info?: T.Info, now: number = Date.now(), still = false): string[] {
+  const lines = a.at >= 0 ? readerView(a, w, h, pal, now) : a.mode === 'expand' ? expandView(a, w, h, info, pal) : a.mode === 'pages' ? P.view(a.pg, w, h, now, still) : a.mode === 'sources' || a.mode === 'claims' ? L.view(a.lib, a.mode, w, h, now, ago) : a.searched !== null ? results(a, w, h, now, pal) : home(a, w, h, info, pal);
   return pad(lines, h).map((l) => T.clip(l, w));
 }
 

@@ -71,11 +71,24 @@ pub fn first_line(description: &str) -> &str {
     description.trim().lines().next().unwrap_or("").trim()
 }
 
-/// A bundle's registry as the manifest declared it.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Registry {
-    pub domains: BTreeMap<String, String>,
-    pub agents: BTreeMap<String, AgentMeta>,
+/// The registry keys of `[agents.<agent>]` in a `bundle.toml` that already passed `validate` at add. Anything that does not
+/// parse as expected is left at its default, never guessed.
+pub fn meta_from_toml(bundle_toml: &str, agent: &str) -> AgentMeta {
+    let t: toml::Table = bundle_toml.parse().unwrap_or_default();
+    let a = t.get("agents").and_then(|a| a.get(agent)).and_then(|a| a.as_table());
+    let list = |k: &str| -> Vec<String> { a.and_then(|a| a.get(k)).and_then(|v| v.as_array()).map(|v| v.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default() };
+    AgentMeta {
+        domain: a.and_then(|a| a.get("domain")).and_then(|v| v.as_str()).map(String::from).unwrap_or_else(|| GENERAL.into()),
+        tags: list("tags"),
+        not_for: list("not_for"),
+        summary: a.and_then(|a| a.get("summary")).and_then(|v| v.as_str()).map(String::from),
+    }
+}
+
+/// `[domains.<id>] summary` of a `bundle.toml` that already passed `validate`.
+pub fn domains_from_toml(bundle_toml: &str) -> BTreeMap<String, String> {
+    let t: toml::Table = bundle_toml.parse().unwrap_or_default();
+    t.get("domains").and_then(|d| d.as_table()).map(|d| d.iter().filter_map(|(k, v)| Some((k.clone(), v.get("summary")?.as_str()?.to_string()))).collect()).unwrap_or_default()
 }
 
 #[cfg(test)]

@@ -247,6 +247,20 @@ The library's sources: capture, excerpts, bibliography.
 One library per install, in <home>/library/. A URL is fetched by the validation fetcher (https only, no private addresses, size cap, cloaking check). The licence decides the level: open licences and your own material are kept whole, restricted ones as excerpts, an unknown one as a pointer; --private keeps a restricted source whole for your own use and it never leaves this install. Everything captured reads not validated. Limits: 64 MiB of text and 512 MiB per source, 20 GiB for the library; over a limit the capture falls back and says so. `purge` deletes the capture and keeps the citation and the content hash. Metadata is read by code, never guessed: Wikipedia (CC BY-SA, the revision from the ETag), a DOI's landing page (citation meta tags) and a Gutenberg header; a field the page does not state is left empty. `show` is an open: if the source was last checked more than 30 days ago it is fetched once through the same fetcher (no tokens; skipped offline or with --offline), an unchanged page only moves last_checked, a changed one becomes a new version with a change note and the old one kept, and a gone one (404/410) is marked retired. `excerpt add` keeps one quoted passage with its locator and purpose: at most 4 KiB each, and for a restricted source not held whole at most 10% of the work or 16 KiB in total (the work's length is recorded at capture, or give --work-bytes); each excerpt carries an anchor (quote, prefix and suffix, and a character range when the text is held) that is looked up again when the source changes, and one that cannot be found is marked contested, never re-pointed. `bib` writes a bibliography from the citation fields alone, in apa, mla, chicago or plain text, or as csl-json or bibtex for a reference manager; private sources are left out of every export. `history` lists every kept capture, oldest first, with its change note (sizes and the sections that came or went, no model) and how many claim anchors point at it; a purge deletes the earlier ones. `add`, `purge`, `excerpt add` and `bib` are refused inside an agent seat.
 Acquisition (off until `[library.acquire] enabled = true`): once a day the daemon looks for public-domain and research sources matching your projects and `interests` in the archives listed in context/sources/archives.toml (and operator/archives.toml), and puts what it found in the digest as ONE batch, never a blocking prompt; nothing is fetched until you accept. `accept` captures the chosen items in full under the archive's own terms (the archive's rate limits, its notice and attribution kept, the public-domain basis recorded from the archive's own record, never typed by an agent); `skip` declines them for good. A standing rule (`acquire rule add`) takes anything on those topics from those archives up to a size without asking. The byte budget (`byte_budget_mib`) stops acquisition and deletes nothing; acquired sources read not validated and their claims start noted. `run` searches now without the scout's model call. A private source's tags never leave the install. `reading-list` keeps named lists of source ids. All of it is refused inside an agent seat.
 
+### `delphi route`
+
+Which bundle agent fits a task (a dry run).
+
+```
+  delphi route "<task>" [--domain <d>] [--role <role>] [--limit <1-5>] [--json] [--workspace <name>] [--home <dir>]
+  delphi route --eval <labeled.json> [--json] [--workspace <name>] [--home <dir>]
+```
+
+Ranks the agents of the added bundles for a task the way the orchestrator's `search_agent_registry` tool does: by name, tags,
+domain and summary, plus the local embedding model when one is installed. Nothing is dispatched, no model is called and nothing
+is created. `--eval` takes a JSON list of {"task", "target"} (target is `bundle:<bundle>/<agent>`) and prints recall at 1, 3 and 5,
+latency and the tokens of the domain index against the uncapped flat list. Turn routing on with `[routing] registry = "auto"`.
+
 ### `delphi needs`
 
 What the roadmap is waiting on evidence for.

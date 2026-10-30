@@ -12,8 +12,8 @@ export type Anchor = { source: string; locator: string; quote: string; state: st
 export type Clm = { id: string; text: string; kind: string; scope: string; status: T.KnowledgeStatus; created: string; confirmed: string; anchors: Anchor[]; cited: number; contestedBy: string[] };
 export type Excerpt = { id: string; locator: string; purpose: string; bytes: number; contested: boolean };
 export type Detail = { k: 'source'; src: Src; excerpts: Excerpt[] | null } | { k: 'claim'; claim: Clm };
-export type Lib = { sources: Src[] | null; claims: Clm[] | null; sel: number; detail: Detail | null; note: string };
-export type LibAction = { t: 'none' } | { t: 'library'; what: LibKind } | { t: 'excerpts'; id: string } | { t: 'leave'; to: 'search' };
+export type Lib = { sources: Src[] | null; claims: Clm[] | null; sel: number; detail: Detail | null; note: string; /** A source another view asked to open once the list arrives. */ want?: string };
+export type LibAction = { t: 'none' } | { t: 'library'; what: LibKind; open?: string } | { t: 'excerpts'; id: string } | { t: 'leave'; to: 'search' };
 
 export const emptyLib = (): Lib => ({ sources: null, claims: null, sel: 0, detail: null, note: '' });
 
@@ -48,7 +48,12 @@ export function parseExcerpts(body: unknown): Excerpt[] {
   return list(body).map((e) => ({ id: str(e.id, 20), locator: str(e.locator, 80), purpose: str(e.purpose, 200), bytes: Number(e.bytes) || 0, contested: e.contested === true }));
 }
 
-export const gotSources = (l: Lib, body: unknown): Lib => ({ ...l, sources: parseSources(body), sel: 0, detail: null, note: '' });
+export function gotSources(l: Lib, body: unknown): Lib {
+  const sources = parseSources(body);
+  const at = l.want ? sources.findIndex((s) => s.id === l.want) : -1;
+  const { want: _want, ...rest } = l;
+  return at >= 0 ? { ...rest, sources, sel: at, detail: { k: 'source', src: sources[at]!, excerpts: null }, note: '' } : { ...rest, sources, sel: 0, detail: null, note: l.want ? 'that source is not in the library' : '' };
+}
 export const gotClaims = (l: Lib, body: unknown): Lib => ({ ...l, claims: parseClaims(body), sel: 0, detail: null, note: '' });
 export const gotExcerpts = (l: Lib, id: string, body: unknown): Lib => (l.detail?.k === 'source' && l.detail.src.id === id ? { ...l, detail: { ...l.detail, excerpts: parseExcerpts(body) } } : l);
 
