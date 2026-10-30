@@ -443,23 +443,49 @@ fn newest_event_mtime(mission_dir: &Path) -> Option<std::time::SystemTime> {
     std::fs::read_dir(mission_dir.join("events")).ok()?.flatten().filter_map(|e| e.metadata().and_then(|m| m.modified()).ok()).max()
 }
 
-/// Bring `<ws>/local/staged/` in line with the mission logs: one Markdown file per live note, `<mission>/<id>.md`.
-/// A projection, like `status.md`: the logs are the truth, a failure here is ignored, and the knowledge base indexes
-/// the files as zone `staged`. A mission whose log has not changed since it was last projected is not read again.
+/// Where a mission's staged notes are projected: `local/staged/<mission>` for a mission with no scope file (the
+/// layout before `specs/058`), else the named project's `local/projects/<id>/staged/<mission>`. A mission whose scope
+/// file names an id that is malformed, unregistered or a symlinked layer is routed nowhere: its notes are not written to
+/// any layer, and never to home (`specs/058` §4.2).
+fn staged_target(ws_dir: &Path, mission_dir: &Path, name: &str, registered: &Result<BTreeSet<String>, String>) -> Option<(Option<crate::scope::ProjectId>, std::path::PathBuf)> {
+    let Ok(raw) = std::fs::read_to_string(mission_dir.join("scope")) else { return Some((None, ws_dir.join("local/staged").join(name))) };
+    let id = crate::scope::ProjectId::parse(raw.trim()).ok()?;
+    if id.as_str() != crate::scope::DEFAULT_PROJECT && !registered.as_ref().is_ok_and(|r| r.contains(id.as_str())) {
+        return None;
+    }
+    let dir = crate::scope::layer_dir(ws_dir, &id).ok()?;
+    Some((Some(id), dir.join("staged").join(name)))
+}
+
+/// Bring the staged zones in line with the mission logs: one Markdown file per live note, `<mission>/<id>.md`, under
+/// `<ws>/local/staged/` or, for a mission scoped to a project (`<mission>/scope`), that project's layer. A projection,
+/// like `status.md`: the logs are the truth, a failure here is ignored, and the knowledge base indexes the files as
+/// zone `staged`. A mission whose log has not changed since it was last projected is not read again.
 pub fn project_staged(ws_dir: &Path) {
     let out = ws_dir.join("local/staged");
+    let projects = ws_dir.join("local/projects");
+    let registered = crate::scope::registered_ids(ws_dir);
     let Ok(rd) = std::fs::read_dir(ws_dir.join("local/missions")) else {
         let _ = std::fs::remove_dir_all(&out);
+        sweep_project_staged(&projects, &BTreeMap::new());
         return;
     };
     let mut present = BTreeSet::new();
+    let mut routed: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for e in rd.flatten().filter(|e| e.path().is_dir()) {
         let name = e.file_name().to_string_lossy().to_string();
         if !plain(&name) {
             continue;
         }
-        present.insert(name.clone());
-        let target = out.join(&name);
+        let Some((project, target)) = staged_target(ws_dir, &e.path(), &name, &registered) else { continue };
+        match &project {
+            None => {
+                present.insert(name.clone());
+            }
+            Some(id) => {
+                routed.entry(id.as_str().to_string()).or_default().insert(name.clone());
+            }
+        }
         let stamp = target.join(".synced");
         let fresh = match (std::fs::metadata(&stamp).and_then(|m| m.modified()).ok(), newest_event_mtime(&e.path())) {
             (Some(s), Some(ev)) => s >= ev,
@@ -503,6 +529,24 @@ pub fn project_staged(ws_dir: &Path) {
     if let Ok(old) = std::fs::read_dir(&out) {
         for d in old.flatten().filter(|d| d.path().is_dir()) {
             if !present.contains(d.file_name().to_string_lossy().as_ref()) {
+                let _ = std::fs::remove_dir_all(d.path());
+            }
+        }
+    }
+    sweep_project_staged(&projects, &routed);
+}
+
+/// Remove a project layer's projected mission directories that no mission routes there any more.
+fn sweep_project_staged(projects: &Path, routed: &BTreeMap<String, BTreeSet<String>>) {
+    let Ok(layers) = std::fs::read_dir(projects) else { return };
+    for layer in layers.flatten() {
+        let id = layer.file_name().to_string_lossy().to_string();
+        if crate::scope::ProjectId::parse(&id).is_err() || layer.file_type().map(|t| t.is_symlink()).unwrap_or(true) {
+            continue;
+        }
+        let Ok(old) = std::fs::read_dir(layer.path().join("staged")) else { continue };
+        for d in old.flatten().filter(|d| d.file_type().map(|t| t.is_dir()).unwrap_or(false)) {
+            if !routed.get(&id).is_some_and(|m| m.contains(d.file_name().to_string_lossy().as_ref())) {
                 let _ = std::fs::remove_dir_all(d.path());
             }
         }
@@ -1053,5 +1097,72 @@ mod tests {
         let many: Vec<EventEnvelope> = (1..=30).map(|i| at(i, None, "learn.proposed", json!({"op": "add", "scope": "workspace", "text": format!("rule {}", i), "rationale": "r"}))).collect();
         let kept = live_proposals("m1", &many);
         assert_eq!((kept.len(), kept[0].id.as_str(), kept[MAX_LIVE_PROPOSALS - 1].id.as_str()), (MAX_LIVE_PROPOSALS, "p11", "p30"), "the newest twenty stay");
+    }
+
+    // ── specs/058 PS2: staged routing ──
+
+    const PA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const PB: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    fn scoped_mission(ws: &Path, mission: &str, scope: Option<&str>) {
+        let dir = ws.join("local/missions").join(mission);
+        let mut log = delphi_core::log::EventLog::open(&dir, delphi_core::log::LogOptions::default()).unwrap();
+        let mut e = EventEnvelope::new(mission, "learn.staged", json!({"id": "n1", "trigger": "denied_card", "summary": "lesson", "event_seqs": [1], "tier": "L5"}));
+        e.task_id = Some("t_0001".into());
+        log.append(e).unwrap();
+        if let Some(scope) = scope {
+            std::fs::write(dir.join("scope"), scope).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_staged_note_of_a_project_mission_lands_in_that_projects_layer_and_never_in_home_or_another_project() {
+        let d = tempfile::tempdir().unwrap();
+        let ws = d.path();
+        std::fs::create_dir_all(ws.join("local")).unwrap();
+        std::fs::write(ws.join("local/projects.json"), json!({"schema": 1, "projects": {PA: {"project_id": PA, "root": "/a"}, PB: {"project_id": PB, "root": "/b"}}}).to_string()).unwrap();
+        scoped_mission(ws, "ma", Some(PA));
+        scoped_mission(ws, "mdef", Some("default"));
+        scoped_mission(ws, "mold", None);
+        project_staged(ws);
+        assert!(ws.join("local/projects").join(PA).join("staged/ma/n1.md").is_file());
+        assert!(ws.join("local/projects/default/staged/mdef/n1.md").is_file());
+        assert!(ws.join("local/staged/mold/n1.md").is_file(), "a mission with no scope keeps the earlier layout");
+        assert!(!ws.join("local/staged/ma").exists() && !ws.join("local/staged/mdef").exists(), "never in the home layer");
+        assert!(!ws.join("local/projects").join(PB).exists(), "project B receives nothing");
+        let layered = crate::scope::layered_sources(ws, &crate::scope::Active { project: Some(crate::scope::ProjectId::parse(PB).unwrap()), diagnostic: None });
+        assert!(layered.iter().all(|s| !s.file.rel_path.contains("ma/")), "and cannot read A's staged note");
+        let _ = std::fs::remove_dir_all(ws.join("local/missions/ma"));
+        project_staged(ws);
+        assert!(!ws.join("local/projects").join(PA).join("staged/ma").exists(), "a removed mission leaves the layer");
+    }
+
+    #[test]
+    fn a_mission_scoped_to_a_spoofed_or_unregistered_project_is_staged_nowhere() {
+        let d = tempfile::tempdir().unwrap();
+        let ws = d.path();
+        std::fs::create_dir_all(ws.join("local")).unwrap();
+        std::fs::write(ws.join("local/projects.json"), json!({"schema": 1, "projects": {PA: {"project_id": PA, "root": "/a"}}}).to_string()).unwrap();
+        for (m, scope) in [("m1", "../../staged"), ("m2", PB), ("m3", ".."), ("m4", "")] {
+            scoped_mission(ws, m, Some(scope));
+        }
+        project_staged(ws);
+        assert!(!ws.join("local/staged").exists() || std::fs::read_dir(ws.join("local/staged")).unwrap().next().is_none(), "nothing falls back to home");
+        assert!(!ws.join("local/projects").join(PB).exists());
+        let escaped = walk(ws).into_iter().filter(|p| p.ends_with("n1.md")).count();
+        assert_eq!(escaped, 0, "no note was written anywhere");
+    }
+
+    fn walk(dir: &Path) -> Vec<std::path::PathBuf> {
+        let mut out = Vec::new();
+        for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                out.extend(walk(&p));
+            } else {
+                out.push(p);
+            }
+        }
+        out
     }
 }
