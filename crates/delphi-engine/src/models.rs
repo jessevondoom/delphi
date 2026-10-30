@@ -177,10 +177,109 @@ pub fn render(list: &[Candidate]) -> String {
 
 /// `delphi capabilities --models`: discover, fold into the saved inventory, save, print.
 pub fn run_inventory(cfg: &Config, ws_dir: &Path, snap: Option<&Snapshot>, now: i64, json: bool) -> std::io::Result<String> {
+    let rules = ClassRules::load(ws_dir).map_err(std::io::Error::other)?;
     let mut list = merge(load(ws_dir), discover(cfg, snap, now));
+    classify(&rules, &mut list);
     list.sort_by(|a, b| (a.presence != Presence::Ready, &a.endpoint_id, &a.model_id).cmp(&(b.presence != Presence::Ready, &b.endpoint_id, &b.model_id)));
     save(ws_dir, &list)?;
     Ok(if json { serde_json::to_string_pretty(&list).unwrap_or_default() + "\n" } else { render(&list) })
+}
+
+/// The shipped rules (`model_classes.toml`).
+pub const SHIPPED_RULES: &str = include_str!("model_classes.toml");
+/// A workspace's own ratified replacement, beside its `config.toml`.
+pub const RULES_OVERRIDE: &str = "model-classes.toml";
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Rule {
+    pub id: String,
+    pub class: String,
+    pub local: Option<bool>,
+    pub tier: Option<String>,
+    pub can_think: Option<bool>,
+    pub cost_class: Option<String>,
+    pub min_context: Option<u64>,
+}
+
+impl Rule {
+    fn holds(&self, c: &Candidate) -> bool {
+        self.local.is_none_or(|v| v == c.local)
+            && self.tier.as_deref().is_none_or(|t| t == c.tier)
+            && self.can_think.is_none_or(|v| v == c.can_think)
+            && self.cost_class.as_deref().is_none_or(|v| v == c.cost_class)
+            && self.min_context.is_none_or(|n| c.context_tokens >= n)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+struct WideRule {
+    min_context_ratio: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct ClassRules {
+    #[serde(default)]
+    pub version: u32,
+    #[serde(default)]
+    wide: WideRule,
+    #[serde(default, rename = "rule")]
+    pub rules: Vec<Rule>,
+}
+
+impl ClassRules {
+    pub fn parse(text: &str) -> Result<ClassRules, String> {
+        let r: ClassRules = toml::from_str(text).map_err(|e| format!("class rules: {e}"))?;
+        for rule in &r.rules {
+            match Class::parse(&rule.class) {
+                Some(Class::Unclassified) | None => return Err(format!("class rules: rule `{}` has class `{}`; use deep, steady, quick or local", rule.id, rule.class)),
+                Some(_) => {}
+            }
+        }
+        Ok(r)
+    }
+
+    pub fn shipped() -> ClassRules {
+        ClassRules::parse(SHIPPED_RULES).expect("the shipped class rules parse (a test pins this)")
+    }
+
+    /// The workspace's replacement if it has one, else the shipped rules.
+    pub fn load(ws_dir: &Path) -> Result<ClassRules, String> {
+        match std::fs::read_to_string(ws_dir.join(RULES_OVERRIDE)) {
+            Ok(t) => ClassRules::parse(&t),
+            Err(_) => Ok(ClassRules::shipped()),
+        }
+    }
+
+    /// Place one model, by attributes alone.
+    pub fn class_of(&self, c: &Candidate) -> Class {
+        self.rules.iter().find(|r| r.holds(c)).and_then(|r| Class::parse(&r.class)).unwrap_or(Class::Unclassified)
+    }
+}
+
+/// Set `class` and `wide` on every candidate. A model no rule places stays `unclassified`.
+pub fn classify(rules: &ClassRules, list: &mut [Candidate]) {
+    let ratio = rules.wide.min_context_ratio.unwrap_or(0.0);
+    let medians: Vec<(String, u64)> = {
+        let mut fams: Vec<String> = list.iter().filter(|c| !c.family.is_empty()).map(|c| c.family.clone()).collect();
+        fams.sort();
+        fams.dedup();
+        fams.into_iter()
+            .filter_map(|f| {
+                let mut v: Vec<u64> = list.iter().filter(|c| c.family == f && c.is_ready() && c.context_tokens > 0).map(|c| c.context_tokens).collect();
+                v.sort_unstable();
+                (v.len() >= 3).then(|| (f, v[v.len() / 2]))
+            })
+            .collect()
+    };
+    for c in list.iter_mut() {
+        c.class = rules.class_of(c);
+        c.wide = ratio > 0.0 && medians.iter().find(|(f, _)| *f == c.family).is_some_and(|(_, m)| c.context_tokens as f64 >= ratio * *m as f64);
+    }
+}
+
+/// The ready candidates no rule placed (`delphi doctor` warns on these).
+pub fn unclassified(list: &[Candidate]) -> Vec<&Candidate> {
+    list.iter().filter(|c| c.is_ready() && c.class == Class::Unclassified).collect()
 }
 
 #[cfg(test)]
@@ -229,7 +328,7 @@ credential = "env:K"
         assert_eq!((top.tier.as_str(), top.context_tokens, top.can_think, top.cost_class.as_str()), ("frontier", 200000, true, "metered"));
         let cli = l.iter().find(|c| c.model_id == "x-one").unwrap();
         assert_eq!((cli.source.as_str(), cli.family.as_str(), cli.cost_class.as_str()), ("cli:codex", "", "subscription"));
-        assert!(l.iter().all(|c| c.class == Class::Unclassified && c.is_ready()));
+        assert!(l.iter().all(|c| c.class == Class::Unclassified && c.is_ready()), "discovery alone places nothing; the rules do");
     }
 
     #[test]
@@ -253,5 +352,51 @@ credential = "env:K"
         let out = run_inventory(&cfg, &dir, Some(&snap(&[])), 20, false).unwrap();
         assert!(out.lines().last().unwrap().contains("x-one") && out.lines().last().unwrap().contains("gone"), "{out}");
         assert_eq!(load(&dir).len(), 4);
+    }
+}
+
+#[cfg(test)]
+mod class_tests {
+    use super::*;
+
+    fn cand(model: &str, tier: &str, ctx: u64, local: bool, family: &str) -> Candidate {
+        Candidate { endpoint_id: "e".into(), model_id: model.into(), family: family.into(), tier: tier.into(), context_tokens: ctx, can_think: false, cost_class: if local { "local" } else { "metered" }.into(), local, source: "pool".into(), seen_unix: 0, presence: Presence::Ready, class: Class::Unclassified, wide: false }
+    }
+
+    #[test]
+    fn three_invented_seats_are_classified_by_the_rules_alone_and_an_unplaced_id_stays_unclassified() {
+        let mut l = vec![cand("zz-1", "frontier", 200_000, false, "f"), cand("zz-2", "workhorse", 200_000, false, "f"), cand("zz-3", "fast", 100_000, false, "f"), cand("zz-4", "", 0, false, ""), cand("zz-5", "frontier", 8_000, true, "g")];
+        classify(&ClassRules::shipped(), &mut l);
+        let got: Vec<Class> = l.iter().map(|c| c.class).collect();
+        assert_eq!(got, [Class::Deep, Class::Steady, Class::Quick, Class::Unclassified, Class::Local]);
+        assert_eq!(unclassified(&l).len(), 1);
+    }
+
+    #[test]
+    fn a_window_several_times_its_familys_median_is_also_wide() {
+        let mut l = vec![cand("a", "fast", 200_000, false, "f"), cand("b", "workhorse", 200_000, false, "f"), cand("c", "frontier", 1_000_000, false, "f"), cand("d", "frontier", 1_000_000, false, "solo")];
+        classify(&ClassRules::shipped(), &mut l);
+        assert_eq!(l.iter().map(|c| c.wide).collect::<Vec<_>>(), [false, false, true, false], "a family of fewer than three has no median");
+    }
+
+    #[test]
+    fn a_new_vendor_is_a_row_in_the_data_file_and_a_bad_class_is_refused() {
+        let rules = ClassRules::parse("[[rule]]\nid = \"big-sub\"\ncost_class = \"subscription\"\nmin_context = 500000\nclass = \"deep\"\n").unwrap();
+        let mut c = cand("zz", "", 600_000, false, "");
+        c.cost_class = "subscription".into();
+        assert_eq!(rules.class_of(&c), Class::Deep);
+        assert!(ClassRules::parse("[[rule]]\nid = \"x\"\nclass = \"best\"\n").is_err());
+        assert!(ClassRules::parse("[[rule]]\nid = \"x\"\nclass = \"unclassified\"\n").is_err());
+        assert_eq!(ClassRules::shipped().version, 1);
+    }
+
+    #[test]
+    fn a_workspace_file_replaces_the_shipped_rules() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(ClassRules::load(dir.path()).unwrap(), ClassRules::shipped());
+        std::fs::write(dir.path().join(RULES_OVERRIDE), "[[rule]]\nid = \"all\"\nclass = \"quick\"\n").unwrap();
+        assert_eq!(ClassRules::load(dir.path()).unwrap().rules.len(), 1);
+        std::fs::write(dir.path().join(RULES_OVERRIDE), "not toml [").unwrap();
+        assert!(ClassRules::load(dir.path()).is_err());
     }
 }

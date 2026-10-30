@@ -112,3 +112,7 @@ A Delphi benchmark (spec 048) or retrospective (spec 037) that contradicts a lin
 - [Best LLMs for coding, 2026 roundups](https://www.edenai.co/post/best-llms-for-coding), [DEV Community](https://dev.to/danishashko/the-best-llms-for-agentic-coding-in-2026-real-world-not-just-benchmarks-96n) (T; disagree on versions)
 - [How cheap models changed multi-agent economics](https://arize.com/blog/how-cheap-models-changed-multi-agent-economics/) (T)
 - Codex's `debug models` and Copilot's model list as run or read on 2026-10-28 (V)
+
+## 6. Where the classes are applied
+
+The class table in §2 is implemented as a ratified data file, `crates/delphi-engine/src/model_classes.toml` (a workspace may replace it with `model-classes.toml`). It matches attributes only (tier, local, thinking, cost class, context), never a name, so this note stays the only place names appear. `delphi capabilities --models` shows each discovered model with its class; `delphi doctor` warns on one no rule places.

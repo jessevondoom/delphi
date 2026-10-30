@@ -367,10 +367,11 @@ Staged notes are never loaded into a prompt; they wait for review. `drop` needs 
 What each model CLI here can use: connectors, skills, models.
 
 ```
-  delphi capabilities [--refresh] [--ask] [--json] [--quiet] [--models] [--project <dir>]... [--workspace <name>] [--home <dir>]
+  delphi capabilities [--refresh] [--ask] [--json] [--quiet] [--models] [--project <dir>]... [--home <dir>]
 ```
 
---models lists every discovered model with its attributes and class (spec 056), from the configured pool and the CLIs' model lists; a model no longer listed is kept as gone.
+--models lists every discovered model with its class (spec 056; takes --workspace); one no longer
+listed is kept as gone.
 Asks each CLI's own list commands and reads the skill directories; saves <home>/capabilities.json.
 Setup and update refresh it in the background. --ask also asks the claude and agy models what they can
 use; that answer is shown apart and is not verified. Calls no model otherwise.
