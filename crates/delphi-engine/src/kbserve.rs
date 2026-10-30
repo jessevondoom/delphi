@@ -242,10 +242,12 @@ impl Reader<'_> {
         let Some(info) = self.kb.document(path, &self.view(q)).map_err(|e| e.to_string())? else { return Ok(fail(404, "not in the knowledge base")) };
         // The file comes from the indexer's own list, so the logical path cannot name anything else.
         let Some(src) = kb::sources(self.ws).into_iter().find(|s| s.rel_path == info.rel_path) else { return Ok(fail(404, "no longer on disk")) };
-        if std::fs::metadata(&src.path).map(|m| m.len()).unwrap_or(u64::MAX) > MAX_DOC_BYTES {
+        let binary = crate::kb_docs::is_binary_doc(&src.rel_path);
+        if !binary && std::fs::metadata(&src.path).map(|m| m.len()).unwrap_or(u64::MAX) > MAX_DOC_BYTES {
             return Ok(fail(413, "document too large to serve"));
         }
-        let text = std::fs::read_to_string(&src.path).map_err(|e| e.to_string())?;
+        // A PDF, DOCX or EPUB is served as the text the index holds for it (`specs/043` §6.2).
+        let text = if binary { crate::kb_docs::text_of(&src.path).ok_or("no longer on disk")? } else { std::fs::read_to_string(&src.path).map_err(|e| e.to_string())? };
         let live = blake3::hash(text.as_bytes()).to_hex().to_string();
         let links = extract_links(&info.rel_path, &text, &|p| self.kb.document(p, &self.view(q)).ok().flatten().is_some());
         Ok(reply(200, json!({"path": info.rel_path, "collection": info.zone, "trust": info.source_type, "status": info.status, "blake3": live, "indexed_blake3": info.blake3, "stale": live != info.blake3, "text": text, "links": links})))
@@ -716,6 +718,23 @@ mod tests {
         let (s, h) = get(&mut api, "/v1/health");
         assert!(s == 200 && h["ok"] == true && h["documents"].as_u64().unwrap() >= 2, "{h}");
         assert_eq!(get(&mut api, "/v1/nope").0, 404);
+    }
+
+    #[test]
+    fn a_media_file_and_an_unreadable_pdf_open_in_the_reader_as_their_listing() {
+        let (home, ws) = workspace();
+        let ctx = ws.path().join("base/context");
+        std::fs::create_dir_all(&ctx).unwrap();
+        std::fs::write(ctx.join("clip.mp4"), b"x").unwrap();
+        std::fs::write(ctx.join("scan.pdf"), b"%PDF-1.4 junk").unwrap();
+        let api = Api::new(home.path(), ws.path()).unwrap();
+        let op = Reader { kb: &api.kb, ws: &api.ws, operator: true };
+        let clip = op.get("/v1/doc?path=context/clip.mp4");
+        assert_eq!(clip.status, 200, "{}", clip.body);
+        assert!(clip.body["text"].as_str().unwrap().contains("video file clip.mp4") && clip.body["stale"] == false);
+        let scan = op.get("/v1/doc?path=context/scan.pdf");
+        assert!(scan.body["text"].as_str().unwrap().contains("by content"), "{}", scan.body);
+        assert_eq!(kind_of("context/scan.pdf", "context"), "docs");
     }
 
     #[test]
