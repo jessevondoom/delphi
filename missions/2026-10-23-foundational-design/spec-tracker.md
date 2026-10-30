@@ -347,7 +347,7 @@ Asked for by the operator on 2026-10-28: no hard-coded favorites; discover what 
 | KB | `context/model-selection-evidence.md`: dated external evidence by family, capability classes, planner and executor results | written, status `draft` |
 | M0 | candidate inventory in `delphi capabilities` | built (`delphi-engine/src/models.rs`, `delphi capabilities --models [--json]`): candidates from the configured pool and the CLIs' model lists (Codex, Claude, Agy, Ollama; Copilot seats appear as pool endpoints), attributes as reported, all `unclassified` until M1, a vanished model kept as `gone` in `local/model-candidates.json` |
 | M1 | class rules as a ratified data file, classifier | built (`delphi-engine/src/model_classes.toml`, `models::{ClassRules, classify}`, workspace override `model-classes.toml`; doctor check 11 warns on an unclassified model; KB note linked from `model-capabilities.md`; `tests/no_model_names.rs` keeps the 056 files name-free) |
-| M2 | assignment in `resolve_model_route` behind `[routing] assignment` | not started |
+| M2 | assignment in `resolve_route` behind `[routing] assignment` | built (`delphi-engine/src/assign.rs`, `[roles]` in `model_classes.toml`, `[routing] assignment = static\|discovered` default `static`, `evidence_enough`, `[routing.reserve]`; `model.assigned` event names class and evidence; council label says low diversity) |
 | M3 | `[grades]`, `delphi agent promote`, `nerf`, `grades` | not started |
 | M4 | ratchet and suggestions from retrospectives | not started |
 | M5 | `delphi models calibrate` | not started |

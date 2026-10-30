@@ -34,6 +34,9 @@ Defaults are those of the template; "—" means no default.
 | `[routing] max_parallel_agents` | `4` | |
 | `[routing] degrade_prompt_secs` | `300` | how long the "run on a weaker model?" card waits |
 | `[routing] max_park_secs` | wait forever | how long a task waits for a model; `0` escalates at once |
+| `[routing] assignment` | `"static"` | `"static"`: a role's tier picks the model. `"discovered"`: a model is assigned by capability class, measured results and quota (spec 056); becomes the default only after a benchmark shows it no worse |
+| `[routing] evidence_enough` | `8` | measured results per `(role, kind, model)` after which a model is scored by them alone |
+| `[routing.reserve] <role>` | none | the share (0 to 1) of the mission budget kept for that role, so planning cannot starve the validator; applies with `assignment = "discovered"` |
 | `[routing.pool] order` | every configured tier, family by family | models in preference order |
 | `[routing.pool] throttle_attempts`, `throttle_window_secs` | `3`, `600` | this many throttles in a row over at least this long count as a spent quota |
 | `[routing.pool] reprobe_first_secs`, `reprobe_max_secs` | `900`, `14400` | when an exhausted model with no known reset time is probed again, doubling up to the maximum |
