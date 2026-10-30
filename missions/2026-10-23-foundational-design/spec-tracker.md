@@ -74,7 +74,7 @@ Drafted at the operator's request; text merged on their "go" 2026-10-26 (renumbe
 | L2 | `propose` tool, `/retro` deck, ratification apply path, dedupe, scope routing | 031 §3.5; 004 §4.2 | L1 | 20 | L2a merged (#274): `suggest_rule` tool, `learn.proposed` events, `delphi retro list/show`; L2b merged (#288): `retro accept/reject`, CAS apply, caps, dedupe, no-relaxation and privacy checks; L2c built (PR open): `retro.*` daemon methods, `/retro` in the Ink console, `/retro run`, Orchestrator instructions; nothing run live |
 | L3 | skill candidates (trigger 6), patch proposals, trigger-test check | 031 §3.3 | L2 | 18 | not started |
 | L4 | `rule_stats`, `skill_stats`, scores, exposure randomization, decay | 031 §3.4; 004 §5.6 | L0, L2; OD-2 | 14 | not started |
-| L5 | `delphi customize note/rule/skill/profile`, bounded `[learning]` config | 031 §3.5-3.6 | L2 | 12 | not started |
+| L5 | `delphi customize note/rule/skill/profile`, bounded `[learning]` config | 031 §3.5-3.6 | L2 | 12 | built; as-built in 031 §7.1 (no `operator export` yet) |
 | L6 | `delphi train`: case format, overlay, safety rules, budget, report | 031 §4 | `delphi run` (built); OD-3 | 24 | L6a built (#186: validate, plan, case format, home rule); L6b merged (#202: `delphi train run`, overlay via ratified copy + lock, fake-binary tests; no live run, seed cases still unrun, scenarios and policy cards not supported) |
 | L7 | seed suites: learning-loop, role-behavior, orchestration, skill-trigger | 031 §4.6 | L6 (L1 for learning-loop) | 20 | not started |
 | L8 | probe mode, grader calibration | 031 §4.4-4.5 | L6, L7; OD-5 | 14 | not started |
@@ -177,7 +177,7 @@ Approved by the operator 2026-10-28 with the mockups in `specs/assets/kb-decisio
 | Slice | Content | State |
 | :-- | :-- | :-- |
 | K1 | page chrome, kind filter row with counts, uniform rows, best-match card, `facets` in the search API | built (resting counts by kind, chips, the best match as the passage's own words, uniform rows; `/v1/kinds`, `kind` and `facets` in the API). Kinds in effect today: spec, lesson, docs (`context/`), mission, skill, memory, other; `research` arrives with E3 and `docs/` with K2. Unproven in a real terminal. Stacked on E1 |
-| K2 | index PDF, DOCX, EPUB text; list media by name | not started |
+| K2 | index PDF, DOCX, EPUB text; list media by name | built (`crates/delphi-engine/src/kb_docs.rs`): PDF, DOCX and EPUB under `context/` are extracted by the `delphi-docs` readers and indexed under their own path (text first line `text extracted from <file>, <n> pages`); over 20 MB, empty or failing files are listed by name and size with the reason; pictures, audio and video are listed by name, size and type, and a sidecar `<name>.md` is an ordinary document; `kb.get` serves the same text. Only `context/` is walked (the `docs` kind's root); a separate operator documents root is not built |
 | K3 | reader provenance banner, `↗` rows, browser handoff with allow-list | not started |
 | K4 | summarize for me, with the cache | not started |
 | K5 | thin-reference hint, query carried into expand, expand pages' visuals | merged (#299): the results line says `thin on reference: shift+tab to research this topic` under 3 `research`/`docs` results (console only; counts from the facets when present); `shift+tab` carries the query and starts nothing; the expand pages keep the box and show one line per source (`✔ ● ○ ✖`, form, licence; `research.status` gains `sources`) and the results table with `read, not kept` and `seen, not read`. Matches the mockups kb-8/kb-9 in text; unproven in a real terminal and against a live job |
@@ -347,7 +347,7 @@ Asked for by the operator on 2026-10-28: no hard-coded favorites; discover what 
 | KB | `context/model-selection-evidence.md`: dated external evidence by family, capability classes, planner and executor results | written, status `draft` |
 | M0 | candidate inventory in `delphi capabilities` | built (`delphi-engine/src/models.rs`, `delphi capabilities --models [--json]`): candidates from the configured pool and the CLIs' model lists (Codex, Claude, Agy, Ollama; Copilot seats appear as pool endpoints), attributes as reported, all `unclassified` until M1, a vanished model kept as `gone` in `local/model-candidates.json` |
 | M1 | class rules as a ratified data file, classifier | built (`delphi-engine/src/model_classes.toml`, `models::{ClassRules, classify}`, workspace override `model-classes.toml`; doctor check 11 warns on an unclassified model; KB note linked from `model-capabilities.md`; `tests/no_model_names.rs` keeps the 056 files name-free) |
-| M2 | assignment in `resolve_model_route` behind `[routing] assignment` | not started |
+| M2 | assignment in `resolve_route` behind `[routing] assignment` | built (`delphi-engine/src/assign.rs`, `[roles]` in `model_classes.toml`, `[routing] assignment = static\|discovered` default `static`, `evidence_enough`, `[routing.reserve]`; `model.assigned` event names class and evidence; council label says low diversity) |
 | M3 | `[grades]`, `delphi agent promote`, `nerf`, `grades` | not started |
 | M4 | ratchet and suggestions from retrospectives | not started |
 | M5 | `delphi models calibrate` | not started |

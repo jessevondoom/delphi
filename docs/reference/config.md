@@ -34,6 +34,9 @@ Defaults are those of the template; "—" means no default.
 | `[routing] max_parallel_agents` | `4` | |
 | `[routing] degrade_prompt_secs` | `300` | how long the "run on a weaker model?" card waits |
 | `[routing] max_park_secs` | wait forever | how long a task waits for a model; `0` escalates at once |
+| `[routing] assignment` | `"static"` | `"static"`: a role's tier picks the model. `"discovered"`: a model is assigned by capability class, measured results and quota (spec 056); becomes the default only after a benchmark shows it no worse |
+| `[routing] evidence_enough` | `8` | measured results per `(role, kind, model)` after which a model is scored by them alone |
+| `[routing.reserve] <role>` | none | the share (0 to 1) of the mission budget kept for that role, so planning cannot starve the validator; applies with `assignment = "discovered"` |
 | `[routing.pool] order` | every configured tier, family by family | models in preference order |
 | `[routing.pool] throttle_attempts`, `throttle_window_secs` | `3`, `600` | this many throttles in a row over at least this long count as a spent quota |
 | `[routing.pool] reprobe_first_secs`, `reprobe_max_secs` | `900`, `14400` | when an exhausted model with no known reset time is probed again, doubling up to the maximum |
@@ -96,7 +99,7 @@ Which sites the job may read is not here: it is `context/sources/trusted.toml` (
 | :-- | :-- |
 | `[session] summary` | `off`, `local` or `fast`: how a finished console session is summarized for `delphi sessions` ([`specs/030`](../../specs/030-console-sessions-and-conversation-context.md)) |
 | `[session] conversation_tokens` | how much of your session a task is told; `0` tells nothing |
-| `[learning] capture`, `max_notes`, `triggers` | whether notes are staged from denials, corrections, retries and escalations, how many, and which triggers. Staged notes are never loaded into a prompt ([`specs/031`](../../specs/031-layered-learning-and-training-mode.md)) |
+| `[learning] capture`, `max_notes`, `triggers`, `retro_min_tasks` | whether notes are staged from denials, corrections, retries and escalations (default on), how many per mission (10 to 1000, default 200), which triggers, and how many finished tasks `delphi needs` waits for before calling the coaching pass worth building (3 to 200, default 10). A value outside its bounds is clamped and reported at boot. No key loads staged text into a prompt; turning capture off is allowed, loading unratified content is not ([`specs/031`](../../specs/031-layered-learning-and-training-mode.md) §3.6) |
 | `[loop] nudge`, `nudge_edits`, `budget_warnings`, `verify_gate`, `workspace_bootstrap` | what the engine adds around a role's model calls: a nudge when it goes round in circles (and a stop if it carries on), a warning at 75 % and 90 % of its turns, one check against the task before a role that writes or runs commands may finish, and a map of its worktree. All on by default; `nudge_edits` is 4 ([`specs/045`](../../specs/045-harness-loop-techniques.md)) |
 | `[optimistic] approver`, `second_seat`, `max_decisions`, `max_approver_calls`, `unseconded`, `review_wait_sec` | how `/build --optimistic` records and reviews provisional decisions ([`specs/015`](../../specs/015-provisional-decisions.md)) |
 

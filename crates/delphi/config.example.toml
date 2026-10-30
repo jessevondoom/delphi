@@ -61,6 +61,14 @@ max_parallel_agents = 4
 # degrade_prompt_secs = 300           # how long the "run on a weaker model?" card waits; no answer means look again, then ask again
 # max_park_secs = 0                  # omit to wait as long as it takes; 0 = never wait (escalate at once); N = give up after N seconds
 
+# Model assignment (specs/056). "static" (default): a role's tier picks the model, as always. "discovered": each dispatch is
+# assigned by capability class (role floor and preferred class), measured results and quota, from the pool you ratified;
+# a card only when no pool member meets a role's floor. `delphi capabilities --models` shows each model's class.
+# assignment = "static"
+# evidence_enough = 8                # measured results per (role, kind, model) after which a model is scored by them alone
+# [routing.reserve]                  # share of the mission budget no other role may spend (assignment = "discovered")
+# validator = 0.15
+
 # Model pool (specs/002 §4.1, D-26: ratified). Models in preference order; when the first eligible
 # model is exhausted (quota, subscription window or budget) the next one takes over and work continues.
 # Roles ask for capabilities, never for a named model. Omit to use every configured tier, family by family.
@@ -108,6 +116,14 @@ sandbox = "off"
 # builds are unsigned, so this is for installs that follow releases.
 # [update]
 # require_signed = true
+
+# Learning loop (specs/031 section 3.6). Staged notes are kept for your review and never loaded into a prompt. Each number is clamped
+# to a floor and ceiling the core sets; turning capture off is allowed, loading unratified content is not.
+# [learning]
+# capture = true                     # stage notes from denials, corrections, retries and escalations
+# max_notes = 200                    # per mission, 10 to 1000; the oldest is dropped
+# triggers = ["denied_card", "correction", "recovery", "escalation", "rejected_decision"]
+# retro_min_tasks = 10               # finished tasks before `delphi needs` says the coaching pass has material (3 to 200)
 
 # Fact validator (specs/040 section 15.1). off: no fetch of any kind. advisory (default): the full fact path as a dry run; it uses the
 # network, records what it would ratify and writes nothing validated. ratify: real writes, allowed only while the daemon's latch and the

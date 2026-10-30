@@ -75,6 +75,8 @@ pub struct RouteRequest {
     pub target: Option<String>,
     /// The caller can only drive one model turn at a time, so a harness (which runs a whole span) is not a candidate.
     pub turn_by_turn: bool,
+    /// Present when the engine asks for discovered assignment (`specs/056`); used only with `[routing] assignment = "discovered"`.
+    pub assign: Option<crate::assign::Assign>,
 }
 
 /// An eligible pair that cannot be used right now, and when it may come back.
@@ -161,12 +163,12 @@ fn rank_at(cfg: &Config, key: &PoolKey, want: i32) -> i32 {
     if serves { want } else { rank(&key.tier) }
 }
 
-enum Avail {
+pub(crate) enum Avail {
     Yes,
     No { why: String, back_at: Option<i64> },
 }
 
-fn availability(entry: Option<&Entry>, now: i64) -> Avail {
+pub(crate) fn availability(entry: Option<&Entry>, now: i64) -> Avail {
     let Some(e) = entry else { return Avail::Yes };
     match (e.state, e.until) {
         (State::Available, _) => Avail::Yes,
@@ -183,7 +185,7 @@ fn context_of(cfg: &Config, key: &PoolKey) -> u64 {
 }
 
 /// Why a pair can never serve this request, or `None` if it is eligible.
-fn ineligible(cfg: &Config, key: &PoolKey, req: &RouteRequest) -> Option<String> {
+pub(crate) fn ineligible(cfg: &Config, key: &PoolKey, req: &RouteRequest) -> Option<String> {
     let ep = cfg.endpoint(&key.endpoint_id)?;
     if !cfg.is_allowed(&ep.id) {
         return Some("the endpoint is not in allowed_endpoints".into());
@@ -206,6 +208,11 @@ fn ineligible(cfg: &Config, key: &PoolKey, req: &RouteRequest) -> Option<String>
 
 /// Resolve a request. `state` is the pool snapshot ([`crate::pool::Pool::snapshot`]).
 pub fn resolve_route(cfg: &Config, state: &[Entry], now: i64, req: &RouteRequest) -> Route {
+    if cfg.routing.assignment == delphi_adapter::config::Assignment::Discovered {
+        if let Some(a) = &req.assign {
+            return crate::assign::pick(cfg, state, now, req, a);
+        }
+    }
     let find = |k: &PoolKey| state.iter().find(|e| e.endpoint_id == k.endpoint_id && e.model_id == k.model_id);
     let avoided = |k: &PoolKey| req.avoid_families.iter().any(|f| f == &k.family);
 

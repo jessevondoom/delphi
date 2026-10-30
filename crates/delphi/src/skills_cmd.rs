@@ -238,11 +238,11 @@ fn write_package(dest: &Path, skill_text: &str, files: &[(String, Vec<u8>)]) -> 
 }
 
 /// Where a skill of this name lives in a workspace, most specific first.
-fn find_skill(ws_dir: &Path, name: &str) -> Option<PathBuf> {
+pub(crate) fn find_skill(ws_dir: &Path, name: &str) -> Option<PathBuf> {
     [ws_dir.join("team/skills/custom").join(name), ws_dir.join("core/skills").join(name), ws_dir.join("base/skills").join(name)].into_iter().find(|p| p.join("SKILL.md").is_file())
 }
 
-fn dir_name(dir: &Path) -> String {
+pub(crate) fn dir_name(dir: &Path) -> String {
     std::fs::canonicalize(dir).ok().and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string())).unwrap_or_default()
 }
 
