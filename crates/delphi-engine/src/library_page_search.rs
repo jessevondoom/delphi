@@ -48,6 +48,28 @@ pub struct Gathered {
     pub sources: Vec<(String, Value, String)>,
     /// Claims left out because they rest on a private source, on an external page.
     pub withheld: usize,
+    pub stats: GatherStats,
+}
+
+/// What a gather cost (`specs/057` §5.1): counts, bytes read and where the time went. Times are nanoseconds; reading and
+/// hashing are the two parts of `stored_text`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GatherStats {
+    pub claims_seen: u64,
+    pub sources_seen: u64,
+    pub text_reads: u64,
+    pub bytes_read: u64,
+    pub list_ns: u64,
+    pub read_ns: u64,
+    pub hash_ns: u64,
+    pub tokenize_ns: u64,
+    pub total_ns: u64,
+}
+
+impl GatherStats {
+    pub fn to_json(&self) -> Value {
+        json!({"claims_seen": self.claims_seen, "sources_seen": self.sources_seen, "text_reads": self.text_reads, "bytes_read": self.bytes_read, "list_ns": self.list_ns, "read_ns": self.read_ns, "hash_ns": self.hash_ns, "tokenize_ns": self.tokenize_ns, "total_ns": self.total_ns})
+    }
 }
 
 impl Gathered {
@@ -160,16 +182,24 @@ impl Library {
     /// Claims and sources that answer `query`, with the standing the daemon derived for each. A private record is left out
     /// of an external page (`specs/055` §10.1); on an internal page it may be used.
     pub fn gather(&self, query: &str, scope: Scope, extra: &[String]) -> Gathered {
+        let started = std::time::Instant::now();
+        let ns = |t: std::time::Instant| t.elapsed().as_nanos() as u64;
         let q = content_words(query);
         let external = scope == Scope::External;
         let mut g = Gathered::default();
         let mut claims: Vec<(usize, bool, Value)> = Vec::new();
-        for c in self.claims() {
+        let t = std::time::Instant::now();
+        let all_claims = self.claims();
+        g.stats.list_ns += ns(t);
+        for c in all_claims {
+            g.stats.claims_seen += 1;
+            let t = std::time::Instant::now();
             let st = status(&c);
             if matches!(st, Status::Disproved | Status::Retired) || !c["superseded_by"].is_null() {
                 continue;
             }
             let overlap = content_words(c["text"].as_str().unwrap_or("")).intersection(&q).count();
+            g.stats.tokenize_ns += ns(t);
             if overlap == 0 {
                 continue;
             }
@@ -182,13 +212,24 @@ impl Library {
         claims.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)).then(a.2["id"].as_str().cmp(&b.2["id"].as_str())));
         g.claims = claims.into_iter().take(MAX_CLAIMS).map(|(_, _, c)| c).collect();
         let mut sources: Vec<(usize, String, Value, String)> = Vec::new();
-        for (id, meta) in self.list() {
+        let t = std::time::Instant::now();
+        let listed = self.list();
+        g.stats.list_ns += ns(t);
+        for (id, meta) in listed {
+            g.stats.sources_seen += 1;
             if !meta["purged"].is_null() || !meta["retired"].is_null() || (external && is_private(&meta)) {
                 continue;
             }
-            let text = self.stored_text(&id).unwrap_or_default();
+            let (text, cost) = self.stored_text_measured(&id);
+            let text = text.unwrap_or_default();
+            g.stats.text_reads += 1;
+            g.stats.bytes_read += cost.bytes;
+            g.stats.read_ns += cost.read_ns;
+            g.stats.hash_ns += cost.hash_ns;
+            let t = std::time::Instant::now();
             let scan: String = format!("{} {}", meta["title"].as_str().unwrap_or(""), text.chars().take(SCAN_MAX).collect::<String>());
             let overlap = content_words(&scan).intersection(&q).count();
+            g.stats.tokenize_ns += ns(t);
             if overlap == 0 && !extra.contains(&id) {
                 continue;
             }
@@ -196,6 +237,7 @@ impl Library {
         }
         sources.sort_by(|a, b| (!extra.contains(&a.1)).cmp(&!extra.contains(&b.1)).then(b.0.cmp(&a.0)).then(a.1.cmp(&b.1)));
         g.sources = sources.into_iter().take(MAX_SOURCES.max(extra.len())).map(|(_, id, m, t)| (id, m, t)).collect();
+        g.stats.total_ns = ns(started);
         g
     }
 
