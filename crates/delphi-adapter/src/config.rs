@@ -464,6 +464,8 @@ pub struct Config {
     pub search: crate::research::SearchConfig,
     /// `[validator]`: the fact validator's mode and the operator's additions to the source list (`specs/040` §15.1, §6.1).
     pub validator: ValidatorConfig,
+    /// `[library]`: the central library's acquisition job (`specs/055` §8).
+    pub library: LibraryConfig,
 }
 
 /// `[validator] mode` (`specs/040` §15.1). Ordered so that `min` is the stricter of two.
@@ -516,6 +518,55 @@ fn de_mode<'de, D: serde::Deserializer<'de>>(d: D) -> Result<ValidatorMode, D::E
     ValidatorMode::parse(&s).ok_or_else(|| serde::de::Error::custom(format!("mode `{}` is not one of off, advisory, ratify", s)))
 }
 
+/// `[library]` (`specs/055`). Only `acquire` so far.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LibraryConfig {
+    pub acquire: AcquireConfig,
+}
+
+/// `[library.acquire]` (`specs/055` §8): the acquisition job proposes public-domain and research sources, in one batch in the digest.
+/// Off until the operator turns it on, because it reaches out to archives. Ratified, since it names where the daemon fetches from.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AcquireConfig {
+    pub enabled: bool,
+    /// Bytes acquisition may hold in the library, in MiB. The library budget (`specs/055` §3.6) still applies; nothing is evicted.
+    pub byte_budget_mib: u64,
+    /// The largest text one acquired source may have, in MiB.
+    pub max_item_mib: u64,
+    /// Sources in one proposed batch.
+    pub batch_size: usize,
+    /// The scout's share of the install's tokens over the trailing week, in percent (`specs/040` §20.2). 0 keeps the job model-free.
+    pub token_share_percent: u64,
+    /// Topics the operator wants, beside the workspace's project names.
+    pub interests: Vec<String>,
+}
+
+impl Default for AcquireConfig {
+    fn default() -> Self {
+        AcquireConfig { enabled: false, byte_budget_mib: 2048, max_item_mib: 16, batch_size: 8, token_share_percent: 5, interests: Vec::new() }
+    }
+}
+
+impl AcquireConfig {
+    fn check(&self) -> Result<(), String> {
+        if self.byte_budget_mib == 0 || self.max_item_mib == 0 {
+            return Err("byte_budget_mib and max_item_mib must be at least 1".into());
+        }
+        if !(1..=20).contains(&self.batch_size) {
+            return Err("batch_size must be between 1 and 20".into());
+        }
+        if self.token_share_percent > 10 {
+            return Err("token_share_percent is at most 10 (specs/040 section 20.2)".into());
+        }
+        if self.interests.len() > 50 || self.interests.iter().any(|i| i.trim().is_empty() || i.chars().count() > 80) {
+            return Err("interests: at most 50 topics of 1 to 80 characters".into());
+        }
+        Ok(())
+    }
+}
+
 const TIERS: [&str; 3] = ["fast", "workhorse", "frontier"];
 
 pub(crate) fn is_loopback(url: &str) -> bool {
@@ -566,6 +617,15 @@ impl Config {
             match v.clone().try_into::<ValidatorConfig>() {
                 Ok(v) => cfg.validator = v,
                 Err(e) => errs.push(format!("[validator]: {}", e)),
+            }
+        }
+        if let Some(v) = root.get("library") {
+            match v.clone().try_into::<LibraryConfig>() {
+                Ok(v) => match v.acquire.check() {
+                    Ok(()) => cfg.library = v,
+                    Err(e) => errs.push(format!("[library.acquire]: {}", e)),
+                },
+                Err(e) => errs.push(format!("[library]: {}", e)),
             }
         }
         // `[harness]` also carries scalar settings of its own (`subscription_budget_tokens`); only its sub-tables are profiles.
@@ -1354,5 +1414,17 @@ tools = { search = "read", note = "draft", send = "write" }
         assert!(bad(&|t| t.replace("[connectors.docs]", "[connectors.Docs_X]")).contains("lowercase"));
         assert!(bad(&|t| t.replace("[connectors.docs]", "[connectors.docs]\nfirst_use = \"sometimes\"")).contains("first_use"));
         assert!(bad(&|t| t.replace("[connectors.docs]", "[connectors.docs]\nmax_arg_chars = 100000")).contains("max_arg_chars"));
+    }
+
+    #[test]
+    fn library_acquisition_is_off_by_default_and_its_keys_are_checked() {
+        let off = Config::parse(SAMPLE).unwrap().library.acquire;
+        assert!(!off.enabled && off.token_share_percent == 5 && off.interests.is_empty());
+        let on = Config::parse(&format!("{}\n[library.acquire]\nenabled = true\ninterests = [\"siege engines\"]\nbatch_size = 4\n", SAMPLE)).unwrap().library.acquire;
+        assert!(on.enabled && on.batch_size == 4 && on.interests == ["siege engines"]);
+        for (bad, why) in [("batch_size = 0", "batch_size"), ("token_share_percent = 11", "token_share_percent"), ("interests = [\"\"]", "interests"), ("byte_budget_mib = 0", "byte_budget_mib"), ("licence = \"cc0\"", "licence")] {
+            let errs = Config::parse(&format!("{}\n[library.acquire]\n{}\n", SAMPLE, bad)).unwrap_err().join("\n");
+            assert!(errs.contains(why), "{}: {}", bad, errs);
+        }
     }
 }

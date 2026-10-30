@@ -14,6 +14,8 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
+#[path = "library_acquire.rs"]
+pub mod acquire;
 #[path = "library_bib.rs"]
 pub mod bib;
 #[path = "library_claims.rs"]
@@ -33,6 +35,8 @@ mod page_check;
 pub mod pages;
 #[path = "library_page_validate.rs"]
 pub mod page_validate;
+#[path = "library_reading.rs"]
+mod reading;
 #[path = "library_review.rs"]
 pub mod review;
 #[path = "library_recheck.rs"]
@@ -404,6 +408,12 @@ impl Library {
             // `cited_by` is the daemon's record of who relied on the source; a new capture keeps it
             if let Some(c) = o.get("cited_by").filter(|c| c.as_array().is_some_and(|a| !a.is_empty())) {
                 p.meta.insert("cited_by".into(), c.clone());
+            }
+            // where an acquired source came from stays with it across versions (`specs/055` §8)
+            for k in ["acquired", "archive_notice"] {
+                if let Some(v) = o.get(k) {
+                    p.meta.entry(k.to_string()).or_insert(v.clone());
+                }
             }
             if !p.meta.contains_key("work_bytes") {
                 if let Some(w) = o.get("work_bytes") {

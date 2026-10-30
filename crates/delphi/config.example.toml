@@ -131,6 +131,17 @@ sandbox = "off"
 # [search.searxng]
 # url = "https://searx.example.org"
 
+# Library acquisition (specs/055 section 8): once a day, the library scout proposes public-domain and research sources that match your projects
+# and these interests, as ONE batch in the digest. Nothing is fetched until you accept (or a standing rule covers it). Ratified, because it
+# names where the daemon fetches from (the archives in context/sources/archives.toml and your operator/archives.toml). Off by default.
+# [library.acquire]
+# enabled = false
+# byte_budget_mib = 2048          # reaching it stops acquiring; nothing is evicted
+# max_item_mib = 16
+# batch_size = 8
+# token_share_percent = 5         # the scout's share of the trailing week's tokens (at most 10); 0 = no model call
+# interests = ["medieval siege engineering"]
+
 [rag]
 engine = "sqlite-hybrid"             # informational: FTS5 + sqlite-vec + RRF + reranker (spec 004). What runs depends on the models installed;
                                      # DELPHI_EMBED_MODEL=off / DELPHI_RERANK_MODEL=off / DELPHI_SEED_VECTORS=off switch each part off

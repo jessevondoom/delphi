@@ -88,6 +88,8 @@ pub fn cli(args: &[String], home: &Path) -> i32 {
         Some("history") => history(&lib, rest),
         Some("excerpt") => excerpt(&lib, rest),
         Some("bib") => bibliography(&lib, rest),
+        Some("acquire") => crate::sources_acquire_cmd::acquire(home, rest),
+        Some("reading-list") => crate::sources_acquire_cmd::reading_list(home, rest),
         _ => {
             eprintln!("{}", USAGE);
             2

@@ -4,6 +4,7 @@ pub mod approval;
 pub mod fact_check;
 pub mod fact_fetch;
 pub mod library;
+pub mod library_acquire_run;
 pub mod fact_intake;
 pub mod fact_judge;
 pub mod fact_mode;
