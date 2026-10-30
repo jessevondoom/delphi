@@ -1114,6 +1114,13 @@ impl Engine {
                 m.append(sc.ev("model.homogeneous", json!({"avoided": sc.avoid_families, "used": {"endpoint_id": key.endpoint_id, "model_id": key.model_id, "family": key.family}}))).await?;
             }
             let this_key = (key.endpoint_id.clone(), key.model_id.clone());
+            if sc.last_key.lock().unwrap().as_ref() != Some(&this_key) {
+                if let Some(a) = self.assign_for(sc) {
+                    let (class, evidence) = a.describe(&key);
+                    let floor = a.floor.as_str();
+                    m.append(sc.ev("model.assigned", json!({"endpoint_id": key.endpoint_id, "model_id": key.model_id, "class": class, "floor": floor, "evidence": evidence}))).await?;
+                }
+            }
             loop {
                 let Some(entry) = cfg.catalog_entry(&model_id) else {
                     return Ok(Err(Escalate(format!("model `{}` has no [models.catalog] entry, so its cost can't be reserved", model_id))));
@@ -1139,10 +1146,12 @@ impl Engine {
                 let rid = {
                     let _gate = m.reserve_gate.lock().await;
                     let available = m.budget.lock().unwrap().available();
+                    let available = available.saturating_sub(self.held_for_others(m, &sc.role, &cfg));
                     if amount > available {
                         return Ok(Err(Escalate(format!("mission budget: this call could cost up to ${:.4} but only ${:.4} remains (raise it with /budget)", amount as f64 / 1e6, available as f64 / 1e6))));
                     }
                     let rid = m.next_reservation_id();
+                    *m.role_spend.lock().unwrap().entry(sc.role.clone()).or_default() += amount;
                     m.append(sc.agent_ev("budget.reserve", json!({"reservation_id": rid, "amount": amount, "unit": "micro_usd", "turn_index": turn_index}), ep, &model_id)).await?;
                     rid
                 };
@@ -1204,6 +1213,7 @@ impl Engine {
                         return Ok(Ok((done, ep.clone(), model_id)));
                     }
                     Err(ModelError::Throttled(msg)) => {
+                        self.give_back(m, &sc.role, amount);
                         m.append(sc.agent_ev("budget.release", json!({"reservation_id": rid, "reason": "throttled"}), ep, &model_id)).await?;
                         m.append(sc.ev("endpoint.throttled", json!({"endpoint_id": ep.id, "message": self.secrets.redact(&msg)}))).await?;
                         // Rule 3 (`specs/002` §4.1): throttled over and over for ten minutes is a spent quota, not a rate limit.
@@ -1214,6 +1224,7 @@ impl Engine {
                     }
                     Err(ModelError::Exhausted(x)) => {
                         // Out of quota, not slow: no retry here (`specs/002` §4.1). Say why and when it returns, then try the next endpoint.
+                        self.give_back(m, &sc.role, amount);
                         m.append(sc.agent_ev("budget.release", json!({"reservation_id": rid, "reason": "quota exhausted"}), ep, &model_id)).await?;
                         m.append(sc.ev("model.exhausted", json!({"endpoint_id": ep.id, "model_id": model_id, "reason": x.reason, "reset_at": x.reset_at, "raw": self.secrets.redact(&x.raw)}))).await?;
                         self.pool.record_exhausted(&ep.id, &model_id, &x);
@@ -1240,16 +1251,35 @@ impl Engine {
                         }
                     }
                     Err(ModelError::NeedsReauth { endpoint }) => {
+                        self.give_back(m, &sc.role, amount);
                         m.append(sc.agent_ev("budget.release", json!({"reservation_id": rid, "reason": "needs re-authentication"}), ep, &model_id)).await?;
                         m.append(sc.ev("endpoint.reauth_required", json!({"endpoint_id": endpoint}))).await?;
                         return Ok(Err(Escalate(format!("re-authenticate {}", endpoint))));
                     }
                     Err(ModelError::Refused(msg)) | Err(ModelError::Failed(msg)) => {
+                        self.give_back(m, &sc.role, amount);
                         m.append(sc.agent_ev("budget.release", json!({"reservation_id": rid, "reason": "rejected"}), ep, &model_id)).await?;
                         return Ok(Err(Escalate(self.secrets.redact(&msg))));
                     }
                 }
             }
+        }
+    }
+
+    /// Micro-USD kept for other roles' `[routing.reserve]` slices: what each has not yet used of its share of the mission's cap.
+    /// Zero unless `assignment = "discovered"` and a slice is set, so `static` behaves as before.
+    fn held_for_others(&self, m: &MissionState, role: &str, cfg: &delphi_adapter::config::Config) -> u64 {
+        if cfg.routing.assignment != delphi_adapter::config::Assignment::Discovered || cfg.routing.reserve.is_empty() {
+            return 0;
+        }
+        let total = m.budget.lock().unwrap().cap_micro();
+        let spend = m.role_spend.lock().unwrap();
+        cfg.routing.reserve.iter().filter(|(r, _)| r.as_str() != role).map(|(r, share)| ((total as f64 * share) as u64).saturating_sub(spend.get(r).copied().unwrap_or(0))).sum()
+    }
+
+    fn give_back(&self, m: &MissionState, role: &str, amount: u64) {
+        if let Some(v) = m.role_spend.lock().unwrap().get_mut(role) {
+            *v = v.saturating_sub(amount);
         }
     }
 
@@ -1413,7 +1443,27 @@ impl Engine {
             min_context_tokens: 0,
             target: self.cfg.get().routing.targets.get(&sc.role).cloned(),
             turn_by_turn,
+            assign: self.assign_for(sc),
         }
+    }
+
+    /// The inputs of discovered assignment for this span (`specs/056`); `None` under `assignment = "static"`.
+    fn assign_for(&self, sc: &SpanCtx) -> Option<crate::assign::Assign> {
+        let cfg = self.cfg.get();
+        if cfg.routing.assignment != delphi_adapter::config::Assignment::Discovered {
+            return None;
+        }
+        let rules = crate::models::ClassRules::load(&self.ws.dir).unwrap_or_else(|_| crate::models::ClassRules::shipped());
+        let mut list = crate::models::load(&self.ws.dir);
+        let seen = crate::models::discover(&cfg, None, (self.clock_unix)());
+        list = crate::models::merge(list, seen);
+        crate::models::classify(&rules, &mut list);
+        let mut a = crate::assign::Assign::build(&rules, &sc.role, &list, cfg.routing.evidence_enough);
+        a.evidence = crate::assign::read_evidence(&self.ws.dir, &sc.role);
+        a.near_cap = crate::assign::read_near_cap(&self.ws.dir);
+        let rank = |t: &str| match t { "fast" => 0, "frontier" => 2, _ => 1 };
+        a.step = rank(&sc.tier) - rank(&self.default_tier_of(&sc.role, &sc.manifest));
+        Some(a)
     }
 
     /// The harness endpoint the resolver would use for this span now, if its pick is one (and needs no confirmation).
@@ -3179,6 +3229,30 @@ mod tests {
         assert!(f.model.requests().is_empty(), "no call was made");
         assert_eq!(f.model.remaining(), 1);
         assert!(events_of(&f, "budget.reserve").is_empty());
+    }
+
+    // specs/056 §8: a role's reserve slice cannot be spent by another role; `static` ignores the slice; the choice names class and evidence.
+    #[tokio::test]
+    async fn a_roles_reserve_slice_cannot_be_spent_by_another_role_and_the_assignment_is_recorded() {
+        let discovered = |extra: &str| crate::testkit::CONFIG.replace("[access]", &format!("[routing]\nassignment = \"discovered\"\n{}\n[access]", extra));
+        let f = setup(vec![Step::text("should never be asked")], 5.0, |_| {});
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&discovered("[routing.reserve]\nvalidator = 0.99")).unwrap());
+        let out = f.engine.run_task(&f.m, "orchestrator", "hi").await.unwrap();
+        assert!(matches!(&out.status, Status::Escalated(r) if r.contains("mission budget")), "{:?}", out.status);
+        assert!(f.model.requests().is_empty(), "no call was made");
+
+        let g = setup(vec![Step::text("Done.")], 5.0, |_| {});
+        g.engine.cfg.set(delphi_adapter::config::Config::parse(&discovered("")).unwrap());
+        let out = g.engine.run_task(&g.m, "orchestrator", "hi").await.unwrap();
+        assert_eq!(out.status, Status::Done, "{:?}", out.status);
+        let assigned = events_of(&g, "model.assigned");
+        assert_eq!(assigned.len(), 1);
+        assert!(assigned[0].payload["class"].is_string() && assigned[0].payload["evidence"].as_str().unwrap().contains("class decides"), "{}", assigned[0].payload);
+
+        let h = setup(vec![Step::text("Done.")], 5.0, |_| {});
+        h.engine.cfg.set(delphi_adapter::config::Config::parse(&crate::testkit::CONFIG.replace("[access]", "[routing.reserve]\nvalidator = 0.99\n[access]")).unwrap());
+        assert_eq!(h.engine.run_task(&h.m, "orchestrator", "hi").await.unwrap().status, Status::Done, "static ignores the slice");
+        assert!(events_of(&h, "model.assigned").is_empty());
     }
 
     // specs/005 §6 test 15

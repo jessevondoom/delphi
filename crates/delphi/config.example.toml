@@ -61,6 +61,14 @@ max_parallel_agents = 4
 # degrade_prompt_secs = 300           # how long the "run on a weaker model?" card waits; no answer means look again, then ask again
 # max_park_secs = 0                  # omit to wait as long as it takes; 0 = never wait (escalate at once); N = give up after N seconds
 
+# Model assignment (specs/056). "static" (default): a role's tier picks the model, as always. "discovered": each dispatch is
+# assigned by capability class (role floor and preferred class), measured results and quota, from the pool you ratified;
+# a card only when no pool member meets a role's floor. `delphi capabilities --models` shows each model's class.
+# assignment = "static"
+# evidence_enough = 8                # measured results per (role, kind, model) after which a model is scored by them alone
+# [routing.reserve]                  # share of the mission budget no other role may spend (assignment = "discovered")
+# validator = 0.15
+
 # Model pool (specs/002 §4.1, D-26: ratified). Models in preference order; when the first eligible
 # model is exhausted (quota, subscription window or budget) the next one takes over and work continues.
 # Roles ask for capabilities, never for a named model. Omit to use every configured tier, family by family.
