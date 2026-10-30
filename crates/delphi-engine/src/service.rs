@@ -1368,6 +1368,7 @@ impl EngineService {
                 .map(|p| {
                     let mut v = p.to_json();
                     v["blocked"] = json!(crate::retro::check(home, ws, p));
+                    v["candidates"] = json!(crate::retro::candidates_for(home, ws, p).iter().map(|c| c.to_json()).collect::<Vec<_>>());
                     v
                 })
                 .collect(),
@@ -1400,7 +1401,7 @@ impl EngineService {
         if accept {
             let f = found.clone();
             let done = tokio::task::spawn_blocking(move || crate::retro::accept(&home, &ws, &f)).await.map_err(|e| err(-32000, e.to_string()))?.map_err(|e| err(code::INVALID_PARAMS, e))?;
-            detail = json!({"by": by, "scope": found.scope, "file": done.file, "pin": done.pin});
+            detail = json!({"by": by, "scope": found.scope, "file": done.file, "pin": done.pin, "retired": done.retired.iter().map(|(id, text)| json!({"id": id, "text": text})).collect::<Vec<_>>()});
             let (zone, path) = if found.scope == "operator" { (delphi_core::provenance::Zone::Local, "heuristics.md".to_string()) } else { crate::tools::zone_of("heuristics.md") };
             m.append(EventEnvelope::new(&m.id, "provenance.stamp", delphi_core::provenance::Index::stamp_payload(zone, &path, &done.pin, delphi_core::provenance::Tier::L5))).await.map_err(engine_err)?;
         }

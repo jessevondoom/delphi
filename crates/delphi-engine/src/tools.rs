@@ -202,7 +202,7 @@ impl Registry {
             exec: ToolExec::Local(note),
         });
         r.register(ToolSpec {
-            def: read_def("suggest_rule", "Propose a change to what the team always carries, for the operator to ratify at `/retro`. `op` is `add` (a new rule or lesson), `merge` (fold `target` into `text`) or `demote` (retire `target`). `scope` is `workspace` or `operator` (operator scope must be project-agnostic: no repo names, hosts or paths). `text` is the rule in at most 350 characters; `rationale` says what happened that earns it. Nothing is loaded into any prompt until the operator ratifies it. Orchestrator only.", json!({"type": "object", "required": ["op", "scope", "text", "rationale"], "properties": {"op": {"type": "string", "enum": ["add", "merge", "demote"]}, "scope": {"type": "string", "enum": ["workspace", "operator"]}, "text": {"type": "string", "maxLength": 350}, "rationale": {"type": "string", "maxLength": 280}, "target": {"type": "string", "maxLength": 40}}})),
+            def: read_def("suggest_rule", "Propose a change to what the team always carries, for the operator to ratify at `/retro`. `op` is `add` (a new rule or lesson), `merge` (fold `target` into `text`) or `demote` (retire `target`). `scope` is `workspace` or `operator` (operator scope must be project-agnostic: no repo names, hosts or paths). `text` is the rule in at most 350 characters; `rationale` says what happened that earns it. An `add` may list in `supersedes` up to 3 rule ids it replaces (such as W-001); the operator sees the pairing and nothing is retired until they ratify. Nothing is loaded into any prompt until the operator ratifies it. Orchestrator only.", json!({"type": "object", "required": ["op", "scope", "text", "rationale"], "properties": {"op": {"type": "string", "enum": ["add", "merge", "demote"]}, "scope": {"type": "string", "enum": ["workspace", "operator"]}, "text": {"type": "string", "maxLength": 350}, "rationale": {"type": "string", "maxLength": 280}, "target": {"type": "string", "maxLength": 40}, "supersedes": {"type": "array", "maxItems": 3, "items": {"type": "string", "maxLength": 12}}}})),
             requires_write_scope: false,
             classify: classify_suggest_rule,
             exec: ToolExec::Local(suggest_rule),
@@ -449,7 +449,16 @@ fn suggest_rule(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
     }
     // Like a note, a proposal is never above the span's ceiling, so web text cannot launder itself into a rule.
     let tier = ctx.span.ceiling().min(Tier::L3);
-    ctx.events.push(("learn.proposed".into(), json!({"op": op, "scope": scope, "text": text, "rationale": rationale, "target": target, "tier": tier.as_str()})));
+    let mut payload = json!({"op": op, "scope": scope, "text": text, "rationale": rationale, "target": target, "tier": tier.as_str()});
+    // Naming the rule an `add` replaces only puts a pairing in front of the operator: nothing is retired until they ratify (`specs/050` ML-2).
+    if let Some(v) = args.get("supersedes").filter(|v| !v.is_null()) {
+        let ids: Vec<&str> = v.as_array().map(|a| a.iter().filter_map(|x| x.as_str()).collect()).unwrap_or_default();
+        if op != "add" || ids.is_empty() || ids.len() > crate::retro::MAX_SUPERSEDES || ids.iter().any(|id| !crate::retro::is_rule_id(id)) || v.as_array().is_some_and(|a| a.len() != ids.len()) {
+            return ToolResult::err(format!("`supersedes` is for `add` only: one to {} rule ids such as W-001", crate::retro::MAX_SUPERSEDES));
+        }
+        payload["supersedes"] = json!(ids);
+    }
+    ctx.events.push(("learn.proposed".into(), payload));
     ToolResult::ok("proposed for the operator's `/retro` review; it is not loaded into any prompt".to_string())
 }
 
@@ -1077,6 +1086,19 @@ mod tests {
             let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "orchestrator", mission_id: "m1", now_rfc3339: "t", stamps: vec![], events: vec![] };
             assert!(run(&mut ctx, "suggest_rule", &bad).is_error && ctx.events.is_empty(), "{}", bad);
         }
+    }
+
+    #[test]
+    fn supersedes_is_for_an_add_naming_rule_ids_and_is_only_recorded() {
+        let mut f = fx(&[]);
+        let base = |op: &str, sup: Value| json!({"op": op, "scope": "workspace", "text": "x", "rationale": "y", "target": "W-001", "supersedes": sup});
+        for bad in [base("merge", json!(["W-001"])), base("add", json!([])), base("add", json!(["nope"])), base("add", json!(["W-001", "W-002", "W-003", "W-004"])), base("add", json!(["W-001", 5]))] {
+            let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "orchestrator", mission_id: "m1", now_rfc3339: "t", stamps: vec![], events: vec![] };
+            assert!(run(&mut ctx, "suggest_rule", &bad).is_error && ctx.events.is_empty(), "{}", bad);
+        }
+        let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "orchestrator", mission_id: "m1", now_rfc3339: "t", stamps: vec![], events: vec![] };
+        assert!(!run(&mut ctx, "suggest_rule", &base("add", json!(["W-001"]))).is_error);
+        assert_eq!(ctx.events[0].1["supersedes"], json!(["W-001"]));
     }
 
     #[test]

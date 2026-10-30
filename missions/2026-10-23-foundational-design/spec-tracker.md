@@ -246,7 +246,7 @@ Drafted from a review of LangChain / LangSmith benchmarking, memory and context 
 | 050 | ML1 | memory write-path audit and lint (first, before 045 H3 adds a write path) | built: `delphi-engine/src/memory_audit.rs` lists every memory write path with its proof tests; `delphi lint --repo` rule `memory-write-sites` fails on an unlisted write or a missing proof |
 | 050 | ML2 | entry types and dates, schemas | built: `kind`/`created`/`last_confirmed`/`valid_until` validated in `frontmatter.rs`, written on staged notes, excluded from the rule byte cap, `schemas/memory-entry.schema.json` |
 | 050 | ML3 | validity, stale list in `/retro`, type-aware selection | built: `valid_until` on a staged note (agent `note` tool only, OD-5) is excluded from kb search after its date; `delphi retro stale` and `/retro stale` list expired notes and rules files past 90 days; `kb search --staged --kind` filters by kind, facts outrank episodes, optional episode budget |
-| 050 | ML4 | supersession candidates and ratification | not started |
+| 050 | ML4 | supersession candidates and ratification | built: `suggest_rule` `add` may name up to 3 rule ids in `supersedes`; `delphi retro show`/`/retro` list candidates (named, or at least 30% word overlap with the new text), shown never applied; ratifying the `add` retires only the named rules from `heuristics.md` and records their text in `learn.proposal_resolved` (`detail.retired`); security rules are never retired. `delphi lint` does not list pairs yet |
 | 050 | ML5 | trace mining report; wires 045 T11 / H8 | not started |
 | 050 | ML6 | retention probes in the learning-loop suite | not started |
 

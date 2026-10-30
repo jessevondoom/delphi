@@ -69,6 +69,15 @@ pub fn render_one(p: &LiveProposal) -> String {
     )
 }
 
+/// The rules a ratified `add` would retire (named) or resembles (similar). Shown only; the operator's ratification applies.
+pub fn render_candidates(c: &[retro::Candidate]) -> String {
+    if c.is_empty() {
+        return String::new();
+    }
+    let lines: String = c.iter().map(|c| format!("  - [{}] {} ({:.0}% of the same words)\n", c.id, if c.named { "named as superseded: ratifying retires it" } else { "similar, not named: stays unless you retire it" }, c.overlap * 100.0)).collect();
+    format!("\nsupersession candidates:\n{}", lines)
+}
+
 /// The proposal a reference names: `<mission>/<id>`, or a bare id when exactly one mission has it.
 pub fn find<'a>(items: &'a [LiveProposal], reference: &str) -> Result<&'a LiveProposal, String> {
     let hits: Vec<&LiveProposal> = items.iter().filter(|p| p.reference() == reference || p.id == reference).collect();
@@ -106,6 +115,7 @@ pub fn run_in(ws_dir: &Path, verb: &str, reference: Option<&str>, opts: &Options
                 return serde_json::to_string_pretty(&p.to_json()).map(|s| s + "\n").map_err(|e| e.to_string());
             }
             let mut out = render_one(p);
+            out.push_str(&render_candidates(&retro::candidates_for(&opts.home, ws_dir, p)));
             let blocked = retro::check(&opts.home, ws_dir, p);
             if !blocked.is_empty() {
                 out.push_str(&format!("\nnot ratifiable as it stands:\n{}", blocked.iter().map(|b| format!("  - {}\n", b)).collect::<String>()));
@@ -148,7 +158,7 @@ pub fn resolve(ws_dir: &Path, p: &LiveProposal, accept: bool, opts: &Options) ->
     let mut log = open_log(ws_dir, &p.mission)?;
     let (resolution, detail) = if accept {
         let done = retro::accept(&opts.home, ws_dir, &p)?;
-        ("accepted", serde_json::json!({"scope": p.scope, "file": done.file, "pin": done.pin}))
+        ("accepted", serde_json::json!({"scope": p.scope, "file": done.file, "pin": done.pin, "retired": done.retired.iter().map(|(id, text)| serde_json::json!({"id": id, "text": text})).collect::<Vec<_>>()}))
     } else {
         ("rejected", serde_json::json!({}))
     };
@@ -189,6 +199,7 @@ pub fn cli(ws_dir: &Path, args: &[String], opts: &Options) -> i32 {
             }
             print!("{}", render_one(&shown));
             if *verb == "accept" {
+                print!("{}", render_candidates(&retro::candidates_for(&opts.home, ws_dir, &shown)));
                 let blocked = retro::check(&opts.home, ws_dir, &shown);
                 if !blocked.is_empty() {
                     return Err(blocked.join("; "));
