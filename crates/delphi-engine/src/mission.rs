@@ -149,6 +149,8 @@ pub struct MissionState {
     registered: AtomicU64,
     /// Serializes reserve decisions so parallel spans can't jointly overshoot the cap.
     pub reserve_gate: tokio::sync::Mutex<()>,
+    /// Micro-USD reserved or spent per role this mission, kept for `[routing.reserve]` slices (`specs/056`): a reservation counts until released.
+    pub role_spend: Mutex<std::collections::BTreeMap<String, u64>>,
     /// Persist-then-apply is one step: concurrent appenders must not apply their events to the derived state out of `seq` order.
     append_gate: tokio::sync::Mutex<()>,
     next_task: AtomicU64,
@@ -199,6 +201,7 @@ impl MissionState {
             secrets,
             registered: AtomicU64::new(0),
             reserve_gate: tokio::sync::Mutex::new(()),
+            role_spend: Mutex::new(std::collections::BTreeMap::new()),
             append_gate: tokio::sync::Mutex::new(()),
             held: Mutex::new(std::collections::HashMap::new()),
             stager: Mutex::new(crate::learn::Stager::replay(crate::learn::LearningSettings::default(), &events)),

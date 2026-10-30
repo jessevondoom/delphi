@@ -432,6 +432,7 @@ pub fn sources(ws: &Path) -> Vec<SourceFile> {
         }
         all.extend(core);
         md_files(&base.join("context"), "context", "context", UNTRUSTED, &mut all);
+        crate::kb_docs::doc_files(&base.join("context"), "context", "context", UNTRUSTED, &mut all);
         md_files(&base.join("specs"), "specs", "specs", UNTRUSTED, &mut all);
         md_files(&base.join("agents"), "agents", "agents", shipped, &mut all);
         md_files(&base.join("skills"), "skills", "skills", shipped, &mut all);
@@ -639,11 +640,15 @@ impl Kb {
                 rep.unchanged += 1;
                 continue;
             }
-            let Ok(bytes) = std::fs::read(&f.path) else {
+            let text = if crate::kb_docs::is_binary_doc(&f.rel_path) {
+                crate::kb_docs::text_of(&f.path)
+            } else {
+                std::fs::read(&f.path).ok().map(|b| String::from_utf8_lossy(&b).into_owned())
+            };
+            let Some(text) = text else {
                 seen.remove(f.rel_path.as_str());
                 continue;
             };
-            let text = String::from_utf8_lossy(&bytes);
             let existed = known.contains_key(&f.rel_path);
             if self.upsert_with(&f.rel_path, f.zone, f.default_source, f.bundle.as_ref(), &text, now)? {
                 if existed {
@@ -1409,7 +1414,7 @@ impl Kb {
 /// When the file was edited, the chunk is re-found by its heading; if the heading is gone the pointer is stale.
 pub fn resolve(ws: &Path, hit: &Hit) -> Result<(usize, usize), String> {
     let src = sources(ws).into_iter().find(|s| s.rel_path == hit.rel_path).ok_or_else(|| format!("{} is no longer indexed", hit.rel_path))?;
-    let text = std::fs::read_to_string(&src.path).map_err(|e| e.to_string())?;
+    let text = if crate::kb_docs::is_binary_doc(&src.rel_path) { crate::kb_docs::text_of(&src.path).ok_or("unreadable")? } else { std::fs::read_to_string(&src.path).map_err(|e| e.to_string())? };
     if blake3::hash(text.as_bytes()).to_hex().as_str() == hit.blake3 {
         return Ok((hit.start_line, hit.end_line));
     }
@@ -2163,6 +2168,57 @@ mod tests {
         kb.rebuild(&sources(d.path()), "t").unwrap();
         kb.integrity_check().unwrap();
         assert_eq!(kb.counts().unwrap().0, 5);
+    }
+
+    fn tiny_pdf(text: &str) -> Vec<u8> {
+        let content = format!("BT /F1 12 Tf 72 700 Td ({}) Tj ET", text);
+        let mut out = String::from("%PDF-1.4\n");
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>".to_string(),
+            format!("<< /Length {} >>\nstream\n{}\nendstream", content.len(), content),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+        ];
+        let mut offs = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offs.push(out.len());
+            out.push_str(&format!("{} 0 obj\n{}\nendobj\n", i + 1, o));
+        }
+        let xref = out.len();
+        out.push_str(&format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1));
+        for o in offs {
+            out.push_str(&format!("{:010} 00000 n \n", o));
+        }
+        out.push_str(&format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{}\n%%EOF\n", objs.len() + 1, xref));
+        out.into_bytes()
+    }
+
+    #[test]
+    fn pdf_and_docx_text_is_found_media_by_name_and_an_unreadable_file_is_listed_with_its_reason() {
+        let docx = delphi_docs::zipfile::testutil::make_zip(&[
+            ("[Content_Types].xml", b"<Types/>", 0),
+            ("word/document.xml", br#"<w:document><w:body><w:p><w:r><w:t>marmoset habitat notes</w:t></w:r></w:p></w:body></w:document>"#, 8),
+        ]);
+        let d = tree(&[("team/context/readme.md", "# R\n\nplain\n"), ("team/context/photos/otter.png.md", "# Otter\n\nsidecar says capybara\n")]);
+        let c = d.path().join("team/context");
+        std::fs::write(c.join("report.pdf"), tiny_pdf("quokka telemetry findings")).unwrap();
+        std::fs::write(c.join("notes.docx"), docx).unwrap();
+        std::fs::write(c.join("photos/otter.png"), b"\x89PNG junk").unwrap();
+        std::fs::write(c.join("broken.epub"), b"PK not an epub").unwrap();
+        std::fs::write(c.join("run.exe"), b"MZ").unwrap();
+        let mut kb = Kb::open_in_memory().unwrap();
+        kb.sync(&sources(d.path()), "t").unwrap();
+        let opts = SearchOpts { include_untrusted: true, ..SearchOpts::default() };
+        let paths = |q: &str| kb.search(q, &opts).unwrap().into_iter().map(|h| h.rel_path).collect::<Vec<_>>();
+        assert_eq!(paths("quokka telemetry"), ["context/report.pdf"]);
+        assert_eq!(paths("marmoset habitat"), ["context/notes.docx"]);
+        assert!(paths("otter.png").contains(&"context/photos/otter.png".to_string()), "media is found by its name");
+        assert!(paths("capybara").contains(&"context/photos/otter.png.md".to_string()), "a sidecar is an ordinary document");
+        assert!(paths("broken.epub").contains(&"context/broken.epub".to_string()) && paths("extraction").contains(&"context/broken.epub".to_string()));
+        assert!(paths("run.exe").is_empty(), "an executable is not listed");
+        let h = kb.search("quokka telemetry", &opts).unwrap().remove(0);
+        assert!(h.preview.contains("text extracted from report.pdf") || h.preview.contains("quokka"), "{}", h.preview);
     }
 
     #[test]

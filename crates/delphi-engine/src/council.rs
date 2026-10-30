@@ -433,7 +433,7 @@ pub fn minority_report(round2: &Round2, d: &Decision, homogeneous: bool) -> Stri
         }
     }
     if homogeneous {
-        s.push_str("\nHomogeneous: every seat is in one model family, so the author's family reviewed its own work. You may prefer to wait for a second family before approving.\n");
+        s.push_str("\nHomogeneous (low diversity): every seat is in one model family, so the author's family reviewed its own work. You may prefer to wait for a second family before approving.\n");
     }
     s
 }
@@ -505,7 +505,7 @@ pub fn render_artifact(a: &ArtifactInput) -> String {
         };
         s.push_str(&format!("| `{}` | {} | {} | {} |\n", p.role, p.family, r1, r2));
     }
-    s.push_str(&format!("\n{}\n\n", if a.plan.homogeneous { "**Homogeneous:** one model family only, so the `[H-001]` diversity guarantee did not hold." } else { "Heterogeneous: the seats span more than one model family (`[H-001]`)." }));
+    s.push_str(&format!("\n{}\n\n", if a.plan.homogeneous { "**Homogeneous (low diversity):** one model family only, so the `[H-001]` diversity guarantee did not hold." } else { "Heterogeneous: the seats span more than one model family (`[H-001]`)." }));
     for n in &a.plan.notes {
         s.push_str(&format!("- {}\n", n));
     }

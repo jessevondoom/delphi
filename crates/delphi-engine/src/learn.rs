@@ -246,17 +246,21 @@ pub struct LearningSettings {
     /// Notes kept per mission; the oldest is dropped (`learn.dropped`, reason `evicted`) when a new one would exceed it.
     pub max_notes: usize,
     pub triggers: BTreeSet<String>,
+    /// Finished tasks before `delphi needs` calls the coaching pass worth building on (`specs/031` §3.6).
+    pub retro_min_tasks: usize,
 }
 
 impl Default for LearningSettings {
     fn default() -> Self {
-        LearningSettings { capture: true, max_notes: 200, triggers: TRIGGERS.iter().map(|t| t.to_string()).collect() }
+        LearningSettings { capture: true, max_notes: 200, triggers: TRIGGERS.iter().map(|t| t.to_string()).collect(), retro_min_tasks: 10 }
     }
 }
 
 impl LearningSettings {
     pub const MAX_NOTES_FLOOR: usize = 10;
     pub const MAX_NOTES_CEILING: usize = 1000;
+    pub const RETRO_TASKS_FLOOR: usize = 3;
+    pub const RETRO_TASKS_CEILING: usize = 200;
 
     /// Read `[learning]` from a parsed `config.toml`. A value outside the floor and ceiling is clamped; an unknown key or
     /// trigger is a returned problem, for the boot notices.
@@ -265,8 +269,8 @@ impl LearningSettings {
         let mut problems = Vec::new();
         let Some(t) = root.get("learning").and_then(|v| v.as_table()) else { return (s, problems) };
         for k in t.keys() {
-            if !["capture", "max_notes", "triggers"].contains(&k.as_str()) {
-                problems.push(format!("[learning] {}: not a setting (capture, max_notes, triggers)", k));
+            if !["capture", "max_notes", "triggers", "retro_min_tasks"].contains(&k.as_str()) {
+                problems.push(format!("[learning] {}: not a setting (capture, max_notes, triggers, retro_min_tasks)", k));
             }
         }
         if let Some(v) = t.get("capture") {
@@ -285,6 +289,18 @@ impl LearningSettings {
                     s.max_notes = c;
                 }
                 None => problems.push("[learning] max_notes: expected a whole number".into()),
+            }
+        }
+        if let Some(v) = t.get("retro_min_tasks") {
+            match v.as_integer() {
+                Some(n) => {
+                    let c = (n.max(0) as usize).clamp(Self::RETRO_TASKS_FLOOR, Self::RETRO_TASKS_CEILING);
+                    if c as i64 != n {
+                        problems.push(format!("[learning] retro_min_tasks: {} is outside {}..={}; using {}", n, Self::RETRO_TASKS_FLOOR, Self::RETRO_TASKS_CEILING, c));
+                    }
+                    s.retro_min_tasks = c;
+                }
+                None => problems.push("[learning] retro_min_tasks: expected a whole number".into()),
             }
         }
         if let Some(v) = t.get("triggers") {
@@ -985,6 +1001,8 @@ mod tests {
         assert_eq!(problems.len(), 3, "{:?}", problems);
         assert!(problems.iter().any(|p| p.contains("load_staged")), "there is no setting that loads staged text");
         assert_eq!(LearningSettings::parse(&toml::from_str("").unwrap()), (LearningSettings::default(), vec![]));
+        let (s, problems) = LearningSettings::parse(&toml::from_str("[learning]\nretro_min_tasks = 1\n").unwrap());
+        assert_eq!((s.retro_min_tasks, problems.len()), (LearningSettings::RETRO_TASKS_FLOOR, 1), "the floor is the core's, not the operator's");
     }
 
     #[test]

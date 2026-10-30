@@ -216,6 +216,17 @@ struct WideRule {
     min_context_ratio: Option<f64>,
 }
 
+/// What a role needs (`specs/056` §3.1).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct RoleRule {
+    pub floor: String,
+    pub preferred: String,
+    #[serde(default)]
+    pub plan_making: bool,
+    #[serde(default)]
+    pub plan_following: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct ClassRules {
     #[serde(default)]
@@ -224,6 +235,8 @@ pub struct ClassRules {
     wide: WideRule,
     #[serde(default, rename = "rule")]
     pub rules: Vec<Rule>,
+    #[serde(default)]
+    pub roles: std::collections::BTreeMap<String, RoleRule>,
 }
 
 impl ClassRules {
@@ -233,6 +246,13 @@ impl ClassRules {
             match Class::parse(&rule.class) {
                 Some(Class::Unclassified) | None => return Err(format!("class rules: rule `{}` has class `{}`; use deep, steady, quick or local", rule.id, rule.class)),
                 Some(_) => {}
+            }
+        }
+        for (id, role) in &r.roles {
+            for (what, v) in [("floor", &role.floor), ("preferred", &role.preferred)] {
+                if !matches!(Class::parse(v), Some(Class::Deep | Class::Steady | Class::Quick | Class::Local)) {
+                    return Err(format!("class rules: role `{id}` has {what} `{v}`; use deep, steady, quick or local"));
+                }
             }
         }
         Ok(r)

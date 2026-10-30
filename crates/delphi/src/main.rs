@@ -32,6 +32,7 @@ mod lint;
 mod logs_cmd;
 mod missions;
 mod changelog;
+mod customize_cmd;
 mod learn_cmd;
 mod retro_cmd;
 mod train_run;
@@ -112,6 +113,7 @@ const CMDS: &[Cmd] = &[
     Cmd { group: "Inspect", name: "release", about: "whether this build is a signed release", synopsis: "  delphi release [status]", detail: "Signed by the maintainers' key, unsigned (a local or development build), or invalid. Needs no terminal." },
     Cmd { group: "Inspect", name: "sessions", about: "the finished console sessions, to review later", synopsis: "  delphi sessions [--mission <id>] [--limit <n>] [--full] [--json] [--home <dir>]", detail: "Written when a session ends (/new, or a daemon restart): the first words of what was asked, the changes recorded, and the summary when [session] summary is on. Reads the central log; calls no model." },
     Cmd { group: "Inspect", name: "tools", about: "how tools are used, and how often models record their changes", synopsis: "  delphi tools [--mission <id> | --all] [--json | --prom] [--workspace <name>] [--home <dir>]", detail: "Per model: runs that changed something and recorded a change. --prom: Prometheus text. Counts only." },
+    Cmd { group: "Set up", name: "customize", about: "teach Delphi a note, a rule, a skill or a profile line yourself", synopsis: "  delphi customize note \"<text>\" [--mission <id>]\n  delphi customize rule \"<text>\" [--scope workspace|operator] [--why \"…\"] [--replace <ID> | --remove <ID>]\n  delphi customize skill <dir> --agents <role,role> [--description \"…\"]\n  delphi customize profile [\"<line>\" | --file <path>]\n    [--yes] [--workspace <name>] [--home <dir>]", detail: "What you write is yours: a rule, a skill or a profile line is ratified as you write it, after the same checks a proposal gets (no relaxing a rule, the caps, no near-duplicate). `note` only stages a note for review. Each verb needs a terminal; `--yes` skips the typed yes, not the terminal. A rule applies from the next task." },
     Cmd { group: "Inspect", name: "retro", about: "rules the Orchestrator proposed, waiting for your review", synopsis: "  delphi retro list [--mission <id>] [--json]\n  delphi retro show <mission>/<id> [--json]\n  delphi retro accept <mission>/<id> [--scope workspace|operator]\n  delphi retro reject <mission>/<id>\n    [--workspace <name>] [--home <dir>]", detail: "Proposals are made with the Orchestrator's `suggest_rule` tool and are never loaded into a prompt until you ratify them. `accept` and `reject` need a terminal and a typed yes, and `accept` needs the daemon stopped; `--scope` ratifies at a different scope than proposed." },
     Cmd { group: "Inspect", name: "learn", about: "notes staged from denials, corrections, retries and escalations", synopsis: "  delphi learn list [--mission <id>] [--json]\n  delphi learn show <mission>/<id> [--json]\n  delphi learn drop <mission>/<id>\n    [--workspace <name>] [--home <dir>]", detail: "Staged notes are never loaded into a prompt; they wait for review. `drop` needs the daemon stopped. Capture is set in [learning] in config.toml." },
     Cmd { group: "Inspect", name: "capabilities", about: "what each model CLI here can use: connectors, skills, models", synopsis: "  delphi capabilities [--refresh] [--ask] [--json] [--quiet] [--models] [--project <dir>]... [--home <dir>]", detail: "--models lists every discovered model with its class (spec 056; takes --workspace); one no longer\nlisted is kept as gone.\nAsks each CLI's own list commands and reads the skill directories; saves <home>/capabilities.json.\nSetup and update refresh it in the background. --ask also asks the claude and agy models what they can\nuse; that answer is shown apart and is not verified. Calls no model otherwise." },
@@ -284,6 +286,7 @@ fn main() {
         Some("tools") => cmd_tools(&args),
         Some("learn") => cmd_learn(&args),
         Some("retro") => cmd_retro(&args),
+        Some("customize") => cmd_customize(&args),
         Some("chat") => cmd_chat(&args),
         Some("run") => cmd_run(&args),
         Some("relay") => cmd_relay(&args),
@@ -1099,6 +1102,14 @@ fn cmd_sessions(args: &[String]) -> i32 {
 fn cmd_learn(args: &[String]) -> i32 {
     match resolve_ws("learn", args) {
         Ok((_home, ws)) => learn_cmd::cli(&ws.dir, args, &learn_cmd::Options { mission: flag(args, "--mission"), json: args.iter().any(|a| a == "--json") }),
+        Err(code) => code,
+    }
+}
+
+/// `delphi customize note|rule|skill|profile`: the operator writes to the stores directly (see `customize_cmd.rs`).
+fn cmd_customize(args: &[String]) -> i32 {
+    match resolve_ws("customize", args) {
+        Ok((home, ws)) => customize_cmd::cli(&ws.dir, args, &customize_cmd::Options { home }),
         Err(code) => code,
     }
 }

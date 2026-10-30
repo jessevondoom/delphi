@@ -249,6 +249,13 @@ Total about **182 h**. Critical path for the operator layer: L0 → L1 → L2 �
 - **Not built:** the skill and patch queues of the deck (L3), `PROMOTE`, lessons files, embedding dedupe.
 - Unverified: no real model has called `suggest_rule`; whether the instructions get it to propose sensible rules (and not too many) is the first thing to read in `/retro` after a real mission.
 
+**L5 (`delphi customize`; `delphi-engine/src/customize.rs`, `crates/delphi/src/customize_cmd.rs`).**
+- **`delphi customize note|rule|skill|profile`.** Every verb needs a terminal and a typed `yes` (`--yes` skips only the typed word); a script cannot write a rule, a skill or a profile line. `note` appends a tier-L5 `learn.staged` event (trigger `operator_note`, id `n<seq>`) to the newest unlocked mission's log, so it flows through the existing projection and stays out of every prompt. `rule` goes through `retro::check`/`retro::accept` (the same checks and CAS write as `retro accept`), with `--scope`, `--why`, `--replace <ID>` and `--remove <ID>`. `profile` appends a line to `profile.md` (4096-byte bound, no-relaxation check). `skill <dir> --agents ...` packages a directory through the `skills import` path and pins each file with `ratify::edit_pinned`; it refuses a name that already exists.
+- **`[learning] retro_min_tasks`** (default 10, 3 to 200) is the "finished tasks" threshold `delphi needs` uses for the coaching pass.
+- **Authority:** nothing here raises trust; ratification is the operator's typed word.
+- **Differences:** a note needs an unlocked mission (there is no mission-less store). Skills written to the operator scope are pinned but the engine does not load skills by name yet.
+- **Not built:** `delphi operator export/import` does not exist, so it cannot cover the new stores.
+
 **Suggested order of first merges:** L0, then L6 and L1 in parallel, then L2 and L7, then L3 and L4, then L9, L5, L8, L10. After L1 and L2, run the loop on real work for a few weeks before L3; the staged notes will show which triggers produce signal.
 
 ## 8. Decisions for the Operator
