@@ -69,6 +69,13 @@ max_parallel_agents = 4
 # [routing.reserve]                  # share of the mission budget no other role may spend (assignment = "discovered")
 # validator = 0.15
 
+# Promote and nerf (specs/056 §4; ratified): a role's grade from -2 to 2. `delphi agent promote|nerf <role>` proposes the edit; /ratify applies it.
+# [grades]
+# architect = 1
+# [grades.builder]
+# default = 0
+# docs = -1
+
 # Model pool (specs/002 §4.1, D-26: ratified). Models in preference order; when the first eligible
 # model is exhausted (quota, subscription window or budget) the next one takes over and work continues.
 # Roles ask for capabilities, never for a named model. Omit to use every configured tier, family by family.

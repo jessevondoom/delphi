@@ -33,6 +33,7 @@ mod logs_cmd;
 mod missions;
 mod changelog;
 mod learn_cmd;
+mod agent_cmd;
 mod retro_cmd;
 mod train_run;
 mod train_arms;
@@ -113,6 +114,7 @@ const CMDS: &[Cmd] = &[
     Cmd { group: "Inspect", name: "sessions", about: "the finished console sessions, to review later", synopsis: "  delphi sessions [--mission <id>] [--limit <n>] [--full] [--json] [--home <dir>]", detail: "Written when a session ends (/new, or a daemon restart): the first words of what was asked, the changes recorded, and the summary when [session] summary is on. Reads the central log; calls no model." },
     Cmd { group: "Inspect", name: "tools", about: "how tools are used, and how often models record their changes", synopsis: "  delphi tools [--mission <id> | --all] [--json | --prom] [--workspace <name>] [--home <dir>]", detail: "Per model: runs that changed something and recorded a change. --prom: Prometheus text. Counts only." },
     Cmd { group: "Inspect", name: "retro", about: "rules the Orchestrator proposed, waiting for your review", synopsis: "  delphi retro list [--mission <id>] [--json]\n  delphi retro show <mission>/<id> [--json]\n  delphi retro accept <mission>/<id> [--scope workspace|operator]\n  delphi retro reject <mission>/<id>\n    [--workspace <name>] [--home <dir>]", detail: "Proposals are made with the Orchestrator's `suggest_rule` tool and are never loaded into a prompt until you ratify them. `accept` and `reject` need a terminal and a typed yes, and `accept` needs the daemon stopped; `--scope` ratifies at a different scope than proposed." },
+    Cmd { group: "Inspect", name: "agent", about: "promote or nerf a role: the class of model it is assigned", synopsis: "  delphi agent promote|nerf <role> [--kind <task kind>] [--reason <text>]\n  delphi agent grades\n    [--workspace <name>] [--home <dir>]", detail: "A grade (-2 to 2) is kept in the ratified [grades] table. promote and nerf edit config.toml and show the diff; nothing changes until you /ratify it.\ngrades lists them with the measured results beside each. Delphi may suggest a grade and never applies one. Refused inside an agent seat." },
     Cmd { group: "Inspect", name: "learn", about: "notes staged from denials, corrections, retries and escalations", synopsis: "  delphi learn list [--mission <id>] [--json]\n  delphi learn show <mission>/<id> [--json]\n  delphi learn drop <mission>/<id>\n    [--workspace <name>] [--home <dir>]", detail: "Staged notes are never loaded into a prompt; they wait for review. `drop` needs the daemon stopped. Capture is set in [learning] in config.toml." },
     Cmd { group: "Inspect", name: "capabilities", about: "what each model CLI here can use: connectors, skills, models", synopsis: "  delphi capabilities [--refresh] [--ask] [--json] [--quiet] [--models] [--project <dir>]... [--home <dir>]", detail: "--models lists every discovered model with its class (spec 056; takes --workspace); one no longer\nlisted is kept as gone.\nAsks each CLI's own list commands and reads the skill directories; saves <home>/capabilities.json.\nSetup and update refresh it in the background. --ask also asks the claude and agy models what they can\nuse; that answer is shown apart and is not verified. Calls no model otherwise." },
     Cmd { group: "Inspect", name: "logs", about: "the error log: what went wrong, with context", synopsis: "  delphi logs [--lines <n>] [--since 1h] [--level error|warn|debug] [--component <name>] [--mission <id>] [--json] [--follow] [--path] [--home <dir>]", detail: "Reads $DELPHI_HOME/logs/delphi.log.jsonl, written by the CLI, the daemon and the console: errors and panics by default, redacted, 10 MB x 3 files.\nDELPHI_LOG=off|error|warn|debug or [logging] level in <home>/operator/config.toml sets what is kept. Read-only and offline. --path prints the file's location.\nComponents: cli, daemon, engine, harness, provider, ui, xenia, relay, tool." },
@@ -284,6 +286,7 @@ fn main() {
         Some("tools") => cmd_tools(&args),
         Some("learn") => cmd_learn(&args),
         Some("retro") => cmd_retro(&args),
+        Some("agent") => cmd_agent(&args),
         Some("chat") => cmd_chat(&args),
         Some("run") => cmd_run(&args),
         Some("relay") => cmd_relay(&args),
@@ -1096,6 +1099,14 @@ fn cmd_learn(args: &[String]) -> i32 {
 fn cmd_retro(args: &[String]) -> i32 {
     match resolve_ws("retro", args) {
         Ok((home, ws)) => retro_cmd::cli(&ws.dir, args, &retro_cmd::Options { home: home.clone(), scope: flag(args, "--scope"), mission: flag(args, "--mission"), json: args.iter().any(|a| a == "--json") }),
+        Err(code) => code,
+    }
+}
+
+/// `delphi agent promote|nerf|grades`: a role's grade, as a pending ratified edit (see `agent_cmd.rs`).
+fn cmd_agent(args: &[String]) -> i32 {
+    match resolve_ws("agent", args) {
+        Ok((_home, ws)) => agent_cmd::cli(&ws.dir, args, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)),
         Err(code) => code,
     }
 }

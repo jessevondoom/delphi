@@ -349,6 +349,19 @@ Rules the Orchestrator proposed, waiting for your review.
 
 Proposals are made with the Orchestrator's `suggest_rule` tool and are never loaded into a prompt until you ratify them. `accept` and `reject` need a terminal and a typed yes, and `accept` needs the daemon stopped; `--scope` ratifies at a different scope than proposed.
 
+### `delphi agent`
+
+Promote or nerf a role: the class of model it is assigned.
+
+```
+  delphi agent promote|nerf <role> [--kind <task kind>] [--reason <text>]
+  delphi agent grades
+    [--workspace <name>] [--home <dir>]
+```
+
+A grade (-2 to 2) is kept in the ratified [grades] table. promote and nerf edit config.toml and show the diff; nothing changes until you /ratify it.
+grades lists them with the measured results beside each. Delphi may suggest a grade and never applies one. Refused inside an agent seat.
+
 ### `delphi learn`
 
 Notes staged from denials, corrections, retries and escalations.
