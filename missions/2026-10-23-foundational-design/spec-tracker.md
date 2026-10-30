@@ -127,7 +127,7 @@ Council 011 (Haiku + two Gemini 3.8 Flash High): build with changes. Approved by
 | :-- | :-- | :-- |
 | S0 | report truncation of the 20-agent catalog | built (this PR): the slice ends with the "... and N more" note; `/org` open items and `delphi doctor` check 12 give the count |
 | S1 | registry entry, `[domains]`, validation | built (this PR): `delphi-bundle/src/registry.rs`, `[domains]` and the `[agents.*]` keys `domain`, `tags`, `not_for`, `summary` validated at step 4 (caps refused, never cut; control characters, delimiters, relaxing or steering text refused), `schemas/bundle.schema.json`. The over-long default summary is an error only for a bundle that declares `[domains]` (a warning otherwise, so existing bundles still validate) |
-| S2 | index, `search_agent_registry`, `delphi route`, eval set | not started |
+| S2 | index, `search_agent_registry`, `delphi route`, eval set | built (this PR): `delphi-engine/src/agent_registry.rs` (deterministic lexical + optional local-vector ranking with the `not_for` penalty, floor, 2 reformulations per task, the bounded `@runtime/agent-domains` slice above 20 agents, quoted untrusted results, `registry.search` / `registry.dispatch` events), the orchestrator-only `search_agent_registry` tool, `delphi route` (and `--eval`), `[routing] registry = "auto"\|"flat"` (default `flat` until S4 decides). The index is built from the active bundles on demand, not stored as a `kb` document kind |
 | S3 | `[extends.<role>]`: skills, guidance, team | not started |
 | S4 | evidence run against the flat list; default-on decision | not started |
 | S5 | domain leads (spec 042) | only if the gate in §7 trips |
