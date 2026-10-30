@@ -49,6 +49,8 @@ pub struct EngineService {
     research: Mutex<Option<Arc<crate::research::Shared>>>,
     /// The briefs being written and the ones that failed, by cache key (`decision_run.rs`): each is tried once until `r` asks again.
     briefs: Arc<Mutex<Briefs>>,
+    /// When the acquisition job was last looked at (unix seconds): it is considered once an hour.
+    acquire_checked: Mutex<i64>,
 }
 
 #[derive(Default)]
@@ -106,7 +108,7 @@ fn engine_err(e: EngineError) -> RpcError {
 
 impl EngineService {
     pub fn new(engine: Arc<Engine>, default_mission: &str) -> Arc<EngineService> {
-        Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())) })
+        Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())), acquire_checked: Mutex::new(0) })
     }
 
     /// Run `org.action` through this binary instead of the current executable (tests, where that is the test binary).
@@ -279,8 +281,27 @@ impl EngineService {
             loop {
                 every.tick().await;
                 svc.timer_tick().await;
+                svc.acquire_tick().await;
             }
         });
+    }
+
+    /// Once an hour, and only when the operator turned it on: a daily acquisition run if one is due (`specs/055` §8).
+    async fn acquire_tick(&self) {
+        let now = (self.engine.clock_unix)();
+        {
+            let mut last = self.acquire_checked.lock().unwrap();
+            if now - *last < 3600 {
+                return;
+            }
+            *last = now;
+        }
+        if self.engine.cfg.get().library.acquire.enabled && crate::library::Library::in_home(&self.engine.ws.home).job_due(now) {
+            let e = self.engine.clone();
+            tokio::spawn(async move {
+                e.run_acquisition().await;
+            });
+        }
     }
 
     fn timers_json(&self) -> Value {
@@ -546,6 +567,7 @@ impl EngineService {
         let lib = crate::library::Library::in_home(&self.engine.ws.home);
         list.extend(crate::digest_review::pick(&m.id, &lib, &events, &now).map(|(p, left)| match p {
             crate::digest_review::Pick::Review(i) => crate::digest_review::to_decision(&i, left, &now),
+            crate::digest_review::Pick::Acquire(a) => crate::digest_review::acquire_decision(&a, left, &now),
             crate::digest_review::Pick::Note(n) => crate::digest::to_decision(&n, left, &now),
         }));
         list.sort_by_key(|d| crate::decision_model::rank(d["tier"].as_str().unwrap_or("")));
@@ -588,6 +610,30 @@ impl EngineService {
                 let _ = m2.append(EventEnvelope::new(&m2.id, "decision.brief_ready", json!({"id": id, "tokens": rec.tokens}))).await;
             }
         });
+    }
+
+    /// What an answer to the acquisition card sets going: the accepted sources are captured in the background by the daemon.
+    fn acquire_decided(&self, lib: &crate::library::Library, a: &crate::digest_review::AcquireItem, action: &str) -> Result<(), String> {
+        if self.engine.apply_acquire_choice(lib, &a.batch, action)? {
+            let e = self.engine.clone();
+            tokio::spawn(async move {
+                e.run_accepted_sources().await;
+            });
+        }
+        Ok(())
+    }
+
+    /// `library.acquire`: the operator asks for a run of the acquisition job now. Console only; the batch arrives in the digest.
+    async fn library_acquire(&self, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        if !self.engine.cfg.get().library.acquire.enabled {
+            return Err(err(code::INVALID_PARAMS, "library acquisition is off: set `[library.acquire] enabled = true`"));
+        }
+        let e = self.engine.clone();
+        tokio::spawn(async move {
+            e.run_acquisition().await;
+        });
+        Ok(json!({"started": true}))
     }
 
     /// `digest.act`: the operator acts on the digest's candidate (`specs/052` §3.3): keep, check, promote or dismiss. Promote only writes a proposal
@@ -676,6 +722,7 @@ impl EngineService {
         };
         let (hash, id) = match &pick {
             crate::digest_review::Pick::Review(i) => (crate::digest_review::payload_hash(i), i.id.clone()),
+            crate::digest_review::Pick::Acquire(a) => (crate::digest_review::acquire_hash(a), a.id.clone()),
             crate::digest_review::Pick::Note(n) => (crate::digest::payload_hash(n), n.id.clone()),
         };
         if p["payload_blake3"].as_str() != Some(hash.as_str()) {
@@ -684,6 +731,7 @@ impl EngineService {
         let action = p["choice_id"].as_str().unwrap_or("");
         let evs = match &pick {
             crate::digest_review::Pick::Review(i) => crate::digest_review::act(&m.id, i, action),
+            crate::digest_review::Pick::Acquire(a) => crate::digest_review::acquire_act(&m.id, a, action),
             crate::digest_review::Pick::Note(n) => crate::digest::act(&m.id, n, action),
         };
         let evs = evs.map_err(|e| err(code::INVALID_PARAMS, e))?;
@@ -692,6 +740,9 @@ impl EngineService {
             if let Some(c) = i.claims.first().and_then(|c| c["id"].as_str()) {
                 lib.confirm_claim(c).map_err(|e| err(code::INVALID_PARAMS, e))?;
             }
+        }
+        if let crate::digest_review::Pick::Acquire(a) = &pick {
+            self.acquire_decided(&lib, a, action).map_err(|e| err(code::INVALID_PARAMS, e))?;
         }
         for ev in evs {
             m.append(ev).await.map_err(|e| err(-32000, e.to_string()))?;
@@ -1706,6 +1757,7 @@ impl Extension for ServiceExt {
                 "pages.dispute" => svc.pages_dispute(params, ctx).await,
                 "pages.promote" => svc.pages_promote(params, ctx).await,
                 "digest.act" => svc.digest_act(params, ctx).await,
+                "library.acquire" => svc.library_acquire(ctx).await,
                 "decisions.review" => svc.decisions_review(params, ctx).await,
                 "council.start" => svc.council_start(params, ctx).await,
                 "bundle.distill" => svc.distill_start(params, ctx).await,

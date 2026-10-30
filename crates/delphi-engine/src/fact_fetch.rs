@@ -54,6 +54,11 @@ impl Default for FetchPolicy {
 }
 
 impl FetchPolicy {
+    pub fn with_max_bytes(mut self, n: usize) -> FetchPolicy {
+        self.max_bytes = n;
+        self
+    }
+
     /// For tests with a loopback fixture server. Never used by the daemon.
     pub fn with_fixture_addrs(mut self, addrs: impl IntoIterator<Item = SocketAddr>) -> FetchPolicy {
         self.exempt.extend(addrs);
@@ -270,7 +275,7 @@ struct Raw {
     redirects: Vec<Redirect>,
 }
 
-async fn fetch_raw(policy: &FetchPolicy, url: &str, agent: &str) -> Result<Raw, FetchError> {
+async fn fetch_raw(policy: &FetchPolicy, url: &str, agent: &str, extra_types: &[&str]) -> Result<Raw, FetchError> {
     let mut redirects: Vec<Redirect> = Vec::new();
     let fail = |refusal: Refusal, redirects: &Vec<Redirect>| FetchError { refusal, redirects: Tainted(redirects.clone()) };
     let mut cur = Url::parse(url).map_err(|_| fail(Refusal::BadUrl("unparseable"), &redirects))?;
@@ -287,7 +292,7 @@ async fn fetch_raw(policy: &FetchPolicy, url: &str, agent: &str) -> Result<Raw, 
             .resolve_to_addrs(&host, &addrs)
             .build()
             .map_err(|_| fail(Refusal::Transport, &redirects))?;
-        let mut resp = client.get(cur.clone()).header(header::ACCEPT, "text/html,text/plain;q=0.9").send().await.map_err(|_| fail(Refusal::Transport, &redirects))?;
+        let mut resp = client.get(cur.clone()).header(header::ACCEPT, if extra_types.is_empty() { "text/html,text/plain;q=0.9" } else { "application/json,text/plain;q=0.9" }).send().await.map_err(|_| fail(Refusal::Transport, &redirects))?;
         let status = resp.status().as_u16();
         if resp.status().is_redirection() {
             let loc = resp.headers().get(header::LOCATION).and_then(|v| v.to_str().ok()).ok_or_else(|| fail(Refusal::Status(status), &redirects))?;
@@ -316,7 +321,7 @@ async fn fetch_raw(policy: &FetchPolicy, url: &str, agent: &str) -> Result<Raw, 
             return Err(fail(Refusal::Status(status), &redirects));
         }
         let content_type = resp.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("").split(';').next().unwrap_or("").trim().to_ascii_lowercase();
-        if !TEXT_TYPES.contains(&content_type.as_str()) {
+        if !TEXT_TYPES.contains(&content_type.as_str()) && !extra_types.contains(&content_type.as_str()) {
             return Err(fail(Refusal::ContentType, &redirects));
         }
         if resp.content_length().is_some_and(|n| n > policy.max_bytes as u64) {
@@ -390,15 +395,25 @@ fn build(raw: Raw, cloaked: bool) -> Snapshot {
 
 /// Fetch one URL as the daemon and snapshot it. No model is involved.
 pub async fn fetch_snapshot(policy: &FetchPolicy, url: &str) -> Result<Snapshot, FetchError> {
-    Ok(build(fetch_raw(policy, url, DAEMON_AGENT).await?, false))
+    Ok(build(fetch_raw(policy, url, DAEMON_AGENT, &[]).await?, false))
+}
+
+/// Fetch an archive's search answer as the daemon: the same address, redirect and size rules, and JSON allowed beside text.
+/// The body is data for the daemon's own parser; it is never shown to a model.
+pub async fn fetch_catalog(policy: &FetchPolicy, url: &str) -> Result<Vec<u8>, FetchError> {
+    let raw = fetch_raw(policy, url, DAEMON_AGENT, &["application/json"]).await?;
+    if raw.truncated {
+        return Err(FetchError { refusal: Refusal::TooLarge, redirects: Tainted(raw.redirects) });
+    }
+    Ok(raw.body)
 }
 
 /// The cloaking check: fetch as the daemon and as a browser and compare the hashes of the extracted text.
 /// Returns the daemon's snapshot, flagged `cloaked` if the two differ, and the browser's snapshot when they do
 /// (both are kept as evidence). A browser fetch that fails leaves the flag unset and says nothing either way.
 pub async fn fetch_snapshot_checked(policy: &FetchPolicy, url: &str) -> Result<(Snapshot, Option<Snapshot>), FetchError> {
-    let mut a = build(fetch_raw(policy, url, DAEMON_AGENT).await?, false);
-    match fetch_raw(policy, url, BROWSER_AGENT).await {
+    let mut a = build(fetch_raw(policy, url, DAEMON_AGENT, &[]).await?, false);
+    match fetch_raw(policy, url, BROWSER_AGENT, &[]).await {
         Ok(raw) => {
             let b = build(raw, false);
             if b.text_sha256 != a.text_sha256 {
