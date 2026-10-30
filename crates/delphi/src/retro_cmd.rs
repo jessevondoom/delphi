@@ -79,7 +79,23 @@ pub fn find<'a>(items: &'a [LiveProposal], reference: &str) -> Result<&'a LivePr
     }
 }
 
+/// The stale list (`specs/050` ML-3): expired notes and rules past their review window. Listed, never changed.
+pub fn render_stale(items: &[retro::Stale], json: bool) -> Result<String, String> {
+    if json {
+        return serde_json::to_string_pretty(&items.iter().map(retro::Stale::to_json).collect::<Vec<_>>()).map(|s| s + "\n").map_err(|e| e.to_string());
+    }
+    if items.is_empty() {
+        return Ok("nothing is stale: no staged note is past its date and no rules file is past its review window\n".into());
+    }
+    let mut out: String = items.iter().map(|s| format!("{:<6} {}  {}\n", s.kind, s.reference, s.detail)).collect();
+    out.push_str(&format!("{} stale entr(ies). Nothing was removed; an expired note is no longer retrieved, and a rules file is reviewed by editing its `last_confirmed`.\n", items.len()));
+    Ok(out)
+}
+
 pub fn run_in(ws_dir: &Path, verb: &str, reference: Option<&str>, opts: &Options) -> Result<String, String> {
+    if verb == "stale" {
+        return render_stale(&retro::stale(&opts.home, ws_dir, &delphi_core::bundles::today()), opts.json);
+    }
     let items = collect(ws_dir, opts)?;
     match verb {
         "list" if opts.json => serde_json::to_string_pretty(&items.iter().map(LiveProposal::to_json).collect::<Vec<_>>()).map(|s| s + "\n").map_err(|e| e.to_string()),
@@ -96,7 +112,7 @@ pub fn run_in(ws_dir: &Path, verb: &str, reference: Option<&str>, opts: &Options
             }
             Ok(out)
         }
-        other => Err(format!("`{}` is not a retro verb (list, show, accept, reject)", other)),
+        other => Err(format!("`{}` is not a retro verb (list, show, stale, accept, reject)", other)),
     }
 }
 
@@ -158,7 +174,7 @@ fn confirm(question: &str) -> bool {
 pub fn cli(ws_dir: &Path, args: &[String], opts: &Options) -> i32 {
     let positional: Vec<&str> = args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && (*i == 0 || !["--mission", "--workspace", "--home", "--scope"].contains(&args[*i - 1].as_str()))).map(|(_, a)| a.as_str()).collect();
     let Some(verb) = positional.first() else {
-        eprintln!("delphi retro: list | show <mission>/<id>");
+        eprintln!("delphi retro: list | show <mission>/<id> | stale");
         return 2;
     };
     if matches!(*verb, "accept" | "reject") {

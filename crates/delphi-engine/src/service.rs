@@ -1301,6 +1301,12 @@ impl EngineService {
         ))
     }
 
+    /// Expired staged notes and rules files past their review window (`specs/050` ML-3). A read; nothing here changes an entry.
+    fn retro_stale(&self, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        Ok(Value::Array(crate::retro::stale(&self.engine.ws.home, &self.engine.ws.dir, &delphi_core::bundles::today()).iter().map(|s| s.to_json()).collect()))
+    }
+
     /// Accept or reject one proposal by its `ref` (`<mission>/<id>`). Accepting writes the scope's `heuristics.md` through the
     /// compare-and-swap path, then the proposal's own mission records `learn.proposal_resolved` and the file is stamped L5,
     /// as `ratify.apply` does. `scope` is the operator's choice at ratification. The call is the operator's act: console only.
@@ -1658,6 +1664,7 @@ impl Extension for ServiceExt {
                 "ratify.list" => svc.ratify_list(),
                 "ratify.apply" => svc.ratify_change(params, ctx, false).await,
                 "retro.list" => svc.retro_list(ctx),
+                "retro.stale" => svc.retro_stale(ctx),
                 "retro.accept" => svc.retro_resolve(params, ctx, true).await,
                 "retro.reject" => svc.retro_resolve(params, ctx, false).await,
                 "ratify.reject" => svc.ratify_change(params, ctx, true).await,
@@ -2468,7 +2475,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "research.start", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "retro.list", "retro.accept", "retro.reject", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
+            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "research.start", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "retro.list", "retro.stale", "retro.accept", "retro.reject", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
             for m in every_mutating_method_the_daemon_has {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }

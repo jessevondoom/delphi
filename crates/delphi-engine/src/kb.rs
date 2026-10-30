@@ -56,6 +56,8 @@ const RERANK_TOP: usize = 10;
 /// A passage is shown to the reranker in at most this many windows of about `RERANK_CHARS`; its best window counts.
 const RERANK_WINDOWS: usize = 1;
 const RERANK_CHARS: usize = 600;
+/// Share of its score a staged `episode` keeps against a `fact` (`specs/050` ML-4).
+const EPISODE_FACTOR: f64 = 0.8;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS kb_documents (
@@ -71,7 +73,9 @@ CREATE TABLE IF NOT EXISTS kb_documents (
     updated_at      TEXT NOT NULL,
     mtime_ns        INTEGER NOT NULL DEFAULT 0,
     size            INTEGER NOT NULL DEFAULT 0,
-    web_corroborated INTEGER NOT NULL DEFAULT 0
+    web_corroborated INTEGER NOT NULL DEFAULT 0,
+    kind            TEXT,
+    valid_until     TEXT
 );
 CREATE TABLE IF NOT EXISTS kb_chunks (
     chunk_id        INTEGER PRIMARY KEY,
@@ -507,9 +511,13 @@ impl Kb {
         xenia::ensure(&conn)?;
         // An index made before files were compared by modification time gains the columns; 0 means "read it once".
         let columns: Vec<String> = conn.prepare("PRAGMA table_info(kb_documents)")?.query_map([], |r| r.get::<_, String>(1))?.flatten().collect();
-        for (name, ddl) in [("mtime_ns", "ALTER TABLE kb_documents ADD COLUMN mtime_ns INTEGER NOT NULL DEFAULT 0"), ("size", "ALTER TABLE kb_documents ADD COLUMN size INTEGER NOT NULL DEFAULT 0"), ("web_corroborated", "ALTER TABLE kb_documents ADD COLUMN web_corroborated INTEGER NOT NULL DEFAULT 0")] {
+        for (name, ddl) in [("mtime_ns", "ALTER TABLE kb_documents ADD COLUMN mtime_ns INTEGER NOT NULL DEFAULT 0"), ("size", "ALTER TABLE kb_documents ADD COLUMN size INTEGER NOT NULL DEFAULT 0"), ("web_corroborated", "ALTER TABLE kb_documents ADD COLUMN web_corroborated INTEGER NOT NULL DEFAULT 0"), ("kind", "ALTER TABLE kb_documents ADD COLUMN kind TEXT"), ("valid_until", "ALTER TABLE kb_documents ADD COLUMN valid_until TEXT")] {
             if !columns.iter().any(|c| c == name) {
                 conn.execute(ddl, [])?;
+                // Documents indexed before the column existed are read once more, so it is filled in.
+                if matches!(name, "kind" | "valid_until") {
+                    conn.execute("UPDATE kb_documents SET content_blake3 = '', mtime_ns = 0", [])?;
+                }
             }
         }
         conn.execute("INSERT OR IGNORE INTO kb_meta(key, value) VALUES ('schema_version', ?1)", [SCHEMA_VERSION])?;
@@ -558,7 +566,10 @@ impl Kb {
         // Only the daemon's fact store writes `context/facts/` (pathguard denies every agent), so only there is the
         // marker read; anywhere else a file claiming `web_corroborated` is ignored (`specs/040` §7.3).
         let web_corroborated = rel_path.starts_with("context/facts/") && frontmatter_flag(text, "web_corroborated") && frontmatter_field(text, "ratified_by").as_deref() == Some("validator") && frontmatter_field(text, "kind").as_deref() == Some("fact");
-        tx.execute("INSERT INTO kb_documents(rel_path, zone, content_blake3, author, source_type, confidence, status, updated_at, web_corroborated) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)", params![rel_path, zone, hash, author, source_type, confidence, status, now, web_corroborated as i64])?;
+        // Only a staged note carries a validity date and a kind the search acts on (`specs/050` ML-3, ML-4); anywhere else
+        // the fields are ignored here, so a rule or a library page cannot be hidden by one.
+        let (kind, valid_until) = if zone == "staged" { (frontmatter_field(text, "kind").filter(|k| crate::frontmatter::KINDS.contains(&k.as_str())), frontmatter_field(text, "valid_until").filter(|d| crate::frontmatter::entry_date_ok(d)).map(|d| d[..10].to_string())) } else { (None, None) };
+        tx.execute("INSERT INTO kb_documents(rel_path, zone, content_blake3, author, source_type, confidence, status, updated_at, web_corroborated, kind, valid_until) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)", params![rel_path, zone, hash, author, source_type, confidence, status, now, web_corroborated as i64, kind, valid_until])?;
         let doc_id = tx.last_insert_rowid();
         for (i, c) in chunks_for(zone, text).into_iter().enumerate() {
             let ids = identifiers(&c.raw);
@@ -806,6 +817,16 @@ fn allowed_sql(opts: &SearchOpts) -> String {
     }
     if !opts.include_staged {
         allowed.push_str(" AND d.zone != 'staged'");
+    } else {
+        // A note is valid through its `valid_until` date and out of retrieval the day after (`specs/050` ML-3). The date
+        // is checked to be a date, so nothing else reaches the query text.
+        let today = opts.today.clone().filter(|d| crate::frontmatter::entry_date_ok(d)).map(|d| d[..10].to_string()).unwrap_or_else(delphi_core::bundles::today);
+        allowed.push_str(&format!(" AND (d.zone != 'staged' OR d.valid_until IS NULL OR d.valid_until >= '{}')", today));
+        // A kind filter only narrows: it names kinds from the fixed list, so it cannot widen what the role may read (ML-4).
+        if let Some(kinds) = &opts.kinds {
+            let ok: Vec<String> = kinds.iter().filter(|k| crate::frontmatter::KINDS.contains(&k.as_str())).map(|k| format!("'{}'", k)).collect();
+            allowed.push_str(&if ok.is_empty() { " AND d.zone != 'staged'".to_string() } else { format!(" AND (d.zone != 'staged' OR d.kind IN ({}))", ok.join(",")) });
+        }
     }
     // The Xenia zone is judged by its own rule, whatever `include_untrusted` says: invisible unless a view is asked
     // for, and then L2 only (agents) or the rest (the quarantine read).
@@ -1131,6 +1152,12 @@ pub struct SearchOpts {
     /// Include zone `staged`: notes the daemon captured from what happened (`specs/031` §3.1). Off by default, so an
     /// ordinary search never mixes unreviewed candidate lessons into its answer.
     pub include_staged: bool,
+    /// With `include_staged`: only staged notes of these kinds (`fact`, `episode`). Narrows, never widens (`specs/050` ML-4).
+    pub kinds: Option<Vec<String>>,
+    /// With `include_staged`: at most this many `episode` notes in the results (a budget by kind).
+    pub max_episodes: Option<usize>,
+    /// The date (`YYYY-MM-DD`) a staged note's `valid_until` is judged against; `None` is today (UTC). Tests set it.
+    pub today: Option<String>,
     /// Which Xenia records a search may see (`specs/011` §5.3). The zone is invisible unless asked for, and each view
     /// is exclusive: it returns Xenia records and nothing else.
     pub xenia: XeniaView,
@@ -1170,7 +1197,7 @@ pub enum Legs {
 
 impl Default for SearchOpts {
     fn default() -> Self {
-        SearchOpts { role: None, limit: 10, include_untrusted: false, include_attributed: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false, xenia: XeniaView::Off }
+        SearchOpts { role: None, limit: 10, include_untrusted: false, include_attributed: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false, kinds: None, max_episodes: None, today: None, xenia: XeniaView::Off }
     }
 }
 
@@ -1322,6 +1349,16 @@ impl Kb {
                 }
             }
         }
+        // Among staged notes a fact the question names outranks an episode that merely mentions it: episodes keep a fixed
+        // share of their score, lower and never hidden (`specs/050` ML-4).
+        if opts.include_staged {
+            for (id, s) in order.iter_mut() {
+                let kind: Option<Option<String>> = self.conn.query_row("SELECT d.kind FROM kb_chunks c JOIN kb_documents d ON d.doc_id = c.doc_id WHERE c.chunk_id = ?1 AND d.zone = 'staged'", [*id], |r| r.get(0)).ok();
+                if kind.is_some_and(|k| k.as_deref() == Some("episode")) {
+                    *s *= EPISODE_FACTOR;
+                }
+            }
+        }
         order.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then(a.0.cmp(&b.0)));
         let mut best_rerank = None;
         if opts.legs == Legs::Hybrid && opts.rerank_weight > 0.0 {
@@ -1336,7 +1373,20 @@ impl Kb {
         let vouched: Vec<(String, String)> = self.conn.query_row("SELECT value FROM kb_meta WHERE key = 'vouched'", [], |r| r.get::<_, String>(0)).ok().map(|v| v.lines().filter_map(|l| l.split_once('\t')).map(|(p, o)| (p.to_string(), o.to_string())).collect()).unwrap_or_default();
         let mut hits = Vec::new();
         let mut readiness: HashMap<String, Option<String>> = HashMap::new();
-        for (id, s) in order.into_iter().take(opts.limit.min(10)) {
+        let mut episodes = 0usize;
+        for (id, s) in order.into_iter() {
+            if hits.len() >= opts.limit.min(10) {
+                break;
+            }
+            if let Some(cap) = opts.max_episodes.filter(|_| opts.include_staged) {
+                let episode = self.conn.query_row("SELECT d.kind = 'episode' AND d.zone = 'staged' FROM kb_chunks c JOIN kb_documents d ON d.doc_id = c.doc_id WHERE c.chunk_id = ?1", [id], |r| r.get::<_, Option<bool>>(0)).ok().flatten().unwrap_or(false);
+                if episode {
+                    episodes += 1;
+                    if episodes > cap {
+                        continue;
+                    }
+                }
+            }
             let row = self.conn.query_row("SELECT c.rel_path, c.start_line, c.end_line, c.heading_path, c.raw_content, d.content_blake3, d.zone, d.source_type, d.status, d.web_corroborated FROM kb_chunks c JOIN kb_documents d ON d.doc_id = c.doc_id WHERE c.chunk_id = ?1", [id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?, r.get::<_, String>(7)?, r.get::<_, String>(8)?, r.get::<_, i64>(9)? != 0)));
             let Ok((rel_path, a, b, heading_path, raw, blake3, zone, tier_name, doc_status, web_corroborated)) = row else { continue };
             let preview = raw.lines().filter(|l| !l.trim().is_empty()).take(3).map(|l| l.chars().take(160).collect::<String>()).collect::<Vec<_>>().join("\n");
@@ -1853,7 +1903,7 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                 let bundle = args.iter().position(|a| a == "--bundle" || a == "--org").and_then(|i| args.get(i + 1)).cloned();
                 let query: Vec<&str> = query.into_iter().filter(|a| Some(*a) != role.as_deref() && Some(*a) != bundle.as_deref()).collect();
                 if query.is_empty() {
-                    eprintln!("usage: delphi kb search <query> [--role <role>] [--untrusted] [--lexical] [--no-rerank] [--bundle <org/name> | --org <org> | --no-bundles]");
+                    eprintln!("usage: delphi kb search <query> [--role <role>] [--untrusted] [--lexical] [--no-rerank] [--staged [--kind fact|episode]] [--bundle <org/name> | --org <org> | --no-bundles]");
                     return Ok(2);
                 }
                 let mut kb = open()?;
@@ -1868,7 +1918,7 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                     }
                 }
                 let legs = if args.iter().any(|a| a == "--lexical") { Legs::LexicalOnly } else { Legs::Hybrid };
-                let mut opts = SearchOpts { role, include_untrusted: args.iter().any(|a| a == "--untrusted"), legs, bundle, no_bundles: args.iter().any(|a| a == "--no-bundles"), include_staged: args.iter().any(|a| a == "--staged"), ..Default::default() };
+                let mut opts = SearchOpts { role, include_untrusted: args.iter().any(|a| a == "--untrusted"), legs, bundle, no_bundles: args.iter().any(|a| a == "--no-bundles"), include_staged: args.iter().any(|a| a == "--staged"), kinds: flag_value(args, "--kind").map(|k| k.split(',').map(|x| x.trim().to_string()).collect()), ..Default::default() };
                 if args.iter().any(|a| a == "--no-rerank") {
                     opts.rerank_weight = 0.0;
                 }
@@ -2789,6 +2839,41 @@ mod tests {
         let mut e = delphi_core::event::EventEnvelope::new("m1", "learn.staged", serde_json::json!({"id": id, "trigger": "denied_card", "summary": summary, "event_seqs": [1], "tier": tier}));
         e.task_id = Some("t_0001".into());
         e
+    }
+
+    fn staged_doc(id: &str, kind: &str, valid_until: Option<&str>, text: &str) -> String {
+        format!("---\nsource_type: internal_generated\nauthor: daemon\nstatus: active\nkind: {}\n{}---\n# Staged note {}\n\n{}\n", kind, valid_until.map(|d| format!("valid_until: {}\n", d)).unwrap_or_default(), id, text)
+    }
+
+    #[test]
+    fn a_staged_note_stops_being_retrieved_the_day_after_its_valid_until() {
+        let mut kb = Kb::open_in_memory().unwrap();
+        kb.upsert_from("staged/m1/n1.md", "staged", "internal_generated", &staged_doc("n1", "fact", Some("2026-10-29"), "the quokka registry lives at the old host"), "t").unwrap();
+        kb.upsert_from("staged/m1/n2.md", "staged", "internal_generated", &staged_doc("n2", "fact", None, "the quokka cache is warm on mondays"), "t").unwrap();
+        let q = |today: &str| {
+            let o = SearchOpts { include_staged: true, legs: Legs::LexicalOnly, today: Some(today.into()), ..Default::default() };
+            let mut v = kb.search("quokka", &o).unwrap().into_iter().map(|h| h.rel_path).collect::<Vec<_>>();
+            v.sort();
+            v
+        };
+        assert_eq!(q("2026-10-29"), vec!["staged/m1/n1.md", "staged/m1/n2.md"], "valid through the date itself");
+        assert_eq!(q("2026-10-30"), vec!["staged/m1/n2.md"], "gone the day after; an undated note is unchanged");
+    }
+
+    #[test]
+    fn kind_filters_narrow_facts_outrank_episodes_and_episodes_have_a_budget() {
+        let mut kb = Kb::open_in_memory().unwrap();
+        kb.upsert_from("staged/m1/e1.md", "staged", "internal_generated", &staged_doc("e1", "episode", None, "quokka quokka quokka build failed twice"), "t").unwrap();
+        kb.upsert_from("staged/m1/e2.md", "staged", "internal_generated", &staged_doc("e2", "episode", None, "quokka card denied"), "t").unwrap();
+        kb.upsert_from("staged/m1/f1.md", "staged", "internal_generated", &staged_doc("f1", "fact", None, "quokka lockfile is generated"), "t").unwrap();
+        let q = |o: SearchOpts| kb.search("quokka", &SearchOpts { include_staged: true, legs: Legs::LexicalOnly, ..o }).unwrap().into_iter().map(|h| h.rel_path).collect::<Vec<_>>();
+        assert_eq!(q(SearchOpts::default())[0], "staged/m1/f1.md", "a fact is favored over an episode");
+        assert_eq!(q(SearchOpts { kinds: Some(vec!["fact".into()]), ..Default::default() }), vec!["staged/m1/f1.md"]);
+        assert_eq!(q(SearchOpts { kinds: Some(vec!["episode".into()]), ..Default::default() }).len(), 2);
+        assert!(q(SearchOpts { kinds: Some(vec!["bogus".into()]), ..Default::default() }).is_empty(), "an unknown kind matches nothing and never widens");
+        assert_eq!(q(SearchOpts { max_episodes: Some(1), ..Default::default() }).len(), 2, "one fact and one episode");
+        let plain = SearchOpts { legs: Legs::LexicalOnly, kinds: Some(vec!["fact".into()]), ..Default::default() };
+        assert!(kb.search("quokka", &plain).unwrap().is_empty(), "a filter cannot add staged notes to an ordinary search");
     }
 
     #[test]
