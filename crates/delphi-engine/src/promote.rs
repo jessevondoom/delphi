@@ -99,6 +99,10 @@ fn check_summary(ws_dir: &Path, summary: &str) -> Result<(), Refusal> {
     if let Some(h) = delphi_bundle::scan::scan_text(summary, &crate::distill::scan_context(ws_dir)).into_iter().find(|h| h.fail) {
         return refuse("summary_not_redacted", format!("the summary carries {}", h.found));
     }
+    // Home entries are read in every project: a local path, address or workspace name in the summary would travel with it.
+    if crate::distill::mask(ws_dir, summary.trim()) != summary.trim() || summary.contains(&*ws_dir.to_string_lossy()) {
+        return refuse("summary_not_redacted", "the summary carries a local path, address or workspace name");
+    }
     Ok(())
 }
 
@@ -378,6 +382,22 @@ pub fn accept(ws_dir: &Path, p: &Promotion, expected_version: &str, by: &str, no
         if p.version() != expected_version {
             return refuse("stale_proposal", "the proposal is not the version you reviewed; review it again");
         }
+        let path = store(ws_dir).join(format!("{}.md", entry_id(p)));
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            // A crash between the write and the log append leaves the entry without its resolution event; the same operator
+            // retrying finishes it rather than being refused. A retired entry, or another proposal's, never counts.
+            let fm = frontmatter::parse(&text).ok().and_then(|d| d.frontmatter);
+            return match fm {
+                Some(fm) if frontmatter::get_str(&fm, "proposal") == Some(p.reference().as_str()) && frontmatter::get_str(&fm, "status") == Some("active") => Ok(Accepted {
+                    entry: entry_id(p),
+                    file: format!("local/promoted/{}.md", entry_id(p)),
+                    blake3: lock::hash(text.as_bytes()),
+                    source_type: frontmatter::get_str(&fm, "source_type").unwrap_or(CEILING).to_string(),
+                    matches: Vec::new(),
+                }),
+                _ => refuse("already_promoted", format!("{} is already a home entry", entry_id(p))),
+            };
+        }
         let rels: Vec<String> = p.records.iter().map(|r| r.rel.clone()).collect();
         let now_records = preflight(ws_dir, &p.project, &rels, &p.summary)?;
         if now_records != p.records {
@@ -388,10 +408,6 @@ pub fn accept(ws_dir: &Path, p: &Promotion, expected_version: &str, by: &str, no
         }
         let lowest = p.records.iter().map(|r| r.source_type.as_str()).min_by_key(|s| rank(s)).unwrap_or("external_untrusted");
         let source_type = if rank(lowest) > rank(CEILING) { CEILING } else { lowest };
-        let path = store(ws_dir).join(format!("{}.md", entry_id(p)));
-        if path.exists() {
-            return refuse("already_promoted", format!("{} is already a home entry", entry_id(p)));
-        }
         let text = entry_text(p, source_type, by, now);
         lock::write_atomic(&path, text.as_bytes()).map_err(|e| Refusal { code: "io", detail: e.to_string() })?;
         Ok(Accepted { entry: entry_id(p), file: format!("local/promoted/{}.md", entry_id(p)), blake3: lock::hash(text.as_bytes()), source_type: source_type.to_string(), matches: home_matches(ws_dir, &p.summary) })
@@ -425,6 +441,8 @@ pub struct Withdrawn {
     pub proposal_id: String,
     /// The reference the log and the retired entry share.
     pub audit: String,
+    /// False when the entry was already retired and this call only found its audit reference.
+    pub rewritten: bool,
 }
 
 /// Retire the promoted entry `entry`: its status becomes `retired`, with who, when, why and an audit reference; the
@@ -438,20 +456,41 @@ pub fn withdraw(ws_dir: &Path, entry: &str, by: &str, reason: &str, now: &str) -
         let Ok(text) = std::fs::read_to_string(&path) else { return refuse("entry_missing", format!("no promoted entry `{}`", entry)) };
         let doc = frontmatter::parse(&text).ok().and_then(|d| d.frontmatter);
         let Some(fm) = doc.filter(|m| frontmatter::has(m, "promoted_from")) else { return refuse("entry_invalid", "not a promoted entry") };
-        if frontmatter::get_str(&fm, "status") != Some("active") {
-            return refuse("not_active", format!("`{}` is already retired", entry));
-        }
         let proposal = frontmatter::get_str(&fm, "proposal").unwrap_or("").to_string();
         let Some((mission, proposal_id)) = proposal.split_once('/').filter(|(m, i)| plain(m) && plain(i)) else { return refuse("entry_invalid", "the entry names no proposal") };
+        if frontmatter::get_str(&fm, "status") != Some("active") {
+            // Retired by an earlier call that did not reach the log: hand back its audit reference so the caller can
+            // append the event. Whether the log already has it is the caller's check (see `withdrawal_logged`).
+            return match frontmatter::get_str(&fm, "withdrawal_audit").filter(|_| frontmatter::get_str(&fm, "status") == Some("retired")) {
+                Some(audit) => Ok(Withdrawn { entry: entry.to_string(), proposal: proposal.clone(), mission: mission.to_string(), proposal_id: proposal_id.to_string(), audit: audit.to_string(), rewritten: false }),
+                None => refuse("not_active", format!("`{}` is not an active promoted entry", entry)),
+            };
+        }
         let audit = format!("wd-{}", &lock::hash(format!("{}{}{}", text, now, by).as_bytes())[..12]);
         let close = text[4..].find("\n---\n").map(|i| i + 4).ok_or(Refusal { code: "entry_invalid", detail: "unclosed frontmatter".into() })?;
         let head = text[..close].replacen("\nstatus: active", "\nstatus: retired", 1);
         let note = format!("\nretired_at: {}\nretired_by: {}\nwithdrawal_audit: {}\nwithdrawal_reason: {:?}\nprevious_blake3: {}", now, one_line(by, 80), audit, clean_reason(ws_dir, reason), lock::hash(text.as_bytes()));
         let new = format!("{}{}{}", head, note, &text[close..]);
         lock::write_atomic(&path, new.as_bytes()).map_err(|e| Refusal { code: "io", detail: e.to_string() })?;
-        Ok(Withdrawn { entry: entry.to_string(), proposal: proposal.clone(), mission: mission.to_string(), proposal_id: proposal_id.to_string(), audit })
+        Ok(Withdrawn { entry: entry.to_string(), proposal: proposal.clone(), mission: mission.to_string(), proposal_id: proposal_id.to_string(), audit, rewritten: true })
     })
     .map_err(|e| Refusal { code: "io", detail: e.to_string() })?
+}
+
+/// Whether the mission's log already records this withdrawal.
+pub fn withdrawal_logged(events: &[EventEnvelope], w: &Withdrawn) -> bool {
+    events.iter().any(|e| e.kind == "learn.proposal_resolved" && e.payload["id"] == w.proposal_id.as_str() && e.payload["resolution"] == "withdrawn" && e.payload["detail"]["audit"] == w.audit.as_str())
+}
+
+/// Run `f` holding the promotion lock, so a decision and its log append cannot interleave with another one.
+pub fn locked<T>(ws_dir: &Path, f: impl FnOnce() -> Result<T, Refusal>) -> Result<T, Refusal> {
+    lock::with_lock(&lock_path(ws_dir), f).map_err(|e| Refusal { code: "io", detail: e.to_string() })?
+}
+
+/// Whether a promoted entry file for `p` exists: once it does, the proposal can only be accepted again (to finish its log
+/// record) or withdrawn, never rejected.
+pub fn entry_exists(ws_dir: &Path, p: &Promotion) -> bool {
+    store(ws_dir).join(format!("{}.md", entry_id(p))).exists()
 }
 
 /// The event that records a withdrawal in the log of the mission whose proposal was promoted.
@@ -519,6 +558,45 @@ mod tests {
 
     fn code<T: std::fmt::Debug>(r: Result<T, Refusal>) -> &'static str {
         r.unwrap_err().code
+    }
+
+    #[test]
+    fn accepting_again_after_a_lost_log_record_returns_the_same_entry_and_a_retired_one_is_not_revived() {
+        let f = fx();
+        let p = f.propose(SUMMARY).unwrap();
+        let first = accept(&f.ws, &p, &p.version(), "console-1", "2026-10-30T00:00:00Z").unwrap();
+        let again = accept(&f.ws, &p, &p.version(), "console-1", "2026-10-30T01:00:00Z").unwrap();
+        assert_eq!((again.entry.as_str(), again.blake3.as_str()), (first.entry.as_str(), first.blake3.as_str()), "the entry is not rewritten");
+        assert_eq!(code(accept(&f.ws, &p, "not-the-version", "console-1", "t")), "stale_proposal", "the version is still checked first");
+        withdraw(&f.ws, &first.entry, "console-1", "no", "2026-10-30T02:00:00Z").unwrap();
+        assert_eq!(code(accept(&f.ws, &p, &p.version(), "console-1", "t")), "already_promoted");
+    }
+
+    #[test]
+    fn a_retired_entry_without_its_log_record_can_be_withdrawn_again_to_log_it_once() {
+        let f = fx();
+        let p = f.propose(SUMMARY).unwrap();
+        let done = accept(&f.ws, &p, &p.version(), "console-1", "2026-10-30T00:00:00Z").unwrap();
+        let w1 = withdraw(&f.ws, &done.entry, "console-1", "gone", "2026-10-30T02:00:00Z").unwrap();
+        assert!(w1.rewritten);
+        let w2 = withdraw(&f.ws, &done.entry, "console-1", "again", "2026-10-30T03:00:00Z").unwrap();
+        assert!((!w2.rewritten, w2.audit == w1.audit) == (true, true), "the audit reference is the first one");
+        assert!(!withdrawal_logged(&[], &w2));
+        assert!(withdrawal_logged(&[withdrawal_event(&w1, "console-1")], &w2), "once logged, a repeat is recognised");
+        assert_eq!(code(withdraw(&f.ws, "m1-nope", "c", "", "t")), "entry_missing");
+    }
+
+    #[test]
+    fn a_home_entry_names_the_project_by_id_and_never_a_private_root_path() {
+        let f = fx();
+        let p = f.propose(SUMMARY).unwrap();
+        let done = accept(&f.ws, &p, &p.version(), "console-1", "2026-10-30T00:00:00Z").unwrap();
+        let text = fs::read_to_string(f.ws.join(&done.file)).unwrap();
+        assert!(!text.contains("/r/") && !text.contains(f.ws.to_str().unwrap()), "{}", text);
+        assert_eq!(p.project.label(), format!("project:{}", A));
+        for leaky in [format!("The build root is /{}/jesse/work/app/src and must pin the toolchain.", "Users"), format!("The build root is {}/src and must pin the toolchain.", f.ws.display())] {
+            assert_eq!(code(f.propose(&leaky)), "summary_not_redacted", "a summary naming a local path is refused: {}", leaky);
+        }
     }
 
     #[test]
@@ -656,8 +734,24 @@ mod tests {
             let hs: Vec<_> = (0..6).map(|i| s.spawn(move || accept(&fr.ws, pr, &pr.version(), &format!("c{}", i), "t"))).collect();
             hs.into_iter().map(|h| h.join().unwrap()).collect()
         });
+        let hashes: Vec<_> = results.iter().map(|r| r.as_ref().map(|d| d.blake3.clone()).map_err(|e| e.code)).collect();
+        assert!(hashes.iter().all(|h| *h == hashes[0]) && hashes[0].is_ok(), "one entry, written once, returned to every caller: {:?}", results);
+        assert_eq!(fs::read_dir(f.ws.join("local/promoted")).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn two_different_proposals_against_one_home_version_let_only_one_win() {
+        let f = fx();
+        let a = f.propose(SUMMARY).unwrap();
+        let mut b = a.clone();
+        b.id = "p8".into();
+        let results: Vec<Result<Accepted, Refusal>> = std::thread::scope(|s| {
+            let (fr, ar, br) = (&f, &a, &b);
+            let hs = [s.spawn(move || accept(&fr.ws, ar, &ar.version(), "c1", "t")), s.spawn(move || accept(&fr.ws, br, &br.version(), "c2", "t"))];
+            hs.into_iter().map(|h| h.join().unwrap()).collect()
+        });
         assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1, "{:?}", results);
-        assert!(results.iter().filter_map(|r| r.as_ref().err()).all(|e| matches!(e.code, "stale_home" | "already_promoted")));
+        assert!(results.iter().filter_map(|r| r.as_ref().err()).all(|e| e.code == "stale_home"));
         assert_eq!(fs::read_dir(f.ws.join("local/promoted")).unwrap().count(), 1);
     }
 
@@ -687,7 +781,7 @@ mod tests {
         assert_ne!(before, after);
         assert_eq!((w.mission.as_str(), w.proposal_id.as_str()), ("m1", "p7"));
         assert_eq!(withdrawal_event(&w, "console-2").payload["detail"]["audit"], w.audit.as_str());
-        assert_eq!(code(withdraw(&f.ws, &done.entry, "c", "r", "t")), "not_active");
+        assert!(!withdraw(&f.ws, &done.entry, "c", "r", "t").unwrap().rewritten, "a repeat finds the audit and rewrites nothing");
         assert_eq!(code(withdraw(&f.ws, "nope", "c", "r", "t")), "entry_missing");
         assert_eq!(code(withdraw(&f.ws, "../x", "c", "r", "t")), "entry_invalid");
         assert!(f.layer(A, NOTE).is_file(), "the project's original is untouched");

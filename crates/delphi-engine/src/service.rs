@@ -1573,14 +1573,46 @@ impl EngineService {
         let m = self.mission(Some(&promotion.mission)).await?;
         let by = format!("console-{}", ctx.client_id);
         let ws = self.engine.ws.dir.clone();
+        let handle = tokio::runtime::Handle::current();
         if !accept {
-            m.append(crate::promote::rejection_event(&ws, &promotion, &by, p["reason"].as_str().unwrap_or(""))).await.map_err(engine_err)?;
+            // The decision and its log record happen under the promotion lock, against the log as it is now: a proposal
+            // already resolved, or already written to home memory, cannot also be rejected.
+            let (ws2, pr, m2, by2, reason) = (ws.clone(), promotion.clone(), m.clone(), by.clone(), p["reason"].as_str().unwrap_or("").to_string());
+            tokio::task::spawn_blocking(move || {
+                crate::promote::locked(&ws2.clone(), || {
+                    let live = m2.replay().map(|ev| crate::promote::live_promotions(&pr.mission, &ev).iter().any(|x| x.id == pr.id)).unwrap_or(false);
+                    if !live {
+                        return Err(crate::promote::Refusal { code: "already_resolved", detail: "the proposal was already resolved".into() });
+                    }
+                    if crate::promote::entry_exists(&ws2, &pr) {
+                        return Err(crate::promote::Refusal { code: "already_promoted", detail: "the proposal was accepted and its entry exists; accept it again to finish, or withdraw the entry".into() });
+                    }
+                    handle.block_on(m2.append(crate::promote::rejection_event(&ws2, &pr, &by2, &reason))).map(|_| ()).map_err(|e| crate::promote::Refusal { code: "io", detail: e.to_string() })
+                })
+            })
+            .await
+            .map_err(|e| err(-32000, e.to_string()))?
+            .map_err(promote_err)?;
             return Ok(json!({"ref": promotion.reference(), "resolution": "rejected"}));
         }
         let Some(version) = p["version"].as_str().map(String::from) else { return Err(err(code::INVALID_PARAMS, "`version` (from retro.promotions) is required to accept a promotion")) };
-        let (pr, b) = (promotion.clone(), by.clone());
-        let done = tokio::task::spawn_blocking(move || crate::promote::accept(&ws, &pr, &version, &b, &delphi_core::time::now_rfc3339())).await.map_err(|e| err(-32000, e.to_string()))?.map_err(promote_err)?;
-        m.append(crate::promote::acceptance_event(&promotion, &done, &by)).await.map_err(engine_err)?;
+        let (pr, b, ws2) = (promotion.clone(), by.clone(), ws.clone());
+        let done = tokio::task::spawn_blocking(move || crate::promote::accept(&ws2, &pr, &version, &b, &delphi_core::time::now_rfc3339())).await.map_err(|e| err(-32000, e.to_string()))?.map_err(promote_err)?;
+        // Accepting again after an interrupted attempt finds the entry; the log gets its one record either way.
+        let (pr, m2, by2, d2, ws2) = (promotion.clone(), m.clone(), by.clone(), done.clone(), ws.clone());
+        let handle2 = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
+            crate::promote::locked(&ws2, || {
+                let live = m2.replay().map(|ev| crate::promote::live_promotions(&pr.mission, &ev).iter().any(|x| x.id == pr.id)).unwrap_or(false);
+                if !live {
+                    return Ok(());
+                }
+                handle2.block_on(m2.append(crate::promote::acceptance_event(&pr, &d2, &by2))).map(|_| ()).map_err(|e| crate::promote::Refusal { code: "io", detail: e.to_string() })
+            })
+        })
+        .await
+        .map_err(|e| err(-32000, e.to_string()))?
+        .map_err(promote_err)?;
         Ok(json!({"ref": promotion.reference(), "resolution": "accepted", "entry": done.entry, "file": done.file, "source_type": done.source_type, "matches": done.matches.iter().map(|x| x.to_json()).collect::<Vec<_>>()}))
     }
 
@@ -1593,7 +1625,18 @@ impl EngineService {
         let (ws, b) = (self.engine.ws.dir.clone(), by.clone());
         let w = tokio::task::spawn_blocking(move || crate::promote::withdraw(&ws, &entry, &b, &reason, &delphi_core::time::now_rfc3339())).await.map_err(|e| err(-32000, e.to_string()))?.map_err(promote_err)?;
         let m = self.mission(Some(&w.mission)).await?;
-        m.append(crate::promote::withdrawal_event(&w, &by)).await.map_err(engine_err)?;
+        let (ws2, m2, w2, by2, handle) = (self.engine.ws.dir.clone(), m.clone(), w.clone(), by.clone(), tokio::runtime::Handle::current());
+        tokio::task::spawn_blocking(move || {
+            crate::promote::locked(&ws2, || {
+                if !w2.rewritten && m2.replay().map(|ev| crate::promote::withdrawal_logged(&ev, &w2)).unwrap_or(false) {
+                    return Err(crate::promote::Refusal { code: "not_active", detail: format!("`{}` is already withdrawn", w2.entry) });
+                }
+                handle.block_on(m2.append(crate::promote::withdrawal_event(&w2, &by2))).map(|_| ()).map_err(|e| crate::promote::Refusal { code: "io", detail: e.to_string() })
+            })
+        })
+        .await
+        .map_err(|e| err(-32000, e.to_string()))?
+        .map_err(promote_err)?;
         Ok(json!({"entry": w.entry, "audit": w.audit}))
     }
 
@@ -3680,6 +3723,45 @@ mod tests {
         assert!(entry.contains("status: retired") && entry.contains(withdrawn["audit"].as_str().unwrap()), "{}", entry);
         assert_eq!(after.as_array().unwrap().len(), 0);
         assert_eq!(events_of(&f, "learn.proposal_resolved").iter().map(|e| e.payload["resolution"].as_str().unwrap().to_string()).collect::<Vec<_>>(), ["accepted", "withdrawn"]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_promotion_is_resolved_once_whatever_is_retried_or_raced() {
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        let ws = f.root.join("workspaces/w");
+        let id = "a".repeat(32);
+        fs::write(ws.join("local/projects.json"), json!({"schema": 1, "projects": {id.clone(): {"project_id": id, "root": "/r/a", "display_name": "a", "created_unix": 1}}}).to_string()).unwrap();
+        let note = ws.join("local/projects").join(&id).join("staged/m1/n1.md");
+        fs::create_dir_all(note.parent().unwrap()).unwrap();
+        fs::write(&note, "---\nsource_type: internal_generated\nauthor: daemon\nstatus: active\nkind: fact\n---\n# n\n\nPin the toolchain in CI images.\n").unwrap();
+        let s = serve(&f).await;
+        let (c_sock, c_tok, ws2) = (s.sock.clone(), s.console.clone(), ws.clone());
+        let (second_reject, reject_after_write, again, twice) = blocking(move || {
+            let mut c = Client::connect(&c_sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            c.hello(&c_tok).unwrap();
+            let args = json!({"project": id, "records": ["staged/m1/n1.md"], "summary": "Pin the toolchain version in CI images for every build."});
+            let a = c.call("retro.promote", args.clone()).unwrap()["ref"].as_str().unwrap().to_string();
+            c.call("retro.reject", json!({"ref": a, "reason": "no"})).unwrap();
+            let second_reject = rpc_code(c.call("retro.reject", json!({"ref": a, "reason": "again"})));
+            // An accept that wrote the entry but lost its log record: reject is refused, accepting again finishes it once.
+            let b = c.call("retro.promote", json!({"project": id, "records": ["staged/m1/n1.md"], "summary": "Pin the toolchain version in CI images, every single build."})).unwrap()["ref"].as_str().unwrap().to_string();
+            let pr = crate::promote::collect(&ws2).into_iter().find(|p| p.reference() == b).unwrap();
+            crate::promote::accept(&ws2, &pr, &pr.version(), "console-x", "2026-10-30T00:00:00Z").unwrap();
+            let reject_after_write = rpc_code(c.call("retro.reject", json!({"ref": b, "reason": "late"})));
+            let v = pr.version();
+            let first = c.call("retro.accept", json!({"ref": b, "version": v})).unwrap();
+            let again = (first["resolution"].as_str().map(String::from), rpc_code(c.call("retro.accept", json!({"ref": b, "version": v}))));
+            let w = c.call("retro.withdraw", json!({"entry": first["entry"]})).unwrap();
+            let twice = (w["audit"].as_str().is_some(), rpc_code(c.call("retro.withdraw", json!({"entry": first["entry"]}))));
+            (second_reject, reject_after_write, again, twice)
+        })
+        .await;
+        assert_eq!((second_reject, reject_after_write), (Some(code::INVALID_PARAMS), Some(code::INVALID_PARAMS)));
+        assert_eq!(again.0.as_deref(), Some("accepted"));
+        assert_eq!(twice, (true, Some(code::INVALID_PARAMS)), "a withdrawn entry is not withdrawn twice in the log");
+        let res: Vec<String> = events_of(&f, "learn.proposal_resolved").iter().map(|e| e.payload["resolution"].as_str().unwrap().to_string()).collect();
+        assert_eq!(res, ["rejected", "accepted", "withdrawn"], "one record per decision");
     }
 
     #[tokio::test(flavor = "multi_thread")]
