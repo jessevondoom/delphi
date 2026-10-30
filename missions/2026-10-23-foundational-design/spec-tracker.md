@@ -74,7 +74,7 @@ Drafted at the operator's request; text merged on their "go" 2026-10-26 (renumbe
 | L2 | `propose` tool, `/retro` deck, ratification apply path, dedupe, scope routing | 031 §3.5; 004 §4.2 | L1 | 20 | L2a merged (#274): `suggest_rule` tool, `learn.proposed` events, `delphi retro list/show`; L2b merged (#288): `retro accept/reject`, CAS apply, caps, dedupe, no-relaxation and privacy checks; L2c built (PR open): `retro.*` daemon methods, `/retro` in the Ink console, `/retro run`, Orchestrator instructions; nothing run live |
 | L3 | skill candidates (trigger 6), patch proposals, trigger-test check | 031 §3.3 | L2 | 18 | not started |
 | L4 | `rule_stats`, `skill_stats`, scores, exposure randomization, decay | 031 §3.4; 004 §5.6 | L0, L2; OD-2 | 14 | not started |
-| L5 | `delphi customize note/rule/skill/profile`, bounded `[learning]` config | 031 §3.5-3.6 | L2 | 12 | not started |
+| L5 | `delphi customize note/rule/skill/profile`, bounded `[learning]` config | 031 §3.5-3.6 | L2 | 12 | built; as-built in 031 §7.1 (no `operator export` yet) |
 | L6 | `delphi train`: case format, overlay, safety rules, budget, report | 031 §4 | `delphi run` (built); OD-3 | 24 | L6a built (#186: validate, plan, case format, home rule); L6b merged (#202: `delphi train run`, overlay via ratified copy + lock, fake-binary tests; no live run, seed cases still unrun, scenarios and policy cards not supported) |
 | L7 | seed suites: learning-loop, role-behavior, orchestration, skill-trigger | 031 §4.6 | L6 (L1 for learning-loop) | 20 | not started |
 | L8 | probe mode, grader calibration | 031 §4.4-4.5 | L6, L7; OD-5 | 14 | not started |

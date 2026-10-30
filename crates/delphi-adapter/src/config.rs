@@ -498,6 +498,19 @@ pub struct Config {
     pub search: crate::research::SearchConfig,
     /// `[validator]`: the fact validator's mode and the operator's additions to the source list (`specs/040` §15.1, §6.1).
     pub validator: ValidatorConfig,
+    /// `[learning]`: capture and the bounds on the learning loop (`specs/031` §3.6). The engine clamps each value to the core's bounds.
+    pub learning: LearningConfig,
+}
+
+/// `[learning]`. Types are checked here so `delphi doctor` names a wrong one; the floors and ceilings are the engine's
+/// (`delphi_engine::learn::LearningSettings`). No key loads unratified content, and an unknown key is a boot notice.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(default)]
+pub struct LearningConfig {
+    pub capture: Option<bool>,
+    pub max_notes: Option<i64>,
+    pub triggers: Option<Vec<String>>,
+    pub retro_min_tasks: Option<i64>,
 }
 
 /// `[validator] mode` (`specs/040` §15.1). Ordered so that `min` is the stricter of two.
@@ -600,6 +613,12 @@ impl Config {
             match v.clone().try_into::<ValidatorConfig>() {
                 Ok(v) => cfg.validator = v,
                 Err(e) => errs.push(format!("[validator]: {}", e)),
+            }
+        }
+        if let Some(v) = root.get("learning") {
+            match v.clone().try_into::<LearningConfig>() {
+                Ok(v) => cfg.learning = v,
+                Err(e) => errs.push(format!("[learning]: {}", e)),
             }
         }
         // `[harness]` also carries scalar settings of its own (`subscription_budget_tokens`); only its sub-tables are profiles.

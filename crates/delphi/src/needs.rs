@@ -12,8 +12,13 @@ use std::path::Path;
 
 /// Automatic diff3 merging is worth building after this many customized files had to be set aside.
 pub const DIFF3_CONFLICTS: usize = 3;
-/// A coaching pass has material to find patterns in after this many finished tasks.
+/// A coaching pass has material to find patterns in after this many finished tasks, unless `[learning] retro_min_tasks` says otherwise.
 pub const RETRO_TASKS: usize = 10;
+
+/// `[learning] retro_min_tasks` of the workspace's `config.toml`, within the core's bounds.
+fn retro_tasks(ws: &Path) -> usize {
+    fs::read_to_string(ws.join("config.toml")).ok().and_then(|t| toml::from_str::<toml::Value>(&t).ok()).map_or(RETRO_TASKS, |root| delphi_engine::learn::LearningSettings::parse(&root).0.retro_min_tasks)
+}
 
 pub struct Item {
     pub id: &'static str,
@@ -105,7 +110,10 @@ pub fn report_at(ws: &Path, home: Option<&Path>, now: i64) -> Vec<Item> {
         .map(|(id, what, rule)| {
             let mine: Vec<String> = recorded.iter().filter(|r| r["item"] == *id).map(|r| r["reason"].as_str().unwrap_or("").to_string()).collect();
             let (evidence, met) = match *id {
-                "retro" => (format!("{} finished task(s)", tasks), Some(tasks >= RETRO_TASKS)),
+                "retro" => {
+                    let min = retro_tasks(ws);
+                    (format!("{} finished task(s) (needs {})", tasks, min), Some(tasks >= min))
+                }
                 "diff3" => (format!("{} customized file(s) set aside so far", conflicts), Some(conflicts >= DIFF3_CONFLICTS)),
                 "xenia" => xenia_evidence(home, now),
                 "sync" => (if team_has_remote(ws) { "team/ has a git remote".to_string() } else { "team/ has no git remote (single operator)".to_string() }, Some(team_has_remote(ws))),
@@ -217,7 +225,7 @@ mod tests {
         fs::write(d.path().join("local/update-conflicts.jsonl"), "{\"file\":\"a\"}\n{\"file\":\"b\"}\n{\"file\":\"c\"}\n").unwrap();
         let items = report_in(d.path(), None);
         assert_eq!((by(&items, "retro").met, by(&items, "diff3").met), (Some(true), Some(true)));
-        assert_eq!(by(&items, "retro").evidence, "10 finished task(s)");
+        assert_eq!(by(&items, "retro").evidence, "10 finished task(s) (needs 10)");
     }
 
     #[test]
