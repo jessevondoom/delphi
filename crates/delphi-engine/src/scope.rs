@@ -145,11 +145,8 @@ const PROJECT_DIRS: [(&str, &str, &str); 4] = [
     ("staged", "staged", "external_untrusted"),
 ];
 
-/// The home layer, then the active project's layer. A project file's `rel_path` is its logical path inside the layer,
-/// so the two layers are told apart by `layer`, never by a rewritten name.
-pub fn layered_sources(ws_dir: &Path, active: &Active) -> Vec<ScopedSource> {
-    let home = crate::kb::sources(ws_dir);
-    let mut out: Vec<ScopedSource> = Vec::new();
+/// The active project's layer files alone, with the layer label.
+fn project_files(ws_dir: &Path, active: &Active) -> (String, Vec<SourceFile>) {
     let mut project: Vec<SourceFile> = Vec::new();
     let mut label = String::new();
     if let Some(id) = &active.project {
@@ -160,13 +157,51 @@ pub fn layered_sources(ws_dir: &Path, active: &Active) -> Vec<ScopedSource> {
             }
         }
     }
+    (label, project)
+}
+
+/// The home layer, then the active project's layer. A project file's `rel_path` is its logical path inside the layer,
+/// so the two layers are told apart by `layer`, never by a rewritten name.
+pub fn layered_sources(ws_dir: &Path, active: &Active) -> Vec<ScopedSource> {
+    let home = crate::kb::sources(ws_dir);
+    let (label, project) = project_files(ws_dir, active);
     let home_paths: std::collections::BTreeSet<String> = home.iter().map(|f| f.rel_path.clone()).collect();
-    out.extend(home.into_iter().map(|file| ScopedSource { layer: "home".into(), overrides: None, file }));
+    let mut out: Vec<ScopedSource> = home.into_iter().map(|file| ScopedSource { layer: "home".into(), overrides: None, file }).collect();
     for file in project {
         let overrides = home_paths.contains(&file.rel_path).then(|| file.rel_path.clone());
         out.push(ScopedSource { layer: label.clone(), overrides, file });
     }
     out
+}
+
+/// The project a mission was stamped with at creation (`<mission>/scope`), only while it is still the default project or
+/// registered here. No file, a malformed id or an unregistered one means the mission is home-only.
+pub fn mission_scope(ws_dir: &Path, mission_dir: &Path) -> Option<ProjectId> {
+    let id = ProjectId::parse(std::fs::read_to_string(mission_dir.join("scope")).ok()?.trim()).ok()?;
+    is_registered(ws_dir, &id).then_some(id)
+}
+
+/// Most bytes of project layer a span's prompt carries.
+const PROMPT_LAYER_BYTES: usize = 12_000;
+
+/// What a span of `role` in a mission scoped to a project reads from that project's layer, as one slice text with each
+/// file under its layer label, or `None` for a home-only mission or an empty layer. Never another project's layer, never
+/// another role's memory, never staged notes (those load only through an explicit search). The caller marks the span
+/// tainted: project content is untrusted until its own tier says otherwise.
+pub fn prompt_layer(ws_dir: &Path, mission_dir: &Path, role: &str) -> Option<String> {
+    let id = mission_scope(ws_dir, mission_dir)?;
+    let (label, files) = project_files(ws_dir, &Active { project: Some(id), diagnostic: None });
+    let own_memory = format!("memory/agents/{}/", role);
+    let mut text = String::new();
+    for f in files.iter().filter(|f| f.zone != "staged" && (f.zone != "memory" || f.rel_path.starts_with(&own_memory))) {
+        let Ok(body) = std::fs::read_to_string(&f.path) else { continue };
+        let entry = format!("[layer: {}, path: {}, source: {}]\n{}\n\n", label, f.rel_path, f.default_source, body.trim());
+        if text.len() + entry.len() > PROMPT_LAYER_BYTES {
+            break;
+        }
+        text.push_str(&entry);
+    }
+    (!text.is_empty()).then_some(text)
 }
 
 /// Where a staged note goes.
@@ -321,5 +356,38 @@ mod tests {
         assert!(route_staged(&f.ws, &in_a, Some(&Destination::Project(id(C))), true).is_err(), "an unregistered id is refused even for the operator");
         let closed = Active { project: None, diagnostic: Some("corrupt".into()) };
         assert!(route_staged(&f.ws, &closed, None, false).is_err(), "a failed-closed scope writes nowhere");
+    }
+
+    #[test]
+    fn a_missions_prompt_layer_is_its_own_projects_labelled_and_never_another_projects() {
+        let f = fx();
+        for (id, body) in [(A, "alpha convention"), (B, "bravo convention")] {
+            put(layer_dir(&f.ws, &id_of(id)).unwrap().join("context/conv.md"), body);
+            put(layer_dir(&f.ws, &id_of(id)).unwrap().join("memory/agents/builder/lessons.md"), &format!("{} lesson", body));
+            put(layer_dir(&f.ws, &id_of(id)).unwrap().join("memory/agents/auditor/lessons.md"), &format!("{} auditor", body));
+            put(layer_dir(&f.ws, &id_of(id)).unwrap().join("staged/m/n.md"), &format!("{} staged", body));
+        }
+        let mission = |name: &str, scope: Option<&str>| {
+            let d = f.ws.join("local/missions").join(name);
+            fs::create_dir_all(&d).unwrap();
+            if let Some(s) = scope {
+                fs::write(d.join("scope"), s).unwrap();
+            }
+            d
+        };
+        let text = prompt_layer(&f.ws, &mission("ma", Some(A)), "builder").unwrap();
+        assert!(text.contains(&format!("[layer: project:{}, path: context/conv.md, source: external_untrusted]", A)), "{}", text);
+        assert!(text.contains("alpha convention") && text.contains("alpha convention lesson"));
+        assert!(!text.contains("bravo") && !text.contains("auditor") && !text.contains("staged"));
+        assert!(prompt_layer(&f.ws, &mission("mb", Some(B)), "builder").unwrap().contains("bravo convention"));
+        assert_eq!(prompt_layer(&f.ws, &mission("none", None), "builder"), None, "a mission without scope loads nothing extra");
+        let unregistered = format!("{}ccc", &C[..29]);
+        for bad in [C, "../b", "", unregistered.as_str()] {
+            assert_eq!(prompt_layer(&f.ws, &mission("bad", Some(bad)), "builder"), None, "{:?}", bad);
+        }
+    }
+
+    fn id_of(s: &str) -> ProjectId {
+        ProjectId::parse(s).unwrap()
     }
 }

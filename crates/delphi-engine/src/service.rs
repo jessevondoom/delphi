@@ -127,6 +127,13 @@ impl EngineService {
 
     /// Open (or return the already open) mission.
     pub async fn mission(&self, id: Option<&str>) -> Result<Arc<MissionState>, RpcError> {
+        self.mission_at(id, None).await
+    }
+
+    /// [`Self::mission`], and when the mission is created now, stamp the project scope `cwd` resolves to (`specs/058` §3.2).
+    /// With no `cwd`, an unresolvable one, or a registry that cannot be trusted, nothing is stamped and the mission stays
+    /// home-only; a mission that already exists is never re-scoped.
+    pub async fn mission_at(&self, id: Option<&str>, cwd: Option<&str>) -> Result<Arc<MissionState>, RpcError> {
         let id = id.unwrap_or(&self.default_mission);
         if !valid_mission_id(id) {
             return Err(err(code::INVALID_PARAMS, "mission ids are lowercase letters, digits and `-`"));
@@ -136,7 +143,18 @@ impl EngineService {
             return Ok(m.clone());
         }
         let e = &self.engine;
-        let m = MissionState::open(&e.ws.dir.join("local/missions").join(id), id, e.hub.clone(), e.ledger.clone(), e.secrets.clone(), e.settings.mission_budget_usd).map_err(engine_err)?;
+        let mission_dir = e.ws.dir.join("local/missions").join(id);
+        if !mission_dir.exists() {
+            if let Some(cwd) = cwd.map(std::path::Path::new).filter(|c| c.is_absolute()) {
+                if let Some(project) = crate::scope::resolve(&e.ws.dir, cwd).project {
+                    // A failed stamp leaves the mission home-only.
+                    if std::fs::create_dir_all(&mission_dir).is_ok() {
+                        let _ = std::fs::write(mission_dir.join("scope"), project.as_str());
+                    }
+                }
+            }
+        }
+        let m = MissionState::open(&mission_dir, id, e.hub.clone(), e.ledger.clone(), e.secrets.clone(), e.settings.mission_budget_usd).map_err(engine_err)?;
         m.set_learning(e.settings.learning.clone());
         // The daemon has restarted since this mission was last open, so what was said before it is a past session (`specs/030`).
         if let Err(e) = self.begin_session(&m, "restart").await {
@@ -1758,7 +1776,7 @@ impl Extension for ServiceExt {
             Some(match method.as_str() {
                 "mission.open" => match need_console(&ctx) {
                     Err(e) => Err(e),
-                    Ok(()) => svc.mission(params["mission_id"].as_str()).await.map(|m| json!({"mission_id": m.id, "budget": EngineService::budget_json(&m), "mode": svc.engine.broker.mode().as_str(), "recovery": svc.recovery_json(&m.id)})),
+                    Ok(()) => svc.mission_at(params["mission_id"].as_str(), params["cwd"].as_str()).await.map(|m| json!({"mission_id": m.id, "budget": EngineService::budget_json(&m), "mode": svc.engine.broker.mode().as_str(), "recovery": svc.recovery_json(&m.id)})),
                 },
                 "recovery.resume" => svc.recovery_resume(params, ctx).await,
                 "recovery.pause" => (|| {
@@ -3601,6 +3619,55 @@ mod tests {
         assert_eq!(resumed["resumed"][0], "t_0001");
         assert_eq!(again["resumed"].as_array().unwrap().len(), 0, "a task is resumed once");
         assert_eq!(out, "Resumed answer.");
+    }
+
+    const SCOPE_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    fn register_at(ws: &std::path::Path, entries: &[(&str, &std::path::Path)]) {
+        let projects: serde_json::Map<String, Value> = entries.iter().map(|(id, root)| (id.to_string(), json!({"project_id": id, "root": root}))).collect();
+        std::fs::create_dir_all(ws.join("local")).unwrap();
+        std::fs::write(ws.join("local/projects.json"), json!({"schema": 1, "projects": projects}).to_string()).unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_new_mission_is_stamped_with_the_project_its_directory_resolves_to_and_only_when_created() {
+        let f = setup(vec![Step::text("unused")], 5.0, |_| {});
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        let ws = f.engine.ws.dir.clone();
+        let base = std::fs::canonicalize(f._t.path()).unwrap();
+        let (root, outside) = (base.join("proj-a"), base.join("elsewhere"));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        register_at(&ws, &[(SCOPE_A, &root)]);
+        let scope = |m: &str| std::fs::read_to_string(ws.join("local/missions").join(m).join("scope")).ok();
+        svc.mission_at(Some("at-root"), Some(root.to_str().unwrap())).await.unwrap();
+        svc.mission_at(Some("in-sub"), Some(root.join("src").to_str().unwrap())).await.unwrap();
+        svc.mission_at(Some("outside"), Some(outside.to_str().unwrap())).await.unwrap();
+        svc.mission_at(Some("no-cwd"), None).await.unwrap();
+        svc.mission_at(Some("relative"), Some("proj-a")).await.unwrap();
+        assert_eq!(scope("at-root").as_deref(), Some(SCOPE_A));
+        assert_eq!(scope("in-sub").as_deref(), Some(SCOPE_A));
+        assert_eq!(scope("outside").as_deref(), Some("default"), "an unregistered directory takes the default project");
+        assert_eq!((scope("no-cwd"), scope("relative")), (None, None), "no usable directory means home-only");
+        std::fs::create_dir_all(ws.join("local/missions/older")).unwrap();
+        svc.mission_at(Some("older"), Some(root.to_str().unwrap())).await.unwrap();
+        assert_eq!(scope("older"), None, "a mission that already exists is never re-scoped");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_ambiguous_or_corrupt_registry_stamps_nothing() {
+        let f = setup(vec![Step::text("unused")], 5.0, |_| {});
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        let ws = f.engine.ws.dir.clone();
+        let root = std::fs::canonicalize(f._t.path()).unwrap().join("proj-a");
+        std::fs::create_dir_all(&root).unwrap();
+        register_at(&ws, &[(SCOPE_A, &root), ("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", &root)]);
+        svc.mission_at(Some("ambiguous"), Some(root.to_str().unwrap())).await.unwrap();
+        std::fs::write(ws.join("local/projects.json"), "{not json").unwrap();
+        svc.mission_at(Some("corrupt"), Some(root.to_str().unwrap())).await.unwrap();
+        for m in ["ambiguous", "corrupt"] {
+            assert!(ws.join("local/missions").join(m).is_dir() && !ws.join("local/missions").join(m).join("scope").exists(), "{}", m);
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]
