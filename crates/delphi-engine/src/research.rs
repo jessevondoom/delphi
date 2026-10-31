@@ -491,7 +491,7 @@ async fn job(d: &Deps, topic: &str, sh: &Arc<Shared>) -> Result<Report, String> 
                 rep.provider = Some(f.provider.name().to_string());
                 rows.extend(f.rows);
             }
-            Err(SearchError::NotConfigured) => return Err("no search engine is configured: set `providers` under [search] in config.toml".into()),
+            Err(SearchError::NotConfigured) => return Err("research is turned off: `providers` under [search] in config.toml is empty".into()),
             Err(SearchError::AllFailed(why)) => {
                 if rep.provider.is_some() {
                     continue; // an earlier query worked; this one failing costs only its own results

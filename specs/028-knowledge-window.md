@@ -270,3 +270,22 @@ A fake web serves: a picture whose Commons file is CC BY-SA (saved, attribution 
 | Slice | Content | State |
 | :-- | :-- | :-- |
 | I3 | picture licence detection, picture fetch, `images:` frontmatter, attribution line, results-page reasons | **built**; never run against the live web; the console's results page does not show the picture count yet (it is in the report as `pictures`) |
+
+## 12. Amendment 028-A3: Parallel as a keyless search engine, and the default (operator, 2026-10-31)
+
+**Status: approved by the operator, 2026-10-31** ("adapt it for a second search provider, parallel, which has a keyless MCP server with rate limited free search ... i'd prefer it as the default"). It amends §10.8 Q2; everything else there stands.
+
+### 12.1 What changes
+1. **A sixth engine, `parallel`.** Parallel's hosted MCP server (`https://mcp.parallel.ai/mcp`, streamable HTTP) needs no key and no account, and is rate limited. The client sends one stateless JSON-RPC `tools/call` of `web_search` per query (no `initialize`, no session) and reads the `results` (`url`, `title`, `excerpts`) from the answer, which comes as JSON or as one server-sent event. It is listed in `providers` like any other engine and has no `[search.parallel]` settings.
+2. **It is the default.** With no `providers` key under `[search]` (or no `[search]` table at all) the order is `["parallel"]`, so research works on a fresh install. An explicit `providers = [...]` replaces it; `providers = []` turns research off. Brave stays supported and unchanged; an operator who wants it first writes `providers = ["brave", "parallel"]`.
+3. **Why this is not a widening of authority.** The rule of §10.8 Q2 holds: one engine at a time, the next only on failure, never several at once; the query leaves the machine to one third party, on `enter` in expand mode (or an explicit external page, `specs/057`) only. The allow lists of §10.3 filter every result in code after it returns, so Parallel decides nothing about trust. Its excerpts are used only as the search snippet; the pages themselves are still fetched by the daemon from listed hosts.
+4. **The privacy cost, stated.** Parallel is a vendor that sees the query text with no account tying it to a contract the operator chose, and its terms and privacy policy (`parallel.ai/customer-terms`, `parallel.ai/privacy-policy`) are its own. Operators who want no vendor to see queries set `providers = ["searxng"]` (self-hosted) or `[]`. §10.8 Q2's wording "privacy-friendly engines that do not sell query data" is therefore relaxed for this one engine, by the operator's decision above.
+5. **Rate limits.** A 429 or a refusal is "over its limit" and falls through to the next engine, as for any other.
+
+### 12.2 Tests (no live network)
+The `parallel` answer parses from a JSON body and from an event stream; an error result or a body with no results fails the engine and falls through; the request is a POST to the MCP URL with no credentials; an unset `[search]` yields `["parallel"]` and `providers = []` yields none; the other engines' behaviour is unchanged.
+
+### 12.3 Slice
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| P1 | `parallel` engine and POST transport, default order, schema, config reference, example, tests | built |
