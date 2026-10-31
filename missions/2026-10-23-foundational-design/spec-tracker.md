@@ -381,3 +381,21 @@ Approved for implementation by the operator on 2026-10-30. Defines the run-anywh
 | OE4 | Public release attestation verification without GitHub CLI login prerequisite | approved, not built |
 | OE5 | Update preview/notice alignment; exclude rollback and recovery redesign | approved, not built |
 | OE6 | Integration, reference docs and terminal walkthrough | approved, not built |
+
+## Council 013: containment increment (verdict: `councils/013-verdict.md`)
+
+Increment 1 (authority and trust containment), each slice its own PR; the 350 h report plan is not run as one batch. Built 2026-10-30; all slices amend approved specs (spec status unchanged).
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| S1 | Taint containment: origin default L0 for `missions/**/{research,reports,artifacts}/**`, tainted-span writes refused to higher-origin paths (`write_file` and artifact tools), `@worktree/`/`@project/` prefixes gated, `suggest_rule` refused at ceiling ≤ L1 (001-A4, 004-A4; D8, D15b) | built (#394) |
+| S2 | Connector drafts: own payload card, no allow-similar, Red when tainted or when recipients/invitees/opaque bodies are present (010-A2; D23) | built (#391) |
+| S3 | Promotion hardening: payload-shown and console-only CAS acceptance verified (no Red card needed), source floor `federated_verified`, 200-entry/256 KiB cap (058-A2; D11) | built (#396) |
+| S4 | `optimistic` removed from the mode cycle (per-build flag stays), confirm on entering `auto`, bulk approve only rendered cards (005-A8, 005d-A2, 005e-A1, 015-A1, 035-A1, 044-A1; D3b, D4a) | built (#393) |
+| S5 | Refuse allow-capable harness hooks (PreToolUse, PermissionRequest) (018-A1, 021-A1; D13) | built (#390) |
+| S6 | Relay cannot approve merge-class cards; TOTP replay and lockout state persisted, fail closed (014-A1; D12a) | built (#392) |
+| D10a | Rejections count toward the attempt cap but never upscale or change family (015-A2) | built (#395) |
+| Increment 2 | Meter system calls (D5), T/D/F plus retro stub (D16), barrier-glob lint, validator gate wiring (D27, advisory), release/signing text (D1), bundle order and report approval (D26), text fixes for D2, D6, D9, D10, D14, D20, D21, D22, D25 | approved by the council, not built |
+| Deferred | WS4, WS19, WS22; MI16, the TI35 refactor, the WS25 sweep (cut) | not built |
+
+Known follow-ups: `docs/reference/config.md` ladder row still says "upscale, reset, escalate" (D10a); `retro` help does not mention the new refusals (S3); the `ui (node)` CI job fails on `main` since the OpenTUI conversion (Node 22 vs `@opentui/core` needing Node ≥ 26.4 or bun).
