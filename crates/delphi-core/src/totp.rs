@@ -126,7 +126,7 @@ impl std::fmt::Display for StepUpError {
 /// The stateful half: a code works once, and wrong guesses are rationed. With a state file (`Verifier::persistent`)
 /// both survive a restart; the file is written atomically (0600) and holds only what the code window still needs.
 /// A state file that exists but cannot be read or parsed fails closed: step-up is locked for [`LOCKOUT_SECS`] from the
-/// first check, never started empty (`specs/014` amendment 014-A1, REV-SEC-09).
+/// first check, never started empty. The same holds when the file has been deleted after its first creation (a marker beside it records that it existed) (`specs/014` amendment 014-A1, REV-SEC-09).
 #[derive(Default)]
 pub struct Verifier {
     used: Mutex<HashSet<u64>>,
@@ -140,14 +140,29 @@ const MAX_STATE_BYTES: u64 = 16 * 1024;
 impl Verifier {
     /// A verifier that keeps its replay and lockout state in `path`.
     pub fn persistent(path: PathBuf) -> Verifier {
+        remove_stale_temps(&path);
         let v = Verifier { path: Some(path.clone()), ..Default::default() };
         match read_state(&path) {
             Ok(Some((used, failures))) => {
                 *v.used.lock().unwrap() = used;
                 *v.failures.lock().unwrap() = failures;
             }
-            Ok(None) => {}
+            Ok(None) => {
+                // No file: a first run creates it, with a marker beside it. A marker without the file means the
+                // state was deleted, which is treated like corruption, not like a clean start.
+                let marker = marker_of(&path);
+                if marker.exists() || v.save(&HashSet::new(), &VecDeque::new()).is_err() || std::fs::write(&marker, b"armed\n").is_err() {
+                    *v.distrust.lock().unwrap() = true;
+                }
+            }
             Err(()) => *v.distrust.lock().unwrap() = true,
+        }
+        let trusted = !*v.distrust.lock().unwrap();
+        if trusted {
+            let marker = marker_of(&path);
+            if !marker.exists() {
+                let _ = std::fs::write(&marker, b"armed\n");
+            }
         }
         v
     }
@@ -191,15 +206,62 @@ impl Verifier {
         for t in failures {
             text.push_str(&format!("fail {}\n", t));
         }
-        let tmp = path.with_extension("tmp");
+        // A fresh, exclusively created temp file (O_EXCL never follows a planted symlink), forced to 0600.
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+        let tmp = temp_prefix(path).with_extra(format!("{}.{}.{}", std::process::id(), nanos, SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
         let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
+        opts.write(true).create_new(true);
         #[cfg(unix)]
         std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
         let mut f = opts.open(&tmp)?;
-        std::io::Write::write_all(&mut f, text.as_bytes())?;
-        f.sync_all()?;
-        std::fs::rename(&tmp, path)
+        let done = (|| {
+            #[cfg(unix)]
+            f.set_permissions(std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
+            std::io::Write::write_all(&mut f, text.as_bytes())?;
+            f.sync_all()?;
+            std::fs::rename(&tmp, path)
+        })();
+        if done.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        done
+    }
+}
+
+fn marker_of(path: &Path) -> PathBuf {
+    let mut n = path.file_name().unwrap_or_default().to_os_string();
+    n.push(".armed");
+    path.with_file_name(n)
+}
+
+struct TempName(PathBuf);
+
+impl TempName {
+    fn with_extra(self, extra: String) -> PathBuf {
+        let mut n = self.0.file_name().unwrap_or_default().to_os_string();
+        n.push(&extra);
+        self.0.with_file_name(n)
+    }
+}
+
+/// `<state file>.tmp.`: every temp file this verifier makes starts with it.
+fn temp_prefix(path: &Path) -> TempName {
+    let mut n = path.file_name().unwrap_or_default().to_os_string();
+    n.push(".tmp.");
+    TempName(path.with_file_name(n))
+}
+
+/// Remove temp files a crash left behind; unlinking never follows a symlink.
+fn remove_stale_temps(path: &Path) {
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str())) else { return };
+    let prefix = format!("{}.tmp.", name);
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for e in entries.flatten() {
+            if e.file_name().to_string_lossy().starts_with(&prefix) {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
     }
 }
 
@@ -320,6 +382,33 @@ mod tests {
             assert!(matches!(v.check(RFC_SECRET, &fresh, t + 90), Err(StepUpError::Locked { .. })), "a corrupt file starts locked, not empty: {}", junk);
             assert_eq!(v.check(RFC_SECRET, &code_at(RFC_SECRET, t + 90 + LOCKOUT_SECS), t + 90 + LOCKOUT_SECS), Ok(()), "and opens when the window passes");
         }
+    }
+
+    #[test]
+    fn a_deleted_state_file_fails_closed_and_stale_or_planted_temp_files_are_not_trusted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("totp-state");
+        let t = 1_700_000_000u64;
+        let code = code_at(RFC_SECRET, t);
+        assert_eq!(Verifier::persistent(path.clone()).check(RFC_SECRET, &code, t), Ok(()), "a first run starts clean and creates the file");
+        assert!(path.exists());
+        std::fs::remove_file(&path).unwrap();
+        let v = Verifier::persistent(path.clone());
+        assert!(matches!(v.check(RFC_SECRET, &code_at(RFC_SECRET, t + 90), t + 90), Err(StepUpError::Locked { .. })), "deleting the file does not reset anything");
+        // A stale 0644 temp and a symlink at a temp name are removed, never followed or kept.
+        let victim = dir.path().join("victim");
+        std::fs::write(&victim, "keep").unwrap();
+        let stale = dir.path().join("totp-state.tmp.1.2.3");
+        std::fs::write(&stale, "old").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&victim, dir.path().join("totp-state.tmp.9.9.9")).unwrap();
+        let v = Verifier::persistent(path.clone());
+        assert!(!stale.exists() && std::fs::symlink_metadata(dir.path().join("totp-state.tmp.9.9.9")).is_err());
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep", "the symlink target was not touched");
+        let _ = v.check(RFC_SECRET, "000000", t);
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
+        let leftovers = std::fs::read_dir(dir.path()).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().contains(".tmp.")).count();
+        assert_eq!(leftovers, 0, "no temp file is left behind");
     }
 
     #[test]

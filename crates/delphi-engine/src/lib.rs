@@ -59,6 +59,7 @@ pub mod endpoints_cli;
 pub mod engine;
 pub mod exec;
 pub mod finalize;
+pub mod merge_class;
 pub mod checks;
 pub mod frontmatter;
 pub mod gates;

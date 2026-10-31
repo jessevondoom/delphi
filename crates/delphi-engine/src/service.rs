@@ -64,9 +64,6 @@ struct PlanState {
     resumed: std::collections::HashSet<String>,
 }
 
-/// Card tools only the console may approve (`specs/014` amendment 014-A1): the merge boundary and Red-tier constitution changes.
-const CONSOLE_ONLY_TOOLS: [&str; 6] = ["merge", "git_merge", "pull_request", "constitution", "constitution_change", "ratify"];
-
 /// The TOTP secret behind a credential reference: base32, as an authenticator shows it.
 pub fn totp_secret(credential: &str) -> Result<Vec<u8>, String> {
     use delphi_adapter::credential::{CredentialRef, Resolved, Resolver};
@@ -934,12 +931,13 @@ impl EngineService {
             Some("deny") => false,
             _ => return Err(err(code::INVALID_PARAMS, "`decision` must be allow or deny")),
         };
-        // A merge, pull request or constitution/ratification change is the operator's at the console, with or without
-        // step-up (GOVERNANCE 1.1, specs/014 amendment 014-A1, REV-SEC-09). Denying is always open.
+        // A merge is the operator's at the console, with or without step-up (GOVERNANCE 1.1, specs/014 amendment
+        // 014-A1, REV-SEC-09). The finalize cards are exact; a command that looks like a merge is a verb heuristic
+        // (`merge_class`). Denying is always open.
         if allow {
             if let Some(r) = self.engine.broker.get(id) {
-                if CONSOLE_ONLY_TOOLS.contains(&r.tool.as_str()) {
-                    return Err(err(code::FORBIDDEN, format!("a {} is approved only at the console, never by a relay reply, even with an authenticator code (it can still be denied here)", r.tool)));
+                if let Some(what) = crate::merge_class::console_only(&r.tool, &r.payload) {
+                    return Err(err(code::FORBIDDEN, format!("{} is approved only at the console, never by a relay reply, even with an authenticator code (it can still be denied here)", what)));
                 }
             }
         }
@@ -3237,10 +3235,20 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_merge_or_constitution_card_is_never_approved_by_a_relay_even_with_a_valid_code() {
+    async fn a_merge_card_or_merge_class_command_is_never_approved_by_a_relay_even_with_a_valid_code() {
         let f = with_stepup(TEST_SECRET_B32);
         let s = serve(&f).await;
-        let cards: Vec<_> = ["merge", "git_merge", "pull_request", "constitution"].iter().map(|t| red_card(&f, t)).collect();
+        let cards: Vec<_> = ["merge", "pull_request"].iter().map(|t| red_card(&f, t)).collect();
+        let bash = |line: &str| {
+            use crate::approval::{Request, Tier};
+            let w = f.engine.broker.request(Request { approval_id: String::new(), task_id: "t_0001".into(), span_id: "sp1".into(), role: "builder".into(), tier: Tier::Red, tool: "harness_bash".into(), pattern: "harness_bash".into(), worktree: None, summary: "s".into(), payload: json!({"tool": "Bash", "command": line}), payload_blake3: String::new(), timeout: Duration::from_secs(60) });
+            let id = w.approval_id.clone();
+            let hash = f.engine.broker.get(&id).unwrap().payload_blake3;
+            (w, id, hash)
+        };
+        let mut cards = cards;
+        cards.push(bash("cd x && gh pr merge 4 --squash"));
+        cards.push(bash("git push origin main"));
         let (sock, tok) = (s.relay_sock.clone(), s.relay.clone());
         let ids: Vec<(String, String)> = cards.iter().map(|(_, i, h)| (i.clone(), h.clone())).collect();
         let now = (f.engine.clock_unix)() as u64;
