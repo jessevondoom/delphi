@@ -50,6 +50,21 @@ test('/ratify lists, then applies exactly the version that was listed', async ()
   assert.equal(r.out.at(-1), 'ratified cfg');
 });
 
+test('/validate lists held research, then ratifies or discards exactly the entries listed', async () => {
+  const items = [{ rel: 'commons.wikimedia.org/a.md', title: 'A', url: 'https://commons.wikimedia.org/a', class: 'weak' }];
+  const r = ctx(initial(0), [], (m) => (m === 'pending.list' ? { items } : {}));
+  await runSlash('/validate ratify 1', r.c);
+  assert.match(r.out[0]!, /run \/validate first/);
+  await runSlash('/validate', r.c);
+  assert.match(r.out[1]!, /1 held entry.*\n\s+1\. \[weak\] A/);
+  await runSlash('/validate ratify 1', r.c);
+  assert.deepEqual(r.calls.at(-1), ['pending.ratify', { rel: 'commons.wikimedia.org/a.md' }]);
+  await runSlash('/validate discard 1', r.c);
+  assert.match(r.out.at(-1)!, /already decided/);
+  await runSlash('/retro research project=demo', r.c);
+  assert.deepEqual(r.calls.at(-1), ['pending.list', { project: 'demo' }]);
+});
+
 test('usage renders a table with a total', () => {
   const t = renderUsage({ mission_id: 'm1', rows: [{ key: 'builder', calls: 2, input_tokens: 10, output_tokens: 5, cost_usd: 0.5 }], budget: { cap_usd: 5, reserved_usd: 0, available_usd: 4.5 } });
   assert.match(t, /builder\s+2\s+10\s+0\s+5\s+\$0\.5000/);

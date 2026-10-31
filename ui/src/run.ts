@@ -223,6 +223,7 @@ export async function runSlash(line: string, ctx: Ctx, now = Date.now()): Promis
     }
     case 'ratify': { ctx.post(await ratify(ctx, rest)); return; }
     case 'retro': { ctx.post(await retro(ctx, rest)); return; }
+    case 'validate': { ctx.post(await validate(ctx, rest)); return; }
     case 'models': { const v = await call('models.get'); if (v) ctx.post(String(v.text ?? '').trimEnd() || 'no models are configured'); return; }
     case 'agents': {
       const running = ctx.state().activity.running;
@@ -281,6 +282,7 @@ let lastRetro: any[] = [];
 
 /** `/retro`: the rules the Orchestrator proposed with `suggest_rule`, and the operator's decision on each (`specs/031` L2). */
 async function retro(ctx: Ctx, args: string[]): Promise<string> {
+  if (args[0] === 'research') return validate(ctx, args.slice(1));
   const act = args[0] ?? 'list';
   const line = (p: any, i: number) => `${String(i + 1).padStart(3)}. [${sanitize(String(p.op))} · ${sanitize(String(p.scope))}${p.target ? ` · ${sanitize(String(p.target))}` : ''}] ${sanitize(String(p.text))}${p.blocked?.length ? ' (cannot be ratified as it stands: /retro show ' + (i + 1) + ')' : ''}`;
   try {
@@ -324,6 +326,42 @@ async function retro(ctx: Ctx, args: string[]): Promise<string> {
       } catch (e) { failed.push(`#${n}: ${errText(e)}`); }
     }
     return [done.length ? `${act === 'accept' ? 'ratified' : 'rejected'} ${done.join(', ')}${act === 'accept' ? '; the rules apply from the next task' : ''}` : '', ...failed].filter(Boolean).join('\n');
+  } catch (e) { return errText(e); }
+}
+
+let lastPending: { project?: string; items: any[] } = { items: [] };
+
+/** `/validate`: research held back from the knowledge base (`specs/058` §14). Ratifying puts one entry in the index as noted, not validated. */
+async function validate(ctx: Ctx, args: string[]): Promise<string> {
+  const proj = args.find((a) => a.startsWith('project='))?.slice(8) || undefined;
+  const rest = args.filter((a) => !a.startsWith('project='));
+  const act = rest[0] ?? 'list';
+  const where = proj ? ` in project ${sanitize(proj)}` : '';
+  try {
+    if (act === 'list') {
+      const v = await ctx.cmd.call('pending.list', proj ? { project: proj } : {});
+      lastPending = { project: proj, items: Array.isArray(v?.items) ? v.items : [] };
+      if (!lastPending.items.length) return `no held research${where}. Pages from sources that are not trusted wait here instead of entering the knowledge base.`;
+      const rows = lastPending.items.map((p, i) => `${String(i + 1).padStart(3)}. [${sanitize(String(p.class || 'unclassed'))}] ${sanitize(String(p.title))} · ${sanitize(String(p.url))}`);
+      return [`${rows.length} held entr${rows.length === 1 ? 'y' : 'ies'}${where}. None is in the knowledge base until you ratify it.`, ...rows, `/validate ratify <n…> · ${proj ? '' : 'discard <n…> · '}add project=<name> for a project's own research`].join('\n');
+    }
+    if (act !== 'ratify' && act !== 'discard') return `unknown /validate action \`${sanitize(act)}\` (list, ratify, discard)`;
+    const nums = rest.slice(1).filter((a) => /^\d+$/.test(a)).map(Number);
+    if (!nums.length || nums.some((n) => n < 1)) return `usage: /validate ${act} <number…>`;
+    if (!lastPending.items.length || lastPending.project !== proj) return `run /validate${proj ? ' project=' + sanitize(proj) : ''} first to list held research (asked for #${nums.join(', #')})`;
+    const done: string[] = [];
+    const failed: string[] = [];
+    for (const n of nums) {
+      const p = lastPending.items[n - 1];
+      if (!p) { failed.push(`no held entry #${n}`); continue; }
+      if (p.done) { failed.push(`#${n}: already decided`); continue; }
+      try {
+        await ctx.cmd.call(act === 'ratify' ? 'pending.ratify' : 'pending.discard', { rel: p.rel, ...(proj ? { project: proj } : {}) });
+        p.done = true;
+        done.push(sanitize(String(p.rel)));
+      } catch (e) { failed.push(`#${n}: ${errText(e)}`); }
+    }
+    return [done.length ? `${act === 'ratify' ? 'ratified (now searchable, noted, not validated)' : 'discarded'} ${done.join(', ')}` : '', ...failed].filter(Boolean).join('\n');
   } catch (e) { return errText(e); }
 }
 
