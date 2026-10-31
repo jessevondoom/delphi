@@ -1,7 +1,8 @@
 // `delphi-ui --observe [view]`: the Observer window. Attaches with a narrator token, so the daemon refuses anything
 // that would start work or approve anything; killed and reopened, it rebuilds the same screen from the daemon.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Box, Text, useApp, useStdout } from 'ink';
+import { useTerminalDimensions } from '@opentui/react';
+import { Frame } from './frame.tsx';
 import type { Ev } from './input.ts';
 import { SAMPLE_SECS } from './meters.ts';
 import { emptyState, epicOrder, feedLinks, observeFrame, parseView, stepView, type OModel, type OState, type View } from './observe-screen.ts';
@@ -14,12 +15,15 @@ import type { Info } from './theme.ts';
 import { stillMotion } from './motion.ts';
 import { useReduceMotion } from './reduce-motion.ts';
 
-type Props = { cmd: Rpc; ev: Rpc; term: Term; info: Info; dark: boolean; themeForced?: boolean; view: View | null };
+type Props = { cmd: Rpc; ev: Rpc; term: Term; info: Info; dark: boolean; themeForced?: boolean; view: View | null; onExit?: () => void };
 
-export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }: Props) {
-  const { exit } = useApp();
-  const stdout = useStdout().stdout as unknown as NodeJS.WriteStream;
-  const [size, setSize] = useState({ w: stdout.columns || 100, h: stdout.rows || 30 });
+const Box = 'box' as any;
+const Text = 'text' as any;
+
+export function Observer({ cmd, ev, term, info, dark, themeForced, view: first, onExit }: Props) {
+  const exit = onExit ?? (() => process.exit(0));
+  const dimensions = useTerminalDimensions();
+  const size = { w: dimensions.width || 100, h: dimensions.height || 30 };
   const [pal, setPal] = useState({ dark });
   const [st, setSt] = useState<OState>(emptyState());
   const [view, setView] = useState<View>(first ?? 'epic');
@@ -104,12 +108,6 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }
     } else if (act.t === 'browser') fail('this window only reads: open links from the console, which checks your lists first');
     else if (act.t === 'copy') { copyToClipboard(act.text); fail('copied'); }
   };
-
-  useEffect(() => {
-    const onResize = () => setSize({ w: stdout.columns, h: stdout.rows });
-    stdout.on('resize', onResize);
-    return () => { stdout.off('resize', onResize); };
-  }, [stdout]);
 
   useEffect(() => {
     // Events change the picture: refetch it, at most about three times a second. Frames only feed the live text.
@@ -207,7 +205,7 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }
   const shown = useSelection(term, lines);
   return (
     <Box flexDirection="column" height={size.h} width={size.w}>
-      <Text>{shown.join('\n')}</Text>
+      <Frame lines={shown} width={size.w} height={size.h} />
     </Box>
   );
 }

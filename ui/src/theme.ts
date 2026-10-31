@@ -32,6 +32,18 @@ export type Info = {
   avatar?: AvatarSpec;
 };
 
+/** Convert the standard ANSI 256-colour palette to the display hex used by OpenTUI spans. */
+export function terminalAnsiColor(n: number): string {
+  const palette = ['#000000', '#800000', '#008000', '#808000', '#000080', '#800080', '#008080', '#c0c0c0', '#808080', '#ff0000', '#00ff00', '#ffff00', '#0000ff', '#ff00ff', '#00ffff', '#ffffff'];
+  if (n < 16) return palette[n]!;
+  if (n < 232) {
+    const i = n - 16, levels = [0, 95, 135, 175, 215, 255];
+    return `#${levels[Math.floor(i / 36)]!.toString(16).padStart(2, '0')}${levels[Math.floor(i / 6) % 6]!.toString(16).padStart(2, '0')}${levels[i % 6]!.toString(16).padStart(2, '0')}`;
+  }
+  const gray = (8 + (n - 232) * 10).toString(16).padStart(2, '0');
+  return `#${gray}${gray}${gray}`;
+}
+
 /** Dark or light, and the terminal's background colour when it answered the query (`null`/absent: unknown, so no tint). */
 export type Pal = { dark: boolean; bg?: Rgb | null };
 
@@ -337,4 +349,19 @@ export function tilde(path: string): string {
 /** Strip anything a terminal would act on from text that came from a model. */
 export function sanitize(s: string): string {
   return s.replace(/[\u202a-\u202e\u2066-\u2069]/g, '').replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)?/g, '').replace(/\x1b[@-Z\\-_]|\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '');
+}
+
+/** Remove colour parameters (30-38, 40-48, 90-97, 100-107, with their 5;n and 2;r;g;b operands) from SGR sequences; attributes stay. */
+export function stripColour(text: string): string {
+  return text.replace(/\x1b\[([0-9;]*)m/g, (_all, params: string) => {
+    const codes = params === '' ? ['0'] : params.split(';');
+    const kept: string[] = [];
+    for (let i = 0; i < codes.length; i++) {
+      const c = Number(codes[i] || 0);
+      if (c === 38 || c === 48) { i += codes[i + 1] === '5' ? 2 : codes[i + 1] === '2' ? 4 : 0; continue; }
+      if ((c >= 30 && c <= 37) || (c >= 40 && c <= 47) || (c >= 90 && c <= 97) || (c >= 100 && c <= 107)) continue;
+      kept.push(codes[i]!);
+    }
+    return kept.length ? `\x1b[${kept.join(';')}m` : '';
+  });
 }
