@@ -12,8 +12,9 @@
     "check-deps": "node dev/check-deps.mjs"
   },
   "dependencies": {
+    "@opentui/core": "0.8.0",
+    "@opentui/react": "0.8.0",
     "chalk": "6.0.1",
-    "ink": "8.0.0",
     "marked": "18.1.1",
     "react": "19.3.1",
     "string-width": "8.3.0",

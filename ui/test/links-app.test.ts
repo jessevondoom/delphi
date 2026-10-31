@@ -9,7 +9,8 @@ import { PassThrough } from 'node:stream';
 import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { render } from 'ink';
+import { createCliRenderer } from '@opentui/core';
+import { createRoot } from '@opentui/react';
 import { App } from '../src/app.tsx';
 import { Observer } from '../src/observer.tsx';
 import { Term } from '../src/terminal.ts';
@@ -59,8 +60,18 @@ async function consoleApp(daemon = fakeDaemon()) {
   const term = new Term({ mouse: false });
   const scr = screen();
   const info = { ...baseInfo, workspace };
-  const app = render(React.createElement(App, { cmd: daemon.rpc, ev: daemon.rpc, term, info, mission: 'm1', dark: true, themeForced: true, history: stateWorld() }), { stdout: scr.out as any, stdin: new PassThrough() as any, exitOnCtrlC: false, patchConsole: false, interactive: true, debug: true } as any);
+  const renderer = await createCliRenderer({
+    stdin: new PassThrough() as any,
+    stdout: scr.out as any,
+    width: 100,
+    height: 40,
+    exitOnCtrlC: false,
+    useMouse: false,
+  });
+  const root = createRoot(renderer);
+  root.render(React.createElement(App, { cmd: daemon.rpc, ev: daemon.rpc, term, info, mission: 'm1', dark: true, themeForced: true, history: stateWorld() }));
   await tick(150);
+  const app = { unmount: () => { root.unmount(); renderer.destroy(); } };
   return { term, scr, app, daemon, workspace, show: () => scr.frame().join('\n') };
 }
 
@@ -131,8 +142,18 @@ test('narrator: in the change feed tab focuses a link, enter reads it over the f
   const daemon = fakeDaemon({ 'observe.state': () => st });
   const term = new Term({ mouse: false });
   const scr = screen();
-  const app = render(React.createElement(Observer, { cmd: daemon.rpc, ev: daemon.rpc, term, info: baseInfo, dark: true, themeForced: true, view: 'changes' }), { stdout: scr.out as any, stdin: new PassThrough() as any, exitOnCtrlC: false, patchConsole: false, interactive: true, debug: true } as any);
+  const renderer = await createCliRenderer({
+    stdin: new PassThrough() as any,
+    stdout: scr.out as any,
+    width: 100,
+    height: 40,
+    exitOnCtrlC: false,
+    useMouse: false,
+  });
+  const root = createRoot(renderer);
+  root.render(React.createElement(Observer, { cmd: daemon.rpc, ev: daemon.rpc, term, info: baseInfo, dark: true, themeForced: true, view: 'changes' }));
   await tick(200);
+  const app = { unmount: () => { root.unmount(); renderer.destroy(); } };
   const show = () => scr.frame().join('\n');
   assert.match(show(), /1 link · tab to follow/);
   key(term, 'tab'); await tick();
