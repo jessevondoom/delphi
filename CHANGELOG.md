@@ -28,6 +28,7 @@ This file starts with the work after v0.2.7. For earlier releases, the history i
 ### Changed
 
 - **Optimistic is a per-build choice, not an approval mode** (spec 015-A1, council 013): `optimistic` is gone from `/permissions`, `delphi run --permissions` and the `Shift+Tab` cycle; `/build --optimistic` is unchanged. Entering `auto` with `Shift+Tab` now takes a second press, and bulk-approving Amber decisions or cards (`a`, `y`, inbox approve-all) covers only those whose detail was shown at least once (specs 005e-A1, 044-A1).
+- Docs: folded spec 004 (memory and coaching): amendments 004-A1 to A4 merged into the normative text, measurements and history moved to `specs/history/004-memory-and-coaching.md`; no behavior change.
 
 ## 0.3.0 — 2026-10-28
 

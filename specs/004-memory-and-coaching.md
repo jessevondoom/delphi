@@ -3,7 +3,7 @@ id: spec-004-memory-and-coaching
 title: "004: Dual-Tier Memory, Zero-Server Hybrid RAG & Coaching Loop"
 author: architect
 timestamp: 2026-10-23T07:53:00Z
-status: approved   # by the operator, 2026-10-24 ("ratify all"); whole document. Amendments 004-A1 (§3.3-§3.5, §4.2, §6 tests 16-20), 004-A2 (§3.1, §3.6, §6 tests 21-24) and 004-A3 (§3.3, §3.4, §3.7, §6 tests 25-31) approved by the operator, 2026-10-25
+status: approved   # operator, 2026-10-24 ("ratify all"); amendments A1-A3 folded in, approved 2026-10-25; A4 approved 2026-10-30 (council 013 D15b)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -13,6 +13,8 @@ tags: [spec]
 ---
 
 # Spec 004: Dual-Tier Memory, Zero-Server Hybrid RAG & Coaching Loop
+
+Folded 2026-10-30 (docs only, no change in behavior); amendment history in specs/history/004-memory-and-coaching.md.
 
 > **Outside amendments:** §3.3, §3.6 zone `bundles`, bundle `vectors/` cache, `[privacy] identifiers` in `bundle validate` (ratified 2026-10-25). Live in `specs/022` §5, `specs/024` §3.5, `specs/027` §5.
 
@@ -24,10 +26,8 @@ This specification defines Delphi's memory, local retrieval (Hybrid RAG), and se
 4. **Orchestrator's Coaching, Two-Strike Circuit Breaker & 4-Channel `REVIEW.md` Loop:** Governed by the **ExpeL Rule of 25**, a **6 KB hard byte cap**, and the **6-Tier Security Taint Lattice (`[H-004]`)**.
 
 ### 1.1 Simpler Alternative Considered
-- **Alternative 1 (Pure Vector DB / External Server):** Index all files into Qdrant/Chroma using 500-token sliding windows.
-  - *Why Rejected:* Pure dense embeddings compress exact technical identifiers (`[H-004]`, `REV-SEC-04`, `Part.thoughtSignature`) into generic semantic neighborhoods, sever Markdown section headers from child paragraphs, ignore YAML provenance taint tags, and require an external server process.
-- **Alternative 2 (Grep-Only):** Rely solely on `ripgrep` without BM25 or semantic indexing.
-  - *Why Rejected:* While `ripgrep` + `context/index.md` is superior for live source code (`src/`), searching across 500+ historical missions (`missions/YYYY-MM-DD-*/`) for conceptually similar bugs or architectural debates fails when terminology shifts (*"subprocess hang"* vs. *"pipe buffer deadlock"*). Embedding **SQLite FTS5 + `sqlite-vec` + RRF** inside `.delphi/state.db` gives zero-server, single-file ACID hybrid retrieval in about 20 ms per query (measured on an M1 laptop, with the query embedded on its GPU), or about half a second when the reranking pass of §3.7 reads the best results as well; both are local, and the quick path is always available (`--no-rerank`).
+- **Alternative 1 (Pure Vector DB / External Server):** index all files into Qdrant/Chroma with 500-token sliding windows. *Rejected:* dense embeddings blur exact identifiers (`[H-004]`, `REV-SEC-04`, `Part.thoughtSignature`), sever Markdown headers from child paragraphs, ignore YAML provenance taint tags, and need an external server.
+- **Alternative 2 (Grep-Only):** `ripgrep` alone. *Rejected:* `ripgrep` + `context/index.md` is right for live source code (`src/`), but searching 500+ historical missions (`missions/YYYY-MM-DD-*/`) for similar bugs fails when terminology shifts (*"subprocess hang"* vs. *"pipe buffer deadlock"*). **SQLite FTS5 + `sqlite-vec` + RRF** inside `.delphi/state.db` gives zero-server, single-file ACID hybrid retrieval in about 20 ms per query (M1 laptop, query embedded on its GPU), or about half a second when the reranking pass of §3.7 reads the best results as well; both are local, and the quick path is always available (`--no-rerank`).
 
 ---
 
@@ -67,9 +67,9 @@ flowchart TD
 | **3** | §4.1 context circuit breaker (it needs Builder and the retry ladder) |
 | **5** | §3 FTS5 knowledge-base search |
 | **6** | §4.2 `/retro` distillation, `rule_stats` |
-| **Amendment 004-A1** | §3.5 local embeddings: the vector leg of §3.4 ships in the binary (D-01 reopened by the operator, 2026-10-24) |
-| **Amendment 004-A2** | §3.6 preloaded vectors for the shipped documents, and `agents/` and `skills/` in the index (approved by the operator, 2026-10-25) |
-| **Amendment 004-A3** | §3.7 a refresh of the index on every search, a cross-encoder reranker with a calibrated score floor, and frontmatter summaries for agents and skills (approved by the operator, 2026-10-25) |
+| **004-A1** | §3.5 local embeddings: the vector leg of §3.4 ships in the binary (D-01 reopened) |
+| **004-A2** | §3.6 preloaded vectors for the shipped documents; `agents/` and `skills/` in the index |
+| **004-A3** | §3.7 index refresh on every search, cross-encoder reranker with a calibrated score floor, frontmatter summaries for agents and skills |
 
 §5.8 covers the §5 rows.
 
@@ -207,34 +207,26 @@ A vector match counts only at or above the model's similarity floor (§3.5), so 
 When a reranking model is installed, the best 10 fused results are then read together with the question and reordered, and if even the best of them scores below the reranker's calibrated floor nothing is returned (§3.7). Results return **at most 10 `path#Lstart-Lend` pointers + 3-line previews** (`<150` lines total, enforcing `[H-002]`). Each pointer carries the chunk's `heading_path` and `blake3`. When a file has been edited since indexing, the resolver re-anchors by heading. If the heading is gone, it reports the pointer as stale rather than returning the wrong lines.
 
 ### 3.5 Local Embeddings (Amendment 004-A1)
-**Directed by the operator on 2026-10-24**, reopening D-01: use the most accurate embedding model that runs well on a recent Mac laptop, up to 150 MB added to the binary, run with `candle`, vectors in `sqlite-vec`. Approved by the operator on 2026-10-25, with the matching edits to `006` and `013`.
+The operator's directive (2026-10-24, reopening D-01): the most accurate embedding model that runs well on a recent Mac laptop, up to 150 MB added to the binary, run with `candle`, vectors in `sqlite-vec`.
 
-**Model.** `BAAI/bge-base-en-v1.5` (110M parameters, 768 dimensions, MIT), stored as int8 with one scale per row: a 111 MB package, one file, compiled into release binaries. Four candidates were run on this repository's own documents (112 files, 910 chunks, 40 hand-written questions that are worded differently from the answers or are identifiers, plus 8 questions the documents do not answer; `dev/kb-eval.json`, run with `delphi kb eval`):
-
-| Ranking (top 10) | R@1 | R@5 | R@10 | MRR | off-topic answered |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| lexical only (FTS5, the previous behaviour) | 0.25 | 0.55 | 0.60 | 0.37 | 5 of 8 |
-| vector only (`bge-base`, int8) | 0.42 | 0.78 | 0.80 | 0.57 | 0 of 8 |
-| **hybrid (shipped)** | **0.42** | **0.82** | **0.88** | **0.58** | **0 of 8** |
-
-Dense-only recall@10 on the paraphrase subset (30 questions): `bge-small` 0.77, **`bge-base` 0.83**, `snowflake-arctic-embed-m-v1.5` 0.73. `gte-modernbert-base` tied `bge-base` once fused (R@10 0.88, MRR 0.58) but is 153.5 MB as int8, over the limit, so it was not taken. A 40-question set is small: treat differences of one question as noise, and grow the set from confirmed misses (`delphi kb miss`).
+**Model.** `BAAI/bge-base-en-v1.5` (110M parameters, 768 dimensions, MIT), stored as int8 with one scale per row: a 111 MB package, one file, compiled into release binaries. It is evaluated on this repository's own documents with `dev/kb-eval.json` (40 hand-written questions that are worded differently from the answers or are identifiers, plus 8 questions the documents do not answer), run with `delphi kb eval`. The shipped hybrid scored R@1 0.42, R@10 0.88, MRR 0.58 and answered 0 of 8 off-topic questions (lexical only: R@10 0.60, 5 of 8 answered). A 40-question set is small: treat differences of one question as noise, and grow the set from confirmed misses (`delphi kb miss`).
 
 **Package.** One file, `DLPHMDL1`: the tokenizer, the model config and the weights (int8 with per-row scales for matrices of 4096 or more values, f32 otherwise), with a header that records the model id, kind, pooling, prefixes, token limit, similarity floor and source repository and revision. `delphi kb model pack <hf dir> <out> --id … --kind … --dim …` makes one; `delphi kb model info` reports the installed one. It is found, in order, at `DELPHI_EMBED_MODEL` (`off` switches vectors off), `$DELPHI_HOME/models/embed.dlphmdl`, then inside the binary (built with `--features embedded-model` and `DELPHI_EMBED_MODEL_FILE`, which the release workflow sets from `dev/fetch-model.sh`, a pinned revision with checked SHA-256 sums). The model id names the weights, the quantization and the prefixes: it changes whenever the vectors would.
 
-**Runtime.** `candle` (pure Rust, no ONNX Runtime). On a Mac the matrix work runs on the GPU through Metal when one is present (`DELPHI_EMBED_DEVICE=cpu` forces the CPU), otherwise on the CPU, with Accelerate on macOS. Always f32: f16 on Metal gave wrong vectors in testing. Candle's Metal backend panics, rather than returning an error, on a macOS that lacks a system class it asks for (found by the release dry run on a macOS 14 runner: `class MTLResidencySetDescriptor could not be found`); the device is therefore created once, under `catch_unwind`, and the CPU is used when that fails, as it is on a machine with no GPU. Weights are widened to f32 when the model loads (about 0.5 GB resident).
+**Runtime.** `candle` (pure Rust, no ONNX Runtime). On a Mac the matrix work runs on the GPU through Metal when one is present (`DELPHI_EMBED_DEVICE=cpu` forces the CPU), otherwise on the CPU, with Accelerate on macOS. Always f32 (f16 on Metal gave wrong vectors). Candle's Metal backend panics, rather than returning an error, on a macOS lacking a system class it asks for (`MTLResidencySetDescriptor`, macOS 14); the device is therefore created once, under `catch_unwind`, and the CPU is used when that fails, as it is on a machine with no GPU. Weights are widened to f32 when the model loads (about 0.5 GB resident).
 
 **What is embedded.** Each chunk is cut into windows of about 1,600 characters at blank lines outside code fences (at most 16), so a long section is not cut off at the model's 512-token window. A window's text is `<path> > <heading path>` and a newline, then the window. A question is prefixed as the model expects. Similarity is cosine. A vector match counts only at or above the package's floor (0.54 for `bge-base`: off-topic questions scored 0.42 to 0.50, answerable ones 0.55 to 0.82). `delphi kb eval` prints both ranges so the floor can be re-set when the model changes. `kb_meta` also records `embedding_format`; changing the windowing or the text around each window bumps it and every vector is made again.
 
 **Fusion.** The vector ranking joins the lexical ones with weight 3.0. Question words with no topic (`how`, `the`, `is`, …) are left out of the lexical query unless nothing else is left. When no chunk holds every query word and the any-word pass is used, the lexical rankings weigh 0.15, and when a model is installed and no vector clears the floor they are dropped, so a question about something the documents do not cover returns nothing instead of chunks that share a stray word. Exact identifiers (`[REV-SEC-04]`) match every word and keep their full lexical weight.
 
-**Indexing.** Indexing the words is unchanged and quick. Vectors are made separately, a few chunks at a time with no write lock held while the model runs, and a chunk without a vector is simply not in the vector ranking yet. `delphi kb index` embeds with progress; the daemon's `kb.search` and `kb.index` start one background thread (at most one per process) and use the vectors that exist. Only new or changed chunks are embedded after the first time. Measured on an M1 laptop, the first pass over these 910 chunks took 4 to 5 minutes on the CPU with the machine otherwise idle, and was faster on the GPU; timings varied a lot with machine load.
+**Indexing.** Indexing the words is unchanged and quick. Vectors are made separately, a few chunks at a time with no write lock held while the model runs, and a chunk without a vector is simply not in the vector ranking yet. `delphi kb index` embeds with progress; the daemon's `kb.search` and `kb.index` start one background thread (at most one per process) and use the vectors that exist. Only new or changed chunks are embedded after the first time.
 
 **Safety.** Visibility is decided by the same SQL filter as the lexical rankings (§3.4): the vector table's `trusted` and `scope` columns only skip rows that could never be returned. Nothing leaves the machine: the model runs locally and vectors are derived state in `state.db`. A model that is installed but cannot be loaded is reported once and search carries on lexically; `delphi doctor` check 6 reports a stale or incomplete vector index.
 
 The reranker that was the next lever here is §3.7.
 
 ### 3.6 Preloaded Vectors and Agent Skills in the Index (Amendment 004-A2)
-**Approved by the operator on 2026-10-25.** Two changes so that retrieval is accurate from the first query, not after the first indexing pass.
+**Retrieval is accurate from the first query, not after the first indexing pass.**
 
 **Agents and skills are indexed.** `agents/<role>/AGENT.md` and `skills/**/*.md` (the shipped copy under `base/`, and the team's own under `team/`, the team copy winning for a path) join the index as zones `agents` and `skills`, so an agent can find a skill or a role description by meaning. They are shared files, so they carry no per-role visibility rule. A shipped file has no `source_type` in its frontmatter, so a file that names none is `user_ratified` when it comes from `base/` (the release ratified it, §2.1 of `specs/006`) and `internal_generated` when it comes from `team/`; a file that names its own tier keeps it, and one that says `external_untrusted` stays out of default results like any untrusted document. Every other zone still defaults to `external_untrusted`.
 
@@ -242,42 +234,22 @@ The reranker that was the next lever here is §3.7.
 - `embed_pending` asks the cache before the model. `apply_seed_vectors` does only that, so it is cheap enough to run before a search: the daemon's `kb.search` and `kb.index` and the `delphi kb search` command apply it first, which gives a brand-new workspace semantic search on its first query. Chunks the cache does not cover wait for the background pass (§3.5).
 - `delphi kb index` reports how many chunks came from the preloaded vectors and how many from the model. `delphi kb seed-export <out>` writes the cache from a workspace whose chunks all have vectors.
 - `dev/build-seed-vectors.sh` makes the cache in a fresh seeded workspace and then checks it: a second fresh workspace is indexed with the cache and the model must read nothing (`0 by the model`), otherwise the script fails and the release stops. The release workflow runs it in the `model` job beside the model fetch. Anything that changes the shipped agents, skills, context or memory templates, the windowing, or the text around a window is covered by that check at release; the cache never needs to be committed.
-- Measured on a fresh workspace (34 documents, 170 chunks): 85 s for the model to embed them, 0 s and no model reads with the cache.
 
 
 ### 3.7 A Fresh Index, Reranking and Query-Aware Fusion (Amendment 004-A3)
-**Approved by the operator on 2026-10-25.** The operator asked for the data to stay fresh and for retrieval to be as accurate as it can be. Four changes, each measured with `delphi kb eval` on this repository's own documents (125 files, 998 chunks) against two question sets: `dev/kb-eval.json`, which the settings were tuned on, and `dev/kb-eval-holdout.json`, written before any reranker was tried and never tuned on. A third, small set of six questions about facts that live only in agent and skill frontmatter was written after the summaries (below) existed, to test them.
+Four changes for fresh data and accurate retrieval. Settings were measured with `delphi kb eval` on this repository's own documents against two question sets: `dev/kb-eval.json`, which the settings were tuned on, and `dev/kb-eval-holdout.json`, written before any reranker was tried and never tuned on. A third, small set of six questions about facts that live only in agent and skill frontmatter tests the summaries (below).
 
 **The index stays fresh.** Every search first brings the index up to date (`Kb::refresh`): the daemon's `kb.search` and `kb.index` and the CLI's `kb search` all do it. A file whose modification time and size match what was recorded when it was indexed (`kb_documents.mtime_ns`, `size`) is not read, so checking the whole tree costs a stat per file, and a note written a minute ago is found. Changed files are re-chunked, new ones added, vanished ones removed; the preloaded vectors are applied (§3.6) and anything else is embedded by the background pass (§3.5). The fast path trusts the stamp: `delphi kb reindex` reads everything regardless. An index made before the columns existed gains them on open and is read once. `kb_meta.chunker_version` does the same for a change in how documents are chunked: when it differs, every document is read once, because an unchanged file would otherwise keep the chunks the old rules made.
 
 **Agents and skills are searchable by what their frontmatter says.** The frontmatter of a shipped agent or skill is not chunked like the body, but it holds what they are looked up by. For zones `agents` and `skills` a first chunk, headed `Summary (frontmatter)`, is built from `title`, `role`, `name`, `description`, `authorized_skills` and `authorized_agents`, with its line range pointing at the frontmatter itself (so `resolve` re-anchors it like any other section).
 
-**Reranking.** A cross-encoder, `cross-encoder/ms-marco-MiniLM-L12-v2` as int8 (34.6 MB, 12 layers; the model card says Apache-2.0, and it was trained on MS MARCO, whose data terms are for research use, which the operator should weigh before distributing commercially), reads the question together with each of the best 10 fused results and scores how well each answers it. It reads the section's heading and its first window of about 600 characters (longer passages did no better and cost more). Its ranking is added to the fusion as one more reciprocal-rank term with weight 6.0 (the result is flat between 3 and 30; 6 was best on the held-out set). The score floor is part of the model package, as the similarity floor is for the embedder (`Meta.min_similarity`, here -9): if even the best result scores below it, nothing is returned. The floor is what stops an off-topic question that happens to resemble some document (similarity up to 0.57) from getting results; floors of -8 and above lost answerable questions. `delphi kb eval` prints the score ranges to re-set it. Where it runs: on the CPU, on several threads, even on a Mac with a GPU (the embedder uses the GPU): a model this small is many short kernels, and Metal made a search about four times slower (2.2 s against 0.5 s for ten passages in testing). `DELPHI_RERANK_DEVICE=metal` overrides. It is found like the embedder: `DELPHI_RERANK_MODEL` (`off` switches it off), `$DELPHI_HOME/models/rerank.dlphmdl`, or compiled in (`DELPHI_RERANK_MODEL_FILE`); `dev/fetch-model.sh rerank` makes the package from a pinned revision with checked SHA-256 sums. It can be left out per call (`--no-rerank`, `"rerank": false`), and if it fails the search carries on in the order it had and says so once on stderr.
+**Reranking.** A cross-encoder, `cross-encoder/ms-marco-MiniLM-L12-v2` as int8 (34.6 MB, 12 layers; the model card says Apache-2.0, and it was trained on MS MARCO, whose data terms are for research use, which the operator should weigh before distributing commercially), reads the question together with each of the best 10 fused results and scores how well each answers it. It reads the section's heading and its first window of about 600 characters. Its ranking is added to the fusion as one more reciprocal-rank term with weight 6.0. The score floor is part of the model package, as the similarity floor is for the embedder (`Meta.min_similarity`, here -9): if even the best result scores below it, nothing is returned. The floor is what stops an off-topic question that happens to resemble some document (similarity up to 0.57) from getting results. `delphi kb eval` prints the score ranges to re-set it. Where it runs: on the CPU, on several threads, even on a Mac with a GPU (the embedder uses the GPU), because a model this small is many short kernels. `DELPHI_RERANK_DEVICE=metal` overrides. It is found like the embedder: `DELPHI_RERANK_MODEL` (`off` switches it off), `$DELPHI_HOME/models/rerank.dlphmdl`, or compiled in (`DELPHI_RERANK_MODEL_FILE`); `dev/fetch-model.sh rerank` makes the package from a pinned revision with checked SHA-256 sums. It can be left out per call (`--no-rerank`, `"rerank": false`), and if it fails the search carries on in the order it had and says so once on stderr.
 
-**Query-aware fusion.** Keyword matching is what finds `[REV-SEC-04]`; on a sentence it mostly matches filler and common words. Measured, vector search alone beat the hybrid on every sentence-style set (held-out MRR 0.644 against 0.629; frontmatter questions 0.861 against 0.468). A query is treated as a sentence (`is_natural_question`) when it contains no identifier-like word (a digit, `_ . / : @ #`, or a capital after the first letter) and either has five or more words or three or four words with at least one filler word. For a sentence the keyword rankings are weighted 0.1 (the sweep: 1.0, 0.5, 0.25, 0.1, 0 gave frontmatter MRR 0.64, 0.75, 0.83, 0.92, 0.83 and held-out 0.677, 0.677, 0.686, 0.701, 0.699). Keyword and identifier queries are unchanged.
+**Query-aware fusion.** Keyword matching is what finds `[REV-SEC-04]`; on a sentence it mostly matches filler and common words. A query is treated as a sentence (`is_natural_question`) when it contains no identifier-like word (a digit, `_ . / : @ #`, or a capital after the first letter) and either has five or more words or three or four words with at least one filler word. For a sentence the keyword rankings are weighted 0.1. Keyword and identifier queries are unchanged.
 
-**Results** (shipped settings; recall in the top 10, off-topic questions answered):
+**Shipped results** (recall in the top 10, off-topic questions answered): held-out set (36 + 8), hybrid + reranker R@1 0.61, R@10 0.83, MRR 0.701, 0 of 8 off-topic answered (hybrid alone: MRR 0.643, 2 of 8); dev set (40 + 8), hybrid + reranker R@1 0.53, R@10 0.82, MRR 0.628, 0 of 8; frontmatter facts (6), R@1 0.83, MRR 0.917. Reranker choice: MiniLM-L12 was the only candidate that helped on both sets at 35 MB; with the 111 MB embedding model the models total 146 MB, inside the operator's 150 MB. Without the reranker a search takes about 20 to 30 ms in the daemon; the reranker adds about 0.5 s for ten passages on an M1 (Linux CPU speed not measured).
 
-| Set | Ranking | R@1 | R@10 | MRR | Off-topic answered |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| dev (40 + 8) | keywords only | 0.25 | 0.57 | 0.361 | 5 of 8 |
-| | vectors only | 0.45 | 0.80 | 0.584 | 0 of 8 |
-| | hybrid | 0.50 | 0.85 | 0.611 | 0 of 8 |
-| | **hybrid + reranker** | **0.53** | 0.82 | **0.628** | **0 of 8** |
-| held-out (36 + 8) | keywords only | 0.33 | 0.61 | 0.403 | 7 of 8 |
-| | vectors only | 0.58 | 0.78 | 0.644 | 2 of 8 |
-| | hybrid | 0.56 | 0.83 | 0.643 | 2 of 8 |
-| | **hybrid + reranker** | **0.61** | **0.83** | **0.701** | **0 of 8** |
-| frontmatter facts (6) | hybrid | 0.50 | 1.00 | 0.667 | |
-| | **hybrid + reranker** | **0.83** | 1.00 | **0.917** | |
-
-Before this amendment (the §3.5 hybrid) the held-out set scored R@1 0.53, MRR 0.634 and answered 2 of 8 off-topic questions. The dev set gives up one answerable question from the top 10 (0.85 to 0.82 for the full pipeline), the price of the score floor and the lower keyword weight on sentences.
-
-**Which reranker.** Under the same settings (weight 3, no floor, before query-aware fusion): MiniLM-L12 MRR 0.657 dev and 0.686 held-out at 35 MB and about 0.6 s; MiniLM-L6 0.597 and 0.651 at 24 MB and 0.27 s; `mxbai-rerank-xsmall` 0.665 and 0.645 at 80 MB and 0.95 s (better on dev, worse than L12 on held-out, and over the size budget); `bge-reranker-base` gained least and took 5 to 6 s a query at 297 MB. MiniLM-L12 was the only one that helped on both sets. With the 111 MB embedding model it brings the models to 146 MB, inside the 150 MB the operator set.
-
-**Speed.** Without the reranker a search takes about 20 to 30 ms in the daemon. With it, the reranker adds about 0.5 s for ten passages on an M1, and it was 1.5 to 2 s in the runs above while the machine was loaded (load average 19 to 75, so the figures are pessimistic). A `delphi kb search` from the command line, which loads the models each time, took about 0.4 s without reranking and about 1 s with it under that load. The Linux CPU speed is not measured.
-
-**Limits.** The sets are small (82 questions in all): a difference of one question is noise, and the settings above were chosen on them. Two held-out agent-role questions ("who splits a big task and hands the parts out", "the role that lands changes and cuts releases") still miss because other documents (`specs/003`, the handoff specs) answer them too and the labels accept only the agent file; they were left as written. Grow the sets from the misses the operator confirms with `delphi kb miss`, and re-run `delphi kb eval` before changing any weight, floor or model.
+**Limits.** The sets are small (82 questions in all): a difference of one question is noise, and the settings above were chosen on them. Grow the sets from the misses the operator confirms with `delphi kb miss`, and re-run `delphi kb eval` before changing any weight, floor or model.
 
 ---
 
@@ -293,11 +265,9 @@ When **Builder** fails the same test or build verification twice in a row inside
 
 ### 4.2 Post-Mission ExpeL Contrastive Distillation
 At mission close, **Orchestrator** executes `review-md-distillation` and `lesson-promotion`:
-- Candidate lessons are checked against the **6-Tier IFC Taint Lattice (`[H-004]`)**: only `user_ratified` ($L_5$) and `internal_empirical` ($L_4$) lessons may enter `context/heuristics.md`, `REVIEW.md`, `lessons.md`, or `skills/`.
+- Candidate lessons are checked against the **6-Tier IFC Taint Lattice (`[H-004]`)**: only `user_ratified` ($L_5$) and `internal_empirical` ($L_4$) lessons may enter `context/heuristics.md`, `REVIEW.md`, `lessons.md`, or `skills/`. `suggest_rule` refuses when the span's ceiling is $\le L_1$, with a reason that points to `note`: a tainted span may leave a note instead of putting web-derived text in front of the `/retro` operator as a rule candidate. Spans at $L_2$ and above are unchanged (was 004-A4; council 013 D15b, approved by the operator 2026-10-30).
 - Using rule-ID match + BM25 overlap (plus embedding cosine similarity between the candidate and an existing rule, with the threshold set from the model's measured scores, not a fixed $0.82$ (Amendment 004-A1)) via `lesson-deduper`, **Orchestrator** proposes ExpeL operations (`ADD`, `MERGE`, `DEMOTE`, or `PROMOTE` 2-strike rules to deterministic scripts in `skills/*/scripts/`).
 - Proposals are submitted through the daemon's `propose` tool, stored in daemon-only `local/proposals/<mission-id>/`, and applied by `delphi-core` only after the **operator** ratifies them at `/retro` (GOVERNANCE §5.7, §7). This includes `lessons.md` (D-11, revised 2026-10-23): nothing enters an always-loaded prompt without ratification.
-
-**Amendment 004-A4: no proposals from a tainted span (council 013 D15b; approved by the operator 2026-10-30).** `suggest_rule` refuses when the span's ceiling is $\le L_1$, with a reason that points to `note`. Capping the proposal's tier at the ceiling labelled it but still put web-derived text in front of the `/retro` operator as a rule candidate for every future prompt; a tainted span may leave a note instead. Spans at $L_2$ and above are unchanged.
 
 ## 5. Memory Scopes, Operator Customization & Evolution (D-20)
 
