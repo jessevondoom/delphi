@@ -146,6 +146,7 @@ sandbox = "off"
 # PROMOTE conditions permit; the effective mode is the lower of this value and the latch.
 # [validator]
 # mode = "advisory"
+# weak_sources = "label"          # a claim only Weak sources support: "label" keeps it as unverified (weak), "off" refuses it
 # [validator.sources]          # your additions to the default source list (registrable domains)
 # primary = []
 # reputable = []

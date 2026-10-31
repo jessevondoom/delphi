@@ -137,6 +137,7 @@
       "additionalProperties": false,
       "properties": {
         "mode": { "enum": ["off", "advisory", "ratify"], "default": "advisory", "description": "off: no fetch of any kind. advisory: the full fact path as a dry run that writes nothing validated. ratify: real writes, only after PROMOTE." },
+        "weak_sources": { "enum": ["label", "off"], "default": "label", "description": "A claim supported only by Weak sources: label keeps it as unverified (weak), never as evidence; off refuses it (specs/040 section 27)." },
         "sources": {
           "type": "object",
           "description": "The operator's additions to the default source list (specs/040 appendix A). Registrable domains.",

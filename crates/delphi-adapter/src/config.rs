@@ -704,6 +704,35 @@ pub struct ValidatorConfig {
     #[serde(deserialize_with = "de_mode")]
     pub mode: ValidatorMode,
     pub sources: ValidatorSources,
+    /// What to do with a claim supported only by Weak sources (`specs/040` §27): keep it labelled, or refuse it.
+    #[serde(deserialize_with = "de_weak")]
+    pub weak_sources: WeakSources,
+}
+
+/// `[validator] weak_sources`. Weak sources never count as evidence; this only says whether a claim they alone support is kept.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum WeakSources {
+    #[default]
+    Label,
+    Off,
+}
+
+impl WeakSources {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            WeakSources::Label => "label",
+            WeakSources::Off => "off",
+        }
+    }
+}
+
+fn de_weak<'de, D: serde::Deserializer<'de>>(d: D) -> Result<WeakSources, D::Error> {
+    let s = <String as serde::Deserialize>::deserialize(d)?;
+    match s.as_str() {
+        "label" => Ok(WeakSources::Label),
+        "off" => Ok(WeakSources::Off),
+        _ => Err(serde::de::Error::custom(format!("weak_sources `{}` is not one of label, off", s))),
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]

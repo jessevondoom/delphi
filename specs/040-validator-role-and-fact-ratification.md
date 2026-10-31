@@ -676,3 +676,22 @@ Where this spec was silent or ambiguous at build, the smallest reading chosen. E
 1. **Wikipedia is Reputable secondary** (A.2), so it counts as one of the two independent sources, never alone. `wikimedia.org`, `fandom.com` and other wikis stay Weak. Not built: ignoring a Wikipedia claim that is uncited or tagged "citation needed"; until then the independence rule (§6.2) and the second source are the guard.
 2. **Peer-reviewed publishers and the other domains listed in A.2** join the default list. Verifying that a given paper appeared in a peer-reviewed venue (a DOI that resolves to a journal) is not built; the domain class is the only check today.
 3. **Weak sources as corroboration** (operator direction, not yet built): a Weak source may count when several corroborate each other and the claim is plausible against Primary or Reputable material. This changes the §6.1 rule that Weak never counts, so it needs its own amendment with a labelled-set score (§15.5) before any code.
+
+## 27. Amendment 040-A2: Weak sources are labelled, never evidence (operator, 2026-10-31)
+The operator asked that Weak sources be usable in research and analysis. They stay out of corroboration (§6.1 is unchanged); what changes is how a claim supported only by them is kept and shown, so nothing is thrown away and nothing reads as fact.
+
+1. **Labels, mapped onto §23.1.** No new status ladder; two sub-labels of **not validated** are added, and `attributed` is the existing kind (§19.3):
+
+   | Label | Operator label | When |
+   | :-- | :-- | :-- |
+   | `verified` | validated | §7.2 passed: a Primary source, or two independent Reputable ones |
+   | `attributed` | not validated | a known source states it (`AttributionOnly`), or a Weak source that cites a Primary or Reputable one which the daemon then fetched and checked |
+   | `unverified (weak)` | not validated | the only support is Weak (forums, blogs, social posts, unlisted domains), for a claim of fact |
+   | `opinion (weak)` | not validated | the claim is a stance, review or forecast from a Weak source (D-9 applies: returned only when asked) |
+
+   The label is derived by the daemon from the source classes and the claim kind, never declared by a model.
+2. **Nothing counts.** A Weak source never counts toward the two (§6.1, A.3), however many agree. Agreement between Weak sources is shown in the record (`weak_agree: n`) but does not change a label. A model's judgement of plausibility is not an input to any label.
+3. **Promotion.** A background pass (V2b, under the §20 budget) re-runs claims labelled `unverified (weak)` when a Primary or Reputable source for the same claim is found, and moves the claim up through §7.2 as for any claim. Promotion never skips §7.2, and demotion happens through §23.3.
+4. **Where they live.** `unverified (weak)` and `opinion (weak)` claims are searchable and are returned labelled; they are never quoted as fact, never enter `context/facts/**`, and in the default scope they stay local until validated or ratified. A trusted-source claim (§26, A.1, A.2) is the only kind that enters the shared knowledge base at once.
+5. **One switch.** `[validator] weak_sources = "label" | "off"`, default `"label"`: `off` refuses to store a claim supported only by Weak sources. A setting that makes Weak count as evidence is not offered; revisiting it needs a labelled-set score (§15.5) showing a false-ratification rate below the operator's threshold.
+6. **Digest, not a card.** Unpromoted and unverified items are summarised in the periodic digest (slice 5); no per-claim approval is added.
