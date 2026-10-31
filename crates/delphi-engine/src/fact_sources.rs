@@ -67,6 +67,25 @@ fn matches(host: &str, dom: &str) -> bool {
     host == dom || host.ends_with(&format!(".{}", dom))
 }
 
+const JOURNAL_PUBLISHERS: [&str; 17] = [
+    "springer.com", "sciencedirect.com", "wiley.com", "tandfonline.com", "jstor.org", "cell.com", "thelancet.com", "nejm.org", "bmj.com", "pnas.org", "plos.org", "ieee.org", "acm.org", "aps.org", "academic.oup.com", "cambridge.org", "nature.com",
+];
+
+fn host_of(url: &str) -> String {
+    delphi_adapter::reqwest::Url::parse(url).ok().and_then(|u| u.host_str().map(|h| h.trim_end_matches('.').to_ascii_lowercase())).unwrap_or_default()
+}
+
+/// A page on Wikipedia (`specs/040` §28.1).
+pub fn is_wikipedia(url: &str) -> bool {
+    matches(&host_of(url), "wikipedia.org")
+}
+
+/// A journal publisher's domain: a page there counts only when it is an article with a DOI (`specs/040` §28.2).
+pub fn is_journal_publisher(url: &str) -> bool {
+    let h = host_of(url);
+    JOURNAL_PUBLISHERS.iter().any(|d| matches(&h, d))
+}
+
 fn pinned_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
