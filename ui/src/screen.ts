@@ -206,6 +206,26 @@ function toolRows(t: Block, m: Model, tw: number, inline = true): string[] {
   return [head, ...t.detail.split('\n').flatMap((l) => wrap(l, tw - 4)).map((l) => '    ' + T.dim(l))];
 }
 
+/** Most output rows a `!` block shows; the rest is counted (`specs/061` §6). */
+export const SHELL_ROWS = 200;
+
+/** A `!` command: its line, what it printed, and how it ended. A failure carries the attention styling, a success the muted one. */
+function shellRows(b: Block, m: Model, tw: number): string[] {
+  const failed = b.status === 'error';
+  const paint = failed ? T.warn : T.dim;
+  const head = T.clip(T.accent('!') + ' ' + T.sanitize(b.text).replace(/\s+/g, ' '), tw);
+  const out = (b.detail ?? '').replace(/\r\n?/g, '\n').replace(/\t/g, '    ').split('\n');
+  while (out.length && out[out.length - 1] === '') out.pop();
+  const rows = out.flatMap((l) => wrap(T.sanitize(l), tw));
+  const shown = rows.slice(0, SHELL_ROWS).map((l) => paint(l));
+  if (rows.length > SHELL_ROWS) shown.push(T.dim(`… ${rows.length - SHELL_ROWS} more lines`));
+  const sh = b.shell;
+  const foot = b.status === 'running' || !sh
+    ? T.dim('running…')
+    : (failed ? T.crimson : T.dim)([sh.timedOut ? 'timed out' : sh.exit === null ? 'killed' : `exit ${sh.exit}`, ...(sh.capped ? ['output capped'] : []), `${(sh.ms / 1000).toFixed(1)}s`].join(' · '));
+  return [head, ...shown, foot];
+}
+
 const MARK = { info: () => T.dim('·'), error: () => T.mark('disproved'), ok: () => T.mark('done') };
 
 const roleBullet = (role: string, m: Model): string => T.roleColor(role, m.info).bold('●');
@@ -215,7 +235,7 @@ function render(b: Block, m: Model, w: number, tools: Block[] = []): string[] {
   const lines = renderIn(b, m, inner, tools);
   if (b.kind === 'attention') return gutter(lines, T.mark('needs-you'), w);
   if (b.kind === 'card') return gutter(lines, T.mark('needs-you'), w);
-  if (b.kind === 'tool') return gutter(lines, toolMark(b, m), w);
+  if (b.kind === 'tool' || b.kind === 'shell') return gutter(lines, toolMark(b, m), w);
   if (b.kind === 'user') return gutter(lines, T.dim('●'), w);
   if (b.kind === 'note') return gutter(lines, /^[·✖✔■]/.test(b.text) ? '' : MARK[b.tone ?? 'info'](), w);
   return gutter(lines, b.status === 'escalated' ? T.mark('needs-you') : roleBullet(b.role ?? 'orchestrator', m), w);
@@ -241,6 +261,7 @@ function renderIn(b: Block, m: Model, w: number, tools: Block[]): string[] {
     return ['', head, ...b.text.split('\n').flatMap((l) => wrap(l, w - 2)), keys];
   }
   if (b.kind === 'tool') return ['', ...toolRows(b, m, w - 2, false)];
+  if (b.kind === 'shell') return ['', ...shellRows(b, m, w - 2)];
   const role = b.role ?? 'orchestrator';
   const label = T.badge(role, b.status === 'escalated' ? 'escalated' : 'idle', m.info, m.pal) + ' ' + T.roleColor(role, m.info).bold(T.roleName(role, m.info)) + T.dim(` · ${clock(b.at)}`);
   return ['', ...message(m, w, label, [...trimBlank(renderMarkdown(b.text, tw)), ...tools.flatMap((t) => toolRows(t, m, tw))])];
@@ -252,7 +273,7 @@ const rolesKey = new WeakMap<object, string>();
 function block(b: Block, m: Model, w: number, tools: Block[] = []): string[] {
   let rk = rolesKey.get(m.info.roles);
   if (rk === undefined) { rk = JSON.stringify(m.info.roles); rolesKey.set(m.info.roles, rk); }
-  const spin = [b, ...tools].some((t) => t.kind === 'tool' && t.status !== 'ok' && t.status !== 'error') && spinner(m.now, m.still ?? false);
+  const spin = [b, ...tools].some((t) => (t.kind === 'tool' || t.kind === 'shell') && t.status !== 'ok' && t.status !== 'error') && spinner(m.now, m.still ?? false);
   const tk = tools.map((t) => `${t.id}${t.status}${t.detail?.length ?? 0}`).join(',') + spin;
   const key = `${w}:${m.pal.dark}:${m.pal.bg?.join(',') ?? '-'}:${T.currentCapabilities().color}:${m.expandTools}:${b.status}:${b.detail?.length ?? 0}:${rk}:${tk}`;
   const hit = cache.get(b);
@@ -406,7 +427,7 @@ function windowOf(ps: string[][], start: number, end: number): string[] {
 
 /** The keys, as the help overlay shows them (`005e` §10.1). Every row is a key that does what it says. */
 const KEYS = [
-  'enter  send                alt+enter / ctrl+j  new line',
+  'enter  send         alt+enter / ctrl+j  new line   !cmd  shell',
   'esc    clear the prompt; with it empty, stop what is running',
   '↑ ↓    history             ctrl+r  search history      tab  complete',
   '← →    decks (empty prompt) · shift+← →  decks any time',

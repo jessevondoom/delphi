@@ -7,9 +7,11 @@ import { sanitize, type AgentState } from './theme.ts';
  * An `attention` block is a task that stopped and needs the operator (an escalation or a failure): `text` is the
  * headline, `reason` the engine's reason without its wrapper, `cause` which stop it is (`attention.ts`).
  */
-export type Block = { id: number; kind: 'user' | 'reply' | 'note' | 'card' | 'tool' | 'attention'; role?: string; text: string; at: number; status?: string; ref?: string; detail?: string; reason?: string; cause?: Cause;
+export type Block = { id: number; kind: 'user' | 'reply' | 'note' | 'card' | 'tool' | 'attention' | 'shell'; role?: string; text: string; at: number; status?: string; ref?: string; detail?: string; reason?: string; cause?: Cause;
   /** For a note: how it is marked in the chat (`·` information, `✖` error, `✔` success; `005e` §10.6). */
-  tone?: 'info' | 'error' | 'ok' };
+  tone?: 'info' | 'error' | 'ok';
+  /** For a `!` shell block (`specs/061` §6): `text` is the command, `detail` its output, `status` running | ok | error. */
+  shell?: { exit: number | null; timedOut: boolean; capped: boolean; ms: number } };
 export type Agent = {
   state: AgentState; doing: string;
   /** When it entered `escalated`, so the strip can let go of the face (`005e` §6.2). */
