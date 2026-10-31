@@ -24,8 +24,8 @@ export type Decision = {
  * how a decision with no recommendation starts); `answered` is the decision an answer has been sent for, so a second
  * press cannot send it twice; `note` is the line that confirms the last answer.
  */
-export type Pane = { /** What is being typed in the detail view's prompt, the saved thread of the open decision, a model's reading awaiting confirmation, a reply in flight, and the cost line of the last reply. */ draft: string; thread: Entry[]; reading: Reading | null; busy: boolean; rnote: string; sel: number; filter: string | null; ticks: string[]; open: string | null; opt: number | null; payload: boolean; openedAt: number; answered: string | null; note: string; /** The confirm page for the ticked decisions is showing, since `confirmedAt`. */ confirm: boolean; confirmedAt: number };
-export const newPane = (): Pane => ({ draft: '', thread: [], reading: null, busy: false, rnote: '', sel: 0, filter: null, ticks: [], open: null, opt: null, payload: false, openedAt: 0, answered: null, note: '', confirm: false, confirmedAt: 0 });
+export type Pane = { /** What is being typed in the detail view's prompt, the saved thread of the open decision, a model's reading awaiting confirmation, a reply in flight, and the cost line of the last reply. */ draft: string; thread: Entry[]; reading: Reading | null; busy: boolean; rnote: string; sel: number; filter: string | null; ticks: string[]; open: string | null; opt: number | null; payload: boolean; openedAt: number; answered: string | null; note: string; /** The confirm page for the ticked decisions is showing, since `confirmedAt`. */ confirm: boolean; confirmedAt: number; /** Decisions (id@payload hash) whose detail view has been shown: only these can be ticked, so a bulk accept never covers what was not rendered. */ seen: string[] };
+export const newPane = (): Pane => ({ draft: '', thread: [], reading: null, busy: false, rnote: '', sel: 0, filter: null, ticks: [], open: null, opt: null, payload: false, openedAt: 0, answered: null, note: '', confirm: false, confirmedAt: 0, seen: [] });
 
 /** `answer` is the operator choosing; `accept-all` is the ticked recommendations accepted together (specs/044 §5.5). The console turns each into the existing call for the decision's source. */
 export type Action =
@@ -80,7 +80,13 @@ export function chips(items: Decision[]): { kind: string; n: number }[] {
 }
 
 const tickKey = (d: Decision) => `${d.id}@${d.payload_blake3}`;
-export const isTicked = (p: Pane, d: Decision): boolean => d.tickable && p.ticks.includes(tickKey(d));
+/** A decision can be ticked when the daemon says so and its payload has been shown in this pane (Red is never tickable). */
+export const canTick = (p: Pane, d: Decision): boolean => d.tickable && p.seen.includes(tickKey(d));
+export const isTicked = (p: Pane, d: Decision): boolean => canTick(p, d) && p.ticks.includes(tickKey(d));
+/** Record that the detail view of these decisions has been shown. */
+export const markSeen = (p: Pane, ds: Decision[]): Pane => ({ ...p, seen: [...new Set([...p.seen, ...ds.map(tickKey)])] });
+/** How many tickable decisions in `rows` have not been opened yet. */
+export const unopened = (p: Pane, rows: Decision[]): number => rows.filter((d) => d.tickable && !canTick(p, d)).length;
 export const ticked = (p: Pane, items: Decision[]): Decision[] => items.filter((d) => isTicked(p, d));
 
 /** After the list changes: keep the selection in range, drop a filter nothing matches, and drop ticks whose decision
@@ -91,13 +97,13 @@ export function reconcile(p: Pane, items: Decision[]): Pane {
   const rows = visible(items, filter);
   const sel = Math.max(0, Math.min(p.sel, rows.length - 1));
   const ticks = p.ticks.filter((t) => live.has(t));
-  const base = { ...p, filter, ticks, sel, confirm: p.confirm && ticks.length > 0 };
+  const base = { ...p, filter, ticks, sel, confirm: p.confirm && ticks.length > 0, seen: p.seen.filter((t) => live.has(t)) };
   if (p.open === null) return base;
   const at = rows.findIndex((d) => d.id === p.open);
-  if (at >= 0) return { ...base, sel: at };
+  if (at >= 0) return { ...markSeen(base, [rows[at]!]), sel: at };
   // The decision being read is gone (it was answered): move to the next one in this filter, or leave the detail view.
   const next = rows[sel];
-  return next ? { ...base, ...fresh, open: next.id, opt: initialOpt(next), payload: false, answered: null } : { ...base, ...fresh, open: null, opt: null, payload: false, answered: null };
+  return next ? { ...markSeen(base, [next]), ...fresh, open: next.id, opt: initialOpt(next), payload: false, answered: null } : { ...base, ...fresh, open: null, opt: null, payload: false, answered: null };
 }
 
 /** Typing state of a decision that was just opened. */
@@ -105,7 +111,7 @@ const fresh = { draft: '', thread: [] as Entry[], reading: null as Reading | nul
 const recIndex = (d: Decision): number => (d.brief.recommendation ? d.choices.findIndex((c) => c.id === d.brief.recommendation!.choice_id) : -1);
 /** The focus starts on the recommended choice; a decision with no recommendation starts with none selected. */
 export const initialOpt = (d: Decision): number | null => { const i = recIndex(d); return i >= 0 ? i : null; };
-const openAt = (p: Pane, rows: Decision[], i: number, now: number): Pane => ({ ...p, ...fresh, sel: i, open: rows[i]!.id, opt: initialOpt(rows[i]!), payload: false, openedAt: now, answered: null });
+const openAt = (p: Pane, rows: Decision[], i: number, now: number): Pane => ({ ...markSeen(p, [rows[i]!]), ...fresh, sel: i, open: rows[i]!.id, opt: initialOpt(rows[i]!), payload: false, openedAt: now, answered: null });
 
 /** Clear the sent mark after a failed answer so the operator can try again. */
 export const unsent = (p: Pane): Pane => ({ ...p, answered: null, note: '', busy: false });
@@ -206,13 +212,14 @@ export function key(p: Pane, items: Decision[], e: Ev, now = 0): { pane: Pane; a
   }
   if (k === ' ' && d) {
     if (!d.tickable) return none();
+    if (!canTick(p, d)) return none({ ...p, sel });
     const t = tickKey(d);
     return none({ ...p, sel, ticks: p.ticks.includes(t) ? p.ticks.filter((x) => x !== t) : [...p.ticks, t] });
   }
   if (k === 'y') return ticked(p, items).length ? none({ ...p, confirm: true, confirmedAt: now }) : none();
   if (k === 'a') {
     // Every tickable decision in the filter, never more: a filter hides entries, it does not widen the batch.
-    const ts = rows.filter((x) => x.tickable);
+    const ts = rows.filter((x) => canTick(p, x));
     if (!ts.length) return none();
     const keys = ts.map(tickKey);
     const all = keys.every((x) => p.ticks.includes(x));
@@ -278,7 +285,8 @@ export function view(items: Decision[], p: Pane, c: Ctx): string[] {
     });
     return T.dim('show  ') + parts.join('   ');
   })();
-  const head = ['', '  ' + T.spread(count, tickHint, w - 4), '  ' + T.spread(chipRow, T.dim('f change'), w - 4), ''];
+  const unread = unopened(p, rows);
+  const head = ['', '  ' + T.spread(count, tickHint, w - 4), '  ' + T.spread(chipRow, T.dim('f change'), w - 4), unread ? '  ' + T.warn(T.clip(`${unread} not opened yet: open one (enter) to read it before it can be ticked`, w - 4)) : ''];
   const per = compact ? 4 : 5;
   const cap = Math.max(1, Math.floor((h - head.length + (compact ? 0 : 1)) / per));
   const start = Math.min(Math.max(0, sel - cap + 1), Math.max(0, rows.length - cap));
@@ -286,7 +294,7 @@ export function view(items: Decision[], p: Pane, c: Ctx): string[] {
   rows.slice(start, start + cap).forEach((d, i) => {
     const on = start + i === sel;
     const style = tierStyle(d.tier);
-    const box = d.tickable ? (isTicked(p, d) ? T.ok(chalk.bold('[x]')) : T.dim('[ ]')) : '   ';
+    const box = d.tickable ? (isTicked(p, d) ? T.ok(chalk.bold('[x]')) : canTick(p, d) ? T.dim('[ ]') : T.dim('[?]')) : '   ';
     const when = c.at(d);
     const tag = (d.tier === 'open' ? T.dim : style)(`${TIER_WORD[d.tier]} · ${KIND_WORD[d.kind] ?? d.kind}`) + (when === null ? '' : '  ' + T.dim(age(c.now - when)));
     const left = (on ? T.accent('❯') : ' ') + ' ' + box + ' ' + T.dim(d.label) + '  ' + (on ? chalk.bold(style(d.title)) : style(d.title));

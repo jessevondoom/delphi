@@ -96,7 +96,7 @@ These are ordinary (not pinned) settings: none of them can let anything reach yo
 
 ## 7. Guard rails
 - **The OS sandbox is required.** `build.start --optimistic` is refused without it: everything an optimistic task does happens before the review, and a worktree is not a sandbox (GOVERNANCE). Gate commands that would run unsandboxed still ask.
-- **Opt-in per build,** never a default, and not part of any permission mode.
+- **Opt-in per build,** never a default, and not part of any permission mode. *Amendment 015-A1 (council 013 D3, S4):* this is now true in the code: `optimistic` is no longer a `/permissions` value or a `Shift+Tab` stop, and the broker's permission modes are `default`, `accept-edits` and `mission-auto`. Only `/build --optimistic` (`build.start`'s `optimistic`, which still needs the sandbox) makes a task optimistic, and the weaker-model rule of `specs/035` D-13 follows that per-task flag.
 - Nothing eligible reaches the operator's checkout: the merge is gated on the review, the merge card, and the existing gates 1 to 5.
 - Taint still limits what a span may do; the approver does not read agent prose, only the daemon's classified card.
 
@@ -122,3 +122,6 @@ Caps and rollback: past `max_decisions` or `max_approver_calls` the next edit go
 Service: decisions are listed and reviewed by the console only; a review with the wrong hash, an unknown id, a bad resolution or a refusal is rejected; the narrator and relay cannot review or merge; `build.merge` needs a task with a kept branch; the relay event list is pinned. Console and CLI: the `--optimistic` flag, `/decisions` and `/merge` parse; the listing, show, ratify, reject and bulk commands send the hash that was shown. Run: a build awaiting review ends the run with exit code 5.
 
 Not covered: a real model driving an optimistic build; the relay email for the review request against a real mailbox.
+
+## 10. Amendment 015-A1: optimistic is a per-build flag, not a permission mode (council 013 D3 b)
+The `optimistic` value of `/permissions`, `delphi run --permissions` and the `Shift+Tab` cycle is removed, along with the broker mode behind it (§7 already said an optimistic build is chosen per build and is not part of any permission mode). Behaviour of `/build --optimistic` is unchanged. A session that was in `auto` stays in `auto`; none starts an optimistic build by itself.

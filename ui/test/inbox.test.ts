@@ -67,12 +67,26 @@ test('focus: numbers and enter choose an option; a red card has no option 3', ()
 
 test('approve-all-amber needs a second press and never includes a red card', () => {
   const list = cards(three());
-  const first = key(newInbox(0), list, ch('a'), 9000);
+  const inb = { ...newInbox(0), seen: ['a2', 'a3'] };
+  const first = key(inb, list, ch('a'), 9000);
   assert.equal(first.action.t, 'none');
   assert.equal(first.inbox.confirmAll, true);
   const second = key(first.inbox, list, ch('a'), 9000).action;
   assert.deepEqual(second.t === 'resolve-all' && second.cards.map((c) => c.id), ['a2', 'a3']);
   assert.equal(key(first.inbox, list, k('down'), 9000).inbox.confirmAll, false, 'any other key cancels the confirmation');
+});
+
+test('approve-all-amber skips an amber card whose payload was never shown, and says so', () => {
+  const list = cards(three());
+  const a2 = list.find((c) => c.id === 'a2')!;
+  const seenOne = key({ ...newInbox(0), sel: list.indexOf(a2) }, list, k('tab'), 9000).inbox;
+  assert.deepEqual(seenOne.seen, ['a2'], 'focus mode renders the card');
+  const armed = key({ ...seenOne, mode: 'list' }, list, ch('a'), 9000).inbox;
+  const all = key(armed, list, ch('a'), 9000).action;
+  assert.deepEqual(all.t === 'resolve-all' && all.cards.map((c) => c.id), ['a2'], 'a3 was not rendered, so it stays pending');
+  const none = key(newInbox(0), list, ch('a'), 9000);
+  assert.equal(none.inbox.confirmAll, false, 'nothing rendered: nothing to approve');
+  assert.match(view(three(), newInbox(0), info, pal, 9000, 100, 24).map(plain).join('\n'), /2 amber action\(s\) not opened yet/);
 });
 
 test('the views follow the design: list rows with tier, role badge and time; focus card with options and the diff', () => {

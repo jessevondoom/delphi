@@ -1168,7 +1168,7 @@ mod tests {
         assert!(f.root.join(format!("workspaces/w/local/missions/{}/research/page.html", f.m.id)).exists());
         // a page with a script: a card in the most permissive mode, showing the script; denied, so nothing is written
         let f = setup(vec![Step::tool("a1", "write_html", page(Some("document.title = 'x';"))), Step::text("Understood.")], 5.0, |_| {});
-        f.engine.broker.set_mode(Mode::Optimistic);
+        f.engine.broker.set_mode(Mode::MissionAuto);
         let (e, m) = (f.engine.clone(), f.m.clone());
         let task = tokio::spawn(async move { e.run_task(&m, "architect", "Make a scripted page").await });
         let c = pending_card(&f).await.expect("a scripted page always asks");
