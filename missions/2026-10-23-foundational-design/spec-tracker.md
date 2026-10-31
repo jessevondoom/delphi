@@ -392,6 +392,15 @@ Approved by the operator on 2026-10-30. D-33 supersedes D-28's Ink renderer choi
 | :-- | :-- | :-- |
 | OUI1 | OpenTUI renderer, supported source runtime, terminal ownership, CI end-to-end and release builds | in progress on `codex/opentui-completion` |
 
+## Delphi for host agents over MCP (spec 061, approved 2026-10-31)
+
+Approved by the operator on 2026-10-31. Same-machine host agents (Claude Code, Copilot CLI, Codex) get role packs, project awareness, `request_help`, Councils and a propose-only learning path. D-1..D-5 are the operator's decisions; D-6..D-9 follow the architect's recommendations; Q-1..Q-5 are open and each blocks one slice (§12).
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| S0 | spec 061 approval | approved 2026-10-31; merges with its pull request |
+| S1-S11 | server skeleton and toggle, agent packs, project awareness, host config and plugin and docs, daemon proposals and limits, `request_help`, `request_council`, vector search, transcript ingest, resume and console toggle, security review | not started |
+
 ## Council 013: containment increment (verdict: `councils/013-verdict.md`)
 
 Increment 1 (authority and trust containment), each slice its own PR; the 350 h report plan is not run as one batch. Built 2026-10-30; all slices amend approved specs (spec status unchanged).
