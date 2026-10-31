@@ -1200,6 +1200,51 @@ impl EngineService {
         Ok(json!({"marked": true}))
     }
 
+    /// The registered project a request names (`project`), or none for the default scope.
+    fn named_project(&self, p: &Value) -> Result<Option<std::path::PathBuf>, RpcError> {
+        let Some(n) = p["project"].as_str().map(|n| n.trim().to_lowercase()).filter(|n| !n.is_empty()) else { return Ok(None) };
+        match self.engine.projects.iter().find(|(name, _)| name.to_lowercase() == n) {
+            Some((_, root)) => Ok(Some(root.clone())),
+            None => Err(err(code::INVALID_PARAMS, format!("`{}` is not a registered project", n))),
+        }
+    }
+
+    /// `pending.list`: research held back from the knowledge base, in the default scope or in the named project (`specs/058` §14).
+    async fn pending_list(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let held = self.named_project(&p)?.map(crate::research_pending::Held::Project).unwrap_or(crate::research_pending::Held::Pending);
+        let ws = self.engine.ws.dir.clone();
+        let items = tokio::task::spawn_blocking(move || crate::research_pending::list(&ws, &held)).await.map_err(|e| err(-32000, e.to_string()))?;
+        Ok(json!({"items": items}))
+    }
+
+    /// `pending.ratify` and `pending.discard`: the operator's decision on one held entry. Ratifying puts it where the index reads it.
+    async fn pending_decide(&self, p: Value, ctx: CallContext, ratify: bool) -> RpcOutcome {
+        need_console(&ctx)?;
+        let held = self.named_project(&p)?.map(crate::research_pending::Held::Project).unwrap_or(crate::research_pending::Held::Pending);
+        let Some(rel) = p["rel"].as_str().map(String::from) else { return Err(err(code::INVALID_PARAMS, "`rel` is required")) };
+        let (ws, home) = (self.engine.ws.dir.clone(), self.engine.ws.home.clone());
+        let out = tokio::task::spawn_blocking(move || -> Result<Value, String> {
+            if !ratify {
+                crate::research_pending::discard(&ws, &held, &rel)?;
+                return Ok(json!({"discarded": rel}));
+            }
+            let (wrote, path) = crate::research_pending::ratify(&ws, &held, &rel)?;
+            if wrote != crate::research::Wrote::Unchanged {
+                let mut kb = crate::kb::Kb::open(&ws.join("local/state.db")).map_err(|e| e.to_string())?;
+                let model = crate::kb::attach_default(&home, &mut kb).map_err(|e| e.to_string())?;
+                kb.refresh(&ws, "").map_err(|e| e.to_string())?;
+                if model {
+                    crate::kb::embed_in_background(&home, &ws);
+                }
+            }
+            Ok(json!({"ratified": path}))
+        })
+        .await
+        .map_err(|e| err(-32000, e.to_string()))?;
+        out.map_err(|e| err(code::INVALID_PARAMS, e))
+    }
+
     /// `research.start`: expand the knowledge base with what the trusted sources say about a topic (`specs/028` §10). Returns at once;
     /// `research.status` reports progress and, when the job ends, the report. One job at a time. Console only: it sends the topic to a
     /// search engine and writes into the workspace.
@@ -1210,12 +1255,9 @@ impl EngineService {
             return Err(err(code::INVALID_PARAMS, "`topic` must be 1 to 200 characters"));
         }
         // A registered project's name sends the research into that project (`specs/058` §13); none means the default scope.
-        let scope = match p["project"].as_str().map(|n| n.trim().to_lowercase()).filter(|n| !n.is_empty()) {
+        let scope = match self.named_project(&p)? {
             None => crate::research::Scope::Home,
-            Some(n) => match self.engine.projects.iter().find(|(name, _)| name.to_lowercase() == n) {
-                Some((_, root)) => crate::research::Scope::Project(root.clone()),
-                None => return Err(err(code::INVALID_PARAMS, format!("`{}` is not a registered project", n))),
-            },
+            Some(root) => crate::research::Scope::Project(root),
         };
         let shared = crate::research::Shared::new(&topic);
         {
@@ -1935,6 +1977,9 @@ impl Extension for ServiceExt {
                 "build.start" => svc.build_start(params, ctx).await,
                 "build.merge" => svc.build_merge(params, ctx).await,
                 "research.start" => svc.research_start(params, ctx).await,
+                "pending.list" => svc.pending_list(params, ctx).await,
+                "pending.ratify" => svc.pending_decide(params, ctx, true).await,
+                "pending.discard" => svc.pending_decide(params, ctx, false).await,
                 "answer.accept" => svc.answer_accept(params, ctx).await,
                 "research.status" => svc.research_status(ctx).await,
                 "research.cancel" => svc.research_cancel(ctx).await,
@@ -2806,7 +2851,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "kb.open", "research.start", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "retro.list", "retro.stale", "retro.accept", "retro.reject", "retro.promotions", "retro.promote", "retro.withdraw", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
+            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "kb.open", "research.start", "pending.list", "pending.ratify", "pending.discard", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "retro.list", "retro.stale", "retro.accept", "retro.reject", "retro.promotions", "retro.promote", "retro.withdraw", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
             for m in every_mutating_method_the_daemon_has {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }
@@ -2863,7 +2908,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let everything_a_relay_must_not_reach = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "kb.open", "research.start", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","kb.search", "kb.get", "kb.allows", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "models.get", "anything.else"];
+            let everything_a_relay_must_not_reach = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "kb.open", "research.start", "pending.list", "pending.ratify", "pending.discard", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","kb.search", "kb.get", "kb.allows", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "models.get", "anything.else"];
             for m in everything_a_relay_must_not_reach {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }

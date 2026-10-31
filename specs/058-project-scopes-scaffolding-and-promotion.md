@@ -268,3 +268,11 @@ Research the operator asks for (the expand job, `specs/028` §10) is written whe
 3. **Source-status label.** Each entry's frontmatter gains `source_class` (`primary`, `reputable_secondary`, `weak`), written by code from the same class. A pending or project entry is at the same tier as any other research entry; nothing here raises trust (`specs/001` §5).
 4. **One list.** The research job still reads only hosts on its own list (`context/sources/trusted.toml`, the operator's `trusted-sources.toml`); the validator's classes decide only where a page goes. Hosts the research list reads but the validator does not trust (today `upload.wikimedia.org`, `commons.wikimedia.org`) are held, not shared; a test fails if the sets drift.
 5. **Not built:** the console passing a project name (slice 6), listing or promoting pending entries (slice 4), the digest (slice 5), and routing of agent-run searches outside the expand job.
+
+## 14. Amendment 058-A2: reviewing held research, `/validate` (operator, 2026-10-31)
+1. **What is held.** The default scope's `local/pending/web/` and a registered project's `research/web/` (§13). Neither is indexed.
+2. **Console commands.** `/validate` lists them; `/validate ratify <n…>` and `/validate discard <n…>` decide; `project=<name>` selects a project's own research. `/retro research …` is the same command. The daemon methods are `pending.list`, `pending.ratify` and `pending.discard`: console scope only, and absent from the relay.
+3. **Ratify** puts the entry (and the pictures it names) under `knowledge/web/`, where the index reads it at the research tier, so it is searchable as **noted, not validated**; its `source_class` still says what the source was. A held page is moved; a project's entry is copied and the project keeps its own. It is the operator's act and nothing raises a tier (`specs/001` §5).
+4. **Discard** deletes a held page from the workspace's pending folder. It never deletes a project's files.
+5. **Checks by code.** An entry is named `host/slug.md` exactly (validated host, lowercase letters, digits and dashes); a link is never followed; a file the job did not write (no `source_url`) is refused.
+6. **Not built:** the automatic validator pass over held entries (the promotion pass of `specs/040`, 040-A2), and a bulk `retro promote` of project research; ratification is per entry.
