@@ -49,7 +49,7 @@ Invariants, tested:
 1. **Red is never allowed.** A card of the Red tier is denied whatever the policy says.
 2. **Merge tools are never allowed.** A card whose tool is `merge` or `pull_request` is denied even if it claims to be Amber, and a policy file that names either tool, or any tier other than Amber, does not load.
 3. **Stopping at the merge card is the design.** When a build reaches the merge card, the run records the branch, commit and gate report from the card, denies the card, and reports `ready_to_merge`. The operator merges later from the console. Denying the card keeps the branch and worktree, which is what the engine already does for a declined merge.
-4. With `--on-card relay` a Red card that is not a merge card is left for the operator, who can deny it by reply and approve it only at the console (`specs/014` §3). How each left card ended (approved, denied, timed out, and by whom) is filled into the summary from the log.
+4. With `--on-card relay` a Red card that is not a merge card is left for the operator, who can deny it by reply and, if step-up is set up, approve it with an authenticator code (`specs/014` §7.1). A merge or pull-request card is approved only at the console, whatever the code (`specs/014` amendment 014-A1). How each left card ended (approved, denied, timed out, and by whom) is filled into the summary from the log.
 
 ## 4. Output and exit codes
 - default: a short human summary on stdout.

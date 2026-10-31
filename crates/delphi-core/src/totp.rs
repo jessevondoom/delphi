@@ -9,6 +9,7 @@ use hmac::{Hmac, KeyInit, Mac};
 use sha1::Sha1;
 use std::collections::{HashSet, VecDeque};
 use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 pub const STEP_SECS: u64 = 30;
@@ -107,6 +108,8 @@ pub enum StepUpError {
     Wrong,
     /// The code was already used.
     Replayed,
+    /// The replay and lockout state could not be saved, so nothing is accepted.
+    Unavailable,
 }
 
 impl std::fmt::Display for StepUpError {
@@ -115,21 +118,48 @@ impl std::fmt::Display for StepUpError {
             StepUpError::Locked { retry_in_secs } => write!(f, "too many wrong codes; step-up is locked for {} more seconds", retry_in_secs),
             StepUpError::Wrong => write!(f, "that authenticator code is wrong"),
             StepUpError::Replayed => write!(f, "that authenticator code was already used; wait for the next one"),
+            StepUpError::Unavailable => write!(f, "step-up cannot record its state, so it approves nothing"),
         }
     }
 }
 
-/// The stateful half: a code works once, and wrong guesses are rationed. (In memory: a restart forgets both, but a
-/// replay would then also need the single-use card code the relay holds.)
+/// The stateful half: a code works once, and wrong guesses are rationed. With a state file (`Verifier::persistent`)
+/// both survive a restart; the file is written atomically (0600) and holds only what the code window still needs.
+/// A state file that exists but cannot be read or parsed fails closed: step-up is locked for [`LOCKOUT_SECS`] from the
+/// first check, never started empty (`specs/014` amendment 014-A1, REV-SEC-09).
 #[derive(Default)]
 pub struct Verifier {
     used: Mutex<HashSet<u64>>,
     failures: Mutex<VecDeque<u64>>,
+    path: Option<PathBuf>,
+    distrust: Mutex<bool>,
 }
 
+const MAX_STATE_BYTES: u64 = 16 * 1024;
+
 impl Verifier {
+    /// A verifier that keeps its replay and lockout state in `path`.
+    pub fn persistent(path: PathBuf) -> Verifier {
+        let v = Verifier { path: Some(path.clone()), ..Default::default() };
+        match read_state(&path) {
+            Ok(Some((used, failures))) => {
+                *v.used.lock().unwrap() = used;
+                *v.failures.lock().unwrap() = failures;
+            }
+            Ok(None) => {}
+            Err(()) => *v.distrust.lock().unwrap() = true,
+        }
+        v
+    }
+
     pub fn check(&self, secret: &[u8], code: &str, now_secs: u64) -> Result<(), StepUpError> {
         let mut failures = self.failures.lock().unwrap();
+        let mut used = self.used.lock().unwrap();
+        if std::mem::take(&mut *self.distrust.lock().unwrap()) {
+            failures.clear();
+            failures.extend(std::iter::repeat_n(now_secs, MAX_FAILURES));
+            let _ = self.save(&used, &failures);
+        }
         while failures.front().is_some_and(|t| now_secs.saturating_sub(*t) >= LOCKOUT_SECS) {
             failures.pop_front();
         }
@@ -139,16 +169,68 @@ impl Verifier {
         }
         let Some(step) = matching_step(secret, code, now_secs) else {
             failures.push_back(now_secs);
+            self.save(&used, &failures).map_err(|_| StepUpError::Unavailable)?;
             return Err(StepUpError::Wrong);
         };
-        let mut used = self.used.lock().unwrap();
         used.retain(|s| *s + 2 * WINDOW + 1 >= now_secs / STEP_SECS);
         if !used.insert(step) {
             return Err(StepUpError::Replayed);
         }
         failures.clear();
-        Ok(())
+        self.save(&used, &failures).map_err(|_| StepUpError::Unavailable)
     }
+
+    fn save(&self, used: &HashSet<u64>, failures: &VecDeque<u64>) -> std::io::Result<()> {
+        let Some(path) = &self.path else { return Ok(()) };
+        let mut text = String::from("delphi-totp-state 1\n");
+        let mut steps: Vec<_> = used.iter().collect();
+        steps.sort();
+        for s in steps {
+            text.push_str(&format!("used {}\n", s));
+        }
+        for t in failures {
+            text.push_str(&format!("fail {}\n", t));
+        }
+        let tmp = path.with_extension("tmp");
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+        let mut f = opts.open(&tmp)?;
+        std::io::Write::write_all(&mut f, text.as_bytes())?;
+        f.sync_all()?;
+        std::fs::rename(&tmp, path)
+    }
+}
+
+/// `Ok(None)`: no file yet. `Err`: present but unusable.
+#[allow(clippy::type_complexity)]
+fn read_state(path: &Path) -> Result<Option<(HashSet<u64>, VecDeque<u64>)>, ()> {
+    let meta = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(()),
+    };
+    if meta.len() > MAX_STATE_BYTES {
+        return Err(());
+    }
+    let text = std::fs::read_to_string(path).map_err(|_| ())?;
+    let mut lines = text.lines();
+    if lines.next() != Some("delphi-totp-state 1") {
+        return Err(());
+    }
+    let (mut used, mut failures) = (HashSet::new(), VecDeque::new());
+    for l in lines {
+        match l.split_once(' ') {
+            Some(("used", n)) => used.insert(n.parse::<u64>().map_err(|_| ())?),
+            Some(("fail", n)) => {
+                failures.push_back(n.parse::<u64>().map_err(|_| ())?);
+                true
+            }
+            _ => return Err(()),
+        };
+    }
+    Ok(Some((used, failures)))
 }
 
 #[cfg(test)]
@@ -213,6 +295,31 @@ mod tests {
         }
         assert!(matches!(v.check(RFC_SECRET, &code, t + 10), Err(StepUpError::Locked { retry_in_secs }) if retry_in_secs > 200), "locked even for the right code");
         assert_eq!(v.check(RFC_SECRET, &code_at(RFC_SECRET, t + LOCKOUT_SECS + 10), t + LOCKOUT_SECS + 10), Ok(()), "and open again afterwards");
+    }
+
+    #[test]
+    fn replay_and_lockout_survive_a_restart_and_a_bad_state_file_fails_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("totp-state");
+        let t = 1_700_000_000u64;
+        let code = code_at(RFC_SECRET, t);
+        assert_eq!(Verifier::persistent(path.clone()).check(RFC_SECRET, &code, t), Ok(()));
+        let v = Verifier::persistent(path.clone());
+        assert_eq!(v.check(RFC_SECRET, &code, t + 5), Err(StepUpError::Replayed), "a used code stays used after a reload");
+        #[cfg(unix)]
+        assert_eq!(std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&path).unwrap().permissions()) & 0o777, 0o600);
+        for i in 0..MAX_FAILURES {
+            assert_eq!(v.check(RFC_SECRET, "000000", t + 40 + i as u64), Err(StepUpError::Wrong));
+        }
+        let v = Verifier::persistent(path.clone());
+        let fresh = code_at(RFC_SECRET, t + 90);
+        assert!(matches!(v.check(RFC_SECRET, &fresh, t + 90), Err(StepUpError::Locked { .. })), "the lockout survives a reload");
+        for junk in ["garbage", "delphi-totp-state 1\nused x\n"] {
+            std::fs::write(&path, junk).unwrap();
+            let v = Verifier::persistent(path.clone());
+            assert!(matches!(v.check(RFC_SECRET, &fresh, t + 90), Err(StepUpError::Locked { .. })), "a corrupt file starts locked, not empty: {}", junk);
+            assert_eq!(v.check(RFC_SECRET, &code_at(RFC_SECRET, t + 90 + LOCKOUT_SECS), t + 90 + LOCKOUT_SECS), Ok(()), "and opens when the window passes");
+        }
     }
 
     #[test]

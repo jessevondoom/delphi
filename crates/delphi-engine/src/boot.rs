@@ -334,7 +334,7 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
         toolless: Default::default(),
         approver_calls: Default::default(),
         pace: Default::default(),
-        totp: Default::default(),
+        totp: delphi_core::totp::Verifier::persistent(ws_dir.join("local/totp-state")),
     });
     let day = &now_rfc3339()[..10];
     let default_mission = format!("{}-session", day);

@@ -10,6 +10,7 @@ This file starts with the work after v0.2.7. For earlier releases, the history i
 
 ### Added
 
+- **Relay merge boundary** (spec 014 amendment 014-A1, REV-SEC-09): a merge, pull-request or constitution/ratification card can no longer be approved by relay reply, even with a valid authenticator code; and step-up's used-code and lockout state now persist in `local/totp-state`, failing closed if the file is corrupt, so a restart no longer resets them.
 - **Excerpts, anchors and bibliographies in the central library** (spec 055 SK2): `delphi sources excerpt add|list` keeps quoted passages with a locator and purpose (4 KiB each; for a restricted source not held whole, 10% of the work or 16 KiB in total) and an anchor with prefix and suffix that is found again when the source changes; `delphi sources bib` writes APA, MLA, Chicago, plain text, CSL-JSON or BibTeX and never a private source. `delphi sources add` now reads Wikipedia, DOI and Gutenberg metadata by code, and `sources show` rechecks a source last checked over 30 days ago through the fetcher.
 - **Sources in org bundles** (spec 055 SK0, spec 023 §2.1): an optional `sources/` section with full-text captures and images, gated by licence (only open SPDX ids, `public-domain:<jurisdiction>:<basis>` and `own` travel; `all-rights-reserved`, `unknown` and `private` are refused), with its own size class, `schemas/source-meta.schema.json`, and a sources table in `bundle validate --report`.
 

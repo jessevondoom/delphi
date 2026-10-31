@@ -17,7 +17,7 @@ tags: [spec, relay, approvals, email, away-mode, security]
 ## 1. Scope & Objectives
 A build that needs a person's decision should be able to wait for them when they are away from the terminal, and they should be able to answer from wherever they are, without any of the properties of an approval card being weakened. This spec adds three things: a **relay scope** on the daemon, a **relay process** that carries cards out and answers back, and **parking** so an unanswered card does not fail the task.
 
-Origin and reasoning: [`gap-closure-plan-2026-10-25.md`](../missions/2026-10-23-foundational-design/gap-closure-plan-2026-10-25.md) §1. Implemented: the relay scope, the email channel, parking, `delphi relay`, and `delphi run --on-card relay`. Not yet implemented: TOTP step-up (§7), chat channels, and optimistic decisions (spec 015).
+Origin and reasoning: [`gap-closure-plan-2026-10-25.md`](../missions/2026-10-23-foundational-design/gap-closure-plan-2026-10-25.md) §1. Implemented: the relay scope, the email channel, parking, `delphi relay`, and `delphi run --on-card relay`. TOTP step-up (§7.1) is built (`delphi_core::totp::Verifier`). Not yet implemented: Slack and other chat channels beyond Telegram (§7), and optimistic decisions (spec 015).
 
 ### 1.1 Non-Goals
 - **Starting work from a message.** A reply is a verb and a code, nothing else. Command ingress from a chat channel is prompt injection waiting to happen and is out of scope.
@@ -44,9 +44,10 @@ A third client scope beside `console` and `narrator`, on its own socket (`<run>/
 | Card | Console | Relay (email) |
 | :-- | :-- | :-- |
 | Amber | approve, allow similar, deny | approve, deny |
-| Red (merge, pull request, outbound, destructive, constitution) | approve, deny | deny; **approve only with step-up** (§7) |
+| Red: merge, pull request, constitution or ratification change | approve, deny | **deny only**, even with step-up (014-A1) |
+| Red: outbound, destructive, other | approve, deny | deny; **approve only with step-up** (§7.1) |
 
-A Red card is still sent to the operator, so they know it is waiting. Without step-up the text says "approve it at the console, or deny it here" and there is no approve link; with it (§7) the card explains the extra code.
+A Red card is still sent to the operator, so they know it is waiting. Without step-up the text says "approve it at the console, or deny it here" and there is no approve link; with it (§7.1) the card explains the extra code, except on a merge-boundary card (014-A1), which is answered only at the console.
 
 ## 4. The relay process (`delphi relay`)
 Run in a terminal: `delphi relay` (the relay), `delphi relay check` (log in to the mailbox and report, sending and reading nothing).
@@ -127,11 +128,11 @@ Set up: make a bot with @BotFather, open a chat with it and press Start (Telegra
 - A `doctor` line for the relay.
 
 ## 7.1 Step-up: approving a Red action by reply (TOTP)
-A stolen mailbox or chat account must not be able to approve a merge. With step-up, a Red approval needs something the mailbox does not hold: a six-digit code from the operator's authenticator app.
+A stolen mailbox or chat account must not be able to approve a merge. With step-up, a Red approval **other than a merge, pull request or constitution/ratification change (014-A1)** needs something the mailbox does not hold: a six-digit code from the operator's authenticator app.
 
 - **Setup.** `delphi relay totp-enroll` makes a secret and shows it once, as a key and an `otpauth://` link, with the keychain command to store it. In `config.toml`: `[relay] step_up = "totp"` and `totp_credential = "keychain:delphi-relay-totp"` (any `keychain:`, `env:` or `command:` reference; never the secret itself). Both are in the ratified `[relay]` block. `delphi relay totp-check <code>` confirms the phone and the stored key agree.
 - **Use.** A Red card's message explains it. The operator replies `APPROVE <card code> <6 digits>`. A code on a `DENY`, or a malformed one, is not a reply. `APPROVE <card code>` alone leaves the card code unspent and tells the operator what to add.
-- **The daemon checks, not the relay.** `approval.relay_resolve` takes the code with the answer and verifies it against the secret (RFC 6238, HMAC-SHA1, 30-second steps, one step of drift either side). Each code works **once**. Five wrong codes in five minutes lock step-up out for five minutes, even for the right code. A card can still be answered at the console meanwhile. The answer is logged as `relay:<channel>:<sender>+totp`.
+- **The daemon checks, not the relay.** `approval.relay_resolve` takes the code with the answer and verifies it against the secret (RFC 6238, HMAC-SHA1, 30-second steps, one step of drift either side). Each code works **once**. Five wrong codes in five minutes lock step-up out for five minutes, even for the right code. The used-code window and the failure list are kept in `local/totp-state` (atomic write, mode 0600, pruned by the window) and read at start, so a restart resets neither; an unreadable or corrupt file starts the daemon locked for five minutes rather than empty (014-A1). A card can still be answered at the console meanwhile. The answer is logged as `relay:<channel>:<sender>+totp`.
 - **What it does not change.** Without `step_up` a relay still cannot approve a Red card. Amber approvals need no code. The card code stays single-use, so a wrong authenticator code spends it: one guess per card.
 - **What it does not protect.** Someone who holds both the mailbox and the phone. The secret is as safe as the credential store it sits in.
 
@@ -174,3 +175,10 @@ Daemon tests (`service.rs`, `tests/daemon.rs`): each socket accepts only its own
 End-to-end (`tests/e2e.rs`): a headless run raises a card, `delphi relay` under a terminal mails it, a forged reply is ignored, the operator's real reply approves it, the write runs, and the log names `relay:email:<sender>`; an unratified `[relay]` is ignored.
 
 Not covered, and to do before relying on it: a live run against a real mailbox (§8 steps 5 to 7 on a Gmail account), because no provider-specific behaviour (app-password login, the exact `Authentication-Results` text, delivery delay) has been seen yet.
+
+## 10. Amendment 014-A1: The merge boundary and persistent step-up state (council 013 D12, TI14; `[REV-SEC-09]`)
+GOVERNANCE §1.1 keeps final merges with the operator at the console; §3 and §7.1 as first written let a TOTP code approve one by reply, which disagreed with the away-mode guide, `specs/016` §3 and §8.1. Resolved in favour of the console:
+
+1. **Merge boundary.** `approval.relay_resolve` refuses `allow` for a card whose tool is `merge`, `git_merge`, `pull_request`, `constitution`, `constitution_change` or `ratify`, with or without a valid code, and says it is approved only at the console. Denying stays open to the relay. One check, in `service.rs`, before step-up is consulted, so a code is not even spent. Other Red cards keep §7.1.
+2. **Persistent replay and lockout.** The daemon's TOTP verifier saves its used-code window and failure list to `local/totp-state` (temp file and rename, 0600, at most 16 KiB, pruned by the code window) and loads it at start. A file that exists but cannot be read or parsed fails closed: step-up is locked for five minutes from the first check. If the file cannot be written, the check refuses.
+3. **Residual (not changed).** The relay's table of outstanding card codes and tokens (§4, §5) is still in the relay process's memory. A restart of the relay drops them, which only loses pending replies (the card must be re-sent); it cannot approve anything, because the daemon still needs the card's payload hash, and for a Red card a fresh code from the phone. Persisting that table is deferred.
