@@ -15,7 +15,7 @@ One page: what each colour, glyph and weight in the console means. The rule is t
 | Disproved, failed | `alert` | `✕` | `✕`, bold text |
 | Retired, superseded | `retired` (dim, struck through where supported) | `·` | `·` |
 | Link, pointer | `link` (cyan, underlined) | none | underline |
-| Mode in force (`auto`, optimistic) | `auto` (the warning orange) | none | bold |
+| Mode in force (`auto`) | `auto` (the warning orange) | none | bold |
 
 Every style has three looks: 256 and true colour, 16 colours, and none. At 16 colours the styles above stay pairwise distinct, and the role colours use the avatar library's own ANSI choice.
 

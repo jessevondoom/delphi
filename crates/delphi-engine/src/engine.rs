@@ -1074,9 +1074,9 @@ impl Engine {
                         *sc.parked.lock().unwrap() = Some(ParkInfo { back_at: *back_at, why: format!("waiting for {} ({}); the operator's policy runs nothing weaker", from, why) });
                         return Ok(Err(Escalate(format!("{}{}: {} is unavailable ({}) and [access] on_weaker = \"never\" does not allow running on the weaker {}; {}", EXHAUSTED, note, from, why, to, saved_note.trim()))));
                     }
-                    // Optimistic mode continues without a card, carefully (D-13): the save-point is written, the switch is logged, and the task's
+                    // An optimistic build continues without a card, carefully (D-13): the save-point is written, the switch is logged, and the task's
                     // writes ask (below). `finish` does the same for a task that is already under way.
-                    let optimistic = self.broker.mode() == crate::approval::Mode::Optimistic;
+                    let optimistic = self.optimistic.lock().unwrap().contains(sc.task_id.as_str());
                     let by_policy = (optimistic || (cfg.access.on_weaker == OnWeaker::Finish && turn_index > 1)) && !confirmed && !declined;
                     let mut ok = confirmed || by_policy;
                     if !confirmed && !declined && !by_policy {
@@ -1108,7 +1108,7 @@ impl Engine {
                         *sc.parked.lock().unwrap() = Some(ParkInfo { back_at: *back_at, why: format!("waiting for {} ({}); the weaker {} was declined", from, why, to) });
                         return Ok(Err(Escalate(format!("{}{}: the operator declined the weaker model {} (it has {}); {} is unavailable ({})", EXHAUSTED, note, to, lost.join(" and "), from, why))));
                     }
-                    let agreed = if by_policy && optimistic { "continued automatically in optimistic mode, after the work was saved" } else if by_policy { "to finish the task under way, as [access] on_weaker = \"finish\" allows" } else { "confirmed by the operator" };
+                    let agreed = if by_policy && optimistic { "continued automatically in an optimistic build, after the work was saved" } else if by_policy { "to finish the task under way, as [access] on_weaker = \"finish\" allows" } else { "confirmed by the operator" };
                     // On a weaker model nothing is approved by the permission mode: each write asks.
                     self.broker.mark_degraded(&sc.task_id);
                     (key.clone(), Some((target.clone(), format!("{}; {}, with {}", why, agreed, lost.join(" and ")))))
@@ -2918,27 +2918,27 @@ mod tests {
         task.abort();
     }
 
-    // specs/035 D-13 (AC-13): optimistic mode goes on without a card, after saving; the task's writes ask from then on, and say why it went on.
+    // specs/035 D-13 (AC-13): an optimistic build goes on without a card, after saving; the task's writes ask from then on, and say why it went on.
     #[tokio::test]
-    async fn in_optimistic_mode_the_task_continues_after_saving_without_a_card_and_says_so() {
+    async fn in_an_optimistic_build_the_task_continues_after_saving_without_a_card_and_says_so() {
         let f = setup(vec![Step::tool("c1", "read_file", json!({"path": "@project/app/src/lib.rs"})), Step::Exhaust, Step::text("Where it stood."), Step::text("The chat."), Step::text("Finished on the weaker model.")], 5.0, |s| s.checkpoint_model = true);
-        f.engine.broker.set_mode(crate::approval::Mode::Optimistic);
+        f.engine.optimistic.lock().unwrap().insert("t_0001".into());
         opus_only_on_direct(&f);
         let out = f.engine.run_task(&f.m, "architect", "What does @project/app/src/lib.rs define?").await.unwrap();
         assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "Finished on the weaker model."));
-        assert!(events_of(&f, "approval.requested").iter().all(|e| e.payload["tool"] != "model"), "no card in optimistic mode");
+        assert!(events_of(&f, "approval.requested").iter().all(|e| e.payload["tool"] != "model"), "no card in an optimistic build");
         let kinds: Vec<String> = f.m.replay().unwrap().into_iter().map(|e| e.kind).collect();
         let (saved, promoted) = (kinds.iter().position(|k| k == "checkpoint.saved").unwrap(), kinds.iter().position(|k| k == "model.promoted").unwrap());
         assert!(saved < promoted, "saved before the weaker model took the work: {:?}", kinds);
         let why = events_of(&f, "model.promoted")[0].payload["reason"].as_str().unwrap().to_string();
-        assert!(why.contains("optimistic mode") && why.contains("after the work was saved"), "{}", why);
+        assert!(why.contains("optimistic build") && why.contains("after the work was saved"), "{}", why);
     }
 
     // The same, caught while it runs: until the task ends the permission mode approves nothing for it.
     #[tokio::test]
     async fn while_a_task_runs_on_the_weaker_model_the_permission_mode_approves_nothing_for_it() {
         let f = setup(vec![Step::tool("c1", "read_file", json!({"path": "@project/app/src/lib.rs"})), Step::Exhaust, Step::text("Where it stood."), Step::text("The chat."), Step::Hang], 5.0, |s| s.checkpoint_model = true);
-        f.engine.broker.set_mode(crate::approval::Mode::Optimistic);
+        f.engine.optimistic.lock().unwrap().insert("t_0001".into());
         opus_only_on_direct(&f);
         let task = spawn_task(&f, "architect", "What does @project/app/src/lib.rs define?");
         wait_for_event(&f, "checkpoint.saved").await;

@@ -28,9 +28,6 @@ pub enum Mode {
     AcceptEdits,
     /// Additionally auto-approves dependency installs pinned in a committed lockfile.
     MissionAuto,
-    /// As `MissionAuto`, and a build started in it decides its eligible cards provisionally (`specs/015`), as if
-    /// started with `--optimistic`. Needs the OS sandbox.
-    Optimistic,
 }
 
 impl Mode {
@@ -39,7 +36,6 @@ impl Mode {
             "default" => Mode::Default,
             "accept-edits" => Mode::AcceptEdits,
             "mission-auto" => Mode::MissionAuto,
-            "optimistic" => Mode::Optimistic,
             _ => return None,
         })
     }
@@ -49,7 +45,6 @@ impl Mode {
             Mode::Default => "default",
             Mode::AcceptEdits => "accept-edits",
             Mode::MissionAuto => "mission-auto",
-            Mode::Optimistic => "optimistic",
         }
     }
 }
@@ -240,7 +235,6 @@ fn mode_from(i: u8) -> Mode {
     match i {
         1 => Mode::AcceptEdits,
         2 => Mode::MissionAuto,
-        3 => Mode::Optimistic,
         _ => Mode::Default,
     }
 }
@@ -266,7 +260,6 @@ impl Broker {
             Mode::Default => 0,
             Mode::AcceptEdits => 1,
             Mode::MissionAuto => 2,
-            Mode::Optimistic => 3,
         };
     }
 
@@ -280,7 +273,7 @@ impl Broker {
         // A task on a weaker model gets no automatic approval from the mode: each write asks. (Red is never automatic anyway.)
         let auto = !st.degraded.contains(task_id) && matches!(
             (mode, c.kind),
-            (Mode::AcceptEdits | Mode::MissionAuto | Mode::Optimistic, ActionKind::WorktreeEdit) | (Mode::MissionAuto | Mode::Optimistic, ActionKind::PinnedDependencyInstall)
+            (Mode::AcceptEdits | Mode::MissionAuto, ActionKind::WorktreeEdit) | (Mode::MissionAuto, ActionKind::PinnedDependencyInstall)
         );
         if auto {
             return Need::No("permission mode");
@@ -416,7 +409,7 @@ mod tests {
         let note = classify("write_file", &json!({"path": "missions/m/n.md", "content": "x"})).unwrap();
         assert_eq!(b.need("t1", None, &note), Need::No("green"));
         let spec = spec_write("x");
-        for m in [Mode::Default, Mode::AcceptEdits, Mode::MissionAuto, Mode::Optimistic] {
+        for m in [Mode::Default, Mode::AcceptEdits, Mode::MissionAuto] {
             b.set_mode(m);
             assert_eq!(b.need("t1", None, &spec), Need::Yes(Tier::Amber), "a draft spec outside the worktree asks in {:?}", m);
         }
@@ -431,10 +424,7 @@ mod tests {
         assert_eq!((b.need("t", None, &edit), b.need("t", None, &install)), (Need::No("permission mode"), Need::Yes(Tier::Amber)));
         b.set_mode(Mode::MissionAuto);
         assert_eq!((b.need("t", None, &edit), b.need("t", None, &install)), (Need::No("permission mode"), Need::No("permission mode")));
-        b.set_mode(Mode::Optimistic);
-        assert_eq!((b.need("t", None, &edit), b.need("t", None, &install)), (Need::No("permission mode"), Need::No("permission mode")));
         // specs/035 D-13: a task on a weaker model is approved by nothing but the operator, in every mode, until it ends.
-        b.set_mode(Mode::Optimistic);
         b.mark_degraded("t");
         assert!(b.is_degraded("t") && !b.is_degraded("other"));
         assert_eq!((b.need("t", None, &edit), b.need("t", None, &install)), (Need::Yes(Tier::Amber), Need::Yes(Tier::Amber)));
@@ -442,7 +432,7 @@ mod tests {
         b.end_task("t");
         assert_eq!(b.need("t", None, &edit), Need::No("permission mode"), "the end of the task ends it");
         assert_eq!(Mode::parse("mission-auto"), Some(Mode::MissionAuto));
-        assert_eq!(Mode::parse("optimistic"), Some(Mode::Optimistic));
+        assert_eq!(Mode::parse("optimistic"), None, "optimistic is chosen per build, never a permission mode (specs/015 §7)");
         assert_eq!(Mode::parse("yolo"), None);
     }
 

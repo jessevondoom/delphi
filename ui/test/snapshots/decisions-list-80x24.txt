@@ -4,14 +4,14 @@ delphi v0.5 · /proj · decisions
 
   5 decisions · 3 can take the recommendation   a  tick every recommended item
   show  ● all 5   ○ actions 1   ○ specs 1   ○ builds 2   ○ questions… f change
-
+  3 not opened yet: open one (enter) to read it before it can be ticked
   ❯     DEC-081  Run a migration on the host staging.db, ou… RED · action  9 m
         builder wants to run scripts/migrate_0.2.7.sql on …
         no recommendation: your call. Red actions are decided one at a time.
         DEC-083  Approve spec 042: chunked bundle streaming o… RED · spec  9 m
         Streams bundle manifests over IPC in 64 KB chunks with backpressure, …
         ✔ recommend ratify · architect review done, no new authority. Red: de…
-    [ ] DEC-082  Raise the rate-limit burst from 20 to 50 … AMBER · build  9 m
+    [?] DEC-082  Raise the rate-limit burst from 20 to 50 … AMBER · build  9 m
         Provisional change from optimistic build t_014 (rate.rs, +12 -4) to …
         ✔ recommend ratify · routine risk, second seat (scout) concurred
 

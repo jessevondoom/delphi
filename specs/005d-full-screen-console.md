@@ -49,7 +49,7 @@ Alternate screen, no boxes, hairlines only (`skills/tui-design`).
 | `↑` `↓`, `Ctrl+R` | history; reverse history search |
 | `/` then `Tab` or `Enter` | command menu; `@` completes roles (`@architect …` sends to one role) and `@specs/…` paths |
 | `PgUp` `PgDn`, the wheel | scroll |
-| `Shift+Tab` | cycle the approval mode (default, accept-edits, auto), through `permissions.set` |
+| `Shift+Tab` | cycle the approval mode (default, accept-edits, auto; entering auto takes a second press, 005d-A2), through `permissions.set` |
 | `Ctrl+K`, `Ctrl+S`, `Ctrl+O` | search the knowledge base, sources, open tool output |
 | `Ctrl+Z` | suspend; `fg` returns and redraws |
 | `Ctrl+C` | leave (the daemon keeps running) |
@@ -87,3 +87,6 @@ Looking at it on real terminals; Windows (not supported); an in-app Markdown/ima
 
 ## 12. Amendment 005d-A1: Screen and Narrator Per 005e (approved by the operator 2026-10-25)
 §3 (header, transcript, footer) is superseded by [`005e`](005e-console-ux-review-and-redesign.md) §§5, 7, 8 and 10, and §7 (the Observer window and its keys) by 005e §9, with Amendment 005b-A3: the header is the animated badge strip and the title row directly beneath it; the transcript is tinted square blocks with a label row; the left deck is a ticker with finished history; the Observer is the narrator window with six views, plain arrow keys, no money and no classic fallback. Everything else in this spec stands. The ordered build plan is [`005f`](005f-console-redesign-build-plan.md).
+
+## 13. Amendment 005d-A2: approval mode keys (council 013 D3 b, S4)
+`Shift+Tab` cycles `default → accept-edits → auto → default`; `optimistic` is not a stop (it is chosen per build, `specs/015` §7). Entering `auto` needs a second `Shift+Tab` (see 005e-A1); any other key cancels it.

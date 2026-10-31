@@ -403,7 +403,7 @@ impl EngineService {
             return Err(err(code::INVALID_PARAMS, "the builder role is not enabled"));
         }
         let task_id = m.next_task_id();
-        let optimistic = p["optimistic"].as_bool().unwrap_or(false) || self.engine.broker.mode() == Mode::Optimistic;
+        let optimistic = p["optimistic"].as_bool().unwrap_or(false);
         if optimistic {
             // Refused before anything starts: the mode runs work ahead of the operator's review and needs the sandbox.
             self.engine.mark_optimistic(&task_id).map_err(|e| err(code::INVALID_PARAMS, e))?;
@@ -1962,10 +1962,7 @@ impl Extension for ServiceExt {
                 "permissions.get" => Ok(json!({"mode": svc.engine.broker.mode().as_str(), "allow_similar": svc.engine.broker.allow_similar().iter().map(|(t, tool, pat)| json!({"task_id": t, "tool": tool, "pattern": pat})).collect::<Vec<_>>()})),
                 "permissions.set" => (|| {
                     need_console(&ctx)?;
-                    let mode = params["mode"].as_str().and_then(Mode::parse).ok_or_else(|| err(code::INVALID_PARAMS, "`mode` must be default, accept-edits, mission-auto or optimistic"))?;
-                    if mode == Mode::Optimistic && svc.engine.exec.sandbox.is_none() {
-                        return Err(err(code::INVALID_PARAMS, "optimistic mode needs the OS sandbox, and none is available on this machine"));
-                    }
+                    let mode = params["mode"].as_str().and_then(Mode::parse).ok_or_else(|| err(code::INVALID_PARAMS, "`mode` must be default, accept-edits or mission-auto"))?;
                     svc.engine.broker.set_mode(mode);
                     Ok(json!({"mode": mode.as_str()}))
                 })(),
@@ -3887,6 +3884,7 @@ mod tests {
             assert_eq!(c.call("permissions.get", json!({})).unwrap()["mode"], "default");
             assert_eq!(c.call("permissions.set", json!({"mode": "accept-edits"})).unwrap()["mode"], "accept-edits");
             assert_eq!(rpc_code(c.call("permissions.set", json!({"mode": "yolo"}))), Some(code::INVALID_PARAMS));
+            assert_eq!(rpc_code(c.call("permissions.set", json!({"mode": "optimistic"}))), Some(code::INVALID_PARAMS), "optimistic is chosen per build, not a mode (specs/015 §7)");
             c.call("task.submit", json!({"target": "architect", "prompt": "Draft"})).unwrap();
             loop {
                 let snap = c.call("session.snapshot", json!({})).unwrap();

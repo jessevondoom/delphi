@@ -11,7 +11,7 @@ delphi v0.5 · /proj · decisions
   Selected: #1 · ratify
   Reason: Red-tier gate: Ratify spec 011 into the canonical repository
 
-
+  1 amber action(s) not opened yet: open one (enter) to read it before `a` can approve it
 
 
 

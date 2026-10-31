@@ -11,8 +11,8 @@ import * as D from './decisions-pane.ts';
  * `items` is the daemon's `decision.list` (specs/044) and `loaded` says it has arrived, so an empty list means
  * "nothing is owed" and not "the daemon did not answer". Until it has, the inbox is the cards alone, as it was.
  */
-export type Inbox = { mode: 'list' | 'focus'; sel: number; opt: number; payload: boolean; confirmAll: boolean; since: number; items: D.Decision[]; loaded: boolean; pane: D.Pane };
-export const newInbox = (now: number, items: D.Decision[] = [], pane: D.Pane = D.newPane(), loaded = items.length > 0): Inbox => ({ mode: 'list', sel: 0, opt: 0, payload: false, confirmAll: false, since: now, items, loaded, pane: D.reconcile(pane, items) });
+export type Inbox = { mode: 'list' | 'focus'; sel: number; opt: number; payload: boolean; confirmAll: boolean; /** Approval ids whose card was shown in focus mode: only these join a resolve-all. */ seen: string[]; since: number; items: D.Decision[]; loaded: boolean; pane: D.Pane };
+export const newInbox = (now: number, items: D.Decision[] = [], pane: D.Pane = D.newPane(), loaded = items.length > 0): Inbox => ({ mode: 'list', sel: 0, opt: 0, payload: false, confirmAll: false, seen: [], since: now, items, loaded, pane: D.reconcile(pane, items) });
 /** The pane (list, detail, empty state) owns the deck once the daemon's list has arrived. */
 const paned = (inb: Inbox): boolean => inb.loaded || inb.items.length > 0;
 
@@ -44,7 +44,16 @@ const remaining = (a: Approval, now: number) => {
   return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 };
 
+/** A key press; a card shown in focus mode counts as rendered, and only rendered cards join a resolve-all. */
 export function key(inb: Inbox, list: Approval[], e: Ev, now: number): { inbox: Inbox; action: Action } {
+  const r = press(inb, list, e, now);
+  const next = r.inbox;
+  if (paned(next) || next.mode !== 'focus') return r;
+  const shown = list[Math.min(next.sel, Math.max(0, list.length - 1))];
+  return shown && !next.seen.includes(shown.id) ? { ...r, inbox: { ...next, seen: [...next.seen, shown.id] } } : r;
+}
+
+function press(inb: Inbox, list: Approval[], e: Ev, now: number): { inbox: Inbox; action: Action } {
   const none = (i: Inbox = inb) => ({ inbox: i, action: { t: 'none' } as Action });
   if (e.t !== 'key' && e.t !== 'text' && !(paned(inb) && (e.t === 'ctrl' || e.t === 'paste'))) return none();
   const sel = Math.min(inb.sel, Math.max(0, list.length - 1));
@@ -97,7 +106,7 @@ export function key(inb: Inbox, list: Approval[], e: Ev, now: number): { inbox: 
   if (k === 'y') return answer('allow');
   if (k === 'n') return answer('deny');
   if (k === 'a' && inb.mode === 'list') {
-    const amber = list.filter((c) => c.tier !== 'red' && now - c.at >= GUARD_MS);
+    const amber = list.filter((c) => c.tier !== 'red' && now - c.at >= GUARD_MS && inb.seen.includes(c.id));
     if (!amber.length || guarded) return none();
     if (!inb.confirmAll) return none({ ...inb, confirmAll: true });
     return { inbox: { ...inb, confirmAll: false }, action: { t: 'resolve-all', cards: amber } };
@@ -129,7 +138,8 @@ export function view(s: State, inb: Inbox, info: T.Info, pal: T.Pal, now: number
       const right = T.badge(c.role, 'idle', info, pal) + ' ' + T.dim(T.roleName(c.role, info)) + '  ' + T.dim(remaining(c, now));
       return T.spread(left, right, w - 2);
     });
-    const amber = list.filter((c) => c.tier !== 'red').length;
+    const amber = list.filter((c) => c.tier !== 'red' && inb.seen.includes(c.id)).length;
+    const unread = list.filter((c) => c.tier !== 'red' && !inb.seen.includes(c.id)).length;
     return pad([
       '', '  ' + chalk.bold(T.text(pal)('Pending decisions')) + T.dim(` (${list.length})`), '',
       ...rows.map((r) => '  ' + r), '',
@@ -137,6 +147,7 @@ export function view(s: State, inb: Inbox, info: T.Info, pal: T.Pal, now: number
       '  ' + T.dim(`Selected: #${sel + 1} · ${card.tool}`),
       '  ' + T.dim(`Reason: ${card.tier === 'red' ? 'Red-tier gate: ' : ''}${card.summary}`),
       ...(inb.confirmAll ? ['', '  ' + T.warn(`press a again to approve ${amber} amber action(s), each bound to what it shows`)] : []),
+      ...(unread ? ['', '  ' + T.warn(`${unread} amber action(s) not opened yet: open one (enter) to read it before \`a\` can approve it`)] : []),
     ]);
   }
   const opts = options(card);

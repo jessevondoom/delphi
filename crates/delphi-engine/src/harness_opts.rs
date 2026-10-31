@@ -11,6 +11,8 @@ use crate::harness::{Cli, Opts, SessionMode};
 use std::path::PathBuf;
 
 const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+/// Hook kinds whose command output can allow a tool call; only Delphi's own deny hooks (`specs/018` §4) may guard one.
+const ALLOW_CAPABLE_HOOKS: [&str; 2] = ["pretooluse", "permissionrequest"];
 const AGY_MODES: [&str; 3] = ["plan", "accept-edits", "auto"];
 
 /// The options for one CLI's block, with each rejected key's reason.
@@ -88,6 +90,10 @@ pub fn parse(root: &toml::Value, cli: Cli) -> (Opts, Vec<String>) {
             // Tables become the JSON the CLI takes: `[harness.claude.agents.<name>]` and `[harness.claude.settings]`.
             for (key, slot) in [("agents", &mut o.agents_json), ("settings", &mut o.settings_json)] {
                 if let Some(v) = t.get(key) {
+                    if let Some(kind) = allow_capable_hook(key, v) {
+                        reject(key, &format!("a `{}` hook can allow a tool call and is runtime-only enforceable, so it cannot be configured; guard with a `[[hooks.deny]]` hook (specs/018 018-A1)", kind));
+                        continue;
+                    }
                     match v.as_table().filter(|t| !t.is_empty()).and_then(|_| serde_json::to_string(v).ok()) {
                         Some(j) => *slot = Some(j),
                         None => reject(key, "expected a table"),
@@ -123,6 +129,15 @@ pub fn parse(root: &toml::Value, cli: Cli) -> (Opts, Vec<String>) {
         }
     }
     (o, bad)
+}
+
+/// The first allow-capable hook kind in a `settings` table's `hooks`, or in an agent's own `hooks`.
+fn allow_capable_hook(key: &str, v: &toml::Value) -> Option<String> {
+    let hook_tables: Vec<&toml::Value> = match key {
+        "settings" => v.get("hooks").into_iter().collect(),
+        _ => v.as_table().into_iter().flat_map(|a| a.values().filter_map(|d| d.get("hooks"))).collect(),
+    };
+    hook_tables.iter().filter_map(|h| h.as_table()).flat_map(|h| h.keys()).find(|k| ALLOW_CAPABLE_HOOKS.contains(&k.to_lowercase().as_str())).cloned()
 }
 
 /// Every rejected key across both blocks, for the attach notices.
@@ -162,7 +177,7 @@ description = "Reviews a diff"
 prompt = "Be strict."
 tools = ["Read", "Grep"]
 [harness.claude.settings.hooks]
-PreToolUse = [{ matcher = "Bash", hooks = [{ type = "command", command = "/usr/local/bin/gate" }] }]
+PostToolUse = [{ matcher = "Bash", hooks = [{ type = "command", command = "/usr/local/bin/log" }] }]
 "#,
         );
         let (o, bad) = parse(&r, Cli::Claude);
@@ -172,7 +187,26 @@ PreToolUse = [{ matcher = "Bash", hooks = [{ type = "command", command = "/usr/l
         let agents: serde_json::Value = serde_json::from_str(o.agents_json.as_deref().unwrap()).unwrap();
         assert_eq!(agents["reviewer"]["tools"][1], "Grep");
         let settings: serde_json::Value = serde_json::from_str(o.settings_json.as_deref().unwrap()).unwrap();
-        assert_eq!(settings["hooks"]["PreToolUse"][0]["matcher"], "Bash");
+        assert_eq!(settings["hooks"]["PostToolUse"][0]["matcher"], "Bash");
+    }
+
+    #[test]
+    fn allow_capable_hooks_are_refused_and_named() {
+        for kind in ["PreToolUse", "PermissionRequest", "pretooluse"] {
+            let r = root(&format!("[harness.claude.settings.hooks]\n{} = [{{ matcher = \"Bash\", hooks = [{{ type = \"command\", command = \"/bin/gate\" }}] }}]\nStop = []\n", kind));
+            let (o, bad) = parse(&r, Cli::Claude);
+            assert!(o.settings_json.is_none(), "{} was forwarded", kind);
+            assert!(bad.len() == 1 && bad[0].contains("settings") && bad[0].contains(kind), "{:?}", bad);
+        }
+        let r = root("[harness.claude.agents.r]\ndescription = \"d\"\n[harness.claude.agents.r.hooks]\nPreToolUse = []\n");
+        let (o, bad) = parse(&r, Cli::Claude);
+        assert!(o.agents_json.is_none() && bad.iter().any(|b| b.contains("agents")), "{:?}", bad);
+    }
+
+    #[test]
+    fn empty_settings_are_unchanged() {
+        let (o, bad) = parse(&root("[harness.claude.settings]\n"), Cli::Claude);
+        assert!(o.settings_json.is_none() && bad.len() == 1 && bad[0].contains("expected a table"));
     }
 
     #[test]
