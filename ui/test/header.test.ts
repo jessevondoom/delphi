@@ -9,7 +9,7 @@ import { initial } from '../src/fold.ts';
 import { helpKey } from '../src/help.ts';
 import type { Ev } from '../src/input.ts';
 import { newInbox } from '../src/inbox.ts';
-import { modeNote, nextMode } from '../src/mode.ts';
+import { cycleMode, MODES, modeNote, nextMode } from '../src/mode.ts';
 import { BLINK_SLOT_MS, faceOf, SUCCESS_MS, stripFaces, STRIP_ROLES, THINKING_WINDOW_MS, tickKey, TICK_MS } from '../src/motion.ts';
 import { footer, frame, header, titleRow, type Model } from '../src/screen.ts';
 import * as T from '../src/theme.ts';
@@ -141,9 +141,14 @@ test('auto is the only mode drawn in the warning-red colour', () => {
   } finally { T.useCapabilities(prev); }
 });
 
-test('Shift+Tab cycles default → accept edits → auto → auto · optimistic and each change says what it means', () => {
-  assert.deepEqual(['default', 'accept-edits', 'mission-auto', 'optimistic'].map(nextMode), ['accept-edits', 'mission-auto', 'optimistic', 'default']);
-  assert.match(modeNote('optimistic'), /^· approval mode: auto · optimistic — /);
+test('Shift+Tab cycles default → accept edits → auto, never to optimistic, and each change says what it means', () => {
+  assert.deepEqual(MODES, ['default', 'accept-edits', 'mission-auto']);
+  assert.deepEqual(['default', 'accept-edits', 'mission-auto'].map(nextMode), ['accept-edits', 'mission-auto', 'default']);
+  assert.ok(!MODES.some((m) => /optimistic/.test(m)) && !/optimistic/.test(modeNote('optimistic')), 'optimistic is chosen per build, not a mode');
+  assert.deepEqual(cycleMode('accept-edits', false), { set: null, armed: true }, 'entering auto waits for a confirming press');
+  assert.deepEqual(cycleMode('accept-edits', true), { set: 'mission-auto', armed: false });
+  assert.deepEqual(cycleMode('default', false), { set: 'accept-edits', armed: false });
+  assert.deepEqual(cycleMode('mission-auto', false), { set: 'default', armed: false });
   assert.equal(modeNote('mission-auto'), '· approval mode: auto — Amber actions run without asking this mission; Red actions always ask');
   assert.equal(modeNote('accept-edits'), '· approval mode: accept edits — file edits run without asking; commands and Red actions still ask');
   assert.equal(modeNote('default'), '· approval mode: default');

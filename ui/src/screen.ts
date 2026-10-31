@@ -26,7 +26,7 @@ export type Model = {
   queue: string[];
   inbox: I.Inbox;
   panel: P.Panel | null;
-  /** permissions mode: default, accept-edits mission-auto or optimistic */
+  /** permissions mode: default, accept-edits or mission-auto */
   mode: string;
   /** The daemon says the workspace has no model at all (`models.get`): the welcome becomes the no-model card, and the footer says so. */
   noModel?: boolean;
@@ -77,7 +77,7 @@ export function header(m: Model, w: number): string[] {
   return [T.clip(strip, w), titleRow(m, w)];
 }
 
-const modeLabel = (mode: string): string => (mode === 'mission-auto' ? T.auto('auto') : mode === 'optimistic' ? T.auto('auto · optimistic') : mode === 'accept-edits' ? T.body('accept edits') : T.dim(mode === 'default' ? 'default' : mode));
+const modeLabel = (mode: string): string => (mode === 'mission-auto' ? T.auto('auto') : mode === 'accept-edits' ? T.body('accept edits') : T.dim(mode === 'default' ? 'default' : mode));
 
 /** What this session added to the library, in the quiet words of `specs/053` §5: `+3 noted · 1 to review`; empty when nothing was. Never alert-coloured. */
 export const libraryCounter = (noted: number, review: number): string => [noted ? `+${noted} noted` : '', review ? `${review} to review` : ''].filter(Boolean).join(' · ');
@@ -414,7 +414,7 @@ const KEYS = [
   'pgup pgdn / wheel  scroll  ctrl+t  tool details        ctrl+l  to end',
   'ctrl+o  follow links (tab next · enter read here · p pin · esc leave)',
   '/  commands   @role …  one role   @specs/…  a file   ?  this help',
-  'shift+tab  approval mode (default → accept edits → auto → optimistic)',
+  'shift+tab  approval mode (default → accept edits → auto, auto asks once)',
   'decisions:  enter open · space tick · a tick all · f filter · 1-9 choose',
   'ctrl+k  search knowledge  ctrl+s  sources  ctrl+c  leave (daemon stays)',
 ];

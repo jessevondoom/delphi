@@ -25,7 +25,7 @@ import { copyText, firstVisible, stepFocus, type Target } from './links.ts';
 import { execFile } from 'node:child_process';
 import { anchorBack, backShowing, bodyHeight, chatLinks, frame, replyAnchor, transcriptCount, typingOf, type Model } from './screen.ts';
 import { helpKey } from './help.ts';
-import { modeNote, nextMode } from './mode.ts';
+import { AUTO_CONFIRM_NOTE, cycleMode, modeNote } from './mode.ts';
 import { STRIP_ROLES, stillMotion, tickKey, TICK_MS, typingFrame } from './motion.ts';
 import { useReduceMotion } from './reduce-motion.ts';
 import type { Ev } from './input.ts';
@@ -132,6 +132,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
   const expandRef = useRef(false);
   const palRef = useRef(pal);
   palRef.current = pal;
+  const autoArmRef = useRef(false);
   const modeRef = useRef(mode);
   modeRef.current = mode;
   const listDir = useMemo(() => listTeamDir(info), [info]);
@@ -445,6 +446,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
       const upd = (f: (c: C.Composer) => C.Composer) => { comp.current = f(comp.current); selRef.current = 0; setComposer(comp.current); setSel(0); };
       const setS = (s: typeof search) => { searchRef.current = s; setSearch(s); };
       const hist = comp.current.hist;
+      if (!(e.t === 'key' && e.k === 'shift-tab')) autoArmRef.current = false;
 
       // History search owns the keyboard while it is open.
       const sr = searchRef.current;
@@ -468,10 +470,12 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
 
       // Shift+Tab cycles the approval mode from anywhere.
       if (e.t === 'key' && e.k === 'shift-tab') {
-        const next = nextMode(modeRef.current);
+        const step = cycleMode(modeRef.current, autoArmRef.current);
+        autoArmRef.current = step.armed;
+        if (step.set === null) { note(AUTO_CONFIRM_NOTE); return; }
+        const next = step.set;
         const set = (m: string) => cmd.call('permissions.set', { mode: m }).then((v: any) => { const got = String(v?.mode ?? m); setMode(got); note(modeNote(got)); });
-        // Optimistic needs the OS sandbox; without one the cycle skips it and wraps to default.
-        set(next).catch((er) => (next === 'optimistic' ? set('default') : Promise.reject(er))).catch((er) => note('could not change the approval mode: ' + (er?.message ?? JSON.stringify(er)), 'error'));
+        set(next).catch((er) => note('could not change the approval mode: ' + (er?.message ?? JSON.stringify(er)), 'error'));
         return;
       }
 

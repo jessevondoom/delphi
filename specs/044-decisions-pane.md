@@ -150,6 +150,7 @@ Titles are red for `tier: red`, orange for `tier: amber`, the default foreground
 3. its `payload_blake3` is the one the recommendation was made for;
 4. for `build`: `risk` is `routine` and `second` is `concurred:*`; for `question`: the recommended choice has `reversible: true`.
 A decision that stops meeting these (its payload changed, say) loses its tick, and a ticked one is un-ticked with a note.
+5. *(Amendment 044-A1, council 013 D4 a, S4)* the pane has shown its detail view (opened it, or paged onto it) for this payload. An unopened tickable decision shows `[?]`, cannot be ticked by `space` or `a`, and the list says `N not opened yet: open one (enter) to read it before it can be ticked`. The legacy card inbox applies the same rule to its approve-all `a`: only cards shown in focus mode join it. Red behaviour is unchanged.
 
 ### 5.5 Accepting several at once (`dec-3-confirm`)
 `y` with ticks opens a confirm page: `Accept N recommendations?`, each item with its title in tier colour and the **exact effect** in one line (`builds keep commit b7f28a; builder marks t_014 done`), then `not included: these need you one at a time` and the Red and non-tickable items, then `Each acceptance is signed as you and logged`. `enter` accepts; `esc` goes back.
