@@ -237,6 +237,8 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
       const who = pl.by === 'usage' ? 'Delphi noticed a pattern' : 'the orchestrator suggests';
       return addBlock(s, { kind: 'note', text: `${who}: ${sanitize(String(pl.key))} → ${sanitize(String(pl.value))} (${sanitize(String(pl.reason ?? ''))}). /settings accept ${n} to make it, /settings dismiss ${n} to decline.`, at: stamp(e, now), tone: 'info' });
     }
+    // The weekly note that research is waiting outside the knowledge base (`specs/058` §17): the orchestrator says it once; nothing is asked.
+    case 'research.digest': return addBlock(s, { kind: 'reply', role: String(e.agent ?? 'orchestrator'), text: sanitize(String(pl.text ?? '')), at: stamp(e, now), status: 'done' });
     // A weaker model wrote a save-point before anyone was asked (`specs/035` D-11); where, for the operator who is not asked (optimistic mode).
     case 'checkpoint.saved': return addBlock(s, { kind: 'note', text: `the work so far is saved for resumption: ${sanitize(String(pl.path ?? ''))}`, at: stamp(e, now), tone: 'info' });
     // A task moved to another model (`specs/035`): said once in the chat, so the operator is never surprised by who is answering.

@@ -1209,6 +1209,27 @@ impl EngineService {
         }
     }
 
+    /// Say once a week, in the chat, that research is waiting outside the knowledge base (`specs/058` §17). A message, not a card.
+    async fn research_nudge(&self, m: &Arc<MissionState>) {
+        let ws = self.engine.ws.dir.clone();
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let due = tokio::task::spawn_blocking(move || {
+            let d = crate::research_digest::collect(&ws);
+            crate::research_digest::due(&ws, &d, now).then(|| {
+                crate::research_digest::mark(&ws, now);
+                d
+            })
+        })
+        .await
+        .ok()
+        .flatten();
+        let Some(d) = due else { return };
+        let projects: Vec<Value> = d.projects.iter().map(|(n, c)| json!({"name": n, "pages": c})).collect();
+        let mut ev = EventEnvelope::new(&m.id, "research.digest", json!({"held": d.held, "projects": projects, "weak": d.weak, "text": crate::research_digest::text(&d)}));
+        ev.agent = Some("orchestrator".into());
+        let _ = m.append(ev).await;
+    }
+
     /// `projects.list`: the home workspace and every registered project, read now (`specs/058` §15).
     async fn projects_list(&self, ctx: CallContext) -> RpcOutcome {
         need_console(&ctx)?;
@@ -1973,7 +1994,7 @@ impl Extension for ServiceExt {
             Some(match method.as_str() {
                 "mission.open" => match need_console(&ctx) {
                     Err(e) => Err(e),
-                    Ok(()) => svc.mission_at(params["mission_id"].as_str(), params["cwd"].as_str()).await.map(|m| json!({"mission_id": m.id, "budget": EngineService::budget_json(&m), "mode": svc.engine.broker.mode().as_str(), "recovery": svc.recovery_json(&m.id)})),
+                    Ok(()) => svc.mission_at(params["mission_id"].as_str(), params["cwd"].as_str()).await.inspect(|m| { let (svc, m) = (svc.clone(), m.clone()); tokio::spawn(async move { svc.research_nudge(&m).await }); }).map(|m| json!({"mission_id": m.id, "budget": EngineService::budget_json(&m), "mode": svc.engine.broker.mode().as_str(), "recovery": svc.recovery_json(&m.id)})),
                 },
                 "recovery.resume" => svc.recovery_resume(params, ctx).await,
                 "recovery.pause" => (|| {
@@ -3995,6 +4016,29 @@ mod tests {
         let id = crate::scope::resolve(&ws, &root.join("src")).project.unwrap();
         assert_eq!(crate::scope::project_root(&ws, &id), Some(root));
         assert_eq!(crate::scope::project_root(&ws, &crate::scope::ProjectId::default_project()), None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_orchestrator_says_once_that_research_is_waiting_and_not_again_that_week() {
+        let f = setup(vec![Step::text("unused")], 5.0, |_| {});
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        let ws = f.engine.ws.dir.clone();
+        let m = svc.mission_at(Some("digest-m"), None).await.unwrap();
+        let dir = ws.join("local/missions/digest-m");
+        let digests = |_: &Arc<MissionState>| delphi_core::log::replay(&dir).unwrap().into_iter().filter(|e| e.kind == "research.digest").collect::<Vec<_>>();
+        svc.research_nudge(&m).await;
+        assert!(digests(&m).is_empty(), "nothing waiting, nothing said");
+        for n in 0..crate::research_digest::THRESHOLD {
+            let p = ws.join(crate::research::PENDING_DIR).join("blog.example").join(format!("p{n}.md"));
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, "---\ntitle: \"T\"\nsource_url: \"https://blog.example/x\"\nsource_class: weak\nretrieved: 2026-10-31\n---\n\n# T\n").unwrap();
+        }
+        svc.research_nudge(&m).await;
+        svc.research_nudge(&m).await;
+        let said = digests(&m);
+        assert_eq!(said.len(), 1, "once, not on every open");
+        assert_eq!((said[0].agent.as_deref(), said[0].payload["held"].as_u64(), said[0].payload["weak"].as_u64()), (Some("orchestrator"), Some(5), Some(5)));
+        assert!(said[0].payload["text"].as_str().unwrap().contains("/validate"));
     }
 
     #[tokio::test(flavor = "multi_thread")]

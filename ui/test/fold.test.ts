@@ -34,3 +34,10 @@ test('a reasoning delta marks the agent as thinking, and a finished task marks i
   s = fold(s, ev('task.output', { status: 'done', text: 'ok' }), 5000);
   assert.deepEqual([s.agents['builder']!.state, s.agents['builder']!.successAt], ['idle', 5000]);
 });
+
+test('the weekly research digest is one reply from the orchestrator, with nothing to answer', () => {
+  const s = fold(initial(0), { method: 'event', params: { type: 'research.digest', agent: 'orchestrator', payload: { text: '5 research pages are waiting outside the knowledge base: 5 held in the default scope. /validate lists them; nothing is added until you ratify it.' } } }, 0);
+  assert.equal(s.blocks.length, 1);
+  assert.deepEqual([s.blocks[0]!.kind, s.blocks[0]!.role], ['reply', 'orchestrator']);
+  assert.match(s.blocks[0]!.text, /^5 research pages are waiting/);
+});
