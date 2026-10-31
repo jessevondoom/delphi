@@ -48,6 +48,10 @@ Tests that start daemons hold pseudo-terminals until the process ends; if `openp
 
 Describe what changed and why, name the spec, and say how you checked it. If a step was skipped or a test is flaky, say so plainly. Releases are cut by the maintainers: bump the version in `crates/delphi/Cargo.toml` in its own PR, then tag `vX.Y.Z` on `main`; the release workflow builds, attests and publishes (running it by hand is a dry run).
 
+## Folding spec amendments
+
+When a spec's amendments are folded into its body, move the removed amendment text verbatim to `specs/history/NNN-<slug>.md` (non-normative). Keep every section number: a folded-away section stays as a stub heading, `## N. (folded into §X.Y; was NNN-An)`, and each amendment ID survives as an inline `(was NNN-An)` anchor. `cargo test -p delphi --test spec_refs` fails when a reference (`specs/NNN §X.Y`, `NNN §X`, `NNN-An`) in specs, docs, code comments, the console, schemas, the changelog or mission notes stops resolving. It has a small allowlist of references that were already broken; fix those rather than add to it.
+
 ## Security
 
 Report a vulnerability privately to the repository owner (a GitHub security advisory, if enabled, or a direct message) rather than in a public issue. Never include credentials, tokens or customer data in an issue, a test fixture or a spec.
