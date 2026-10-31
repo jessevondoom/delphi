@@ -931,6 +931,16 @@ impl EngineService {
             Some("deny") => false,
             _ => return Err(err(code::INVALID_PARAMS, "`decision` must be allow or deny")),
         };
+        // A merge is the operator's at the console, with or without step-up (GOVERNANCE 1.1, specs/014 amendment
+        // 014-A1, REV-SEC-09). The finalize cards are exact; a command that looks like a merge is a verb heuristic
+        // (`merge_class`). Denying is always open.
+        if allow {
+            if let Some(r) = self.engine.broker.get(id) {
+                if let Some(what) = crate::merge_class::console_only(&r.tool, &r.payload) {
+                    return Err(err(code::FORBIDDEN, format!("{} is approved only at the console, never by a relay reply, even with an authenticator code (it can still be denied here)", what)));
+                }
+            }
+        }
         // A Red card can be denied by anyone the relay vouches for. Approving one also needs the operator's authenticator
         // code, which the daemon checks itself: a stolen mailbox or chat account does not have it.
         let mut stepped_up = false;
@@ -3179,8 +3189,8 @@ mod tests {
     async fn a_relay_can_approve_a_red_card_only_with_a_valid_authenticator_code_that_works_once() {
         let f = with_stepup(TEST_SECRET_B32);
         let s = serve(&f).await;
-        let (w1, id1, h1) = red_card(&f, "merge");
-        let (w2, id2, h2) = red_card(&f, "pull_request");
+        let (w1, id1, h1) = red_card(&f, "run_command");
+        let (w2, id2, h2) = red_card(&f, "dispatch_agent");
         let now = (f.engine.clock_unix)() as u64;
         let good = delphi_core::totp::code_at(b"12345678901234567890", now);
         let wrong = if good == "000000" { "000001".to_string() } else { "000000".to_string() };
@@ -3222,10 +3232,46 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn a_merge_card_or_merge_class_command_is_never_approved_by_a_relay_even_with_a_valid_code() {
+        let f = with_stepup(TEST_SECRET_B32);
+        let s = serve(&f).await;
+        let cards: Vec<_> = ["merge", "pull_request"].iter().map(|t| red_card(&f, t)).collect();
+        let bash = |line: &str| {
+            use crate::approval::{Request, Tier};
+            let w = f.engine.broker.request(Request { approval_id: String::new(), task_id: "t_0001".into(), span_id: "sp1".into(), role: "builder".into(), tier: Tier::Red, tool: "harness_bash".into(), pattern: "harness_bash".into(), worktree: None, summary: "s".into(), payload: json!({"tool": "Bash", "command": line}), payload_blake3: String::new(), timeout: Duration::from_secs(60) });
+            let id = w.approval_id.clone();
+            let hash = f.engine.broker.get(&id).unwrap().payload_blake3;
+            (w, id, hash)
+        };
+        let mut cards = cards;
+        cards.push(bash("cd x && gh pr merge 4 --squash"));
+        cards.push(bash("git push origin main"));
+        let (sock, tok) = (s.relay_sock.clone(), s.relay.clone());
+        let ids: Vec<(String, String)> = cards.iter().map(|(_, i, h)| (i.clone(), h.clone())).collect();
+        let now = (f.engine.clock_unix)() as u64;
+        let good = delphi_core::totp::code_at(b"12345678901234567890", now);
+        blocking(move || {
+            let mut r = Client::connect(&sock).unwrap();
+            r.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            r.hello(&tok).unwrap();
+            for (id, hash) in &ids {
+                let e = r.call("approval.relay_resolve", json!({"approval_id": id, "payload_blake3": hash, "decision": "allow", "channel": "email", "sender": "me@example.com", "totp": good}));
+                match e {
+                    Err(ClientError::Rpc { code: c, message, .. }) => assert!(c == code::FORBIDDEN && message.contains("only at the console"), "{}", message),
+                    other => panic!("{:?}", other),
+                }
+            }
+            assert!(r.call("approval.relay_resolve", json!({"approval_id": ids[0].0, "payload_blake3": ids[0].1, "decision": "deny", "channel": "email", "sender": "me@example.com"})).is_ok(), "denying stays open");
+        })
+        .await;
+        assert!(f.engine.broker.get(&cards[1].1).is_some(), "the refused card is still waiting for the console");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn wrong_codes_lock_step_up_out_even_for_the_right_one() {
         let f = with_stepup(TEST_SECRET_B32);
         let s = serve(&f).await;
-        let (_w, id, hash) = red_card(&f, "merge");
+        let (_w, id, hash) = red_card(&f, "run_command");
         let now = (f.engine.clock_unix)() as u64;
         let good = delphi_core::totp::code_at(b"12345678901234567890", now);
         let wrong = if good == "000000" { "000001" } else { "000000" };
@@ -3253,7 +3299,7 @@ mod tests {
         // Not configured at all: a Red approval is refused whatever code comes with it.
         let f = setup(vec![Step::text("x")], 5.0, |_| {});
         let s = serve(&f).await;
-        let (_w, id, hash) = red_card(&f, "merge");
+        let (_w, id, hash) = red_card(&f, "run_command");
         let good = delphi_core::totp::code_at(b"12345678901234567890", (f.engine.clock_unix)() as u64);
         let (sock, tok) = (s.relay_sock.clone(), s.relay.clone());
         let (i2, h2, g2) = (id.clone(), hash.clone(), good.clone());
@@ -3271,7 +3317,7 @@ mod tests {
         // Configured, but the secret is not base32.
         let f = with_stepup("not base32 at all!");
         let s = serve(&f).await;
-        let (_w, id, hash) = red_card(&f, "merge");
+        let (_w, id, hash) = red_card(&f, "run_command");
         let (sock, tok) = (s.relay_sock.clone(), s.relay.clone());
         blocking(move || {
             let mut r = Client::connect(&sock).unwrap();
