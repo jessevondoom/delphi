@@ -2563,6 +2563,14 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_model_sees_what_a_shell_line_printed() {
+        let f = builder_fixture(vec![Step::tool("c1", "shell", json!({"command": "echo marker-7731 | tr a-z A-Z"})), Step::text("done")], |c| c.sandbox = crate::exec::SandboxMode::Off);
+        f.engine.broker.set_mode(Mode::ShellAuto);
+        assert_eq!(f.engine.run_task(&f.m, "builder", BUILD_PROMPT).await.unwrap().status, Status::Done);
+        assert!(f.model.requests()[1].body["messages"].to_string().contains("MARKER-7731"));
+    }
+
+    #[tokio::test]
     async fn a_session_grant_covers_the_same_shell_shape_in_a_later_task_until_revoked() {
         let f = builder_fixture(
             vec![Step::tool("c1", "shell", json!({"command": "touch a.txt"})), Step::text("one"), Step::tool("c2", "shell", json!({"command": "touch b.txt"})), Step::text("two")],
