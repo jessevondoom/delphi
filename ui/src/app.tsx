@@ -74,6 +74,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
   const [rdr, setRdrState] = useState<A.Arch>(() => A.emptyArch(true));
   const [lm, setLmState] = useState<{ focus: number | null; note: string } | null>(null);
   const [help, setHelp] = useState(false);
+  const [projects, setProjects] = useState(info.projects);
   const [sel, setSel] = useState(0);
   const [expandTools, setExpandTools] = useState(false);
   const [queue, setQueue] = useState<string[]>([]);
@@ -249,16 +250,19 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
     }
     if (name === '/projects') {
       const word = projectKey(line.slice(name.length));
-      const list = info.projects ?? [];
-      if (!word) {
-        if (list.length < 2) { note('no registered projects yet; `delphi project add` registers one', 'error'); return; }
-        comp.current = C.insert(C.empty(comp.current.hist), '/projects '); setComposer(comp.current);
-        return;
-      }
-      const p = list.find((x) => projectKey(x.name) === word);
-      if (!p || !info.relaunch_file) { note(p ? 'this console cannot restart itself; start `delphi chat` in that directory' : `${word} is not a registered project; /projects lists them`, 'error'); return; }
-      writeFileSync(info.relaunch_file, p.root);
-      exit();
+      // Read the registry now, so a project registered after the console started is there; an older daemon falls back to the list from the start.
+      void cmd.call('projects.list', {}).then((r: any) => (r?.projects ?? info.projects ?? []) as NonNullable<Info['projects']>, () => info.projects ?? []).then((list) => {
+        setProjects(list);
+        if (!word) {
+          if (list.length < 2) { note('no registered projects yet; `delphi project add` registers one', 'error'); return; }
+          comp.current = C.insert(C.empty(comp.current.hist), '/projects '); setComposer(comp.current);
+          return;
+        }
+        const p = list.find((x) => projectKey(x.name) === word);
+        if (!p || !info.relaunch_file) { note(p ? 'this console cannot restart itself; start `delphi chat` in that directory' : `${word} is not a registered project; /projects lists them`, 'error'); return; }
+        writeFileSync(info.relaunch_file, p.root);
+        exit();
+      });
       return;
     }
     if (name === '/pictures') {
@@ -406,7 +410,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
   }).catch(() => {});
   const startResearch = (topic: string) => {
     stopPolling();
-    cmd.call('research.start', { topic }).then(() => { researchPoll.current = setInterval(tickResearch, 700); void tickResearch(); })
+    cmd.call('research.start', { topic, cwd: info.cwd }).then(() => { researchPoll.current = setInterval(tickResearch, 700); void tickResearch(); })
       .catch((er: any) => setArch((a) => A.researchRefused(a, er?.message ?? 'could not start the research')));
   };
   useEffect(() => stopPolling, []);
@@ -451,7 +455,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
     const menuNow = (): Completion | null => {
       if (searchRef.current) return null;
       const c = comp.current;
-      return completions(c.chars, c.cur, info, listDir);
+      return completions(c.chars, c.cur, { ...info, projects }, listDir);
     };
     const onEv = (e: Ev) => {
       const bodyH = Math.max(3, sizeRef.current.h - 9);
@@ -704,7 +708,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
     };
     term.on('ev', onEv);
     return () => { term.off('ev', onEv); };
-  }, [term, help, info, listDir]);
+  }, [term, help, info, listDir, projects]);
 
   // Scrolled up, new output must not move what is being read: grow the offset by what was added below. A reply that
   // begins while the operator is at the end is pinned by its label row once it outgrows the body (`005e` §7.2).
@@ -735,7 +739,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
     });
   }, [lineCount]);
 
-  const comps = search ? null : completions(composer.chars, composer.cur, info, listDir);
+  const comps = search ? null : completions(composer.chars, composer.cur, { ...info, projects }, listDir);
   const model: Model = { ...base, review: inbox.items.filter((d) => d.kind === 'learn').length, bundles, still, quitArmed, now, back, arch, links: lm ?? undefined, reader: rdr, help, menu: comps ? { items: comps.items, sel } : null, search: search ? { q: search.q, match: search.match } : null };
   const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, arch, lm, rdr, sel, help, size, pal, expandTools, queue, search, inbox, mode, panel, noModel, still, quitArmed, bundles]);
   const shown = useSelection(term, lines);

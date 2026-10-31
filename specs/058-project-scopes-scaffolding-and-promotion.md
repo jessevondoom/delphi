@@ -281,4 +281,9 @@ Research the operator asks for (the expand job, `specs/028` §10) is written whe
 1. **The picker.** `/projects` in the console lists the home workspace (`default`, always first) and every registered project (§2), in an arrow-key menu; Enter selects. `/projects <name>` selects by name (the directory name, lowercased, spaces as hyphens).
 2. **Switching is a restart.** The console writes the chosen directory to the file `delphi chat` named for it and exits; `delphi chat` changes its working directory there and starts the console again with a new session. The scope of the new session is then resolved from that directory as in §3.2; nothing else changes and nothing is carried over.
 3. **Checks by code.** `delphi chat` follows the request only when the directory is the home workspace or the root of a registered project; anything else ends the console as before. The request file is removed after it is read.
-4. **Not built:** the list is read when the console starts (a project registered later shows after a restart); the console does not yet name its project to `research.start`.
+4. **Not built:** see §16 for what closed the two gaps this item named.
+
+## 16. Amendment 058-A4: live project list, research in the project you are in (operator, 2026-10-31)
+1. **Live list.** The console-only method `projects.list` returns the home workspace and the registered projects as they are now; `/projects` calls it each time, so a project registered after the console started is offered at once. A daemon without the method leaves the list sent at start.
+2. **Research follows the directory.** `research.start` accepts the console's absolute `cwd`. With no `project` name, the directory is resolved as in §3.2; inside a registered project the research is written under that project (§13), anywhere else it takes the default scope. A named `project` still wins. The console sends its `cwd` with every research request.
+3. **Checks by code.** A relative or unresolvable `cwd`, or a registry that cannot be trusted, means the default scope, which holds weak pages back (§13); no case reaches the shared knowledge base more than before.
