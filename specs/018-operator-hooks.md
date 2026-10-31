@@ -23,6 +23,8 @@ Origin: [`gap-closure-plan-2026-10-25.md`](../missions/2026-10-23-foundational-d
 - A hook that approves, edits an action, or changes what an agent sees. None exists, and none will be added without a spec change and a charter change.
 - Hooks written by an agent. They live in the operator's ratified configuration.
 
+- A hook configured through a harness's own settings that can allow a tool call (018-A1, below).
+
 ### 1.2 Simpler Alternative Considered
 **`[exec] allow`/`deny` rules** already let the operator pre-approve or refuse command patterns. They cannot ask a script ("is this file in a directory I froze?", "is it Friday?"), notify anyone, or react to events. Hooks add exactly that, and nothing else.
 
@@ -61,3 +63,6 @@ Engine (`hooks_run.rs`, scripted model): an objecting hook stops the action befo
 Runner (`hooks_cmd.rs`) and end to end: an event asks for exactly the hooks that named its kind; a run gets the event and environment and its failure is reported, not raised; with a real daemon, an observe hook runs when a task completes, once, with the event on stdin; hooks that are not ratified do not run and the command says so.
 
 Not covered: a deny hook on the CLI-harness paths; hooks for Green actions.
+
+## 6. Amendment 018-A1: Harness-native allow-capable hooks (Council 013 D13; approved by the operator 2026-10-30)
+A command hook's decision (for example `permissionDecision: "allow"` on standard output) exists only at runtime, so no static check of a configured hook can show that it only tightens. This boundary is **runtime-only enforceable; this slice removes the ability to configure allow-capable hooks rather than proving hook outcomes.** The daemon refuses, with a notice naming the key, any ratified `[harness.claude.settings]` `hooks` entry of kind `PreToolUse` or `PermissionRequest` (and the same kinds in a `[harness.claude.agents.<name>]` `hooks` table); the key is dropped and the span runs without it. Observational kinds (`PostToolUse`, `Stop`, `Notification`, …) stay allowed. A guard belongs to a `[[hooks.deny]]` hook (§4; GOVERNANCE §5.11). Checked: the `claude` settings and agents tables are the only harness blocks that forward hook-bearing JSON; `codex`, `copilot` and `agy` blocks forward no settings or hooks.

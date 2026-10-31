@@ -34,10 +34,12 @@ A bad value is skipped and shown as an attach notice (`harness_opts::problems`).
 | `session` | `--no-session-persistence` / none | `"ephemeral"` (default) saves nothing. `"persist"` keeps the transcript under the CLI's config dir and logs `harness.session {session_id}`. |
 | `add_dirs` | `--add-dir` | Absolute paths the span may read and edit. **Only a span with tools gets them.** |
 | `[harness.claude.agents.<name>]` | `--agents` | CLI-native subagents (`description`, `prompt`, `tools`, `model`). **Only a span with tools gets them.** |
-| `[harness.claude.settings]` | `--settings` | Inline settings JSON layered over the blank setting sources, e.g. `hooks`. A `PreToolUse` hook is a second policy gate that sees every tool call, including MCP calls the permission bridge never sees. |
+| `[harness.claude.settings]` | `--settings` | Inline settings JSON layered over the blank setting sources, e.g. observational `hooks`. A `PreToolUse` or `PermissionRequest` hook is **refused** with a notice naming the key (021-A1): its decision exists only at runtime, so it is runtime-only enforceable and Delphi removes the ability to configure it rather than proving outcomes (`specs/018` 018-A1). Guards are `[[hooks.deny]]` hooks. |
 | `json_schema` | `--json-schema` | A JSON Schema as a string. The CLI validates its final answer; the span's text becomes that answer as compact JSON. The CLI's own `StructuredOutput` tool is allowed without asking. |
 
 Verified against `claude` 2.1.310 on 2026-10-25: inline `--settings` hooks fire with `--setting-sources ""`; `--json-schema` takes JSON text, **not a path**, and returns `structured_output` on the result line; `--resume <id> --fork-session` returns a new session id with the earlier context; `stream_event` lines carry `text_delta`s, and a subagent's carry a `parent_tool_use_id` and are ignored.
+
+**Amendment 021-A1 (Council 013 D13).** Allow-capable hook kinds (`PreToolUse`, `PermissionRequest`) in `[harness.claude.settings]` or a `[harness.claude.agents.<name>]` `hooks` table are refused at parse time and reported on attach; the rest of `[harness.claude]` still applies. Other hook kinds are unchanged.
 
 ## 3. Antigravity (`[harness.agy]`)
 
