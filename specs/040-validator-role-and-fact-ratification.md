@@ -695,3 +695,10 @@ The operator asked that Weak sources be usable in research and analysis. They st
 4. **Where they live.** `unverified (weak)` and `opinion (weak)` claims are searchable and are returned labelled; they are never quoted as fact, never enter `context/facts/**`, and in the default scope they stay local until validated or ratified. A trusted-source claim (§26, A.1, A.2) is the only kind that enters the shared knowledge base at once.
 5. **One switch.** `[validator] weak_sources = "label" | "off"`, default `"label"`: `off` refuses to store a claim supported only by Weak sources. A setting that makes Weak count as evidence is not offered; revisiting it needs a labelled-set score (§15.5) showing a false-ratification rate below the operator's threshold.
 6. **Digest, not a card.** Unpromoted and unverified items are summarised in the periodic digest (slice 5); no per-claim approval is added.
+
+## 28. Amendment 040-A3: Wikipedia and journal-publisher guards (operator, 2026-10-31)
+Two checks the §26 note left unbuilt, both pure code over the stored snapshot (no new fetch, no model input). A source that fails one stays in the record, uncounted, with the reason.
+
+1. **Wikipedia.** A Wikipedia page still counts as one Reputable source (A.2), but not for a sentence the page itself marks "citation needed" (within 48 characters after it), nor, when the page text carries footnote markers (`[n]`), for a sentence with no marker inside it or right after it. Wikipedia never counts alone (§6.1).
+2. **Journal publishers.** A page on a peer-reviewed publisher's domain (the A.2 list) counts only when its text names a DOI (`10.NNNN/...`), which is what separates an article from a news, blog or marketing page on the same domain. Resolving the DOI to confirm the venue's peer review is a network check and is **not built**; the DOI-in-text test is the present stand-in.
+3. **Not changed.** Preprint servers stay Weak (§26.2); the independence rule (§6.2) and the two-source rule are unchanged.

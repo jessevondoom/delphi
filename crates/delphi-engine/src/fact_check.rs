@@ -17,7 +17,7 @@
 
 use crate::checks::Outcome;
 use crate::fact_fetch::Snapshot;
-use crate::fact_sources::{Class, SourceList};
+use crate::fact_sources::{is_journal_publisher, is_wikipedia, Class, SourceList};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -337,6 +337,35 @@ impl Submission {
     }
 }
 
+fn doi_re() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"\b10\.\d{4,9}/\S+").unwrap())
+}
+
+fn footnote_re() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"\[\d{1,3}\]").unwrap())
+}
+
+/// `specs/040` §28: a page whose class would count it, but whose own text says the passage is unsupported. By code.
+fn unsupported_page(url: &str, text: &str, passage: &str) -> Option<&'static str> {
+    if is_wikipedia(url) {
+        let after = text.find(passage).map(|i| &text[i + passage.len()..]).unwrap_or("");
+        let near: String = after.chars().take(48).collect();
+        if near.to_ascii_lowercase().contains("citation needed") {
+            return Some("wikipedia: the sentence is tagged \"citation needed\"");
+        }
+        // Footnote markers survive extraction on this page, so a sentence with none after it is uncited.
+        if footnote_re().is_match(text) && !footnote_re().is_match(passage) && !footnote_re().is_match(&near.chars().take(12).collect::<String>()) {
+            return Some("wikipedia: the sentence carries no citation");
+        }
+    }
+    if is_journal_publisher(url) && !doi_re().is_match(text) {
+        return Some("a publisher page without a DOI is not a journal article");
+    }
+    None
+}
+
 pub fn check_fact(sub: &Submission, snaps: &[Snapshot], list: &SourceList) -> FactFindings {
     let mut f = FactFindings { claim: sub.claim.trim().to_string(), kind: sub.kind, sources: vec![], independent: 0, standing: Standing::Rejected, fails: claim_shape(&sub.claim), escalations: vec![] };
     if sub.needed_for.trim().is_empty() {
@@ -367,6 +396,8 @@ pub fn check_fact(sub: &Submission, snaps: &[Snapshot], list: &SourceList) -> Fa
             note = format!("weak: {}", cls.reason);
         } else if passage.is_none() {
             note = "no whole sentence of the page carries the claim".into();
+        } else if let Some(why) = passage.as_deref().and_then(|p| unsupported_page(&url, s.text.for_daemon(), p)) {
+            note = why.into();
         } else if cls.record_only && sub.kind != ClaimKind::Record {
             note = "official record only: for a claim of fact this is an attributed statement".into();
         }
@@ -483,6 +514,27 @@ mod tests {
         let mixed = run(&sub(CLAIM, &["u1", "u2"]), &[weak("https://www.reddit.com/r/music/one"), weak("https://www.britannica.com/x")]);
         assert_ne!(mixed.label(), Some("unverified (weak)"));
         assert_ne!(mixed.label(), Some("verified"));
+    }
+
+    #[test]
+    fn wikipedia_counts_only_for_a_cited_sentence_and_a_publisher_only_for_an_article() {
+        let claim = "Harry Nilsson wrote the song 'One' (1968).";
+        let two = |a: &str, b: &str| {
+            let a = test_snapshot("https://en.wikipedia.org/wiki/One", "t", &[a]);
+            let b = test_snapshot("https://www.britannica.com/x", "t", &[b]);
+            run(&sub(claim, &["u1", "u2"]), &[a, b])
+        };
+        let other = "Harry Nilsson wrote the song 'One' (1968); Three Dog Night took it to number five.";
+        let cited = two("Harry Nilsson wrote the song 'One' (1968).[3] The single was recorded in London with a full orchestra and released that January.", other);
+        assert_eq!(cited.independent, 2, "{:?}", cited.sources.iter().map(|s| (&s.note, s.cluster)).collect::<Vec<_>>());
+        let tagged = two("Harry Nilsson wrote the song 'One' (1968). [citation needed] The single was recorded in London with a full orchestra and released that January.", other);
+        assert_eq!((tagged.independent, tagged.sources[0].counted), (1, false));
+        let bare = two("Harry Nilsson wrote the song 'One' (1968). It was recorded in London with a full orchestra and released in January that year as a single.[3]", other);
+        assert!(!bare.sources[0].counted && bare.sources[0].note.contains("no citation"));
+        let page = test_snapshot("https://link.springer.com/article/1", "t", &["Harry Nilsson wrote the song 'One' (1968)."]);
+        let article = test_snapshot("https://link.springer.com/article/2", "t", &["Harry Nilsson wrote the song 'One' (1968). doi:10.1007/s00000-000-0000-0"]);
+        assert!(!run(&sub(claim, &["u1"]), &[page]).sources[0].counted);
+        assert!(run(&sub(claim, &["u1"]), &[article]).sources[0].counted);
     }
 
     #[test]
