@@ -8,8 +8,13 @@ This file starts with the work after v0.2.7. For earlier releases, the history i
 
 ## Unreleased
 
+### Security
+
+- **Promotion hardening** (spec 058-A2): records below `federated_verified` cannot be promoted to home memory (`source_untrusted`), and `local/promoted/` is capped at 200 active entries / 256 KiB (`promoted_cap_reached`).
+
 ### Fixed
 
+- **A rejected edit no longer buys a stronger model** (spec 015-A2, council 013 D10): an operator rejection still counts toward the three attempts but never upscales the model or changes the family; only gate failures, turn exhaustion and audit findings climb the retry ladder.
 - **Taint no longer fades between missions** (spec 001-A4, 004-A4): files under `missions/**/research/**` and `missions/**/reports/**` and `missions/**/artifacts/**` read as `L0` in later missions when they have no stamp; a span at `L1` or below can write only such paths; the gated-path check sees through `@worktree/` and `@project/<name>/`; and `suggest_rule` refuses from a tainted span.
 
 ### Added

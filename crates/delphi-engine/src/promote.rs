@@ -39,6 +39,11 @@ const MAX_RECORD_BYTES: u64 = 64 * 1024;
 pub const DESTINATION: &str = "home:memory/promoted";
 /// Source tiers above this are never given to a promoted summary: acceptance ratifies a summary, it validates no fact.
 const CEILING: &str = "internal_generated";
+/// Records below this source tier (`external_untrusted`, `federated_peer`) are never promoted to home memory (058-A2).
+const FLOOR: &str = "federated_verified";
+/// Most active entries, and most bytes of them, under `local/promoted/` (058-A2).
+pub const MAX_PROMOTED_ENTRIES: usize = 200;
+pub const MAX_PROMOTED_BYTES: u64 = 256 * 1024;
 
 /// Why a record cannot be promoted, by a stable code.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,6 +133,9 @@ fn read_record(ws_dir: &Path, project: &ProjectId, rel: &str) -> Result<Original
     if let Some(h) = delphi_bundle::scan::scan_text(&text, &ctx).into_iter().find(|h| h.fail && matches!(h.class, "secret" | "token" | "private-key")) {
         return refuse("contains_secret", format!("`{}` carries {} (line {})", rel, h.found, h.line));
     }
+    if rank(source_type) < rank(FLOOR) {
+        return refuse("source_untrusted", format!("`{}` is `{}`, below the `{}` tier a promoted record needs", rel, source_type, FLOOR));
+    }
     Ok(Original { rel: rel.to_string(), blake3: lock::hash(text.as_bytes()), source_type: source_type.to_string() })
 }
 
@@ -206,6 +214,27 @@ pub fn home_matches(ws_dir: &Path, summary: &str) -> Vec<Match> {
 
 fn store(ws_dir: &Path) -> PathBuf {
     ws_dir.join("local/promoted")
+}
+
+/// Active entries and their bytes under `local/promoted/`; a retired entry no longer counts.
+fn promoted_usage(ws_dir: &Path) -> (usize, u64) {
+    let mut usage = (0, 0);
+    for e in std::fs::read_dir(store(ws_dir)).into_iter().flatten().flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_file())) {
+        let Ok(text) = std::fs::read_to_string(e.path()) else { continue };
+        let active = frontmatter::parse(&text).ok().and_then(|d| d.frontmatter).is_some_and(|m| frontmatter::get_str(&m, "status") == Some("active"));
+        if active {
+            usage = (usage.0 + 1, usage.1 + text.len() as u64);
+        }
+    }
+    usage
+}
+
+fn check_cap(ws_dir: &Path, new_bytes: u64) -> Result<(), Refusal> {
+    let (n, bytes) = promoted_usage(ws_dir);
+    if n >= MAX_PROMOTED_ENTRIES || bytes + new_bytes > MAX_PROMOTED_BYTES {
+        return refuse("promoted_cap_reached", format!("home promoted memory holds {} entries, {} bytes (limit {} entries, {} bytes); withdraw an entry first", n, bytes, MAX_PROMOTED_ENTRIES, MAX_PROMOTED_BYTES));
+    }
+    Ok(())
 }
 
 /// A hash of the home records a promotion targets: the promoted entries and their bytes, in name order.
@@ -323,6 +352,7 @@ pub fn propose(ws_dir: &Path, mission: &str, project: &ProjectId, rels: &[String
     }
     let summary = summary.trim();
     let originals = preflight(ws_dir, project, rels, summary)?;
+    check_cap(ws_dir, 0)?;
     let matches = home_matches(ws_dir, summary);
     let payload = json!({
         "op": "promote", "scope": "home", "project": project.as_str(), "destination": DESTINATION, "summary": summary, "uncertainty": one_line(uncertainty, 300),
@@ -409,6 +439,7 @@ pub fn accept(ws_dir: &Path, p: &Promotion, expected_version: &str, by: &str, no
         let lowest = p.records.iter().map(|r| r.source_type.as_str()).min_by_key(|s| rank(s)).unwrap_or("external_untrusted");
         let source_type = if rank(lowest) > rank(CEILING) { CEILING } else { lowest };
         let text = entry_text(p, source_type, by, now);
+        check_cap(ws_dir, text.len() as u64)?;
         lock::write_atomic(&path, text.as_bytes()).map_err(|e| Refusal { code: "io", detail: e.to_string() })?;
         Ok(Accepted { entry: entry_id(p), file: format!("local/promoted/{}.md", entry_id(p)), blake3: lock::hash(text.as_bytes()), source_type: source_type.to_string(), matches: home_matches(ws_dir, &p.summary) })
     })
@@ -678,12 +709,12 @@ mod tests {
         let kb = crate::kb::sources(&f.ws);
         assert!(kb.iter().any(|s| s.rel_path == "memory/promoted/m1-p3.md" || s.path.ends_with("promoted/m1-p3.md")), "indexed as home memory");
         // A record below the ceiling keeps its lower tier.
-        f.put(A, "staged/m1/n3.md", &record("", "fact", "active", "x y z").replace("internal_generated", "external_untrusted"));
+        f.put(A, "staged/m1/n3.md", &record("", "fact", "active", "x y z").replace("internal_generated", "federated_verified"));
         let (e, _) = propose(&f.ws, "m2", &f.project(), &["staged/m1/n3.md".into()], SUMMARY, "").unwrap();
         let mut e = e;
         e.seq = 1;
         let q = live_promotions("m2", &[e]).remove(0);
-        assert_eq!(accept(&f.ws, &q, &q.version(), "c", "t").unwrap().source_type, "external_untrusted");
+        assert_eq!(accept(&f.ws, &q, &q.version(), "c", "t").unwrap().source_type, "federated_verified");
         // A ratified-tier record is capped: the summary is not validated by being accepted.
         f.put(A, "staged/m1/n4.md", &record("", "fact", "active", "x y z").replace("internal_generated", "user_ratified"));
         let (e, _) = propose(&f.ws, "m3", &f.project(), &["staged/m1/n4.md".into()], SUMMARY, "").unwrap();
@@ -691,6 +722,37 @@ mod tests {
         e.seq = 1;
         let r = live_promotions("m3", &[e]).remove(0);
         assert_eq!(accept(&f.ws, &r, &r.version(), "c", "t").unwrap().source_type, "internal_generated");
+    }
+
+    #[test]
+    fn records_below_the_source_floor_are_refused_with_a_reason_code() {
+        let f = fx();
+        for low in ["external_untrusted", "federated_peer"] {
+            f.put(A, "staged/m1/low.md", &record("", "fact", "active", "x y z").replace("internal_generated", low));
+            let r = propose(&f.ws, "m1", &f.project(), &["staged/m1/low.md".into()], SUMMARY, "").unwrap_err();
+            assert_eq!(r.code, "source_untrusted", "{}", low);
+        }
+    }
+
+    #[test]
+    fn the_promoted_store_is_capped_in_entries_and_bytes_and_a_withdrawal_frees_room() {
+        let f = fx();
+        let dir = f.ws.join("local/promoted");
+        fs::create_dir_all(&dir).unwrap();
+        let active = "---\nstatus: active\n---\nx\n";
+        for i in 0..MAX_PROMOTED_ENTRIES {
+            fs::write(dir.join(format!("e{}.md", i)), active).unwrap();
+        }
+        assert_eq!(code(f.propose(SUMMARY)), "promoted_cap_reached");
+        fs::write(dir.join("e0.md"), "---\nstatus: retired\n---\nx\n").unwrap();
+        let p = f.propose(SUMMARY).unwrap();
+        assert!(accept(&f.ws, &p, &p.version(), "c", "t").is_ok(), "a retired entry frees its slot");
+        // Bytes: one big entry fills the budget.
+        let g = fx();
+        let big = format!("---\nstatus: active\n---\n{}", "y".repeat(MAX_PROMOTED_BYTES as usize));
+        fs::create_dir_all(g.ws.join("local/promoted")).unwrap();
+        fs::write(g.ws.join("local/promoted/big.md"), big).unwrap();
+        assert_eq!(code(g.propose(SUMMARY)), "promoted_cap_reached");
     }
 
     #[test]

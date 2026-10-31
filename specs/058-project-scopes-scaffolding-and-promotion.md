@@ -189,6 +189,13 @@ The operator may accept the summary without references, or accept the summary wi
 - Rejection records only the proposal outcome and operator-provided reason subject to existing privacy rules; it does not copy proposal text into an always-loaded store.
 - The operator may withdraw a promoted entry. Withdrawal marks it inactive/retired with an audit reference; it does not delete source records or rewrite the project original.
 
+### 7.4 Amendment 058-A2 (council 013, D11: promotion hardening)
+
+- **Decision:** the console-only compare-and-swap acceptance stays the control; no Red card is added. It was verified before being kept: (a) `delphi retro show`/`accept` print the full summary that would land in `local/promoted/` and then ask for a typed yes at a terminal, and `retro.promotions` returns the same summary with the `version` that `retro.accept` requires; (b) `retro.accept` is console-scope only (a relay or narrator seat is refused), and acceptance is bound to a hash of the summary, the records' hashes and the home version, so a changed proposal is `stale_proposal`. Had either failed, acceptance would need a Red card whose payload is the summary text.
+- **Source floor:** a record whose `source_type` is below `federated_verified` (`external_untrusted`, `federated_peer`) is refused at proposal and again at acceptance with `source_untrusted`. The ceiling of §7.3 is unchanged.
+- **Cap:** `local/promoted/` holds at most 200 active entries and 256 KiB of them; a proposal or acceptance past either is refused with `promoted_cap_reached`. A retired entry no longer counts, so withdrawal frees room.
+- **Acceptance tests:** `records_below_the_source_floor_are_refused_with_a_reason_code` and `the_promoted_store_is_capped_in_entries_and_bytes_and_a_withdrawal_frees_room` in `crates/delphi-engine/src/promote.rs`; the existing narrator-denied and stale-version cases of `retro.accept` cover (b).
+
 ## 8. Commands and user experience
 
 | Command | Behavior |
