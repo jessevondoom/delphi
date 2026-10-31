@@ -1009,14 +1009,34 @@ pub fn launch_ui(ui: &Path, home: &Path, ws_dir: &Path, mission: Option<String>,
             return 1;
         }
     };
-    let info = ui_info(&l.sock, &l.narrator_sock, ws_dir, mission, names);
-    match run_ui(std::process::Command::new(ui).arg("--info").arg(info.to_string())) {
-        Ok(code) => code,
-        Err(e) => {
-            eprintln!("delphi chat: cannot start the full-screen console ({}); try `delphi chat --inline`", e);
-            1
+    let relaunch = ws_dir.join("local").join(format!("relaunch-{}.json", std::process::id()));
+    let mut mission = mission;
+    loop {
+        let _ = std::fs::remove_file(&relaunch);
+        let mut info = ui_info(&l.sock, &l.narrator_sock, ws_dir, mission.take(), names);
+        info["relaunch_file"] = json!(relaunch);
+        let code = match run_ui(std::process::Command::new(ui).arg("--info").arg(info.to_string())) {
+            Ok(code) => code,
+            Err(e) => {
+                eprintln!("delphi chat: cannot start the full-screen console ({}); try `delphi chat --inline`", e);
+                return 1;
+            }
+        };
+        let asked = std::fs::read_to_string(&relaunch).ok();
+        let _ = std::fs::remove_file(&relaunch);
+        match asked.and_then(|t| relaunch_target(ws_dir, &t)) {
+            Some(dir) if code == 0 && std::env::set_current_dir(&dir).is_ok() => continue,
+            _ => return code,
         }
     }
+}
+
+/// `specs/058` §15: the directory the console asked to restart in, only when it is the home workspace or a registered project root.
+pub(crate) fn relaunch_target(ws_dir: &Path, asked: &str) -> Option<PathBuf> {
+    let dir = std::fs::canonicalize(asked.trim()).ok()?;
+    let home_dir = std::fs::canonicalize(ws_dir).ok()?;
+    let registered = crate::home::project_records(ws_dir).ok()?.into_iter().any(|r| std::fs::canonicalize(&r.root).is_ok_and(|c| c == dir));
+    (dir == home_dir || registered).then_some(dir)
 }
 
 /// The full-screen Observer: the same UI executable in its read-only mode. It needs a running daemon (it only watches).
@@ -1066,7 +1086,12 @@ pub(crate) fn ui_info(console: &Path, narrator: &Path, ws_dir: &Path, mission: O
         })
         .collect();
     let cwd = std::env::current_dir().ok().map(|p| p.display().to_string()).unwrap_or_default();
-    json!({"console_socket": console, "narrator_socket": narrator, "workspace": ws_dir, "mission": mission, "version": env!("CARGO_PKG_VERSION"), "cwd": cwd, "roles": roles, "avatar": crate::avatar::ui_spec(), "delphi_exe": exe, "workspace_name": ws_name, "home": home})
+    // Home first, then each registered project: what `/projects` offers (`specs/058` §15).
+    let mut projects = vec![json!({"name": "default", "root": ws_dir, "home": true})];
+    let mut records = crate::home::project_records(ws_dir).unwrap_or_default();
+    records.sort_by_key(|r| r.display_name.to_lowercase());
+    projects.extend(records.iter().map(|r| json!({"name": r.display_name, "root": r.root, "home": false})));
+    json!({"projects": projects, "console_socket": console, "narrator_socket": narrator, "workspace": ws_dir, "mission": mission, "version": env!("CARGO_PKG_VERSION"), "cwd": cwd, "roles": roles, "avatar": crate::avatar::ui_spec(), "delphi_exe": exe, "workspace_name": ws_name, "home": home})
 }
 
 /// `delphi daemon status|stop|restart`.
@@ -1153,6 +1178,25 @@ pub fn daemon(home: &Path, ws_dir: &Path, action: &str) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_relaunch_goes_only_to_home_or_a_registered_project() {
+        let t = tempfile::tempdir().unwrap();
+        let ws = t.path().join("ws");
+        std::fs::create_dir_all(ws.join("local")).unwrap();
+        let (proj, other) = (t.path().join("proj"), t.path().join("other"));
+        std::fs::create_dir_all(&proj).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        crate::home::register_project(&ws, &proj).unwrap();
+        let canon = |p: &Path| std::fs::canonicalize(p).unwrap();
+        assert_eq!(relaunch_target(&ws, &format!("{}\n", proj.display())), Some(canon(&proj)));
+        assert_eq!(relaunch_target(&ws, ws.to_str().unwrap()), Some(canon(&ws)));
+        assert_eq!(relaunch_target(&ws, other.to_str().unwrap()), None, "an unregistered directory is refused");
+        assert_eq!(relaunch_target(&ws, "/nonexistent/dir"), None);
+        let info = ui_info(Path::new("/s"), Path::new("/n"), &ws, None, &HashMap::new());
+        assert_eq!(info["projects"][0]["name"], "default");
+        assert_eq!(info["projects"][1]["name"], "proj");
+    }
 
     #[test]
     fn the_optimistic_flag_decisions_and_merge_commands_parse() {

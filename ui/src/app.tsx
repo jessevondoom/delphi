@@ -6,7 +6,7 @@ import { mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as C from './composer.ts';
 import { lookup } from './commands.ts';
-import { bundleTarget, completions, enterAccepts, searchHistory, type Completion, type ListDir } from './complete.ts';
+import { bundleTarget, completions, enterAccepts, projectKey, searchHistory, type Completion, type ListDir } from './complete.ts';
 import { addBlock, fold, type State } from './fold.ts';
 import { contextReport, exportAll, exportHead } from './session.ts';
 import { loadHistory } from './attach.ts';
@@ -245,6 +245,20 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
       cmd.call('session.new', { mission_id: mission })
         .then(() => setState((s) => fold(s, { method: 'event', params: { type: 'session.started', payload: {} } }, Date.now())))
         .catch((e) => note('could not start a new session: ' + (e?.message ?? JSON.stringify(e)), 'error'));
+      return;
+    }
+    if (name === '/projects') {
+      const word = projectKey(line.slice(name.length));
+      const list = info.projects ?? [];
+      if (!word) {
+        if (list.length < 2) { note('no registered projects yet; `delphi project add` registers one', 'error'); return; }
+        comp.current = C.insert(C.empty(comp.current.hist), '/projects '); setComposer(comp.current);
+        return;
+      }
+      const p = list.find((x) => projectKey(x.name) === word);
+      if (!p || !info.relaunch_file) { note(p ? 'this console cannot restart itself; start `delphi chat` in that directory' : `${word} is not a registered project; /projects lists them`, 'error'); return; }
+      writeFileSync(info.relaunch_file, p.root);
+      exit();
       return;
     }
     if (name === '/pictures') {
@@ -670,6 +684,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
               const text = C.textOf(comp.current);
               if (items.length) {
                 const it = items[Math.min(selRef.current, items.length - 1)]!;
+                if (it.run) { comp.current = C.empty(comp.current.hist); setComposer(comp.current); run('/projects ' + it.insert); return; }
                 const tok = comp.current.chars.slice(m!.from, m!.to).join('');
                 if (enterAccepts(tok, it, selRef.current)) { accept(it); return; }
               }

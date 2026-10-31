@@ -30,6 +30,8 @@ export type Info = {
   delphi_exe?: string; workspace_name?: string; home?: string;
   /** Absent when an older `delphi` started the console; the built-in faces below are used then. */
   avatar?: AvatarSpec;
+  /** `/projects`: the home workspace first, then each registered project (`specs/058` §15). `relaunch_file` is where the console says which directory to restart in. */
+  projects?: { name: string; root: string; home: boolean }[]; relaunch_file?: string;
 };
 
 /** Convert the standard ANSI 256-colour palette to the display hex used by OpenTUI spans. */
