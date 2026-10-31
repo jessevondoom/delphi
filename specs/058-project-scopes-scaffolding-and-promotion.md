@@ -276,3 +276,9 @@ Research the operator asks for (the expand job, `specs/028` §10) is written whe
 4. **Discard** deletes a held page from the workspace's pending folder. It never deletes a project's files.
 5. **Checks by code.** An entry is named `host/slug.md` exactly (validated host, lowercase letters, digits and dashes); a link is never followed; a file the job did not write (no `source_url`) is refused.
 6. **Not built:** the automatic validator pass over held entries (the promotion pass of `specs/040`, 040-A2), and a bulk `retro promote` of project research; ratification is per entry.
+
+## 15. Amendment 058-A3: `/projects`, switching project (operator, 2026-10-31)
+1. **The picker.** `/projects` in the console lists the home workspace (`default`, always first) and every registered project (§2), in an arrow-key menu; Enter selects. `/projects <name>` selects by name (the directory name, lowercased, spaces as hyphens).
+2. **Switching is a restart.** The console writes the chosen directory to the file `delphi chat` named for it and exits; `delphi chat` changes its working directory there and starts the console again with a new session. The scope of the new session is then resolved from that directory as in §3.2; nothing else changes and nothing is carried over.
+3. **Checks by code.** `delphi chat` follows the request only when the directory is the home workspace or the root of a registered project; anything else ends the console as before. The request file is removed after it is read.
+4. **Not built:** the list is read when the console starts (a project registered later shows after a restart); the console does not yet name its project to `research.start`.

@@ -40,3 +40,13 @@ test("@bundle:agent names a bundle agent; a line reference is not one", () => {
   assert.equal(bundleTarget("architect"), null);
   assert.equal(bundleTarget("a:b:c"), null);
 });
+
+test('/projects offers the home workspace first, then registered projects, and Enter runs the pick', () => {
+  const withProjects = { ...info, projects: [{ name: 'default', root: '/ws', home: true }, { name: 'My App', root: '/code/My App', home: false }, { name: 'notes', root: '/code/notes', home: false }] } as unknown as Info;
+  const all = completions('/projects ', 10, withProjects, fs)!;
+  assert.deepEqual(all.items.map((i) => i.insert), ['default', 'my-app', 'notes']);
+  assert.ok(all.items.every((i) => i.run));
+  assert.deepEqual(completions('/projects my', 12, withProjects, fs)!.items.map((i) => i.insert), ['my-app']);
+  assert.equal(completions('/projects zzz', 13, withProjects, fs), null);
+  assert.equal(completions('/projects ', 10, info, fs), null, 'an older delphi sends no list');
+});

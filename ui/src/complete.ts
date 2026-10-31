@@ -3,7 +3,10 @@ import { COMMANDS, filter, lookup } from './commands.ts';
 import { graphemes } from './text.ts';
 import type { Info } from './theme.ts';
 
-export type Item = { label: string; desc: string; insert: string };
+export type Item = { label: string; desc: string; insert: string; /** Enter on it runs `/projects <insert>` at once. */ run?: boolean };
+
+/** The word that names a project after `/projects`: its directory name, lowercased, spaces as hyphens. */
+export const projectKey = (name: string): string => name.trim().toLowerCase().replace(/\s+/g, '-');
 export type Completion = { items: Item[]; from: number; to: number };
 
 /**
@@ -28,6 +31,12 @@ export function completions(input: string | string[], cur: number, info: Info, l
   let from = cur;
   while (from > 0 && !/\s/.test(chars[from - 1]!)) from--;
   const tok = chars.slice(from, cur).join('');
+  const pm = /^\/projects\s+(\S*)$/.exec(chars.slice(0, cur).join(''));
+  if (pm && !chars.includes('\n')) {
+    const q = pm[1]!.toLowerCase();
+    const items: Item[] = (info.projects ?? []).filter((p) => projectKey(p.name).startsWith(q)).map((p) => ({ label: projectKey(p.name), desc: p.home ? 'home workspace' : p.root, insert: projectKey(p.name), run: true }));
+    return items.length ? { items, from: cur - pm[1]!.length, to: cur } : null;
+  }
   if (tok.startsWith('/') && from === 0 && !chars.includes('\n')) {
     const items = filter(tok).map((c) => ({ label: c.name, desc: c.desc, insert: c.name }));
     return items.length ? { items, from, to: cur } : null;
