@@ -49,14 +49,15 @@ fn c(class: Class, reason: &'static str) -> Classified {
 const EXCLUDED: [&str; 14] = [
     "bit.ly", "t.co", "tinyurl.com", "goo.gl", "ow.ly", "is.gd", "buff.ly", "webcache.googleusercontent.com", "cachedview.nl", "archive.org", "archive.ph", "archive.is", "web.archive.org", "r.jina.ai",
 ];
-const WEAK: [&str; 22] = [
-    "wikipedia.org", "wikimedia.org", "wikia.com", "fandom.com", "reddit.com", "quora.com", "stackoverflow.com", "stackexchange.com", "medium.com", "substack.com", "x.com", "twitter.com", "facebook.com", "youtube.com", "discogs.com", "musicbrainz.org", "imdb.com", "genius.com", "blogspot.com", "wordpress.com", "tumblr.com", "linkedin.com",
+const WEAK: [&str; 21] = [
+    "wikimedia.org", "wikia.com", "fandom.com", "reddit.com", "quora.com", "stackoverflow.com", "stackexchange.com", "medium.com", "substack.com", "x.com", "twitter.com", "facebook.com", "youtube.com", "discogs.com", "musicbrainz.org", "imdb.com", "genius.com", "blogspot.com", "wordpress.com", "tumblr.com", "linkedin.com",
 ];
 const PRIMARY: [&str; 31] = [
     "ietf.org", "rfc-editor.org", "w3.org", "whatwg.org", "ecma-international.org", "unicode.org", "iso.org", "nist.gov", "legislation.gov.uk", "europa.eu", "sec.gov", "doi.org", "pubmed.ncbi.nlm.nih.gov", "clinicaltrials.gov", "arxiv.org", "crates.io", "pypi.org", "npmjs.com", "github.com", "copyright.gov", "loc.gov", "ascap.com", "bmi.com", "docs.rs", "rust-lang.org", "python.org", "kernel.org", "postgresql.org", "mozilla.org", "owasp.org", "iana.org",
 ];
-const REPUTABLE: [&str; 17] = [
+const REPUTABLE: [&str; 48] = [
     "britannica.com", "apnews.com", "reuters.com", "bbc.co.uk", "bbc.com", "nytimes.com", "theguardian.com", "washingtonpost.com", "npr.org", "annualreviews.org", "si.edu", "smithsonianmag.com", "nationalgeographic.com", "billboard.com", "allmusic.com", "nature.com", "science.org",
+    "wikipedia.org", "springer.com", "sciencedirect.com", "wiley.com", "tandfonline.com", "jstor.org", "cell.com", "thelancet.com", "nejm.org", "bmj.com", "pnas.org", "plos.org", "ieee.org", "acm.org", "aps.org", "academic.oup.com", "cambridge.org", "merriam-webster.com", "oed.com", "plato.stanford.edu", "worldbank.org", "who.int", "un.org", "oecd.org", "economist.com", "ft.com", "wsj.com", "bloomberg.com", "propublica.org", "ncbi.nlm.nih.gov", "europepmc.org",
 ];
 /// Suffixes whose registrable domains are a class (§6.3), subject to the kind-of-claim rule.
 const GOV_SUFFIXES: [&str; 3] = [".gov", ".gov.uk", ".gov.au"];
@@ -172,7 +173,10 @@ mod tests {
     fn appendix_a_classes() {
         assert_eq!(class("https://www.rfc-editor.org/rfc/rfc2324"), Class::Primary);
         assert_eq!(class("https://www.britannica.com/topic/x"), Class::ReputableSecondary);
-        assert_eq!(class("https://en.wikipedia.org/wiki/One_(song)"), Class::Weak);
+        assert_eq!(class("https://en.wikipedia.org/wiki/One_(song)"), Class::ReputableSecondary);
+        assert_eq!(class("https://link.springer.com/article/1"), Class::ReputableSecondary);
+        assert_eq!(class("https://commons.wikimedia.org/wiki/File:x.png"), Class::Weak);
+        assert_eq!(class("https://www.biorxiv.org/content/1v1"), Class::Weak);
         assert_eq!(class("https://www.discogs.com/release/1"), Class::Weak);
         assert_eq!(class("https://bit.ly/abc"), Class::Excluded);
         assert_eq!(class("https://web.archive.org/web/2020/https://x.org"), Class::Excluded);

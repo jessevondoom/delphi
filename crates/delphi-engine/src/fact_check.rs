@@ -444,7 +444,7 @@ mod tests {
 
     #[test]
     fn weak_sources_never_count_and_a_weak_only_claim_escalates() {
-        let a = test_snapshot("https://en.wikipedia.org/wiki/One", "t", &["Harry Nilsson wrote the song 'One' (1968)."]);
+        let a = test_snapshot("https://www.reddit.com/r/music/one", "t", &["Harry Nilsson wrote the song 'One' (1968)."]);
         let b = test_snapshot("https://www.discogs.com/r", "t", &["Harry Nilsson wrote the song 'One' (1968)."]);
         let f = run(&sub(CLAIM, &["u1", "u2"]), &[a, b]);
         assert_eq!((f.independent, f.standing), (0, Standing::Rejected));
