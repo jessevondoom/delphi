@@ -110,6 +110,27 @@ pub struct FactFindings {
 }
 
 impl FactFindings {
+    /// `specs/040` §27: how a claim is shown. Derived from the source classes, never declared by a model. A claim only
+    /// Weak sources support is `unverified (weak)`; nothing Weak is ever counted.
+    pub fn label(&self) -> Option<&'static str> {
+        match self.standing {
+            Standing::Fact(_) => Some("verified"),
+            Standing::AttributionOnly => Some("attributed"),
+            Standing::Rejected if self.fails.is_empty() && self.weak_only() => Some("unverified (weak)"),
+            Standing::Rejected => None,
+        }
+    }
+
+    /// At least one source was read and every one of them is Weak.
+    pub fn weak_only(&self) -> bool {
+        !self.sources.is_empty() && self.sources.iter().all(|s| s.class == Class::Weak)
+    }
+
+    /// Distinct origins among Weak sources: shown in the record, never an input to the label.
+    pub fn weak_agree(&self) -> usize {
+        self.sources.iter().filter(|s| s.class == Class::Weak).map(|s| s.cluster).collect::<std::collections::BTreeSet<_>>().len()
+    }
+
     pub fn passed(&self) -> bool {
         self.fails.is_empty() && self.escalations.is_empty() && self.standing != Standing::Rejected
     }
@@ -449,6 +470,19 @@ mod tests {
         let f = run(&sub(CLAIM, &["u1", "u2"]), &[a, b]);
         assert_eq!((f.independent, f.standing), (0, Standing::Rejected));
         assert!(f.escalations.iter().any(|e| e.contains("weak")));
+    }
+
+    #[test]
+    fn labels_follow_the_source_classes_and_weak_agreement_changes_nothing() {
+        let weak = |u: &str| test_snapshot(u, "t", &["Harry Nilsson wrote the song 'One' (1968)."]);
+        let other = test_snapshot("https://www.discogs.com/r", "t", &["A release listing: Nilsson's 'One' appears on the 1968 album Aerial Ballet, track four."]);
+        let f = run(&sub(CLAIM, &["u1", "u2"]), &[weak("https://www.reddit.com/r/music/one"), other]);
+        assert_eq!((f.label(), f.weak_agree(), f.independent), (Some("unverified (weak)"), 2, 0));
+        let t = run(&sub(CLAIM, &["u1", "u2"]), &[weak("https://www.britannica.com/x"), test_snapshot("https://www.reuters.com/y", "t", &["Harry Nilsson wrote the song 'One' (1968); Three Dog Night later took it to number five."])]);
+        assert_eq!(t.label(), Some("verified"));
+        let mixed = run(&sub(CLAIM, &["u1", "u2"]), &[weak("https://www.reddit.com/r/music/one"), weak("https://www.britannica.com/x")]);
+        assert_ne!(mixed.label(), Some("unverified (weak)"));
+        assert_ne!(mixed.label(), Some("verified"));
     }
 
     #[test]

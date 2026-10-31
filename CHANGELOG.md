@@ -8,6 +8,10 @@ This file starts with the work after v0.2.7. For earlier releases, the history i
 
 ## Unreleased
 
+### Validator
+
+- Weak sources are labelled, never evidence (spec 040-A2): a claim only Weak sources support is `unverified (weak)`, and agreement among Weak sources is recorded but changes no label. New `[validator] weak_sources = "label"|"off"` (default `label`).
+
 ## 0.4.0 — 2026-10-31
 
 Docs and tests: `cargo test -p delphi --test spec_refs` checks that every spec section and amendment reference (`NNN §X.Y`, `NNN-An`) still resolves, so folding amendments into specs cannot silently break one.

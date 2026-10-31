@@ -91,6 +91,7 @@ Which sites the job may read is not here: it is `context/sources/trusted.toml` (
 | Key | Default | Meaning |
 | :-- | :-- | :-- |
 | `[validator] mode` ◆ | `advisory` | `off`: the validator fetches nothing, anywhere. `advisory`: the full fact path runs as a dry run (**it does use the network**: it fetches, snapshots, judges and records what it would ratify) and writes nothing validated. `ratify`: real writes to `context/facts/**`, honoured only while the daemon's latch allows it and the PROMOTE conditions hold. The effective mode is the lower of this value and the latch |
+| `[validator] weak_sources` ◆ | `label` | a claim supported only by Weak sources: `label` keeps it labelled `unverified (weak)`, searchable and never quoted as fact; `off` refuses it. Weak sources never count toward the two that validate a claim, whatever this is set to ([`specs/040`](../../specs/040-validator-role-and-fact-ratification.md) §27) |
 | `[validator.sources] primary`, `reputable`, `weak` ◆ | — | registrable domains the operator adds to the default source list (`specs/040` appendix A); they win over the defaults. Only the operator can edit them |
 
 ## Library acquisition ◆
