@@ -148,11 +148,10 @@ jobs:
       - name: Build the console
         working-directory: ui
         run: |
-          npm ci --ignore-scripts --no-audit --no-fund
-          # Install scripts stay off for everything, except bun's own, which fetches the bun executable.
-          npm rebuild bun
-          # The release version is baked in: a console of another release refuses to run beside this delphi.
-          ./node_modules/.bin/bun build --compile --define "BUILD_VERSION=\"${{ steps.ver.outputs.version }}\"" --target=${{ matrix.bun }} src/main.tsx --outfile dist/delphi-ui
+          # Install scripts stay off for everything, except bun's own, which build.sh runs. It installs the target's
+          # OpenTUI native package and leaves the other platforms external. The release version is baked in: a console
+          # of another release refuses to run beside this delphi.
+          dev/build.sh "${{ steps.ver.outputs.version }}" dist/delphi-ui ${{ matrix.bun }}
           test -x dist/delphi-ui
       - name: Package
         run: |

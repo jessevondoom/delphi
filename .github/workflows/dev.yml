@@ -115,9 +115,8 @@ jobs:
       - name: Build the console
         working-directory: ui
         run: |
-          npm ci --ignore-scripts --no-audit --no-fund
-          npm rebuild bun
-          ./node_modules/.bin/bun build --compile --define "BUILD_VERSION=\"${{ steps.ver.outputs.version }}\"" --target=${{ matrix.bun }} src/main.tsx --outfile dist/delphi-ui
+          # build.sh installs the target's OpenTUI native package and leaves the other platforms external.
+          dev/build.sh "${{ steps.ver.outputs.version }}" dist/delphi-ui ${{ matrix.bun }}
           test -x dist/delphi-ui
       - name: Package
         run: |
