@@ -19,9 +19,9 @@ tags: [spec, ui, tui, console, observer, ink, review, d-28]
 
 ## 1. Scope
 
-**Reviewed.** The full-screen console (`ui/src`, Ink), the Observer window (`ui/src/observe-screen.ts`, `observer.tsx`), the inline and plain Rust consoles (`crates/delphi/src/console.rs`, `chat.rs`), the classic Rust Observer (`observer.rs`), the first run (`main.rs`, `start.rs`, `setup.rs`) and the CLI surface (`main.rs` usage text, `doctor`, `models`, `needs`).
+**Reviewed.** The full-screen console (`ui/src`, originally Ink and now OpenTUI under D-33), the Observer window (`ui/src/observe-screen.ts`, `observer.tsx`), the inline and plain Rust consoles (`crates/delphi/src/console.rs`, `chat.rs`), the classic Rust Observer (`observer.rs`), the first run (`main.rs`, `start.rs`, `setup.rs`) and the CLI surface (`main.rs` usage text, `doctor`, `models`, `needs`).
 
-**Changed by this spec.** Visual language and palette (§5), first run and the no-model state (§6), the chat deck (§7), the activity deck (§8), the narrator window (§9), discoverability and keyboard flow (§10), degradation at narrow widths and without colour (§11). Rust fallbacks (inline and plain consoles) adopt only the copy and state changes (§6, §10.5); their layout is out of scope.
+**Changed by this spec.** Visual language and palette (§5), first run and the no-model state (§6), the chat deck (§7), the activity deck (§8), the narrator window (§9), discoverability and keyboard flow (§10), degradation at narrow widths and without colour (§11). The renderer choice is OpenTUI under approved spec 060 and D-33; the UI model and authority boundary are unchanged. Rust fallbacks (inline and plain consoles) adopt only the copy and state changes (§6, §10.5); their layout is out of scope.
 
 **Not changed.** The daemon protocol, approval semantics (payload-hash binding, the 300 ms guard, one approval per option, Red never auto-approved), the Decision Inbox's rules, the deck model, the badge and mascot invariants of [`005a`](005a-terminal-avatar-system.md). Windows is not supported. The chromeless viewer of `005b` §5 stays later work.
 

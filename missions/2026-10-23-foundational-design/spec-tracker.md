@@ -381,3 +381,11 @@ Approved for implementation by the operator on 2026-10-30. Defines the run-anywh
 | OE4 | Public release attestation verification without GitHub CLI login prerequisite | approved, not built |
 | OE5 | Update preview/notice alignment; exclude rollback and recovery redesign | approved, not built |
 | OE6 | Integration, reference docs and terminal walkthrough | approved, not built |
+
+## OpenTUI renderer and supported UI runtime (spec 060, approved 2026-10-30)
+
+Approved by the operator on 2026-10-30. D-33 supersedes D-28's Ink renderer choice while retaining the socket boundary, pure frame model, Rust fallbacks, approval semantics and standalone release executable.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| OUI1 | OpenTUI renderer, supported source runtime, terminal ownership, CI end-to-end and release builds | in progress on `codex/opentui-completion` |

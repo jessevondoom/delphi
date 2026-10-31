@@ -15,7 +15,7 @@ tags: [spec, ui, tui, console, narrator, ink, build-plan, d-28]
 
 # Spec 005f: Console Redesign Build Plan
 
-**Purpose.** A self-contained brief for a model or engineer who has not seen the design conversation. It turns [`005e`](005e-console-ux-review-and-redesign.md) into eleven ordered slices, each shippable as its own pull request. Read `005e` §§5-11 first: it is the design; this file is the order of work, the files, the tests and the "done" test for each slice. Where the two differ, `005e` governs.
+**Purpose.** A self-contained brief for a model or engineer who has not seen the design conversation. It turns [`005e`](005e-console-ux-review-and-redesign.md) into eleven ordered slices, each shippable as its own pull request. Read `005e` §§5-11 first: it is the design; this file is the order of work, the files, the tests and the "done" test for each slice. Where the two differ, `005e` governs. The renderer is OpenTUI under [`spec 060`](060-opentui-renderer-and-runtime.md); the pure frame and daemon boundaries remain as described here.
 
 **Reference material in the repository.** Rendered mockups: `specs/assets/005e/*.png` (open `specs/assets/005e/mockups.html` in a browser to see every state with controls). Reference frames as text are in `005e` §7.2, §8.2, §9.2 and §10.1: they are the golden screens.
 
@@ -30,7 +30,7 @@ Every slice names its tests; the plan-wide gates are in §0 rule 2 and the defin
 
 ## 0. Ground rules
 
-1. **Architecture stays.** The console is a pure renderer: `frame(model, w, h)` in `ui/src/screen.ts` and `observeFrame(model, w, h)` in `ui/src/observe-screen.ts` return exactly `h` lines of at most `w` columns. Change renderers and the fold; do not change the daemon protocol except where a slice says so. Every screen stays a golden-file test.
+1. **Architecture stays.** The console is a pure renderer: `frame(model, w, h)` in `ui/src/screen.ts` and `observeFrame(model, w, h)` in `ui/src/observe-screen.ts` return exactly `h` lines of at most `w` columns. OpenTUI paints those frames; the UI model and terminal input layer remain separate. Change renderers and the fold; do not change the daemon protocol except where a slice says so. Every screen stays a golden-file test.
 2. **Never commit past a failing gate.** Gates for every slice: `cd ui && npm ci --ignore-scripts && npm run typecheck && npm test`; `cargo test`; `cargo run -- lint --repo .`; `cargo run -- check tui ui/src`. Goldens change only deliberately: `UPDATE_SNAPSHOTS=1 npm test`, then read the diff before committing it.
 3. **Gotchas.** Pty tests in `crates/delphi/tests/e2e.rs` can fail intermittently; rerun before investigating. Any `delphi` command you run by hand needs `--home <tmp dir>` (even `init --help` creates a real workspace). Stage files by path; there may be unrelated uncommitted files in the checkout.
 4. **No hex colours outside `ui/src/theme.ts`** after slice 2 (a test enforces it). No money anywhere in the narrator. No `/` or `?` in the narrator footer.

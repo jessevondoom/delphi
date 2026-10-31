@@ -6,7 +6,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 version="$1"; out="$2"; target="${3:-}"
-[ -d node_modules/ink ] || npm ci --ignore-scripts --no-audit --no-fund
+[ -d node_modules/@opentui/core ] || npm ci --ignore-scripts --no-audit --no-fund
 # `npm ci --ignore-scripts` skips the bun package's own install step, which places its platform binary.
 [ -x node_modules/bun/bin/bun.exe ] && node_modules/bun/bin/bun.exe --version >/dev/null 2>&1 || node node_modules/bun/install.js
 mkdir -p "$(dirname "$out")"

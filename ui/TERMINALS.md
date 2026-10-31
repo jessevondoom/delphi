@@ -4,12 +4,18 @@ What the console needs from a terminal, what is checked automatically, and what 
 The automatic checks run a pty and replay its output through an emulator (`vt100` in `crates/delphi/tests/e2e.rs`); an
 emulator is not Terminal.app, so the table below is a checklist, not a claim.
 
+The UI model remains pure frame data. `Term` owns stdin, raw mode, mouse and paste protocols, and the alternate screen;
+OpenTUI is configured to paint those frames on the already selected screen without taking stdin or enabling mouse input.
+Source execution requires Node.js 26.4.0 or newer with `--experimental-ffi`; the shipped UI is the standalone Bun build.
+
 ## Checked automatically
 
 - Takes the alternate screen, mouse and bracketed-paste modes on, and gives all of them back on every exit path:
   `Ctrl+C`, `/quit`, `SIGTERM`, `SIGHUP`, `SIGINT`, an uncaught exception, an unhandled rejection
   (`test/hardening.test.ts`, and the scripted session in `e2e.rs`). An error message is printed after the screen is given
   back, so it stays readable.
+- The alternate screen is entered once, by `Term`; the OpenTUI renderer does not enter a second alternate screen or
+  start its own input and mouse protocols (`the_terminal_is_given_back_and_the_mouse_can_be_left_to_the_terminal`).
 - The screen is exactly the window: `w` columns by `h` rows, no line wider, from 1x1 up to 200x60, in every deck and in
   every narrator view.
 - A resize while running repaints to the new size, with the footer on the last row (scripted session).
