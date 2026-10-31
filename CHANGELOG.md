@@ -8,6 +8,10 @@ This file starts with the work after v0.2.7. For earlier releases, the history i
 
 ## Unreleased
 
+### Fixed
+
+- **Taint no longer fades between missions** (spec 001-A4, 004-A4): files under `missions/**/research/**` and `missions/**/reports/**` and `missions/**/artifacts/**` read as `L0` in later missions when they have no stamp; a span at `L1` or below can write only such paths; the gated-path check sees through `@worktree/` and `@project/<name>/`; and `suggest_rule` refuses from a tainted span.
+
 ### Added
 
 - **Harness hook boundary** (specs 018-A1, 021-A1; council 013 D13): a ratified `[harness.claude.settings]` (or agent) `hooks` entry of kind `PreToolUse` or `PermissionRequest` is refused with a notice naming the key, because an allow-capable hook is runtime-only enforceable; observational hooks still work and guards belong to `[[hooks.deny]]`.

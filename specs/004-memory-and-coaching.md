@@ -297,6 +297,8 @@ At mission close, **Orchestrator** executes `review-md-distillation` and `lesson
 - Using rule-ID match + BM25 overlap (plus embedding cosine similarity between the candidate and an existing rule, with the threshold set from the model's measured scores, not a fixed $0.82$ (Amendment 004-A1)) via `lesson-deduper`, **Orchestrator** proposes ExpeL operations (`ADD`, `MERGE`, `DEMOTE`, or `PROMOTE` 2-strike rules to deterministic scripts in `skills/*/scripts/`).
 - Proposals are submitted through the daemon's `propose` tool, stored in daemon-only `local/proposals/<mission-id>/`, and applied by `delphi-core` only after the **operator** ratifies them at `/retro` (GOVERNANCE §5.7, §7). This includes `lessons.md` (D-11, revised 2026-10-23): nothing enters an always-loaded prompt without ratification.
 
+**Amendment 004-A4: no proposals from a tainted span (council 013 D15b; approved by the operator 2026-10-30).** `suggest_rule` refuses when the span's ceiling is $\le L_1$, with a reason that points to `note`. Capping the proposal's tier at the ceiling labelled it but still put web-derived text in front of the `/retro` operator as a rule candidate for every future prompt; a tainted span may leave a note instead. Spans at $L_2$ and above are unchanged.
+
 ## 5. Memory Scopes, Operator Customization & Evolution (D-20)
 
 Delphi learns at two levels at once. **Each operator's Delphi adapts to that person**: their preferences, tools and recurring corrections, across all their projects. **Delphi itself improves centrally**: lessons that prove generally useful flow back into the built-in processes every install receives. Neither may leak into the other without an explicit, ratified step.
