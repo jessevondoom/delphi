@@ -35,7 +35,7 @@ export const GUARD_MS = 300;
 export const cards = (s: State): Approval[] => Object.values(s.approvals).sort((a, b) => (a.tier === 'red' ? 0 : 1) - (b.tier === 'red' ? 0 : 1) || a.at - b.at);
 
 export const options = (a: Approval): { d: Decision; label: string }[] =>
-  a.tier === 'red'
+  a.tier === 'red' || a.noSimilar
     ? [{ d: 'allow', label: 'Approve once' }, { d: 'deny', label: 'Reject' }]
     : [{ d: 'allow', label: 'Approve once' }, { d: 'allow_similar', label: 'Allow similar actions this task' }, { d: 'deny', label: 'Reject' }];
 

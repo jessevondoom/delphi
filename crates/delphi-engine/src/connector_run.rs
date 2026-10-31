@@ -25,13 +25,34 @@ fn err_result(msg: impl Into<String>) -> ToolResult {
 /// How long listing a connector's tools may delay a span before the span starts without them.
 const LIST_TIMEOUT: Duration = Duration::from_secs(20);
 
-const RECIPIENT_KEYS: [&str; 9] = ["to", "cc", "bcc", "recipient", "recipients", "attendee", "attendees", "invitee", "invitees"];
+/// Opaque bodies (a raw RFC 822 message, base64) hide their recipients, so they are treated as naming some.
+const OPAQUE_KEYS: [&str; 4] = ["raw", "mime", "rfc822", "eml"];
 
-/// True when any argument key, at any depth, names recipients or invitees and carries a value.
+fn key_names_recipients(k: &str) -> bool {
+    let n: String = k.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_lowercase();
+    ["recip", "attendee", "invitee", "guest", "participant", "email", "address", "collaborator", "sharewith"].iter().any(|w| n.contains(w)) || ["to", "cc", "bcc"].iter().any(|w| n == *w || n.starts_with(w) && n[w.len()..].starts_with(|c: char| c.is_ascii_digit()))
+}
+
+fn string_names_recipients(s: &str) -> bool {
+    let b64 = s.len() >= 64 && s.chars().all(|c| c.is_ascii_alphanumeric() || "+/=_-\r\n".contains(c));
+    let header = s.lines().any(|l| {
+        let l = l.trim_start().to_lowercase();
+        ["to:", "cc:", "bcc:"].iter().any(|h| l.starts_with(h))
+    });
+    let email = s.split(|c: char| c.is_whitespace() || "<>,;()\"'[]{}:".contains(c)).any(|w| matches!(w.split_once('@'), Some((l, d)) if !l.is_empty() && d.contains('.') && !d.starts_with('.') && !d.ends_with('.')));
+    b64 || header || email
+}
+
+/// True when the arguments name recipients or invitees anywhere: in a key, an email address, a To:/Cc: header or an opaque message body.
 fn names_recipients(v: &Value) -> bool {
     match v {
-        Value::Object(m) => m.iter().any(|(k, x)| (RECIPIENT_KEYS.contains(&k.to_lowercase().as_str()) && !matches!(x, Value::Null) && x != &json!("") && x != &json!([])) || names_recipients(x)),
+        Value::Object(m) => m.iter().any(|(k, x)| {
+            let n = k.to_lowercase();
+            let filled = !matches!(x, Value::Null) && x != &json!("") && x != &json!([]) && x != &json!({}) && x != &json!(false);
+            (filled && (key_names_recipients(k) || OPAQUE_KEYS.contains(&n.as_str()))) || names_recipients(x)
+        }),
         Value::Array(a) => a.iter().any(names_recipients),
+        Value::String(s) => string_names_recipients(s),
         _ => false,
     }
 }
@@ -371,7 +392,7 @@ tools = { search = "read", draft_note = "draft", send = "write" }
     #[tokio::test]
     async fn every_draft_asks_and_allow_similar_never_covers_one() {
         let f = fixture(vec![Step::tool("c1", "docs__draft_note", json!({"body": "one"})), Step::tool("c2", "docs__draft_note", json!({"body": "one"})), Step::tool("c3", "docs__draft_note", json!({"body": "two"})), Step::text("ok")]).await;
-        let seen = approver(&f, |r| if r.tier == crate::approval::Tier::Red { Answer::Allow } else { Answer::AllowSimilar });
+        let seen = approver(&f, allow);
         f.engine.run_task(&f.m, "orchestrator", "Draft three").await.unwrap();
         let cards = seen.lock().unwrap().clone();
         assert_eq!(cards.len(), 3, "{:?}", cards);
@@ -392,6 +413,31 @@ tools = { search = "read", draft_note = "draft", send = "write" }
         f.engine.run_task(&f.m, "orchestrator", "Invite").await.unwrap();
         let cards = seen.lock().unwrap().clone();
         assert!(cards.len() == 1 && cards[0].0 == "red" && cards[0].1.contains("recipients or invitees"), "{:?}", cards);
+    }
+
+    #[test]
+    fn recipient_detection_survives_renamed_keys_embedded_addresses_and_opaque_bodies() {
+        for bad in [
+            json!({"toRecipients": ["a"]}), json!({"ccRecipients": "x"}), json!({"bcc_recipients": ["x"]}), json!({"to_addresses": ["x"]}), json!({"emails": ["x"]}),
+            json!({"guests": ["x"]}), json!({"participants": ["x"]}), json!({"share_with": "x"}), json!({"collaborators": ["x"]}), json!({"required_attendees": ["x"]}),
+            json!({"message": {"raw": "AAAA"}}), json!({"body": "To: a@b.c\nSubject: hi"}), json!({"body": "{\"cc\": \"x\"}\nCc: someone"}), json!({"note": "send to a@b.c"}),
+            json!({"body": "A".repeat(80)}),
+        ] {
+            assert!(names_recipients(&bad), "{}", bad);
+        }
+        for ok in [json!({"body": "hello", "title": "Lunch"}), json!({"subject": "Notes", "to": ""}), json!({"start": "2026-10-30T10:00:00Z", "attendees": []})] {
+            assert!(!names_recipients(&ok), "{}", ok);
+        }
+    }
+
+    #[tokio::test]
+    async fn an_amber_draft_card_refuses_allow_similar_and_records_no_grant() {
+        let f = fixture(vec![Step::tool("c1", "docs__draft_note", json!({"body": "one"})), Step::text("ok")]).await;
+        let seen = approver(&f, |r| if r.similar_allowed() { Answer::AllowSimilar } else { Answer::Allow });
+        f.engine.run_task(&f.m, "orchestrator", "Draft").await.unwrap();
+        assert_eq!(seen.lock().unwrap()[0].0, "amber");
+        assert!(f.engine.broker.allow_similar().is_empty());
+        assert_eq!(f.connector_mock.calls.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]
