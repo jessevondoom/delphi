@@ -8,6 +8,8 @@ This file starts with the work after v0.2.7. For earlier releases, the history i
 
 ## Unreleased
 
+Docs and tests: `cargo test -p delphi --test spec_refs` checks that every spec section and amendment reference (`NNN §X.Y`, `NNN-An`) still resolves, so folding amendments into specs cannot silently break one.
+
 ### Security
 
 - **Promotion hardening** (spec 058-A2): records below `federated_verified` cannot be promoted to home memory (`source_untrusted`), and `local/promoted/` is capped at 200 active entries / 256 KiB (`promoted_cap_reached`).
