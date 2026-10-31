@@ -166,9 +166,10 @@ sandbox = "off"
 
 # Research (specs/028 section 10): the web search engines the archives pane's expand mode asks, in order, one at a time (the next only if
 # the last failed). Ratified, because it names who receives your queries. Which sites may be read is context/sources/trusted.toml plus your
-# own $DELPHI_HOME/operator/trusted-sources.toml. Unset: research cannot run.
+# own $DELPHI_HOME/operator/trusted-sources.toml. Unset: "parallel" (a hosted MCP search, no key or account, rate limited, sees the query
+# text). providers = [] turns research off; providers = ["searxng"] keeps queries off any vendor.
 # [search]
-# providers = ["brave", "mojeek", "searxng"]   # brave | mojeek | searxng | kagi | google (google only with a Gemini endpoint)
+# providers = ["parallel", "brave", "searxng"]   # parallel | brave | mojeek | searxng | kagi | google (google only with a Gemini endpoint)
 # [search.brave]
 # credential = "env:BRAVE_API_KEY"
 # [search.mojeek]

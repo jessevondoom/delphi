@@ -44,7 +44,7 @@ pub fn engines(engine: &Engine) -> Vec<ProviderSpec> {
 
 pub fn deps(engine: &Arc<Engine>, ws: &Path, home: &Path, scope: Scope) -> Result<Deps, String> {
     if engine.cfg.get().search.providers.is_empty() {
-        return Err("no search engine is configured: set `providers` under [search] in config.toml".into());
+        return Err("research is turned off: `providers` under [search] in config.toml is empty".into());
     }
     let list = lists(ws, home)?;
     let date = (engine.clock)().get(..10).unwrap_or("").to_string();

@@ -18,6 +18,11 @@ pub struct Response {
 pub trait Transport: Send + Sync {
     /// GET `url`. `Err` is a network failure (no connection, timeout, bad TLS); an HTTP error status is a normal `Response`.
     fn get(&self, url: &str, headers: &[(&str, &str)], max_bytes: usize, timeout: Duration) -> Result<Response, String>;
+
+    /// POST a JSON `body` to `url`; the same limits as `get`. Only the keyless MCP search engine uses it.
+    fn post_json(&self, _url: &str, _headers: &[(&str, &str)], _body: &str, _max_bytes: usize, _timeout: Duration) -> Result<Response, String> {
+        Err("this transport cannot POST".into())
+    }
 }
 
 /// The real transport. Blocking, so the job runs it on a blocking thread.
@@ -36,9 +41,8 @@ impl HttpTransport {
     }
 }
 
-impl Transport for HttpTransport {
-    fn get(&self, url: &str, headers: &[(&str, &str)], max_bytes: usize, timeout: Duration) -> Result<Response, String> {
-        let mut req = self.client.get(url).timeout(timeout);
+impl HttpTransport {
+    fn send(&self, mut req: reqwest::blocking::RequestBuilder, headers: &[(&str, &str)], max_bytes: usize) -> Result<Response, String> {
         for (k, v) in headers {
             req = req.header(*k, *v);
         }
@@ -51,5 +55,15 @@ impl Transport for HttpTransport {
         let truncated = n > max_bytes;
         body.truncate(max_bytes);
         Ok(Response { status, location, content_type, body, truncated })
+    }
+}
+
+impl Transport for HttpTransport {
+    fn get(&self, url: &str, headers: &[(&str, &str)], max_bytes: usize, timeout: Duration) -> Result<Response, String> {
+        self.send(self.client.get(url).timeout(timeout), headers, max_bytes)
+    }
+
+    fn post_json(&self, url: &str, headers: &[(&str, &str)], body: &str, max_bytes: usize, timeout: Duration) -> Result<Response, String> {
+        self.send(self.client.post(url).timeout(timeout).header("Content-Type", "application/json").body(body.to_string()), headers, max_bytes)
     }
 }

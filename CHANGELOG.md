@@ -21,10 +21,12 @@ This file starts with the work after v0.2.7. For earlier releases, the history i
 
 ### Research
 
+- A keyless search engine, `parallel` (Parallel's hosted MCP server; no key or account, rate limited; it sees the query text), and it is now the default when `[search] providers` is unset (spec 028-A3). Brave and the others are unchanged; `providers = []` turns research off.
 - Research routing (spec 058-A1): in the default scope only a Primary or Reputable source is indexed at once; a weak page is held under `local/pending/web/` (not indexed) and is dropped when `[validator] weak_sources = "off"`. `research.start` takes an optional registered `project`, whose research is written to its `research/web/` and not shared. Entries carry `source_class`.
 - `/validate` (also `/retro research`) lists research held back from the knowledge base, in the default scope or a project (`project=<name>`), and ratifies or discards each entry; ratified entries are searchable as noted, not validated (spec 058-A2). New daemon methods `pending.list`, `pending.ratify`, `pending.discard` (console only).
 - `/projects` lists the home workspace and the registered projects in an arrow-key menu; Enter restarts the console in the chosen directory as a new session (spec 058-A3). A request outside the home workspace and registered roots is ignored.
 
+- `/projects` reads the registry each time (new console-only `projects.list`), and `research.start` takes the console's `cwd`: research started inside a registered project is written to that project (spec 058-A4).
 ## 0.4.0 — 2026-10-31
 
 Docs and tests: `cargo test -p delphi --test spec_refs` checks that every spec section and amendment reference (`NNN §X.Y`, `NNN-An`) still resolves, so folding amendments into specs cannot silently break one.

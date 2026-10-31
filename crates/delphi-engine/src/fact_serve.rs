@@ -96,7 +96,8 @@ impl Engine {
         let list = SourceList::new(cfg.validator.sources.clone());
         let judge = EngineJudge { engine: self.clone(), author_family: Some(author_family.to_string()).filter(|f| !f.is_empty()), author_model: None };
         let ledger = self.validator.ledger();
-        let searcher: Option<Arc<dyn Searcher>> = if cfg.search.providers.is_empty() {
+        // The validator sends claim text, so it uses only engines the operator named, not the default (specs/028 §12.1).
+        let searcher: Option<Arc<dyn Searcher>> = if !cfg.search.explicit || cfg.search.providers.is_empty() {
             None
         } else {
             HttpTransport::new().ok().map(|t| Arc::new(TransportSearcher { transport: Arc::new(t), engines: crate::research_setup::engines(self) }) as Arc<dyn Searcher>)

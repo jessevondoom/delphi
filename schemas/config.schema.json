@@ -102,10 +102,10 @@
     "update": { "type": "object", "properties": { "require_signed": { "type": "boolean" } } },
     "search": {
       "type": "object",
-      "description": "Web search engines for the archives pane's research mode (specs/028 section 10), tried in order, one at a time. Unset means research cannot run.",
+      "description": "Web search engines for the archives pane's research mode (specs/028 section 10), tried in order, one at a time. Unset means the keyless parallel engine (specs/028 section 12); an empty list means research cannot run.",
       "additionalProperties": false,
       "properties": {
-        "providers": { "type": "array", "items": { "enum": ["brave", "mojeek", "searxng", "kagi", "google"] }, "uniqueItems": true },
+        "providers": { "type": "array", "items": { "enum": ["parallel", "brave", "mojeek", "searxng", "kagi", "google"] }, "uniqueItems": true },
         "brave": { "$ref": "#/$defs/searchEngine" },
         "mojeek": { "$ref": "#/$defs/searchEngine" },
         "searxng": { "$ref": "#/$defs/searchEngine" },
