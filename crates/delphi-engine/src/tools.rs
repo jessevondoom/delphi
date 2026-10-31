@@ -430,6 +430,9 @@ fn suggest_rule(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
     if ctx.role != "orchestrator" {
         return ToolResult::err("only the orchestrator proposes rules; use `note` to leave a lesson for the operator");
     }
+    if ctx.span.ceiling() <= Tier::L1 {
+        return ToolResult::err(format!("refused: this span's ceiling is {} (external or federated input is in its context), and a tainted span may not propose a rule that would be carried into every prompt; use `note`", ctx.span.ceiling()));
+    }
     let field = |k: &str| args.get(k).and_then(|v| v.as_str()).map(|s| s.split_whitespace().collect::<Vec<_>>().join(" ")).unwrap_or_default();
     let (op, scope, text, rationale, target) = (field("op"), field("scope"), field("text"), field("rationale"), field("target"));
     if !crate::learn::PROPOSAL_OPS.contains(&op.as_str()) {
@@ -630,6 +633,19 @@ pub(crate) fn zone_of(logical: &str) -> (Zone, String) {
         return (Zone::Team, l.to_string());
     }
     (Zone::Release, l.to_string())
+}
+
+/// A span at `L1` or below writes only where its output reads back as `L0`, so it cannot launder through a broader glob.
+pub(crate) fn gate_tainted_write(logical: &str, ceiling: Tier) -> Result<(), ToolResult> {
+    if ceiling > Tier::L1 {
+        return Ok(());
+    }
+    let (zone, rel) = zone_of(logical);
+    let default = delphi_core::provenance::origin_default(zone, &rel, &OriginRules::default(), true);
+    if default > Tier::L0 {
+        return Err(ToolResult::err(format!("provenance gate: `{}` reads back as {}, and this span's ceiling is {}; a tainted span writes only where its output stays L0 (mission research and reports)", logical, default, ceiling)));
+    }
+    Ok(())
 }
 
 pub(crate) fn denied(d: Denied) -> ToolResult {
@@ -973,6 +989,7 @@ pub fn precheck_write(guard: &Guard, ceiling: Tier, role: &str, mission_id: &str
     }
     guard.check_policy(path, delphi_core::pathguard::Access::Write).map_err(denied)?;
     gate_write(path, ceiling).map_err(|g| ToolResult::err(g.to_string()))?;
+    gate_tainted_write(path, ceiling)?;
     if path.to_lowercase().ends_with(".md") {
         with_provenance_header(content, role, mission_id, now, path).map_err(ToolResult::err)
     } else {
@@ -1290,7 +1307,7 @@ mod tests {
         let r = run_tool(&mut f, "read_file", json!({"path": "@project/app/vendor/lib/x.js"}));
         assert!(r.content.contains("L0 external_untrusted") && r.content.contains("untrusted data"), "{}", r.content);
         assert_eq!(f.span.ceiling(), Tier::L0);
-        let w = run_tool(&mut f, "write_file", json!({"path": "missions/m1/notes.md", "content": "# Notes\nsummary"}));
+        let w = run_tool(&mut f, "write_file", json!({"path": "missions/m1/research/notes.md", "content": "# Notes\nsummary"}));
         assert!(!w.is_error && w.content.contains("tier L0"), "{}", w.content);
     }
 
@@ -1313,7 +1330,7 @@ mod tests {
         let r = run_tool(&mut f, "read_file", json!({"path": "@project/app/vendor/lib/doc.zip"}));
         assert!(r.content.contains("L0 external_untrusted") && r.content.contains("untrusted data") && r.content.contains("zip archive"), "{}", r.content);
         assert_eq!(f.span.ceiling(), Tier::L0);
-        let w = run_tool(&mut f, "write_file", json!({"path": "missions/m1/notes.md", "content": "# Notes\nfrom a zip"}));
+        let w = run_tool(&mut f, "write_file", json!({"path": "missions/m1/research/notes.md", "content": "# Notes\nfrom a zip"}));
         assert!(w.content.contains("tier L0"), "{}", w.content);
     }
 
@@ -1539,6 +1556,35 @@ mod tests {
         }
         let r = run_tool(&mut f, "search", json!({"pattern": "NEEDLE", "path": "@project/app/src", "ignore_case": true, "max_results": 5}));
         assert!(r.content.contains("5 matches (truncated)"), "{}", r.content);
+    }
+
+    #[test]
+    fn a_tainted_span_proposes_no_rule_but_an_untainted_one_does() {
+        let args = json!({"op": "add", "scope": "workspace", "text": "Run the formatter first.", "rationale": "Style failures."});
+        for (tier, refused) in [(Tier::L0, true), (Tier::L1, true), (Tier::L2, false), (Tier::L4, false)] {
+            let mut f = fx(&[]);
+            f.span = Span::with_ceiling("sp1", tier);
+            let r = run_tool_as(&mut f, "orchestrator", "suggest_rule", args.clone());
+            assert_eq!(r.is_error, refused, "{} {}", tier, r.content);
+            if refused {
+                assert!(r.content.contains("tainted span may not propose a rule"), "{}", r.content);
+            }
+        }
+    }
+
+    #[test]
+    fn a_tainted_span_writes_only_where_its_output_stays_l0() {
+        let mut f = fx(&["missions/**", "context/domains/**"]);
+        f.span = Span::with_ceiling("sp1", Tier::L1);
+        let ok = run_tool_as(&mut f, "scout", "write_file", json!({"path": "missions/m1/research/web.md", "content": "x"}));
+        assert!(!ok.is_error, "{}", ok.content);
+        for p in ["missions/m1/notes.md", "missions/m1/specs/s.md", "context/domains/d.md"] {
+            let r = run_tool_as(&mut f, "scout", "write_file", json!({"path": p, "content": "x"}));
+            assert!(r.is_error && r.content.contains("provenance gate"), "{}: {}", p, r.content);
+        }
+        let mut g = fx(&["missions/**"]);
+        let r = run_tool_as(&mut g, "builder", "write_file", json!({"path": "missions/m1/notes.md", "content": "x"}));
+        assert!(!r.is_error, "an untainted span keeps its scope: {}", r.content);
     }
 
     #[test]

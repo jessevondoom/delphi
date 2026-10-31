@@ -3522,7 +3522,7 @@ mod tests {
     #[tokio::test]
     async fn reading_untrusted_content_taints_the_span_and_what_it_writes() {
         let f = setup(
-            vec![Step::tool("a", "read_file", json!({"path": "@project/app/vendor/x.js"})), Step::tool("b", "write_file", json!({"path": "missions/m1/notes.md", "content": "# Notes\nsummary"})), Step::text("done")],
+            vec![Step::tool("a", "read_file", json!({"path": "@project/app/vendor/x.js"})), Step::tool("b", "write_file", json!({"path": "missions/m1/research/notes.md", "content": "# Notes\nsummary"})), Step::text("done")],
             5.0,
             |_| {},
         );

@@ -283,6 +283,13 @@ roles:                                                              # exactly th
 > - **Heuristics by scope:** `context/heuristics.md` (release `[H-…]`) maps to `base/`, read-only; `context/team-heuristics.md` (`[T-…]`) maps to `team/`; workspace `heuristics.md` (`[W-…]`) maps to `local/`. All are never-writable by agents, and all change only through ratified proposals (`specs/004` §2.1).
 > - **Spec approval fields:** agent writes that set or change `status: approved` or `approved_sections` in any `specs/**` file are rejected (`specs/003` §3.1.2).
 
+## 6C. Amendment 001-A4: Taint Containment Across Missions (council 013 D8; approved by the operator 2026-10-30)
+> This amendment is part of the approved spec. It refines §5.1 and §5.2:
+> - **Stamps do not cross missions.** `provenance.stamp` events live in the log of the mission that wrote them, and the index is rebuilt per mission. In a later mission a file with no stamp for its hash falls back to its origin default, which for `local/` content was $L_3$. So $L_0$ content that a tainted span wrote under `missions/**/research/**` was read back as $L_3$.
+> - **Origin default $L_0$ for tainted-role output.** In the `local/` zone, `missions/**/research/**` and `missions/**/reports/**` (the mission-local globs that scout, investigator and writer may write) default to $L_0$. This only lowers trust. **Accepted cost:** untainted notes under `research/**` (an architect's, say) also read as $L_0$ in later missions, until the operator ratifies them. The tier is never read from frontmatter.
+> - **A tainted span cannot launder through a broader glob.** A write by a span with ceiling $\le L_1$ is refused to any path whose origin default is above $L_0$, whatever its manifest says. This covers `context/domains/**` (which stays barred below $L_2$), other mission paths and `@worktree/**`. No new write scope is granted, and the Outbound ❌ column of §5.2 is unchanged.
+> - **Gate paths under prefixes.** The §5.1 gate matches `agents/**`, `skills/**` and the other gated files after stripping a leading `@worktree/` or `@project/<name>/`.
+
 ## 7. Verification Plan
 1. **Schema Linter (`delphi lint`, compiled in per D-02):** validates all `agents/*/AGENT.md`, any `skills/*/SKILL.md`, and the §5 frontmatter of every Markdown file. It applies the §2.3 skill-reference and narrowing rules, and fails if any manifest, governance file or spec names an agent by anything other than its canonical role ID. Historical council records under `missions/**/councils/` are exempt from the name check only.
 2. **Handoff Budget Test:** Unit test confirming that any `HandoffEnvelope` exceeding 2,000 inline tokens or lacking valid workspace-relative `path#Lx-Ly` pointers is rejected by the runtime router.

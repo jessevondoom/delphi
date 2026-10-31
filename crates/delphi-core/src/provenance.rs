@@ -123,6 +123,11 @@ impl OriginRules {
     }
 }
 
+/// Mission-local output globs the tainted roles (scout, investigator, writer) may write. The stamp that records a
+/// span's ceiling lives only in that mission's log, so a later mission has nothing to read it from: these paths
+/// default to `L0` instead (lower-only; `specs/001` amendment 001-A4).
+pub const TAINTED_OUTPUT_GLOBS: &[&str] = &["missions/**/research/**", "missions/**/reports/**"];
+
 /// The tier of a file with no index entry for its current hash.
 pub fn origin_default(zone: Zone, path: &str, rules: &OriginRules, clean_at_base: bool) -> Tier {
     match zone {
@@ -140,6 +145,7 @@ pub fn origin_default(zone: Zone, path: &str, rules: &OriginRules, clean_at_base
         Zone::Team | Zone::Bundle => Tier::L2,
         // No stamp for this exact content: the record was not computed here, so it is not trusted.
         Zone::Xenia => Tier::L0,
+        Zone::Local if TAINTED_OUTPUT_GLOBS.iter().any(|g| glob_match(g, path)) => Tier::L0,
         Zone::Local | Zone::Worktree => Tier::L3,
     }
 }
@@ -258,7 +264,14 @@ impl Span {
 /// Logical paths that change only through ratified proposals; a span below `L4` may not write them
 /// (`specs/001` §5.1 gate), whatever its manifest says.
 pub fn is_gated_path(logical: &str) -> bool {
-    let l = logical.to_lowercase();
+    let lower = logical.to_lowercase();
+    let mut l = lower.trim_start_matches("./");
+    if let Some(rest) = l.strip_prefix("@worktree/") {
+        l = rest;
+    } else if let Some(rest) = l.strip_prefix("@project/") {
+        l = rest.split_once('/').map(|(_, r)| r).unwrap_or("");
+    }
+    let l = l.trim_start_matches("./");
     l == "context/heuristics.md"
         || l == "review.md"
         || l == "governance.md"
@@ -439,6 +452,32 @@ mod tests {
         }
         assert!(gate_write("missions/m/notes.md", Tier::L0).is_ok(), "ordinary artifacts are not gated");
         assert!(gate_write("REVIEW.md", Tier::L2).unwrap_err().to_string().contains("ratified proposals"));
+    }
+
+    #[test]
+    fn gated_paths_are_recognised_under_worktree_and_project_prefixes() {
+        for p in ["@worktree/skills/x/SKILL.md", "@worktree/agents/b/AGENT.md", "@project/app/skills/x/SKILL.md", "@Worktree/REVIEW.md", "./skills/x", "@project/app/context/heuristics.md"] {
+            assert!(is_gated_path(p), "{}", p);
+            assert!(gate_write(p, Tier::L1).is_err(), "{}", p);
+        }
+        for p in ["@worktree/src/skills.rs", "@project/skills", "@worktree/docs/agents.md"] {
+            assert!(!is_gated_path(p), "{}", p);
+        }
+    }
+
+    #[test]
+    fn tainted_mission_output_defaults_to_l0_in_a_later_mission() {
+        let r = OriginRules::with_defaults();
+        for p in ["missions/a/research/web.md", "missions/a/research/deep/x.md", "missions/a/reports/brief.md"] {
+            assert_eq!(origin_default(Zone::Local, p, &r, true), Tier::L0, "{}", p);
+        }
+        for p in ["missions/a/notes.md", "missions/a/specs/s.md", "memory/x.md"] {
+            assert_eq!(origin_default(Zone::Local, p, &r, true), Tier::L3, "{}", p);
+        }
+        // Stamps are per mission: a fresh index (mission B) has no entry, so the default applies.
+        let (mut a, b) = (Index::new(), Index::new());
+        a.stamp(Zone::Local, "missions/a/research/web.md", "h", Tier::L0);
+        assert_eq!(b.tier_of(Zone::Local, "missions/a/research/web.md", "h", &r, true), Tier::L0);
     }
 
     #[test]
