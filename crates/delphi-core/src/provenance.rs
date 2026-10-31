@@ -126,7 +126,7 @@ impl OriginRules {
 /// Mission-local output globs the tainted roles (scout, investigator, writer) may write. The stamp that records a
 /// span's ceiling lives only in that mission's log, so a later mission has nothing to read it from: these paths
 /// default to `L0` instead (lower-only; `specs/001` amendment 001-A4).
-pub const TAINTED_OUTPUT_GLOBS: &[&str] = &["missions/**/research/**", "missions/**/reports/**"];
+pub const TAINTED_OUTPUT_GLOBS: &[&str] = &["missions/**/research/**", "missions/**/reports/**", "missions/**/artifacts/**"];
 
 /// The tier of a file with no index entry for its current hash.
 pub fn origin_default(zone: Zone, path: &str, rules: &OriginRules, clean_at_base: bool) -> Tier {
@@ -468,7 +468,7 @@ mod tests {
     #[test]
     fn tainted_mission_output_defaults_to_l0_in_a_later_mission() {
         let r = OriginRules::with_defaults();
-        for p in ["missions/a/research/web.md", "missions/a/research/deep/x.md", "missions/a/reports/brief.md"] {
+        for p in ["missions/a/research/web.md", "missions/a/research/deep/x.md", "missions/a/reports/brief.md", "missions/a/artifacts/page.html"] {
             assert_eq!(origin_default(Zone::Local, p, &r, true), Tier::L0, "{}", p);
         }
         for p in ["missions/a/notes.md", "missions/a/specs/s.md", "memory/x.md"] {

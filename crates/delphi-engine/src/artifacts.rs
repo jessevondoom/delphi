@@ -405,6 +405,7 @@ pub fn precheck(guard: &Guard, ceiling: Tier, mission_id: &str, tool: &str, args
     for p in std::iter::once(&resolved).chain(sidecar.iter()) {
         guard.check_policy(p, Access::Write).map_err(denied)?;
         gate_write(p, ceiling).map_err(|g| ToolResult::err(g.to_string()))?;
+        crate::tools::gate_tainted_write(p, ceiling)?;
     }
     if tool == "write_archive" {
         for m in members_of(args).map_err(|e| ToolResult::err(e.0))? {
@@ -1081,6 +1082,19 @@ mod tests {
         let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "architect", mission_id: "m1", now_rfc3339: "t", stamps: vec![], events: vec![] };
         let back = Registry::builtin().run(&mut ctx, "read_doc", &json!({"path": "missions/m1/artifacts/report.html"}));
         assert!(back.content.contains("# Q3 review") && back.content.contains("| North | 120 |"), "{}", back.content);
+    }
+
+    #[test]
+    fn a_tainted_artifact_goes_only_where_it_reads_back_as_l0() {
+        let mut f = fx(&["missions/**"]);
+        f.span.observe_input(Tier::L0);
+        let mut args = page_args();
+        args["path"] = json!("missions/m1/specs/report.html");
+        let (r, _) = run_tool(&mut f, "write_html", args);
+        assert!(r.is_error && r.content.contains("provenance gate"), "{}", r.content);
+        let (ok, _) = run_tool(&mut f, "write_html", page_args());
+        assert!(!ok.is_error, "the default folder is artifacts/: {}", ok.content);
+        assert_eq!(delphi_core::provenance::origin_default(delphi_core::provenance::Zone::Local, "missions/m1/artifacts/report.html", &OriginRules::default(), true), Tier::L0);
     }
 
     #[test]
