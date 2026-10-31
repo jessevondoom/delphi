@@ -29,6 +29,8 @@ This file starts with the work after v0.2.7. For earlier releases, the history i
 
 - **Optimistic is a per-build choice, not an approval mode** (spec 015-A1, council 013): `optimistic` is gone from `/permissions`, `delphi run --permissions` and the `Shift+Tab` cycle; `/build --optimistic` is unchanged. Entering `auto` with `Shift+Tab` now takes a second press, and bulk-approving Amber decisions or cards (`a`, `y`, inbox approve-all) covers only those whose detail was shown at least once (specs 005e-A1, 044-A1).
 
+- Docs: folded spec 043 (condensed rationale prose; no behavior change); history in `specs/history/043-knowledge-window-search-page-and-growing-corpus.md`.
+
 ## 0.3.0 — 2026-10-28
 
 ### Added

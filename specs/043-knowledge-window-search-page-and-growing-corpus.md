@@ -3,18 +3,20 @@ id: spec-043-knowledge-window-search-page-and-growing-corpus
 title: "043: The Knowledge Window, Round 2: a Plain Search Page, a Best Match, and a Corpus That Grows"
 author: architect
 timestamp: 2026-10-28T12:00:00Z
-status: approved   # by the operator, 2026-10-28 ("create and ratify the full spec. approve things so we can get building"); decisions D-1..D-9 are the operator's, given in chat the same day; nothing is built
+status: approved   # operator, 2026-10-28; decisions D-1..D-9 are the operator's; folded 2026-10-30 (no amendments of its own)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
-confidence: medium   # the mockups were reviewed and approved by the operator; the index changes of §6 are new code; the research job itself is spec 028-A1
+confidence: medium   # mockups approved; the index changes of §6 are new code; the job is 028-A1
 source_mission: 2026-10-23-foundational-design
 tags: [spec, ui, knowledge-base, search, research, narrator]
 ---
 
 # Spec 043: The Knowledge Window, Round 2
 
-> **Status: approved by the operator 2026-10-28.** It builds on [`specs/028`](028-knowledge-window.md) (the window), amendment 028-A1 (two modes and *expand the archive*, PR #263; approved by the operator the same day) and [`specs/029`](029-links-and-inline-reader.md) (the reader). Where it differs from §3, §4 and §7 of 028, this spec wins for the archives pane. Mockups (100×34, dark): [`assets/kb-decisions-options/`](assets/kb-decisions-options/) `kb-1-resting` to `kb-9-expanded` (PNGs, and `mockups.html` with `render.sh` to regenerate them). Nothing here is built; §11 is the build plan.
+> **Status: approved by the operator 2026-10-28.** It builds on [`specs/028`](028-knowledge-window.md) (the window), amendment 028-A1 (two modes and *expand the archive*, PR #263) and [`specs/029`](029-links-and-inline-reader.md) (the reader). Where it differs from §3, §4 and §7 of 028, this spec wins for the archives pane. Mockups (100×34, dark): [`assets/kb-decisions-options/`](assets/kb-decisions-options/) `kb-1-resting` to `kb-9-expanded` (PNGs; `mockups.html` with `render.sh` regenerates them). §11 is the build plan.
+>
+> Folded 2026-10-30 (docs only, no change in behavior); amendment history in specs/history/043-knowledge-window-search-page-and-growing-corpus.md.
 
 ## 1. Scope & Objectives
 The archives pane is how the operator reads what Delphi knows. Round 2 does four things:
@@ -31,7 +33,7 @@ The archives pane is how the operator reads what Delphi knows. Round 2 does four
 - **Automatic summaries.** No model runs unless the operator asks (§7).
 
 ### 1.2 Simpler Alternative Considered
-*Keep 028 §3 and §4 as built* (a shelf under the box; two lines of preview per result; offline/online toggle). It works, but a person cannot tell at a glance what the answer is, nor tell research from a spec, nor tell a document that opens here from one that opens elsewhere. The cost of the change is small (render code and one facet count), and the operator has approved the mockups.
+Keeping 028 §3 and §4 as built was rejected: it cannot show at a glance what the answer is, research from a spec, or what opens here versus elsewhere. The change is small (render code and one facet count).
 
 ### 1.3 Principles
 1. **Zero tokens until asked.** Searching, the best-match summary, filters and reading cost no model call. A model summary is one key, and its cost is on screen before the key is pressed.
@@ -104,7 +106,7 @@ A **kind** is derived from where a document lives. It is a display and filter la
 A document that matches two rows takes the first match in the table order above. A kind with no results is not shown as a chip.
 
 ### 4.2 Why `research` and `docs`
-The operator's aim is to pull down a large amount of subject-matter reference so that Delphi gets smarter over time. That material must be **findable by kind, readable by a person, and visibly separate from curated and ratified knowledge**. `research` is what expand mode wrote; `docs` is what the operator or the repository supplies as reference. Both are plain, human-readable documents (Markdown, or text extracted from a PDF, DOCX or EPUB), and neither can become a `spec` or `lesson` by being stored (028-A1 §10.4).
+Reference material must be **findable by kind, readable by a person, and visibly separate from curated and ratified knowledge**. `research` is what expand mode wrote; `docs` is what the operator or the repository supplies. Both are plain, human-readable documents (Markdown, or text extracted from a PDF, DOCX or EPUB), and neither can become a `spec` or `lesson` by being stored (028-A1 §10.4).
 
 ### 4.3 Trust vocabulary
 The trust column reads `trusted` (curated: specs, lessons, the operator's documents), `listed` (written from an allow-listed source; 028-A1 `trust: trusted_source`) or `untrusted` / `inactive` (028 §3, shown in the warning colour). Ranking and the `ctrl+t` filter use the same values as today; `listed` ranks below `trusted` and above `untrusted`.
@@ -189,7 +191,7 @@ No model available, quota out, or the call fails: the card says so in one line a
 When a search returns fewer than 3 results of kinds `research` or `docs`, the results line adds `thin on reference: shift+tab to research this topic` (dim). `shift+tab` switches to expand mode **with the current query already in the box**; `enter` then runs the job as 028-A1 describes. The window never starts a job by itself and never sends the query out while typing.
 
 ### 8.3 Why the summaries get better
-Search and the best-match card draw on whatever is indexed; the model summary reads the top five passages. With a larger and more varied `research` and `docs` corpus, the top five passages become more relevant and more varied, so summaries cite more and different sources. No special mechanism is needed: this is why the corpus is full text and human readable, and why the summary is cited (so the operator can read the sources behind a claim).
+A larger, more varied `research` and `docs` corpus makes the top five passages more relevant, so summaries cite more sources. No special mechanism is needed: the corpus is full text and human readable, and the summary is cited so the operator can read the sources.
 
 ### 8.4 Limits
 The size of the research corpus is bounded by 028-A1 §10.6 (per-job limits) and by the operator's disk; this spec adds **no** automatic expansion and **no** background crawling.
