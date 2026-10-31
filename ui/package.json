@@ -4,16 +4,17 @@
   "type": "module",
   "version": "0.0.0",
   "scripts": {
-    "start": "node --import tsx src/main.tsx",
+    "start": "node --experimental-ffi --import tsx --import ./dev/check-runtime.mjs src/main.tsx",
     "preview": "bash dev/preview.sh",
-    "test": "TZ=UTC node --import tsx --test --test-force-exit --test-timeout=60000 test/*.test.ts",
+    "test": "TZ=UTC node --experimental-ffi --import ./dev/check-runtime.mjs --import tsx --test --test-force-exit --test-timeout=60000 test/*.test.ts",
     "typecheck": "tsc",
     "build": "bun build --compile src/main.tsx --outfile dist/delphi-ui",
     "check-deps": "node dev/check-deps.mjs"
   },
   "dependencies": {
+    "@opentui/core": "0.8.0",
+    "@opentui/react": "0.8.0",
     "chalk": "6.0.1",
-    "ink": "8.0.0",
     "marked": "18.1.1",
     "react": "19.3.1",
     "string-width": "8.3.0",
@@ -25,5 +26,8 @@
     "bun": "1.4.4",
     "tsx": "4.23.15",
     "typescript": "7.0.2"
+  },
+  "engines": {
+    "node": ">=26.4.0"
   }
 }
