@@ -25,6 +25,38 @@ fn err_result(msg: impl Into<String>) -> ToolResult {
 /// How long listing a connector's tools may delay a span before the span starts without them.
 const LIST_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// Opaque bodies (a raw RFC 822 message, base64) hide their recipients, so they are treated as naming some.
+const OPAQUE_KEYS: [&str; 4] = ["raw", "mime", "rfc822", "eml"];
+
+fn key_names_recipients(k: &str) -> bool {
+    let n: String = k.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_lowercase();
+    ["recip", "attendee", "invitee", "guest", "participant", "email", "address", "collaborator", "sharewith"].iter().any(|w| n.contains(w)) || ["to", "cc", "bcc"].iter().any(|w| n == *w || n.starts_with(w) && n[w.len()..].starts_with(|c: char| c.is_ascii_digit()))
+}
+
+fn string_names_recipients(s: &str) -> bool {
+    let b64 = s.len() >= 64 && s.chars().all(|c| c.is_ascii_alphanumeric() || "+/=_-\r\n".contains(c));
+    let header = s.lines().any(|l| {
+        let l = l.trim_start().to_lowercase();
+        ["to:", "cc:", "bcc:"].iter().any(|h| l.starts_with(h))
+    });
+    let email = s.split(|c: char| c.is_whitespace() || "<>,;()\"'[]{}:".contains(c)).any(|w| matches!(w.split_once('@'), Some((l, d)) if !l.is_empty() && d.contains('.') && !d.starts_with('.') && !d.ends_with('.')));
+    b64 || header || email
+}
+
+/// True when the arguments name recipients or invitees anywhere: in a key, an email address, a To:/Cc: header or an opaque message body.
+fn names_recipients(v: &Value) -> bool {
+    match v {
+        Value::Object(m) => m.iter().any(|(k, x)| {
+            let n = k.to_lowercase();
+            let filled = !matches!(x, Value::Null) && x != &json!("") && x != &json!([]) && x != &json!({}) && x != &json!(false);
+            (filled && (key_names_recipients(k) || OPAQUE_KEYS.contains(&n.as_str()))) || names_recipients(x)
+        }),
+        Value::Array(a) => a.iter().any(names_recipients),
+        Value::String(s) => string_names_recipients(s),
+        _ => false,
+    }
+}
+
 impl Engine {
     /// The connector tools this span's role may be offered. Connectors not yet listed this run are listed first
     /// (once); a connector that cannot be reached or signed in simply contributes no tools, and says so in the log.
@@ -127,11 +159,14 @@ impl Engine {
                 }
             }
             ToolClass::Draft => {
-                let c = Classified { tool: "connector".into(), tier: ToolTier::Amber, kind: ActionKind::Read, summary: format!("{} (creates a private draft): {}", who, args_line), payload: payload.clone(), pattern: format!("{} draft", dotted) };
-                if let Need::Yes(tier) = self.broker.need(&sc.task_id, None, &c) {
-                    if let Some(denied) = self.ask(sc, tier, &c.tool, &c.pattern, &c.summary, &c.payload).await? {
-                        return Ok(denied);
-                    }
+                // Every draft gets its own card with the payload: no mode and no "allow similar" covers it. Red when a tainted span
+                // writes it or it names recipients or invitees, because that leaves the account or can carry read data out.
+                let leaves = tainted || names_recipients(args);
+                let tier = if leaves { ApprovalTier::Red } else { ApprovalTier::Amber };
+                let why = if tainted { ", from a span that read untrusted content" } else if leaves { ", with recipients or invitees" } else { "" };
+                let summary = format!("{} (creates a draft{}): {}", who, why, args_line);
+                if let Some(denied) = self.ask(sc, tier, "connector", &format!("{} draft", dotted), &summary, &payload).await? {
+                    return Ok(denied);
                 }
             }
             ToolClass::Read => {
@@ -352,6 +387,57 @@ tools = { search = "read", draft_note = "draft", send = "write" }
         let c = f.engine.broker.pending().into_iter().next().unwrap();
         assert!(f.engine.broker.resolve(&c.approval_id, &c.payload_blake3, Answer::AllowSimilar, "test").is_err());
         drop(w);
+    }
+
+    #[tokio::test]
+    async fn every_draft_asks_and_allow_similar_never_covers_one() {
+        let f = fixture(vec![Step::tool("c1", "docs__draft_note", json!({"body": "one"})), Step::tool("c2", "docs__draft_note", json!({"body": "one"})), Step::tool("c3", "docs__draft_note", json!({"body": "two"})), Step::text("ok")]).await;
+        let seen = approver(&f, allow);
+        f.engine.run_task(&f.m, "orchestrator", "Draft three").await.unwrap();
+        let cards = seen.lock().unwrap().clone();
+        assert_eq!(cards.len(), 3, "{:?}", cards);
+        // The first draft's result is external content, so the span is tainted and the later drafts are Red.
+        assert!(cards[0].0 == "amber" && cards[1..].iter().all(|c| c.0 == "red") && cards.iter().all(|c| c.1.contains("creates a draft")), "{:?}", cards);
+        assert_eq!(f.connector_mock.calls.lock().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_draft_from_a_tainted_span_or_with_invitees_is_red() {
+        let f = fixture(vec![Step::tool("r1", "read_file", json!({"path": "@project/app/vendor/x.js"})), Step::tool("c1", "docs__draft_note", json!({"body": "x"})), Step::text("ok")]).await;
+        let seen = approver(&f, allow);
+        f.engine.run_task(&f.m, "orchestrator", "Draft").await.unwrap();
+        let cards = seen.lock().unwrap().clone();
+        assert!(cards.iter().any(|c| c.0 == "red" && c.1.contains("untrusted")), "{:?}", cards);
+        let f = fixture(vec![Step::tool("c1", "docs__draft_note", json!({"body": "x", "attendees": ["a@b.c"]})), Step::text("ok")]).await;
+        let seen = approver(&f, allow);
+        f.engine.run_task(&f.m, "orchestrator", "Invite").await.unwrap();
+        let cards = seen.lock().unwrap().clone();
+        assert!(cards.len() == 1 && cards[0].0 == "red" && cards[0].1.contains("recipients or invitees"), "{:?}", cards);
+    }
+
+    #[test]
+    fn recipient_detection_survives_renamed_keys_embedded_addresses_and_opaque_bodies() {
+        for bad in [
+            json!({"toRecipients": ["a"]}), json!({"ccRecipients": "x"}), json!({"bcc_recipients": ["x"]}), json!({"to_addresses": ["x"]}), json!({"emails": ["x"]}),
+            json!({"guests": ["x"]}), json!({"participants": ["x"]}), json!({"share_with": "x"}), json!({"collaborators": ["x"]}), json!({"required_attendees": ["x"]}),
+            json!({"message": {"raw": "AAAA"}}), json!({"body": "To: a@b.c\nSubject: hi"}), json!({"body": "{\"cc\": \"x\"}\nCc: someone"}), json!({"note": "send to a@b.c"}),
+            json!({"body": "A".repeat(80)}),
+        ] {
+            assert!(names_recipients(&bad), "{}", bad);
+        }
+        for ok in [json!({"body": "hello", "title": "Lunch"}), json!({"subject": "Notes", "to": ""}), json!({"start": "2026-10-30T10:00:00Z", "attendees": []})] {
+            assert!(!names_recipients(&ok), "{}", ok);
+        }
+    }
+
+    #[tokio::test]
+    async fn an_amber_draft_card_refuses_allow_similar_and_records_no_grant() {
+        let f = fixture(vec![Step::tool("c1", "docs__draft_note", json!({"body": "one"})), Step::text("ok")]).await;
+        let seen = approver(&f, |r| if r.similar_allowed() { Answer::AllowSimilar } else { Answer::Allow });
+        f.engine.run_task(&f.m, "orchestrator", "Draft").await.unwrap();
+        assert_eq!(seen.lock().unwrap()[0].0, "amber");
+        assert!(f.engine.broker.allow_similar().is_empty());
+        assert_eq!(f.connector_mock.calls.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]

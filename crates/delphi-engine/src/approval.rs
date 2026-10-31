@@ -121,11 +121,16 @@ pub struct Request {
 }
 
 impl Request {
+    /// Red cards and connector draft cards never take "allow similar" (spec 010-A2).
+    pub fn similar_allowed(&self) -> bool {
+        self.tier != Tier::Red && !(self.tool == "connector" && self.pattern.ends_with(" draft"))
+    }
+
     /// The `approval.requested` event payload (and what a console renders).
     pub fn event_payload(&self) -> Value {
         json!({"approval_id": self.approval_id, "task_id": self.task_id, "span_id": self.span_id, "role": self.role, "tier": self.tier.as_str(),
                "tool": self.tool, "pattern": self.pattern, "summary": self.summary, "payload": self.payload, "payload_blake3": self.payload_blake3,
-               "timeout_secs": self.timeout.as_secs()})
+               "timeout_secs": self.timeout.as_secs(), "similar_allowed": self.similar_allowed()})
     }
 }
 
@@ -177,7 +182,7 @@ impl std::fmt::Display for ResolveError {
             ResolveError::Gone { resolution: Some(r), by: Some(b) } => write!(f, "already answered by {}: {:?}", b, r),
             ResolveError::Gone { .. } => write!(f, "no such pending approval"),
             ResolveError::PayloadMismatch => write!(f, "the answer's payload_blake3 does not match the payload shown"),
-            ResolveError::SimilarNotAllowedForRed => write!(f, "`allow similar` never covers a Red action"),
+            ResolveError::SimilarNotAllowedForRed => write!(f, "`allow similar` never covers a Red action or a connector draft"),
         }
     }
 }
@@ -317,7 +322,7 @@ impl Broker {
         if p.req.payload_blake3 != payload_blake3 {
             return Err(ResolveError::PayloadMismatch);
         }
-        if answer == Answer::AllowSimilar && p.req.tier == Tier::Red {
+        if answer == Answer::AllowSimilar && !p.req.similar_allowed() {
             return Err(ResolveError::SimilarNotAllowedForRed);
         }
         let p = st.pending.remove(approval_id).expect("checked above");
