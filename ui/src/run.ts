@@ -345,7 +345,13 @@ async function validate(ctx: Ctx, args: string[]): Promise<string> {
       const rows = lastPending.items.map((p, i) => `${String(i + 1).padStart(3)}. [${sanitize(String(p.class || 'unclassed'))}] ${sanitize(String(p.title))} · ${sanitize(String(p.url))}`);
       return [`${rows.length} held entr${rows.length === 1 ? 'y' : 'ies'}${where}. None is in the knowledge base until you ratify it.`, ...rows, `/validate ratify <n…> · ${proj ? '' : 'discard <n…> · '}add project=<name> for a project's own research`].join('\n');
     }
-    if (act !== 'ratify' && act !== 'discard') return `unknown /validate action \`${sanitize(act)}\` (list, ratify, discard)`;
+    if (act === 'pass') {
+      const v = await ctx.cmd.call('pending.pass', proj ? { project: proj } : {});
+      const moved: string[] = Array.isArray(v?.promoted) ? v.promoted.map((r: unknown) => sanitize(String(r))) : [];
+      lastPending = { project: undefined, items: [] };
+      return moved.length ? `the validator pass promoted ${moved.length} page${moved.length === 1 ? '' : 's'}${where} whose source the list now trusts (searchable, noted, not validated): ${moved.join(', ')}` : `the validator pass found nothing${where} whose source the list trusts; weak pages stay held until you ratify them`;
+    }
+    if (act !== 'ratify' && act !== 'discard') return `unknown /validate action \`${sanitize(act)}\` (list, pass, ratify, discard)`;
     const nums = rest.slice(1).filter((a) => /^\d+$/.test(a)).map(Number);
     if (!nums.length || nums.some((n) => n < 1)) return `usage: /validate ${act} <number…>`;
     if (!lastPending.items.length || lastPending.project !== proj) return `run /validate${proj ? ' project=' + sanitize(proj) : ''} first to list held research (asked for #${nums.join(', #')})`;
