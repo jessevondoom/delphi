@@ -21,6 +21,7 @@ This file starts with the work after v0.2.7. For earlier releases, the history i
 - `/projects` lists the home workspace and the registered projects in an arrow-key menu; Enter restarts the console in the chosen directory as a new session (spec 058-A3). A request outside the home workspace and registered roots is ignored.
 
 - `/projects` reads the registry each time (new console-only `projects.list`), and `research.start` takes the console's `cwd`: research started inside a registered project is written to that project (spec 058-A4).
+- Weekly digest (spec 058-A5): when at least five research pages are waiting outside the knowledge base (held, or in a project and not yet ratified) and a week has passed, the orchestrator says so once in the chat (`research.digest`) and points to `/validate`. A message, never a card.
 ## 0.4.0 — 2026-10-31
 
 Docs and tests: `cargo test -p delphi --test spec_refs` checks that every spec section and amendment reference (`NNN §X.Y`, `NNN-An`) still resolves, so folding amendments into specs cannot silently break one.
