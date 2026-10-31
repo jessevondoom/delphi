@@ -51,11 +51,14 @@ struct Raw {
 pub struct SearchConfig {
     pub providers: Vec<Provider>,
     pub settings: BTreeMap<String, ProviderSettings>,
+    /// `providers` was written in config.toml. The default engine serves only what the operator starts (research, saved pages), never
+    /// the validator's background contradiction search, which sends claim text and so needs an explicit choice.
+    pub explicit: bool,
 }
 
 impl Default for SearchConfig {
     fn default() -> Self {
-        SearchConfig { providers: vec![Provider::Parallel], settings: BTreeMap::new() }
+        SearchConfig { providers: vec![Provider::Parallel], settings: BTreeMap::new(), explicit: false }
     }
 }
 
@@ -68,6 +71,7 @@ impl SearchConfig {
         let mut cfg = SearchConfig::default();
         if raw.providers.is_some() {
             cfg.providers.clear();
+            cfg.explicit = true;
         }
         for (name, s) in [("brave", raw.brave), ("mojeek", raw.mojeek), ("searxng", raw.searxng), ("kagi", raw.kagi), ("google", raw.google)] {
             if let Some(s) = s {
@@ -132,6 +136,7 @@ mod tests {
     #[test]
     fn unset_means_parallel_and_an_empty_list_means_none() {
         assert_eq!(parse("[search]\n", false).unwrap().providers, vec![Provider::Parallel]);
+        assert!(!SearchConfig::default().explicit && parse("[search]\nproviders = [\"parallel\"]\n", false).unwrap().explicit);
         assert_eq!(SearchConfig::default().providers, vec![Provider::Parallel]);
         assert!(parse("[search]\nproviders = []\n", false).unwrap().providers.is_empty());
         assert_eq!(parse("[search]\nproviders = [\"parallel\", \"searxng\"]\n[search.searxng]\nurl = \"https://s.example.org\"\n", false).unwrap().providers, vec![Provider::Parallel, Provider::Searxng]);
