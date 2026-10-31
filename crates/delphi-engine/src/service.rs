@@ -1209,6 +1209,14 @@ impl EngineService {
         if topic.is_empty() || topic.chars().count() > 200 {
             return Err(err(code::INVALID_PARAMS, "`topic` must be 1 to 200 characters"));
         }
+        // A registered project's name sends the research into that project (`specs/058` §13); none means the default scope.
+        let scope = match p["project"].as_str().map(|n| n.trim().to_lowercase()).filter(|n| !n.is_empty()) {
+            None => crate::research::Scope::Home,
+            Some(n) => match self.engine.projects.iter().find(|(name, _)| name.to_lowercase() == n) {
+                Some((_, root)) => crate::research::Scope::Project(root.clone()),
+                None => return Err(err(code::INVALID_PARAMS, format!("`{}` is not a registered project", n))),
+            },
+        };
         let shared = crate::research::Shared::new(&topic);
         {
             let mut cur = self.research.lock().unwrap();
@@ -1218,7 +1226,7 @@ impl EngineService {
             *cur = Some(shared.clone());
         }
         let (e, ws, home) = (self.engine.clone(), self.engine.ws.dir.clone(), self.engine.ws.home.clone());
-        let setup = tokio::task::spawn_blocking(move || crate::research_setup::deps(&e, &ws, &home)).await.map_err(|e| err(-32000, e.to_string()))?;
+        let setup = tokio::task::spawn_blocking(move || crate::research_setup::deps(&e, &ws, &home, scope)).await.map_err(|e| err(-32000, e.to_string()))?;
         let deps = match setup {
             Ok(d) => d,
             Err(msg) => {
@@ -1236,7 +1244,7 @@ impl EngineService {
                 let _ = m.append(EventEnvelope::new(&m.id, "research.finished", json!({"topic": topic, "new": r.new.len(), "updated": r.updated.len()}))).await;
             }
             // What was written is searchable now: bring the index up to date (the words at once, the vectors in the background).
-            if shared.snapshot().report.is_some_and(|r| !r.new.is_empty() || !r.updated.is_empty()) {
+            if shared.snapshot().report.is_some_and(|r| r.new.iter().chain(&r.updated).any(|e| e.dest == crate::research::Dest::Shared)) {
                 let _ = tokio::task::spawn_blocking(move || -> Result<(), crate::kb::KbError> {
                     let mut kb = crate::kb::Kb::open(&ws.join("local/state.db"))?;
                     let model = crate::kb::attach_default(&home, &mut kb)?;
@@ -3405,6 +3413,9 @@ mod tests {
         assert_eq!(svc.research_status(console).await.unwrap_err().code, code::NOT_FOUND, "nothing started yet");
         assert_eq!(svc.research_start(json!({"topic": "  "}), console).await.unwrap_err().code, code::INVALID_PARAMS);
         assert_eq!(svc.research_cancel(console).await.unwrap(), json!({"cancelling": false}));
+        let e = svc.research_start(json!({"topic": "bft", "project": "nowhere"}), console).await.unwrap_err();
+        assert!((e.code, e.message.contains("not a registered project")) == (code::INVALID_PARAMS, true), "an unregistered project is refused before anything starts: {}", e.message);
+        assert_eq!(svc.research_status(console).await.unwrap_err().code, code::NOT_FOUND, "and no job was recorded");
         // No [search] engine in the test workspace: the job cannot start, and the reason is the config key to set.
         let e = svc.research_start(json!({"topic": "bft"}), console).await.unwrap_err();
         assert!(e.message.contains("[search]"), "{}", e.message);
