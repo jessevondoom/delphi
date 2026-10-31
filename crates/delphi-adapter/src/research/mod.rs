@@ -32,7 +32,7 @@ pub struct ProviderSettings {
 #[serde(deny_unknown_fields)]
 struct Raw {
     #[serde(default)]
-    providers: Vec<String>,
+    providers: Option<Vec<String>>,
     #[serde(default)]
     brave: Option<ProviderSettings>,
     #[serde(default)]
@@ -45,11 +45,21 @@ struct Raw {
     google: Option<ProviderSettings>,
 }
 
-/// `[search]`: which engines the research job asks, in order. Unset means no engine, and expand mode says so.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// `[search]`: which engines the research job asks, in order. Unset means Parallel's keyless engine (`specs/028` §12); an explicit
+/// empty list means no engine, and expand mode says so.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchConfig {
     pub providers: Vec<Provider>,
     pub settings: BTreeMap<String, ProviderSettings>,
+    /// `providers` was written in config.toml. The default engine serves only what the operator starts (research, saved pages), never
+    /// the validator's background contradiction search, which sends claim text and so needs an explicit choice.
+    pub explicit: bool,
+}
+
+impl Default for SearchConfig {
+    fn default() -> Self {
+        SearchConfig { providers: vec![Provider::Parallel], settings: BTreeMap::new(), explicit: false }
+    }
 }
 
 impl SearchConfig {
@@ -59,12 +69,16 @@ impl SearchConfig {
         let raw: Raw = table.clone().try_into().map_err(|e| vec![format!("[search]: {}", e)])?;
         let mut errs = Vec::new();
         let mut cfg = SearchConfig::default();
+        if raw.providers.is_some() {
+            cfg.providers.clear();
+            cfg.explicit = true;
+        }
         for (name, s) in [("brave", raw.brave), ("mojeek", raw.mojeek), ("searxng", raw.searxng), ("kagi", raw.kagi), ("google", raw.google)] {
             if let Some(s) = s {
                 cfg.settings.insert(name.into(), s);
             }
         }
-        for name in &raw.providers {
+        for name in raw.providers.iter().flatten() {
             let Some(p) = Provider::parse(name) else {
                 errs.push(format!("[search] providers: unknown engine `{}` (expected {})", name, Provider::ALL.map(|p| p.name()).join(", ")));
                 continue;
@@ -120,14 +134,19 @@ mod tests {
     }
 
     #[test]
-    fn the_recommended_order_parses() {
-        let c = parse("[search]\nproviders = [\"brave\", \"mojeek\", \"searxng\"]\n[search.brave]\ncredential = \"env:BRAVE_API_KEY\"\n[search.mojeek]\ncredential = \"keychain:mojeek\"\n[search.searxng]\nurl = \"https://searx.example.org\"\n", false).unwrap();
-        assert_eq!(c.providers, vec![Provider::Brave, Provider::Mojeek, Provider::Searxng]);
+    fn unset_means_parallel_and_an_empty_list_means_none() {
+        assert_eq!(parse("[search]\n", false).unwrap().providers, vec![Provider::Parallel]);
+        assert!(!SearchConfig::default().explicit && parse("[search]\nproviders = [\"parallel\"]\n", false).unwrap().explicit);
+        assert_eq!(SearchConfig::default().providers, vec![Provider::Parallel]);
+        assert!(parse("[search]\nproviders = []\n", false).unwrap().providers.is_empty());
+        assert_eq!(parse("[search]\nproviders = [\"parallel\", \"searxng\"]\n[search.searxng]\nurl = \"https://s.example.org\"\n", false).unwrap().providers, vec![Provider::Parallel, Provider::Searxng]);
+        assert!(parse("[search]\nproviders = [\"parallel\"]\n[search.parallel]\ncredential = \"env:K\"\n", false).is_err());
     }
 
     #[test]
-    fn an_unset_search_table_is_no_engine() {
-        assert!(parse("[search]\n", false).unwrap().providers.is_empty());
+    fn the_recommended_order_parses() {
+        let c = parse("[search]\nproviders = [\"brave\", \"mojeek\", \"searxng\"]\n[search.brave]\ncredential = \"env:BRAVE_API_KEY\"\n[search.mojeek]\ncredential = \"keychain:mojeek\"\n[search.searxng]\nurl = \"https://searx.example.org\"\n", false).unwrap();
+        assert_eq!(c.providers, vec![Provider::Brave, Provider::Mojeek, Provider::Searxng]);
     }
 
     #[test]

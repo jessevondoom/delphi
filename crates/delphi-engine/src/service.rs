@@ -3480,7 +3480,8 @@ mod tests {
         let e = svc.research_start(json!({"topic": "bft", "project": "nowhere"}), console).await.unwrap_err();
         assert!((e.code, e.message.contains("not a registered project")) == (code::INVALID_PARAMS, true), "an unregistered project is refused before anything starts: {}", e.message);
         assert_eq!(svc.research_status(console).await.unwrap_err().code, code::NOT_FOUND, "and no job was recorded");
-        // No [search] engine in the test workspace: the job cannot start, and the reason is the config key to set.
+        // Research turned off (`providers = []`): the job cannot start, and the reason is the config key.
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&format!("{}\n[search]\nproviders = []\n", crate::testkit::CONFIG)).unwrap());
         let e = svc.research_start(json!({"topic": "bft"}), console).await.unwrap_err();
         assert!(e.message.contains("[search]"), "{}", e.message);
         assert_eq!(svc.research_status(console).await.unwrap()["phase"], "failed");

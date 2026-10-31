@@ -79,8 +79,8 @@ Defaults are those of the template; "—" means no default.
 
 | Key | Default | Meaning |
 | :-- | :-- | :-- |
-| `[search] providers` ◆ | — (none) | the web search engines to ask, in order, one at a time: the next only if the last failed. `brave`, `mojeek`, `searxng`, `kagi`, `google`. `google` needs a Gemini endpoint. Unset: research cannot run |
-| `[search.<engine>] credential` ◆ | — | where the key comes from, as for an endpoint (`env:BRAVE_API_KEY`, `keychain:…`, `command:…`); every engine but `searxng` needs one |
+| `[search] providers` ◆ | `["parallel"]` | the web search engines to ask, in order, one at a time: the next only if the last failed. `parallel` (Parallel's hosted MCP server: no key, no account, rate limited; it sees the query text), `brave`, `mojeek`, `searxng`, `kagi`, `google`. `google` needs a Gemini endpoint. `[]`: research cannot run ([`specs/028`](../../specs/028-knowledge-window.md) §12) |
+| `[search.<engine>] credential` ◆ | — | where the key comes from, as for an endpoint (`env:BRAVE_API_KEY`, `keychain:…`, `command:…`); every engine but `parallel` and `searxng` needs one |
 | `[search.searxng] url` ◆ | — | the SearXNG instance (https, or http to loopback) |
 | `[search.google] cx` ◆ | — | the Programmable Search engine id |
 
