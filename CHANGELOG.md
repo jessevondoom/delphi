@@ -11,6 +11,7 @@ This file starts with the work after v0.2.7. For earlier releases, the history i
 ### Validator
 
 - Weak sources are labelled, never evidence (spec 040-A2): a claim only Weak sources support is `unverified (weak)`, and agreement among Weak sources is recorded but changes no label. New `[validator] weak_sources = "label"|"off"` (default `label`).
+- A Wikipedia sentence tagged "citation needed" or carrying no citation, and a journal-publisher page with no DOI, no longer count as sources (spec 040-A3).
 
 ## 0.4.0 — 2026-10-31
 
