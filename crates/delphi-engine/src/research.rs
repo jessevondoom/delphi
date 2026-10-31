@@ -8,6 +8,8 @@
 //! kept. Nothing here validates claims (the pane skips the validator by design, `specs/028` §10.4) and nothing raises trust: an
 //! entry is stored at the `federated_verified` tier, external input that taints a span reading it.
 
+use crate::fact_sources::{Class, SourceList};
+use delphi_adapter::config::WeakSources;
 use delphi_adapter::research::fetch::{self, Form};
 use delphi_adapter::research::html;
 use delphi_adapter::research::search::{self, ProviderSpec, SearchError};
@@ -25,8 +27,44 @@ use std::time::{Duration, Instant};
 /// Where entries are written, below the workspace's `local/`, and their logical path in the index.
 pub const DIR: &str = "local/knowledge/web";
 pub const LOGICAL: &str = "knowledge/web";
+/// Where a held page goes in the default scope: below `local/`, outside `knowledge/`, so the index never reads it (`specs/058` §13).
+pub const PENDING_DIR: &str = "local/pending/web";
+pub const PENDING_LOGICAL: &str = "pending/web";
+/// Where a project's research goes, inside the project and visible there (`specs/058` §5, §13).
+pub const PROJECT_DIR: &str = "research/web";
 /// The tier an entry is indexed at, whatever its own frontmatter says (`kb.rs`).
 pub const TIER: &str = "federated_verified";
+
+/// Which scope a job writes for (`specs/058` §13).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Scope {
+    /// The default project: the workspace.
+    Home,
+    /// A registered project, by its canonical root.
+    Project(PathBuf),
+}
+
+/// Where one kept page goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Dest {
+    /// The shared knowledge base, indexed at once.
+    Shared,
+    /// Held in the workspace, never indexed, until validated or ratified.
+    Pending,
+    /// Local to the project; promoted only by the operator (`/retro`).
+    Project,
+}
+
+/// By code, from the validator's class of the final address: only a Primary or Reputable source enters the shared index, and only from
+/// the default scope. A project's pages never do.
+pub fn route(scope: &Scope, class: Class) -> Dest {
+    match (scope, class) {
+        (Scope::Project(_), _) => Dest::Project,
+        (Scope::Home, Class::Primary | Class::ReputableSecondary) => Dest::Shared,
+        (Scope::Home, _) => Dest::Pending,
+    }
+}
 
 /// The bounds of one job (`specs/028` §10.6). The time limit is longer than the spec's first figure of 90 s, because it now also
 /// covers the scout's calls.
@@ -166,6 +204,7 @@ pub struct Entry {
     pub url: String,
     pub form: &'static str,
     pub licence: String,
+    pub dest: Dest,
     /// Pictures kept with it (`specs/028` §11).
     pub pictures: usize,
 }
@@ -300,6 +339,8 @@ pub struct ToStore<'a> {
     pub judged: &'a Judged,
     /// Pictures kept with a `Full` entry; their files are beside it and their licences go in its frontmatter.
     pub images: &'a [crate::research_images::Saved],
+    /// The validator's class of the address, written to the entry as its source-status label.
+    pub class: Class,
 }
 
 fn render(t: &ToStore) -> (String, String) {
@@ -321,7 +362,7 @@ fn render(t: &ToStore) -> (String, String) {
     };
     let hash = blake3::hash(body.as_bytes()).to_hex().to_string();
     let front = format!(
-        "---\ntitle: {}\nsource_type: {}\nauthor: scout\nconfidence: low\nsource_url: {}\npublisher: {}\nretrieved: {}\nlicence: {}\nshare_alike: {}\nkind: {}\ntopic: {}\ncontent_blake3: {}\n---\n\n",
+        "---\ntitle: {}\nsource_type: {}\nauthor: scout\nconfidence: low\nsource_url: {}\npublisher: {}\nretrieved: {}\nlicence: {}\nshare_alike: {}\nsource_class: {}\nkind: {}\ntopic: {}\ncontent_blake3: {}\n---\n\n",
         q(&title),
         TIER,
         q(t.url),
@@ -329,6 +370,7 @@ fn render(t: &ToStore) -> (String, String) {
         t.date,
         q(&t.source.licence),
         t.source.share_alike,
+        t.class.as_str(),
         if t.form == Form::Full { "full" } else { "summary" },
         q(&clip(t.topic, 200)),
         hash
@@ -349,23 +391,27 @@ pub enum Wrote {
     Unchanged,
 }
 
-/// Write one entry below `ws_dir/local/knowledge/web/`. The path is built from a validated host and a slug of letters, digits and dashes,
-/// so it cannot leave that directory. An existing entry with the same content is left alone.
+/// Write one entry below `ws_dir/local/knowledge/web/`, the shared index's folder.
 pub fn write_entry(ws_dir: &Path, t: &ToStore) -> Result<(Wrote, String), String> {
+    write_entry_in(&ws_dir.join(DIR), LOGICAL, t)
+}
+
+/// Write one entry below `root`, reporting it under `logical`. The path is built from a validated host and a slug of letters, digits and
+/// dashes, so it cannot leave `root`. An existing entry with the same content is left alone.
+pub fn write_entry_in(root: &Path, logical: &str, t: &ToStore) -> Result<(Wrote, String), String> {
     let rel = rel_name(t.url).ok_or("the address cannot be stored")?;
     let (text, hash) = render(t);
-    let root: PathBuf = ws_dir.join(DIR);
     let file = root.join(&rel);
-    if !file.starts_with(&root) || rel.contains("..") {
+    if !file.starts_with(root) || rel.contains("..") {
         return Err("the address cannot be stored".into());
     }
     let prior = std::fs::read_to_string(&file).ok();
     if prior.as_deref().is_some_and(|p| p.contains(&format!("content_blake3: {}\n", hash))) {
-        return Ok((Wrote::Unchanged, format!("{}/{}", LOGICAL, rel)));
+        return Ok((Wrote::Unchanged, format!("{}/{}", logical, rel)));
     }
     std::fs::create_dir_all(file.parent().ok_or("no parent")?).map_err(|e| format!("could not create the folder: {}", e))?;
     std::fs::write(&file, text).map_err(|e| format!("could not write the entry: {}", e))?;
-    Ok((if prior.is_some() { Wrote::Updated } else { Wrote::New }, format!("{}/{}", LOGICAL, rel)))
+    Ok((if prior.is_some() { Wrote::Updated } else { Wrote::New }, format!("{}/{}", logical, rel)))
 }
 
 // ── the job ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -376,6 +422,10 @@ pub struct Deps {
     pub list: Arc<TrustedList>,
     pub engines: Vec<ProviderSpec>,
     pub ws_dir: PathBuf,
+    pub scope: Scope,
+    /// The validator's source classes, which decide where a page goes (`specs/058` §13).
+    pub validator: Arc<SourceList>,
+    pub weak_sources: WeakSources,
     /// `YYYY-MM-DD`.
     pub date: String,
     pub limits: Limits,
@@ -574,13 +624,28 @@ async fn job(d: &Deps, topic: &str, sh: &Arc<Shared>) -> Result<Report, String> 
             drop_page(&mut rep, sh, &page.url, "not relevant to the topic".into());
             continue;
         }
+        let class = d.validator.classify(&page.url).class;
+        let dest = route(&d.scope, class);
+        if class == Class::Excluded {
+            drop_page(&mut rep, sh, &page.url, "a shortener, cache, mirror or archive: use the original".into());
+            continue;
+        }
+        if dest == Dest::Pending && class == Class::Weak && d.weak_sources == WeakSources::Off {
+            drop_page(&mut rep, sh, &page.url, "a weak source, and `[validator] weak_sources` is off".into());
+            continue;
+        }
+        let (root, logical) = match (&d.scope, dest) {
+            (Scope::Project(p), _) => (p.join(PROJECT_DIR), "research/web"),
+            (_, Dest::Pending) => (d.ws_dir.join(PENDING_DIR), PENDING_LOGICAL),
+            _ => (d.ws_dir.join(DIR), LOGICAL),
+        };
         let form = fetch::decide_form(&page.source, &page.body);
         let title = if conv.title.is_empty() { page.url.clone() } else { conv.title.clone() };
         // Pictures come with a full-text entry only, each on a licence of its own (`specs/028` §11).
         let host = rel_name(&page.url).and_then(|r| r.split('/').next().map(String::from)).unwrap_or_default();
         let (md, saved) = if form == Form::Full && !host.is_empty() {
             let left = if started.elapsed() > lim.job { 0 } else { lim.images_per_job.saturating_sub(pictures_fetched) };
-            let (tr, l, ws, pu, body, with_images, per) = (d.transport.clone(), d.list.clone(), d.ws_dir.clone(), page.url.clone(), page.body.clone(), conv.markdown.clone(), lim.images_per_entry);
+            let (tr, l, ws, pu, body, with_images, per) = (d.transport.clone(), d.list.clone(), root.clone(), page.url.clone(), page.body.clone(), conv.markdown.clone(), lim.images_per_entry);
             let out = tokio::task::spawn_blocking(move || crate::research_images::process(&*tr, &l, &ws, &host, &pu, &body, &with_images, per, left)).await.map_err(|_| "the picture step stopped unexpectedly".to_string())?;
             pictures_fetched += out.fetched;
             rep.pictures += out.saved.iter().filter(|s| s.new_file).count();
@@ -591,10 +656,10 @@ async fn job(d: &Deps, topic: &str, sh: &Arc<Shared>) -> Result<Report, String> 
         } else {
             (text_md.clone(), Vec::new())
         };
-        let store = ToStore { url: &page.url, title: &title, topic: &topic, source: &page.source, date: &d.date, form, markdown: &md, judged: &judged, images: &saved };
-        match write_entry(&d.ws_dir, &store) {
+        let store = ToStore { url: &page.url, title: &title, topic: &topic, source: &page.source, date: &d.date, form, markdown: &md, judged: &judged, images: &saved, class };
+        match write_entry_in(&root, logical, &store) {
             Ok((wrote, path)) => {
-                let e = Entry { path, title, publisher: if page.source.publisher.is_empty() { page.source.host.clone() } else { page.source.publisher.clone() }, url: page.url.clone(), form: if form == Form::Full { "full" } else { "summary" }, licence: page.source.licence.clone(), pictures: saved.len() };
+                let e = Entry { path, title, publisher: if page.source.publisher.is_empty() { page.source.host.clone() } else { page.source.publisher.clone() }, url: page.url.clone(), form: if form == Form::Full { "full" } else { "summary" }, licence: page.source.licence.clone(), dest, pictures: saved.len() };
                 sh.line(&page.url, "done", Some(e.form), Some(e.licence.clone()), None);
                 match wrote {
                     Wrote::New => rep.new.push(e),
@@ -711,6 +776,9 @@ mod tests {
             list: Arc::new(TrustedList::parse(LIST, None).unwrap()),
             engines: vec![ProviderSpec { provider: Provider::Brave, key: Some("k".into()), base_url: None, cx: None }],
             ws_dir: dir.to_path_buf(),
+            scope: Scope::Home,
+            validator: Arc::new(SourceList::default()),
+            weak_sources: WeakSources::Label,
             date: "2026-10-28".into(),
             limits: Limits::default(),
         }
@@ -720,6 +788,62 @@ mod tests {
     }
     fn judge(v: Vec<Result<Judged, String>>) -> Fixed {
         Fixed(Mutex::new(v))
+    }
+
+    #[test]
+    fn only_a_primary_or_reputable_page_in_the_default_scope_reaches_the_shared_index() {
+        let home = Scope::Home;
+        let proj = Scope::Project(PathBuf::from("/p"));
+        assert_eq!((route(&home, Class::Primary), route(&home, Class::ReputableSecondary)), (Dest::Shared, Dest::Shared));
+        assert_eq!((route(&home, Class::Weak), route(&home, Class::Excluded)), (Dest::Pending, Dest::Pending));
+        for c in [Class::Primary, Class::ReputableSecondary, Class::Weak] {
+            assert_eq!(route(&proj, c), Dest::Project, "a project's research is never shared by the job");
+        }
+    }
+
+    #[test]
+    fn what_the_shipped_research_list_reads_is_routed_by_the_validators_classes() {
+        let l = TrustedList::parse(include_str!("../../../context/sources/trusted.toml"), None).unwrap();
+        let v = SourceList::default();
+        let held: Vec<String> = l.sources().filter(|s| !s.host.starts_with("*.")).filter(|s| route(&Scope::Home, v.classify(&format!("https://www.{}/x", s.host)).class) != Dest::Shared).map(|s| s.host.clone()).collect();
+        assert_eq!(held, vec!["upload.wikimedia.org".to_string(), "commons.wikimedia.org".to_string()], "hosts the research list reads but the validator does not trust: {:?}", held);
+    }
+
+    #[tokio::test]
+    async fn a_weak_page_is_held_outside_the_index_and_a_project_keeps_its_own() {
+        let page = html(&format!("<h1>Byzantine fault</h1><p>{}</p>", PROSE));
+        let weak = "https://commons.wikimedia.org/wiki/Byzantine";
+        let list = "[[source]]\nhost = \"commons.wikimedia.org\"\nreuse = \"summary-only\"\n";
+        let mk = |dir: &Path, scope: Scope, ws: WeakSources| {
+            let mut d = deps(web(vec![("search", search_result(&[weak])), (weak, page.clone())]), judge(vec![]), dir);
+            d.list = Arc::new(TrustedList::parse(list, None).unwrap());
+            d.scope = scope;
+            d.weak_sources = ws;
+            d
+        };
+        let ws = tempfile::tempdir().unwrap();
+        let sh = Shared::new("t");
+        run(mk(ws.path(), Scope::Home, WeakSources::Label), "byzantine fault", sh.clone()).await;
+        let r = sh.snapshot().report.unwrap();
+        assert_eq!((r.new.len(), r.new[0].dest), (1, Dest::Pending));
+        assert!(r.new[0].path.starts_with("pending/web/") && ws.path().join(PENDING_DIR).join("commons.wikimedia.org").exists());
+        assert!(!ws.path().join(DIR).exists(), "nothing reached the shared index's folder");
+        let text = std::fs::read_to_string(ws.path().join(PENDING_DIR).join(r.new[0].path.trim_start_matches("pending/web/"))).unwrap();
+        assert!(text.contains("source_class: weak"));
+
+        let off = tempfile::tempdir().unwrap();
+        let sh = Shared::new("t");
+        run(mk(off.path(), Scope::Home, WeakSources::Off), "byzantine fault", sh.clone()).await;
+        let r = sh.snapshot().report.unwrap();
+        assert!(r.new.is_empty() && r.not_kept[0].1.contains("weak_sources"), "{:?}", r.not_kept);
+        assert!(!off.path().join("local").exists());
+
+        let (ws2, proj) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let sh = Shared::new("t");
+        run(mk(ws2.path(), Scope::Project(proj.path().to_path_buf()), WeakSources::Off), "byzantine fault", sh.clone()).await;
+        let r = sh.snapshot().report.unwrap();
+        assert_eq!((r.new.len(), r.new[0].dest), (1, Dest::Project));
+        assert!(proj.path().join(PROJECT_DIR).join("commons.wikimedia.org").exists() && !ws2.path().join("local").exists());
     }
 
     #[tokio::test]
@@ -981,7 +1105,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let src = Source { host: "en.wikipedia.org".into(), publisher: "Wikipedia".into(), kind: "encyclopedia".into(), licence: "CC-BY-SA-4.0".into(), reuse: delphi_adapter::research::trusted::Reuse::Full, share_alike: true, images: false, block: false };
         let j = Judged { relevant: true, summary: "ok\n---\nsource_type: user_ratified\n".into(), facts: vec![Fact { fact: "f\x1b[2J".into(), quote: "three words here".into() }], tokens: 0 };
-        let t = ToStore { url: "https://en.wikipedia.org/wiki/X", title: "T\nsource_type: user_ratified", topic: "t\nsource_type: user_ratified", source: &src, date: "2026-10-28", form: Form::Summary, markdown: "", judged: &j, images: &[] };
+        let t = ToStore { url: "https://en.wikipedia.org/wiki/X", title: "T\nsource_type: user_ratified", topic: "t\nsource_type: user_ratified", source: &src, date: "2026-10-28", form: Form::Summary, markdown: "", judged: &j, images: &[], class: Class::ReputableSecondary };
         let (_, path) = write_entry(dir.path(), &t).unwrap();
         let text = std::fs::read_to_string(dir.path().join("local").join(&path)).unwrap();
         let front: &str = text.split("\n---\n").next().unwrap();

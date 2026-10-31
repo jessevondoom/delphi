@@ -13,6 +13,10 @@ This file starts with the work after v0.2.7. For earlier releases, the history i
 - Weak sources are labelled, never evidence (spec 040-A2): a claim only Weak sources support is `unverified (weak)`, and agreement among Weak sources is recorded but changes no label. New `[validator] weak_sources = "label"|"off"` (default `label`).
 - A Wikipedia sentence tagged "citation needed" or carrying no citation, and a journal-publisher page with no DOI, no longer count as sources (spec 040-A3).
 
+### Research
+
+- Research routing (spec 058-A1): in the default scope only a Primary or Reputable source is indexed at once; a weak page is held under `local/pending/web/` (not indexed) and is dropped when `[validator] weak_sources = "off"`. `research.start` takes an optional registered `project`, whose research is written to its `research/web/` and not shared. Entries carry `source_class`.
+
 ## 0.4.0 — 2026-10-31
 
 Docs and tests: `cargo test -p delphi --test spec_refs` checks that every spec section and amendment reference (`NNN §X.Y`, `NNN-An`) still resolves, so folding amendments into specs cannot silently break one.

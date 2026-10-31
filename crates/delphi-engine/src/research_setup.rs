@@ -3,7 +3,8 @@
 //! [`deps`] on a blocking thread.
 
 use crate::engine::Engine;
-use crate::research::{Deps, EngineJudge, Limits};
+use crate::fact_sources::SourceList;
+use crate::research::{Deps, EngineJudge, Limits, Scope};
 use delphi_adapter::credential::{CredentialRef, Resolved, Resolver};
 use delphi_adapter::research::search::ProviderSpec;
 use delphi_adapter::research::transport::HttpTransport;
@@ -41,7 +42,7 @@ pub fn engines(engine: &Engine) -> Vec<ProviderSpec> {
         .collect()
 }
 
-pub fn deps(engine: &Arc<Engine>, ws: &Path, home: &Path) -> Result<Deps, String> {
+pub fn deps(engine: &Arc<Engine>, ws: &Path, home: &Path, scope: Scope) -> Result<Deps, String> {
     if engine.cfg.get().search.providers.is_empty() {
         return Err("no search engine is configured: set `providers` under [search] in config.toml".into());
     }
@@ -53,6 +54,9 @@ pub fn deps(engine: &Arc<Engine>, ws: &Path, home: &Path) -> Result<Deps, String
         list: Arc::new(list),
         engines: engines(engine),
         ws_dir: ws.to_path_buf(),
+        scope,
+        validator: Arc::new(SourceList::new(engine.cfg.get().validator.sources.clone())),
+        weak_sources: engine.cfg.get().validator.weak_sources,
         date,
         limits: Limits::default(),
     })

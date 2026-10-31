@@ -89,7 +89,7 @@ fn keep(transport: &dyn Transport, list: &TrustedList, dir: &Path, host: &str, p
     }
     let hash = blake3::hash(&bytes).to_hex().to_string();
     let file = format!("images/{}.{}", hash, ext);
-    let root = dir.join(crate::research::DIR);
+    let root = dir.to_path_buf();
     let folder = root.join(host).join("images");
     let path = folder.join(format!("{}.{}", hash, ext));
     if !path.starts_with(&root) || host.contains("..") {
@@ -112,9 +112,9 @@ fn images_host(url: &str) -> String {
 
 /// Process the pictures of one kept page. `md` is the page converted with its images (`html::to_markdown_with_images`), `html_body` the
 /// page itself, whose figures say what licence a picture declares. At most `per_entry` pictures are fetched, and no more than `job_left`.
-/// Blocking: it makes requests.
+/// `root` is the folder the entries live in; pictures go beside them. Blocking: it makes requests.
 #[allow(clippy::too_many_arguments)]
-pub fn process(transport: &dyn Transport, list: &TrustedList, ws_dir: &Path, host: &str, page_url: &str, html_body: &str, md: &str, per_entry: usize, job_left: usize) -> Outcome {
+pub fn process(transport: &dyn Transport, list: &TrustedList, root: &Path, host: &str, page_url: &str, html_body: &str, md: &str, per_entry: usize, job_left: usize) -> Outcome {
     let toks = html::find_images(md);
     let refs: HashMap<String, ImageRef> = images::extract(html_body, page_url).into_iter().map(|r| (r.url.clone(), r)).collect();
     let mut out = Outcome::default();
@@ -131,7 +131,7 @@ pub fn process(transport: &dyn Transport, list: &TrustedList, ws_dir: &Path, hos
                     Some(_) if inside_link(&md[..tok.start]) => Err("the picture is inside a link with other words".to_string()),
                     Some(r) => {
                         let may_fetch = out.fetched < per_entry && out.fetched < job_left;
-                        keep(transport, list, ws_dir, host, page_url, tok, r, &mut out.fetched, may_fetch)
+                        keep(transport, list, root, host, page_url, tok, r, &mut out.fetched, may_fetch)
                     }
                 };
                 let s = match verdict {
@@ -205,7 +205,7 @@ mod tests {
     }
     fn run_with(web: &Web, html: &str, dir: &Path, list: &str, per: usize, job: usize) -> Outcome {
         let md = html::to_markdown_with_images(&format!("<html><body>{}</body></html>", html), BASE, 100_000).markdown;
-        process(web, &TrustedList::parse(list, None).unwrap(), dir, "en.wikipedia.org", BASE, html, &md, per, job)
+        process(web, &TrustedList::parse(list, None).unwrap(), &dir.join(crate::research::DIR), "en.wikipedia.org", BASE, html, &md, per, job)
     }
     fn files(dir: &Path) -> Vec<String> {
         fn walk(p: &Path, out: &mut Vec<String>) {
@@ -352,7 +352,7 @@ mod tests {
         let w = web(vec![("https://www.nasa.gov/p.png", ok(pic()))]);
         let html = "<img alt=\"A rocket\" src=\"https://www.nasa.gov/p.png\">";
         let md = html::to_markdown_with_images(html, "https://www.nasa.gov/x", 10_000).markdown;
-        let go = |images: bool| process(&w, &TrustedList::parse(&gov(images), None).unwrap(), dir.path(), "www.nasa.gov", "https://www.nasa.gov/x", html, &md, 6, 24);
+        let go = |images: bool| process(&w, &TrustedList::parse(&gov(images), None).unwrap(), &dir.path().join(crate::research::DIR), "www.nasa.gov", "https://www.nasa.gov/x", html, &md, 6, 24);
         let off = go(false);
         assert!(off.saved.is_empty() && off.not_saved[0].1.contains("no licence"), "{:?}", off.not_saved);
         let on = go(true);
