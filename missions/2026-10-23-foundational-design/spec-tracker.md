@@ -391,6 +391,18 @@ Approved by the operator on 2026-10-30. D-33 supersedes D-28's Ink renderer choi
 | :-- | :-- | :-- |
 | OUI1 | OpenTUI renderer, supported source runtime, terminal ownership, CI end-to-end and release builds | in progress on `codex/opentui-completion` |
 
+## The shell tool, shell modes and the `!` bang (spec 061, approved 2026-10-31)
+
+Approved by the operator on 2026-10-31 (D-34). Amends 008 §4 / D-24, 020 §3 and the 005 permission modes. Each slice is its own PR.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| SH1 | `shell` tool in the engine: runner, deny and taint gates, sandbox verdict, `shellsafe` classifier and Hard cards | in progress |
+| SH2 | `shell-auto` mode, `[s]` session grants, `permissions.revoke` | approved, not built |
+| SH3 | `!` bang: `shell.run` RPC, console block and composer | approved, not built |
+| SH4 | Harness bridge and capability map | approved, not built |
+| SH5 | Config keys, schema, reference docs and regenerated files | approved, not built |
+
 ## Council 013: containment increment (verdict: `councils/013-verdict.md`)
 
 Increment 1 (authority and trust containment), each slice its own PR; the 350 h report plan is not run as one batch. Built 2026-10-30; all slices amend approved specs (spec status unchanged).
