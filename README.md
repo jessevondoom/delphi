@@ -236,7 +236,8 @@ The daemon (`delphi-core`, `delphi-engine`) is the only writer of the event log 
 | `/distill [<path\|missions/id> …]` | the writer drafts bundle knowledge into a staging directory; nothing is written into a bundle |
 | `/timer <when> <note>`, `/timer @architect 1h …` | wake a role later; `/timer list`, `/timer cancel <id>` |
 | `/y` `/a` `/n` `/d` | approve once, approve similar this task (Amber only), reject, show the card's payload |
-| `/permissions [default\|accept-edits\|mission-auto\|optimistic]` | approval mode (`Shift+Tab` cycles it) |
+| `/permissions [default\|accept-edits\|shell-auto\|mission-auto\|optimistic\|revoke]` | approval mode (`Shift+Tab` cycles it); `revoke` ends session grants |
+| `!<line>` | run a shell line yourself in the project; the output is shown to you and never sent to a model |
 | `/budget [dollars]`, `/usage [mission\|role\|task\|model]` | this mission's ceiling; tokens and spend |
 | `/models`, `/agents`, `/connectors` | the pool, who is running, which connectors are pinned |
 | `/decisions`, `/merge <task>` | open the decisions pane (everything you owe, one at a time); rerun the gates and merge card |

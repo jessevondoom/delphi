@@ -124,7 +124,7 @@ export function renderTimers(v: any): string {
 }
 
 /** Answer a card: the daemon checks the payload hash, so what is approved is exactly what was shown. */
-export async function resolveCard(cmd: Rpc, card: Approval, decision: 'allow' | 'allow_similar' | 'deny'): Promise<string | null> {
+export async function resolveCard(cmd: Rpc, card: Approval, decision: 'allow' | 'allow_similar' | 'allow_session' | 'deny'): Promise<string | null> {
   try { await cmd.call('approval.resolve', { approval_id: card.id, payload_blake3: card.blake3, decision }); return null; }
   catch (e) { return errText(e); }
 }
@@ -252,14 +252,15 @@ export async function runSlash(line: string, ctx: Ctx, now = Date.now()): Promis
       return;
     }
     case 'observe': case 'narrator': case 'visualize': ctx.post(await openNarrator(rest[0], ctx.info, process.env, undefined, ctx.open)); return;
-    case 'y': case 'yes': case 'a': case 'always': case 'n': case 'no': case 'd': case 'diff': case 'approve': {
+    case 'y': case 'yes': case 'a': case 'always': case 's': case 'session': case 'n': case 'no': case 'd': case 'diff': case 'approve': {
       const key = name === 'approve' ? rest[0] : name;
-      const d = key === 'y' || key === 'yes' ? 'allow' : key === 'a' || key === 'always' ? 'allow_similar' : key === 'n' || key === 'no' ? 'deny' : key === 'd' || key === 'diff' ? 'view' : null;
-      if (!d) { ctx.post('/approve takes y, a, n or d'); return; }
+      const d = key === 'y' || key === 'yes' ? 'allow' : key === 'a' || key === 'always' ? 'allow_similar' : key === 's' || key === 'session' ? 'allow_session' : key === 'n' || key === 'no' ? 'deny' : key === 'd' || key === 'diff' ? 'view' : null;
+      if (!d) { ctx.post('/approve takes y, a, s, n or d'); return; }
       const card = waiting(ctx.state());
       if (!card) { ctx.post('no approval is waiting'); return; }
       if (d === 'view') { ctx.post(JSON.stringify(card.payload, null, 2)); return; }
       if (d === 'allow_similar' && card.tier === 'red') { ctx.post('`allow similar` never applies to a Red action; use /y to approve this once or /n'); return; }
+      if (d === 'allow_session' && !card.sessionAllowed) { ctx.post('`allow session` applies only to shell commands that are not Red; use /y to approve this once or /n'); return; }
       if (now - card.at < 300) { ctx.post('that card only just appeared; look at it, then answer'); return; }
       const bad = await resolveCard(ctx.cmd, card, d);
       if (bad) ctx.post(bad);

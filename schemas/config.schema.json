@@ -93,6 +93,8 @@
         "sandbox": { "enum": ["off", "prefer", "required"] },
         "allow": { "type": "array", "items": { "type": "string" } },
         "deny": { "type": "array", "items": { "type": "string" } },
+        "shell": { "type": "boolean", "description": "Offer the `shell` tool (specs/061). Default true." },
+        "hard": { "type": "array", "items": { "type": "string" }, "description": "Shell lines that are always Hard: a Red card." },
         "test_command": { "type": "array", "items": { "type": "string" }, "description": "Merge gate 1." },
         "check_command": { "type": "array", "items": { "type": "string" }, "description": "Merge gate 2." }
       }

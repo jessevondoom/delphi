@@ -398,10 +398,10 @@ Approved by the operator on 2026-10-31 (D-34). Amends 008 §4 / D-24, 020 §3 an
 | Slice | Content | State |
 | :-- | :-- | :-- |
 | SH1 | `shell` tool in the engine: runner, deny and taint gates, sandbox verdict, `shellsafe` classifier and Hard cards | built (engine, `shell.run` RPC, plain console) |
-| SH2 | `shell-auto` mode, `[s]` session grants, `permissions.revoke` | built in the engine and plain console; OpenTUI mode cycle and `[s]` choice not yet |
-| SH3 | `!` bang: `shell.run` RPC, console block and composer | approved, not built |
-| SH4 | Harness bridge and capability map | approved, not built |
-| SH5 | Config keys, schema, reference docs and regenerated files | approved, not built |
+| SH2 | `shell-auto` mode, `[s]` session grants, `permissions.revoke` | built: engine, plain console and OpenTUI (Shift+Tab `shell auto`, `[s]` choice) |
+| SH3 | `!` bang: `shell.run` RPC, console block and composer | built: `shell.run` and the `!` bang (`ui/src/shell.ts`) |
+| SH4 | Harness bridge and capability map | built: `shell` offered over the bridge beside `run_command`, kept by agy Builders |
+| SH5 | Config keys, schema, reference docs and regenerated files | built: `[exec] shell`/`hard`, schema, reference, README, CHANGELOG |
 
 ## Council 013: containment increment (verdict: `councils/013-verdict.md`)
 

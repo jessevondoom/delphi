@@ -126,6 +126,8 @@ sandbox = "off"
 # deny = ["git push*"]               # commands that are refused outright
 # test_command = ["cargo", "test"]   # merge gate 1
 # check_command = ["cargo", "clippy"] # merge gate 2
+# shell = true                       # offer the `shell` tool (a full shell line); false keeps only `run_command`
+# hard = ["git push*"]               # shell lines that are always Hard: a Red card, never auto-approved (specs/061)
 
 # Releases (specs/036). Uncomment to make `delphi update` refuse any build that is not a signed release. This table is ratified:
 # adding the line takes effect at once, and taking it out takes effect when you ratify the removal. Development builds and source

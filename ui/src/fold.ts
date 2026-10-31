@@ -21,7 +21,7 @@ export type Agent = {
   /** When its task last finished: the badge shows success for 3 s. */
   successAt?: number;
 };
-export type Approval = { id: string; task: string; role: string; tool: string; tier: string; summary: string; preview: string; blake3: string; payload: unknown; at: number; timeoutS: number; noSimilar?: boolean };
+export type Approval = { id: string; task: string; role: string; tool: string; tier: string; summary: string; preview: string; blake3: string; payload: unknown; at: number; timeoutS: number; noSimilar?: boolean; sessionAllowed?: boolean };
 /**
  * One agent's work in progress (`specs/037`): who, since when, the tool call it is waiting on, its running token total
  * when the daemon reports one, and what it has done that a summary can name. Nothing the agent thought or wrote is kept
@@ -288,7 +288,7 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
       const id = String(pl.approval_id ?? '');
       const role = String(pl.role ?? 'orchestrator');
       const secs = Number(pl.timeout_secs ?? pl.timeout_s ?? pl.expires_in_s ?? 600);
-      const card: Approval = { id, task: String(e.task_id ?? pl.task_id ?? ''), role, tool: String(pl.tool ?? ''), tier: String(pl.tier ?? 'amber'), summary: sanitize(String(pl.summary ?? '')), preview: sanitize(String(pl.payload?.preview ?? '')), blake3: String(pl.payload_blake3 ?? ''), payload: pl.payload, at: now, timeoutS: secs, ...(pl.similar_allowed === false ? { noSimilar: true } : {}) };
+      const card: Approval = { id, task: String(e.task_id ?? pl.task_id ?? ''), role, tool: String(pl.tool ?? ''), tier: String(pl.tier ?? 'amber'), summary: sanitize(String(pl.summary ?? '')), preview: sanitize(String(pl.payload?.preview ?? '')), blake3: String(pl.payload_blake3 ?? ''), payload: pl.payload, at: now, timeoutS: secs, ...(pl.similar_allowed === false ? { noSimilar: true } : {}), ...(pl.session_allowed === true ? { sessionAllowed: true } : {}) };
       const next = { ...s, approvals: { ...s.approvals, [id]: card }, lastActivity: now };
       const shown = addBlock(next, { kind: 'card', role, text: [card.summary, ...card.preview.split('\n').slice(0, 6).map((l) => '  ' + l.slice(0, 100))].filter(Boolean).join('\n'), at: now, status: card.tier, ref: id });
       return setAgent({ ...shown, alert: { role, until: now + secs * 1000 } }, role, { state: 'waiting on you', doing: 'decision needed' });

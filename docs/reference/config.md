@@ -72,6 +72,8 @@ Defaults are those of the template; "—" means no default.
 | :-- | :-- | :-- |
 | `[exec] sandbox` ◆ | `off` | `off`, `prefer` or `required` |
 | `[exec] allow`, `deny` ◆ | — | command patterns over the argument list; `*` matches anything. `allow` needs no approval, `deny` is refused outright |
+| `[exec] shell` ◆ | `true` | offer the `shell` tool (a full shell line, `specs/061`); `false` keeps only `run_command` |
+| `[exec] hard` ◆ | — | shell-line patterns that are always Hard: a Red card, never auto-approved, never granted for the session |
 | `[exec] test_command`, `check_command` ◆ | — | the two merge gates, as argument lists |
 | `[update] require_signed` ◆ | `false` | refuse any build that is not a signed release |
 

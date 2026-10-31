@@ -676,8 +676,10 @@ impl PtyConsole {
         self.wait_for("· approval mode: default");
     }
 
-    /// Into `auto` takes a second Shift+Tab to confirm.
+    /// From `accept edits`: one Shift+Tab to `shell auto`, then into `auto`, which takes a second Shift+Tab to confirm.
     fn enter_auto(&mut self) {
+        self.type_keys("\x1b[Z");
+        self.wait_for("· approval mode: shell auto");
         self.type_keys("\x1b[Z");
         self.wait_for("press Shift+Tab again to confirm");
         self.type_keys("\x1b[Z");

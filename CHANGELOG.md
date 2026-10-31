@@ -8,6 +8,12 @@ This file starts with the work after v0.2.7. For earlier releases, the history i
 
 ## Unreleased
 
+### Shell
+
+- A `shell` tool: a full shell line for agents, sandboxed when a sandbox is on, otherwise asked about. Lines are classed Safe, Caution or Hard; Hard lines (`sudo`, `rm -rf`, `git push`, writes outside the worktree, `[exec] hard` patterns) are always a Red card (spec 061).
+- `shell-auto` mode runs safe shell lines without asking; `[s]` / `/s` allows similar shell commands for the session, and `/permissions revoke` ends the grants.
+- `!<line>` in the console runs a line yourself via `shell.run`; the output is never sent to a model.
+
 ### Validator
 
 - Weak sources are labelled, never evidence (spec 040-A2): a claim only Weak sources support is `unverified (weak)`, and agreement among Weak sources is recorded but changes no label. New `[validator] weak_sources = "label"|"off"` (default `label`).
