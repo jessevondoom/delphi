@@ -407,3 +407,7 @@ Increment 1 (authority and trust containment), each slice its own PR; the 350 h 
 | Deferred | WS4, WS19, WS22; MI16, the TI35 refactor, the WS25 sweep (cut) | not built |
 
 Known follow-ups: `docs/reference/config.md` ladder row still says "upscale, reset, escalate" (D10a); `retro` help does not mention the new refusals (S3); the `ui (node)` CI job fails on `main` since the OpenTUI conversion (Node 22 vs `@opentui/core` needing Node ≥ 26.4 or bun).
+
+## Spec fold (docs only, 2026-10-30)
+
+Specs 004, 006, 007, 010 and 043 were folded to read as current normative text, with no change in behavior. Amendment text and deliberation moved verbatim to `specs/history/NNN-<slug>.md`; section numbers, test ids and `(was NNN-An)` anchors are unchanged. `crates/delphi/tests/spec_refs.rs` now fails when a spec, section or amendment reference stops resolving (21 pre-existing broken references are allowlisted). Reductions were small (2–9%): the remaining text is normative. 006 keeps two contradictions listed in its PR (#399: Red approval for the GOVERNANCE.md release vs 006-A6 tacit ratification; tests 13/14 still say `self-update`). Folded: #399 (006), #400 (007), #401 (010), #402 (043), #403 (004); gate #404.
