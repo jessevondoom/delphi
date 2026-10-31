@@ -31,6 +31,7 @@ Docs and tests: `cargo test -p delphi --test spec_refs` checks that every spec s
 
 - **Optimistic is a per-build choice, not an approval mode** (spec 015-A1, council 013): `optimistic` is gone from `/permissions`, `delphi run --permissions` and the `Shift+Tab` cycle; `/build --optimistic` is unchanged. Entering `auto` with `Shift+Tab` now takes a second press, and bulk-approving Amber decisions or cards (`a`, `y`, inbox approve-all) covers only those whose detail was shown at least once (specs 005e-A1, 044-A1).
 - Docs: folded spec 004 (memory and coaching): amendments 004-A1 to A4 merged into the normative text, measurements and history moved to `specs/history/004-memory-and-coaching.md`; no behavior change.
+- Docs: folded spec 007 (federated mesh and sync) so it reads as current normative text; amendment banners and history moved to `specs/history/007-federated-mesh-and-sync.md`. No change in behavior.
 - Docs: folded spec 010 (connectors) so amendments 010-A1 and 010-A2 read inline; history moved to `specs/history/010-connectors-and-tool-access.md`. No change in behavior.
 
 - Docs: folded spec 043 (condensed rationale prose; no behavior change); history in `specs/history/043-knowledge-window-search-page-and-growing-corpus.md`.
