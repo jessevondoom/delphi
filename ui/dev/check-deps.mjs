@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
 const lock = JSON.parse(readFileSync('package-lock.json', 'utf8'));
-const ALLOWED = ['@opentui/core', '@opentui/react', 'chalk', 'marked', 'react', 'string-width', 'wrap-ansi'];
+const ALLOWED = ['chalk', 'ink', 'marked', 'react', 'string-width', 'wrap-ansi'];
 const MAX_PROD_PACKAGES = 60;
 const problems = [];
 

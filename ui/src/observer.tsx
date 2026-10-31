@@ -1,6 +1,7 @@
 // `delphi-ui --observe [view]`: the Observer window. Attaches with a narrator token, so the daemon refuses anything
 // that would start work or approve anything; killed and reopened, it rebuilds the same screen from the daemon.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Box, Text, useApp, useStdout } from 'ink';
 import type { Ev } from './input.ts';
 import { SAMPLE_SECS } from './meters.ts';
 import { emptyState, epicOrder, feedLinks, observeFrame, parseView, stepView, type OModel, type OState, type View } from './observe-screen.ts';
@@ -13,14 +14,11 @@ import type { Info } from './theme.ts';
 import { stillMotion } from './motion.ts';
 import { useReduceMotion } from './reduce-motion.ts';
 
-type Props = { cmd: Rpc; ev: Rpc; term: Term; info: Info; dark: boolean; themeForced?: boolean; view: View | null; onExit?: () => void };
+type Props = { cmd: Rpc; ev: Rpc; term: Term; info: Info; dark: boolean; themeForced?: boolean; view: View | null };
 
-const Box = 'box' as any;
-const Text = 'text' as any;
-
-export function Observer({ cmd, ev, term, info, dark, themeForced, view: first, onExit }: Props) {
-  const exit = onExit ?? (() => process.exit(0));
-  const stdout = process.stdout;
+export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }: Props) {
+  const { exit } = useApp();
+  const stdout = useStdout().stdout as unknown as NodeJS.WriteStream;
   const [size, setSize] = useState({ w: stdout.columns || 100, h: stdout.rows || 30 });
   const [pal, setPal] = useState({ dark });
   const [st, setSt] = useState<OState>(emptyState());

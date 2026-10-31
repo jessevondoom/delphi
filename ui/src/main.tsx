@@ -1,6 +1,6 @@
 import React from 'react';
-import { createCliRenderer } from '@opentui/core';
-import { createRoot } from '@opentui/react';
+import { render } from 'ink';
+import { PassThrough } from 'node:stream';
 import { readFileSync } from 'node:fs';
 import { App } from './app.tsx';
 import { Rpc } from './rpc.ts';
@@ -93,25 +93,16 @@ if (observeAt >= 0) {
   const term = new Term({ mouse: !process.argv.includes('--no-mouse') && !process.env.DELPHI_NO_MOUSE });
   term.start();
   const { dark, forced } = await detectDark(term);
-  const renderer = await createCliRenderer({ exitOnCtrlC: false, useMouse: false });
-  const root = createRoot(renderer);
-  let resolveExit!: () => void;
-  const exitPromise = new Promise<void>((r) => { resolveExit = r; });
-  const onExit = () => resolveExit();
-
-  root.render(<ErrorBoundary><Observer cmd={cmd} ev={ev} term={term} info={info} dark={dark} themeForced={forced} view={view} onExit={onExit} /></ErrorBoundary>);
-  term.on('resume', () => { renderer.requestRender(); });
+  const app = render(<ErrorBoundary><Observer cmd={cmd} ev={ev} term={term} info={info} dark={dark} themeForced={forced} view={view} /></ErrorBoundary>, { stdin: new PassThrough() as any, exitOnCtrlC: false, patchConsole: false, interactive: Boolean(process.stdout.isTTY) });
+  term.on('resume', () => { app.clear(); app.rerender(<ErrorBoundary><Observer cmd={cmd} ev={ev} term={term} info={info} dark={dark} themeForced={forced} view={view} /></ErrorBoundary>); });
   try {
-    await exitPromise;
+    await app.waitUntilExit();
   } catch (e) { // a render error: leave the alternate screen first so the message stays readable
     term.stop();
     logCrash('console_stopped', e, { view: 'observer' });
     console.error('delphi observe: the Observer stopped on an error:', e);
     cmd.close(); ev.close();
     process.exit(1);
-  } finally {
-    root.unmount();
-    renderer.destroy();
   }
   term.stop();
   cmd.close(); ev.close();
@@ -146,25 +137,19 @@ const retitle = () => term.setTitle(title(info.version, busy));
 ev.on('notification', (n: any) => { if (busy.feed(n)) retitle(); });
 ev.on('reconnected', () => { busy.reset(); retitle(); });
 retitle();
-const renderer = await createCliRenderer({ exitOnCtrlC: false, useMouse: false });
-const root = createRoot(renderer);
-let resolveExit!: () => void;
-const exitPromise = new Promise<void>((r) => { resolveExit = r; });
-const onExit = () => resolveExit();
-
-root.render(<ErrorBoundary><App cmd={cmd} ev={ev} term={term} info={info} mission={mission} dark={dark} bg={bg} themeForced={forced} history={history} onExit={onExit} /></ErrorBoundary>);
-term.on('resume', () => { renderer.requestRender(); });
+const app = render(<ErrorBoundary><App cmd={cmd} ev={ev} term={term} info={info} mission={mission} dark={dark} bg={bg} themeForced={forced} history={history} /></ErrorBoundary>, {
+  stdin: new PassThrough() as any, exitOnCtrlC: false, patchConsole: false,
+  interactive: Boolean(process.stdout.isTTY), // a CI environment variable must not switch Ink to its print-once mode
+});
+term.on('resume', () => { app.clear(); app.rerender(<ErrorBoundary><App cmd={cmd} ev={ev} term={term} info={info} mission={mission} dark={dark} bg={bg} themeForced={forced} history={history} /></ErrorBoundary>); });
 try {
-  await exitPromise;
+  await app.waitUntilExit();
 } catch (e) { // a render error: leave the alternate screen first so the message stays readable
   term.stop();
   logCrash('console_stopped', e, { view: 'console' });
   console.error('delphi-ui: the console stopped on an error:', e);
   cmd.close(); ev.close();
   process.exit(1);
-} finally {
-  root.unmount();
-  renderer.destroy();
 }
 term.stop();
 cmd.close(); ev.close();

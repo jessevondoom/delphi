@@ -1,6 +1,7 @@
 import { deckTarget, type Deck } from './decknav.ts';
 import { graphemes } from './text.ts';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Box, Text, useApp, useStdout } from 'ink';
 import { mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as C from './composer.ts';
@@ -33,10 +34,7 @@ import type { Rpc } from './rpc.ts';
 import type { Term } from './terminal.ts';
 import type { Info, Pal, Rgb } from './theme.ts';
 
-type Props = { cmd: Rpc; ev: Rpc; term: Term; info: Info; mission: string; dark: boolean; bg?: Rgb | null; themeForced?: boolean; history: State; onExit?: () => void };
-
-const Box = 'box' as any;
-const Text = 'text' as any;
+type Props = { cmd: Rpc; ev: Rpc; term: Term; info: Info; mission: string; dark: boolean; bg?: Rgb | null; themeForced?: boolean; history: State };
 
 /** Entries of a directory under the workspace's team root, for `@specs/…` completion. Read-only, names only. */
 const listTeamDir = (info: Info): ListDir => (rel) => {
@@ -56,9 +54,9 @@ export function exportMarkdown(s: State, info: Info, mission: string): string {
   return out.join('\n');
 }
 
-export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, history, onExit }: Props) {
-  const exit = onExit ?? (() => process.exit(0));
-  const stdout = process.stdout;
+export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, history }: Props) {
+  const { exit } = useApp();
+  const stdout = useStdout().stdout as unknown as NodeJS.WriteStream;
   const [size, setSize] = useState({ w: stdout.columns || 100, h: stdout.rows || 30 });
   const [now, setNow] = useState(Date.now());
   const [pal, setPal] = useState<Pal>({ dark, bg: bg ?? null });
