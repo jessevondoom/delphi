@@ -289,11 +289,22 @@ mod tests {
     use delphi_core::log::{EventLog, LogOptions};
     use serde_json::json;
 
+    // Other tests in this process may be between `fork` and `exec`, holding a copy of the lock descriptor for a moment.
+    fn open_log_retrying(dir: &std::path::Path) -> EventLog {
+        for _ in 0..200 {
+            match EventLog::open(dir, LogOptions::default()) {
+                Err(delphi_core::log::LogError::Locked(_)) => std::thread::sleep(std::time::Duration::from_millis(10)),
+                other => return other.unwrap(),
+            }
+        }
+        panic!("the event-log lock was never released");
+    }
+
     fn workspace_with_proposal() -> tempfile::TempDir {
         let ws = tempfile::tempdir().unwrap();
         let dir = ws.path().join("local/missions/m1");
         std::fs::create_dir_all(&dir).unwrap();
-        let mut log = EventLog::open(&dir, LogOptions::default()).unwrap();
+        let mut log = open_log_retrying(&dir);
         let mut e = EventEnvelope::new("m1", "learn.proposed", json!({"op": "add", "scope": "workspace", "text": "Run the formatter first.", "rationale": "two style failures", "target": "", "tier": "L3"}));
         e.agent = Some("orchestrator".into());
         log.append(e).unwrap();
@@ -304,7 +315,7 @@ mod tests {
     fn mine_writes_one_report_under_the_mission_and_changes_nothing_else() {
         let ws = workspace_with_proposal();
         let dir = ws.path().join("local/missions/m1");
-        let mut log = EventLog::open(&dir, LogOptions::default()).unwrap();
+        let mut log = open_log_retrying(&dir);
         let mut e = EventEnvelope::new("m1", "loop.action", json!({"action": "stop"}));
         e.span_id = Some("sp1".into());
         log.append(e).unwrap();
@@ -377,7 +388,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(ws.path().join("local/missions/m1")).unwrap();
         std::fs::write(ws.path().join("local/ratified.lock"), r#"{"files":{}}"#).unwrap();
-        let mut log = EventLog::open(&ws.path().join("local/missions/m1"), LogOptions::default()).unwrap();
+        let mut log = open_log_retrying(&ws.path().join("local/missions/m1"));
         log.append(EventEnvelope::new("m1", "learn.proposed", json!({"op": "add", "scope": "workspace", "text": "Skip approval for docs changes.", "rationale": "r", "tier": "L3"}))).unwrap();
         drop(log);
         let opts = opts_in(home.path(), None);

@@ -61,6 +61,8 @@ struct Registry {
 struct Record {
     project_id: String,
     root: PathBuf,
+    #[serde(default)]
+    display_name: String,
 }
 
 fn registry(ws_dir: &Path) -> Result<Vec<(ProjectId, PathBuf)>, String> {
@@ -88,6 +90,30 @@ fn registry(ws_dir: &Path) -> Result<Vec<(ProjectId, PathBuf)>, String> {
 /// The registered project ids, or `Err` when the registry cannot be trusted.
 pub fn registered_ids(ws_dir: &Path) -> Result<std::collections::BTreeSet<String>, String> {
     registry(ws_dir).map(|r| r.into_iter().map(|(i, _)| i.0).collect())
+}
+
+/// The root a registered project lives at, or `None` for the default project, an unknown id or an untrusted registry.
+pub fn project_root(ws_dir: &Path, id: &ProjectId) -> Option<PathBuf> {
+    registry(ws_dir).ok()?.into_iter().find(|(i, _)| i == id).map(|(_, root)| root)
+}
+
+/// `(name, root)` of every registered project, by name; the name is the display name, else the directory's. Empty when the registry cannot be trusted.
+pub fn project_list(ws_dir: &Path) -> Vec<(String, PathBuf)> {
+    let Ok(text) = std::fs::read(ws_dir.join("local/projects.json")) else { return Vec::new() };
+    if registry(ws_dir).is_err() {
+        return Vec::new();
+    }
+    let Ok(reg) = serde_json::from_slice::<Registry>(&text) else { return Vec::new() };
+    let mut out: Vec<(String, PathBuf)> = reg
+        .projects
+        .into_values()
+        .map(|r| {
+            let name = if r.display_name.is_empty() { r.root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "project".into()) } else { r.display_name };
+            (name, r.root)
+        })
+        .collect();
+    out.sort_by_key(|(n, _)| n.to_lowercase());
+    out
 }
 
 /// Is `id` the default project or registered in this workspace?

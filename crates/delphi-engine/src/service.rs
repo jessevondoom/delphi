@@ -1209,6 +1209,16 @@ impl EngineService {
         }
     }
 
+    /// `projects.list`: the home workspace and every registered project, read now (`specs/058` §15).
+    async fn projects_list(&self, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let ws = self.engine.ws.dir.clone();
+        let mut items = vec![json!({"name": "default", "root": ws, "home": true})];
+        let found = tokio::task::spawn_blocking({ let ws = ws.clone(); move || crate::scope::project_list(&ws) }).await.map_err(|e| err(-32000, e.to_string()))?;
+        items.extend(found.into_iter().map(|(name, root)| json!({"name": name, "root": root, "home": false})));
+        Ok(json!({"projects": items}))
+    }
+
     /// `pending.list`: research held back from the knowledge base, in the default scope or in the named project (`specs/058` §14).
     async fn pending_list(&self, p: Value, ctx: CallContext) -> RpcOutcome {
         need_console(&ctx)?;
@@ -1255,7 +1265,15 @@ impl EngineService {
             return Err(err(code::INVALID_PARAMS, "`topic` must be 1 to 200 characters"));
         }
         // A registered project's name sends the research into that project (`specs/058` §13); none means the default scope.
-        let scope = match self.named_project(&p)? {
+        // With no name, the console's directory decides: inside a registered project the research stays in it.
+        let named = match self.named_project(&p)? {
+            Some(root) => Some(root),
+            None => p["cwd"].as_str().map(std::path::Path::new).filter(|c| c.is_absolute()).and_then(|cwd| {
+                let id = crate::scope::resolve(&self.engine.ws.dir, cwd).project?;
+                crate::scope::project_root(&self.engine.ws.dir, &id)
+            }),
+        };
+        let scope = match named {
             None => crate::research::Scope::Home,
             Some(root) => crate::research::Scope::Project(root),
         };
@@ -1977,6 +1995,7 @@ impl Extension for ServiceExt {
                 "build.start" => svc.build_start(params, ctx).await,
                 "build.merge" => svc.build_merge(params, ctx).await,
                 "research.start" => svc.research_start(params, ctx).await,
+                "projects.list" => svc.projects_list(ctx).await,
                 "pending.list" => svc.pending_list(params, ctx).await,
                 "pending.ratify" => svc.pending_decide(params, ctx, true).await,
                 "pending.discard" => svc.pending_decide(params, ctx, false).await,
@@ -2851,7 +2870,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "kb.open", "research.start", "pending.list", "pending.ratify", "pending.discard", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "retro.list", "retro.stale", "retro.accept", "retro.reject", "retro.promotions", "retro.promote", "retro.withdraw", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
+            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "kb.open", "research.start", "projects.list", "pending.list", "pending.ratify", "pending.discard", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "retro.list", "retro.stale", "retro.accept", "retro.reject", "retro.promotions", "retro.promote", "retro.withdraw", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
             for m in every_mutating_method_the_daemon_has {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }
@@ -2908,7 +2927,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let everything_a_relay_must_not_reach = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "kb.open", "research.start", "pending.list", "pending.ratify", "pending.discard", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","kb.search", "kb.get", "kb.allows", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "models.get", "anything.else"];
+            let everything_a_relay_must_not_reach = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "kb.open", "research.start", "projects.list", "pending.list", "pending.ratify", "pending.discard", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","kb.search", "kb.get", "kb.allows", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "models.get", "anything.else"];
             for m in everything_a_relay_must_not_reach {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }
@@ -3956,6 +3975,26 @@ mod tests {
         std::fs::create_dir_all(ws.join("local/missions/older")).unwrap();
         svc.mission_at(Some("older"), Some(root.to_str().unwrap())).await.unwrap();
         assert_eq!(scope("older"), None, "a mission that already exists is never re-scoped");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn projects_are_listed_live_and_a_directory_inside_one_names_its_root() {
+        let f = setup(vec![Step::text("unused")], 5.0, |_| {});
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        let ws = f.engine.ws.dir.clone();
+        let base = std::fs::canonicalize(f._t.path()).unwrap();
+        let root = base.join("proj-a");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        let console = CallContext { scope: Scope::Console, client_id: 2 };
+        assert!(svc.projects_list(CallContext { scope: Scope::Narrator, client_id: 1 }).await.is_err(), "console only");
+        let none = svc.projects_list(console).await.unwrap();
+        assert_eq!(none["projects"].as_array().unwrap().len(), 1, "the home workspace alone");
+        register_at(&ws, &[(SCOPE_A, &root)]);
+        let two = svc.projects_list(console).await.unwrap();
+        assert_eq!((two["projects"][0]["name"].as_str(), two["projects"][1]["name"].as_str()), (Some("default"), Some("proj-a")));
+        let id = crate::scope::resolve(&ws, &root.join("src")).project.unwrap();
+        assert_eq!(crate::scope::project_root(&ws, &id), Some(root));
+        assert_eq!(crate::scope::project_root(&ws, &crate::scope::ProjectId::default_project()), None);
     }
 
     #[tokio::test(flavor = "multi_thread")]
