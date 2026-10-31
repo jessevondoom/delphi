@@ -3,7 +3,7 @@
 process.env.TZ = 'UTC';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chips, confirm, detail, hint, isTicked, key, newPane, parse, promptLine, reconcile, replied, ticked, unsent, view, visible, withThread, type Decision, type Pane } from '../src/decisions-pane.ts';
+import { chips, confirm, detail, hint, isTicked, key, markSeen, newPane, parse, promptLine, reconcile, replied, ticked, unsent, view, visible, withThread, type Decision, type Pane } from '../src/decisions-pane.ts';
 import { frame, type Model } from '../src/screen.ts';
 import * as C from '../src/composer.ts';
 import { fold, initial } from '../src/fold.ts';
@@ -22,6 +22,7 @@ const raw = (id: string, kind: string, tier: string, title: string, summary: str
   choices: [{ id: 'ratified', label: 'Ratify', effect: 'record', reversible: true }, { id: 'rejected', label: 'Reject', effect: 'record', reversible: true }],
   tickable, tickable_reason: '', ...extra,
 });
+const read = (items: Decision[]): Pane => markSeen(newPane(), items);
 const five = () => parse({
   decisions: [
     raw('dec-081', 'action', 'red', 'Run a migration on the host staging.db, outside the sandbox', 'builder wants to run scripts/migrate_0.2.7.sql on /var/data/staging.db. It rewrites about 420 KB of host data that git cannot roll back, and it leaves the sandbox.', null, false),
@@ -48,7 +49,7 @@ test('the chips list the kinds present, in the order of the spec, with their cou
 
 test('space ticks only what the daemon says is tickable; a red decision never gets a tick', () => {
   const items = five();
-  let p: Pane = newPane();
+  let p: Pane = read(items);
   assert.deepEqual(key(p, items, ch(' ')).pane.ticks, [], 'the first entry is a Red action');
   p = key(p, items, k('down')).pane;
   assert.deepEqual(key(p, items, ch(' ')).pane.ticks, [], 'a Red spec has a recommendation but is not tickable');
@@ -60,12 +61,12 @@ test('space ticks only what the daemon says is tickable; a red decision never ge
 
 test('a ticks every tickable decision in the filter, never more, and a second press clears them', () => {
   const items = five();
-  let p = key(newPane(), items, ch('a')).pane;
+  let p = key(read(items), items, ch('a')).pane;
   assert.deepEqual(ticked(p, items).map((d) => d.label), ['DEC-082', 'DEC-085', 'DEC-084']);
   p = key(p, items, ch('a')).pane;
   assert.deepEqual(p.ticks, []);
   // Filtered to the builds, `a` reaches only the builds.
-  p = { ...newPane(), filter: 'build' };
+  p = { ...read(items), filter: 'build' };
   p = key(p, items, ch('a')).pane;
   assert.deepEqual(ticked(p, items).map((d) => d.label), ['DEC-082', 'DEC-085']);
   // Filtered to the actions: nothing is tickable, so nothing happens.
@@ -96,7 +97,7 @@ test('the filter shows one kind, and the selection stays inside it', () => {
 
 test('a tick belongs to the payload it was given for: a changed payload, a gone decision or a lost tick drops it', () => {
   const items = five();
-  const p = key(newPane(), items, ch('a')).pane;
+  const p = key(read(items), items, ch('a')).pane;
   assert.equal(p.ticks.length, 3);
   const changed = items.map((d) => (d.label === 'DEC-082' ? { ...d, payload_blake3: 'new' } : d));
   assert.equal(isTicked(p, changed.find((d) => d.label === 'DEC-082')!), false);
@@ -108,7 +109,7 @@ test('a tick belongs to the payload it was given for: a changed payload, a gone 
 });
 
 test('the list prints the tier and kind on every entry, a tick box only where tickable, and says when there is no recommendation', () => {
-  const lines = view(five(), newPane(), { pal: { dark: true }, now: NOW, w: 100, h: 34, at: (d) => Date.parse(d.raised_at ?? '') || null }).map(plain);
+  const lines = view(five(), read(five()), { pal: { dark: true }, now: NOW, w: 100, h: 34, at: (d) => Date.parse(d.raised_at ?? '') || null }).map(plain);
   const text = lines.join('\n');
   for (const tag of ['RED · action', 'RED · spec', 'AMBER · build', 'OPEN · question']) assert.ok(text.includes(tag), tag);
   const titleRow = (id: string) => lines.find((l) => l.includes(id))!;
@@ -125,7 +126,7 @@ test('the list prints the tier and kind on every entry, a tick box only where ti
 test('ticked entries show [x], a filtered list says what it hides, and 80 columns keep one sentence of each summary', () => {
   const items = five();
   const ctx = { pal: { dark: true }, now: NOW, h: 24, at: () => null };
-  const p = key({ ...newPane(), filter: 'build' }, items, ch('a')).pane;
+  const p = key({ ...read(items), filter: 'build' }, items, ch('a')).pane;
   const t = view(items, p, { ...ctx, w: 100, h: 34 }).map(plain).join('\n');
   assert.match(t, /2 builds · hiding 3 other decisions/);
   assert.equal((t.match(/\[x\]/g) ?? []).length, 2);
@@ -246,7 +247,27 @@ test('nothing owed: the daemon list has arrived and is empty, so the pane says s
   assert.equal(inboxKey(inb, [], k('esc'), 9000).action.t, 'chat');
 });
 
-const tickedPane = (items: Decision[]): Pane => key(newPane(), items, ch('a')).pane;
+const tickedPane = (items: Decision[]): Pane => key(read(items), items, ch('a')).pane;
+
+test('a and space tick only decisions whose detail view was shown; an unopened one stays unticked and the list says why', () => {
+  const items = five();
+  assert.deepEqual(key(newPane(), items, ch('a')).pane.ticks, [], 'nothing was rendered, so nothing is ticked');
+  const unread = view(items, newPane(), { pal: { dark: true }, now: NOW, w: 100, h: 34, at: () => null }).map(plain).join('\n');
+  assert.match(unread, /3 not opened yet: open one \(enter\) to read it before it can be ticked/);
+  assert.match(unread, /\[\?\]/);
+  const at = (label: string) => items.findIndex((d) => d.label === label);
+  assert.deepEqual(key({ ...newPane(), sel: at('DEC-082') }, items, ch(' ')).pane.ticks, [], 'space on an unopened decision ticks nothing');
+  // Opening DEC-082 (enter) renders it; back in the list it, and only it, can be ticked.
+  const opened = key({ ...newPane(), sel: at('DEC-082') }, items, k('enter'), 1000).pane;
+  const back = key(opened, items, k('esc'), 2000).pane;
+  assert.deepEqual(ticked(key(back, items, ch('a')).pane, items).map((d) => d.label), ['DEC-082']);
+  // Paging through the detail view with down renders each decision it lands on.
+  const next = key(opened, items, k('down'), 2000).pane;
+  assert.ok(isTicked({ ...key(key(next, items, k('esc'), 3000).pane, items, ch('a')).pane }, items.find((d) => d.label === 'DEC-085')!));
+  // A payload that changed since it was shown has not been seen.
+  const changed = items.map((d) => (d.label === 'DEC-082' ? { ...d, payload_blake3: 'new' } : d));
+  assert.deepEqual(ticked(key(reconcile(back, changed), changed, ch('a')).pane, changed).map((d) => d.label), []);
+});
 
 test('y with ticks opens the confirm page, y with none does nothing, and esc goes back with the ticks kept', () => {
   const items = five();
@@ -305,7 +326,7 @@ const base: Model = {
 test('golden screens: the list, the filtered list and the list at 80x24', () => {
   for (const [name, m, w, h] of [
     ['decisions-list-100x34', base, 100, 34],
-    ['decisions-list-filtered-100x34', { ...base, inbox: newInbox(0, five(), { ...newPane(), filter: 'build', ticks: ['dec-082@h-dec-082', 'dec-085@h-dec-085'] }) }, 100, 34],
+    ['decisions-list-filtered-100x34', { ...base, inbox: newInbox(0, five(), { ...read(five()), filter: 'build', ticks: ['dec-082@h-dec-082', 'dec-085@h-dec-085'] }) }, 100, 34],
     ['decisions-list-80x24', base, 80, 24],
     ['decisions-detail-100x34', { ...base, inbox: newInbox(0, five(), open(five(), 2)) }, 100, 34],
     ['decisions-detail-red-100x34', { ...base, inbox: newInbox(0, five(), open(five(), 1)) }, 100, 34],

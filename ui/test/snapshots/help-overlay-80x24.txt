@@ -12,7 +12,7 @@ delphi v0.5 · /proj · chat
    pgup pgdn / wheel  scroll  ctrl+t  tool details        ctrl+l  to end
    ctrl+o  follow links (tab next · enter read here · p pin · esc leave)
    /  commands   @role …  one role   @specs/…  a file   ?  this help
-   shift+tab  approval mode (default → accept edits → auto → optimistic)
+   shift+tab  approval mode (default → accept edits → auto, auto asks once)
    decisions:  enter open · space tick · a tick all · f filter · 1-9 choose
    ctrl+k  search knowledge  ctrl+s  sources  ctrl+c  leave (daemon stays)
 
