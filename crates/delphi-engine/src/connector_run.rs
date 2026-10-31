@@ -25,6 +25,17 @@ fn err_result(msg: impl Into<String>) -> ToolResult {
 /// How long listing a connector's tools may delay a span before the span starts without them.
 const LIST_TIMEOUT: Duration = Duration::from_secs(20);
 
+const RECIPIENT_KEYS: [&str; 9] = ["to", "cc", "bcc", "recipient", "recipients", "attendee", "attendees", "invitee", "invitees"];
+
+/// True when any argument key, at any depth, names recipients or invitees and carries a value.
+fn names_recipients(v: &Value) -> bool {
+    match v {
+        Value::Object(m) => m.iter().any(|(k, x)| (RECIPIENT_KEYS.contains(&k.to_lowercase().as_str()) && !matches!(x, Value::Null) && x != &json!("") && x != &json!([])) || names_recipients(x)),
+        Value::Array(a) => a.iter().any(names_recipients),
+        _ => false,
+    }
+}
+
 impl Engine {
     /// The connector tools this span's role may be offered. Connectors not yet listed this run are listed first
     /// (once); a connector that cannot be reached or signed in simply contributes no tools, and says so in the log.
@@ -127,11 +138,14 @@ impl Engine {
                 }
             }
             ToolClass::Draft => {
-                let c = Classified { tool: "connector".into(), tier: ToolTier::Amber, kind: ActionKind::Read, summary: format!("{} (creates a private draft): {}", who, args_line), payload: payload.clone(), pattern: format!("{} draft", dotted) };
-                if let Need::Yes(tier) = self.broker.need(&sc.task_id, None, &c) {
-                    if let Some(denied) = self.ask(sc, tier, &c.tool, &c.pattern, &c.summary, &c.payload).await? {
-                        return Ok(denied);
-                    }
+                // Every draft gets its own card with the payload: no mode and no "allow similar" covers it. Red when a tainted span
+                // writes it or it names recipients or invitees, because that leaves the account or can carry read data out.
+                let leaves = tainted || names_recipients(args);
+                let tier = if leaves { ApprovalTier::Red } else { ApprovalTier::Amber };
+                let why = if tainted { ", from a span that read untrusted content" } else if leaves { ", with recipients or invitees" } else { "" };
+                let summary = format!("{} (creates a draft{}): {}", who, why, args_line);
+                if let Some(denied) = self.ask(sc, tier, "connector", &format!("{} draft", dotted), &summary, &payload).await? {
+                    return Ok(denied);
                 }
             }
             ToolClass::Read => {
@@ -352,6 +366,32 @@ tools = { search = "read", draft_note = "draft", send = "write" }
         let c = f.engine.broker.pending().into_iter().next().unwrap();
         assert!(f.engine.broker.resolve(&c.approval_id, &c.payload_blake3, Answer::AllowSimilar, "test").is_err());
         drop(w);
+    }
+
+    #[tokio::test]
+    async fn every_draft_asks_and_allow_similar_never_covers_one() {
+        let f = fixture(vec![Step::tool("c1", "docs__draft_note", json!({"body": "one"})), Step::tool("c2", "docs__draft_note", json!({"body": "one"})), Step::tool("c3", "docs__draft_note", json!({"body": "two"})), Step::text("ok")]).await;
+        let seen = approver(&f, |r| if r.tier == crate::approval::Tier::Red { Answer::Allow } else { Answer::AllowSimilar });
+        f.engine.run_task(&f.m, "orchestrator", "Draft three").await.unwrap();
+        let cards = seen.lock().unwrap().clone();
+        assert_eq!(cards.len(), 3, "{:?}", cards);
+        // The first draft's result is external content, so the span is tainted and the later drafts are Red.
+        assert!(cards[0].0 == "amber" && cards[1..].iter().all(|c| c.0 == "red") && cards.iter().all(|c| c.1.contains("creates a draft")), "{:?}", cards);
+        assert_eq!(f.connector_mock.calls.lock().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_draft_from_a_tainted_span_or_with_invitees_is_red() {
+        let f = fixture(vec![Step::tool("r1", "read_file", json!({"path": "@project/app/vendor/x.js"})), Step::tool("c1", "docs__draft_note", json!({"body": "x"})), Step::text("ok")]).await;
+        let seen = approver(&f, allow);
+        f.engine.run_task(&f.m, "orchestrator", "Draft").await.unwrap();
+        let cards = seen.lock().unwrap().clone();
+        assert!(cards.iter().any(|c| c.0 == "red" && c.1.contains("untrusted")), "{:?}", cards);
+        let f = fixture(vec![Step::tool("c1", "docs__draft_note", json!({"body": "x", "attendees": ["a@b.c"]})), Step::text("ok")]).await;
+        let seen = approver(&f, allow);
+        f.engine.run_task(&f.m, "orchestrator", "Invite").await.unwrap();
+        let cards = seen.lock().unwrap().clone();
+        assert!(cards.len() == 1 && cards[0].0 == "red" && cards[0].1.contains("recipients or invitees"), "{:?}", cards);
     }
 
     #[tokio::test]
