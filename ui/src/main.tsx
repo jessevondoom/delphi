@@ -1,5 +1,6 @@
 import React from 'react';
-import { render } from 'ink';
+import { createCliRenderer } from '@opentui/core';
+import { createRoot } from '@opentui/react';
 import { PassThrough } from 'node:stream';
 import { readFileSync } from 'node:fs';
 import { App } from './app.tsx';
@@ -11,7 +12,25 @@ import { Activity, title } from './title.ts';
 import { loadHistory } from './attach.ts';
 import { ErrorBoundary } from './boundary.tsx';
 import { initElog, watchProcess, logCrash, error as elogError } from './elog.ts';
-import { capabilities, envTheme, useCapabilities, type Info, type Rgb } from './theme.ts';
+import { capabilities, currentCapabilities, stripColour, envTheme, useCapabilities, type Info, type Rgb } from './theme.ts';
+
+/** `NO_COLOR` or a dumb terminal: the renderer paints default colours of its own, so its output stream drops every colour code. */
+function rendererOut(): NodeJS.WriteStream | undefined {
+  if (currentCapabilities().color !== 'none') return undefined;
+  const real = process.stdout;
+  const raw = real.write.bind(real) as (...a: any[]) => boolean;
+  const own = new Map<PropertyKey, unknown>(); // the renderer may hook `write`; keep that off the real stream
+  const plain = (chunk: any) => typeof chunk === 'string' ? stripColour(chunk) : chunk instanceof Uint8Array ? Buffer.from(stripColour(Buffer.from(chunk).toString('utf8'))) : chunk;
+  return new Proxy(real, {
+    set(_t, prop, value) { own.set(prop, value); return true; },
+    get(_t, prop) {
+      if (own.has(prop)) return own.get(prop);
+      if (prop === 'write') return (chunk: any, ...rest: any[]) => raw(plain(chunk), ...rest);
+      const v = Reflect.get(real, prop, real);
+      return typeof v === 'function' ? v.bind(real) : v;
+    },
+  });
+}
 
 declare const BUILD_VERSION: string | undefined; // set by the release build (bun --define); absent when run from source
 const VERSION = typeof BUILD_VERSION === 'string' ? BUILD_VERSION : 'dev';
@@ -93,16 +112,29 @@ if (observeAt >= 0) {
   const term = new Term({ mouse: !process.argv.includes('--no-mouse') && !process.env.DELPHI_NO_MOUSE });
   term.start();
   const { dark, forced } = await detectDark(term);
-  const app = render(<ErrorBoundary><Observer cmd={cmd} ev={ev} term={term} info={info} dark={dark} themeForced={forced} view={view} /></ErrorBoundary>, { stdin: new PassThrough() as any, exitOnCtrlC: false, patchConsole: false, interactive: Boolean(process.stdout.isTTY) });
-  term.on('resume', () => { app.clear(); app.rerender(<ErrorBoundary><Observer cmd={cmd} ev={ev} term={term} info={info} dark={dark} themeForced={forced} view={view} /></ErrorBoundary>); });
+  const renderer = await createCliRenderer({
+    // Term owns stdin, raw mode, mouse protocols and the alternate screen. OpenTUI only paints frames.
+    stdin: new PassThrough() as any, stdout: rendererOut(), externalOutputMode: 'passthrough', screenMode: 'main-screen', useMouse: false,
+    exitOnCtrlC: false, exitSignals: [], clearOnShutdown: false,
+  });
+  const root = createRoot(renderer);
+  let resolveExit!: () => void;
+  const exitPromise = new Promise<void>((r) => { resolveExit = r; });
+  const onExit = () => resolveExit();
+
+  root.render(<ErrorBoundary><Observer cmd={cmd} ev={ev} term={term} info={info} dark={dark} themeForced={forced} view={view} onExit={onExit} /></ErrorBoundary>);
+  term.on('resume', () => { renderer.requestRender(); });
   try {
-    await app.waitUntilExit();
+    await exitPromise;
   } catch (e) { // a render error: leave the alternate screen first so the message stays readable
     term.stop();
     logCrash('console_stopped', e, { view: 'observer' });
     console.error('delphi observe: the Observer stopped on an error:', e);
     cmd.close(); ev.close();
     process.exit(1);
+  } finally {
+    root.unmount();
+    renderer.destroy();
   }
   term.stop();
   cmd.close(); ev.close();
@@ -137,19 +169,30 @@ const retitle = () => term.setTitle(title(info.version, busy));
 ev.on('notification', (n: any) => { if (busy.feed(n)) retitle(); });
 ev.on('reconnected', () => { busy.reset(); retitle(); });
 retitle();
-const app = render(<ErrorBoundary><App cmd={cmd} ev={ev} term={term} info={info} mission={mission} dark={dark} bg={bg} themeForced={forced} history={history} /></ErrorBoundary>, {
-  stdin: new PassThrough() as any, exitOnCtrlC: false, patchConsole: false,
-  interactive: Boolean(process.stdout.isTTY), // a CI environment variable must not switch Ink to its print-once mode
+const renderer = await createCliRenderer({
+  // Term owns stdin, raw mode, mouse protocols and the alternate screen. OpenTUI only paints frames.
+  stdin: new PassThrough() as any, stdout: rendererOut(), externalOutputMode: 'passthrough', screenMode: 'main-screen', useMouse: false,
+  exitOnCtrlC: false, exitSignals: [], clearOnShutdown: false,
 });
-term.on('resume', () => { app.clear(); app.rerender(<ErrorBoundary><App cmd={cmd} ev={ev} term={term} info={info} mission={mission} dark={dark} bg={bg} themeForced={forced} history={history} /></ErrorBoundary>); });
+const root = createRoot(renderer);
+let resolveExit!: () => void;
+const exitPromise = new Promise<void>((r) => { resolveExit = r; });
+const onExit = () => resolveExit();
+
+root.render(<ErrorBoundary><App cmd={cmd} ev={ev} term={term} info={info} mission={mission} dark={dark} bg={bg} themeForced={forced} history={history} onExit={onExit} /></ErrorBoundary>);
+term.on('resume', () => { renderer.requestRender(); });
 try {
-  await app.waitUntilExit();
+  await exitPromise;
 } catch (e) { // a render error: leave the alternate screen first so the message stays readable
   term.stop();
   logCrash('console_stopped', e, { view: 'console' });
   console.error('delphi-ui: the console stopped on an error:', e);
   cmd.close(); ev.close();
   process.exit(1);
+} finally {
+  root.unmount();
+  renderer.destroy();
+  await renderer.closed;
 }
 term.stop();
 cmd.close(); ev.close();
