@@ -66,6 +66,9 @@ pub fn from_card(card: &Value) -> Option<Value> {
     if tier != "red" {
         choices.push(json!({"id": "allow_similar", "label": "Allow similar actions this task", "effect": "approval.resolve", "reversible": false}));
     }
+    if tier != "red" && card["session_allowed"].as_bool().unwrap_or(false) {
+        choices.push(json!({"id": "allow_session", "label": "Allow similar commands this session", "effect": "approval.resolve", "reversible": false}));
+    }
     choices.push(json!({"id": "deny", "label": "Reject", "effect": "approval.resolve", "reversible": false}));
     Some(json!({
         "id": format!("card:{}", source_id), "source": "card", "source_id": source_id, "label": source_id,

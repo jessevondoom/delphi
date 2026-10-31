@@ -257,6 +257,7 @@ pub struct View<'a> {
 fn mode_label(mode: &str) -> &str {
     match mode {
         "accept-edits" => "edits auto",
+        "shell-auto" => "shell auto",
         "mission-auto" => "auto",
         _ => "approvals",
     }

@@ -67,6 +67,10 @@ pub struct ExecConfig {
     pub allow: Vec<String>,
     /// Commands that are refused outright; checked before `allow`.
     pub deny: Vec<String>,
+    /// Offer the `shell` tool (`specs/061`).
+    pub shell: bool,
+    /// Extra command-line patterns that are always Hard for the `shell` tool.
+    pub hard: Vec<String>,
     pub toolchain: Vec<PathBuf>,
     pub env: BTreeMap<String, String>,
     pub timeout: Duration,
@@ -85,6 +89,8 @@ impl Default for ExecConfig {
             merge: MergeMode::Local,
             allow: vec![],
             deny: vec![],
+            shell: true,
+            hard: vec![],
             toolchain: vec![],
             env: BTreeMap::from([("PATH".to_string(), "/usr/bin:/bin:/usr/sbin:/sbin".to_string())]),
             timeout: Duration::from_secs(600),
@@ -132,6 +138,8 @@ impl ExecConfig {
         c.merge = if t.get("merge").and_then(|v| v.as_str()) == Some("pr") { MergeMode::Pr } else { MergeMode::Local };
         c.allow = string_list(t.get("allow"));
         c.deny = string_list(t.get("deny"));
+        c.shell = t.get("shell").and_then(|v| v.as_bool()).unwrap_or(true);
+        c.hard = string_list(t.get("hard"));
         c.toolchain = string_list(t.get("toolchain")).iter().map(|p| PathBuf::from(expand_home(p, home))).collect();
         if let Some(env) = t.get("env").and_then(|e| e.as_table()) {
             c.env = env.iter().filter_map(|(k, v)| v.as_str().map(|v| (k.clone(), expand_home(v, home)))).collect();
@@ -181,6 +189,15 @@ pub fn parse_argv(args: &serde_json::Value) -> Result<Vec<String>, ExecError> {
         return Err(ExecError::BadArgs("an argument is too long or contains a NUL".into()));
     }
     Ok(argv)
+}
+
+/// Validate `shell` arguments: one command line.
+pub fn parse_shell(args: &serde_json::Value) -> Result<String, ExecError> {
+    let line = args["command"].as_str().ok_or_else(|| ExecError::BadArgs("`command` must be a string: the shell command line".into()))?.trim();
+    if line.is_empty() || line.len() > 16 * 1024 || line.contains('\0') {
+        return Err(ExecError::BadArgs("`command` needs 1 to 16384 characters and no NUL".into()));
+    }
+    Ok(line.to_string())
 }
 
 /// Modified-file detection without trusting the command: (length, mtime) before and after.
@@ -307,6 +324,20 @@ pub enum Verdict {
     Allowed(&'static str),
     /// The operator is asked.
     Ask,
+    Refused(String),
+}
+
+/// What the policy says about a `shell` line before anything asks the operator.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShellVerdict {
+    /// Runs without a card, and why.
+    Allowed(&'static str),
+    /// Plainly harmless and unsandboxed: `shell-auto` runs it without a card, every other mode asks.
+    Safe,
+    /// The operator is asked (Amber).
+    Ask,
+    /// Always asks as Red, with the reason.
+    Hard(String),
     Refused(String),
 }
 
@@ -553,13 +584,41 @@ impl ExecEnv {
         self.verdict_line_at(line, None)
     }
 
-    pub fn verdict_line_at(&self, line: &str, root: Option<&Path>) -> Verdict {
+    /// The deny rule a shell line runs into, checked against every segment.
+    pub fn denied_line(&self, line: &str) -> Option<String> {
         for seg in line.split([';', '|', '&', '\n']) {
             let seg = seg.trim();
             let words = shell_words(seg).unwrap_or_else(|| seg.split_whitespace().map(String::from).collect());
             if let Some(why) = self.denied(&words, seg) {
-                return Verdict::Refused(why);
+                return Some(why);
             }
+        }
+        None
+    }
+
+    /// What the policy says about a `shell` tool line (`specs/061` §3-§4): deny rules on every segment, then the
+    /// sandbox (no card when active), the allow rules and read-only list for a plain command, and last the
+    /// Safe / Caution / Hard classification of an unsandboxed line.
+    pub fn verdict_shell(&self, line: &str, root: Option<&Path>) -> ShellVerdict {
+        if let Some(why) = self.denied_line(line) {
+            return ShellVerdict::Refused(why);
+        }
+        if self.active_sandbox().is_some() {
+            return ShellVerdict::Allowed("sandboxed");
+        }
+        match crate::shellsafe::classify(line, root, &self.cfg.hard) {
+            crate::shellsafe::Danger::Hard(why) => ShellVerdict::Hard(why),
+            danger => match self.verdict_line_at(line, root) {
+                Verdict::Allowed(why) => ShellVerdict::Allowed(why),
+                _ if danger == crate::shellsafe::Danger::Safe => ShellVerdict::Safe,
+                _ => ShellVerdict::Ask,
+            },
+        }
+    }
+
+    pub fn verdict_line_at(&self, line: &str, root: Option<&Path>) -> Verdict {
+        if let Some(why) = self.denied_line(line) {
+            return Verdict::Refused(why);
         }
         match shell_words(line) {
             Some(argv) if !argv.is_empty() => self.judge(&argv, root, false),
@@ -650,6 +709,26 @@ impl ExecEnv {
         }
         spec.env.entry("CARGO_TARGET_DIR".into()).or_insert_with(|| scratch.join("target").display().to_string());
         Ok(spec)
+    }
+
+    /// The shell a `shell` call runs: bash when there is one, else `sh`.
+    pub fn shell_program() -> &'static str {
+        ["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash", "/opt/homebrew/bin/bash"].into_iter().find(|p| Path::new(p).exists()).unwrap_or("/bin/sh")
+    }
+
+    /// The operator's own `!` line (`specs/061` §6): run in `cwd` by the operator's shell, never sandboxed, with only an
+    /// environment allowlist taken from the daemon's own. Deny rules are the caller's check. Blocking.
+    pub fn run_operator(&self, line: &str, cwd: &Path, timeout: Option<Duration>) -> Result<CommandReport, ExecError> {
+        const KEEP: [&str; 12] = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "TERM", "TMPDIR", "CARGO_HOME", "RUSTUP_HOME", "GOPATH", "VIRTUAL_ENV"];
+        let mut env: BTreeMap<String, String> = std::env::vars().filter(|(k, _)| KEEP.contains(&k.as_str()) || k.starts_with("LC_")).collect();
+        env.entry("PATH".into()).or_insert_with(|| "/usr/bin:/bin:/usr/sbin:/sbin".into());
+        let limits = delphi_sandbox::Limits { cpu_secs: Some(self.cfg.cpu_secs), ..Default::default() };
+        let mut cmd = plain_command(limits, &env, Self::shell_program(), ["-c", line]);
+        cmd.current_dir(cwd);
+        let started = std::time::Instant::now();
+        let opts = RunOptions { timeout: timeout.unwrap_or(self.cfg.timeout).min(self.cfg.timeout), max_output_bytes: self.cfg.max_output_bytes, quota: vec![] };
+        let outcome = run_bounded(cmd, &opts).map_err(|e| ExecError::Io(format!("could not start the shell: {}", e)))?;
+        Ok(CommandReport { outcome, sandboxed: false, tampered: vec![], changed: vec![], elapsed: started.elapsed() })
     }
 
     /// Run `argv` in the worktree: under the sandbox when the mode says so and one exists, directly otherwise.

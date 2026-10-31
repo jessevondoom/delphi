@@ -7,6 +7,8 @@
 //! * **First answer wins** by `approval_id`; later answers learn who answered and how.
 //! * **Timeout always denies,** whether or not any console is attached; the agent gets a structured
 //!   denial and does not hang.
+//! * `[s]` "allow for the session" (command tools only, never Red) covers `(tool, pattern)` until the daemon stops
+//!   or the grants are revoked (`specs/061` §5).
 //! * `[a]` "allow similar" covers only `(task_id, tool, the normalized pattern shown on the card,
 //!   worktree)` for the rest of that task, and never a Red action.
 
@@ -26,6 +28,8 @@ pub enum Mode {
     Default,
     /// Auto-approves Amber worktree file and branch edits only.
     AcceptEdits,
+    /// Additionally runs unsandboxed `shell` lines classified Safe (`specs/061` §4) without a card.
+    ShellAuto,
     /// Additionally auto-approves dependency installs pinned in a committed lockfile.
     MissionAuto,
 }
@@ -35,6 +39,7 @@ impl Mode {
         Some(match s {
             "default" => Mode::Default,
             "accept-edits" => Mode::AcceptEdits,
+            "shell-auto" => Mode::ShellAuto,
             "mission-auto" => Mode::MissionAuto,
             _ => return None,
         })
@@ -44,6 +49,7 @@ impl Mode {
         match self {
             Mode::Default => "default",
             Mode::AcceptEdits => "accept-edits",
+            Mode::ShellAuto => "shell-auto",
             Mode::MissionAuto => "mission-auto",
         }
     }
@@ -126,11 +132,16 @@ impl Request {
         self.tier != Tier::Red && !(self.tool == "connector" && self.pattern.ends_with(" draft"))
     }
 
+    /// `[s]` allow for the session: only the command tools, and only where `[a]` is also allowed.
+    pub fn session_allowed(&self) -> bool {
+        self.similar_allowed() && (self.tool == "shell" || self.tool == "run_command")
+    }
+
     /// The `approval.requested` event payload (and what a console renders).
     pub fn event_payload(&self) -> Value {
         json!({"approval_id": self.approval_id, "task_id": self.task_id, "span_id": self.span_id, "role": self.role, "tier": self.tier.as_str(),
                "tool": self.tool, "pattern": self.pattern, "summary": self.summary, "payload": self.payload, "payload_blake3": self.payload_blake3,
-               "timeout_secs": self.timeout.as_secs(), "similar_allowed": self.similar_allowed()})
+               "timeout_secs": self.timeout.as_secs(), "similar_allowed": self.similar_allowed(), "session_allowed": self.session_allowed()})
     }
 }
 
@@ -140,6 +151,8 @@ pub enum Answer {
     Allow,
     /// `[a]` allow similar for the rest of the task (Amber only).
     AllowSimilar,
+    /// `[s]` allow similar for the rest of the session: until the daemon stops or the grants are revoked (Amber only).
+    AllowSession,
     /// `[n]` reject and redirect.
     Deny { reason: String },
 }
@@ -208,6 +221,8 @@ struct State {
     /// Recently resolved, so a late second answer can learn who won.
     resolved: HashMap<String, (Resolution, String)>,
     similar: HashSet<(String, String, String, Option<String>)>,
+    /// `(tool, pattern)` grants that last until the daemon stops (`specs/061` §5).
+    session: HashSet<(String, String)>,
     /// Tasks running on a weaker model than the one that ran out (`specs/035` D-13): the permission mode's automatic approvals are off for them.
     degraded: HashSet<String>,
     next_id: u64,
@@ -235,6 +250,7 @@ fn mode_from(i: u8) -> Mode {
     match i {
         1 => Mode::AcceptEdits,
         2 => Mode::MissionAuto,
+        3 => Mode::ShellAuto,
         _ => Mode::Default,
     }
 }
@@ -260,6 +276,7 @@ impl Broker {
             Mode::Default => 0,
             Mode::AcceptEdits => 1,
             Mode::MissionAuto => 2,
+            Mode::ShellAuto => 3,
         };
     }
 
@@ -273,13 +290,18 @@ impl Broker {
         // A task on a weaker model gets no automatic approval from the mode: each write asks. (Red is never automatic anyway.)
         let auto = !st.degraded.contains(task_id) && matches!(
             (mode, c.kind),
-            (Mode::AcceptEdits | Mode::MissionAuto, ActionKind::WorktreeEdit) | (Mode::MissionAuto, ActionKind::PinnedDependencyInstall)
+            (Mode::AcceptEdits | Mode::ShellAuto | Mode::MissionAuto, ActionKind::WorktreeEdit)
+                | (Mode::MissionAuto, ActionKind::PinnedDependencyInstall)
+                | (Mode::ShellAuto | Mode::MissionAuto, ActionKind::SafeShell)
         );
         if auto {
             return Need::No("permission mode");
         }
         if st.similar.contains(&(task_id.to_string(), c.tool.clone(), c.pattern.clone(), worktree.map(String::from))) {
             return Need::No("allowed similar earlier in this task");
+        }
+        if !st.degraded.contains(task_id) && st.session.contains(&(c.tool.clone(), c.pattern.clone())) {
+            return Need::No("allowed for this session");
         }
         Need::Yes(Tier::Amber)
     }
@@ -322,7 +344,7 @@ impl Broker {
         if p.req.payload_blake3 != payload_blake3 {
             return Err(ResolveError::PayloadMismatch);
         }
-        if answer == Answer::AllowSimilar && !p.req.similar_allowed() {
+        if answer == Answer::AllowSimilar && !p.req.similar_allowed() || answer == Answer::AllowSession && !p.req.session_allowed() {
             return Err(ResolveError::SimilarNotAllowedForRed);
         }
         let p = st.pending.remove(approval_id).expect("checked above");
@@ -330,6 +352,10 @@ impl Broker {
             Answer::Allow => Resolution::Approved { similar: false },
             Answer::AllowSimilar => {
                 st.similar.insert((p.req.task_id.clone(), p.req.tool.clone(), p.req.pattern.clone(), p.req.worktree.clone()));
+                Resolution::Approved { similar: true }
+            }
+            Answer::AllowSession => {
+                st.session.insert((p.req.tool.clone(), p.req.pattern.clone()));
                 Resolution::Approved { similar: true }
             }
             Answer::Deny { reason } => Resolution::Denied { reason },
@@ -359,6 +385,21 @@ impl Broker {
         let mut v: Vec<_> = self.state.lock().unwrap().similar.iter().map(|(t, tool, pat, _)| (t.clone(), tool.clone(), pat.clone())).collect();
         v.sort();
         v
+    }
+
+    /// `/permissions` lists these: `(tool, pattern)` grants for the rest of the session.
+    pub fn session_grants(&self) -> Vec<(String, String)> {
+        let mut v: Vec<_> = self.state.lock().unwrap().session.iter().cloned().collect();
+        v.sort();
+        v
+    }
+
+    /// End every session grant; how many ended.
+    pub fn revoke_session(&self) -> usize {
+        let mut st = self.state.lock().unwrap();
+        let n = st.session.len();
+        st.session.clear();
+        n
     }
 
     /// A task ended: its "allow similar" grants end with it, and its open cards are denied.
