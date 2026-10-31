@@ -721,6 +721,7 @@ impl PtyConsole {
     fn ctrl_c_out(mut self) -> i32 {
         let ask = "press Ctrl+C again to quit";
         let before = self.written(ask);
+        let shown_before = self.visible().contains(ask);
         self.type_keys("\x03");
         let deadline = Instant::now() + Duration::from_secs(30);
         let mut asked_again = false;
@@ -729,7 +730,8 @@ impl PtyConsole {
                 return st.code().unwrap_or(-1);
             }
             // Only a new ask counts (an older note may still be on screen), and the console may be leaving already.
-            if !asked_again && self.written(ask) > before {
+            // Without colour changes the renderer repaints only the cells that differ, so the text may arrive in pieces: the screen counts too.
+            if !asked_again && (self.written(ask) > before || (!shown_before && self.visible().contains(ask))) {
                 asked_again = true;
                 let _ = self.writer.write_all(b"\x03");
                 let _ = self.writer.flush();
@@ -902,14 +904,14 @@ fn ui_launcher(dir: &Path) -> Option<PathBuf> {
         return Some(PathBuf::from(p));
     }
     let ui = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui");
-    if !ui.join("node_modules/ink").exists() || Command::new("node").arg("--version").output().is_err() {
+    if !ui.join("node_modules/@opentui/core").exists() || Command::new("node").arg("--version").output().is_err() {
         // CI's UI job sets DELPHI_REQUIRE_UI: there a missing UI is a failure, not a silent pass.
         assert!(std::env::var_os("DELPHI_REQUIRE_UI").is_none(), "DELPHI_REQUIRE_UI is set but ui/node_modules or node is missing");
         eprintln!("skipped: ui/node_modules or node is missing (run `npm ci` in ui/)");
         return None;
     }
     let wrapper = dir.join("delphi-ui");
-    std::fs::write(&wrapper, format!("#!/bin/sh\ncd '{}' && exec node --import tsx src/main.tsx \"$@\"\n", ui.canonicalize().unwrap().display())).unwrap();
+    std::fs::write(&wrapper, format!("#!/bin/sh\ncd '{}' && exec node --experimental-ffi --import ./dev/check-runtime.mjs --import tsx src/main.tsx \"$@\"\n", ui.canonicalize().unwrap().display())).unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
     Some(wrapper)
@@ -1498,7 +1500,7 @@ fn research_panels_search_the_knowledge_base_cite_into_the_prompt_and_pin_to_the
 #[test]
 fn a_scripted_session_through_the_full_screen_console_ends_with_the_terminal_given_back() {
     let ui = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui");
-    if !ui.join("node_modules/ink").exists() || Command::new("node").arg("--version").output().is_err() {
+    if !ui.join("node_modules/@opentui/core").exists() || Command::new("node").arg("--version").output().is_err() {
         // CI's UI job sets DELPHI_REQUIRE_UI: there a missing UI is a failure, not a silent pass.
         assert!(std::env::var_os("DELPHI_REQUIRE_UI").is_none(), "DELPHI_REQUIRE_UI is set but ui/node_modules or node is missing");
         eprintln!("skipped: ui/node_modules or node is missing (run `npm ci` in ui/)");
@@ -1507,7 +1509,7 @@ fn a_scripted_session_through_the_full_screen_console_ends_with_the_terminal_giv
     let m = mock(vec![reply_tool("w1", "write_file", json!({"path": "specs/009-e2e.md", "content": "# never written"})), reply_text("Understood, nothing was written.")]);
     let e = setup(m.port);
     let wrapper = e._t.path().join("delphi-ui");
-    std::fs::write(&wrapper, format!("#!/bin/sh\ncd '{}' && exec node --import tsx src/main.tsx \"$@\"\n", ui.canonicalize().unwrap().display())).unwrap();
+    std::fs::write(&wrapper, format!("#!/bin/sh\ncd '{}' && exec node --experimental-ffi --import ./dev/check-runtime.mjs --import tsx src/main.tsx \"$@\"\n", ui.canonicalize().unwrap().display())).unwrap();
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -1628,8 +1630,10 @@ fn the_terminal_is_given_back_and_the_mouse_can_be_left_to_the_terminal() {
     let mut c = PtyConsole::start_env(&e.home, &["chat", "--no-mouse", "--workspace", "e2e"], 30, 100, &envs);
     c.wait_for("← / ? →");
     let raw = |c: &PtyConsole| String::from_utf8_lossy(&c.bytes.lock().unwrap()).to_string();
-    assert!(raw(&c).contains("\x1b[?1049h") && raw(&c).contains("\x1b[?2004h"), "alternate screen and bracketed paste are on");
-    assert!(!raw(&c).contains("\x1b[?1000h"), "mouse reporting stays off with --no-mouse");
+    let started = raw(&c);
+    assert!(started.contains("\x1b[?1049h") && started.contains("\x1b[?2004h"), "alternate screen and bracketed paste are on");
+    assert_eq!(started.matches("\x1b[?1049h").count(), 1, "Term enters one alternate screen; OpenTUI paints within it");
+    assert!(!started.contains("\x1b[?1000h"), "mouse reporting stays off with --no-mouse");
     // /mouse turns it on for this session, and says so.
     c.type_keys("/mouse");
     std::thread::sleep(Duration::from_millis(150));
@@ -1640,10 +1644,14 @@ fn the_terminal_is_given_back_and_the_mouse_can_be_left_to_the_terminal() {
     let bytes = c.bytes.clone();
     assert_eq!(c.ctrl_c_out(), 0);
     let end = String::from_utf8_lossy(&bytes.lock().unwrap()).to_string();
-    let tail = &end[end.rfind("\x1b[>4;0m").expect("the terminal reset was written")..];
-    for want in ["\x1b[?2004l", "\x1b[?1006l", "\x1b[?1000l", "\x1b[?1049l", "\x1b[?25h"] {
-        assert!(tail.contains(want), "missing {:?} in the reset {:?}", want, tail);
+    assert_eq!(end.matches("\x1b[?1049h").count(), 1, "the renderer did not enter a second alternate screen");
+    assert_eq!(end.matches("\x1b[?1049l").count(), 1, "the terminal was restored once");
+    for (on, off) in [("\x1b[?2004h", "\x1b[?2004l"), ("\x1b[?1006h", "\x1b[?1006l"), ("\x1b[?1000h", "\x1b[?1000l"), ("\x1b[?1049h", "\x1b[?1049l")] {
+        let started = end.rfind(on).expect("mode was enabled");
+        let restored = end.rfind(off).expect("mode was restored");
+        assert!(restored > started, "missing {:?} after {:?}", off, on);
     }
+    assert!(end.rfind("\x1b[?25h").is_some(), "cursor was not shown on exit");
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }
 

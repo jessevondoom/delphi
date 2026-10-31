@@ -358,7 +358,7 @@ Follows D-22 (Council 005 rejected harness connectors). The operator asked for h
 6. **Known spike problems to fix first:** mouse wheel (own input parser), a first-column redraw glitch after scroll, Enter arriving inside a paste, Shift+Enter in Terminal.app (use Alt+Enter plus the kitty protocol where available). Reference terminal: Terminal.app.
 7. **Cost accepted:** ~90 MB per platform and ~45 production packages.
 
-Supersedes 005c's no-alternate-screen premise for the default console. **Status:** ✅ APPROVED 2026-10-24 by the operator. **Built 2026-10-24:** phases 0 to 6 of `ui/PLAN.md` (specs/005d records it; [console-ink-handoff.md](console-ink-handoff.md) lists what is proven and what needs a person).
+Supersedes 005c's no-alternate-screen premise for the default console. **Status:** ✅ APPROVED 2026-10-24 by the operator; superseded on renderer choice by D-33. **Built 2026-10-24:** phases 0 to 6 of `ui/PLAN.md` (specs/005d records it; [console-ink-handoff.md](console-ink-handoff.md) lists what is proven and what needs a person).
 
 ## ✅ D-27 — The MCP client is the official `rmcp` SDK, not an in-tree client
 **Context (operator, 2026-10-24):** spec 010 §1 item 6 (Council 006) chose a minimal in-tree MCP client behind an `McpTransport` trait and scheduled a spike against a library. A survey of Rust agent crates found that every agent framework (Rig, swarms-rs, ADK-Rust, AutoAgents, goose) owns the agent loop, where Delphi's governance lives, so none is adoptable; the plumbing crates are. The operator prefers existing open source wherever Delphi is not the differentiator.
@@ -431,3 +431,14 @@ Supersedes 005c's no-alternate-screen premise for the default console. **Status:
 - **Why not leave `delphi://` for Plane 2:** two schemes for one protocol, and a project-named scheme in a protocol that is meant to outlive the project.
 
 **Status:** ✅ APPROVED 2026-10-29 by the operator. Implements-Spec: `specs/012`.
+
+## ✅ D-33 — OpenTUI renders the full-screen console and observer; the Rust core and daemon boundary stay
+
+**Context (operator, 2026-10-30):** OpenTUI work was reverted from `main` because its native FFI requires Bun or Node 26.4+, while CI ran Node 22. The conversion preserves Delphi's pure frame functions and terminal input layer, but changes D-28's approved renderer and needs an explicit decision.
+
+**Decision (operator, 2026-10-30): approve spec 060 and use OpenTUI for the full-screen console and observer.**
+1. Keep the daemon protocol, console/narrator socket scopes, Rust core, inline and plain fallbacks, approval semantics, pure-data frame functions and standalone Bun-compiled release executable.
+2. Pin the supported Node runtime for source execution and tests to 26.4 or newer with `--experimental-ffi`; keep Bun pinned for standalone compilation.
+3. Preserve the supply-chain checks and verify terminal-mode ownership, cleanup, source-mode PTY flows, compiled-binary PTY flows and all release targets before use.
+
+**Status:** ✅ APPROVED 2026-10-30 by the operator. **Implements:** [`specs/060-opentui-renderer-and-runtime.md`](../../specs/060-opentui-renderer-and-runtime.md).

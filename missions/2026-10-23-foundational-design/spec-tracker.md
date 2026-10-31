@@ -382,6 +382,14 @@ Approved for implementation by the operator on 2026-10-30. Defines the run-anywh
 | OE5 | Update preview/notice alignment; exclude rollback and recovery redesign | approved, not built |
 | OE6 | Integration, reference docs and terminal walkthrough | approved, not built |
 
+## OpenTUI renderer and supported UI runtime (spec 060, approved 2026-10-30)
+
+Approved by the operator on 2026-10-30. D-33 supersedes D-28's Ink renderer choice while retaining the socket boundary, pure frame model, Rust fallbacks, approval semantics and standalone release executable.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| OUI1 | OpenTUI renderer, supported source runtime, terminal ownership, CI end-to-end and release builds | in progress on `codex/opentui-completion` |
+
 ## Council 013: containment increment (verdict: `councils/013-verdict.md`)
 
 Increment 1 (authority and trust containment), each slice its own PR; the 350 h report plan is not run as one batch. Built 2026-10-30; all slices amend approved specs (spec status unchanged).

@@ -8,7 +8,7 @@
 # --calm leaves out the approval, the loop and the file clash, to see the quiet picture. Nothing is written outside a temp directory.
 set -e
 cd "$(dirname "$0")/.."
-[ -d node_modules/ink ] || npm ci --ignore-scripts --no-audit --no-fund
+[ -d node_modules/@opentui/core ] || npm ci --ignore-scripts --no-audit --no-fund
 PANE=pulse
 case "${1:-}" in ''|--*) ;; *) PANE="$1"; shift ;; esac
 D=$(mktemp -d)
@@ -17,4 +17,4 @@ node --import tsx dev/preview-daemon.ts "$D/p.sock" "$@" &
 DP=$!
 trap 'kill $DP 2>/dev/null; rm -rf "$D"' EXIT
 sleep 1
-node --import tsx src/main.tsx --info-file "$D/info.json" --observe "$PANE"
+node --experimental-ffi --import ./dev/check-runtime.mjs --import tsx src/main.tsx --info-file "$D/info.json" --observe "$PANE"
