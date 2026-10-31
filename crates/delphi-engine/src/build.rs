@@ -8,6 +8,9 @@
 //! 3. **a different model family** when another is allowed (otherwise a different run of the same family,
 //!    recorded as `homogeneous_retry`, `[H-008]`), again with the diagnostic and a fresh context.
 //!
+//! A retry after the operator rejected an optimistic edit counts toward the three but stays on the rung it
+//! was on: a rejection never buys a stronger model or a different family (`specs/015` 015-A2).
+//!
 //! Then it halts and the operator decides. Anything that is not a failed check (a refused approval, a
 //! budget ceiling, a reauthentication, a halted agent) stops the ladder at once: more attempts would not
 //! change it.
@@ -136,6 +139,8 @@ impl Engine {
         let spec = pointers_from_prompt(prompt).into_iter().find(|p| p.uri.starts_with("specs/") && p.uri.ends_with(".md")).map(|p| p.uri);
         let mut diagnostics: Vec<String> = Vec::new();
         let mut n = 0u32;
+        // The rung of the ladder: only failures climb it, never an operator's rejection (specs/015 015-A2).
+        let mut rung = 1u32;
         for attempt in 1..=self.settings.build_attempts {
             n += 1;
             let mut h = self.span_handoff(m, task_id, n, "builder", prompt, pointers_from_prompt(prompt));
@@ -145,7 +150,7 @@ impl Engine {
             h.constraints.extend(diagnostics.iter().cloned());
             let mut family = base_family.clone();
             let mut homogeneous = false;
-            match attempt {
+            match rung {
                 1 => {}
                 2 => {
                     h.routing_directive.model_tier = Some(upscale(manifest.tier()).to_string());
@@ -176,6 +181,7 @@ impl Engine {
                 // A run that simply ran out of turns is a failed attempt; any other halt is the operator's call.
                 if r.contains("whole turn budget") {
                     diagnostics.push(format!("Attempt {} ran out of turns before finishing; do the essential change first.", attempt));
+                    rung += 1;
                     continue;
                 }
                 return Ok((Status::Escalated(r.clone()), format!("[the build halted on attempt {}: {}]", attempt, r)));
@@ -192,6 +198,7 @@ impl Engine {
             if red.iter().any(|g| g.n == 1 || g.n == 2) {
                 let why = red.iter().filter(|g| g.n <= 2).map(|g| format!("gate {} ({}): {}", g.n, g.name, g.detail)).collect::<Vec<_>>().join("\n");
                 diagnostics.push(format!("Attempt {} failed verification:\n{}", attempt, why.chars().take(1500).collect::<String>()));
+                rung += 1;
                 continue;
             }
             debug_assert!(audit_only);
@@ -206,6 +213,7 @@ impl Engine {
             let blocking: Vec<&(String, String)> = findings.iter().filter(|(s, _)| s == "P0" || s == "P1").collect();
             if !blocking.is_empty() {
                 diagnostics.push(format!("Attempt {} was audited and has open findings:\n{}", attempt, blocking.iter().map(|(s, t)| format!("- {} {}", s, t)).collect::<Vec<_>>().join("\n")));
+                rung += 1;
                 continue;
             }
             // Everything the daemon can check is green: the operator decides.
@@ -442,7 +450,9 @@ mod tests {
         // The second attempt was told what to avoid, and why.
         let second = f.model.requests().iter().find(|r| r.body["messages"].to_string().contains("rejected these edits")).expect("the Builder saw the rejection").body["messages"].to_string();
         assert!(second.contains("src/extra.rs") && second.contains("not part of the spec"), "{}", second);
-        assert_eq!(events_of(&f, "build.attempt").len(), 2);
+        let attempts = events_of(&f, "build.attempt");
+        assert_eq!(attempts.len(), 2);
+        assert_eq!((attempts[1].payload["tier"].as_str(), attempts[1].payload["thinking_budget"].as_u64(), attempts[1].payload["homogeneous_retry"].as_bool()), (None, None, Some(false)), "a rejection buys no stronger model");
     }
 
     #[tokio::test]
