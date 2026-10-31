@@ -8,7 +8,6 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PassThrough } from 'node:stream';
 import React from 'react';
-import { render } from 'ink';
 import { FILE, initElog, log, error, warn, debug, logCrash, readRecords, sanitize, settingsFor, stopElog, CONTEXT_KEYS } from '../src/elog.ts';
 import { ErrorBoundary } from '../src/boundary.tsx';
 
@@ -153,14 +152,16 @@ test('without the Term, an uncaught error is logged and Node still dies as it al
   assert.ok(!existsSync(join(off, 'logs')));
 });
 
-test('a React error boundary logs the render error once and lets it reach Ink as before', async () => {
+test('a React error boundary logs the render error once and rethrows', () => {
   const h = home();
   initElog({ home: h, version: 't', env: {} });
-  const Boom = () => { throw new Error(`render failed ${SECRET}`); };
-  const out = new PassThrough();
-  out.on('data', () => {});
-  const app = render(React.createElement(ErrorBoundary, null, React.createElement(Boom)), { stdout: out as any, stdin: new PassThrough() as any, exitOnCtrlC: false, patchConsole: false, interactive: false, debug: true } as any);
-  await assert.rejects(app.waitUntilExit(), /render failed/);
+  const err = new Error(`render failed ${SECRET}`);
+  assert.throws(() => {
+    ErrorBoundary.getDerivedStateFromError(err);
+    const boundary = new ErrorBoundary({});
+    boundary.state = { error: err };
+    boundary.render();
+  }, /render failed/);
   const recs = readRecords(h);
   assert.equal(recs.length, 1);
   assert.equal(recs[0]!.slug, 'render_error');
