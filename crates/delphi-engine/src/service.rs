@@ -904,8 +904,9 @@ impl EngineService {
         let answer = match p["decision"].as_str() {
             Some("allow") => Answer::Allow,
             Some("allow_similar") => Answer::AllowSimilar,
+            Some("allow_session") => Answer::AllowSession,
             Some("deny") => Answer::Deny { reason: p["reason"].as_str().unwrap_or("").chars().take(500).collect() },
-            _ => return Err(err(code::INVALID_PARAMS, "`decision` must be allow, allow_similar or deny")),
+            _ => return Err(err(code::INVALID_PARAMS, "`decision` must be allow, allow_similar, allow_session or deny")),
         };
         match self.engine.broker.resolve(id, hash, answer, &format!("console-{}", ctx.client_id)) {
             Ok(r) => Ok(r.event_payload(id, &format!("console-{}", ctx.client_id))),
@@ -988,6 +989,49 @@ impl EngineService {
             "rows": rows.iter().map(|t| json!({"key": t.key, "calls": t.calls, "input_tokens": t.input_tokens, "cache_read_tokens": t.cache_read_tokens, "cache_write_tokens": t.cache_write_tokens, "output_tokens": t.output_tokens, "thinking_tokens": t.thinking_tokens, "cost_usd": t.cost_usd})).collect::<Vec<_>>(),
             "budget": Self::budget_json(&m),
         }))
+    }
+
+    /// `shell.run` (`specs/061` §6): the operator's own `!` line. Console scope only; refused by a deny rule or bundle
+    /// policy; runs in the console's directory without a card or a sandbox; its output is shown to the operator and
+    /// logged, and reaches no prompt.
+    async fn shell_run(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let line = crate::exec::parse_shell(&json!({"command": p["command"]})).map_err(|e| err(code::INVALID_PARAMS, e.to_string()))?;
+        let cwd = p["cwd"].as_str().map(std::path::PathBuf::from).filter(|c| c.is_absolute() && c.is_dir()).ok_or_else(|| err(code::INVALID_PARAMS, "`cwd` must be an existing absolute directory"))?;
+        let refuse = |why: String| Ok(json!({"ok": false, "exit_code": null, "timed_out": false, "output": "", "output_capped": false, "elapsed_ms": 0, "refused": why}));
+        if let Some(why) = self.engine.exec.denied_line(&line) {
+            return refuse(why);
+        }
+        match crate::bundle_load::policy(&self.engine.ws) {
+            Ok(policy) => {
+                for seg in line.split([';', '|', '&', '\n']) {
+                    let words = crate::exec::shell_words(seg.trim()).unwrap_or_else(|| seg.split_whitespace().map(String::from).collect());
+                    if let Some(why) = (!words.is_empty()).then(|| policy.denies_command(&words)).flatten() {
+                        return refuse(why);
+                    }
+                }
+            }
+            Err(e) => return refuse(format!("a bundle policy that cannot be verified refuses: {}", e)),
+        }
+        let timeout = p["timeout_secs"].as_u64().filter(|n| *n > 0).map(Duration::from_secs);
+        let (env, l2) = (self.engine.exec.clone(), line.clone());
+        let report = tokio::task::spawn_blocking(move || env.run_operator(&l2, &cwd, timeout)).await.map_err(|e| err(-32000, e.to_string()))?.map_err(|e| err(-32000, e.to_string()))?;
+        let o = &report.outcome;
+        let mut output = o.stdout.clone();
+        if !o.stderr.is_empty() {
+            if !output.is_empty() && !output.ends_with('\n') {
+                output.push('\n');
+            }
+            output.push_str(&o.stderr);
+        }
+        let output = self.engine.secrets.redact(&output);
+        let exit_code = o.status.and_then(|s| s.code());
+        // Logged for the record, not for any prompt; a mission is only needed to hold the event.
+        if let Ok(m) = self.mission(p["mission_id"].as_str()).await {
+            let ev = EventEnvelope::new(&m.id, "operator.shell", json!({"command": self.engine.secrets.redact(&line), "exit_code": exit_code, "timed_out": o.timed_out, "output_capped": o.output_capped, "elapsed_ms": report.elapsed.as_millis() as u64, "output": output.chars().take(8192).collect::<String>(), "by": format!("console-{}", ctx.client_id)}));
+            let _ = m.append(ev).await;
+        }
+        Ok(json!({"ok": o.success(), "exit_code": exit_code, "timed_out": o.timed_out, "output": output, "output_capped": o.output_capped, "elapsed_ms": report.elapsed.as_millis() as u64}))
     }
 
     async fn budget_set(&self, p: Value, ctx: CallContext) -> RpcOutcome {
@@ -2062,10 +2106,15 @@ impl Extension for ServiceExt {
                 "models.get" => svc.models_get(),
                 "budget.get" => svc.mission(params["mission_id"].as_str()).await.map(|m| EngineService::budget_json(&m)),
                 "budget.set" => svc.budget_set(params, ctx).await,
-                "permissions.get" => Ok(json!({"mode": svc.engine.broker.mode().as_str(), "allow_similar": svc.engine.broker.allow_similar().iter().map(|(t, tool, pat)| json!({"task_id": t, "tool": tool, "pattern": pat})).collect::<Vec<_>>()})),
+                "permissions.get" => Ok(json!({"mode": svc.engine.broker.mode().as_str(), "allow_similar": svc.engine.broker.allow_similar().iter().map(|(t, tool, pat)| json!({"task_id": t, "tool": tool, "pattern": pat})).collect::<Vec<_>>(), "allow_session": svc.engine.broker.session_grants().iter().map(|(tool, pat)| json!({"tool": tool, "pattern": pat})).collect::<Vec<_>>()})),
+                "shell.run" => svc.shell_run(params, ctx).await,
+                "permissions.revoke" => (|| {
+                    need_console(&ctx)?;
+                    Ok(json!({"revoked": svc.engine.broker.revoke_session()}))
+                })(),
                 "permissions.set" => (|| {
                     need_console(&ctx)?;
-                    let mode = params["mode"].as_str().and_then(Mode::parse).ok_or_else(|| err(code::INVALID_PARAMS, "`mode` must be default, accept-edits or mission-auto"))?;
+                    let mode = params["mode"].as_str().and_then(Mode::parse).ok_or_else(|| err(code::INVALID_PARAMS, "`mode` must be default, accept-edits, shell-auto or mission-auto"))?;
                     svc.engine.broker.set_mode(mode);
                     Ok(json!({"mode": mode.as_str()}))
                 })(),
@@ -2958,6 +3007,32 @@ mod tests {
         })
         .await;
         assert_eq!(f.model.requests().len(), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn shell_run_is_console_only_and_honors_deny_rules() {
+        let f = crate::testkit::setup_with_exec(vec![], 5.0, |_| {}, |c| c.deny = vec!["echo nope*".into()]);
+        let s = serve(&f).await;
+        let (c_sock, n_sock, c_tok, n_tok) = (s.sock.clone(), s.narrator_sock.clone(), s.console.clone(), s.narrator.clone());
+        let cwd = f.root.to_string_lossy().to_string();
+        let (ok, denied, narrator) = blocking(move || {
+            let mut c = Client::connect(&c_sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+            c.hello(&c_tok).unwrap();
+            let ok = c.call("shell.run", json!({"command": "echo hi | tr a-z A-Z", "cwd": cwd})).unwrap();
+            let denied = c.call("shell.run", json!({"command": "echo nope; echo ok", "cwd": cwd})).unwrap();
+            let mut n = Client::connect(&n_sock).unwrap();
+            n.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            n.hello(&n_tok).unwrap();
+            let narrator = rpc_code(n.call("shell.run", json!({"command": "echo hi", "cwd": cwd})));
+            (ok, denied, narrator)
+        })
+        .await;
+        assert_eq!(ok["ok"], true, "{ok}");
+        assert!(ok["output"].as_str().unwrap().contains("HI"), "{ok}");
+        assert_eq!(denied["ok"], false, "{denied}");
+        assert!(denied["refused"].is_string(), "{denied}");
+        assert_eq!(narrator, Some(code::FORBIDDEN));
     }
 
     #[tokio::test(flavor = "multi_thread")]

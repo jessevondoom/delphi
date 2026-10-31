@@ -392,6 +392,18 @@ Approved by the operator on 2026-10-30. D-33 supersedes D-28's Ink renderer choi
 | :-- | :-- | :-- |
 | OUI1 | OpenTUI renderer, supported source runtime, terminal ownership, CI end-to-end and release builds | in progress on `codex/opentui-completion` |
 
+## The shell tool, shell modes and the `!` bang (spec 061, approved 2026-10-31)
+
+Approved by the operator on 2026-10-31 (D-34). Amends 008 §4 / D-24, 020 §3 and the 005 permission modes. Each slice is its own PR.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| SH1 | `shell` tool in the engine: runner, deny and taint gates, sandbox verdict, `shellsafe` classifier and Hard cards | built (engine, `shell.run` RPC, plain console) |
+| SH2 | `shell-auto` mode, `[s]` session grants, `permissions.revoke` | built: engine, plain console and OpenTUI (Shift+Tab `shell auto`, `[s]` choice) |
+| SH3 | `!` bang: `shell.run` RPC, console block and composer | built: `shell.run` and the `!` bang (`ui/src/shell.ts`) |
+| SH4 | Harness bridge and capability map | built: `shell` offered over the bridge beside `run_command`, kept by agy Builders |
+| SH5 | Config keys, schema, reference docs and regenerated files | built: `[exec] shell`/`hard`, schema, reference, README, CHANGELOG |
+
 ## Council 013: containment increment (verdict: `councils/013-verdict.md`)
 
 Increment 1 (authority and trust containment), each slice its own PR; the 350 h report plan is not run as one batch. Built 2026-10-30; all slices amend approved specs (spec status unchanged).

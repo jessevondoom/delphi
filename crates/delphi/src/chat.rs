@@ -5,7 +5,7 @@
 //! becomes a task; `@role` routes to a role directly; `/usage`, `/budget`, `/permissions` read and
 //! adjust the daemon. Approval cards follow the spec: the answer is bound to the exact payload shown
 //! (`approval.resolve` carries its blake3), a card never captures what you were typing (answers are
-//! explicit `/y /a /n /d`), and answers in the first 300 ms after a card appears are ignored.
+//! explicit `/y /a /s /n /d`), and answers in the first 300 ms after a card appears are ignored.
 
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -18,6 +18,8 @@ pub const FOCUS_GUARD: Duration = Duration::from_millis(300);
 pub enum Decision {
     Allow,
     AllowSimilar,
+    /// `[s]`: allow similar commands for the rest of the session.
+    AllowSession,
     Deny,
     /// `[d]`: show the full payload without answering.
     View,
@@ -114,14 +116,16 @@ pub fn parse_input(line: &str) -> Input {
             "council" => parse_council(cmd.trim_start().strip_prefix("council").unwrap_or("")),
             "y" | "yes" => Input::Answer(Decision::Allow),
             "a" | "always" => Input::Answer(Decision::AllowSimilar),
+            "s" | "session" => Input::Answer(Decision::AllowSession),
             "n" | "no" => Input::Answer(Decision::Deny),
             "d" | "diff" => Input::Answer(Decision::View),
             "approve" => match rest.first().copied() {
                 Some("y") => Input::Answer(Decision::Allow),
                 Some("a") => Input::Answer(Decision::AllowSimilar),
+                Some("s") => Input::Answer(Decision::AllowSession),
                 Some("n") => Input::Answer(Decision::Deny),
                 Some("d") => Input::Answer(Decision::View),
-                _ => Input::Unknown("/approve takes y, a, n or d".into()),
+                _ => Input::Unknown("/approve takes y, a, s, n or d".into()),
             },
             other => Input::Unknown(format!("unknown command /{} (try /help)", other)),
         };
@@ -262,7 +266,10 @@ pub fn render_card(e: &Value, who: &str) -> String {
             s.push_str(&format!("    {}\n", l.chars().take(100).collect::<String>()));
         }
     }
-    let similar = if tier == "red" { "" } else { " · /a allow similar this task" };
+    let mut similar = if tier == "red" { String::new() } else { " · /a allow similar this task".to_string() };
+    if e["session_allowed"].as_bool().unwrap_or(false) {
+        similar.push_str(" · /s allow similar this session");
+    }
     s.push_str(&format!("  /y approve once{} · /n reject · /d view all   (id {}, expires in {}s)\n", similar, e["approval_id"].as_str().unwrap_or("?"), e["timeout_secs"].as_u64().unwrap_or(0)));
     s
 }
@@ -800,8 +807,13 @@ impl Session {
             Input::Permissions(None) => match self.cmd.call("permissions.get", json!({})) {
                 Ok(v) => {
                     let sim: Vec<String> = v["allow_similar"].as_array().cloned().unwrap_or_default().iter().map(|s| format!("{} ({})", s["pattern"].as_str().unwrap_or(""), s["task_id"].as_str().unwrap_or(""))).collect();
-                    say(&format!("mode: {} · allowed similar this task: {}\n", v["mode"].as_str().unwrap_or("?"), if sim.is_empty() { "none".to_string() } else { sim.join(", ") }));
+                    let ses: Vec<String> = v["allow_session"].as_array().cloned().unwrap_or_default().iter().map(|s| s["pattern"].as_str().unwrap_or("").to_string()).collect();
+                    say(&format!("mode: {} · allowed similar this task: {} · allowed this session: {} (/permissions revoke ends them)\n", v["mode"].as_str().unwrap_or("?"), if sim.is_empty() { "none".to_string() } else { sim.join(", ") }, if ses.is_empty() { "none".to_string() } else { ses.join(", ") }));
                 }
+                Err(e) => say(&format!("{}\n", rpc_error(&e))),
+            },
+            Input::Permissions(Some(mode)) if mode == "revoke" => match self.cmd.call("permissions.revoke", json!({})) {
+                Ok(v) => say(&format!("{} session grant(s) ended\n", v["revoked"].as_u64().unwrap_or(0))),
                 Err(e) => say(&format!("{}\n", rpc_error(&e))),
             },
             Input::Permissions(Some(mode)) => match self.cmd.call("permissions.set", json!({"mode": mode})) {
@@ -819,7 +831,7 @@ impl Session {
                     say(&format!("{}\n", serde_json::to_string_pretty(&card.payload).unwrap_or_default()));
                     return true;
                 }
-                if d == Decision::AllowSimilar && card.tier == "red" {
+                if matches!(d, Decision::AllowSimilar | Decision::AllowSession) && card.tier == "red" {
                     say("`allow similar` never applies to a Red action; use /y to approve this once or /n\n");
                     return true;
                 }
@@ -830,6 +842,7 @@ impl Session {
                 let decision = match d {
                     Decision::Allow => "allow",
                     Decision::AllowSimilar => "allow_similar",
+                    Decision::AllowSession => "allow_session",
                     _ => "deny",
                 };
                 if let Err(e) = self.cmd.call("approval.resolve", json!({"approval_id": card.approval_id, "payload_blake3": card.payload_blake3, "decision": decision})) {
@@ -1250,6 +1263,8 @@ mod tests {
         assert_eq!(parse_input("/pause"), Input::Pause);
         assert_eq!(parse_input("/y"), Input::Answer(Decision::Allow));
         assert_eq!(parse_input("/a"), Input::Answer(Decision::AllowSimilar));
+        assert_eq!(parse_input("/s"), Input::Answer(Decision::AllowSession));
+        assert_eq!(parse_input("/approve s"), Input::Answer(Decision::AllowSession));
         assert_eq!(parse_input("/approve n"), Input::Answer(Decision::Deny));
         assert_eq!(parse_input("/d"), Input::Answer(Decision::View));
         assert!(matches!(parse_input("/launch-missiles"), Input::Unknown(m) if m.contains("/help")));

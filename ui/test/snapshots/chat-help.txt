@@ -4,7 +4,7 @@ delphi v0.5 · /proj · chat
             keys · esc closes
             ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
-             enter  send                alt+enter / ctrl+j  new line
+             enter  send         alt+enter / ctrl+j  new line   !cmd  shell
              esc    clear the prompt; with it empty, stop what is running
              ↑ ↓    history             ctrl+r  search history      tab  complete
              ← →    decks (empty prompt) · shift+← →  decks any time

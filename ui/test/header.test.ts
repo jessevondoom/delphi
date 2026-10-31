@@ -142,11 +142,13 @@ test('auto is the only mode drawn in the warning-red colour', () => {
 });
 
 test('Shift+Tab cycles default → accept edits → auto, never to optimistic, and each change says what it means', () => {
-  assert.deepEqual(MODES, ['default', 'accept-edits', 'mission-auto']);
-  assert.deepEqual(['default', 'accept-edits', 'mission-auto'].map(nextMode), ['accept-edits', 'mission-auto', 'default']);
+  assert.deepEqual(MODES, ['default', 'accept-edits', 'shell-auto', 'mission-auto']);
+  assert.deepEqual(['default', 'accept-edits', 'shell-auto', 'mission-auto'].map(nextMode), ['accept-edits', 'shell-auto', 'mission-auto', 'default']);
   assert.ok(!MODES.some((m) => /optimistic/.test(m)) && !/optimistic/.test(modeNote('optimistic')), 'optimistic is chosen per build, not a mode');
-  assert.deepEqual(cycleMode('accept-edits', false), { set: null, armed: true }, 'entering auto waits for a confirming press');
-  assert.deepEqual(cycleMode('accept-edits', true), { set: 'mission-auto', armed: false });
+  assert.deepEqual(cycleMode('shell-auto', false), { set: null, armed: true }, 'entering auto waits for a confirming press');
+  assert.deepEqual(cycleMode('shell-auto', true), { set: 'mission-auto', armed: false });
+  assert.deepEqual(cycleMode('accept-edits', false), { set: 'shell-auto', armed: false }, 'shell auto runs only safe commands, so it needs no confirmation');
+  assert.ok(modeNote('shell-auto').includes('shell auto'));
   assert.deepEqual(cycleMode('default', false), { set: 'accept-edits', armed: false });
   assert.deepEqual(cycleMode('mission-auto', false), { set: 'default', armed: false });
   assert.equal(modeNote('mission-auto'), '· approval mode: auto — Amber actions run without asking this mission; Red actions always ask');

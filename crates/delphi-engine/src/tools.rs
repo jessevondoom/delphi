@@ -38,6 +38,9 @@ pub enum ActionKind {
     /// A command run directly on the operator's machine. No permission mode approves it on its own; only a
     /// ratified allow rule or "allow similar" for the task does.
     UnsandboxedExec,
+    /// An unsandboxed `shell` line the classifier found plainly harmless (`specs/061` §4): `shell-auto` and
+    /// `mission-auto` run it without a card; every other mode asks.
+    SafeShell,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

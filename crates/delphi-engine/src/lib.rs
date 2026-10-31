@@ -2,6 +2,7 @@
 
 pub mod agent_registry;
 pub mod approval;
+pub mod shellsafe;
 pub mod assign;
 pub mod fact_check;
 pub mod fact_fetch;

@@ -16,7 +16,7 @@ export const newInbox = (now: number, items: D.Decision[] = [], pane: D.Pane = D
 /** The pane (list, detail, empty state) owns the deck once the daemon's list has arrived. */
 const paned = (inb: Inbox): boolean => inb.loaded || inb.items.length > 0;
 
-export type Decision = 'allow' | 'allow_similar' | 'deny';
+export type Decision = 'allow' | 'allow_similar' | 'allow_session' | 'deny';
 export type Action =
   | { t: 'none' }
   | { t: 'chat' }
@@ -37,7 +37,7 @@ export const cards = (s: State): Approval[] => Object.values(s.approvals).sort((
 export const options = (a: Approval): { d: Decision; label: string }[] =>
   a.tier === 'red' || a.noSimilar
     ? [{ d: 'allow', label: 'Approve once' }, { d: 'deny', label: 'Reject' }]
-    : [{ d: 'allow', label: 'Approve once' }, { d: 'allow_similar', label: 'Allow similar actions this task' }, { d: 'deny', label: 'Reject' }];
+    : [{ d: 'allow', label: 'Approve once' }, { d: 'allow_similar', label: 'Allow similar actions this task' }, ...(a.sessionAllowed ? [{ d: 'allow_session' as const, label: 'Allow similar commands this session' }] : []), { d: 'deny', label: 'Reject' }];
 
 const remaining = (a: Approval, now: number) => {
   const s = Math.max(0, Math.round((a.at + a.timeoutS * 1000 - now) / 1000));
@@ -72,7 +72,7 @@ function press(inb: Inbox, list: Approval[], e: Ev, now: number): { inbox: Inbox
       const { d, choice } = r.action;
       if (d.source === 'card') {
         const c = list.find((x) => x.id === d.source_id);
-        if (c && (choice.id === 'allow' || choice.id === 'allow_similar' || choice.id === 'deny') && now - c.at >= GUARD_MS) return { inbox: { ...inb, pane: r.pane }, action: { t: 'resolve', card: c, decision: choice.id, ...(r.action.conditions ? { conditions: r.action.conditions, d } : {}) } };
+        if (c && (choice.id === 'allow' || choice.id === 'allow_similar' || choice.id === 'allow_session' || choice.id === 'deny') && now - c.at >= GUARD_MS) return { inbox: { ...inb, pane: r.pane }, action: { t: 'resolve', card: c, decision: choice.id, ...(r.action.conditions ? { conditions: r.action.conditions, d } : {}) } };
       } else if (d.source === 'raised' || d.source === 'digest') {
         return { inbox: { ...inb, pane: r.pane }, action: { t: 'record', d, choice_id: choice.id, ...(r.action.conditions ? { conditions: r.action.conditions } : {}) } };
       } else if (d.source === 'provisional' && (choice.id === 'ratified' || choice.id === 'rejected')) {
