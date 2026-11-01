@@ -42,6 +42,7 @@ pub struct Detected {
     pub claude: Option<ClaudeState>,
     pub agy_version: Option<String>,
     pub codex: Option<CodexState>,
+    pub copilot_version: Option<String>,
     pub gcloud: bool,
 }
 
@@ -65,7 +66,10 @@ pub fn detect(env: &dyn Env) -> Detected {
         ClaudeState { version: v.trim().to_string(), logged_in: status.as_ref().is_some_and(|s| s["loggedIn"] == true), plan: status.as_ref().and_then(|s| s["subscriptionType"].as_str()).unwrap_or("").to_string() }
     });
     let codex = env.run("codex", &["--version"]).map(|(_, v)| CodexState { version: v.trim().trim_start_matches("codex-cli").trim().to_string(), signed_in: matches!(env.run("codex", &["login", "status"]), Some((0, _))) });
-    Detected { claude, codex, agy_version: env.run("agy", &["--version"]).map(|(_, v)| v.trim().to_string()), gcloud: env.run("gcloud", &["--version"]).is_some() }
+    let copilot_version = env.run("copilot", &["--version"]).and_then(|(_, v)| {
+        v.lines().next().and_then(|l| l.split_whitespace().find(|w| w.chars().next().is_some_and(|c| c.is_ascii_digit()))).map(|w| w.trim_end_matches('.').to_string())
+    });
+    Detected { claude, codex, agy_version: env.run("agy", &["--version"]).map(|(_, v)| v.trim().to_string()), copilot_version, gcloud: env.run("gcloud", &["--version"]).is_some() }
 }
 
 /// What the project's own toolchain suggests for the merge gates and the commands that need no approval.
@@ -309,6 +313,9 @@ fn report_detection(ui: &mut dyn Ui, d: &Detected) {
         Some(c) => ui.say(&format!("  • Codex CLI {} — installed, not signed in (`codex login`)", c.version)),
         None => {}
     }
+    if let Some(v) = &d.copilot_version {
+        ui.say(&format!("  ✓ GitHub Copilot CLI {} — installed", v));
+    }
     ui.say(&format!("  {} gcloud — {}", if d.gcloud { "✓" } else { "•" }, if d.gcloud { "installed" } else { "not installed" }));
 }
 
@@ -374,6 +381,18 @@ fn agy_harness(ui: &mut dyn Ui, env: &dyn Env, d: &Detected, doc: &mut DocumentM
     let [fast, mid, top] = pick_agy_models(&listing).unwrap_or_else(|| ["gemini-3.8-flash-low".into(), "gemini-3.8-flash-medium".into(), "gemini-3.8-flash-high".into()]);
     add_endpoint(doc, "gemini", "agy-sub", &[("path", "harness"), ("harness", "agy"), ("credential", "harness-login"), ("cost_model", "subscription")], &[("fast", &fast), ("workhorse", &mid), ("frontier", &top)]);
     Some("agy-sub")
+}
+
+/// GitHub Copilot subscription through `copilot`: Builders and reviewers; file edits and commands judged via ACP approval bridge.
+fn copilot_harness(ui: &mut dyn Ui, _env: &dyn Env, d: &Detected, doc: &mut DocumentMut) -> Option<&'static str> {
+    if has_endpoint(doc, "copilot-sub") || d.copilot_version.is_none() {
+        return None;
+    }
+    if !ui.yes_no("Use your GitHub Copilot subscription through `copilot`? (Builders and reviewers; Delphi's ACP approval bridge judges file edits and commands)", true) {
+        return None;
+    }
+    add_endpoint(doc, "claude", "copilot-sub", &[("path", "harness"), ("harness", "copilot"), ("credential", "harness-login"), ("cost_model", "subscription")], &[("fast", "claude-haiku-4.5"), ("workhorse", "claude-sonnet-5.5"), ("frontier", "claude-opus-5.5")]);
+    Some("copilot-sub")
 }
 
 /// A local Ollama server: slow, but it costs nothing and never runs out, so it is declared last and the pool falls to it
@@ -631,6 +650,9 @@ pub fn run(ui: &mut dyn Ui, env: &dyn Env, o: &Opts) -> Result<Outcome> {
         added.push(id.into());
     }
     if let Some(id) = codex_harness(ui, env, &detected, &mut doc) {
+        added.push(id.into());
+    }
+    if let Some(id) = copilot_harness(ui, env, &detected, &mut doc) {
         added.push(id.into());
     }
     // A step that fails late (after its secret is already in the keychain) must not throw away the endpoints the
@@ -944,6 +966,20 @@ mod tests {
         let mut ui2 = Script::default();
         assert_eq!(codex_harness(&mut ui2, &codex_machine(false), &detect(&codex_machine(false)), &mut DocumentMut::new()), None);
         assert!(ui2.asked.is_empty());
+    }
+
+    #[test]
+    fn copilot_is_detected_and_offered_with_acp_bridge_for_builders() {
+        let mut e = FakeEnv::default();
+        e.programs.insert("copilot --version".into(), "GitHub Copilot CLI 1.0.105.\n".into());
+        let d = detect(&e);
+        assert_eq!(d.copilot_version.as_deref(), Some("1.0.105"));
+        let mut doc = DocumentMut::new();
+        let mut ui = Script::default();
+        assert_eq!(copilot_harness(&mut ui, &e, &d, &mut doc), Some("copilot-sub"));
+        let text = doc.to_string();
+        assert!(text.contains("harness = \"copilot\"") && text.contains("family = \"claude\"") && text.contains("credential = \"harness-login\""), "{}", text);
+        assert!(text.contains("claude-sonnet-5.5"), "{}", text);
     }
 
     #[test]
