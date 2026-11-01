@@ -408,7 +408,8 @@ Approved by the operator on 2026-10-31. Same-machine host agents (Claude Code, C
 | S7 | `request_council`, `council_status`, `council_result` | built: `host.request_council`/`host.council_status`/`host.council_result`; the Council runs in the host session's own mission (text-only seats, the fenced question), the id returns at once, status and the ruling are read from the session log (no in-memory state, so a daemon restart loses nothing), only the raising session can read it, no limit (spec §9). Q-4 answered by assumption: no blocking call, `council_result` with `wait: true` waits at most 25 seconds. A ruling creates no Delphi decision; its record stays in the host mission for the operator |
 | S8 | read-only `Kb::open_readonly`; `search_project`/`search_memory` lead with vector+rerank hits over the same allowed docs | built (PR pending) |
 | S9 | `delphi learn ingest --from claude-code`: per-project opt-in, versioned reader, two fixed rules, L0 role-keyed notes (Codex/Copilot readers later) | built (PR pending) |
-| S10-S11 | resume and console toggle, security review | not started |
+| S10 | `/resume-host` (`handoff.resume`), `/mcp [on\|off]` (`mcp.get`/`mcp.set`, comment-preserving edit of `[mcp] enabled`) | built (PR pending) |
+| S11 | security and red-team review | not started |
 
 ## The shell tool, shell modes and the `!` bang (spec 061, approved 2026-10-31)
 

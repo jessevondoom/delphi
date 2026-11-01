@@ -389,6 +389,42 @@ impl EngineService {
         })
     }
 
+    /// `mcp.get` / `mcp.set` (`specs/062` §9): the operator's switch for host tools, and how many host lessons wait for review.
+    async fn mcp_switch(&self, p: Value, ctx: CallContext, set: bool) -> RpcOutcome {
+        need_console(&ctx)?;
+        let ws = &self.engine.ws;
+        if set {
+            let on = p["enabled"].as_bool().ok_or_else(|| err(code::INVALID_PARAMS, "`enabled` is true or false"))?;
+            crate::host_rpc::set_enabled(&ws.dir, on).map_err(|e| err(code::INVALID_PARAMS, e))?;
+        }
+        let enabled = crate::host_rpc::gate(&ws.dir).is_ok();
+        let waiting: usize = delphi_core::sessions::dirs(&ws.dir)
+            .into_iter()
+            .filter(|(n, _)| n.starts_with("host-"))
+            .filter_map(|(_, d)| delphi_core::log::replay(&d).ok())
+            .map(|ev| ev.iter().filter(|e| e.kind == "learn.staged" && e.payload["trigger"].as_str().is_some_and(|t| crate::host_rpc::TRIGGERS.contains(&t))).count())
+            .sum();
+        Ok(json!({"enabled": enabled, "host_lessons": waiting}))
+    }
+
+    /// `handoff.resume` (`specs/062` S10): the operator carries a host session's handoff into this Delphi mission as a task. Only
+    /// a handoff of this mission's own project scope is read, and the task runs as any task does, under its role's tier and cards.
+    async fn handoff_resume(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        use crate::host_rpc as h;
+        need_console(&ctx)?;
+        let m = self.mission(p["mission_id"].as_str()).await?;
+        let ws = &self.engine.ws;
+        // The project is the one the console's folder belongs to (`cwd`), else the one the mission was stamped with.
+        let from_cwd = p["cwd"].as_str().map(std::path::Path::new).filter(|c| c.is_absolute()).and_then(|c| crate::scope::resolve(&ws.dir, c).project);
+        let project = from_cwd.or_else(|| crate::scope::mission_scope(&ws.dir, &m.dir)).map(|id| id.as_str().to_string());
+        let Some((session, env)) = h::read_handoff(&ws.dir, project.as_deref(), p["session"].as_str()) else {
+            return Err(err(code::INVALID_PARAMS, "no host handoff for this project: a coding tool leaves one with `handoff_put`"));
+        };
+        let target = if self.engine.settings.enabled_agents.contains(&env.target_agent) { env.target_agent.clone() } else { "orchestrator".to_string() };
+        let task_id = self.spawn_task(&m, &target, &h::resume_prompt(&session, &env), None);
+        Ok(json!({"task_id": task_id, "mission_id": m.id, "session": session, "role": target}))
+    }
+
     /// Tasks of a recovery plan not yet resumed, as JSON for the console.
     fn recovery_json(&self, mission: &str) -> Value {
         let g = self.recovery.lock().unwrap();
@@ -2352,6 +2388,9 @@ impl Extension for ServiceExt {
                 "host.council_status" => svc.host_council_read(params, ctx, false).await,
                 "host.council_result" => svc.host_council_read(params, ctx, true).await,
                 "recovery.resume" => svc.recovery_resume(params, ctx).await,
+                "handoff.resume" => svc.handoff_resume(params, ctx).await,
+                "mcp.get" => svc.mcp_switch(params, ctx, false).await,
+                "mcp.set" => svc.mcp_switch(params, ctx, true).await,
                 "recovery.pause" => (|| {
                     need_console(&ctx)?;
                     Ok(json!({"paused": true}))
@@ -2686,6 +2725,36 @@ mod tests {
             let mut bad = p.clone();
             bad["context_pointers"] = json!([{"uri": "../secret", "reason": "r"}]);
             assert_eq!(rpc_code(c.call("host.handoff_put", bad)), Some(code::INVALID_PARAMS));
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_console_resumes_a_host_handoff_and_flips_the_switch_without_touching_the_rest_of_the_file() {
+        let f = setup(vec![Step::text("Picking it up.")], 5.0, |_| {});
+        let ws_dir = f.engine.ws.dir.clone();
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok, csock, ctok) = (s.host_sock.clone(), s.host.clone(), s.sock.clone(), s.console.clone());
+        blocking(move || {
+            let mut h = Client::connect(&hsock).unwrap();
+            h.hello(&htok).unwrap();
+            let mut c = Client::connect(&csock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+            c.hello(&ctok).unwrap();
+            assert_eq!(rpc_code(c.call("handoff.resume", json!({"cwd": cwd}))), Some(code::INVALID_PARAMS), "nothing to resume yet");
+            h.call("host.handoff_put", json!({"session": "abcdef0123456789", "tool": "codex", "cwd": cwd, "objective": "Finish the parser"})).unwrap();
+            let r = c.call("handoff.resume", json!({"cwd": cwd})).unwrap();
+            assert_eq!((r["session"].as_str(), r["role"].as_str()), (Some("abcdef0123456789"), Some("orchestrator")));
+            let cfg = ws_dir.join("config.toml");
+            std::fs::write(&cfg, "# my notes\n[other]\nx = 1  # keep\n").unwrap();
+            assert_eq!(c.call("mcp.get", json!({})).unwrap()["enabled"], true);
+            assert_eq!(c.call("mcp.set", json!({"enabled": false})).unwrap()["enabled"], false);
+            assert_eq!(rpc_code(h.call("host.handoff_get", json!({"session": "fedcba9876543210", "tool": "x", "cwd": cwd}))), Some(code::FORBIDDEN), "off means off");
+            let off = std::fs::read_to_string(&cfg).unwrap();
+            assert!(off.contains("enabled = false") && off.contains("# my notes") && off.contains("x = 1  # keep"), "{off}");
+            assert_eq!(c.call("mcp.set", json!({"enabled": true})).unwrap()["enabled"], true);
+            assert_eq!(rpc_code(c.call("mcp.set", json!({"enabled": "yes"}))), Some(code::INVALID_PARAMS));
         })
         .await;
     }
@@ -3431,7 +3500,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "kb.open", "research.start", "projects.list", "pending.pass", "pending.list", "pending.ratify", "pending.discard", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "retro.list", "retro.stale", "retro.accept", "retro.reject", "retro.promotions", "retro.promote", "retro.withdraw", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
+            let every_mutating_method_the_daemon_has = ["handoff.resume", "mcp.get", "mcp.set", "task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "kb.open", "research.start", "projects.list", "pending.pass", "pending.list", "pending.ratify", "pending.discard", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "retro.list", "retro.stale", "retro.accept", "retro.reject", "retro.promotions", "retro.promote", "retro.withdraw", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
             for m in every_mutating_method_the_daemon_has {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }
@@ -3488,7 +3557,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let everything_a_relay_must_not_reach = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "kb.open", "research.start", "projects.list", "pending.pass", "pending.list", "pending.ratify", "pending.discard", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","kb.search", "kb.get", "kb.allows", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "models.get", "anything.else"];
+            let everything_a_relay_must_not_reach = ["handoff.resume", "mcp.get", "mcp.set", "task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "kb.open", "research.start", "projects.list", "pending.pass", "pending.list", "pending.ratify", "pending.discard", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","kb.search", "kb.get", "kb.allows", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "models.get", "anything.else"];
             for m in everything_a_relay_must_not_reach {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }

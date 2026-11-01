@@ -51,6 +51,10 @@ delphi learn list                                             # review what was 
 
 Two rules run: things you typed that correct the assistant, and tool failures that were retried successfully. Each becomes an L0 note for the role you named, with a pointer to the log line, and waits for review like any other staged lesson. No model reads the log and nothing in it is followed. A log in a format the reader does not know is refused whole. Reading the same log twice stages nothing twice. The daemon must be stopped (the same rule as `delphi learn drop`). Only Claude Code logs are read so far.
 
+## Pick up a tool's work in Delphi
+
+In the console, `/resume-host` takes the latest handoff a coding tool left for your project (`handoff_put`) and starts a task from it for the role it named. The handoff is read as context, never as instruction, and the task runs under the usual tiers and cards. `/mcp` shows whether other tools are allowed and how many lessons they proposed are waiting for review; `/mcp off` and `/mcp on` flip the switch.
+
 ## Turn it off
 
-Set `[mcp] enabled = false` in `config.toml`. Every call is then answered `disabled_by_operator`, at once.
+Run `/mcp off` in the console, or set `[mcp] enabled = false` in `config.toml`. Every call is then answered `disabled_by_operator`, at once.

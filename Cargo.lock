@@ -918,6 +918,7 @@ dependencies = [
  "tokenizers 0.23.2",
  "tokio",
  "toml",
+ "toml_edit",
  "walkdir",
 ]
 
