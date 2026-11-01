@@ -1471,6 +1471,8 @@ impl EngineService {
         let rerank = p["rerank"].as_bool().unwrap_or(true);
         // Notes the daemon staged are searched only when asked for (`specs/031` §3.1).
         let staged = p["staged"].as_bool().unwrap_or(false);
+        // The release's own specs and reference are searched only when asked for (`specs/064` §7).
+        let about = p["about"].as_bool().unwrap_or(false);
         let hits = tokio::task::spawn_blocking(move || -> Result<Vec<crate::kb::Hit>, crate::kb::KbError> {
             let mut kb = crate::kb::Kb::open(&ws.join("local/state.db"))?;
             // A search never waits for the model to read the corpus, and never answers from a stale index: the words
@@ -1484,7 +1486,7 @@ impl EngineService {
                     crate::kb::embed_in_background(&home, &ws);
                 }
             }
-            let mut opts = crate::kb::SearchOpts { role: role.clone(), include_staged: staged, ..Default::default() };
+            let mut opts = crate::kb::SearchOpts { role: role.clone(), include_staged: staged, about, ..Default::default() };
             if !rerank {
                 opts.rerank_weight = 0.0;
             }

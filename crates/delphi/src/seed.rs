@@ -7,6 +7,8 @@ static SKILLS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../skills");
 static THEMES: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../themes");
 static CONTEXT: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../context");
 static MEMORY: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../memory");
+include!(concat!(env!("OUT_DIR"), "/about.rs"));
+
 pub const CONFIG_TEMPLATE: &str = include_str!("../config.example.toml");
 
 /// Which zone a seed file is installed into (`specs/006` §3.1).
@@ -47,6 +49,8 @@ pub fn files() -> Vec<SeedFile> {
     collect(&THEMES, "themes", Zone::Base, &mut v);
     collect(&CONTEXT, "context", Zone::Team, &mut v);
     collect(&MEMORY, "memory", Zone::Local, &mut v);
+    // The release's own specs and reference, read-only in the base zone (`specs/064` §7).
+    v.extend(ABOUT.iter().map(|(logical, bytes)| SeedFile { logical: (*logical).into(), zone: Zone::Base, bytes }));
     // 006-A2: release heuristics are part of the release snapshot (Zone 1), not team content.
     for f in v.iter_mut().filter(|f| f.logical == "context/heuristics.md") {
         f.zone = Zone::Base;

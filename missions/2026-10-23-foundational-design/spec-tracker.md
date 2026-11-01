@@ -481,5 +481,5 @@ Approved by the operator on 2026-11-01 after a three-seat council review. Amends
 | R2 | MCP `search_kb` over `HostLink`, allowlist visibility, per-request scope, `search_memory` narrowing | partly built (`search_kb` tool, `host.search_kb`, zone allowlist, project layer; roots/list scope and `search_memory` narrowing not yet) |
 | R3 | Span-start retrieval for root spans, `[retrieval]` config | built (`retrieval::span_start`, `auto_query`, engine wiring, `retrieval.done`; tests in `retrieval.rs`) |
 | R4 | Markdown/scratch tiering, tier stamping, spec-gate predicate | built (scratch zone and `is_notes_write`, tier cap, gate 3 `notes_only`, `FileChange.mode`); the start-of-task `build_without_spec` card is unchanged |
-| R5 | `about/` release snapshot | not started |
+| R5 | `about/` release snapshot | built (`build.rs` embeds the release's `specs/*.md` and `docs/reference/*.md` at `base/about/`; zone `about` hidden unless `about: true` or `kb search --about`; label "release reference, not build authority"; `spec_link` refuses `about/`; orchestrator duty) |
 | R6 | Search page building state and cancel (SK9d fix built) | partly built |

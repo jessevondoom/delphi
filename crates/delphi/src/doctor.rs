@@ -86,6 +86,11 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
     let mut caps = 0;
     let mut links = 0;
     for f in lint_report.findings {
+        // `about/` is the release's own read-only snapshot of its specs and reference (`specs/064` §7): its links point into the
+        // repository it came from, and the release's own lint already checked them there.
+        if f.location.starts_with("about/") {
+            continue;
+        }
         match f.check.as_str() {
             "rule-caps" => {
                 caps += 1;
