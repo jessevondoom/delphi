@@ -180,6 +180,7 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first, 
         if (e.t === 'key' && e.k === 'shift-tab' && links.length) { move(-1); return; }
         if (e.t === 'key' && e.k === 'enter' && cur) {
           if (cur.target.k === 'external') run({ t: 'browser', url: cur.target.url });
+          else if (cur.target.k === 'page') run({ t: 'copy', text: copyText(cur.target) });
           else { setFeed((f) => ({ ...f, note: 'opening…' })); run({ t: 'open', target: cur.target }); }
           return;
         }

@@ -77,7 +77,7 @@ export function copyText(t: Target): string {
 }
 
 /** The logical path a target opens in the reader; external targets have none. */
-export const pathOf = (t: Target): string | null => (t.k === 'external' ? null : t.path);
+export const pathOf = (t: Target): string | null => (t.k === 'doc' || t.k === 'pointer' ? t.path : null);
 
 /** The next link after `cur` (or the first), wrapping or stopping at the ends; `cur` null means none is focused. */
 export function stepFocus(links: Link[], cur: number | null, dir: 1 | -1): number | null {

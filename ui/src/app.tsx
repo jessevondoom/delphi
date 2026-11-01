@@ -598,9 +598,12 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
           if (key === 'shift-tab') { move(-1); return; }
           if (cur && key === 'enter') {
             if (cur.target.k === 'external') runKb({ t: 'browser', url: cur.target.url }, 'rdr');
-            else { setLm((l) => (l ? { ...l, note: 'opening…' } : l)); runKb({ t: 'open', target: cur.target }, 'rdr'); }
+            else if (cur.target.k === 'page') {
+              setDeck(0);
+              runKb({ t: 'pages-search', q: cur.target.slug, external: false });
+            } else { setLm((l) => (l ? { ...l, note: 'opening…' } : l)); runKb({ t: 'open', target: cur.target }, 'rdr'); }
           } else if (cur && key === 'y') runKb({ t: 'copy', text: copyText(cur.target) }, 'rdr');
-          else if (cur && key === 'p' && cur.target.k !== 'external') pinTarget(cur.target);
+          else if (cur && key === 'p' && (cur.target.k === 'doc' || cur.target.k === 'pointer')) pinTarget(cur.target);
           return;
         }
       }

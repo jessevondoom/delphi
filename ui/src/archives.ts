@@ -409,6 +409,7 @@ function reader(a: Arch, e: Ev, w: number, h: number, used: (n: Arch, act?: Acti
       const l = cur.focus === null ? undefined : links[cur.focus];
       if (!l) return used(a);
       if (l.target.k === 'external') return cur.listed?.[l.target.url] === true ? used(a, { t: 'browser', url: l.target.url }) : used({ ...a, note: 'seen, not read: that address is not on your list' });
+      if (l.target.k === 'page') return used({ ...a, mode: 'pages', note: 'opening page…' }, { t: 'pages-search', q: l.target.slug, external: false });
       return used({ ...a, note: 'opening…' }, { t: 'open', target: l.target });
     }
     case 'esc': case 'backspace': return back();
