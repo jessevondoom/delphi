@@ -399,7 +399,8 @@ Approved by the operator on 2026-10-31. Same-machine host agents (Claude Code, C
 | Slice | Content | State |
 | :-- | :-- | :-- |
 | S0 | spec 061 approval | approved 2026-10-31; merges with its pull request |
-| S1-S11 | server skeleton and toggle, agent packs, project awareness, host config and plugin and docs, daemon proposals and limits, `request_help`, `request_council`, vector search, transcript ingest, resume and console toggle, security review | not started |
+| S1 | server skeleton and toggle | built (this PR): `delphi mcp` (`mcp_host.rs`, framing shared with `bundle serve` in `mcp_wire.rs`), `[mcp] enabled` re-read each call and fail-closed, `allow_remote = true` refused, empty golden `tools/list`; `delphi doctor` MCP line moves to S10 |
+| S2-S11 | agent packs, project awareness, host config and plugin and docs, daemon proposals and limits, `request_help`, `request_council`, vector search, transcript ingest, resume and console toggle, security review | not started |
 
 ## Council 013: containment increment (verdict: `councils/013-verdict.md`)
 

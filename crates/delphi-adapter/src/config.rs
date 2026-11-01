@@ -578,6 +578,35 @@ pub struct Config {
     pub library: LibraryConfig,
     /// `[learning]`: capture and the bounds on the learning loop (`specs/031` §3.6). The engine clamps each value to the core's bounds.
     pub learning: LearningConfig,
+    /// `[mcp]`: the server for host agents (`specs/061` §3.4).
+    pub mcp: McpConfig,
+}
+
+/// `[mcp]` (`specs/061` §3.2, §3.4). `enabled` is the operator's switch; `allow_remote` is reserved for a later spec and
+/// cannot be turned on in this version.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct McpConfig {
+    pub enabled: bool,
+    pub allow_remote: bool,
+}
+
+impl Default for McpConfig {
+    fn default() -> McpConfig {
+        McpConfig { enabled: true, allow_remote: false }
+    }
+}
+
+impl McpConfig {
+    /// Whether the server answers tool calls, read from a `config.toml`'s text. Anything that cannot be read as the operator
+    /// wrote it (invalid TOML, a wrong type under `[mcp]`) is "off": the switch fails closed.
+    pub fn enabled_in(text: &str) -> bool {
+        let Ok(root) = toml::from_str::<toml::Value>(text) else { return false };
+        match root.get("mcp") {
+            None => true,
+            Some(v) => v.clone().try_into::<McpConfig>().map(|c| c.enabled && !c.allow_remote).unwrap_or(false),
+        }
+    }
 }
 
 /// `[library]`.
@@ -861,6 +890,13 @@ impl Config {
             match v.clone().try_into::<LearningConfig>() {
                 Ok(v) => cfg.learning = v,
                 Err(e) => errs.push(format!("[learning]: {}", e)),
+            }
+        }
+        if let Some(v) = root.get("mcp") {
+            match v.clone().try_into::<McpConfig>() {
+                Ok(v) if v.allow_remote => errs.push("[mcp] allow_remote: remote access is not supported in this version (specs/061 §3.2)".to_string()),
+                Ok(v) => cfg.mcp = v,
+                Err(e) => errs.push(format!("[mcp]: {}", e)),
             }
         }
         // `[harness]` also carries scalar settings of its own (`subscription_budget_tokens`); only its sub-tables are profiles.
@@ -1372,6 +1408,23 @@ impl Config {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn mcp_defaults_on_and_refuses_remote_access() {
+        assert!(Config::parse("").unwrap().mcp.enabled);
+        assert!(!Config::parse("[mcp]\nenabled = false\n").unwrap().mcp.enabled);
+        assert!(Config::parse("[mcp]\nallow_remote = true\n").unwrap_err().iter().any(|e| e.contains("allow_remote")));
+        assert!(Config::parse("[mcp]\nsurprise = 1\n").is_err());
+    }
+
+    #[test]
+    fn mcp_switch_reads_fail_closed() {
+        assert!(McpConfig::enabled_in(""));
+        assert!(!McpConfig::enabled_in("[mcp]\nenabled = false\n"));
+        assert!(!McpConfig::enabled_in("[mcp]\nenabled = \"no\"\n"));
+        assert!(!McpConfig::enabled_in("[mcp]\nallow_remote = true\n"));
+        assert!(!McpConfig::enabled_in("[[["));
+    }
 
     #[test]
     fn library_pages_defaults_and_ttl_forms() {

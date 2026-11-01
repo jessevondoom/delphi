@@ -166,6 +166,16 @@ Run your observe hooks on events.
 
 Run it in a terminal or a tmux pane. The hooks are in the ratified [hooks] config.
 
+### `delphi mcp`
+
+Delphi for the other tools you code with, as an MCP server on stdio.
+
+```
+  delphi mcp [--workspace <name>] [--home <dir>]
+```
+
+A host such as Claude Code starts it from its MCP configuration; it is not meant to be run by hand. It is read-only, opens no port and runs nothing, and serves this machine and this user only (spec 061). Turn it off with `[mcp] enabled = false` in config.toml: every tool call is then answered `disabled_by_operator`, and the change takes effect at once. In this version it has the handshake and the switch; roles, project knowledge, help and Councils arrive in later slices.
+
 ## Work
 
 ### `delphi decisions`
