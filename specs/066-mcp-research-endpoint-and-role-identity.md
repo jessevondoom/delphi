@@ -3,7 +3,8 @@ id: spec-066-mcp-research-endpoint-and-role-identity
 title: "066: MCP research endpoint for host agents, and Delphi role identity in answers"
 author: architect
 timestamp: 2026-11-01T17:55:00Z
-status: draft   # decisions D-1..D-6 were given by the operator on 2026-11-01 in conversation; this file becomes approved only when the operator approves it
+status: approved   # approved by the operator on 2026-11-01 ("approve the spec and start building"); D-1..D-6 were given by the operator the same day
+approved_by: operator (2026-11-01)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +15,7 @@ tags: [spec, mcp, host-agents, research, scout, validator, library, trusted-sour
 
 # Spec 066: Research endpoint and role identity for host agents
 
-> **Status: draft.** Amends [`specs/062`](062-delphi-as-host-agent-mcp-server.md) (§2 principle 2, §6.3, §9). Uses [`specs/052`](052-knowledge-status-capture-on-contact-and-the-digest.md) (status vocabulary, capture on contact), [`specs/055`](055-the-central-library-sources-claims-and-pages.md) (library), [`specs/028`](028-knowledge-window.md) §10.3 (trusted lists), [`specs/064`](064-knowledge-retrieval-for-agents-and-mcp.md) (retrieval) and [`specs/005a`](005a-terminal-avatar-system.md) (badges). Reviewed by a three-seat council (architect, investigator as red team, scout) on 2026-11-01.
+> **Status: approved by the operator, 2026-11-01.** Amends [`specs/062`](062-delphi-as-host-agent-mcp-server.md) (§2 principle 2, §6.3, §9). Uses [`specs/052`](052-knowledge-status-capture-on-contact-and-the-digest.md) (status vocabulary, capture on contact), [`specs/055`](055-the-central-library-sources-claims-and-pages.md) (library), [`specs/028`](028-knowledge-window.md) §10.3 (trusted lists), [`specs/064`](064-knowledge-retrieval-for-agents-and-mcp.md) (retrieval) and [`specs/005a`](005a-terminal-avatar-system.md) (badges). Reviewed by a three-seat council (architect, investigator as red team, scout) on 2026-11-01.
 
 ## 1. Scope & Objectives
 
