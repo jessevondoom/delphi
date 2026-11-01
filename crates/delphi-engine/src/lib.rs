@@ -52,6 +52,7 @@ pub mod mcp_host;
 pub mod mcp_hosts;
 pub mod mcp_packs;
 pub mod mcp_project;
+pub mod transcript;
 pub mod mcp_wire;
 pub mod org_context;
 pub mod core_main;

@@ -133,6 +133,74 @@ pub fn cli(ws_dir: &Path, args: &[String], opts: &Options) -> i32 {
     }
 }
 
+pub struct Ingest {
+    pub from: Option<String>,
+    pub role: Option<String>,
+    pub path: Option<std::path::PathBuf>,
+    pub enable: bool,
+}
+
+/// Where Claude Code keeps the session logs of the project at `cwd`: `~/.claude/projects/<cwd with `/` and `.` as `-`>`.
+fn claude_logs_for(cwd: &Path) -> Option<std::path::PathBuf> {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from)?;
+    let folder: String = cwd.to_string_lossy().chars().map(|c| if c == '/' || c == '.' { '-' } else { c }).collect();
+    Some(home.join(".claude/projects").join(folder))
+}
+
+pub fn ingest_run(ws: &delphi_engine::workspace::WorkspacePaths, cwd: &Path, a: &Ingest) -> Result<String, String> {
+    use delphi_engine::transcript;
+    let project = delphi_engine::scope::resolve(&ws.dir, cwd).project.ok_or("this folder resolves to no project scope: nothing was ingested")?;
+    if a.enable {
+        transcript::opt_in(&ws.dir, project.as_str())?;
+        if a.from.is_none() {
+            return Ok(format!("transcript ingest is on for project {}\n", project.as_str()));
+        }
+    }
+    match a.from.as_deref() {
+        Some("claude-code") => {}
+        Some("codex" | "copilot") => return Err("only `claude-code` logs are read so far; the other readers follow once their formats have fixtures".into()),
+        Some(other) => return Err(format!("`{other}` is not a transcript source (claude-code)")),
+        None => return Err("ingest needs --from claude-code".into()),
+    }
+    let role = a.role.as_deref().ok_or("ingest needs --role <role>: the role the lessons are for (see `delphi catalog`)")?;
+    let src = a.path.clone().or_else(|| claude_logs_for(cwd)).ok_or("could not find the session logs; pass --path")?;
+    let mut files: Vec<std::path::PathBuf> = if src.is_dir() {
+        std::fs::read_dir(&src).map_err(|e| format!("could not read {}: {e}", src.display()))?.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "jsonl")).collect()
+    } else {
+        vec![src.clone()]
+    };
+    files.sort();
+    let (mut staged, mut already, mut refused) = (0, 0, Vec::new());
+    for f in &files {
+        let text = std::fs::read_to_string(f).map_err(|e| format!("could not read {}: {e}", f.display()))?;
+        match transcript::ingest_claude_code(ws, cwd, role, &text) {
+            Ok(r) => (staged, already) = (staged + r.staged, already + r.already),
+            Err(e) if e.contains("is off for project") || e.contains("daemon") || e.contains("role") => return Err(e),
+            Err(e) => refused.push(format!("{}: {e}", f.display())),
+        }
+    }
+    let mut out = format!("{} log(s): {staged} note(s) staged for {role} at L0, {already} already staged\n", files.len());
+    for r in &refused {
+        out.push_str(&format!("skipped {r}\n"));
+    }
+    out.push_str("review them with `delphi learn list`; staged notes are never loaded into a prompt\n");
+    Ok(out)
+}
+
+pub fn ingest_cli(ws: &delphi_engine::workspace::WorkspacePaths, a: &Ingest) -> i32 {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    match ingest_run(ws, &cwd, a) {
+        Ok(t) => {
+            print!("{t}");
+            0
+        }
+        Err(e) => {
+            eprintln!("delphi learn ingest: {e}");
+            1
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

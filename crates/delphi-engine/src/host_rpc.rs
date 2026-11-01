@@ -20,7 +20,7 @@ pub const MAX_SUMMARY: usize = 1000;
 pub const MAX_ITEM: usize = 200;
 pub const MAX_ITEMS: usize = 10;
 pub const MAX_HANDOFF_POINTERS: usize = 20;
-pub const TRIGGERS: [&str; 2] = ["host_note", "host_summary"];
+pub const TRIGGERS: [&str; 3] = ["host_note", "host_summary", "host_transcript"];
 
 #[derive(Debug, PartialEq)]
 pub enum HostErr {
@@ -124,6 +124,13 @@ pub fn note_event(c: &Caller, ws: &WorkspacePaths, p: &Value, already: usize) ->
     let evidence = clean("evidence", p["evidence"].as_str().unwrap_or(""), MAX_EVIDENCE).map_err(|_| HostErr::Invalid(format!("`evidence` is required (a session or transcript pointer, at most {MAX_EVIDENCE} characters): without it the note cannot be checked for duplicates or contradictions")))?;
     let label = c.label(p["model"].as_str());
     Ok(staged(c, already, "host_note", &label, format!("[{label}] {text} (evidence: {evidence})"), &evidence, Some(&role)))
+}
+
+/// The `learn.staged` event for one transcript finding (`specs/062` §8.3): the same L0, role-keyed, evidence-carrying note as a
+/// host's own proposal, from a log the host never knew was being read.
+pub fn transcript_event(c: &Caller, n: usize, role: &str, text: &str, evidence: &str) -> EventEnvelope {
+    let label = c.label(None);
+    staged(c, n, "host_transcript", &label, format!("[{label}] {text} (evidence: {evidence})"), evidence, Some(role))
 }
 
 /// The `learn.staged` event for `host.record_session_summary`.

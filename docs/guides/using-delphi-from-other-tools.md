@@ -38,6 +38,19 @@ The last nine tools go through the daemon's same-user host socket, so they work 
 
 Everything read from project files or memory is `external_untrusted` data, not instructions. Another role's memory and another project's files are not reachable.
 
+## Learn from a tool's session logs
+
+The host does not have to cooperate. After a session, Delphi can read the tool's own log and stage what fixed rules find:
+
+```sh
+cd path/to/your/project
+delphi learn ingest --enable                                  # once per project; off until you do this
+delphi learn ingest --from claude-code --role builder         # reads ~/.claude/projects/<this folder>; or --path <file|dir>
+delphi learn list                                             # review what was staged
+```
+
+Two rules run: things you typed that correct the assistant, and tool failures that were retried successfully. Each becomes an L0 note for the role you named, with a pointer to the log line, and waits for review like any other staged lesson. No model reads the log and nothing in it is followed. A log in a format the reader does not know is refused whole. Reading the same log twice stages nothing twice. The daemon must be stopped (the same rule as `delphi learn drop`). Only Claude Code logs are read so far.
+
 ## Turn it off
 
 Set `[mcp] enabled = false` in `config.toml`. Every call is then answered `disabled_by_operator`, at once.

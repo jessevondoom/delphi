@@ -378,10 +378,11 @@ notes staged from denials, corrections, retries and escalations.
   delphi learn list [\-\-mission <id>] [\-\-json]
   delphi learn show <mission>/<id> [\-\-json]
   delphi learn drop <mission>/<id>
+  delphi learn ingest \-\-from claude\-code \-\-role <role> [\-\-path <file|dir>] [\-\-enable]
     [\-\-workspace <name>] [\-\-home <dir>]
 .fi
 .PP
-Staged notes are never loaded into a prompt; they wait for review. `drop` needs the daemon stopped. Capture is set in [learning] in config.toml.
+Staged notes are never loaded into a prompt; they wait for review. `drop` needs the daemon stopped. Capture is set in [learning] in config.toml. `ingest` reads a coding tool's own session logs after the fact and stages what fixed rules find (your corrections, failures that were retried) as L0 notes for one role; it is off for a project until you run it once with `\-\-enable` from inside that project, reads the current folder's logs unless `\-\-path` says otherwise, and needs the daemon stopped.
 .SS delphi capabilities
 what each model CLI here can use: connectors, skills, models.
 .PP
