@@ -4,7 +4,7 @@
 //! `get_agent`, `list_skills`, `get_skill`, and each servable role as an MCP prompt; S3 adds project awareness
 //! (`mcp_project.rs`): the specs and context of the registered project the working directory belongs to, `specs_status`,
 //! `search_project`, `search_memory`, and `route`. S5 adds four tools that write through the daemon (`mcp_daemon.rs`): `propose_note`,
-//! `record_session_summary`, `handoff_put`, `handoff_get`; S6 adds `request_help` and `help_result`. Councils arrive in a later slice and add their tools to `tools()`.
+//! `record_session_summary`, `handoff_put`, `handoff_get`; S6 adds `request_help` and `help_result`; S7 adds `request_council`, `council_status` and `council_result`.
 //!
 //! Secure by construction, like `delphi bundle serve`:
 //! * **No file, no network, no process.** This module writes no file and opens no network socket; it reads `config.toml` and speaks
@@ -224,6 +224,48 @@ pub fn tools() -> Value {
                 "additionalProperties": false
             },
             "annotations": annotations("Fetch the answer to a help request")
+        },
+        {
+            "name": "request_council",
+            "title": "Ask Delphi's Council to rule",
+            "description": "Put a question to Delphi's Council: seats argue it blind, critique each other, and the Orchestrator rules, with the dissent kept. Returns a council_id at once; the Council takes a few minutes, so check it with council_status and read the ruling with council_result. The ruling is advice and binds nothing in your project. It spends the operator's tokens as any Council does: state the question and the options plainly.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string", "minLength": 1, "maxLength": 2000, "description": "What the Council should decide."},
+                    "options": {"type": "array", "maxItems": 8, "items": {"type": "string", "maxLength": 200}, "description": "The choices you are weighing, if any."},
+                    "stakes": {"type": "string", "enum": ["low", "normal", "high"], "default": "normal"},
+                    "context_pointers": {"type": "array", "maxItems": 10, "items": {"type": "object", "properties": {"uri": {"type": "string", "maxLength": 200}, "reason": {"type": "string", "maxLength": 200}}, "required": ["uri", "reason"], "additionalProperties": false}, "description": "Project-relative files the Council should look at."},
+                    "model": {"type": "string", "maxLength": 64, "description": "Your model name, self-reported."}
+                },
+                "required": ["question"],
+                "additionalProperties": false
+            },
+            "annotations": writes("Ask the Council to rule")
+        },
+        {
+            "name": "council_status",
+            "title": "Check a Council",
+            "description": "The state of a Council this session raised: convening, deliberating (with the round), decided, needs_operator, not_decided or failed.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"council_id": {"type": "string", "minLength": 1, "maxLength": 64}},
+                "required": ["council_id"],
+                "additionalProperties": false
+            },
+            "annotations": annotations("Check a Council")
+        },
+        {
+            "name": "council_result",
+            "title": "Read a Council's ruling",
+            "description": "The ruling of a Council this session raised: the decision, next steps, the options considered, each seat's position, the dissent verbatim, the unresolved findings and the record. Pass wait: true to wait up to 25 seconds if it is still deliberating.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"council_id": {"type": "string", "minLength": 1, "maxLength": 64}, "wait": {"type": "boolean", "default": false}},
+                "required": ["council_id"],
+                "additionalProperties": false
+            },
+            "annotations": annotations("Read a Council's ruling")
         }
     ])
 }
@@ -299,6 +341,9 @@ impl Server {
             "handoff_get" => self.daemon("host.handoff_get", args),
             "request_help" => self.daemon_slow("host.request_help", args),
             "help_result" => self.daemon_slow("host.help_result", args),
+            "request_council" => self.daemon("host.request_council", args),
+            "council_status" => self.daemon("host.council_status", args),
+            "council_result" => self.daemon_slow("host.council_result", args),
             _ => return None,
         })
     }
@@ -470,9 +515,9 @@ mod tests {
         let r = call(&mut s, json!({"jsonrpc": "2.0", "id": 3, "method": "tools/list"}));
         let tools = r["result"]["tools"].as_array().unwrap();
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["list_roles", "get_agent", "list_skills", "get_skill", "specs_status", "search_project", "search_memory", "route", "propose_note", "record_session_summary", "handoff_put", "handoff_get", "request_help", "help_result"]);
+        assert_eq!(names, ["list_roles", "get_agent", "list_skills", "get_skill", "specs_status", "search_project", "search_memory", "route", "propose_note", "record_session_summary", "handoff_put", "handoff_get", "request_help", "help_result", "request_council", "council_status", "council_result"]);
         for t in tools {
-            let writes = ["propose_note", "record_session_summary", "handoff_put", "request_help"].contains(&t["name"].as_str().unwrap());
+            let writes = ["propose_note", "record_session_summary", "handoff_put", "request_help", "request_council"].contains(&t["name"].as_str().unwrap());
             assert_eq!(t["annotations"]["readOnlyHint"], !writes, "{}", t["name"]);
             assert_eq!(t["annotations"]["destructiveHint"], false, "{}", t["name"]);
             assert_eq!(t["annotations"]["openWorldHint"], false, "{}", t["name"]);
@@ -617,7 +662,7 @@ mod tests {
             assert_eq!(r["result"]["isError"], true);
             assert!(r["result"]["content"][0]["text"].as_str().unwrap().starts_with("disabled_by_operator"));
         }
-        assert!(call(&mut s, json!({"jsonrpc": "2.0", "id": 9, "method": "tools/list"}))["result"]["tools"].as_array().unwrap().len() == 14);
+        assert!(call(&mut s, json!({"jsonrpc": "2.0", "id": 9, "method": "tools/list"}))["result"]["tools"].as_array().unwrap().len() == 17);
         std::fs::write(d.path().join("config.toml"), "[mcp]\nenabled = true\n").unwrap();
         assert_eq!(tool(&mut s, "no_such_tool")["error"]["code"], -32602);
         std::fs::write(d.path().join("config.toml"), "[mcp]\nenabled = false\n").unwrap();

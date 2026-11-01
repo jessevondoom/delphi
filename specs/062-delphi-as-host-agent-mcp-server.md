@@ -154,6 +154,8 @@ For a host-originated request, the dispatched agent runs under its own role scop
 
 The result is structured and host-friendly, not console UI: the decision, the options considered, each seat's position, the dissent verbatim (GOVERNANCE minority report), the reasoning and the Council id. **A ruling is advice to the host and binds nothing in the host.** Where it creates a Delphi decision, that decision is recorded as proposed in the decisions pane and the operator ratifies it.
 
+**How (S7, assumptions the operator can change).** The Council runs in the host session's own mission (`host-<session>`), convened by the daemon with the default seats (text-only, as every Council) on a fenced proposition built from `question`, `options`, `stakes` and `context_pointers`; pointers are named in the proposition, not read by the host server. The ID is the Council's task ID. `council_status` and `council_result` read the state and ruling from that mission's log, so a daemon restart loses nothing and only the session that raised the Council can read it. States: `deliberating` (with the round), `decided`, `needs_operator` (the Council escalated to the operator), `not_decided` (too few seats answered) and `failed`. `council_result` with `wait: true` waits at most 25 seconds (Q-4: no call blocks for the whole Council). The ruling carries the dissent verbatim from the Council's record. A host's ruling creates **no** Delphi decision and no card; the record stays in the host mission for the operator to read. Councils are not rate-limited (§9).
+
 ## 8. Learning back
 
 ### 8.1 Proposals

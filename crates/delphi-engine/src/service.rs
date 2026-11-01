@@ -289,6 +289,53 @@ impl EngineService {
         Ok(self.wait_help(&task_id, HELP_WAIT).await)
     }
 
+    /// `host.request_council` (`specs/062` §7): raise an on-demand Council on a host's question, in the host session's own mission, and
+    /// return its id at once. The seats are text-only, so they advise and change nothing; the ruling is read with `host.council_status`
+    /// and `host.council_result`, and binds nothing in the host.
+    async fn host_request_council(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        use crate::host_rpc as h;
+        need_host(&ctx)?;
+        let ws = &self.engine.ws;
+        h::gate(&ws.dir).map_err(host_err)?;
+        let c = h::Caller::parse(&p).map_err(host_err)?;
+        let proposition = h::council_proposition(&c, &p).map_err(host_err)?;
+        let (task_id, m) = {
+            let _gate = self.host_gate.lock().await;
+            let m = self.mission_at(Some(&c.mission()), c.cwd.to_str()).await?;
+            let task_id = m.next_task_id();
+            m.append(EventEnvelope::new(&m.id, h::COUNCIL_EVENT, json!({"task_id": task_id, "source": c.label(p["model"].as_str())}))).await.map_err(engine_err)?;
+            (task_id, m)
+        };
+        let (engine, tid, mm) = (self.engine.clone(), task_id.clone(), m.clone());
+        tokio::spawn(async move {
+            if let Err(e) = engine.run_council(&mm, tid.clone(), &proposition, crate::council::CouncilOpts::default()).await {
+                elog_task_failed(&mm.id, &tid, &e);
+                let mut ev = EventEnvelope::new(&mm.id, "task.failed", json!({"error": engine.secrets.redact(&e.to_string())}));
+                ev.task_id = Some(tid.clone());
+                let _ = mm.append(ev).await;
+            }
+        });
+        Ok(json!({"council_id": task_id, "state": "convening", "note": "a Council runs for a few minutes: ask again with council_status, then council_result; its ruling is advice and binds nothing in your project"}))
+    }
+
+    /// `host.council_status` and `host.council_result`: the state, and the ruling once decided. Only the session that raised it can read it.
+    async fn host_council_read(&self, p: Value, ctx: CallContext, wait: bool) -> RpcOutcome {
+        use crate::host_rpc as h;
+        need_host(&ctx)?;
+        h::gate(&self.engine.ws.dir).map_err(host_err)?;
+        let c = h::Caller::parse(&p).map_err(host_err)?;
+        let id = p["council_id"].as_str().unwrap_or("").to_string();
+        let m = self.mission_at(Some(&c.mission()), c.cwd.to_str()).await?;
+        let deadline = Instant::now() + if wait && p["wait"].as_bool() == Some(true) { Duration::from_secs(25) } else { Duration::ZERO };
+        loop {
+            let view = h::council_view(&m.replay().map_err(engine_err)?, &m.dir, &id).ok_or_else(|| err(code::INVALID_PARAMS, "no such Council for this session"))?;
+            if view["state"] != "deliberating" || Instant::now() >= deadline {
+                return Ok(view);
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+
     /// The answer so far: the result, or `working`. Only the session that asked can read it.
     async fn wait_help(&self, id: &str, wait: Duration) -> Value {
         let deadline = Instant::now() + wait;
@@ -2301,6 +2348,9 @@ impl Extension for ServiceExt {
                 "host.handoff_get" => svc.host_handoff_get(params, ctx).await,
                 "host.request_help" => svc.host_request_help(params, ctx).await,
                 "host.help_result" => svc.host_help_result(params, ctx).await,
+                "host.request_council" => svc.host_request_council(params, ctx).await,
+                "host.council_status" => svc.host_council_read(params, ctx, false).await,
+                "host.council_result" => svc.host_council_read(params, ctx, true).await,
                 "recovery.resume" => svc.recovery_resume(params, ctx).await,
                 "recovery.pause" => (|| {
                     need_console(&ctx)?;
@@ -2571,6 +2621,47 @@ mod tests {
         .await;
         let events = replay_log(&delphi_core::sessions::dir(&ws_dir, "host-abcdef0123456789"));
         assert_eq!(crate::host_rpc::helps_in(&events), 3);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_host_raises_a_council_and_only_its_own_session_reads_it_and_the_switch_holds() {
+        let f = setup(vec![], 5.0, |_| {});
+        let ws_dir = f.engine.ws.dir.clone();
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let dir2 = ws_dir.clone();
+        blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            c.hello(&htok).unwrap();
+            let p = |extra: Value| {
+                let mut b = json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cwd});
+                for (k, v) in extra.as_object().unwrap() {
+                    b[k] = v.clone();
+                }
+                b
+            };
+            assert_eq!(rpc_code(c.call("host.request_council", p(json!({"options": ["a"]})))), Some(code::INVALID_PARAMS));
+            assert_eq!(rpc_code(c.call("host.request_council", p(json!({"question": "q", "stakes": "dire"})))), Some(code::INVALID_PARAMS));
+            let r = c.call("host.request_council", p(json!({"question": "Table or file for the retry queue?", "options": ["table", "file"], "stakes": "high"}))).unwrap();
+            let id = r["council_id"].as_str().unwrap().to_string();
+            assert_eq!(r["state"], "convening");
+            let got = c.call("host.council_result", p(json!({"council_id": id, "wait": true}))).unwrap();
+            assert_eq!(got["council_id"], json!(id));
+            assert!(["deliberating", "decided", "needs_operator", "not_decided", "failed"].contains(&got["state"].as_str().unwrap()), "{got}");
+            assert!(c.call("host.council_status", p(json!({"council_id": id}))).is_ok());
+            // Another session, or a made-up id, finds nothing.
+            let other = json!({"session": "fedcba9876543210", "tool": "x", "cwd": cwd, "council_id": id});
+            assert_eq!(rpc_code(c.call("host.council_status", other)), Some(code::INVALID_PARAMS));
+            assert_eq!(rpc_code(c.call("host.council_result", p(json!({"council_id": "t-nope"})))), Some(code::INVALID_PARAMS));
+            std::fs::write(dir2.join("config.toml"), "[mcp]\nenabled = false\n").unwrap();
+            assert_eq!(rpc_code(c.call("host.request_council", p(json!({"question": "q"})))), Some(code::FORBIDDEN));
+            assert_eq!(rpc_code(c.call("host.council_status", p(json!({"council_id": id})))), Some(code::FORBIDDEN));
+        })
+        .await;
+        let events = replay_log(&delphi_core::sessions::dir(&ws_dir, "host-abcdef0123456789"));
+        assert_eq!(events.iter().filter(|e| e.kind == crate::host_rpc::COUNCIL_EVENT).count(), 1);
     }
 
     fn replay_log(dir: &std::path::Path) -> Vec<delphi_core::event::EventEnvelope> {
