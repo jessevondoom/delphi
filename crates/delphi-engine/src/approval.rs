@@ -556,7 +556,7 @@ mod tests {
         assert_eq!(b.need("t1", None, &spec_write("b")), Need::No("allowed similar earlier in this task"));
         // A different task, a different directory, or a different tool: asks.
         assert_eq!(b.need("t2", None, &spec_write("b")), Need::Yes(Tier::Amber));
-        let other_dir = classify("write_file", &json!({"path": "context/domains/x.md", "content": "b"})).unwrap();
+        let other_dir = classify("write_file", &json!({"path": "context/domains/x.toml", "content": "b"})).unwrap();
         assert_eq!(b.need("t1", None, &other_dir), Need::Yes(Tier::Amber));
         assert_eq!(b.allow_similar(), vec![("t1".to_string(), "write_file".to_string(), "write_file specs/*".to_string())]);
         b.end_task("t1");

@@ -149,6 +149,8 @@ pub struct FileChange {
     /// Why, when it is not just the path: a symlink (it can point anywhere on the operator's disk) or a
     /// submodule.
     pub special: Option<&'static str>,
+    /// The git file mode after the change (`100644`, `100755`, ...); empty when git did not report one.
+    pub mode: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -404,7 +406,7 @@ impl Worktree {
                 Some("160000") => Some("submodule"),
                 _ => None,
             };
-            files.push(FileChange { path: path.to_string(), status: status.get(path).copied().unwrap_or('M'), added: a.parse().unwrap_or(10_000), removed: r.parse().unwrap_or(0), host_exec: host || special.is_some(), special });
+            files.push(FileChange { path: path.to_string(), status: status.get(path).copied().unwrap_or('M'), added: a.parse().unwrap_or(10_000), removed: r.parse().unwrap_or(0), host_exec: host || special.is_some(), special, mode: modes.get(path).cloned().unwrap_or_default() });
         }
         files.sort_by(|a, b| (!a.host_exec, &a.path).cmp(&(!b.host_exec, &b.path)));
         Ok(DiffSummary { head_sha, files })

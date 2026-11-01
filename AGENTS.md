@@ -8,7 +8,7 @@ Delphi: a Rust workspace (`crates/`) plus an Ink/TypeScript console (`ui/`). One
 
 ## Rules
 
-- **No Spec, No Build.** Work only against a spec with `status: approved`. Commit trailer: `Implements-Spec: specs/NNN-*.md`. A draft spec is a proposal, not permission.
+- **No Spec, No Build.** Work only against a spec with `status: approved`. Commit trailer: `Implements-Spec: specs/NNN-*.md`. A draft spec is a proposal, not permission. Markdown notes and plain `scratch/` files are not building and need no spec (governed paths such as `specs/`, `memory/`, `agents/` excepted).
 - **One slice per pull request.** Update the spec tracker (`missions/2026-10-23-foundational-design/spec-tracker.md`) in the PR that changes a spec's state.
 - **Never commit past a failing gate.** Run before committing:
   ```sh

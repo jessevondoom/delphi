@@ -480,6 +480,6 @@ Approved by the operator on 2026-11-01 after a three-seat council review. Amends
 | R1 | `retrieval.rs`: read-only reader pool with the embedder attached once, passage results, deadline, `retrieval.done`; `kb_search`, `kb.search`, `kbserve` use it | partly built (agent `kb_search` uses it; daemon RPC and HTTP not yet) |
 | R2 | MCP `search_kb` over `HostLink`, allowlist visibility, per-request scope, `search_memory` narrowing | partly built (`search_kb` tool, `host.search_kb`, zone allowlist, project layer; roots/list scope and `search_memory` narrowing not yet) |
 | R3 | Span-start retrieval for root spans, `[retrieval]` config | built (`retrieval::span_start`, `auto_query`, engine wiring, `retrieval.done`; tests in `retrieval.rs`) |
-| R4 | Markdown/scratch tiering, tier stamping, spec-gate predicate | not started |
+| R4 | Markdown/scratch tiering, tier stamping, spec-gate predicate | built (scratch zone and `is_notes_write`, tier cap, gate 3 `notes_only`, `FileChange.mode`); the start-of-task `build_without_spec` card is unchanged |
 | R5 | `about/` release snapshot | not started |
 | R6 | Search page building state and cancel (SK9d fix built) | partly built |

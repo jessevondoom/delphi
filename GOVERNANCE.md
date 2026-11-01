@@ -21,7 +21,7 @@ Delphi is a multi-agent working environment in which a team of specialized agent
    - **Tier 1: [GOVERNANCE.md](GOVERNANCE.md):** behavioral invariants, safety boundaries and collaboration protocols.
    - **Tier 2: [SPEC.md](SPEC.md), sub-specs (`specs/*.md`) and [REVIEW.md](REVIEW.md):** architectural, functional and adversarial verification requirements.
    - **Tier 3: Implementation (code, scripts, prompts, skills, theme packs):** derived artifacts that must conform to Tiers 1 and 2.
-3. **No Spec, No Build:** Builder may not implement non-trivial features or architectural changes without an `approved` spec authored by Architect, reviewed by Strategist and Red-Team, and linked to the task (`Implements-Spec: specs/NNN-*.md`).
+3. **No Spec, No Build:** Builder may not implement non-trivial features or architectural changes without an `approved` spec authored by Architect, reviewed by Strategist and Red-Team, and linked to the task (`Implements-Spec: specs/NNN-*.md`). Writing Markdown notes (research, plans, reports) or plain files in `scratch/` is the system running, not building: it needs no spec and no ratification, except under `specs/`, `memory/`, `agents/`, `skills/`, `themes/` and the other governed paths.
 4. **Drift Remediation:** if implementation and specification diverge, the agent halts and requests a spec amendment instead of silently working around the spec in code (`FM-1.1`).
 
 ---

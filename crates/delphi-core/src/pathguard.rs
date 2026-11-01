@@ -127,7 +127,7 @@ fn never_readable(key: &str, role: &str) -> Option<String> {
     None
 }
 
-/// Extensions of files that run, load or build (`specs/064` §6.2). A scratch file is data: none of these may be written there.
+/// Extensions of files that run, load or build (`specs/064` §6). A scratch file is data: none of these may be written there.
 const SCRATCH_EXEC_EXT: [&str; 44] = [
     "sh", "bash", "zsh", "fish", "csh", "ksh", "command", "bat", "cmd", "ps1", "psm1", "exe", "com", "dll", "so", "dylib", "app", "py", "pyc", "pyw", "rb", "pl", "js", "mjs", "cjs", "ts", "php", "lua", "jar", "class", "scpt", "applescript", "vbs", "wsf", "msi", "dmg", "pkg", "run", "bin", "out", "action", "workflow", "desktop", "lnk",
 ];
@@ -240,7 +240,7 @@ pub fn glob_match(glob: &str, path: &str) -> bool {
 
 impl Guard {
     /// Does the role's own scope allow `access` to this case-folded path? Any role that may write at all may write
-    /// scratch notes (`specs/064` §6.2).
+    /// scratch notes (`specs/064` §6).
     fn in_scope(&self, key: &str, access: Access) -> bool {
         let globs = if access == Access::Write { &self.write_globs } else { &self.read_globs };
         let scratch = key.starts_with("scratch/") && (access == Access::Read || !self.write_globs.is_empty());
@@ -312,7 +312,7 @@ impl Guard {
             return Some((self.zones.local.clone(), path.into()));
         }
         if key.starts_with("scratch/") {
-            // `local/scratch/`: data only (`specs/064` §6.2). Never ratified, never trusted.
+            // `local/scratch/`: data only (`specs/064` §6). Never ratified, never trusted.
             if access == Access::Write {
                 let _ = std::fs::create_dir_all(self.zones.local.join("scratch"));
             }
@@ -686,7 +686,7 @@ mod tests {
         assert!(g2.check(&format!("@payload/{}", hash), Access::Read).is_err());
     }
 
-    // specs/064 §6.2: scratch is data; everything that runs or is read by a tool or shell is refused, in any case.
+    // specs/064 §6: scratch is data; everything that runs or is read by a tool or shell is refused, in any case.
     #[test]
     fn scratch_takes_plain_files_and_refuses_what_runs() {
         let (t, g) = setup();
