@@ -46,11 +46,18 @@ pub fn run(kind: &str, target: &Path, repo: Option<&Path>) -> Result<Report, Str
 
 // ── fact: a claim over stored snapshots (specs/040 §7.2) ───────────────────
 
-/// `delphi check fact <claim.json> --home <dir>`: the pure part of the fact path. The input names the claim and the
-/// ids of snapshots the daemon already stored; there is no network and no model here, and nothing is written. The
-/// entailment judge and the contradiction search are the daemon's (`fact_run`), so a pass here is "may go on".
-pub fn fact(input: &Path, home: &Path) -> Result<Report, String> {
-    use delphi_engine::fact_check::{check_fact, Submission};
+/// `delphi check fact <claim.json> --home <dir> [--offline]`: the deterministic part of the fact path. The input names the claim and the
+/// ids of snapshots the daemon already stored; there is no model here, and nothing is written. The only network call is the DOI lookup at
+/// doi.org for a stored journal-publisher page that carries a DOI (`specs/040` §30), the same one the daemon makes; `offline` skips it
+/// and judges such a page on its text alone. The entailment judge and the contradiction search are the daemon's (`fact_run`), so a pass
+/// here is "may go on".
+pub fn fact(input: &Path, home: &Path, offline: bool) -> Result<Report, String> {
+    let resolver = delphi_engine::fact_run::HandleResolver::default();
+    fact_with(input, home, if offline { None } else { Some(&resolver) })
+}
+
+fn fact_with(input: &Path, home: &Path, doi: Option<&dyn delphi_engine::fact_run::DoiResolver>) -> Result<Report, String> {
+    use delphi_engine::fact_check::Submission;
     use delphi_engine::fact_fetch::SnapshotStore;
     use delphi_engine::fact_sources::SourceList;
     #[derive(serde::Deserialize)]
@@ -74,7 +81,7 @@ pub fn fact(input: &Path, home: &Path) -> Result<Report, String> {
         snaps.push(store.get(id).ok_or_else(|| format!("snapshot {} is not stored here, or its bytes do not match its hash", id.chars().take(16).collect::<String>()))?);
     }
     let sub = Submission::over_snapshots(i.claim, i.needed_for, i.kind.unwrap_or_default(), &snaps);
-    let o = check_fact(&sub, &snaps, &SourceList::new(sources)).to_outcome();
+    let o = delphi_engine::fact_run::check_stored(&sub, &snaps, &SourceList::new(sources), doi).to_outcome();
     let mut r = Report::default();
     o.fails.iter().for_each(|m| r.fail("fact", "", m));
     o.warns.iter().for_each(|m| r.warn("fact", "", m));
@@ -222,9 +229,9 @@ mod tests {
     fn check_fact_refuses_unstored_snapshots_and_submitted_quotes() {
         let home = tempfile::tempdir().unwrap();
         let (_d, p) = tmp("c.json", &format!(r#"{{"claim":"X is Y.","needed_for":"q","snapshots":["{}"]}}"#, "0".repeat(64)));
-        assert!(fact(&p, home.path()).err().unwrap().contains("not stored"));
+        assert!(fact(&p, home.path(), true).err().unwrap().contains("not stored"));
         let (_d2, p2) = tmp("c.json", r#"{"claim":"X is Y.","needed_for":"q","snapshots":[],"quote":"X is Y."}"#);
-        assert!(fact(&p2, home.path()).is_err(), "a submitted quote is refused by the parser");
+        assert!(fact(&p2, home.path(), true).is_err(), "a submitted quote is refused by the parser");
     }
 
     fn tmp(name: &str, body: &str) -> (tempfile::TempDir, std::path::PathBuf) {

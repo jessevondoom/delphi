@@ -444,14 +444,15 @@ the deterministic checks behind the built\-in skills.
 .PP
 .nf
   delphi check <dag|handoff|provenance|rules|review\-md|spec|kb|tui|skill> <path> [\-\-repo <path>]
-  delphi check fact <claim.json> [\-\-home <dir>]
+  delphi check fact <claim.json> [\-\-home <dir>] [\-\-offline]
   delphi check record <mission\-dir> \-\-event <seq> [\-\-hash <h>]
 .fi
 .PP
 `record` verifies one event in a mission log: its hash chain against the daemon's stored head (no model,
 no network). An agent\-authored event only warns "an agent wrote this". `fact` reads {claim, needed_for, kind,
 snapshots: [ids]} and checks the claim against snapshots the daemon stored: origins, independence, classes.
-It makes no network call and runs no model; the judge and the contradiction search are the daemon's.
+It runs no model; the judge and the contradiction search are the daemon's. It looks a stored publisher
+page's DOI up at doi.org, as the daemon does; `\-\-offline` skips that.
 .SH MAINTAIN
 .SS delphi update
 the program, the built\-in files, then the daemons.

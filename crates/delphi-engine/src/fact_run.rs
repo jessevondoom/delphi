@@ -89,6 +89,16 @@ pub fn verified_dois(resolver: &dyn DoiResolver, snaps: &[Snapshot]) -> BTreeSet
     ok
 }
 
+/// The deterministic fact check over stored snapshots, with the DOI lookup when a resolver is given (`specs/040` A5, §30). The daemon's run and
+/// `delphi check fact` both come through here, so they cannot disagree about a page. With no resolver a publisher page is judged on its text alone.
+pub fn check_stored(sub: &Submission, snaps: &[Snapshot], list: &SourceList, doi: Option<&dyn DoiResolver>) -> FactFindings {
+    let doi = match doi {
+        Some(res) => DoiCheck::Resolved(verified_dois(res, snaps)),
+        None => DoiCheck::TextOnly,
+    };
+    check_fact_with(sub, snaps, list, &doi)
+}
+
 /// The configured web search engines (`[search]`).
 pub struct TransportSearcher {
     pub transport: Arc<dyn Transport>,
@@ -259,13 +269,7 @@ pub async fn run_fact(deps: &Deps<'_>, mode: ValidatorMode, sub: &Submission) ->
     for url in sub.urls.iter().take(MAX_URLS) {
         fetch_stored(deps, url, &mut snaps, &mut refused).await;
     }
-    let doi = match deps.doi {
-        Some(res) => {
-            DoiCheck::Resolved(verified_dois(res, &snaps))
-        }
-        None => DoiCheck::TextOnly,
-    };
-    let findings = check_fact_with(sub, &snaps, deps.list, &doi);
+    let findings = check_stored(sub, &snaps, deps.list, deps.doi);
     let mut r = Report::new(mode, findings);
     r.refused_fetches = refused;
     if !r.findings.escalations.is_empty() {
@@ -533,5 +537,10 @@ mod tests {
         let down = Registry([("10.1007/real", Err("timeout"))].into());
         assert!(!judge(&down, page("10.1007/real")), "an error fails closed");
         assert_eq!(crate::fact_check::dois_in("see 10.1007/a.b), and 10.1007/a.b, then 10.5555/x;"), vec!["10.1007/a.b", "10.5555/x"]);
+        // `delphi check fact` comes through `check_stored`: with a resolver it agrees with the daemon, without one it judges the text alone.
+        let one = [page("10.1007/made-up")];
+        assert!(check_stored(&sub, &one, &list, None).sources[0].counted, "offline: text only");
+        assert!(!check_stored(&sub, &one, &list, Some(&real)).sources[0].counted, "online: the DOI is not registered");
+        assert!(check_stored(&sub, &[page("10.1007/real")], &list, Some(&real)).sources[0].counted);
     }
 }

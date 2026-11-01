@@ -224,8 +224,8 @@ pub struct TaskOutcome {
 }
 
 pub struct Engine {
-    /// Where an approved `request_research` goes, as `(mission id, topic)`; the service starts the job (`specs/058` §20).
-    pub research_ask: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<(String, String)>>,
+    /// Where an approved `request_research` goes, as `(mission id, topic, requesting role)`; the service starts the job (`specs/058` §20).
+    pub research_ask: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<(String, String, String)>>,
     /// The consumer of `validator.request` (`fact_serve`): intake quotas and the token allowance.
     pub validator: crate::fact_serve::Host,
     pub ws: WorkspacePaths,
@@ -762,6 +762,13 @@ impl Engine {
                 slices.push(ContextSlice { label: "@runtime/decision-answers".into(), tier: "L5".into(), text });
                 for id in ids {
                     m.append(sc.ev("decision.delivered", json!({"id": id, "to": sc.role}))).await?;
+                }
+            }
+            // How research an agent asked for went (`specs/058` §22): told once to the role that asked and once to the orchestrator.
+            if let Some((seqs, text)) = m.replay().ok().and_then(|events| crate::research_report::undelivered(&events, &sc.role)) {
+                slices.push(ContextSlice { label: "@runtime/research-results".into(), tier: "L3".into(), text });
+                for seq in seqs {
+                    m.append(sc.ev("research.delivered", json!({"seq": seq, "to": sc.role}))).await?;
                 }
             }
             // Every role with tools reports finished work to the change log (`record_change`), not in its reply.
@@ -1768,7 +1775,7 @@ impl Engine {
             let appended = sc.m.append_batch(events).await?;
             for e in appended.iter().filter(|e| e.kind == "research.request") {
                 if let (Some(tx), Some(topic)) = (self.research_ask.get(), e.payload["topic"].as_str()) {
-                    let _ = tx.send((sc.m.id.clone(), topic.to_string()));
+                    let _ = tx.send((sc.m.id.clone(), topic.to_string(), e.agent.clone().unwrap_or_default()));
                 }
             }
             for e in appended.iter().filter(|e| e.kind == "validator.request") {

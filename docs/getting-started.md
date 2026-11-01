@@ -51,6 +51,8 @@ Type `/research <topic>` (or ask in chat and approve the card the agent raises, 
 
 - **Default project:** pages from primary or reputable-secondary sources (standards bodies, governments, Wikipedia, peer-reviewed publishers and so on) go into the knowledge base at once. Pages from anything else are held under `local/pending/web/`, labelled weak, and are not searchable until you decide.
 - **Registered project:** research is saved in the project's `research/web/` and is never shared automatically. Promote what is worth keeping with `/retro`.
+
+When an agent asks for research, you always get a card first. Once the job ends, the agent is told how it went (how many pages were kept, held or left out, or why it did not run) at the start of its next turn, so it can search what was kept. It never receives page text in that note.
 - **Reviewing held pages:** `/validate` lists them; `/validate pass` promotes every page whose source the allow list now trusts (it also runs when a session opens); `/validate ratify <n>` or `discard <n>` decides one at a time. Add `project=<name>` for a project's pages. Ratified pages are searchable but noted as not validated.
 - **A nudge:** about once a week, when five or more pages are waiting, the orchestrator says so in the chat.
 
