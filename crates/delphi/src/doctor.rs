@@ -26,7 +26,9 @@ pub fn overlay(ws: &Workspace, home: &Path) -> Tree {
     add(ws.dir.join("core"), "", &mut files);
     add(ws.dir.join("team"), "", &mut files);
     add(ws.dir.join("local/memory"), "memory/", &mut files);
-    add(ws.dir.join("local/missions"), "missions/", &mut files);
+    for root in delphi_core::sessions::roots(&ws.dir) {
+        add(root, "missions/", &mut files);
+    }
     let local_heur = ws.dir.join("local/heuristics.md");
     if local_heur.exists() {
         files.insert("heuristics.md".into(), local_heur);
@@ -200,12 +202,10 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
 /// `14 error-log`: read-only; says what is recorded and where, and warns when records were lost.
 /// The event hash chain of every mission (`specs/040` §21.6): a break or a cut tail is a failure, an unchained log is said so.
 fn check_event_chains(ws: &Path, r: &mut Report) {
-    let Ok(dir) = fs::read_dir(ws.join("local/missions")) else { return };
     let (mut ok, mut unchained) = (0u64, 0u64);
-    for d in dir.flatten().filter(|d| d.path().join("events").is_dir()) {
-        let id = d.file_name().to_string_lossy().to_string();
+    for (id, path) in delphi_core::sessions::dirs(ws).into_iter().filter(|(_, p)| p.join("events").is_dir()) {
         let stored = delphi_core::ledger::Ledger::stored_chain_head(&ws.join("local/state.db"), &id);
-        match delphi_core::log::verify_chain(&d.path()).map(|c| c.against_stored_head(stored)) {
+        match delphi_core::log::verify_chain(&path).map(|c| c.against_stored_head(stored)) {
             Err(e) => r.fail("8 event-chain", &id, format!("the log cannot be read: {e}")),
             Ok(c) if c.broken.is_some() => r.fail("8 event-chain", &id, c.broken.unwrap_or_default()),
             Ok(c) if c.chained == 0 => unchained += 1,

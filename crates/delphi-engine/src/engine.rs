@@ -1355,7 +1355,7 @@ impl Engine {
         let n = std::fs::read_dir(&dir).map(|d| d.count()).unwrap_or(0) + 1;
         let name = format!("{:03}-{}.md", n, sc.task_id);
         std::fs::write(dir.join(&name), text).ok()?;
-        let rel = format!("local/missions/{}/checkpoints/{}", m.id, name);
+        let rel = format!("{}/checkpoints/{}", m.dir.strip_prefix(&self.ws.dir).map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| format!("{}/{}", delphi_core::sessions::CURRENT, m.id)), name);
         let _ = m.append(sc.ev("checkpoint.saved", json!({"path": rel, "target": from, "substitute": to, "model_written": parts.work.is_some() || parts.chat.is_some(), "tainted": tainted, "turn_index": turn_index}))).await;
         Some(rel)
     }

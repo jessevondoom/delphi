@@ -441,7 +441,9 @@ pub fn sources(ws: &Path) -> Vec<SourceFile> {
         md_files(&base.join("agents"), "agents", "agents", shipped, &mut all);
         md_files(&base.join("skills"), "skills", "skills", shipped, &mut all);
     }
-    md_files(&ws.join("local/missions"), "missions", "missions", UNTRUSTED, &mut all);
+    for root in delphi_core::sessions::roots(ws) {
+        md_files(&root, "missions", "missions", UNTRUSTED, &mut all);
+    }
     // What the archives pane's research job stored (`specs/028` §10): external pages kept at one fixed tier (`upsert_with`).
     md_files(&ws.join("local/knowledge"), "knowledge", "knowledge", crate::research::TIER, &mut all);
     md_files(&ws.join("local/memory/agents"), "memory/agents", "memory", UNTRUSTED, &mut all);

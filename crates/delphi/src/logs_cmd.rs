@@ -266,7 +266,7 @@ pub fn collect(home: &Path, ws: Option<&home::Workspace>, since: Option<i64>, mi
                 if id.is_empty() || id.contains(['/', '\\']) || id.starts_with('.') {
                     notes.push(format!("events.jsonl: skipped, `{}` is not a mission id", id));
                 } else {
-                    let dir = ws.dir.join("local/missions").join(id);
+                    let dir = delphi_core::sessions::dir(&ws.dir, id);
                     match event_summaries(&dir, BUNDLE_EVENTS, home) {
                         Ok(t) => {
                             notes.push(format!("events.jsonl: the last {} events of mission {} (types, ids and short status fields only; no prompts, outputs or file contents)", t.lines().count(), id));

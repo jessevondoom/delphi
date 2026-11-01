@@ -331,7 +331,7 @@ fn an_operator_ratifies_endpoints_runs_a_task_and_reads_the_cost() {
     assert!(seen[1].body["messages"].to_string().contains("pub fn needle()"));
 
     // On disk: a fsync'd event log, the cost in the ledger — and the API key nowhere.
-    let mission_dir = std::fs::read_dir(e.ws.join("local/missions")).unwrap().next().unwrap().unwrap().path();
+    let mission_dir = delphi_core::sessions::dirs(&e.ws).into_iter().next().unwrap().1;
     let log = std::fs::read_to_string(mission_dir.join("events/000001.jsonl")).unwrap();
     assert!(log.contains("\"type\":\"agent.usage\"") && log.contains("\"type\":\"task.completed\""));
     assert!(!log.contains(KEY), "the credential never reaches the event log");
@@ -499,7 +499,7 @@ fn killing_the_daemon_mid_request_loses_nothing_and_the_operator_resumes_from_th
     assert_eq!(seen[0].body["system"], seen[1].body["system"], "and the cached prefix is byte-identical");
 
     // The books: the interrupted call was charged in full, and nothing is left reserved.
-    let mission_dir = std::fs::read_dir(e.ws.join("local/missions")).unwrap().next().unwrap().unwrap().path();
+    let mission_dir = delphi_core::sessions::dirs(&e.ws).into_iter().next().unwrap().1;
     let log = std::fs::read_to_string(mission_dir.join("events/000001.jsonl")).unwrap();
     assert!(log.contains("\"outcome\":\"cancelled\"") && log.contains("\"type\":\"mission.recovered\""), "{}", log.lines().count());
     let status = std::fs::read_to_string(mission_dir.join("status.md")).unwrap();
@@ -872,7 +872,7 @@ fn a_long_reply_is_cut_to_a_screenful_saved_whole_and_available_with_more() {
     assert!(all.contains("… 36 more lines · missions/") && all.contains("/more prints them"), "{}", all);
     assert!(all.contains("⟦") && all.contains(" · ") , "the reply is introduced by its speaker's badge and the time");
     // The whole reply is on disk, as a document with frontmatter, and its path was written as a link.
-    let saved = std::fs::read_dir(e.ws.join("local/missions")).unwrap().flatten().flat_map(|m| std::fs::read_dir(m.path().join("replies")).into_iter().flatten().flatten()).next().expect("a saved reply").path();
+    let saved = delphi_core::sessions::dirs(&e.ws).into_iter().flat_map(|(_, m)| std::fs::read_dir(m.join("replies")).into_iter().flatten().flatten()).next().expect("a saved reply").path();
     let text = std::fs::read_to_string(&saved).unwrap();
     assert!(text.starts_with("---\n") && text.contains("line 60 of the long answer") && text.contains("source_type: internal_generated"), "{}", text);
     let raw = String::from_utf8_lossy(&c.bytes.lock().unwrap()).to_string();
@@ -1480,7 +1480,7 @@ fn research_panels_search_the_knowledge_base_cite_into_the_prompt_and_pin_to_the
     c.type_keys("\r");
     c.wait_for("Mission notebook");
     c.wait_for("search “review”");
-    let notes = std::fs::read_dir(e.ws.join("local/missions")).unwrap().flatten().map(|m| m.path().join("notes.md")).find(|p| p.exists()).expect("a notebook was written");
+    let notes = delphi_core::sessions::dirs(&e.ws).into_iter().map(|(_, m)| m.join("notes.md")).find(|p| p.exists()).expect("a notebook was written");
     let text = std::fs::read_to_string(&notes).unwrap();
     assert!(text.starts_with("---\n") && text.contains("source_type: internal_generated") && text.contains("# Notebook"), "{}", text);
     assert!(text.contains("· athena (orchestrator)") || text.contains("· Athena (orchestrator)"), "the last reply was pinned with its speaker:\n{}", text);
@@ -1575,10 +1575,10 @@ fn a_scripted_session_through_the_full_screen_console_ends_with_the_terminal_giv
     // Keep the reply, save the conversation.
     line(&mut c, "/pin");
     c.wait_for("pinned to the mission notebook");
-    let notes = std::fs::read_dir(e.ws.join("local/missions")).unwrap().flatten().map(|m| m.path().join("notes.md")).find(|p| p.exists()).expect("a notebook");
+    let notes = delphi_core::sessions::dirs(&e.ws).into_iter().map(|(_, m)| m.join("notes.md")).find(|p| p.exists()).expect("a notebook");
     assert!(std::fs::read_to_string(&notes).unwrap().contains("Understood, nothing was written."));
     line(&mut c, "/export");
-    c.wait_for("exported to local/missions/");
+    c.wait_for("exported to local/sessions/");
 
     // Shift+Tab goes round the approval modes and ends where it started.
     c.type_keys("\x1b[Z");
@@ -2145,7 +2145,7 @@ fn a_new_session_clears_the_screen_and_the_context_and_export_all_covers_both_se
 
     say(&mut c, "/export all");
     c.wait_for("exported to");
-    let dir = std::fs::read_dir(e.ws.join("local/missions")).unwrap().next().unwrap().unwrap().path().join("exports");
+    let dir = delphi_core::sessions::dirs(&e.ws).into_iter().next().unwrap().1.join("exports");
     let file = std::fs::read_dir(&dir).unwrap().filter_map(|f| f.ok()).map(|f| f.path()).find(|p| p.file_name().unwrap().to_string_lossy().starts_with("mission-")).expect("the export file");
     let md = std::fs::read_to_string(file).unwrap();
     assert!(md.contains("## session 1 ·") && md.contains("list two queue options") && md.contains("what were we doing?") && md.contains("Reply two."), "{}", md);
@@ -2219,7 +2219,7 @@ role_family = {{ orchestrator = "local", architect = "local", builder = "local",
                 c.type_keys("\r");
                 std::thread::sleep(Duration::from_secs(2));
                 let mut log = String::new();
-                let mut stack = vec![ws.join("local/missions")];
+                let mut stack = delphi_core::sessions::roots(&ws).to_vec();
                 while let Some(d) = stack.pop() {
                     for f in std::fs::read_dir(&d).into_iter().flatten().flatten() {
                         let path = f.path();
@@ -2301,7 +2301,7 @@ fn live_claude_runs_out_and_the_task_finishes_on_a_local_model_after_the_operato
     }
     c.expect_visible("saved for resumption");
     c.expect_visible("less sure with tools");
-    let checkpoints = std::fs::read_dir(e.ws.join("local/missions")).unwrap().next().unwrap().unwrap().path().join("checkpoints");
+    let checkpoints = delphi_core::sessions::dirs(&e.ws).into_iter().next().unwrap().1.join("checkpoints");
     let note = std::fs::read_dir(&checkpoints).expect("a save-point exists before the answer").filter_map(|f| f.ok()).map(|f| std::fs::read_to_string(f.path()).unwrap()).next().expect("one save-point");
     println!("=== THE SAVE-POINT, written by the local model before the card ===\n{}", note);
     assert!(note.contains("Save-point for") && note.contains("billing error") && note.contains("ollama/"), "{}", note);

@@ -19,8 +19,7 @@ fn last_activity(dir: &Path) -> Option<SystemTime> {
 
 /// Every mission of the workspace, the most recently active first (ties and unknown times by id).
 pub fn list(ws_dir: &Path) -> Vec<Row> {
-    let Ok(rd) = std::fs::read_dir(ws_dir.join("local/missions")) else { return Vec::new() };
-    let mut rows: Vec<Row> = rd.flatten().filter(|e| e.path().is_dir()).map(|e| Row { id: e.file_name().to_string_lossy().to_string(), last: last_activity(&e.path()) }).collect();
+    let mut rows: Vec<Row> = delphi_core::sessions::dirs(ws_dir).into_iter().map(|(id, p)| Row { id, last: last_activity(&p) }).collect();
     rows.sort_by(|a, b| b.last.cmp(&a.last).then_with(|| b.id.cmp(&a.id)));
     rows
 }
@@ -61,7 +60,7 @@ mod tests {
     use super::*;
 
     fn mission(ws: &Path, id: &str, secs_ago: u64) {
-        let ev = ws.join("local/missions").join(id).join("events");
+        let ev = delphi_core::sessions::dir(ws, id).join("events");
         std::fs::create_dir_all(&ev).unwrap();
         let f = ev.join("000001.jsonl");
         std::fs::write(&f, "{}\n").unwrap();
@@ -93,5 +92,17 @@ mod tests {
         assert!(list(t.path()).is_empty(), "only directories are missions");
         assert_eq!(ago(None, SystemTime::now()), "—");
         assert_eq!(ago(Some(SystemTime::now()), SystemTime::now()), "just now");
+    }
+
+    #[test]
+    fn sessions_from_both_layouts_are_listed_once_each() {
+        let t = tempfile::tempdir().unwrap();
+        mission(t.path(), "new-one", 30);
+        std::fs::create_dir_all(t.path().join("local/missions/old-one/events")).unwrap();
+        std::fs::create_dir_all(t.path().join("local/sessions/old-one")).unwrap();
+        let mut ids: Vec<String> = list(t.path()).into_iter().map(|r| r.id).collect();
+        ids.sort();
+        assert_eq!(ids, ["new-one", "old-one"]);
+        assert!(t.path().join("local/sessions/new-one/events").is_dir(), "a new session is created under sessions/");
     }
 }

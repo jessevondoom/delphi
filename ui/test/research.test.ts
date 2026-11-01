@@ -91,3 +91,16 @@ test('replies that cite documents feed the sources list, also when a mission is 
   const live = fold(initial(0), { method: 'event', params: { type: 'agent.block.complete', agent: 'builder', payload: { block: { type: 'tool_call', id: 'c', name: 'read_file', arguments: { path: 'specs/005b.md' } } } } }, 1);
   assert.equal(live.sources['specs/005b.md']!.how, 'read');
 });
+
+test('a session lives under local/sessions unless an older one is under local/missions, and both are listed', async () => {
+  const { listMissions, sessionDir } = await import('../src/missions.ts');
+  const ws = mkdtempSync(join(tmpdir(), 'delphi-sess-'));
+  mkdirSync(join(ws, 'local/missions/old/events'), { recursive: true });
+  mkdirSync(join(ws, 'local/sessions/fresh/events'), { recursive: true });
+  assert.equal(sessionDir(ws, 'old'), join(ws, 'local/missions/old'));
+  assert.equal(sessionDir(ws, 'fresh'), join(ws, 'local/sessions/fresh'));
+  assert.equal(sessionDir(ws, 'brand-new'), join(ws, 'local/sessions/brand-new'));
+  assert.deepEqual(listMissions(ws).map((r) => r.id).sort(), ['fresh', 'old']);
+  writeFileSync(join(ws, 'local/sessions/fresh/notes.md'), 'x');
+  assert.ok(physical({ workspace: ws } as Info, 'missions/fresh/notes.md')?.endsWith('local/sessions/fresh/notes.md'));
+});

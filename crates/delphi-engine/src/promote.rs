@@ -334,9 +334,8 @@ pub fn live_promotions(mission: &str, events: &[EventEnvelope]) -> Vec<Promotion
 /// Every unresolved promotion in the workspace, newest first. Reads the logs and nothing else.
 pub fn collect(ws_dir: &Path) -> Vec<Promotion> {
     let mut all = Vec::new();
-    for entry in std::fs::read_dir(ws_dir.join("local/missions")).into_iter().flatten().flatten() {
-        let Some(id) = entry.file_name().to_str().map(String::from) else { continue };
-        if let Ok(events) = delphi_core::log::replay(&entry.path()) {
+    for (id, path) in delphi_core::sessions::dirs(ws_dir) {
+        if let Ok(events) = delphi_core::log::replay(&path) {
             all.extend(live_promotions(&id, &events));
         }
     }

@@ -52,7 +52,7 @@ fn lines(path: &Path) -> Vec<Value> {
 }
 
 fn missions(ws: &Path) -> Vec<std::path::PathBuf> {
-    fs::read_dir(ws.join("local/missions")).map(|rd| rd.flatten().filter(|e| e.path().is_dir()).map(|e| e.path()).collect()).unwrap_or_default()
+    delphi_core::sessions::dirs(ws).into_iter().map(|(_, p)| p).collect()
 }
 
 /// Finished tasks across every mission's event log.

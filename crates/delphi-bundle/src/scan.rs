@@ -52,7 +52,7 @@ fn patterns() -> Patterns {
         key_header: Regex::new(r"-----BEGIN [A-Z ]*PRIVATE KEY-----").unwrap(),
         // What a mission's own record looks like. A knowledge file points to a mission by file and commit and never carries
         // its log or transcript (`specs/027` §6.4); the event log is unreadable to every role.
-        log: Regex::new(r#"events\.jsonl|local/missions/|/workspaces/[A-Za-z0-9._-]+/local/|"type"\s*:\s*"(?:task|tool|handoff|approval)\.[a-z_]+""#).unwrap(),
+        log: Regex::new(r#"events\.jsonl|local/(?:missions|sessions)/|/workspaces/[A-Za-z0-9._-]+/local/|"type"\s*:\s*"(?:task|tool|handoff|approval)\.[a-z_]+""#).unwrap(),
     }
 }
 

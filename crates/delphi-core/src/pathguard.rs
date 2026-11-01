@@ -257,7 +257,13 @@ impl Guard {
             return Some((self.zones.ratified.clone(), path.to_string()));
         }
         if key.starts_with("missions/") {
-            return Some((self.zones.local.clone(), path.into()));
+            // The logical `missions/<id>/…` name is stable; on disk a session is under `sessions/` unless
+            // it was written before that and still lives under `missions/` (058-A9).
+            let rest = path.split_once('/').map_or("", |x| x.1);
+            let id = rest.split('/').next().unwrap_or("");
+            let legacy = if id.is_empty() { self.zones.local.join("missions").is_dir() } else { self.zones.local.join("missions").join(id).exists() };
+            let inner = if legacy { path.to_string() } else { format!("sessions/{}", rest) };
+            return Some((self.zones.local.clone(), inner));
         }
         if key.starts_with("memory/agents/") {
             return Some((self.zones.local.clone(), path.into()));
@@ -759,11 +765,14 @@ mod tests {
     fn atomic_writes_create_parents_and_replace_files_safely() {
         let (t, g) = setup();
         assert!(g.write_atomic("missions/m2/deep/notes.md", b"hello").unwrap(), "created");
-        assert_eq!(fs::read_to_string(t.path().join("local/missions/m2/deep/notes.md")).unwrap(), "hello");
+        assert_eq!(fs::read_to_string(t.path().join("local/sessions/m2/deep/notes.md")).unwrap(), "hello");
         assert!(!g.write_atomic("missions/m2/deep/notes.md", b"replaced").unwrap(), "replaced");
         assert_eq!(g.read_file("missions/m2/deep/notes.md", 100).unwrap(), (b"replaced".to_vec(), false));
-        let leftovers: Vec<_> = fs::read_dir(t.path().join("local/missions/m2/deep")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
+        let leftovers: Vec<_> = fs::read_dir(t.path().join("local/sessions/m2/deep")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
         assert_eq!(leftovers, vec!["notes.md"], "no temp files remain");
+        assert!(g.write_atomic("missions/m1/more.md", b"old").unwrap());
+        assert_eq!(fs::read_to_string(t.path().join("local/missions/m1/more.md")).unwrap(), "old", "a session that already lives under missions/ stays there");
+        assert!(!t.path().join("local/sessions/m1").exists());
         // The deny lists and scopes still apply to writes.
         assert!(matches!(g.write_atomic("missions/m1/events.jsonl", b"x"), Err(Denied::NeverReadable(_))));
         assert!(matches!(g.write_atomic("@project/app/src/main.rs", b"x"), Err(Denied::NeverWritable(_))));
