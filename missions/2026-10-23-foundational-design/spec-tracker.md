@@ -409,7 +409,7 @@ Approved by the operator on 2026-10-31. Same-machine host agents (Claude Code, C
 | S8 | read-only `Kb::open_readonly`; `search_project`/`search_memory` lead with vector+rerank hits over the same allowed docs | built (PR pending) |
 | S9 | `delphi learn ingest --from claude-code`: per-project opt-in, versioned reader, two fixed rules, L0 role-keyed notes (Codex/Copilot readers later) | built (PR pending) |
 | S10 | `/resume-host` (`handoff.resume`), `/mcp [on\|off]` (`mcp.get`/`mcp.set`, comment-preserving edit of `[mcp] enabled`) | built (PR pending) |
-| S11 | security and red-team review | not started |
+| S11 | security review of every new write, spend and read path; fence-closing fix (`defuse`) | built (PR pending) |
 
 ## The shell tool, shell modes and the `!` bang (spec 061, approved 2026-10-31)
 

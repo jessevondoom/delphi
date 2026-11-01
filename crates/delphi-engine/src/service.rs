@@ -420,7 +420,7 @@ impl EngineService {
         let Some((session, env)) = h::read_handoff(&ws.dir, project.as_deref(), p["session"].as_str()) else {
             return Err(err(code::INVALID_PARAMS, "no host handoff for this project: a coding tool leaves one with `handoff_put`"));
         };
-        let target = if self.engine.settings.enabled_agents.contains(&env.target_agent) { env.target_agent.clone() } else { "orchestrator".to_string() };
+        let target = if h::servable_role(ws, &env.target_agent).is_ok() && self.engine.settings.enabled_agents.contains(&env.target_agent) { env.target_agent.clone() } else { "orchestrator".to_string() };
         let task_id = self.spawn_task(&m, &target, &h::resume_prompt(&session, &env), None);
         Ok(json!({"task_id": task_id, "mission_id": m.id, "session": session, "role": target}))
     }
