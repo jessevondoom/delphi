@@ -20,6 +20,7 @@ export function filter(query: string, cmds: Command[] = COMMANDS): Command[] {
   const q = query.toLowerCase();
   const rank = (n: string): number | null => {
     n = n.toLowerCase();
+    if (n === q) return -1;
     if (n.startsWith(q)) return 0;
     if (n.includes(q)) return 1;
     let i = 0;

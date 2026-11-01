@@ -4,7 +4,7 @@
 
 **A team of AI agents in your terminal that plans, builds and reviews software with you, and has to get your approval before anything leaves its sandbox.**
 
-> Status: pre-1.0, macOS and Linux, one person per install. Latest release: v0.4.0 (`delphi update --dev` follows `main`). For an honest list of what is proven and what is not, see [Status and limitations](#status-and-limitations).
+> Status: pre-1.0, macOS and Linux, one person per install. Latest release: v0.5.0 (`delphi update --dev` follows `main`). For an honest list of what is proven and what is not, see [Status and limitations](#status-and-limitations).
 
 ## Contents
 
@@ -108,33 +108,38 @@ Paths in the prompt are logical: `@project/<name>/…` for a project repo, `@wor
 
 ### Roles
 
-Agents are plain files: each is an `agents/<role>/AGENT.md` that states what the role may write, which tools it may use and which model tier it needs. Nine roles exist; five are on by default.
+Agents are plain files: each is an `agents/<role>/AGENT.md` that states what the role may write, which tools it may use and which model tier it needs. Nine canonical roles exist; five are on by default in the interactive roster.
+
+**Fleet architecture and dynamic orchestration ([`specs/063`](specs/063-agent-fleet-behaviors-and-dynamic-orchestration.md)):**
+- **Orchestrator ultimate visibility:** The orchestrator has full visibility into all registered canonical roles and bundle specialists. It plans serial vs. parallel task decomposition, routes tasks, tracks cross-agent collaboration metrics, and coordinates subagent learning.
+- **Operator interactive control:** You initially interact directly via `@` mentions with the enabled interactive roster (by default, the core five). When the orchestrator dispatches any specialist into the conversation, that agent is introduced to the session and becomes dynamically `@`-addressable for the rest of the session.
+- **Operator bounds:** `/solo` locks discussion to 1:1 dialog with the current agent (capping sub-consultation tokens), while `/quarantine <role>` blocks both orchestrator dispatch and direct interaction (`/unquarantine <role>` restores it).
 
 | Role | What it does | On by default |
 | :-- | :-- | :-- |
-| `orchestrator` | Breaks your goal into a task graph, dispatches the others, chairs Councils, runs the post-mission retrospective | yes |
-| `builder` | Writes code in an isolated worktree against an approved spec, test first | yes |
-| `architect` | Drafts specs and designs; owns the technical shape of a change | yes |
-| `red-team` | Audits other agents' work: security, assumptions, adversarial tests, the exact commit | yes |
-| `strategist` | Keeps work on your actual goal, sequences roadmaps, flags scope creep, checks specs against your org's stated goals | yes |
-| `investigator` | Finds the one root cause: bisect hunts, microbenchmarks, checking an upstream claim | no |
-| `scout` | Maps unfamiliar repositories, surveys literature, audits dependencies | no |
-| `writer` | User-facing documentation, turning dense output into clear prose | no |
-| `integrator` | The boundary with the outside world: GitHub through `gh`, external services, MCP server onboarding | no |
+| `orchestrator` | Task graph decomposition, resource management, specialist dispatch, Councils, collaboration tracking, retrospective | yes |
+| `builder` | Writes code in worktrees against approved specs; broad systems, protocols, edge architectures, and language patterns | yes |
+| `architect` | Drafts specs and designs; creative conceptual frameworks, Eno's Oblique Strategies, unconventional wisdom | yes |
+| `red-team` | Audits builds, security, and assumptions; Socratic interrogation ("why?") during Council second-round debates | yes |
+| `strategist` | Brand, business, and product strategy; competitive SWOT analysis, ancient and modern maneuvers, pattern matching | yes |
+| `investigator` | Dogged root-cause hunts, bisects, benchmarks; hypothesis flipping and resilience against early dead ends | no |
+| `scout` | Dual-horizon local-out and outward-in repository and literature surveys, dependency audits | no |
+| `writer` | Technical, business, creative, and persuasion prose; tonal calibration and register code-switching | no |
+| `integrator` | External boundary: GitHub (`gh`), external services, MCP server onboarding | no |
 
 Specs, config and manifests always use these role IDs. **Display names and voice come from a theme pack** (Greek mythology by default, [`themes/greek/theme.md`](themes/greek/theme.md)); a theme changes how things look and sound, never what a role may do. You can write your own pack in `~/.delphi/themes/`.
 
 ### Skills
 
-A skill is a small package (`skills/<name>/SKILL.md`) that loads into an agent only when needed, so prompts stay short. Rules worth enforcing are compiled into `delphi check <kind> <path>` rather than left to a model. 45 ship with Delphi ([full catalog](skills/CATALOG.md), [generated reference](docs/reference/catalog.md)):
+A skill is a small package (`skills/<name>/SKILL.md`) that loads into an agent only when needed, so prompts stay short. Rules worth enforcing are compiled into `delphi check <kind> <path>` rather than left to a model. 53 ship with Delphi ([full catalog](skills/CATALOG.md), [generated reference](docs/reference/catalog.md)), backed by curated reference compendiums in `context/reference/`:
 
 | Area | Skills |
 | :-- | :-- |
-| **Planning and coordination** | `task-decomposition` · `roadmap-sequencing` · `dynamic-model-scaling` · `council-moderation` · `handoff-packaging` · `scope-creep-detection` · `spec-authoring` |
-| **Building and shipping** | `worktree-isolation` · `tdd-execution` · `safe-refactoring` · `git-pr-packaging` · `ci-triage` · `git-bisect-hunt` · `ast-code-search` · `benchmark-profiling` · `dependency-audit` · `github-ops-sync` |
-| **Review and risk** | `adversarial-test-gen` · `assumption-stress-test` · `threat-modeling` · `pr-alignment-review` · `review-md-audit` · `primary-source-verification` · `risk-roi-analysis` · `trade-off-matrix` |
-| **Research and memory** | `literature-survey` · `multi-source-synthesis` · `repo-cartography` · `knowledge-compaction` · `contradiction-pruning` · `lesson-promotion` · `retrospective-facilitation` · `review-md-distillation` · `documentation-architecture` |
-| **Writing, design and integration** | `clarity-synthesis` · `concision-audit` · `narrative-briefing` · `diagram-generation` · `tui-design` · `external-comms-dispatch` · `api-contract-design` · `protocol-schema-translation` · `mcp-server-integration` · `org-bundle-authoring` |
+| **Planning and coordination** | `task-decomposition` · `roadmap-sequencing` · `dynamic-model-scaling` · `council-moderation` · `handoff-packaging` · `scope-creep-detection` · `spec-authoring` · `strategic-deployment` |
+| **Building and shipping** | `worktree-isolation` · `tdd-execution` · `safe-refactoring` · `git-pr-packaging` · `ci-triage` · `git-bisect-hunt` · `ast-code-search` · `benchmark-profiling` · `dependency-audit` · `github-ops-sync` · `engineering-patterns-breadth` |
+| **Review and risk** | `adversarial-test-gen` · `assumption-stress-test` · `threat-modeling` · `pr-alignment-review` · `review-md-audit` · `primary-source-verification` · `risk-roi-analysis` · `trade-off-matrix` · `socratic-council-interrogation` |
+| **Research and memory** | `literature-survey` · `multi-source-synthesis` · `repo-cartography` · `knowledge-compaction` · `contradiction-pruning` · `lesson-promotion` · `retrospective-facilitation` · `review-md-distillation` · `documentation-architecture` · `competitive-analysis-swot` · `dual-horizon-search` · `hypothesis-flipping` |
+| **Writing, design and integration** | `clarity-synthesis` · `concision-audit` · `narrative-briefing` · `diagram-generation` · `tui-design` · `external-comms-dispatch` · `api-contract-design` · `protocol-schema-translation` · `mcp-server-integration` · `org-bundle-authoring` · `oblique-strategies` · `tonal-calibration` |
 
 You can add your own skills, and import and export skills with `delphi skills import|export` ([`specs/019`](specs/019-skills-import-export.md)). Organizations can ship skills, agents and knowledge together as [org bundles](#org-bundles-and-sharing).
 
@@ -241,6 +246,8 @@ The daemon (`delphi-core`, `delphi-engine`) is the only writer of the event log 
 | `@<role> <request>` | ask one role directly (by role ID or its theme name) |
 | `/build [--optimistic] <request>` | worktree, tests, audit, then your merge card |
 | `/council [--lenses] [--tier …] <proposition>` | a blind three-round Council; `/follow` starts its next steps |
+| `/solo [on \| off]` | toggle solo dialog mode to cap peer consultations and preserve token budget |
+| `/quarantine <role>`, `/unquarantine <role>` | quarantine or restore an agent from orchestrator dispatch and direct interaction |
 | `/distill [<path\|missions/id> …]` | the writer drafts bundle knowledge into a staging directory; nothing is written into a bundle |
 | `/timer <when> <note>`, `/timer @architect 1h …` | wake a role later; `/timer list`, `/timer cancel <id>` |
 | `/y` `/a` `/n` `/d` | approve once, approve similar this task (Amber only), reject, show the card's payload |
@@ -440,6 +447,7 @@ All in [`specs/`](specs/); each file's `status` line says whether the operator h
 | 044 | [Decisions pane](specs/044-decisions-pane.md) | approved; partly built |
 | 045 | [Harness loop techniques](specs/045-harness-loop-techniques.md) | approved; first slice built |
 | 046, 047 | [Harness and OpenAI coverage](specs/046-harness-and-openai-coverage.md); [Codex CLI as a third harness](specs/047-codex-harness-and-coverage.md) | approved; first slice built |
+| 063 | [Agent fleet behaviors, dynamic orchestration, and curated knowledge](specs/063-agent-fleet-behaviors-and-dynamic-orchestration.md) | built |
 
 Two numbers are used twice (014 and 037); the file names are unique and the specs cite each other by name. Numbers 040 and 042 are reserved for specs not yet written. The machine-readable counterparts of the specs that define a format are in [`schemas/`](schemas/) (see [`docs/reference/schemas.md`](docs/reference/schemas.md)).
 
