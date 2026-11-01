@@ -483,3 +483,19 @@ Approved by the operator on 2026-11-01 after a three-seat council review. Amends
 | R4 | Markdown/scratch tiering, tier stamping, spec-gate predicate | built (scratch zone and `is_notes_write`, tier cap, gate 3 `notes_only`, `FileChange.mode`); the start-of-task `build_without_spec` card is unchanged |
 | R5 | `about/` release snapshot | built (`build.rs` embeds the release's `specs/*.md` and `docs/reference/*.md` at `base/about/`; zone `about` hidden unless `about: true` or `kb search --about`; label "release reference, not build authority"; `spec_link` refuses `about/`; orchestrator duty) |
 | R6 | Search page building state and cancel (SK9d fix built) | built in the console: the raw results show "building a page · esc cancels" (still glyph under reduce motion); esc stops the wait and a late page for that query is dropped (`ui/test/pages.test.ts`). The daemon job is not aborted: it finishes and caches within `[library.pages]` limits; a daemon-side cancel is not built |
+
+## MCP research endpoint and role identity for host agents (spec 066, draft 2026-11-01)
+
+Draft; becomes approved only when the operator approves it. Amends 062 for research egress; adds `request_research`, `research_status`, `research_result` and a daemon-built `identity` and `signature` on every Delphi answer. Trusted sources are a source policy, never a claim status (052).
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| S0 | the spec and this entry | proposed (this PR) |
+| S1 | claim, status, result and identity schemas | proposed |
+| S2 | job lifecycle, queue (cap 2), egress scopes, audit | proposed |
+| S3 | planner, depth budgets, dedupe | proposed |
+| S4 | validator, contradictions, trusted fast-lane | proposed |
+| S5 | research tools and identity builder | proposed |
+| S6 | `badge_style`, `delphi-attribution` skill, instructions, print-config | proposed |
+| S7 | generated docs and goldens | proposed |
+| S8 | security and red-team pass | proposed |
