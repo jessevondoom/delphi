@@ -22,12 +22,14 @@ You can run Delphi from any directory. `cd` into a Git project first if you want
 
 The first time, Delphi:
 
-1. creates a workspace for the project under `~/.delphi/workspaces/` (your project repository is never written to);
+1. creates or resolves a workspace under `~/.delphi/workspaces/` (opening the console writes nothing into your directory);
 2. looks for model access. If it finds none it runs the guided setup, which detects your `claude` and `agy` programs, asks only for what it cannot find, and ratifies the result. See [Model access](guides/model-access.md);
 3. runs the doctor and offers to fix what it can;
 4. opens the console.
 
 Outside a git repository it uses a `default` workspace. Run `delphi setup` later if you deferred model setup.
+
+**Projects.** A project is a registered directory, not necessarily a Git repository. `delphi project register` records it and writes only a small `.delphi-project` identity marker; `delphi project init` (asks first, or `--yes`) adds `specs/`, `plans/`, `context/`, `research/`, `work/` and a generated `_index.md`, creating only what is missing. Everything else Delphi remembers stays under `~/.delphi`. Inside a project you see its context and the shared home knowledge; outside any registered project, the default project is active. Type `/projects` to switch: arrow keys and Enter restart the console in that directory as a new session.
 
 ## 3. Ask, then build
 
@@ -42,6 +44,17 @@ Type at the `›` prompt. Paths are logical: `@project/<name>/…` for your repo
 `/build` is where Delphi earns its keep: a throwaway worktree, your tests and checks as merge gates, a second agent auditing the exact commit, and a card asking you to merge. [Builds and Councils](guides/builds-and-councils.md) walks through one.
 
 Delphi builds against an approved spec ("No Spec, No Build"). If you have none, ask the architect to draft one first, read it, and approve it.
+
+### Research and the knowledge base
+
+Start research from the knowledge window's expand page and the job fetches pages and sorts them by the source's trust class, which code decides, never a model:
+
+- **Default project:** pages from primary or reputable-secondary sources (standards bodies, governments, Wikipedia, peer-reviewed publishers and so on) go into the knowledge base at once. Pages from anything else are held under `local/pending/web/`, labelled weak, and are not searchable until you decide.
+- **Registered project:** research is saved in the project's `research/web/` and is never shared automatically. Promote what is worth keeping with `/retro`.
+- **Reviewing held pages:** `/validate` lists them; `/validate pass` promotes every page whose source the allow list now trusts (it also runs when a session opens); `/validate ratify <n>` or `discard <n>` decides one at a time. Add `project=<name>` for a project's pages. Ratified pages are searchable but noted as not validated.
+- **A nudge:** about once a week, when five or more pages are waiting, the orchestrator says so in the chat.
+
+Weak sources are never treated as corroboration. Not built yet: resolving a DOI against doi.org (today a journal page needs a DOI in its text), and the rename of "mission" to "session".
 
 ## 4. Answer the cards
 
@@ -70,7 +83,7 @@ Red cards (outbound calls, merges, new dependencies, destructive commands) alway
 
 ## Where things live
 
-Everything is under `$DELPHI_HOME` (default `~/.delphi`): `workspaces/<name>/config.toml`, the mission logs, the knowledge index, and your agent memory. Delphi never writes into the project itself. When you try commands in a scratch setting, always pass `--home <tmpdir>`: bare `delphi` and `delphi init` create a real workspace.
+Everything is under `$DELPHI_HOME` (default `~/.delphi`): `workspaces/<name>/config.toml`, the mission logs, the knowledge index, and your agent memory. Runtime state never goes into a project; a project directory holds only the marker and scaffold you asked for. When you try commands in a scratch setting, always pass `--home <tmpdir>`: bare `delphi` and `delphi init` create a real workspace.
 
 ## Next
 
