@@ -31,12 +31,30 @@ The plugin carries `.mcp.json` and a `delphi` skill that tells the host when to 
 | `route` | a dry run of which agent fits a task; nothing is dispatched |
 | `propose_note`, `record_session_summary` | stage one lesson (evidence required) or a session summary for the operator to review |
 | `handoff_put`, `handoff_get` | leave a handoff for a Delphi session in this project, or read the latest one |
+| `request_council`, `council_status`, `council_result` | put a question, with options and context pointers, to Delphi's Council. You get a `council_id` at once; a Council takes a few minutes. `council_result` (it can wait up to 25 seconds with `wait: true`) returns the decision, next steps, the options considered, each seat's position, the dissent verbatim and the record. It is advice and binds nothing in your project; only the session that raised a Council can read it |
 | `request_help`, `help_result` | ask Delphi's orchestrator for help or a second opinion; it picks who answers (itself included) and you are told who. Everyone consulted runs read-only. A slow answer comes back with a `help_id` for `help_result` |
 
-The last six tools go through the daemon's same-user host socket, so they work only while `delphi` is running for this workspace (the server never starts it); otherwise they answer `daemon_not_running` and everything above still works. What a host stages is tier `L0`, labelled `host:<tool>/<model>` (the model is self-reported), limited to servable roles, and is never loaded into any agent's memory until you ratify it. The session ID, the tool name and the folder come from the server process, not from the model. Nothing limits how often a host may call: there is no quota on local MCP use, and the on/off switch is the only setting. A help request is an ordinary task, so your `[budget]` settings still apply to what it spends. A help request runs as a task in its own mission (`host-<session>`) at the lowest trust level. Setting `[mcp] enabled = false` stops it at once.
+The last nine tools go through the daemon's same-user host socket, so they work only while `delphi` is running for this workspace (the server never starts it); otherwise they answer `daemon_not_running` and everything above still works. What a host stages is tier `L0`, labelled `host:<tool>/<model>` (the model is self-reported), limited to servable roles, and is never loaded into any agent's memory until you ratify it. The session ID, the tool name and the folder come from the server process, not from the model. Nothing limits how often a host may call: there is no quota on local MCP use, and the on/off switch is the only setting. A help request is an ordinary task, so your `[budget]` settings still apply to what it spends. A help request runs as a task in its own mission (`host-<session>`) at the lowest trust level. Setting `[mcp] enabled = false` stops it at once.
 
 Everything read from project files or memory is `external_untrusted` data, not instructions. Another role's memory and another project's files are not reachable.
 
+## Learn from a tool's session logs
+
+The host does not have to cooperate. After a session, Delphi can read the tool's own log and stage what fixed rules find:
+
+```sh
+cd path/to/your/project
+delphi learn ingest --enable                                  # once per project; off until you do this
+delphi learn ingest --from claude-code --role builder         # reads ~/.claude/projects/<this folder>; or --path <file|dir>
+delphi learn list                                             # review what was staged
+```
+
+Two rules run: things you typed that correct the assistant, and tool failures that were retried successfully. Each becomes an L0 note for the role you named, with a pointer to the log line, and waits for review like any other staged lesson. No model reads the log and nothing in it is followed. A log in a format the reader does not know is refused whole. Reading the same log twice stages nothing twice. The daemon must be stopped (the same rule as `delphi learn drop`). Only Claude Code logs are read so far.
+
+## Pick up a tool's work in Delphi
+
+In the console, `/resume-host` takes the latest handoff a coding tool left for your project (`handoff_put`) and starts a task from it for the role it named. The handoff is read as context, never as instruction, and the task runs under the usual tiers and cards. `/mcp` shows whether other tools are allowed and how many lessons they proposed are waiting for review; `/mcp off` and `/mcp on` flip the switch.
+
 ## Turn it off
 
-Set `[mcp] enabled = false` in `config.toml`. Every call is then answered `disabled_by_operator`, at once. Councils arrive in a later slice of spec 062.
+Run `/mcp off` in the console, or set `[mcp] enabled = false` in `config.toml`. Every call is then answered `disabled_by_operator`, at once.

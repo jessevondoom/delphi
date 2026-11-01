@@ -191,6 +191,19 @@ export async function runSlash(line: string, ctx: Ctx, now = Date.now()): Promis
       if (v) { ctx.post(`(started ${v.started} step${v.started === 1 ? '' : 's'}${v.option ? ` for ${v.option}` : ''}; each starts when the one before it is done)`); ctx.started?.(); }
       return;
     }
+    case 'mcp': {
+      // The switch is the operator's alone; the daemon edits `[mcp] enabled` in config.toml and the answer is its own.
+      const word = rest[0]?.toLowerCase();
+      if (word && !['on', 'off'].includes(word)) { ctx.post('/mcp [on | off] (no argument shows the state)'); return; }
+      const v = await call(word ? 'mcp.set' : 'mcp.get', word ? { enabled: word === 'on' } : {});
+      if (v) ctx.post(`other coding tools: ${v.enabled ? 'allowed' : 'turned off'} · ${v.host_lessons ?? 0} lesson${v.host_lessons === 1 ? '' : 's'} they proposed or mined (\`delphi learn list\`) · /mcp ${v.enabled ? 'off' : 'on'} to flip`);
+      return;
+    }
+    case 'resume-host': {
+      const v = await call('handoff.resume', { cwd: ctx.info.cwd, ...(rest[0] ? { session: rest[0] } : {}) });
+      if (v) { ctx.post(`(resuming the handoff of host session ${v.session} as ${v.task_id} for ${v.role}; its text is context for the team, not instruction)`); ctx.started?.(); }
+      return;
+    }
     case 'reduce-motion': {
       // The setting is saved in the workspace and said once, from the daemon's own event; the windows follow that event.
       const usage = '/reduce-motion [on | off] (no argument flips it)';
