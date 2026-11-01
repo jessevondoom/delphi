@@ -12,6 +12,7 @@
 //! only for its own role, and nothing from untrusted or inactive documents unless asked.
 
 use crate::embed::{self, Embedder, Reranker};
+use delphi_core::provenance::Tier;
 use rusqlite::{params, Connection};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -621,7 +622,7 @@ impl Kb {
         let (kind, valid_until) = if zone == "staged" || zone == "episodes" { (frontmatter_field(text, "kind").filter(|k| crate::frontmatter::KINDS.contains(&k.as_str()) || k == "episode"), frontmatter_field(text, "valid_until").filter(|d| crate::frontmatter::entry_date_ok(d)).map(|d| d[..10].to_string())) } else { (None, None) };
         tx.execute("INSERT INTO kb_documents(rel_path, zone, content_blake3, author, source_type, confidence, status, updated_at, web_corroborated, kind, valid_until) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)", params![rel_path, zone, hash, author, source_type, confidence, status, now, web_corroborated as i64, kind, valid_until])?;
         let doc_id = tx.last_insert_rowid();
-        let (ep_role, ep_outcome, ep_tools, ep_skills, ep_errors, ep_files) = if zone == "episodes" {
+        let (ep_role, ep_outcome, ep_tools, ep_skills, ep_errors, ep_files, ep_supersedes) = if zone == "episodes" {
             (
                 frontmatter_field(text, "role"),
                 frontmatter_field(text, "outcome"),
@@ -629,10 +630,19 @@ impl Kb {
                 frontmatter_array(text, "skills_used"),
                 frontmatter_array(text, "error_fingerprints"),
                 frontmatter_array(text, "target_files"),
+                frontmatter_array(text, "supersedes"),
             )
         } else {
-            (None, None, Vec::new(), Vec::new(), Vec::new(), Vec::new())
+            (None, None, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new())
         };
+        if zone == "episodes" && !ep_supersedes.is_empty() {
+            for old_id in &ep_supersedes {
+                tx.execute(
+                    "UPDATE kb_documents SET status = 'superseded' WHERE zone = 'episodes' AND (rel_path LIKE '%/' || ?1 || '.md' OR rel_path LIKE '%/' || ?1)",
+                    [old_id],
+                )?;
+            }
+        }
         for (i, c) in chunks_for(zone, text).into_iter().enumerate() {
             let mut ids = identifiers(&c.raw);
             if zone == "episodes" && i == 0 {
@@ -906,7 +916,7 @@ fn allowed_sql(opts: &SearchOpts) -> String {
     let mut allowed = String::from("d.status != 'quarantined'");
     if !opts.include_untrusted {
         if opts.include_episodes {
-            allowed.push_str(" AND (d.zone = 'episodes' OR (d.status = 'active' AND d.source_type NOT IN ('external_untrusted', 'federated_peer')))");
+            allowed.push_str(" AND d.status = 'active' AND (d.zone = 'episodes' OR d.source_type NOT IN ('external_untrusted', 'federated_peer'))");
         } else {
             allowed.push_str(" AND d.status = 'active' AND d.source_type NOT IN ('external_untrusted', 'federated_peer')");
         }
@@ -1597,6 +1607,107 @@ impl Kb {
         order.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then(a.0.cmp(&b.0)));
         Ok(Some(top_score))
     }
+}
+
+/// Proactive retry-ladder bridge lookup (specs/065 §5.3):
+/// Fast-matches error strings against `kb_fts_ident` for existing episodes with
+/// `outcome: resolved_after_failure` or `outcome: success`.
+/// If matched, returns a single bounded resolution hint (<= 300 chars).
+pub fn find_proactive_hint(
+    db: &Path,
+    role: &str,
+    error_text: &str,
+    ceiling: Tier,
+) -> Option<String> {
+    if !db.is_file() || error_text.trim().is_empty() {
+        return None;
+    }
+    let conn = Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+
+    let terms = match_terms(error_text);
+    if terms.is_empty() {
+        return None;
+    }
+
+    let error_expr = terms.join(" OR ");
+    let query_expr = format!("(\"outcome:resolved_after_failure\" OR \"outcome:success\") AND ({})", error_expr);
+
+    let taint_clause = if !ceiling.is_external() {
+        "AND d.source_type NOT IN ('external_untrusted', 'federated_peer')"
+    } else {
+        ""
+    };
+
+    let sql = format!(
+        "SELECT d.doc_id, d.rel_path \
+         FROM kb_fts_ident i \
+         JOIN kb_chunks c ON c.chunk_id = i.rowid \
+         JOIN kb_documents d ON d.doc_id = c.doc_id \
+         WHERE kb_fts_ident MATCH ?1 \
+           AND d.zone = 'episodes' \
+           AND d.status = 'active' \
+           AND (d.author = ?2 OR d.author = 'shared' OR d.author IS NULL) \
+           {taint_clause} \
+         ORDER BY bm25(kb_fts_ident, 2.0, 5.0, 10.0) \
+         LIMIT 1"
+    );
+
+    let doc: Option<(i64, String)> = conn.query_row(&sql, params![query_expr, role], |r| {
+        Ok((r.get(0)?, r.get(1)?))
+    }).ok();
+
+    let (doc_id, rel_path) = match doc {
+        Some(d) => d,
+        None => {
+            let prose_sql = format!(
+                "SELECT d.doc_id, d.rel_path \
+                 FROM kb_fts_prose p \
+                 JOIN kb_chunks c ON c.chunk_id = p.rowid \
+                 JOIN kb_documents d ON d.doc_id = c.doc_id \
+                 WHERE kb_fts_prose MATCH ?1 \
+                   AND d.zone = 'episodes' \
+                   AND d.status = 'active' \
+                   AND (d.author = ?2 OR d.author = 'shared' OR d.author IS NULL) \
+                   {taint_clause} \
+                 ORDER BY bm25(kb_fts_prose, 1.0) \
+                 LIMIT 1"
+            );
+            conn.query_row(&prose_sql, params![error_expr, role], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            }).ok()?
+        }
+    };
+
+    let mut st = conn.prepare("SELECT heading_path, raw_content FROM kb_chunks WHERE doc_id = ?1 ORDER BY chunk_id").ok()?;
+    let chunks = st.query_map([doc_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).ok()?;
+
+    let mut resolution_text = None;
+    for chunk in chunks.flatten() {
+        let (heading, raw) = chunk;
+        if heading.to_lowercase().contains("resolution") || raw.contains("## Resolution") {
+            let body = raw.lines()
+                .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join(" ");
+            if !body.trim().is_empty() {
+                resolution_text = Some(body);
+                break;
+            }
+        }
+    }
+
+    let raw_hint = resolution_text.or_else(|| {
+        conn.query_row(
+            "SELECT raw_content FROM kb_chunks WHERE doc_id = ?1 AND chunk_id > 0 LIMIT 1",
+            [doc_id],
+            |r| r.get::<_, String>(0),
+        ).ok()
+    })?;
+
+    let trimmed = raw_hint.trim();
+    let bounded: String = trimmed.chars().take(240).collect();
+    let ep_name = rel_path.rsplit('/').next().unwrap_or(&rel_path).trim_end_matches(".md");
+    Some(format!("[episodic memory hint from {}]: {}", ep_name, bounded.trim()))
 }
 
 /// A pointer's lines still say what they said when indexed? `Err` names why not (the file changed or is gone).
@@ -3272,5 +3383,68 @@ Close connection handles before directory clean.
         // 5. Expiry via valid_until: when today is past valid_until, episode is excluded
         let expired = kb.search("EMFILE", &SearchOpts { include_episodes: true, today: Some("2026-11-20".into()), legs: Legs::LexicalOnly, ..Default::default() }).unwrap();
         assert!(expired.is_empty(), "episode past valid_until must be excluded from search: {:?}", expired);
+    }
+
+    #[test]
+    fn proactive_retry_hint_matches_resolved_episodes_and_injects_bounded_hint() {
+        let ep_builder = "\
+---
+id: ep-2026-11-01-builder-cargo-deadlock-t0198
+title: \"Builder: Resolving Cargo Lock Contention\"
+author: builder
+role: builder
+kind: episode
+source_type: internal_empirical
+status: active
+outcome: resolved_after_failure
+error_fingerprints: [\"Blocking waiting for file lock on package cache\"]
+tools_invoked: [shell-worktree-scoped]
+skills_used: [tdd-execution]
+supersedes: []
+---
+
+# Episode: Resolving Cargo Lock Contention
+
+## Context & Obstacle
+Test execution hung waiting for cargo file lock.
+
+## Tool & Execution Signature
+Tool: shell-worktree-scoped
+Failed Command: cargo test -p delphi-engine --locked
+
+## Resolution & Pattern
+Set CARGO_TARGET_DIR inside isolated worktree and run with offline flag.
+";
+
+        let d = tempfile::tempdir().unwrap();
+        let db_path = d.path().join("state.db");
+        let mut kb = Kb::open(&db_path).unwrap();
+        kb.upsert("missions/m1/traces/builder-t0198.md", "episodes", ep_builder, "2026-11-01T12:00:00Z").unwrap();
+        drop(kb);
+
+        // 1. Matching error returns bounded proactive hint
+        let hint = find_proactive_hint(&db_path, "builder", "Blocking waiting for file lock on package cache", Tier::L5);
+        assert!(hint.is_some(), "expected proactive hint for matching error");
+        let h = hint.unwrap();
+        assert!(h.contains("[episodic memory hint from builder-t0198]:"), "{}", h);
+        assert!(h.contains("Set CARGO_TARGET_DIR inside isolated worktree"), "{}", h);
+        assert!(h.len() <= 300, "hint length must be <= 300 chars: {}", h.len());
+
+        // 2. Unrelated error returns None
+        let no_hint = find_proactive_hint(&db_path, "builder", "syntax error unexpected token", Tier::L5);
+        assert!(no_hint.is_none(), "unrelated error must return None");
+
+        // 3. Role isolation: scout cannot receive builder's private trace hint
+        let scout_hint = find_proactive_hint(&db_path, "scout", "Blocking waiting for file lock", Tier::L5);
+        assert!(scout_hint.is_none(), "scout must not see builder trace hint");
+
+        // 4. Superseded episode: when superseded, proactive hint is silenced
+        let mut kb = Kb::open(&db_path).unwrap();
+        let ep_superseded = ep_builder.replace("status: active", "status: superseded");
+        kb.upsert("missions/m1/traces/builder-t0198.md", "episodes", &ep_superseded, "2026-11-01T13:00:00Z").unwrap();
+        drop(kb);
+
+        let silenced_hint = find_proactive_hint(&db_path, "builder", "Blocking waiting for file lock on package cache", Tier::L5);
+        assert!(silenced_hint.is_none(), "superseded episode must not produce proactive hint");
     }
 }
