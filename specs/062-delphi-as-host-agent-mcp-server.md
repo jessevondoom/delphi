@@ -210,6 +210,8 @@ A host session is a server process lifetime (a random 16-hex session ID the MCP 
 | S6 | `request_help` | S5 |
 | S7 | `request_council`, `council_status`, `council_result` | S5 |
 | S8 | read-only `state.db` open, so `search` uses vectors and the reranker (025's deferred `Kb::open_readonly`) | S1 |
+
+**How (S8).** `Kb::open_readonly` opens `local/state.db` with `SQLITE_OPEN_READ_ONLY` and `query_only`: no schema work, no WAL change, and a missing or foreign file is an error, never a new index. The installed embedder is attached only if the index already holds vectors from that same model (it cannot rebuild them). `search_project` and `search_memory` use the index only to **order** the documents they already allowed: indexed hits lead, the keyword ranking follows, and a path the index returns that is not an allowed document is never served, so role isolation and the `external_untrusted` label are unchanged. With no index, no model or no hit, search is the keyword search it was.
 | S9 | transcript ingest, Claude Code first, then Codex and Copilot | S5 |
 | S10 | resume a host handoff in a Delphi session; console `/mcp` toggle and review surfaces | S5 |
 | S11 | security review and red-team pass over every new write, spend and read path | all |

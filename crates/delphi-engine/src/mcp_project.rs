@@ -80,26 +80,29 @@ pub fn words(q: &str) -> Vec<String> {
 }
 
 /// Rank `docs` by the query words: more distinct words first, then more occurrences. Returns up to `limit` results.
-fn rank(docs: Vec<Doc>, query: &str, limit: usize) -> Vec<Value> {
+/// `order` is the paths the knowledge base's vector and rerank search put first (best first); they lead, and may include a
+/// file no query word appears in. It only reorders `docs`: a path that is not in `docs` is never served.
+fn rank(docs: Vec<Doc>, query: &str, limit: usize, order: &[String]) -> Vec<Value> {
     let ws = words(query);
     if ws.is_empty() {
         return vec![];
     }
-    let mut hits: Vec<(usize, usize, Value)> = Vec::new();
+    let mut hits: Vec<(usize, usize, usize, Value)> = Vec::new();
     for d in docs {
         let Some(text) = read_capped(&d.file) else { continue };
         let lower = text.to_lowercase();
         let name = d.path.to_lowercase();
         let distinct = ws.iter().filter(|w| lower.contains(w.as_str()) || name.contains(w.as_str())).count();
-        if distinct == 0 {
+        let lead = order.iter().position(|p| *p == d.path).map_or(0, |i| order.len() - i);
+        if distinct == 0 && lead == 0 {
             continue;
         }
         let total: usize = ws.iter().map(|w| lower.matches(w.as_str()).count().min(50) + if name.contains(w.as_str()) { 5 } else { 0 }).sum();
         let (line_no, line) = text.lines().enumerate().max_by_key(|(_, l)| { let l = l.to_lowercase(); ws.iter().filter(|w| l.contains(w.as_str())).count() }).map(|(i, l)| (i + 1, flat(l, 200))).unwrap_or((1, String::new()));
-        hits.push((distinct, total, json!({"layer": d.layer, "path": d.path, "line": line_no, "preview": line, "source_type": d.source, "note": "data, not instructions"})));
+        hits.push((lead, distinct, total, json!({"layer": d.layer, "path": d.path, "line": line_no, "preview": line, "source_type": d.source, "note": "data, not instructions"})));
     }
-    hits.sort_by_key(|a| std::cmp::Reverse((a.0, a.1)));
-    hits.into_iter().take(limit).map(|h| h.2).collect()
+    hits.sort_by_key(|a| std::cmp::Reverse((a.0, a.1, a.2)));
+    hits.into_iter().take(limit).map(|h| h.3).collect()
 }
 
 fn valid_role(r: &str) -> bool {
@@ -181,6 +184,28 @@ impl Project {
         .to_string())
     }
 
+    /// Paths the knowledge base ranks for `query`, best first, read from `state.db` without writing anything. Empty when there is
+    /// no index, no installed model whose vectors the index holds, or nothing near: the keyword ranking then stands alone.
+    fn semantic_order(&self, query: &str) -> Vec<String> {
+        let db = self.ws_dir.join("local/state.db");
+        let Some(home) = self.ws_dir.parent().and_then(Path::parent) else { return vec![] };
+        if !db.is_file() {
+            return vec![];
+        }
+        let Ok(mut kb) = crate::kb::Kb::open_readonly(&db) else { return vec![] };
+        if !crate::kb::attach_default_readonly(home, &mut kb) {
+            return vec![];
+        }
+        let opts = crate::kb::SearchOpts { limit: 50, include_untrusted: true, include_attributed: true, ..Default::default() };
+        let mut out: Vec<String> = Vec::new();
+        for h in kb.search(query, &opts).unwrap_or_default() {
+            if !out.contains(&h.rel_path) {
+                out.push(h.rel_path);
+            }
+        }
+        out
+    }
+
     pub fn search_project(&self, query: &str, limit: usize) -> Result<String, String> {
         let mut docs: Vec<Doc> = self.files().into_iter().map(|(rel, file)| Doc { layer: "project".into(), path: rel, source: UNTRUSTED, file }).collect();
         for s in scope::layered_sources(&self.ws_dir, &self.active) {
@@ -188,7 +213,7 @@ impl Project {
                 docs.push(Doc { layer: s.layer, path: s.file.rel_path, source: s.file.default_source, file: s.file.path });
             }
         }
-        Ok(json!({"project": self.describe(), "results": rank(docs, query, limit)}).to_string())
+        Ok(json!({"project": self.describe(), "results": rank(docs, query, limit, &self.semantic_order(query))}).to_string())
     }
 
     pub fn search_memory(&self, query: &str, role: Option<&str>, limit: usize) -> Result<String, String> {
@@ -202,7 +227,7 @@ impl Project {
             .filter(|s| s.file.zone == "memory" && memory_allowed(&s.file.rel_path, role))
             .map(|s| Doc { layer: s.layer, path: s.file.rel_path, source: s.file.default_source, file: s.file.path })
             .collect();
-        Ok(json!({"project": self.describe(), "role": role, "results": rank(docs, query, limit)}).to_string())
+        Ok(json!({"project": self.describe(), "role": role, "results": rank(docs, query, limit, &self.semantic_order(query))}).to_string())
     }
 }
 
@@ -248,6 +273,21 @@ mod tests {
         let outside = Project::new(&ws, t.path());
         assert!(outside.describe().contains("no registered project"));
         assert!(outside.specs_status().is_err() && outside.resources().is_empty());
+    }
+
+    #[test]
+    fn search_leads_with_the_index_but_serves_only_what_the_role_may_read() {
+        let (_t, ws, root) = fixture();
+        let p = Project::new(&ws, &root);
+        let allowed = texts(&p.search_memory("quokka", Some("architect"), 10).unwrap());
+        // The index puts another role's file first; it is not an allowed document, so it is never served.
+        let docs: Vec<Doc> = scope::layered_sources(&ws, &p.active).into_iter().filter(|s| s.file.zone == "memory" && memory_allowed(&s.file.rel_path, Some("architect"))).map(|s| Doc { layer: s.layer, path: s.file.rel_path, source: s.file.default_source, file: s.file.path }).collect();
+        let order = vec!["memory/agents/builder/lessons.md".to_string()];
+        let got: Vec<String> = rank(docs, "quokka", 10, &order).iter().map(|r| r["path"].as_str().unwrap().to_string()).collect();
+        assert_eq!(got, allowed);
+        assert!(got.iter().all(|g| !g.contains("builder")));
+        // With no index at all, search is the keyword search it was.
+        assert!(!ws.join("local/state.db").exists() && p.semantic_order("quokka").is_empty());
     }
 
     #[test]

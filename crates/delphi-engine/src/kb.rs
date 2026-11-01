@@ -504,6 +504,31 @@ impl Kb {
         Kb::init(conn)
     }
 
+    /// Open an existing index for reading only (`specs/025` §4.4, `specs/062` S8): no schema work, no migration, no pragma that
+    /// writes, and the connection itself refuses every write. For a process that must never change the workspace.
+    pub fn open_readonly(db: &Path) -> Result<Kb, KbError> {
+        use rusqlite::OpenFlags;
+        crate::vecext::register();
+        let conn = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+        conn.busy_timeout(std::time::Duration::from_secs(2))?;
+        conn.pragma_update(None, "query_only", "ON")?;
+        // An index that is not one of ours (or has no tables yet) is an error here, not something to create.
+        conn.query_row("SELECT value FROM kb_meta WHERE key = 'schema_version'", [], |r| r.get::<_, String>(0))?;
+        Ok(Kb { conn, embedder: None, floor: None, seed: None, seeded: 0, reranker: None })
+    }
+
+    /// `attach_embedder` for a read-only index: used only if the index already holds vectors made by this very model, since
+    /// it cannot rebuild them. Returns whether it was attached; search is keywords-only otherwise.
+    pub fn attach_embedder_readonly(&mut self, e: Arc<dyn Embedder>) -> bool {
+        let meta = |k: &str| -> Option<String> { self.conn.query_row("SELECT value FROM kb_meta WHERE key = ?1", [k], |r| r.get(0)).ok() };
+        let same = meta("embedding_model_id").as_deref() == Some(e.model_id()) && meta("embedding_dim").as_deref() == Some(e.dim().to_string().as_str()) && meta("embedding_format").as_deref() == Some(EMBED_FORMAT);
+        if !same || !has_vec(&self.conn) {
+            return false;
+        }
+        self.embedder = Some(e);
+        true
+    }
+
     pub fn open_in_memory() -> Result<Kb, KbError> {
         crate::vecext::register();
         let conn = Connection::open_in_memory()?;
@@ -1577,6 +1602,17 @@ pub fn attach_default(home: &Path, kb: &mut Kb) -> Result<bool, KbError> {
     }
 }
 
+/// `attach_default` for a read-only index: the installed reranker, and the installed embedder if the index's vectors are its own.
+pub fn attach_default_readonly(home: &Path, kb: &mut Kb) -> bool {
+    if let Ok(r) = embed::open_default_reranker(Some(home)) {
+        kb.attach_reranker(r);
+    }
+    match embed::open_default(Some(home)) {
+        Ok(Some(e)) => kb.attach_embedder_readonly(e),
+        _ => false,
+    }
+}
+
 static BACKGROUND_EMBEDDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Give chunks without vectors their vectors on a background thread (at most one per process), so that a search
@@ -2033,6 +2069,20 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_read_only_open_changes_nothing_refuses_writes_and_never_creates_an_index() {
+        let t = tempfile::tempdir().unwrap();
+        let db = t.path().join("state.db");
+        assert!(Kb::open_readonly(&db).is_err() && !db.exists(), "a missing index is an error, not a new file");
+        Kb::open(&db).unwrap();
+        let before = std::fs::read(&db).unwrap();
+        let kb = Kb::open_readonly(&db).unwrap();
+        assert!(kb.conn.execute("INSERT OR REPLACE INTO kb_meta(key, value) VALUES ('x', 'y')", []).is_err());
+        assert_eq!(kb.search("anything at all", &SearchOpts::default()).unwrap().len(), 0);
+        drop(kb);
+        assert_eq!(std::fs::read(&db).unwrap(), before, "opening and searching wrote nothing");
+    }
 
     const DOC: &str = "---\nid: x\nsource_type: internal_generated\nauthor: orchestrator\nstatus: active\n---\n\n# Title\n\nIntro text.\n\n## Rubric\n\n- **`[REV-SEC-04]` Ratified Rubric Loading:** audits load REVIEW.md from ratified copies.\n- `[REV-ARCH-05]` Names.\n\n```text\n## not a heading\n```\n\n### Deep\n\nThe `Part.thoughtSignature` field must round-trip.\n";
 
