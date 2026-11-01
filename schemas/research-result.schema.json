@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jessevondoom/delphi/schemas/research-result.schema.json",
+  "title": "Delphi research result",
+  "description": "What `research_result` returns to a host agent (specs/066 §4; crates/delphi-core/src/research.rs). A claim's `knowledge_status` is never raised by its source being trusted (specs/052).",
+  "type": "object",
+  "required": ["status", "answer", "claims", "source_ids", "kb_hits", "new_claims", "budget_used", "answered_by", "identity", "signature"],
+  "properties": {
+    "status": { "enum": ["done", "partial", "failed", "cancelled"] },
+    "answer": { "type": "string", "maxLength": 8000, "description": "Model synthesis, labelled not validated. Raw page text is never returned." },
+    "claims": { "type": "array", "items": { "$ref": "#/$defs/claim" } },
+    "citations": { "type": "array", "items": { "type": "string" } },
+    "source_ids": { "type": "array", "items": { "type": "string" } },
+    "kb_hits": { "type": "array", "items": { "type": "string" } },
+    "new_claims": { "type": "integer", "minimum": 0, "description": "Deduplicated staged candidates, not search hits." },
+    "contradictions": { "type": "array", "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "description": "Claim ids that disagree." } },
+    "freshness": {
+      "type": "object",
+      "properties": { "retrieved": { "type": "string" }, "last_checked": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "budget_used": {
+      "type": "object",
+      "required": ["steps"],
+      "properties": { "steps": { "type": "integer", "minimum": 0 }, "ms": { "type": "integer", "minimum": 0 } },
+      "additionalProperties": false
+    },
+    "answered_by": { "type": "string", "minLength": 1 },
+    "consulted": { "type": "array", "items": { "type": "string" } },
+    "identity": { "$ref": "#/$defs/identity" },
+    "signature": { "type": "string", "minLength": 1, "description": "The identity as plain text, or the variant chosen by [mcp] badge_style." }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "claim": {
+      "type": "object",
+      "required": ["id", "assertion", "source_ids", "quote", "locator", "retrieved", "licence", "knowledge_status", "contested"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "assertion": { "type": "string", "minLength": 1 },
+        "source_ids": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "quote": { "type": "string" },
+        "locator": { "type": "string" },
+        "retrieved": { "type": "string" },
+        "licence": { "type": "string" },
+        "knowledge_status": { "enum": ["noted", "checking", "validated", "contested", "disproved", "retired"] },
+        "contested": { "type": "boolean" },
+        "from_trusted_source": { "type": "boolean", "description": "Provenance only; does not change knowledge_status." }
+      },
+      "additionalProperties": false
+    },
+    "identity": {
+      "type": "object",
+      "required": ["role", "display_name", "badge", "hex", "ansi256"],
+      "properties": {
+        "role": { "type": "string", "minLength": 1, "maxLength": 40, "pattern": "^[^\\u0000-\\u001f\\u007f]*$" },
+        "display_name": { "type": "string", "minLength": 1, "maxLength": 40, "pattern": "^[^\\u0000-\\u001f\\u007f]*$" },
+        "badge": { "type": "string", "minLength": 1, "maxLength": 8, "pattern": "^[^\\u0000-\\u001f\\u007f]*$" },
+        "hex": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
+        "ansi256": { "type": "integer", "minimum": 0, "maximum": 255 },
+        "via": { "type": "string", "maxLength": 40, "description": "Present when a host adopted the role: not a Delphi agent answering." },
+        "variants": {
+          "type": "object",
+          "properties": { "plain": { "type": "string" }, "ansi": { "type": "string" }, "markdown": { "type": "string" } },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
