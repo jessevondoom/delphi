@@ -580,6 +580,8 @@ pub struct Config {
     pub learning: LearningConfig,
     /// `[mcp]`: the server for host agents (`specs/062` §3.4).
     pub mcp: McpConfig,
+    /// `[retrieval]`: knowledge retrieval for agents (`specs/064` §4).
+    pub retrieval: RetrievalConfig,
     /// `[agents]`: operator direct interaction, fleet accessibility, and quarantine (`specs/063` §3.1).
     pub agents: AgentsConfig,
 }
@@ -634,6 +636,19 @@ impl AgentsConfig {
         } else {
             self.enabled.iter().any(|r| r == role)
         }
+    }
+}
+
+/// `[retrieval]` (`specs/064` §4.2). `auto`: a root span starts with at most three passages from the knowledge base.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RetrievalConfig {
+    pub auto: bool,
+}
+
+impl Default for RetrievalConfig {
+    fn default() -> RetrievalConfig {
+        RetrievalConfig { auto: true }
     }
 }
 
@@ -966,6 +981,12 @@ impl Config {
                 Ok(v) if v.allow_remote => errs.push("[mcp] allow_remote: remote access is not supported in this version (specs/062 §3.2)".to_string()),
                 Ok(v) => cfg.mcp = v,
                 Err(e) => errs.push(format!("[mcp]: {}", e)),
+            }
+        }
+        if let Some(v) = root.get("retrieval") {
+            match v.clone().try_into::<RetrievalConfig>() {
+                Ok(v) => cfg.retrieval = v,
+                Err(e) => errs.push(format!("[retrieval]: {}", e)),
             }
         }
         if let Some(v) = root.get("agents") {

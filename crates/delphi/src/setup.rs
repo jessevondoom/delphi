@@ -362,12 +362,12 @@ fn codex_harness(ui: &mut dyn Ui, env: &dyn Env, d: &Detected, doc: &mut Documen
     Some("codex-sub")
 }
 
-/// Gemini subscription through `agy`: read-only roles.
+/// Gemini subscription through `agy`: reviewers, Council seats, and Builders once verified with `delphi endpoints test --probe`.
 fn agy_harness(ui: &mut dyn Ui, env: &dyn Env, d: &Detected, doc: &mut DocumentMut) -> Option<&'static str> {
     if has_endpoint(doc, "agy-sub") || d.agy_version.is_none() {
         return None;
     }
-    if !ui.yes_no("Use your Gemini subscription through `agy`? (read-only roles like reviewers and Council seats; its output is treated as not validated)", true) {
+    if !ui.yes_no("Use your Gemini subscription through `agy`? (reviewers, Council seats, and Builders once verified with `delphi endpoints test --probe`)", true) {
         return None;
     }
     let listing = env.run("agy", &["models"]).map(|(_, o)| o).unwrap_or_default();

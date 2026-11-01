@@ -35,6 +35,7 @@ One row per spec. Three separate questions, because they diverge: **Approved** (
 | 011 Xenia trust model | yes (text, by "ratify all") | yes (X0-X10) | tests, fuzz, scratch-store drill | Phase 1 build: X0-X10 merged (plan: xenia-phase-1-plan.md; gates in xenia-x10-verification.md). Gates 1-7 of 011 §1.4 met by automated tests; gate 8 (3-human, 2-week dogfood, X11), the independent red-team sweep and a live store with real admin identities are the operator's |
 | 012 Xenia record schema | yes (text, by "ratify all") | yes (kinds `memory`, `endorsement`, `tombstone`, and `bundle` from B8) | tests, fuzz | same; not exercised on a live store. 2026-10-29 (D-32): pointer scheme is `xenia://<kind>/<id>[@rev]` (bare form refused), `delphi://` refused, `xenia://cap/` reserved |
 | 013 Librarian and internal retrieval | yes | no ("scoped, not yet built") | n/a | after 011/012 |
+| 020 Harness tool bridge, seat profiles & tool inventory | yes | yes (§8.7 Antigravity Builder activation and diagnostic parity) | tests, agy live probe | none |
 | 022 The sharing layer (overview, plan, decisions) | yes (decisions OD-1..OD-9, 2026-10-25; text on merge of PR #155; ratified in full 2026-10-28) | yes (code in `delphi-bundle`, `bundle_*.rs`, `org_context.rs`; per-slice state below) | n/a | B0: apply the 022 §5 amendments; then the slices below |
 | 023 Org bundle standard (manifest, layout, knowledge, skills, agents, behavior, vectors) | yes (2026-10-25; ratified in full 2026-10-28) | yes (code in `delphi-bundle`, `bundle_*.rs`, `org_context.rs`; per-slice state below) | n/a | B1 |
 | 024 Bundle provenance, adding, precedence, lifecycle | yes (2026-10-25; ratified in full 2026-10-28) | yes (code in `delphi-bundle`, `bundle_*.rs`, `org_context.rs`; per-slice state below) | n/a | B2, B4, B6 |
@@ -454,7 +455,7 @@ Approved by the operator on 2026-10-31. Makes the Wikipedia-style Encyclopedia S
 | SK9a | `skills/encyclopedia-synthesis/SKILL.md`, authorize for `writer`, frontmatter schema (`valid_until`, `volatility`, `ttl_reason`, `depth`, `disambiguation`) and `[1, 365]` day clamping | built |
 | SK9b | Unified `Library::gather` (central library + workspace `kb` excerpts + `GatheredAsset` images), `library_page_check.rs` support for TOC `#anchors`, `page:<slug>` links, and verified `lib:`/`kb:` inline images, `/v1/image` resolution | built |
 | SK9c | Reputable expansion (`pages.expand` RPC and `delphi pages expand <query>` CLI) connecting `research.rs` and `research_images.rs` to library source/asset persistence and `depth: expanded` re-synthesis | built |
-| SK9d | Encyclopedia Page as primary search result in `ui/src/archives.ts` rendered via `renderMarkdownLinks` and `paint`, immediate synthesis on search, TOC `#anchor` jumping, disambiguation links, and `e` / `r` / `f` controls | built |
+| SK9d | Encyclopedia Page as primary search result in `ui/src/archives.ts` rendered via `renderMarkdownLinks` and `paint`, immediate synthesis on search, TOC `#anchor` jumping, disambiguation links, and `e` / `r` / `f` controls |and `e` / `r` / `f` controls | built; corrected 2026-11-01: a search never set `pg.q`, so `gotPage` dropped every page and the raw list always won. Submit now sets it, the page takes the view when it arrives unless `f` chose raw, and a late page for an older query is dropped (`ui/test/pages.test.ts`) |
 
 ## Agent fleet behaviors, dynamic orchestration, and curated knowledge (spec 063, approved 2026-11-01)
 
@@ -469,3 +470,16 @@ Approved by the operator on 2026-11-01. Replaces binary `enabled_agents` with fl
 | S5 | Fleet collaboration telemetry & tenacity pushback: FPY/churn/overhead tracking and single-pushback retry policy for `investigator` | built (this PR) |
 
 
+
+## Knowledge retrieval for agents and MCP, markdown and scratch tiering, release self-knowledge (spec 064, approved 2026-11-01)
+
+Approved by the operator on 2026-11-01 after a three-seat council review. Amends 004, 043, 057, 058 and 062.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| R1 | `retrieval.rs`: read-only reader pool with the embedder attached once, passage results, deadline, `retrieval.done`; `kb_search`, `kb.search`, `kbserve` use it | partly built (agent `kb_search` uses it; daemon RPC and HTTP not yet) |
+| R2 | MCP `search_kb` over `HostLink`, allowlist visibility, per-request scope, `search_memory` narrowing | partly built (`search_kb` tool, `host.search_kb`, zone allowlist, project layer; roots/list scope and `search_memory` narrowing not yet) |
+| R3 | Span-start retrieval for root spans, `[retrieval]` config | not started |
+| R4 | Markdown/scratch tiering, tier stamping, spec-gate predicate | not started |
+| R5 | `about/` release snapshot | not started |
+| R6 | Search page building state and cancel (SK9d fix built) | partly built |

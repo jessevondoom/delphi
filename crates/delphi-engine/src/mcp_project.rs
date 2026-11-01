@@ -216,6 +216,21 @@ impl Project {
         Ok(json!({"project": self.describe(), "results": rank(docs, query, limit, &self.semantic_order(query))}).to_string())
     }
 
+    /// The project's part of `search_kb` (`specs/064` §5): its knowledge and context layers and its `research/` folder.
+    /// Nothing else of the project (specs, plans, memory) is searched here, and no project means no results.
+    pub fn search_kb_project(&self, query: &str, limit: usize) -> Vec<Value> {
+        if self.root.is_none() {
+            return vec![];
+        }
+        let mut docs: Vec<Doc> = self.files().into_iter().filter(|(rel, _)| rel.starts_with("context/") || rel.starts_with("research/")).map(|(rel, file)| Doc { layer: "project".into(), path: rel, source: UNTRUSTED, file }).collect();
+        for s in scope::layered_sources(&self.ws_dir, &self.active) {
+            if s.layer != "home" && matches!(s.file.zone, "context" | "knowledge") && !s.file.rel_path.starts_with("context/facts/") {
+                docs.push(Doc { layer: s.layer, path: s.file.rel_path, source: s.file.default_source, file: s.file.path });
+            }
+        }
+        rank(docs, query, limit, &self.semantic_order(query))
+    }
+
     pub fn search_memory(&self, query: &str, role: Option<&str>, limit: usize) -> Result<String, String> {
         if let Some(r) = role {
             if !valid_role(r) {

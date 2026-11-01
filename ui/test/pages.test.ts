@@ -93,3 +93,21 @@ test('toggle between encyclopedia page and raw file search with f', () => {
   const backToPage = walk(toRaw.a, text('f'));
   assert.equal(backToPage.a.mode, 'pages');
 });
+
+test('a search shows the encyclopedia page as soon as it arrives, unless the operator chose the raw list or searched again (specs/061 §4.6)', () => {
+  const searched = (q: string, a: A.Arch = A.emptyArch(true)) => {
+    for (const c of q) a = walk(a, text(c)).a;
+    const r = walk(a, k('enter'));
+    assert.deepEqual(r.action, { t: 'search', q });
+    return A.gotHits(r.a, q, { results: [{ path: 'specs/a.md', collection: 'specs', trust: 'x', heading: '', preview: 'p' }] });
+  };
+  const a = searched('tides');
+  assert.equal(a.mode, 'search', 'the raw list is on screen until the page is ready');
+  const got = A.gotPages(a, (p) => P.gotPage(p, 'tides', PAGE));
+  assert.equal(got.mode, 'pages', 'the page takes the view');
+  assert.equal(walk(got, text('f')).a.mode, 'search', 'f shows the raw results');
+  const raw = walk(got, text('f')).a;
+  assert.equal(A.gotPages(raw, (p) => P.gotPage(p, 'tides', PAGE)).mode, 'search', 'a page arriving after the operator chose raw does not take the view back');
+  const cached = A.gotPages(searched('tides'), (p) => P.gotPage(p, 'moon', PAGE));
+  assert.equal(cached.mode, 'search', 'a late page for an older query is dropped');
+});

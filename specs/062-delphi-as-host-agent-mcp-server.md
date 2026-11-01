@@ -291,3 +291,5 @@ Unit tests for the framing and guards (moved from `bundle_serve.rs`, which keeps
 ## 17. Known limits
 
 A different model acting as a role may decide differently from the model Delphi assigns it (`tuned_for` says so; role evals from 048 can later measure it). A host is not bound by a role's scope, so a pack can be ignored. Councils are slow and the async result depends on the host polling. Transcript formats are not stable. Lessons learned under one model may not transfer, which is why proposals carry their origin.
+
+> **Amended by [`specs/064`](064-knowledge-retrieval-for-agents-and-mcp.md) (2026-11-01):** agent and MCP knowledge retrieval, scope per request, and the search-page order (see 064 §3 to §8).

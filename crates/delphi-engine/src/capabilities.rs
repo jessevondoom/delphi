@@ -475,6 +475,8 @@ pub async fn probe_harness_full(cfg: &Config, ep: &Endpoint, program: &str, now:
             cap.notes.push(format!("agy gate: verified{}. Delphi's tool was served and the gate met and denied {}; none ran, so a span on this agy version starts untrusted only if it reads from the web", if version.is_empty() { String::new() } else { format!(" on {}", version) }, seen));
             if !builder_ready {
                 cap.notes.push(format!("agy gate: not ready for Builders. The probe did not see {} fire under {} name(s); Delphi judges a Builder's edits by those names (the file tools it saw: {}), so Builder tasks stay on other seats. Run the probe again, or report the new tool names", missing_for_builder.join(", "), if missing_for_builder.len() == 1 { "that" } else { "those" }, attempted.iter().filter(|t| matches!(tool_kind(t), "read" | "write" | "edit")).cloned().collect::<Vec<_>>().join(", ")));
+            } else {
+                cap.notes.push("agy gate: ready for Builders. File edits are judged by Delphi cards, and commands run through Delphi's sandboxed runner.".into());
             }
         } else if served {
             cap.notes.push(format!("agy gate: unproven. Delphi's tool was served and nothing got through, but the model reached for only {}; the gate needs a shell and {} kinds of tool denied to count as verified, so the span stays untrusted. Run the probe again", seen, GATE_MIN_KINDS));

@@ -529,6 +529,11 @@ impl Kb {
         true
     }
 
+    /// Counts index changes made by a sync; a cached reader compares it to know whether to reopen.
+    pub fn index_generation(&self) -> i64 {
+        self.conn.query_row("SELECT value FROM kb_meta WHERE key = 'index_generation'", [], |r| r.get::<_, String>(0)).ok().and_then(|v| v.parse().ok()).unwrap_or(0)
+    }
+
     pub fn open_in_memory() -> Result<Kb, KbError> {
         crate::vecext::register();
         let conn = Connection::open_in_memory()?;
@@ -710,6 +715,9 @@ impl Kb {
         // Who vouches for what, from the lock's listing above and from nothing in a document: one `prefix<TAB>org` per line.
         let vouched: std::collections::BTreeSet<String> = files.iter().filter_map(|f| f.vouched_by.as_ref().map(|o| format!("{}\t{}", f.bundle.as_ref().map(|b| format!("bundles/{}/", b.id)).unwrap_or_else(|| f.rel_path.clone()), o))).collect();
         self.conn.execute("INSERT OR REPLACE INTO kb_meta(key, value) VALUES ('vouched', ?1)", [vouched.into_iter().collect::<Vec<_>>().join("\n")])?;
+        if rep.added + rep.updated + rep.removed > 0 {
+            self.conn.execute("INSERT INTO kb_meta(key, value) VALUES ('index_generation', '1') ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1", [])?;
+        }
         Ok(rep)
     }
 
@@ -845,6 +853,10 @@ fn allowed_sql(opts: &SearchOpts) -> String {
         } else {
             allowed.push_str(" AND d.zone != 'memory'");
         }
+    }
+    if let Some(z) = &opts.zones {
+        let list: Vec<String> = z.iter().map(|z| format!("'{}'", z)).collect();
+        allowed.push_str(&format!(" AND d.zone IN ({}) AND d.rel_path NOT LIKE 'context/facts/%'", if list.is_empty() { "''".into() } else { list.join(",") }));
     }
     if opts.no_bundles {
         allowed.push_str(" AND d.zone != 'bundles' AND d.rel_path NOT LIKE 'bundles/%'");
@@ -1195,6 +1207,8 @@ pub struct SearchOpts {
     /// Which Xenia records a search may see (`specs/011` §5.3). The zone is invisible unless asked for, and each view
     /// is exclusive: it returns Xenia records and nothing else.
     pub xenia: XeniaView,
+    /// Only documents in these zones (`specs/064` §5). Narrows, never widens; `None` is every zone the other rules allow.
+    pub zones: Option<Vec<&'static str>>,
 }
 
 /// The three ways to see the Xenia zone. The default sees none of it, so every ordinary search, listing and read is
@@ -1231,7 +1245,7 @@ pub enum Legs {
 
 impl Default for SearchOpts {
     fn default() -> Self {
-        SearchOpts { role: None, limit: 10, include_untrusted: false, include_attributed: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false, kinds: None, max_episodes: None, today: None, xenia: XeniaView::Off }
+        SearchOpts { role: None, limit: 10, include_untrusted: false, include_attributed: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false, kinds: None, max_episodes: None, today: None, xenia: XeniaView::Off, zones: None }
     }
 }
 

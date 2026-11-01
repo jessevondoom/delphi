@@ -173,7 +173,7 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
     check_xenia(home, delphi_xenia_now(), &mut r);
 
     // 10. Subscription harnesses (specs/009 §7B): installed and signed in, from the CLIs' own status commands.
-    check_harnesses(&cfg, &run_cli, opts.require_providers, &mut r);
+    check_harnesses(Some(&ws.dir), &cfg, &run_cli, opts.require_providers, &mut r);
     let codex_meter = || delphi_engine::quota::read_codex("codex", std::time::Duration::from_secs(8));
     check_seat_quota(&cfg, &run_cli, &codex_meter, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0), &mut r);
     check_coverage_drift(&cfg, &help_page, &mut r);
@@ -266,7 +266,7 @@ fn check_mcp_policy(cfg_text: &str, policy: &delphi_engine::policy::McpPolicy, e
 /// For every `path = "harness"` endpoint: is its CLI installed, and is it signed in? Claude has
 /// `claude auth status`; `agy` has no status command, so its sign-in is proven by
 /// `delphi endpoints test --probe` (one tiny call). Account details such as the email are never printed.
-fn check_harnesses(cfg_text: &str, run: &dyn Fn(&str, &[&str]) -> CliRun, require: bool, r: &mut Report) {
+fn check_harnesses(ws: Option<&Path>, cfg_text: &str, run: &dyn Fn(&str, &[&str]) -> CliRun, require: bool, r: &mut Report) {
     let Ok(v) = toml::from_str::<toml::Value>(cfg_text) else { return };
     let Some(list) = v.get("endpoints").and_then(|e| e.as_array()) else { return };
     let missing = |r: &mut Report, id: &str, msg: String| if require { r.fail("10 harness", id.to_string(), msg) } else { r.warn("10 harness", id.to_string(), msg) };
@@ -290,10 +290,21 @@ fn check_harnesses(cfg_text: &str, run: &dyn Fn(&str, &[&str]) -> CliRun, requir
             Some("agy") => match run("agy", &["--version"]) {
                 None => missing(r, id, "the `agy` program was not found on PATH; install the Antigravity CLI".into()),
                 Some((_, ver)) => {
-                    // `[harness.agy]` (`specs/020` §8): with the bridge on (the default) a span carries Delphi's tools in a plugin and a
-                    // hook gates its other tools; off, it is the old read-only, untrusted seat. Either way: no file edits or commands.
                     let bridge = v.get("harness").and_then(|h| h.get("agy")).and_then(|a| a.get("bridge")).and_then(|b| b.as_bool()).unwrap_or(true);
-                    let what = if bridge { "Delphi's tools reach it through a plugin and a hook denies its other tools, and its output is not validated until `delphi endpoints test --probe` has watched the gate hold on this version (after that it starts as trusted as any role, and drops to not validated when it reads the web); it is never a Builder" } else { "the bridge is off: read-only roles only, nothing gates its own tools, output is not validated" };
+                    let gate_path = ws.map(|w| w.join("local/agy-gate.json"));
+                    let gate = gate_path.and_then(|p| delphi_engine::capabilities::load_gates(&p).into_iter().find(|g| g.endpoint_id == id));
+                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+                    let verified = gate.as_ref().is_some_and(|g| g.verified && g.served && g.side_effects.is_empty() && g.is_fresh(now));
+                    let builder_ready = verified && gate.as_ref().is_some_and(|g| g.builder_ready);
+                    let what = if !bridge {
+                        "the bridge is off: read-only roles only, nothing gates its own tools, output is not validated"
+                    } else if builder_ready {
+                        "gate verified for Builders: file edits are judged by Delphi cards and commands run through Delphi's sandboxed runner. Run `delphi endpoints test --probe` to re-probe."
+                    } else if verified {
+                        "gate verified for read-only roles (file tools unobserved). Run `delphi endpoints test --probe` to verify file tools for Builders."
+                    } else {
+                        "Delphi's tools reach it through a plugin and a hook denies its other tools, and its output is not validated until `delphi endpoints test --probe` has watched the gate hold on this version; run `delphi endpoints test --probe` to verify the gate for Builders."
+                    };
                     r.push(Level::Ok, "10 harness", id.to_string(), format!("agy {} is installed; it has no status command, so run `delphi endpoints test --probe` to prove it is signed in. {}", ver.trim(), what))
                 }
             },
@@ -1185,7 +1196,7 @@ mod tests {
         };
         let level = |cfg: &str, f: &dyn Fn(&str, &[&str]) -> CliRun, require: bool| {
             let mut r = Report::default();
-            check_harnesses(cfg, f, require, &mut r);
+            check_harnesses(None, cfg, f, require, &mut r);
             r.findings.iter().map(|f| (f.level, f.message.clone())).collect::<Vec<_>>()
         };
         let ok = level(cfg, &run(Some(0)), false);
@@ -1210,16 +1221,28 @@ mod tests {
             }
         };
         let mut r = Report::default();
-        check_harnesses(cfg, &run_ok, false, &mut r);
+        check_harnesses(None, cfg, &run_ok, false, &mut r);
         let text: Vec<String> = r.findings.iter().map(|f| format!("{:?} {} {}", f.level, f.location, f.message)).collect();
         assert!(text.iter().any(|t| t.starts_with("Ok c") && t.contains("signed in") && t.contains("pro plan") && t.contains("Delphi tool bridge on, approvals by delegate, account connectors on")), "{:?}", text);
         let mut r2 = Report::default();
-        check_harnesses(&format!("{}\n[harness.claude]\nbridge = false\napprovals = \"delphi\"\nclaudeai_connectors = false\n", cfg), &run_ok, false, &mut r2);
+        check_harnesses(None, &format!("{}\n[harness.claude]\nbridge = false\napprovals = \"delphi\"\nclaudeai_connectors = false\n", cfg), &run_ok, false, &mut r2);
         assert!(r2.findings.iter().any(|f| f.location == "c" && f.message.contains("bridge off (roles run text-only), approvals by delphi, account connectors off")), "{:?}", r2.findings.iter().map(|f| f.message.clone()).collect::<Vec<_>>());
         assert!(text.iter().any(|t| t.starts_with("Ok a") && t.contains("endpoints test --probe") && t.contains("plugin and a hook denies its other tools")), "{:?}", text);
         assert!(text.iter().any(|t| t.starts_with("Warn g") && t.contains("Antigravity")), "{:?}", text);
         assert!(!text.iter().any(|t| t.contains("secret@example.com")), "the account email is never printed");
         assert_eq!(r.findings.len(), 3, "API endpoints are not harness checks");
+
+        // When a fresh verified gate record exists with builder_ready = true, it reports ready for Builders.
+        let td = tempfile::tempdir().unwrap();
+        let local = td.path().join("local");
+        std::fs::create_dir_all(&local).unwrap();
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+        let rec = format!(r#"[{{"endpoint_id":"a","agy_version":"1.4.6","at":{},"attempted":["run_command","read_file","write_file","edit_file"],"kinds":["shell","read","write","edit"],"served":true,"side_effects":[],"verified":true,"builder_ready":true}}]"#, now);
+        std::fs::write(local.join("agy-gate.json"), rec).unwrap();
+        let mut r_builder = Report::default();
+        check_harnesses(Some(td.path()), cfg, &run_ok, false, &mut r_builder);
+        let builder_text: Vec<String> = r_builder.findings.iter().map(|f| format!("{:?} {} {}", f.level, f.location, f.message)).collect();
+        assert!(builder_text.iter().any(|t| t.starts_with("Ok a") && t.contains("gate verified for Builders")), "{:?}", builder_text);
 
         let run_out = |p: &str, a: &[&str]| -> Option<(i32, String)> {
             match (p, a.first().copied()) {
@@ -1229,11 +1252,11 @@ mod tests {
             }
         };
         let mut r = Report::default();
-        check_harnesses(cfg, &run_out, true, &mut r);
+        check_harnesses(None, cfg, &run_out, true, &mut r);
         let level_of = |id: &str| r.findings.iter().find(|f| f.location == id).map(|f| f.level);
         assert_eq!((level_of("c"), level_of("a")), (Some(Level::Fail), Some(Level::Fail)), "not signed in and not installed fail under --require-providers");
         let mut r = Report::default();
-        check_harnesses(cfg, &run_out, false, &mut r);
+        check_harnesses(None, cfg, &run_out, false, &mut r);
         assert!(r.findings.iter().filter(|f| f.location == "c" || f.location == "a").all(|f| f.level == Level::Warn));
     }
 
