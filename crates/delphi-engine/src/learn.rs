@@ -197,7 +197,7 @@ pub fn live_proposals(mission: &str, events: &[EventEnvelope]) -> Vec<LivePropos
                     continue;
                 }
                 let tier = e.payload["tier"].as_str().and_then(Tier::parse).unwrap_or(Tier::L0).min(Tier::L3);
-                out.push(LiveProposal { mission: mission.to_string(), id: format!("p{}", e.seq), op: s("op"), scope: s("scope"), text: s("text"), rationale: s("rationale"), target: s("target"), tier: tier.as_str().to_string(), task_id: e.task_id.clone(), timestamp: e.timestamp.clone(), supersedes: e.payload["supersedes"].as_array().into_iter().flatten().filter_map(|v| v.as_str()).filter(|id| crate::retro::is_rule_id(id)).take(crate::retro::MAX_SUPERSEDES).map(String::from).collect() });
+                out.push(LiveProposal { mission: mission.to_string(), id: format!("p{}", e.seq), op: s("op"), scope: s("scope"), text: s("text"), rationale: s("rationale"), target: s("target"), tier: tier.as_str().to_string(), task_id: e.task_id.clone(), timestamp: e.timestamp.clone(), supersedes: e.payload["supersedes"].as_array().into_iter().flatten().filter_map(|v| v.as_str()).filter(|id| crate::retro::is_rule_id(id) || crate::retro::is_episode_id(id)).take(crate::retro::MAX_SUPERSEDES).map(String::from).collect() });
             }
             "learn.proposal_resolved" => {
                 if let Some(id) = e.payload["id"].as_str() {
