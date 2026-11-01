@@ -60,6 +60,12 @@ pub enum Input {
     Narrator(Option<String>),
     /// `/more`: the rest of a reply the inline console shortened.
     More,
+    /// `/solo [on | off]`: toggle solo dialog mode (`specs/063` §3.3).
+    Solo(Option<String>),
+    /// `/quarantine <role>`: quarantine an agent (`specs/063` §3.2).
+    Quarantine(String),
+    /// `/unquarantine <role>`: unquarantine an agent (`specs/063` §3.2).
+    Unquarantine(String),
     Unknown(String),
 }
 
@@ -113,6 +119,15 @@ pub fn parse_input(line: &str) -> Input {
                 None => Input::Unknown("/merge needs the build's task id, for example `/merge t_0003`".into()),
             },
             "distill" => Input::Distill(rest.iter().map(|s| s.to_string()).collect()),
+            "solo" => Input::Solo(rest.first().map(|s| s.to_string())),
+            "quarantine" => match rest.first() {
+                Some(r) => Input::Quarantine(r.to_string()),
+                None => Input::Unknown("/quarantine needs a role to quarantine, for example `/quarantine investigator`".into()),
+            },
+            "unquarantine" => match rest.first() {
+                Some(r) => Input::Unquarantine(r.to_string()),
+                None => Input::Unknown("/unquarantine needs a role to unquarantine, for example `/unquarantine investigator`".into()),
+            },
             "council" => parse_council(cmd.trim_start().strip_prefix("council").unwrap_or("")),
             "y" | "yes" => Input::Answer(Decision::Allow),
             "a" | "always" => Input::Answer(Decision::AllowSimilar),
@@ -784,6 +799,25 @@ impl Session {
                 Ok(_) => say("left as they are; they will be offered again after the next restart\n"),
                 Err(e) => say(&format!("{}\n", rpc_error(&e))),
             },
+            Input::Solo(mode) => {
+                let payload = match mode.as_deref() {
+                    Some("on") => json!({"solo": true}),
+                    Some("off") => json!({"solo": false}),
+                    _ => json!({}),
+                };
+                match self.cmd.call("session.solo", payload) {
+                    Ok(v) => say(&format!("solo mode {}\n", if v["solo"].as_bool().unwrap_or(false) { "on (peer consultations disabled)" } else { "off" })),
+                    Err(e) => say(&format!("{}\n", rpc_error(&e))),
+                }
+            }
+            Input::Quarantine(role) => match self.cmd.call("agents.quarantine", json!({"role": role})) {
+                Ok(_) => say(&format!("Agent '{}' quarantined.\n", role)),
+                Err(e) => say(&format!("{}\n", rpc_error(&e))),
+            }
+            Input::Unquarantine(role) => match self.cmd.call("agents.unquarantine", json!({"role": role})) {
+                Ok(_) => say(&format!("Agent '{}' unquarantined.\n", role)),
+                Err(e) => say(&format!("{}\n", rpc_error(&e))),
+            },
             Input::Usage(group) => match self.cmd.call("usage.get", json!({"mission_id": self.mission_id, "group": group.unwrap_or_else(|| "role".into())})) {
                 Ok(v) => say(&format!("{}\n", render_usage(&v))),
                 Err(e) => say(&format!("{}\n", rpc_error(&e))),
@@ -1104,7 +1138,23 @@ pub(crate) fn ui_info(console: &Path, narrator: &Path, ws_dir: &Path, mission: O
     let mut records = crate::home::project_records(ws_dir).unwrap_or_default();
     records.sort_by_key(|r| r.display_name.to_lowercase());
     projects.extend(records.iter().map(|r| json!({"name": r.display_name, "root": r.root, "home": false})));
-    json!({"projects": projects, "console_socket": console, "narrator_socket": narrator, "workspace": ws_dir, "mission": mission, "version": env!("CARGO_PKG_VERSION"), "cwd": cwd, "roles": roles, "avatar": crate::avatar::ui_spec(), "delphi_exe": exe, "workspace_name": ws_name, "home": home})
+    let (interactive, forbidden) = match std::fs::read_to_string(ws_dir.join("config.toml")) {
+        Ok(text) => match toml::from_str::<toml::Value>(&text) {
+            Ok(root) => {
+                let ag = root.get("agents");
+                let inter = ag.and_then(|a| a.get("interactive")).and_then(|v| v.as_array())
+                    .map(|l| l.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                    .unwrap_or_else(|| vec!["orchestrator".into()]);
+                let forb = ag.and_then(|a| a.get("forbidden")).and_then(|v| v.as_array())
+                    .map(|l| l.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                    .unwrap_or_default();
+                (inter, forb)
+            }
+            Err(_) => (vec!["orchestrator".into()], Vec::new()),
+        },
+        Err(_) => (vec!["orchestrator".into()], Vec::new()),
+    };
+    json!({"projects": projects, "console_socket": console, "narrator_socket": narrator, "workspace": ws_dir, "mission": mission, "version": env!("CARGO_PKG_VERSION"), "cwd": cwd, "roles": roles, "avatar": crate::avatar::ui_spec(), "delphi_exe": exe, "workspace_name": ws_name, "home": home, "interactive_agents": interactive, "forbidden_agents": forbidden})
 }
 
 /// `delphi daemon status|stop|restart`.
@@ -1253,6 +1303,10 @@ mod tests {
         assert_eq!(parse_input("/permissions accept-edits"), Input::Permissions(Some("accept-edits".into())));
         assert_eq!(parse_input("/build implement @specs/011-x.md in @project/app"), Input::Build("implement @specs/011-x.md in @project/app".into()));
         assert!(matches!(parse_input("/build"), Input::Unknown(m) if m.contains("needs a request")));
+        assert_eq!(parse_input("/solo"), Input::Solo(None));
+        assert_eq!(parse_input("/solo on"), Input::Solo(Some("on".into())));
+        assert_eq!(parse_input("/quarantine scout"), Input::Quarantine("scout".into()));
+        assert_eq!(parse_input("/unquarantine scout"), Input::Unquarantine("scout".into()));
         assert_eq!(parse_input("/narrator"), Input::Narrator(None));
         assert_eq!(parse_input("/observe council"), Input::Narrator(Some("council".into())));
         assert!(matches!(parse_input("/narrator nonsense"), Input::Unknown(m) if m.contains("council, epic")));

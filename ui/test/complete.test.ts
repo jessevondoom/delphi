@@ -50,3 +50,13 @@ test('/projects offers the home workspace first, then registered projects, and E
   assert.equal(completions('/projects zzz', 13, withProjects, fs), null);
   assert.equal(completions('/projects ', 10, info, fs), null, 'an older delphi sends no list');
 });
+
+test('@ completes only interactive roles and filters forbidden roles (specs/063)', () => {
+  const scopedInfo = {
+    ...info,
+    interactive_agents: ['architect'],
+    forbidden_agents: ['builder'],
+  } as unknown as Info;
+  assert.deepEqual(completions('@', 1, scopedInfo, fs)!.items.map((i) => i.label), ['@architect', '@specs/']);
+  assert.equal(completions('@b', 2, scopedInfo, fs), null);
+});

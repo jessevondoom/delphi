@@ -47,6 +47,8 @@ export function completions(input: string | string[], cur: number, info: Info, l
   if (!p.includes('/')) {
     const q = p.toLowerCase();
     for (const [id, r] of Object.entries(info.roles)) {
+      if (info.forbidden_agents?.includes(id)) continue;
+      if (info.interactive_agents && info.interactive_agents.length > 0 && !info.interactive_agents.includes(id)) continue;
       if (id.startsWith(q) || r.name.toLowerCase().startsWith(q)) items.push({ label: '@' + id, desc: `role · ${r.name}`, insert: '@' + id + ' ' });
     }
     if ('specs'.startsWith(q)) items.push({ label: '@specs/', desc: 'a spec in this workspace', insert: '@specs/' });

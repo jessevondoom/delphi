@@ -90,10 +90,27 @@ pub fn settings_from(root: &toml::Value) -> Settings {
             s.unseconded = a;
         }
     }
-    if let Some(list) = root.get("agents").and_then(|a| a.get("enabled")).and_then(|v| v.as_array()) {
-        let roles: Vec<String> = list.iter().filter_map(|x| x.as_str().map(String::from)).collect();
-        if !roles.is_empty() {
-            s.enabled_agents = roles;
+    if let Some(agents_val) = root.get("agents") {
+        if let Some(list) = agents_val.get("forbidden").and_then(|v| v.as_array()) {
+            s.forbidden_agents = list.iter().filter_map(|x| x.as_str().map(String::from)).collect();
+        }
+        if let Some(fleet) = agents_val.get("fleet").and_then(|v| v.as_str()) {
+            s.fleet = fleet.to_string();
+        }
+        let interactive: Vec<String> = agents_val.get("interactive")
+            .and_then(|v| v.as_array())
+            .map(|list| list.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        let enabled: Vec<String> = agents_val.get("enabled")
+            .and_then(|v| v.as_array())
+            .map(|list| list.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        if !interactive.is_empty() {
+            s.interactive_agents = interactive.clone();
+            s.enabled_agents = interactive;
+        } else if !enabled.is_empty() {
+            s.interactive_agents = enabled.clone();
+            s.enabled_agents = enabled;
         }
     }
     if let Some(v) = root.get("routing").and_then(|r| r.get("degrade_prompt_secs")).and_then(|v| v.as_integer()).filter(|v| *v > 0) {
@@ -337,6 +354,10 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
         approver_calls: Default::default(),
         pace: Default::default(),
         totp: delphi_core::totp::Verifier::persistent(ws_dir.join("local/totp-state")),
+        session_introduced: Default::default(),
+        quarantined: Default::default(),
+        unquarantined: Default::default(),
+        solo_mode: Default::default(),
     });
     let day = &now_rfc3339()[..10];
     let default_mission = format!("{}-session", day);
@@ -379,12 +400,30 @@ mod tests {
         assert_eq!(b.engine.settings.approval_timeout, Duration::from_secs(90));
         assert_eq!(b.engine.settings.approval_park_max, Duration::from_secs(3600));
         assert_eq!(b.engine.settings.enabled_agents, vec!["orchestrator", "architect"]);
+        assert_eq!(b.engine.settings.interactive_agents, vec!["orchestrator", "architect"]);
         assert_eq!(b.engine.projects.len(), 1);
         assert_eq!(b.engine.projects[0].0, "proj");
         assert_eq!(b.engine.projects[0].1, fs::canonicalize(t.path().join("proj")).unwrap());
         assert_eq!(b.engine.cfg.get().endpoints.len(), 2);
         assert!(b.default_mission.ends_with("-session") && b.default_mission.len() == 18, "{}", b.default_mission);
         assert!(ws.dir.join("local/state.db").exists());
+    }
+
+    #[test]
+    fn agents_config_interactive_and_forbidden_in_boot() {
+        let (t, ws) = workspace_with_config("[agents]\ninteractive = [\"orchestrator\"]\nforbidden = [\"scout\"]\nfleet = \"all\"\n");
+        pin_config(&ws);
+        let b = build(&ws.home, &ws.dir, Hub::new()).unwrap();
+        assert_eq!(b.engine.settings.interactive_agents, vec!["orchestrator"]);
+        assert_eq!(b.engine.settings.forbidden_agents, vec!["scout"]);
+        assert_eq!(b.engine.settings.fleet, "all");
+        assert!(b.engine.settings.is_forbidden("scout"));
+        assert!(!b.engine.settings.is_forbidden("investigator"));
+        assert!(b.engine.settings.is_interactive("orchestrator"));
+        assert!(!b.engine.settings.is_interactive("investigator"));
+        assert!(b.engine.settings.is_dispatchable("investigator"));
+        assert!(!b.engine.settings.is_dispatchable("scout"));
+        drop(t);
     }
 
     fn pin_config(ws: &WorkspacePaths) {

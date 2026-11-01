@@ -383,6 +383,11 @@ pub(crate) mod tests {
             ("builder", include_str!("../../../agents/builder/AGENT.md")),
             ("red-team", include_str!("../../../agents/red-team/AGENT.md")),
             ("strategist", include_str!("../../../agents/strategist/AGENT.md")),
+            ("writer", include_str!("../../../agents/writer/AGENT.md")),
+            ("scout", include_str!("../../../agents/scout/AGENT.md")),
+            ("integrator", include_str!("../../../agents/integrator/AGENT.md")),
+            ("investigator", include_str!("../../../agents/investigator/AGENT.md")),
+            ("validator", include_str!("../../../agents/validator/AGENT.md")),
         ] {
             // These roles used to start on the top tier. The failover tests are about running out of the top model, so the test workspace
             // keeps them there; the shipped manifests start on `workhorse` (`specs/035` D-14).

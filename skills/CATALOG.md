@@ -68,6 +68,7 @@ The six kinds that judge one document (`dag`, `handoff`, `provenance`, `rules`, 
 | `safe-refactoring` | Performs structural code transformations that keep behaviour and API surface unchanged. | instructions |
 | `git-pr-packaging` | Formats atomic commits and prepares PRs with `Implements-Spec:` linkage. | instructions |
 | `ci-triage` | Diagnoses CI/test failures, separating flakes from regressions. | instructions |
+| `systems-pattern-catalog` | Applies proven systems, concurrency, protocol, and edge patterns. | instructions |
 
 ### 3. **Architect** (Systems Architect, Creative Designer & Spec Author)
 | Skill | Purpose | Backing |
@@ -77,6 +78,7 @@ The six kinds that judge one document (`dag`, `handoff`, `provenance`, `rules`, 
 | `api-contract-design` | Designs provider-neutral interfaces, IPC schemas, and CLI grammars. | instructions |
 | `trade-off-matrix` | Evaluates competing designs across weighted criteria with weight sensitivity. | `templates/trade-off-matrix.md` |
 | `tui-design` | Designs calm, high-focus terminal interfaces, deck navigation, and character-cell invariants in Ratatui. | `delphi check tui` |
+| `oblique-strategies` | Applies lateral thinking, Oblique Strategies, and TRIZ matrices to break deadlocks. | instructions |
 
 ### 4. **Investigator** (Precision Hunter, Bug Tracker & Benchmark Specialist)
 | Skill | Purpose | Backing |
@@ -85,6 +87,8 @@ The six kinds that judge one document (`dag`, `handoff`, `provenance`, `rules`, 
 | `git-bisect-hunt` | Isolates the exact breaking commit using an automated reproduction. | instructions |
 | `benchmark-profiling` | Runs statistical microbenchmarks (percentiles, memory, tokens) with significance tests. | instructions |
 | `primary-source-verification` | Fact-checks specific claims, benchmarks, or APIs against primary sources. | instructions |
+| `competitive-swot-analysis` | Evaluates competitive dynamics, platform bets, and moats via SWOT and Wardley mapping. | instructions |
+| `hypothesis-flipping` | Inverts axioms and formulates contrarian test hypotheses when debugging dead-ends. | instructions |
 
 ### 5. **Scout** (Broad Scout & Landscape Cartographer)
 | Skill | Purpose | Backing |
@@ -93,6 +97,7 @@ The six kinds that judge one document (`dag`, `handoff`, `provenance`, `rules`, 
 | `literature-survey` | Wide-angle prior-art discovery across papers, RFCs, docs, and open-source repos. | instructions |
 | `multi-source-synthesis` | Synthesizes heterogeneous notes/sources into a compact landscape map (`<300` lines). | instructions |
 | `dependency-audit` | Audits libraries for maintenance health, license compatibility, bloat, and CVEs. | instructions |
+| `dual-horizon-search` | Explores internal local-out codebase reality and outside-in industry trends. | instructions |
 
 ### 6. **Strategist** (Long-Horizon Strategist, Sequencer & Alignment Auditor)
 | Skill | Purpose | Backing |
@@ -101,6 +106,8 @@ The six kinds that judge one document (`dag`, `handoff`, `provenance`, `rules`, 
 | `pr-alignment-review` | Audits PRs and Specs against User goals, `SPEC.md`, and `REVIEW.md` §3. | instructions |
 | `scope-creep-detection` | Enforces **The scope audit**: flags gold-plating or unapproved scope expansion. | instructions |
 | `risk-roi-analysis` | Evaluates effort and risk against expected payoff and opportunity cost. | `templates/risk-roi-brief.md` |
+| `strategic-pattern-matching` | Maps challenges to military precedents, business cases, and asymmetric maneuvers. | instructions |
+| `competitive-swot-analysis` | Evaluates competitive dynamics, platform bets, and moats via SWOT and Wardley mapping. | instructions |
 
 ### 7. **Red-Team** (Red Team, Adversarial Critic & PR Security Auditor)
 | Skill | Purpose | Backing |
@@ -109,6 +116,7 @@ The six kinds that judge one document (`dag`, `handoff`, `provenance`, `rules`, 
 | `threat-modeling` | Performs STRIDE + agentic threat modeling (prompt injection, memory poisoning, tool escalation). | instructions |
 | `adversarial-test-gen` | Generates boundary-value, race-condition, malformed-input, and fault-injection tests. | instructions |
 | `assumption-stress-test` | Runs pre-mortem failure analysis on Council proposals, research, or plans. | `templates/premortem-dissent.md` |
+| `socratic-interrogation` | Probes proposals and arguments with minimalist, piercing Socratic questions. | instructions |
 
 ### 8. **Writer** (Documentation Architect, Technical Writer & Clarity Synthesizer)
 | Skill | Purpose | Backing |
@@ -119,6 +127,7 @@ The six kinds that judge one document (`dag`, `handoff`, `provenance`, `rules`, 
 | `concision-audit` | Audits docs and KB articles for bloat, redundancy, and unverified claims. | instructions |
 | `encyclopedia-synthesis` | Writes an encyclopedia-style search page (lead, infobox, contents, figures, citations, hatnotes) and proposes its cache lifetime (`specs/061`). | instructions |
 | `org-bundle-authoring` | Creates, sanitizes and packages an org knowledge bundle (`specs/023`) from allow-listed sources, with a human-approved redaction report before packaging. *`specs/027` §2.6; its `delphi bundle init|distill|validate --report|package --vectors` commands are built (slice B10).* | `templates/redaction-report.md`, `delphi check provenance` |
+| `tonal-calibration` | Dynamically code-switches prose across technical, executive, and pedagogical registers. | instructions |
 
 ### 9. **Integrator** (External Integrations, GitHub Ops & Protocol Specialist)
 | Skill | Purpose | Backing |

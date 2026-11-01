@@ -207,6 +207,30 @@ export async function runSlash(line: string, ctx: Ctx, now = Date.now()): Promis
       await call('settings.set', { key: 'pace', value: word });
       return;
     }
+    case 'solo': {
+      const usage = '/solo [on | off] (no argument flips it)';
+      const word = rest[0]?.toLowerCase();
+      if (word && !['on', 'off'].includes(word)) { ctx.post(usage); return; }
+      const v = await call('session.solo', word ? { solo: word === 'on' } : {});
+      if (v) ctx.post(`solo mode ${v.solo ? 'on (peer consultations disabled)' : 'off'}`);
+      return;
+    }
+    case 'quarantine': {
+      const usage = '/quarantine <role>';
+      const target = rest[0]?.toLowerCase();
+      if (!target) { ctx.post(usage); return; }
+      const v = await call('agents.quarantine', { role: target });
+      if (v) ctx.post(`Agent '${target}' quarantined.`);
+      return;
+    }
+    case 'unquarantine': {
+      const usage = '/unquarantine <role>';
+      const target = rest[0]?.toLowerCase();
+      if (!target) { ctx.post(usage); return; }
+      const v = await call('agents.unquarantine', { role: target });
+      if (v) ctx.post(`Agent '${target}' unquarantined.`);
+      return;
+    }
     case 'settings': {
       const usage = '/settings · /settings accept <n> · /settings dismiss <n> · /settings set <role_tier.role | mission_budget_usd> <value> · /settings reset <role>';
       const sub = rest[0];

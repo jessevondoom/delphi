@@ -35,7 +35,15 @@
       "properties": { "catalog": { "type": "object", "additionalProperties": { "$ref": "#/$defs/catalogEntry" } } },
       "additionalProperties": { "$ref": "#/$defs/tierMap" }
     },
-    "agents": { "type": "object", "properties": { "enabled": { "type": "array", "items": { "type": "string" } } } },
+    "agents": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "array", "items": { "type": "string" }, "description": "Legacy fallback for interactive roles." },
+        "interactive": { "type": "array", "items": { "type": "string" }, "description": "Roles the operator can directly @ on session start." },
+        "forbidden": { "type": "array", "items": { "type": "string" }, "description": "Quarantined roles; orchestrator dispatch and direct interaction are blocked." },
+        "fleet": { "type": "string", "enum": ["all", "interactive"], "description": "Fleet accessibility mode for the orchestrator (default: all)." }
+      }
+    },
     "events": { "type": "object", "properties": { "thinking_retention_days": { "type": "integer", "minimum": 0 } } },
     "routing": {
       "type": "object",

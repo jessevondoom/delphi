@@ -46,6 +46,15 @@ frontier = "<gemini frontier model id>"
 # output_usd_per_mtok = 0.0          # thinking is billed at the output rate
 
 [agents]
+# Operator direct interaction, fleet accessibility, and quarantine (specs/063 §3.1).
+# The orchestrator has full visibility of all canonical and bundle specialist agents.
+# Only interactive roles can be @-addressed directly by the operator on session start:
+interactive = ["orchestrator"]
+# Quarantined roles; orchestrator dispatch and direct interaction are strictly blocked:
+# forbidden = []
+# Fleet accessibility mode: "all" (default, all canonical roles + bundle agents visible to orchestrator)
+# fleet = "all"
+# Legacy fallback: enabled = [...] (treated as interactive if interactive is omitted)
 enabled = ["orchestrator", "architect", "builder", "red-team", "strategist"]   # D-07 v1 roster
 
 [events]

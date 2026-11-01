@@ -15,6 +15,7 @@ authorized_skills:
   - git-pr-packaging
   - ci-triage
   - tui-design
+  - systems-pattern-catalog
 memory_scope: "memory/agents/builder/"
 max_turn_budget: 40
 ---

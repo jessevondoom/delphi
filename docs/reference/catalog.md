@@ -8,16 +8,16 @@ What a bundle can attach to. A bundle names a **host role** by its id (never a t
 
 | id | job | default tier | skills |
 | :-- | :-- | :-- | :-- |
-| `architect` | Systems Architect, Creative Designer & Spec Author | workhorse | `repo-cartography`, `ast-code-search`, `spec-authoring`, `diagram-generation`, `api-contract-design`, `trade-off-matrix`, `tui-design` |
-| `builder` | Lead Engineer, Builder & Verification Specialist | workhorse | `worktree-isolation`, `tdd-execution`, `safe-refactoring`, `git-pr-packaging`, `ci-triage`, `tui-design` |
+| `architect` | Systems Architect, Creative Designer & Spec Author | workhorse | `repo-cartography`, `ast-code-search`, `spec-authoring`, `diagram-generation`, `api-contract-design`, `trade-off-matrix`, `tui-design`, `oblique-strategies` |
+| `builder` | Lead Engineer, Builder & Verification Specialist | workhorse | `worktree-isolation`, `tdd-execution`, `safe-refactoring`, `git-pr-packaging`, `ci-triage`, `tui-design`, `systems-pattern-catalog` |
 | `integrator` | External Integrations, GitHub/API Operations & Protocol Bridge | fast | `github-ops-sync`, `mcp-server-integration`, `external-comms-dispatch`, `protocol-schema-translation` |
-| `investigator` | Precision Researcher, Bug Tracker & Benchmark Specialist | fast | `ast-code-search`, `git-bisect-hunt`, `benchmark-profiling`, `primary-source-verification` |
+| `investigator` | Precision Researcher, Bug Tracker & Benchmark Specialist | fast | `ast-code-search`, `git-bisect-hunt`, `benchmark-profiling`, `primary-source-verification`, `competitive-swot-analysis`, `hypothesis-flipping` |
 | `orchestrator` | Lead Orchestrator, Coach, Council Arbiter & Model Scaler | workhorse | `task-decomposition`, `dynamic-model-scaling`, `council-moderation`, `handoff-packaging`, `retrospective-facilitation`, `knowledge-compaction`, `review-md-distillation`, `contradiction-pruning`, `lesson-promotion` |
-| `red-team` | Red Team, Adversarial Critic, Threat Modeler & PR Security Auditor | workhorse | `review-md-audit`, `threat-modeling`, `adversarial-test-gen`, `assumption-stress-test` |
-| `scout` | Broad Discovery, Repository Cartographer & Literature Scout | fast | `repo-cartography`, `literature-survey`, `multi-source-synthesis`, `dependency-audit` |
-| `strategist` | Long-Horizon Strategist, Sequencer & Scope Auditor | workhorse | `roadmap-sequencing`, `pr-alignment-review`, `scope-creep-detection`, `risk-roi-analysis` |
+| `red-team` | Red Team, Adversarial Critic, Threat Modeler & PR Security Auditor | workhorse | `review-md-audit`, `threat-modeling`, `adversarial-test-gen`, `assumption-stress-test`, `socratic-interrogation` |
+| `scout` | Broad Discovery, Repository Cartographer & Literature Scout | fast | `repo-cartography`, `literature-survey`, `multi-source-synthesis`, `dependency-audit`, `dual-horizon-search` |
+| `strategist` | Long-Horizon Strategist, Sequencer & Scope Auditor | workhorse | `roadmap-sequencing`, `pr-alignment-review`, `scope-creep-detection`, `risk-roi-analysis`, `strategic-pattern-matching`, `competitive-swot-analysis` |
 | `validator` | Fact-Checker, Source Assessor & Knowledge Gatekeeper | workhorse | `fact-validation` |
-| `writer` | Documentation Architect, Technical Writer & Clarity Synthesizer | workhorse | `documentation-architecture`, `clarity-synthesis`, `narrative-briefing`, `concision-audit`, `encyclopedia-synthesis`, `org-bundle-authoring` |
+| `writer` | Documentation Architect, Technical Writer & Clarity Synthesizer | workhorse | `documentation-architecture`, `clarity-synthesis`, `narrative-briefing`, `concision-audit`, `encyclopedia-synthesis`, `org-bundle-authoring`, `tonal-calibration` |
 
 ## Skills
 
@@ -30,12 +30,14 @@ What a bundle can attach to. A bundle names a **host role** by its id (never a t
 | `benchmark-profiling` | Measure performance with warmups, repeated runs and a significance test before claiming a change helps. Use when comparing speed, memory or tokens. | `investigator` |
 | `ci-triage` | Diagnose a failing CI or test run: separate real regressions from flakes and environment problems, and say what to do. Use when a pipeline is red. | `builder` |
 | `clarity-synthesis` | Turn dense research, specs or logs into a clear brief for a human reader: the answer, the reasons, the decisions needed. Use when handing findings to the operator. | `writer` |
+| `competitive-swot-analysis` | Execute systematic SWOT, Porter's Five Forces, and Wardley mapping analyses on technical and market positions. Use when evaluating competitive dynamics, platform bets, or product viability. | `strategist`, `investigator` |
 | `concision-audit` | Audit documents and knowledge-base articles for bloat, redundancy and unverified claims, and cut them. Use when a document is long or restates others. | `writer` |
 | `contradiction-pruning` | Find stale claims, broken links and superseded documents in the knowledge base and propose fixes. Use periodically and before a release. | `orchestrator` |
 | `council-moderation` | Run the three-round Council: blind Round 1, cross-examination, Verdict plus verbatim Minority Report. Use when a decision needs adversarial review. | `orchestrator` |
 | `dependency-audit` | Audit libraries for maintenance health, licence fit, size, and known advisories, and recommend keep, replace or drop. Use before adding or upgrading a dependency. | `scout` |
 | `diagram-generation` | Produce a Mermaid diagram that shows real structure or flow, with quoted labels and the right diagram type. Use when a picture beats prose. | `architect` |
 | `documentation-architecture` | Design and maintain README, docs and guides so they match the code and specs, with working links and examples. Use when documentation is added or drifts. | `writer` |
+| `dual-horizon-search` | Conduct dual-horizon exploration via local-out workspace expansion and outside-in industry trend mapping. Use when investigating unfamiliar technical terrain or mapping ecosystem dependencies. | `scout` |
 | `dynamic-model-scaling` | Choose the model tier and thinking budget for a handoff from task signals and retry history. Use when writing a routing directive or after a failed attempt. | `orchestrator` |
 | `encyclopedia-synthesis` | Write an encyclopedia-style summary page in Markdown from gathered records: lead, infobox, contents, inline figures, citations, hatnotes, and a cache lifetime. | `writer` |
 | `external-comms-dispatch` | Send plans or notices to external channels (calendar, webhook, notification) only with redaction and explicit approval. Use when something must leave Delphi. | `integrator` |
@@ -44,12 +46,14 @@ What a bundle can attach to. A bundle names a **host role** by its id (never a t
 | `git-pr-packaging` | Prepare atomic commits and a pull request with spec linkage, a checked diff, and honest verification notes. Use when work is ready for review. | `builder` |
 | `github-ops-sync` | Bridge missions with GitHub through gh: issues, PRs, comments, CI status. Every outbound action is confirmed first. Use to read or update GitHub state. | `integrator` |
 | `handoff-packaging` | Package a handoff as a pointer-based envelope: objective, file:line context, constraints, expected output. Use before dispatching any agent. | `orchestrator` |
+| `hypothesis-flipping` | Invert core assumptions and construct contrarian test hypotheses when investigative avenues are exhausted. Use when debugging persistent regressions or responding to orchestrator pushback. | `investigator` |
 | `knowledge-compaction` | Compact mission logs and scratchpads into a short summary with provenance frontmatter. Use at mission close to keep context lean. | `orchestrator` |
 | `lesson-promotion` | Add, correct or retire a rule in a role's lessons.md or context/heuristics.md under the Rule of 25, merging to make room. Use after a retrospective, or when a rule file is full or wrong. | `orchestrator` |
 | `literature-survey` | Survey prior art across papers, standards, docs and open-source projects, and report what exists, what it claims, and how reliable it is. Use before designing. | `scout` |
 | `mcp-server-integration` | Discover, configure and health-check an external MCP tool server in a sandbox, listing the tools it exposes. Use before relying on a new MCP server. | `integrator` |
 | `multi-source-synthesis` | Combine notes and sources into one compact landscape map where every claim points to its source. Use when several inputs must become one picture. | `scout` |
 | `narrative-briefing` | Write plans, proposals and release notes that are specific, honest and free of filler. Use for announcements and personal or project plans. | `writer` |
+| `oblique-strategies` | Apply lateral thinking prompts, Oblique Strategies, and TRIZ contradiction matrices to break architectural deadlocks. Use when standard designs hit intractable trade-offs or creative blocks. | `architect` |
 | `org-bundle-authoring` | Create, sanitize and package an org knowledge bundle (specs/023): gather allow-listed sources, distill, scan, validate, package. Use when an org wants its knowledge and skills bundled. | `writer` |
 | `pr-alignment-review` | Audit a PR or spec against the operator's goal, the governing specs and the REVIEW.md rubric, mapping acceptance criteria to evidence. Use at review. | `strategist` |
 | `primary-source-verification` | Check a specific claim, API behaviour or benchmark against the primary source and report what holds. Use before relying on a claim you did not verify. | `investigator` |
@@ -62,10 +66,14 @@ What a bundle can attach to. A bundle names a **host role** by its id (never a t
 | `roadmap-sequencing` | Order multi-phase work into milestones along the critical path, with dependencies and weights checked. Use when planning more than one deliverable. | `strategist` |
 | `safe-refactoring` | Restructure code while keeping its public behaviour and API surface unchanged, in small steps with tests green. Use for cleanup, renames and extractions. | `builder` |
 | `scope-creep-detection` | Flag changes that go beyond the approved spec: unrequested files, features, dependencies or refactors. Use on every spec and PR before approval. | `strategist` |
+| `socratic-interrogation` | Subject proposals, specs, and council arguments to disciplined Socratic interrogation with minimalist, probing questions. Use when evaluating critical design premises or high-contention claims. | `red-team` |
 | `spec-authoring` | Write a modular spec with scope, acceptance criteria, a Simpler Alternative Considered section and a verification plan. Use before any non-trivial build. | `architect` |
+| `strategic-pattern-matching` | Map tactical challenges to historical precedents, market campaigns, and strategic doctrine to uncover asymmetric advantages. Use when sequencing initiatives or positioning against competition. | `strategist` |
+| `systems-pattern-catalog` | Select and apply proven systems, protocol, concurrency, and edge architectures to technical implementations. Use when choosing data models, networking protocols, or runtime execution patterns. | `builder` |
 | `task-decomposition` | Turn an approved spec or goal into a task DAG with a cognitive tier and spec link per task. Use before dispatching any multi-step mission. | `orchestrator` |
 | `tdd-execution` | Implement against a spec's acceptance criteria with red-green-refactor, proving each new test fails first. Use for any behaviour change. | `builder` |
 | `threat-modeling` | Model threats to a design or change with STRIDE plus agent-specific threats such as prompt injection and memory poisoning. Use when a feature crosses a trust boundary. | `red-team` |
+| `tonal-calibration` | Calibrate and shift prose across technical, executive, persuasive, and educational registers for reader comfort. Use when adapting documentation, mission briefs, or reports for distinct audiences. | `writer` |
 | `trade-off-matrix` | Compare options across weighted criteria and test whether the winner survives changed weights. Use when a decision has several defensible answers. | `architect` |
 | `tui-design` | Design calm, borderless terminal interfaces: decks, headers, badges and character-cell rules. Use when adding or changing any TUI view, widget or layout in Ratatui. | `architect`, `builder`, `orchestrator` |
 | `worktree-isolation` | Create and prune isolated git worktrees for a task so builds never touch the operator's checkout. Use before any code change. | `builder` |

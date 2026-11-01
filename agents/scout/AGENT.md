@@ -13,6 +13,7 @@ authorized_skills:
   - literature-survey
   - multi-source-synthesis
   - dependency-audit
+  - dual-horizon-search
 memory_scope: "memory/agents/scout/"
 max_turn_budget: 25
 ---
