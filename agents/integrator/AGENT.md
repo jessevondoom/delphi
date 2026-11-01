@@ -15,6 +15,7 @@ authorized_skills:
   - protocol-schema-translation
 memory_scope: "memory/agents/integrator/"
 max_turn_budget: 15
+host_servable: false  # not offered to host agents over MCP (specs/061 §4.3): its outbound operations rely on Delphi's cards
 ---
 
 # Agent: Integrator (`agents/integrator/AGENT.md`)

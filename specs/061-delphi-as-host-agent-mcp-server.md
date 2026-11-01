@@ -77,7 +77,7 @@ The workspace is chosen as in 058 §3.2 from the server's working directory (or 
 | `list_roles` | each role's ID, one-line purpose, whether it is servable (§4.3), and the skills it may use |
 | `get_agent(role)` | the assembled agent pack (§4.2); also served as an MCP **prompt** per role so a host can adopt it with a slash command |
 | `list_skills`, `get_skill(name)` | the skill catalog and one `SKILL.md`, loaded on demand and never part of the pack's frozen prefix |
-| `route(task, domain?, role?)` | the dry-run route of `delphi route` (which agent fits), advisory |
+| `route(task, domain?, role?)` | the dry-run route of `delphi route` (which agent fits), advisory (slice S3) |
 
 Role IDs only, never theme names, outside `themes/`.
 
@@ -98,7 +98,7 @@ The 12 KiB combined cap and per-scope budgets of 004 §5.2 apply to items 3-6. E
 
 ### 4.3 Which roles are servable
 
-On demand, any role by name. A per-role manifest field `host_servable` (default `true`) lets a role refuse. **`builder` and `integrator` default to `false`** until the operator turns them on: their safety comes from Delphi's isolated worktrees and cards, which do not travel (§4.4), so serving them widens what a host does under host permissions.
+On demand, any role by name. A per-role manifest field `host_servable` (default `true`) lets a role refuse. **`integrator` ships with `host_servable: false`**: its outbound operations rely on Delphi's cards, which do not travel (§4.4). The operator turns it on by changing that field in the workspace's ratified agent override. **`builder` is servable** (operator decision, 2026-10-31, amending D-6): a host acting as the Builder gets the role's judgement, TDD discipline and lessons, but not the isolated worktree, the sandbox or the merge gates, so its writes are governed by the host's own permissions. The pack header says so.
 
 ### 4.4 Instructions, not authority
 
@@ -196,8 +196,8 @@ A host session is a server process lifetime. Refusals are explicit (`limit_reach
 | :-- | :-- | :-- |
 | S0 | this spec: approved 2026-10-31 (merges with this pull request) | |
 | S1 | extract shared MCP framing and guards; `delphi mcp` skeleton, `enabled` toggle, golden `tools/list` | S0 |
-| S2 | confirm or extract a daemon-free IPR 1-4 builder; agent packs, `list_roles`, skills, `route`, prompts, `host_servable` | S1 |
-| S3 | project resolution, spec and context resources, `specs_status`, `search_project`, `search_memory` | S1 |
+| S2 | confirm or extract a daemon-free IPR 1-4 builder; agent packs, `list_roles`, `list_skills`/`get_skill`, prompts, `host_servable` | S1 |
+| S3 | project resolution, spec and context resources, `specs_status`, `search_project`, `search_memory`, `route` (moved from S2: it ranks bundle agents, a project-context question) | S1 |
 | S4 | host config printers, plugin and skill export, `delphi doctor` snippet; docs (§13); manual host checks recorded | S2, S3 |
 | S5 | daemon endpoint for host requests, `propose_note`, `record_session_summary`, handoff in/out, limits and counters | S2 |
 | S6 | `request_help` | S5 |
@@ -221,7 +221,7 @@ A host session is a server process lifetime. Refusals are explicit (`limit_reach
 
 **Recommended by the architect and approved with the spec (the operator may change them on request):**
 
-- **D-6.** `builder` and `integrator` default to not servable.
+- **D-6.** `integrator` defaults to not servable. *Amended 2026-10-31 by the operator: `builder` is servable too (S2).*
 - **D-7.** The operator profile is omitted from packs for hosts by default (an operator setting may include it).
 - **D-8.** Dispatch for host requests is read-only in this version.
 - **D-9.** Proposals carry `host:<tool>/<model>` and reviewers see it.
@@ -254,7 +254,7 @@ Documentation lands with S4 (not before the behavior exists), and every slice th
 5. Dispatched agents for host requests have no write, execute or network capability.
 6. A proposal never becomes always-loaded without ratification; a proposal without evidence is refused.
 7. With `enabled = false`, every tool answers `disabled_by_operator` and nothing reaches the daemon.
-8. `builder` and `integrator` packs are refused until enabled.
+8. An `integrator` pack (and any role with `host_servable: false`, or a `host_servable` that is not a boolean) is refused until the operator enables it.
 9. Packs and project resources contain no theme names, no other role's lessons, no other project's memory and no operator-private data beyond what D-7 allows.
 10. A pack for the same inputs has the same content hash.
 

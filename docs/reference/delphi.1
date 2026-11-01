@@ -147,7 +147,7 @@ Delphi for the other tools you code with, as an MCP server on stdio.
   delphi mcp [\-\-workspace <name>] [\-\-home <dir>]
 .fi
 .PP
-A host such as Claude Code starts it from its MCP configuration; it is not meant to be run by hand. It is read\-only, opens no port and runs nothing, and serves this machine and this user only (spec 061). Turn it off with `[mcp] enabled = false` in config.toml: every tool call is then answered `disabled_by_operator`, and the change takes effect at once. In this version it has the handshake and the switch; roles, project knowledge, help and Councils arrive in later slices.
+A host such as Claude Code starts it from its MCP configuration; it is not meant to be run by hand. It is read\-only, opens no port and runs nothing, and serves this machine and this user only (spec 061). Turn it off with `[mcp] enabled = false` in config.toml: every tool call is then answered `disabled_by_operator`, and the change takes effect at once. It serves Delphi's roles as agent packs a host can adopt (tools list_roles, get_agent, list_skills, get_skill, and one prompt per role): advice from your ratified files, never a grant of permission; a role whose manifest says `host_servable: false` (the integrator) is refused. Project knowledge, help and Councils arrive in later slices.
 .SH WORK
 .SS delphi decisions
 review an optimistic build's provisional decisions.
