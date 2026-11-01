@@ -47,7 +47,7 @@ Delphi builds against an approved spec ("No Spec, No Build"). If you have none, 
 
 ### Research and the knowledge base
 
-Start research from the knowledge window's expand page and the job fetches pages and sorts them by the source's trust class, which code decides, never a model:
+Type `/research <topic>` (or use the knowledge window's expand page; `/research status` and `/research cancel` manage it) and the job fetches pages and sorts them by the source's trust class, which code decides, never a model:
 
 - **Default project:** pages from primary or reputable-secondary sources (standards bodies, governments, Wikipedia, peer-reviewed publishers and so on) go into the knowledge base at once. Pages from anything else are held under `local/pending/web/`, labelled weak, and are not searchable until you decide.
 - **Registered project:** research is saved in the project's `research/web/` and is never shared automatically. Promote what is worth keeping with `/retro`.

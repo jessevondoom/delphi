@@ -299,3 +299,8 @@ Research the operator asks for (the expand job, `specs/028` §10) is written whe
 2. **What it never does.** It never promotes a weak or unknown source, never counts weak sources as corroboration (`specs/040` §27), and never moves a project's pages unless the operator names the project: `/validate pass project=<name>` is the operator's act, and the project keeps its own copy (§14).
 3. **Automatic.** When the console opens a session the default scope's pass runs first, before the digest counts (§17), so pages the list now trusts are not reported as waiting. It asks nothing and adds no approval.
 4. **Checks by code.** The pass re-classifies by the page's recorded `source_url` through `SourceList::classify`, the single authority, and uses `ratify` (§14) for the move, so its path, symlink and `source_url` checks apply. The index is refreshed once when something entered.
+
+## 19. Amendment 058-A7: `/research` (operator, 2026-10-31)
+1. **From the prompt.** `/research <topic>` starts the same research job as the knowledge window's expand page (`specs/028` §10), through `research.start` with the console's directory, so §13 routing applies unchanged: the default scope shares only Primary and Reputable pages, a registered project keeps its pages in its own `research/web/`, and held pages wait for `/validate` (§14). `/research status` and `/research cancel` report and stop the one job.
+2. **No new authority.** It is the operator's own command, console only, and the job's bounds, trusted-host list and trust classes are the expand job's. The chat says once how the job ended.
+3. **Not built:** the agent starting research on its own from a chat request (058-A8).
