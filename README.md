@@ -45,7 +45,7 @@ Three ideas hold it together:
 
 1. **Specs first.** Delphi builds from a written, approved spec ("No Spec, No Build"), so you can see what it intends before it touches code.
 2. **You approve what matters.** Reading is free. Anything consequential (a merge, a new dependency, anything that goes outside your machine) shows you a card and waits. If nobody answers, the answer is no.
-3. **It uses the AI access you already have.** The Anthropic or Gemini APIs, AWS Bedrock, Google Vertex, an OpenAI-compatible gateway, your own `claude` or `agy` subscription, or a local Ollama model. Delphi never writes into your project repository, and never reads your logins.
+3. **It uses the AI access you already have.** The Anthropic or Gemini APIs, AWS Bedrock, Google Vertex, an OpenAI-compatible gateway, your own `claude` or `agy` subscription, or a local Ollama model. Delphi keeps its runtime state outside your project, writes into a project directory only what you register or scaffold, and never reads your logins.
 
 Delphi is one Rust executable plus a full-screen console. There is no server to run and no account to create.
 
@@ -58,6 +58,8 @@ Delphi is one Rust executable plus a full-screen console. There is no server to 
 | Have a change built and reviewed | `/build <request>`. You get a merge card (or a pull request) at the end. |
 | Settle a hard decision | `/council <proposition>`. Blind answers, cross-examination, verdict, Minority Report. |
 | Watch the work live | `/observe` opens a second, read-only window: threads of work, the agents, a change log. |
+| Switch project | `/projects`, then arrow keys and Enter. |
+| Review research held back from the knowledge base | `/validate` (`/validate pass` promotes what the allow list now trusts) |
 | Find something Delphi knows | `/search` (or `ctrl+k`). Local keyword + meaning search; nothing leaves your machine. |
 | Run a task from a script or CI | `delphi run "<task>"`, which answers cards by a policy you wrote. |
 | Go away and still get asked | `delphi relay` emails or messages you the approval cards. |
@@ -90,7 +92,9 @@ Put `ui/dist/delphi-ui` next to `delphi` or point `$DELPHI_UI` at it; without it
 delphi
 ```
 
-You can run `delphi` from any directory; a Git repository is not required to open the console. The first time, it creates or resolves a workspace under `~/.delphi/workspaces/`, runs guided model setup if no model access exists (it finds `claude` and `agy`, asks only for what it cannot find, and ratifies the config), runs the doctor and offers to fix what it can, then opens the console. After that it just opens the console. Outside a Git repository it uses the `default` workspace.
+You can run `delphi` from any directory; a Git repository is not required to open the console. The first time, it creates or resolves a workspace under `~/.delphi/workspaces/`, runs guided model setup if no model access exists (it finds `claude` and `agy`, asks only for what it cannot find, and ratifies the config), runs the doctor and offers to fix what it can, then opens the console. After that it just opens the console. Outside a Git repository it uses the `default` workspace. Bare `delphi` never registers or scaffolds the directory you are in; that is `delphi project register` / `delphi project init`.
+
+**Projects and research.** The default project is where you start. Research you ask for there (the knowledge window's expand job) is written to the shared knowledge base at once only when its source is on the validator's allow list as primary or reputable secondary (Wikipedia, peer-reviewed publishers and the like). Anything else is held under `local/pending/web/`, labelled weak, and stays out of the index until you review it with `/validate` (`/validate pass` promotes what the current list now trusts; `ratify` and `discard` act one page at a time). Inside a registered project, research is stored in that project's `research/web/` and is never shared automatically; promote it through `/retro`. Weak sources are never counted as corroboration. About once a week, if five or more pages are waiting, the orchestrator mentions it in chat. `/projects` lists registered projects; pick one with the arrow keys and Enter to restart the console in that directory as a new session. Not built yet: resolving a DOI against doi.org (the check is that a DOI appears in the page), and the rename of "mission" to "session" (the logs and commands still say mission).
 
 Paths in the prompt are logical: `@project/<name>/…` for a project repo, `@worktree/…` inside a build, `specs/…`, `missions/…` and `context/…` for the workspace's own files. A new user should read [Getting started](docs/getting-started.md) next.
 
@@ -217,7 +221,7 @@ Lessons, rules, config changes and imported skills all arrive as proposals and t
  narrator (observe) ─┘  JSON-RPC       │  model pool and routing, budget reservations
    read-only, live                     │  local/missions/<id>/*.jsonl ← the event log, single source of truth (agents cannot read it)
                                        │  local/state.db              ← derived index: FTS5 + vectors, usage ledger
- $DELPHI_HOME/workspaces/<name>/       ← all state lives here (default ~/.delphi); project repos stay clean
+ $DELPHI_HOME/workspaces/<name>/       ← all state lives here (default ~/.delphi); runtime state never goes in a project
 ```
 
 The daemon (`delphi-core`, `delphi-engine`) is the only writer of the event log and the index, and it enforces every invariant in code. The console and the narrator are clients. The console is `delphi-ui`, an [Ink](https://github.com/vadimdemedes/ink) program compiled with Bun and installed next to `delphi`; when it is absent `delphi` falls back to the Rust inline console (`delphi chat --inline`). If the daemon restarts, the console says so, re-attaches and rebuilds the conversation from the mission log. The adapter compiles one intermediate prompt representation into each provider's dialect, preserving reasoning signatures across tool loops.
@@ -267,7 +271,7 @@ Every command takes `--workspace <name>` and `--home <dir>`; `delphi help <comma
 
 ## Configuration
 
-Delphi keeps all state in `$DELPHI_HOME` (default `~/.delphi`) and never writes into a project repository:
+Delphi keeps all runtime state in `$DELPHI_HOME` (default `~/.delphi`). A project directory holds only what you explicitly register or scaffold (`delphi project register` writes a `.delphi-project` identity marker; `delphi project init` adds `specs/`, `plans/`, `context/`, `research/`, `work/` and a generated `_index.md`), and an agent never edits your checkout outside a build worktree:
 
 ```
 ~/.delphi/

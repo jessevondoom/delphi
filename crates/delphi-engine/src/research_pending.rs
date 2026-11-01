@@ -131,6 +131,23 @@ pub fn ratify(ws: &Path, held: &Held, rel: &str) -> Result<(Wrote, String), Stri
     Ok((wrote, format!("{}/{}", LOGICAL, rel)))
 }
 
+/// The validator pass (`specs/058` §18): put every held entry whose source the current list trusts into the shared base. It is the same
+/// decision the research job makes when it writes a page ([`crate::research::route`]), taken again because the operator's list may
+/// have changed since. Weak pages are never promoted by it, and nothing is ever corroborated into trust. Returns the entries moved.
+pub fn pass(ws: &Path, held: &Held, sources: &crate::fact_sources::SourceList) -> Vec<(String, Wrote)> {
+    use crate::research::{Dest, Scope, route};
+    let mut done = Vec::new();
+    for item in list(ws, held) {
+        if route(&Scope::Home, sources.classify(&item.url).class) != Dest::Shared {
+            continue;
+        }
+        if let Ok((wrote, _)) = ratify(ws, held, &item.rel) {
+            done.push((item.rel, wrote));
+        }
+    }
+    done
+}
+
 /// Delete one held page from the workspace's pending folder. A project's own files are never deleted from here.
 pub fn discard(ws: &Path, held: &Held, rel: &str) -> Result<(), String> {
     if *held != Held::Pending {
@@ -218,5 +235,23 @@ mod tests {
         std::os::unix::fs::symlink(&outside, dir.join("l.md")).unwrap();
         assert!(list(ws.path(), &Held::Pending).is_empty());
         assert!(ratify(ws.path(), &Held::Pending, "h.example/l.md").is_err());
+    }
+
+    #[test]
+    fn the_pass_promotes_only_what_the_current_list_trusts() {
+        use crate::fact_sources::SourceList;
+        let ws = tempfile::tempdir().unwrap();
+        for (host, rel) in [("blog.example", "blog.example/a.md"), ("commons.wikimedia.org", "commons.wikimedia.org/b.md")] {
+            let p = ws.path().join(PENDING_DIR).join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, format!("---\ntitle: \"T\"\nsource_url: \"https://{}/x\"\nsource_class: weak\nretrieved: 2026-10-31\n---\n\n# T\n", host)).unwrap();
+        }
+        let before = SourceList::new(Default::default());
+        assert!(pass(ws.path(), &Held::Pending, &before).is_empty(), "unknown and weak hosts stay held");
+        let cfg = delphi_adapter::config::ValidatorSources { reputable: vec!["blog.example".into()], ..Default::default() };
+        let moved = pass(ws.path(), &Held::Pending, &SourceList::new(cfg));
+        assert_eq!(moved.iter().map(|(r, _)| r.as_str()).collect::<Vec<_>>(), vec!["blog.example/a.md"]);
+        assert!(ws.path().join(DIR).join("blog.example/a.md").is_file());
+        assert!(ws.path().join(PENDING_DIR).join("commons.wikimedia.org/b.md").is_file());
     }
 }
