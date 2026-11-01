@@ -54,6 +54,10 @@ impl Packs {
         Packs { ws }
     }
 
+    pub fn workspace(&self) -> &WorkspacePaths {
+        &self.ws
+    }
+
     /// The roles whose ratified manifest exists, by ID, in order.
     fn role_ids(&self) -> Result<Vec<String>, String> {
         let lock = read_lock(&self.ws.dir.join("local/ratified.lock")).map_err(|e| e.to_string())?;

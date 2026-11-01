@@ -5,6 +5,7 @@ author: architect
 timestamp: 2026-10-31T00:00:00Z
 status: approved   # by the operator, 2026-10-31 ("approve the spec if it was built on the rules you showed"): D-1..D-5 ratified; D-6..D-9 follow the architect's recommendations; Q-1..Q-5 stay open and each blocks only the slice named in §12. The text as written is approved when this pull request merges.
 approved_by: operator (2026-10-31)
+amendments: "2026-10-31, approved by the operator ('approve the spec changes as needed'): `builder` servable (D-6, §4.3, invariant 8); `route` moves from S2 to S3 (§11)"
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -116,8 +117,8 @@ Packs, role and skill listings, and project reads must work with no daemon runni
 
 In a registered project, the server serves, each with scope, tier and provenance and never as orders:
 
-- **resources:** `delphi://project/specs/<id>` (spec text plus its `status`), `delphi://project/index`, `delphi://project/context/...` (reading only files the scaffold of 058 §5 lists);
-- **tools:** `specs_status` ("what may be built?": spec, status, tracker row), `search_project(query)` and `search_memory(query, role?)` over the project and home layers, using the hybrid retriever (§11, S8) and the lexical index until then.
+- **resources:** `delphi://project/<path>` for `_index.md` and the `.md` files under `specs/`, `plans/`, `context/` and `research/` (only a path that was enumerated is served; symlinks, hidden files and anything past the size and count caps are skipped);
+- **tools:** `specs_status` ("what may be built?": each spec and its status; `buildable` only when `approved`), `search_project(query)` and `search_memory(query, role?)` over the project and home layers (the role's own memory plus operator-promoted summaries; with no role, only the shared ones), and `route(task, domain?, role?)`, a dry run of the agent registry that dispatches nothing. Search is lexical until the hybrid retriever (§11, S8). Every result is `external_untrusted`.
 
 Reading project files keeps their real provenance and taint; registration does not ratify content (058 §4.1). A host may not read another role's memory, another project's memory, operator-private files or anything outside the closed set the path guard lists.
 
