@@ -71,6 +71,8 @@ Red cards (outbound calls, merges, new dependencies, destructive commands) alway
 
 ## 5. Look around, and keep it healthy
 
+A **mission** is one piece of work: its own budget, notebook, knowledge and log, kept until you stop caring about it. `delphi chat` opens today's mission or the one you name. `/new` starts a fresh conversation inside the same mission (a "session" in the logs and in `delphi sessions`) without losing the notebook or the knowledge.
+
 | To | Run |
 | :-- | :-- |
 | see the live team in a second window | `/observe` in the console, or `delphi observe` |
