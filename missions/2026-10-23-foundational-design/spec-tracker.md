@@ -456,3 +456,16 @@ Approved by the operator on 2026-10-31. Makes the Wikipedia-style Encyclopedia S
 | SK9c | Reputable expansion (`pages.expand` RPC and `delphi pages expand <query>` CLI) connecting `research.rs` and `research_images.rs` to library source/asset persistence and `depth: expanded` re-synthesis | built |
 | SK9d | Encyclopedia Page as primary search result in `ui/src/archives.ts` rendered via `renderMarkdownLinks` and `paint`, immediate synthesis on search, TOC `#anchor` jumping, disambiguation links, and `e` / `r` / `f` controls | built |
 
+## Agent fleet behaviors, dynamic orchestration, and curated knowledge (spec 063, approved 2026-11-01)
+
+Approved by the operator on 2026-11-01. Replaces binary `enabled_agents` with fleet-wide orchestrator visibility, session-scoped operator chain of command (`interactive`, SME autonomous introduction and active floor control), operator quarantine (`forbidden`), offloading fleet behaviors into modular skills/tools (lateral thinking, polyglot edge/systems literacy, Socratic interrogation, strategic case-study pattern matching, dual-horizon discovery, tonal calibration), and built-in curated knowledge in `context/reference/`.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| S1 | Fleet visibility & quarantine engine: `interactive`, `forbidden`, and fleet-wide orchestrator dispatch in `delphi-adapter` and `delphi-engine`; config template and schemas | built (this PR) |
+| S2 | Session floor control & active monitoring: `@`-addressability lifecycle, `/solo` mode toggle, and orchestrator active monitoring / floor reclaim | built (this PR) |
+| S3 | New skills & role authorizations: `oblique-strategies`, `dual-horizon-search`, `systems-pattern-catalog`, `strategic-pattern-matching`, `tonal-calibration`, `socratic-interrogation`, `hypothesis-flipping` in `skills/` and `agents/` | built (this PR) |
+| S4 | Curated seed knowledge: reference compendiums in `context/reference/` for strategy, lateral thinking, systems/edge protocols, and tonal registers; indexed into `kb` | built (this PR) |
+| S5 | Fleet collaboration telemetry & tenacity pushback: FPY/churn/overhead tracking and single-pushback retry policy for `investigator` | built (this PR) |
+
+

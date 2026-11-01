@@ -33,6 +33,7 @@ pub mod ctxacct;
 pub mod ctxhist;
 pub mod loopctl;
 pub mod toolreport;
+pub mod collaboration;
 pub mod artifacts;
 pub mod auth_cli;
 pub mod boot;

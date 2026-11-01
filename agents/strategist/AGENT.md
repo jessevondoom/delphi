@@ -13,6 +13,8 @@ authorized_skills:
   - pr-alignment-review
   - scope-creep-detection
   - risk-roi-analysis
+  - strategic-pattern-matching
+  - competitive-swot-analysis
 memory_scope: "memory/agents/strategist/"
 max_turn_budget: 20
 ---

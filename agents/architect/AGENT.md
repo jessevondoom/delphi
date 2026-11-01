@@ -16,6 +16,7 @@ authorized_skills:
   - api-contract-design
   - trade-off-matrix
   - tui-design
+  - oblique-strategies
 memory_scope: "memory/agents/architect/"
 max_turn_budget: 25
 ---

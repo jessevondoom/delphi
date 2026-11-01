@@ -488,14 +488,20 @@ impl EngineService {
         // `@<bundle>:<agent>`: validated against the added bundles and the host role's being enabled, before anything starts.
         if target.starts_with("bundle:") {
             let a = crate::bundle_load::agent(&self.engine.ws, &target).map_err(|e| err(code::INVALID_PARAMS, e))?;
-            if !self.engine.settings.enabled_agents.contains(&a.host_role) {
-                return Err(err(code::INVALID_PARAMS, format!("`{}` runs as {}, which is not an enabled role", target, a.host_role)));
+            if self.engine.is_forbidden(&a.id) || self.engine.is_forbidden(&a.host_role) {
+                return Err(err(code::INVALID_PARAMS, format!("Agent '{}' is quarantined. Remove from forbidden in config.toml or run /unquarantine {} to allow.", target, target)));
+            }
+            if !self.engine.is_interactive(&target) && !self.engine.is_interactive(&a.host_role) {
+                return Err(err(code::INVALID_PARAMS, format!("`{}` runs as {}, which is not an interactive role for the operator", target, a.host_role)));
             }
             let task_id = self.spawn_task(&m, &target, &prompt, None);
             return Ok(json!({"task_id": task_id, "mission_id": m.id, "bundle_agent": a.id, "role": a.host_role}));
         }
-        if !self.engine.settings.enabled_agents.contains(&target) {
-            return Err(err(code::INVALID_PARAMS, format!("`{}` is not an enabled role (enabled: {})", target, self.engine.settings.enabled_agents.join(", "))));
+        if self.engine.is_forbidden(&target) {
+            return Err(err(code::INVALID_PARAMS, format!("Agent '{}' is quarantined. Remove from forbidden in config.toml or run /unquarantine {} to allow.", target, target)));
+        }
+        if !self.engine.is_interactive(&target) {
+            return Err(err(code::INVALID_PARAMS, format!("`{}` is not an interactive role for the operator (interactive: {})", target, self.engine.settings.interactive_agents.join(", "))));
         }
         let task_id = self.spawn_task(&m, &target, &prompt, None);
         Ok(json!({"task_id": task_id, "mission_id": m.id}))
@@ -594,8 +600,11 @@ impl EngineService {
         need_console(&ctx)?;
         let m = self.mission(p["mission_id"].as_str()).await?;
         let target = p["target"].as_str().unwrap_or("orchestrator").to_string();
-        if !self.engine.settings.enabled_agents.contains(&target) {
-            return Err(err(code::INVALID_PARAMS, format!("`{}` is not an enabled role (enabled: {})", target, self.engine.settings.enabled_agents.join(", "))));
+        if self.engine.is_forbidden(&target) {
+            return Err(err(code::INVALID_PARAMS, format!("Agent '{}' is quarantined. Remove from forbidden in config.toml or run /unquarantine {} to allow.", target, target)));
+        }
+        if !self.engine.settings.is_dispatchable(&target) {
+            return Err(err(code::INVALID_PARAMS, format!("`{}` is not an enabled or dispatchable role", target)));
         }
         let at_unix = match p["at"].as_str() {
             Some(s) => Some(delphi_core::time::parse_rfc3339(s).ok_or_else(|| err(code::INVALID_PARAMS, "`at` must be an RFC 3339 time"))?),
@@ -651,8 +660,11 @@ impl EngineService {
         if prompt.is_empty() || prompt.chars().count() > 20_000 {
             return Err(err(code::INVALID_PARAMS, "`prompt` must be 1 to 20,000 characters"));
         }
-        if !self.engine.settings.enabled_agents.iter().any(|a| a == "builder") {
-            return Err(err(code::INVALID_PARAMS, "the builder role is not enabled"));
+        if self.engine.is_forbidden("builder") {
+            return Err(err(code::INVALID_PARAMS, "Agent 'builder' is quarantined. Remove from forbidden in config.toml or run /unquarantine builder to allow."));
+        }
+        if !self.engine.settings.is_dispatchable("builder") {
+            return Err(err(code::INVALID_PARAMS, "the builder role is not dispatchable"));
         }
         let task_id = m.next_task_id();
         let optimistic = p["optimistic"].as_bool().unwrap_or(false);
@@ -1159,8 +1171,11 @@ impl EngineService {
         }
         let req = crate::distill::Request { from };
         // Refused up front, so the operator hears why instead of finding a failed task.
-        if !self.engine.settings.enabled_agents.iter().any(|a| a == "writer") {
-            return Err(err(code::INVALID_PARAMS, "the writer role is not enabled: add \"writer\" to [agents] enabled in config.toml"));
+        if self.engine.is_forbidden("writer") {
+            return Err(err(code::INVALID_PARAMS, "Agent 'writer' is quarantined. Remove from forbidden in config.toml or run /unquarantine writer to allow."));
+        }
+        if !self.engine.settings.is_dispatchable("writer") {
+            return Err(err(code::INVALID_PARAMS, "the writer role is not dispatchable"));
         }
         let task_id = m.next_task_id();
         self.running.lock().unwrap().insert(task_id.clone(), Running { target: "writer".into(), prompt: "distill knowledge for a bundle".into(), started: Instant::now() });
@@ -1333,7 +1348,16 @@ impl EngineService {
         events.retain(|e| crate::observe::KINDS.contains(&e.kind.as_str()));
         let skip = events.len().saturating_sub(4000);
         let events: Vec<Value> = events.into_iter().skip(skip).map(|e| serde_json::to_value(e).expect("events serialize")).collect();
-        Ok(json!({"mission_id": m.id, "events": events, "enabled_agents": self.engine.settings.enabled_agents, "budget": Self::budget_json(&m), "pending_proposals": crate::ratify::list(&self.engine.ws.home, &self.engine.ws.dir).len()}))
+        Ok(json!({
+            "mission_id": m.id,
+            "events": events,
+            "enabled_agents": self.engine.settings.enabled_agents,
+            "interactive_agents": self.engine.active_interactive(),
+            "forbidden_agents": self.engine.settings.forbidden_agents,
+            "solo_mode": self.engine.is_solo(),
+            "budget": Self::budget_json(&m),
+            "pending_proposals": crate::ratify::list(&self.engine.ws.home, &self.engine.ws.dir).len(),
+        }))
     }
 
     /// `observe.state`: the Observer's folded picture of the mission (agents, DAG, councils, builds, spend), computed
@@ -2250,6 +2274,33 @@ impl EngineService {
         Ok(json!({"dismissed": s.id}))
     }
 
+    /// `session.solo`: toggle or set solo mode to forbid sub-consultations by internal agents (`specs/063` §3.3).
+    async fn session_solo(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let solo = match p.get("solo").and_then(Value::as_bool) {
+            Some(b) => b,
+            None => !self.engine.is_solo(),
+        };
+        self.engine.set_solo(solo);
+        Ok(json!({"solo": solo}))
+    }
+
+    /// `agents.quarantine`: quarantine an agent, blocking orchestrator dispatch and direct interaction (`specs/063` §3.2).
+    async fn agents_quarantine(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let role = p["role"].as_str().ok_or_else(|| err(code::INVALID_PARAMS, "missing role"))?;
+        self.engine.quarantine(role);
+        Ok(json!({"quarantined": role}))
+    }
+
+    /// `agents.unquarantine`: unquarantine a previously forbidden or quarantined agent (`specs/063` §3.2).
+    async fn agents_unquarantine(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let role = p["role"].as_str().ok_or_else(|| err(code::INVALID_PARAMS, "missing role"))?;
+        self.engine.unquarantine(role);
+        Ok(json!({"unquarantined": role}))
+    }
+
     /// `council.follow`: start the next steps of the last Council's verdict, one after the other (`specs/003` §4.2). A Council that escalated
     /// needs `option` (its number or label); one that did not, none. The steps run as ordinary tasks, each with the Council's record to read;
     /// the chain stops at the first that is cancelled, fails or hands back to the operator. The same steps are not started twice unless `again`.
@@ -2336,6 +2387,9 @@ impl EngineService {
             "running_tasks": running,
             "timers": self.timers_json()["timers"].as_array().cloned().unwrap_or_default().into_iter().filter(|t| t["state"] == "pending").collect::<Vec<_>>(),
             "enabled_agents": self.engine.settings.enabled_agents,
+            "interactive_agents": self.engine.active_interactive(),
+            "forbidden_agents": self.engine.settings.forbidden_agents,
+            "solo_mode": self.engine.is_solo(),
         }))
     }
 }
@@ -2398,6 +2452,9 @@ impl Extension for ServiceExt {
                 "task.submit" => svc.task_submit(params, ctx).await,
                 "session.new" => svc.session_new(params, ctx).await,
                 "session.context" => svc.session_context(params, ctx).await,
+                "session.solo" => svc.session_solo(params, ctx).await,
+                "agents.quarantine" => svc.agents_quarantine(params, ctx).await,
+                "agents.unquarantine" => svc.agents_unquarantine(params, ctx).await,
                 "council.follow" => svc.council_follow(params, ctx).await,
                 "settings.get" => svc.settings_get(params, ctx).await,
                 "settings.set" => svc.settings_set(params, ctx).await,
@@ -4788,5 +4845,49 @@ mod tests {
         for (m, console, narrator) in codes {
             assert!(console.is_some() && narrator.is_some(), "{} must be refused on both sockets, got {:?} / {:?}", m, console, narrator);
         }
+    }
+
+    #[tokio::test]
+    async fn task_submit_enforces_interactive_and_quarantine() {
+        let f = setup(vec![], 5.0, |s| {
+            s.interactive_agents = vec!["orchestrator".into()];
+            s.forbidden_agents = vec!["builder".into()];
+        });
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        svc.adopt(f.m.clone());
+        let ctx = CallContext { scope: Scope::Console, client_id: 1 };
+
+        // 1. Interactive agent succeeds
+        let ok = svc.task_submit(json!({"target": "orchestrator", "prompt": "Hello"}), ctx).await;
+        assert!(ok.is_ok());
+
+        // 2. Non-interactive fleet agent (scout) fails direct task submit
+        let non_interactive = svc.task_submit(json!({"target": "scout", "prompt": "Hello"}), ctx).await.unwrap_err();
+        assert_eq!(non_interactive.code, code::INVALID_PARAMS);
+        assert!(non_interactive.message.contains("not an interactive role for the operator"), "{}", non_interactive.message);
+
+        // 3. Quarantined agent (builder) fails direct task submit with quarantined error
+        let forbidden = svc.task_submit(json!({"target": "builder", "prompt": "Hello"}), ctx).await.unwrap_err();
+        assert_eq!(forbidden.code, code::INVALID_PARAMS);
+        assert!(forbidden.message.contains("is quarantined"), "{}", forbidden.message);
+
+        // 4. Test agents.quarantine and agents.unquarantine
+        let q_res = svc.agents_quarantine(json!({"role": "orchestrator"}), ctx).await;
+        assert!(q_res.is_ok());
+        let q_err = svc.task_submit(json!({"target": "orchestrator", "prompt": "Hello"}), ctx).await.unwrap_err();
+        assert!(q_err.message.contains("is quarantined"));
+
+        let unq_res = svc.agents_unquarantine(json!({"role": "orchestrator"}), ctx).await;
+        assert!(unq_res.is_ok());
+        let unq_ok = svc.task_submit(json!({"target": "orchestrator", "prompt": "Hello"}), ctx).await;
+        assert!(unq_ok.is_ok());
+
+        // 5. Test session.solo toggle
+        let solo_res = svc.session_solo(json!({}), ctx).await.unwrap();
+        assert_eq!(solo_res["solo"], true);
+        assert!(f.engine.is_solo());
+        let solo_off = svc.session_solo(json!({"solo": false}), ctx).await.unwrap();
+        assert_eq!(solo_off["solo"], false);
+        assert!(!f.engine.is_solo());
     }
 }

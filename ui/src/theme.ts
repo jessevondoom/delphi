@@ -32,6 +32,10 @@ export type Info = {
   avatar?: AvatarSpec;
   /** `/projects`: the home workspace first, then each registered project (`specs/058` §15). `relaunch_file` is where the console says which directory to restart in. */
   projects?: { name: string; root: string; home: boolean }[]; relaunch_file?: string;
+  /** Roles directly @-addressable initially or after introduction (`specs/063`). */
+  interactive_agents?: string[];
+  /** Roles quarantined by operator (`specs/063`). */
+  forbidden_agents?: string[];
 };
 
 /** Convert the standard ANSI 256-colour palette to the display hex used by OpenTUI spans. */

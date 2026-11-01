@@ -19,7 +19,10 @@ Defaults are those of the template; "—" means no default.
 | `[theme] name` | `greek` | display names, window labels and voice only; behavior never depends on it |
 | `[tui] auto_spawn_narrator` | `false` | open the second window on launch |
 | `[tui] frame_rate_hz` | `60` | |
-| `[agents] enabled` | orchestrator, architect, builder, red-team, strategist | the roster; nine roles exist |
+| `[agents] interactive` | `["orchestrator"]` | roles the operator can directly @ on session start (spec 063) |
+| `[agents] forbidden` | `[]` | quarantined roles; orchestrator dispatch and direct interaction are blocked |
+| `[agents] fleet` | `"all"` | fleet visibility for the orchestrator (`all` or `interactive`) |
+| `[agents] enabled` | orchestrator, architect, builder, red-team, strategist | legacy fallback for `interactive` |
 | `[events] thinking_retention_days` | `30` | how long thinking is kept |
 
 ## Models, routing and budget

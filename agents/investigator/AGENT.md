@@ -13,6 +13,8 @@ authorized_skills:
   - git-bisect-hunt
   - benchmark-profiling
   - primary-source-verification
+  - competitive-swot-analysis
+  - hypothesis-flipping
 memory_scope: "memory/agents/investigator/"
 max_turn_budget: 25
 ---

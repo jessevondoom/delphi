@@ -580,6 +580,61 @@ pub struct Config {
     pub learning: LearningConfig,
     /// `[mcp]`: the server for host agents (`specs/062` §3.4).
     pub mcp: McpConfig,
+    /// `[agents]`: operator direct interaction, fleet accessibility, and quarantine (`specs/063` §3.1).
+    pub agents: AgentsConfig,
+}
+
+/// `[agents]` (`specs/063` §3.1). Operator direct interaction, fleet accessibility, and quarantine.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(default)]
+pub struct AgentsConfig {
+    pub interactive: Vec<String>,
+    pub enabled: Vec<String>,
+    pub forbidden: Vec<String>,
+    pub fleet: String,
+}
+
+impl Default for AgentsConfig {
+    fn default() -> Self {
+        AgentsConfig {
+            interactive: Vec::new(),
+            enabled: vec![
+                "orchestrator".into(),
+                "architect".into(),
+                "builder".into(),
+                "red-team".into(),
+                "strategist".into(),
+            ],
+            forbidden: Vec::new(),
+            fleet: "all".into(),
+        }
+    }
+}
+
+impl AgentsConfig {
+    pub fn active_interactive(&self) -> Vec<String> {
+        let list = if !self.interactive.is_empty() {
+            &self.interactive
+        } else {
+            &self.enabled
+        };
+        list.iter().filter(|r| !self.is_forbidden(r)).cloned().collect()
+    }
+
+    pub fn is_forbidden(&self, role: &str) -> bool {
+        self.forbidden.iter().any(|f| f == role)
+    }
+
+    pub fn is_interactive(&self, role: &str) -> bool {
+        if self.is_forbidden(role) {
+            return false;
+        }
+        if !self.interactive.is_empty() {
+            self.interactive.iter().any(|r| r == role)
+        } else {
+            self.enabled.iter().any(|r| r == role)
+        }
+    }
 }
 
 /// `[mcp]` (`specs/062` §3.2, §3.4). `enabled` is the operator's switch; `allow_remote` is reserved for a later spec and
@@ -911,6 +966,12 @@ impl Config {
                 Ok(v) if v.allow_remote => errs.push("[mcp] allow_remote: remote access is not supported in this version (specs/062 §3.2)".to_string()),
                 Ok(v) => cfg.mcp = v,
                 Err(e) => errs.push(format!("[mcp]: {}", e)),
+            }
+        }
+        if let Some(v) = root.get("agents") {
+            match v.clone().try_into::<AgentsConfig>() {
+                Ok(v) => cfg.agents = v,
+                Err(e) => errs.push(format!("[agents]: {}", e)),
             }
         }
         // `[harness]` also carries scalar settings of its own (`subscription_budget_tokens`); only its sub-tables are profiles.
@@ -1795,5 +1856,24 @@ tools = { search = "read", note = "draft", send = "write" }
             let errs = Config::parse(&format!("{}\n[library.acquire]\n{}\n", SAMPLE, bad)).unwrap_err().join("\n");
             assert!(errs.contains(why), "{}: {}", bad, errs);
         }
+    }
+
+    #[test]
+    fn agents_config_supports_interactive_forbidden_and_fleet() {
+        let def = Config::parse(SAMPLE).unwrap().agents;
+        assert_eq!(def.fleet, "all");
+        assert!(def.forbidden.is_empty());
+        assert_eq!(def.active_interactive(), vec!["orchestrator", "architect", "builder", "red-team", "strategist"]);
+        assert!(def.is_interactive("orchestrator"));
+        assert!(!def.is_forbidden("scout"));
+
+        let custom = Config::parse(&format!("{}\n[agents]\ninteractive = [\"orchestrator\"]\nforbidden = [\"scout\"]\nfleet = \"all\"\n", SAMPLE)).unwrap().agents;
+        assert_eq!(custom.interactive, vec!["orchestrator"]);
+        assert_eq!(custom.forbidden, vec!["scout"]);
+        assert_eq!(custom.active_interactive(), vec!["orchestrator"]);
+        assert!(custom.is_interactive("orchestrator"));
+        assert!(!custom.is_interactive("builder"));
+        assert!(custom.is_forbidden("scout"));
+        assert!(!custom.is_interactive("scout"));
     }
 }

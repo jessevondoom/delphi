@@ -1,6 +1,6 @@
 [package]
 name = "delphi"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Delphi: terminal-first multi-agent working environment (roadmap Step 1: init, doctor, lint)"

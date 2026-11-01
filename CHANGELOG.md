@@ -6,7 +6,16 @@ Release builds, with their notes and build attestations, are on the [releases pa
 
 This file starts with the work after v0.2.7. For earlier releases, the history is the merged pull requests and the per-spec notes under `specs/`; their entries below give dates, not detail.
 
-## Unreleased
+## 0.5.0 — 2026-11-01
+
+### Fleet Architecture and Dynamic Orchestration (Spec 063)
+
+- **Fleet-wide visibility & decoupled dispatch**: The Orchestrator has complete visibility into all registered canonical roles and bundle specialists to autonomously decompose tasks, route specialist assignments, and coordinate learning.
+- **Interactive focus & dynamic session introductions**: Operators interact directly via `@` mentions with the interactive roster (`interactive = [...]`, default 5 core roles). When the orchestrator dispatches any specialist into the conversation, the agent is introduced and becomes dynamically addressable for the remainder of the session.
+- **Operator controls**: Added `/solo` dialog mode (capping sub-consultation tokens to keep interaction 1:1) and dynamic quarantine controls (`/quarantine <role>`, `/unquarantine <role>`) to block or restore dispatch and direct interaction.
+- **Cognitive & specialist skills**: Added 8 modular skills (`strategic-deployment`, `engineering-patterns-breadth`, `socratic-council-interrogation`, `competitive-analysis-swot`, `dual-horizon-search`, `hypothesis-flipping`, `oblique-strategies`, `tonal-calibration`).
+- **Curated reference compendiums**: Added curated knowledge bases in `context/reference/` for Oblique Strategies, strategic maneuvers, engineering architecture paradigms, and tonal registers.
+- **Collaboration tracking & tenacity pushback**: Dynamic metrics tracking for agent collaboration outcomes and persistent tenacity pushback for the Investigator.
 
 ### Shell
 

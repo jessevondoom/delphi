@@ -15,6 +15,7 @@ authorized_skills:
   - concision-audit
   - encyclopedia-synthesis
   - org-bundle-authoring
+  - tonal-calibration
 memory_scope: "memory/agents/writer/"
 max_turn_budget: 20
 ---

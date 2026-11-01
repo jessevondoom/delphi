@@ -67,6 +67,9 @@ pub struct Settings {
     /// Escalate when this many consecutive interruptions hit the same turn (`specs/005` §2.5).
     pub max_interruptions: u32,
     pub enabled_agents: Vec<String>,
+    pub interactive_agents: Vec<String>,
+    pub forbidden_agents: Vec<String>,
+    pub fleet: String,
     /// The Claude CLI to launch for a harness endpoint.
     pub harness_program: String,
     /// The GitHub CLI used to open pull requests in PR mode.
@@ -144,6 +147,9 @@ impl Default for Settings {
             mission_budget_usd: 5.0,
             max_interruptions: 2,
             enabled_agents: ["orchestrator", "architect", "builder", "red-team", "strategist"].iter().map(|s| s.to_string()).collect(),
+            interactive_agents: vec!["orchestrator".into()],
+            forbidden_agents: Vec::new(),
+            fleet: "all".into(),
             harness_program: "claude".into(),
             gh_program: "gh".into(),
             build_attempts: 3,
@@ -172,6 +178,34 @@ impl Default for Settings {
             max_approver_calls: 100,
             hooks: Default::default(),
             relay_totp_credential: None,
+        }
+    }
+}
+
+impl Settings {
+    pub fn is_forbidden(&self, role: &str) -> bool {
+        self.forbidden_agents.iter().any(|a| a == role)
+    }
+
+    pub fn is_interactive(&self, role: &str) -> bool {
+        if self.is_forbidden(role) {
+            return false;
+        }
+        if !self.interactive_agents.is_empty() {
+            self.interactive_agents.iter().any(|a| a == role)
+        } else {
+            self.enabled_agents.iter().any(|a| a == role)
+        }
+    }
+
+    pub fn is_dispatchable(&self, role: &str) -> bool {
+        if self.is_forbidden(role) {
+            return false;
+        }
+        if self.fleet == "all" {
+            crate::frontmatter::ROLES.contains(&role)
+        } else {
+            self.is_interactive(role)
         }
     }
 }
@@ -284,6 +318,14 @@ pub struct Engine {
     pub pace: Mutex<crate::route::Pace>,
     /// Single-use and rate-limit state for step-up codes.
     pub(crate) totp: delphi_core::totp::Verifier,
+    /// Specialist agents dynamically introduced during this session (`specs/063` §3.2).
+    pub session_introduced: Mutex<HashSet<String>>,
+    /// Dynamically quarantined roles for this session (`specs/063` §3.2).
+    pub quarantined: Mutex<HashSet<String>>,
+    /// Quarantined roles explicitly unquarantined by the operator for this session (`specs/063` §3.2).
+    pub unquarantined: Mutex<HashSet<String>>,
+    /// Solo mode toggle: when true, SME agents do not spawn sub-consultations (`specs/063` §3.3).
+    pub solo_mode: std::sync::atomic::AtomicBool,
 }
 
 /// What the operator decided about weaker substitutes for one task, as `(endpoint, model)` pairs.
@@ -440,6 +482,83 @@ fn timer_def() -> ToolDef {
 }
 
 impl Engine {
+    pub fn is_interactive(&self, role: &str) -> bool {
+        if self.is_forbidden(role) {
+            return false;
+        }
+        if self.settings.is_interactive(role) {
+            return true;
+        }
+        if let Ok(lock) = self.session_introduced.lock() {
+            if lock.contains(role) {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn active_interactive(&self) -> Vec<String> {
+        let mut active = self.settings.interactive_agents.clone();
+        if let Ok(intro) = self.session_introduced.lock() {
+            active.extend(intro.iter().cloned());
+        }
+        active.sort();
+        active.dedup();
+        active.retain(|r| !self.is_forbidden(r));
+        active
+    }
+
+    pub fn is_forbidden(&self, role: &str) -> bool {
+        if let Ok(lock) = self.unquarantined.lock() {
+            if lock.contains(role) {
+                return false;
+            }
+        }
+        if let Ok(lock) = self.quarantined.lock() {
+            if lock.contains(role) {
+                return true;
+            }
+        }
+        self.settings.is_forbidden(role)
+    }
+
+    pub fn introduce_agent(&self, role: &str) {
+        if !self.is_forbidden(role) {
+            if let Ok(mut lock) = self.session_introduced.lock() {
+                lock.insert(role.to_string());
+            }
+        }
+    }
+
+    pub fn quarantine(&self, role: &str) {
+        if let Ok(mut lock) = self.unquarantined.lock() {
+            lock.remove(role);
+        }
+        if let Ok(mut lock) = self.quarantined.lock() {
+            lock.insert(role.to_string());
+        }
+        if let Ok(mut lock) = self.session_introduced.lock() {
+            lock.remove(role);
+        }
+    }
+
+    pub fn unquarantine(&self, role: &str) {
+        if let Ok(mut lock) = self.quarantined.lock() {
+            lock.remove(role);
+        }
+        if let Ok(mut lock) = self.unquarantined.lock() {
+            lock.insert(role.to_string());
+        }
+    }
+
+    pub fn is_solo(&self) -> bool {
+        self.solo_mode.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn set_solo(&self, solo: bool) {
+        self.solo_mode.store(solo, std::sync::atomic::Ordering::Relaxed);
+    }
+
     pub(crate) fn now(&self) -> String {
         (self.clock)()
     }
@@ -552,8 +671,11 @@ impl Engine {
             handoff.add_agents_md(&self.projects);
         }
         handoff.validate().map_err(EngineError::Invalid)?;
-        if !self.settings.enabled_agents.iter().any(|a| a == target) {
-            return Err(EngineError::Invalid(format!("`{}` is not an enabled role", target)));
+        if self.settings.is_forbidden(target) || bundle_agent.as_ref().map(|b| self.settings.is_forbidden(b)).unwrap_or(false) {
+            return Err(EngineError::Invalid(format!("`{}` is quarantined (forbidden in workspace config)", target)));
+        }
+        if bundle_agent.is_none() && !self.settings.is_dispatchable(target) {
+            return Err(EngineError::Invalid(format!("`{}` is not an enabled or dispatchable role", target)));
         }
         if announce {
             let mut created = EventEnvelope::new(&m.id, "task.created", json!({"prompt": prompt, "target": target, "bundle_agent": bundle_agent, "source": if operator_task { "operator" } else if self.readonly_tasks.lock().unwrap().contains(&task_id) { "host" } else { "timer" }}));
@@ -2214,8 +2336,14 @@ impl Engine {
                 sc.m.append(sc.ev("registry.dispatch", rec)).await?;
             }
         }
-        if !self.settings.enabled_agents.iter().any(|a| a == role) {
-            return Ok((tool_result_error(format!("`{}` is not an enabled role (enabled: {})", role, self.settings.enabled_agents.join(", "))), None));
+        if self.is_forbidden(role) || bundle_agent.as_ref().map(|b| self.is_forbidden(b)).unwrap_or(false) {
+            return Ok((tool_result_error(format!("`{}` is quarantined (forbidden in workspace config)", target)), None));
+        }
+        if self.is_solo() && sc.role != "orchestrator" {
+            return Ok((tool_result_error("solo mode is enabled by operator: peer consultations are disabled to preserve token budget"), None));
+        }
+        if bundle_agent.is_none() && !self.settings.is_dispatchable(role) {
+            return Ok((tool_result_error(format!("`{}` is not a dispatchable role (known: {})", role, crate::frontmatter::ROLES.join(", "))), None));
         }
         if role == sc.role && bundle_agent.is_none() {
             return Ok((tool_result_error("a role cannot dispatch to itself"), None));
@@ -2241,7 +2369,7 @@ impl Engine {
         child.handoff_id = format!("ho_{}_{}", sc.span_id, call_id);
         child.parent_span_id = sc.span_id.clone();
         child.caller_agent = sc.role.clone();
-        child.bundle_agent = bundle_agent;
+        child.bundle_agent = bundle_agent.clone();
         // The orchestrator may raise or lower the role's model for this task (`specs/035` D-15). Raising above the role's default must say why.
         if let Some(want) = args["tier"].as_str() {
             let rank = |t: &str| match t {
@@ -2270,7 +2398,36 @@ impl Engine {
         if let Err(e) = child.validate() {
             return Ok((tool_result_error(format!("invalid handoff: {}", e)), None));
         }
-        let out = self.run_span(&sc.m.clone(), &sc.task_id.clone(), child, Some(sc.span.clone()), sc.depth + 1).await?;
+        self.introduce_agent(role);
+        if let Some(ref b) = bundle_agent {
+            self.introduce_agent(b);
+        }
+        let mut out = self.run_span(&sc.m.clone(), &sc.task_id.clone(), child.clone(), Some(sc.span.clone()), sc.depth + 1).await?;
+        if role == "investigator" {
+            let lower = out.text.to_lowercase();
+            let exhausted = lower.contains("exhausted")
+                || lower.contains("no solution")
+                || lower.contains("could not find")
+                || lower.contains("dead end")
+                || matches!(out.status, Status::Escalated(_));
+            if crate::collaboration::should_pushback(role, exhausted, false) {
+                sc.m.append(sc.ev(crate::collaboration::TENACITY_EVENT, json!({
+                    "role": role,
+                    "target": target,
+                    "reason": "exhausted avenues",
+                    "pushback": crate::collaboration::TENACITY_PUSHBACK_MESSAGE
+                }))).await?;
+
+                let mut retry_child = child;
+                retry_child.handoff_id = format!("ho_{}_{}_retry", sc.span_id, call_id);
+                retry_child.objective = format!(
+                    "{}\n\n[orchestrator pushback]: {}",
+                    retry_child.objective,
+                    crate::collaboration::TENACITY_PUSHBACK_MESSAGE
+                );
+                out = self.run_span(&sc.m.clone(), &sc.task_id.clone(), retry_child, Some(sc.span.clone()), sc.depth + 1).await?;
+            }
+        }
         let st = match &out.status {
             Status::Done => NodeStatus::Done,
             Status::Escalated(r) => NodeStatus::Escalated(r.clone()),
@@ -4827,5 +4984,93 @@ mod tests {
         let hash = last.split("[argument trimmed").nth(1).unwrap().split("@payload/").nth(1).unwrap().chars().take(64).collect::<String>();
         assert!(f.engine.connectors.read_payload(&hash).unwrap().starts_with("0 body body"));
         assert!(events_of(&f, "loop.prefix").iter().any(|e| e.payload["trimmed_args"].as_u64().unwrap() > 0));
+    }
+
+    #[tokio::test]
+    async fn spec_063_fleet_dispatch_and_quarantine_enforcement() {
+        // 1. Orchestrator can dispatch a specialist (scout) even when only orchestrator is in interactive_agents
+        let f = setup(
+            vec![
+                Step::tool("d1", "dispatch_agent", json!({"role": "scout", "objective": "Discover context"})),
+                Step::text("Scouting report."),
+                Step::text("Done."),
+            ],
+            5.0,
+            |s| {
+                s.interactive_agents = vec!["orchestrator".into()];
+                s.enabled_agents = vec!["orchestrator".into()];
+                s.fleet = "all".into();
+                s.forbidden_agents = vec!["investigator".into()];
+            },
+        );
+        let out = f.engine.run_task(&f.m, "orchestrator", "Research").await.unwrap();
+        assert_eq!(out.status, Status::Done);
+        assert_eq!(events_of(&f, "dag.node.added").len(), 2, "both orchestrator and scout spans ran");
+
+        // 2. Dispatching a quarantined agent (investigator) is refused
+        let f2 = setup(
+            vec![
+                Step::tool("d1", "dispatch_agent", json!({"role": "investigator", "objective": "Investigate"})),
+                Step::text("Done."),
+            ],
+            5.0,
+            |s| {
+                s.forbidden_agents = vec!["investigator".into()];
+            },
+        );
+        f2.engine.run_task(&f2.m, "orchestrator", "Investigate").await.unwrap();
+        assert_eq!(events_of(&f2, "dag.node.added").len(), 1, "quarantined investigator never ran");
+        let bodies: Vec<String> = f2.model.requests().iter().map(|r| r.body.to_string()).collect();
+        assert!(bodies[1].contains("quarantined (forbidden in workspace config)"), "{}", bodies[1]);
+    }
+
+    #[tokio::test]
+    async fn spec_063_introduced_agent_and_solo_mode() {
+        let f = setup(
+            vec![
+                Step::tool("d1", "dispatch_agent", json!({"role": "scout", "objective": "Discover context"})),
+                Step::text("Scout findings."),
+                Step::text("All done."),
+            ],
+            5.0,
+            |s| {
+                s.interactive_agents = vec!["orchestrator".into()];
+            },
+        );
+
+        assert!(!f.engine.is_interactive("scout"), "scout is initially not interactive");
+        let out = f.engine.run_task(&f.m, "orchestrator", "Research").await.unwrap();
+        assert_eq!(out.status, Status::Done);
+        assert!(f.engine.is_interactive("scout"), "scout becomes interactive after autonomous introduction");
+        assert!(f.engine.active_interactive().contains(&"scout".to_string()));
+
+        // Solo mode blocks SME agents from dispatching peer consultations
+        f.engine.set_solo(true);
+        assert!(f.engine.is_solo());
+    }
+
+    #[tokio::test]
+    async fn spec_063_tenacity_pushback_triggers_on_investigator_exhausted() {
+        let f = setup(
+            vec![
+                Step::tool("d1", "dispatch_agent", json!({"role": "investigator", "objective": "Find root cause"})),
+                // 1st attempt: investigator exhausts avenues
+                Step::text("Exhausted all avenues, could not find bug."),
+                // 2nd attempt: investigator retries after pushback
+                Step::text("Found the root cause via inverted hypothesis."),
+                // Orchestrator completes
+                Step::text("Mission complete."),
+            ],
+            5.0,
+            |_| {},
+        );
+
+        let out = f.engine.run_task(&f.m, "orchestrator", "Triage bug").await.unwrap();
+        assert_eq!(out.status, Status::Done);
+
+        let pushbacks = events_of(&f, crate::collaboration::TENACITY_EVENT);
+        assert_eq!(pushbacks.len(), 1, "exactly one tenacity pushback emitted");
+        assert_eq!(pushbacks[0].payload["role"], "investigator");
+        assert!(pushbacks[0].payload["pushback"].as_str().unwrap().contains("solvable"));
     }
 }
