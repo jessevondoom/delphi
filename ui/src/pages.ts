@@ -41,6 +41,8 @@ export type Pages = {
   /** What the console is waiting for, if anything: the instant results, or the page the writer is composing. */
   busy: 'results' | 'page' | null;
   open: Open | null; at: number; draft: string; note: string;
+  /** The query whose page the operator cancelled: it is dropped if it still arrives. */
+  drop: string | null;
 };
 export type PagesAction =
   | { t: 'none' }
@@ -55,7 +57,7 @@ export type PagesAction =
   | { t: 'open-source'; id: string }
   | { t: 'leave' };
 
-export const emptyPages = (): Pages => ({ q: '', ext: false, focus: 'box', hits: null, pages: [], sel: 0, busy: null, open: null, at: 0, draft: '', note: '' });
+export const emptyPages = (): Pages => ({ q: '', ext: false, focus: 'box', hits: null, pages: [], sel: 0, busy: null, open: null, at: 0, draft: '', note: '', drop: null });
 
 const clean = (s: string, max: number): string => sanitize(s).slice(0, max);
 const str = (v: unknown, max = 400): string => (typeof v === 'string' ? sanitize(v).slice(0, max) : '');
@@ -138,7 +140,10 @@ export const gotImage = (p: Pages, src: string, raster: Raster | null): Pages =>
 
 export const gotList = (p: Pages, body: any): Pages => ({ ...p, pages: parseEntries(body?.pages ?? body) });
 export const gotResults = (p: Pages, q: string, body: any): Pages => (q === p.q.trim() ? { ...p, hits: parseHits(body?.hits), pages: body?.pages ? parseEntries(body.pages) : p.pages, busy: p.busy === 'results' ? 'page' : p.busy, sel: 0 } : p);
-export const gotPage = (p: Pages, q: string, body: any): Pages => (q === p.q.trim() ? { ...p, open: opened(body, body?.cached === true), at: 0, busy: null, focus: 'results', note: '' } : p);
+/** Stop waiting for the page; the raw results stay. A page that still arrives for this query is dropped. */
+export const cancel = (p: Pages): Pages => (p.busy ? { ...p, busy: null, drop: p.q.trim(), note: 'page cancelled' } : p);
+export const building = (p: Pages, searched: string | null): boolean => p.busy === 'page' && searched !== null && searched === p.q.trim();
+export const gotPage = (p: Pages, q: string, body: any): Pages => (q === p.q.trim() && p.drop === q ? { ...p, drop: null } : q === p.q.trim() ? { ...p, open: opened(body, body?.cached === true), at: 0, busy: null, focus: 'results', note: '' } : p);
 export const gotOpened = (p: Pages, body: any): Pages => ({ ...p, open: opened(body, true), at: 0, busy: null, focus: 'page', note: '' });
 export const failed = (p: Pages, why: string): Pages => ({ ...p, busy: null, note: clean(why, 300) });
 export const withNote = (p: Pages, note: string): Pages => ({ ...p, note: clean(note, 300) });
@@ -198,10 +203,10 @@ export function key(p: Pages, e: Ev, h: number): { p: Pages; action: PagesAction
       case 'enter': {
         const q = p.q.trim();
         if (!q) return used(p);
-        return used({ ...p, hits: null, open: null, busy: 'results', focus: 'box', note: '' }, { t: 'pages-search', q, external: p.ext });
+        return used({ ...p, hits: null, open: null, busy: 'results', focus: 'box', note: '', drop: null }, { t: 'pages-search', q, external: p.ext });
       }
       case 'down': return p.hits?.length || p.pages.length ? used({ ...p, focus: 'results', sel: 0 }) : used(p);
-      case 'esc': case 'shift-tab': return used(p, { t: 'leave' });
+      case 'esc': case 'shift-tab': return e.k === 'esc' && p.busy ? used(cancel(p)) : used(p, { t: 'leave' });
       case 'left': case 'right': return { p, action: none, used: false };
       default: return used(p);
     }
@@ -333,7 +338,7 @@ export function view(p: Pages, w: number, h: number, now: number, still: boolean
     results.push(T.dim(' earlier pages'));
     p.pages.forEach((x, i) => results.push(entryRow(x, p.focus === 'results' && p.sel === (p.hits?.length ?? 0) + i, left)));
   }
-  const waiting = p.busy === 'page' ? [T.dim(` ${spinner(now, still)} writing the page, then checking it…`)] : [];
+  const waiting = p.busy === 'page' ? [T.dim(` ${spinner(now, still)} writing the page, then checking it… · esc cancels`)] : [];
   if (wide && p.open) {
     const page = pageLines(p.open, p.at, p.focus === 'page', w - left - 3, room);
     for (let i = 0; i < room; i++) lines.push(T.spread(T.clip(results[i] ?? '', left), T.dim('│ ') + (page[i] ?? ''), w));
