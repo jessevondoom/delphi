@@ -483,3 +483,14 @@ Approved by the operator on 2026-11-01 after a three-seat council review. Amends
 | R4 | Markdown/scratch tiering, tier stamping, spec-gate predicate | built (scratch zone and `is_notes_write`, tier cap, gate 3 `notes_only`, `FileChange.mode`); the start-of-task `build_without_spec` card is unchanged |
 | R5 | `about/` release snapshot | built (`build.rs` embeds the release's `specs/*.md` and `docs/reference/*.md` at `base/about/`; zone `about` hidden unless `about: true` or `kb search --about`; label "release reference, not build authority"; `spec_link` refuses `about/`; orchestrator duty) |
 | R6 | Search page building state and cancel (SK9d fix built) | built in the console: the raw results show "building a page · esc cancels" (still glyph under reduce motion); esc stops the wait and a late page for that query is dropped (`ui/test/pages.test.ts`). The daemon job is not aborted: it finishes and caches within `[library.pages]` limits; a daemon-side cancel is not built |
+
+## Agent episodic memory, trace distillation, and tool-conditioned retrieval (spec 065, approved 2026-11-01)
+
+Approved by the operator on 2026-11-01 after a four-seat adversarial council review (architect, red-team, strategist, orchestrator). Establishes zero-token deterministic trace harvesting from execution event streams (`events.jsonl`), immutable daemon-enforced frontmatter and taint stamping (`min(span.taint)`), quota bounding (max 1 per task, max 3 per mission), and tool-conditioned hybrid archival retrieval (`zone: episodes`) while preserving the 100% frozen boot KV cache prefix.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| E1 | `schemas/episode.schema.json`, `trace_miner.rs` event harvester, daemon taint stamping, deduplication, and schema verification in `docs.rs` | built (this PR) |
+| E2 | KB indexing (`zone: episodes`), tool/skill/error tokenization in `kb_fts_ident`, and role isolation in `kb.rs` | proposed |
+| E3 | Agent tool `recall_memory` and engine wiring to unified retrieval service (`specs/064`) | proposed |
+| E4 | Proactive retry-ladder bridge hint injection and `/retro` candidate supersession | proposed |
