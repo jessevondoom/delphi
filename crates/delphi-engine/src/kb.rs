@@ -414,7 +414,12 @@ pub(crate) fn md_files(root: &Path, logical_prefix: &str, zone: &'static str, de
         if ft.is_dir() {
             md_files(&e.path(), &rel, zone, default_source, out);
         } else if ft.is_file() && name.ends_with(".md") && e.metadata().map(|m| m.len() <= MAX_FILE_BYTES).unwrap_or(false) {
-            out.push(SourceFile { rel_path: rel, zone, path: e.path(), default_source, bundle: None, vouched_by: None });
+            let actual_zone = if rel.contains("/traces/") && (zone == "missions" || rel.starts_with("missions/")) {
+                "episodes"
+            } else {
+                zone
+            };
+            out.push(SourceFile { rel_path: rel, zone: actual_zone, path: e.path(), default_source, bundle: None, vouched_by: None });
         }
     }
 }
@@ -444,6 +449,7 @@ pub fn sources(ws: &Path) -> Vec<SourceFile> {
     for root in delphi_core::sessions::roots(ws) {
         md_files(&root, "missions", "missions", UNTRUSTED, &mut all);
     }
+    md_files(&ws.join("missions"), "missions", "missions", UNTRUSTED, &mut all);
     // What the archives pane's research job stored (`specs/028` §10): external pages kept at one fixed tier (`upsert_with`).
     // The release's own specs and reference, installed read-only in the base zone (`specs/064` §7): its own zone and tier.
     md_files(&ws.join("base/about"), "about", "about", "user_ratified", &mut all);
@@ -492,6 +498,13 @@ fn frontmatter_field(text: &str, key: &str) -> Option<String> {
 fn frontmatter_flag(text: &str, key: &str) -> bool {
     let (fm, _) = crate::workspace::split_frontmatter(text);
     fm.and_then(|f| f.get(key).and_then(|v| v.as_bool())).unwrap_or(false)
+}
+
+fn frontmatter_array(text: &str, key: &str) -> Vec<String> {
+    let (fm, _) = crate::workspace::split_frontmatter(text);
+    fm.and_then(|f| f.get(key).and_then(|v| v.as_sequence().map(|arr| {
+        arr.iter().filter_map(|val| val.as_str().map(String::from)).collect()
+    }))).unwrap_or_default()
 }
 
 const SOURCE_TYPES: [&str; 6] = ["user_ratified", "internal_empirical", "internal_generated", "federated_verified", "federated_peer", "external_untrusted"];
@@ -603,13 +616,58 @@ impl Kb {
         // Only the daemon's fact store writes `context/facts/` (pathguard denies every agent), so only there is the
         // marker read; anywhere else a file claiming `web_corroborated` is ignored (`specs/040` §7.3).
         let web_corroborated = rel_path.starts_with("context/facts/") && frontmatter_flag(text, "web_corroborated") && frontmatter_field(text, "ratified_by").as_deref() == Some("validator") && frontmatter_field(text, "kind").as_deref() == Some("fact");
-        // Only a staged note carries a validity date and a kind the search acts on (`specs/050` ML-3, ML-4); anywhere else
+        // Only a staged note or episode carries a validity date and a kind the search acts on (`specs/050` ML-3, ML-4, `specs/065`); anywhere else
         // the fields are ignored here, so a rule or a library page cannot be hidden by one.
-        let (kind, valid_until) = if zone == "staged" { (frontmatter_field(text, "kind").filter(|k| crate::frontmatter::KINDS.contains(&k.as_str())), frontmatter_field(text, "valid_until").filter(|d| crate::frontmatter::entry_date_ok(d)).map(|d| d[..10].to_string())) } else { (None, None) };
+        let (kind, valid_until) = if zone == "staged" || zone == "episodes" { (frontmatter_field(text, "kind").filter(|k| crate::frontmatter::KINDS.contains(&k.as_str()) || k == "episode"), frontmatter_field(text, "valid_until").filter(|d| crate::frontmatter::entry_date_ok(d)).map(|d| d[..10].to_string())) } else { (None, None) };
         tx.execute("INSERT INTO kb_documents(rel_path, zone, content_blake3, author, source_type, confidence, status, updated_at, web_corroborated, kind, valid_until) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)", params![rel_path, zone, hash, author, source_type, confidence, status, now, web_corroborated as i64, kind, valid_until])?;
         let doc_id = tx.last_insert_rowid();
+        let (ep_role, ep_outcome, ep_tools, ep_skills, ep_errors, ep_files) = if zone == "episodes" {
+            (
+                frontmatter_field(text, "role"),
+                frontmatter_field(text, "outcome"),
+                frontmatter_array(text, "tools_invoked"),
+                frontmatter_array(text, "skills_used"),
+                frontmatter_array(text, "error_fingerprints"),
+                frontmatter_array(text, "target_files"),
+            )
+        } else {
+            (None, None, Vec::new(), Vec::new(), Vec::new(), Vec::new())
+        };
         for (i, c) in chunks_for(zone, text).into_iter().enumerate() {
-            let ids = identifiers(&c.raw);
+            let mut ids = identifiers(&c.raw);
+            if zone == "episodes" && i == 0 {
+                let mut facets = Vec::new();
+                if let Some(r) = &ep_role {
+                    facets.push(format!("role:{}", r));
+                }
+                if let Some(o) = &ep_outcome {
+                    facets.push(format!("outcome:{}", o));
+                }
+                for t in &ep_tools {
+                    facets.push(format!("tool:{}", t));
+                }
+                for s in &ep_skills {
+                    facets.push(format!("skill:{}", s));
+                }
+                for e in &ep_errors {
+                    let err_ids = identifiers(e);
+                    if !err_ids.is_empty() {
+                        facets.push(err_ids);
+                    }
+                }
+                for f in &ep_files {
+                    facets.push(format!("file:{}", f));
+                }
+                let extra = facets.join(" ");
+                if !extra.is_empty() {
+                    if ids.is_empty() {
+                        ids = extra;
+                    } else {
+                        ids.push(' ');
+                        ids.push_str(&extra);
+                    }
+                }
+            }
             let ctx = format!("[File: {} | Lines: {}-{} | Section: {} | Source: {} | Status: {}{}]\n{}", rel_path, c.start_line, c.end_line, if c.heading_path.is_empty() { "(top)" } else { &c.heading_path }, source_type, status, from, c.raw);
             tx.execute(
                 "INSERT INTO kb_chunks(doc_id, chunk_index, start_line, end_line, rel_path, heading_path, identifiers, raw_content, contextual_text) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
@@ -815,10 +873,17 @@ fn drop_vectors(conn: &Connection, doc_id: Option<i64>) -> Result<(), KbError> {
 /// memory file (visible to no role). The authoritative check is the SQL filter in `allowed`; this only lets the
 /// nearest-neighbour search skip what could never be returned.
 fn vec_scope(zone: &str, rel_path: &str) -> String {
-    if zone != "memory" {
-        return String::new();
+    if zone == "memory" {
+        return rel_path.strip_prefix("memory/agents/").and_then(|r| r.split('/').next()).filter(|r| !r.is_empty()).map(String::from).unwrap_or_else(|| "~".into());
     }
-    rel_path.strip_prefix("memory/agents/").and_then(|r| r.split('/').next()).filter(|r| !r.is_empty()).map(String::from).unwrap_or_else(|| "~".into())
+    if zone == "episodes" {
+        if let Some(trace_file) = rel_path.rsplit("/traces/").next() {
+            if let Some(role) = trace_file.split('-').next().filter(|r| !r.is_empty()) {
+                return role.to_string();
+            }
+        }
+    }
+    String::new()
 }
 
 fn trusted(source_type: &str, status: &str) -> bool {
@@ -882,6 +947,19 @@ fn allowed_sql(opts: &SearchOpts) -> String {
             let ok: Vec<String> = kinds.iter().filter(|k| crate::frontmatter::KINDS.contains(&k.as_str())).map(|k| format!("'{}'", k)).collect();
             allowed.push_str(&if ok.is_empty() { " AND d.zone != 'staged'".to_string() } else { format!(" AND (d.zone != 'staged' OR d.kind IN ({}))", ok.join(",")) });
         }
+    }
+    if !opts.include_episodes && !opts.zones.as_ref().is_some_and(|zs| zs.contains(&"episodes")) {
+        allowed.push_str(" AND d.zone != 'episodes'");
+    } else {
+        if let Some(r) = &opts.role {
+            if valid_role(r) {
+                allowed.push_str(&format!(" AND (d.zone != 'episodes' OR d.author = '{}' OR d.author = 'shared' OR d.author IS NULL)", r));
+            } else {
+                allowed.push_str(" AND d.zone != 'episodes'");
+            }
+        }
+        let today = opts.today.clone().filter(|d| crate::frontmatter::entry_date_ok(d)).map(|d| d[..10].to_string()).unwrap_or_else(delphi_core::bundles::today);
+        allowed.push_str(&format!(" AND (d.zone != 'episodes' OR d.valid_until IS NULL OR d.valid_until >= '{}')", today));
     }
     // The Xenia zone is judged by its own rule, whatever `include_untrusted` says: invisible unless a view is asked
     // for, and then L2 only (agents) or the rest (the quarantine read).
@@ -1207,6 +1285,9 @@ pub struct SearchOpts {
     /// Include zone `staged`: notes the daemon captured from what happened (`specs/031` §3.1). Off by default, so an
     /// ordinary search never mixes unreviewed candidate lessons into its answer.
     pub include_staged: bool,
+    /// Include zone `episodes`: structured execution traces (`specs/065`). Off by default, so an
+    /// ordinary search never mixes raw tool error traces into standard knowledge answers.
+    pub include_episodes: bool,
     /// Include zone `about`: the release's own specs and reference (`specs/064` §7). Off by default, so it does not drown the user's own corpus.
     pub about: bool,
     /// With `include_staged`: only staged notes of these kinds (`fact`, `episode`). Narrows, never widens (`specs/050` ML-4).
@@ -1256,7 +1337,7 @@ pub enum Legs {
 
 impl Default for SearchOpts {
     fn default() -> Self {
-        SearchOpts { role: None, limit: 10, include_untrusted: false, include_attributed: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false, about: false, kinds: None, max_episodes: None, today: None, xenia: XeniaView::Off, zones: None }
+        SearchOpts { role: None, limit: 10, include_untrusted: false, include_attributed: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false, include_episodes: false, about: false, kinds: None, max_episodes: None, today: None, xenia: XeniaView::Off, zones: None }
     }
 }
 
@@ -1988,7 +2069,7 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                     }
                 }
                 let legs = if args.iter().any(|a| a == "--lexical") { Legs::LexicalOnly } else { Legs::Hybrid };
-                let mut opts = SearchOpts { role, include_untrusted: args.iter().any(|a| a == "--untrusted"), legs, bundle, no_bundles: args.iter().any(|a| a == "--no-bundles"), include_staged: args.iter().any(|a| a == "--staged"), about: args.iter().any(|a| a == "--about"), kinds: flag_value(args, "--kind").map(|k| k.split(',').map(|x| x.trim().to_string()).collect()), ..Default::default() };
+                let mut opts = SearchOpts { role, include_untrusted: args.iter().any(|a| a == "--untrusted"), legs, bundle, no_bundles: args.iter().any(|a| a == "--no-bundles"), include_staged: args.iter().any(|a| a == "--staged"), include_episodes: args.iter().any(|a| a == "--episodes"), about: args.iter().any(|a| a == "--about"), kinds: flag_value(args, "--kind").map(|k| k.split(',').map(|x| x.trim().to_string()).collect()), ..Default::default() };
                 if args.iter().any(|a| a == "--no-rerank") {
                     opts.rerank_weight = 0.0;
                 }
@@ -3069,5 +3150,123 @@ mod tests {
         assert!(zoned.iter().any(|(p, _)| p.starts_with("about/")), "an allowlist still carries about when asked: {:?}", zoned);
         let unzoned = rel(&SearchOpts { zones: Some(vec!["core", "context", "about"]), rerank_weight: 0.0, ..Default::default() });
         assert!(unzoned.iter().all(|(p, _)| !p.starts_with("about/")), "about is never in by allowlist alone: {:?}", unzoned);
+    }
+
+    #[test]
+    fn episodes_are_indexed_under_zone_episodes_and_searched_on_demand_with_role_isolation() {
+        let ep_builder = "\
+---
+id: ep-2026-11-01-builder-cargo-deadlock-t0198
+title: \"Builder: Resolving Cargo Lock Contention\"
+author: builder
+role: builder
+timestamp: 2026-11-01T14:22:00Z
+kind: episode
+source_type: internal_empirical
+confidence: high
+status: active
+valid_until: null
+mission: 2026-11-01-core-engine-refactor
+session_id: s_0042
+task_id: t_0198
+skills_used: [tdd-execution, worktree-isolation]
+tools_invoked: [shell-worktree-scoped, test-runner]
+outcome: resolved_after_failure
+error_fingerprints: [\"Blocking waiting for file lock on package cache\"]
+target_files: [\"Cargo.lock\"]
+supersedes: []
+tags: [cargo, flock]
+---
+
+# Episode: Resolving Cargo Lock Contention
+
+## Context & Obstacle
+Test execution hung waiting for cargo file lock.
+
+## Tool & Execution Signature
+- Tool: `shell-worktree-scoped`
+- Failed: cargo test
+
+## Resolution & Pattern
+Pass --offline to test runner.
+";
+
+        let ep_investigator = "\
+---
+id: ep-2026-11-01-investigator-leak-t0089
+title: \"Investigator: SQLite VFS leak\"
+author: investigator
+role: investigator
+timestamp: 2026-11-01T15:10:00Z
+kind: episode
+source_type: internal_empirical
+confidence: high
+status: active
+valid_until: 2026-11-15
+mission: 2026-11-01-core-engine-refactor
+session_id: s_0042
+task_id: t_0089
+skills_used: [ci-triage]
+tools_invoked: [shell-worktree-scoped]
+outcome: failure
+error_fingerprints: [\"EMFILE: too many open files\"]
+target_files: [\"crates/delphi-engine/src/kb.rs\"]
+supersedes: []
+tags: [sqlite, descriptors]
+---
+
+# Episode: SQLite VFS leak
+
+## Context & Obstacle
+EMFILE exhausted open file descriptors.
+
+## Tool & Execution Signature
+- Tool: `shell-worktree-scoped`
+
+## Resolution & Pattern
+Close connection handles before directory clean.
+";
+
+        let d = tree(&[
+            ("missions/m1/traces/builder-t0198.md", ep_builder),
+            ("missions/m1/traces/investigator-t0089.md", ep_investigator),
+            ("team/context/index.md", "---\nsource_type: user_ratified\n---\n# Index\n\nStandard context docs.\n"),
+        ]);
+
+        let files = sources(d.path());
+        let b_file = files.iter().find(|f| f.rel_path.ends_with("builder-t0198.md")).expect("builder episode found");
+        assert_eq!(b_file.zone, "episodes", "missions/**/traces/*.md must have zone 'episodes'");
+        let i_file = files.iter().find(|f| f.rel_path.ends_with("investigator-t0089.md")).expect("investigator episode found");
+        assert_eq!(i_file.zone, "episodes");
+
+        let mut kb = Kb::open(&d.path().join("state.db")).unwrap();
+        kb.sync_lexical(&files, "").unwrap();
+
+        // 1. Ordinary search without include_episodes does NOT return episodes
+        let plain = kb.search("Blocking waiting for file lock", &SearchOpts { legs: Legs::LexicalOnly, ..Default::default() }).unwrap();
+        assert!(plain.is_empty(), "ordinary search must not return episodes: {:?}", plain);
+
+        // 2. Searching with include_episodes returns matching episode
+        let hits = kb.search("Blocking waiting for file lock", &SearchOpts { include_episodes: true, legs: Legs::LexicalOnly, ..Default::default() }).unwrap();
+        assert!(!hits.is_empty(), "expected hits for file lock episode");
+        assert!(hits[0].rel_path.contains("builder-t0198.md"));
+
+        // 3. Exact tool/facet search in identifiers
+        let tool_hits = kb.search("tool:shell-worktree-scoped", &SearchOpts { include_episodes: true, legs: Legs::LexicalOnly, ..Default::default() }).unwrap();
+        let rel_paths: HashSet<_> = tool_hits.iter().map(|h| h.rel_path.as_str()).collect();
+        assert_eq!(rel_paths.len(), 2, "both episodes indexed tool:shell-worktree-scoped in kb_fts_ident");
+
+        // 4. Role isolation: builder cannot see investigator episode
+        let b_hits = kb.search("EMFILE", &SearchOpts { role: Some("builder".into()), include_episodes: true, legs: Legs::LexicalOnly, ..Default::default() }).unwrap();
+        assert!(b_hits.is_empty(), "builder role must not see investigator episode: {:?}", b_hits);
+
+        // But investigator CAN see it
+        let i_hits = kb.search("EMFILE", &SearchOpts { role: Some("investigator".into()), include_episodes: true, legs: Legs::LexicalOnly, ..Default::default() }).unwrap();
+        assert!(!i_hits.is_empty(), "investigator should see its own episode");
+        assert!(i_hits[0].rel_path.contains("investigator-t0089.md"));
+
+        // 5. Expiry via valid_until: when today is past valid_until, episode is excluded
+        let expired = kb.search("EMFILE", &SearchOpts { include_episodes: true, today: Some("2026-11-20".into()), legs: Legs::LexicalOnly, ..Default::default() }).unwrap();
+        assert!(expired.is_empty(), "episode past valid_until must be excluded from search: {:?}", expired);
     }
 }

@@ -491,6 +491,6 @@ Approved by the operator on 2026-11-01 after a four-seat adversarial council rev
 | Slice | Content | State |
 | :-- | :-- | :-- |
 | E1 | `schemas/episode.schema.json`, `trace_miner.rs` event harvester, daemon taint stamping, deduplication, and schema verification in `docs.rs` | built (this PR) |
-| E2 | KB indexing (`zone: episodes`), tool/skill/error tokenization in `kb_fts_ident`, and role isolation in `kb.rs` | proposed |
+| E2 | KB indexing (`zone: episodes`), tool/skill/error tokenization in `kb_fts_ident`, and role isolation in `kb.rs` | built (this PR) |
 | E3 | Agent tool `recall_memory` and engine wiring to unified retrieval service (`specs/064`) | proposed |
 | E4 | Proactive retry-ladder bridge hint injection and `/retro` candidate supersession | proposed |
