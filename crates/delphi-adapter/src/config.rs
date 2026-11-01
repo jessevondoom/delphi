@@ -589,19 +589,11 @@ pub struct Config {
 pub struct McpConfig {
     pub enabled: bool,
     pub allow_remote: bool,
-    /// `request_help` calls per host session (0 to 20).
-    pub max_help_per_session: u32,
-    /// Open Councils raised by one host session (0 to 5).
-    pub max_concurrent_councils: u32,
-    /// Minimum seconds between dispatch or Council calls (0 to 3600).
-    pub cooldown_seconds: u32,
-    /// Staged notes per host session (0 to 200).
-    pub max_proposals_per_session: u32,
 }
 
 impl Default for McpConfig {
     fn default() -> McpConfig {
-        McpConfig { enabled: true, allow_remote: false, max_help_per_session: 2, max_concurrent_councils: 1, cooldown_seconds: 30, max_proposals_per_session: 20 }
+        McpConfig { enabled: true, allow_remote: false }
     }
 }
 
@@ -614,18 +606,7 @@ impl McpConfig {
             None => McpConfig::default(),
             Some(v) => v.clone().try_into::<McpConfig>().ok()?,
         };
-        (!c.allow_remote && c.problems().is_empty()).then_some(c)
-    }
-
-    /// Why the limits are out of range, one message each.
-    pub fn problems(&self) -> Vec<String> {
-        let mut p = Vec::new();
-        for (key, v, max) in [("max_help_per_session", self.max_help_per_session, 20), ("max_concurrent_councils", self.max_concurrent_councils, 5), ("cooldown_seconds", self.cooldown_seconds, 3600), ("max_proposals_per_session", self.max_proposals_per_session, 200)] {
-            if v > max {
-                p.push(format!("[mcp] {key} must be 0 to {max}"));
-            }
-        }
-        p
+        (!c.allow_remote).then_some(c)
     }
 
     /// Whether the server answers tool calls, read from a `config.toml`'s text. Anything that cannot be read as the operator
@@ -925,10 +906,7 @@ impl Config {
         if let Some(v) = root.get("mcp") {
             match v.clone().try_into::<McpConfig>() {
                 Ok(v) if v.allow_remote => errs.push("[mcp] allow_remote: remote access is not supported in this version (specs/061 §3.2)".to_string()),
-                Ok(v) => {
-                    errs.extend(v.problems());
-                    cfg.mcp = v
-                }
+                Ok(v) => cfg.mcp = v,
                 Err(e) => errs.push(format!("[mcp]: {}", e)),
             }
         }
@@ -1448,11 +1426,9 @@ pub(crate) mod tests {
         assert!(!Config::parse("[mcp]\nenabled = false\n").unwrap().mcp.enabled);
         assert!(Config::parse("[mcp]\nallow_remote = true\n").unwrap_err().iter().any(|e| e.contains("allow_remote")));
         assert!(Config::parse("[mcp]\nsurprise = 1\n").is_err());
-        let d = Config::parse("").unwrap().mcp;
-        assert_eq!((d.max_help_per_session, d.max_concurrent_councils, d.cooldown_seconds, d.max_proposals_per_session), (2, 1, 30, 20));
-        assert!(Config::parse("[mcp]\nmax_proposals_per_session = 5\n").unwrap().mcp.max_proposals_per_session == 5);
-        assert!(Config::parse("[mcp]\nmax_proposals_per_session = 201\n").unwrap_err().iter().any(|e| e.contains("max_proposals_per_session")));
-        assert!(McpConfig::read("[mcp]\ncooldown_seconds = 99999\n").is_none() && McpConfig::read("[mcp]\nenabled = 3\n").is_none() && McpConfig::read("").is_some());
+        // There is no limit or quota on host calls: the switch is the only setting (`specs/061` §9).
+        assert!(Config::parse("[mcp]\nmax_help_per_session = 5\n").is_err() && Config::parse("[mcp]\ncooldown_seconds = 5\n").is_err());
+        assert!(McpConfig::read("[mcp]\nenabled = 3\n").is_none() && McpConfig::read("").is_some());
     }
 
     #[test]

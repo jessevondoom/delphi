@@ -32,7 +32,7 @@ An operator uses Delphi and also another coding tool (Claude Code, Copilot CLI, 
 
 - **Widening authority.** Nothing here lets a host act outside a sandbox, approve its own action, or raise the trust of content it read. Red actions still always ask. A role served to a host is **instructions, not authority** (§4.4).
 - **Remote hosts.** Same machine and same user only in this spec (§3.2). A later spec may add remote access, and would bring back a first-call approval card and a stronger identity.
-- **Dollar budgets for host use.** Rejected by the operator as too complex across services (§9). Limits are counts and an on/off toggle.
+- **Dollar budgets for host use.** Rejected by the operator as too complex across services (§9). There are no counts either (§9): the on/off toggle is the only setting.
 - **Host write access to the project.** Dispatched agents are read-only for host-originated requests in this version (§6.3).
 - **Replacing `delphi bundle serve`.** It stays frozen and golden-tested.
 - **A new memory store.** Host proposals use the existing staged-learning queue.
@@ -44,7 +44,7 @@ An operator uses Delphi and also another coding tool (Claude Code, Copilot CLI, 
 ## 2. Principles
 
 1. **One builder.** An agent pack is produced by the code that builds the IPR blocks 1-4 for a Delphi agent (`specs/002` §2), never by a second renderer, so the pack cannot drift from what the agent has learned.
-2. **The MCP process is read-only and offline.** Like `bundle serve`, it opens no network and writes nothing. Anything that writes, dispatches or spends goes through the daemon's local socket, which applies scope, taint, limits and the toggle.
+2. **The MCP process is read-only and offline.** Like `bundle serve`, it opens no network and writes nothing. Anything that writes, dispatches or spends goes through the daemon's local socket, which applies scope, taint and the toggle.
 3. **Content, not commands.** Everything a host sends (a question, a note, context pointers) is untrusted data at the host's tier. It cannot dispatch, choose scope, name tools or raise trust.
 4. **Propose, never silently change.** Host-originated learning is staged (031, 050) and ratified by the operator.
 5. **Fail closed, degrade honestly.** When the daemon is down, read-only tools still answer from files; tools that need it say so and never start it silently.
@@ -60,7 +60,7 @@ An operator uses Delphi and also another coding tool (Claude Code, Copilot CLI, 
 - stdio is local by construction. Calls that reach the daemon use its existing unix socket, which is `0600` in a `0700` directory and refuses a peer whose UID differs (`delphi-core/src/server.rs`). **No new authentication is introduced.**
 - A setting `[mcp] allow_remote = false` is reserved for the later spec and is refused with a clear message when set to `true` in this version.
 - **A host socket, for writes only (S5).** The daemon binds a third unix socket, `<hash>.host.sock`, beside the console, narrator and relay sockets, with the same permissions and UID check. Its token scope is `host`, which needs no terminal (the MCP process is spawned by another tool), and it may call only `session.ping`, `host.propose_note`, `host.record_session_summary`, `host.handoff_put` and `host.handoff_get`. It cannot subscribe to events, and no other scope's token works on it. `delphi mcp` never starts a daemon: with none running a write tool answers `daemon_not_running` and the host keeps working in pack mode.
-- Because the operator works both sides, **no approval card is raised for a first call.** The remaining defenses are the limits in §9, read-only dispatch, content-not-commands and the toggle. A host steered by injected content is the residual risk and is why those stay mandatory.
+- Because the operator works both sides, **no approval card is raised for a first call.** The remaining defenses are read-only dispatch, content-not-commands and the toggle. A host steered by injected content is the residual risk and is why those stay mandatory.
 
 ### 3.3 Scope resolution
 
@@ -127,15 +127,18 @@ Reading project files keeps their real provenance and taint; registration does n
 
 ### 6.1 `request_help`
 
-`request_help({ need, tried, kind?, suggested_target?, context_pointers? })`: the shape of 041 §5.6, with `kind` of `expertise`, `second_opinion` or `decision`. The request enters the daemon as content for the **orchestrator**, which chooses who answers (via `search_agent_registry`, a specialist, a Council seat for `second_opinion`, or itself) exactly as for a Delphi agent. `suggested_target` is advisory.
+`request_help({ need, tried, kind?, suggested_target?, context_pointers? })`: the shape of 041 §5.6, with `kind` of `expertise`, `second_opinion` or `decision`. The request enters the daemon as content for the **orchestrator**, which chooses who answers (via `search_agent_registry`, a specialist, a Council seat for `second_opinion`, or itself) exactly as for a Delphi agent. `suggested_target` is advisory: the orchestrator sees it only as a name, and only if it is a role of this workspace. The request runs as a task of the host session's own mission, starts below full trust (`L0`, the host's content), and is fenced in the prompt as a question, not an instruction.
 
+**Waiting (S6).** The call waits up to 45 seconds for the answer. A slower answer returns `status: working` and a `help_id`; `help_result({ help_id })` (same session only; it does not count as another request) waits up to 25 seconds more. Which hosts tolerate long tool calls is Q-4, so the wait is bounded rather than assumed. 
 ### 6.2 The answer
 
-A structured result: `answered_by` (role ID), the answer, evidence pointers, and a `handoff_id`; never the specialist's whole working context. A host sees *who* answered.
+A structured result: `status` (`answered`, `unanswered`, `failed` or `working`), `answered_by` (role ID; the last role consulted, else the orchestrator), `consulted` (every role asked), the answer (at most 8000 characters, redacted), and the `help_id` of the task; never the specialist's whole working context. A host sees *who* answered. The answer names its own evidence in its text; a separate pointer list and a handoff envelope per answer are not built (amended in S6).
 
 ### 6.3 Read-only dispatch
 
 For a host-originated request, the dispatched agent runs under its own role scope **narrowed to read-only**: it investigates and advises, it does not write, run code or open worktrees in the host's project. Anything stronger needs a later spec.
+
+**How (S6).** The engine marks the task ID as host-raised (`Engine::run_task_for_host`); every span of that task, the orchestrator's and any it dispatches, has its write globs and write tools removed, its `execute` list cut to `agent-dispatch` and `org-context` (no commands, timers, settings or worktree), and no connector tools. `exec_tool` also refuses any tool the span was not offered, so the narrowing does not rely on the model. Nothing limits how often a host may ask (§9); each request is logged as `host.help.requested` in the host session's mission.
 
 ## 7. Councils
 
@@ -172,19 +175,19 @@ The result is structured and host-friendly, not console UI: the decision, the op
 
 `delphi learn ingest --from claude-code|codex|copilot [--project]` reads a host's session transcripts **after** a session, opt-in per project, runs deterministic trace mining (050 ML-5) and *proposes* the findings. It needs no host cooperation and no host self-report. Transcript formats change without notice, so each reader is versioned, fixture-tested, and refuses a format it does not recognize.
 
-## 9. Limits (no dollars)
+## 9. No limits, no quotas (amended 2026-10-31, S6)
 
-Host requests run as ordinary Delphi tasks, so the existing `[budget]` limits and quota windows apply; this spec adds only counters, all operator-editable under `[mcp]`:
+**The operator decided that there is no limit or quota on local MCP interaction, and none on CLI execution.** Using Delphi as a harness from another system (its orchestration and coordination, knowledge base, Councils and agent behaviors) is an encouraged use, not a risk to meter. The only setting is the toggle:
 
 | Key | Default | Meaning |
 | :-- | :-- | :-- |
 | `enabled` | `true` | the toggle (§3.4) |
-| `max_help_per_session` | `2` | `request_help` calls per host session (matches 041 §5.6) |
-| `max_concurrent_councils` | `1` | open Councils raised by one host session |
-| `cooldown_seconds` | `30` | minimum gap between dispatch or Council calls |
-| `max_proposals_per_session` | `20` | staged notes per host session |
 
-A host session is a server process lifetime (a random 16-hex session ID the MCP process makes; the model never supplies it, nor the tool name or the folder, which the process takes from the handshake and its working directory). Refusals are explicit (`limit_reached`, with which limit and when it clears) so the host can fall back to pack mode. Counters are kept by the daemon, not the MCP process, and are counted from the staged log, so a daemon restart does not reset them. `max_proposals_per_session` counts notes and summaries together. The limits are read at every call, like the switch.
+The counters first proposed here (`max_help_per_session`, `max_concurrent_councils`, `cooldown_seconds`, `max_proposals_per_session`) are **removed**, and `[mcp]` rejects them as unknown keys. Metering will be considered later if it is needed; if it is, it is a new decision with its own spec.
+
+What stays is not a quota: the existing `[budget]` settings still govern what a *task* may spend, for a host's request as for any other; the size bounds on a single note, summary or handoff (§8.2) are input limits, not rates; the `L0` tier, the read-only narrowing (§6.3) and the sandbox are authority rules and are unchanged.
+
+A host session is a server process lifetime (a random 16-hex session ID the MCP process makes; the model never supplies it, nor the tool name or the folder, which the process takes from the handshake and its working directory). It labels what a session staged and groups its requests; it is not a counter.
 
 ## 10. Plugin, skill and host configuration
 
@@ -201,7 +204,7 @@ A host session is a server process lifetime (a random 16-hex session ID the MCP 
 | S2 | confirm or extract a daemon-free IPR 1-4 builder; agent packs, `list_roles`, `list_skills`/`get_skill`, prompts, `host_servable` | S1 |
 | S3 | project resolution, spec and context resources, `specs_status`, `search_project`, `search_memory`, `route` (moved from S2: it ranks bundle agents, a project-context question) | S1 |
 | S4 | host config printers, plugin and skill export, `delphi doctor` snippet; docs (§13); manual host checks recorded | S2, S3 |
-| S5 | daemon endpoint for host requests, `propose_note`, `record_session_summary`, handoff in/out, limits and counters | S2 |
+| S5 | daemon endpoint for host requests, `propose_note`, `record_session_summary`, handoff in/out | S2 |
 | S6 | `request_help` | S5 |
 | S7 | `request_council`, `council_status`, `council_result` | S5 |
 | S8 | read-only `state.db` open, so `search` uses vectors and the reranker (025's deferred `Kb::open_readonly`) | S1 |
@@ -218,7 +221,7 @@ A host session is a server process lifetime (a random 16-hex session ID the MCP 
 - **D-1.** Roles are requested on demand by name; some roles may refuse (`host_servable`).
 - **D-2.** Help and Councils are routed through the orchestrator; a Council ruling is legible to the host.
 - **D-3.** Same machine and same user only; no first-call card; remote access is a later setting.
-- **D-4.** No dollar budget; an on/off toggle (default on) plus the count limits of §9.
+- **D-4.** No dollar budget; an on/off toggle (default on). **Amended 2026-10-31: the count limits were dropped; the toggle is the only setting (§9).**
 - **D-5.** Proposals use the existing propose mechanism.
 
 **Recommended by the architect and approved with the spec (the operator may change them on request):**
@@ -240,7 +243,7 @@ A host session is a server process lifetime (a random 16-hex session ID the MCP 
 
 Documentation lands with S4 (not before the behavior exists), and every slice that adds a command or key updates its references in the same pull request:
 
-- a guide, `docs/guides/using-delphi-from-other-tools.md`: set-up per host, the role pack, project awareness, asking for help and Councils, the limits and the toggle, and the same-machine rule;
+- a guide, `docs/guides/using-delphi-from-other-tools.md`: set-up per host, the role pack, project awareness, asking for help and Councils, the toggle, and the same-machine rule;
 - `docs/guides/builds-and-councils.md` gains a "Councils raised by a host" paragraph (S7);
 - the `CMDS` table in `crates/delphi/src/main.rs` (`mcp`, `plugin`, `learn ingest`), then regenerate `docs/reference/cli.md`, `delphi.1` and `catalog.md`;
 - `[mcp]` keys: `crates/delphi/config.example.toml`, `crates/delphi-adapter/src/config.rs`, `crates/delphi-engine/src/boot.rs`, `schemas/config.schema.json`, `docs/reference/config.md`;
@@ -264,10 +267,10 @@ Documentation lands with S4 (not before the behavior exists), and every slice th
 
 - **AC-1 (packs):** `get_agent(<role>)` returns the assembled pack for every servable role; a golden pack per role; a changed lesson changes the hash.
 - **AC-2 (project):** in a registered project the host lists and reads approved specs and gets `specs_status`; in an unregistered folder it gets home scope only and nothing is registered.
-- **AC-3 (help):** a request returns `answered_by`, the answer and a handoff id; a third request in a session is refused with `limit_reached`.
+- **AC-3 (help):** a request returns `answered_by`, the answer and a handoff id; any number of requests are answered (§9).
 - **AC-4 (Council):** a raised Council returns an id; `council_result` returns the structured ruling including dissent; a second concurrent Council is refused.
 - **AC-5 (learning):** a proposal appears in `delphi learn list` with its `host:` label, is ratified at the console and then appears in the role's next pack; a pure Delphi session resumes a host handoff.
-- **AC-6 (toggle and limits):** each key of §9 is honored and operator-editable; the toggle works from config and `/mcp`.
+- **AC-6 (toggle):** `enabled` is honored at every call and operator-editable; the toggle works from config and `/mcp`; no other `[mcp]` key exists and no call is refused for how often it is made.
 - **AC-7 (hosts):** a session of each supported host lists the tools and fetches a pack (manual, recorded with the host's version).
 - **AC-8:** every invariant of §14 has a test.
 

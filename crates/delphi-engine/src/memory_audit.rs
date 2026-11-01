@@ -38,7 +38,7 @@ pub const SITES: &[Site] = &[
         files: &["crates/delphi-engine/src/host_rpc.rs"],
         events: &["learn.staged"],
         proofs: &[
-            ("crates/delphi-engine/src/service.rs", "a_host_stages_untrusted_notes_in_its_own_session_and_the_switch_and_the_limit_hold"),
+            ("crates/delphi-engine/src/service.rs", "a_host_stages_untrusted_notes_in_its_own_session_and_the_switch_holds"),
         ],
     },
     Site {

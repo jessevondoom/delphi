@@ -4,12 +4,12 @@
 //! `get_agent`, `list_skills`, `get_skill`, and each servable role as an MCP prompt; S3 adds project awareness
 //! (`mcp_project.rs`): the specs and context of the registered project the working directory belongs to, `specs_status`,
 //! `search_project`, `search_memory`, and `route`. S5 adds four tools that write through the daemon (`mcp_daemon.rs`): `propose_note`,
-//! `record_session_summary`, `handoff_put`, `handoff_get`. Help and Councils arrive in later slices and each adds its tools to `tools()`.
+//! `record_session_summary`, `handoff_put`, `handoff_get`; S6 adds `request_help` and `help_result`. Councils arrive in a later slice and add their tools to `tools()`.
 //!
 //! Secure by construction, like `delphi bundle serve`:
 //! * **No file, no network, no process.** This module writes no file and opens no network socket; it reads `config.toml` and speaks
 //!   on its two streams. Anything that writes, dispatches or spends goes through the daemon's same-user host socket
-//!   (`mcp_daemon.rs`), which this module never starts; the daemon applies the rules and the limits.
+//!   (`mcp_daemon.rs`), which this module never starts; the daemon applies the rules.
 //! * **The operator's switch.** `[mcp] enabled` is read before every tool call, so turning the feature off takes effect at once.
 //!   Off (or a `config.toml` that cannot be read as written) answers every tool call with `disabled_by_operator` and does nothing else.
 //! * **Bounded input.** The framing, the 64 KiB line limit and the envelope checks are `mcp_wire`'s, shared with `bundle serve`.
@@ -193,6 +193,37 @@ pub fn tools() -> Value {
                 "additionalProperties": false
             },
             "annotations": annotations("Read a handoff left in this project")
+        },
+        {
+            "name": "request_help",
+            "title": "Ask Delphi for help",
+            "description": "Ask Delphi's orchestrator for help when you are stuck or want a second opinion. It chooses who answers (a specialist, a Council seat, or itself) and you are told who. The answering agents run read-only: they advise, they do not change your project. It spends the operator's tokens as any task does; say what you need and what you already tried. If the answer takes long you get a help_id: fetch it with help_result.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "need": {"type": "string", "minLength": 1, "maxLength": 1500, "description": "What you need help with."},
+                    "tried": {"type": "string", "maxLength": 1500, "description": "What you already tried."},
+                    "kind": {"type": "string", "enum": ["expertise", "second_opinion", "decision"], "default": "expertise"},
+                    "suggested_target": {"type": "string", "maxLength": 64, "description": "A role ID you think fits; advisory only."},
+                    "context_pointers": {"type": "array", "maxItems": 10, "items": {"type": "object", "properties": {"uri": {"type": "string", "maxLength": 200}, "reason": {"type": "string", "maxLength": 200}}, "required": ["uri", "reason"], "additionalProperties": false}},
+                    "model": {"type": "string", "maxLength": 64, "description": "Your model name, self-reported."}
+                },
+                "required": ["need"],
+                "additionalProperties": false
+            },
+            "annotations": writes("Ask Delphi for help")
+        },
+        {
+            "name": "help_result",
+            "title": "Fetch the answer to a help request",
+            "description": "The answer to an earlier request_help of this session that was still being worked on. It does not count as another request.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"help_id": {"type": "string", "minLength": 1, "maxLength": 64}},
+                "required": ["help_id"],
+                "additionalProperties": false
+            },
+            "annotations": annotations("Fetch the answer to a help request")
         }
     ])
 }
@@ -266,8 +297,16 @@ impl Server {
             "record_session_summary" => self.daemon("host.record_session_summary", args),
             "handoff_put" => self.daemon("host.handoff_put", args),
             "handoff_get" => self.daemon("host.handoff_get", args),
+            "request_help" => self.daemon_slow("host.request_help", args),
+            "help_result" => self.daemon_slow("host.help_result", args),
             _ => return None,
         })
+    }
+
+    /// As [`Server::daemon`], for a call an agent answers: it may wait close to a minute.
+    fn daemon_slow(&self, method: &str, args: &Value) -> Result<String, String> {
+        let link = self.link.as_ref().ok_or_else(|| "no Delphi workspace resolved: run `delphi` to initialize one, or pass --workspace/--home".to_string())?;
+        link.call_within(method, args, std::time::Duration::from_secs(80)).map(|v| v.to_string())
     }
 
     /// A write through the daemon's host socket; the daemon's own answer, or why it could not be asked.
@@ -424,16 +463,16 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_is_a_golden_and_only_the_four_staging_tools_are_not_read_only() {
+    fn tools_list_is_a_golden_and_only_the_tools_that_stage_or_spend_are_not_read_only() {
         let d = ws(None);
         let mut s = Server::new(d.path());
         init(&mut s);
         let r = call(&mut s, json!({"jsonrpc": "2.0", "id": 3, "method": "tools/list"}));
         let tools = r["result"]["tools"].as_array().unwrap();
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["list_roles", "get_agent", "list_skills", "get_skill", "specs_status", "search_project", "search_memory", "route", "propose_note", "record_session_summary", "handoff_put", "handoff_get"]);
+        assert_eq!(names, ["list_roles", "get_agent", "list_skills", "get_skill", "specs_status", "search_project", "search_memory", "route", "propose_note", "record_session_summary", "handoff_put", "handoff_get", "request_help", "help_result"]);
         for t in tools {
-            let writes = ["propose_note", "record_session_summary", "handoff_put"].contains(&t["name"].as_str().unwrap());
+            let writes = ["propose_note", "record_session_summary", "handoff_put", "request_help"].contains(&t["name"].as_str().unwrap());
             assert_eq!(t["annotations"]["readOnlyHint"], !writes, "{}", t["name"]);
             assert_eq!(t["annotations"]["destructiveHint"], false, "{}", t["name"]);
             assert_eq!(t["annotations"]["openWorldHint"], false, "{}", t["name"]);
@@ -578,7 +617,7 @@ mod tests {
             assert_eq!(r["result"]["isError"], true);
             assert!(r["result"]["content"][0]["text"].as_str().unwrap().starts_with("disabled_by_operator"));
         }
-        assert!(call(&mut s, json!({"jsonrpc": "2.0", "id": 9, "method": "tools/list"}))["result"]["tools"].as_array().unwrap().len() == 12);
+        assert!(call(&mut s, json!({"jsonrpc": "2.0", "id": 9, "method": "tools/list"}))["result"]["tools"].as_array().unwrap().len() == 14);
         std::fs::write(d.path().join("config.toml"), "[mcp]\nenabled = true\n").unwrap();
         assert_eq!(tool(&mut s, "no_such_tool")["error"]["code"], -32602);
         std::fs::write(d.path().join("config.toml"), "[mcp]\nenabled = false\n").unwrap();

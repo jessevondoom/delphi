@@ -34,7 +34,7 @@ pub const RELAY_METHODS: [&str; 5] = ["session.ping", "events.subscribe", "appro
 
 /// The only methods the host socket answers (besides the `hello` handshake): stage a lesson or a summary as untrusted
 /// content, and keep or read one handoff (`specs/061` §8). A host cannot start work, read events or approve anything.
-pub const HOST_METHODS: [&str; 5] = ["session.ping", "host.propose_note", "host.record_session_summary", "host.handoff_put", "host.handoff_get"];
+pub const HOST_METHODS: [&str; 7] = ["session.ping", "host.propose_note", "host.record_session_summary", "host.handoff_put", "host.handoff_get", "host.request_help", "host.help_result"];
 
 /// A request line larger than this closes the connection.
 pub const MAX_LINE: usize = 1024 * 1024;
