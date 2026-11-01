@@ -13,6 +13,7 @@ Start with the README, then the guides. The specs are the design and say, in a `
 - [Builds and Councils](docs/guides/builds-and-councils.md): the build ladder, gates, optimistic builds, Councils
 - [Headless runs and CI](docs/guides/headless-and-ci.md): `delphi run`, card policies, exit codes
 - [Away mode](docs/guides/away-mode.md): the email/Telegram relay, timers, hooks
+- [Using Delphi from other tools](docs/guides/using-delphi-from-other-tools.md): `delphi mcp` for Claude Code, Copilot, Codex, agy
 - [Org bundles](docs/guides/org-bundles.md): share knowledge, skills and goals; Claude Code plugin interchange
 - [Building a bundle with an operator](docs/guides/building-a-bundle.md): START HERE to build a bundle interactively: what to read, the interview, where each answer goes, where to stop
 - [Xenia operator guide](docs/guides/xenia-operator.md): join, run and recover the org's signed memory store

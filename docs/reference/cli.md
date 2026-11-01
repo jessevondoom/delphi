@@ -172,9 +172,20 @@ Delphi for the other tools you code with, as an MCP server on stdio.
 
 ```
   delphi mcp [--workspace <name>] [--home <dir>]
+  delphi mcp --print-config <claude-code|copilot|codex|agy>
 ```
 
-A host such as Claude Code starts it from its MCP configuration; it is not meant to be run by hand. It is read-only, opens no port and runs nothing, and serves this machine and this user only (spec 061). Turn it off with `[mcp] enabled = false` in config.toml: every tool call is then answered `disabled_by_operator`, and the change takes effect at once. It serves Delphi's roles as agent packs a host can adopt (tools list_roles, get_agent, list_skills, get_skill, and one prompt per role): advice from your ratified files, never a grant of permission; a role whose manifest says `host_servable: false` (the integrator) is refused. Run from inside a registered project it also serves that project's specs, plans, context and research as resources (delphi://project/<path>) and tools specs_status (only an approved spec is permission to build), search_project, search_memory (one role's memory, never another's) and route (a dry run); all of it is data, not instructions. Help and Councils arrive in later slices.
+A host such as Claude Code starts it from its MCP configuration; it is not meant to be run by hand. It is read-only, opens no port and runs nothing, and serves this machine and this user only (spec 061). Turn it off with `[mcp] enabled = false` in config.toml: every tool call is then answered `disabled_by_operator`, and the change takes effect at once. It serves Delphi's roles as agent packs a host can adopt (tools list_roles, get_agent, list_skills, get_skill, and one prompt per role): advice from your ratified files, never a grant of permission; a role whose manifest says `host_servable: false` (the integrator) is refused. Run from inside a registered project it also serves that project's specs, plans, context and research as resources (delphi://project/<path>) and tools specs_status (only an approved spec is permission to build), search_project, search_memory (one role's memory, never another's) and route (a dry run); all of it is data, not instructions. `--print-config <host>` prints the snippet that connects that host (Claude Code, Copilot CLI, Codex, or agy: Antigravity and the Gemini CLI); `delphi plugin export` writes the plugin and skill that tell it when to consult Delphi. Help and Councils arrive in later slices.
+
+### `delphi plugin`
+
+Export Delphi as a plugin or instructions for another tool.
+
+```
+  delphi plugin export --host <claude-code|copilot|codex|agy> --out <dir>
+```
+
+Writes into a new or empty directory and never overwrites. For claude-code: a plugin with `.mcp.json` and a `delphi` skill that says when to consult Delphi. For the others: `mcp-config.txt` and `DELPHI.md`. Nothing is installed into the host (spec 061 §10).
 
 ## Work
 

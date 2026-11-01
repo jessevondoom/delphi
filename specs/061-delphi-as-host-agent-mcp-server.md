@@ -187,7 +187,7 @@ A host session is a server process lifetime. Refusals are explicit (`limit_reach
 
 ## 10. Plugin, skill and host configuration
 
-- `delphi mcp --print-config <claude-code|copilot|codex|agy>` prints the host's configuration snippet; `delphi doctor` shows the `.mcp.json` snippet (the deferred item of 025).
+- `delphi mcp --print-config <claude-code|copilot|codex|agy>` prints the host's configuration snippet; `delphi doctor` points to it (it prints the command, not the snippet).
 - `delphi plugin export --host claude-code` writes a plugin containing `.mcp.json` and a **skill** (`skills/delphi/SKILL.md`) that tells the host *when* to consult Delphi: before acting in a Delphi project, when work leaves the host's expertise, when a decision is contested.
 - Equivalent instructions files for the other hosts are generated, not hand-written (listed in the catalog). "agy" is not documented in the sources used to write this spec; its support is decided at §12 Q-5.
 
@@ -233,7 +233,7 @@ A host session is a server process lifetime. Refusals are explicit (`limit_reach
 - **Q-2** (blocks S5). Should host-originated notes use a new "host-observed" label beyond the provenance tag, or the existing tier alone?
 - **Q-3** (blocks S1). Is stdio the only transport in this version (recommended)?
 - **Q-4** (blocks S7). Which hosts support long-running tool calls or progress notifications? Unverified for Copilot CLI, Codex and agy.
-- **Q-5** (blocks S4). What is "agy", and is it in scope for S4?
+- **Q-5** (answered 2026-10-31). "agy" is Antigravity, Google's Gemini CLI; in scope for S4. Its snippet follows the Gemini CLI `settings.json` and stays unverified until checked against a live host.
 
 ## 13. Documentation and generated files
 

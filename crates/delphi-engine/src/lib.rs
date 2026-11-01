@@ -46,6 +46,7 @@ pub mod align_run;
 pub mod bundle_load;
 pub mod bundle_serve;
 pub mod mcp_host;
+pub mod mcp_hosts;
 pub mod mcp_packs;
 pub mod mcp_project;
 pub mod mcp_wire;
