@@ -113,16 +113,16 @@ fn engine_err(e: EngineError) -> RpcError {
 
 impl EngineService {
     pub fn new(engine: Arc<Engine>, default_mission: &str) -> Arc<EngineService> {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(String, String)>();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(String, String, String)>();
         let _ = engine.research_ask.set(tx);
         let svc = Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())), acquire_checked: Mutex::new(0) });
         // An approved `request_research` card (`specs/058` §20): the mission's own scope decides where the pages go.
         if tokio::runtime::Handle::try_current().is_ok() {
             let weak = Arc::downgrade(&svc);
             tokio::spawn(async move {
-                while let Some((mission, topic)) = rx.recv().await {
+                while let Some((mission, topic, by)) = rx.recv().await {
                     let Some(svc) = weak.upgrade() else { break };
-                    svc.agent_research(&mission, &topic).await;
+                    svc.agent_research(&mission, &topic, &by).await;
                 }
             });
         }
@@ -1363,25 +1363,27 @@ impl EngineService {
             None => crate::research::Scope::Home,
             Some(root) => crate::research::Scope::Project(root),
         };
-        self.launch_research(topic, scope).await
+        self.launch_research(topic, scope, None).await
     }
 
     /// An approved `request_research` (`specs/058` §20): the job runs in the scope the mission was stamped with, and the log says what happened.
-    async fn agent_research(&self, mission: &str, topic: &str) {
+    /// The outcome is written to the requesting mission, with the role that asked, so that role is told at its next span (`specs/058` §22).
+    async fn agent_research(&self, mission: &str, topic: &str, by: &str) {
         let ws = &self.engine.ws.dir;
         let root = crate::scope::mission_scope(ws, &ws.join("local/missions").join(mission)).and_then(|id| crate::scope::project_root(ws, &id));
         let scope = root.map(crate::research::Scope::Project).unwrap_or(crate::research::Scope::Home);
-        let outcome = self.launch_research(topic.to_string(), scope).await;
+        let outcome = self.launch_research(topic.to_string(), scope, Some((mission.to_string(), by.to_string()))).await;
         if let Ok(m) = self.mission_at(Some(mission), None).await {
             let (kind, payload) = match outcome {
-                Ok(_) => ("research.started", json!({"topic": topic})),
-                Err(e) => ("research.refused", json!({"topic": topic, "why": e.message})),
+                Ok(_) => ("research.started", json!({"topic": topic, "by": by})),
+                Err(e) => ("research.refused", json!({"topic": topic, "by": by, "why": e.message})),
             };
             let _ = m.append(EventEnvelope::new(&m.id, kind, payload)).await;
         }
     }
 
-    async fn launch_research(&self, topic: String, scope: crate::research::Scope) -> RpcOutcome {
+    /// `report_to` is the mission and role an agent's request came from; the operator's own `/research` has none and logs to the default mission.
+    async fn launch_research(&self, topic: String, scope: crate::research::Scope, report_to: Option<(String, String)>) -> RpcOutcome {
         let shared = crate::research::Shared::new(&topic);
         {
             let mut cur = self.research.lock().unwrap();
@@ -1401,12 +1403,19 @@ impl EngineService {
             }
         };
         let (engine, ws, home) = (self.engine.clone(), self.engine.ws.dir.clone(), self.engine.ws.home.clone());
-        let mission = self.mission(None).await.ok();
+        let by = report_to.as_ref().map(|(_, by)| by.clone());
+        let mission = match &report_to {
+            Some((id, _)) => self.mission_at(Some(id), None).await.ok(),
+            None => self.mission(None).await.ok(),
+        };
         tokio::spawn(async move {
             crate::research::run(deps, &topic, shared.clone()).await;
-            // The run is marked in the mission log so the daemon can stage a `noted` candidate for it (`specs/052` KS-2); silent.
-            if let (Some(m), Some(r)) = (&mission, shared.snapshot().report) {
-                let _ = m.append(EventEnvelope::new(&m.id, "research.finished", json!({"topic": topic, "new": r.new.len(), "updated": r.updated.len()}))).await;
+            // The run is marked in the mission log so the daemon can stage a `noted` candidate for it (`specs/052` KS-2) and, for an agent's
+            // request, tell that role how it went (`specs/058` §22); a failed or cancelled run is marked too, so the agent is not left waiting.
+            if let Some(m) = &mission {
+                if by.is_some() || shared.snapshot().report.is_some() {
+                    let _ = m.append(EventEnvelope::new(&m.id, "research.finished", crate::research_report::finished_payload(&topic, by.as_deref(), &shared.snapshot()))).await;
+                }
             }
             // What was written is searchable now: bring the index up to date (the words at once, the vectors in the background).
             if shared.snapshot().report.is_some_and(|r| r.new.iter().chain(&r.updated).any(|e| e.dest == crate::research::Dest::Shared)) {
@@ -3394,6 +3403,25 @@ mod tests {
         assert_eq!(events_of(&f, "decision.delivered").len(), 1);
         f.engine.run_task(&f.m, "orchestrator", "and now?").await.unwrap();
         assert!(!f.model.requests()[5].body.to_string().contains("runtime/decision-answers"), "told once");
+    }
+
+    // specs/058 §22: research an agent asked for is reported to it, once, in the log's own counts.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn research_an_agent_asked_for_is_reported_to_it_once_and_the_log_says_who_asked() {
+        let f = setup(vec![Step::text("Waiting."), Step::text("Noted the research."), Step::text("Nothing new.")], 5.0, |_| {});
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        svc.adopt(f.m.clone());
+        // Whether the job starts or is refused, the log says who asked.
+        svc.agent_research("m1", "queues", "orchestrator").await;
+        let logged: Vec<_> = events_of(&f, "research.started").into_iter().chain(events_of(&f, "research.refused")).collect();
+        assert_eq!((logged.len(), logged[0].payload["by"].as_str(), logged[0].payload["topic"].as_str()), (1, Some("orchestrator"), Some("queues")), "{logged:?}");
+        f.m.append(EventEnvelope::new(&f.m.id, "research.finished", json!({"topic": "retries", "by": "orchestrator", "new": 2, "updated": 1, "held": 1, "project": 0, "not_kept": 0, "outcome": "done"}))).await.unwrap();
+        f.engine.run_task(&f.m, "orchestrator", "continue").await.unwrap();
+        let told = f.model.requests()[0].body.to_string();
+        assert!(told.contains("runtime/research-results") && told.contains("(asked by orchestrator): 2 new and 1 updated; 1 held for validation"), "{told}");
+        assert!(!events_of(&f, "research.delivered").is_empty());
+        f.engine.run_task(&f.m, "orchestrator", "and now?").await.unwrap();
+        assert!(!f.model.requests()[1].body.to_string().contains("runtime/research-results"), "told once");
     }
 
     // ── step-up: a Red answer through a relay needs the authenticator code (specs/014 §7) ──

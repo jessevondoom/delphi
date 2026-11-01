@@ -416,7 +416,7 @@ fn request_research(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
     match research_topic(args) {
         Ok(topic) => {
             ctx.events.push(("research.request".into(), json!({"topic": topic, "by": ctx.role})));
-            ToolResult::ok("approved and queued. The operator can follow it with /research status; do not wait for it, and do not repeat the request.".to_string())
+            ToolResult::ok("approved and queued. Do not wait for it and do not repeat the request: you will be told how it went at the start of your next turn, and the pages it keeps are then found with `search`.".to_string())
         }
         Err(e) => ToolResult::err(e),
     }

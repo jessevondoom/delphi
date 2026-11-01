@@ -10,6 +10,8 @@ This file starts with the work after v0.2.7. For earlier releases, the history i
 
 ### Shell
 
+- An agent that asked for research with `request_research` is now told how it went, once, at the start of its next turn (and the orchestrator too): counts of pages kept, held for validation or left out, or why it did not start or failed; never page text (spec 058-A10). A failed or cancelled run is logged too, and the outcome goes to the requesting session's log.
+- `delphi check fact` now looks up a stored journal page's DOI at doi.org, as the daemon does, so the two agree; `--offline` keeps the text-only check (spec 040-A6).
 - New sessions are written under `local/sessions/<id>/` (spec 058-A9); sessions already under `local/missions/` stay where they are and keep working, and every listing, scan and check reads both. Agents still use the `missions/<id>/…` path.
 - A `shell` tool: a full shell line for agents, sandboxed when a sandbox is on, otherwise asked about. Lines are classed Safe, Caution or Hard; Hard lines (`sudo`, `rm -rf`, `git push`, writes outside the worktree, `[exec] hard` patterns) are always a Red card (spec 061).
 - `shell-auto` mode runs safe shell lines without asking; `[s]` / `/s` allows similar shell commands for the session, and `/permissions revoke` ends the grants.
