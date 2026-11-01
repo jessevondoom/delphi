@@ -342,13 +342,39 @@ fn doi_re() -> &'static Regex {
     R.get_or_init(|| Regex::new(r"\b10\.\d{4,9}/\S+").unwrap())
 }
 
+/// The most DOIs of one page that are tried against the resolver (`specs/040` A5).
+pub const MAX_DOIS: usize = 3;
+
+/// The first few distinct DOIs written in `text`, trimmed of trailing punctuation, only those made of characters a DOI path may use.
+pub fn dois_in(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for m in doi_re().find_iter(text) {
+        let d = m.as_str().trim_end_matches(['.', ',', ';', ':', ')', ']', '"', '\'', '>']);
+        if d.len() <= 128 && d.bytes().all(|b| b.is_ascii_alphanumeric() || b"./-_;()<>:".contains(&b)) && !d.contains(['<', '>']) && !out.iter().any(|o| o == d) {
+            out.push(d.to_string());
+        }
+        if out.len() == MAX_DOIS {
+            break;
+        }
+    }
+    out
+}
+
+/// How a journal-publisher page's DOI is judged. `TextOnly`: one is written on the page (offline checks). `Resolved`: it is, and it resolved at
+/// `doi.org` to a publisher; the set holds the snapshots for which that held (`specs/040` A5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DoiCheck {
+    TextOnly,
+    Resolved(std::collections::BTreeSet<String>),
+}
+
 fn footnote_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| Regex::new(r"\[\d{1,3}\]").unwrap())
 }
 
 /// `specs/040` §28: a page whose class would count it, but whose own text says the passage is unsupported. By code.
-fn unsupported_page(url: &str, text: &str, passage: &str) -> Option<&'static str> {
+fn unsupported_page(url: &str, text: &str, passage: &str, snapshot: &str, doi: &DoiCheck) -> Option<&'static str> {
     if is_wikipedia(url) {
         let after = text.find(passage).map(|i| &text[i + passage.len()..]).unwrap_or("");
         let near: String = after.chars().take(48).collect();
@@ -363,10 +389,17 @@ fn unsupported_page(url: &str, text: &str, passage: &str) -> Option<&'static str
     if is_journal_publisher(url) && !doi_re().is_match(text) {
         return Some("a publisher page without a DOI is not a journal article");
     }
+    if is_journal_publisher(url) && matches!(doi, DoiCheck::Resolved(ok) if !ok.contains(snapshot)) {
+        return Some("a DOI on the page did not resolve to a publisher (or could not be checked): not counted");
+    }
     None
 }
 
 pub fn check_fact(sub: &Submission, snaps: &[Snapshot], list: &SourceList) -> FactFindings {
+    check_fact_with(sub, snaps, list, &DoiCheck::TextOnly)
+}
+
+pub fn check_fact_with(sub: &Submission, snaps: &[Snapshot], list: &SourceList, doi: &DoiCheck) -> FactFindings {
     let mut f = FactFindings { claim: sub.claim.trim().to_string(), kind: sub.kind, sources: vec![], independent: 0, standing: Standing::Rejected, fails: claim_shape(&sub.claim), escalations: vec![] };
     if sub.needed_for.trim().is_empty() {
         f.fails.push("`needed_for` is required: a fact is checked because something asked for it (§5)".into());
@@ -396,7 +429,7 @@ pub fn check_fact(sub: &Submission, snaps: &[Snapshot], list: &SourceList) -> Fa
             note = format!("weak: {}", cls.reason);
         } else if passage.is_none() {
             note = "no whole sentence of the page carries the claim".into();
-        } else if let Some(why) = passage.as_deref().and_then(|p| unsupported_page(&url, s.text.for_daemon(), p)) {
+        } else if let Some(why) = passage.as_deref().and_then(|p| unsupported_page(&url, s.text.for_daemon(), p, &s.id, doi)) {
             note = why.into();
         } else if cls.record_only && sub.kind != ClaimKind::Record {
             note = "official record only: for a claim of fact this is an attributed statement".into();

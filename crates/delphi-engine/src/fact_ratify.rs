@@ -150,7 +150,7 @@ mod tests {
         let store = SnapshotStore::in_home(ws.path());
         let list = SourceList::new(ValidatorSources { primary: vec!["127.0.0.1".into()], ..Default::default() }).with_test_pin("/rfc");
         let ledger = TokenLedger::new(100_000);
-        let deps = Deps { policy: &policy, store: &store, list: &list, judge: &Yes, searcher: Some(&Nothing), ledger: &ledger, author_family: None };
+        let deps = Deps { policy: &policy, store: &store, list: &list, judge: &Yes, searcher: Some(&Nothing), ledger: &ledger, author_family: None, doi: None };
         let sub = Submission { claim: "HTTP status 418 is defined as I'm a teapot.".into(), needed_for: "q".into(), urls: vec![format!("http://{}/rfc/2324", addr)], kind: ClaimKind::Fact };
         let d = ratify_fact(&deps, &eff, ws.path(), &sub, "2026-10-28T00:00:00Z", "m1").await.unwrap();
         (d, ws)
@@ -201,7 +201,7 @@ mod tests {
         let store = SnapshotStore::in_home(ws.path());
         let list = SourceList::new(ValidatorSources::default());
         let ledger = TokenLedger::new(1);
-        let deps = Deps { policy: &policy, store: &store, list: &list, judge: &Yes, searcher: None, ledger: &ledger, author_family: None };
+        let deps = Deps { policy: &policy, store: &store, list: &list, judge: &Yes, searcher: None, ledger: &ledger, author_family: None, doi: None };
         let sub = Submission { claim: "X is Y.".into(), needed_for: "q".into(), urls: vec![format!("http://{}/", addr)], kind: ClaimKind::Fact };
         assert!(ratify_fact(&deps, &eff, ws.path(), &sub, "now", "m").await.is_err());
         assert!(!ws.path().join("local").exists() && facts_dir_empty(ws.path()));
