@@ -234,7 +234,11 @@
       "additionalProperties": false,
       "properties": {
         "enabled": { "type": "boolean", "default": true, "description": "false: every tool call is answered `disabled_by_operator`. Read at each call, so it takes effect at once. A config.toml that cannot be read as written also turns it off." },
-        "allow_remote": { "type": "boolean", "default": false, "description": "Reserved for a later spec. true is refused in this version." }
+        "allow_remote": { "type": "boolean", "default": false, "description": "Reserved for a later spec. true is refused in this version." },
+        "max_help_per_session": { "type": "integer", "minimum": 0, "maximum": 20, "default": 2, "description": "`request_help` calls per host session." },
+        "max_concurrent_councils": { "type": "integer", "minimum": 0, "maximum": 5, "default": 1, "description": "Open Councils raised by one host session." },
+        "cooldown_seconds": { "type": "integer", "minimum": 0, "maximum": 3600, "default": 30, "description": "Minimum seconds between dispatch or Council calls from a host." },
+        "max_proposals_per_session": { "type": "integer", "minimum": 0, "maximum": 200, "default": 20, "description": "Notes and summaries a host session may stage. 0 refuses all." }
       }
     },
     "hooks": { "type": "object", "description": "`[[hooks.observe]]` and `[[hooks.deny]]` (specs/018): commands that can only watch or refuse." }

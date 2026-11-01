@@ -145,6 +145,10 @@ sandbox = "off"
 # [mcp]
 # enabled = true                     # false: every tool call is answered `disabled_by_operator`; read at each call, so it takes effect at once
 # allow_remote = false               # reserved for a later spec; true is refused
+# max_proposals_per_session = 20     # notes and summaries one host session may stage (0 to 200)
+# max_help_per_session = 2           # request_help calls per host session (0 to 20), used from a later slice
+# max_concurrent_councils = 1        # open Councils one host session may raise (0 to 5), used from a later slice
+# cooldown_seconds = 30              # minimum gap between a host's dispatch or Council calls (0 to 3600), used from a later slice
 
 # Fact validator (specs/040 section 15.1). off: no fetch of any kind. advisory (default): the full fact path as a dry run; it uses the
 # network, records what it would ratify and writes nothing validated. ratify: real writes, allowed only while the daemon's latch and the

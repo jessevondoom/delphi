@@ -59,6 +59,7 @@ An operator uses Delphi and also another coding tool (Claude Code, Copilot CLI, 
 
 - stdio is local by construction. Calls that reach the daemon use its existing unix socket, which is `0600` in a `0700` directory and refuses a peer whose UID differs (`delphi-core/src/server.rs`). **No new authentication is introduced.**
 - A setting `[mcp] allow_remote = false` is reserved for the later spec and is refused with a clear message when set to `true` in this version.
+- **A host socket, for writes only (S5).** The daemon binds a third unix socket, `<hash>.host.sock`, beside the console, narrator and relay sockets, with the same permissions and UID check. Its token scope is `host`, which needs no terminal (the MCP process is spawned by another tool), and it may call only `session.ping`, `host.propose_note`, `host.record_session_summary`, `host.handoff_put` and `host.handoff_get`. It cannot subscribe to events, and no other scope's token works on it. `delphi mcp` never starts a daemon: with none running a write tool answers `daemon_not_running` and the host keeps working in pack mode.
 - Because the operator works both sides, **no approval card is raised for a first call.** The remaining defenses are the limits in §9, read-only dispatch, content-not-commands and the toggle. A host steered by injected content is the residual risk and is why those stay mandatory.
 
 ### 3.3 Scope resolution
@@ -161,7 +162,7 @@ The result is structured and host-friendly, not console UI: the decision, the op
 ### 8.2 Rules (the daemon enforces; the MCP process cannot)
 
 1. **Scope is forced** to the caller's resolved scope (058 §4.2); a host cannot choose a broader one.
-2. **Role-keyed.** A note lands only in the named role's staged lessons; role isolation holds.
+2. **Role-keyed.** A note lands only in the named role's staged lessons, and only for a servable role; role isolation holds. Bounds: a note is at most 350 characters with at most 300 of evidence; a summary at most 1000 with at most 10 decisions and 10 open questions of 200 each. A handoff's context pointers must be relative and may not contain `..`; a handoff read is limited to the caller's own project.
 3. **Evidence required.** A proposal carries a session or transcript pointer and, when it changes a rule, which rule; without it the deterministic dedupe and contradiction checks (050) cannot run and the proposal is refused.
 4. **Provenance label** `host:<tool>/<model>`, shown at review, because a lesson learned under another model may not transfer.
 5. **Taint.** Proposals are content at the host's tier (below `federated_verified`); they never exceed it and never become always-loaded without the operator's ratification (031 §2, 004 §5). The existing 350-character rule cap, Rule-of-25 and 12 KiB caps apply.
@@ -183,7 +184,7 @@ Host requests run as ordinary Delphi tasks, so the existing `[budget]` limits an
 | `cooldown_seconds` | `30` | minimum gap between dispatch or Council calls |
 | `max_proposals_per_session` | `20` | staged notes per host session |
 
-A host session is a server process lifetime. Refusals are explicit (`limit_reached`, with which limit and when it clears) so the host can fall back to pack mode. Counters are kept by the daemon, not the MCP process, so a restarted server does not reset them within the same host session id.
+A host session is a server process lifetime (a random 16-hex session ID the MCP process makes; the model never supplies it, nor the tool name or the folder, which the process takes from the handshake and its working directory). Refusals are explicit (`limit_reached`, with which limit and when it clears) so the host can fall back to pack mode. Counters are kept by the daemon, not the MCP process, and are counted from the staged log, so a daemon restart does not reset them. `max_proposals_per_session` counts notes and summaries together. The limits are read at every call, like the switch.
 
 ## 10. Plugin, skill and host configuration
 
@@ -230,7 +231,7 @@ A host session is a server process lifetime. Refusals are explicit (`limit_reach
 **Open (each blocks only the slice named; the operator answers before that slice starts):**
 
 - **Q-1** (blocks S9). Is transcript ingest opt-in per project (recommended) or per workspace?
-- **Q-2** (blocks S5). Should host-originated notes use a new "host-observed" label beyond the provenance tag, or the existing tier alone?
+- **Q-2** (answered by assumption, S5; the operator may overrule). Host notes carry the provenance label `host:<tool>/<model>` and tier `L0` only; there is no new "host-observed" label. The model is self-reported and is shown at review as such. An `L0` note is below the promotion floor (058-A2), so it can be reviewed and ratified into a role's staged lessons by the operator but is never promoted to home memory on its own.
 - **Q-3** (blocks S1). Is stdio the only transport in this version (recommended)?
 - **Q-4** (blocks S7). Which hosts support long-running tool calls or progress notifications? Unverified for Copilot CLI, Codex and agy.
 - **Q-5** (answered 2026-10-31). "agy" is Antigravity, Google's Gemini CLI; in scope for S4. Its snippet follows the Gemini CLI `settings.json` and stays unverified until checked against a live host.

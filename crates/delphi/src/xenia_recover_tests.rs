@@ -277,7 +277,7 @@ fn the_daemon_and_the_tool_registry_reach_only_the_limited_admin_operations() {
             assert!(!n.to_lowercase().contains(banned), "tool `{n}` looks like a Xenia write: {banned}");
         }
     }
-    // The console socket answers exactly two admin methods; the narrator and relay lists have none.
+    // The console socket answers exactly two admin methods; the narrator, relay and host lists have none.
     let engine = Path::new(env!("CARGO_MANIFEST_DIR")).join("../delphi-engine/src");
     let svc = std::fs::read_to_string(engine.join("service.rs")).unwrap();
     let mut methods = Vec::new();
@@ -291,9 +291,9 @@ fn the_daemon_and_the_tool_registry_reach_only_the_limited_admin_operations() {
             }
         }
     }
-    let adminish: Vec<&String> = methods.iter().filter(|m| ["admin", "roster", "rotate", "genesis", "propose", "join"].iter().any(|b| m.contains(b))).collect();
+    let adminish: Vec<&String> = methods.iter().filter(|m| !m.starts_with("host.")).filter(|m| ["admin", "roster", "rotate", "genesis", "propose", "join"].iter().any(|b| m.contains(b))).collect();
     assert_eq!(adminish, vec!["xenia.admin.prepare", "xenia.admin.decide"], "{methods:?}");
-    for m in delphi_core::server::NARRATOR_METHODS.iter().chain(delphi_core::server::RELAY_METHODS.iter()) {
+    for m in delphi_core::server::NARRATOR_METHODS.iter().chain(delphi_core::server::RELAY_METHODS.iter()).chain(delphi_core::server::HOST_METHODS.iter()) {
         assert!(!m.contains("xenia"), "{m}");
     }
     // Nothing in the engine can start a genesis, a rewrite recovery or a rotation: the identifiers are not there, so

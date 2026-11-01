@@ -32,6 +32,10 @@ pub const NARRATOR_METHODS: [&str; 12] = ["session.ping", "events.subscribe", "s
 /// budget, answer a card through the relay's own narrower method, and listen. Everything else is refused by name.
 pub const RELAY_METHODS: [&str; 5] = ["session.ping", "events.subscribe", "approval.list", "approval.relay_resolve", "budget.get"];
 
+/// The only methods the host socket answers (besides the `hello` handshake): stage a lesson or a summary as untrusted
+/// content, and keep or read one handoff (`specs/061` §8). A host cannot start work, read events or approve anything.
+pub const HOST_METHODS: [&str; 5] = ["session.ping", "host.propose_note", "host.record_session_summary", "host.handoff_put", "host.handoff_get"];
+
 /// A request line larger than this closes the connection.
 pub const MAX_LINE: usize = 1024 * 1024;
 
@@ -89,6 +93,7 @@ pub struct Daemon {
     console_token: String,
     narrator_token: String,
     relay_token: String,
+    host_token: String,
     /// True while an unsandboxed (Amber) command runs: no new tokens without console confirmation.
     pub amber_active: AtomicBool,
     uid: u32,
@@ -149,6 +154,7 @@ impl Daemon {
             console_token: random_token()?,
             narrator_token: random_token()?,
             relay_token: random_token()?,
+            host_token: random_token()?,
             amber_active: AtomicBool::new(false),
             uid: unsafe { libc::geteuid() },
             shutdown: Notify::new(),
@@ -171,6 +177,10 @@ impl Daemon {
         &self.narrator_token
     }
 
+    pub fn host_token(&self) -> &str {
+        &self.host_token
+    }
+
     pub fn relay_token(&self) -> &str {
         &self.relay_token
     }
@@ -186,12 +196,15 @@ impl Daemon {
         let c = ct_eq(token, &self.console_token);
         let n = ct_eq(token, &self.narrator_token);
         let r = ct_eq(token, &self.relay_token);
+        let h = ct_eq(token, &self.host_token);
         if c {
             Some(Scope::Console)
         } else if n {
             Some(Scope::Narrator)
         } else if r {
             Some(Scope::Relay)
+        } else if h {
+            Some(Scope::Host)
         } else {
             None
         }
@@ -212,7 +225,17 @@ impl Daemon {
     /// As [`Daemon::serve_sockets`], with the relay socket (`specs/014`): a relay token is refused on the other
     /// sockets and theirs on this one, and its dispatcher offers [`RELAY_METHODS`] and nothing else.
     pub async fn serve_all(self: Arc<Self>, console: UnixListener, narrator: Option<UnixListener>, relay: Option<UnixListener>) {
+        self.serve_everything(console, narrator, relay, None).await
+    }
+
+    /// As [`Daemon::serve_all`], with the host socket (`specs/061`): a host token is refused on the other sockets and
+    /// theirs on this one, and its dispatcher offers [`HOST_METHODS`] and nothing else.
+    pub async fn serve_everything(self: Arc<Self>, console: UnixListener, narrator: Option<UnixListener>, relay: Option<UnixListener>, host: Option<UnixListener>) {
         tokio::spawn(self.hub.clone().run_coalescer());
+        if let Some(l) = host {
+            let me = self.clone();
+            tokio::spawn(async move { me.accept_loop(l, Scope::Host).await });
+        }
         if let Some(l) = narrator {
             let me = self.clone();
             tokio::spawn(async move { me.accept_loop(l, Scope::Narrator).await });
@@ -330,7 +353,8 @@ impl Daemon {
             Some("console") => Scope::Console,
             Some("narrator") => Scope::Narrator,
             Some("relay") => Scope::Relay,
-            _ => return Response::err(req.id.clone(), code::INVALID_PARAMS, "scope must be `console`, `narrator` or `relay`"),
+            Some("host") => Scope::Host,
+            _ => return Response::err(req.id.clone(), code::INVALID_PARAMS, "scope must be `console`, `narrator`, `relay` or `host`"),
         };
         if scope != socket_scope {
             return Response::err(req.id.clone(), code::FORBIDDEN, &format!("this socket issues {} tokens only", socket_scope.as_str()));
@@ -339,9 +363,10 @@ impl Daemon {
             TtyPolicy::Required => {
                 // The narrator scope is read-only (the daemon refuses anything that starts work or approves
                 // anything for it), so it needs no terminal: `delphi observe --once` works from a script. The
-                // scopes that can act, console and relay, keep the rule (operator decision, 2026-10-25).
+                // scopes that can act, console and relay, keep the rule (operator decision, 2026-10-25). The host scope
+                // acts on nothing either: it stages untrusted notes, and a coding tool's MCP process has no terminal.
                 let tty = peer_pid.and_then(controlling_tty);
-                if tty.is_none() && scope != Scope::Narrator {
+                if tty.is_none() && !matches!(scope, Scope::Narrator | Scope::Host) {
                     return Response::err(req.id.clone(), code::TTY_REQUIRED, "tokens are issued only to a client attached to an interactive terminal");
                 }
             }
@@ -355,6 +380,7 @@ impl Daemon {
             Scope::Console => &self.console_token,
             Scope::Narrator => &self.narrator_token,
             Scope::Relay => &self.relay_token,
+            Scope::Host => &self.host_token,
         };
         Response::ok(req.id.clone(), json!({"token": token, "scope": scope.as_str()}))
     }
@@ -370,6 +396,10 @@ impl Daemon {
         if scope == Scope::Relay && !RELAY_METHODS.contains(&req.method.as_str()) {
             crate::elog::warn("daemon", "rpc_forbidden", "a method outside the relay list was refused", json!({"method": req.method, "kind": "relay"}));
             return Response::err(id, code::FORBIDDEN, &format!("`{}` is not available on the relay socket", req.method));
+        }
+        if scope == Scope::Host && !HOST_METHODS.contains(&req.method.as_str()) {
+            crate::elog::warn("daemon", "rpc_forbidden", "a method outside the host list was refused", json!({"method": req.method, "kind": "host"}));
+            return Response::err(id, code::FORBIDDEN, &format!("`{}` is not available on the host socket", req.method));
         }
         // The server's own methods first; everything else may belong to the engine.
         if matches!(req.method.as_str(), "session.ping" | "events.subscribe" | "daemon.shutdown") {
@@ -404,7 +434,7 @@ impl Daemon {
             }
             "session.snapshot" => Response::ok(
                 id,
-                json!({"clients": {"console": self.hub.client_count(Some(Scope::Console)), "narrator": self.hub.client_count(Some(Scope::Narrator)), "relay": self.hub.client_count(Some(Scope::Relay))}, "missions": []}),
+                json!({"clients": {"console": self.hub.client_count(Some(Scope::Console)), "narrator": self.hub.client_count(Some(Scope::Narrator)), "relay": self.hub.client_count(Some(Scope::Relay)), "host": self.hub.client_count(Some(Scope::Host))}, "missions": []}),
             ),
             // Privileged: console scope only.
             "approval.resolve" | "budget.set" | "permissions.set" | "ratify.apply" | "mission.rewind" | "daemon.shutdown" => {

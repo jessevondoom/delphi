@@ -403,7 +403,8 @@ Approved by the operator on 2026-10-31. Same-machine host agents (Claude Code, C
 | S2 | agent packs | built (this PR): `mcp_packs.rs`: `list_roles`, `get_agent`, `list_skills`, `get_skill` and one MCP prompt per servable role, from the ratified copies (hash-checked) via `load_snapshot_with` (operator profile omitted); `host_servable` in the manifest schema, `integrator` ships `false`, `builder` servable by the operator's decision of 2026-10-31 (D-6 amended); `route` moved to S3 |
 | S3 | project awareness: project resources, `specs_status`, `search_project`, `search_memory`, `route` | built |
 | S4 | host config printers, plugin export, guide | built: `mcp_hosts.rs`, `delphi mcp --print-config`, `delphi plugin export`, doctor hint, `docs/guides/using-delphi-from-other-tools.md`; agy taken as Antigravity / the Gemini CLI (Q-5 answered), its snippet unverified against a live host |
-| S5-S11 | daemon proposals and limits, `request_help`, `request_council`, vector search, transcript ingest, resume and console toggle, security review | not started |
+| S5 | daemon host socket, `propose_note`, `record_session_summary`, `handoff_put`, `handoff_get`, limits | built: `Scope::Host` and `<hash>.host.sock` (no tty needed, five methods only), `host_rpc.rs` rules (servable role, evidence required, tier `L0`, label `host:<tool>/<model>`), `mcp_daemon.rs` link (the process supplies session, tool and folder; never starts a daemon), four `[mcp] max_*`/`cooldown_seconds` keys read per call; Q-2 answered by assumption. `cooldown_seconds`, `max_help_per_session` and `max_concurrent_councils` take effect with S6/S7 |
+| S6-S11 | `request_help`, `request_council`, vector search, transcript ingest, resume and console toggle, security review | not started |
 
 ## Council 013: containment increment (verdict: `councils/013-verdict.md`)
 

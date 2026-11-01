@@ -17,6 +17,9 @@ pub enum Scope {
     /// (`specs/014`). It sees only approval and task-outcome events, and can answer an Amber card or deny any
     /// card. It cannot change the budget, the permission mode, a ratification or anything else.
     Relay,
+    /// A coding tool on this machine that uses Delphi through `delphi mcp` (`specs/061`). It can stage lessons and
+    /// summaries as untrusted content and keep one handoff, nothing else: [`crate::server::HOST_METHODS`].
+    Host,
 }
 
 impl Scope {
@@ -25,6 +28,7 @@ impl Scope {
             Scope::Console => "console",
             Scope::Narrator => "narrator",
             Scope::Relay => "relay",
+            Scope::Host => "host",
         }
     }
 }

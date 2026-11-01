@@ -19,6 +19,7 @@ struct Fixture {
     sock: PathBuf,
     narrator_sock: PathBuf,
     relay_sock: PathBuf,
+    host_sock: PathBuf,
     daemon: Arc<Daemon>,
 }
 
@@ -31,13 +32,15 @@ async fn start(policy: TtyPolicy, queue_cap: usize) -> Fixture {
     let narrator_listener = tokio::net::UnixListener::bind(&narrator_sock).unwrap();
     let relay_sock = dir.path().join("r.sock");
     let relay_listener = tokio::net::UnixListener::bind(&relay_sock).unwrap();
+    let host_sock = dir.path().join("h.sock");
+    let host_listener = tokio::net::UnixListener::bind(&host_sock).unwrap();
     let mut cfg = DaemonConfig::new(dir.path().to_path_buf(), dir.path().to_path_buf());
     cfg.tty_policy = policy;
     cfg.queue_cap = queue_cap;
     cfg.auth_timeout = Duration::from_millis(500);
     let daemon = Daemon::new(cfg).unwrap();
-    tokio::spawn(daemon.clone().serve_all(listener, Some(narrator_listener), Some(relay_listener)));
-    Fixture { _dir: dir, sock, narrator_sock, relay_sock, daemon }
+    tokio::spawn(daemon.clone().serve_everything(listener, Some(narrator_listener), Some(relay_listener), Some(host_listener)));
+    Fixture { _dir: dir, sock, narrator_sock, relay_sock, host_sock, daemon }
 }
 
 fn authed(f: &Fixture, scope: Scope) -> Client {
@@ -45,6 +48,7 @@ fn authed(f: &Fixture, scope: Scope) -> Client {
         Scope::Console => (&f.sock, f.daemon.console_token()),
         Scope::Narrator => (&f.narrator_sock, f.daemon.narrator_token()),
         Scope::Relay => (&f.relay_sock, f.daemon.relay_token()),
+        Scope::Host => (&f.host_sock, f.daemon.host_token()),
     };
     let mut c = Client::connect(sock).unwrap();
     c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
@@ -450,4 +454,29 @@ fn ten_simultaneous_clients_start_exactly_one_daemon() {
     assert_eq!(after["spawned"], true);
     assert_ne!(after["pid"].as_u64().unwrap() as i32, pid);
     unsafe { libc::kill(after["pid"].as_u64().unwrap() as i32, libc::SIGKILL) };
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_host_socket_offers_its_own_methods_only_and_takes_only_its_own_token() {
+    let f = start(TtyPolicy::Required, 64).await;
+    let (hs, cs, ht, ct) = (f.host_sock.clone(), f.sock.clone(), f.daemon.host_token().to_string(), f.daemon.console_token().to_string());
+    tokio::task::spawn_blocking(move || {
+        // No terminal is needed for a host token, and the other sockets refuse it.
+        let mut c = Client::connect(&hs).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        assert_eq!(c.issue_token(Scope::Host).unwrap(), ht);
+        assert!(c.hello(&ht).is_ok());
+        assert_eq!(c.call("session.ping", json!({})).unwrap(), json!("pong"));
+        for m in ["events.subscribe", "task.submit", "approval.resolve", "kb.search", "session.snapshot", "host.anything_else", "daemon.shutdown"] {
+            assert_eq!(rpc_code(c.call(m, json!({}))), Some(code::FORBIDDEN), "{m}");
+        }
+        let mut other = Client::connect(&cs).unwrap();
+        other.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        assert!(other.hello(&ht).is_err(), "a host token on the console socket");
+        let mut h2 = Client::connect(&hs).unwrap();
+        h2.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        assert!(h2.hello(&ct).is_err(), "a console token on the host socket");
+    })
+    .await
+    .unwrap();
 }
