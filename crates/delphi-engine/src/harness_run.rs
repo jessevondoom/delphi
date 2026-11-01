@@ -335,7 +335,7 @@ impl Engine {
     /// the gate's own `.agents` directory: it holds the span's token and the hook itself.
     async fn agy_builder_decide(&self, sc: &mut SpanCtx, wt: &Option<Worktree>, tool: &str, args: &Value, ctl: &Ctl<'_>) -> Result<(bool, String), EngineError> {
         let deny = |why: &str| Ok((false, format!("denied by Delphi: {}", why)));
-        let path = args["Path"].as_str().or_else(|| args["path"].as_str()).unwrap_or("");
+        let path = args["Path"].as_str().or_else(|| args["path"].as_str()).or_else(|| args["file_path"].as_str()).unwrap_or("");
         let (name, input) = match tool {
             "read_file" | "write_file" | "edit_file" if path.is_empty() => return deny("the call named no path"),
             "read_file" => ("Read", json!({"file_path": path})),

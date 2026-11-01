@@ -35,6 +35,7 @@ One row per spec. Three separate questions, because they diverge: **Approved** (
 | 011 Xenia trust model | yes (text, by "ratify all") | yes (X0-X10) | tests, fuzz, scratch-store drill | Phase 1 build: X0-X10 merged (plan: xenia-phase-1-plan.md; gates in xenia-x10-verification.md). Gates 1-7 of 011 §1.4 met by automated tests; gate 8 (3-human, 2-week dogfood, X11), the independent red-team sweep and a live store with real admin identities are the operator's |
 | 012 Xenia record schema | yes (text, by "ratify all") | yes (kinds `memory`, `endorsement`, `tombstone`, and `bundle` from B8) | tests, fuzz | same; not exercised on a live store. 2026-10-29 (D-32): pointer scheme is `xenia://<kind>/<id>[@rev]` (bare form refused), `delphi://` refused, `xenia://cap/` reserved |
 | 013 Librarian and internal retrieval | yes | no ("scoped, not yet built") | n/a | after 011/012 |
+| 020 Harness tool bridge, seat profiles & tool inventory | yes | yes (§8.7 Antigravity Builder activation and diagnostic parity) | tests, agy live probe | none |
 | 022 The sharing layer (overview, plan, decisions) | yes (decisions OD-1..OD-9, 2026-10-25; text on merge of PR #155; ratified in full 2026-10-28) | yes (code in `delphi-bundle`, `bundle_*.rs`, `org_context.rs`; per-slice state below) | n/a | B0: apply the 022 §5 amendments; then the slices below |
 | 023 Org bundle standard (manifest, layout, knowledge, skills, agents, behavior, vectors) | yes (2026-10-25; ratified in full 2026-10-28) | yes (code in `delphi-bundle`, `bundle_*.rs`, `org_context.rs`; per-slice state below) | n/a | B1 |
 | 024 Bundle provenance, adding, precedence, lifecycle | yes (2026-10-25; ratified in full 2026-10-28) | yes (code in `delphi-bundle`, `bundle_*.rs`, `org_context.rs`; per-slice state below) | n/a | B2, B4, B6 |
@@ -467,5 +468,4 @@ Approved by the operator on 2026-11-01. Replaces binary `enabled_agents` with fl
 | S3 | New skills & role authorizations: `oblique-strategies`, `dual-horizon-search`, `systems-pattern-catalog`, `strategic-pattern-matching`, `tonal-calibration`, `socratic-interrogation`, `hypothesis-flipping` in `skills/` and `agents/` | built (this PR) |
 | S4 | Curated seed knowledge: reference compendiums in `context/reference/` for strategy, lateral thinking, systems/edge protocols, and tonal registers; indexed into `kb` | built (this PR) |
 | S5 | Fleet collaboration telemetry & tenacity pushback: FPY/churn/overhead tracking and single-pushback retry policy for `investigator` | built (this PR) |
-
 

@@ -422,7 +422,7 @@ pub(crate) mod tests {
         assert!(m.read.contains(&"*".to_string()) && m.write.contains(&"specs/**".to_string()));
         assert!(m.max_turn_budget > 0 && m.body.contains("Architect"));
         assert_eq!((m.tier(), m.thinking_budget()), ("frontier", 8192));
-        assert!(matches!(ws.load_manifest("scout"), Err(LoadError::Missing(_))));
+        assert!(matches!(ws.load_manifest("nonexistent"), Err(LoadError::Missing(_))));
     }
 
     #[test]

@@ -525,7 +525,7 @@ mod tests {
         let mut seen = vec![];
         for _ in 0..100 {
             seen = kinds(&f);
-            if seen.iter().any(|(k, _)| k == "validator.event") {
+            if seen.iter().any(|(k, p)| k == "validator.event" && p["kind"] == "no_sources") {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;

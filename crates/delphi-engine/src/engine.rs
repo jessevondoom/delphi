@@ -4239,7 +4239,7 @@ mod tests {
         let err = f.engine.run_task(&f.m, "architect", "hi").await.unwrap_err();
         assert!(err.to_string().contains("does not match its lock"), "{}", err);
         assert!(f.model.requests().is_empty());
-        assert!(f.engine.run_task(&f.m, "scout", "hi").await.is_err(), "roles outside the v1 roster have no manifest here");
+        assert!(f.engine.run_task(&f.m, "nonexistent", "hi").await.is_err(), "roles outside the v1 roster have no manifest here");
         let _ = Path::new("");
     }
 
