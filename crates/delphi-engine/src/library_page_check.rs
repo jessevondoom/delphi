@@ -50,6 +50,10 @@ pub enum Finding {
     UnknownLink(String),
     UnknownImage(String),
     ImageUncited(String),
+    /// A `#section` link that names no heading on the page.
+    UnknownAnchor(String),
+    /// A `page:` link whose slug is not a plain lowercase-hyphen slug.
+    BadPageLink(String),
     TableUncited,
 }
 
@@ -71,6 +75,8 @@ impl std::fmt::Display for Finding {
             Finding::UnknownLink(u) => write!(f, "link not in any cited source's record: {}", short(u)),
             Finding::UnknownImage(r) => write!(f, "image is not an asset of a library source: {}", short(r)),
             Finding::ImageUncited(id) => write!(f, "image from `{}`, which the page does not cite", id),
+            Finding::UnknownAnchor(a) => write!(f, "the link `#{}` names no heading on the page", short(a)),
+            Finding::BadPageLink(l) => write!(f, "a `page:` link must name a slug of lowercase letters, digits and hyphens: {}", short(l)),
             Finding::TableUncited => write!(f, "a table has no citation in or beside it"),
         }
     }
@@ -284,6 +290,30 @@ fn urls_of(meta: &Value, out: &mut BTreeSet<String>) {
     }
 }
 
+/// The anchors the headings of `body` make: lowercase, letters and digits kept, spaces and hyphens as hyphens, the rest dropped
+/// (the same rule the reader uses for `#section` links).
+pub fn heading_slugs(body: &str) -> BTreeSet<String> {
+    let mut in_fence = false;
+    let mut out = BTreeSet::new();
+    for line in body.lines() {
+        if line.trim_start().starts_with("```") {
+            in_fence = !in_fence;
+            continue;
+        }
+        let t = line.trim_start();
+        let hashes = t.chars().take_while(|c| *c == '#').count();
+        if in_fence || hashes == 0 || hashes > 6 || !t[hashes..].starts_with(' ') {
+            continue;
+        }
+        out.insert(slug_of(t[hashes..].trim()));
+    }
+    out
+}
+
+pub fn slug_of(heading: &str) -> String {
+    heading.to_lowercase().chars().filter_map(|c| if c.is_alphanumeric() { Some(c) } else if c == ' ' || c == '-' { Some('-') } else { None }).collect()
+}
+
 /// Every `](target)` of a markdown link or image, and bare http(s) URLs, with whether it is an image.
 fn refs(text: &str) -> Vec<(bool, String)> {
     let mut out = Vec::new();
@@ -311,12 +341,19 @@ fn refs(text: &str) -> Vec<(bool, String)> {
     out
 }
 
+/// An italic one-line pointer to another page of the encyclopedia, with no quotation marks in it (`specs/061` §3).
+fn is_hatnote(q: &str) -> bool {
+    q.len() > 2 && q.starts_with('*') && q.ends_with('*') && q.contains("](page:") && !q.contains(['"', '“', '”'])
+}
+
 fn quotes_of(block: &str) -> Vec<(String, bool)> {
     let mut out = Vec::new();
     let mut quoted = Vec::new();
     let mut rest = Vec::new();
     for l in block.lines() {
         match l.trim_start().strip_prefix('>') {
+            // A hatnote (`> *This page is about X. For Y, see [Y](page:y).*`) quotes nothing: it is the page's own pointer.
+            Some(q) if is_hatnote(q.trim()) => {}
             Some(q) => quoted.push(q.trim().to_string()),
             None => rest.push(l),
         }
@@ -577,7 +614,16 @@ impl Library {
                 if !allowed.contains(&normalise_url(&target)) {
                     push(Finding::UnknownLink(target), &mut out.findings);
                 }
-            } else if !target.starts_with('#') {
+            } else if let Some(anchor) = target.strip_prefix('#') {
+                if !anchor.is_empty() && !heading_slugs(body).contains(anchor) {
+                    push(Finding::UnknownAnchor(anchor.to_string()), &mut out.findings);
+                }
+            } else if let Some(slug) = target.strip_prefix("page:") {
+                // A hatnote or disambiguation link to another page of the encyclopedia; it opens a search and carries no content.
+                if image || slug.is_empty() || slug.len() > 80 || !slug.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+                    push(Finding::BadPageLink(target), &mut out.findings);
+                }
+            } else {
                 push(Finding::UnknownLink(target), &mut out.findings);
             }
         }
@@ -604,6 +650,8 @@ impl Library {
     /// The whole page as a file: banner first, body, then the table last (`specs/057` §3.1). This is what `delphi pages
     /// check` runs.
     pub fn check_page_text(&self, text: &str, scope: Scope) -> Checked {
+        // A cached encyclopedia page starts with YAML frontmatter (`specs/061`); the banner is the first line after it.
+        let text = super::page_meta::strip(text);
         let mut found = Vec::new();
         let mut lines = text.lines().skip_while(|l| l.trim().is_empty());
         let first = lines.next().unwrap_or("");

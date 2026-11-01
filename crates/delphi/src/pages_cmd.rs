@@ -16,6 +16,7 @@ const USAGE: &str = "usage:
   delphi pages check <file> [--home <dir>]
   delphi pages dispute <claim> --note <what is wrong> [--home <dir>]
   delphi pages search <question words...> [--internal | --external] [--json] [--home <dir>]
+  delphi pages expand <question words...> [--json] [--home <dir>]
   delphi pages list [--json] [--home <dir>]
   delphi pages pin|unpin <key> [--home <dir>]";
 
@@ -69,6 +70,43 @@ fn search(home: &Path, ws_dir: &Path, query: &str, external: Option<bool>, as_js
         }
         Err(e) => {
             eprintln!("delphi pages search: {}", e);
+            1
+        }
+    }
+}
+
+fn expand(home: &Path, ws_dir: &Path, query: &str, as_json: bool) -> i32 {
+    use delphi_core::spawn::{connect_or_spawn, SpawnOptions};
+    let Some(exe) = crate::chat::daemon_exe() else {
+        eprintln!("delphi pages expand: cannot locate this program to start the daemon");
+        return 4;
+    };
+    let mut attached = match connect_or_spawn(&SpawnOptions { home, workspace: ws_dir, daemon_exe: &exe, extra_args: vec![], prefix_args: vec!["__core".into()], own_version: Some(env!("CARGO_PKG_VERSION")) }) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("delphi pages expand: {}", e);
+            return 4;
+        }
+    };
+    let r = attached.client.call("pages.expand", json!({"query": query}));
+    if attached.spawned {
+        let _ = attached.client.call("daemon.shutdown", json!({}));
+    }
+    match r {
+        Ok(v) if as_json => {
+            println!("{}", v);
+            0
+        }
+        Ok(v) => {
+            print!("{}", v["markdown"].as_str().unwrap_or(""));
+            for n in v["notes"].as_array().into_iter().flatten().filter_map(|n| n.as_str()) {
+                eprintln!("{}", n);
+            }
+            eprintln!("{} · {}{}", v["path"].as_str().unwrap_or(""), v["outcome"].as_str().unwrap_or(""), if v["cached"] == true { " · cached" } else { "" });
+            if v["outcome"] == "claims_only" { 1 } else { 0 }
+        }
+        Err(e) => {
+            eprintln!("delphi pages expand: {}", e);
             1
         }
     }
@@ -145,6 +183,10 @@ pub fn cli(args: &[String], home: &Path, ws_dir: Option<&Path>) -> i32 {
             let mode = if external { Some(true) } else if internal { Some(false) } else { None };
             search(home, ws, &pos.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" "), mode, rest.iter().any(|a| a == "--json"))
         }
+        Some("expand") if !pos.is_empty() => {
+            let Some(ws) = ws_dir else { return 4 };
+            expand(home, ws, &pos.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" "), rest.iter().any(|a| a == "--json"))
+        }
         Some("list") => {
             let ttl = delphi_adapter::config::PagesConfig::default().external_ttl_secs;
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
@@ -193,5 +235,17 @@ pub fn cli(args: &[String], home: &Path, ws_dir: Option<&Path>) -> i32 {
             eprintln!("{}", USAGE);
             2
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pages_expand_usage_on_missing_args() {
+        let d = tempfile::tempdir().unwrap();
+        let code = cli(&["expand".to_string()], d.path(), None);
+        assert_eq!(code, 2);
     }
 }

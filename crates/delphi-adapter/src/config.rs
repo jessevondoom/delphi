@@ -609,11 +609,14 @@ pub struct PagesConfig {
     pub external_ttl_secs: u64,
     /// Pages the daemon builds in one day; a cache hit is free. They also count against the validator's share (`specs/040` §20).
     pub per_day: u32,
+    /// The bounds, in days, on the cache lifetime the `writer` proposes for a page (`specs/061` §4.4).
+    pub min_ttl_days: u32,
+    pub max_ttl_days: u32,
 }
 
 impl Default for PagesConfig {
     fn default() -> Self {
-        PagesConfig { enabled: true, external: PagesExternal::Ask, max_tokens: 3000, external_ttl_secs: 7 * 86_400, per_day: 20 }
+        PagesConfig { enabled: true, external: PagesExternal::Ask, max_tokens: 3000, external_ttl_secs: 7 * 86_400, per_day: 20, min_ttl_days: 1, max_ttl_days: 365 }
     }
 }
 
@@ -1377,7 +1380,7 @@ pub(crate) mod tests {
     fn library_pages_defaults_and_ttl_forms() {
         let d = Config::parse(SAMPLE).unwrap().library.pages;
         assert!(d.enabled && d.external == PagesExternal::Ask);
-        assert_eq!((d.max_tokens, d.external_ttl_secs, d.per_day), (3000, 7 * 86_400, 20));
+        assert_eq!((d.max_tokens, d.external_ttl_secs, d.per_day, d.min_ttl_days, d.max_ttl_days), (3000, 7 * 86_400, 20, 1, 365));
         for (v, secs) in [("3", 3 * 86_400), ("\"12h\"", 12 * 3600), ("\"90m\"", 5400), ("\"7d\"", 7 * 86_400)] {
             let c = Config::parse(&format!("{}\n[library.pages]\nexternal = \"off\"\nexternal_ttl = {}\n", SAMPLE, v)).unwrap().library.pages;
             assert_eq!((c.external, c.external_ttl_secs), (PagesExternal::Off, secs), "{v}");

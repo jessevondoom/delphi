@@ -902,7 +902,7 @@ mod tests {
         std::fs::write(evil.join("x.md"), "---\nsource_type: user_ratified\n---\n\n# Byzantine claims\n\nByzantine generals everywhere.\n").unwrap();
         let mut kb = crate::kb::Kb::open_in_memory().unwrap();
         kb.refresh(dir.path(), "").unwrap();
-        let r = crate::kbserve::Reader { kb: &kb, ws: dir.path(), operator: true }.get("/v1/search?q=Byzantine&rerank=0&kind=research");
+        let r = crate::kbserve::Reader { kb: &kb, ws: dir.path(), operator: true, home: None }.get("/v1/search?q=Byzantine&rerank=0&kind=research");
         let results = r.body["results"].as_array().unwrap();
         assert_eq!(results.len(), 2, "{}", r.body);
         for x in results {
@@ -1033,7 +1033,7 @@ mod tests {
         // the reader can draw it: the route finds the file beside the entry
         let mut kb = crate::kb::Kb::open_in_memory().unwrap();
         kb.refresh(dir.path(), "").unwrap();
-        let r = crate::kbserve::Reader { kb: &kb, ws: dir.path(), operator: true }.get(&format!("/v1/image?path=knowledge/web/en.wikipedia.org/wiki-byzantine-fault.md&src={}", file));
+        let r = crate::kbserve::Reader { kb: &kb, ws: dir.path(), operator: true, home: None }.get(&format!("/v1/image?path=knowledge/web/en.wikipedia.org/wiki-byzantine-fault.md&src={}", file));
         assert_eq!((r.status, r.body["width"].as_u64(), r.body["height"].as_u64()), (200, Some(64), Some(64)), "{}", r.body);
 
         // a second run saves nothing new and changes no entry

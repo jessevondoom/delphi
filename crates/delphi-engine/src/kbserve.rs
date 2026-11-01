@@ -98,7 +98,7 @@ impl Api {
             return fail(405, "this API is read-only: only GET and HEAD");
         }
         self.fresh();
-        Reader { kb: &self.kb, ws: &self.ws, operator: false }.get(target)
+        Reader { kb: &self.kb, ws: &self.ws, operator: false, home: None }.get(target)
     }
 }
 
@@ -111,6 +111,8 @@ pub struct Reader<'a> {
     /// sees every document, private agent memory included, each tagged with its provenance, and may ask for the
     /// trusted ones only (`trusted_only=1`). Over HTTP the view is always the restricted one and the parameter is ignored.
     pub operator: bool,
+    /// The install's home, for the library's pictures (`src=lib:<source>/<file>`). Only the operator's view reads them.
+    pub home: Option<&'a Path>,
 }
 
 impl Reader<'_> {
@@ -266,7 +268,21 @@ impl Reader<'_> {
     /// it in half-block cells. The file must sit inside the document's own directory (no `..`, no absolute path, no
     /// symlink out of it) and be a PNG, JPEG or GIF of at most 8 MiB; the document must be one this view may read.
     fn image(&self, q: &HashMap<String, String>) -> Result<Reply, String> {
-        let (Some(path), Some(href)) = (q.get("path").filter(|p| !p.is_empty()), q.get("src").filter(|s| !s.is_empty())) else {
+        // A picture of the library, named by the page that shows it (`specs/061` §4.3): `src=lib:<source>/<file>`. Only the
+        // operator's view reads the library; the file must be a plain-named picture in that source's own `assets/`.
+        if let Some(r) = q.get("src").and_then(|s| s.strip_prefix("lib:")) {
+            let (Some(home), true) = (self.home, self.operator) else { return Ok(fail(403, "the library's pictures are served to the operator's console only")) };
+            let Some((sid, file)) = r.split_once('/') else { return Ok(fail(400, "`src` must be lib:<source>/<file>")) };
+            let Some(file) = crate::library::Library::in_home(home).asset_file(sid, file) else { return Ok(fail(404, "no such picture in the library")) };
+            return self.picture(&file);
+        }
+        // `src=kb:<document>#<picture>` names a document's own picture in one value, the way a page writes it.
+        let kb_form = q.get("src").and_then(|s| s.strip_prefix("kb:")).and_then(|s| s.split_once('#'));
+        let (path, href) = match kb_form {
+            Some((doc, rel)) => (Some(doc.to_string()), Some(rel.to_string())),
+            None => (q.get("path").cloned(), q.get("src").cloned()),
+        };
+        let (Some(path), Some(href)) = (path.filter(|p| !p.is_empty()), href.filter(|s| !s.is_empty())) else {
             return Ok(fail(400, "`path` and `src` are required"));
         };
         let href = href.split(['#', '?']).next().unwrap_or("");
@@ -279,17 +295,22 @@ impl Reader<'_> {
         if !named_ok {
             return Ok(fail(400, "`src` must be a relative path to a .png, .jpg, .jpeg or .gif file below the document's directory"));
         }
-        let Some(info) = self.kb.document(path, &self.view(q)).map_err(|e| e.to_string())? else { return Ok(fail(404, "not in the knowledge base")) };
+        let Some(info) = self.kb.document(&path, &self.view(q)).map_err(|e| e.to_string())? else { return Ok(fail(404, "not in the knowledge base")) };
         let Some(src) = kb::sources(self.ws).into_iter().find(|s| s.rel_path == info.rel_path) else { return Ok(fail(404, "no longer on disk")) };
         let Some(dir) = src.path.parent().and_then(|d| d.canonicalize().ok()) else { return Ok(fail(404, "no longer on disk")) };
         let Ok(file) = dir.join(href).canonicalize() else { return Ok(fail(404, "no such image next to the document")) };
         if !file.starts_with(&dir) || !file.is_file() {
             return Ok(fail(404, "no such image next to the document"));
         }
-        if std::fs::metadata(&file).map(|m| m.len()).unwrap_or(u64::MAX) > MAX_IMAGE_BYTES {
+        self.picture(&file)
+    }
+
+    /// Decode a picture file already confined by the caller, and shrink it to the reader's size.
+    fn picture(&self, file: &Path) -> Result<Reply, String> {
+        if std::fs::metadata(file).map(|m| m.len()).unwrap_or(u64::MAX) > MAX_IMAGE_BYTES {
             return Ok(fail(413, "image too large to draw"));
         }
-        let bytes = std::fs::read(&file).map_err(|e| e.to_string())?;
+        let bytes = std::fs::read(file).map_err(|e| e.to_string())?;
         let img = match delphi_docs::pixels::decode(&bytes) {
             Ok(i) => delphi_docs::pixels::fit(&i, IMAGE_SIDE, IMAGE_SIDE),
             Err(e) => return Ok(fail(415, &e.0)),
@@ -732,7 +753,7 @@ mod tests {
         let (home, ws) = workspace();
         std::fs::write(ws.path().join("base/specs/refs.md"), doc("internal_generated", "# Refs\n\nSee [wiki](https://en.wikipedia.org/wiki/Zebra) and [lookalike](https://en.wikipedia.org.evil.example/) and [plain](http://en.wikipedia.org/x).\n")).unwrap();
         let api = Api::new(home.path(), ws.path()).unwrap();
-        let d = Reader { kb: &api.kb, ws: &api.ws, operator: true }.get("/v1/doc?path=specs/refs.md").body;
+        let d = Reader { kb: &api.kb, ws: &api.ws, operator: true, home: None }.get("/v1/doc?path=specs/refs.md").body;
         let listed: Vec<bool> = d["links"].as_array().unwrap().iter().map(|l| l["listed"].as_bool().unwrap()).collect();
         assert_eq!(listed, [true, false, false]);
     }
@@ -745,7 +766,7 @@ mod tests {
         std::fs::write(ctx.join("clip.mp4"), b"x").unwrap();
         std::fs::write(ctx.join("scan.pdf"), b"%PDF-1.4 junk").unwrap();
         let api = Api::new(home.path(), ws.path()).unwrap();
-        let op = Reader { kb: &api.kb, ws: &api.ws, operator: true };
+        let op = Reader { kb: &api.kb, ws: &api.ws, operator: true, home: None };
         let clip = op.get("/v1/doc?path=context/clip.mp4");
         assert_eq!(clip.status, 200, "{}", clip.body);
         assert!(clip.body["text"].as_str().unwrap().contains("video file clip.mp4") && clip.body["stale"] == false);
@@ -758,7 +779,7 @@ mod tests {
     fn the_operator_sees_everything_with_its_provenance_and_http_cannot_widen_its_view() {
         let (home, ws) = workspace();
         let mut api = Api::new(home.path(), ws.path()).unwrap();
-        let op = Reader { kb: &api.kb, ws: &api.ws, operator: true };
+        let op = Reader { kb: &api.kb, ws: &api.ws, operator: true, home: None };
         let paths = |r: Reply| -> Vec<String> { r.body["results"].as_array().unwrap().iter().map(|x| x["path"].as_str().unwrap().to_string()).collect() };
         let all = op.get("/v1/search?q=zebra&rerank=0");
         let listed = paths(Reply { status: all.status, body: all.body.clone() });

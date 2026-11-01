@@ -420,8 +420,8 @@ Approved by the operator on 2026-10-31. Makes the Wikipedia-style Encyclopedia S
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
-| SK9a | `skills/encyclopedia-synthesis/SKILL.md`, authorize for `writer`, frontmatter schema (`valid_until`, `volatility`, `ttl_reason`, `depth`, `disambiguation`) and `[1, 365]` day clamping | approved, not built |
-| SK9b | Unified `Library::gather` (central library + workspace `kb` excerpts + `GatheredAsset` images), `library_page_check.rs` support for TOC `#anchors`, `page:<slug>` links, and verified `lib:`/`kb:` inline images, `/v1/image` resolution | approved, not built |
-| SK9c | Reputable expansion (`pages.expand` RPC and `delphi pages expand <query>` CLI) connecting `research.rs` and `research_images.rs` to library source/asset persistence and `depth: expanded` re-synthesis | approved, not built |
-| SK9d | Encyclopedia Page as primary search result in `ui/src/archives.ts` rendered via `renderMarkdownLinks` and `paint`, immediate synthesis on search, TOC `#anchor` jumping, disambiguation links, and `e` / `r` / `f` controls | approved, not built |
+| SK9a | `skills/encyclopedia-synthesis/SKILL.md`, authorize for `writer`, frontmatter schema (`valid_until`, `volatility`, `ttl_reason`, `depth`, `disambiguation`) and `[1, 365]` day clamping | built |
+| SK9b | Unified `Library::gather` (central library + workspace `kb` excerpts + `GatheredAsset` images), `library_page_check.rs` support for TOC `#anchors`, `page:<slug>` links, and verified `lib:`/`kb:` inline images, `/v1/image` resolution | built |
+| SK9c | Reputable expansion (`pages.expand` RPC and `delphi pages expand <query>` CLI) connecting `research.rs` and `research_images.rs` to library source/asset persistence and `depth: expanded` re-synthesis | built |
+| SK9d | Encyclopedia Page as primary search result in `ui/src/archives.ts` rendered via `renderMarkdownLinks` and `paint`, immediate synthesis on search, TOC `#anchor` jumping, disambiguation links, and `e` / `r` / `f` controls | built |
 

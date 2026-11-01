@@ -696,6 +696,36 @@ impl EngineService {
         Ok(v)
     }
 
+    async fn pages_expand(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let query = p["query"].as_str().unwrap_or("").trim().to_string();
+        if query.is_empty() {
+            return Err(err(code::INVALID_PARAMS, "a search needs words"));
+        }
+        let run = self.engine.clone().page_expand(&query).await.map_err(|e| err(code::INVALID_PARAMS, e))?;
+        let mut v = run.page.entry.to_json();
+        v["markdown"] = json!(run.page.markdown);
+        v["path"] = json!(run.page.path.display().to_string());
+        v["cached"] = json!(run.page.cached);
+        v["notes"] = json!(run.notes);
+        Ok(v)
+    }
+
+    async fn pages_refresh(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let query = p["query"].as_str().unwrap_or("").trim().to_string();
+        if query.is_empty() {
+            return Err(err(code::INVALID_PARAMS, "a search needs words"));
+        }
+        let run = self.engine.clone().page_refresh(&query, p["external"].as_bool()).await.map_err(|e| err(code::INVALID_PARAMS, e))?;
+        let mut v = run.page.entry.to_json();
+        v["markdown"] = json!(run.page.markdown);
+        v["path"] = json!(run.page.path.display().to_string());
+        v["cached"] = json!(run.page.cached);
+        v["notes"] = json!(run.notes);
+        Ok(v)
+    }
+
     async fn pages_list(&self, _p: Value, ctx: CallContext) -> RpcOutcome {
         need_console(&ctx)?;
         let lib = crate::library::Library::in_home(&self.engine.ws.home);
@@ -1134,7 +1164,7 @@ impl EngineService {
                     crate::kb::embed_in_background(&home, &ws);
                 }
             }
-            Ok(crate::kbserve::Reader { kb: &kb, ws: &ws, operator: true }.get(&target))
+            Ok(crate::kbserve::Reader { kb: &kb, ws: &ws, operator: true, home: Some(home.as_path()) }.get(&target))
         })
         .await
         .map_err(|e| err(-32000, e.to_string()))?
@@ -2011,6 +2041,8 @@ impl Extension for ServiceExt {
                 "decision.resolve" => svc.decision_resolve(params, ctx).await,
                 "pages.results" => svc.pages_results(params, ctx).await,
                 "pages.search" => svc.pages_search(params, ctx).await,
+                "pages.expand" => svc.pages_expand(params, ctx).await,
+                "pages.refresh" => svc.pages_refresh(params, ctx).await,
                 "pages.list" => svc.pages_list(params, ctx).await,
                 "pages.open" => svc.pages_open(params, ctx).await,
                 "pages.pin" => svc.pages_pin(params, ctx).await,

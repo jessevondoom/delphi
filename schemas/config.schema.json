@@ -164,7 +164,9 @@
             "external": { "enum": ["ask", "off", "on"], "default": "ask", "description": "ask: external search only when the operator asks (--external, or the console's key). off: never. on: every page also searches the web, unless --internal. Private sources never leave the install." },
             "max_tokens": { "type": "integer", "minimum": 200, "default": 3000, "description": "The longest page the writer may write, in tokens." },
             "external_ttl": { "type": ["string", "integer"], "default": "7d", "description": "How long a page that used external search stays fresh: a number of days, or a duration such as 12h or 7d." },
-            "per_day": { "type": "integer", "minimum": 0, "default": 20, "description": "Pages the daemon builds in one day (a cache hit is free). Their validator tokens also count against the validator's share (specs/040 section 20)." }
+            "per_day": { "type": "integer", "minimum": 0, "default": 20, "description": "Pages the daemon builds in one day (a cache hit is free). Their validator tokens also count against the validator's share (specs/040 section 20)." },
+            "min_ttl_days": { "type": "integer", "minimum": 1, "default": 1, "description": "The shortest cache lifetime, in days, the daemon accepts for a page the writer proposed one for (specs/061)." },
+            "max_ttl_days": { "type": "integer", "minimum": 1, "default": 365, "description": "The longest cache lifetime, in days, the daemon accepts for a page the writer proposed one for (specs/061)." }
           }
         }
       }

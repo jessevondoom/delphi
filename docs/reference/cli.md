@@ -233,6 +233,7 @@ A readable page generated from the library's claims, and dispute from it.
   delphi pages check <file> [--home <dir>]
   delphi pages dispute <claim> --note <what is wrong> [--home <dir>]
   delphi pages search <question words...> [--internal | --external] [--json] [--home <dir>]
+  delphi pages expand <question words...> [--json] [--home <dir>]
   delphi pages list [--json] [--home <dir>]
   delphi pages pin|unpin <key> [--home <dir>]
 ```

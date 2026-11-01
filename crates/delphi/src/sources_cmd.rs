@@ -61,6 +61,7 @@ fn parse_opts(args: &[String]) -> Result<AddOpts, String> {
         doi: None,
         raise_text: mib(args, "--max-text-mib")?,
         raise_source: mib(args, "--max-source-mib")?,
+        ..Default::default()
     })
 }
 

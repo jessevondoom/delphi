@@ -33,12 +33,16 @@ pub use export::Exported;
 mod page_check;
 #[path = "library_pages.rs"]
 pub mod pages;
+#[path = "library_page_meta.rs"]
+pub mod page_meta;
 #[path = "library_page_search.rs"]
 pub mod page_search;
 #[path = "library_page_validate.rs"]
 pub mod page_validate;
 #[path = "library_reading.rs"]
 mod reading;
+#[path = "library_workspace.rs"]
+pub mod workspace;
 #[path = "library_review.rs"]
 pub mod review;
 #[path = "library_recheck.rs"]
@@ -104,6 +108,8 @@ pub struct AddOpts {
     /// Raise the text or per-source limit for this one source (§3.6).
     pub raise_text: Option<u64>,
     pub raise_source: Option<u64>,
+    /// Capture and decode licensed inline image assets into `assets/` for encyclopedia pages.
+    pub save_images: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -592,7 +598,48 @@ impl Library {
                     notes.push(format!("the page is over the {}-byte text limit; kept as a pointer", b.text));
                     requested = Some(Level::Pointer);
                 }
-                let mut s = self.store(Prepared { id, meta, text, assets: None, requested, excerpts: None, imported: false }, &b)?;
+                let mut temp_assets = None;
+                if opts.save_images {
+                    let html = String::from_utf8_lossy(snap.body_for_daemon());
+                    let refs = delphi_adapter::research::images::extract(&html, &canonical);
+                    if !refs.is_empty() {
+                        let stage_assets = self.root.join(".staging").join(format!("assets-{}-{}", id, std::process::id()));
+                        let _ = std::fs::remove_dir_all(&stage_assets);
+                        if std::fs::create_dir_all(&stage_assets).is_ok() {
+                            let trusted = crate::research_setup::lists(&self.root, self.root.parent().unwrap_or(&self.root)).unwrap_or_else(|_| delphi_adapter::research::trusted::TrustedList::parse(include_str!("../../../context/sources/trusted.toml"), None).unwrap());
+                            if let Ok(transport) = delphi_adapter::research::transport::HttpTransport::new() {
+                                let mut count = 0;
+                                for r in refs {
+                                    if count >= 3 { break; }
+                                    if let Some(entry) = trusted.allows_url(&r.url) {
+                                        if delphi_adapter::research::images::resolve(&transport, &trusted, &r, entry, &canonical).is_ok() {
+                                            if let Ok(bytes) = delphi_adapter::research::images::get_bytes(&transport, &trusted, &r.url, "image/png, image/jpeg, image/gif", delphi_adapter::research::images::MAX_IMAGE_BYTES) {
+                                                if let Some(ext) = delphi_adapter::research::images::sniff(&bytes) {
+                                                    if let Ok(pic) = delphi_docs::pixels::decode(&bytes) {
+                                                        if pic.width >= 48 && pic.height >= 48 {
+                                                            let hash = blake3::hash(&bytes).to_hex().to_string();
+                                                            let fname = format!("{}.{}", hash, ext);
+                                                            if std::fs::write(stage_assets.join(&fname), &bytes).is_ok() {
+                                                                count += 1;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                if count > 0 {
+                                    temp_assets = Some(stage_assets);
+                                }
+                            }
+                        }
+                    }
+                }
+                let mut s = self.store(Prepared { id, meta, text, assets: temp_assets.as_deref().map(Path::to_path_buf), requested, excerpts: None, imported: false }, &b)?;
+                if let Some(a) = &temp_assets {
+                    let _ = std::fs::remove_dir_all(a);
+                }
                 notes.append(&mut s.notes);
                 s.notes = notes;
                 Ok(s)

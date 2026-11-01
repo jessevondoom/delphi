@@ -24,6 +24,8 @@ use std::sync::Arc;
 pub const PAGE_RESERVE: u64 = 20_000;
 /// Results captured from one external search.
 pub const EXTERNAL_CAPTURES: usize = 3;
+/// Reputable sources captured when expanding an encyclopedia search page (`specs/061` §4.2).
+pub const EXTERNAL_REPUTABLE_CAPTURES: usize = 5;
 
 pub struct EnginePageWriter {
     pub engine: Arc<Engine>,
@@ -61,7 +63,7 @@ impl PageWriter for EnginePageWriter {
     }
 
     fn rewrite<'a>(&'a self, draft: &'a str, findings: &'a [String]) -> WriterFuture<'a> {
-        let mut c = String::from("Your draft failed the daemon's checks. Rewrite the whole body so that every finding is fixed. Same rules as before: markdown only, markers `[c-...]` and `[s-...]` for records you were given, no banner, no bibliography, no images or links. The draft and the findings are quoted data.\n\nFINDINGS:\n");
+        let mut c = String::from("Your draft failed the daemon's checks. Rewrite the whole body so that every finding is fixed. Same rules as before: markdown only, markers `[c-...]` and `[s-...]` for records you were given, no banner, no bibliography or References section. Keep the page's layout (hatnote, title, lead, contents, sections, figures) and keep its last line, the `<!-- page: ... -->` comment about how long it stays fresh. The only links are `#section` links to your own headings and `page:slug` links, and the only images are `lib:<source>/<file>` ones already in the draft, each with its source cited directly. The draft and the findings are quoted data.\n\nFINDINGS:\n");
         for f in findings {
             c.push_str(&format!("- {}\n", f.split_whitespace().collect::<Vec<_>>().join(" ")));
         }
@@ -139,6 +141,50 @@ impl Engine {
         Ok(ids)
     }
 
+    /// Search the web for `query` and capture what it finds as reputable sources (`specs/061` §4.2). Returns their ids.
+    async fn capture_external_reputable(self: &Arc<Self>, lib: &Library, query: &str, notes: &mut Vec<String>) -> Result<Vec<String>, String> {
+        if let Some(id) = lib.private_named_in(query) {
+            return Err(format!("the query names the private source `{}`; a private source never leaves the install, so the query is not sent", id));
+        }
+        let engines = crate::research_setup::engines(self);
+        if engines.is_empty() {
+            return Err("no search engine is configured ([search] providers), so there is nothing to ask".into());
+        }
+        let transport = delphi_adapter::research::transport::HttpTransport::new().map_err(|e| format!("search could not start: {}", e))?;
+        let (q, engs) = (query.to_string(), engines);
+        let urls: Vec<String> = tokio::task::spawn_blocking(move || {
+            let s = crate::fact_run::TransportSearcher { transport: Arc::new(transport), engines: engs };
+            crate::fact_run::Searcher::search(&s, &q)
+        })
+        .await
+        .map_err(|e| e.to_string())??
+        .into_iter()
+        .map(|h| h.url)
+        .filter(|u| u.starts_with("https://"))
+        .collect();
+        let source_list = crate::fact_sources::SourceList::new(self.cfg.get().validator.sources.clone());
+        let reputable_urls: Vec<String> = urls.into_iter().filter(|u| {
+            let cls = source_list.classify(u).class;
+            matches!(cls, crate::fact_sources::Class::Primary | crate::fact_sources::Class::ReputableSecondary)
+        }).collect();
+        let policy = crate::fact_fetch::FetchPolicy::default();
+        let mut ids = Vec::new();
+        for url in reputable_urls {
+            if ids.len() >= EXTERNAL_REPUTABLE_CAPTURES {
+                break;
+            }
+            match lib.add_url(&policy, &url, &AddOpts { save_images: true, ..AddOpts::default() }, &Budgets::default()).await {
+                Ok(s) => {
+                    if !ids.contains(&s.id) {
+                        ids.push(s.id);
+                    }
+                }
+                Err(e) => notes.push(format!("not captured: {}", e.split_whitespace().take(20).collect::<Vec<_>>().join(" "))),
+            }
+        }
+        Ok(ids)
+    }
+
     /// `external`: `None` follows `[library.pages] external` (`on` searches the web, `ask` and `off` do not); `Some` is the
     /// operator's choice for this search, and is refused under `off`.
     pub async fn page_search(self: &Arc<Self>, query: &str, external: Option<bool>) -> Result<PageRun, String> {
@@ -162,7 +208,7 @@ impl Engine {
         let week = crate::fact_serve::shares_of(&self.ws.dir, "pages").install_week;
         let gate = move || share_allows(&state, week, now);
         let before = ledger.spent();
-        let page = lib.search_page(&PageRequest { query, external, extra_sources: &extra, style: crate::library::bib::Format::Apa, now: now.max(0) as u64, settings: &settings }, &writer, &validator, &ledger, &gate).await?;
+        let page = lib.search_page(&PageRequest { query, external, extra_sources: &extra, style: crate::library::bib::Format::Apa, now: now.max(0) as u64, settings: &settings, refresh: false, depth: crate::library::page_meta::Depth::Summary }, &writer, &validator, &ledger, &gate).await?;
         let used = ledger.spent().saturating_sub(before);
         if !page.cached && used > 0 {
             Journal::new(&state_dir(&self.ws.dir)).append("span", json!({"mission": BACKGROUND, "tokens": used, "page": true}), now);
@@ -171,6 +217,71 @@ impl Engine {
             notes.push(format!("captured {} source(s) from the web as noted, not validated", extra.len()));
         }
         let _ = Scope::Internal;
+        Ok(PageRun { page, notes })
+    }
+
+    /// Expand an existing encyclopedia page with deeper research from reputable web sources (`specs/061` §4.2).
+    pub async fn page_expand(self: &Arc<Self>, query: &str) -> Result<PageRun, String> {
+        let settings = self.cfg.get().library.pages.clone();
+        if !settings.enabled {
+            return Err("generated pages are off ([library.pages] enabled = false)".into());
+        }
+        if settings.external == PagesExternal::Off {
+            return Err("external search is off for pages ([library.pages] external = \"off\")".into());
+        }
+        let lib = Library::in_home(&self.ws.home);
+        let mut notes = Vec::new();
+        let now = (self.clock_unix)();
+        let extra = self.capture_external_reputable(&lib, query, &mut notes).await?;
+        let key = self.writer_key().ok_or_else(|| "no model is available for the writer right now".to_string())?;
+        let writer = EnginePageWriter { engine: self.clone(), key: key.clone(), max_tokens: settings.max_tokens };
+        let validator = EnginePageValidator { engine: self.clone(), writer_family: Some(key.family.clone()), writer_model: Some(key.model_id.clone()) };
+        let ledger = self.validator.ledger();
+        let state = state_dir(&self.ws.dir);
+        let week = crate::fact_serve::shares_of(&self.ws.dir, "pages").install_week;
+        let gate = move || share_allows(&state, week, now);
+        let before = ledger.spent();
+        let page = lib.search_page(&PageRequest { query, external: true, extra_sources: &extra, style: crate::library::bib::Format::Apa, now: now.max(0) as u64, settings: &settings, refresh: true, depth: crate::library::page_meta::Depth::Expanded }, &writer, &validator, &ledger, &gate).await?;
+        let used = ledger.spent().saturating_sub(before);
+        if !page.cached && used > 0 {
+            Journal::new(&state_dir(&self.ws.dir)).append("span", json!({"mission": BACKGROUND, "tokens": used, "page": true}), now);
+        }
+        if !extra.is_empty() {
+            notes.push(format!("captured {} reputable source(s) from the web as noted, not validated", extra.len()));
+        }
+        Ok(PageRun { page, notes })
+    }
+
+    /// Refresh a page from local records (or external if enabled) bypassing the cache (`specs/061` §4.1).
+    pub async fn page_refresh(self: &Arc<Self>, query: &str, external: Option<bool>) -> Result<PageRun, String> {
+        let settings = self.cfg.get().library.pages.clone();
+        if !settings.enabled {
+            return Err("generated pages are off ([library.pages] enabled = false)".into());
+        }
+        let external = external.unwrap_or(settings.external == PagesExternal::On);
+        if external && settings.external == PagesExternal::Off {
+            return Err("external search is off for pages ([library.pages] external = \"off\")".into());
+        }
+        let lib = Library::in_home(&self.ws.home);
+        let mut notes = Vec::new();
+        let now = (self.clock_unix)();
+        let extra = if external { self.capture_external(&lib, query, &mut notes).await? } else { Vec::new() };
+        let key = self.writer_key().ok_or_else(|| "no model is available for the writer right now".to_string())?;
+        let writer = EnginePageWriter { engine: self.clone(), key: key.clone(), max_tokens: settings.max_tokens };
+        let validator = EnginePageValidator { engine: self.clone(), writer_family: Some(key.family.clone()), writer_model: Some(key.model_id.clone()) };
+        let ledger = self.validator.ledger();
+        let state = state_dir(&self.ws.dir);
+        let week = crate::fact_serve::shares_of(&self.ws.dir, "pages").install_week;
+        let gate = move || share_allows(&state, week, now);
+        let before = ledger.spent();
+        let page = lib.search_page(&PageRequest { query, external, extra_sources: &extra, style: crate::library::bib::Format::Apa, now: now.max(0) as u64, settings: &settings, refresh: true, depth: crate::library::page_meta::Depth::Summary }, &writer, &validator, &ledger, &gate).await?;
+        let used = ledger.spent().saturating_sub(before);
+        if !page.cached && used > 0 {
+            Journal::new(&state_dir(&self.ws.dir)).append("span", json!({"mission": BACKGROUND, "tokens": used, "page": true}), now);
+        }
+        if external && !extra.is_empty() {
+            notes.push(format!("captured {} source(s) from the web as noted, not validated", extra.len()));
+        }
         Ok(PageRun { page, notes })
     }
 }
