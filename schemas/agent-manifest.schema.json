@@ -23,7 +23,8 @@
     },
     "authorized_skills": { "type": "array", "items": { "type": "string" } },
     "memory_scope": { "type": "string" },
-    "max_turn_budget": { "type": "integer", "minimum": 1 }
+    "max_turn_budget": { "type": "integer", "minimum": 1 },
+    "host_servable": { "type": "boolean", "description": "Whether the role may be served to a host agent over MCP (specs/062 §4.3). Absent means yes." }
   },
   "additionalProperties": true
 }

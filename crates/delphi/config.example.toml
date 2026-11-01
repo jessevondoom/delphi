@@ -143,6 +143,11 @@ sandbox = "off"
 # triggers = ["denied_card", "correction", "recovery", "escalation", "rejected_decision"]
 # retro_min_tasks = 10               # finished tasks before `delphi needs` says the coaching pass has material (3 to 200)
 
+# Delphi for the other tools you code with (specs/062): `delphi mcp` is an MCP server on stdio, for this machine and this user only.
+# [mcp]
+# enabled = true                     # false: every tool call is answered `disabled_by_operator`; read at each call, so it takes effect at once
+# allow_remote = false               # reserved for a later spec; true is refused
+
 # Fact validator (specs/040 section 15.1). off: no fetch of any kind. advisory (default): the full fact path as a dry run; it uses the
 # network, records what it would ratify and writes nothing validated. ratify: real writes, allowed only while the daemon's latch and the
 # PROMOTE conditions permit; the effective mode is the lower of this value and the latch.

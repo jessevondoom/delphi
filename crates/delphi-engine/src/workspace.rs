@@ -37,12 +37,12 @@ impl std::fmt::Display for LoadError {
 
 impl std::error::Error for LoadError {}
 
-fn hash(bytes: &[u8]) -> String {
+pub(crate) fn hash(bytes: &[u8]) -> String {
     blake3::hash(bytes).to_hex().to_string()
 }
 
 /// `{"files": {logical: blake3}}`.
-fn read_lock(path: &Path) -> Result<BTreeMap<String, String>, LoadError> {
+pub(crate) fn read_lock(path: &Path) -> Result<BTreeMap<String, String>, LoadError> {
     let v: serde_json::Value = serde_json::from_slice(&fs::read(path).map_err(|_| LoadError::Missing(path.display().to_string()))?).map_err(|e| LoadError::Invalid(format!("{}: {}", path.display(), e)))?;
     let files = v.get("files").and_then(|f| f.as_object()).ok_or_else(|| LoadError::Invalid(format!("{}: no `files` object", path.display())))?;
     Ok(files.iter().filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string()))).collect())
@@ -215,7 +215,7 @@ impl WorkspacePaths {
         WorkspacePaths { home: home.to_path_buf(), dir: home.join("workspaces").join(name) }
     }
 
-    fn ratified_workspace(&self, logical: &str) -> Result<String, LoadError> {
+    pub(crate) fn ratified_workspace(&self, logical: &str) -> Result<String, LoadError> {
         let lock = read_lock(&self.dir.join("local/ratified.lock"))?;
         let path = self.dir.join("local/ratified").join(logical);
         let bytes = fs::read(&path).map_err(|_| LoadError::Missing(format!("local/ratified/{}", logical)))?;
@@ -257,6 +257,11 @@ impl WorkspacePaths {
     /// Assemble IPR blocks 1, 3 and 4 for `role` (`specs/004` §5.2): heuristics release → team → operator
     /// → workspace, then the role's lessons operator → workspace, then the operator profile (≤ 1 KB).
     pub fn load_snapshot(&self, role: &str) -> Result<Snapshot, LoadError> {
+        self.load_snapshot_with(role, true)
+    }
+
+    /// `load_snapshot`, with the operator profile summary left out when `include_profile` is false (a host agent's pack, `specs/062` §4.2).
+    pub fn load_snapshot_with(&self, role: &str, include_profile: bool) -> Result<Snapshot, LoadError> {
         let mut snap = Snapshot { governance: split_frontmatter(&self.ratified_workspace("GOVERNANCE.md")?).1.trim().to_string(), ..Snapshot::default() };
         let rules = |text: &str| split_frontmatter(text).1.trim().to_string();
 
@@ -309,7 +314,7 @@ impl WorkspacePaths {
             snap.loaded.extend(rule_ids(&rules(&t)).into_iter().map(|id| LoadedRule { scope: "workspace-lessons".into(), id }));
             lessons.push_str(&format!("## workspace lessons\n{}\n\n", rules(&t)));
         }
-        if let Some(p) = self.ratified_operator("profile.md")? {
+        if let Some(p) = self.ratified_operator("profile.md")?.filter(|_| include_profile) {
             lessons.push_str(&format!("## operator profile (summary)\n{}\n", clip(&rules(&p), PROFILE_SUMMARY_BYTES)));
         }
         snap.lessons = lessons.trim().to_string();

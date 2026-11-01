@@ -232,6 +232,15 @@
         "retro_min_tasks": { "type": "integer", "minimum": 3, "maximum": 200, "description": "Finished tasks before `delphi needs` says the coaching pass has material. Default 10." }
       }
     },
+    "mcp": {
+      "type": "object",
+      "description": "Delphi for host agents (specs/062 section 3.4): `delphi mcp`, an MCP server on stdio for the other tools you code with. Same machine and same user only.",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": true, "description": "false: every tool call is answered `disabled_by_operator`. Read at each call, so it takes effect at once. A config.toml that cannot be read as written also turns it off." },
+        "allow_remote": { "type": "boolean", "default": false, "description": "Reserved for a later spec. true is refused in this version." }
+      }
+    },
     "hooks": { "type": "object", "description": "`[[hooks.observe]]` and `[[hooks.deny]]` (specs/018): commands that can only watch or refuse." }
   },
   "additionalProperties": true,

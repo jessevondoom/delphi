@@ -138,6 +138,14 @@ Which sites the job may read is not here: it is `context/sources/trusted.toml` (
 | `[loop] tool_result_limit_kb`, `clear_after_kb`, `trim_arguments_kb`, `keep_recent_turns` | keeping a long span's history small without losing any of it. A tool result over `tool_result_limit_kb` is stored and the history keeps a handle (`@payload/<id>`, readable with `read_file`) and a preview of at most 400 bytes; old results are replaced by a handle in batches of about `clear_after_kb`; old tool calls with large arguments keep a handle in place of the bulk (`trim_arguments_kb`); the newest `keep_recent_turns` (6) assistant turns stay whole. The first three are `0` (off) by default until measured; reading a handle counts as reading external content ([`specs/045`](../../specs/045-harness-loop-techniques.md) T5, [`specs/049`](../../specs/049-context-management-recoverable-compaction-and-handles.md) CX-1, CX-2) |
 | `[optimistic] approver`, `second_seat`, `max_decisions`, `max_approver_calls`, `unseconded`, `review_wait_sec` | how `/build --optimistic` records and reviews provisional decisions ([`specs/015`](../../specs/015-provisional-decisions.md)) |
 
+## Delphi for other tools
+
+| Key | Meaning |
+| :-- | :-- |
+| `[mcp] enabled` | default on. `false` makes `delphi mcp` answer every tool call `disabled_by_operator`; it is read at each call, so the change is immediate, and a `config.toml` that cannot be read as written also turns it off ([`specs/062`](../../specs/062-delphi-as-host-agent-mcp-server.md) §3.4) |
+| (no limits) | there is no limit or quota on host calls or on the CLI: `enabled` is the only switch, and metering will be considered later if needed (specs/062 §9). The `[budget]` settings still govern what a task spends |
+| `[mcp] allow_remote` | reserved for a later spec; `true` is refused. Today the server serves this machine and this user only (§3.2) |
+
 ## Search and federation
 
 | Key | Default | Meaning |

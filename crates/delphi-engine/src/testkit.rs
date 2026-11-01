@@ -153,6 +153,7 @@ fn assemble(t: tempfile::TempDir, root: PathBuf, steps: Vec<Step>, budget_usd: f
         timers: Arc::new(crate::timers::TimerStore::memory()),
         inventory: Arc::new(crate::inventory::Inventory::memory()),
         toolless: Default::default(),
+        readonly_tasks: Default::default(),
         approver_calls: Default::default(),
         pace: Default::default(),
         totp: Default::default(),

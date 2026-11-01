@@ -34,6 +34,14 @@ pub const SITES: &[Site] = &[
         ],
     },
     Site {
+        name: "a host agent's proposed note or session summary (`specs/062` §8: tier L0, labelled, staged only, role-keyed, evidence required)",
+        files: &["crates/delphi-engine/src/host_rpc.rs"],
+        events: &["learn.staged"],
+        proofs: &[
+            ("crates/delphi-engine/src/service.rs", "a_host_stages_untrusted_notes_in_its_own_session_and_the_switch_holds"),
+        ],
+    },
+    Site {
         name: "`delphi customize note` (the operator's own note, tier L5, staged and never loaded)",
         files: &["crates/delphi-engine/src/customize.rs"],
         events: &["learn.staged"],

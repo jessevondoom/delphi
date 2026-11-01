@@ -19,6 +19,7 @@
 //!   a bad argument each get a JSON-RPC error (or a tool error); a notification gets nothing.
 
 use crate::kb::{BundleTag, Kb, Legs, SearchOpts};
+use crate::mcp_wire::{cut_at_char, err, ok, parse_request, tool_err, tool_result, Request, PROTOCOLS};
 use delphi_core::bundles::{self, Entry};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
@@ -26,8 +27,7 @@ use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
 pub const SERVER_NAME: &str = "delphi-bundles";
-/// Longest accepted request line. Every request this server understands is far smaller.
-pub const MAX_LINE: usize = 64 * 1024;
+pub use crate::mcp_wire::MAX_LINE;
 /// The most one `get_doc`, `resources/read` or `search` result carries.
 pub const MAX_RESULT_BYTES: usize = 256 * 1024;
 pub const MAX_QUERY_CHARS: usize = 500;
@@ -41,7 +41,6 @@ const MAX_DOC_BYTES: u64 = 512 * 1024;
 const MAX_TOTAL_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_DOCS: usize = 20_000;
 const URI_SCHEME: &str = "delphi-bundle://";
-const PROTOCOLS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 /// The provenance levels `bundle add` records. A bundle with any other value is not served (`specs/024` §2.2).
 const PROVENANCE: [&str; 5] = ["unsigned", "signed", "known-publisher", "endorsed", "member-signed"];
 
@@ -172,22 +171,6 @@ pub struct Server {
     pub notes: Vec<String>,
 }
 
-fn err(id: Value, code: i64, message: &str) -> Value {
-    json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})
-}
-
-fn ok(id: Value, result: Value) -> Value {
-    json!({"jsonrpc": "2.0", "id": id, "result": result})
-}
-
-fn tool_result(text: String, is_error: bool) -> Value {
-    json!({"content": [{"type": "text", "text": text}], "isError": is_error})
-}
-
-fn tool_err(msg: &str) -> Value {
-    tool_result(msg.to_string(), true)
-}
-
 /// The tool definitions; also the golden of the protocol tests.
 pub fn tools() -> Value {
     let annotations = |title: &str| json!({"title": title, "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false});
@@ -228,17 +211,6 @@ pub fn tools() -> Value {
     ])
 }
 
-fn cut_at_char(s: &str, max: usize) -> &str {
-    if s.len() <= max {
-        return s;
-    }
-    let mut n = max;
-    while !s.is_char_boundary(n) {
-        n -= 1;
-    }
-    &s[..n]
-}
-
 impl Server {
     /// Index what is served now. `only` names bundles (`org/name`); empty serves every active bundle.
     pub fn new(home: &Path, ws: &Path, only: &[String]) -> Result<Server, String> {
@@ -264,35 +236,15 @@ impl Server {
 
     /// One input line: the reply line to write, or `None` when nothing is to be said.
     pub fn handle_bytes(&mut self, line: &[u8]) -> Option<Value> {
-        let Ok(text) = std::str::from_utf8(line) else { return Some(err(Value::Null, -32700, "parse error: the request is not UTF-8")) };
-        match serde_json::from_str::<Value>(text) {
-            Ok(v) => self.handle(v),
-            Err(_) => Some(err(Value::Null, -32700, "parse error: the request is not valid JSON")),
-        }
+        crate::mcp_wire::handle_bytes(line, &mut |v| self.handle(v))
     }
 
     pub fn handle(&mut self, v: Value) -> Option<Value> {
-        let Value::Object(obj) = v else { return Some(err(Value::Null, -32600, "invalid request: a single JSON object is expected (batches are not supported)")) };
-        let id = match obj.get("id") {
-            None => None,
-            Some(i @ (Value::String(_) | Value::Number(_))) => Some(i.clone()),
-            Some(_) => return Some(err(Value::Null, -32600, "invalid request: id must be a string or a number")),
+        let Request { id, method, params } = match parse_request(v) {
+            Ok(r) => r,
+            Err(reply) => return reply,
         };
-        let method = match obj.get("method") {
-            Some(Value::String(m)) => m.as_str(),
-            // A reply to a request this server never made, or junk: nothing to say to either.
-            _ if obj.contains_key("result") || obj.contains_key("error") => return None,
-            _ => return id.map(|i| err(i, -32600, "invalid request: method must be a string")).or_else(|| Some(err(Value::Null, -32600, "invalid request: method must be a string"))),
-        };
-        if obj.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
-            return Some(err(id.unwrap_or(Value::Null), -32600, "invalid request: jsonrpc must be \"2.0\""));
-        }
-        let id = id?; // a notification is never answered
-        let params = match obj.get("params") {
-            None | Some(Value::Null) => Map::new(),
-            Some(Value::Object(p)) => p.clone(),
-            Some(_) => return Some(err(id, -32602, "invalid params: an object is expected")),
-        };
+        let method = method.as_str();
         if !self.initialized && !matches!(method, "initialize" | "ping") {
             return Some(err(id, -32600, "the server is not initialized: send `initialize` first"));
         }
@@ -490,79 +442,9 @@ fn limited(text: &str) -> (String, bool) {
 
 // ── stdio ───────────────────────────────────────────────────────────────────
 
-enum Line {
-    Eof,
-    Ok(Vec<u8>),
-    TooLong,
-}
-
-/// One newline-terminated line of at most `MAX_LINE` bytes. A longer line is consumed to its end without being kept.
-fn read_line<R: BufRead>(r: &mut R) -> std::io::Result<Line> {
-    let mut buf = Vec::new();
-    let mut too_long = false;
-    loop {
-        let chunk = match r.fill_buf() {
-            Ok(c) => c,
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(e) => return Err(e),
-        };
-        if chunk.is_empty() {
-            return Ok(if too_long {
-                Line::TooLong
-            } else if buf.is_empty() {
-                Line::Eof
-            } else {
-                Line::Ok(buf)
-            });
-        }
-        let (take, found) = match chunk.iter().position(|b| *b == b'\n') {
-            Some(i) => (i + 1, true),
-            None => (chunk.len(), false),
-        };
-        if !too_long {
-            if buf.len() + take > MAX_LINE + 1 {
-                too_long = true;
-                buf = Vec::new();
-            } else {
-                buf.extend_from_slice(&chunk[..take]);
-            }
-        }
-        r.consume(take);
-        if found {
-            if too_long {
-                return Ok(Line::TooLong);
-            }
-            while matches!(buf.last(), Some(b'\n' | b'\r')) {
-                buf.pop();
-            }
-            return Ok(Line::Ok(buf));
-        }
-    }
-}
-
-fn write_line<W: Write>(out: &mut W, v: &Value) -> std::io::Result<()> {
-    let mut s = serde_json::to_vec(v).unwrap_or_default();
-    s.push(b'\n');
-    out.write_all(&s)?;
-    out.flush()
-}
-
 /// Serve until the input closes. Returns the exit code.
-pub fn serve<R: BufRead, W: Write>(server: &mut Server, mut input: R, mut output: W) -> i32 {
-    loop {
-        let reply = match read_line(&mut input) {
-            Ok(Line::Eof) => return 0,
-            Ok(Line::Ok(b)) if b.iter().all(u8::is_ascii_whitespace) => continue,
-            Ok(Line::Ok(b)) => server.handle_bytes(&b),
-            Ok(Line::TooLong) => Some(err(Value::Null, -32600, "invalid request: the request is over the 64 KiB limit")),
-            Err(_) => return 1,
-        };
-        if let Some(r) = reply {
-            if write_line(&mut output, &r).is_err() {
-                return 1; // the client went away
-            }
-        }
-    }
+pub fn serve<R: BufRead, W: Write>(server: &mut Server, input: R, output: W) -> i32 {
+    crate::mcp_wire::serve_lines(input, output, &mut |b| server.handle_bytes(b))
 }
 
 /// `delphi bundle serve [--bundle <org/name>]...`, on this process's stdin and stdout.
@@ -602,6 +484,7 @@ pub fn run(home: &Path, ws: &Path, only: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mcp_wire::{read_line, Line};
     use crate::bundle_load::tests::add_bundle;
     use crate::workspace::tests::make_workspace;
     use crate::workspace::WorkspacePaths;

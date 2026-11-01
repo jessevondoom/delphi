@@ -392,6 +392,21 @@ Approved by the operator on 2026-10-30. D-33 supersedes D-28's Ink renderer choi
 | :-- | :-- | :-- |
 | OUI1 | OpenTUI renderer, supported source runtime, terminal ownership, CI end-to-end and release builds | in progress on `codex/opentui-completion` |
 
+## Delphi for host agents over MCP (spec 062, approved 2026-10-31)
+
+Approved by the operator on 2026-10-31. Same-machine host agents (Claude Code, Copilot CLI, Codex) get role packs, project awareness, `request_help`, Councils and a propose-only learning path. D-1..D-5 are the operator's decisions; D-6..D-9 follow the architect's recommendations; Q-1..Q-5 are open and each blocks one slice (§12).
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| S0 | spec 062 approval | approved 2026-10-31; merges with its pull request |
+| S1 | server skeleton and toggle | built (this PR): `delphi mcp` (`mcp_host.rs`, framing shared with `bundle serve` in `mcp_wire.rs`), `[mcp] enabled` re-read each call and fail-closed, `allow_remote = true` refused, empty golden `tools/list`; `delphi doctor` MCP line moves to S10 |
+| S2 | agent packs | built (this PR): `mcp_packs.rs`: `list_roles`, `get_agent`, `list_skills`, `get_skill` and one MCP prompt per servable role, from the ratified copies (hash-checked) via `load_snapshot_with` (operator profile omitted); `host_servable` in the manifest schema, `integrator` ships `false`, `builder` servable by the operator's decision of 2026-10-31 (D-6 amended); `route` moved to S3 |
+| S3 | project awareness: project resources, `specs_status`, `search_project`, `search_memory`, `route` | built |
+| S4 | host config printers, plugin export, guide | built: `mcp_hosts.rs`, `delphi mcp --print-config`, `delphi plugin export`, doctor hint, `docs/guides/using-delphi-from-other-tools.md`; agy taken as Antigravity / the Gemini CLI (Q-5 answered), its snippet unverified against a live host |
+| S5 | daemon host socket, `propose_note`, `record_session_summary`, `handoff_put`, `handoff_get` | built: `Scope::Host` and `<hash>.host.sock` (no tty needed, five methods only), `host_rpc.rs` rules (servable role, evidence required, tier `L0`, label `host:<tool>/<model>`), `mcp_daemon.rs` link (the process supplies session, tool and folder; never starts a daemon),; Q-2 answered by assumption. The count limits first built here were removed on 2026-10-31 (operator decision, spec §9): no limit or quota on local MCP or CLI use, the toggle only |
+| S6 | `request_help`, `help_result` | built: `host.request_help`/`host.help_result` on the host socket, `Engine::run_task_for_host` (read-only spans for the whole task, `L0` ceiling, `source: host`), the orchestrator picks who answers, no limit on how often (spec §9), bounded wait with `help_id` for a slow answer (Q-4 still open) |
+| S7-S11 | `request_council`, vector search, transcript ingest, resume and console toggle, security review | not started |
+
 ## The shell tool, shell modes and the `!` bang (spec 061, approved 2026-10-31)
 
 Approved by the operator on 2026-10-31 (D-34). Amends 008 §4 / D-24, 020 §3 and the 005 permission modes. Each slice is its own PR.
