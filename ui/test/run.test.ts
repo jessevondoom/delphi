@@ -77,6 +77,16 @@ test('/validate is a command the console accepts, and pass reports what the list
   assert.match(none.out.at(-1)!, /found nothing.*weak pages stay held/);
 });
 
+test('/research starts the job in this directory and /research cancel stops it', async () => {
+  const r = ctx(initial(0), [], (m) => (m === 'research.cancel' ? { cancelling: true } : {}));
+  await runSlash('/research the fall of Constantinople', r.c);
+  assert.deepEqual(r.calls[0], ['research.start', { topic: 'the fall of Constantinople', cwd: undefined }]);
+  await runSlash('/research cancel', r.c);
+  assert.equal(r.out.at(-1), 'cancelling the research');
+  await runSlash('/research', r.c);
+  assert.match(r.out.at(-1)!, /usage: \/research/);
+});
+
 test('usage renders a table with a total', () => {
   const t = renderUsage({ mission_id: 'm1', rows: [{ key: 'builder', calls: 2, input_tokens: 10, output_tokens: 5, cost_usd: 0.5 }], budget: { cap_usd: 5, reserved_usd: 0, available_usd: 4.5 } });
   assert.match(t, /builder\s+2\s+10\s+0\s+5\s+\$0\.5000/);

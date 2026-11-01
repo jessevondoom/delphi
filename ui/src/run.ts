@@ -223,6 +223,7 @@ export async function runSlash(line: string, ctx: Ctx, now = Date.now()): Promis
     }
     case 'ratify': { ctx.post(await ratify(ctx, rest)); return; }
     case 'retro': { ctx.post(await retro(ctx, rest)); return; }
+    case 'research': { ctx.post(await research(ctx, rest)); return; }
     case 'validate': { ctx.post(await validate(ctx, rest)); return; }
     case 'models': { const v = await call('models.get'); if (v) ctx.post(String(v.text ?? '').trimEnd() || 'no models are configured'); return; }
     case 'agents': {
@@ -331,6 +332,36 @@ async function retro(ctx: Ctx, args: string[]): Promise<string> {
 }
 
 let lastPending: { project?: string; items: any[] } = { items: [] };
+
+/** `/research <topic>`: the expand job from the prompt (`specs/058` §19). The same `research.start` the knowledge window uses, with this console's directory so a registered project keeps the pages. */
+async function research(ctx: Ctx, args: string[]): Promise<string> {
+  try {
+    if (args[0] === 'cancel') { const v = await ctx.cmd.call('research.cancel', {}); return v?.cancelling ? 'cancelling the research' : 'no research is running'; }
+    if (args[0] === 'status') {
+      const s = await ctx.cmd.call('research.status', {});
+      return `research on ${sanitize(String(s?.topic ?? ''))}: ${sanitize(String(s?.phase ?? 'unknown'))} · ${Number(s?.found ?? 0)} found, ${Number(s?.read ?? 0)} read, ${Number(s?.skipped ?? 0)} skipped`;
+    }
+    const topic = args.join(' ').trim();
+    if (!topic) return 'usage: /research <topic> · /research status · /research cancel';
+    await ctx.cmd.call('research.start', { topic, cwd: ctx.info.cwd });
+    void watchResearch(ctx);
+    return `researching ${sanitize(topic)}. Trusted sources enter the knowledge base (inside a registered project, its research folder instead); others are held for /validate. /research status · /research cancel`;
+  } catch (e) { return errText(e); }
+}
+
+/** Says once, in the chat, how the job ended. Stops by itself after the job ends or about ten minutes. */
+async function watchResearch(ctx: Ctx): Promise<void> {
+  for (let i = 0; i < 600; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    let s: any;
+    try { s = await ctx.cmd.call('research.status', {}); } catch { return; }
+    const phase = String(s?.phase);
+    if (!['done', 'failed', 'cancelled'].includes(phase)) continue;
+    const counts = `${Number(s?.found ?? 0)} found, ${Number(s?.read ?? 0)} read, ${Number(s?.skipped ?? 0)} skipped`;
+    ctx.post(phase === 'done' ? `research on ${sanitize(String(s?.topic ?? ''))} finished: ${counts}. /validate lists anything held back.` : `research ${phase}${s?.error ? ': ' + sanitize(String(s.error)) : ''} (${counts})`, phase === 'done' ? 'ok' : 'error');
+    return;
+  }
+}
 
 /** `/validate`: research held back from the knowledge base (`specs/058` §14). Ratifying puts one entry in the index as noted, not validated. */
 async function validate(ctx: Ctx, args: string[]): Promise<string> {

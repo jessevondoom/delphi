@@ -31,6 +31,7 @@
   { "name": "/merge", "args": "<task>", "desc": "Run the gates and the merge card again for a kept branch, after review", "ink": true, "rust": true, "local": false },
   { "name": "/retro", "args": "[list | show <n> | accept <n…> [workspace|operator] | reject <n…> | run]", "desc": "Rules the Orchestrator proposed: review, accept or reject; `run` asks it to look at this mission now", "ink": true, "rust": false, "local": false },
   { "name": "/projects", "args": "[name]", "desc": "Pick a registered project (arrow keys, Enter): the console restarts there as a new session", "ink": true, "rust": false, "local": true },
+  { "name": "/research", "args": "<topic> | status | cancel", "desc": "Research a topic from the trusted sources into the knowledge base (or this project's research folder); other pages are held for /validate", "ink": true, "rust": false, "local": false },
   { "name": "/validate", "args": "[list | pass | ratify <n…> | discard <n…>] [project=<name>]", "desc": "Research held back from the knowledge base: promote what the list now trusts (pass), or ratify or discard one at a time", "ink": true, "rust": false, "local": false },
   { "name": "/ratify", "desc": "Pending proposals (config, manifests, specs): review and approve", "ink": true, "rust": true, "local": false },
   { "name": "/resume", "args": "[task…]", "desc": "After a restart: continue the tasks it interrupted", "ink": true, "rust": true, "local": false },

@@ -28,6 +28,8 @@ This file starts with the work after v0.2.7. For earlier releases, the history i
 
 - `/projects` reads the registry each time (new console-only `projects.list`), and `research.start` takes the console's `cwd`: research started inside a registered project is written to that project (spec 058-A4).
 - The fact validator now looks a journal-publisher page's DOI up at doi.org (spec 040-A5): a made-up DOI, one registered outside a publisher, or any lookup failure means the page is not counted.
+- Agent-started research (spec 058-A8): the `request_research` tool asks you with a card every time, then runs the same job in the session's own scope.
+- `/research <topic>` (spec 058-A7): start the research job from the prompt, with `status` and `cancel`; it uses the console's directory, so project routing applies.
 - Validator pass (spec 058-A6): `/validate pass` promotes held research whose source the allow list now trusts; it runs automatically when a session opens (default scope), never promotes weak sources, and moves a project's pages only when you name the project.
 - Weekly digest (spec 058-A5): when at least five research pages are waiting outside the knowledge base (held, or in a project and not yet ratified) and a week has passed, the orchestrator says so once in the chat (`research.digest`) and points to `/validate`. A message, never a card.
 ## 0.4.0 — 2026-10-31
