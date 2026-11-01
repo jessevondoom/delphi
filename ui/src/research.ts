@@ -4,6 +4,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { copyText, type Target } from './links.ts';
+import { sessionDir } from './missions.ts';
 import type { Info } from './theme.ts';
 
 export type Source = { path: string; how: 'read' | 'cited'; roles: string[]; count: number; last: number };
@@ -38,6 +39,11 @@ export function physical(info: Info, logical: string): string | null {
     const p = join(root, rel);
     if (existsSync(p)) return p;
   }
+  const m = /^missions\/([^/]+)(\/.*)?$/.exec(rel);
+  if (m) {
+    const p = join(sessionDir(info.workspace, m[1]!), m[2] ?? '');
+    if (existsSync(p)) return p;
+  }
   return null;
 }
 
@@ -48,7 +54,7 @@ export function previewOf(info: Info, logical: string, max = 40): string[] {
   try { return readFileSync(p, 'utf8').replace(/\x1b/g, '').split('\n').slice(0, max); } catch { return []; }
 }
 
-export const notesPath = (info: Info, mission: string) => join(info.workspace, 'local/missions', mission, 'notes.md');
+export const notesPath = (info: Info, mission: string) => join(sessionDir(info.workspace, mission), 'notes.md');
 
 const FRONTMATTER = (mission: string, now: string) => `---\nid: notes-${mission}\ntitle: "Mission notebook"\nauthor: operator\ntimestamp: ${now}\nsource_type: internal_generated\nconfidence: medium\nstatus: active\nsource_mission: ${mission}\ntags: [notes]\n---\n\n# Notebook\n\nPinned by the operator from the console. Each entry says where it came from.\n`;
 

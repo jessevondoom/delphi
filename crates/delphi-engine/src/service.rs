@@ -161,7 +161,7 @@ impl EngineService {
             return Ok(m.clone());
         }
         let e = &self.engine;
-        let mission_dir = e.ws.dir.join("local/missions").join(id);
+        let mission_dir = delphi_core::sessions::dir(&e.ws.dir, id);
         if !mission_dir.exists() {
             if let Some(cwd) = cwd.map(std::path::Path::new).filter(|c| c.is_absolute()) {
                 if let Some(project) = crate::scope::resolve(&e.ws.dir, cwd).project {
@@ -4120,7 +4120,7 @@ mod tests {
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::create_dir_all(&outside).unwrap();
         register_at(&ws, &[(SCOPE_A, &root)]);
-        let scope = |m: &str| std::fs::read_to_string(ws.join("local/missions").join(m).join("scope")).ok();
+        let scope = |m: &str| std::fs::read_to_string(delphi_core::sessions::dir(&ws, m).join("scope")).ok();
         svc.mission_at(Some("at-root"), Some(root.to_str().unwrap())).await.unwrap();
         svc.mission_at(Some("in-sub"), Some(root.join("src").to_str().unwrap())).await.unwrap();
         svc.mission_at(Some("outside"), Some(outside.to_str().unwrap())).await.unwrap();
@@ -4161,7 +4161,7 @@ mod tests {
         let svc = EngineService::new(f.engine.clone(), "m1");
         let ws = f.engine.ws.dir.clone();
         let m = svc.mission_at(Some("digest-m"), None).await.unwrap();
-        let dir = ws.join("local/missions/digest-m");
+        let dir = delphi_core::sessions::dir(&ws, "digest-m");
         let digests = |_: &Arc<MissionState>| delphi_core::log::replay(&dir).unwrap().into_iter().filter(|e| e.kind == "research.digest").collect::<Vec<_>>();
         svc.research_nudge(&m).await;
         assert!(digests(&m).is_empty(), "nothing waiting, nothing said");
@@ -4190,7 +4190,7 @@ mod tests {
         std::fs::write(ws.join("local/projects.json"), "{not json").unwrap();
         svc.mission_at(Some("corrupt"), Some(root.to_str().unwrap())).await.unwrap();
         for m in ["ambiguous", "corrupt"] {
-            assert!(ws.join("local/missions").join(m).is_dir() && !ws.join("local/missions").join(m).join("scope").exists(), "{}", m);
+            assert!(delphi_core::sessions::dir(&ws, m).is_dir() && !delphi_core::sessions::dir(&ws, m).join("scope").exists(), "{}", m);
         }
     }
 

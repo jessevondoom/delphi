@@ -145,8 +145,8 @@ pub(crate) fn utc(ts: i64) -> String {
 
 /// Paths (relative to the workspace) an arm home does not take: the operator's work and state, and the workspace's own
 /// learning, so the arm starts from the release and team layers only.
-const SKIP: [&str; 14] = [
-    "local/missions", "local/state.db", "local/state.db-shm", "local/state.db-wal", "local/pool-state.json", "local/proposals", "local/timers.json",
+const SKIP: [&str; 15] = [
+    "local/missions", "local/sessions", "local/state.db", "local/state.db-shm", "local/state.db-wal", "local/pool-state.json", "local/proposals", "local/timers.json",
     "local/memory", "local/staged", "local/ratified/memory", "local/ratified/heuristics.md", "local/ratified/specs", "worktrees", "scratch",
 ];
 

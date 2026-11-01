@@ -198,7 +198,7 @@ fn mission_verdict(ws: &Path, mission: &str, fact: &str) -> Option<Value> {
     if mission.contains(['/', '\\']) || mission.contains("..") {
         return None;
     }
-    let events = delphi_core::log::replay(&ws.join("local/missions").join(mission)).ok()?;
+    let events = delphi_core::log::replay(&delphi_core::sessions::dir(ws, mission)).ok()?;
     events.into_iter().rev().find(|e| e.kind == "validator.verdict" && e.payload["claim"].as_str().is_some_and(|c| fact_id(c) == fact)).map(|e| e.payload)
 }
 
@@ -520,8 +520,8 @@ pub fn retract_all(ws: &Path, state: &Path, store: &FactStore, now: i64) -> Retr
     let retracted = store.retract_all();
     let ids: BTreeSet<&str> = retracted.iter().map(|(i, _)| i.as_str()).collect();
     let mut readers: Vec<Reader> = vec![];
-    if let Ok(rd) = std::fs::read_dir(ws.join("local/missions")) {
-        let mut dirs: Vec<_> = rd.flatten().map(|d| d.path()).collect();
+    {
+        let mut dirs: Vec<_> = delphi_core::sessions::dirs(ws).into_iter().map(|(_, p)| p).collect();
         dirs.sort();
         for d in dirs {
             for e in delphi_core::log::replay(&d).unwrap_or_default() {
@@ -639,7 +639,7 @@ mod tests {
 
     /// A mission record holding the verdict event, so a card can show its claim.
     fn mission_with_claim(ws: &Path, mission: &str, claim: &str) {
-        let mut log = delphi_core::log::EventLog::open(&ws.join("local/missions").join(mission), Default::default()).unwrap();
+        let mut log = delphi_core::log::EventLog::open(&delphi_core::sessions::dir(ws, mission), Default::default()).unwrap();
         log.append(delphi_core::event::EventEnvelope::new(mission, "validator.verdict", json!({"claim": claim, "verdict": "would_ratify", "sources": [{"url": "https://example.org/a", "origin": "example.org"}], "reasons": ["two independent origins"]})))
             .unwrap();
     }

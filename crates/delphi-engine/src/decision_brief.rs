@@ -58,10 +58,10 @@ pub fn key(id: &str, payload_blake3: &str) -> String {
     blake3::hash(format!("{}\n{}\nv{}", id, payload_blake3, BRIEF_VERSION).as_bytes()).to_hex()[..32].to_string()
 }
 
-/// Where a decision's brief and thread live: `<workspace>/local/missions/<mission>/decisions/<hash of the id>/`. The id is hashed, so
+/// Where a decision's brief and thread live: `<workspace>/local/sessions/<mission>/decisions/<hash of the id>/`. The id is hashed, so
 /// whatever it contains cannot name a path.
 pub fn dir_of(ws: &Path, mission: &str, id: &str) -> PathBuf {
-    ws.join("local/missions").join(mission).join("decisions").join(&blake3::hash(id.as_bytes()).to_hex()[..16])
+    delphi_core::sessions::dir(ws, mission).join("decisions").join(&blake3::hash(id.as_bytes()).to_hex()[..16])
 }
 
 pub fn read_brief(dir: &Path, key: &str) -> Option<BriefRecord> {
@@ -243,7 +243,7 @@ mod tests {
         assert_ne!(key("card:a1", "h1"), key("card:a2", "h1"));
         let ws = Path::new("/ws");
         let d = dir_of(ws, "m1", "card:../../etc/passwd");
-        assert!(d.starts_with("/ws/local/missions/m1/decisions/") && !d.to_string_lossy().contains(".."), "{d:?}");
+        assert!(d.starts_with("/ws/local/sessions/m1/decisions/") && !d.to_string_lossy().contains(".."), "{d:?}");
         assert_eq!(d.file_name().unwrap().len(), 16);
     }
 

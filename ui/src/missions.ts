@@ -1,22 +1,30 @@
-// /missions: the workspace's missions, newest first (`crates/delphi/src/missions.rs` does the same for the CLI and
-// the Rust console; keep the two in step). A mission is a directory under `local/missions/`; its last activity is the
-// newest event file in it.
-import { readdirSync, statSync } from 'node:fs';
+// /sessions: the workspace's sessions, newest first (`crates/delphi/src/missions.rs` does the same for the CLI and
+// the Rust console; keep the two in step). A session is a directory under `local/sessions/`, or under `local/missions/`
+// when it was written before that name changed (spec 058-A9); its last activity is the newest event file in it.
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 export type MissionRow = { id: string; last: number | null };
 
 const mtime = (p: string): number | null => { try { return statSync(p).mtimeMs; } catch { return null; } };
 
+/** Where session `id` lives: its old `local/missions/` directory if it has one, otherwise `local/sessions/`. */
+export function sessionDir(workspace: string, id: string): string {
+  const old = join(workspace, 'local/missions', id);
+  return existsSync(old) ? old : join(workspace, 'local/sessions', id);
+}
+
 export function listMissions(workspace: string | undefined): MissionRow[] {
   if (!workspace) return [];
-  const root = join(workspace, 'local/missions');
-  let ids: string[];
-  try { ids = readdirSync(root, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name); } catch { return []; }
-  const rows = ids.map((id) => {
+  const ids = new Set<string>();
+  for (const root of ['local/missions', 'local/sessions']) {
+    try { for (const e of readdirSync(join(workspace, root), { withFileTypes: true })) if (e.isDirectory()) ids.add(e.name); } catch { /* no such root */ }
+  }
+  const rows = [...ids].map((id) => {
+    const dir = sessionDir(workspace, id);
     let newest: number | null = null;
-    try { for (const f of readdirSync(join(root, id, 'events'))) newest = Math.max(newest ?? 0, mtime(join(root, id, 'events', f)) ?? 0); } catch { /* no events yet */ }
-    return { id, last: newest ?? mtime(join(root, id)) };
+    try { for (const f of readdirSync(join(dir, 'events'))) newest = Math.max(newest ?? 0, mtime(join(dir, 'events', f)) ?? 0); } catch { /* no events yet */ }
+    return { id, last: newest ?? mtime(dir) };
   });
   return rows.sort((a, b) => (b.last ?? 0) - (a.last ?? 0) || (a.id < b.id ? 1 : -1));
 }

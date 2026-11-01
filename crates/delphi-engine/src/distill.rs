@@ -148,7 +148,7 @@ impl Walk<'_> {
             return self.refuse(&format!("missions/{}", id), "not a mission id");
         }
         self.file(&format!("missions/{}/decisions.md", id), false);
-        let mut names: Vec<String> = std::fs::read_dir(ws_dir.join("local/missions").join(id).join("councils")).map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
+        let mut names: Vec<String> = std::fs::read_dir(delphi_core::sessions::dir(ws_dir, id).join("councils")).map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
         names.sort();
         for n in names.into_iter().filter(|n| n.ends_with("-verdict.md")) {
             self.file(&format!("missions/{}/councils/{}", id, n), false);
@@ -167,7 +167,7 @@ pub fn plan(guard: &Guard, ws_dir: &Path, requested: &[String]) -> Result<Plan, 
     if requested.is_empty() {
         w.dir("context", 0);
         w.dir("specs", 0);
-        let mut missions: Vec<String> = std::fs::read_dir(ws_dir.join("local/missions")).map(|rd| rd.flatten().filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
+        let mut missions: Vec<String> = delphi_core::sessions::dirs(ws_dir).into_iter().map(|(id, _)| id).collect();
         missions.sort();
         for id in missions {
             w.mission(ws_dir, &id);

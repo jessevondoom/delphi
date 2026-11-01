@@ -762,7 +762,7 @@ fn run_inner(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize, row:
         return Err(format!("infrastructure failure: {}", summary["error"].as_str().or(summary["reason"].as_str()).unwrap_or("see stderr")));
     }
     let mission = summary["mission_id"].as_str().filter(|m| !m.is_empty() && !m.contains(['/', '\\', '.'])).ok_or("the summary names no mission")?;
-    let events = delphi_core::log::replay(&ws_dir.join("local/missions").join(mission)).map_err(|e| format!("could not read the mission log: {}", e))?;
+    let events = delphi_core::log::replay(&delphi_core::sessions::dir(&ws_dir, mission)).map_err(|e| format!("could not read the mission log: {}", e))?;
     row.usage = usage_by_model(&events);
     row.cost_usd = row.usage.values().map(|u| u.cost_usd).sum();
     row.promotions = events.iter().filter(|e| e.kind == "model.promoted").count() as u32;
@@ -780,7 +780,7 @@ fn run_inner(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize, row:
     let task = summary["task_id"].as_str();
     row.attempts = records.iter().find(|r| Some(r.task_id.as_str()) == task).or(records.last()).map_or(0, |r| r.attempts);
     let record = records.iter().find(|r| Some(r.task_id.as_str()) == task).or(records.last()).cloned();
-    let deliverable = deliverable_of(&events, task, &ws_dir.join("local/missions").join(mission));
+    let deliverable = deliverable_of(&events, task, &delphi_core::sessions::dir(&ws_dir, mission));
     // What the run delivered, for the jury: taken before the hidden tests are placed in the repository.
     let draft = crate::train_judge::draft(case, &repo, &deliverable);
     let ctx = Ctx { events: &events, record, fixture: &case.dir.join("fixture"), repo: &repo, deliverable, truth: case.truth.as_ref(), case, target: cfg.work_dir.join("target"), scratch: dir.join("hidden") };

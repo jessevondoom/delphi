@@ -465,19 +465,18 @@ pub fn project_staged(ws_dir: &Path) {
     let out = ws_dir.join("local/staged");
     let projects = ws_dir.join("local/projects");
     let registered = crate::scope::registered_ids(ws_dir);
-    let Ok(rd) = std::fs::read_dir(ws_dir.join("local/missions")) else {
+    if !delphi_core::sessions::roots(ws_dir).iter().any(|r| r.is_dir()) {
         let _ = std::fs::remove_dir_all(&out);
         sweep_project_staged(&projects, &BTreeMap::new());
         return;
-    };
+    }
     let mut present = BTreeSet::new();
     let mut routed: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for e in rd.flatten().filter(|e| e.path().is_dir()) {
-        let name = e.file_name().to_string_lossy().to_string();
+    for (name, dir) in delphi_core::sessions::dirs(ws_dir) {
         if !plain(&name) {
             continue;
         }
-        let Some((project, target)) = staged_target(ws_dir, &e.path(), &name, &registered) else { continue };
+        let Some((project, target)) = staged_target(ws_dir, &dir, &name, &registered) else { continue };
         match &project {
             None => {
                 present.insert(name.clone());
@@ -487,7 +486,7 @@ pub fn project_staged(ws_dir: &Path) {
             }
         }
         let stamp = target.join(".synced");
-        let fresh = match (std::fs::metadata(&stamp).and_then(|m| m.modified()).ok(), newest_event_mtime(&e.path())) {
+        let fresh = match (std::fs::metadata(&stamp).and_then(|m| m.modified()).ok(), newest_event_mtime(&dir)) {
             (Some(s), Some(ev)) => s >= ev,
             (Some(_), None) => true,
             _ => false,
@@ -495,7 +494,7 @@ pub fn project_staged(ws_dir: &Path) {
         if fresh {
             continue;
         }
-        let Ok(events) = delphi_core::log::replay(&e.path()) else { continue };
+        let Ok(events) = delphi_core::log::replay(&dir) else { continue };
         let notes = live_notes(&name, &events);
         if notes.is_empty() {
             let _ = std::fs::remove_dir_all(&target);
@@ -1105,7 +1104,7 @@ mod tests {
     const PB: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
     fn scoped_mission(ws: &Path, mission: &str, scope: Option<&str>) {
-        let dir = ws.join("local/missions").join(mission);
+        let dir = delphi_core::sessions::dir(ws, mission);
         let mut log = delphi_core::log::EventLog::open(&dir, delphi_core::log::LogOptions::default()).unwrap();
         let mut e = EventEnvelope::new(mission, "learn.staged", json!({"id": "n1", "trigger": "denied_card", "summary": "lesson", "event_seqs": [1], "tier": "L5"}));
         e.task_id = Some("t_0001".into());
@@ -1132,7 +1131,7 @@ mod tests {
         assert!(!ws.join("local/projects").join(PB).exists(), "project B receives nothing");
         let layered = crate::scope::layered_sources(ws, &crate::scope::Active { project: Some(crate::scope::ProjectId::parse(PB).unwrap()), diagnostic: None });
         assert!(layered.iter().all(|s| !s.file.rel_path.contains("ma/")), "and cannot read A's staged note");
-        let _ = std::fs::remove_dir_all(ws.join("local/missions/ma"));
+        let _ = std::fs::remove_dir_all(ws.join("local/sessions/ma"));
         project_staged(ws);
         assert!(!ws.join("local/projects").join(PA).join("staged/ma").exists(), "a removed mission leaves the layer");
     }

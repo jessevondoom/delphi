@@ -54,7 +54,7 @@ Type `/research <topic>` (or ask in chat and approve the card the agent raises, 
 - **Reviewing held pages:** `/validate` lists them; `/validate pass` promotes every page whose source the allow list now trusts (it also runs when a session opens); `/validate ratify <n>` or `discard <n>` decides one at a time. Add `project=<name>` for a project's pages. Ratified pages are searchable but noted as not validated.
 - **A nudge:** about once a week, when five or more pages are waiting, the orchestrator says so in the chat.
 
-Weak sources are never treated as corroboration. The fact validator looks a journal page's DOI up at doi.org and counts the page only if it is registered to a publisher; a failed lookup is a no. Not built yet: the rename of "mission" to "session".
+Weak sources are never treated as corroboration. The fact validator looks a journal page's DOI up at doi.org and counts the page only if it is registered to a publisher; a failed lookup is a no. Not built yet: renaming the word "mission" in commands (new session logs are already stored under `local/sessions/`, but "session" already names a span of a mission, so the words wait for a decision).
 
 ## 4. Answer the cards
 

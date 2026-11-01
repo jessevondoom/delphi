@@ -27,7 +27,7 @@ check-jsonschema --schemafile schemas/config.schema.json ~/.delphi/workspaces/wo
 check-jsonschema --schemafile schemas/bundle.schema.json my-bundle/bundle.toml
 ```
 
-Validate an event log line with any JSON Schema library: parse the line as JSON and check it against `schemas/event-envelope.schema.json`. The mission logs are under `local/missions/<id>/` in the workspace and are written only by the daemon.
+Validate an event log line with any JSON Schema library: parse the line as JSON and check it against `schemas/event-envelope.schema.json`. The session logs are under `local/sessions/<id>/` in the workspace (older ones stay under `local/missions/<id>/`) and are written only by the daemon.
 
 Each schema's `$id` is stable and its `description` names the specification and the source file that implement it.
 

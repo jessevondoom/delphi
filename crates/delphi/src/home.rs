@@ -359,7 +359,7 @@ pub fn init(o: &InitOptions) -> Result<Workspace> {
             bail!("theme `{}` is invalid: {}", o.theme, errs.join("; "));
         }
     }
-    for d in ["core", "base", "team", "local/missions", "local/proposals", "local/ratified", "locks", "worktrees"] {
+    for d in ["core", "base", "team", "local/sessions", "local/proposals", "local/ratified", "locks", "worktrees"] {
         fs::create_dir_all(ws.dir.join(d))?;
     }
     for r in ROLES.iter() {

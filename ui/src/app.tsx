@@ -20,6 +20,7 @@ import { imageRefs } from './markdown.ts';
 import { pictureStyle, rasterOf, styleOf, usePictureStyle } from './image.ts';
 import { openExternal, openFile } from './external.ts';
 import * as O from './org.ts';
+import { sessionDir } from './missions.ts';
 import { noteSources, passageOf, pin, previewOf, readNotes } from './research.ts';
 import { copyText, firstVisible, stepFocus, type Target } from './links.ts';
 import { execFile } from 'node:child_process';
@@ -284,7 +285,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
       const all = line.slice(name.length).trim() === 'all';
       const write = (text: string, stem: string) => {
         try {
-          const dir = join(info.workspace, 'local/missions', mission, 'exports');
+          const dir = join(sessionDir(info.workspace, mission), 'exports');
           mkdirSync(dir, { recursive: true });
           const file = join(dir, `${stem}-${Date.now()}.md`);
           writeFileSync(file, text);

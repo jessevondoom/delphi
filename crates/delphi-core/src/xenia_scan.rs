@@ -5,7 +5,7 @@
 //! [`Redactor`], the same one that masks events and that the bundle `validate` step 8 scan uses), a private-key
 //! block, an operator-registered credential literal in raw, base64 or URL-encoded form, a local user path
 //! (`/Users/<name>/`, `/home/<name>/`, `C:\Users\<name>`) and a reference to a mission's own record (`events.jsonl`,
-//! `local/missions/`, a `"type":"task.*"` event line), which is what an "unredacted session trace" looks like.
+//! `local/missions/` or `local/sessions/`, a `"type":"task.*"` event line), which is what an "unredacted session trace" looks like.
 //!
 //! **Flags** do not block (spec 011 §7.1: "flags (does not block) URLs, long high-entropy strings and
 //! customer-identifier patterns"); they are shown beside the exact bytes and the operator's approval has to
@@ -86,7 +86,7 @@ fn patterns(ctx: &ScanContext) -> Patterns {
         redactor,
         home: Regex::new(r"(/Users/[A-Za-z0-9._-]+/|/home/[A-Za-z0-9._-]+/|[A-Za-z]:\\Users\\[A-Za-z0-9._-]+)").unwrap(),
         key_header: Regex::new(r"-----BEGIN [A-Z ]*PRIVATE KEY-----").unwrap(),
-        trace: Regex::new(r#"events\.jsonl|local/missions/|/workspaces/[A-Za-z0-9._-]+/local/|"type"\s*:\s*"(?:task|tool|handoff|approval)\.[a-z_]+""#).unwrap(),
+        trace: Regex::new(r#"events\.jsonl|local/(?:missions|sessions)/|/workspaces/[A-Za-z0-9._-]+/local/|"type"\s*:\s*"(?:task|tool|handoff|approval)\.[a-z_]+""#).unwrap(),
         url: Regex::new(r#"(?i)\b(?:https?|ssh|ftp)://[^\s<>")\]]+"#).unwrap(),
         email: Regex::new(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+").unwrap(),
         customer: Regex::new(r"\b(?:cus|acct|sub|in|pi|ch|cust|customer|account)[_-][A-Za-z0-9]{6,}\b").unwrap(),

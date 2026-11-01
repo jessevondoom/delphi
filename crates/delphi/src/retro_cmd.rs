@@ -23,7 +23,7 @@ pub fn collect(ws_dir: &Path, opts: &Options) -> Result<Vec<LiveProposal>, Strin
     let ids = match &opts.mission {
         Some(m) => {
             // A mission id is a directory name; refuse anything that could point elsewhere.
-            if m.is_empty() || m.contains(['/', '\\']) || m.starts_with('.') || !ws_dir.join("local/missions").join(m).is_dir() {
+            if m.is_empty() || m.contains(['/', '\\']) || m.starts_with('.') || !delphi_core::sessions::dir(ws_dir, m).is_dir() {
                 return Err(format!("no mission `{}` in this workspace (see `delphi missions`)", m));
             }
             vec![m.clone()]
@@ -32,7 +32,7 @@ pub fn collect(ws_dir: &Path, opts: &Options) -> Result<Vec<LiveProposal>, Strin
     };
     let mut all = Vec::new();
     for id in ids {
-        let events = replay(&ws_dir.join("local/missions").join(&id)).map_err(|e| format!("could not read the log of {}: {}", id, e))?;
+        let events = replay(&delphi_core::sessions::dir(ws_dir, &id)).map_err(|e| format!("could not read the log of {}: {}", id, e))?;
         all.extend(live_proposals(&id, &events));
     }
     all.sort_by(|a, b| b.timestamp.cmp(&a.timestamp).then_with(|| b.reference().cmp(&a.reference())));
@@ -44,7 +44,7 @@ pub fn collect(ws_dir: &Path, opts: &Options) -> Result<Vec<LiveProposal>, Strin
 pub fn mine(ws_dir: &Path, opts: &Options) -> Result<String, String> {
     let ids = match &opts.mission {
         Some(m) => {
-            if m.is_empty() || m.contains(['/', '\\']) || m.starts_with('.') || !ws_dir.join("local/missions").join(m).is_dir() {
+            if m.is_empty() || m.contains(['/', '\\']) || m.starts_with('.') || !delphi_core::sessions::dir(ws_dir, m).is_dir() {
                 return Err(format!("no mission `{}` in this workspace (see `delphi missions`)", m));
             }
             vec![m.clone()]
@@ -53,7 +53,7 @@ pub fn mine(ws_dir: &Path, opts: &Options) -> Result<String, String> {
     };
     let (mut out, mut reports) = (String::new(), Vec::new());
     for id in &ids {
-        let dir = ws_dir.join("local/missions").join(id);
+        let dir = delphi_core::sessions::dir(ws_dir, id);
         let events = replay(&dir).map_err(|e| format!("could not read the log of {}: {}", id, e))?;
         let report = delphi_engine::trace_mine::mine(id, &events);
         let body = serde_json::to_string_pretty(&report.to_json()).map_err(|e| e.to_string())? + "\n";
@@ -166,7 +166,7 @@ pub fn run_in(ws_dir: &Path, verb: &str, reference: Option<&str>, opts: &Options
 /// The mission's log, for writing. A lock held by a live daemon stays held, so the wait is short: it only covers the
 /// moment after a writer in this process closed the log, when a forked child may still carry a copy of the descriptor.
 pub(crate) fn open_log(ws_dir: &Path, mission: &str) -> Result<EventLog, String> {
-    let dir = ws_dir.join("local/missions").join(mission);
+    let dir = delphi_core::sessions::dir(ws_dir, mission);
     let mut tries = 0;
     loop {
         match EventLog::open(&dir, LogOptions::default()) {
