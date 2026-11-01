@@ -601,7 +601,7 @@ impl Kb {
         }
         let source_type = if bundle.is_some() || zone == "knowledge" || zone == "library" || zone == "about" { default_source.to_string() } else { frontmatter_field(text, "source_type").filter(|s| SOURCE_TYPES.contains(&s.as_str())).unwrap_or_else(|| default_source.to_string()) };
         let from = bundle.map(|b| format!(" | Bundle: {}", b.label)).unwrap_or_default();
-        let (author, confidence, status) = (frontmatter_field(text, "author"), frontmatter_field(text, "confidence").unwrap_or_else(|| "low".into()), if zone == "about" { "active".into() } else { frontmatter_field(text, "status").unwrap_or_else(|| "active".into()) });
+        let (author, confidence, status) = (frontmatter_field(text, "author").or_else(|| frontmatter_field(text, "role")), frontmatter_field(text, "confidence").unwrap_or_else(|| "low".into()), if zone == "about" { "active".into() } else { frontmatter_field(text, "status").unwrap_or_else(|| "active".into()) });
         let tx = self.conn.transaction()?;
         // A bundle's file is rewritten on every add (its label may have changed), but a chunk whose text did not change
         // keeps its vectors: they are filed under a hash of that text, so an update embeds only what was edited.
@@ -905,7 +905,11 @@ fn allowed_sql(opts: &SearchOpts) -> String {
     // A quarantined fact (`specs/040` §15.2) is out of search for everyone, the operator's view included.
     let mut allowed = String::from("d.status != 'quarantined'");
     if !opts.include_untrusted {
-        allowed.push_str(" AND d.status = 'active' AND d.source_type NOT IN ('external_untrusted', 'federated_peer')");
+        if opts.include_episodes {
+            allowed.push_str(" AND (d.zone = 'episodes' OR (d.status = 'active' AND d.source_type NOT IN ('external_untrusted', 'federated_peer')))");
+        } else {
+            allowed.push_str(" AND d.status = 'active' AND d.source_type NOT IN ('external_untrusted', 'federated_peer')");
+        }
     }
     // An attribution ("SOURCE states X") is not a fact: it is invisible to search, listing and reading, whatever else
     // is asked for, unless `include_attributed` is (`specs/040` §24.3).
