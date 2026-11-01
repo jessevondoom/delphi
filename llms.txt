@@ -43,7 +43,7 @@ Start with the README, then the guides. The specs are the design and say, in a `
 ## Design
 
 - [Charter](GOVERNANCE.md) and [review rubric](REVIEW.md)
-- [specs/](specs/): governance and manifests (001), adapter and routing (002), Council (003), memory and search (004), console (005*), installer (006), model access (009), connectors (010), Xenia trust, records and librarian (011-013, 022), documents and charts (014), headless run (016), org bundles (023-027), agent registry (041, approved, not built), layered learning (031), signed releases (036), training experiments (037), Delphi for host agents over MCP (061, approved, not built)
+- [specs/](specs/): governance and manifests (001), adapter and routing (002), Council (003), memory and search (004), console (005*), installer (006), model access (009), connectors (010), Xenia trust, records and librarian (011-013, 022), documents and charts (014), headless run (016), org bundles (023-027), agent registry (041, approved, not built), layered learning (031), signed releases (036), training experiments (037), Delphi for host agents over MCP (062, approved, not built)
 
 ## For contributors and coding agents
 

@@ -303,6 +303,7 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
     notices.extend(crate::hooks::parse(&root).1.into_iter().map(|p| format!("hooks: {}", p)));
     let pool = Arc::new(crate::pool::Pool::open(Some(ws_dir.join("local/pool-state.json")), cfg.get().routing.tuning.clone(), crate::pool::system_clock()));
     let engine = Arc::new(Engine {
+        research_ask: Default::default(),
         validator: Default::default(),
         ws: WorkspacePaths { home: home.to_path_buf(), dir: ws_dir.to_path_buf() },
         cfg,

@@ -260,7 +260,7 @@ impl WorkspacePaths {
         self.load_snapshot_with(role, true)
     }
 
-    /// `load_snapshot`, with the operator profile summary left out when `include_profile` is false (a host agent's pack, `specs/061` §4.2).
+    /// `load_snapshot`, with the operator profile summary left out when `include_profile` is false (a host agent's pack, `specs/062` §4.2).
     pub fn load_snapshot_with(&self, role: &str, include_profile: bool) -> Result<Snapshot, LoadError> {
         let mut snap = Snapshot { governance: split_frontmatter(&self.ratified_workspace("GOVERNANCE.md")?).1.trim().to_string(), ..Snapshot::default() };
         let rules = |text: &str| split_frontmatter(text).1.trim().to_string();

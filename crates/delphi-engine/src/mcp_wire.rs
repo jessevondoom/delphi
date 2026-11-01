@@ -1,4 +1,4 @@
-//! The MCP wire shared by Delphi's stdio servers (`delphi bundle serve`, `specs/025` §4.4, and `delphi mcp`, `specs/061` §3.1):
+//! The MCP wire shared by Delphi's stdio servers (`delphi bundle serve`, `specs/025` §4.4, and `delphi mcp`, `specs/062` §3.1):
 //! newline-delimited JSON-RPC, a bounded request line, the request envelope checks and the reply shapes.
 //!
 //! It holds no state and no policy: no file, no socket, no process. What a method does is the server's business.

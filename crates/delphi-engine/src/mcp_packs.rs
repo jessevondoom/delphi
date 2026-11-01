@@ -1,4 +1,4 @@
-//! Agent packs for host agents (`specs/061` §4): a Delphi role's instructions, heuristics, lessons and skill index, assembled
+//! Agent packs for host agents (`specs/062` §4): a Delphi role's instructions, heuristics, lessons and skill index, assembled
 //! the way the harness assembles IPR blocks 1-4 (`WorkspacePaths::load_snapshot_with`), so a pack cannot drift from what the
 //! role has learned.
 //!
@@ -132,7 +132,7 @@ impl Packs {
         ))
     }
 
-    /// The agent pack for `role` (`specs/061` §4.2). The operator profile is left out (`include_profile` is for a later opt-in).
+    /// The agent pack for `role` (`specs/062` §4.2). The operator profile is left out (`include_profile` is for a later opt-in).
     pub fn pack(&self, role: &str, include_profile: bool) -> Result<String, String> {
         let text = self.role_text(role)?;
         let (fm, _) = split_frontmatter(&text);

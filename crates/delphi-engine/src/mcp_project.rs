@@ -1,4 +1,4 @@
-//! Project awareness for host agents (`specs/061` §5): the specs and context of the registered project a folder belongs to,
+//! Project awareness for host agents (`specs/062` §5): the specs and context of the registered project a folder belongs to,
 //! what may be built, and a search over the project and the memory a role may read.
 //!
 //! Read-only, like the rest of `delphi mcp`. The scope is resolved from the server's working directory by `scope::resolve`

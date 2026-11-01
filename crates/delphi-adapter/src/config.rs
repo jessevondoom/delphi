@@ -578,11 +578,11 @@ pub struct Config {
     pub library: LibraryConfig,
     /// `[learning]`: capture and the bounds on the learning loop (`specs/031` §3.6). The engine clamps each value to the core's bounds.
     pub learning: LearningConfig,
-    /// `[mcp]`: the server for host agents (`specs/061` §3.4).
+    /// `[mcp]`: the server for host agents (`specs/062` §3.4).
     pub mcp: McpConfig,
 }
 
-/// `[mcp]` (`specs/061` §3.2, §3.4). `enabled` is the operator's switch; `allow_remote` is reserved for a later spec and
+/// `[mcp]` (`specs/062` §3.2, §3.4). `enabled` is the operator's switch; `allow_remote` is reserved for a later spec and
 /// cannot be turned on in this version.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -905,7 +905,7 @@ impl Config {
         }
         if let Some(v) = root.get("mcp") {
             match v.clone().try_into::<McpConfig>() {
-                Ok(v) if v.allow_remote => errs.push("[mcp] allow_remote: remote access is not supported in this version (specs/061 §3.2)".to_string()),
+                Ok(v) if v.allow_remote => errs.push("[mcp] allow_remote: remote access is not supported in this version (specs/062 §3.2)".to_string()),
                 Ok(v) => cfg.mcp = v,
                 Err(e) => errs.push(format!("[mcp]: {}", e)),
             }
@@ -1426,7 +1426,7 @@ pub(crate) mod tests {
         assert!(!Config::parse("[mcp]\nenabled = false\n").unwrap().mcp.enabled);
         assert!(Config::parse("[mcp]\nallow_remote = true\n").unwrap_err().iter().any(|e| e.contains("allow_remote")));
         assert!(Config::parse("[mcp]\nsurprise = 1\n").is_err());
-        // There is no limit or quota on host calls: the switch is the only setting (`specs/061` §9).
+        // There is no limit or quota on host calls: the switch is the only setting (`specs/062` §9).
         assert!(Config::parse("[mcp]\nmax_help_per_session = 5\n").is_err() && Config::parse("[mcp]\ncooldown_seconds = 5\n").is_err());
         assert!(McpConfig::read("[mcp]\nenabled = 3\n").is_none() && McpConfig::read("").is_some());
     }

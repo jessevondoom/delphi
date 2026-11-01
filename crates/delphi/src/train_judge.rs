@@ -308,7 +308,7 @@ pub fn call_judge(cfg: &JuryConfig, judge: &Arm, prompt: &str, index: usize) -> 
     let stdout = fs::read_to_string(&out).unwrap_or_default();
     let summary: Value = stdout.lines().rev().find_map(|l| serde_json::from_str::<Value>(l).ok().filter(|v| v["type"] == "run.summary")).ok_or_else(|| format!("no run summary; see {}", err.display()))?;
     let mission = summary["mission_id"].as_str().filter(|m| !m.is_empty() && !m.contains(['/', '\\', '.'])).ok_or("the summary names no mission")?;
-    let mdir = ws_dir.join("local/missions").join(mission);
+    let mdir = delphi_core::sessions::dir(&ws_dir, mission);
     let events = delphi_core::log::replay(&mdir).map_err(|e| format!("could not read the judge's log: {}", e))?;
     let usage = usage_by_model(&events);
     let models: Vec<String> = usage.keys().cloned().collect();

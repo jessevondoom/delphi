@@ -442,3 +442,14 @@ Supersedes 005c's no-alternate-screen premise for the default console. **Status:
 3. Preserve the supply-chain checks and verify terminal-mode ownership, cleanup, source-mode PTY flows, compiled-binary PTY flows and all release targets before use.
 
 **Status:** ✅ APPROVED 2026-10-30 by the operator. **Implements:** [`specs/060-opentui-renderer-and-runtime.md`](../../specs/060-opentui-renderer-and-runtime.md).
+
+## ✅ D-34 — A real shell tool, with Safe/Caution/Hard classification, session grants and the `!` bang
+
+**Context (operator, 2026-10-31):** `run_command` runs a program with no shell. The operator wants full bash as a tool call, usable per call, per session or automatically, and a `!` line prefix in the console, like Copilot.
+
+**Decision (operator, 2026-10-31): approve spec 061.**
+1. Add a `shell` tool beside `run_command`; the sandbox, deny rules, bundle policy and taint gate apply unchanged. Red actions always ask.
+2. Unsandboxed lines are classified Safe, Caution or Hard. Hard asks as Red every time. Safe lines may run without a card for a whole session through the new `shell-auto` mode (non-destructive, non-dangerous calls). Caution lines ask, with allow-once, allow-similar-for-the-task and allow-similar-for-the-session.
+3. `!` runs the operator's own command from the console, obeys deny rules, raises no card, and its output is never fed to a model.
+
+**Status:** ✅ APPROVED 2026-10-31 by the operator. **Implements:** [`specs/061-shell-tool.md`](../../specs/061-shell-tool.md).

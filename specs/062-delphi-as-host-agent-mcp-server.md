@@ -1,6 +1,6 @@
 ---
-id: spec-061-delphi-as-host-agent-mcp-server
-title: "061: Delphi for host agents: roles, project knowledge, help and Councils over MCP, and learning back"
+id: spec-062-delphi-as-host-agent-mcp-server
+title: "062: Delphi for host agents: roles, project knowledge, help and Councils over MCP, and learning back"
 author: architect
 timestamp: 2026-10-31T00:00:00Z
 status: approved   # by the operator, 2026-10-31 ("approve the spec if it was built on the rules you showed"): D-1..D-5 ratified; D-6..D-9 follow the architect's recommendations; Q-1..Q-5 stay open and each blocks only the slice named in §12. The text as written is approved when this pull request merges.
@@ -14,7 +14,7 @@ source_mission: 2026-10-23-foundational-design
 tags: [spec, mcp, host-agents, claude-code, copilot, codex, roles, council, memory, handoff]
 ---
 
-# Spec 061: Delphi for host agents
+# Spec 062: Delphi for host agents
 
 > **Status: approved by the operator, 2026-10-31.** Slices follow §11, one per pull request. Extends [`specs/025`](025-plugin-skill-and-tool-compatibility.md) §4.4 (`delphi bundle serve`, read-only knowledge), uses [`specs/041`](041-agent-registry-routing-and-role-extensions.md) §5.6 (`request_help`), [`specs/003`](003-collaboration-and-council.md) §4 (Council), [`specs/058`](058-project-scopes-scaffolding-and-promotion.md) (project scopes), [`specs/004`](004-memory-and-coaching.md), [`specs/031`](031-layered-learning-and-training-mode.md) and [`specs/050`](050-memory-lifecycle-types-supersession-and-trace-mining.md) (staged learning). Amends nothing; where 025 §4.4 says the served surface is read-only, this spec adds a second server and leaves `bundle serve` as it is.
 

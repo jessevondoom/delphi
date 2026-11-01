@@ -115,7 +115,7 @@ impl HookPolicy {
         let web = if self.allow_names.is_empty() { String::new() } else { format!(" and {}", self.allow_names.join(", ")) };
         let why = match tool {
             "call_mcp_tool" => format!("call the Delphi tools directly by their names (they start with `{}`)", own),
-            "run_command" if self.ask.is_some() => format!("your own shell is switched off in this task; run commands with the Delphi tool `{}run_command` (a program and its arguments, no shell)", own),
+            "run_command" if self.ask.is_some() => format!("your own shell is switched off in this task; run commands with the Delphi tool `{}shell` (a shell line, when it is offered) or `{}run_command` (a program and its arguments, no shell)", own, own),
             "" => "the tool call named no tool".to_string(),
             t => format!("`{}` is not available in this task; the Delphi tools (names starting `{}`){} are", t, own, web),
         };

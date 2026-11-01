@@ -8,6 +8,13 @@ This file starts with the work after v0.2.7. For earlier releases, the history i
 
 ## Unreleased
 
+### Shell
+
+- New sessions are written under `local/sessions/<id>/` (spec 058-A9); sessions already under `local/missions/` stay where they are and keep working, and every listing, scan and check reads both. Agents still use the `missions/<id>/…` path.
+- A `shell` tool: a full shell line for agents, sandboxed when a sandbox is on, otherwise asked about. Lines are classed Safe, Caution or Hard; Hard lines (`sudo`, `rm -rf`, `git push`, writes outside the worktree, `[exec] hard` patterns) are always a Red card (spec 061).
+- `shell-auto` mode runs safe shell lines without asking; `[s]` / `/s` allows similar shell commands for the session, and `/permissions revoke` ends the grants.
+- `!<line>` in the console runs a line yourself via `shell.run`; the output is never sent to a model.
+
 ### Validator
 
 - Weak sources are labelled, never evidence (spec 040-A2): a claim only Weak sources support is `unverified (weak)`, and agreement among Weak sources is recorded but changes no label. New `[validator] weak_sources = "label"|"off"` (default `label`).
@@ -21,6 +28,11 @@ This file starts with the work after v0.2.7. For earlier releases, the history i
 - `/projects` lists the home workspace and the registered projects in an arrow-key menu; Enter restarts the console in the chosen directory as a new session (spec 058-A3). A request outside the home workspace and registered roots is ignored.
 
 - `/projects` reads the registry each time (new console-only `projects.list`), and `research.start` takes the console's `cwd`: research started inside a registered project is written to that project (spec 058-A4).
+- The fact validator now looks a journal-publisher page's DOI up at doi.org (spec 040-A5): a made-up DOI, one registered outside a publisher, or any lookup failure means the page is not counted.
+- Agent-started research (spec 058-A8): the `request_research` tool asks you with a card every time, then runs the same job in the session's own scope.
+- `/research <topic>` (spec 058-A7): start the research job from the prompt, with `status` and `cancel`; it uses the console's directory, so project routing applies.
+- Validator pass (spec 058-A6): `/validate pass` promotes held research whose source the allow list now trusts; it runs automatically when a session opens (default scope), never promotes weak sources, and moves a project's pages only when you name the project.
+- Weekly digest (spec 058-A5): when at least five research pages are waiting outside the knowledge base (held, or in a project and not yet ratified) and a week has passed, the orchestrator says so once in the chat (`research.digest`) and points to `/validate`. A message, never a card.
 ## 0.4.0 — 2026-10-31
 
 Docs and tests: `cargo test -p delphi --test spec_refs` checks that every spec section and amendment reference (`NNN §X.Y`, `NNN-An`) still resolves, so folding amendments into specs cannot silently break one.

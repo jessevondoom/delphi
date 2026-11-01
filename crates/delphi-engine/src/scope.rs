@@ -394,7 +394,7 @@ mod tests {
             put(layer_dir(&f.ws, &id_of(id)).unwrap().join("staged/m/n.md"), &format!("{} staged", body));
         }
         let mission = |name: &str, scope: Option<&str>| {
-            let d = f.ws.join("local/missions").join(name);
+            let d = delphi_core::sessions::dir(&f.ws, name);
             fs::create_dir_all(&d).unwrap();
             if let Some(s) = scope {
                 fs::write(d.join("scope"), s).unwrap();

@@ -1,4 +1,4 @@
-//! `delphi mcp`: Delphi for host agents, as an MCP server on stdio (`specs/061`).
+//! `delphi mcp`: Delphi for host agents, as an MCP server on stdio (`specs/062`).
 //!
 //! S1 built the handshake, the operator's switch and the golden tool list; S2 adds agent packs (`mcp_packs.rs`): `list_roles`,
 //! `get_agent`, `list_skills`, `get_skill`, and each servable role as an MCP prompt; S3 adds project awareness

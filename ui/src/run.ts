@@ -124,7 +124,7 @@ export function renderTimers(v: any): string {
 }
 
 /** Answer a card: the daemon checks the payload hash, so what is approved is exactly what was shown. */
-export async function resolveCard(cmd: Rpc, card: Approval, decision: 'allow' | 'allow_similar' | 'deny'): Promise<string | null> {
+export async function resolveCard(cmd: Rpc, card: Approval, decision: 'allow' | 'allow_similar' | 'allow_session' | 'deny'): Promise<string | null> {
   try { await cmd.call('approval.resolve', { approval_id: card.id, payload_blake3: card.blake3, decision }); return null; }
   catch (e) { return errText(e); }
 }
@@ -223,6 +223,7 @@ export async function runSlash(line: string, ctx: Ctx, now = Date.now()): Promis
     }
     case 'ratify': { ctx.post(await ratify(ctx, rest)); return; }
     case 'retro': { ctx.post(await retro(ctx, rest)); return; }
+    case 'research': { ctx.post(await research(ctx, rest)); return; }
     case 'validate': { ctx.post(await validate(ctx, rest)); return; }
     case 'models': { const v = await call('models.get'); if (v) ctx.post(String(v.text ?? '').trimEnd() || 'no models are configured'); return; }
     case 'agents': {
@@ -252,14 +253,15 @@ export async function runSlash(line: string, ctx: Ctx, now = Date.now()): Promis
       return;
     }
     case 'observe': case 'narrator': case 'visualize': ctx.post(await openNarrator(rest[0], ctx.info, process.env, undefined, ctx.open)); return;
-    case 'y': case 'yes': case 'a': case 'always': case 'n': case 'no': case 'd': case 'diff': case 'approve': {
+    case 'y': case 'yes': case 'a': case 'always': case 's': case 'session': case 'n': case 'no': case 'd': case 'diff': case 'approve': {
       const key = name === 'approve' ? rest[0] : name;
-      const d = key === 'y' || key === 'yes' ? 'allow' : key === 'a' || key === 'always' ? 'allow_similar' : key === 'n' || key === 'no' ? 'deny' : key === 'd' || key === 'diff' ? 'view' : null;
-      if (!d) { ctx.post('/approve takes y, a, n or d'); return; }
+      const d = key === 'y' || key === 'yes' ? 'allow' : key === 'a' || key === 'always' ? 'allow_similar' : key === 's' || key === 'session' ? 'allow_session' : key === 'n' || key === 'no' ? 'deny' : key === 'd' || key === 'diff' ? 'view' : null;
+      if (!d) { ctx.post('/approve takes y, a, s, n or d'); return; }
       const card = waiting(ctx.state());
       if (!card) { ctx.post('no approval is waiting'); return; }
       if (d === 'view') { ctx.post(JSON.stringify(card.payload, null, 2)); return; }
       if (d === 'allow_similar' && card.tier === 'red') { ctx.post('`allow similar` never applies to a Red action; use /y to approve this once or /n'); return; }
+      if (d === 'allow_session' && !card.sessionAllowed) { ctx.post('`allow session` applies only to shell commands that are not Red; use /y to approve this once or /n'); return; }
       if (now - card.at < 300) { ctx.post('that card only just appeared; look at it, then answer'); return; }
       const bad = await resolveCard(ctx.cmd, card, d);
       if (bad) ctx.post(bad);
@@ -331,6 +333,36 @@ async function retro(ctx: Ctx, args: string[]): Promise<string> {
 
 let lastPending: { project?: string; items: any[] } = { items: [] };
 
+/** `/research <topic>`: the expand job from the prompt (`specs/058` §19). The same `research.start` the knowledge window uses, with this console's directory so a registered project keeps the pages. */
+async function research(ctx: Ctx, args: string[]): Promise<string> {
+  try {
+    if (args[0] === 'cancel') { const v = await ctx.cmd.call('research.cancel', {}); return v?.cancelling ? 'cancelling the research' : 'no research is running'; }
+    if (args[0] === 'status') {
+      const s = await ctx.cmd.call('research.status', {});
+      return `research on ${sanitize(String(s?.topic ?? ''))}: ${sanitize(String(s?.phase ?? 'unknown'))} · ${Number(s?.found ?? 0)} found, ${Number(s?.read ?? 0)} read, ${Number(s?.skipped ?? 0)} skipped`;
+    }
+    const topic = args.join(' ').trim();
+    if (!topic) return 'usage: /research <topic> · /research status · /research cancel';
+    await ctx.cmd.call('research.start', { topic, cwd: ctx.info.cwd });
+    void watchResearch(ctx);
+    return `researching ${sanitize(topic)}. Trusted sources enter the knowledge base (inside a registered project, its research folder instead); others are held for /validate. /research status · /research cancel`;
+  } catch (e) { return errText(e); }
+}
+
+/** Says once, in the chat, how the job ended. Stops by itself after the job ends or about ten minutes. */
+async function watchResearch(ctx: Ctx): Promise<void> {
+  for (let i = 0; i < 600; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    let s: any;
+    try { s = await ctx.cmd.call('research.status', {}); } catch { return; }
+    const phase = String(s?.phase);
+    if (!['done', 'failed', 'cancelled'].includes(phase)) continue;
+    const counts = `${Number(s?.found ?? 0)} found, ${Number(s?.read ?? 0)} read, ${Number(s?.skipped ?? 0)} skipped`;
+    ctx.post(phase === 'done' ? `research on ${sanitize(String(s?.topic ?? ''))} finished: ${counts}. /validate lists anything held back.` : `research ${phase}${s?.error ? ': ' + sanitize(String(s.error)) : ''} (${counts})`, phase === 'done' ? 'ok' : 'error');
+    return;
+  }
+}
+
 /** `/validate`: research held back from the knowledge base (`specs/058` §14). Ratifying puts one entry in the index as noted, not validated. */
 async function validate(ctx: Ctx, args: string[]): Promise<string> {
   const proj = args.find((a) => a.startsWith('project='))?.slice(8) || undefined;
@@ -345,7 +377,13 @@ async function validate(ctx: Ctx, args: string[]): Promise<string> {
       const rows = lastPending.items.map((p, i) => `${String(i + 1).padStart(3)}. [${sanitize(String(p.class || 'unclassed'))}] ${sanitize(String(p.title))} · ${sanitize(String(p.url))}`);
       return [`${rows.length} held entr${rows.length === 1 ? 'y' : 'ies'}${where}. None is in the knowledge base until you ratify it.`, ...rows, `/validate ratify <n…> · ${proj ? '' : 'discard <n…> · '}add project=<name> for a project's own research`].join('\n');
     }
-    if (act !== 'ratify' && act !== 'discard') return `unknown /validate action \`${sanitize(act)}\` (list, ratify, discard)`;
+    if (act === 'pass') {
+      const v = await ctx.cmd.call('pending.pass', proj ? { project: proj } : {});
+      const moved: string[] = Array.isArray(v?.promoted) ? v.promoted.map((r: unknown) => sanitize(String(r))) : [];
+      lastPending = { project: undefined, items: [] };
+      return moved.length ? `the validator pass promoted ${moved.length} page${moved.length === 1 ? '' : 's'}${where} whose source the list now trusts (searchable, noted, not validated): ${moved.join(', ')}` : `the validator pass found nothing${where} whose source the list trusts; weak pages stay held until you ratify them`;
+    }
+    if (act !== 'ratify' && act !== 'discard') return `unknown /validate action \`${sanitize(act)}\` (list, pass, ratify, discard)`;
     const nums = rest.slice(1).filter((a) => /^\d+$/.test(a)).map(Number);
     if (!nums.length || nums.some((n) => n < 1)) return `usage: /validate ${act} <number…>`;
     if (!lastPending.items.length || lastPending.project !== proj) return `run /validate${proj ? ' project=' + sanitize(proj) : ''} first to list held research (asked for #${nums.join(', #')})`;

@@ -18,7 +18,7 @@ fn mission_ids(ws_dir: &Path, only: &Option<String>) -> Result<Vec<String>, Stri
     match only {
         Some(m) => {
             // A mission id is a directory name; refuse anything that could point elsewhere.
-            if m.is_empty() || m.contains(['/', '\\']) || m.starts_with('.') || !ws_dir.join("local/missions").join(m).is_dir() {
+            if m.is_empty() || m.contains(['/', '\\']) || m.starts_with('.') || !delphi_core::sessions::dir(ws_dir, m).is_dir() {
                 return Err(format!("no mission `{}` in this workspace (see `delphi missions`)", m));
             }
             Ok(vec![m.clone()])
@@ -31,7 +31,7 @@ fn mission_ids(ws_dir: &Path, only: &Option<String>) -> Result<Vec<String>, Stri
 pub fn collect(ws_dir: &Path, opts: &Options) -> Result<Vec<LiveNote>, String> {
     let mut all = Vec::new();
     for id in mission_ids(ws_dir, &opts.mission)? {
-        let events = replay(&ws_dir.join("local/missions").join(&id)).map_err(|e| format!("could not read the log of {}: {}", id, e))?;
+        let events = replay(&delphi_core::sessions::dir(ws_dir, &id)).map_err(|e| format!("could not read the log of {}: {}", id, e))?;
         all.extend(live_notes(&id, &events));
     }
     all.sort_by(|a, b| b.timestamp.cmp(&a.timestamp).then_with(|| b.reference().cmp(&a.reference())));
@@ -79,7 +79,7 @@ pub fn find<'a>(notes: &'a [LiveNote], reference: &str) -> Result<&'a LiveNote, 
 
 /// Append `learn.dropped` for a note. The log is not rewritten and the note stays in it.
 pub fn drop_note(ws_dir: &Path, note: &LiveNote) -> Result<(), String> {
-    let dir = ws_dir.join("local/missions").join(&note.mission);
+    let dir = delphi_core::sessions::dir(ws_dir, &note.mission);
     let mut log = EventLog::open(&dir, LogOptions::default()).map_err(|e| match e {
         LogError::Locked(_) => format!("the daemon has mission {} open; stop it (`delphi daemon stop`) and run this again", note.mission),
         other => format!("could not open the log of {}: {}", note.mission, other),
@@ -165,7 +165,7 @@ mod tests {
     }
 
     fn mission(ws: &Path, id: &str, events: Vec<EventEnvelope>) {
-        let mut log = open_log(&ws.join("local/missions").join(id));
+        let mut log = open_log(&delphi_core::sessions::dir(ws, id));
         for e in events {
             log.append(e).unwrap();
         }
@@ -196,7 +196,7 @@ mod tests {
         drop_note(t.path(), "m_a/n3");
         let after = run_in(t.path(), "list", None, &opts()).unwrap();
         assert!(!after.contains("m_a/n3") && after.contains("m_a/n9") && after.contains("2 note(s)"), "{}", after);
-        let log = replay(&t.path().join("local/missions/m_a")).unwrap();
+        let log = replay(&t.path().join("local/sessions/m_a")).unwrap();
         assert_eq!(log.iter().filter(|e| e.kind == "learn.staged").count(), 2, "dropping removes nothing from the log");
         assert_eq!(log.iter().filter(|e| e.kind == "learn.dropped").count(), 1);
     }
@@ -205,7 +205,7 @@ mod tests {
     fn drop_refuses_while_a_daemon_holds_the_mission() {
         let t = tempfile::tempdir().unwrap();
         mission(t.path(), "m_a", vec![staged("m_a", "n3", "x", "L5")]);
-        let _held = open_log(&t.path().join("local/missions/m_a"));
+        let _held = open_log(&t.path().join("local/sessions/m_a"));
         let err = run_in(t.path(), "drop", Some("m_a/n3"), &opts()).unwrap_err();
         assert!(err.contains("daemon") && err.contains("m_a"), "{}", err);
     }

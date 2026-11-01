@@ -1,4 +1,4 @@
-//! The one thing `delphi mcp` does beyond reading: ask the running daemon to stage a proposal or keep a handoff (`specs/061` §8).
+//! The one thing `delphi mcp` does beyond reading: ask the running daemon to stage a proposal or keep a handoff (`specs/062` §8).
 //!
 //! * The socket is the daemon's host socket (`<hash>.host.sock`), owned by the same user; its UID check is the authentication.
 //! * Nothing here starts a daemon. No daemon means `daemon_not_running`, and the host is told to use pack mode.

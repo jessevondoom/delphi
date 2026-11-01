@@ -1,8 +1,8 @@
-//! What a host (Claude Code, Copilot, Codex, agy) may leave in Delphi (`specs/061` §8): a lesson for one role, a session
+//! What a host (Claude Code, Copilot, Codex, agy) may leave in Delphi (`specs/062` §8): a lesson for one role, a session
 //! summary and one handoff, each as untrusted content. The rules live here, in the daemon, so the MCP process cannot skip them:
 //! the scope is the one the caller's working directory resolves to, a note names a servable role and carries evidence, the
 //! tier is `L0` (`external_untrusted`, never promotable to home memory), the label `host:<tool>/<model>` is in the text a
-//! reviewer reads, and the operator's switch is read at every call. There is no limit or quota on calls (`specs/061` §9).
+//! reviewer reads, and the operator's switch is read at every call. There is no limit or quota on calls (`specs/062` §9).
 
 use std::path::{Path, PathBuf};
 
@@ -269,7 +269,6 @@ pub fn write_handoff(mission_dir: &Path, env: &HandoffEnvelope) -> Result<(), Ho
 /// The newest handoff of a host session of the caller's own project scope (or of home, when the caller has none), or the
 /// one named, if it is of that scope. Another project's handoff is never returned.
 pub fn read_handoff(ws_dir: &Path, project: Option<&str>, session: Option<&str>) -> Option<(String, HandoffEnvelope)> {
-    let missions = ws_dir.join("local/missions");
     let mine = |dir: &Path| -> bool {
         let scope = std::fs::read_to_string(dir.join("scope")).ok().map(|s| s.trim().to_string());
         scope.as_deref() == project
@@ -279,16 +278,13 @@ pub fn read_handoff(ws_dir: &Path, project: Option<&str>, session: Option<&str>)
         if !(8..=32).contains(&s.len()) || !s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()) {
             return None;
         }
-        let dir = missions.join(format!("host-{s}"));
+        let dir = delphi_core::sessions::dir(ws_dir, &format!("host-{s}"));
         return if mine(&dir) { load(&dir).map(|e| (s.to_string(), e)) } else { None };
     }
-    let mut found: Vec<(std::time::SystemTime, String, PathBuf)> = std::fs::read_dir(&missions)
+    let mut found: Vec<(std::time::SystemTime, String, PathBuf)> = delphi_core::sessions::dirs(ws_dir)
         .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(|d| {
-            let name = d.file_name().to_str()?.strip_prefix("host-")?.to_string();
-            let dir = d.path();
+        .filter_map(|(name, dir)| {
+            let name = name.strip_prefix("host-")?.to_string();
             let m = std::fs::symlink_metadata(dir.join("handoff.json")).ok().filter(|m| m.is_file())?;
             mine(&dir).then(|| (m.modified().ok().unwrap_or(std::time::UNIX_EPOCH), name, dir))
         })
@@ -375,7 +371,7 @@ mod tests {
         for u in ["../x", "/etc/passwd", "a/../b"] {
             assert!(handoff_from(&caller(), &w, &json!({"objective": "o", "context_pointers": [{"uri": u, "reason": "r"}]})).is_err(), "{u}");
         }
-        let dir = w.dir.join("local/missions/host-abcdef0123456789");
+        let dir = delphi_core::sessions::dir(&w.dir, "host-abcdef0123456789");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("scope"), "p1").unwrap();
         write_handoff(&dir, &env).unwrap();

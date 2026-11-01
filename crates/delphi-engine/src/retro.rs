@@ -226,9 +226,8 @@ fn current_rules(home: &Path, ws_dir: &Path, p: &LiveProposal) -> Vec<Rule> {
 /// safe while the daemon holds a mission open.
 pub fn collect(ws_dir: &Path) -> Vec<LiveProposal> {
     let mut all = Vec::new();
-    for entry in std::fs::read_dir(ws_dir.join("local/missions")).into_iter().flatten().flatten() {
-        let Some(id) = entry.file_name().to_str().map(String::from) else { continue };
-        if let Ok(events) = delphi_core::log::replay(&entry.path()) {
+    for (id, path) in delphi_core::sessions::dirs(ws_dir) {
+        if let Ok(events) = delphi_core::log::replay(&path) {
             all.extend(crate::learn::live_proposals(&id, &events));
         }
     }
@@ -265,9 +264,8 @@ fn day_number(date: &str) -> Option<i64> {
 /// A note without a date and a file without `last_confirmed` or `created` are never listed.
 pub fn stale(home: &Path, ws_dir: &Path, today: &str) -> Vec<Stale> {
     let mut out = Vec::new();
-    for entry in std::fs::read_dir(ws_dir.join("local/missions")).into_iter().flatten().flatten() {
-        let Some(id) = entry.file_name().to_str().map(String::from) else { continue };
-        let Ok(events) = delphi_core::log::replay(&entry.path()) else { continue };
+    for (id, path) in delphi_core::sessions::dirs(ws_dir) {
+        let Ok(events) = delphi_core::log::replay(&path) else { continue };
         for n in crate::learn::live_notes(&id, &events) {
             if let Some(until) = n.valid_until.as_deref().filter(|u| *u < today) {
                 out.push(Stale { kind: "note", reference: n.reference(), since: until.to_string(), detail: format!("expired {}: {}", until, n.summary) });

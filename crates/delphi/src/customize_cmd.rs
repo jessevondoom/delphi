@@ -56,7 +56,7 @@ fn open_any_log(ws_dir: &Path, only: Option<&str>) -> Result<(String, EventLog),
     }
     let mut last = String::new();
     for id in ids {
-        if id.is_empty() || id.contains(['/', '\\']) || id.starts_with('.') || !ws_dir.join("local/missions").join(&id).is_dir() {
+        if id.is_empty() || id.contains(['/', '\\']) || id.starts_with('.') || !delphi_core::sessions::dir(ws_dir, &id).is_dir() {
             return Err(format!("no mission `{}` in this workspace (see `delphi missions`)", id));
         }
         match crate::retro_cmd::open_log(ws_dir, &id) {

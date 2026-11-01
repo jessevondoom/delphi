@@ -195,9 +195,9 @@ pub fn delphi_tools(claude: &str) -> Vec<String> {
         "Grep" => &["search"],
         "Glob" => &["list_dir"],
         "Write" | "Edit" | "MultiEdit" => &["write_file"],
-        "Bash" => &["run_command"],
+        "Bash" => &["run_command", "shell"],
         "Task" | "Agent" => &["dispatch_agent"],
-        "read_file" | "read_doc" | "check" | "check_alignment" | "search" | "list_dir" | "write_file" | "run_command" | "dispatch_agent" | "timer" | "name_thread" | "external_available" => return vec![claude.to_string()],
+        "read_file" | "read_doc" | "check" | "check_alignment" | "search" | "list_dir" | "write_file" | "run_command" | "shell" | "dispatch_agent" | "timer" | "name_thread" | "external_available" => return vec![claude.to_string()],
         _ => &[],
     };
     v.iter().map(|s| s.to_string()).collect()

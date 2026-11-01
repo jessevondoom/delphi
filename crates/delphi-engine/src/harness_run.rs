@@ -97,7 +97,7 @@ impl HarnessErr {
 
 /// The Delphi tools whose job the CLI's own built-ins do for a Builder, so offering both would give it two ways
 /// to touch the same files, one of them outside the worktree guard.
-const DUPLICATED_FOR_BUILDERS: [&str; 5] = ["read_file", "list_dir", "search", "write_file", "run_command"];
+const DUPLICATED_FOR_BUILDERS: [&str; 6] = ["read_file", "list_dir", "search", "write_file", "run_command", "shell"];
 
 /// Delphi tools that only read: a task that used nothing else can still be retried by another method.
 const READ_ONLY_TOOLS: [&str; 4] = ["read_file", "list_dir", "search", "check"];
@@ -543,7 +543,7 @@ impl Engine {
         let mut bridge_defs: Vec<ToolDef> = if profile.bridge && cli != Cli::Codex { self.span_tool_defs(sc).await? } else { vec![] };
         if builder {
             // An agy Builder keeps Delphi's `run_command`: its own shell cannot be approved when it runs headless.
-            bridge_defs.retain(|d| !DUPLICATED_FOR_BUILDERS.contains(&d.name.as_str()) || (cli == Cli::Agy && d.name == "run_command"));
+            bridge_defs.retain(|d| !DUPLICATED_FOR_BUILDERS.contains(&d.name.as_str()) || (cli == Cli::Agy && (d.name == "run_command" || d.name == "shell")));
         }
         let connectors = cli == Cli::Claude && !builder && profile.claudeai_connectors;
         // Servers a previous session had connected besides ours: the wait for the account's connectors holds out for them.
@@ -630,7 +630,7 @@ impl Engine {
                     }
                     // A web tool the gate let through may have run since the loop last looked: taint before this call runs.
                     self.taint_if_read_outside(sc, &gate_policy).await?;
-                    if agents_guard.is_some() && call.name == "run_command" {
+                    if agents_guard.is_some() && (call.name == "run_command" || call.name == "shell") {
                         if call.args.to_string().contains(".agents") {
                             // Same rule as for the file tools: the gate's directory is not the model's to read or write.
                             let _ = call.reply.send(crate::tools::ToolResult { content: "the `.agents` directory is the gate's own and is off limits".into(), is_error: true });

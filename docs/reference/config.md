@@ -72,6 +72,8 @@ Defaults are those of the template; "—" means no default.
 | :-- | :-- | :-- |
 | `[exec] sandbox` ◆ | `off` | `off`, `prefer` or `required` |
 | `[exec] allow`, `deny` ◆ | — | command patterns over the argument list; `*` matches anything. `allow` needs no approval, `deny` is refused outright |
+| `[exec] shell` ◆ | `true` | offer the `shell` tool (a full shell line, `specs/061`); `false` keeps only `run_command` |
+| `[exec] hard` ◆ | — | shell-line patterns that are always Hard: a Red card, never auto-approved, never granted for the session |
 | `[exec] test_command`, `check_command` ◆ | — | the two merge gates, as argument lists |
 | `[update] require_signed` ◆ | `false` | refuse any build that is not a signed release |
 
@@ -138,8 +140,8 @@ Which sites the job may read is not here: it is `context/sources/trusted.toml` (
 
 | Key | Meaning |
 | :-- | :-- |
-| `[mcp] enabled` | default on. `false` makes `delphi mcp` answer every tool call `disabled_by_operator`; it is read at each call, so the change is immediate, and a `config.toml` that cannot be read as written also turns it off ([`specs/061`](../../specs/061-delphi-as-host-agent-mcp-server.md) §3.4) |
-| (no limits) | there is no limit or quota on host calls or on the CLI: `enabled` is the only switch, and metering will be considered later if needed (specs/061 §9). The `[budget]` settings still govern what a task spends |
+| `[mcp] enabled` | default on. `false` makes `delphi mcp` answer every tool call `disabled_by_operator`; it is read at each call, so the change is immediate, and a `config.toml` that cannot be read as written also turns it off ([`specs/062`](../../specs/062-delphi-as-host-agent-mcp-server.md) §3.4) |
+| (no limits) | there is no limit or quota on host calls or on the CLI: `enabled` is the only switch, and metering will be considered later if needed (specs/062 §9). The `[budget]` settings still govern what a task spends |
 | `[mcp] allow_remote` | reserved for a later spec; `true` is refused. Today the server serves this machine and this user only (§3.2) |
 
 ## Search and federation

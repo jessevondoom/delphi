@@ -124,6 +124,7 @@ fn assemble(t: tempfile::TempDir, root: PathBuf, steps: Vec<Step>, budget_usd: f
     };
     let pool = Arc::new(crate::pool::Pool::open(Some(ws_dir_for_exec.join("local/pool-state.json")), Default::default(), clock.clone()));
     let engine = Arc::new(Engine {
+        research_ask: Default::default(),
         validator: Default::default(),
         ws,
         cfg: cfg_for_connectors.clone(),

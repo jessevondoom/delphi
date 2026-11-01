@@ -75,4 +75,4 @@ A Council has its own ceiling, `[budget] council_budget_usd` (default 20.0). `de
 | see what the agents finished | `delphi changelog` (Markdown by session, from the mission log; `--json` for one line per change) |
 | see spend | `/usage [mission\|role\|task\|model]` |
 | stop the running task | `Esc` (first clears the prompt, then stops the task) |
-| change how much it asks | `/permissions [default\|accept-edits\|mission-auto]`, or `Shift+Tab` (entering `auto` takes a second press) |
+| change how much it asks | `/permissions [default\|accept-edits\|shell-auto\|mission-auto]`, or `Shift+Tab` (entering `auto` takes a second press) |

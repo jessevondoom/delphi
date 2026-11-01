@@ -224,6 +224,8 @@ pub struct TaskOutcome {
 }
 
 pub struct Engine {
+    /// Where an approved `request_research` goes, as `(mission id, topic)`; the service starts the job (`specs/058` §20).
+    pub research_ask: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<(String, String)>>,
     /// The consumer of `validator.request` (`fact_serve`): intake quotas and the token allowance.
     pub validator: crate::fact_serve::Host,
     pub ws: WorkspacePaths,
@@ -273,7 +275,7 @@ pub struct Engine {
     pub inventory: Arc<crate::inventory::Inventory>,
     /// Handoffs whose spans get no tools at all (an approver answers in text), by handoff id.
     pub(crate) toolless: Mutex<HashSet<String>>,
-    /// Tasks raised by a host agent (`specs/061` §6.3): every span of one, dispatched or not, runs narrowed to read-only.
+    /// Tasks raised by a host agent (`specs/062` §6.3): every span of one, dispatched or not, runs narrowed to read-only.
     pub(crate) readonly_tasks: Mutex<HashSet<String>>,
     /// Model calls spent on provisional decisions, by task (`[optimistic] max_approver_calls`).
     pub(crate) approver_calls: Mutex<HashMap<String, u32>>,
@@ -407,6 +409,14 @@ fn run_command_def() -> ToolDef {
     }
 }
 
+fn shell_def() -> ToolDef {
+    ToolDef {
+        name: "shell".into(),
+        description: "Run a shell command line (`bash -c`) in your task worktree: pipes, redirects, `&&` and loops work. Killed after a timeout; one call is one command line, with no interactive input. Prefer it for chains such as `cargo test 2>&1 | tail -n 40`; use `run_command` for a single program with exact arguments. Harmless read and test commands may run at once; anything destructive or dangerous (deleting, publishing, privileged or outside the worktree) waits for the operator's approval.".into(),
+        input_schema: json!({"type": "object", "required": ["command"], "properties": {"command": {"type": "string"}, "timeout_secs": {"type": "integer"}}}),
+    }
+}
+
 fn dispatch_def() -> ToolDef {
     ToolDef {
         name: "dispatch_agent".into(),
@@ -490,7 +500,7 @@ impl Engine {
         self.start_task(m, task_id, target, prompt, true, Some(Span::with_ceiling("timer", ceiling))).await
     }
 
-    /// A task a host agent asked for (`specs/061` §6): read-only throughout, and below full trust from its first turn, since
+    /// A task a host agent asked for (`specs/062` §6): read-only throughout, and below full trust from its first turn, since
     /// the request is content from outside. The caller allocated `task_id` so it can say which task is answering.
     pub async fn run_task_for_host(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, target: &str, prompt: &str) -> Result<TaskOutcome, EngineError> {
         self.readonly_tasks.lock().unwrap().insert(task_id.clone());
@@ -1363,7 +1373,7 @@ impl Engine {
         let n = std::fs::read_dir(&dir).map(|d| d.count()).unwrap_or(0) + 1;
         let name = format!("{:03}-{}.md", n, sc.task_id);
         std::fs::write(dir.join(&name), text).ok()?;
-        let rel = format!("local/missions/{}/checkpoints/{}", m.id, name);
+        let rel = format!("{}/checkpoints/{}", m.dir.strip_prefix(&self.ws.dir).map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| format!("{}/{}", delphi_core::sessions::CURRENT, m.id)), name);
         let _ = m.append(sc.ev("checkpoint.saved", json!({"path": rel, "target": from, "substitute": to, "model_written": parts.work.is_some() || parts.chat.is_some(), "tainted": tainted, "turn_index": turn_index}))).await;
         Some(rel)
     }
@@ -1550,6 +1560,9 @@ impl Engine {
         }
         if sc.guard.zones.worktree.is_some() && sc.manifest.execute.iter().any(|e| e == "shell-worktree-scoped") {
             defs.push(run_command_def());
+            if self.exec.cfg.shell {
+                defs.push(shell_def());
+            }
         }
         if self.offers_alignment(sc) {
             defs.push(crate::align_run::def());
@@ -1631,6 +1644,9 @@ impl Engine {
         }
         if name == "run_command" {
             return self.exec_command(sc, call_id, args).await;
+        }
+        if name == "shell" {
+            return self.exec_shell(sc, call_id, args).await;
         }
         if name == "dispatch_agent" {
             // The schema is only offered to roles that may dispatch; a call from any other role is refused here too.
@@ -1750,6 +1766,11 @@ impl Engine {
         }
         if !events.is_empty() {
             let appended = sc.m.append_batch(events).await?;
+            for e in appended.iter().filter(|e| e.kind == "research.request") {
+                if let (Some(tx), Some(topic)) = (self.research_ask.get(), e.payload["topic"].as_str()) {
+                    let _ = tx.send((sc.m.id.clone(), topic.to_string()));
+                }
+            }
             for e in appended.iter().filter(|e| e.kind == "validator.request") {
                 self.serve_validator_request(sc.m.clone(), e.payload.clone(), sc.family.clone());
             }
@@ -1859,9 +1880,91 @@ impl Engine {
                 sc.m.append(sc.ev("span.taint", json!({"ceiling": sc.span.ceiling().as_str(), "cause": "run_command output"}))).await?;
             }
         }
+        self.finish_command(sc, call_id, "run_command", &wt, &argv, &argv.join(" "), args).await
+    }
+
+    /// `shell` (`specs/061`): a command line through `bash -c`, judged as a whole. The gates are `run_command`'s; the
+    /// verdict adds Hard (a Red card that no mode or grant covers) and Safe (which `shell-auto` runs without a card).
+    async fn exec_shell(self: &Arc<Self>, sc: &mut SpanCtx, call_id: &str, args: &Value) -> Result<tools::ToolResult, EngineError> {
+        if !sc.manifest.execute.iter().any(|e| e == "shell-worktree-scoped") || !self.exec.cfg.shell {
+            return Ok(tool_result_error("this role's manifest does not authorize shell-worktree-scoped, or the shell tool is switched off"));
+        }
+        let Some(wt) = self.exec.known_worktree(&sc.task_id) else {
+            return Ok(tool_result_error("this task has no worktree"));
+        };
+        let line = match exec::parse_shell(args) {
+            Ok(l) => l,
+            Err(e) => return Ok(tool_result_error(e.to_string())),
+        };
+        match crate::bundle_load::policy(&self.ws) {
+            Ok(p) => {
+                for seg in line.split([';', '|', '&', '\n']) {
+                    let words = exec::shell_words(seg.trim()).unwrap_or_else(|| seg.split_whitespace().map(String::from).collect());
+                    if let Some(why) = (!words.is_empty()).then(|| p.denies_command(&words)).flatten() {
+                        return Ok(tool_result_error(format!("refused by policy: {}", why)));
+                    }
+                }
+            }
+            Err(e) => return Ok(tool_result_error(format!("refused by policy: {}", e))),
+        }
+        if let Err(e) = self.exec.can_run() {
+            return Ok(tool_result_error(e.to_string()));
+        }
+        match gate(sc.span.ceiling(), Action::WorktreeWrite) {
+            Gate::Allow => {}
+            Gate::Deny => return Ok(tool_result_error("code execution is not allowed from a span at this taint level")),
+            Gate::Red => {
+                let payload = json!({"tool": "shell", "command": line, "ceiling": sc.span.ceiling().as_str()});
+                let summary = format!("run `{}` from a span tainted at {}", line.chars().take(200).collect::<String>(), sc.span.ceiling());
+                if let Some(denied) = self.ask(sc, ApprovalTier::Red, "shell", "shell", &summary, &payload).await? {
+                    return Ok(denied);
+                }
+            }
+        }
+        let verdict = self.exec.verdict_shell(&line, Some(&wt.path));
+        let shown: String = line.chars().take(200).collect();
+        match verdict {
+            exec::ShellVerdict::Refused(why) => return Ok(tool_result_error(format!("refused by policy: {}", why))),
+            exec::ShellVerdict::Allowed(_) => {}
+            exec::ShellVerdict::Hard(why) => {
+                let payload = json!({"tool": "shell", "command": line, "cwd": "@worktree", "sandboxed": false, "danger": "hard", "why": why, "timeout_secs": args["timeout_secs"]});
+                let summary = format!("run `{}` in the worktree: {} (not sandboxed)", shown, why);
+                if let Some(denied) = self.ask(sc, ApprovalTier::Red, "shell", "shell", &summary, &payload).await? {
+                    return Ok(denied);
+                }
+            }
+            exec::ShellVerdict::Safe | exec::ShellVerdict::Ask => {
+                let safe = verdict == exec::ShellVerdict::Safe;
+                let c = tools::Classified {
+                    tool: "shell".into(),
+                    tier: tools::ToolTier::Amber,
+                    kind: if safe { tools::ActionKind::SafeShell } else { tools::ActionKind::UnsandboxedExec },
+                    summary: format!("run `{}` in the worktree (not sandboxed)", shown),
+                    payload: json!({"tool": "shell", "command": line, "cwd": "@worktree", "sandboxed": false, "danger": if safe { "safe" } else { "caution" }, "timeout_secs": args["timeout_secs"]}),
+                    pattern: crate::shellsafe::pattern(&line),
+                };
+                if let Need::Yes(tier) = self.broker.need(&sc.task_id, None, &c) {
+                    if let Some(denied) = self.ask(sc, tier, &c.tool, &c.pattern, &c.summary, &c.payload).await? {
+                        return Ok(denied);
+                    }
+                }
+            }
+        }
+        // What the line reads may be untrusted text (a vendored file): it taints like `read_file`.
+        let hit = crate::shellsafe::words(&line).iter().filter(|a| !a.starts_with('-')).any(|a| self.rules.untrusted(a.trim_start_matches("./")) || self.rules.untrusted(&format!("{}/x", a.trim_start_matches("./").trim_end_matches('/'))));
+        if hit && sc.span.observe_input(delphi_core::provenance::Tier::L0) {
+            sc.m.append(sc.ev("span.taint", json!({"ceiling": sc.span.ceiling().as_str(), "cause": "shell output"}))).await?;
+        }
+        let argv = vec![exec::ExecEnv::shell_program().to_string(), "-c".to_string(), line.clone()];
+        self.finish_command(sc, call_id, "shell", &wt, &argv, &line, args).await
+    }
+
+    /// Write-ahead, run, stamp what changed and render: the tail `run_command` and `shell` share.
+    #[allow(clippy::too_many_arguments)]
+    async fn finish_command(self: &Arc<Self>, sc: &mut SpanCtx, call_id: &str, tool: &str, wt: &crate::worktree::Worktree, argv: &[String], shown: &str, args: &Value) -> Result<tools::ToolResult, EngineError> {
         // Write-ahead: a crash between these two events leaves a command whose outcome is unknown.
-        sc.m.append(sc.ev("action.intent", json!({"action_id": call_id, "tool": "run_command", "argv": argv}))).await?;
-        let (exec, wt2, argv2) = (self.exec.clone(), wt.clone(), argv.clone());
+        sc.m.append(sc.ev("action.intent", json!({"action_id": call_id, "tool": tool, "argv": argv}))).await?;
+        let (exec, wt2, argv2) = (self.exec.clone(), wt.clone(), argv.to_vec());
         let timeout = args["timeout_secs"].as_u64().filter(|n| *n > 0).map(Duration::from_secs);
         let ran = tokio::task::spawn_blocking(move || exec.run(&wt2, &argv2, timeout)).await.map_err(|e| EngineError::Invalid(e.to_string()))?;
         let report = match ran {
@@ -1889,7 +1992,7 @@ impl Engine {
         let o = &report.outcome;
         events.push(sc.ev("action.result", json!({"action_id": call_id, "ok": o.success(), "exit_code": o.status.and_then(|s| s.code()), "timed_out": o.timed_out, "output_capped": o.output_capped, "changed_files": report.changed.len(), "over_quota": !o.over_quota.is_empty(), "millis": report.elapsed.as_millis() as u64})));
         sc.m.append_batch(events).await?;
-        let (text, is_error) = exec::render(&report, &argv);
+        let (text, is_error) = exec::render(&report, &[shown.to_string()]);
         Ok(tools::ToolResult { content: text, is_error })
     }
 
@@ -2193,7 +2296,7 @@ mod tool_schema_tests {
     #[test]
     fn every_tool_delphi_defines_has_a_schema_the_strictest_provider_accepts() {
         let mut defs = tools::tool_defs(true);
-        defs.extend([dispatch_def(), timer_def(), run_command_def(), crate::settings_run::def()]);
+        defs.extend([dispatch_def(), timer_def(), run_command_def(), shell_def(), crate::settings_run::def()]);
         assert!(defs.len() >= 14);
         let mut bad = Vec::new();
         for d in &defs {
@@ -2461,6 +2564,108 @@ mod tests {
         let all = f.model.requests()[4].body["messages"].to_string();
         assert!(all.contains("refused by policy") && all.contains("deny rule"), "{}", all);
         assert_eq!(events_of(&f, "approval.requested").iter().filter(|e| e.payload["tool"] == "run_command").count(), 1);
+    }
+
+    fn shell_cards(f: &Fx) -> usize {
+        events_of(f, "approval.requested").iter().filter(|e| e.payload["tool"] == "shell").count()
+    }
+
+    fn task_dir(f: &Fx, n: usize) -> std::path::PathBuf {
+        f.root.join("workspaces/w/worktrees").join(events_of(f, "task.created")[n].task_id.clone().unwrap())
+    }
+
+    #[tokio::test]
+    async fn a_shell_pipeline_runs_after_a_card_and_a_hard_line_is_red_and_takes_no_grant_in_any_mode() {
+        let f = builder_fixture(
+            vec![Step::tool("c1", "shell", json!({"command": "echo hi | tr a-z A-Z > out.txt"})), Step::tool("c2", "shell", json!({"command": "rm -rf build"})), Step::text("done")],
+            |c| c.sandbox = crate::exec::SandboxMode::Off,
+        );
+        f.engine.broker.set_mode(Mode::MissionAuto);
+        let task = { let e = f.engine.clone(); let m = f.m.clone(); tokio::spawn(async move { e.run_task(&m, "builder", BUILD_PROMPT).await }) };
+        let card = wait_for_card(&f).await;
+        assert_eq!((card.tool.as_str(), card.tier), ("shell", ApprovalTier::Amber), "a redirect is not Safe, even in the most permissive mode");
+        assert_eq!(card.payload["danger"], "caution");
+        f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Allow, "console-1").unwrap();
+        let card = wait_for_card(&f).await;
+        assert_eq!((card.tool.as_str(), card.tier, card.payload["danger"].as_str()), ("shell", ApprovalTier::Red, Some("hard")));
+        assert!(!card.similar_allowed());
+        assert!(f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::AllowSession, "c").is_err());
+        f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Deny { reason: "no".into() }, "console-1").unwrap();
+        assert_eq!(task.await.unwrap().unwrap().status, Status::Done);
+        assert_eq!(std::fs::read_to_string(task_dir(&f, 0).join("out.txt")).unwrap().trim(), "HI");
+        let all = f.model.requests()[2].body["messages"].to_string();
+        assert!(all.contains("denied this action"), "{}", all);
+    }
+
+    #[tokio::test]
+    async fn shell_auto_runs_safe_lines_without_a_card_and_still_asks_for_the_rest() {
+        let f = builder_fixture(
+            vec![Step::tool("c1", "shell", json!({"command": "ls | wc -l"})), Step::tool("c2", "shell", json!({"command": "touch made.txt"})), Step::text("done")],
+            |c| c.sandbox = crate::exec::SandboxMode::Off,
+        );
+        f.engine.broker.set_mode(Mode::ShellAuto);
+        let task = { let e = f.engine.clone(); let m = f.m.clone(); tokio::spawn(async move { e.run_task(&m, "builder", BUILD_PROMPT).await }) };
+        let card = wait_for_card(&f).await;
+        assert!(card.summary.contains("touch made.txt"), "the safe line ran without a card: {}", card.summary);
+        f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Deny { reason: "no".into() }, "console-1").unwrap();
+        assert_eq!(task.await.unwrap().unwrap().status, Status::Done);
+        assert_eq!(shell_cards(&f), 1);
+        assert!(!task_dir(&f, 0).join("made.txt").exists());
+        assert!(f.model.requests()[1].body["messages"].to_string().contains("exit 0"));
+    }
+
+    #[tokio::test]
+    async fn the_model_sees_what_a_shell_line_printed() {
+        let f = builder_fixture(vec![Step::tool("c1", "shell", json!({"command": "echo marker-7731 | tr a-z A-Z"})), Step::text("done")], |c| c.sandbox = crate::exec::SandboxMode::Off);
+        f.engine.broker.set_mode(Mode::ShellAuto);
+        assert_eq!(f.engine.run_task(&f.m, "builder", BUILD_PROMPT).await.unwrap().status, Status::Done);
+        assert!(f.model.requests()[1].body["messages"].to_string().contains("MARKER-7731"));
+    }
+
+    #[tokio::test]
+    async fn a_session_grant_covers_the_same_shell_shape_in_a_later_task_until_revoked() {
+        let f = builder_fixture(
+            vec![Step::tool("c1", "shell", json!({"command": "touch a.txt"})), Step::text("one"), Step::tool("c2", "shell", json!({"command": "touch b.txt"})), Step::text("two")],
+            |c| c.sandbox = crate::exec::SandboxMode::Off,
+        );
+        let task = { let e = f.engine.clone(); let m = f.m.clone(); tokio::spawn(async move { e.run_task(&m, "builder", BUILD_PROMPT).await }) };
+        let card = wait_for_card(&f).await;
+        f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::AllowSession, "console-1").unwrap();
+        assert_eq!(task.await.unwrap().unwrap().status, Status::Done);
+        assert_eq!(f.engine.broker.session_grants(), vec![("shell".to_string(), "shell touch".to_string())]);
+        assert_eq!(f.engine.run_task(&f.m, "builder", BUILD_PROMPT).await.unwrap().status, Status::Done);
+        assert_eq!(shell_cards(&f), 1, "the second task did not ask");
+        assert!(task_dir(&f, 1).join("b.txt").exists());
+        assert_eq!(f.engine.broker.revoke_session(), 1);
+        assert!(f.engine.broker.session_grants().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_deny_rule_refuses_a_shell_line_that_hides_the_command_in_a_later_segment() {
+        let f = builder_fixture(
+            vec![Step::tool("c1", "shell", json!({"command": "ls && git push origin main"})), Step::text("done")],
+            |c| {
+                c.sandbox = crate::exec::SandboxMode::Off;
+                c.deny = vec!["git push*".into()];
+            },
+        );
+        assert_eq!(f.engine.run_task(&f.m, "builder", BUILD_PROMPT).await.unwrap().status, Status::Done);
+        assert_eq!(shell_cards(&f), 0);
+        let all = f.model.requests()[1].body["messages"].to_string();
+        assert!(all.contains("refused by policy") && all.contains("deny rule"), "{}", all);
+    }
+
+    #[tokio::test]
+    async fn a_shell_line_runs_without_a_card_under_the_sandbox_and_a_switched_off_tool_is_refused() {
+        if delphi_sandbox::Sandbox::detect().is_ok() {
+            let f = builder_fixture(vec![Step::tool("c1", "shell", json!({"command": "echo boxed > b.txt && cat b.txt"})), Step::text("done")], |c| c.sandbox = crate::exec::SandboxMode::Prefer);
+            assert_eq!(f.engine.run_task(&f.m, "builder", BUILD_PROMPT).await.unwrap().status, Status::Done);
+            assert_eq!(shell_cards(&f), 0);
+            assert!(f.model.requests()[1].body["messages"].to_string().contains("boxed"));
+        }
+        let f = builder_fixture(vec![Step::tool("c1", "shell", json!({"command": "ls"})), Step::text("done")], |c| c.shell = false);
+        assert_eq!(f.engine.run_task(&f.m, "builder", BUILD_PROMPT).await.unwrap().status, Status::Done);
+        assert!(f.model.requests()[1].body["messages"].to_string().contains("switched off"));
     }
 
     #[tokio::test]

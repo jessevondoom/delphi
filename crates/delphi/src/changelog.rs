@@ -20,7 +20,7 @@ pub fn render(ws_dir: &Path, opts: &Options) -> Result<String, String> {
     if id.is_empty() || id.contains(['/', '\\']) || id.starts_with('.') {
         return Err(format!("`{}` is not a mission id (see `delphi missions`)", id));
     }
-    let dir = ws_dir.join("local/missions").join(&id);
+    let dir = delphi_core::sessions::dir(ws_dir, &id);
     if !dir.is_dir() {
         return Err(format!("no mission `{}` in this workspace (see `delphi missions`)", id));
     }
@@ -57,7 +57,7 @@ mod tests {
     use serde_json::json;
 
     fn write_mission(ws: &Path, id: &str, events: &[(&str, serde_json::Value)]) {
-        let dir = ws.join("local/missions").join(id);
+        let dir = delphi_core::sessions::dir(ws, id);
         let mut log = delphi_core::log::EventLog::open(&dir, delphi_core::log::LogOptions::default()).unwrap();
         for (kind, payload) in events {
             log.append(EventEnvelope::new(id, kind, payload.clone())).unwrap();

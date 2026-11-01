@@ -34,7 +34,7 @@ pub const SITES: &[Site] = &[
         ],
     },
     Site {
-        name: "a host agent's proposed note or session summary (`specs/061` §8: tier L0, labelled, staged only, role-keyed, evidence required)",
+        name: "a host agent's proposed note or session summary (`specs/062` §8: tier L0, labelled, staged only, role-keyed, evidence required)",
         files: &["crates/delphi-engine/src/host_rpc.rs"],
         events: &["learn.staged"],
         proofs: &[

@@ -30,6 +30,7 @@ test('red cards come first, then oldest first; red offers no "allow similar"', (
   assert.deepEqual(list.map((c) => c.id), ['r1', 'a2', 'a3']);
   assert.deepEqual(options(list[0]!).map((o) => o.d), ['allow', 'deny']);
   assert.deepEqual(options(list[1]!).map((o) => o.d), ['allow', 'allow_similar', 'deny']);
+  assert.deepEqual(options({ ...list[1]!, sessionAllowed: true }).map((o) => o.d), ['allow', 'allow_similar', 'allow_session', 'deny']);
 });
 
 test('keys that answer are ignored for 300 ms after the deck opens, and after a card appears', () => {

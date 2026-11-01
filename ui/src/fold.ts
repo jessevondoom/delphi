@@ -7,9 +7,11 @@ import { sanitize, type AgentState } from './theme.ts';
  * An `attention` block is a task that stopped and needs the operator (an escalation or a failure): `text` is the
  * headline, `reason` the engine's reason without its wrapper, `cause` which stop it is (`attention.ts`).
  */
-export type Block = { id: number; kind: 'user' | 'reply' | 'note' | 'card' | 'tool' | 'attention'; role?: string; text: string; at: number; status?: string; ref?: string; detail?: string; reason?: string; cause?: Cause;
+export type Block = { id: number; kind: 'user' | 'reply' | 'note' | 'card' | 'tool' | 'attention' | 'shell'; role?: string; text: string; at: number; status?: string; ref?: string; detail?: string; reason?: string; cause?: Cause;
   /** For a note: how it is marked in the chat (`·` information, `✖` error, `✔` success; `005e` §10.6). */
-  tone?: 'info' | 'error' | 'ok' };
+  tone?: 'info' | 'error' | 'ok';
+  /** For a `!` shell block (`specs/061` §6): `text` is the command, `detail` its output, `status` running | ok | error. */
+  shell?: { exit: number | null; timedOut: boolean; capped: boolean; ms: number } };
 export type Agent = {
   state: AgentState; doing: string;
   /** When it entered `escalated`, so the strip can let go of the face (`005e` §6.2). */
@@ -19,7 +21,7 @@ export type Agent = {
   /** When its task last finished: the badge shows success for 3 s. */
   successAt?: number;
 };
-export type Approval = { id: string; task: string; role: string; tool: string; tier: string; summary: string; preview: string; blake3: string; payload: unknown; at: number; timeoutS: number; noSimilar?: boolean };
+export type Approval = { id: string; task: string; role: string; tool: string; tier: string; summary: string; preview: string; blake3: string; payload: unknown; at: number; timeoutS: number; noSimilar?: boolean; sessionAllowed?: boolean };
 /**
  * One agent's work in progress (`specs/037`): who, since when, the tool call it is waiting on, its running token total
  * when the daemon reports one, and what it has done that a summary can name. Nothing the agent thought or wrote is kept
@@ -237,6 +239,8 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
       const who = pl.by === 'usage' ? 'Delphi noticed a pattern' : 'the orchestrator suggests';
       return addBlock(s, { kind: 'note', text: `${who}: ${sanitize(String(pl.key))} → ${sanitize(String(pl.value))} (${sanitize(String(pl.reason ?? ''))}). /settings accept ${n} to make it, /settings dismiss ${n} to decline.`, at: stamp(e, now), tone: 'info' });
     }
+    // The weekly note that research is waiting outside the knowledge base (`specs/058` §17): the orchestrator says it once; nothing is asked.
+    case 'research.digest': return addBlock(s, { kind: 'reply', role: String(e.agent ?? 'orchestrator'), text: sanitize(String(pl.text ?? '')), at: stamp(e, now), status: 'done' });
     // A weaker model wrote a save-point before anyone was asked (`specs/035` D-11); where, for the operator who is not asked (optimistic mode).
     case 'checkpoint.saved': return addBlock(s, { kind: 'note', text: `the work so far is saved for resumption: ${sanitize(String(pl.path ?? ''))}`, at: stamp(e, now), tone: 'info' });
     // A task moved to another model (`specs/035`): said once in the chat, so the operator is never surprised by who is answering.
@@ -286,7 +290,7 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
       const id = String(pl.approval_id ?? '');
       const role = String(pl.role ?? 'orchestrator');
       const secs = Number(pl.timeout_secs ?? pl.timeout_s ?? pl.expires_in_s ?? 600);
-      const card: Approval = { id, task: String(e.task_id ?? pl.task_id ?? ''), role, tool: String(pl.tool ?? ''), tier: String(pl.tier ?? 'amber'), summary: sanitize(String(pl.summary ?? '')), preview: sanitize(String(pl.payload?.preview ?? '')), blake3: String(pl.payload_blake3 ?? ''), payload: pl.payload, at: now, timeoutS: secs, ...(pl.similar_allowed === false ? { noSimilar: true } : {}) };
+      const card: Approval = { id, task: String(e.task_id ?? pl.task_id ?? ''), role, tool: String(pl.tool ?? ''), tier: String(pl.tier ?? 'amber'), summary: sanitize(String(pl.summary ?? '')), preview: sanitize(String(pl.payload?.preview ?? '')), blake3: String(pl.payload_blake3 ?? ''), payload: pl.payload, at: now, timeoutS: secs, ...(pl.similar_allowed === false ? { noSimilar: true } : {}), ...(pl.session_allowed === true ? { sessionAllowed: true } : {}) };
       const next = { ...s, approvals: { ...s.approvals, [id]: card }, lastActivity: now };
       const shown = addBlock(next, { kind: 'card', role, text: [card.summary, ...card.preview.split('\n').slice(0, 6).map((l) => '  ' + l.slice(0, 100))].filter(Boolean).join('\n'), at: now, status: card.tier, ref: id });
       return setAgent({ ...shown, alert: { role, until: now + secs * 1000 } }, role, { state: 'waiting on you', doing: 'decision needed' });

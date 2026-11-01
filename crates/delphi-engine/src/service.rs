@@ -39,7 +39,7 @@ pub struct EngineService {
     open_gate: tokio::sync::Mutex<()>,
     /// Serializes what a host stages, so its count and its write are one step (`host_rpc.rs`).
     host_gate: tokio::sync::Mutex<()>,
-    /// Help requested by host sessions: the task's ID to who asked and, once it finishes, what it answered (`specs/061` §6).
+    /// Help requested by host sessions: the task's ID to who asked and, once it finishes, what it answered (`specs/062` §6).
     helps: Arc<Mutex<HashMap<String, HelpRun>>>,
     /// Recovery plans awaiting the operator's decision, by mission.
     recovery: Mutex<HashMap<String, PlanState>>,
@@ -149,7 +149,20 @@ fn engine_err(e: EngineError) -> RpcError {
 
 impl EngineService {
     pub fn new(engine: Arc<Engine>, default_mission: &str) -> Arc<EngineService> {
-        Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), host_gate: tokio::sync::Mutex::new(()), helps: Arc::new(Mutex::new(HashMap::new())), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())), acquire_checked: Mutex::new(0) })
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(String, String)>();
+        let _ = engine.research_ask.set(tx);
+        let svc = Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), host_gate: tokio::sync::Mutex::new(()), helps: Arc::new(Mutex::new(HashMap::new())), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())), acquire_checked: Mutex::new(0) });
+        // An approved `request_research` card (`specs/058` §20): the mission's own scope decides where the pages go.
+        if tokio::runtime::Handle::try_current().is_ok() {
+            let weak = Arc::downgrade(&svc);
+            tokio::spawn(async move {
+                while let Some((mission, topic)) = rx.recv().await {
+                    let Some(svc) = weak.upgrade() else { break };
+                    svc.agent_research(&mission, &topic).await;
+                }
+            });
+        }
+        svc
     }
 
     /// Run `org.action` through this binary instead of the current executable (tests, where that is the test binary).
@@ -184,7 +197,7 @@ impl EngineService {
             return Ok(m.clone());
         }
         let e = &self.engine;
-        let mission_dir = e.ws.dir.join("local/missions").join(id);
+        let mission_dir = delphi_core::sessions::dir(&e.ws.dir, id);
         if !mission_dir.exists() {
             if let Some(cwd) = cwd.map(std::path::Path::new).filter(|c| c.is_absolute()) {
                 if let Some(project) = crate::scope::resolve(&e.ws.dir, cwd).project {
@@ -209,7 +222,7 @@ impl EngineService {
         Ok(m)
     }
 
-    /// `host.propose_note` and `host.record_session_summary` (`specs/061` §8): stage one untrusted note in the host
+    /// `host.propose_note` and `host.record_session_summary` (`specs/062` §8): stage one untrusted note in the host
     /// session's own mission, which carries the caller's project scope.
     async fn host_stage(&self, p: Value, ctx: CallContext, summary: bool) -> RpcOutcome {
         use crate::host_rpc as h;
@@ -228,7 +241,7 @@ impl EngineService {
         Ok(json!({"staged": true, "ref": format!("{}/{}", m.id, id), "tier": "L0", "count": already + 1}))
     }
 
-    /// `host.request_help` (`specs/061` §6): the orchestrator gets the request as content, picks who answers (itself included),
+    /// `host.request_help` (`specs/062` §6): the orchestrator gets the request as content, picks who answers (itself included),
     /// and everyone it consults runs read-only. The call waits a while for the answer; a slow one is fetched with `host.help_result`.
     async fn host_request_help(&self, p: Value, ctx: CallContext) -> RpcOutcome {
         use crate::host_rpc as h;
@@ -1060,8 +1073,9 @@ impl EngineService {
         let answer = match p["decision"].as_str() {
             Some("allow") => Answer::Allow,
             Some("allow_similar") => Answer::AllowSimilar,
+            Some("allow_session") => Answer::AllowSession,
             Some("deny") => Answer::Deny { reason: p["reason"].as_str().unwrap_or("").chars().take(500).collect() },
-            _ => return Err(err(code::INVALID_PARAMS, "`decision` must be allow, allow_similar or deny")),
+            _ => return Err(err(code::INVALID_PARAMS, "`decision` must be allow, allow_similar, allow_session or deny")),
         };
         match self.engine.broker.resolve(id, hash, answer, &format!("console-{}", ctx.client_id)) {
             Ok(r) => Ok(r.event_payload(id, &format!("console-{}", ctx.client_id))),
@@ -1144,6 +1158,49 @@ impl EngineService {
             "rows": rows.iter().map(|t| json!({"key": t.key, "calls": t.calls, "input_tokens": t.input_tokens, "cache_read_tokens": t.cache_read_tokens, "cache_write_tokens": t.cache_write_tokens, "output_tokens": t.output_tokens, "thinking_tokens": t.thinking_tokens, "cost_usd": t.cost_usd})).collect::<Vec<_>>(),
             "budget": Self::budget_json(&m),
         }))
+    }
+
+    /// `shell.run` (`specs/061` §6): the operator's own `!` line. Console scope only; refused by a deny rule or bundle
+    /// policy; runs in the console's directory without a card or a sandbox; its output is shown to the operator and
+    /// logged, and reaches no prompt.
+    async fn shell_run(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let line = crate::exec::parse_shell(&json!({"command": p["command"]})).map_err(|e| err(code::INVALID_PARAMS, e.to_string()))?;
+        let cwd = p["cwd"].as_str().map(std::path::PathBuf::from).filter(|c| c.is_absolute() && c.is_dir()).ok_or_else(|| err(code::INVALID_PARAMS, "`cwd` must be an existing absolute directory"))?;
+        let refuse = |why: String| Ok(json!({"ok": false, "exit_code": null, "timed_out": false, "output": "", "output_capped": false, "elapsed_ms": 0, "refused": why}));
+        if let Some(why) = self.engine.exec.denied_line(&line) {
+            return refuse(why);
+        }
+        match crate::bundle_load::policy(&self.engine.ws) {
+            Ok(policy) => {
+                for seg in line.split([';', '|', '&', '\n']) {
+                    let words = crate::exec::shell_words(seg.trim()).unwrap_or_else(|| seg.split_whitespace().map(String::from).collect());
+                    if let Some(why) = (!words.is_empty()).then(|| policy.denies_command(&words)).flatten() {
+                        return refuse(why);
+                    }
+                }
+            }
+            Err(e) => return refuse(format!("a bundle policy that cannot be verified refuses: {}", e)),
+        }
+        let timeout = p["timeout_secs"].as_u64().filter(|n| *n > 0).map(Duration::from_secs);
+        let (env, l2) = (self.engine.exec.clone(), line.clone());
+        let report = tokio::task::spawn_blocking(move || env.run_operator(&l2, &cwd, timeout)).await.map_err(|e| err(-32000, e.to_string()))?.map_err(|e| err(-32000, e.to_string()))?;
+        let o = &report.outcome;
+        let mut output = o.stdout.clone();
+        if !o.stderr.is_empty() {
+            if !output.is_empty() && !output.ends_with('\n') {
+                output.push('\n');
+            }
+            output.push_str(&o.stderr);
+        }
+        let output = self.engine.secrets.redact(&output);
+        let exit_code = o.status.and_then(|s| s.code());
+        // Logged for the record, not for any prompt; a mission is only needed to hold the event.
+        if let Ok(m) = self.mission(p["mission_id"].as_str()).await {
+            let ev = EventEnvelope::new(&m.id, "operator.shell", json!({"command": self.engine.secrets.redact(&line), "exit_code": exit_code, "timed_out": o.timed_out, "output_capped": o.output_capped, "elapsed_ms": report.elapsed.as_millis() as u64, "output": output.chars().take(8192).collect::<String>(), "by": format!("console-{}", ctx.client_id)}));
+            let _ = m.append(ev).await;
+        }
+        Ok(json!({"ok": o.success(), "exit_code": exit_code, "timed_out": o.timed_out, "output": output, "output_capped": o.output_capped, "elapsed_ms": report.elapsed.as_millis() as u64}))
     }
 
     async fn budget_set(&self, p: Value, ctx: CallContext) -> RpcOutcome {
@@ -1365,6 +1422,30 @@ impl EngineService {
         }
     }
 
+    /// Say once a week, in the chat, that research is waiting outside the knowledge base (`specs/058` §17). A message, not a card.
+    async fn research_nudge(&self, m: &Arc<MissionState>) {
+        let (ws, home) = (self.engine.ws.dir.clone(), self.engine.ws.home.clone());
+        let sources = crate::fact_sources::SourceList::new(self.engine.cfg.get().validator.sources.clone());
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let due = tokio::task::spawn_blocking(move || {
+            // Held pages the operator's list now trusts go in first (the automatic pass, default scope only), so they are not counted as waiting.
+            let _ = run_pass(&ws, &home, &crate::research_pending::Held::Pending, &sources);
+            let d = crate::research_digest::collect(&ws);
+            crate::research_digest::due(&ws, &d, now).then(|| {
+                crate::research_digest::mark(&ws, now);
+                d
+            })
+        })
+        .await
+        .ok()
+        .flatten();
+        let Some(d) = due else { return };
+        let projects: Vec<Value> = d.projects.iter().map(|(n, c)| json!({"name": n, "pages": c})).collect();
+        let mut ev = EventEnvelope::new(&m.id, "research.digest", json!({"held": d.held, "projects": projects, "weak": d.weak, "text": crate::research_digest::text(&d)}));
+        ev.agent = Some("orchestrator".into());
+        let _ = m.append(ev).await;
+    }
+
     /// `projects.list`: the home workspace and every registered project, read now (`specs/058` §15).
     async fn projects_list(&self, ctx: CallContext) -> RpcOutcome {
         need_console(&ctx)?;
@@ -1397,18 +1478,23 @@ impl EngineService {
             }
             let (wrote, path) = crate::research_pending::ratify(&ws, &held, &rel)?;
             if wrote != crate::research::Wrote::Unchanged {
-                let mut kb = crate::kb::Kb::open(&ws.join("local/state.db")).map_err(|e| e.to_string())?;
-                let model = crate::kb::attach_default(&home, &mut kb).map_err(|e| e.to_string())?;
-                kb.refresh(&ws, "").map_err(|e| e.to_string())?;
-                if model {
-                    crate::kb::embed_in_background(&home, &ws);
-                }
+                refresh_kb(&ws, &home)?;
             }
             Ok(json!({"ratified": path}))
         })
         .await
         .map_err(|e| err(-32000, e.to_string()))?;
         out.map_err(|e| err(code::INVALID_PARAMS, e))
+    }
+
+    /// `pending.pass`: the validator pass over held research (`specs/058` §18). Console only.
+    async fn pending_pass(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let held = self.named_project(&p)?.map(crate::research_pending::Held::Project).unwrap_or(crate::research_pending::Held::Pending);
+        let (ws, home) = (self.engine.ws.dir.clone(), self.engine.ws.home.clone());
+        let sources = crate::fact_sources::SourceList::new(self.engine.cfg.get().validator.sources.clone());
+        let moved = tokio::task::spawn_blocking(move || run_pass(&ws, &home, &held, &sources)).await.map_err(|e| err(-32000, e.to_string()))?.map_err(|e| err(code::INVALID_PARAMS, e))?;
+        Ok(json!({"promoted": moved}))
     }
 
     /// `research.start`: expand the knowledge base with what the trusted sources say about a topic (`specs/028` §10). Returns at once;
@@ -1433,6 +1519,25 @@ impl EngineService {
             None => crate::research::Scope::Home,
             Some(root) => crate::research::Scope::Project(root),
         };
+        self.launch_research(topic, scope).await
+    }
+
+    /// An approved `request_research` (`specs/058` §20): the job runs in the scope the mission was stamped with, and the log says what happened.
+    async fn agent_research(&self, mission: &str, topic: &str) {
+        let ws = &self.engine.ws.dir;
+        let root = crate::scope::mission_scope(ws, &ws.join("local/missions").join(mission)).and_then(|id| crate::scope::project_root(ws, &id));
+        let scope = root.map(crate::research::Scope::Project).unwrap_or(crate::research::Scope::Home);
+        let outcome = self.launch_research(topic.to_string(), scope).await;
+        if let Ok(m) = self.mission_at(Some(mission), None).await {
+            let (kind, payload) = match outcome {
+                Ok(_) => ("research.started", json!({"topic": topic})),
+                Err(e) => ("research.refused", json!({"topic": topic, "why": e.message})),
+            };
+            let _ = m.append(EventEnvelope::new(&m.id, kind, payload)).await;
+        }
+    }
+
+    async fn launch_research(&self, topic: String, scope: crate::research::Scope) -> RpcOutcome {
         let shared = crate::research::Shared::new(&topic);
         {
             let mut cur = self.research.lock().unwrap();
@@ -2113,6 +2218,26 @@ impl EngineService {
     }
 }
 
+/// Re-index after entries entered the shared base, embedding in the background when a model is there.
+fn refresh_kb(ws: &std::path::Path, home: &std::path::Path) -> Result<(), String> {
+    let mut kb = crate::kb::Kb::open(&ws.join("local/state.db")).map_err(|e| e.to_string())?;
+    let model = crate::kb::attach_default(home, &mut kb).map_err(|e| e.to_string())?;
+    kb.refresh(ws, "").map_err(|e| e.to_string())?;
+    if model {
+        crate::kb::embed_in_background(home, ws);
+    }
+    Ok(())
+}
+
+/// The validator pass and, when something entered the base, the re-index; the entries moved, by name.
+fn run_pass(ws: &std::path::Path, home: &std::path::Path, held: &crate::research_pending::Held, sources: &crate::fact_sources::SourceList) -> Result<Vec<String>, String> {
+    let moved = crate::research_pending::pass(ws, held, sources);
+    if moved.iter().any(|(_, w)| *w != crate::research::Wrote::Unchanged) {
+        refresh_kb(ws, home)?;
+    }
+    Ok(moved.into_iter().map(|(rel, _)| rel).collect())
+}
+
 /// The handle the daemon holds (a newtype, since `Extension` and `Arc` are both foreign to this crate).
 pub struct ServiceExt(pub Arc<EngineService>);
 
@@ -2129,7 +2254,7 @@ impl Extension for ServiceExt {
             Some(match method.as_str() {
                 "mission.open" => match need_console(&ctx) {
                     Err(e) => Err(e),
-                    Ok(()) => svc.mission_at(params["mission_id"].as_str(), params["cwd"].as_str()).await.map(|m| json!({"mission_id": m.id, "budget": EngineService::budget_json(&m), "mode": svc.engine.broker.mode().as_str(), "recovery": svc.recovery_json(&m.id)})),
+                    Ok(()) => svc.mission_at(params["mission_id"].as_str(), params["cwd"].as_str()).await.inspect(|m| { let (svc, m) = (svc.clone(), m.clone()); tokio::spawn(async move { svc.research_nudge(&m).await }); }).map(|m| json!({"mission_id": m.id, "budget": EngineService::budget_json(&m), "mode": svc.engine.broker.mode().as_str(), "recovery": svc.recovery_json(&m.id)})),
                 },
                 "host.propose_note" => svc.host_stage(params, ctx, false).await,
                 "host.record_session_summary" => svc.host_stage(params, ctx, true).await,
@@ -2158,6 +2283,7 @@ impl Extension for ServiceExt {
                 "build.merge" => svc.build_merge(params, ctx).await,
                 "research.start" => svc.research_start(params, ctx).await,
                 "projects.list" => svc.projects_list(ctx).await,
+                "pending.pass" => svc.pending_pass(params, ctx).await,
                 "pending.list" => svc.pending_list(params, ctx).await,
                 "pending.ratify" => svc.pending_decide(params, ctx, true).await,
                 "pending.discard" => svc.pending_decide(params, ctx, false).await,
@@ -2203,10 +2329,15 @@ impl Extension for ServiceExt {
                 "models.get" => svc.models_get(),
                 "budget.get" => svc.mission(params["mission_id"].as_str()).await.map(|m| EngineService::budget_json(&m)),
                 "budget.set" => svc.budget_set(params, ctx).await,
-                "permissions.get" => Ok(json!({"mode": svc.engine.broker.mode().as_str(), "allow_similar": svc.engine.broker.allow_similar().iter().map(|(t, tool, pat)| json!({"task_id": t, "tool": tool, "pattern": pat})).collect::<Vec<_>>()})),
+                "permissions.get" => Ok(json!({"mode": svc.engine.broker.mode().as_str(), "allow_similar": svc.engine.broker.allow_similar().iter().map(|(t, tool, pat)| json!({"task_id": t, "tool": tool, "pattern": pat})).collect::<Vec<_>>(), "allow_session": svc.engine.broker.session_grants().iter().map(|(tool, pat)| json!({"tool": tool, "pattern": pat})).collect::<Vec<_>>()})),
+                "shell.run" => svc.shell_run(params, ctx).await,
+                "permissions.revoke" => (|| {
+                    need_console(&ctx)?;
+                    Ok(json!({"revoked": svc.engine.broker.revoke_session()}))
+                })(),
                 "permissions.set" => (|| {
                     need_console(&ctx)?;
-                    let mode = params["mode"].as_str().and_then(Mode::parse).ok_or_else(|| err(code::INVALID_PARAMS, "`mode` must be default, accept-edits or mission-auto"))?;
+                    let mode = params["mode"].as_str().and_then(Mode::parse).ok_or_else(|| err(code::INVALID_PARAMS, "`mode` must be default, accept-edits, shell-auto or mission-auto"))?;
                     svc.engine.broker.set_mode(mode);
                     Ok(json!({"mode": mode.as_str()}))
                 })(),
@@ -2337,7 +2468,7 @@ mod tests {
             assert_eq!(rpc_code(k.call("host.propose_note", base.clone())), Some(code::FORBIDDEN));
         })
         .await;
-        let events = replay_log(&ws_dir.join("local/missions/host-abcdef0123456789"));
+        let events = replay_log(&delphi_core::sessions::dir(&ws_dir, "host-abcdef0123456789"));
         let live = crate::learn::live_notes("host-abcdef0123456789", &events);
         assert_eq!(live.len(), 24, "{live:?}");
         assert!(live.iter().all(|n| n.tier == "L0" && n.summary.starts_with("[host:claude-code/")), "{live:?}");
@@ -2357,7 +2488,7 @@ mod tests {
             link.session().to_string()
         })
         .await;
-        assert!(f.engine.ws.dir.join("local/missions").join(format!("host-{session}/handoff.json")).exists());
+        assert!(delphi_core::sessions::dir(&f.engine.ws.dir, &format!("host-{session}")).join("handoff.json").exists());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2397,7 +2528,7 @@ mod tests {
             assert_eq!(rpc_code(c.call("host.request_help", p(json!({"need": "n"})))), Some(code::FORBIDDEN));
         })
         .await;
-        let events = replay_log(&ws_dir.join("local/missions/host-abcdef0123456789"));
+        let events = replay_log(&delphi_core::sessions::dir(&ws_dir, "host-abcdef0123456789"));
         assert_eq!(crate::host_rpc::helps_in(&events), 3);
     }
 
@@ -3168,7 +3299,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "kb.open", "research.start", "projects.list", "pending.list", "pending.ratify", "pending.discard", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "retro.list", "retro.stale", "retro.accept", "retro.reject", "retro.promotions", "retro.promote", "retro.withdraw", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
+            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "kb.open", "research.start", "projects.list", "pending.pass", "pending.list", "pending.ratify", "pending.discard", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "retro.list", "retro.stale", "retro.accept", "retro.reject", "retro.promotions", "retro.promote", "retro.withdraw", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
             for m in every_mutating_method_the_daemon_has {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }
@@ -3225,7 +3356,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let everything_a_relay_must_not_reach = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "kb.open", "research.start", "projects.list", "pending.list", "pending.ratify", "pending.discard", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","kb.search", "kb.get", "kb.allows", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "models.get", "anything.else"];
+            let everything_a_relay_must_not_reach = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "kb.open", "research.start", "projects.list", "pending.pass", "pending.list", "pending.ratify", "pending.discard", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","kb.search", "kb.get", "kb.allows", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "models.get", "anything.else"];
             for m in everything_a_relay_must_not_reach {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }
@@ -3235,6 +3366,32 @@ mod tests {
         })
         .await;
         assert_eq!(f.model.requests().len(), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn shell_run_is_console_only_and_honors_deny_rules() {
+        let f = crate::testkit::setup_with_exec(vec![], 5.0, |_| {}, |c| c.deny = vec!["echo nope*".into()]);
+        let s = serve(&f).await;
+        let (c_sock, n_sock, c_tok, n_tok) = (s.sock.clone(), s.narrator_sock.clone(), s.console.clone(), s.narrator.clone());
+        let cwd = f.root.to_string_lossy().to_string();
+        let (ok, denied, narrator) = blocking(move || {
+            let mut c = Client::connect(&c_sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+            c.hello(&c_tok).unwrap();
+            let ok = c.call("shell.run", json!({"command": "echo hi | tr a-z A-Z", "cwd": cwd})).unwrap();
+            let denied = c.call("shell.run", json!({"command": "echo nope; echo ok", "cwd": cwd})).unwrap();
+            let mut n = Client::connect(&n_sock).unwrap();
+            n.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            n.hello(&n_tok).unwrap();
+            let narrator = rpc_code(n.call("shell.run", json!({"command": "echo hi", "cwd": cwd})));
+            (ok, denied, narrator)
+        })
+        .await;
+        assert_eq!(ok["ok"], true, "{ok}");
+        assert!(ok["output"].as_str().unwrap().contains("HI"), "{ok}");
+        assert_eq!(denied["ok"], false, "{denied}");
+        assert!(denied["refused"].is_string(), "{denied}");
+        assert_eq!(narrator, Some(code::FORBIDDEN));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -4261,7 +4418,7 @@ mod tests {
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::create_dir_all(&outside).unwrap();
         register_at(&ws, &[(SCOPE_A, &root)]);
-        let scope = |m: &str| std::fs::read_to_string(ws.join("local/missions").join(m).join("scope")).ok();
+        let scope = |m: &str| std::fs::read_to_string(delphi_core::sessions::dir(&ws, m).join("scope")).ok();
         svc.mission_at(Some("at-root"), Some(root.to_str().unwrap())).await.unwrap();
         svc.mission_at(Some("in-sub"), Some(root.join("src").to_str().unwrap())).await.unwrap();
         svc.mission_at(Some("outside"), Some(outside.to_str().unwrap())).await.unwrap();
@@ -4297,6 +4454,29 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn the_orchestrator_says_once_that_research_is_waiting_and_not_again_that_week() {
+        let f = setup(vec![Step::text("unused")], 5.0, |_| {});
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        let ws = f.engine.ws.dir.clone();
+        let m = svc.mission_at(Some("digest-m"), None).await.unwrap();
+        let dir = delphi_core::sessions::dir(&ws, "digest-m");
+        let digests = |_: &Arc<MissionState>| delphi_core::log::replay(&dir).unwrap().into_iter().filter(|e| e.kind == "research.digest").collect::<Vec<_>>();
+        svc.research_nudge(&m).await;
+        assert!(digests(&m).is_empty(), "nothing waiting, nothing said");
+        for n in 0..crate::research_digest::THRESHOLD {
+            let p = ws.join(crate::research::PENDING_DIR).join("blog.example").join(format!("p{n}.md"));
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, "---\ntitle: \"T\"\nsource_url: \"https://blog.example/x\"\nsource_class: weak\nretrieved: 2026-10-31\n---\n\n# T\n").unwrap();
+        }
+        svc.research_nudge(&m).await;
+        svc.research_nudge(&m).await;
+        let said = digests(&m);
+        assert_eq!(said.len(), 1, "once, not on every open");
+        assert_eq!((said[0].agent.as_deref(), said[0].payload["held"].as_u64(), said[0].payload["weak"].as_u64()), (Some("orchestrator"), Some(5), Some(5)));
+        assert!(said[0].payload["text"].as_str().unwrap().contains("/validate"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn an_ambiguous_or_corrupt_registry_stamps_nothing() {
         let f = setup(vec![Step::text("unused")], 5.0, |_| {});
         let svc = EngineService::new(f.engine.clone(), "m1");
@@ -4308,7 +4488,7 @@ mod tests {
         std::fs::write(ws.join("local/projects.json"), "{not json").unwrap();
         svc.mission_at(Some("corrupt"), Some(root.to_str().unwrap())).await.unwrap();
         for m in ["ambiguous", "corrupt"] {
-            assert!(ws.join("local/missions").join(m).is_dir() && !ws.join("local/missions").join(m).join("scope").exists(), "{}", m);
+            assert!(delphi_core::sessions::dir(&ws, m).is_dir() && !delphi_core::sessions::dir(&ws, m).join("scope").exists(), "{}", m);
         }
     }
 

@@ -20,6 +20,7 @@ import { imageRefs } from './markdown.ts';
 import { pictureStyle, rasterOf, styleOf, usePictureStyle } from './image.ts';
 import { openExternal, openFile } from './external.ts';
 import * as O from './org.ts';
+import { sessionDir } from './missions.ts';
 import { noteSources, passageOf, pin, previewOf, readNotes } from './research.ts';
 import { copyText, firstVisible, stepFocus, type Target } from './links.ts';
 import { execFile } from 'node:child_process';
@@ -31,6 +32,7 @@ import { useReduceMotion } from './reduce-motion.ts';
 import type { Ev } from './input.ts';
 import { copyToClipboard, useSelection } from './select.ts';
 import type { Rpc } from './rpc.ts';
+import { anyShellRunning, runBang } from './shell.ts';
 import type { Term } from './terminal.ts';
 import type { Info, Pal, Rgb } from './theme.ts';
 import { Frame } from './frame.tsx';
@@ -152,7 +154,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
     const t = setInterval(() => {
       const n = Date.now(), s = stateRef.current;
       const ty = typingOf(s);
-      const key = tickKey(s.agents, STRIP_ROLES.filter((r) => info.roles[r]), n, still, Object.keys(s.running).length > 0 || archRef.current.pg.busy !== null, ty ? String(typingFrame(ty.since, ty.id, n, still)) : '');
+      const key = tickKey(s.agents, STRIP_ROLES.filter((r) => info.roles[r]), n, still, Object.keys(s.running).length > 0 || anyShellRunning(s) || archRef.current.pg.busy !== null, ty ? String(typingFrame(ty.since, ty.id, n, still)) : '');
       if (key !== last) { last = key; setNow(n); }
     }, TICK_MS);
     return () => clearInterval(t);
@@ -283,7 +285,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
       const all = line.slice(name.length).trim() === 'all';
       const write = (text: string, stem: string) => {
         try {
-          const dir = join(info.workspace, 'local/missions', mission, 'exports');
+          const dir = join(sessionDir(info.workspace, mission), 'exports');
           mkdirSync(dir, { recursive: true });
           const file = join(dir, `${stem}-${Date.now()}.md`);
           writeFileSync(file, text);
@@ -696,7 +698,8 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
               const { text: t, next } = C.submit(comp.current);
               if (!t) return;
               comp.current = next; setComposer(next);
-              if (t.startsWith('/') && lookup(t.split(/\s/)[0]!)) run(t);
+              if (t.startsWith('!')) void runBang(t, { cmd, cwd: process.cwd(), update: setState, note });
+              else if (t.startsWith('/') && lookup(t.split(/\s/)[0]!)) run(t);
               else if (t.startsWith('/')) note(`unknown command ${t.split(/\s/)[0]}; / shows the list`, 'error');
               else if (Object.keys(stateRef.current.running).length) { queueRef.current = [...queueRef.current, t]; setQueue(queueRef.current); }
               else send(t);

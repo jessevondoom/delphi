@@ -128,8 +128,7 @@ pub fn render(id: &str, version: &str, a: &Agg, knowledge: &[String], stale: boo
 
 /// The event logs of every mission in a workspace, oldest mission first.
 pub fn read_missions(ws: &Path) -> Vec<Vec<EventEnvelope>> {
-    let Ok(rd) = std::fs::read_dir(ws.join("local/missions")) else { return Vec::new() };
-    let mut dirs: Vec<_> = rd.flatten().filter(|e| e.path().is_dir()).map(|e| e.path()).collect();
+    let mut dirs: Vec<_> = delphi_core::sessions::dirs(ws).into_iter().map(|(_, p)| p).collect();
     dirs.sort();
     dirs.iter().filter_map(|d| delphi_core::log::replay(d).ok()).collect()
 }

@@ -1,6 +1,6 @@
 # Using Delphi from other tools
 
-`delphi mcp` is an MCP server that lets Claude Code, Copilot CLI, Codex or agy (Antigravity and the Gemini CLI) borrow Delphi's roles, skills, project specs and memory. The design is [`specs/061`](../../specs/061-delphi-as-host-agent-mcp-server.md).
+`delphi mcp` is an MCP server that lets Claude Code, Copilot CLI, Codex or agy (Antigravity and the Gemini CLI) borrow Delphi's roles, skills, project specs and memory. The design is [`specs/062`](../../specs/062-delphi-as-host-agent-mcp-server.md).
 
 It reads files, opens no network port, runs nothing, and serves this machine and this user only. The only thing it writes is staged content, and only through the running daemon (below). What it returns is advice and data, never a grant of permission: a host stays inside its own sandbox and approvals.
 
@@ -39,4 +39,4 @@ Everything read from project files or memory is `external_untrusted` data, not i
 
 ## Turn it off
 
-Set `[mcp] enabled = false` in `config.toml`. Every call is then answered `disabled_by_operator`, at once. Councils arrive in a later slice of spec 061.
+Set `[mcp] enabled = false` in `config.toml`. Every call is then answered `disabled_by_operator`, at once. Councils arrive in a later slice of spec 062.

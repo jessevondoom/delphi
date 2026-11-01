@@ -93,6 +93,8 @@
         "sandbox": { "enum": ["off", "prefer", "required"] },
         "allow": { "type": "array", "items": { "type": "string" } },
         "deny": { "type": "array", "items": { "type": "string" } },
+        "shell": { "type": "boolean", "description": "Offer the `shell` tool (specs/061). Default true." },
+        "hard": { "type": "array", "items": { "type": "string" }, "description": "Shell lines that are always Hard: a Red card." },
         "test_command": { "type": "array", "items": { "type": "string" }, "description": "Merge gate 1." },
         "check_command": { "type": "array", "items": { "type": "string" }, "description": "Merge gate 2." }
       }
@@ -230,7 +232,7 @@
     },
     "mcp": {
       "type": "object",
-      "description": "Delphi for host agents (specs/061 section 3.4): `delphi mcp`, an MCP server on stdio for the other tools you code with. Same machine and same user only.",
+      "description": "Delphi for host agents (specs/062 section 3.4): `delphi mcp`, an MCP server on stdio for the other tools you code with. Same machine and same user only.",
       "additionalProperties": false,
       "properties": {
         "enabled": { "type": "boolean", "default": true, "description": "false: every tool call is answered `disabled_by_operator`. Read at each call, so it takes effect at once. A config.toml that cannot be read as written also turns it off." },

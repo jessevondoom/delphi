@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseCouncil, renderUsage, runSlash, type Ctx } from '../src/run.ts';
 import { fold, initial, replay } from '../src/fold.ts';
+import { lookup } from '../src/commands.ts';
 import { highlightLine } from '../src/highlight.ts';
 import type { Info } from '../src/theme.ts';
 import chalk from 'chalk';
@@ -63,6 +64,27 @@ test('/validate lists held research, then ratifies or discards exactly the entri
   assert.match(r.out.at(-1)!, /already decided/);
   await runSlash('/retro research project=demo', r.c);
   assert.deepEqual(r.calls.at(-1), ['pending.list', { project: 'demo' }]);
+});
+
+test('/validate is a command the console accepts, and pass reports what the list now trusts', async () => {
+  assert.equal(lookup('/validate')?.name, '/validate');
+  const r = ctx(initial(0), [], (m) => (m === 'pending.pass' ? { promoted: ['blog.example/a.md'] } : {}));
+  await runSlash('/validate pass project=demo', r.c);
+  assert.deepEqual(r.calls.at(-1), ['pending.pass', { project: 'demo' }]);
+  assert.match(r.out.at(-1)!, /promoted 1 page in project demo.*blog\.example\/a\.md/);
+  const none = ctx(initial(0), [], () => ({ promoted: [] }));
+  await runSlash('/validate pass', none.c);
+  assert.match(none.out.at(-1)!, /found nothing.*weak pages stay held/);
+});
+
+test('/research starts the job in this directory and /research cancel stops it', async () => {
+  const r = ctx(initial(0), [], (m) => (m === 'research.cancel' ? { cancelling: true } : {}));
+  await runSlash('/research the fall of Constantinople', r.c);
+  assert.deepEqual(r.calls[0], ['research.start', { topic: 'the fall of Constantinople', cwd: undefined }]);
+  await runSlash('/research cancel', r.c);
+  assert.equal(r.out.at(-1), 'cancelling the research');
+  await runSlash('/research', r.c);
+  assert.match(r.out.at(-1)!, /usage: \/research/);
 });
 
 test('usage renders a table with a total', () => {

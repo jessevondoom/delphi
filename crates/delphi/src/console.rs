@@ -257,6 +257,7 @@ pub struct View<'a> {
 fn mode_label(mode: &str) -> &str {
     match mode {
         "accept-edits" => "edits auto",
+        "shell-auto" => "shell auto",
         "mission-auto" => "auto",
         _ => "approvals",
     }
@@ -364,7 +365,7 @@ fn clock() -> String {
 /// Keep a whole reply as a document in the mission (`missions/<mission>/replies/<task>.md`). It is the agent's own
 /// output, so it is marked as generated, and it carries the frontmatter every workspace document has.
 pub fn save_reply(ws_dir: &Path, mission: &str, r: &Reply, now_rfc3339: &str) -> std::io::Result<std::path::PathBuf> {
-    let dir = ws_dir.join("local/missions").join(mission).join("replies");
+    let dir = delphi_core::sessions::dir(ws_dir, mission).join("replies");
     std::fs::create_dir_all(&dir)?;
     let path = dir.join(format!("{}.md", r.task_id));
     let doc = format!(
@@ -806,7 +807,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let r = Reply { task_id: "t_0007".into(), role: "architect".into(), name: "Daedalus".into(), text: "# Plan\n\nstep one\nstep two\n".into(), status: "done".into() };
         let path = save_reply(d.path(), "m1", &r, "2026-10-24T12:00:00Z").unwrap();
-        assert!(path.ends_with("local/missions/m1/replies/t_0007.md"));
+        assert!(path.ends_with("local/sessions/m1/replies/t_0007.md"));
         let text = std::fs::read_to_string(&path).unwrap();
         let (fm, body) = delphi_engine::workspace::split_frontmatter(&text);
         let fm = fm.expect("frontmatter");

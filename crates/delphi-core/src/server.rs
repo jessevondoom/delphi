@@ -33,7 +33,7 @@ pub const NARRATOR_METHODS: [&str; 12] = ["session.ping", "events.subscribe", "s
 pub const RELAY_METHODS: [&str; 5] = ["session.ping", "events.subscribe", "approval.list", "approval.relay_resolve", "budget.get"];
 
 /// The only methods the host socket answers (besides the `hello` handshake): stage a lesson or a summary as untrusted
-/// content, and keep or read one handoff (`specs/061` §8). A host cannot start work, read events or approve anything.
+/// content, and keep or read one handoff (`specs/062` §8). A host cannot start work, read events or approve anything.
 pub const HOST_METHODS: [&str; 7] = ["session.ping", "host.propose_note", "host.record_session_summary", "host.handoff_put", "host.handoff_get", "host.request_help", "host.help_result"];
 
 /// A request line larger than this closes the connection.
@@ -228,7 +228,7 @@ impl Daemon {
         self.serve_everything(console, narrator, relay, None).await
     }
 
-    /// As [`Daemon::serve_all`], with the host socket (`specs/061`): a host token is refused on the other sockets and
+    /// As [`Daemon::serve_all`], with the host socket (`specs/062`): a host token is refused on the other sockets and
     /// theirs on this one, and its dispatcher offers [`HOST_METHODS`] and nothing else.
     pub async fn serve_everything(self: Arc<Self>, console: UnixListener, narrator: Option<UnixListener>, relay: Option<UnixListener>, host: Option<UnixListener>) {
         tokio::spawn(self.hub.clone().run_coalescer());

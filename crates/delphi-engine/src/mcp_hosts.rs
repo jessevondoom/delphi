@@ -1,4 +1,4 @@
-//! Spec 061 §10: the configuration a host needs to start `delphi mcp`, and the plugin and instructions it is given.
+//! Spec 062 §10: the configuration a host needs to start `delphi mcp`, and the plugin and instructions it is given.
 //! Pure text; nothing here starts a server or touches a host's own files.
 
 use std::path::{Path, PathBuf};
@@ -13,7 +13,7 @@ pub fn config_snippet(host: &str) -> Result<String, String> {
         "claude-code" => format!("# .mcp.json in the project, or: claude mcp add {SERVER} -- delphi mcp\n{{\n  \"mcpServers\": {{\n    \"{SERVER}\": {{ \"command\": \"delphi\", \"args\": [\"mcp\"] }}\n  }}\n}}\n"),
         "copilot" => format!("# ~/.copilot/mcp-config.json\n{{\n  \"mcpServers\": {{\n    \"{SERVER}\": {{ \"type\": \"local\", \"command\": \"delphi\", \"args\": [\"mcp\"], \"tools\": [\"*\"] }}\n  }}\n}}\n"),
         "codex" => format!("# ~/.codex/config.toml\n[mcp_servers.{SERVER}]\ncommand = \"delphi\"\nargs = [\"mcp\"]\n"),
-        "agy" => format!("# Antigravity / Gemini CLI: ~/.gemini/settings.json (not yet verified against a live host; spec 061 Q-5)\n{{\n  \"mcpServers\": {{\n    \"{SERVER}\": {{ \"command\": \"delphi\", \"args\": [\"mcp\"] }}\n  }}\n}}\n"),
+        "agy" => format!("# Antigravity / Gemini CLI: ~/.gemini/settings.json (not yet verified against a live host; spec 062 Q-5)\n{{\n  \"mcpServers\": {{\n    \"{SERVER}\": {{ \"command\": \"delphi\", \"args\": [\"mcp\"] }}\n  }}\n}}\n"),
         other => return Err(format!("unknown host `{other}`; one of {}", HOSTS.join(", "))),
     })
 }

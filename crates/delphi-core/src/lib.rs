@@ -23,6 +23,7 @@ pub mod provenance;
 pub mod proto;
 pub mod redact;
 pub mod server;
+pub mod sessions;
 pub mod spawn;
 pub mod time;
 pub mod totp;

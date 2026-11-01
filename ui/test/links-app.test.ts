@@ -90,7 +90,7 @@ test('console: p in the reader pins the passage to the mission notebook with its
   const c = await consoleApp();
   ctrl(c.term, 'o'); await c.settle(); key(c.term, 'tab'); await c.settle(); key(c.term, 'enter'); await c.settle(250);
   text(c.term, 'p'); await c.settle(250);
-  const notes = join(c.workspace, 'local/missions/m1/notes.md');
+  const notes = join(c.workspace, 'local/sessions/m1/notes.md');
   assert.ok(existsSync(notes), 'the notebook was written');
   const body = readFileSync(notes, 'utf8');
   assert.match(body, /· read specs\/002-adapter-and-routing\.md\n/, 'an anchor is a section, not a line range, so the whole document is pointed at');

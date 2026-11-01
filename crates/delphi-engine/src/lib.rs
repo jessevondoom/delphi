@@ -2,6 +2,7 @@
 
 pub mod agent_registry;
 pub mod approval;
+pub mod shellsafe;
 pub mod assign;
 pub mod fact_check;
 pub mod fact_fetch;
@@ -110,6 +111,7 @@ pub mod hostmap;
 pub mod recovery;
 pub mod research;
 pub mod research_images;
+pub mod research_digest;
 pub mod research_pending;
 pub mod research_setup;
 pub mod route;
