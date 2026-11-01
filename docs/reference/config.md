@@ -139,8 +139,7 @@ Which sites the job may read is not here: it is `context/sources/trusted.toml` (
 | Key | Meaning |
 | :-- | :-- |
 | `[mcp] enabled` | default on. `false` makes `delphi mcp` answer every tool call `disabled_by_operator`; it is read at each call, so the change is immediate, and a `config.toml` that cannot be read as written also turns it off ([`specs/061`](../../specs/061-delphi-as-host-agent-mcp-server.md) §3.4) |
-| `[mcp] max_proposals_per_session` | default 20 (0 to 200; 0 refuses all). Notes and summaries one host session may stage; the daemon counts them from the staged log, so a restart does not reset the count. Over it, the host is told `limit_reached` |
-| `[mcp] max_help_per_session`, `max_concurrent_councils`, `cooldown_seconds` | defaults 2 (0 to 20), 1 (0 to 5) and 30 (0 to 3600). Read now, used by `request_help` and `request_council` when they arrive (spec 061 §9) |
+| (no limits) | there is no limit or quota on host calls or on the CLI: `enabled` is the only switch, and metering will be considered later if needed (specs/061 §9). The `[budget]` settings still govern what a task spends |
 | `[mcp] allow_remote` | reserved for a later spec; `true` is refused. Today the server serves this machine and this user only (§3.2) |
 
 ## Search and federation

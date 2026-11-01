@@ -57,8 +57,13 @@ impl HostLink {
 
     /// Call one `host.*` method. `args` is what the model gave; the caller's identity fields are overwritten here.
     pub fn call(&self, method: &str, args: &Value) -> Result<Value, String> {
+        self.call_within(method, args, Duration::from_secs(20))
+    }
+
+    /// As [`HostLink::call`], for a method that may take a while (a help request is answered by an agent).
+    pub fn call_within(&self, method: &str, args: &Value, wait: Duration) -> Result<Value, String> {
         let mut c = Client::connect(&self.sock).map_err(|_| "daemon_not_running: Delphi's daemon is not running for this workspace, so nothing was recorded. Start `delphi` in a terminal, or keep working in pack mode (roles, specs and memory still read)".to_string())?;
-        c.set_read_timeout(Some(Duration::from_secs(20))).map_err(|e| e.to_string())?;
+        c.set_read_timeout(Some(wait)).map_err(|e| e.to_string())?;
         let token = c.issue_token(Scope::Host).map_err(|e| e.to_string())?;
         c.hello(&token).map_err(|e| e.to_string())?;
         let mut p = args.as_object().cloned().unwrap_or_default();

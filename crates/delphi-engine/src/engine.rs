@@ -273,6 +273,8 @@ pub struct Engine {
     pub inventory: Arc<crate::inventory::Inventory>,
     /// Handoffs whose spans get no tools at all (an approver answers in text), by handoff id.
     pub(crate) toolless: Mutex<HashSet<String>>,
+    /// Tasks raised by a host agent (`specs/061` §6.3): every span of one, dispatched or not, runs narrowed to read-only.
+    pub(crate) readonly_tasks: Mutex<HashSet<String>>,
     /// Model calls spent on provisional decisions, by task (`[optimistic] max_approver_calls`).
     pub(crate) approver_calls: Mutex<HashMap<String, u32>>,
     /// How the team is spread over the providers for now (`/pace`, `specs/035` D-21). Kept in memory on purpose: it lasts until the
@@ -353,6 +355,8 @@ pub(crate) struct SpanCtx {
     pub(crate) said_homogeneous: Mutex<bool>,
     /// This span is offered no tools, and refuses any it is not offered (`provisional_run.rs`).
     pub(crate) toolless: bool,
+    /// This span belongs to a host-originated task: no writes, no commands, no timers, no settings, no connectors.
+    pub(crate) readonly: bool,
     /// A harness was already tried for this span (and failed for a reason that is not a spent quota, so the pool does not know).
     pub(crate) harness_tried: std::sync::atomic::AtomicBool,
     /// The JSON Schema this span's answer must match, when its handoff named one.
@@ -486,6 +490,15 @@ impl Engine {
         self.start_task(m, task_id, target, prompt, true, Some(Span::with_ceiling("timer", ceiling))).await
     }
 
+    /// A task a host agent asked for (`specs/061` §6): read-only throughout, and below full trust from its first turn, since
+    /// the request is content from outside. The caller allocated `task_id` so it can say which task is answering.
+    pub async fn run_task_for_host(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, target: &str, prompt: &str) -> Result<TaskOutcome, EngineError> {
+        self.readonly_tasks.lock().unwrap().insert(task_id.clone());
+        let out = self.start_task(m, task_id.clone(), target, prompt, true, Some(Span::with_ceiling("host", delphi_core::provenance::Tier::L0))).await;
+        self.readonly_tasks.lock().unwrap().remove(&task_id);
+        out
+    }
+
     async fn start_task(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, target: &str, prompt: &str, announce: bool, parent: Option<Span>) -> Result<TaskOutcome, EngineError> {
         self.reconcile_bundles(m).await?;
         self.reconcile_xenia(m).await?;
@@ -533,7 +546,7 @@ impl Engine {
             return Err(EngineError::Invalid(format!("`{}` is not an enabled role", target)));
         }
         if announce {
-            let mut created = EventEnvelope::new(&m.id, "task.created", json!({"prompt": prompt, "target": target, "bundle_agent": bundle_agent, "source": if operator_task { "operator" } else { "timer" }}));
+            let mut created = EventEnvelope::new(&m.id, "task.created", json!({"prompt": prompt, "target": target, "bundle_agent": bundle_agent, "source": if operator_task { "operator" } else if self.readonly_tasks.lock().unwrap().contains(&task_id) { "host" } else { "timer" }}));
             created.task_id = Some(task_id.clone());
             m.append(created).await?;
         }
@@ -632,7 +645,7 @@ impl Engine {
             let tier = handoff.routing_directive.model_tier.clone().unwrap_or_else(|| self.default_tier_of(&role, &manifest));
             let family = handoff.routing_directive.model_family.clone().unwrap_or_else(|| self.cfg.get().family_for_role(&role).to_string());
             let thinking = handoff.routing_directive.thinking_budget_tokens.unwrap_or_else(|| manifest.thinking_budget());
-            let mut sc = SpanCtx { served_tier: Mutex::new(None), m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), bundle_agent, streak: Default::default(), lp: crate::loopctl::SpanLoop::from_history(&history) };
+            let mut sc = SpanCtx { served_tier: Mutex::new(None), m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), readonly: self.readonly_tasks.lock().unwrap().contains(task_id), output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), bundle_agent, streak: Default::default(), lp: crate::loopctl::SpanLoop::from_history(&history) };
 
             if fresh {
                 let mut open = vec![
@@ -648,6 +661,11 @@ impl Engine {
                 m.append_batch(open).await?;
             }
 
+            if sc.readonly {
+                sc.manifest.write = Vec::new();
+                sc.guard.write_globs = Vec::new();
+                sc.manifest.execute.retain(|e| e == "agent-dispatch" || e == "org-context");
+            }
             // A bundle `distill` span is narrowed before anything is read or offered (`distill.rs`).
             if let Some(stage) = &handoff.distill {
                 crate::distill::narrow(&mut sc, stage);
@@ -1536,7 +1554,9 @@ impl Engine {
         if self.offers_alignment(sc) {
             defs.push(crate::align_run::def());
         }
-        defs.extend(self.connector_defs(sc).await?);
+        if !sc.readonly {
+            defs.extend(self.connector_defs(sc).await?);
+        }
         // A bundle agent's `tools` list only removes: what the host role lacks is not in `defs`, and what the list lacks goes.
         if let Some(allowed) = sc.bundle_agent.as_ref().and_then(|a| a.allowed_tools.as_ref()) {
             defs.retain(|d| allowed.contains(&d.name));
@@ -1604,6 +1624,10 @@ impl Engine {
             if !allowed.contains(name) {
                 return Ok(tool_result_error(format!("`{}` is not among the tools of the bundle agent {}", name, sc.bundle_agent.as_ref().map(|a| a.id.as_str()).unwrap_or(""))));
             }
+        }
+        // The refusal does not rely on the model only calling what it was offered.
+        if sc.readonly && !self.span_tool_defs(sc).await?.iter().any(|d| d.name == name) {
+            return Ok(tool_result_error("this task was raised by a host agent and runs read-only: it can read and advise, not write, run commands or use connectors"));
         }
         if name == "run_command" {
             return self.exec_command(sc, call_id, args).await;
@@ -2203,6 +2227,27 @@ mod tests {
             usage: Usage { input_tokens: 1000, cache_read_tokens: 0, cache_write_tokens: 0, output_tokens: 150, thinking_tokens: 0 },
             stop_reason: "tool_use",
         }
+    }
+
+    #[tokio::test]
+    async fn a_task_raised_by_a_host_runs_read_only_and_below_full_trust() {
+        let f = setup(vec![Step::text("Use the retry ladder."), Step::text("Again.")], 5.0, |_| {});
+        let out = f.engine.run_task_for_host(&f.m, "t-host".into(), "orchestrator", "How do retries work?").await.unwrap();
+        assert_eq!(out.text, "Use the retry ladder.");
+        let tools: Vec<String> = f.model.requests()[0].body["tools"].as_array().map(|a| a.iter().map(|t| t["name"].as_str().unwrap().to_string()).collect()).unwrap_or_default();
+        assert!(tools.contains(&"dispatch_agent".to_string()), "{tools:?}");
+        for banned in ["write_file", "run_command", "timer", "settings"] {
+            assert!(!tools.contains(&banned.to_string()), "{banned} offered: {tools:?}");
+        }
+        let created = events_of(&f, "task.created");
+        assert_eq!(created.last().unwrap().payload["source"], "host");
+        let added = events_of(&f, "dag.node.added");
+        assert_eq!(added.last().unwrap().payload["ceiling"], "L0");
+        assert!(f.engine.readonly_tasks.lock().unwrap().is_empty(), "the mark does not outlive the task");
+        // An ordinary task is unchanged.
+        f.engine.run_task(&f.m, "orchestrator", "Again").await.unwrap();
+        let tools2 = f.model.requests()[1].body["tools"].to_string();
+        assert!(tools2.contains("write_file"));
     }
 
     #[tokio::test]

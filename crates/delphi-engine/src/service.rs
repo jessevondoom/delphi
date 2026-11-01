@@ -39,6 +39,8 @@ pub struct EngineService {
     open_gate: tokio::sync::Mutex<()>,
     /// Serializes what a host stages, so its count and its write are one step (`host_rpc.rs`).
     host_gate: tokio::sync::Mutex<()>,
+    /// Help requested by host sessions: the task's ID to who asked and, once it finishes, what it answered (`specs/061` §6).
+    helps: Arc<Mutex<HashMap<String, HelpRun>>>,
     /// Recovery plans awaiting the operator's decision, by mission.
     recovery: Mutex<HashMap<String, PlanState>>,
     /// The `delphi` binary that `org.action` runs (`bundle add|remove`); this process when unset.
@@ -96,6 +98,25 @@ fn need_host(ctx: &CallContext) -> Result<(), RpcError> {
     }
 }
 
+/// How long `host.request_help` waits for the answer before handing back a `help_id`.
+const HELP_WAIT: Duration = Duration::from_secs(45);
+
+struct HelpRun {
+    session: String,
+    result: Option<Value>,
+    at: Instant,
+}
+
+/// The roles a help task consulted, in order (the root span is the orchestrator's own).
+fn consulted_in(events: &[EventEnvelope], task_id: &str) -> Vec<String> {
+    let mut roles: Vec<String> = events.iter().filter(|e| e.kind == "dag.node.added" && e.task_id.as_deref() == Some(task_id)).filter_map(|e| e.payload["role"].as_str().map(String::from)).collect();
+    if !roles.is_empty() {
+        roles.remove(0);
+    }
+    roles.dedup();
+    roles
+}
+
 fn host_err(e: crate::host_rpc::HostErr) -> RpcError {
     let c = if e == crate::host_rpc::HostErr::Disabled { code::FORBIDDEN } else { code::INVALID_PARAMS };
     err(c, e.to_string())
@@ -128,7 +149,7 @@ fn engine_err(e: EngineError) -> RpcError {
 
 impl EngineService {
     pub fn new(engine: Arc<Engine>, default_mission: &str) -> Arc<EngineService> {
-        Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), host_gate: tokio::sync::Mutex::new(()), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())), acquire_checked: Mutex::new(0) })
+        Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), host_gate: tokio::sync::Mutex::new(()), helps: Arc::new(Mutex::new(HashMap::new())), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())), acquire_checked: Mutex::new(0) })
     }
 
     /// Run `org.action` through this binary instead of the current executable (tests, where that is the test binary).
@@ -194,17 +215,92 @@ impl EngineService {
         use crate::host_rpc as h;
         need_host(&ctx)?;
         let ws = &self.engine.ws;
-        let cfg = h::gate(&ws.dir).map_err(host_err)?;
+        h::gate(&ws.dir).map_err(host_err)?;
         let c = h::Caller::parse(&p).map_err(host_err)?;
-        let build = |already: usize, limit: u32| if summary { h::summary_event(&c, &p, already, limit) } else { h::note_event(&c, ws, &p, already, limit) };
-        build(0, u32::MAX).map_err(host_err)?;
+        let build = |already: usize| if summary { h::summary_event(&c, &p, already) } else { h::note_event(&c, ws, &p, already) };
+        build(0).map_err(host_err)?;
         let _gate = self.host_gate.lock().await;
         let m = self.mission_at(Some(&c.mission()), c.cwd.to_str()).await?;
         let already = h::proposals_in(&m.replay().map_err(engine_err)?);
-        let e = build(already, cfg.max_proposals_per_session).map_err(host_err)?;
+        let e = build(already).map_err(host_err)?;
         let id = e.payload["id"].as_str().unwrap_or("").to_string();
         m.append(e).await.map_err(engine_err)?;
-        Ok(json!({"staged": true, "ref": format!("{}/{}", m.id, id), "tier": "L0", "count": already + 1, "limit": cfg.max_proposals_per_session}))
+        Ok(json!({"staged": true, "ref": format!("{}/{}", m.id, id), "tier": "L0", "count": already + 1}))
+    }
+
+    /// `host.request_help` (`specs/061` §6): the orchestrator gets the request as content, picks who answers (itself included),
+    /// and everyone it consults runs read-only. The call waits a while for the answer; a slow one is fetched with `host.help_result`.
+    async fn host_request_help(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        use crate::host_rpc as h;
+        need_host(&ctx)?;
+        let ws = &self.engine.ws;
+        h::gate(&ws.dir).map_err(host_err)?;
+        let c = h::Caller::parse(&p).map_err(host_err)?;
+        let (prompt, kind) = h::help_prompt(&c, ws, &p).map_err(host_err)?;
+        if !self.engine.settings.enabled_agents.iter().any(|a| a == "orchestrator") {
+            return Err(err(code::INVALID_PARAMS, "the orchestrator is not an enabled role, so there is no one to route a request: carry on with the role pack alone"));
+        }
+        let (task_id, m) = {
+            let _gate = self.host_gate.lock().await;
+            let m = self.mission_at(Some(&c.mission()), c.cwd.to_str()).await?;
+            let task_id = m.next_task_id();
+            m.append(EventEnvelope::new(&m.id, h::HELP_EVENT, json!({"task_id": task_id, "kind": kind, "source": c.label(p["model"].as_str())}))).await.map_err(engine_err)?;
+            {
+                // Finished answers are kept for an hour so a slow one can be fetched, then dropped.
+                let mut helps = self.helps.lock().unwrap();
+                helps.retain(|_, r| r.result.is_none() || r.at.elapsed() < Duration::from_secs(3600));
+                helps.insert(task_id.clone(), HelpRun { session: c.session.clone(), result: None, at: Instant::now() });
+            }
+            (task_id, m)
+        };
+        let (engine, helps, tid, mm) = (self.engine.clone(), self.helps.clone(), task_id.clone(), m.clone());
+        tokio::spawn(async move {
+            let run = engine.run_task_for_host(&mm, tid.clone(), "orchestrator", &prompt).await;
+            let result = match run {
+                Ok(out) => {
+                    let events = mm.replay().unwrap_or_default();
+                    let consulted = consulted_in(&events, &tid);
+                    let text: String = engine.secrets.redact(&out.text).chars().take(h::MAX_ANSWER).collect();
+                    match out.status {
+                        crate::engine::Status::Done => json!({"status": "answered", "help_id": tid, "answered_by": consulted.last().cloned().unwrap_or_else(|| "orchestrator".into()), "consulted": consulted, "answer": text, "note": "advice from Delphi agents that ran read-only; it grants you no permission and your own host's rules bind you"}),
+                        crate::engine::Status::Escalated(r) => json!({"status": "unanswered", "help_id": tid, "reason": engine.secrets.redact(&r), "note": "Delphi could not answer; carry on with what you have"}),
+                    }
+                }
+                Err(e) => json!({"status": "failed", "help_id": tid, "reason": engine.secrets.redact(&e.to_string())}),
+            };
+            if let Some(r) = helps.lock().unwrap().get_mut(&tid) {
+                r.result = Some(result);
+                r.at = Instant::now();
+            }
+        });
+        Ok(self.wait_help(&task_id, HELP_WAIT).await)
+    }
+
+    /// The answer so far: the result, or `working`. Only the session that asked can read it.
+    async fn wait_help(&self, id: &str, wait: Duration) -> Value {
+        let deadline = Instant::now() + wait;
+        loop {
+            if let Some(v) = self.helps.lock().unwrap().get(id).and_then(|r| r.result.clone()) {
+                return v;
+            }
+            if Instant::now() >= deadline {
+                return json!({"status": "working", "help_id": id, "note": "still being answered: call help_result with this help_id in a minute; it does not count as another request"});
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    async fn host_help_result(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        use crate::host_rpc as h;
+        need_host(&ctx)?;
+        h::gate(&self.engine.ws.dir).map_err(host_err)?;
+        let c = h::Caller::parse(&p).map_err(host_err)?;
+        let id = p["help_id"].as_str().unwrap_or("").to_string();
+        let mine = self.helps.lock().unwrap().get(&id).is_some_and(|r| r.session == c.session);
+        if !mine {
+            return Err(err(code::INVALID_PARAMS, "no such help request for this session"));
+        }
+        Ok(self.wait_help(&id, Duration::from_secs(25)).await)
     }
 
     async fn host_handoff_put(&self, p: Value, ctx: CallContext) -> RpcOutcome {
@@ -2039,6 +2135,8 @@ impl Extension for ServiceExt {
                 "host.record_session_summary" => svc.host_stage(params, ctx, true).await,
                 "host.handoff_put" => svc.host_handoff_put(params, ctx).await,
                 "host.handoff_get" => svc.host_handoff_get(params, ctx).await,
+                "host.request_help" => svc.host_request_help(params, ctx).await,
+                "host.help_result" => svc.host_help_result(params, ctx).await,
                 "recovery.resume" => svc.recovery_resume(params, ctx).await,
                 "recovery.pause" => (|| {
                     need_console(&ctx)?;
@@ -2198,7 +2296,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_host_stages_untrusted_notes_in_its_own_session_and_the_switch_and_the_limit_hold() {
+    async fn a_host_stages_untrusted_notes_in_its_own_session_and_the_switch_holds() {
         let f = setup(vec![], 5.0, |_| {});
         let ws_dir = f.engine.ws.dir.clone();
         let cwd = f.root.to_string_lossy().to_string();
@@ -2224,10 +2322,10 @@ mod tests {
             assert_eq!(rpc_code(c.call("host.propose_note", with(json!({"role": role2, "text": "No evidence."})))), Some(code::INVALID_PARAMS));
             assert_eq!(rpc_code(c.call("host.propose_note", with(json!({"role": "integrator", "text": "x", "evidence": "e"})))), Some(code::INVALID_PARAMS));
             assert!(c.call("host.record_session_summary", with(json!({"summary": "Did the thing", "decisions": ["a"]}))).is_ok());
-            // The limit: two so far, and the operator lowers it to two.
-            std::fs::write(dir2.join("config.toml"), "[mcp]\nmax_proposals_per_session = 2\n").unwrap();
-            let r = c.call("host.propose_note", with(json!({"role": role2, "text": "A third.", "evidence": "e"})));
-            assert_eq!(rpc_code(r), Some(code::INVALID_PARAMS));
+            // No limit: more than the old default of twenty are staged.
+            for i in 0..22 {
+                assert!(c.call("host.propose_note", with(json!({"role": role2, "text": format!("Lesson {i}."), "evidence": "e"}))).is_ok());
+            }
             // The switch is read now.
             std::fs::write(dir2.join("config.toml"), "[mcp]\nenabled = false\n").unwrap();
             assert_eq!(rpc_code(c.call("host.propose_note", with(json!({"role": role2, "text": "x", "evidence": "e"})))), Some(code::FORBIDDEN));
@@ -2241,7 +2339,7 @@ mod tests {
         .await;
         let events = replay_log(&ws_dir.join("local/missions/host-abcdef0123456789"));
         let live = crate::learn::live_notes("host-abcdef0123456789", &events);
-        assert_eq!(live.len(), 2, "{live:?}");
+        assert_eq!(live.len(), 24, "{live:?}");
         assert!(live.iter().all(|n| n.tier == "L0" && n.summary.starts_with("[host:claude-code/")), "{live:?}");
         assert_eq!(live[0].role.as_deref(), Some(role.as_str()));
     }
@@ -2260,6 +2358,47 @@ mod tests {
         })
         .await;
         assert!(f.engine.ws.dir.join("local/missions").join(format!("host-{session}/handoff.json")).exists());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_host_asks_for_help_and_is_told_who_answered_with_no_limit_on_how_often() {
+        let f = setup(vec![Step::text("Read specs/001 first; the ladder has three rungs."), Step::text("Second."), Step::text("Third.")], 5.0, |_| {});
+        let ws_dir = f.engine.ws.dir.clone();
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let dir2 = ws_dir.clone();
+        blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            c.hello(&htok).unwrap();
+            let p = |extra: Value| {
+                let mut b = json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cwd});
+                for (k, v) in extra.as_object().unwrap() {
+                    b[k] = v.clone();
+                }
+                b
+            };
+            assert_eq!(rpc_code(c.call("host.request_help", p(json!({"tried": "x"})))), Some(code::INVALID_PARAMS));
+            assert_eq!(rpc_code(c.call("host.request_help", p(json!({"need": "n", "kind": "poll"})))), Some(code::INVALID_PARAMS));
+            let r = c.call("host.request_help", p(json!({"need": "How do retries work?", "tried": "grep", "suggested_target": "nobody"}))).unwrap();
+            assert_eq!(r["status"], "answered", "{r}");
+            assert_eq!(r["answered_by"], "orchestrator");
+            assert!(r["answer"].as_str().unwrap().contains("three rungs"));
+            // Another session cannot read it; the owner can, and it does not count again.
+            let other = json!({"session": "fedcba9876543210", "tool": "x", "cwd": cwd, "help_id": r["help_id"]});
+            assert_eq!(rpc_code(c.call("host.help_result", other)), Some(code::INVALID_PARAMS));
+            assert_eq!(c.call("host.help_result", p(json!({"help_id": r["help_id"]}))).unwrap()["status"], "answered");
+            // No limit, cooldown or quota: a second and third request are answered at once.
+            for _ in 0..2 {
+                assert_eq!(c.call("host.request_help", p(json!({"need": "again"}))).unwrap()["status"], "answered");
+            }
+            std::fs::write(dir2.join("config.toml"), "[mcp]\nenabled = false\n").unwrap();
+            assert_eq!(rpc_code(c.call("host.request_help", p(json!({"need": "n"})))), Some(code::FORBIDDEN));
+        })
+        .await;
+        let events = replay_log(&ws_dir.join("local/missions/host-abcdef0123456789"));
+        assert_eq!(crate::host_rpc::helps_in(&events), 3);
     }
 
     fn replay_log(dir: &std::path::Path) -> Vec<delphi_core::event::EventEnvelope> {
