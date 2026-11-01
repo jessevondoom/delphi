@@ -15,10 +15,10 @@
 //!
 //! Nothing here writes validated knowledge. In `advisory` mode `would_ratify` is the whole outcome.
 
-use crate::fact_check::{check_fact, find_passage_at, ClaimKind, Corroboration, FactFindings, SourceRecord, Standing, Submission, MAX_URLS};
+use crate::fact_check::{check_fact, check_fact_with, dois_in, find_passage_at, DoiCheck, ClaimKind, Corroboration, FactFindings, SourceRecord, Standing, Submission, MAX_URLS};
 use crate::fact_fetch::{fetch_snapshot_checked, FetchPolicy, Snapshot, SnapshotStore};
 use crate::fact_judge::{judge_budgeted, Entail, FactJudge, JudgeError, JudgeQuery, TokenLedger};
-use crate::fact_sources::{Class, SourceList};
+use crate::fact_sources::{is_journal_publisher, Class, SourceList};
 use delphi_adapter::config::ValidatorMode;
 use delphi_adapter::research::search::{self, ProviderSpec};
 use delphi_adapter::research::transport::Transport;
@@ -39,6 +39,54 @@ pub struct Hit {
 /// The contradiction search's engine. Rows come back as URLs only: titles and snippets are never used.
 pub trait Searcher: Send + Sync {
     fn search(&self, query: &str) -> Result<Vec<Hit>, String>;
+}
+
+/// Looks a DOI up at the DOI foundation (`specs/040` A5). `Ok(Some(url))` is where it is registered, `Ok(None)` that it is not registered. `Err` is
+/// an answer that could not be had, which counts as not resolved.
+pub trait DoiResolver: Send + Sync {
+    fn resolve(&self, doi: &str) -> Result<Option<String>, String>;
+}
+
+/// The Handle API at `doi.org`: one bounded GET per DOI, no redirect followed, only the registered URL read from the answer. The transport is
+/// made on the first lookup; if it cannot be made every lookup is an error, so nothing is counted.
+#[derive(Default)]
+pub struct HandleResolver {
+    transport: std::sync::OnceLock<Result<Arc<dyn Transport>, String>>,
+}
+
+impl DoiResolver for HandleResolver {
+    fn resolve(&self, doi: &str) -> Result<Option<String>, String> {
+        let url = format!("https://doi.org/api/handles/{}?type=URL", doi);
+        let t = self.transport.get_or_init(|| delphi_adapter::research::transport::HttpTransport::new().map(|t| Arc::new(t) as Arc<dyn Transport>)).as_ref().map_err(|e| e.clone())?;
+        let r = t.get(&url, &[("accept", "application/json")], 16 * 1024, std::time::Duration::from_secs(8))?;
+        if r.status == 404 {
+            return Ok(None);
+        }
+        if r.status != 200 || r.truncated {
+            return Err(format!("doi.org answered {}", r.status));
+        }
+        let v: serde_json::Value = serde_json::from_slice(&r.body).map_err(|_| "doi.org answered with something that is not JSON".to_string())?;
+        if v["responseCode"] != 1 {
+            return Ok(None);
+        }
+        Ok(v["values"].as_array().and_then(|vs| vs.iter().find(|x| x["type"] == "URL")).and_then(|x| x["data"]["value"].as_str()).map(String::from))
+    }
+}
+
+/// Which of the fetched journal-publisher pages carry a DOI that is registered at a journal publisher's address. Fails closed: an error is a no.
+pub fn verified_dois(resolver: &dyn DoiResolver, snaps: &[Snapshot]) -> BTreeSet<String> {
+    let mut cache: std::collections::HashMap<String, bool> = Default::default();
+    let mut ok = BTreeSet::new();
+    for s in snaps.iter().filter(|s| s.status == 200 && is_journal_publisher(s.final_url.for_daemon())) {
+        for doi in dois_in(s.text.for_daemon()) {
+            let good = *cache.entry(doi.clone()).or_insert_with(|| matches!(resolver.resolve(&doi), Ok(Some(t)) if is_journal_publisher(&t)));
+            if good {
+                ok.insert(s.id.clone());
+                break;
+            }
+        }
+    }
+    ok
 }
 
 /// The configured web search engines (`[search]`).
@@ -159,6 +207,8 @@ pub struct Deps<'a> {
     pub ledger: &'a TokenLedger,
     /// The family of the model that wrote the claim, for the record and for the judge's choice.
     pub author_family: Option<&'a str>,
+    /// With a resolver, a journal-publisher page counts only when its DOI is registered at a publisher; without one, when a DOI is written on it.
+    pub doi: Option<&'a dyn DoiResolver>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -209,7 +259,13 @@ pub async fn run_fact(deps: &Deps<'_>, mode: ValidatorMode, sub: &Submission) ->
     for url in sub.urls.iter().take(MAX_URLS) {
         fetch_stored(deps, url, &mut snaps, &mut refused).await;
     }
-    let findings = check_fact(sub, &snaps, deps.list);
+    let doi = match deps.doi {
+        Some(res) => {
+            DoiCheck::Resolved(verified_dois(res, &snaps))
+        }
+        None => DoiCheck::TextOnly,
+    };
+    let findings = check_fact_with(sub, &snaps, deps.list, &doi);
     let mut r = Report::new(mode, findings);
     r.refused_fetches = refused;
     if !r.findings.escalations.is_empty() {
@@ -377,7 +433,7 @@ mod tests {
         let store = SnapshotStore::in_home(home.path());
         let judge = Says(says, Mutex::new(vec![]));
         let ledger = TokenLedger::new(tokens);
-        let deps = Deps { policy: &policy, store: &store, list: &list, judge: &judge, searcher: searcher.map(|s| s as &dyn Searcher), ledger: &ledger, author_family: Some("author") };
+        let deps = Deps { policy: &policy, store: &store, list: &list, judge: &judge, searcher: searcher.map(|s| s as &dyn Searcher), ledger: &ledger, author_family: Some("author"), doi: None };
         let r = run_fact(&deps, mode, &sub(format!("http://{}{}", addr, path))).await;
         (r, hits, judge)
     }
@@ -445,9 +501,37 @@ mod tests {
         let judge = Flip(Mutex::new(0));
         let ledger = TokenLedger::new(100_000);
         let s = Hits(vec![format!("http://{}/other", addr)], Mutex::new(vec![]));
-        let deps = Deps { policy: &policy, store: &store, list: &list, judge: &judge, searcher: Some(&s), ledger: &ledger, author_family: None };
+        let deps = Deps { policy: &policy, store: &store, list: &list, judge: &judge, searcher: Some(&s), ledger: &ledger, author_family: None, doi: None };
         let r = run_fact(&deps, ValidatorMode::Advisory, &sub(format!("http://{}{}", addr, PINNED))).await.unwrap();
         assert_eq!((r.verdict, r.would_ratify), (Verdict::Conflicting, false), "{:?}", r.reasons);
         assert_eq!(r.contradictions.len(), 1);
+    }
+
+    struct Registry(std::collections::HashMap<&'static str, Result<Option<&'static str>, &'static str>>);
+    impl DoiResolver for Registry {
+        fn resolve(&self, doi: &str) -> Result<Option<String>, String> {
+            self.0.get(doi).cloned().unwrap_or(Ok(None)).map(|o| o.map(String::from)).map_err(String::from)
+        }
+    }
+
+    #[test]
+    fn a_publisher_page_counts_only_when_its_doi_is_registered_at_a_publisher_and_any_failure_is_a_no() {
+        use crate::fact_fetch::test_snapshot;
+        let claim = "Harry Nilsson wrote the song 'One' (1968).";
+        let page = |doi: &str| test_snapshot("https://link.springer.com/article/2", "t", &[&format!("{} doi:{}", claim, doi)]);
+        let sub = Submission { claim: claim.into(), needed_for: "q".into(), urls: vec!["u".into()], kind: ClaimKind::Fact };
+        let list = SourceList::default();
+        let judge = |r: &Registry, s: Snapshot| {
+            let ok = verified_dois(r, std::slice::from_ref(&s));
+            check_fact_with(&sub, &[s], &list, &DoiCheck::Resolved(ok)).sources[0].counted
+        };
+        let real = Registry([("10.1007/real", Ok(Some("https://link.springer.com/article/10.1007/real")))].into());
+        assert!(judge(&real, page("10.1007/real")), "registered at a publisher");
+        assert!(!judge(&real, page("10.1007/made-up")), "not registered");
+        let elsewhere = Registry([("10.1007/real", Ok(Some("https://blog.example/post")))].into());
+        assert!(!judge(&elsewhere, page("10.1007/real")), "registered, but not at a publisher");
+        let down = Registry([("10.1007/real", Err("timeout"))].into());
+        assert!(!judge(&down, page("10.1007/real")), "an error fails closed");
+        assert_eq!(crate::fact_check::dois_in("see 10.1007/a.b), and 10.1007/a.b, then 10.5555/x;"), vec!["10.1007/a.b", "10.5555/x"]);
     }
 }

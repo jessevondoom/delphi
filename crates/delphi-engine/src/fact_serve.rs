@@ -21,7 +21,7 @@ use crate::fact_intake::{Accepted, Intake, Receipt};
 use crate::fact_judge::{EngineJudge, TokenLedger};
 use crate::fact_mode::{effective, state_dir, Effective};
 use crate::fact_ratify::ratify_fact;
-use crate::fact_run::{search_subject, Deps, Searcher, TransportSearcher};
+use crate::fact_run::{search_subject, Deps, HandleResolver, Searcher, TransportSearcher};
 use crate::fact_sources::SourceList;
 use crate::mission::MissionState;
 use delphi_adapter::research::transport::HttpTransport;
@@ -102,7 +102,8 @@ impl Engine {
         } else {
             HttpTransport::new().ok().map(|t| Arc::new(TransportSearcher { transport: Arc::new(t), engines: crate::research_setup::engines(self) }) as Arc<dyn Searcher>)
         };
-        let deps = Deps { policy: &policy, store: &store, list: &list, judge: &judge, searcher: searcher.as_deref(), ledger: &ledger, author_family: judge.author_family.as_deref() };
+        let doi = HandleResolver::default();
+        let deps = Deps { policy: &policy, store: &store, list: &list, judge: &judge, searcher: searcher.as_deref(), ledger: &ledger, author_family: judge.author_family.as_deref(), doi: Some(&doi) };
         serve(&self.validator, m, &self.ws.dir, &self.now(), &eff, &deps, searcher.clone(), &shares_of(&self.ws.dir, &m.id), Some(&crate::fact_span::EngineSpan { engine: self.clone(), mission: m.clone(), author_family: judge.author_family.clone() }), req).await
     }
 }
@@ -358,7 +359,7 @@ mod tests {
             u.push(format!("http://{}/rfc/2324", addr).into());
         }
         let search = search.map(|_| Arc::new(Fixed(format!("http://{}/rfc/2324", addr), Default::default())) as Arc<dyn Searcher>);
-        let deps = Deps { policy: &policy, store: &store, list: &list, judge: &Yes, searcher: search.as_deref(), ledger: &ledger, author_family: None };
+        let deps = Deps { policy: &policy, store: &store, list: &list, judge: &Yes, searcher: search.as_deref(), ledger: &ledger, author_family: None, doi: None };
         serve(&f.engine.validator, &f.m, &ws.dir, "2026-10-28T00:00:00Z", &eff, &deps, search.clone(), shares, spans, &req).await.unwrap();
     }
 
