@@ -351,7 +351,18 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
     const fail = (msg: string) => { setArch((a) => A.withNote(a, msg)); if (on === 'rdr') setLm((l) => (l ? { ...l, note: msg } : l)); };
     const a0 = on === 'arch' ? archRef.current : rdrRef.current, tp = A.trustParam(a0);
     if (act.t === 'reload') { void loadShelf(); if (a0.searched && a0.q.trim() && !a0.browse) runKb({ t: 'search', q: a0.q.trim() }, on); else if (a0.browse) runKb({ t: 'browse', name: a0.browse }, on); }
-    else if (act.t === 'search') kb(`/v1/search?q=${enc(act.q)}&limit=${A.RESULTS}&facets=1${a0.kind ? `&kind=${enc(a0.kind)}` : ''}${tp}`).then((r) => setArch((a) => (r.status === 200 ? A.gotHits(a, act.q, r.body) : A.withNote(a, r.body?.error ?? 'the search failed')))).catch(() => fail('the search failed'));
+    else if (act.t === 'search') {
+      kb(`/v1/search?q=${enc(act.q)}&limit=${A.RESULTS}&facets=1${a0.kind ? `&kind=${enc(a0.kind)}` : ''}${tp}`).then((r) => setArch((a) => (r.status === 200 ? A.gotHits(a, act.q, r.body) : A.withNote(a, r.body?.error ?? 'the search failed')))).catch(() => fail('the search failed'));
+      cmd.call('pages.results', { query: act.q, external: a0.pg.ext }).then((r: any) => setArch((a) => A.gotPages(a, (p) => PG.gotResults(p, act.q, r)))).catch(() => {});
+      cmd.call('pages.search', { query: act.q, external: a0.pg.ext }).then((r: any) => {
+        setArch((a) => A.gotPages(a, (p) => PG.gotPage(p, act.q, r)));
+        if (r && typeof r === 'object') {
+          for (const src of imageRefs(String(r.markdown ?? '')).slice(0, A.MAX_IMAGES)) {
+            kb(`/v1/image?src=${enc(src)}${tp}`).then((im) => setArch((a) => A.gotPages(a, (p) => PG.gotImage(p, src, im.status === 200 ? rasterOf(im.body) : null)))).catch(() => setArch((a) => A.gotPages(a, (p) => PG.gotImage(p, src, null))));
+          }
+        }
+      }).catch(() => {});
+    }
     else if (act.t === 'browse') kb(`/v1/documents?kind=${enc(act.name)}&limit=50${tp}`).then((r) => setArch((a) => A.gotBrowse(a, act.name, r.body ?? []))).catch(() => fail('could not list that kind'));
     else if (act.t === 'open') {
       const t = act.target;
@@ -383,8 +394,52 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
       // What the library holds shows at once (no model); the page follows when the writer and the checks are done.
       const { q, external } = act;
       cmd.call('pages.results', { query: q, external }).then((r: any) => setArch((a) => A.gotPages(a, (p) => PG.gotResults(p, q, r)))).catch((e: any) => setArch((a) => A.gotPages(a, (p) => PG.failed(p, e?.message ?? 'could not search the library'))));
-      cmd.call('pages.search', { query: q, external }).then((r: any) => setArch((a) => A.gotPages(a, (p) => PG.gotPage(p, q, r)))).catch((e: any) => setArch((a) => A.gotPages(a, (p) => PG.failed(p, e?.message ?? 'the page could not be made'))));
-    } else if (act.t === 'pages-open') cmd.call('pages.open', { key: act.key }).then((r: any) => setArch((a) => A.gotPages(a, (p) => PG.gotOpened(p, r)))).catch((e: any) => setArch((a) => A.gotPages(a, (p) => PG.failed(p, e?.message ?? 'could not open the page'))));
+      cmd.call('pages.search', { query: q, external }).then((r: any) => {
+        setArch((a) => A.gotPages(a, (p) => PG.gotPage(p, q, r)));
+        if (r && typeof r === 'object') {
+          for (const src of imageRefs(String(r.markdown ?? '')).slice(0, A.MAX_IMAGES)) {
+            kb(`/v1/image?src=${enc(src)}${tp}`).then((im) => setArch((a) => A.gotPages(a, (p) => PG.gotImage(p, src, im.status === 200 ? rasterOf(im.body) : null)))).catch(() => setArch((a) => A.gotPages(a, (p) => PG.gotImage(p, src, null))));
+          }
+        }
+      }).catch((e: any) => setArch((a) => A.gotPages(a, (p) => PG.failed(p, e?.message ?? 'the page could not be made'))));
+    } else if (act.t === 'pages-expand') {
+      const q = act.q;
+      cmd.call('pages.expand', { query: q }).then((r: any) => {
+        setArch((a) => A.gotPages(a, (p) => PG.gotPage(p, q, r)));
+        if (r && typeof r === 'object') {
+          for (const src of imageRefs(String(r.markdown ?? '')).slice(0, A.MAX_IMAGES)) {
+            kb(`/v1/image?src=${enc(src)}${tp}`).then((im) => setArch((a) => A.gotPages(a, (p) => PG.gotImage(p, src, im.status === 200 ? rasterOf(im.body) : null)))).catch(() => setArch((a) => A.gotPages(a, (p) => PG.gotImage(p, src, null))));
+          }
+        }
+      }).catch((e: any) => setArch((a) => A.gotPages(a, (p) => PG.failed(p, e?.message ?? 'the page could not be expanded'))));
+    } else if (act.t === 'pages-refresh') {
+      const { q, external } = act;
+      cmd.call('pages.refresh', { query: q, external }).then((r: any) => {
+        setArch((a) => A.gotPages(a, (p) => PG.gotPage(p, q, r)));
+        if (r && typeof r === 'object') {
+          for (const src of imageRefs(String(r.markdown ?? '')).slice(0, A.MAX_IMAGES)) {
+            kb(`/v1/image?src=${enc(src)}${tp}`).then((im) => setArch((a) => A.gotPages(a, (p) => PG.gotImage(p, src, im.status === 200 ? rasterOf(im.body) : null)))).catch(() => setArch((a) => A.gotPages(a, (p) => PG.gotImage(p, src, null))));
+          }
+        }
+      }).catch((e: any) => setArch((a) => A.gotPages(a, (p) => PG.failed(p, e?.message ?? 'the page could not be refreshed'))));
+    } else if (act.t === 'pages-open-page') {
+      const q = act.slug;
+      cmd.call('pages.search', { query: q }).then((r: any) => {
+        setArch((a) => A.gotPages(a, (p) => PG.gotPage(p, q, r)));
+        if (r && typeof r === 'object') {
+          for (const src of imageRefs(String(r.markdown ?? '')).slice(0, A.MAX_IMAGES)) {
+            kb(`/v1/image?src=${enc(src)}${tp}`).then((im) => setArch((a) => A.gotPages(a, (p) => PG.gotImage(p, src, im.status === 200 ? rasterOf(im.body) : null)))).catch(() => setArch((a) => A.gotPages(a, (p) => PG.gotImage(p, src, null))));
+          }
+        }
+      }).catch((e: any) => setArch((a) => A.gotPages(a, (p) => PG.failed(p, e?.message ?? 'could not open page'))));
+    } else if (act.t === 'pages-open') cmd.call('pages.open', { key: act.key }).then((r: any) => {
+      setArch((a) => A.gotPages(a, (p) => PG.gotOpened(p, r)));
+      if (r && typeof r === 'object') {
+        for (const src of imageRefs(String(r.markdown ?? '')).slice(0, A.MAX_IMAGES)) {
+          kb(`/v1/image?src=${enc(src)}${tp}`).then((im) => setArch((a) => A.gotPages(a, (p) => PG.gotImage(p, src, im.status === 200 ? rasterOf(im.body) : null)))).catch(() => setArch((a) => A.gotPages(a, (p) => PG.gotImage(p, src, null))));
+        }
+      }
+    }).catch((e: any) => setArch((a) => A.gotPages(a, (p) => PG.failed(p, e?.message ?? 'could not open the page'))));
     else if (act.t === 'pages-pin') cmd.call('pages.pin', { key: act.key, pinned: act.pinned }).then((r: any) => setArch((a) => A.gotPages(a, (p) => PG.gotPinned(p, r)))).catch((e: any) => setArch((a) => A.gotPages(a, (p) => PG.withNote(p, e?.message ?? 'could not save it'))));
     else if (act.t === 'pages-dispute') cmd.call('pages.dispute', { claim: act.claim, note: act.note }).then(() => setArch((a) => A.gotPages(a, (p) => PG.withNote(p, `${act.claim} is contested: it reads not validated until the contest is resolved`)))).catch((e: any) => setArch((a) => A.gotPages(a, (p) => PG.withNote(p, e?.message ?? 'could not file the dispute'))));
     else if (act.t === 'pages-promote') cmd.call('pages.promote', { page: act.page, statement: act.statement }).then((r: any) => setArch((a) => A.gotPages(a, (p) => PG.withNote(p, `noted claim ${String(r?.id ?? '')} made: not validated until someone checks it`)))).catch((e: any) => setArch((a) => A.gotPages(a, (p) => PG.withNote(p, e?.message ?? 'could not make the claim'))));
@@ -545,9 +600,12 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
           if (key === 'shift-tab') { move(-1); return; }
           if (cur && key === 'enter') {
             if (cur.target.k === 'external') runKb({ t: 'browser', url: cur.target.url }, 'rdr');
-            else { setLm((l) => (l ? { ...l, note: 'opening…' } : l)); runKb({ t: 'open', target: cur.target }, 'rdr'); }
+            else if (cur.target.k === 'page') {
+              setDeck(0);
+              runKb({ t: 'pages-search', q: cur.target.slug, external: false });
+            } else { setLm((l) => (l ? { ...l, note: 'opening…' } : l)); runKb({ t: 'open', target: cur.target }, 'rdr'); }
           } else if (cur && key === 'y') runKb({ t: 'copy', text: copyText(cur.target) }, 'rdr');
-          else if (cur && key === 'p' && cur.target.k !== 'external') pinTarget(cur.target);
+          else if (cur && key === 'p' && (cur.target.k === 'doc' || cur.target.k === 'pointer')) pinTarget(cur.target);
           return;
         }
       }

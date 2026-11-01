@@ -1252,7 +1252,7 @@ mod page_search_cache {
     #[allow(clippy::too_many_arguments)]
     fn go(l: &Library, q: &str, external: bool, now: u64, cfg: &PagesConfig, w: &W, v: &V, gate: &(dyn Fn() -> Result<(), String> + Sync)) -> Result<crate::library::page_search::SearchedPage, String> {
         let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
-        rt.block_on(l.search_page(&PageRequest { query: q, external, extra_sources: &[], style: Format::Plain, now, settings: cfg }, w, v, &TokenLedger::new(1_000_000), gate))
+        rt.block_on(l.search_page(&PageRequest { query: q, external, extra_sources: &[], style: Format::Plain, now, settings: cfg, refresh: false, depth: Default::default() }, w, v, &TokenLedger::new(1_000_000), gate))
     }
 
     fn pass() -> V {
@@ -1425,6 +1425,109 @@ mod page_search_cache {
         assert_eq!(st.to_json()["text_reads"], 4);
     }
 
+    fn go_with(l: &Library, q: &str, now: u64, cfg: &PagesConfig, w: &W, refresh: bool, gate: &(dyn Fn() -> Result<(), String> + Sync)) -> Result<crate::library::page_search::SearchedPage, String> {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        rt.block_on(l.search_page(&PageRequest { query: q, external: false, extra_sources: &[], style: Format::Plain, now, settings: cfg, refresh, depth: Default::default() }, w, &pass(), &TokenLedger::new(1_000_000), gate))
+    }
+
+    fn png() -> Vec<u8> {
+        let rgba = (0..64 * 64).flat_map(|i| [(i % 64 * 4) as u8, (i / 64 * 4) as u8, 120, 255]).collect();
+        delphi_docs::png::encode(&delphi_docs::png::Image { width: 64, height: 64, rgba }, &[])
+    }
+
+    #[test]
+    fn the_writers_lifetime_is_written_as_frontmatter_and_ends_the_cache() {
+        let (_d, l, mut w) = setup();
+        w.draft = format!("{}\n\n<!-- page: kind=article; volatility=low; days=90; reason=A settled fact -->", w.draft);
+        let cfg = PagesConfig::default();
+        let (t0, day) = (1_000_000u64, 86_400u64);
+        let a = go(&l, "tides", false, t0, &cfg, &w, &pass(), &|| Ok(())).unwrap();
+        assert_eq!((a.entry.valid_until, a.entry.volatility.as_deref(), a.entry.ttl_reason.as_deref()), (Some(t0 + 90 * day), Some("low"), Some("A settled fact")));
+        assert!(!a.markdown.contains("<!--") && !a.markdown.starts_with("---"), "{}", a.markdown);
+        let on_disk = std::fs::read_to_string(&a.path).unwrap();
+        assert!(on_disk.starts_with("---\n") && on_disk.contains("valid_until: 1970-04-12") && on_disk.contains("author: writer") && on_disk.contains("volatility: low"), "{on_disk}");
+        assert!(l.check_page_text(&on_disk, Scope::Internal).findings.is_empty(), "the frontmatter is not part of what the check reads");
+        // fresh until the date, rebuilt after it, and a refresh rebuilds at once
+        assert!(go(&l, "tides", false, t0 + 89 * day, &cfg, &w, &pass(), &|| Err("no model".into())).unwrap().cached);
+        let late = go(&l, "tides", false, t0 + 91 * day, &cfg, &w, &pass(), &|| Ok(())).unwrap();
+        assert!(!late.cached);
+        assert_eq!(late.entry.key, a.entry.key);
+        assert!(!go_with(&l, "tides", t0 + 92 * day, &cfg, &w, true, &|| Ok(())).unwrap().cached);
+        assert_eq!(w.writes.load(Ordering::SeqCst), 3);
+        let (opened, md) = l.open_page(&a.entry.key, t0 + 93 * day, cfg.external_ttl_secs).unwrap();
+        assert!(!md.starts_with("---") && opened.stale.is_none(), "{:?}", opened.stale);
+    }
+
+    #[test]
+    fn a_missing_or_wild_lifetime_is_clamped_to_the_operators_bounds() {
+        let day = 86_400u64;
+        let (_d, l, w) = setup();
+        let none = go(&l, "tides", false, 0, &PagesConfig::default(), &w, &pass(), &|| Ok(())).unwrap();
+        assert_eq!((none.entry.volatility.as_deref(), none.entry.valid_until), (Some("medium"), Some(30 * day)));
+        let wild = |days: &str| W { draft: format!("{}\n<!-- page: volatility=timeless; days={}; reason=Forever -->", w.draft, days), writes: AtomicUsize::new(0) };
+        let (_d, l, _w) = setup();
+        assert_eq!(go(&l, "tides", false, 0, &PagesConfig::default(), &wild("9999"), &pass(), &|| Ok(())).unwrap().entry.valid_until, Some(365 * day));
+        let (_d, l, _w) = setup();
+        let tight = PagesConfig { min_ttl_days: 2, max_ttl_days: 10, ..Default::default() };
+        assert_eq!(go(&l, "tides", false, 0, &tight, &wild("9999"), &pass(), &|| Ok(())).unwrap().entry.valid_until, Some(10 * day));
+    }
+
+    #[test]
+    fn a_page_may_show_a_cited_sources_picture_link_a_section_and_point_to_another_page() {
+        let (_d, l, _w) = setup();
+        let sid = l.list().into_iter().find(|(_, m)| m["title"] == "t.md").map(|(id, _)| id).unwrap();
+        std::fs::create_dir_all(l.source_dir(&sid).join("assets")).unwrap();
+        std::fs::write(l.source_dir(&sid).join("assets/chart.png"), png()).unwrap();
+        std::fs::write(l.source_dir(&sid).join("assets/notes.txt"), "not a picture").unwrap();
+        std::fs::write(l.source_dir(&sid).join("assets/has space.png"), png()).unwrap();
+        let g = l.gather("tides", Scope::Internal, &[]);
+        assert_eq!(g.assets.iter().map(|a| a.uri.clone()).collect::<Vec<_>>(), vec![format!("lib:{sid}/chart.png")]);
+        let brief = crate::library::page_search::brief_for("tides", &g, 3000, Default::default());
+        assert!(brief.contains(&format!("ASSET lib:{sid}/chart.png | from s-{sid}")) && brief.contains("page:slug") && !brief.contains("Do not write images or links"));
+
+        let good = format!("# Tides\n\n**Tides** rise twice a day [s-{sid}].\n\n## Contents\n\n1. [The cause](#the-cause)\n\n## The cause\n\n![A tide chart](lib:{sid}/chart.png)\n*Figure 1: Chart [s-{sid}].*\n\n> *For the Greek figure, see [Tithonus](page:tithonus).*\n");
+        let found = |body: &str| l.check_body(body, Scope::Internal).findings.iter().map(|f| f.to_string()).collect::<Vec<_>>();
+        assert!(found(&good).is_empty(), "{:?}", found(&good));
+        assert!(found(&good.replace("(#the-cause)", "(#nowhere)")).iter().any(|f| f.contains("names no heading")));
+        assert!(found(&good.replace("page:tithonus", "page:Bad Slug")).iter().any(|f| f.contains("`page:` link")));
+        assert!(found(&good.replace(&format!("lib:{sid}/chart.png"), "kb:docs/a.md#b.png")).iter().any(|f| f.contains("not an asset")));
+        assert!(found(&good.replace("chart.png", "missing.png")).iter().any(|f| f.contains("not an asset")));
+        assert!(found(&good.replace("(page:tithonus)", "(https://example.org/x)")).iter().any(|f| f.contains("link not in any cited")));
+    }
+
+    #[test]
+    fn a_workspace_document_becomes_a_noted_internal_source_with_its_pictures() {
+        let (d, l) = lib();
+        let ws = d.path().join("ws");
+        std::fs::create_dir_all(ws.join("docs/img")).unwrap();
+        std::fs::write(ws.join("docs/img/chart.png"), png()).unwrap();
+        std::fs::write(ws.join("docs/spec.md"), "# Harbour tides\n\nTides turn at the harbour wall.\n\n![Chart](img/chart.png)\n![Remote](https://example.org/r.png)\n").unwrap();
+        let b = Budgets::default();
+        let s = l.capture_workspace_doc(&ws, &ws.join("docs/spec.md"), "docs/spec.md", &b).unwrap();
+        assert_eq!(s.level, Level::Full);
+        let m = l.read_meta(&s.id).unwrap();
+        assert_eq!((m["status"].as_str(), m["licence"].as_str(), m["title"].as_str(), m["workspace_path"].as_str()), (Some("not validated"), Some("internal"), Some("Harbour tides"), Some("docs/spec.md")));
+        assert!(l.asset_file(&s.id, "chart.png").is_some());
+        assert!(l.asset_file(&s.id, "../meta.json").is_none() && l.asset_file(&s.id, "nope.png").is_none() && l.asset_file("no-such", "chart.png").is_none());
+        assert_eq!(l.capture_workspace_doc(&ws, &ws.join("docs/spec.md"), "docs/spec.md", &b).unwrap().outcome, crate::library::Outcome::Unchanged);
+        let outside = file(d.path(), "o.md", "# Outside");
+        assert!(l.capture_workspace_doc(&ws, &outside, "o.md", &b).is_err(), "a file outside the workspace is not taken");
+        std::fs::write(ws.join("docs/data.bin"), [0u8, 1]).unwrap();
+        assert!(l.capture_workspace_doc(&ws, &ws.join("docs/data.bin"), "docs/data.bin", &b).is_err());
+        let g = l.gather("harbour tides", Scope::Internal, &[]);
+        assert!(g.sources.iter().any(|(id, _, _)| *id == s.id) && g.assets.iter().any(|a| a.uri == format!("lib:{}/chart.png", s.id)));
+
+        // the console's picture reader serves it to the operator only, and nothing outside `assets/`
+        let kb = crate::kb::Kb::open_in_memory().unwrap();
+        let get = |operator: bool, src: &str| crate::kbserve::Reader { kb: &kb, ws: &ws, operator, home: Some(d.path()) }.get(&format!("/v1/image?src={src}"));
+        let ok = get(true, &format!("lib:{}/chart.png", s.id));
+        assert_eq!((ok.status, ok.body["width"].as_u64()), (200, Some(64)), "{}", ok.body);
+        assert_eq!(get(false, &format!("lib:{}/chart.png", s.id)).status, 403);
+        assert_eq!(get(true, &format!("lib:{}/../meta.json", s.id)).status, 404);
+        assert_eq!(get(true, &format!("lib:{}/source.md", s.id)).status, 404);
+        assert_eq!(get(true, "lib:no-such/chart.png").status, 404);
+    }
+
     #[test]
     fn eviction_drops_the_least_recently_opened_and_never_a_pinned_page() {
         let (_d, l, w) = setup();
@@ -1435,5 +1538,39 @@ mod page_search_cache {
         let dropped = l.evict_pages(1);
         assert!(dropped.contains(&b.entry.key) && !dropped.contains(&a.entry.key), "{dropped:?}");
         assert!(l.open_page(&a.entry.key, 400, cfg.external_ttl_secs).is_some());
+    }
+
+    #[test]
+    fn expand_page_with_reputable_sources_and_images() {
+        let (_d, l, _w) = setup();
+        let sid = l.list().into_iter().find(|(_, m)| m["title"] == "t.md").map(|(id, _)| id).unwrap();
+        std::fs::create_dir_all(l.source_dir(&sid).join("assets")).unwrap();
+        std::fs::write(l.source_dir(&sid).join("assets/chart.png"), png()).unwrap();
+        let cfg = PagesConfig::default();
+        let w = W {
+            draft: format!(
+                "# Tides\n\n**Tides** are the rise and fall of sea levels [s-{sid}].\n\n## The cause\n\n![A tide chart](lib:{sid}/chart.png)\n*Figure 1: Chart [s-{sid}].*\n<!-- page: kind=article; depth=expanded; volatility=low; days=90; reason=Settled oceanography -->"
+            ),
+            writes: AtomicUsize::new(0),
+        };
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let req = PageRequest {
+            query: "tides",
+            external: false,
+            extra_sources: &[],
+            style: Format::Plain,
+            now: 1000,
+            settings: &cfg,
+            refresh: true,
+            depth: crate::library::page_meta::Depth::Expanded,
+        };
+        let res = rt.block_on(l.search_page(&req, &w, &pass(), &TokenLedger::new(1_000_000), &|| Ok(()))).unwrap();
+        assert!(!res.cached);
+        assert_eq!(res.entry.depth, "expanded");
+        assert_eq!(res.entry.volatility.as_deref(), Some("low"));
+        let on_disk = std::fs::read_to_string(&res.path).unwrap();
+        assert!(on_disk.contains("depth: expanded"));
+        assert!(on_disk.contains("volatility: low"));
+        assert!(res.markdown.contains("![A tide chart](lib:"));
     }
 }

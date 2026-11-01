@@ -7,7 +7,8 @@ import stringWidth from 'string-width';
 export type Target =
   | { k: 'doc'; path: string; anchor?: string }
   | { k: 'pointer'; path: string; from: number; to: number }
-  | { k: 'external'; url: string };
+  | { k: 'external'; url: string }
+  | { k: 'page'; slug: string };
 
 /** Where a link was drawn: a row of the rendered lines and a column range on it. A wrapped link has one span per row. */
 export type Span = { line: number; col: number; width: number };
@@ -45,6 +46,10 @@ export function normalize(path: string): string | null {
 export function parseTarget(href: string, base?: string): Target | null {
   const raw = href.trim();
   if (/^(https?:\/\/|mailto:)/i.test(raw)) return { k: 'external', url: raw };
+  if (raw.startsWith('page:')) {
+    const slug = raw.slice(5).trim();
+    return slug ? { k: 'page', slug } : null;
+  }
   if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) return null; // `file:`, `javascript:`, anything else: never followed
   const [file, frag] = [raw.split('#')[0]!, raw.includes('#') ? raw.slice(raw.indexOf('#') + 1) : undefined];
   let path: string | null;
@@ -63,16 +68,16 @@ export function parseTarget(href: string, base?: string): Target | null {
 
 /** The same target in the words a status line shows: `specs/a.md § intro`, `specs/a.md L10-L20`, the URL. */
 export function describe(t: Target): string {
-  return t.k === 'external' ? t.url : t.k === 'pointer' ? `${t.path} L${t.from}${t.to !== t.from ? `-L${t.to}` : ''}` : t.anchor ? `${t.path} § ${t.anchor}` : t.path;
+  return t.k === 'external' ? t.url : t.k === 'pointer' ? `${t.path} L${t.from}${t.to !== t.from ? `-L${t.to}` : ''}` : t.k === 'page' ? `page: ${t.slug}` : t.anchor ? `${t.path ? t.path + ' ' : ''}§ ${t.anchor}` : t.path;
 }
 
 /** The target as the text a person copies. */
 export function copyText(t: Target): string {
-  return t.k === 'external' ? t.url : t.k === 'pointer' ? `${t.path}#L${t.from}-L${t.to}` : t.anchor ? `${t.path}#${t.anchor}` : t.path;
+  return t.k === 'external' ? t.url : t.k === 'pointer' ? `${t.path}#L${t.from}-L${t.to}` : t.k === 'page' ? `page:${t.slug}` : t.anchor ? `${t.path}#${t.anchor}` : t.path;
 }
 
 /** The logical path a target opens in the reader; external targets have none. */
-export const pathOf = (t: Target): string | null => (t.k === 'external' ? null : t.path);
+export const pathOf = (t: Target): string | null => (t.k === 'doc' || t.k === 'pointer' ? t.path : null);
 
 /** The next link after `cur` (or the first), wrapping or stopping at the ends; `cur` null means none is focused. */
 export function stepFocus(links: Link[], cur: number | null, dir: 1 | -1): number | null {

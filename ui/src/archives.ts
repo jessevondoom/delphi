@@ -241,6 +241,9 @@ export function key(a: Arch, e: Ev, w: number, h: number): { a: Arch; action: Ac
   if (a.mode === 'pages') return pagesKey(a, e, h, used);
   if (a.mode === 'sources' || a.mode === 'claims') return libraryKey(a, a.mode, e, h, used);
   if (e.t === 'ctrl' && e.c === 'l') return a.pins ? goLibrary(a, 'sources', used) : used({ ...a, note: 'the library views are in the console: this window only reads' });
+  if (e.t === 'text' && e.s === 'f' && a.focus === 'list' && a.pg.open) {
+    return used({ ...a, mode: 'pages', note: 'encyclopedia page (f to return to raw results)' });
+  }
   if (e.t === 'text' || e.t === 'paste') {
     const s = e.t === 'paste' ? e.s.replace(/\s+/g, ' ') : e.s;
     if (/[\x00-\x1f\x7f]/.test(s)) return NOT_USED(a);
@@ -306,6 +309,9 @@ function libraryKey(a: Arch, what: L.LibKind, e: Ev, h: number, used: (n: Arch, 
 }
 
 function pagesKey(a: Arch, e: Ev, h: number, used: (n: Arch, act?: Action) => ReturnType<typeof key>) {
+  if (e.t === 'text' && e.s === 'f' && a.pg.focus !== 'box' && a.pg.focus !== 'note') {
+    return used({ ...a, mode: 'search', focus: 'list', note: 'raw file results (f to return to encyclopedia page)' }, a.searched ? none : (a.pg.q ? { t: 'search', q: a.pg.q } : none));
+  }
   if (e.t === 'ctrl' && e.c === 'l') return used({ ...a, mode: 'search', note: '' }, a.shelf ? none : { t: 'reload' });
   const r = P.key(a.pg, e, h - 7);
   if (!r.used) return NOT_USED(a);
@@ -403,6 +409,7 @@ function reader(a: Arch, e: Ev, w: number, h: number, used: (n: Arch, act?: Acti
       const l = cur.focus === null ? undefined : links[cur.focus];
       if (!l) return used(a);
       if (l.target.k === 'external') return cur.listed?.[l.target.url] === true ? used(a, { t: 'browser', url: l.target.url }) : used({ ...a, note: 'seen, not read: that address is not on your list' });
+      if (l.target.k === 'page') return used({ ...a, mode: 'pages', note: 'opening page…' }, { t: 'pages-search', q: l.target.slug, external: false });
       return used({ ...a, note: 'opening…' }, { t: 'open', target: l.target });
     }
     case 'esc': case 'backspace': return back();

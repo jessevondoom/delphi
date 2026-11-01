@@ -163,6 +163,8 @@ sandbox = "off"
 # max_tokens = 3000
 # external_ttl = "7d"     # a page that used the web is rebuilt after this
 # per_day = 20
+# min_ttl_days = 1        # the writer proposes how long a page stays fresh (specs/061); the daemon keeps it within these bounds
+# max_ttl_days = 365
 
 # Research (specs/028 section 10): the web search engines the archives pane's expand mode asks, in order, one at a time (the next only if
 # the last failed). Ratified, because it names who receives your queries. Which sites may be read is context/sources/trusted.toml plus your

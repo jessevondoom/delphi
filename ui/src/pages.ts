@@ -7,12 +7,34 @@ import type { Ev } from './input.ts';
 import { spinner } from './motion.ts';
 import * as T from './theme.ts';
 import { sanitize } from './theme.ts';
+import type { Raster } from './image.ts';
+import { renderMarkdownLinks } from './markdown.ts';
 
 export type PHit = { kind: 'claim' | 'source'; id: string; title: string; status: T.KnowledgeStatus; private: boolean };
 export type PEntry = { key: string; query: string; pinned: boolean; outcome: string; stale: string; external: boolean; failed: boolean; created: number };
 export type Statement = { text: string; ids: string[] };
 export type Row = string[];
-export type Open = { key: string; query: string; outcome: string; pinned: boolean; stale: string; external: boolean; cached: boolean; banner: string; body: Statement[]; table: Row[]; notes: string[] };
+export type Open = {
+  key: string;
+  query: string;
+  outcome: string;
+  pinned: boolean;
+  stale: string;
+  external: boolean;
+  cached: boolean;
+  banner: string;
+  body: Statement[];
+  table: Row[];
+  notes: string[];
+  markdown?: string;
+  title?: string;
+  kind?: string;
+  depth?: string;
+  valid_until?: string;
+  volatility?: string;
+  ttl_reason?: string;
+  images?: Record<string, Raster | null>;
+};
 export type Pages = {
   q: string; ext: boolean; focus: 'box' | 'results' | 'page' | 'note';
   hits: PHit[] | null; pages: PEntry[]; sel: number;
@@ -23,7 +45,10 @@ export type Pages = {
 export type PagesAction =
   | { t: 'none' }
   | { t: 'pages-search'; q: string; external: boolean }
+  | { t: 'pages-expand'; q: string }
+  | { t: 'pages-refresh'; q: string; external: boolean }
   | { t: 'pages-open'; key: string }
+  | { t: 'pages-open-page'; slug: string }
   | { t: 'pages-pin'; key: string; pinned: boolean }
   | { t: 'pages-dispute'; claim: string; note: string }
   | { t: 'pages-promote'; page: string; statement: string }
@@ -67,10 +92,49 @@ export function parsePage(md: string): Pick<Open, 'banner' | 'body' | 'table'> {
   return { banner, body, table };
 }
 
+export function parseFrontmatter(md: string): { meta: Record<string, string>; content: string } {
+  const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(md);
+  if (!m) return { meta: {}, content: md };
+  const meta: Record<string, string> = {};
+  for (const line of m[1]!.split('\n')) {
+    const idx = line.indexOf(':');
+    if (idx > 0) {
+      const k = line.slice(0, idx).trim();
+      const v = line.slice(idx + 1).trim().replace(/^['"]|['"]$/g, '');
+      meta[k] = v;
+    }
+  }
+  return { meta, content: md.slice(m[0].length) };
+}
+
 function opened(body: any, cached: boolean): Open {
   const e = parseEntries([body])[0];
-  return { key: e?.key ?? '', query: e?.query ?? '', outcome: e?.outcome ?? '', pinned: e?.pinned ?? false, stale: e?.stale ?? '', external: e?.external ?? false, cached, ...parsePage(String(body?.markdown ?? '')), notes: Array.isArray(body?.notes) ? body.notes.map((n: unknown) => str(n, 200)) : [] };
+  const rawMd = String(body?.markdown ?? '');
+  const { meta, content } = parseFrontmatter(rawMd);
+  const parsed = parsePage(content);
+  return {
+    key: e?.key ?? '',
+    query: e?.query ?? '',
+    outcome: e?.outcome ?? '',
+    pinned: e?.pinned ?? false,
+    stale: e?.stale ?? '',
+    external: e?.external ?? false,
+    cached,
+    ...parsed,
+    notes: Array.isArray(body?.notes) ? body.notes.map((n: unknown) => str(n, 200)) : [],
+    markdown: content,
+    title: meta['title'] || str(body?.title, 200),
+    kind: meta['kind'] || str(body?.kind, 50),
+    depth: meta['depth'] || str(body?.depth, 50),
+    valid_until: meta['valid_until'] || str(body?.valid_until, 50),
+    volatility: meta['volatility'] || str(body?.volatility, 50),
+    ttl_reason: meta['ttl_reason'] || str(body?.ttl_reason, 200),
+    images: body?.images ?? {},
+  };
 }
+
+export const gotImage = (p: Pages, src: string, raster: Raster | null): Pages =>
+  p.open ? { ...p, open: { ...p.open, images: { ...p.open.images, [src]: raster } } } : p;
 
 export const gotList = (p: Pages, body: any): Pages => ({ ...p, pages: parseEntries(body?.pages ?? body) });
 export const gotResults = (p: Pages, q: string, body: any): Pages => (q === p.q.trim() ? { ...p, hits: parseHits(body?.hits), pages: body?.pages ? parseEntries(body.pages) : p.pages, busy: p.busy === 'results' ? 'page' : p.busy, sel: 0 } : p);
@@ -112,6 +176,8 @@ export function key(p: Pages, e: Ev, h: number): { p: Pages; action: PagesAction
   if (e.t === 'text' && p.focus === 'page' && p.open) {
     const st = p.open.body[p.at];
     switch (e.s) {
+      case 'e': return used({ ...p, note: 'expanding page with reputable web research…' }, { t: 'pages-expand', q: p.open.query });
+      case 'r': return used({ ...p, note: 'refreshing page…' }, { t: 'pages-refresh', q: p.open.query, external: p.open.external });
       case 's': return used({ ...p, note: '' }, { t: 'pages-pin', key: p.open.key, pinned: !p.open.pinned });
       case 'd': return claimOf(st) ? used({ ...p, focus: 'note', draft: '', note: '' }) : used({ ...p, note: 'this statement cites no claim to dispute' });
       case 'p': return st && st.text ? used({ ...p, note: 'making a noted claim…' }, { t: 'pages-promote', page: p.open.key, statement: st.text.replace(/\s*\[[^\]]*\]/g, '').trim() }) : used(p);
@@ -212,9 +278,26 @@ function glyphFor(o: Open, ids: string[]): string {
 function pageLines(o: Open, at: number, focused: boolean, w: number, h: number): string[] {
   const out: string[] = [];
   out.push(...wrap(o.banner, w - 2).map((l) => ' ' + T.dim(l)));
-  const flags = [o.pinned ? 'pinned' : '', o.stale ? `stale: ${o.stale}` : '', o.cached ? 'cached' : '', o.external ? 'external' : ''].filter(Boolean).join(' · ');
+  const flags = [
+    o.kind ? `kind: ${o.kind}` : '',
+    o.depth ? `depth: ${o.depth}` : '',
+    o.valid_until ? `valid: ${o.valid_until}${o.volatility ? ` (${o.volatility})` : ''}` : '',
+    o.pinned ? 'pinned' : '',
+    o.stale ? `stale: ${o.stale}` : '',
+    o.cached ? 'cached' : '',
+    o.external ? 'external' : '',
+  ].filter(Boolean).join(' · ');
   if (flags) out.push(' ' + T.dim(flags));
   out.push(T.dim('─'.repeat(Math.max(0, w))));
+
+  if (o.markdown && (o.kind || o.depth || o.markdown.includes('# ') || o.markdown.includes('## Contents') || o.markdown.includes('!['))) {
+    const rendered = renderMarkdownLinks(o.markdown, Math.max(10, w - 4), { images: o.images });
+    const room = Math.max(1, h - out.length - 1);
+    const first = Math.max(0, Math.min(at, Math.max(0, rendered.lines.length - room)));
+    out.push(...rendered.lines.slice(first, first + room));
+    return out;
+  }
+
   const body: string[] = [];
   let focusAt = 0;
   o.body.forEach((s, i) => {
@@ -261,6 +344,6 @@ export function view(p: Pages, w: number, h: number, now: number, still: boolean
   while (out.length < h - 2) out.push('');
   const note = p.focus === 'note' ? ` ${T.accent('what is wrong?')} ${p.draft}${T.accent('▏')}` : p.note ? T.dim(' ' + sanitize(p.note)) : p.open?.notes.length ? T.dim(' ' + p.open.notes[0]) : p.open?.outcome === 'claims_only' ? T.dim(' the draft did not pass its checks: these are the claims alone') : '';
   out.push(note);
-  out.push(hint(p.focus === 'note' ? 'enter file it · esc cancel' : p.focus === 'page' ? '↑ ↓ statement · s save/pin · d dispute · p promote to claim · o open source · tab back' : p.focus === 'box' ? 'enter ask · tab internal/external · ↓ results · esc back' : '↑ ↓ pick · enter open · tab page · esc ask again'));
+  out.push(hint(p.focus === 'note' ? 'enter file it · esc cancel' : p.focus === 'page' ? '↑ ↓ scroll · e expand · r refresh · s save/pin · d dispute · p promote to claim · o open source · tab back' : p.focus === 'box' ? 'enter ask · tab internal/external · ↓ results · esc back' : '↑ ↓ pick · enter open · tab page · esc ask again'));
   return out.slice(0, h).map((s) => T.clip(s, w));
 }

@@ -42,7 +42,15 @@ function withPointers(text: string): string {
 
 /** The file an image points at, as the daemon is asked for it: no fragment or query. Null for the web and absolute paths (never fetched). */
 export function imageSrc(href: string): string | null {
-  const h = href.trim().split(/[#?]/)[0]!;
+  const trimmed = href.trim();
+  if (trimmed.startsWith('lib:')) {
+    const file = trimmed.split(/[?]/)[0]!;
+    return /^lib:[a-zA-Z0-9_-]+\/[a-zA-Z0-9._-]+$/.test(file) ? file : null;
+  }
+  if (trimmed.startsWith('kb:')) {
+    return trimmed;
+  }
+  const h = trimmed.split(/[#?]/)[0]!;
   return h === '' || h.startsWith('/') || /^[a-z][a-z0-9+.-]*:/i.test(h) ? null : h;
 }
 

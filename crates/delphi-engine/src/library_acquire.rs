@@ -658,6 +658,7 @@ impl Library {
                     doi: None,
                     raise_text: None,
                     raise_source: None,
+                    ..Default::default()
                 };
                 let budgets = Budgets { text: cfg.max_item, ..Budgets::default() };
                 match self.add_url(policy, &url, &opts, &budgets).await {

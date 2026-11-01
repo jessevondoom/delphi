@@ -15,6 +15,7 @@ test('targets: documents, passages, the web; relative links resolve against the 
   assert.deepEqual(parseTarget('#top', 'specs/alpha.md'), { k: 'doc', path: 'specs/alpha.md', anchor: 'top' });
   assert.deepEqual(parseTarget('context/x.md#L51-L68'), { k: 'pointer', path: 'context/x.md', from: 51, to: 68 });
   assert.deepEqual(parseTarget('context/x.md#L7'), { k: 'pointer', path: 'context/x.md', from: 7, to: 7 });
+  assert.deepEqual(parseTarget('page:tides'), { k: 'page', slug: 'tides' });
   assert.deepEqual(parseTarget('https://example.com/a?b=1'), { k: 'external', url: 'https://example.com/a?b=1' });
   assert.equal(parseTarget('../../etc/passwd.md', 'specs/a.md'), null, 'leaves the tree');
   assert.equal(parseTarget('javascript:alert(1)'), null);
@@ -94,6 +95,8 @@ test('moving focus: tab and shift+tab stop at the ends, and start from the visib
 test('describing a target for the status line and for copying', () => {
   assert.equal(describe({ k: 'pointer', path: 'a/b.md', from: 3, to: 9 }), 'a/b.md L3-L9');
   assert.equal(describe({ k: 'doc', path: 'a/b.md', anchor: 'x' }), 'a/b.md § x');
+  assert.equal(describe({ k: 'page', slug: 'tides' }), 'page: tides');
   assert.equal(copyText({ k: 'pointer', path: 'a/b.md', from: 3, to: 9 }), 'a/b.md#L3-L9');
   assert.equal(copyText({ k: 'doc', path: 'a/b.md' }), 'a/b.md');
+  assert.equal(copyText({ k: 'page', slug: 'tides' }), 'page:tides');
 });

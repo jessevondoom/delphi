@@ -116,6 +116,8 @@ Which sites the job may read is not here: it is `context/sources/trusted.toml` (
 | `[library.pages] max_tokens` | `3000` | the longest page the writer may write |
 | `[library.pages] external_ttl` | `7d` | a page that used the web is stale after this (days as a number, or `12h`, `7d`) |
 | `[library.pages] per_day` | `20` | pages built in one day (a cache hit costs nothing). The validator tokens a page uses also count against the validator's share ([`specs/040`](../../specs/040-validator-role-and-fact-ratification.md) §20) |
+| `[library.pages] min_ttl_days` | `1` | the shortest cache lifetime, in days, the daemon accepts for a page ([`specs/061`](../../specs/061-encyclopedia-search-pages.md)) |
+| `[library.pages] max_ttl_days` | `365` | the longest; the `writer` proposes a lifetime from how fast the topic changes and the daemon keeps it within these bounds |
 
 ## Away mode and hooks ◆
 

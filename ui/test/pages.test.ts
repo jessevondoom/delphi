@@ -76,3 +76,20 @@ test('the wait for the writer is a still glyph under reduce motion', () => {
   const frames = [0, 400, 800, 1200].map((n) => A.view(a, 100, 20, { dark: true }, undefined, n, true).map(plain).join('\n'));
   assert.equal(new Set(frames).size, 1);
 });
+
+test('keys on a page: expand with reputable sources and refresh', () => {
+  const a = walk(withPage(), k('tab')).a;
+  assert.equal(a.pg.focus, 'page');
+  assert.deepEqual(walk(a, text('e')).action, { t: 'pages-expand', q: PAGE.query });
+  assert.deepEqual(walk(a, text('r')).action, { t: 'pages-refresh', q: PAGE.query, external: PAGE.external });
+});
+
+test('toggle between encyclopedia page and raw file search with f', () => {
+  const p = withPage();
+  assert.equal(p.mode, 'pages');
+  const toRaw = walk(p, text('f'));
+  assert.equal(toRaw.a.mode, 'search');
+  assert.equal(toRaw.a.focus, 'list');
+  const backToPage = walk(toRaw.a, text('f'));
+  assert.equal(backToPage.a.mode, 'pages');
+});
