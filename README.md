@@ -58,6 +58,7 @@ Delphi is one Rust executable plus a full-screen console. There is no server to 
 | Have a change built and reviewed | `/build <request>`. You get a merge card (or a pull request) at the end. |
 | Settle a hard decision | `/council <proposition>`. Blind answers, cross-examination, verdict, Minority Report. |
 | Watch the work live | `/observe` opens a second, read-only window: threads of work, the agents, a change log. |
+| Research a topic by asking | Ask in chat: the agent requests it and you approve a card |
 | Research a topic | `/research <topic>` (trusted pages enter the knowledge base; others are held for `/validate`) |
 | Switch project | `/projects`, then arrow keys and Enter. |
 | Review research held back from the knowledge base | `/validate` (`/validate pass` promotes what the allow list now trusts) |

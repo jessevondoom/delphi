@@ -234,6 +234,12 @@ impl Registry {
             classify: classify_external_available,
             exec: ToolExec::Local(external_available),
         });
+        r.register(ToolSpec {
+            def: read_def("request_research", "Ask to research a topic from the trusted sources, when the operator wants a subject looked up and added to their knowledge. The operator is shown a card with the topic and approves or refuses it; nothing runs until they approve. Pages from trusted sources go to the knowledge base (or, in a project, to that project's research folder) and everything else is held for the operator to review. You cannot choose where it goes, change the trusted list, or ratify anything. One job runs at a time.", json!({"type": "object", "required": ["topic"], "properties": {"topic": {"type": "string", "description": "What to research, in 200 characters or fewer"}}})),
+            requires_write_scope: false,
+            classify: classify_request_research,
+            exec: ToolExec::Local(request_research),
+        });
         for spec in crate::artifacts::specs() {
             r.register(spec);
         }
@@ -389,6 +395,33 @@ fn record_change(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
 }
 
 /// Staging a note writes one event to the operator's own log and nothing else, so it never asks.
+/// Starting a research job sends the topic to a search engine and writes into the workspace, so it asks every time (`specs/058` §20): like a
+/// script, no permission mode approves it, and "allow similar" covers only this exact topic.
+fn classify_request_research(tool: &str, args: &Value) -> Result<Classified, ToolError> {
+    let topic = research_topic(args).map_err(ToolError)?;
+    Ok(Classified { tool: tool.into(), tier: ToolTier::Amber, kind: ActionKind::SpecDraft, summary: format!("research \"{}\" from the trusted sources", topic), payload: json!({"topic": topic}), pattern: format!("{} {}", tool, topic) })
+}
+
+fn research_topic(args: &Value) -> Result<String, String> {
+    let topic = args.get("topic").and_then(|v| v.as_str()).ok_or("missing string argument `topic`")?.split_whitespace().collect::<Vec<_>>().join(" ");
+    if topic.is_empty() || topic.chars().count() > 200 || topic.chars().any(|c| c.is_control()) {
+        return Err("`topic` must be 1 to 200 characters of plain text".into());
+    }
+    Ok(topic)
+}
+
+/// Runs only after the operator's card: it records the request, and the daemon starts the job (`EngineService`). The agent learns nothing of
+/// where the pages go.
+fn request_research(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
+    match research_topic(args) {
+        Ok(topic) => {
+            ctx.events.push(("research.request".into(), json!({"topic": topic, "by": ctx.role})));
+            ToolResult::ok("approved and queued. The operator can follow it with /research status; do not wait for it, and do not repeat the request.".to_string())
+        }
+        Err(e) => ToolResult::err(e),
+    }
+}
+
 fn classify_note(tool: &str, args: &Value) -> Result<Classified, ToolError> {
     str_arg(args, "text")?;
     Ok(Classified { tool: tool.into(), tier: ToolTier::Green, kind: ActionKind::Read, summary: tool.into(), payload: args.clone(), pattern: tool.into() })
@@ -1028,8 +1061,8 @@ mod tests {
     fn the_registry_offers_write_tools_only_to_roles_with_a_write_scope_and_accepts_new_tools() {
         let mut r = Registry::builtin();
         let names = |d: Vec<ToolDef>| d.into_iter().map(|t| t.name).collect::<Vec<_>>();
-        assert_eq!(names(r.defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "xenia_search", "xenia_help", "external_available"]);
-        assert_eq!(names(r.defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "xenia_search", "xenia_help", "external_available", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"]);
+        assert_eq!(names(r.defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "xenia_search", "xenia_help", "external_available", "request_research"]);
+        assert_eq!(names(r.defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "xenia_search", "xenia_help", "external_available", "request_research", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"]);
         assert!(r.classify("nope", &json!({})).is_err());
         fn ping(_: &mut ToolCtx, _: &Value) -> ToolResult {
             ToolResult::ok("pong".to_string())
@@ -1662,7 +1695,19 @@ mod tests {
     #[test]
     fn tool_definitions_depend_on_the_role_having_write_scope() {
         let names = |d: Vec<ToolDef>| d.into_iter().map(|t| t.name).collect::<Vec<_>>();
-        assert_eq!(names(tool_defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "xenia_search", "xenia_help", "external_available"]);
-        assert_eq!(names(tool_defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "xenia_search", "xenia_help", "external_available", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"]);
+        assert_eq!(names(tool_defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "xenia_search", "xenia_help", "external_available", "request_research"]);
+        assert_eq!(names(tool_defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "xenia_search", "xenia_help", "external_available", "request_research", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"]);
+    }
+
+    #[test]
+    fn requesting_research_always_asks_and_only_records_the_topic() {
+        let reg = Registry::builtin();
+        let c = reg.classify("request_research", &json!({"topic": "  the   fall of Constantinople "})).unwrap();
+        assert_eq!((c.tier, c.kind), (ToolTier::Amber, ActionKind::SpecDraft), "no permission mode approves it");
+        assert_eq!(c.payload, json!({"topic": "the fall of Constantinople"}));
+        assert!(c.pattern.ends_with("the fall of Constantinople"), "allow-similar covers only this topic");
+        for bad in [json!({}), json!({"topic": ""}), json!({"topic": "x".repeat(201)}), json!({"topic": "a\u{7}b"})] {
+            assert!(reg.classify("request_research", &bad).is_err(), "{}", bad);
+        }
     }
 }

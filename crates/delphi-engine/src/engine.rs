@@ -224,6 +224,8 @@ pub struct TaskOutcome {
 }
 
 pub struct Engine {
+    /// Where an approved `request_research` goes, as `(mission id, topic)`; the service starts the job (`specs/058` §20).
+    pub research_ask: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<(String, String)>>,
     /// The consumer of `validator.request` (`fact_serve`): intake quotas and the token allowance.
     pub validator: crate::fact_serve::Host,
     pub ws: WorkspacePaths,
@@ -1740,6 +1742,11 @@ impl Engine {
         }
         if !events.is_empty() {
             let appended = sc.m.append_batch(events).await?;
+            for e in appended.iter().filter(|e| e.kind == "research.request") {
+                if let (Some(tx), Some(topic)) = (self.research_ask.get(), e.payload["topic"].as_str()) {
+                    let _ = tx.send((sc.m.id.clone(), topic.to_string()));
+                }
+            }
             for e in appended.iter().filter(|e| e.kind == "validator.request") {
                 self.serve_validator_request(sc.m.clone(), e.payload.clone(), sc.family.clone());
             }

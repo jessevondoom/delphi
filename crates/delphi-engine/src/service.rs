@@ -113,7 +113,20 @@ fn engine_err(e: EngineError) -> RpcError {
 
 impl EngineService {
     pub fn new(engine: Arc<Engine>, default_mission: &str) -> Arc<EngineService> {
-        Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())), acquire_checked: Mutex::new(0) })
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(String, String)>();
+        let _ = engine.research_ask.set(tx);
+        let svc = Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())), acquire_checked: Mutex::new(0) });
+        // An approved `request_research` card (`specs/058` §20): the mission's own scope decides where the pages go.
+        if tokio::runtime::Handle::try_current().is_ok() {
+            let weak = Arc::downgrade(&svc);
+            tokio::spawn(async move {
+                while let Some((mission, topic)) = rx.recv().await {
+                    let Some(svc) = weak.upgrade() else { break };
+                    svc.agent_research(&mission, &topic).await;
+                }
+            });
+        }
+        svc
     }
 
     /// Run `org.action` through this binary instead of the current executable (tests, where that is the test binary).
@@ -1350,6 +1363,25 @@ impl EngineService {
             None => crate::research::Scope::Home,
             Some(root) => crate::research::Scope::Project(root),
         };
+        self.launch_research(topic, scope).await
+    }
+
+    /// An approved `request_research` (`specs/058` §20): the job runs in the scope the mission was stamped with, and the log says what happened.
+    async fn agent_research(&self, mission: &str, topic: &str) {
+        let ws = &self.engine.ws.dir;
+        let root = crate::scope::mission_scope(ws, &ws.join("local/missions").join(mission)).and_then(|id| crate::scope::project_root(ws, &id));
+        let scope = root.map(crate::research::Scope::Project).unwrap_or(crate::research::Scope::Home);
+        let outcome = self.launch_research(topic.to_string(), scope).await;
+        if let Ok(m) = self.mission_at(Some(mission), None).await {
+            let (kind, payload) = match outcome {
+                Ok(_) => ("research.started", json!({"topic": topic})),
+                Err(e) => ("research.refused", json!({"topic": topic, "why": e.message})),
+            };
+            let _ = m.append(EventEnvelope::new(&m.id, kind, payload)).await;
+        }
+    }
+
+    async fn launch_research(&self, topic: String, scope: crate::research::Scope) -> RpcOutcome {
         let shared = crate::research::Shared::new(&topic);
         {
             let mut cur = self.research.lock().unwrap();
