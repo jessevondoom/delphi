@@ -317,6 +317,19 @@ fn check_harnesses(ws: Option<&Path>, cfg_text: &str, run: &dyn Fn(&str, &[&str]
                     None => r.warn("10 harness", id.to_string(), "`codex login status` could not be run; run `delphi endpoints test --probe`"),
                 },
             },
+            Some("copilot") => match run("copilot", &["--version"]) {
+                None => missing(r, id, "the `copilot` program was not found on PATH; install the GitHub Copilot CLI".into()),
+                Some((_, ver)) => {
+                    let first_line = ver.lines().next().unwrap_or(&ver).trim();
+                    let bridge = v.get("harness").and_then(|h| h.get("copilot")).and_then(|c| c.get("bridge")).and_then(|b| b.as_bool()).unwrap_or(true);
+                    let what = if bridge {
+                        "Delphi's ACP approval bridge is on: file edits and commands are judged by Delphi cards. Run `delphi endpoints test --probe` to prove it answers."
+                    } else {
+                        "the bridge is off: read-only roles only. Run `delphi endpoints test --probe` to prove it answers."
+                    };
+                    r.push(Level::Ok, "10 harness", id.to_string(), format!("{} is installed; {}. Delphi counts its own spans (`harness.cost` events)", first_line, what));
+                }
+            },
             Some("gemini") => r.warn("10 harness", id.to_string(), "the Gemini CLI no longer supports personal Google sign-in (it points to Antigravity); use `harness = \"agy\"`"),
             other => r.warn("10 harness", id.to_string(), format!("the `{}` harness is not implemented yet", other.unwrap_or("?"))),
         }

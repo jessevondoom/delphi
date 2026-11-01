@@ -1592,14 +1592,19 @@ impl Engine {
         })
     }
 
-    /// The `agy` seats that may serve a role that writes files and runs commands: the profile has the gate on, and a
-    /// conformance probe of the installed version has seen it hold (`specs/020` §8.7).
+    /// The seats that may serve a role that writes files and runs commands:
+    /// - an `agy` seat whose profile has the gate on, and a conformance probe of the installed version has seen it hold (`specs/020` §8.7).
+    /// - a `copilot` seat whose profile has the approval bridge on (`specs/051` S2).
     pub(crate) fn mutating_harnesses(&self) -> Vec<String> {
         let cfg = self.cfg.get();
-        if !cfg.harness.get("agy").cloned().unwrap_or_default().bridge {
-            return vec![];
+        let mut out = Vec::new();
+        if cfg.harness.get("agy").cloned().unwrap_or_default().bridge {
+            out.extend(cfg.endpoints.iter().filter(|e| e.path == delphi_adapter::config::AccessPath::Harness && e.harness.as_deref() == Some("agy") && self.agy_builder_ready(&e.id, &self.settings.agy_program)).map(|e| e.id.clone()));
         }
-        cfg.endpoints.iter().filter(|e| e.path == delphi_adapter::config::AccessPath::Harness && e.harness.as_deref() == Some("agy") && self.agy_builder_ready(&e.id, &self.settings.agy_program)).map(|e| e.id.clone()).collect()
+        if cfg.harness.get("copilot").cloned().unwrap_or_default().bridge {
+            out.extend(cfg.endpoints.iter().filter(|e| e.path == delphi_adapter::config::AccessPath::Harness && e.harness.as_deref() == Some("copilot")).map(|e| e.id.clone()));
+        }
+        out
     }
 
     /// What this span asks of a model (`route.rs`). The usual family and the role's target are preferences;

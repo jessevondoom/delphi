@@ -525,6 +525,233 @@ pub fn codex_approval_reply(p: &Permission, d: &Decision) -> String {
     json!({"id": id, "result": {"decision": if *d == Decision::Allow { "accept" } else { "decline" }}}).to_string()
 }
 
+/// `copilot --acp` (`specs/051` §2.2, §6.4, §6.5): Agent Client Protocol on stdio over JSON-RPC 2.0.
+/// It drives the handshake (`initialize`, `session/new`, `session/prompt`), turns notifications into events,
+/// turns `session/request_permission` into [`Event::Permission`], and answers `allow_once` or `reject`
+/// (never `allow_always`).
+#[derive(Debug)]
+pub struct CopilotAcp {
+    prompt: String,
+    cwd: String,
+    last: String,
+    tokens: Tokens,
+    failure: Option<String>,
+}
+
+const COPILOT_ACP_INIT: i64 = 1;
+const COPILOT_ACP_NEW: i64 = 2;
+const COPILOT_ACP_PROMPT: i64 = 3;
+
+impl CopilotAcp {
+    pub fn new(prompt: &str, cwd: &std::path::Path) -> CopilotAcp {
+        CopilotAcp {
+            prompt: prompt.into(),
+            cwd: cwd.display().to_string(),
+            last: String::new(),
+            tokens: Tokens::default(),
+            failure: None,
+        }
+    }
+
+    /// The first line to send (`initialize`).
+    pub fn first_line(&self) -> String {
+        json!({
+            "jsonrpc": "2.0",
+            "id": COPILOT_ACP_INIT,
+            "method": "initialize",
+            "params": {
+                "clientInfo": {"name": "delphi", "version": env!("CARGO_PKG_VERSION")},
+                "protocolVersion": 1
+            }
+        })
+        .to_string()
+    }
+
+    /// What one line from the server means: events for the caller, and lines to send back.
+    pub fn line(&mut self, line: &str) -> (Vec<Event>, Vec<String>) {
+        let Ok(m) = serde_json::from_str::<Value>(line) else { return (vec![], vec![]) };
+        let (mut ev, mut send) = (Vec::new(), Vec::new());
+        let p = &m["params"];
+
+        match (m["id"].as_i64(), m["method"].as_str()) {
+            (Some(_), None) if m.get("error").is_some() => {
+                let why = format!("copilot acp: {}", m["error"]["message"].as_str().unwrap_or("request failed"));
+                ev.push(Event::Result {
+                    text: why,
+                    is_error: true,
+                    stop_reason: None,
+                    total_cost_usd: 0.0,
+                    usage: Tokens::default(),
+                    subtype: "acp_error".into(),
+                    structured: None,
+                });
+            }
+            (Some(COPILOT_ACP_INIT), None) => {
+                send.push(json!({
+                    "jsonrpc": "2.0",
+                    "id": COPILOT_ACP_NEW,
+                    "method": "session/new",
+                    "params": {"cwd": self.cwd}
+                }).to_string());
+            }
+            (Some(COPILOT_ACP_NEW), None) => {
+                let sid = m["result"]["sessionId"].as_str().unwrap_or("");
+                ev.push(Event::Init { session_id: sid.into(), tools: vec![], mcp_servers: None });
+                send.push(json!({
+                    "jsonrpc": "2.0",
+                    "id": COPILOT_ACP_PROMPT,
+                    "method": "session/prompt",
+                    "params": {
+                        "sessionId": sid,
+                        "prompt": [{"type": "text", "text": self.prompt}]
+                    }
+                }).to_string());
+            }
+            (Some(_), Some("session/request_permission")) => {
+                let id_val = m["id"].clone();
+                let request_id = if let Some(n) = id_val.as_i64() { n.to_string() } else { id_val.as_str().unwrap_or("0").to_string() };
+                let tc = &p["toolCall"];
+                let kind = tc["kind"].as_str().unwrap_or("");
+                let raw = &tc["rawInput"];
+                let tool_use_id = tc["toolCallId"].as_str().map(String::from);
+                let description = tc["title"].as_str().map(String::from);
+                match kind {
+                    "edit" | "write" => {
+                        let path = tc["locations"].as_array().and_then(|a| a.first()).and_then(|l| l["path"].as_str())
+                            .or_else(|| raw["fileName"].as_str())
+                            .or_else(|| raw["path"].as_str())
+                            .or_else(|| raw["file_path"].as_str());
+                        ev.push(Event::Permission(Permission {
+                            request_id,
+                            tool_name: "Edit".into(),
+                            input: json!({
+                                "file_path": path,
+                                "path": path,
+                                "diff": raw["diff"]
+                            }),
+                            tool_use_id,
+                            blocked_path: path.map(String::from),
+                            description,
+                        }));
+                    }
+                    "execute" | "bash" | "shell" => {
+                        let cmd = raw["command"].as_str()
+                            .or_else(|| raw["commands"].as_array().and_then(|a| a.first()).and_then(|c| c.as_str()))
+                            .unwrap_or("");
+                        ev.push(Event::Permission(Permission {
+                            request_id,
+                            tool_name: "Bash".into(),
+                            input: json!({"command": cmd}),
+                            tool_use_id,
+                            blocked_path: None,
+                            description,
+                        }));
+                    }
+                    "read" => {
+                        let path = tc["locations"].as_array().and_then(|a| a.first()).and_then(|l| l["path"].as_str())
+                            .or_else(|| raw["fileName"].as_str())
+                            .or_else(|| raw["path"].as_str());
+                        ev.push(Event::Permission(Permission {
+                            request_id,
+                            tool_name: "Read".into(),
+                            input: json!({"file_path": path, "path": path}),
+                            tool_use_id,
+                            blocked_path: path.map(String::from),
+                            description,
+                        }));
+                    }
+                    _ => {
+                        let tool_name = if !kind.is_empty() { kind } else { "tool" };
+                        ev.push(Event::Permission(Permission {
+                            request_id,
+                            tool_name: tool_name.into(),
+                            input: raw.clone(),
+                            tool_use_id,
+                            blocked_path: None,
+                            description,
+                        }));
+                    }
+                }
+            }
+            (Some(id), Some(_other_method)) => {
+                send.push(json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": {"code": -32601, "message": "not supported by Delphi"}
+                }).to_string());
+            }
+            (None, Some("session/update")) => {
+                let u = &p["update"];
+                match u["sessionUpdate"].as_str() {
+                    Some("agent_message_chunk") => {
+                        if let Some(t) = u["content"]["text"].as_str() {
+                            self.last.push_str(t);
+                            ev.push(Event::Text(t.into()));
+                        }
+                    }
+                    Some("tool_call") => {
+                        ev.push(Event::ToolUse {
+                            id: u["toolCallId"].as_str().unwrap_or("").into(),
+                            name: u["kind"].as_str().unwrap_or("tool").into(),
+                            input: u["rawInput"].clone(),
+                        });
+                    }
+                    Some("tool_call_update") => {
+                        ev.push(Event::ToolResult {
+                            id: u["toolCallId"].as_str().unwrap_or("").into(),
+                            is_error: u["status"] == "failed",
+                        });
+                    }
+                    _ => {}
+                }
+            }
+            (Some(COPILOT_ACP_PROMPT), None) => {
+                let r = &m["result"];
+                let u = &r["usage"];
+                let n = |k: &str| u[k].as_u64().unwrap_or(0);
+                self.tokens = Tokens {
+                    input: n("inputTokens").saturating_sub(n("cachedReadTokens")),
+                    cache_read: n("cachedReadTokens"),
+                    cache_write: n("cachedWriteTokens"),
+                    output: n("outputTokens") + n("thoughtTokens"),
+                };
+                let stop_reason = r["stopReason"].as_str();
+                let is_error = stop_reason.is_some_and(|s| s == "error" || s == "failed");
+                let text = if is_error && self.last.is_empty() {
+                    self.failure.clone().unwrap_or_else(|| "copilot prompt failed".into())
+                } else {
+                    self.last.clone()
+                };
+                ev.push(Event::Result {
+                    text,
+                    is_error,
+                    stop_reason: stop_reason.map(String::from),
+                    total_cost_usd: 0.0,
+                    usage: self.tokens,
+                    subtype: if is_error { "prompt_failed".into() } else { "success".into() },
+                    structured: None,
+                });
+            }
+            _ => {}
+        }
+        (ev, send)
+    }
+}
+
+/// The answer to an approval request in Copilot ACP: `allow_once` or `reject` and nothing else,
+/// because `allow_always` persists permissions and bypasses future cards (`specs/051` §6.4 i).
+pub fn copilot_approval_reply(p: &Permission, d: &Decision) -> String {
+    let id: Value = serde_json::from_str(&p.request_id).unwrap_or_else(|_| json!(p.request_id));
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": {
+            "decision": if *d == Decision::Allow { "allow_once" } else { "reject" }
+        }
+    })
+    .to_string()
+}
+
 /// A tool name that matches nothing: `--available-tools` with it offers the model zero tools. An empty value would mean "no
 /// narrowing" (`specs/051` §6.4), so a span with no tools is never launched with an empty list.
 pub const COPILOT_NO_TOOLS: &str = "delphi-no-tools";
@@ -735,6 +962,11 @@ fn args(l: &Launch) -> Vec<String> {
         a.push("-".into());
         return a;
     }
+    if l.cli == Cli::Copilot && o.app_server {
+        let mut a = strings(&["--acp", "--model", l.model.as_str(), "--disable-builtin-mcps", "--no-custom-instructions", "--no-auto-update", "--disable-client-telemetry", "--no-ask-user", "--no-experimental", "--no-bash-env"]);
+        push_flag(&mut a, "--reasoning-effort", o.effort.clone());
+        return a;
+    }
     if l.cli == Cli::Copilot {
         // Headless and fail-closed (`specs/051` §6.4): no allow flag is ever passed, so a run reads inside its working
         // directory and denies everything else. The allowlist is never empty. Nothing of the checkout's own instructions, the
@@ -835,6 +1067,7 @@ pub struct Session {
     stderr_task: Option<tokio::task::JoinHandle<()>>,
     /// The app-server transport's writer: replies and the handshake go through it (it owns the child's stdin).
     out: Option<mpsc::Sender<String>>,
+    cli: Cli,
 }
 
 /// How much of a CLI's stderr the error log can ever see.
@@ -866,9 +1099,9 @@ impl Session {
             std::fs::create_dir_all(&home).and_then(|_| std::fs::create_dir_all(l.cwd.join(COPILOT_LOG_DIR))).map_err(|e| format!("cannot make the copilot home: {}", e))?;
             env.insert("COPILOT_HOME".into(), home.display().to_string());
         }
-        let app_server = l.cli == Cli::Codex && l.opts.app_server;
+        let app_server = (l.cli == Cli::Codex || l.cli == Cli::Copilot) && l.opts.app_server;
         if app_server && l.opts.json_schema.is_some() {
-            return Err("the codex app-server transport has no structured output yet (specs/047 S2b); use exec".into());
+            return Err("the app-server transport has no structured output yet; use exec".into());
         }
         if let (Cli::Codex, Some(schema), false) = (l.cli, &l.opts.json_schema, app_server) {
             // `--output-schema` takes a file: it goes in the span's own scratch directory.
@@ -909,6 +1142,44 @@ impl Session {
         let mut copilot = CopilotParser::new(&l.model);
         let (tx, mut rx) = mpsc::channel(256);
         if app_server {
+            if l.cli == Cli::Copilot {
+                let mut parser = CopilotAcp::new(&format!("{}\n\n{}\n", l.system_prompt, l.user_prompt), &l.cwd);
+                let (out_tx, mut out_rx) = mpsc::channel::<String>(16);
+                out_tx.send(parser.first_line()).await.map_err(|e| e.to_string())?;
+                tokio::spawn(async move {
+                    while let Some(line) = out_rx.recv().await {
+                        if stdin.write_all((line + "\n").as_bytes()).await.is_err() || stdin.flush().await.is_err() {
+                            break;
+                        }
+                    }
+                });
+                let reply = out_tx.clone();
+                tokio::spawn(async move {
+                    let mut reader = BufReader::new(stdout);
+                    let mut buf = Vec::new();
+                    while let Ok(Some(complete)) = read_capped_line(&mut reader, MAX_LINE, &mut buf).await {
+                        if !complete {
+                            continue;
+                        }
+                        let (events, lines) = parser.line(&String::from_utf8_lossy(&buf));
+                        for line in lines {
+                            if reply.send(line).await.is_err() {
+                                return;
+                            }
+                        }
+                        for ev in events {
+                            let done = matches!(ev, Event::Result { .. });
+                            if tx.send(ev).await.is_err() {
+                                return;
+                            }
+                            if done {
+                                return;
+                            }
+                        }
+                    }
+                });
+                return Ok(Session { child, stdin: None, rx, pgid, exited: false, stderr_tail, stderr_task, out: Some(out_tx), cli: l.cli });
+            }
             let mut parser = CodexAppServer::new(&format!("{}\n\n{}\n", l.system_prompt, l.user_prompt), &l.model, &l.cwd, l.opts.effort.clone());
             let (out_tx, mut out_rx) = mpsc::channel::<String>(16);
             out_tx.send(parser.first_line()).await.map_err(|e| e.to_string())?;
@@ -945,7 +1216,7 @@ impl Session {
                     }
                 }
             });
-            return Ok(Session { child, stdin: None, rx, pgid, exited: false, stderr_tail, stderr_task, out: Some(out_tx) });
+            return Ok(Session { child, stdin: None, rx, pgid, exited: false, stderr_tail, stderr_task, out: Some(out_tx), cli: l.cli });
         }
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout);
@@ -978,7 +1249,7 @@ impl Session {
         stdin.flush().await.map_err(|e| e.to_string())?;
         // `codex exec` and `copilot` read their prompt to the end of stdin, so the input closes with the one turn.
         let stdin = if matches!(cli, Cli::Codex | Cli::Copilot) { None } else { Some(stdin) };
-        Ok(Session { child, stdin, rx, pgid, exited: false, stderr_tail, stderr_task, out: None })
+        Ok(Session { child, stdin, rx, pgid, exited: false, stderr_tail, stderr_task, out: None, cli: l.cli })
     }
 
     /// The tail of the CLI's stderr (empty unless the error log was on when it started). Raw: the caller redacts it.
@@ -1021,7 +1292,11 @@ impl Session {
 
     pub async fn decide(&mut self, p: &Permission, d: &Decision) -> Result<(), String> {
         if let Some(out) = &self.out {
-            return out.send(codex_approval_reply(p, d)).await.map_err(|e| e.to_string());
+            let line = match self.cli {
+                Cli::Copilot => copilot_approval_reply(p, d),
+                _ => codex_approval_reply(p, d),
+            };
+            return out.send(line).await.map_err(|e| e.to_string());
         }
         // Only the Claude stream and the Codex app-server carry permission requests, so only they have answers to send.
         let stdin = self.stdin.as_mut().ok_or("the session's input is closed")?;
@@ -1917,5 +2192,137 @@ read never
             }
         }
         assert!(init && metered > 0 && text.to_lowercase().contains("pong"), "text={:?} metered={}", text, metered);
+    }
+
+    #[test]
+    fn copilot_acp_is_launched_with_acp_flag_and_model() {
+        let a = args(&copilot_launch(Tools::Standard, Opts { app_server: true, effort: Some("medium".into()), ..Default::default() }, "copilot", std::path::Path::new("/scratch")));
+        let s = a.join(" ");
+        assert!(s.starts_with("--acp --model m-1 --disable-builtin-mcps"), "{}", s);
+        assert!(s.contains("--reasoning-effort medium"), "{}", s);
+        assert!(!s.contains("--available-tools"), "{}", s);
+    }
+
+    #[test]
+    fn copilot_acp_lines_become_events_and_approvals_become_permissions() {
+        let mut p = CopilotAcp::new("hi", std::path::Path::new("/scratch"));
+        assert!(p.first_line().contains("\"initialize\""));
+        let (ev, send) = p.line(r#"{"jsonrpc":"2.0","id":1,"result":{"agentInfo":{"name":"Copilot"}}}"#);
+        assert!(ev.is_empty() && send.len() == 1 && send[0].contains("\"session/new\""));
+        assert!(send[0].contains("\"cwd\":\"/scratch\""), "{}", send[0]);
+        let (ev, send) = p.line(r#"{"jsonrpc":"2.0","id":2,"result":{"sessionId":"s-123"}}"#);
+        assert_eq!(ev, vec![Event::Init { session_id: "s-123".into(), tools: vec![], mcp_servers: None }]);
+        assert!(send[0].contains("\"session/prompt\"") && send[0].contains("\"sessionId\":\"s-123\"") && send[0].contains("\"text\":\"hi\""));
+        // Permission request for Edit
+        let (ev, send) = p.line(r#"{"jsonrpc":"2.0","id":0,"method":"session/request_permission","params":{"toolCall":{"toolCallId":"tc1","title":"Create file","kind":"edit","rawInput":{"fileName":"/scratch/a.txt","diff":"+hi"},"locations":[{"path":"/scratch/a.txt"}]}}}"#);
+        assert!(send.is_empty());
+        let Event::Permission(perm) = &ev[0] else { panic!("{:?}", ev) };
+        assert_eq!(perm.tool_name, "Edit");
+        assert_eq!(perm.request_id, "0");
+        assert_eq!(perm.blocked_path.as_deref(), Some("/scratch/a.txt"));
+        assert_eq!(copilot_approval_reply(perm, &Decision::Allow), r#"{"id":0,"jsonrpc":"2.0","result":{"decision":"allow_once"}}"#);
+        assert_eq!(copilot_approval_reply(perm, &Decision::Deny("no".into())), r#"{"id":0,"jsonrpc":"2.0","result":{"decision":"reject"}}"#);
+        // Permission request for Bash
+        let (ev, _) = p.line(r#"{"jsonrpc":"2.0","id":10,"method":"session/request_permission","params":{"toolCall":{"toolCallId":"tc2","title":"Run cmd","kind":"execute","rawInput":{"command":"ls"}}}}"#);
+        let Event::Permission(perm2) = &ev[0] else { panic!("{:?}", ev) };
+        assert_eq!(perm2.tool_name, "Bash");
+        assert_eq!(perm2.input["command"], "ls");
+        // Unknown method refused
+        let (ev, send) = p.line(r#"{"jsonrpc":"2.0","id":99,"method":"unknown/method","params":{}}"#);
+        assert!(ev.is_empty() && send[0].contains("\"error\"") && send[0].contains("-32601"));
+        // Streaming text updates
+        let (ev, _) = p.line(r#"{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hello "}}}}"#);
+        assert_eq!(ev, vec![Event::Text("hello ".into())]);
+        let (ev, _) = p.line(r#"{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"world"}}}}"#);
+        assert_eq!(ev, vec![Event::Text("world".into())]);
+        // Tool execution updates
+        let (ev, _) = p.line(r#"{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call","toolCallId":"tc1","kind":"edit","rawInput":{"path":"/scratch/a.txt"}}}}"#);
+        assert!(matches!(&ev[0], Event::ToolUse { id, name, .. } if id == "tc1" && name == "edit"));
+        let (ev, _) = p.line(r#"{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"tc1","status":"completed"}}}"#);
+        assert_eq!(ev, vec![Event::ToolResult { id: "tc1".into(), is_error: false }]);
+        // Prompt completed with usage
+        let (ev, _) = p.line(r#"{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn","usage":{"inputTokens":100,"outputTokens":20,"cachedReadTokens":30,"cachedWriteTokens":0,"thoughtTokens":5}}}"#);
+        let Event::Result { text, is_error: false, usage, .. } = &ev[0] else { panic!("{:?}", ev) };
+        assert_eq!(text, "hello world");
+        assert_eq!((usage.input, usage.cache_read, usage.output), (70, 30, 25));
+    }
+
+    #[tokio::test]
+    async fn a_copilot_acp_session_asks_delphi_and_sends_only_allow_once_or_reject() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let prog = d.path().join("fake-copilot-acp");
+        let script = r#"#!/bin/sh
+printf '%s\n' "$@" > args.txt
+read init
+echo '{"jsonrpc":"2.0","id":1,"result":{"agentInfo":{"name":"Copilot"}}}'
+read new_session
+echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"s-test"}}'
+read prompt
+echo '{"jsonrpc":"2.0","id":0,"method":"session/request_permission","params":{"toolCall":{"toolCallId":"tc1","kind":"edit","title":"write a.txt","rawInput":{"fileName":"a.txt","diff":"+a"}}}}'
+read answer
+echo "$answer" > answer.txt
+echo '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"ok"}}}}'
+echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn","usage":{"inputTokens":10,"outputTokens":2,"cachedReadTokens":0,"cachedWriteTokens":0,"thoughtTokens":0}}}'
+read never
+"#;
+        std::fs::write(&prog, script).unwrap();
+        std::fs::set_permissions(&prog, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let opts = Opts { app_server: true, ..Default::default() };
+        let l = Launch { cli: Cli::Copilot, program: prog.display().to_string(), model: "m".into(), system_prompt: "SYS".into(), user_prompt: "question".into(), cwd: d.path().to_path_buf(), tools: Tools::Standard, env: BTreeMap::new(), profile: Default::default(), opts };
+        let mut s = Session::start(&l).await.unwrap();
+        let mut seen = Vec::new();
+        while let Some(ev) = s.next(Duration::from_secs(10)).await {
+            match ev {
+                Event::Permission(p) => {
+                    s.decide(&p, &Decision::Allow).await.unwrap();
+                }
+                Event::Result { .. } => {
+                    seen.push(ev);
+                    s.close_input();
+                }
+                Event::Exit { .. } => break,
+                other => seen.push(other),
+            }
+        }
+        let answer = std::fs::read_to_string(d.path().join("answer.txt")).unwrap();
+        assert_eq!(answer.trim(), r#"{"id":0,"jsonrpc":"2.0","result":{"decision":"allow_once"}}"#);
+        let args = std::fs::read_to_string(d.path().join("args.txt")).unwrap();
+        assert!(args.contains("--acp") && args.contains("--model\nm"));
+        assert!(seen.iter().any(|e| matches!(e, Event::Result { text, .. } if text == "ok")));
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_copilot_acp_round_trip() {
+        let d = tempfile::tempdir().unwrap();
+        let opts = Opts { app_server: true, ..Default::default() };
+        let l = Launch { cli: Cli::Copilot, program: "copilot".into(), model: "claude-haiku-4.5".into(), system_prompt: "You are a test fixture. Follow instructions precisely.".into(), user_prompt: "Create a file named live-acp.txt with content 'ok'. Then reply with the single word done.".into(), cwd: d.path().to_path_buf(), tools: Tools::Standard, env: cli_env(), profile: Default::default(), opts };
+        let mut s = match Session::start(&l).await {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("skipped: {}", e);
+                return;
+            }
+        };
+        let (mut asked, mut text, mut result) = (0, String::new(), false);
+        while let Some(ev) = s.next(Duration::from_secs(90)).await {
+            match ev {
+                Event::Permission(p) => {
+                    asked += 1;
+                    s.decide(&p, &Decision::Allow).await.unwrap();
+                }
+                Event::Text(t) => text.push_str(&t),
+                Event::Result { .. } => {
+                    result = true;
+                    s.close_input();
+                }
+                Event::Exit { .. } => break,
+                _ => {}
+            }
+        }
+        assert!(result, "session must complete: text={}", text);
+        assert!(asked >= 1, "must have asked for permission");
+        assert_eq!(std::fs::read_to_string(d.path().join("live-acp.txt")).unwrap().trim(), "ok");
     }
 }

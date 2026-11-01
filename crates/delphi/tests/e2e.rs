@@ -215,6 +215,10 @@ projects = ["{proj}"]
 [theme]
 name = "greek"
 
+[agents]
+interactive = ["orchestrator", "architect", "builder", "writer", "strategist", "red-team", "scout", "integrator", "investigator", "validator"]
+fleet = "all"
+
 [models.claude]
 fast = "haiku-t"
 workhorse = "sonnet-t"
@@ -899,6 +903,14 @@ fn a_long_reply_is_cut_to_a_screenful_saved_whole_and_available_with_more() {
     kill_daemon(pid);
 }
 
+fn has_node_runtime() -> bool {
+    Command::new("node")
+        .args(["-e", "const [M,m]=process.versions.node.split('.').map(Number); process.exit(M>26||(M===26&&m>=4)?0:1)"])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 /// The command that starts the full-screen console: the compiled executable when CI built one
 /// (`DELPHI_UI_COMPILED`), else the sources run with Node. `None` when neither is available.
 fn ui_launcher(dir: &Path) -> Option<PathBuf> {
@@ -906,10 +918,10 @@ fn ui_launcher(dir: &Path) -> Option<PathBuf> {
         return Some(PathBuf::from(p));
     }
     let ui = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui");
-    if !ui.join("node_modules/@opentui/core").exists() || Command::new("node").arg("--version").output().is_err() {
+    if !ui.join("node_modules/@opentui/core").exists() || !has_node_runtime() {
         // CI's UI job sets DELPHI_REQUIRE_UI: there a missing UI is a failure, not a silent pass.
-        assert!(std::env::var_os("DELPHI_REQUIRE_UI").is_none(), "DELPHI_REQUIRE_UI is set but ui/node_modules or node is missing");
-        eprintln!("skipped: ui/node_modules or node is missing (run `npm ci` in ui/)");
+        assert!(std::env::var_os("DELPHI_REQUIRE_UI").is_none(), "DELPHI_REQUIRE_UI is set but ui/node_modules or Node >= 26.4 is missing");
+        eprintln!("skipped: ui/node_modules or Node >= 26.4 is missing (run `npm ci` in ui/ with Node >= 26.4)");
         return None;
     }
     let wrapper = dir.join("delphi-ui");
@@ -1501,21 +1513,11 @@ fn research_panels_search_the_knowledge_base_cite_into_the_prompt_and_pin_to_the
 /// terminal back. Each step waits for what it expects, so a regression names the step that broke.
 #[test]
 fn a_scripted_session_through_the_full_screen_console_ends_with_the_terminal_given_back() {
-    let ui = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui");
-    if !ui.join("node_modules/@opentui/core").exists() || Command::new("node").arg("--version").output().is_err() {
-        // CI's UI job sets DELPHI_REQUIRE_UI: there a missing UI is a failure, not a silent pass.
-        assert!(std::env::var_os("DELPHI_REQUIRE_UI").is_none(), "DELPHI_REQUIRE_UI is set but ui/node_modules or node is missing");
-        eprintln!("skipped: ui/node_modules or node is missing (run `npm ci` in ui/)");
-        return;
-    }
     let m = mock(vec![reply_tool("w1", "write_file", json!({"path": "specs/009-e2e.md", "content": "# never written"})), reply_text("Understood, nothing was written.")]);
     let e = setup(m.port);
-    let wrapper = e._t.path().join("delphi-ui");
-    std::fs::write(&wrapper, format!("#!/bin/sh\ncd '{}' && exec node --experimental-ffi --import ./dev/check-runtime.mjs --import tsx src/main.tsx \"$@\"\n", ui.canonicalize().unwrap().display())).unwrap();
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    let Some(wrapper) = ui_launcher(e._t.path()) else {
+        return;
+    };
     let envs = [("DELPHI_UI", wrapper.to_str().unwrap())];
     let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 36, 110, &envs);
     let raw = c.bytes.clone();
@@ -2179,6 +2181,10 @@ name = "e2e"
 projects = ["{proj}"]
 [theme]
 name = "greek"
+
+[agents]
+interactive = ["orchestrator", "architect", "builder", "writer", "strategist", "red-team", "scout", "integrator", "investigator", "validator"]
+fleet = "all"
 [[endpoints]]
 id = "ollama"
 family = "local"

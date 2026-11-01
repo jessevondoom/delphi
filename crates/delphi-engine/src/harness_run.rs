@@ -443,12 +443,15 @@ impl Engine {
                 }
             }
             Cli::Copilot => {
-                // Until the approval bridge over `--acp` is built (`specs/051` S2) a Copilot seat is a reader.
                 if builder {
-                    return Ok(Err(HarnessErr::retry("the copilot harness cannot run a Builder yet: its approvals are not bridged (specs/051 S2); it serves read-only roles")));
+                    let profile = self.cfg.get().harness.get("copilot").cloned().unwrap_or_default();
+                    if !profile.bridge {
+                        return Ok(Err(HarnessErr::retry("the copilot harness cannot run a Builder with `bridge = false` in [harness.copilot]: without the approval bridge nothing judges its calls")));
+                    }
                 }
-                // It is offered no tools here, but nothing in Delphi judges what it does, so what it returns is not vouched for.
-                if sc.span.observe_input(Tier::L0) {
+                // When running a Builder with the ACP approval bridge, tool calls and edits are judged by Delphi cards,
+                // so it starts trusted. Reader seats have no gated tools, so their output is untrusted (L0).
+                if !builder && sc.span.observe_input(Tier::L0) {
                     sc.m.append(sc.ev("span.taint", json!({"ceiling": sc.span.ceiling().as_str(), "cause": "copilot harness: its tools are not gated by Delphi"}))).await?;
                 }
             }
@@ -529,6 +532,10 @@ impl Engine {
             // headless, from refusing the edits the gate allowed. Its shell stays refused there, which is why a Builder's
             // commands run through Delphi's `run_command` tool.
             opts.mode = Some("accept-edits".into());
+        }
+        if cli == Cli::Copilot && builder {
+            // A Builder's file edits and commands are judged through the ACP approval bridge.
+            opts.app_server = true;
         }
         let keyed = opts.api_key.is_some();
         let streamed = opts.partial_messages && cli == Cli::Claude;
