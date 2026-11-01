@@ -413,3 +413,15 @@ Known follow-ups: `docs/reference/config.md` ladder row still says "upscale, res
 ## Spec fold (docs only, 2026-10-30)
 
 Specs 004, 006, 007, 010 and 043 were folded to read as current normative text, with no change in behavior. Amendment text and deliberation moved verbatim to `specs/history/NNN-<slug>.md`; section numbers, test ids and `(was NNN-An)` anchors are unchanged. `crates/delphi/tests/spec_refs.rs` now fails when a spec, section or amendment reference stops resolving (21 pre-existing broken references are allowlisted). Reductions were small (2–9%): the remaining text is normative. 006 keeps two contradictions listed in its PR (#399: Red approval for the GOVERNANCE.md release vs 006-A6 tacit ratification; tests 13/14 still say `self-update`). Folded: #399 (006), #400 (007), #401 (010), #402 (043), #403 (004); gate #404.
+
+## Encyclopedia search pages, inline media, and reputable expansion (spec 061, approved 2026-10-31)
+
+Approved by the operator on 2026-10-31. Makes the Wikipedia-style Encyclopedia Summary Page the primary knowledge base search result, rendered through `ui/src/markdown.ts` and `ui/src/image.ts`, authored by the `writer` role under `skills/encyclopedia-synthesis/SKILL.md`, cached with YAML frontmatter `valid_until` (`[1, 365]` days at the `writer`'s discretion), synthesized immediately on search from local sources, and expandable (`e`) with reputable external research and licensed images.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| SK9a | `skills/encyclopedia-synthesis/SKILL.md`, authorize for `writer`, frontmatter schema (`valid_until`, `volatility`, `ttl_reason`, `depth`, `disambiguation`) and `[1, 365]` day clamping | approved, not built |
+| SK9b | Unified `Library::gather` (central library + workspace `kb` excerpts + `GatheredAsset` images), `library_page_check.rs` support for TOC `#anchors`, `page:<slug>` links, and verified `lib:`/`kb:` inline images, `/v1/image` resolution | approved, not built |
+| SK9c | Reputable expansion (`pages.expand` RPC and `delphi pages expand <query>` CLI) connecting `research.rs` and `research_images.rs` to library source/asset persistence and `depth: expanded` re-synthesis | approved, not built |
+| SK9d | Encyclopedia Page as primary search result in `ui/src/archives.ts` rendered via `renderMarkdownLinks` and `paint`, immediate synthesis on search, TOC `#anchor` jumping, disambiguation links, and `e` / `r` / `f` controls | approved, not built |
+
