@@ -1,5 +1,5 @@
 //! What a release ships, as the signer sees it: the same files, under the same names, that `crates/delphi/src/seed.rs` embeds in the
-//! binary (the three constitution files and the `agents`, `skills`, `themes`, `context` and `memory` trees). A test in the `delphi`
+//! binary (the three constitution files, the `agents`, `skills`, `themes`, `context` and `memory` trees, and the `about/` snapshot of the specs and reference). A test in the `delphi`
 //! crate holds the two to the same manifest, so the signer and the binary cannot drift apart without a failing build.
 
 use std::io;
@@ -8,6 +8,8 @@ use std::path::Path;
 /// The trees of the repository that the binary embeds, and the single files beside them.
 pub const TREES: [&str; 5] = ["agents", "skills", "themes", "context", "memory"];
 pub const LOOSE: [&str; 3] = ["GOVERNANCE.md", "SPEC.md", "REVIEW.md"];
+/// Directories whose top-level Markdown ships read-only as `about/` (`(directory, logical prefix)`).
+pub const ABOUT: [(&str, &str); 2] = [("specs", "about/specs"), ("docs/reference", "about/reference")];
 
 /// Every file a release ships, as `(logical path, bytes)`, sorted by path. Symbolic links are not followed or shipped.
 pub fn repo_files(root: &Path) -> io::Result<Vec<(String, Vec<u8>)>> {
@@ -22,6 +24,16 @@ pub fn repo_files(root: &Path) -> io::Result<Vec<(String, Vec<u8>)>> {
             if e.file_type().is_file() {
                 let rel = e.path().strip_prefix(&base).expect("under its own root").to_string_lossy().replace('\\', "/");
                 out.push((format!("{tree}/{rel}"), std::fs::read(e.path())?));
+            }
+        }
+    }
+    // The read-only `about/` snapshot (`specs/064` §7): the top-level Markdown of `specs/` and `docs/reference/`, as `crates/delphi/build.rs` embeds it.
+    for (dir, prefix) in ABOUT {
+        let Ok(rd) = std::fs::read_dir(root.join(dir)) else { continue };
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.ends_with(".md") && e.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                out.push((format!("{prefix}/{name}"), std::fs::read(e.path())?));
             }
         }
     }

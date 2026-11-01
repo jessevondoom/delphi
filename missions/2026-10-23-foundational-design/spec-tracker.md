@@ -455,7 +455,7 @@ Approved by the operator on 2026-10-31. Makes the Wikipedia-style Encyclopedia S
 | SK9a | `skills/encyclopedia-synthesis/SKILL.md`, authorize for `writer`, frontmatter schema (`valid_until`, `volatility`, `ttl_reason`, `depth`, `disambiguation`) and `[1, 365]` day clamping | built |
 | SK9b | Unified `Library::gather` (central library + workspace `kb` excerpts + `GatheredAsset` images), `library_page_check.rs` support for TOC `#anchors`, `page:<slug>` links, and verified `lib:`/`kb:` inline images, `/v1/image` resolution | built |
 | SK9c | Reputable expansion (`pages.expand` RPC and `delphi pages expand <query>` CLI) connecting `research.rs` and `research_images.rs` to library source/asset persistence and `depth: expanded` re-synthesis | built |
-| SK9d | Encyclopedia Page as primary search result in `ui/src/archives.ts` rendered via `renderMarkdownLinks` and `paint`, immediate synthesis on search, TOC `#anchor` jumping, disambiguation links, and `e` / `r` / `f` controls | built |
+| SK9d | Encyclopedia Page as primary search result in `ui/src/archives.ts` rendered via `renderMarkdownLinks` and `paint`, immediate synthesis on search, TOC `#anchor` jumping, disambiguation links, and `e` / `r` / `f` controls |and `e` / `r` / `f` controls | built; corrected 2026-11-01: a search never set `pg.q`, so `gotPage` dropped every page and the raw list always won. Submit now sets it, the page takes the view when it arrives unless `f` chose raw, and a late page for an older query is dropped (`ui/test/pages.test.ts`) |
 
 ## Agent fleet behaviors, dynamic orchestration, and curated knowledge (spec 063, approved 2026-11-01)
 
@@ -469,3 +469,17 @@ Approved by the operator on 2026-11-01. Replaces binary `enabled_agents` with fl
 | S4 | Curated seed knowledge: reference compendiums in `context/reference/` for strategy, lateral thinking, systems/edge protocols, and tonal registers; indexed into `kb` | built (this PR) |
 | S5 | Fleet collaboration telemetry & tenacity pushback: FPY/churn/overhead tracking and single-pushback retry policy for `investigator` | built (this PR) |
 
+
+
+## Knowledge retrieval for agents and MCP, markdown and scratch tiering, release self-knowledge (spec 064, approved 2026-11-01)
+
+Approved by the operator on 2026-11-01 after a three-seat council review. Amends 004, 043, 057, 058 and 062.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| R1 | `retrieval.rs`: read-only reader pool with the embedder attached once, passage results, deadline, `retrieval.done`; `kb_search`, `kb.search`, `kbserve` use it | partly built (agent `kb_search` uses it; daemon RPC and HTTP not yet) |
+| R2 | MCP `search_kb` over `HostLink`, allowlist visibility, per-request scope, `search_memory` narrowing | partly built (`search_kb` tool, `host.search_kb`, zone allowlist, project layer; roots/list scope and `search_memory` narrowing not yet) |
+| R3 | Span-start retrieval for root spans, `[retrieval]` config | built (`retrieval::span_start`, `auto_query`, engine wiring, `retrieval.done`; tests in `retrieval.rs`) |
+| R4 | Markdown/scratch tiering, tier stamping, spec-gate predicate | built (scratch zone and `is_notes_write`, tier cap, gate 3 `notes_only`, `FileChange.mode`); the start-of-task `build_without_spec` card is unchanged |
+| R5 | `about/` release snapshot | built (`build.rs` embeds the release's `specs/*.md` and `docs/reference/*.md` at `base/about/`; zone `about` hidden unless `about: true` or `kb search --about`; label "release reference, not build authority"; `spec_link` refuses `about/`; orchestrator duty) |
+| R6 | Search page building state and cancel (SK9d fix built) | built in the console: the raw results show "building a page · esc cancels" (still glyph under reduce motion); esc stops the wait and a late page for that query is dropped (`ui/test/pages.test.ts`). The daemon job is not aborted: it finishes and caches within `[library.pages]` limits; a daemon-side cancel is not built |

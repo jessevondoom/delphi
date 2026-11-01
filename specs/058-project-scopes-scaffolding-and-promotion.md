@@ -326,3 +326,5 @@ Research the operator asks for (the expand job, `specs/028` §10) is written whe
 4. **Counts only.** The slice carries the topic the agent itself wrote and Delphi's own counts. It never carries a page title, a source's words or a page's text: the pages are in the knowledge base, where `search` reads them at their own trust, and held pages are not searchable until validated. The failure or refusal reason is flattened to one plain line and capped. No content read from outside reaches the agent through this slice, so it cannot raise anything's trust.
 5. **No new authority.** Nothing here starts research, changes a scope or approves anything. Telling an agent is a read of the log.
 6. **Checks.** Tests cover who is told and when (the requester and the orchestrator, once each, nobody else), the counts-only wording, a refusal, a failure and a cancel, hostile text in a reason being flattened, and the operator's own research telling no agent.
+
+> **Amended by [`specs/064`](064-knowledge-retrieval-for-agents-and-mcp.md) (2026-11-01):** agent and MCP knowledge retrieval, scope per request, and the search-page order (see 064 §3 to §8).

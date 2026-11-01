@@ -853,6 +853,15 @@ impl Engine {
                 }
                 injected.contains_key(&handoff.handoff_id)
             };
+            // Span-start retrieval (`specs/064` §4.2): a root span only, one deterministic query, at most three passages.
+            if fresh && handoff.parent_span_id == "operator" && !council_seat && handoff.distill.is_none() && handoff.context_pointers.is_empty() && !sc.toolless && self.cfg.get().retrieval.auto {
+                let (home, db, mid, obj, role) = (self.ws.home.clone(), self.ws.dir.join("local/state.db"), m.id.clone(), handoff.objective.clone(), sc.role.clone());
+                let got = tokio::task::spawn_blocking(move || crate::retrieval::span_start(&home, &db, &mid, &obj, &role)).await.ok().flatten();
+                if let Some((text, stats)) = got {
+                    slices.push(ContextSlice { label: "@runtime/retrieved".into(), tier: delphi_core::provenance::Tier::L3.as_str().into(), text });
+                    m.append(sc.ev("retrieval.done", stats)).await?;
+                }
+            }
             // A role that dispatches work picks a family and tier; what the chosen path can do is its business to know.
             if sc.manifest.execute.iter().any(|e| e == "agent-dispatch") && !sc.toolless {
                 slices.push(ContextSlice { label: "@runtime/tool-inventory".into(), tier: "L3".into(), text: crate::inventory::render(&self.cfg.get(), &self.inventory.seats()) });

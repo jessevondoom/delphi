@@ -403,3 +403,5 @@ Improvements to Delphi's own process (built-in role manifests, skills, heuristic
 29. **Summary Chunk Test (004-A3):** an agent's role is found through its frontmatter summary, whose pointer covers the frontmatter lines and stays valid.
 30. **Held-Out Evaluation (004-A3):** `delphi kb eval --file dev/kb-eval-holdout.json` is run after any change to the models, the windowing or the fusion; hybrid with the reranker must not do worse than hybrid without it on that set, and must answer none of its off-topic questions. The set is never used to choose a setting.
 31. **Release Dry Run (004-A3):** running the `release` workflow by hand fetches both models, makes and checks the preloaded vectors, builds all four executables with the models compiled in, and on the targets that can run on their runner checks that both models load, that the preloaded vectors match, and that a fresh workspace answers a question; it publishes nothing. Run it before tagging.
+
+> **Amended by [`specs/064`](064-knowledge-retrieval-for-agents-and-mcp.md) (2026-11-01):** agent and MCP knowledge retrieval, scope per request, and the search-page order (see 064 §3 to §8).

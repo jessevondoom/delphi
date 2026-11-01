@@ -87,6 +87,7 @@ pub mod embed;
 pub mod kb;
 pub mod kb_docs;
 pub mod kbserve;
+pub mod retrieval;
 pub mod xenia_read;
 #[cfg(test)]
 mod xenia_scope_tests;

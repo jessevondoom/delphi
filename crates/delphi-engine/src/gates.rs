@@ -141,11 +141,34 @@ pub enum SpecLink {
     NotRatified { spec: String, why: String },
 }
 
+/// Directories whose Markdown a build, a role or a ratification reads: a change there is never plain notes.
+const GOVERNED_DIRS: [&str; 9] = [".github/", "specs/", "agents/", "skills/", "themes/", "memory/", "about/", "context/facts/", "connectors/"];
+
+/// A diff of ordinary Markdown files and nothing else: added or modified, regular mode, outside the governed
+/// directories, not run on the host, and inside the same size limits as the bounded exemption.
+pub fn notes_only(diff: &DiffSummary) -> bool {
+    !diff.files.is_empty()
+        && diff.files.len() <= 2
+        && diff.added() + diff.removed() <= 100
+        && diff.files.iter().all(|f| {
+            let p = f.path.to_lowercase();
+            p.ends_with(".md")
+                && matches!(f.status, 'A' | 'M')
+                && matches!(f.mode.as_str(), "" | "100644")
+                && f.special.is_none()
+                && !f.host_exec
+                && !is_protected_path(&f.path)
+                && !GOVERNED_DIRS.iter().any(|d| p.starts_with(d) || p.contains(&format!("/{}", d)))
+                && !matches!(p.as_str(), "governance.md" | "agents.md" | "review.md")
+        })
+}
+
 /// Gate 3.
 pub fn spec(link: &SpecLink, diff: &DiffSummary, exemption_approved: bool) -> Gate {
     match link {
         SpecLink::Ratified(s) => Gate::new(3, "spec", true, format!("implements {} (its current hash is ratified)", s)),
         SpecLink::NotRatified { spec, why } => Gate::new(3, "spec", false, format!("{} is not a ratified spec: {}", spec, why)),
+        SpecLink::None if notes_only(diff) => Gate::new(3, "spec", true, "Markdown notes only: nothing a build reads, so no spec is needed (specs/064 §6)"),
         SpecLink::None => {
             let v = exemption_violations(diff);
             if !v.is_empty() {
@@ -246,7 +269,7 @@ mod tests {
     }
 
     fn fc(path: &str, added: u64, removed: u64, host_exec: bool) -> FileChange {
-        FileChange { path: path.into(), status: 'M', added, removed, host_exec, special: None }
+        FileChange { path: path.into(), status: 'M', added, removed, host_exec, special: None, mode: String::new() }
     }
 
     fn diff(files: Vec<FileChange>) -> DiffSummary {
@@ -278,6 +301,24 @@ mod tests {
             let g = checks(None, &[], &diff(vec![fc(p, 1, 0, false)]));
             assert!(g.state == State::Red && g.detail.contains("protected"), "{}: {}", p, g.detail);
         }
+    }
+
+    #[test]
+    fn markdown_only_diffs_need_no_spec_but_governed_or_special_files_still_do() {
+        let ok = |paths: Vec<FileChange>| spec(&SpecLink::None, &diff(paths), false);
+        assert_eq!(ok(vec![fc("docs/notes.md", 20, 0, false)]).state, State::Green);
+        assert_eq!(ok(vec![fc("research/a.md", 20, 0, false), fc("research/b.md", 20, 0, false)]).state, State::Green);
+        for p in ["specs/001-x.md", "agents/builder/AGENT.md", "memory/a.md", "about/x.md", ".github/x.md", "GOVERNANCE.md", "docs/a.rs", "docs/a.md.sh"] {
+            assert_eq!(ok(vec![fc(p, 1, 0, false)]).state, State::Red, "{}", p);
+        }
+        let mut exec = fc("docs/run.md", 1, 0, false);
+        exec.mode = "100755".into();
+        assert_eq!(ok(vec![exec]).state, State::Red);
+        let mut gone = fc("docs/old.md", 0, 5, false);
+        gone.status = 'D';
+        assert_eq!(ok(vec![gone]).state, State::Red);
+        assert_eq!(ok(vec![fc("docs/a.md", 150, 0, false)]).state, State::Red);
+        assert_eq!(ok(vec![fc("docs/a.md", 1, 0, false), fc("docs/b.md", 1, 0, false), fc("docs/c.md", 1, 0, false)]).state, State::Red);
     }
 
     #[test]

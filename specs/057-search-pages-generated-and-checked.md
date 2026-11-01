@@ -122,3 +122,5 @@ Gather and the full stale check read and hash every source's whole text before t
 - **D-2:** not every sentence needs a citation; the rule for pages is that nothing may contradict known citable truths and no citation may be fabricated. The 055 §6 per-sentence and content-word rule is replaced.
 - **D-3:** the writer writes freely; the validator checks it. Uncited but consistent statements are allowed and shown as unchecked.
 - **D-4:** pages are cached until their sources change locally.
+
+> **Amended by [`specs/064`](064-knowledge-retrieval-for-agents-and-mcp.md) (2026-11-01):** agent and MCP knowledge retrieval, scope per request, and the search-page order (see 064 §3 to §8).

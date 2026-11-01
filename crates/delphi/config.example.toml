@@ -157,6 +157,10 @@ sandbox = "off"
 # enabled = true                     # false: every tool call is answered `disabled_by_operator`; read at each call, so it takes effect at once
 # allow_remote = false               # reserved for a later spec; true is refused
 
+# Knowledge retrieval for agents (specs/064).
+# [retrieval]
+# auto = true                        # a root span starts with at most 3 passages from the knowledge base; false: only when an agent calls kb_search
+
 # Fact validator (specs/040 section 15.1). off: no fetch of any kind. advisory (default): the full fact path as a dry run; it uses the
 # network, records what it would ratify and writes nothing validated. ratify: real writes, allowed only while the daemon's latch and the
 # PROMOTE conditions permit; the effective mode is the lower of this value and the latch.

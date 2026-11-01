@@ -249,6 +249,14 @@
         "allow_remote": { "type": "boolean", "default": false, "description": "Reserved for a later spec. true is refused in this version." }
       }
     },
+    "retrieval": {
+      "type": "object",
+      "description": "Knowledge retrieval for agents (specs/064 section 4).",
+      "additionalProperties": false,
+      "properties": {
+        "auto": { "type": "boolean", "default": true, "description": "A root span starts with at most three passages (1 500 characters) from the knowledge base, labelled and tainted. false: agents search only when they call kb_search." }
+      }
+    },
     "hooks": { "type": "object", "description": "`[[hooks.observe]]` and `[[hooks.deny]]` (specs/018): commands that can only watch or refuse." }
   },
   "additionalProperties": true,

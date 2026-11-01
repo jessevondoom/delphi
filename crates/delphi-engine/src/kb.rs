@@ -445,6 +445,8 @@ pub fn sources(ws: &Path) -> Vec<SourceFile> {
         md_files(&root, "missions", "missions", UNTRUSTED, &mut all);
     }
     // What the archives pane's research job stored (`specs/028` §10): external pages kept at one fixed tier (`upsert_with`).
+    // The release's own specs and reference, installed read-only in the base zone (`specs/064` §7): its own zone and tier.
+    md_files(&ws.join("base/about"), "about", "about", "user_ratified", &mut all);
     md_files(&ws.join("local/knowledge"), "knowledge", "knowledge", crate::research::TIER, &mut all);
     md_files(&ws.join("local/memory/agents"), "memory/agents", "memory", UNTRUSTED, &mut all);
     // Summaries the operator accepted from a project (`promote::accept`): home memory, each file naming its own tier.
@@ -529,6 +531,11 @@ impl Kb {
         true
     }
 
+    /// Counts index changes made by a sync; a cached reader compares it to know whether to reopen.
+    pub fn index_generation(&self) -> i64 {
+        self.conn.query_row("SELECT value FROM kb_meta WHERE key = 'index_generation'", [], |r| r.get::<_, String>(0)).ok().and_then(|v| v.parse().ok()).unwrap_or(0)
+    }
+
     pub fn open_in_memory() -> Result<Kb, KbError> {
         crate::vecext::register();
         let conn = Connection::open_in_memory()?;
@@ -579,9 +586,9 @@ impl Kb {
         if bundle.is_none() && existing.as_ref().is_some_and(|(_, h)| *h == hash) {
             return Ok(false);
         }
-        let source_type = if bundle.is_some() || zone == "knowledge" || zone == "library" { default_source.to_string() } else { frontmatter_field(text, "source_type").filter(|s| SOURCE_TYPES.contains(&s.as_str())).unwrap_or_else(|| default_source.to_string()) };
+        let source_type = if bundle.is_some() || zone == "knowledge" || zone == "library" || zone == "about" { default_source.to_string() } else { frontmatter_field(text, "source_type").filter(|s| SOURCE_TYPES.contains(&s.as_str())).unwrap_or_else(|| default_source.to_string()) };
         let from = bundle.map(|b| format!(" | Bundle: {}", b.label)).unwrap_or_default();
-        let (author, confidence, status) = (frontmatter_field(text, "author"), frontmatter_field(text, "confidence").unwrap_or_else(|| "low".into()), frontmatter_field(text, "status").unwrap_or_else(|| "active".into()));
+        let (author, confidence, status) = (frontmatter_field(text, "author"), frontmatter_field(text, "confidence").unwrap_or_else(|| "low".into()), if zone == "about" { "active".into() } else { frontmatter_field(text, "status").unwrap_or_else(|| "active".into()) });
         let tx = self.conn.transaction()?;
         // A bundle's file is rewritten on every add (its label may have changed), but a chunk whose text did not change
         // keeps its vectors: they are filed under a hash of that text, so an update embeds only what was edited.
@@ -710,6 +717,9 @@ impl Kb {
         // Who vouches for what, from the lock's listing above and from nothing in a document: one `prefix<TAB>org` per line.
         let vouched: std::collections::BTreeSet<String> = files.iter().filter_map(|f| f.vouched_by.as_ref().map(|o| format!("{}\t{}", f.bundle.as_ref().map(|b| format!("bundles/{}/", b.id)).unwrap_or_else(|| f.rel_path.clone()), o))).collect();
         self.conn.execute("INSERT OR REPLACE INTO kb_meta(key, value) VALUES ('vouched', ?1)", [vouched.into_iter().collect::<Vec<_>>().join("\n")])?;
+        if rep.added + rep.updated + rep.removed > 0 {
+            self.conn.execute("INSERT INTO kb_meta(key, value) VALUES ('index_generation', '1') ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1", [])?;
+        }
         Ok(rep)
     }
 
@@ -845,6 +855,17 @@ fn allowed_sql(opts: &SearchOpts) -> String {
         } else {
             allowed.push_str(" AND d.zone != 'memory'");
         }
+    }
+    if !opts.about {
+        allowed.push_str(" AND d.zone != 'about'");
+    }
+    if let Some(z) = &opts.zones {
+        let mut z = z.clone();
+        if opts.about && !z.contains(&"about") {
+            z.push("about");
+        }
+        let list: Vec<String> = z.iter().map(|z| format!("'{}'", z)).collect();
+        allowed.push_str(&format!(" AND d.zone IN ({}) AND d.rel_path NOT LIKE 'context/facts/%'", if list.is_empty() { "''".into() } else { list.join(",") }));
     }
     if opts.no_bundles {
         allowed.push_str(" AND d.zone != 'bundles' AND d.rel_path NOT LIKE 'bundles/%'");
@@ -1186,6 +1207,8 @@ pub struct SearchOpts {
     /// Include zone `staged`: notes the daemon captured from what happened (`specs/031` §3.1). Off by default, so an
     /// ordinary search never mixes unreviewed candidate lessons into its answer.
     pub include_staged: bool,
+    /// Include zone `about`: the release's own specs and reference (`specs/064` §7). Off by default, so it does not drown the user's own corpus.
+    pub about: bool,
     /// With `include_staged`: only staged notes of these kinds (`fact`, `episode`). Narrows, never widens (`specs/050` ML-4).
     pub kinds: Option<Vec<String>>,
     /// With `include_staged`: at most this many `episode` notes in the results (a budget by kind).
@@ -1195,6 +1218,8 @@ pub struct SearchOpts {
     /// Which Xenia records a search may see (`specs/011` §5.3). The zone is invisible unless asked for, and each view
     /// is exclusive: it returns Xenia records and nothing else.
     pub xenia: XeniaView,
+    /// Only documents in these zones (`specs/064` §5). Narrows, never widens; `None` is every zone the other rules allow.
+    pub zones: Option<Vec<&'static str>>,
 }
 
 /// The three ways to see the Xenia zone. The default sees none of it, so every ordinary search, listing and read is
@@ -1231,7 +1256,7 @@ pub enum Legs {
 
 impl Default for SearchOpts {
     fn default() -> Self {
-        SearchOpts { role: None, limit: 10, include_untrusted: false, include_attributed: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false, kinds: None, max_episodes: None, today: None, xenia: XeniaView::Off }
+        SearchOpts { role: None, limit: 10, include_untrusted: false, include_attributed: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false, about: false, kinds: None, max_episodes: None, today: None, xenia: XeniaView::Off, zones: None }
     }
 }
 
@@ -1438,7 +1463,7 @@ impl Kb {
             let vouched_by = vouched.iter().find(|(p, _)| rel_path == *p || (p.ends_with('/') && rel_path.starts_with(p.as_str()))).map(|(_, o)| o.clone());
             let ks = if rel_path.starts_with("context/facts/") { delphi_core::knowledge_status::derive_fact(&tier_name, &doc_status, web_corroborated) } else { delphi_core::knowledge_status::derive(&zone, &tier_name, &doc_status, vouched_by.as_deref()) };
             let vouched_by = vouched_by.filter(|_| ks == delphi_core::knowledge_status::Status::Validated);
-            hits.push(Hit { pointer, rel_path, start_line: a as usize, end_line: b as usize, heading_path, blake3, preview, score: s, note, status: ks.as_str(), label: ks.label(), vouched_by });
+            hits.push(Hit { pointer, rel_path, start_line: a as usize, end_line: b as usize, heading_path, blake3, preview, score: s, note, status: ks.as_str(), label: if zone == "about" { "release reference, not build authority" } else { ks.label() }, vouched_by });
         }
         Ok((hits, best_rerank))
     }
@@ -1948,7 +1973,7 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                 let bundle = args.iter().position(|a| a == "--bundle" || a == "--org").and_then(|i| args.get(i + 1)).cloned();
                 let query: Vec<&str> = query.into_iter().filter(|a| Some(*a) != role.as_deref() && Some(*a) != bundle.as_deref()).collect();
                 if query.is_empty() {
-                    eprintln!("usage: delphi kb search <query> [--role <role>] [--untrusted] [--lexical] [--no-rerank] [--staged [--kind fact|episode]] [--bundle <org/name> | --org <org> | --no-bundles]");
+                    eprintln!("usage: delphi kb search <query> [--role <role>] [--untrusted] [--lexical] [--no-rerank] [--about] [--staged [--kind fact|episode]] [--bundle <org/name> | --org <org> | --no-bundles]");
                     return Ok(2);
                 }
                 let mut kb = open()?;
@@ -1963,7 +1988,7 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                     }
                 }
                 let legs = if args.iter().any(|a| a == "--lexical") { Legs::LexicalOnly } else { Legs::Hybrid };
-                let mut opts = SearchOpts { role, include_untrusted: args.iter().any(|a| a == "--untrusted"), legs, bundle, no_bundles: args.iter().any(|a| a == "--no-bundles"), include_staged: args.iter().any(|a| a == "--staged"), kinds: flag_value(args, "--kind").map(|k| k.split(',').map(|x| x.trim().to_string()).collect()), ..Default::default() };
+                let mut opts = SearchOpts { role, include_untrusted: args.iter().any(|a| a == "--untrusted"), legs, bundle, no_bundles: args.iter().any(|a| a == "--no-bundles"), include_staged: args.iter().any(|a| a == "--staged"), about: args.iter().any(|a| a == "--about"), kinds: flag_value(args, "--kind").map(|k| k.split(',').map(|x| x.trim().to_string()).collect()), ..Default::default() };
                 if args.iter().any(|a| a == "--no-rerank") {
                     opts.rerank_weight = 0.0;
                 }
@@ -3022,5 +3047,27 @@ mod tests {
     fn a_workspace_with_no_lock_indexes_exactly_what_it_did_before() {
         let d = tree(&[("team/context/index.md", "---\nsource_type: user_ratified\n---\n# T\n\nplain\n")]);
         assert!(sources(d.path()).iter().all(|f| f.zone != "bundles" && f.bundle.is_none()));
+    }
+
+    #[test]
+    fn the_release_reference_is_searched_only_when_asked_for_and_never_called_authority() {
+        let d = tree(&[
+            ("base/about/specs/001-heron.md", "---\nstatus: approved\n---\n# Heron spec\n\nThe heron wades in shallow water.\n"),
+            ("team/context/index.md", "---\nsource_type: user_ratified\n---\n# Ours\n\nOur heron notes live here.\n"),
+        ]);
+        let files = sources(d.path());
+        let about = files.iter().find(|f| f.rel_path == "about/specs/001-heron.md").expect("base/about is indexed");
+        assert!(about.zone == "about" && about.default_source == "user_ratified");
+        let mut kb = Kb::open(&d.path().join("state.db")).unwrap();
+        kb.sync_lexical(&files, "").unwrap();
+        let rel = |opts: &SearchOpts| kb.search("heron", opts).unwrap().into_iter().map(|h| (h.rel_path, h.label)).collect::<Vec<_>>();
+        let plain = rel(&SearchOpts { rerank_weight: 0.0, ..Default::default() });
+        assert!(!plain.is_empty() && plain.iter().all(|(p, _)| !p.starts_with("about/")), "{:?}", plain);
+        let asked = rel(&SearchOpts { about: true, rerank_weight: 0.0, ..Default::default() });
+        assert!(asked.iter().any(|(p, l)| p.starts_with("about/") && *l == "release reference, not build authority"), "{:?}", asked);
+        let zoned = rel(&SearchOpts { about: true, zones: Some(vec!["core", "context"]), rerank_weight: 0.0, ..Default::default() });
+        assert!(zoned.iter().any(|(p, _)| p.starts_with("about/")), "an allowlist still carries about when asked: {:?}", zoned);
+        let unzoned = rel(&SearchOpts { zones: Some(vec!["core", "context", "about"]), rerank_weight: 0.0, ..Default::default() });
+        assert!(unzoned.iter().all(|(p, _)| !p.starts_with("about/")), "about is never in by allowlist alone: {:?}", unzoned);
     }
 }

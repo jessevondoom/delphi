@@ -465,7 +465,7 @@ mod tests {
         assert_eq!(spec_link(ws, None), SpecLink::None);
         fs::write(ws.join("team/specs/011-x.md"), "approved text, then edited").unwrap();
         assert!(matches!(spec_link(ws, Some("specs/011-x.md")), SpecLink::NotRatified { why, .. } if why.contains("edited")));
-        for bad in ["specs/../local/ratified.lock", "../x.md", "/etc/passwd", "specs/missing.md", "specs/a b.md", "specs/011-x.txt"] {
+        for bad in ["specs/../local/ratified.lock", "../x.md", "/etc/passwd", "specs/missing.md", "specs/a b.md", "specs/011-x.txt", "about/specs/011-x.md", "about/specs/../specs/011-x.md"] {
             assert!(matches!(spec_link(ws, Some(bad)), SpecLink::NotRatified { .. }), "{}", bad);
         }
     }

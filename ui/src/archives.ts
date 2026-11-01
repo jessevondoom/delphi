@@ -7,6 +7,7 @@ import { copyText, describe, firstVisible, stepFocus, type Link, type Target } f
 import { renderMarkdownLinks } from './markdown.ts';
 import type { Raster } from './image.ts';
 import * as L from './library.ts';
+import { spinner } from './motion.ts';
 import * as P from './pages.ts';
 import * as T from './theme.ts';
 import { sanitize } from './theme.ts';
@@ -58,6 +59,8 @@ export type Arch = {
   pins: boolean;
   /** `search` is the page as it was (local, zero-token); `expand` is the clean research page of spec 028-A1 (`shift+tab` switches). Remembered for the session. */
   mode: 'search' | 'expand' | 'sources' | 'claims' | 'pages';
+  /** The operator pressed `f` to read the raw results of this search, so a page arriving late must not take the view back (specs/061 §4.6). */
+  rawChosen: boolean;
   /** The library's Sources and Claims views (specs/055 SK2, SK3): what the daemon listed, and where the operator is in it. */
   lib: L.Lib;
   /** The Pages view (specs/057 SK8d): the question, the records found, and the page beside them. */
@@ -69,7 +72,7 @@ export type Arch = {
 /** How many results one search asks for. */
 export const RESULTS = 30;
 
-export const emptyArch = (pins = false): Arch => ({ q: '', focus: 'box', sel: 0, searched: null, hits: [], took: null, engine: null, browse: null, note: '', shelf: null, trail: [], at: -1, kind: null, facets: null, trustedOnly: false, history: [], hist: null, pins, mode: 'search', lib: L.emptyLib(), pg: P.emptyPages(), research: null });
+export const emptyArch = (pins = false): Arch => ({ q: '', focus: 'box', sel: 0, searched: null, hits: [], took: null, engine: null, browse: null, note: '', shelf: null, trail: [], at: -1, kind: null, facets: null, trustedOnly: false, history: [], hist: null, pins, mode: 'search', rawChosen: false, lib: L.emptyLib(), pg: P.emptyPages(), research: null });
 
 /** What every request to the daemon adds: the trust filter. */
 export const trustParam = (a: Arch): string => (a.trustedOnly ? '&trusted_only=1' : '');
@@ -259,7 +262,7 @@ export function key(a: Arch, e: Ev, w: number, h: number): { a: Arch; action: Ac
       if (a.focus === 'list' && list[a.sel]) return open(a, list[a.sel]!, used);
       const q = a.q.trim();
       const history = q && a.history[a.history.length - 1] !== q ? [...a.history, q].slice(-50) : a.history;
-      return q ? used({ ...a, note: 'searching…', history, hist: null }, { t: 'search', q }) : used(a);
+      return q ? used({ ...a, note: 'searching…', history, hist: null, rawChosen: false, pg: { ...a.pg, q, hits: null, open: null, at: 0, busy: 'page', drop: null } }, { t: 'search', q }) : used(a);
     }
     case 'down':
       if (a.focus === 'box' && a.hist !== null) return used(a.hist + 1 < a.history.length ? { ...a, hist: a.hist + 1, q: a.history[a.hist + 1]! } : { ...a, hist: null, q: '' }); // newer, then the empty box again
@@ -284,6 +287,7 @@ export function key(a: Arch, e: Ev, w: number, h: number): { a: Arch; action: Ac
       return !a.browse && q ? used({ ...next, note: 'searching…', sel: 0 }, { t: 'search', q }) : used(next);
     }
     case 'esc':
+      if (P.building(a.pg, a.searched)) return used({ ...a, pg: P.cancel(a.pg), note: 'page cancelled · the raw results stay' });
       if (a.searched !== null) return used({ ...a, searched: null, hits: [], browse: null, note: '', sel: 0, focus: 'box', took: null });
       return a.q ? used({ ...a, q: '' }) : NOT_USED(a);
     default: return NOT_USED(a); // left and right change the view
@@ -310,7 +314,7 @@ function libraryKey(a: Arch, what: L.LibKind, e: Ev, h: number, used: (n: Arch, 
 
 function pagesKey(a: Arch, e: Ev, h: number, used: (n: Arch, act?: Action) => ReturnType<typeof key>) {
   if (e.t === 'text' && e.s === 'f' && a.pg.focus !== 'box' && a.pg.focus !== 'note') {
-    return used({ ...a, mode: 'search', focus: 'list', note: 'raw file results (f to return to encyclopedia page)' }, a.searched ? none : (a.pg.q ? { t: 'search', q: a.pg.q } : none));
+    return used({ ...a, mode: 'search', focus: 'list', rawChosen: true, note: 'raw file results (f to return to encyclopedia page)' }, a.searched ? none : (a.pg.q ? { t: 'search', q: a.pg.q } : none));
   }
   if (e.t === 'ctrl' && e.c === 'l') return used({ ...a, mode: 'search', note: '' }, a.shelf ? none : { t: 'reload' });
   const r = P.key(a.pg, e, h - 7);
@@ -322,7 +326,12 @@ function pagesKey(a: Arch, e: Ev, h: number, used: (n: Arch, act?: Action) => Re
   return used({ ...a, pg: r.p }, act.t === 'none' ? none : act);
 }
 
-export const gotPages = (a: Arch, f: (p: P.Pages) => P.Pages): Arch => ({ ...a, pg: f(a.pg) });
+/** A page for the search on screen becomes the primary result the moment it opens, unless the operator chose the raw list (specs/061 §4.6). */
+export const gotPages = (a: Arch, f: (p: P.Pages) => P.Pages): Arch => {
+  const pg = f(a.pg);
+  const arrived = !a.pg.open && !!pg.open && a.mode === 'search' && a.at < 0 && !a.rawChosen && a.searched !== null && !a.browse && a.searched === pg.q.trim();
+  return arrived ? { ...a, pg, mode: 'pages', note: 'encyclopedia page (f for the raw results)' } : { ...a, pg };
+};
 
 export const gotLibrary = (a: Arch, what: L.LibKind, body: unknown): Arch => ({ ...a, lib: what === 'sources' ? L.gotSources(a.lib, body) : L.gotClaims(a.lib, body) });
 export const gotExcerpts = (a: Arch, id: string, body: unknown): Arch => ({ ...a, lib: L.gotExcerpts(a.lib, id, body) });
@@ -642,7 +651,7 @@ export function thinOnReference(a: Arch): boolean {
   return n < 3;
 }
 
-function results(a: Arch, w: number, h: number, now: number, pal: T.Pal): string[] {
+function results(a: Arch, w: number, h: number, now: number, pal: T.Pal, still = false): string[] {
   const out: string[] = [...box(a, w).slice(w < 40 ? 0 : 1, w < 40 ? 2 : 2)];
   const where = `${a.kind ? ` · ${KIND_LABEL[a.kind] ?? a.kind}` : ''}${a.trustedOnly ? ' · trusted only' : ''}`;
   const head = a.browse
@@ -665,6 +674,7 @@ function results(a: Arch, w: number, h: number, now: number, pal: T.Pal): string
   a.hits.slice(top, top + room).forEach((x, k) => out.push(...listRow(a, x, top + k, w, now)));
   const rest = a.hits.length - (top + room);
   if (rest > 0) out.push(T.dim(`   + ${rest} more below`));
+  if (P.building(a.pg, a.searched)) out.push(T.dim(`  ${spinner(now, still)} building a page · esc cancels`));
   if (a.note) out.push(T.dim('  ' + a.note));
   return pad(out, h - 1).concat(hint(a.focus === 'list' ? `↑ ↓ pick · enter open · tab filter · ctrl+t trust · esc clear · ${SWITCH.search}` : `enter search · ↓ pick · ↑ history · tab filter · ctrl+t trust · esc clear · ${SWITCH.search}`));
 }
@@ -692,7 +702,7 @@ function readerView(a: Arch, w: number, h: number, pal: T.Pal, now: number): str
 
 /** The pane's body: `h` rows of at most `w` columns. */
 export function view(a: Arch, w: number, h: number, pal: T.Pal, info?: T.Info, now: number = Date.now(), still = false): string[] {
-  const lines = a.at >= 0 ? readerView(a, w, h, pal, now) : a.mode === 'expand' ? expandView(a, w, h, info, pal) : a.mode === 'pages' ? P.view(a.pg, w, h, now, still) : a.mode === 'sources' || a.mode === 'claims' ? L.view(a.lib, a.mode, w, h, now, ago) : a.searched !== null ? results(a, w, h, now, pal) : home(a, w, h, info, pal);
+  const lines = a.at >= 0 ? readerView(a, w, h, pal, now) : a.mode === 'expand' ? expandView(a, w, h, info, pal) : a.mode === 'pages' ? P.view(a.pg, w, h, now, still) : a.mode === 'sources' || a.mode === 'claims' ? L.view(a.lib, a.mode, w, h, now, ago) : a.searched !== null ? results(a, w, h, now, pal, still) : home(a, w, h, info, pal);
   return pad(lines, h).map((l) => T.clip(l, w));
 }
 

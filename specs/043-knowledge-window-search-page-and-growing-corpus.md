@@ -234,3 +234,5 @@ Reader: as 029. Expand mode: type a topic · `enter` research · `esc` cancel / 
 
 ## 12. Decisions that remain for the operator
 None block the build. Recommended defaults recorded here, changeable by amendment: summary scope is the top 5 results (a `[kb] summary_results` setting later); the media allow-list of §6.3; the 20 MB extraction cap; at most 500 cached summaries; whether `memory` should be a chip by default (recommended: yes, tagged).
+
+> **Amended by [`specs/064`](064-knowledge-retrieval-for-agents-and-mcp.md) (2026-11-01):** agent and MCP knowledge retrieval, scope per request, and the search-page order (see 064 §3 to §8).

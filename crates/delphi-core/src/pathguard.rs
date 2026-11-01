@@ -127,6 +127,33 @@ fn never_readable(key: &str, role: &str) -> Option<String> {
     None
 }
 
+/// Extensions of files that run, load or build (`specs/064` §6). A scratch file is data: none of these may be written there.
+const SCRATCH_EXEC_EXT: [&str; 44] = [
+    "sh", "bash", "zsh", "fish", "csh", "ksh", "command", "bat", "cmd", "ps1", "psm1", "exe", "com", "dll", "so", "dylib", "app", "py", "pyc", "pyw", "rb", "pl", "js", "mjs", "cjs", "ts", "php", "lua", "jar", "class", "scpt", "applescript", "vbs", "wsf", "msi", "dmg", "pkg", "run", "bin", "out", "action", "workflow", "desktop", "lnk",
+];
+/// Names a shell, a tool or a build reads on its own, whatever their extension.
+const SCRATCH_NAMES: [&str; 31] = [
+    ".bashrc", ".bash_profile", ".zshrc", ".zshenv", ".zprofile", ".profile", ".envrc", ".env", ".npmrc", ".gitconfig", ".gitignore", ".gitattributes", "makefile", "justfile", "dockerfile", "package.json", "package-lock.json", "cargo.toml", "cargo.lock", "pyproject.toml", "requirements.txt", "setup.py", "gemfile", "go.mod", "build.rs", "config.toml", "config.json", "tsconfig.json", "build.gradle", "pom.xml", "authorized_keys",
+];
+
+/// Why a path under `scratch/` (given without that prefix, case-folded) may not be written, or `None`.
+pub fn scratch_refused(rest: &str) -> Option<String> {
+    for seg in rest.split('/') {
+        if seg.starts_with('.') && seg != "." {
+            return Some("scratch holds plain files: no dot-files or dot-directories".into());
+        }
+        if SCRATCH_NAMES.contains(&seg) {
+            return Some(format!("scratch holds data only: `{}` is read by tools or shells", seg));
+        }
+    }
+    let name = rest.rsplit('/').next().unwrap_or("");
+    let ext = name.rsplit_once('.').map(|x| x.1).unwrap_or("");
+    if SCRATCH_EXEC_EXT.contains(&ext) {
+        return Some(format!("scratch holds data only: `.{}` files run or load", ext));
+    }
+    None
+}
+
 /// Logical paths no agent may write, whatever its globs: daemon state, constitution, memory and
 /// heuristics (ratified proposals only), built-in and custom manifests and skills, event log, barrier.
 fn never_writable(key: &str) -> Option<String> {
@@ -146,6 +173,14 @@ fn never_writable(key: &str) -> Option<String> {
     }
     if key.starts_with("skills/") && !is_custom_skill_script(key) {
         return Some("skills (only skills/custom/**/scripts/** is writable; SKILL.md via ratified proposals)".into());
+    }
+    if key.starts_with("about/") || key == "about" {
+        return Some("about/ is the release's own reference (read-only)".into());
+    }
+    if let Some(rest) = key.strip_prefix("scratch/") {
+        if let Some(why) = scratch_refused(rest) {
+            return Some(why);
+        }
     }
     if key.starts_with("@project/") {
         return Some("project repos are read-only (changes happen in @worktree)".into());
@@ -204,6 +239,14 @@ pub fn glob_match(glob: &str, path: &str) -> bool {
 }
 
 impl Guard {
+    /// Does the role's own scope allow `access` to this case-folded path? Any role that may write at all may write
+    /// scratch notes (`specs/064` §6).
+    fn in_scope(&self, key: &str, access: Access) -> bool {
+        let globs = if access == Access::Write { &self.write_globs } else { &self.read_globs };
+        let scratch = key.starts_with("scratch/") && (access == Access::Read || !self.write_globs.is_empty());
+        scratch || globs.iter().any(|g| (g == "*" && access == Access::Read) || glob_match(&g.to_lowercase(), key))
+    }
+
     /// Map a canonical logical path to (zone root, path inside it). `key` is the case-folded form.
     fn zone_of(&self, path: &str, key: &str, access: Access) -> Option<(PathBuf, String)> {
         if key.starts_with("@worktree/") {
@@ -268,13 +311,20 @@ impl Guard {
         if key.starts_with("memory/agents/") {
             return Some((self.zones.local.clone(), path.into()));
         }
+        if key.starts_with("scratch/") {
+            // `local/scratch/`: data only (`specs/064` §6). Never ratified, never trusted.
+            if access == Access::Write {
+                let _ = std::fs::create_dir_all(self.zones.local.join("scratch"));
+            }
+            return Some((self.zones.local.clone(), path.into()));
+        }
         if key == "spec.md" {
             return Some((self.zones.base.clone(), path.into()));
         }
         if key.starts_with("context/") || key.starts_with("specs/") || key.starts_with("agents/custom/") || key.starts_with("skills/custom/") {
             return Some((self.zones.team.clone(), path.into()));
         }
-        if key.starts_with("agents/") || key.starts_with("skills/") || key.starts_with("themes/") {
+        if key.starts_with("agents/") || key.starts_with("skills/") || key.starts_with("themes/") || key.starts_with("about/") {
             return Some((self.zones.base.clone(), path.into()));
         }
         None
@@ -296,9 +346,7 @@ impl Guard {
                 return Err(Denied::NeverWritable(why));
             }
         }
-        let globs = if access == Access::Write { &self.write_globs } else { &self.read_globs };
-        let allowed = globs.iter().any(|g| (g == "*" && access == Access::Read) || glob_match(&g.to_lowercase(), &key));
-        if !allowed {
+        if !self.in_scope(&key, access) {
             return Err(Denied::NotInScope);
         }
         if is_dir {
@@ -401,9 +449,7 @@ impl Guard {
                 return Err(Denied::NeverWritable(why));
             }
         }
-        let globs = if access == Access::Write { &self.write_globs } else { &self.read_globs };
-        let allowed = globs.iter().any(|g| (g == "*" && access == Access::Read) || glob_match(&g.to_lowercase(), &key));
-        if !allowed {
+        if !self.in_scope(&key, access) {
             return Err(Denied::NotInScope);
         }
         let (root, inner) = self.zone_of(&path, &key, access).ok_or(Denied::NoZone)?;
@@ -638,6 +684,27 @@ mod tests {
         let (_t2, mut g2) = setup();
         g2.zones.payload = None;
         assert!(g2.check(&format!("@payload/{}", hash), Access::Read).is_err());
+    }
+
+    // specs/064 §6: scratch is data; everything that runs or is read by a tool or shell is refused, in any case.
+    #[test]
+    fn scratch_takes_plain_files_and_refuses_what_runs() {
+        let (t, g) = setup();
+        assert!(g.check("scratch/notes.md", Access::Write).is_ok(), "{:?}", g.check("scratch/notes.md", Access::Write).err());
+        assert!(g.check("scratch/data.csv", Access::Write).is_ok());
+        for bad in ["scratch/run.sh", "scratch/RUN.SH", "scratch/x.py", "scratch/.bashrc", "scratch/sub/.hidden", "scratch/Makefile", "scratch/package.json", "scratch/a/Cargo.toml", "scratch/../local/x.md"] {
+            assert!(g.check_policy(bad, Access::Write).is_err(), "{}", bad);
+        }
+        // A symlink inside scratch is never followed.
+        let dir = t.path().join("local/scratch");
+        std::os::unix::fs::symlink("/etc/hosts", dir.join("link.md")).unwrap();
+        assert_eq!(g.check("scratch/link.md", Access::Write).unwrap_err(), Denied::Symlink);
+        // about/ is never writable.
+        assert!(g.check_policy("about/specs/001.md", Access::Write).is_err());
+        // A role with no write globs gets no scratch.
+        let (_t2, mut g2) = setup();
+        g2.write_globs.clear();
+        assert!(g2.check_policy("scratch/notes.md", Access::Write).is_err());
     }
 
     #[test]
