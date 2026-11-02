@@ -25,7 +25,7 @@
  {"q": "which agent is the one that writes the documentation", "path": "agents/writer/AGENT.md", "heading": ""},
  {"q": "the agent that tries to break the design and find its flaws", "path": "agents/red-team/AGENT.md", "heading": ""},
  {"q": "which role collects background research and sources", "path": "agents/scout/AGENT.md", "heading": ""},
- {"q": "the role that lands changes and cuts releases", "path": "agents/integrator/AGENT.md", "heading": ""},
+ {"q": "the role that lands changes and cuts releases", "path": "agents/messenger/AGENT.md", "heading": ""},
  {"q": "who splits a big task and hands the parts out", "path": "agents/orchestrator/AGENT.md", "heading": ""},
  {"q": "which agent digs into bugs to find the root cause", "path": "agents/investigator/AGENT.md", "heading": ""},
  {"q": "principles for calm terminal interfaces without boxes everywhere", "path": "skills/tui-design/SKILL.md", "heading": ""},

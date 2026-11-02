@@ -37,8 +37,8 @@
 ["writer", "Make this paragraph shorter without losing any requirement.", "concision-audit"],
 ["writer", "Explain this spec to the operator in a page, with what they must decide.", "clarity-synthesis"],
 ["writer", "Announce the new release to users.", "narrative-briefing"],
-["integrator", "Pull the logs of the failing job on PR 12 and tell me what it says.", "github-ops-sync"],
-["integrator", "What tools does this third-party server expose, and which of them can change things?", "mcp-server-integration"],
-["integrator", "The partner sends us JSON events. Make them safe to use inside the system.", "protocol-schema-translation"],
-["integrator", "Tell the team channel that the release is out.", "external-comms-dispatch"]
+["messenger", "Pull the logs of the failing job on PR 12 and tell me what it says.", "github-ops-sync"],
+["messenger", "What tools does this third-party server expose, and which of them can change things?", "mcp-server-integration"],
+["messenger", "The partner sends us JSON events. Make them safe to use inside the system.", "protocol-schema-translation"],
+["messenger", "Tell the team channel that the release is out.", "external-comms-dispatch"]
 ]
