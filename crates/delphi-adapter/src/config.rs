@@ -659,11 +659,32 @@ impl Default for RetrievalConfig {
 pub struct McpConfig {
     pub enabled: bool,
     pub allow_remote: bool,
+    /// Which form of a Delphi agent's identity the `signature` field carries (`specs/066` §7); every form is always sent.
+    pub badge_style: BadgeStyle,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BadgeStyle {
+    #[default]
+    Plain,
+    Ansi,
+    Markdown,
+}
+
+impl BadgeStyle {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BadgeStyle::Plain => "plain",
+            BadgeStyle::Ansi => "ansi",
+            BadgeStyle::Markdown => "markdown",
+        }
+    }
 }
 
 impl Default for McpConfig {
     fn default() -> McpConfig {
-        McpConfig { enabled: true, allow_remote: false }
+        McpConfig { enabled: true, allow_remote: false, badge_style: BadgeStyle::Plain }
     }
 }
 
@@ -1514,6 +1535,9 @@ pub(crate) mod tests {
         // There is no limit or quota on host calls: the switch is the only setting (`specs/062` §9).
         assert!(Config::parse("[mcp]\nmax_help_per_session = 5\n").is_err() && Config::parse("[mcp]\ncooldown_seconds = 5\n").is_err());
         assert!(McpConfig::read("[mcp]\nenabled = 3\n").is_none() && McpConfig::read("").is_some());
+        assert_eq!(McpConfig::read("").unwrap().badge_style, BadgeStyle::Plain);
+        assert_eq!(McpConfig::read("[mcp]\nbadge_style = \"markdown\"\n").unwrap().badge_style.as_str(), "markdown");
+        assert!(McpConfig::read("[mcp]\nbadge_style = \"neon\"\n").is_none() && !McpConfig::enabled_in("[mcp]\nbadge_style = \"neon\"\n"));
     }
 
     #[test]

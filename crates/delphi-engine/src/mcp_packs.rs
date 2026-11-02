@@ -133,6 +133,11 @@ impl Packs {
     }
 
     /// The agent pack for `role` (`specs/062` §4.2). The operator profile is left out (`include_profile` is for a later opt-in).
+    /// How a role signs: its console badge and its theme name, with the host that adopted it (`specs/066` §7).
+    pub fn identity(&self, role: &str, via: Option<&str>) -> delphi_core::research::Identity {
+        crate::research_host::identity(&self.ws.dir, &self.ws.home, role, via)
+    }
+
     pub fn pack(&self, role: &str, include_profile: bool) -> Result<String, String> {
         let text = self.role_text(role)?;
         let (fm, _) = split_frontmatter(&text);

@@ -156,6 +156,7 @@ sandbox = "off"
 # [mcp]
 # enabled = true                     # false: every tool call is answered `disabled_by_operator`; read at each call, so it takes effect at once
 # allow_remote = false               # reserved for a later spec; true is refused
+# badge_style = "plain"             # plain | ansi | markdown: which form of a Delphi agent's identity (⟦•_•⟧ Name (role)) the `signature` field carries; every form is sent
 
 # Knowledge retrieval for agents (specs/064).
 # [retrieval]
