@@ -128,7 +128,7 @@ pub fn import_text(std_text: &str, dir: &str, o: &ImportOpts) -> Result<Imported
     let hint = from_meta("authorized_agents", &mut meta);
     if o.agents.is_empty() {
         let was = hint.and_then(|v| serde_yaml::to_string(&v).ok()).map(|s| s.replace('\n', " ")).unwrap_or_default();
-        return Err(vec![format!("say which roles may use this skill: --agents scout,architect (roles: orchestrator, builder, architect, investigator, scout, strategist, red-team, writer, integrator){}", if was.is_empty() { String::new() } else { format!("; the export listed: {}", was.trim()) })]);
+        return Err(vec![format!("say which roles may use this skill: --agents scout,architect (roles: orchestrator, builder, architect, investigator, scout, strategist, red-team, writer, messenger){}", if was.is_empty() { String::new() } else { format!("; the export listed: {}", was.trim()) })]);
     }
     out.insert(key("authorized_agents"), Value::Sequence(o.agents.iter().map(|a| Value::String(a.clone())).collect()));
     let object = || {

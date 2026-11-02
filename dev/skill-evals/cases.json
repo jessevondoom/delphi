@@ -87,13 +87,13 @@
 ["writer", "This guide is bloated and repeats the spec. Trim it without losing requirements.", "concision-audit"],
 ["writer", "Which paragraphs of this document are redundant or unsupported?", "concision-audit"],
 ["writer", "Fix the build error in the Rust crate.", null],
-["integrator", "Check the CI status of PR 88 and tell me what failed.", "github-ops-sync"],
-["integrator", "Post a comment on the issue summarizing the decision, after I approve the text.", "github-ops-sync"],
-["integrator", "We want to attach a third-party tool server. Check it out safely and list what it exposes.", "mcp-server-integration"],
-["integrator", "Is this MCP server safe to enable? Test the handshake and its tools.", "mcp-server-integration"],
-["integrator", "Send the weekly plan to the team calendar and the notification channel.", "external-comms-dispatch"],
-["integrator", "Fire the webhook announcing the release, after redacting anything sensitive.", "external-comms-dispatch"],
-["integrator", "A partner's webhook payload needs to become our internal event shape, safely.", "protocol-schema-translation"],
-["integrator", "Translate this foreign tool schema into ours and report what you dropped.", "protocol-schema-translation"],
-["integrator", "Refactor the scheduler module.", null]
+["messenger", "Check the CI status of PR 88 and tell me what failed.", "github-ops-sync"],
+["messenger", "Post a comment on the issue summarizing the decision, after I approve the text.", "github-ops-sync"],
+["messenger", "We want to attach a third-party tool server. Check it out safely and list what it exposes.", "mcp-server-integration"],
+["messenger", "Is this MCP server safe to enable? Test the handshake and its tools.", "mcp-server-integration"],
+["messenger", "Send the weekly plan to the team calendar and the notification channel.", "external-comms-dispatch"],
+["messenger", "Fire the webhook announcing the release, after redacting anything sensitive.", "external-comms-dispatch"],
+["messenger", "A partner's webhook payload needs to become our internal event shape, safely.", "protocol-schema-translation"],
+["messenger", "Translate this foreign tool schema into ours and report what you dropped.", "protocol-schema-translation"],
+["messenger", "Refactor the scheduler module.", null]
 ]

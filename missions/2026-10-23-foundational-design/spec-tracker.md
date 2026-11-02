@@ -18,7 +18,7 @@ One row per spec. Three separate questions, because they diverge: **Approved** (
 
 | Spec | Approved | Built | Proven | What is left |
 | :-- | :-- | :-- | :-- | :-- |
-| 001 Governance and manifests | yes | yes (Step 1) | tests | open sweep findings in `finalize.rs`/`build.rs` (stale merge gates) |
+| 001 Governance and manifests (incl. 001-A1..A5) | yes | yes (Step 1) | tests | open sweep findings in `finalize.rs`/`build.rs` (stale merge gates) |
 | 002 Adapter and routing (incl. model pool, 002-A1) | yes | yes (Steps 2, 3, 3c) | tests; two-family run on a real substitute not logged | live samples of Anthropic API, Gemini API and Bedrock exhaustion; `oauth2.rs`/`credential.rs` sweep findings; direct OpenAI driver (deferred) |
 | 003 Collaboration and Council | yes | yes (Steps 3, 4) | one real Council (007) | Orchestrator does not yet frame the proposition or pick seats; Builder buildability check not wired; group-chat Council view |
 | 004 Memory and coaching (incl. 004-A1 to A3) | yes | `kb`: FTS5, local embeddings, reranker, preloaded vectors, agents and skills indexed, refresh on every search; `needs`, `miss`, `eval` | tests; recall measured on a dev and a held-out question set (hybrid recall in the top 10 0.60 to 0.88 on this repo's docs); the release workflow's model job and smoke test not yet run by a tag (use the dry-run trigger first) | coaching automation (Step 6, gated by `delphi needs`); speed on Linux CPUs unmeasured |
@@ -499,3 +499,14 @@ Approved by the operator on 2026-11-01. Amends 062 for research egress; adds `re
 | S6 | `badge_style`, `delphi-attribution` skill, instructions, print-config | proposed |
 | S7 | generated docs and goldens | proposed |
 | S8 | security and red-team pass | proposed |
+
+## Agent episodic memory, trace distillation, and tool-conditioned retrieval (spec 065, approved 2026-11-01)
+
+Approved by the operator on 2026-11-01 after a four-seat adversarial council review (architect, red-team, strategist, orchestrator). Establishes zero-token deterministic trace harvesting from execution event streams (`events.jsonl`), immutable daemon-enforced frontmatter and taint stamping (`min(span.taint)`), quota bounding (max 1 per task, max 3 per mission), and tool-conditioned hybrid archival retrieval (`zone: episodes`) while preserving the 100% frozen boot KV cache prefix.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| E1 | `schemas/episode.schema.json`, `trace_miner.rs` event harvester, daemon taint stamping, deduplication, and schema verification in `docs.rs` | built (this PR) |
+| E2 | KB indexing (`zone: episodes`), tool/skill/error tokenization in `kb_fts_ident`, and role isolation in `kb.rs` | built (this PR) |
+| E3 | Agent tool `recall_memory` and engine wiring to unified retrieval service (`specs/064`) | built (this PR) |
+| E4 | Proactive retry-ladder bridge hint injection and `/retro` candidate supersession | built (this PR) |
