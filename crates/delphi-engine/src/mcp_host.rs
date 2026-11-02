@@ -679,6 +679,17 @@ mod tests {
     }
 
     #[test]
+    fn with_the_switch_off_the_research_tools_answer_disabled_by_operator() {
+        let (_t, dir) = real_ws();
+        std::fs::write(dir.join("config.toml"), "[mcp]\nenabled = false\n").unwrap();
+        let mut s = Server::new(&dir);
+        init(&mut s);
+        for (name, args) in [("request_research", json!({"question": "q"})), ("research_status", json!({"research_id": "r-1"})), ("research_result", json!({"research_id": "r-1"}))] {
+            assert!(text_of(&call_tool(&mut s, name, args)).starts_with("disabled_by_operator"), "{name}");
+        }
+    }
+
+    #[test]
     fn with_the_switch_off_packs_and_prompts_are_not_served() {
         let (_t, dir) = real_ws();
         std::fs::write(dir.join("config.toml"), "[mcp]\nenabled = false\n").unwrap();
