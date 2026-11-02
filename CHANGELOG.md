@@ -6,6 +6,13 @@ Release builds, with their notes and build attestations, are on the [releases pa
 
 This file starts with the work after v0.2.7. For earlier releases, the history is the merged pull requests and the per-spec notes under `specs/`; their entries below give dates, not detail.
 
+## 0.5.1 — 2026-11-01
+
+- Research and identity (spec 066): research jobs, planner and runner, a research endpoint, attribution, docs and security invariants for the MCP research surface (#445–#453).
+- Episodic memory traces (spec 065) and knowledge retrieval (spec 064) (#442, #443).
+- The Integrator role is renamed Messenger (#444).
+- Copilot builder parity (spec 051) and agy builder activation (spec 020) (#440, #441).
+
 ## 0.5.0 — 2026-11-01
 
 ### Fleet Architecture and Dynamic Orchestration (Spec 063)
