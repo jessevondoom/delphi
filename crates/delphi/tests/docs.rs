@@ -386,3 +386,42 @@ fn memory_entry_metadata_satisfies_its_schema() {
     must_fail("memory-entry.schema.json", "bad kind", &serde_json::json!({"kind": "opinion"}));
     must_fail("memory-entry.schema.json", "bad date", &serde_json::json!({"created": "2026-13-01"}));
 }
+
+#[test]
+fn episode_frontmatter_satisfies_its_schema() {
+    let ok = serde_json::json!({
+        "id": "ep-2026-11-01-builder-cargo-deadlock-t0198",
+        "title": "Builder: Resolving Cargo Lock Contention",
+        "author": "builder",
+        "role": "builder",
+        "timestamp": "2026-11-01T14:22:00Z",
+        "kind": "episode",
+        "source_type": "internal_empirical",
+        "confidence": "high",
+        "status": "active",
+        "valid_until": null,
+        "mission": "2026-11-01-core-engine-refactor",
+        "session_id": "s_0042",
+        "task_id": "t_0198",
+        "skills_used": ["tdd-execution", "worktree-isolation"],
+        "tools_invoked": ["shell-worktree-scoped", "test-runner"],
+        "outcome": "resolved_after_failure",
+        "error_fingerprints": ["Blocking waiting for file lock on package cache"],
+        "target_files": ["Cargo.lock"],
+        "supersedes": [],
+        "tags": ["cargo", "flock"]
+    });
+    must_pass("episode.schema.json", "valid episode frontmatter", &ok);
+    must_fail("episode.schema.json", "missing outcome", &serde_json::json!({
+        "id": "ep-2026-11-01-builder-t01",
+        "title": "t", "author": "builder", "role": "builder", "timestamp": "2026-11-01T14:22:00Z",
+        "kind": "episode", "source_type": "internal_empirical", "confidence": "high",
+        "status": "active", "mission": "m", "session_id": "s", "task_id": "t"
+    }));
+    must_fail("episode.schema.json", "bad outcome", &serde_json::json!({
+        "id": "ep-2026-11-01-builder-t01",
+        "title": "t", "author": "builder", "role": "builder", "timestamp": "2026-11-01T14:22:00Z",
+        "kind": "episode", "source_type": "internal_empirical", "confidence": "high",
+        "status": "active", "mission": "m", "session_id": "s", "task_id": "t", "outcome": "maybe"
+    }));
+}

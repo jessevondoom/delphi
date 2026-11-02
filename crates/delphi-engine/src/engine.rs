@@ -969,6 +969,10 @@ impl Engine {
                                 if r.is_error {
                                     // The tool and the span, never the result text: a refusal or a failed command is routine for an agent, so warn.
                                     delphi_core::elog::warn("tool", "tool_failed", "a tool call returned an error", json!({"mission": sc.m.id, "task": sc.task_id, "span": sc.span_id, "tool": name, "role": sc.role, "kind": "is_error"}));
+                                    let db = self.ws.dir.join("local/state.db");
+                                    if let Some(hint) = crate::kb::find_proactive_hint(&db, &sc.role, &r.content, sc.span.ceiling()) {
+                                        r.content.push_str(&format!("\n\n{}", hint));
+                                    }
                                 }
                                 // A large result is kept in the payload store and the history holds a handle and a preview (`specs/045` T5, `049` CX-2).
                                 if let Some((stub, hash, bytes)) = self.offload_result(&sc, &name, &args, &r.content) {
