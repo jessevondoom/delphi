@@ -31,7 +31,13 @@ pub const ORIGIN_DOWNLOADS: &str = "https://github.com/jessevondoom/delphi/relea
 fn in_origin(api: &str, url: &str) -> bool {
     api.trim_end_matches('/') != DEFAULT_API || url.starts_with(ORIGIN_DOWNLOADS)
 }
-const MAX_BINARY: u64 = 200 << 20;
+
+/// The maximum size allowed for a downloaded release tarball (specs/006 §4). Release tarballs package both
+/// `delphi` (with embedded model and preloaded seed vectors; specs/004 §3.5-3.6) and `delphi-ui`.
+pub const MAX_ARCHIVE: u64 = 512 << 20;
+
+/// The maximum size allowed for an extracted executable (`delphi` or `delphi-ui`) inside a release tarball.
+pub const MAX_BINARY: u64 = 384 << 20;
 
 /// The release asset suffix for this machine.
 pub fn target() -> Option<&'static str> {
@@ -154,13 +160,17 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 /// The file called `file` inside a release tarball (any directory prefix; nothing else is ever extracted).
 fn file_from_tarball(gz: &[u8], file: &str) -> Result<Option<Vec<u8>>> {
+    file_from_tarball_with_limit(gz, file, MAX_BINARY)
+}
+
+fn file_from_tarball_with_limit(gz: &[u8], file: &str, max: u64) -> Result<Option<Vec<u8>>> {
     let mut ar = tar::Archive::new(flate2::read::GzDecoder::new(gz));
     for entry in ar.entries()? {
         let entry = entry?;
         if entry.header().entry_type().is_file() && entry.path()?.file_name().is_some_and(|n| n == file) {
             let mut out = Vec::new();
-            entry.take(MAX_BINARY + 1).read_to_end(&mut out)?;
-            if out.len() as u64 > MAX_BINARY {
+            entry.take(max + 1).read_to_end(&mut out)?;
+            if out.len() as u64 > max {
                 bail!("the `{}` in the release is implausibly large", file);
             }
             return Ok(Some(out));
@@ -203,7 +213,7 @@ pub fn install(net: &dyn Net, rel: &Release, target: &str, dest: &Path) -> Resul
     let url = rel.asset(&name).ok_or_else(|| anyhow!("release {} has no build for {} (looked for {})", rel.tag, target, name))?;
     let sum_url = rel.asset(&format!("{}.sha256", name)).ok_or_else(|| anyhow!("release {} has no checksum for {}; refusing to install without one", rel.tag, name))?;
     let want = String::from_utf8_lossy(&net.get(sum_url, 4096).map_err(|e| anyhow!("could not download the checksum: {}", e))?).split_whitespace().next().unwrap_or("").to_lowercase();
-    let tarball = net.get(url, MAX_BINARY).map_err(|e| anyhow!("could not download {}: {}", name, e))?;
+    let tarball = net.get(url, MAX_ARCHIVE).map_err(|e| anyhow!("could not download {}: {}", name, e))?;
     let got = sha256_hex(&tarball);
     if want.len() != 64 || got != want {
         bail!("the download does not match its checksum (wanted {}, got {}); nothing was changed", if want.is_empty() { "none".to_string() } else { want }, got);
@@ -573,6 +583,33 @@ mod tests {
         let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
         std::io::Write::write_all(&mut gz, &tar_bytes).unwrap();
         assert!(binary_from_tarball(&gz.finish().unwrap()).unwrap_err().to_string().contains("no `delphi` file"));
+    }
+
+    #[test]
+    fn an_extracted_file_exceeding_the_size_limit_is_rejected_as_implausibly_large() {
+        let gz = tarball("#!/bin/sh\necho 'delphi 0.2.0'\n");
+        let err = file_from_tarball_with_limit(&gz, "delphi", 5).unwrap_err().to_string();
+        assert!(err.contains("the `delphi` in the release is implausibly large"), "expected implausibly large error, got: {}", err);
+    }
+
+    #[test]
+    fn an_archive_exceeding_max_archive_is_rejected_on_download() {
+        let (net, api) = server("v0.2.0", "0.2.0", None);
+        let rel = find(&net, &api, "0.1.0", None).unwrap().unwrap();
+        let dest = tempfile::tempdir().unwrap().path().join("delphi");
+        struct EnforcingNet(Fake);
+        impl Net for EnforcingNet {
+            fn get(&self, url: &str, max: u64) -> Result<Vec<u8>, String> {
+                if url.ends_with(".tar.gz") {
+                    assert_eq!(max, MAX_ARCHIVE, "install must download tarball with MAX_ARCHIVE limit");
+                    return Err("the download is larger than allowed".into());
+                }
+                self.0.get(url, max)
+            }
+        }
+        let enforcing = EnforcingNet(net);
+        let err = install(&enforcing, &rel, T, &dest).unwrap_err().to_string();
+        assert!(err.contains("the download is larger than allowed"), "expected size error, got: {}", err);
     }
 
     /// The rolling `dev` release: one release whose tarballs are named for the version they report.
