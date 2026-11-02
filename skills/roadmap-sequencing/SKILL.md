@@ -3,6 +3,7 @@ name: roadmap-sequencing
 description: "Order multi-phase work into milestones along the critical path, with dependencies and weights checked. Use when planning more than one deliverable."
 authorized_agents:
   - strategist
+  - administrator
 input_schema:
   type: object
   required: ["goals"]

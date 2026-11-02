@@ -673,6 +673,9 @@ fn check_names(tree: &Tree, names: &[String], r: &mut Report) {
                 if next == Some('-') {
                     continue; // e.g. the external project `hermes-agent`
                 }
+                if m.as_str().eq_ignore_ascii_case("prometheus") && (line.contains("--prom") || line.to_lowercase().contains("prometheus text") || line.to_lowercase().contains("prometheus format") || line.to_lowercase().contains("prometheus metrics") || line.to_lowercase().contains("prometheus export")) {
+                    continue; // the Prometheus monitoring system / exposition format (specs/033)
+                }
                 r.fail(
                     "canonical-names",
                     format!("{}:{}", path, i + 1),

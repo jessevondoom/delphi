@@ -123,6 +123,9 @@ pub fn role_look(role: &str) -> (&'static str, &'static str, u8) {
         "red-team" => ("⟦-_-⟧", "#ef4444", 203),
         "strategist" => ("⟦•_•⟧", "#14b8a6", 37),
         "scout" | "investigator" => ("⟦•••⟧", "#ffff00", 226),
+        "administrator" => ("⟦•─•⟧", "#64748b", 243),
+        "assistant" => ("⟦•_•⟧", "#3b82f6", 75),
+        "advocate" => ("⟦•_•⟧", "#f43f5e", 204),
         _ => ("⟦•_•⟧", "#94a3b8", 110),
     }
 }
