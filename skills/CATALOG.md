@@ -129,7 +129,7 @@ The six kinds that judge one document (`dag`, `handoff`, `provenance`, `rules`, 
 | `org-bundle-authoring` | Creates, sanitizes and packages an org knowledge bundle (`specs/023`) from allow-listed sources, with a human-approved redaction report before packaging. *`specs/027` §2.6; its `delphi bundle init|distill|validate --report|package --vectors` commands are built (slice B10).* | `templates/redaction-report.md`, `delphi check provenance` |
 | `tonal-calibration` | Dynamically code-switches prose across technical, executive, and pedagogical registers. | instructions |
 
-### 9. **Integrator** (External Integrations, GitHub Ops & Protocol Specialist)
+### 9. **Messenger** (External Integrations, GitHub Ops & Protocol Specialist)
 | Skill | Purpose | Backing |
 | :--- | :--- | :--- |
 | `github-ops-sync` | Bridges local Delphi missions with GitHub via `gh` (Issues, PRs, comments, CI status), confirming each outbound action. | instructions |

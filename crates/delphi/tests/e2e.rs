@@ -216,7 +216,7 @@ projects = ["{proj}"]
 name = "greek"
 
 [agents]
-interactive = ["orchestrator", "architect", "builder", "writer", "strategist", "red-team", "scout", "integrator", "investigator", "validator"]
+interactive = ["orchestrator", "architect", "builder", "writer", "strategist", "red-team", "scout", "messenger", "investigator", "validator"]
 fleet = "all"
 
 [models.claude]
@@ -2183,7 +2183,7 @@ projects = ["{proj}"]
 name = "greek"
 
 [agents]
-interactive = ["orchestrator", "architect", "builder", "writer", "strategist", "red-team", "scout", "integrator", "investigator", "validator"]
+interactive = ["orchestrator", "architect", "builder", "writer", "strategist", "red-team", "scout", "messenger", "investigator", "validator"]
 fleet = "all"
 [[endpoints]]
 id = "ollama"

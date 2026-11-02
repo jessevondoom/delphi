@@ -49,7 +49,7 @@ org: acme                                 # [a-z0-9-]{1,32}; must equal the inst
 store: acme-main                          # [a-z0-9-]{1,32}; must equal the pinned value; bound into the signature
 author: "did:key:z6Mk..."                 # signer; must equal the sidecar kid
 author_handle: "jlee"                     # display only; the roster is authoritative
-author_role: operator | architect | builder | investigator | scout | strategist | red-team | writer | integrator | orchestrator
+author_role: operator | architect | builder | investigator | scout | strategist | red-team | writer | messenger | orchestrator
                                           # canonical IDs only (D-17); `operator` = hand-written by the human
 title: string                             # <= 120 chars, plain text
 summary: string                           # <= 500 chars, plain text, one paragraph, no Markdown links

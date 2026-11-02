@@ -461,7 +461,7 @@ mod tests {
         let e = note_event(&caller(), &w, &ok, 0).unwrap();
         assert_eq!((e.kind.as_str(), e.agent.as_deref(), e.payload["tier"].as_str(), e.payload["trigger"].as_str()), ("learn.staged", Some("builder"), Some("L0"), Some("host_note")));
         assert!(e.payload["summary"].as_str().unwrap().starts_with("[host:claude-code/opus] Run the formatter"));
-        for (what, p) in [("no evidence", json!({"role": "builder", "text": "x"})), ("integrator", json!({"role": "integrator", "text": "x", "evidence": "e"})), ("unknown role", json!({"role": "nobody", "text": "x", "evidence": "e"})), ("path role", json!({"role": "../builder", "text": "x", "evidence": "e"})), ("long note", json!({"role": "builder", "text": "x".repeat(351), "evidence": "e"}))] {
+        for (what, p) in [("no evidence", json!({"role": "builder", "text": "x"})), ("messenger", json!({"role": "messenger", "text": "x", "evidence": "e"})), ("unknown role", json!({"role": "nobody", "text": "x", "evidence": "e"})), ("path role", json!({"role": "../builder", "text": "x", "evidence": "e"})), ("long note", json!({"role": "builder", "text": "x".repeat(351), "evidence": "e"}))] {
             assert!(matches!(note_event(&caller(), &w, &p, 0), Err(HostErr::Invalid(_))), "{what}");
         }
         assert!(note_event(&caller(), &w, &ok, 500).is_ok(), "there is no limit on how many a session stages");
