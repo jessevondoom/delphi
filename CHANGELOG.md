@@ -6,6 +6,11 @@ Release builds, with their notes and build attestations, are on the [releases pa
 
 This file starts with the work after v0.2.7. For earlier releases, the history is the merged pull requests and the per-spec notes under `specs/`; their entries below give dates, not detail.
 
+## 0.5.2 — 2026-11-02
+
+- Self-updater size limit expansion (spec 006): separate downloaded archive safety limit (`MAX_ARCHIVE = 512 MiB`) and extracted binary limit (`MAX_BINARY = 384 MiB`) to support embedded neural models, seed compendiums, and preloaded vector caches (#457).
+- Specialized agent fleet expansion: Administrator, Assistant, and Advocate canonical roles, 8 companion skills, and seed reference compendiums (#456).
+
 ## 0.5.1 — 2026-11-01
 
 - Research and identity (spec 066): research jobs, planner and runner, a research endpoint, attribution, docs and security invariants for the MCP research surface (#445–#453).
