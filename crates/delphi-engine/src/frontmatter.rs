@@ -11,7 +11,7 @@ pub const ROLES: [&str; 10] = [
     "strategist",
     "red-team",
     "writer",
-    "integrator",
+    "messenger",
     "validator",
 ];
 pub const AUTHORS_EXTRA: [&str; 2] = ["operator", "delphi-core"];

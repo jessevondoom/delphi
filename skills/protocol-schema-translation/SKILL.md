@@ -2,7 +2,7 @@
 name: protocol-schema-translation
 description: "Validate and translate payloads at a boundary (webhook, third-party API, provider tool schema), tagging them untrusted. Use when data crosses into Delphi."
 authorized_agents:
-  - integrator
+  - messenger
 input_schema:
   type: object
   required: ["payload"]
