@@ -191,8 +191,8 @@ mod tests {
 
     #[test]
     fn missing_role_is_rejected() {
-        let e = parse(&pack(None, None, Some("integrator"))).err().unwrap();
-        assert!(e.iter().any(|m| m.contains("integrator")));
+        let e = parse(&pack(None, None, Some("messenger"))).err().unwrap();
+        assert!(e.iter().any(|m| m.contains("messenger")));
     }
 
     #[test]

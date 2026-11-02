@@ -101,7 +101,7 @@ pub(crate) fn setup_with_exec(steps: Vec<Step>, budget_usd: f64, tweak: impl FnO
             "strategist".into(),
             "writer".into(),
             "scout".into(),
-            "integrator".into(),
+            "messenger".into(),
             "investigator".into(),
             "validator".into(),
         ],

@@ -10,8 +10,8 @@ What a bundle can attach to. A bundle names a **host role** by its id (never a t
 | :-- | :-- | :-- | :-- |
 | `architect` | Systems Architect, Creative Designer & Spec Author | workhorse | `repo-cartography`, `ast-code-search`, `spec-authoring`, `diagram-generation`, `api-contract-design`, `trade-off-matrix`, `tui-design`, `oblique-strategies` |
 | `builder` | Lead Engineer, Builder & Verification Specialist | workhorse | `worktree-isolation`, `tdd-execution`, `safe-refactoring`, `git-pr-packaging`, `ci-triage`, `tui-design`, `systems-pattern-catalog` |
-| `integrator` | External Integrations, GitHub/API Operations & Protocol Bridge | fast | `github-ops-sync`, `mcp-server-integration`, `external-comms-dispatch`, `protocol-schema-translation` |
 | `investigator` | Precision Researcher, Bug Tracker & Benchmark Specialist | fast | `ast-code-search`, `git-bisect-hunt`, `benchmark-profiling`, `primary-source-verification`, `competitive-swot-analysis`, `hypothesis-flipping` |
+| `messenger` | External Integrations, GitHub/API Operations & Protocol Bridge | fast | `github-ops-sync`, `mcp-server-integration`, `external-comms-dispatch`, `protocol-schema-translation` |
 | `orchestrator` | Lead Orchestrator, Coach, Council Arbiter & Model Scaler | workhorse | `task-decomposition`, `dynamic-model-scaling`, `council-moderation`, `handoff-packaging`, `retrospective-facilitation`, `knowledge-compaction`, `review-md-distillation`, `contradiction-pruning`, `lesson-promotion` |
 | `red-team` | Red Team, Adversarial Critic, Threat Modeler & PR Security Auditor | workhorse | `review-md-audit`, `threat-modeling`, `adversarial-test-gen`, `assumption-stress-test`, `socratic-interrogation` |
 | `scout` | Broad Discovery, Repository Cartographer & Literature Scout | fast | `repo-cartography`, `literature-survey`, `multi-source-synthesis`, `dependency-audit`, `dual-horizon-search` |
@@ -40,24 +40,24 @@ What a bundle can attach to. A bundle names a **host role** by its id (never a t
 | `dual-horizon-search` | Conduct dual-horizon exploration via local-out workspace expansion and outside-in industry trend mapping. Use when investigating unfamiliar technical terrain or mapping ecosystem dependencies. | `scout` |
 | `dynamic-model-scaling` | Choose the model tier and thinking budget for a handoff from task signals and retry history. Use when writing a routing directive or after a failed attempt. | `orchestrator` |
 | `encyclopedia-synthesis` | Write an encyclopedia-style summary page in Markdown from gathered records: lead, infobox, contents, inline figures, citations, hatnotes, and a cache lifetime. | `writer` |
-| `external-comms-dispatch` | Send plans or notices to external channels (calendar, webhook, notification) only with redaction and explicit approval. Use when something must leave Delphi. | `integrator` |
+| `external-comms-dispatch` | Send plans or notices to external channels (calendar, webhook, notification) only with redaction and explicit approval. Use when something must leave Delphi. | `messenger` |
 | `fact-validation` | Advisory: report whether a claim is true by finding independent, reputable corroboration, and what you would conclude. Writes nothing; never marks a claim validated. | `validator`, `scout`, `orchestrator` |
 | `git-bisect-hunt` | Find the commit that introduced a regression with an automated reproduction and git bisect in a detached checkout. Use when something used to work. | `investigator` |
 | `git-pr-packaging` | Prepare atomic commits and a pull request with spec linkage, a checked diff, and honest verification notes. Use when work is ready for review. | `builder` |
-| `github-ops-sync` | Bridge missions with GitHub through gh: issues, PRs, comments, CI status. Every outbound action is confirmed first. Use to read or update GitHub state. | `integrator` |
+| `github-ops-sync` | Bridge missions with GitHub through gh: issues, PRs, comments, CI status. Every outbound action is confirmed first. Use to read or update GitHub state. | `messenger` |
 | `handoff-packaging` | Package a handoff as a pointer-based envelope: objective, file:line context, constraints, expected output. Use before dispatching any agent. | `orchestrator` |
 | `hypothesis-flipping` | Invert core assumptions and construct contrarian test hypotheses when investigative avenues are exhausted. Use when debugging persistent regressions or responding to orchestrator pushback. | `investigator` |
 | `knowledge-compaction` | Compact mission logs and scratchpads into a short summary with provenance frontmatter. Use at mission close to keep context lean. | `orchestrator` |
 | `lesson-promotion` | Add, correct or retire a rule in a role's lessons.md or context/heuristics.md under the Rule of 25, merging to make room. Use after a retrospective, or when a rule file is full or wrong. | `orchestrator` |
 | `literature-survey` | Survey prior art across papers, standards, docs and open-source projects, and report what exists, what it claims, and how reliable it is. Use before designing. | `scout` |
-| `mcp-server-integration` | Discover, configure and health-check an external MCP tool server in a sandbox, listing the tools it exposes. Use before relying on a new MCP server. | `integrator` |
+| `mcp-server-integration` | Discover, configure and health-check an external MCP tool server in a sandbox, listing the tools it exposes. Use before relying on a new MCP server. | `messenger` |
 | `multi-source-synthesis` | Combine notes and sources into one compact landscape map where every claim points to its source. Use when several inputs must become one picture. | `scout` |
 | `narrative-briefing` | Write plans, proposals and release notes that are specific, honest and free of filler. Use for announcements and personal or project plans. | `writer` |
 | `oblique-strategies` | Apply lateral thinking prompts, Oblique Strategies, and TRIZ contradiction matrices to break architectural deadlocks. Use when standard designs hit intractable trade-offs or creative blocks. | `architect` |
 | `org-bundle-authoring` | Create, sanitize and package an org knowledge bundle (specs/023): gather allow-listed sources, distill, scan, validate, package. Use when an org wants its knowledge and skills bundled. | `writer` |
 | `pr-alignment-review` | Audit a PR or spec against the operator's goal, the governing specs and the REVIEW.md rubric, mapping acceptance criteria to evidence. Use at review. | `strategist` |
 | `primary-source-verification` | Check a specific claim, API behaviour or benchmark against the primary source and report what holds. Use before relying on a claim you did not verify. | `investigator` |
-| `protocol-schema-translation` | Validate and translate payloads at a boundary (webhook, third-party API, provider tool schema), tagging them untrusted. Use when data crosses into Delphi. | `integrator` |
+| `protocol-schema-translation` | Validate and translate payloads at a boundary (webhook, third-party API, provider tool schema), tagging them untrusted. Use when data crosses into Delphi. | `messenger` |
 | `repo-cartography` | Map an unfamiliar repository: entry points, module boundaries, build and test commands, in a pointer map under 300 lines. Use when first meeting a codebase. | `architect`, `scout` |
 | `retrospective-facilitation` | Run a short post-mission retrospective: what cost turns, what repeated, what to change. Use at mission close, before compaction. | `orchestrator` |
 | `review-md-audit` | Audit a diff strictly against the base branch's REVIEW.md, never the PR's own copy, and report findings with failure scenarios. Use when reviewing a PR. | `red-team` |

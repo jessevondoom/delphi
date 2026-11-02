@@ -2,7 +2,7 @@
 name: github-ops-sync
 description: "Bridge missions with GitHub through gh: issues, PRs, comments, CI status. Every outbound action is confirmed first. Use to read or update GitHub state."
 authorized_agents:
-  - integrator
+  - messenger
 input_schema:
   type: object
   required: ["action"]
