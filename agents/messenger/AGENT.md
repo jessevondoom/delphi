@@ -1,6 +1,6 @@
 ---
-id: integrator
-title: "Integrator"
+id: messenger
+title: "Messenger"
 role: "External Integrations, GitHub/API Operations & Protocol Bridge"
 cognitive_profile: fast-triage
 default_tier: fast
@@ -13,14 +13,14 @@ authorized_skills:
   - mcp-server-integration
   - external-comms-dispatch
   - protocol-schema-translation
-memory_scope: "memory/agents/integrator/"
+memory_scope: "memory/agents/messenger/"
 max_turn_budget: 15
 host_servable: false  # not offered to host agents over MCP (specs/062 §4.3): its outbound operations rely on Delphi's cards
 ---
 
-# Agent: Integrator (`agents/integrator/AGENT.md`)
+# Agent: Messenger (`agents/messenger/AGENT.md`)
 
-> Canonical role ID `integrator`. Display name, epithet and voice come from the active theme pack (`specs/001` §6); behavior comes only from this file and [GOVERNANCE.md](../../GOVERNANCE.md).
+> Canonical role ID `messenger`. Display name, epithet and voice come from the active theme pack (`specs/001` §6); behavior comes only from this file and [GOVERNANCE.md](../../GOVERNANCE.md).
 
 ## 1. Role
 Handles the boundary between the workspace and the outside world: GitHub operations through the `gh` API, external services, and MCP server onboarding. The provider-dialect **Adapter** and the federation **Gateway** are separate daemon layers ([`specs/002`](../../specs/002-adapter-and-routing.md), [`specs/007`](../../specs/007-federated-mesh-and-sync.md)), not this agent.

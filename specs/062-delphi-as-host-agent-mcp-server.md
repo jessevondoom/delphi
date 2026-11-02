@@ -100,7 +100,7 @@ The 12 KiB combined cap and per-scope budgets of 004 §5.2 apply to items 3-6. E
 
 ### 4.3 Which roles are servable
 
-On demand, any role by name. A per-role manifest field `host_servable` (default `true`) lets a role refuse. **`integrator` ships with `host_servable: false`**: its outbound operations rely on Delphi's cards, which do not travel (§4.4). The operator turns it on by changing that field in the workspace's ratified agent override. **`builder` is servable** (operator decision, 2026-10-31, amending D-6): a host acting as the Builder gets the role's judgement, TDD discipline and lessons, but not the isolated worktree, the sandbox or the merge gates, so its writes are governed by the host's own permissions. The pack header says so.
+On demand, any role by name. A per-role manifest field `host_servable` (default `true`) lets a role refuse. **`messenger` ships with `host_servable: false`**: its outbound operations rely on Delphi's cards, which do not travel (§4.4). The operator turns it on by changing that field in the workspace's ratified agent override. **`builder` is servable** (operator decision, 2026-10-31, amending D-6): a host acting as the Builder gets the role's judgement, TDD discipline and lessons, but not the isolated worktree, the sandbox or the merge gates, so its writes are governed by the host's own permissions. The pack header says so.
 
 ### 4.4 Instructions, not authority
 
@@ -236,7 +236,7 @@ A host session is a server process lifetime (a random 16-hex session ID the MCP 
 
 **Recommended by the architect and approved with the spec (the operator may change them on request):**
 
-- **D-6.** `integrator` defaults to not servable. *Amended 2026-10-31 by the operator: `builder` is servable too (S2).*
+- **D-6.** `messenger` defaults to not servable. *Amended 2026-10-31 by the operator: `builder` is servable too (S2).*
 - **D-7.** The operator profile is omitted from packs for hosts by default (an operator setting may include it).
 - **D-8.** Dispatch for host requests is read-only in this version.
 - **D-9.** Proposals carry `host:<tool>/<model>` and reviewers see it.
@@ -269,7 +269,7 @@ Documentation lands with S4 (not before the behavior exists), and every slice th
 5. Dispatched agents for host requests have no write, execute or network capability.
 6. A proposal never becomes always-loaded without ratification; a proposal without evidence is refused.
 7. With `enabled = false`, every tool answers `disabled_by_operator` and nothing reaches the daemon.
-8. An `integrator` pack (and any role with `host_servable: false`, or a `host_servable` that is not a boolean) is refused until the operator enables it.
+8. A `messenger` pack (and any role with `host_servable: false`, or a `host_servable` that is not a boolean) is refused until the operator enables it.
 9. Packs and project resources contain no theme names, no other role's lessons, no other project's memory and no operator-private data beyond what D-7 allows.
 10. A pack for the same inputs has the same content hash.
 

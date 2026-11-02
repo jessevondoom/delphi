@@ -40,7 +40,7 @@ Multi-agent systems fail when roles blur (`FM-1.2`) or agents share correlated b
 | `strategist` | Roadmaps, sequencing, scope audit | Scope creep; premature victory | **Scope audit** of every spec and PR; cannot waive Red-Team `P0`s |
 | `red-team` | Attacks specs, plans and PRs | Unbounded contrarianism, endless review loops | **Falsifiable-critique contract:** each finding gives a failure scenario and remediation; respects REVIEW.md §5 and the **round cap** |
 | `writer` | User-facing docs and synthesis | Polish over truth | **Truth before harmony:** never documents unbuilt features as working; keeps Red-Team caveats |
-| `integrator` | GitHub, external APIs, MCP onboarding | Silent mutation in transit; noisy ingress | Every outbound action is Red-tier; ingress is tainted and compacted |
+| `messenger` | GitHub, external APIs, MCP onboarding | Silent mutation in transit; noisy ingress | Every outbound action is Red-tier; ingress is tainted and compacted |
 
 The provider-dialect **adapter** and the federation **gateway** are deterministic layers of `delphi-core`, not agents.
 

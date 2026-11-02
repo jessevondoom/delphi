@@ -35,13 +35,13 @@ This specification defines how the 9 agent specialists collaborate under **Orche
 
 ## 2. Orchestrator's Complexity Escalation Ladder
 
-> **v1 roster (D-07, ratified 2026-10-23):** Orchestrator, Architect, Builder, Red-Team, Strategist. Until Scout, Investigator, Writer and Integrator are enabled, their rows below are filled by the nearest enabled role: discovery by Architect (read-only), audits by Red-Team, docs by Builder (in a worktree, through the normal merge gates).
+> **v1 roster (D-07, ratified 2026-10-23):** Orchestrator, Architect, Builder, Red-Team, Strategist. Until Scout, Investigator, Writer and Messenger are enabled, their rows below are filled by the nearest enabled role: discovery by Architect (read-only), audits by Red-Team, docs by Builder (in a worktree, through the normal merge gates).
 
 Per Anthropic's *Building Effective Agents* taxonomy, **Orchestrator** never spawns a multi-agent swarm when a simpler path suffices:
 
 | Level | Pattern | Trigger Criteria | Active Agents |
 | :--- | :--- | :--- | :--- |
-| **L1: Direct Hunt** | Single-specialist lookup | Fact-check, code search, quick doc question, or status lookup. | `Orchestrator` $\rightarrow$ `Investigator` or `Integrator` (`fast` tier); in v1, `Architect` (read-only discovery) |
+| **L1: Direct Hunt** | Single-specialist lookup | Fact-check, code search, quick doc question, or status lookup. | `Orchestrator` $\rightarrow$ `Investigator` or `Messenger` (`fast` tier); in v1, `Architect` (read-only discovery) |
 | **L2: Scoped Pipeline** | 2–3 node linear chain | **Read-only** (Step 2): discovery, plan, spec draft, or audit. **Mutating** (Step 3): a small bug fix, doc update or refactor, against an approved spec or under the bounded exemption (§3.1.2). | Read-only: `Architect` → `Red-Team` or `Strategist`. Mutating: `Investigator`/`Architect` → `Builder` → `Red-Team` |
 | **L3: Full Spec-First DAG** | Parallel discovery $\rightarrow$ Spec $\rightarrow$ Build $\rightarrow$ Audit | New feature, subsystem build, deep research synthesis, or multi-phase personal project. | `Scout` + `Investigator` $\rightarrow$ `Architect` $\rightarrow$ `Strategist` + `Red-Team` $\rightarrow$ `Builder` $\rightarrow$ `Writer` |
 | **L4: Council Mode** | 3-Round Sparse Debate | High architectural ambiguity, major trade-off fork, security-critical design, or explicit `/council` command from the **operator**. | `Orchestrator` + 3–5 heterogeneous specialists (always including `Red-Team` and/or `Strategist`) |
