@@ -24,7 +24,7 @@ The plugin carries `.mcp.json` and a `delphi` skill that tells the host when to 
 
 | Tool | Use |
 | :-- | :-- |
-| `list_roles`, `get_agent` | the roles Delphi serves and one role's pack (also as an MCP prompt). A role whose manifest says `host_servable: false` (the integrator) is refused |
+| `list_roles`, `get_agent` | the roles Delphi serves and one role's pack (also as an MCP prompt). A role whose manifest says `host_servable: false` (the messenger) is refused |
 | `list_skills`, `get_skill` | Delphi's release skills |
 | `specs_status` | each spec of the project the folder belongs to; only `approved` is permission to build |
 | `search_project`, `search_memory` | search specs, plans, context and research, or one role's memory; resources are `delphi://project/<path>` |

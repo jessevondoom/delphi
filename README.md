@@ -141,7 +141,7 @@ Agents are plain files: each is an `agents/<role>/AGENT.md` that states what the
 | `investigator` | Dogged root-cause hunts, bisects, benchmarks; hypothesis flipping and resilience against early dead ends | no |
 | `scout` | Dual-horizon local-out and outward-in repository and literature surveys, dependency audits | no |
 | `writer` | Technical, business, creative, and persuasion prose; tonal calibration and register code-switching | no |
-| `integrator` | External boundary: GitHub (`gh`), external services, MCP server onboarding | no |
+| `messenger` | External boundary: GitHub (`gh`), external services, MCP server onboarding | no |
 
 Specs, config and manifests always use these role IDs. **Display names and voice come from a theme pack** (Greek mythology by default, [`themes/greek/theme.md`](themes/greek/theme.md)); a theme changes how things look and sound, never what a role may do. You can write your own pack in `~/.delphi/themes/`.
 

@@ -14,7 +14,7 @@ tags: [federation, a2a, ucan, biscuit, hybrid-rag, sqlite-vec, fts5, rrf, three-
 
 ## 1. Federated Multi-Instance Context Sharing (`specs/007`)
 
-To allow multiple independent Delphi installations (run by different operators or across different machines) to collaborate without exposing private `memory/agents/` or requiring a centralized cloud database, Delphi uses a **Three-Plane Federation Architecture** mediated by **Integrator**:
+To allow multiple independent Delphi installations (run by different operators or across different machines) to collaborate without exposing private `memory/agents/` or requiring a centralized cloud database, Delphi uses a **Three-Plane Federation Architecture** mediated by **Messenger**:
 
 1. **Plane 1 — Agent-Team-to-Agent-Team Delegation (Google A2A Profile):**
    - Each `delphi-core` instance exposes a signed Agent Card (`/.well-known/delphi-card.json`) with its Ed25519 DID (`did:key:z6Mk...`) and high-level team skills.

@@ -830,7 +830,7 @@ mod tests {
         assert!(write_glob_error("writer", "@worktree/docs/**").is_none());
         assert!(write_glob_error("red-team", "@worktree/**").is_some());
         assert!(write_glob_error("builder", "@worktree/.git/hooks/x").is_some());
-        assert!(write_glob_error("integrator", ".github/**").is_some());
+        assert!(write_glob_error("messenger", ".github/**").is_some());
         assert!(write_glob_error("builder", "skills/review/scripts/**").is_some());
         assert!(write_glob_error("builder", "skills/custom/x/scripts/**").is_none());
         assert!(write_glob_error("scout", "/etc/passwd").is_some());

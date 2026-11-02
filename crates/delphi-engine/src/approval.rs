@@ -441,7 +441,7 @@ mod tests {
     }
 
     fn red(task: &str) -> Request {
-        Request { approval_id: String::new(), task_id: task.into(), span_id: "sp1".into(), role: "integrator".into(), tier: Tier::Red, tool: "gh_pr_create".into(), pattern: "gh_pr_create".into(), worktree: None, summary: "open a PR".into(), payload: json!({"title": "x"}), payload_blake3: String::new(), timeout: Duration::from_secs(60) }
+        Request { approval_id: String::new(), task_id: task.into(), span_id: "sp1".into(), role: "messenger".into(), tier: Tier::Red, tool: "gh_pr_create".into(), pattern: "gh_pr_create".into(), worktree: None, summary: "open a PR".into(), payload: json!({"title": "x"}), payload_blake3: String::new(), timeout: Duration::from_secs(60) }
     }
 
     #[test]

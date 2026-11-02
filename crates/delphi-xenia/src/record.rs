@@ -108,7 +108,7 @@ macro_rules! closed_enum {
 
 closed_enum!(
     /// Canonical role ids (D-17); `operator` is the human writing by hand.
-    Role { Operator = "operator", Architect = "architect", Builder = "builder", Investigator = "investigator", Scout = "scout", Strategist = "strategist", RedTeam = "red-team", Writer = "writer", Integrator = "integrator", Orchestrator = "orchestrator" }
+    Role { Operator = "operator", Architect = "architect", Builder = "builder", Investigator = "investigator", Scout = "scout", Strategist = "strategist", RedTeam = "red-team", Writer = "writer", Messenger = "messenger", Integrator = "integrator", Orchestrator = "orchestrator" }
 );
 closed_enum!(
     /// The local lattice's enum (spec 001 §5); the receiver clamps to its own ceiling regardless.

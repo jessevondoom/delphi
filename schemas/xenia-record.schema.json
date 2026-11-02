@@ -14,7 +14,7 @@
     "store": { "type": "string", "pattern": "^[a-z0-9-]{1,32}$" },
     "author": { "type": "string", "pattern": "^did:key:z", "description": "Equals the sidecar kid." },
     "author_handle": { "type": "string", "description": "Display only." },
-    "author_role": { "enum": ["operator", "orchestrator", "architect", "builder", "investigator", "scout", "strategist", "red-team", "writer", "integrator"] },
+    "author_role": { "enum": ["operator", "orchestrator", "architect", "builder", "investigator", "scout", "strategist", "red-team", "writer", "messenger", "integrator"] },
     "title": { "type": "string", "minLength": 1, "maxLength": 120 },
     "summary": { "type": "string", "minLength": 1, "maxLength": 500, "not": { "pattern": "\\]\\(" } },
     "tags": { "type": "array", "maxItems": 12, "items": { "type": "string", "pattern": "^[a-z0-9-]{1,32}$" } },
@@ -76,7 +76,7 @@
       "type": "object",
       "required": ["roles", "connectors"],
       "properties": {
-        "roles": { "type": "array", "maxItems": 16, "items": { "enum": ["operator", "orchestrator", "architect", "builder", "investigator", "scout", "strategist", "red-team", "writer", "integrator"] } },
+        "roles": { "type": "array", "maxItems": 16, "items": { "enum": ["operator", "orchestrator", "architect", "builder", "investigator", "scout", "strategist", "red-team", "writer", "messenger", "integrator"] } },
         "connectors": { "type": "array", "maxItems": 16, "items": { "type": "string", "pattern": "^[a-z0-9-]{1,32}$" } }
       },
       "additionalProperties": false
