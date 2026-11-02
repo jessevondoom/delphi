@@ -391,6 +391,18 @@ pub fn svg_banner() -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_daemons_role_look_matches_the_avatar_library() {
+        for t in ROLES.iter() {
+            let (badge, hex, _) = delphi_core::research::role_look(t.role_id);
+            let (r, g, b) = t.chassis_rgb;
+            assert_eq!(hex, format!("#{r:02x}{g:02x}{b:02x}"), "{}", t.role_id);
+            let role = from_canonical_id(t.role_id).unwrap();
+            assert_eq!(badge, format!("⟦{}⟧", badge_cells(role, AgentActivity::Idle)), "{}", t.role_id);
+        }
+        assert_eq!(delphi_core::research::role_look("investigator"), delphi_core::research::role_look("scout"));
+    }
+
     use super::*;
 
     #[test]

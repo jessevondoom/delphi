@@ -74,7 +74,7 @@ pub trait Library: Send + Sync {
     /// Fingerprints of claims the library already holds.
     fn known_fingerprints(&self) -> BTreeSet<String>;
     /// Keep a fetched page as a source, `not validated`; returns its source id. `trusted` is provenance for the capture policy.
-    fn capture(&self, url: &str, text: &str, trusted: bool) -> Result<String, String>;
+    fn capture<'a>(&'a self, url: &'a str, text: &'a str, trusted: bool) -> BoxFut<'a, Result<String, String>>;
     /// Stage a claim by capture on contact (`specs/052`): `noted` unless a check is queued.
     fn stage_claim(&self, claim: &ClaimRec) -> Result<(), String>;
 }
@@ -201,7 +201,7 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
             if trusted {
                 trusted_kept += 1;
             }
-            let Ok(source_id) = deps.library.capture(&page.url, &page.text, trusted) else { continue };
+            let Ok(source_id) = deps.library.capture(&page.url, &page.text, trusted).await else { continue };
             let Ok(found) = deps.scout.extract(question, &page).await else { continue };
             for x in found {
                 let fp = claim_fingerprint(&x.subject, &x.predicate, &x.object, &x.scope, &x.time);
@@ -333,9 +333,11 @@ mod tests {
         fn known_fingerprints(&self) -> BTreeSet<String> {
             self.known.clone()
         }
-        fn capture(&self, url: &str, _t: &str, trusted: bool) -> Result<String, String> {
-            self.captured.lock().unwrap().push((url.into(), trusted));
-            Ok(format!("src-{}", host(url)))
+        fn capture<'a>(&'a self, url: &'a str, _t: &'a str, trusted: bool) -> BoxFut<'a, Result<String, String>> {
+            Box::pin(async move {
+                self.captured.lock().unwrap().push((url.into(), trusted));
+                Ok(format!("src-{}", host(url)))
+            })
         }
         fn stage_claim(&self, c: &ClaimRec) -> Result<(), String> {
             self.staged.lock().unwrap().push(c.id.clone());

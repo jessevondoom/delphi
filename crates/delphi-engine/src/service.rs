@@ -55,6 +55,7 @@ pub struct EngineService {
     briefs: Arc<Mutex<Briefs>>,
     /// When the acquisition job was last looked at (unix seconds): it is considered once an hour.
     acquire_checked: Mutex<i64>,
+    research_jobs: crate::research_jobs::Jobs,
 }
 
 #[derive(Default)]
@@ -151,7 +152,7 @@ impl EngineService {
     pub fn new(engine: Arc<Engine>, default_mission: &str) -> Arc<EngineService> {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(String, String, String)>();
         let _ = engine.research_ask.set(tx);
-        let svc = Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), host_gate: tokio::sync::Mutex::new(()), helps: Arc::new(Mutex::new(HashMap::new())), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())), acquire_checked: Mutex::new(0) });
+        let svc = Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), host_gate: tokio::sync::Mutex::new(()), helps: Arc::new(Mutex::new(HashMap::new())), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())), acquire_checked: Mutex::new(0), research_jobs: crate::research_jobs::Jobs::default() });
         // An approved `request_research` card (`specs/058` §20): the mission's own scope decides where the pages go.
         if tokio::runtime::Handle::try_current().is_ok() {
             let weak = Arc::downgrade(&svc);
@@ -286,7 +287,75 @@ impl EngineService {
                 r.at = Instant::now();
             }
         });
-        Ok(self.wait_help(&task_id, HELP_WAIT).await)
+        Ok(self.signed_help(self.wait_help(&task_id, HELP_WAIT).await))
+    }
+
+    /// `host.request_research` (`specs/066` §3): queue a research job and return its id at once. The scout searches the trusted lists
+    /// first and the validator re-reads its sources, both through the per-role egress scopes; everything captured is `not validated`.
+    async fn host_request_research(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        use crate::host_rpc as h;
+        need_host(&ctx)?;
+        let ws = &self.engine.ws;
+        h::gate(&ws.dir).map_err(host_err)?;
+        let c = h::Caller::parse(&p).map_err(host_err)?;
+        let (question, depth) = h::research_args(&p).map_err(host_err)?;
+        let question = self.engine.secrets.redact(&question);
+        if self.engine.cfg.get().search.providers.is_empty() {
+            return Err(err(code::INVALID_PARAMS, "research is turned off: `providers` under [search] in config.toml is empty"));
+        }
+        let (e, wsd, home) = (self.engine.clone(), ws.dir.clone(), ws.home.clone());
+        let (list, engines, transport) = tokio::task::spawn_blocking(move || -> Result<_, String> {
+            Ok((crate::research_setup::lists(&wsd, &home)?, crate::research_setup::engines(&e), delphi_adapter::research::transport::HttpTransport::new()?))
+        })
+        .await
+        .map_err(|e| err(-32000, e.to_string()))?
+        .map_err(|m| err(-32000, m))?;
+        let research_id = {
+            let _gate = self.host_gate.lock().await;
+            let m = self.mission_at(Some(&c.mission()), c.cwd.to_str()).await?;
+            let id = format!("r-{}", m.next_task_id());
+            let label = c.label(p["model"].as_str());
+            m.append(EventEnvelope::new(&m.id, h::RESEARCH_EVENT, crate::research_jobs::audit_payload(&id, depth, &label, question.chars().count()))).await.map_err(engine_err)?;
+            id
+        };
+        let label = c.label(p["model"].as_str());
+        let (engine, wsd, home, q) = (self.engine.clone(), ws.dir.clone(), ws.home.clone(), question.clone());
+        self.research_jobs.submit(&research_id, &c.session, depth, move |jc| async move {
+            let web = Arc::new(crate::research_host::LiveWeb { transport: Arc::new(transport), list: Arc::new(list), engines });
+            let sites = web.list.site_filters();
+            let scout = crate::research_host::LiveScout(engine.clone());
+            let validator = crate::research_host::LiveValidator { web: web.clone() };
+            let library = crate::research_host::LiveLibrary { home, ledger: wsd.join("research/host-claims.jsonl"), label };
+            let redactor = delphi_core::redact::Redactor::new();
+            let deps = crate::research_run::Deps { web: web.as_ref(), scout: &scout, validator: &validator, library: &library, redactor: &redactor, sites: &sites };
+            crate::research_run::run_research(&jc, &q, depth, &deps).await
+        });
+        Ok(json!({"research_id": research_id, "status": "queued", "depth": depth, "note": "research runs in the background, trusted sources first: read it with research_status, then research_result. Everything it returns is not validated unless a claim says otherwise."}))
+    }
+
+    /// `host.research_status` and `host.research_result`: only the session that asked can read a job.
+    async fn host_research_read(&self, p: Value, ctx: CallContext, result: bool) -> RpcOutcome {
+        use crate::host_rpc as h;
+        need_host(&ctx)?;
+        let ws = &self.engine.ws;
+        h::gate(&ws.dir).map_err(host_err)?;
+        let c = h::Caller::parse(&p).map_err(host_err)?;
+        let id = p["research_id"].as_str().unwrap_or("").to_string();
+        let unknown = || err(code::INVALID_PARAMS, "no such research job for this session");
+        let mut v = if result {
+            let wait = if p["wait"].as_bool() == Some(true) { Duration::from_secs(25) } else { Duration::ZERO };
+            match self.research_jobs.wait(&id, &c.session, wait).await {
+                Some(v) => v,
+                None => self.research_jobs.status(&id, &c.session).ok_or_else(unknown)?,
+            }
+        } else {
+            self.research_jobs.status(&id, &c.session).ok_or_else(unknown)?
+        };
+        if v["answered_by"].as_str().is_some() {
+            let id = crate::research_host::identity(&ws.dir, &ws.home, "scout", None);
+            crate::research_host::attach_identity(&mut v, &id, "plain");
+        }
+        Ok(v)
     }
 
     /// `host.request_council` (`specs/062` §7): raise an on-demand Council on a host's question, in the host session's own mission, and
@@ -330,10 +399,36 @@ impl EngineService {
         loop {
             let view = h::council_view(&m.replay().map_err(engine_err)?, &m.dir, &id).ok_or_else(|| err(code::INVALID_PARAMS, "no such Council for this session"))?;
             if view["state"] != "deliberating" || Instant::now() >= deadline {
-                return Ok(view);
+                return Ok(self.signed_council(view));
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
+    }
+
+    /// An answer from a Delphi role carries who gave it (`specs/066` §7): the last role consulted, or the orchestrator.
+    fn signed_help(&self, mut v: Value) -> Value {
+        if let Some(role) = v["answered_by"].as_str().map(String::from) {
+            let ws = &self.engine.ws;
+            crate::research_host::attach_identity(&mut v, &crate::research_host::identity(&ws.dir, &ws.home, &role, None), "plain");
+        }
+        v
+    }
+
+    /// Each seat that spoke is named as in the console; the ruling is the orchestrator's.
+    fn signed_council(&self, mut v: Value) -> Value {
+        let ws = &self.engine.ws;
+        let sign = |role: &str| crate::research_host::identity(&ws.dir, &ws.home, role, None).signature();
+        for key in ["seat_positions", "critiques"] {
+            for p in v["ruling"][key].as_array_mut().into_iter().flatten() {
+                if let Some(r) = p["seat"].as_str().map(String::from) {
+                    p["signature"] = json!(sign(&r));
+                }
+            }
+        }
+        if v.get("ruling").is_some() {
+            crate::research_host::attach_identity(&mut v, &crate::research_host::identity(&ws.dir, &ws.home, "orchestrator", None), "plain");
+        }
+        v
     }
 
     /// The answer so far: the result, or `working`. Only the session that asked can read it.
@@ -360,7 +455,7 @@ impl EngineService {
         if !mine {
             return Err(err(code::INVALID_PARAMS, "no such help request for this session"));
         }
-        Ok(self.wait_help(&id, Duration::from_secs(25)).await)
+        Ok(self.signed_help(self.wait_help(&id, Duration::from_secs(25)).await))
     }
 
     async fn host_handoff_put(&self, p: Value, ctx: CallContext) -> RpcOutcome {
@@ -2477,6 +2572,9 @@ impl Extension for ServiceExt {
                 "host.request_council" => svc.host_request_council(params, ctx).await,
                 "host.council_status" => svc.host_council_read(params, ctx, false).await,
                 "host.council_result" => svc.host_council_read(params, ctx, true).await,
+                "host.request_research" => svc.host_request_research(params, ctx).await,
+                "host.research_status" => svc.host_research_read(params, ctx, false).await,
+                "host.research_result" => svc.host_research_read(params, ctx, true).await,
                 "recovery.resume" => svc.recovery_resume(params, ctx).await,
                 "handoff.resume" => svc.handoff_resume(params, ctx).await,
                 "mcp.get" => svc.mcp_switch(params, ctx, false).await,
@@ -2718,6 +2816,39 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn research_requests_are_checked_run_scoped_to_the_session_and_refuse_all_private_questions() {
+        let f = setup(vec![], 5.0, |_| {});
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.hello(&htok).unwrap();
+            let p = |extra: Value| {
+                let mut b = json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cwd});
+                for (k, v) in extra.as_object().unwrap() {
+                    b[k] = v.clone();
+                }
+                b
+            };
+            assert_eq!(rpc_code(c.call("host.request_research", p(json!({})))), Some(code::INVALID_PARAMS));
+            assert_eq!(rpc_code(c.call("host.request_research", p(json!({"question": "q", "depth": "forever"})))), Some(code::INVALID_PARAMS));
+            // A question that is all private details fails before anything leaves the machine.
+            let r = c.call("host.request_research", p(json!({"question": "/etc/shadow 10.0.0.1"}))).unwrap();
+            assert_eq!(r["status"], "queued", "{r}");
+            let id = r["research_id"].clone();
+            let done = c.call("host.research_result", p(json!({"research_id": id, "wait": true}))).unwrap();
+            assert_eq!(done["status"], "failed", "{done}");
+            assert!(done["error"].as_str().unwrap().contains("no usable search query"), "{done}");
+            assert!(done["queries"].as_array().is_none_or(|q| q.is_empty()));
+            let other = json!({"session": "fedcba9876543210", "tool": "x", "cwd": p(json!({}))["cwd"], "research_id": id});
+            assert_eq!(rpc_code(c.call("host.research_status", other)), Some(code::INVALID_PARAMS));
+            assert_eq!(rpc_code(c.call("host.research_status", p(json!({"research_id": "r-none"})))), Some(code::INVALID_PARAMS));
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn a_host_asks_for_help_and_is_told_who_answered_with_no_limit_on_how_often() {
         let f = setup(vec![Step::text("Read specs/001 first; the ladder has three rungs."), Step::text("Second."), Step::text("Third.")], 5.0, |_| {});
         let ws_dir = f.engine.ws.dir.clone();
@@ -2741,6 +2872,7 @@ mod tests {
             let r = c.call("host.request_help", p(json!({"need": "How do retries work?", "tried": "grep", "suggested_target": "nobody"}))).unwrap();
             assert_eq!(r["status"], "answered", "{r}");
             assert_eq!(r["answered_by"], "orchestrator");
+            assert!(r["signature"].as_str().unwrap().ends_with("(orchestrator)") && r["identity"]["ansi"].as_str().unwrap().contains('\u{1b}'), "{r}");
             assert!(r["answer"].as_str().unwrap().contains("three rungs"));
             // Another session cannot read it; the owner can, and it does not count again.
             let other = json!({"session": "fedcba9876543210", "tool": "x", "cwd": cwd, "help_id": r["help_id"]});

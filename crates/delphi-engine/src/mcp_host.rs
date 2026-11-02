@@ -278,6 +278,46 @@ pub fn tools() -> Value {
                 "additionalProperties": false
             },
             "annotations": annotations("Read a Council's ruling")
+        },
+        {
+            "name": "request_research",
+            "title": "Ask Delphi to research a question",
+            "description": "Ask Delphi's scout to research a question when search_kb comes up short or you need current, sourced facts. It searches the operator's trusted sources first, reads and keeps what it finds (which grows Delphi's knowledge base for everyone), and the validator re-checks the quotes. Returns a research_id at once; read it with research_status and research_result. Everything returned is not validated unless a claim says otherwise, trusted source or not. Ask in general terms: the question is turned into web search queries, so leave out paths, hostnames, keys and anything private (they are stripped, and a question that is all private details is refused). depth is quick (a few steps), survey (default) or deep. Any number can be queued; two run at a time.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string", "minLength": 1, "maxLength": 2000, "description": "What to find out, in general terms."},
+                    "depth": {"type": "string", "enum": ["quick", "survey", "deep"], "default": "survey"},
+                    "model": {"type": "string", "maxLength": 64, "description": "Your model name, self-reported."}
+                },
+                "required": ["question"],
+                "additionalProperties": false
+            },
+            "annotations": {"title": "Ask Delphi to research", "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true}
+        },
+        {
+            "name": "research_status",
+            "title": "Check a research job",
+            "description": "The state of a research job this session raised: queued, running, done, partial, failed or cancelled, with the queries run, the pages read and any address refused.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"research_id": {"type": "string", "minLength": 1, "maxLength": 64}},
+                "required": ["research_id"],
+                "additionalProperties": false
+            },
+            "annotations": annotations("Check a research job")
+        },
+        {
+            "name": "research_result",
+            "title": "Read a research result",
+            "description": "The result of a research job this session raised: an answer (not validated), claims each with its knowledge_status, quote and source, contradictions, citations, what was already known and what is new, and who answered (signature). Pass wait: true to wait up to 25 seconds. When you use the result, say it came from Delphi research and carry the knowledge_status with it.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"research_id": {"type": "string", "minLength": 1, "maxLength": 64}, "wait": {"type": "boolean", "default": false}},
+                "required": ["research_id"],
+                "additionalProperties": false
+            },
+            "annotations": annotations("Read a research result")
         }
     ])
 }
@@ -357,6 +397,9 @@ impl Server {
             "request_council" => self.daemon("host.request_council", args),
             "council_status" => self.daemon("host.council_status", args),
             "council_result" => self.daemon_slow("host.council_result", args),
+            "request_research" => self.daemon("host.request_research", args),
+            "research_status" => self.daemon("host.research_status", args),
+            "research_result" => self.daemon_slow("host.research_result", args),
             _ => return None,
         })
     }
@@ -528,12 +571,12 @@ mod tests {
         let r = call(&mut s, json!({"jsonrpc": "2.0", "id": 3, "method": "tools/list"}));
         let tools = r["result"]["tools"].as_array().unwrap();
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["search_kb", "list_roles", "get_agent", "list_skills", "get_skill", "specs_status", "search_project", "search_memory", "route", "propose_note", "record_session_summary", "handoff_put", "handoff_get", "request_help", "help_result", "request_council", "council_status", "council_result"]);
+        assert_eq!(names, ["search_kb", "list_roles", "get_agent", "list_skills", "get_skill", "specs_status", "search_project", "search_memory", "route", "propose_note", "record_session_summary", "handoff_put", "handoff_get", "request_help", "help_result", "request_council", "council_status", "council_result", "request_research", "research_status", "research_result"]);
         for t in tools {
-            let writes = ["propose_note", "record_session_summary", "handoff_put", "request_help", "request_council"].contains(&t["name"].as_str().unwrap());
+            let writes = ["propose_note", "record_session_summary", "handoff_put", "request_help", "request_council", "request_research"].contains(&t["name"].as_str().unwrap());
             assert_eq!(t["annotations"]["readOnlyHint"], !writes, "{}", t["name"]);
             assert_eq!(t["annotations"]["destructiveHint"], false, "{}", t["name"]);
-            assert_eq!(t["annotations"]["openWorldHint"], false, "{}", t["name"]);
+            assert_eq!(t["annotations"]["openWorldHint"], t["name"] == "request_research", "{}", t["name"]);
             assert_eq!(t["inputSchema"]["additionalProperties"], false, "{}", t["name"]);
         }
         assert_eq!(call(&mut s, json!({"jsonrpc": "2.0", "id": 4, "method": "completion/complete"}))["error"]["code"], -32601);
@@ -675,7 +718,7 @@ mod tests {
             assert_eq!(r["result"]["isError"], true);
             assert!(r["result"]["content"][0]["text"].as_str().unwrap().starts_with("disabled_by_operator"));
         }
-        assert!(call(&mut s, json!({"jsonrpc": "2.0", "id": 9, "method": "tools/list"}))["result"]["tools"].as_array().unwrap().len() == 18);
+        assert!(call(&mut s, json!({"jsonrpc": "2.0", "id": 9, "method": "tools/list"}))["result"]["tools"].as_array().unwrap().len() == 21);
         std::fs::write(d.path().join("config.toml"), "[mcp]\nenabled = true\n").unwrap();
         assert_eq!(tool(&mut s, "no_such_tool")["error"]["code"], -32602);
         std::fs::write(d.path().join("config.toml"), "[mcp]\nenabled = false\n").unwrap();

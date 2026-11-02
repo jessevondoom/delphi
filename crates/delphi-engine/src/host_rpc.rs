@@ -247,6 +247,20 @@ pub const COUNCIL_EVENT: &str = "host.council.requested";
 /// A host raised a research job (`specs/066` §6); logged in the host session's mission.
 pub const RESEARCH_EVENT: &str = "host.research.requested";
 
+/// The question and depth of a research request. The question is content from outside Delphi: one line, capped, and the planner
+/// strips private details before any query leaves the machine (`research_plan::clean_query`).
+pub fn research_args(p: &Value) -> Result<(String, delphi_core::research::Depth), HostErr> {
+    let q = clean("question", p["question"].as_str().unwrap_or(""), MAX_QUESTION)?;
+    let depth = match p["depth"].as_str() {
+        None | Some("") => delphi_core::research::Depth::Survey,
+        Some(d) => match delphi_core::research::Depth::parse(d) {
+            Some(d) => d,
+            None => return bad("`depth` is one of quick, survey, deep"),
+        },
+    };
+    Ok((q, depth))
+}
+
 /// The proposition a Council is convened on, from a host's request (`specs/062` §7.1). It is content from outside Delphi:
 /// fenced as such, so the seats treat it as the question under debate and not as an instruction.
 pub fn council_proposition(c: &Caller, p: &Value) -> Result<String, HostErr> {
