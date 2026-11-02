@@ -244,6 +244,8 @@ fn pointer_lines(p: &Value) -> Result<Vec<String>, HostErr> {
 pub const MAX_QUESTION: usize = 2000;
 pub const STAKES: [&str; 3] = ["low", "normal", "high"];
 pub const COUNCIL_EVENT: &str = "host.council.requested";
+/// A host raised a research job (`specs/066` §6); logged in the host session's mission.
+pub const RESEARCH_EVENT: &str = "host.research.requested";
 
 /// The proposition a Council is convened on, from a host's request (`specs/062` §7.1). It is content from outside Delphi:
 /// fenced as such, so the seats treat it as the question under debate and not as an instruction.
