@@ -4,6 +4,7 @@ title: "006: Multi-Operator Distribution, Installer & Three-Zone Updater Engine"
 author: architect
 timestamp: 2026-10-23T07:54:00Z
 status: approved   # by the operator, 2026-10-23, after Council 002; amendments 004-A1, 006-A1..A6 approved by the operator 2026-10-23 to 2026-10-25 and folded in
+amendments: "2026-11-02, approved by the operator ('work on a fix'): raise self-update safety limits for embedded model and seed vectors (MAX_ARCHIVE 512 MiB, MAX_BINARY 384 MiB; §4)"
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: user_ratified
@@ -177,7 +178,7 @@ Supersedes the former "one Red-tier approval" in §4 step 3 and the "stages the 
 
 ## 4. `delphi update` State Machine
 
-1. **Download & Verify:** downloads the release and verifies its Ed25519 signature and `core-manifest.json`. It refuses a version lower than the installed one unless `--allow-downgrade` is passed, which defends against downgrade attacks.
+1. **Download & Verify:** downloads the release and verifies its Ed25519 signature and `core-manifest.json`. Memory-safe upper bounds prevent excessive memory use: at most 512 MiB for the downloaded archive (`MAX_ARCHIVE`) and at most 384 MiB for an extracted binary (`MAX_BINARY`) (amended 2026-11-02 to accommodate the embedded model and seed vector cache). It refuses a version lower than the installed one unless `--allow-downgrade` is passed, which defends against downgrade attacks.
 2. **Pre-Flight Drain & Stop (all workspaces):** finds every daemon under `$DELPHI_HOME/run/*.sock`. If any task or worktree build is running, it pauses and prompts the operator. Otherwise it asks each daemon to drain (finish the current turn, persist, release locks) and **stops it**.
 3. **Ratify the Release (006-A6, §3.7):** running the update is the operator's approval of what the release ships. Once the workspace's `base/` is refreshed, the release's own files (constitution, manifests, skills, the built-in theme) are ratified into `local/ratified/` and `ratified.lock`, and the names are printed. Only files held exactly as the release has them qualify; customized files, config and everything else stay pending proposals. `--review` skips the ratification and leaves every change pending. Because the daemon loads only ratified copies, a binary swap by anything other than the manual command can never change active rules by itself.
 4. **Zone 1 Merge into `base/` and `core/`:**

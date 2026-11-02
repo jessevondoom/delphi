@@ -217,6 +217,6 @@ mod tests {
     fn repo_greek_pack_is_valid() {
         let text = include_str!("../../../themes/greek/theme.md");
         let t = parse(text).unwrap_or_else(|e| panic!("{:?}", e));
-        assert_eq!(t.roles.len(), 10);
+        assert_eq!(t.roles.len(), 13);
     }
 }
