@@ -510,3 +510,17 @@ Approved by the operator on 2026-11-01 after a four-seat adversarial council rev
 | E2 | KB indexing (`zone: episodes`), tool/skill/error tokenization in `kb_fts_ident`, and role isolation in `kb.rs` | built (this PR) |
 | E3 | Agent tool `recall_memory` and engine wiring to unified retrieval service (`specs/064`) | built (this PR) |
 | E4 | Proactive retry-ladder bridge hint injection and `/retro` candidate supersession | built (this PR) |
+
+
+## Fleet expansion: Administrator, Assistant, and Advocate (spec 067, approved 2026-11-01)
+
+Approved by the operator on 2026-11-01. Introduces three new canonical agents into the Delphi fleet: `administrator` (process topology and Council parliamentarian), `assistant` (executive leverage, comms triage, calendar ergonomics), and `advocate` (human-centered design, user psychology, user joy). Offloads domain knowledge into `context/reference/` and cognitive behaviors into modular skills. Display names and personas come from the active theme pack.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| S0 | the spec and tracker entry | built (this PR) |
+| S1 | curated reference knowledge base compendiums in `context/reference/` | built (this PR) |
+| S2 | modular cognitive skills in `skills/` | built (this PR) |
+| S3 | agent manifests in `agents/` and thematic mapping in `themes/greek/theme.md` | built (this PR) |
+| S4 | frontmatter, avatars, and engine integration | built (this PR) |
+| S5 | docs, catalog, and verification gates | built (this PR) |

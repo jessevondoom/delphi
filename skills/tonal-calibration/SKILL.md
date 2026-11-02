@@ -3,6 +3,8 @@ name: tonal-calibration
 description: "Calibrate and shift prose across technical, executive, persuasive, and educational registers for reader comfort. Use when adapting documentation, mission briefs, or reports for distinct audiences."
 authorized_agents:
   - writer
+  - assistant
+  - advocate
 input_schema:
   type: object
   required: ["content"]

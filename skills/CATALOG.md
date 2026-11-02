@@ -142,6 +142,26 @@ The six kinds that judge one document (`dag`, `handoff`, `provenance`, `rules`, 
 | :--- | :--- | :--- |
 | `fact-validation` | Reports whether a claim has independent, reputable corroboration, and what it would conclude; never writes *validated*. Also usable by the scout and orchestrator. | instructions |
 
+### 11. **Administrator** (Process Topology, Delivery Systems & Council Parliamentarian, `specs/067`)
+| Skill | Purpose | Backing |
+| :--- | :--- | :--- |
+| `work-breakdown-structures` | Decompose complex, ambiguous epics into Mutually Exclusive, Collectively Exhaustive (MECE) task hierarchies. | instructions |
+| `critical-path-sequencing` | Sequence task dependency DAGs, calculate float and critical path bottlenecks, and balance Little's Law WIP limits. | instructions |
+| `council-parliamentarian` | Audit multi-agent Council debates for procedural compliance with REVIEW.md, extract irreconcilable contentions, and structure operator tie-breaker cards. | instructions |
+
+### 12. **Assistant** (Executive Leverage, Comms Triage & Calendar Ergonomics, `specs/067`)
+| Skill | Purpose | Backing |
+| :--- | :--- | :--- |
+| `executive-briefing-distillation` | Distill complex operational context, incidents, and multi-channel communications into top-down BLUF briefings and binary decision cards. | instructions |
+| `transcript-action-extraction` | Forensically extract actionable commitments from meeting and conversation transcripts, eliminating hallucinated consensus and enforcing TRIAD ownership. | instructions |
+
+### 13. **Advocate** (Human-Centered Design, Behavioral Psychology & Joy Optimization, `specs/067`)
+| Skill | Purpose | Backing |
+| :--- | :--- | :--- |
+| `persona-simulation` | Model goal-directed user personas, Jobs to Be Done (JTBD) Job Stories, and cognitive walkthrough scenarios. | instructions |
+| `user-joy-heuristics` | Audit software interfaces, TUI screens, and CLI interactions against emotional design levels, Kahneman's Peak-End Rule, and Nielsen's heuristics to maximize user joy and eliminate friction. | instructions |
+| `cognitive-walkthrough` | Perform structured 4-question cognitive walkthroughs on CLI commands, TUI screens, and user workflows to identify mental model mismatches. | instructions |
+
 ---
 
 ## 3. Growing a Skill

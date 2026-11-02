@@ -8,7 +8,10 @@ What a bundle can attach to. A bundle names a **host role** by its id (never a t
 
 | id | job | default tier | skills |
 | :-- | :-- | :-- | :-- |
+| `administrator` | Process Topology, Delivery Sequencer & Council Parliamentarian | workhorse | `work-breakdown-structures`, `critical-path-sequencing`, `council-parliamentarian`, `roadmap-sequencing` |
+| `advocate` | User Experience Advocate, Behavioral Psychologist & Joy Specialist | workhorse | `persona-simulation`, `user-joy-heuristics`, `cognitive-walkthrough`, `tonal-calibration` |
 | `architect` | Systems Architect, Creative Designer & Spec Author | workhorse | `repo-cartography`, `ast-code-search`, `spec-authoring`, `diagram-generation`, `api-contract-design`, `trade-off-matrix`, `tui-design`, `oblique-strategies` |
+| `assistant` | Executive Assistant, Comms Triage & Operator Leverage Specialist | fast | `executive-briefing-distillation`, `transcript-action-extraction`, `tonal-calibration` |
 | `builder` | Lead Engineer, Builder & Verification Specialist | workhorse | `worktree-isolation`, `tdd-execution`, `safe-refactoring`, `git-pr-packaging`, `ci-triage`, `tui-design`, `systems-pattern-catalog` |
 | `investigator` | Precision Researcher, Bug Tracker & Benchmark Specialist | fast | `ast-code-search`, `git-bisect-hunt`, `benchmark-profiling`, `primary-source-verification`, `competitive-swot-analysis`, `hypothesis-flipping` |
 | `messenger` | External Integrations, GitHub/API Operations & Protocol Bridge | fast | `github-ops-sync`, `mcp-server-integration`, `external-comms-dispatch`, `protocol-schema-translation` |
@@ -30,10 +33,13 @@ What a bundle can attach to. A bundle names a **host role** by its id (never a t
 | `benchmark-profiling` | Measure performance with warmups, repeated runs and a significance test before claiming a change helps. Use when comparing speed, memory or tokens. | `investigator` |
 | `ci-triage` | Diagnose a failing CI or test run: separate real regressions from flakes and environment problems, and say what to do. Use when a pipeline is red. | `builder` |
 | `clarity-synthesis` | Turn dense research, specs or logs into a clear brief for a human reader: the answer, the reasons, the decisions needed. Use when handing findings to the operator. | `writer` |
+| `cognitive-walkthrough` | Perform structured 4-question cognitive walkthroughs on CLI commands, TUI screens, and user workflows to identify mental model mismatches and execution gulfs. | `advocate` |
 | `competitive-swot-analysis` | Execute systematic SWOT, Porter's Five Forces, and Wardley mapping analyses on technical and market positions. Use when evaluating competitive dynamics, platform bets, or product viability. | `strategist`, `investigator` |
 | `concision-audit` | Audit documents and knowledge-base articles for bloat, redundancy and unverified claims, and cut them. Use when a document is long or restates others. | `writer` |
 | `contradiction-pruning` | Find stale claims, broken links and superseded documents in the knowledge base and propose fixes. Use periodically and before a release. | `orchestrator` |
 | `council-moderation` | Run the three-round Council: blind Round 1, cross-examination, Verdict plus verbatim Minority Report. Use when a decision needs adversarial review. | `orchestrator` |
+| `council-parliamentarian` | Audit multi-agent Council debates for procedural compliance with REVIEW.md, extract irreconcilable contentions, and structure operator tie-breaker cards. Use when council sessions reach deadlock. | `administrator` |
+| `critical-path-sequencing` | Sequence task dependency DAGs, calculate float and critical path bottlenecks, and balance Little's Law WIP limits. Use when optimizing multi-agent execution order or resolving project stalls. | `administrator`, `strategist` |
 | `delphi-attribution` | Sign what a Delphi agent said, label what is not validated, and ask for research when the knowledge base falls short. Use with request_research, request_help, request_council. | `orchestrator` |
 | `dependency-audit` | Audit libraries for maintenance health, licence fit, size, and known advisories, and recommend keep, replace or drop. Use before adding or upgrading a dependency. | `scout` |
 | `diagram-generation` | Produce a Mermaid diagram that shows real structure or flow, with quoted labels and the right diagram type. Use when a picture beats prose. | `architect` |
@@ -41,6 +47,7 @@ What a bundle can attach to. A bundle names a **host role** by its id (never a t
 | `dual-horizon-search` | Conduct dual-horizon exploration via local-out workspace expansion and outside-in industry trend mapping. Use when investigating unfamiliar technical terrain or mapping ecosystem dependencies. | `scout` |
 | `dynamic-model-scaling` | Choose the model tier and thinking budget for a handoff from task signals and retry history. Use when writing a routing directive or after a failed attempt. | `orchestrator` |
 | `encyclopedia-synthesis` | Write an encyclopedia-style summary page in Markdown from gathered records: lead, infobox, contents, inline figures, citations, hatnotes, and a cache lifetime. | `writer` |
+| `executive-briefing-distillation` | Distill complex operational context, incidents, and multi-channel communications into top-down BLUF briefings and binary decision cards. Use when packaging daily briefs or unblocking decisions. | `assistant` |
 | `external-comms-dispatch` | Send plans or notices to external channels (calendar, webhook, notification) only with redaction and explicit approval. Use when something must leave Delphi. | `messenger` |
 | `fact-validation` | Advisory: report whether a claim is true by finding independent, reputable corroboration, and what you would conclude. Writes nothing; never marks a claim validated. | `validator`, `scout`, `orchestrator` |
 | `git-bisect-hunt` | Find the commit that introduced a regression with an automated reproduction and git bisect in a detached checkout. Use when something used to work. | `investigator` |
@@ -56,6 +63,7 @@ What a bundle can attach to. A bundle names a **host role** by its id (never a t
 | `narrative-briefing` | Write plans, proposals and release notes that are specific, honest and free of filler. Use for announcements and personal or project plans. | `writer` |
 | `oblique-strategies` | Apply lateral thinking prompts, Oblique Strategies, and TRIZ contradiction matrices to break architectural deadlocks. Use when standard designs hit intractable trade-offs or creative blocks. | `architect` |
 | `org-bundle-authoring` | Create, sanitize and package an org knowledge bundle (specs/023): gather allow-listed sources, distill, scan, validate, package. Use when an org wants its knowledge and skills bundled. | `writer` |
+| `persona-simulation` | Model goal-directed user personas, Jobs to Be Done (JTBD) Job Stories, and cognitive walkthrough scenarios. Use when evaluating product ergonomics, specs, or UI designs. | `advocate` |
 | `pr-alignment-review` | Audit a PR or spec against the operator's goal, the governing specs and the REVIEW.md rubric, mapping acceptance criteria to evidence. Use at review. | `strategist` |
 | `primary-source-verification` | Check a specific claim, API behaviour or benchmark against the primary source and report what holds. Use before relying on a claim you did not verify. | `investigator` |
 | `protocol-schema-translation` | Validate and translate payloads at a boundary (webhook, third-party API, provider tool schema), tagging them untrusted. Use when data crosses into Delphi. | `messenger` |
@@ -64,7 +72,7 @@ What a bundle can attach to. A bundle names a **host role** by its id (never a t
 | `review-md-audit` | Audit a diff strictly against the base branch's REVIEW.md, never the PR's own copy, and report findings with failure scenarios. Use when reviewing a PR. | `red-team` |
 | `review-md-distillation` | Keep the REVIEW.md rubric short: merge repeated findings, flag rules violated twice for a deterministic check. Use when the rubric nears its line budget or a review finding recurs. | `orchestrator` |
 | `risk-roi-analysis` | Weigh the effort and risk of an option against its expected payoff and the cost of not doing it, using a one-page brief. Use when deciding whether to invest. | `strategist` |
-| `roadmap-sequencing` | Order multi-phase work into milestones along the critical path, with dependencies and weights checked. Use when planning more than one deliverable. | `strategist` |
+| `roadmap-sequencing` | Order multi-phase work into milestones along the critical path, with dependencies and weights checked. Use when planning more than one deliverable. | `strategist`, `administrator` |
 | `safe-refactoring` | Restructure code while keeping its public behaviour and API surface unchanged, in small steps with tests green. Use for cleanup, renames and extractions. | `builder` |
 | `scope-creep-detection` | Flag changes that go beyond the approved spec: unrequested files, features, dependencies or refactors. Use on every spec and PR before approval. | `strategist` |
 | `socratic-interrogation` | Subject proposals, specs, and council arguments to disciplined Socratic interrogation with minimalist, probing questions. Use when evaluating critical design premises or high-contention claims. | `red-team` |
@@ -74,7 +82,10 @@ What a bundle can attach to. A bundle names a **host role** by its id (never a t
 | `task-decomposition` | Turn an approved spec or goal into a task DAG with a cognitive tier and spec link per task. Use before dispatching any multi-step mission. | `orchestrator` |
 | `tdd-execution` | Implement against a spec's acceptance criteria with red-green-refactor, proving each new test fails first. Use for any behaviour change. | `builder` |
 | `threat-modeling` | Model threats to a design or change with STRIDE plus agent-specific threats such as prompt injection and memory poisoning. Use when a feature crosses a trust boundary. | `red-team` |
-| `tonal-calibration` | Calibrate and shift prose across technical, executive, persuasive, and educational registers for reader comfort. Use when adapting documentation, mission briefs, or reports for distinct audiences. | `writer` |
+| `tonal-calibration` | Calibrate and shift prose across technical, executive, persuasive, and educational registers for reader comfort. Use when adapting documentation, mission briefs, or reports for distinct audiences. | `writer`, `assistant`, `advocate` |
 | `trade-off-matrix` | Compare options across weighted criteria and test whether the winner survives changed weights. Use when a decision has several defensible answers. | `architect` |
+| `transcript-action-extraction` | Forensically extract actionable commitments from meeting and conversation transcripts, eliminating hallucinated consensus and enforcing TRIAD ownership. Use when digesting audio/video call notes. | `assistant` |
 | `tui-design` | Design calm, borderless terminal interfaces: decks, headers, badges and character-cell rules. Use when adding or changing any TUI view, widget or layout in Ratatui. | `architect`, `builder`, `orchestrator` |
+| `user-joy-heuristics` | Audit software interfaces, TUI screens, and CLI interactions against emotional design levels, Kahneman's Peak-End Rule, and Nielsen's heuristics to maximize user joy and eliminate friction. | `advocate` |
+| `work-breakdown-structures` | Decompose complex, ambiguous epics into Mutually Exclusive, Collectively Exhaustive (MECE) task hierarchies. Use when scoping initiatives or planning sprint structures. | `administrator`, `orchestrator` |
 | `worktree-isolation` | Create and prune isolated git worktrees for a task so builds never touch the operator's checkout. Use before any code change. | `builder` |

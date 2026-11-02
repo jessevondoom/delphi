@@ -51,7 +51,22 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
 /// The roles a bundle may name (D-17), plus `librarian` for guidance once that role is built (`specs/023` §6.3).
-pub const ROLES: [&str; 11] = ["orchestrator", "builder", "architect", "investigator", "scout", "strategist", "red-team", "writer", "messenger", "librarian", "validator"];
+pub const ROLES: [&str; 14] = [
+    "orchestrator",
+    "builder",
+    "architect",
+    "investigator",
+    "scout",
+    "strategist",
+    "red-team",
+    "writer",
+    "messenger",
+    "librarian",
+    "validator",
+    "administrator",
+    "assistant",
+    "advocate",
+];
 
 /// The bundle schema major this build reads (`specs/023` §9).
 pub const SCHEMA: u32 = 1;
