@@ -12,7 +12,7 @@ use crate::distill::Privacy;
 use crate::learn::{LiveProposal, MAX_PROPOSAL_TEXT};
 use crate::ratify::{self, RatifyError, Scope};
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub const MAX_RULES: usize = 25;
 pub const MAX_BYTES: usize = 6144;
@@ -26,6 +26,11 @@ pub const MAX_SUPERSEDES: usize = 3;
 /// A rule id as this file numbers them: `W-` or `O-` and digits.
 pub fn is_rule_id(id: &str) -> bool {
     id.strip_prefix("W-").or_else(|| id.strip_prefix("O-")).is_some_and(|n| (1..=6).contains(&n.len()) && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// An episode id (`ep-...`, specs/065).
+pub fn is_episode_id(id: &str) -> bool {
+    id.starts_with("ep-") && id.len() >= 5
 }
 
 /// An active rule a proposed `add` may replace: named by the proposal, or close to it by shared words. Shown, never applied.
@@ -58,6 +63,9 @@ pub fn candidates(p: &LiveProposal, rules: &[Rule]) -> Vec<Candidate> {
             (named || overlap >= SUPERSESSION_AT).then(|| Candidate { id: r.id.clone(), named, overlap })
         })
         .collect();
+    for ep_id in p.supersedes.iter().filter(|id| is_episode_id(id)) {
+        out.push(Candidate { id: ep_id.clone(), named: true, overlap: 1.0 });
+    }
     out.sort_by(|x, y| y.named.cmp(&x.named).then(y.overlap.total_cmp(&x.overlap)).then(x.id.cmp(&y.id)));
     out
 }
@@ -129,6 +137,9 @@ pub fn problems(p: &LiveProposal, privacy: &Privacy, rules: &[Rule]) -> Vec<Stri
         "add" => {
             let kept: Vec<Rule> = rules.iter().filter(|r| !p.supersedes.contains(&r.id)).cloned().collect();
             for id in &p.supersedes {
+                if is_episode_id(id) {
+                    continue;
+                }
                 match rules.iter().find(|r| &r.id == id) {
                     None => out.push(format!("it supersedes [{}], which is not in the {} file", id, p.scope)),
                     Some(r) if r.block.to_lowercase().contains("security") => out.push(format!("[{}] is a security rule; those are never retired here", id)),
@@ -297,6 +308,76 @@ pub fn check(home: &Path, ws_dir: &Path, p: &LiveProposal) -> Vec<String> {
     problems(p, &crate::distill::privacy(ws_dir), &current_rules(home, ws_dir, p))
 }
 
+fn walk_md(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        let Ok(t) = e.file_type() else { continue };
+        if t.is_dir() {
+            walk_md(&e.path(), out);
+        } else if t.is_file() && e.file_name().to_string_lossy().ends_with(".md") {
+            out.push(e.path());
+        }
+    }
+}
+
+/// Find an episode file by its id (`ep-...`, specs/065) under `missions` or `local/missions`.
+pub fn find_episode_file(ws_dir: &Path, id: &str) -> Option<PathBuf> {
+    let target = format!("{}.md", id);
+    for base in [ws_dir.join("missions"), ws_dir.join("local/missions")] {
+        if !base.is_dir() {
+            continue;
+        }
+        let mut paths = Vec::new();
+        walk_md(&base, &mut paths);
+        for path in paths {
+            if path.file_name().and_then(|f| f.to_str()) == Some(&target) {
+                return Some(path);
+            }
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if let (Some(fm), _) = crate::workspace::split_frontmatter(&content) {
+                    if fm.get("id").and_then(|v| v.as_str()) == Some(id) {
+                        return Some(path);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Mark an episode as superseded in its markdown file and in `state.db` if present.
+pub fn mark_episode_superseded(ws_dir: &Path, id: &str) -> Option<PathBuf> {
+    let path = find_episode_file(ws_dir, id)?;
+    if let Ok(content) = std::fs::read_to_string(&path) {
+        let updated = if content.contains("status: active") {
+            content.replace("status: active", "status: superseded")
+        } else {
+            let lines: Vec<&str> = content.lines().collect();
+            let mut out = Vec::new();
+            for line in lines {
+                if line.trim_start().starts_with("status:") {
+                    out.push("status: superseded");
+                } else {
+                    out.push(line);
+                }
+            }
+            out.join("\n")
+        };
+        let _ = std::fs::write(&path, updated);
+    }
+    for db_path in [ws_dir.join("local/state.db"), ws_dir.join("state.db")] {
+        if db_path.is_file() {
+            if let Ok(conn) = rusqlite::Connection::open(&db_path) {
+                let _ = conn.execute(
+                    "UPDATE kb_documents SET status = 'superseded' WHERE zone = 'episodes' AND (rel_path LIKE '%/' || ?1 || '.md' OR rel_path LIKE '%/' || ?1)",
+                    [id],
+                );
+            }
+        }
+    }
+    Some(path)
+}
+
 /// Ratify `p` into its scope's `heuristics.md`. The caller is the operator's own command and has already confirmed;
 /// the proposal's scope is whatever the operator chose. Refuses on any [`problems`] and on a file with unratified edits.
 pub fn accept(home: &Path, ws_dir: &Path, p: &LiveProposal) -> Result<Accepted, String> {
@@ -305,11 +386,16 @@ pub fn accept(home: &Path, ws_dir: &Path, p: &LiveProposal) -> Result<Accepted, 
         return Err(found.join("; "));
     }
     let scope = scope_of(p);
-    let retired: Vec<(String, String)> = current_rules(home, ws_dir, p).into_iter().filter(|r| p.op == "add" && p.supersedes.contains(&r.id)).map(|r| (r.id, r.block.trim_end().to_string())).collect();
+    let mut retired: Vec<(String, String)> = current_rules(home, ws_dir, p).into_iter().filter(|r| p.op == "add" && p.supersedes.contains(&r.id)).map(|r| (r.id, r.block.trim_end().to_string())).collect();
     let pin = ratify::edit_pinned(home, ws_dir, scope, "heuristics.md", |cur| edited(cur, p)).map_err(|e| match e {
         RatifyError::Stale { .. } => "the rules file has edits that were never ratified; review them with /ratify first".to_string(),
         other => other.to_string(),
     })?;
+    for ep_id in p.supersedes.iter().filter(|id| is_episode_id(id)) {
+        if let Some(path) = mark_episode_superseded(ws_dir, ep_id) {
+            retired.push((ep_id.clone(), format!("superseded episode at {}", path.display())));
+        }
+    }
     Ok(Accepted { scope, file: if scope == Scope::Operator { "operator/heuristics.md".into() } else { "local/heuristics.md".into() }, pin, retired })
 }
 
@@ -459,5 +545,53 @@ mod tests {
         assert!(problems(&prop("add", "workspace", "A wholly different thing entirely.", ""), &Privacy::default(), &rules).iter().any(|d| d.contains("cap")));
         let fat = format!("{}### [W-001] Fat\n- **D:** {}\n", "---\nid: w\n---\n\n", "x ".repeat(3100));
         assert!(edited(Some(&fat), &prop("add", "workspace", "One more rule.", "")).unwrap_err().contains("6144"));
+    }
+
+    #[test]
+    fn a_proposal_superseding_an_episode_marks_it_superseded_in_file_and_kb() {
+        use crate::workspace::tests::make_workspace;
+        let t = tempfile::tempdir().unwrap();
+        let ws = make_workspace(t.path());
+
+        // Create an active episode file
+        let ep_dir = ws.dir.join("missions/m1/traces");
+        std::fs::create_dir_all(&ep_dir).unwrap();
+        let ep_file = ep_dir.join("ep-2026-11-01-old.md");
+        let ep_content = "\
+---
+id: ep-2026-11-01-old
+role: builder
+status: active
+kind: episode
+---
+# Old episode
+";
+        std::fs::write(&ep_file, ep_content).unwrap();
+
+        // Also index into state.db
+        let db_path = ws.dir.join("local/state.db");
+        let mut kb = crate::kb::Kb::open(&db_path).unwrap();
+        kb.upsert("missions/m1/traces/ep-2026-11-01-old.md", "episodes", ep_content, "2026-11-01T12:00:00Z").unwrap();
+        drop(kb);
+
+        let mut p = prop("add", "workspace", "Pin the toolchain in CI images.", "");
+        p.supersedes = vec!["ep-2026-11-01-old".into()];
+
+        let (_, rules) = parse_rules(FILE);
+        let c = candidates(&p, &rules);
+        assert!(c.iter().any(|k| k.id == "ep-2026-11-01-old" && k.named), "episode should be a named candidate");
+        assert!(problems(&p, &Privacy::default(), &rules).is_empty(), "naming an episode is allowed");
+
+        let done = accept(&ws.home, &ws.dir, &p).unwrap();
+        assert!(done.retired.iter().any(|(id, _)| id == "ep-2026-11-01-old"), "episode retired on accept");
+
+        // Assert file status updated to superseded
+        let updated_ep = std::fs::read_to_string(&ep_file).unwrap();
+        assert!(updated_ep.contains("status: superseded"), "{}", updated_ep);
+
+        // Assert state.db updated to superseded
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let st: String = conn.query_row("SELECT status FROM kb_documents WHERE rel_path LIKE '%ep-2026-11-01-old.md'", [], |r| r.get(0)).unwrap();
+        assert_eq!(st, "superseded");
     }
 }

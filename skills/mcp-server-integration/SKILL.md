@@ -2,7 +2,7 @@
 name: mcp-server-integration
 description: "Discover, configure and health-check an external MCP tool server in a sandbox, listing the tools it exposes. Use before relying on a new MCP server."
 authorized_agents:
-  - integrator
+  - messenger
 input_schema:
   type: object
   required: ["server"]

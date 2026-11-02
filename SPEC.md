@@ -14,7 +14,7 @@
 1. **Console & Runtime (`delphi`, `delphi-core`):** the operator's window and the deterministic daemon. They have no persona. This is where intent enters, approvals are granted, and processes and worktrees are supervised.
 2. **Governance ([GOVERNANCE.md](GOVERNANCE.md) & [REVIEW.md](REVIEW.md)):** behavioral invariants, security gates, anti-poisoning rules and the PR review rubric.
 3. **Adapter:** compiles portable agent and skill manifests into provider-native dialects (Claude and Gemini in v1), and owns the federation gateway (deferred).
-4. **Agent Team:** nine canonical roles (`orchestrator`, `builder`, `architect`, `investigator`, `scout`, `strategist`, `red-team`, `writer`, `integrator`), each defined in `agents/<role>/AGENT.md` with scopes, blind spots and counterweights.
+4. **Agent Team:** nine canonical roles (`orchestrator`, `builder`, `architect`, `investigator`, `scout`, `strategist`, `red-team`, `writer`, `messenger`), each defined in `agents/<role>/AGENT.md` with scopes, blind spots and counterweights.
 
 ### 1.2 Canonical Roles & Theme Packs (D-17)
 All governance, specs, manifests, configuration, file paths, frontmatter and event logs use **canonical role IDs** only. A per-install **theme pack** maps each role to a display name, epithet and short voice line, and labels the two windows. Greek mythology is the default; its names are defined only in [`themes/greek/theme.md`](themes/greek/theme.md). Themes are rendered only at the display layer and in a bounded persona slot, so two teammates using different themes read the same shared files. Theme schema, research flow and safety rules: [`specs/001`](specs/001-governance-and-manifests.md) §6.
@@ -23,7 +23,7 @@ All governance, specs, manifests, configuration, file paths, frontmatter and eve
 
 ## 2. Agent Roster
 
-> **v1 roster (D-07, ratified 2026-10-23):** `orchestrator`, `architect`, `builder`, `red-team`, `strategist`. `scout`, `investigator`, `writer` and `integrator` keep their manifests and are enabled when a mission needs them.
+> **v1 roster (D-07, ratified 2026-10-23):** `orchestrator`, `architect`, `builder`, `red-team`, `strategist`. `scout`, `investigator`, `writer` and `messenger` keep their manifests and are enabled when a mission needs them.
 
 Each role has a manifest in `agents/<role>/AGENT.md`, and skills are cataloged in [`skills/CATALOG.md`](skills/CATALOG.md). The roster with scopes, blind spots and counterweights is in [GOVERNANCE.md](GOVERNANCE.md) §2.
 
@@ -139,7 +139,7 @@ The modular subsystem specifications in `specs/`:
 - [x] **[`specs/004-memory-and-coaching.md`](specs/004-memory-and-coaching.md):** Dual-tier memory engine, Frozen Boot-Snapshot cache hygiene, Two-Gear Zero-Server Hybrid RAG (`.delphi/state.db` AST breadcrumb chunking + FTS5 BM25 + `sqlite-vec` local embeddings + RRF + a cross-encoder reranker, with preloaded vectors for the shipped documents; Amendments 004-A1 to A3), Two-Strike Context Circuit Breaker, and ExpeL Rule-of-25 coaching loop.
 - [x] **[`specs/005-console-and-narrator-tui.md`](specs/005-console-and-narrator-tui.md):** `delphi-core` UDS daemon protocol, 60Hz event bus, `Console` operator deck, `Narrator` 4-view live narrator/telemetry window, and multiplexer auto-spawning.
 - [x] **[`specs/006-installer-and-updater.md`](specs/006-installer-and-updater.md):** Single-binary embedded-seed packaging, `delphi init` wizard, Three-Zone `delphi update` (`diff3` merge) & `delphi sync` engine, and 8-point `delphi doctor`.
-- [x] **[`specs/007-federated-mesh-and-sync.md`](specs/007-federated-mesh-and-sync.md):** Multi-instance peer federation via **Integrator** (A2A task delegation, `xenia://cap/` Ed25519 UCAN/Biscuit capability pointers, Tailscale/SSH/mDNS transport, and transitive taint lattice firewall).
+- [x] **[`specs/007-federated-mesh-and-sync.md`](specs/007-federated-mesh-and-sync.md):** Multi-instance peer federation via **Messenger** (A2A task delegation, `xenia://cap/` Ed25519 UCAN/Biscuit capability pointers, Tailscale/SSH/mDNS transport, and transitive taint lattice firewall).
 - [x] **[`specs/008-ambient-watch-and-rewind.md`](specs/008-ambient-watch-and-rewind.md):** Zero-token "No-Agent Mode" ambient watches, coupled `/rewind` time-travel checkpoints (events + Git tree SHAs), 3-tier HITL approval batching.
 - [x] **[`specs/009-model-access-and-auth.md`](specs/009-model-access-and-auth.md):** Access paths (direct API, Bedrock/Vertex, enterprise gateways, subscription CLIs), endpoints and failover policy, delegated credential sources, capability probing, harness mode (D-19). *Approved after Council 003.*
 - [x] **[`specs/011-xenia-trust-model.md`](specs/011-xenia-trust-model.md)** and **[`specs/012-xenia-record-schema.md`](specs/012-xenia-record-schema.md):** the xenia org-sharing store: roster chain, steward endorsement, freshness statements, signed Markdown records with detached sidecars. *Approved; Phase 1 in build.* Specs 010 and 013–021 are listed in [README.md](README.md#subsystem-specifications-specs).
