@@ -117,6 +117,7 @@ pub mod research;
 pub mod research_images;
 pub mod research_jobs;
 pub mod research_plan;
+pub mod research_run;
 pub mod research_digest;
 pub mod research_pending;
 pub mod research_setup;
