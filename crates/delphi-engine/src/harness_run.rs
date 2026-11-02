@@ -427,7 +427,10 @@ impl Engine {
         let builder = wt.is_some() && sc.manifest.execute.iter().any(|e| e == "shell-worktree-scoped");
         match cli {
             Cli::Claude => {
-                if sc.span.ceiling() <= Tier::L1 {
+                // A host-raised span (`specs/062` §6.3) starts at L0 by design, so it would never launch. It is let through because it
+                // is read-only and runs with no native tools, no connectors and no auto-approval: nothing in its loop acts, and its
+                // answer stays tainted.
+                if sc.span.ceiling() <= Tier::L1 && !sc.readonly {
                     return Ok(Err(HarnessErr::retry("launch refused: this span's inputs are untrusted (taint L1 or lower), and a harness runs its own loop")));
                 }
             }
@@ -542,7 +545,7 @@ impl Engine {
         let persist = opts.session != SessionMode::Ephemeral;
         // `[harness.<cli>]` (ratified): how this CLI is equipped and who answers its permission questions (`specs/020`).
         let profile: HarnessProfile = self.cfg.get().harness.get(cli.program()).cloned().unwrap_or_default();
-        let delegate = cli == Cli::Claude && !builder && profile.approvals == ApprovalSource::Delegate;
+        let delegate = cli == Cli::Claude && !builder && !sc.readonly && profile.approvals == ApprovalSource::Delegate;
         // Delphi's tools for this role, offered over the bridge: to the Claude CLI as an MCP config, to the Antigravity CLI
         // as a plugin in the span's own `.agents/` with a hook that gates its other tools (`specs/020` §8). A Builder keeps
         // the Claude CLI's own file and shell tools (every request still answered here), so those Delphi tools are not duplicated.
@@ -552,12 +555,12 @@ impl Engine {
             // An agy Builder keeps Delphi's `run_command`: its own shell cannot be approved when it runs headless.
             bridge_defs.retain(|d| !DUPLICATED_FOR_BUILDERS.contains(&d.name.as_str()) || (cli == Cli::Agy && (d.name == "run_command" || d.name == "shell")));
         }
-        let connectors = cli == Cli::Claude && !builder && profile.claudeai_connectors;
+        let connectors = cli == Cli::Claude && !builder && !sc.readonly && profile.claudeai_connectors;
         // Servers a previous session had connected besides ours: the wait for the account's connectors holds out for them.
         let expect_servers: Vec<String> = self.inventory.seats().into_iter().find(|r| r.endpoint_id == ep.id).map(|r| r.mcp_servers.into_iter().filter(|(n, st)| n != crate::bridge::SERVER_NAME && st == "connected").map(|(n, _)| n).collect()).unwrap_or_default();
         // The CLI's own tools the span may use: for the Claude CLI they are given with `--tools`; for `agy` they are what its gate lets through.
         let agy_native = if cli == Cli::Agy { agy_native_tools(&profile.native_tools) } else { vec![] };
-        let mut lp = LaunchProfile { native_tools: if builder || cli != Cli::Claude { vec![] } else { profile.native_tools.clone() }, auto_approve: delegate, claudeai_connectors: connectors, mcp_config: None, settle: self.settings.connector_settle, expect_servers };
+        let mut lp = LaunchProfile { native_tools: if builder || sc.readonly || cli != Cli::Claude { vec![] } else { profile.native_tools.clone() }, auto_approve: delegate, claudeai_connectors: connectors, mcp_config: None, settle: self.settings.connector_settle, expect_servers };
         let (mut _bridge, mut bridge_rx): (Option<Bridge>, Option<tokio::sync::mpsc::Receiver<BridgeCall>>) = (None, None);
         let mut gate_rx: Option<tokio::sync::mpsc::UnboundedReceiver<HookNote>> = None;
         let mut gate_policy: Option<HookPolicy> = None;
@@ -1088,6 +1091,17 @@ echo "$a_{t}" >> answers.txt"#, t = tool, i = input);
             other => panic!("{:?}", other),
         }
         assert!(events_of(&g, "harness.started").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_host_raised_task_launches_in_the_harness_read_only_with_its_answer_still_untrusted() {
+        let (f, _s) = fixture(&format!("{}\n{}", INIT, FINISH), |_| {});
+        use_harness_profile(&f, "[harness.claude]\nnative_tools = [\"WebFetch\"]\nclaudeai_connectors = true\n");
+        let out = f.engine.run_task_for_host(&f.m, "t-host".into(), "orchestrator", "How do retries work?").await.unwrap();
+        assert!(matches!(out.status, Status::Done), "{:?}", out.status);
+        let started = events_of(&f, "harness.started");
+        assert_eq!((started[0].payload["native_tools"].as_array().map(|a| a.len()), started[0].payload["claudeai_connectors"].as_bool(), started[0].payload["approvals"].as_str()), (Some(0), Some(false), Some("delphi")));
+        assert_eq!(events_of(&f, "dag.node.added").last().unwrap().payload["ceiling"], "L0");
     }
 
     #[tokio::test]
