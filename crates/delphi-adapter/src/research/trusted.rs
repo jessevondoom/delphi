@@ -254,6 +254,17 @@ block = true
     }
 
     #[test]
+    fn a_wildcard_cannot_authorise_a_blocked_host_a_lookalike_or_a_disguised_address() {
+        let l = TrustedList::parse("[[source]]\nhost = \"*.gov\"\nreuse = \"full\"\n", None).unwrap();
+        for u in ["https://evil.gov.attacker.com/x", "https://gov/x", "https://user@a.gov/x", "https://a.gov:8443/x", "http://a.gov/x", "https://a.gov@evil.com/x", "https://127.0.0.1/x"] {
+            assert!(l.allows_url(u).is_none(), "{u}");
+        }
+        assert!(l.allows_url("https://data.a.gov/x").is_some());
+        let blocked = TrustedList::parse("[[source]]\nhost = \"*.gov\"\nreuse = \"full\"\n", Some("[[source]]\nhost = \"bad.gov\"\nreuse = \"full\"\nblock = true\n")).unwrap();
+        assert!(blocked.allows_url("https://sub.bad.gov/x").is_none() && blocked.allows_url("https://ok.gov/x").is_some());
+    }
+
+    #[test]
     fn bad_lists_are_refused_with_the_file_named() {
         let bad = |t: &str, op: bool| if op { TrustedList::parse(DEFAULT, Some(t)) } else { TrustedList::parse(t, None) }.unwrap_err();
         assert!(bad("[[source]]\nhost = \"https://x.org/\"\nreuse = \"full\"\n", false).contains("is not a domain"));
