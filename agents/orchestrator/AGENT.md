@@ -18,6 +18,7 @@ authorized_skills:
   - review-md-distillation
   - contradiction-pruning
   - lesson-promotion
+  - delphi-attribution
 memory_scope: "memory/agents/orchestrator/"
 max_turn_budget: 40
 ---
