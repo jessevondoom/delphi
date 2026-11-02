@@ -335,7 +335,7 @@ pub(crate) mod tests {
             ("strategist", include_str!("../../../agents/strategist/AGENT.md"), "workhorse"),
             ("writer", include_str!("../../../agents/writer/AGENT.md"), "workhorse"),
             ("scout", include_str!("../../../agents/scout/AGENT.md"), "fast"),
-            ("integrator", include_str!("../../../agents/integrator/AGENT.md"), "fast"),
+            ("messenger", include_str!("../../../agents/messenger/AGENT.md"), "fast"),
             ("investigator", include_str!("../../../agents/investigator/AGENT.md"), "fast"),
             ("validator", include_str!("../../../agents/validator/AGENT.md"), "workhorse"),
         ];
@@ -385,7 +385,7 @@ pub(crate) mod tests {
             ("strategist", include_str!("../../../agents/strategist/AGENT.md")),
             ("writer", include_str!("../../../agents/writer/AGENT.md")),
             ("scout", include_str!("../../../agents/scout/AGENT.md")),
-            ("integrator", include_str!("../../../agents/integrator/AGENT.md")),
+            ("messenger", include_str!("../../../agents/messenger/AGENT.md")),
             ("investigator", include_str!("../../../agents/investigator/AGENT.md")),
             ("validator", include_str!("../../../agents/validator/AGENT.md")),
         ] {
