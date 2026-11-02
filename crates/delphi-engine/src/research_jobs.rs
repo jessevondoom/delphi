@@ -103,6 +103,10 @@ pub struct JobCtx {
 }
 
 impl JobCtx {
+    pub fn with_budget(max_steps: u32) -> JobCtx {
+        JobCtx { max_steps, steps: AtomicU32::new(0), trail: Mutex::new(Trail::default()) }
+    }
+
     /// Count one step. The step that would pass the depth's budget is refused.
     pub fn step(&self) -> Result<(), BudgetSpent> {
         let n = self.steps.fetch_add(1, Ordering::SeqCst);
