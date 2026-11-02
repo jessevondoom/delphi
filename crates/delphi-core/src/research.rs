@@ -112,6 +112,21 @@ pub fn sanitize_identity_text(s: &str, max_chars: usize) -> String {
     s.chars().filter(|c| !c.is_control() && !matches!(c, '\u{2028}' | '\u{2029}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')).take(max_chars).collect()
 }
 
+/// A role's badge, colour (`#rrggbb`) and nearest 256-colour, the same as the console's avatar library (`crates/delphi/src/avatar.rs`
+/// is checked against this table by a test there). The investigator borrows the scout's look, as in the console; an unknown role
+/// gets the operator's.
+pub fn role_look(role: &str) -> (&'static str, &'static str, u8) {
+    match role {
+        "orchestrator" => ("⟦•─•⟧", "#a855f7", 135),
+        "builder" => ("⟦•─•⟧", "#f59e0b", 214),
+        "architect" => ("⟦•_•⟧", "#38bdf8", 81),
+        "red-team" => ("⟦-_-⟧", "#ef4444", 203),
+        "strategist" => ("⟦•_•⟧", "#14b8a6", 37),
+        "scout" | "investigator" => ("⟦•••⟧", "#ffff00", 226),
+        _ => ("⟦•_•⟧", "#94a3b8", 110),
+    }
+}
+
 impl Identity {
     /// An identity whose every string has been through [`sanitize_identity_text`]. `hex` must be `#rrggbb` or it falls back to grey.
     pub fn new(role: &str, display_name: &str, badge: &str, hex: &str, ansi256: u8, via: Option<&str>) -> Identity {
