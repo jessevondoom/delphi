@@ -22,6 +22,7 @@ pub mod knowledge_status;
 pub mod provenance;
 pub mod proto;
 pub mod redact;
+pub mod research;
 pub mod server;
 pub mod sessions;
 pub mod spawn;

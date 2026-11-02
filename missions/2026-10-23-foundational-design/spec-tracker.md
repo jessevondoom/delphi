@@ -491,7 +491,7 @@ Approved by the operator on 2026-11-01. Amends 062 for research egress; adds `re
 | Slice | Content | State |
 | :-- | :-- | :-- |
 | S0 | the spec and this entry | built (this PR) |
-| S1 | claim, status, result and identity schemas | proposed |
+| S1 | claim, status, result and identity schemas | built (`delphi-core/src/research.rs`, `schemas/research-result.schema.json`, `tests/docs.rs`) |
 | S2 | job lifecycle, queue (cap 2), egress scopes, audit | proposed |
 | S3 | planner, depth budgets, dedupe | proposed |
 | S4 | validator, contradictions, trusted fast-lane | proposed |

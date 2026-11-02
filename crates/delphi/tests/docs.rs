@@ -132,6 +132,26 @@ fn every_agent_and_skill_manifest_satisfies_its_schema() {
 }
 
 #[test]
+fn research_results_follow_their_schema_and_refuse_control_characters_in_identity() {
+    let ok = json!({
+        "status": "done", "answer": "a", "source_ids": ["s1"], "kb_hits": [], "new_claims": 1, "budget_used": { "steps": 3 },
+        "answered_by": "scout", "signature": "⟦•_•⟧ Name (scout)",
+        "claims": [{ "id": "c1", "assertion": "x", "source_ids": ["s1"], "quote": "q", "locator": "p1", "retrieved": "2026-11-01", "licence": "cc-by", "knowledge_status": "noted", "contested": false, "from_trusted_source": true }],
+        "identity": { "role": "scout", "display_name": "Name", "badge": "⟦•_•⟧", "hex": "#123456", "ansi256": 33 }
+    });
+    must_pass("research-result.schema.json", "a research result", &ok);
+    let mut bad = ok.clone();
+    bad["identity"]["display_name"] = json!("Evil\u{1b}[2J");
+    must_fail("research-result.schema.json", "an escape in a display name", &bad);
+    let mut bad = ok.clone();
+    bad["claims"][0]["knowledge_status"] = json!("trusted");
+    must_fail("research-result.schema.json", "a status outside the vocabulary", &bad);
+    let mut bad = ok;
+    bad["raw_page"] = json!("<html>");
+    must_fail("research-result.schema.json", "raw page text", &bad);
+}
+
+#[test]
 fn events_follow_the_envelope_schema() {
     let ok = json!({ "v": 1, "seq": 3, "timestamp": "2026-10-26T10:00:00Z", "mission_id": "m1", "type": "task.started", "payload": {}, "future_field": 7 });
     must_pass("event-envelope.schema.json", "a plain event", &ok);

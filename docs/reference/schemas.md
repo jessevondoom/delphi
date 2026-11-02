@@ -9,6 +9,7 @@
 | [`source-meta.schema.json`](../../schemas/source-meta.schema.json) | the `meta.json` of a bundle's `sources/<id>/` | [`specs/023`](../../specs/023-org-bundle-standard.md) §2.1, [`specs/055`](../../specs/055-the-central-library-sources-claims-and-pages.md) §3.2.1; `delphi bundle validate` owns the licence warnings and the `private` check |
 | [`event-envelope.schema.json`](../../schemas/event-envelope.schema.json) | one line of a mission event log, and the lines of `delphi run --jsonl` | [`specs/005`](../../specs/005-console-and-narrator-tui.md) §2.2 |
 | [`handoff-envelope.schema.json`](../../schemas/handoff-envelope.schema.json) | the handoff between agents | [`specs/001`](../../specs/001-governance-and-manifests.md) §4 |
+| [`research-result.schema.json`](../../schemas/research-result.schema.json) | what `research_result` returns to a host agent | [`specs/066`](../../specs/066-mcp-research-endpoint-and-role-identity.md) §4 |
 | [`xenia-record.schema.json`](../../schemas/xenia-record.schema.json) | the YAML frontmatter of a Xenia record (`memory`, `endorsement`, `tombstone`) | [`specs/012`](../../specs/012-xenia-record-schema.md); shape only, the verifier also checks signatures, limits and string hygiene |
 | [`xenia-sidecar.schema.json`](../../schemas/xenia-sidecar.schema.json) | a record's `.sig.json` | [`specs/012`](../../specs/012-xenia-record-schema.md) §3 |
 | [`agent-manifest.schema.json`](../../schemas/agent-manifest.schema.json) | the frontmatter of `agents/<role>/AGENT.md` | [`specs/001`](../../specs/001-governance-and-manifests.md) |
