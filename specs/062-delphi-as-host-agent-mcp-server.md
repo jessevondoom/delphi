@@ -5,7 +5,7 @@ author: architect
 timestamp: 2026-10-31T00:00:00Z
 status: approved   # by the operator, 2026-10-31 ("approve the spec if it was built on the rules you showed"): D-1..D-5 ratified; D-6..D-9 follow the architect's recommendations; Q-1..Q-5 stay open and each blocks only the slice named in §12. The text as written is approved when this pull request merges.
 approved_by: operator (2026-10-31)
-amendments: "2026-10-31, approved by the operator ('approve the spec changes as needed'): `builder` servable (D-6, §4.3, invariant 8); `route` moves from S2 to S3 (§11)"
+amendments: "2026-10-31, approved by the operator ('approve the spec changes as needed'): `builder` servable (D-6, §4.3, invariant 8); `route` moves from S2 to S3 (§11); 2026-11-01, asked for by the operator ('i'd like to work around this issue in the code ... since it's visible i'd rather it just work'): a host-raised span may launch in the Claude CLI harness (§6.3)"
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -139,6 +139,8 @@ A structured result: `status` (`answered`, `unanswered`, `failed` or `working`),
 For a host-originated request, the dispatched agent runs under its own role scope **narrowed to read-only**: it investigates and advises, it does not write, run code or open worktrees in the host's project. Anything stronger needs a later spec.
 
 **How (S6).** The engine marks the task ID as host-raised (`Engine::run_task_for_host`); every span of that task, the orchestrator's and any it dispatches, has its write globs and write tools removed, its `execute` list cut to `agent-dispatch` and `org-context` (no commands, timers, settings or worktree), and no connector tools. `exec_tool` also refuses any tool the span was not offered, so the narrowing does not rely on the model. Nothing limits how often a host may ask (§9); each request is logged as `host.help.requested` in the host session's mission.
+
+**Harness seats (amended 2026-11-01).** Working from another harness is a primary use, so a host request must reach the operator's Claude CLI seat like any other task. The launch refusal for a span at `L1` or lower (020 §3, 009) existed because a harness runs its own loop; a host-raised span's loop cannot act, so the refusal does not apply to it: it runs with no native tools, no claude.ai connectors and no auto-approval, and is offered only the read-only tools above. Nothing else moves: the ceiling stays `L0`, the answer stays untrusted, no per-session approval is asked (the operator can see every request in the host session's mission, and `/mcp off` stops them), and an ordinary span at `L1` or lower is still refused.
 
 ## 7. Councils
 
