@@ -291,10 +291,10 @@ mod tests {
     }
 
     #[test]
-    fn the_shipped_builder_is_servable_and_the_shipped_integrator_is_not() {
+    fn the_shipped_builder_is_servable_and_the_shipped_messenger_is_not() {
         let fm = |t: &str| split_frontmatter(t).0;
         assert!(Packs::servable(&fm(include_str!("../../../agents/builder/AGENT.md"))));
-        assert!(!Packs::servable(&fm(include_str!("../../../agents/integrator/AGENT.md"))));
+        assert!(!Packs::servable(&fm(include_str!("../../../agents/messenger/AGENT.md"))));
         for role in ["architect", "red-team", "scout", "strategist", "validator", "writer", "investigator", "orchestrator"] {
             assert!(Packs::servable(&fm(&std::fs::read_to_string(format!("{}/../../agents/{}/AGENT.md", env!("CARGO_MANIFEST_DIR"), role)).unwrap())), "{role}");
         }

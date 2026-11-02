@@ -2782,7 +2782,7 @@ mod tests {
             let ok = c.call("host.propose_note", with(json!({"role": role2, "text": "Prefer small commits.", "evidence": "session abc, turn 2", "model": "opus"}))).unwrap();
             assert_eq!((ok["staged"].clone(), ok["tier"].clone(), ok["count"].clone()), (json!(true), json!("L0"), json!(1)));
             assert_eq!(rpc_code(c.call("host.propose_note", with(json!({"role": role2, "text": "No evidence."})))), Some(code::INVALID_PARAMS));
-            assert_eq!(rpc_code(c.call("host.propose_note", with(json!({"role": "integrator", "text": "x", "evidence": "e"})))), Some(code::INVALID_PARAMS));
+            assert_eq!(rpc_code(c.call("host.propose_note", with(json!({"role": "messenger", "text": "x", "evidence": "e"})))), Some(code::INVALID_PARAMS));
             assert!(c.call("host.record_session_summary", with(json!({"summary": "Did the thing", "decisions": ["a"]}))).is_ok());
             // No limit: more than the old default of twenty are staged.
             for i in 0..22 {

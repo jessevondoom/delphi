@@ -64,7 +64,7 @@ floor = "quick"
 preferred = "steady"
 plan_following = true
 
-[roles.integrator]
+[roles.messenger]
 floor = "quick"
 preferred = "steady"
 plan_following = true

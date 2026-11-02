@@ -37,7 +37,7 @@ This specification emerged from our research into multi-operator collaboration a
 
 ## 2. Three-Plane Federation Architecture
 
-All inter-instance communication enters and exits strictly through the **Gateway** (`agents/integrator/AGENT.md`) acting as the workspace's diplomatic boundary gateway:
+All inter-instance communication enters and exits strictly through the **Gateway** (`agents/messenger/AGENT.md`) acting as the workspace's diplomatic boundary gateway:
 
 ```mermaid
 flowchart TB

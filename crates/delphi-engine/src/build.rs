@@ -197,7 +197,12 @@ impl Engine {
             let audit_only = red.iter().all(|g| g.n == 4);
             if red.iter().any(|g| g.n == 1 || g.n == 2) {
                 let why = red.iter().filter(|g| g.n <= 2).map(|g| format!("gate {} ({}): {}", g.n, g.name, g.detail)).collect::<Vec<_>>().join("\n");
-                diagnostics.push(format!("Attempt {} failed verification:\n{}", attempt, why.chars().take(1500).collect::<String>()));
+                let mut diag = format!("Attempt {} failed verification:\n{}", attempt, why.chars().take(1500).collect::<String>());
+                let db = self.ws.dir.join("local/state.db");
+                if let Some(hint) = crate::kb::find_proactive_hint(&db, "builder", &why, delphi_core::provenance::Tier::L5) {
+                    diag.push_str(&format!("\n\n{}", hint));
+                }
+                diagnostics.push(diag);
                 rung += 1;
                 continue;
             }
