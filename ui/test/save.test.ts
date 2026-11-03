@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { pathOf, plainLabel, saveCommand } from '../src/save.ts';
+import { pathOf, plainLabel, saveCommand, attestCommand } from '../src/save.ts';
 import type { Info } from '../src/theme.ts';
 
 const info = { delphi_exe: '/bin/delphi', workspace_name: 'w', home: '/h' } as Info;
@@ -28,4 +28,9 @@ test('the console says "not yet checked" and keeps the exact machine label besid
   const machine = 'summary · operator-imported · external_unvalidated';
   assert.deepEqual(plainLabel(machine), { plain: 'imported summary · not yet checked', machine });
   assert.equal(plainLabel('trusted'), null);
+});
+
+test('/attest lists cards, and `y|n <claim>` answers one through the same `kb attest`', () => {
+  assert.deepEqual(attestCommand(info, ' pg1'), { args: ['kb', 'attest', '--list', 'pg1', '--workspace', 'w', '--home', '/h'] });
+  assert.deepEqual(attestCommand(info, ' n c-9'), { args: ['kb', 'attest', '--no', 'c-9', '--workspace', 'w', '--home', '/h'] });
 });

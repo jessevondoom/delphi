@@ -79,6 +79,23 @@ pub fn extract_cmd(home: &Path, ws: &Path, args: &[String]) -> i32 {
 /// confirmed the quote is in the source, so the operator judges only meaning and truth.
 pub fn attest_cmd(home: &Path, args: &[String]) -> i32 {
     let lib = Library::in_home(home);
+    // One answer without a keyboard loop, for the console: `--yes <claim-id>` or `--no <claim-id>`.
+    for (flag, yes) in [("--yes", true), ("--no", false)] {
+        if let Some(id) = args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)) {
+            let r = if yes { lib.attest_claim(id) } else { lib.reject_claim(id) };
+            return match r {
+                Ok(_) => {
+                    println!("{} {}", if yes { "confirmed" } else { "rejected" }, id);
+                    0
+                }
+                Err(e) => {
+                    eprintln!("{}", e);
+                    1
+                }
+            };
+        }
+    }
+    let list_only = args.iter().any(|a| a == "--list");
     let page = args.iter().find(|a| !a.starts_with("--")).cloned();
     let mut cards: Vec<(String, Value)> = Vec::new();
     for c in lib.claims() {
@@ -97,6 +114,13 @@ pub fn attest_cmd(home: &Path, args: &[String]) -> i32 {
         return 0;
     }
     let total = cards.len();
+    if list_only {
+        for (n, (_, c)) in cards.iter().enumerate() {
+            let a = &c["anchors"][0];
+            println!("[{}/{}] {}\n  claim: {}\n  quote: \"{}\"\n  /attest y {} · /attest n {}", n + 1, total, c["id"].as_str().unwrap_or(""), flat(c["text"].as_str().unwrap_or(""), 300), flat(a["quote"].as_str().unwrap_or(""), 300), c["id"].as_str().unwrap_or(""), c["id"].as_str().unwrap_or(""));
+        }
+        return 0;
+    }
     let (mut yes, mut no) = (0, 0);
     let mut last = String::new();
     let mut input = std::io::stdin().lock().lines();

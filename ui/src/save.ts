@@ -31,3 +31,12 @@ export function plainLabel(label: string): { plain: string; machine: string } | 
   if (!/\bexternal_unvalidated\b/.test(label)) return null;
   return { plain: (/operator-imported/.test(label) ? 'imported summary' : 'summary') + ' · not yet checked', machine: label };
 }
+
+/** `/attest [page-id]` lists the key-fact cards; `/attest y|n <claim-id>` answers one. Same logic as `delphi kb attest`. */
+export function attestCommand(info: Info, arg: string): Save {
+  if (!info.delphi_exe) return { error: 'this console was not told where delphi is; run `delphi kb attest`' };
+  const tail = ['--workspace', info.workspace_name ?? '', '--home', info.home ?? ''];
+  const [a, b] = arg.trim().split(/\s+/);
+  if ((a === 'y' || a === 'n') && b) return { args: ['kb', 'attest', a === 'y' ? '--yes' : '--no', b, ...tail] };
+  return { args: ['kb', 'attest', '--list', ...(a ? [a] : []), ...tail] };
+}
