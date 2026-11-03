@@ -2220,6 +2220,14 @@ fn collect_markdown(p: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// Import one page's text through the same code as `kb import` (the operator's keep in `kb review` calls this).
+pub fn import_text(ws: &Path, name: &str, text: &str) -> Result<crate::kb_import::Imported, String> {
+    let mut kb = Kb::open(&db_path(ws)).map_err(|e| e.to_string())?;
+    kb.refresh(ws, &now()).map_err(|e| e.to_string())?;
+    let now_secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    crate::kb_import::import(ws, &crate::kb_import::Input { text, name_hint: name, modified_secs: None, now_secs }, &|t| kb.resolve_link(t))
+}
+
 pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
     let sub = args.first().map(String::as_str).unwrap_or("");
     let open = || Kb::open(&db_path(ws));

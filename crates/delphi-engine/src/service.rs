@@ -242,6 +242,30 @@ impl EngineService {
         Ok(json!({"staged": true, "ref": format!("{}/{}", m.id, id), "tier": "L0", "count": already + 1}))
     }
 
+    /// `host.propose_kb_entry` (`specs/068` §5): stage one research entry for the operator's keep-or-discard review. It is never
+    /// searchable until the operator keeps it, and the secret scrubber has already seen the body.
+    async fn host_kb_entry(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        use crate::host_rpc as h;
+        need_host(&ctx)?;
+        let ws = &self.engine.ws;
+        h::gate(&ws.dir).map_err(host_err)?;
+        let c = h::Caller::parse(&p).map_err(host_err)?;
+        let mut p = p;
+        for k in ["title", "body"] {
+            if let Some(t) = p[k].as_str() {
+                p[k] = json!(self.engine.secrets.redact(t));
+            }
+        }
+        h::kb_entry_event(&c, &p, 0, 0).map_err(host_err)?;
+        let _gate = self.host_gate.lock().await;
+        let m = self.mission_at(Some(&c.mission()), c.cwd.to_str()).await?;
+        let events = m.replay().map_err(engine_err)?;
+        let e = h::kb_entry_event(&c, &p, h::proposals_in(&events), h::kb_entries_in(&events)).map_err(host_err)?;
+        let id = e.payload["id"].as_str().unwrap_or("").to_string();
+        m.append(e).await.map_err(engine_err)?;
+        Ok(json!({"staged": true, "ref": format!("{}/{}", m.id, id), "tier": "L0", "searchable": false, "next": "the operator keeps or discards it with `delphi kb review`; until then it is not in kb_search"}))
+    }
+
     /// `host.request_help` (`specs/062` §6): the orchestrator gets the request as content, picks who answers (itself included),
     /// and everyone it consults runs read-only. The call waits a while for the answer; a slow one is fetched with `host.help_result`.
     async fn host_request_help(&self, p: Value, ctx: CallContext) -> RpcOutcome {
@@ -2573,6 +2597,7 @@ impl Extension for ServiceExt {
                     Ok(()) => svc.mission_at(params["mission_id"].as_str(), params["cwd"].as_str()).await.inspect(|m| { let (svc, m) = (svc.clone(), m.clone()); tokio::spawn(async move { svc.research_nudge(&m).await }); }).map(|m| json!({"mission_id": m.id, "budget": EngineService::budget_json(&m), "mode": svc.engine.broker.mode().as_str(), "recovery": svc.recovery_json(&m.id)})),
                 },
                 "host.propose_note" => svc.host_stage(params, ctx, false).await,
+                "host.propose_kb_entry" => svc.host_kb_entry(params, ctx).await,
                 "host.record_session_summary" => svc.host_stage(params, ctx, true).await,
                 "host.handoff_put" => svc.host_handoff_put(params, ctx).await,
                 "host.handoff_get" => svc.host_handoff_get(params, ctx).await,
@@ -2788,12 +2813,16 @@ mod tests {
             for i in 0..22 {
                 assert!(c.call("host.propose_note", with(json!({"role": role2, "text": format!("Lesson {i}."), "evidence": "e"}))).is_ok());
             }
+            let kb = c.call("host.propose_kb_entry", with(json!({"title": "Vault rotation", "body": "Keys rotate every 90 days.", "sources": ["https://wiki.example.com/v"]}))).unwrap();
+            assert_eq!((kb["staged"].clone(), kb["tier"].clone(), kb["searchable"].clone()), (json!(true), json!("L0"), json!(false)));
+            assert_eq!(rpc_code(c.call("host.propose_kb_entry", with(json!({"title": "No body"})))), Some(code::INVALID_PARAMS));
             let found = c.call("host.search_kb", with(json!({"query": "governance"}))).unwrap();
             assert!(found["core"].is_array() && found["project_results"].is_array());
             assert_eq!(rpc_code(c.call("host.search_kb", with(json!({"query": "  "})))), Some(code::INVALID_PARAMS));
             // The switch is read now.
             std::fs::write(dir2.join("config.toml"), "[mcp]\nenabled = false\n").unwrap();
             assert_eq!(rpc_code(c.call("host.propose_note", with(json!({"role": role2, "text": "x", "evidence": "e"})))), Some(code::FORBIDDEN));
+            assert_eq!(rpc_code(c.call("host.propose_kb_entry", with(json!({"title": "x", "body": "y"})))), Some(code::FORBIDDEN));
             assert_eq!(rpc_code(c.call("host.handoff_get", base.clone())), Some(code::FORBIDDEN));
             // A console cannot use the host methods.
             let mut k = Client::connect(&csock).unwrap();
@@ -2804,7 +2833,7 @@ mod tests {
         .await;
         let events = replay_log(&delphi_core::sessions::dir(&ws_dir, "host-abcdef0123456789"));
         let live = crate::learn::live_notes("host-abcdef0123456789", &events);
-        assert_eq!(live.len(), 24, "{live:?}");
+        assert_eq!(live.len(), 25, "{live:?}");
         assert!(live.iter().all(|n| n.tier == "L0" && n.summary.starts_with("[host:claude-code/")), "{live:?}");
         assert_eq!(live[0].role.as_deref(), Some(role.as_str()));
     }
