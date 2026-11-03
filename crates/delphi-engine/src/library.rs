@@ -20,6 +20,8 @@ pub mod acquire;
 pub mod bib;
 #[path = "library_claims.rs"]
 pub mod claims;
+#[path = "library_extract.rs"]
+pub mod extract;
 #[path = "library_excerpts.rs"]
 pub mod excerpts;
 #[path = "library_history.rs"]

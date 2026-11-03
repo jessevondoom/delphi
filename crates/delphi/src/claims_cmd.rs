@@ -166,7 +166,7 @@ fn show(lib: &Library, args: &[String]) -> i32 {
         println!("{}", serde_json::to_string_pretty(&c).unwrap_or_default());
         return 0;
     }
-    println!("{}  {} ({})", id, st.as_str(), st.label());
+    println!("{}  {} ({})", id, st.as_str(), if claims::attested(&c) { delphi_engine::library::extract::ATTESTED_LABEL } else { st.label() });
     println!("  {}", clean(c["text"].as_str().unwrap_or(""), 400));
     for k in ["kind", "scope", "project", "created", "last_confirmed", "valid_until", "supersedes", "superseded_by"] {
         if let Some(v) = c[k].as_str() {

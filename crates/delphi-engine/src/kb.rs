@@ -2367,6 +2367,8 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                 Ok(import_pages(&kb, ws, &paths))
             }
             "refresh" => Ok(refresh_cmd(ws, &args[1..])),
+            "extract" => Ok(crate::kb_extract::extract_cmd(home, ws, &args[1..])),
+            "attest" => Ok(crate::kb_extract::attest_cmd(home, &args[1..])),
             "quarantine" => {
                 let restore = args.iter().any(|a| a == "--restore");
                 let Some(id) = args[1..].iter().find(|a| !a.starts_with("--")) else {

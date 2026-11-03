@@ -108,6 +108,12 @@ fn active(a: &Value) -> bool {
 /// anchor still holds; a contested mark, a lost anchor, a supersession or an expiry lowers it, and an attributed claim is
 /// never validated.
 pub fn status(claim: &Value) -> Status {
+    if attested(claim) {
+        return Status::Validated;
+    }
+    if claim["lifecycle"] == "disproved" {
+        return Status::Disproved;
+    }
     let anchored = anchors_of(claim).iter().any(|a| active(a));
     let recorded = claim["validation"]["by"].is_string() && anchored;
     let doc_status = if claim["kind"] == "attributed" {
@@ -123,6 +129,12 @@ pub fn status(claim: &Value) -> Status {
     };
     let tier = if recorded { Tier::L3.name() } else { Tier::L0.name() };
     derive_fact(tier, doc_status, recorded)
+}
+
+/// The operator attested a claim taken from a summary page (`specs/068` §6.6), it still has a held quote, and nothing has
+/// lowered it since. A record the daemon writes for the operator's key, never a claim's own words.
+pub fn attested(claim: &Value) -> bool {
+    claim["attestation"]["by"] == "operator" && claim["lifecycle"].is_null() && claim["contested_by"].as_array().is_none_or(|m| m.is_empty()) && claim["valid_until"].as_str().is_none_or(|v| v >= today().as_str()) && anchors_of(claim).iter().any(|a| active(a))
 }
 
 fn clean_text(s: &str) -> String {
