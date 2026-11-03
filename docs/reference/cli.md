@@ -315,7 +315,8 @@ It reads files only and never runs the validator.
 The knowledge base: index it, search it.
 
 ```
-  delphi kb index | reindex | stats | search <query> [--role <role>] [--untrusted] [--staged] [--about]
+  delphi kb index | reindex | stats | search <query> [--role <role>] [--untrusted|--all] [--staged] [--about]
+  delphi kb import <file.md | dir | -> [--home <dir>] [--workspace <name>]
   delphi kb serve [--bind <host:port>] [--workspace <name>] [--home <dir>]
 ```
 

@@ -343,6 +343,9 @@ pub struct BundleTag {
 }
 
 const UNTRUSTED: &str = "external_untrusted";
+
+/// The exact machine label of an imported summary page (`specs/068` §6.3); MCP and CLI output carry it unsoftened.
+pub const SUMMARY_LABEL: &str = "summary · operator-imported · external_unvalidated";
 /// A fixed share of the fused score a stale bundle's result keeps (`specs/024` §4.6): lower, never hidden.
 const STALE_BUNDLE_FACTOR: f64 = 0.8;
 
@@ -455,6 +458,8 @@ pub fn sources(ws: &Path) -> Vec<SourceFile> {
     // The release's own specs and reference, installed read-only in the base zone (`specs/064` §7): its own zone and tier.
     md_files(&ws.join("base/about"), "about", "about", "user_ratified", &mut all);
     md_files(&ws.join("local/knowledge"), "knowledge", "knowledge", crate::research::TIER, &mut all);
+    // Pages the operator imported (`specs/068`): the daemon wrote every trust field, and the tier is set at index time.
+    md_files(&ws.join(crate::kb_import::DIR), "summaries", "summaries", UNTRUSTED, &mut all);
     md_files(&ws.join("local/memory/agents"), "memory/agents", "memory", UNTRUSTED, &mut all);
     // Summaries the operator accepted from a project (`promote::accept`): home memory, each file naming its own tier.
     md_files(&ws.join("local/promoted"), "memory/promoted", "memory", UNTRUSTED, &mut all);
@@ -600,7 +605,9 @@ impl Kb {
         if bundle.is_none() && existing.as_ref().is_some_and(|(_, h)| *h == hash) {
             return Ok(false);
         }
-        let source_type = if bundle.is_some() || zone == "knowledge" || zone == "library" || zone == "about" { default_source.to_string() } else { frontmatter_field(text, "source_type").filter(|s| SOURCE_TYPES.contains(&s.as_str())).unwrap_or_else(|| default_source.to_string()) };
+        // An imported page is shown by default only when the daemon found it linking to a checked entry (`specs/068` §6.2); its
+        // recorded taint stays in its own frontmatter, and the label never changes.
+        let source_type = if zone == "summaries" { (if frontmatter_flag(text, "index_worthy") { "internal_generated" } else { UNTRUSTED }).to_string() } else if bundle.is_some() || zone == "knowledge" || zone == "library" || zone == "about" { default_source.to_string() } else { frontmatter_field(text, "source_type").filter(|s| SOURCE_TYPES.contains(&s.as_str())).unwrap_or_else(|| default_source.to_string()) };
         let from = bundle.map(|b| format!(" | Bundle: {}", b.label)).unwrap_or_default();
         let (author, confidence, status) = (frontmatter_field(text, "author").or_else(|| frontmatter_field(text, "role")), frontmatter_field(text, "confidence").unwrap_or_else(|| "low".into()), if zone == "about" { "active".into() } else { frontmatter_field(text, "status").unwrap_or_else(|| "active".into()) });
         let tx = self.conn.transaction()?;
@@ -718,6 +725,22 @@ impl Kb {
     /// Everything a search needs to see the current files: the words are brought up to date (unchanged files are
     /// found by their modification time and size, not read), and vectors the release shipped are applied. No model
     /// is run; chunks that still lack a vector are embedded by `embed_pending`, which callers start in the background.
+    /// A link target of an imported page, resolved to the logical path of a ratified, non-summary entry (`specs/068` §6.2).
+    /// A summary never counts, and neither does anything untrusted or inactive.
+    pub fn resolve_link(&self, target: &str) -> Option<String> {
+        let t = target.trim().trim_start_matches("./");
+        if t.is_empty() || t.contains("..") {
+            return None;
+        }
+        self.conn
+            .query_row(
+                "SELECT rel_path FROM kb_documents WHERE zone != 'summaries' AND status = 'active' AND source_type NOT IN ('external_untrusted', 'federated_peer') AND (rel_path = ?1 OR rel_path LIKE '%/' || ?1) ORDER BY length(rel_path) LIMIT 1",
+                [t],
+                |r| r.get(0),
+            )
+            .ok()
+    }
+
     pub fn refresh(&mut self, ws: &Path, now: &str) -> Result<IndexReport, KbError> {
         crate::learn::project_staged(ws);
         let rep = self.sync_lexical(&sources(ws), now)?;
@@ -1543,6 +1566,21 @@ impl Kb {
             }
             let row = self.conn.query_row("SELECT c.rel_path, c.start_line, c.end_line, c.heading_path, c.raw_content, d.content_blake3, d.zone, d.source_type, d.status, d.web_corroborated FROM kb_chunks c JOIN kb_documents d ON d.doc_id = c.doc_id WHERE c.chunk_id = ?1", [id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?, r.get::<_, String>(7)?, r.get::<_, String>(8)?, r.get::<_, i64>(9)? != 0)));
             let Ok((rel_path, a, b, heading_path, raw, blake3, zone, tier_name, doc_status, web_corroborated)) = row else { continue };
+            // A hit on an imported page's body is answered with its bibliography: the page is found by what it says, but a reader
+            // gets metadata, not prose (`specs/068` §6.7). A page with no bibliography file is not returned.
+            let (rel_path, a, b, heading_path, raw, blake3) = if zone == "summaries" && !rel_path.ends_with(".bib.md") {
+                let sib = format!("{}.bib.md", rel_path.trim_end_matches(".md"));
+                let got = self.conn.query_row("SELECT c.rel_path, c.start_line, c.end_line, c.heading_path, c.raw_content, d.content_blake3 FROM kb_chunks c JOIN kb_documents d ON d.doc_id = c.doc_id WHERE c.rel_path = ?1 ORDER BY c.chunk_id LIMIT 1", [&sib], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?)));
+                match got {
+                    Ok(t) => t,
+                    Err(_) => continue,
+                }
+            } else {
+                (rel_path, a, b, heading_path, raw, blake3)
+            };
+            if zone == "summaries" && hits.iter().any(|h: &Hit| h.rel_path == rel_path) {
+                continue;
+            }
             let preview = raw.lines().filter(|l| !l.trim().is_empty()).take(3).map(|l| l.chars().take(160).collect::<String>()).collect::<Vec<_>>().join("\n");
             let pointer = match rel_path.strip_prefix("bundles/") {
                 Some(rest) => format!("@bundle/{}#L{}-L{}", rest, a, b), // the logical path an agent reads it by
@@ -1558,7 +1596,7 @@ impl Kb {
             let vouched_by = vouched.iter().find(|(p, _)| rel_path == *p || (p.ends_with('/') && rel_path.starts_with(p.as_str()))).map(|(_, o)| o.clone());
             let ks = if rel_path.starts_with("context/facts/") { delphi_core::knowledge_status::derive_fact(&tier_name, &doc_status, web_corroborated) } else { delphi_core::knowledge_status::derive(&zone, &tier_name, &doc_status, vouched_by.as_deref()) };
             let vouched_by = vouched_by.filter(|_| ks == delphi_core::knowledge_status::Status::Validated);
-            hits.push(Hit { pointer, rel_path, start_line: a as usize, end_line: b as usize, heading_path, blake3, preview, score: s, note, status: ks.as_str(), label: if zone == "about" { "release reference, not build authority" } else { ks.label() }, vouched_by });
+            hits.push(Hit { pointer, rel_path, start_line: a as usize, end_line: b as usize, heading_path, blake3, preview, score: s, note, status: ks.as_str(), label: if zone == "about" { "release reference, not build authority" } else if zone == "summaries" { SUMMARY_LABEL } else { ks.label() }, vouched_by });
         }
         Ok((hits, best_rerank))
     }
@@ -2104,6 +2142,84 @@ fn model_cmd(home: &Path, args: &[String]) -> Result<i32, KbError> {
 }
 
 /// `delphi kb index|reindex|search|stats|miss|eval|model` for the workspace at `ws` under `home`.
+/// `delphi kb import`: one file, a directory of Markdown, or `-` for standard input (`specs/068` §3). One file prints its receipt;
+/// several print one summary line. Nothing is asked, and nothing blocks: a problem with a page is a warning, a bad file is skipped.
+fn import_pages(kb: &Kb, ws: &Path, paths: &[&String]) -> i32 {
+    let mut files: Vec<(String, Option<i64>, String)> = Vec::new();
+    let mut failed = 0;
+    for p in paths {
+        if p.as_str() == "-" {
+            let mut text = String::new();
+            if std::io::Read::read_to_string(&mut std::io::Read::take(std::io::stdin(), crate::kb_import::MAX_BYTES as u64 + 1), &mut text).is_err() {
+                eprintln!("delphi kb import: standard input is not UTF-8 text");
+                failed += 1;
+                continue;
+            }
+            files.push(("stdin".into(), None, text));
+            continue;
+        }
+        let mut found = Vec::new();
+        collect_markdown(Path::new(p.as_str()), &mut found);
+        if found.is_empty() {
+            eprintln!("delphi kb import: {} is not a Markdown file or a directory with any", p);
+            failed += 1;
+        }
+        for f in found {
+            let modified = std::fs::metadata(&f).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64);
+            match std::fs::read_to_string(&f) {
+                Ok(t) => files.push((f.to_string_lossy().to_string(), modified, t)),
+                Err(e) => {
+                    eprintln!("delphi kb import: {}: {}", f.display(), e);
+                    failed += 1;
+                }
+            }
+        }
+    }
+    let now_secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    let (mut new, mut updated, mut same, mut needs) = (0, 0, 0, 0);
+    let many = files.len() > 1;
+    for (name, modified, text) in &files {
+        match crate::kb_import::import(ws, &crate::kb_import::Input { text, name_hint: name, modified_secs: *modified, now_secs }, &|t| kb.resolve_link(t)) {
+            Ok(r) => {
+                match r.outcome {
+                    crate::kb_import::Outcome::New => new += 1,
+                    crate::kb_import::Outcome::NewVersion => updated += 1,
+                    crate::kb_import::Outcome::Unchanged => same += 1,
+                }
+                if r.sources.is_empty() {
+                    needs += 1;
+                }
+                if !many {
+                    print!("{}", r.receipt());
+                }
+            }
+            Err(e) => {
+                eprintln!("delphi kb import: {}: {}", name, e);
+                failed += 1;
+            }
+        }
+    }
+    if many {
+        println!("{} imported, {} updated, {} unchanged, {} need citations{}", new, updated, same, needs, if failed > 0 { format!(", {} skipped", failed) } else { String::new() });
+        println!("  Try: delphi kb search <a word from a page>");
+    }
+    if failed > 0 && files.is_empty() { 1 } else { 0 }
+}
+
+fn collect_markdown(p: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(meta) = std::fs::symlink_metadata(p) else { return };
+    if meta.is_file() && p.extension().is_some_and(|e| e == "md") {
+        out.push(p.to_path_buf());
+    } else if meta.is_dir() {
+        let Ok(rd) = std::fs::read_dir(p) else { return };
+        let mut entries: Vec<_> = rd.flatten().filter(|e| !e.file_name().to_string_lossy().starts_with('.')).collect();
+        entries.sort_by_key(|e| e.file_name());
+        for e in entries {
+            collect_markdown(&e.path(), out);
+        }
+    }
+}
+
 pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
     let sub = args.first().map(String::as_str).unwrap_or("");
     let open = || Kb::open(&db_path(ws));
@@ -2163,6 +2279,16 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                 Ok(0)
             }
             "serve" => Ok(crate::kbserve::run(home, ws, &args[1..])),
+            "import" => {
+                let paths: Vec<&String> = args[1..].iter().filter(|a| a.as_str() == "-" || !a.starts_with("--")).collect();
+                if paths.is_empty() {
+                    eprintln!("usage: delphi kb import <file.md | dir | -> [...]");
+                    return Ok(2);
+                }
+                let mut kb = open()?;
+                kb.refresh(ws, &now())?;
+                Ok(import_pages(&kb, ws, &paths))
+            }
             "search" => {
                 let query: Vec<&str> = args[1..].iter().filter(|a| !a.starts_with("--")).map(String::as_str).collect();
                 let role = args.iter().position(|a| a == "--role").and_then(|i| args.get(i + 1)).cloned();
@@ -2184,7 +2310,7 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                     }
                 }
                 let legs = if args.iter().any(|a| a == "--lexical") { Legs::LexicalOnly } else { Legs::Hybrid };
-                let mut opts = SearchOpts { role, include_untrusted: args.iter().any(|a| a == "--untrusted"), legs, bundle, no_bundles: args.iter().any(|a| a == "--no-bundles"), include_staged: args.iter().any(|a| a == "--staged"), include_episodes: args.iter().any(|a| a == "--episodes"), about: args.iter().any(|a| a == "--about"), kinds: flag_value(args, "--kind").map(|k| k.split(',').map(|x| x.trim().to_string()).collect()), ..Default::default() };
+                let mut opts = SearchOpts { role, include_untrusted: args.iter().any(|a| a == "--untrusted" || a == "--all"), legs, bundle, no_bundles: args.iter().any(|a| a == "--no-bundles"), include_staged: args.iter().any(|a| a == "--staged"), include_episodes: args.iter().any(|a| a == "--episodes"), about: args.iter().any(|a| a == "--about"), kinds: flag_value(args, "--kind").map(|k| k.split(',').map(|x| x.trim().to_string()).collect()), ..Default::default() };
                 if args.iter().any(|a| a == "--no-rerank") {
                     opts.rerank_weight = 0.0;
                 }
@@ -3025,7 +3151,7 @@ mod tests {
         let mut kb = Kb::open_in_memory().unwrap();
         kb.sync_lexical(&files, "t").unwrap();
         // the frontmatter claims external_untrusted; a bundle's own claim is a display copy, so default search finds it
-        let hits = kb.search("quokka procedure", &SearchOpts::default()).unwrap();
+        let hits = kb.search("quokka", &SearchOpts::default()).unwrap();
         assert_eq!(hits.len(), 1, "{:?}", hits);
         assert_eq!(hits[0].pointer, "@bundle/acme/plat/knowledge/runbooks/deploy.md#L6-L8", "an agent-readable logical path");
         let (tier, ctx): (String, String) = kb.conn.query_row("SELECT d.source_type, c.contextual_text FROM kb_documents d JOIN kb_chunks c ON c.doc_id = d.doc_id", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
@@ -3071,7 +3197,7 @@ mod tests {
         let only = SearchOpts { bundle: Some("acme/plat".into()), ..Default::default() };
         assert!(!kb.search("wombat checklist", &only).unwrap().is_empty());
         assert!(kb.search("wombat checklist", &SearchOpts { no_bundles: true, ..Default::default() }).unwrap().is_empty());
-        assert!(!kb.search("quokka procedure", &SearchOpts::default()).unwrap().is_empty());
+        assert!(!kb.search("quokka", &SearchOpts::default()).unwrap().is_empty());
     }
 
     #[test]
@@ -3082,21 +3208,21 @@ mod tests {
         kb.attach_embedder(concepts()).unwrap();
         kb.sync_lexical(&sources(&ws), "t").unwrap();
         let opts = SearchOpts::default();
-        let before = kb.search("quokka procedure", &opts).unwrap();
+        let before = kb.search("quokka", &opts).unwrap();
         assert_eq!(before.len(), 2);
         assert!(before.iter().all(|h| h.note.as_deref() == Some("(lexical only: vectors 0% ready)")), "{:?}", before.iter().map(|h| &h.note).collect::<Vec<_>>());
         assert_eq!(kb.bundle_vector_counts("acme/plat").unwrap(), (0, 2));
         // half way: one chunk has its vector (a restart would resume from here)
         kb.conn.execute("INSERT INTO kb_chunk_vec(chunk_id, windows) SELECT MIN(chunk_id), 1 FROM kb_chunks", []).unwrap();
-        let half = kb.search("quokka procedure", &opts).unwrap();
+        let half = kb.search("quokka", &opts).unwrap();
         assert!(half.iter().all(|h| h.note.as_deref() == Some("(lexical only: vectors 50% ready)")), "{:?}", half.iter().map(|h| &h.note).collect::<Vec<_>>());
         kb.conn.execute("DELETE FROM kb_chunk_vec", []).unwrap();
         kb.embed_pending(&mut |_, _| {}).unwrap();
-        let after = kb.search("quokka procedure", &opts).unwrap();
+        let after = kb.search("quokka", &opts).unwrap();
         assert!(after.iter().all(|h| h.note.is_none()), "the note is gone when the vectors are complete");
         // a document that is not a bundle's never carries the note
         kb.upsert("context/x.md", "context", "# X\n\nthe quokka procedure\n", "t").unwrap();
-        let plain = kb.search("quokka procedure", &SearchOpts { include_untrusted: true, ..Default::default() }).unwrap();
+        let plain = kb.search("quokka", &SearchOpts { include_untrusted: true, ..Default::default() }).unwrap();
         assert!(plain.iter().filter(|h| h.rel_path == "context/x.md").all(|h| h.note.is_none()));
     }
 
@@ -3107,14 +3233,14 @@ mod tests {
         let (_h, ws) = home_with_bundles(&[("acme", "old", "blake3:bb", "2020-01-01", old), ("acme", "new", "blake3:cc", "2999-01-01", fresh), ("other", "x", "blake3:dd", "2999-01-01", fresh)]);
         let mut kb = Kb::open_in_memory().unwrap();
         kb.sync_lexical(&sources(&ws), "t").unwrap();
-        let all = kb.search("quokka procedure", &SearchOpts::default()).unwrap();
+        let all = kb.search("quokka", &SearchOpts::default()).unwrap();
         assert_eq!(all.len(), 3);
         assert!(all.last().unwrap().rel_path.contains("acme/old/"), "stale ranks last: {:?}", all.iter().map(|h| &h.rel_path).collect::<Vec<_>>());
         let only = |b: &str| SearchOpts { bundle: Some(b.into()), ..Default::default() };
-        assert_eq!(kb.search("quokka procedure", &only("acme/new")).unwrap().len(), 1);
-        assert_eq!(kb.search("quokka procedure", &only("acme")).unwrap().len(), 2, "an org filter");
-        assert!(kb.search("quokka procedure", &only("../x")).unwrap().is_empty(), "a filter that is not a plain id matches nothing");
-        assert!(kb.search("quokka procedure", &SearchOpts { no_bundles: true, ..Default::default() }).unwrap().is_empty());
+        assert_eq!(kb.search("quokka", &only("acme/new")).unwrap().len(), 1);
+        assert_eq!(kb.search("quokka", &only("acme")).unwrap().len(), 2, "an org filter");
+        assert!(kb.search("quokka", &only("../x")).unwrap().is_empty(), "a filter that is not a plain id matches nothing");
+        assert!(kb.search("quokka", &SearchOpts { no_bundles: true, ..Default::default() }).unwrap().is_empty());
     }
 
     #[test]
@@ -3446,5 +3572,28 @@ Set CARGO_TARGET_DIR inside isolated worktree and run with offline flag.
 
         let silenced_hint = find_proactive_hint(&db_path, "builder", "Blocking waiting for file lock on package cache", Tier::L5);
         assert!(silenced_hint.is_none(), "superseded episode must not produce proactive hint");
+    }
+    #[test]
+    fn imported_pages_are_found_by_their_words_but_answered_with_the_bibliography() {
+        let d = tempfile::tempdir().unwrap();
+        let ws = d.path();
+        let mut kb = Kb::open_in_memory().unwrap();
+        kb.upsert("context/facts/keys.md", "context", "---\nsource_type: user_ratified\n---\n# Keys\n\nKeys are rotated.\n", "t").unwrap();
+        let put = |kb: &mut Kb, text: &str| {
+            let r = crate::kb_import::import(ws, &crate::kb_import::Input { text, name_hint: "n.md", modified_secs: None, now_secs: 1_800_000_000 }, &|t| kb.resolve_link(t)).unwrap();
+            for (p, f) in [(r.page.clone(), format!("summaries/{}.md", r.id)), (r.bibliography.clone(), format!("summaries/{}.bib.md", r.id))] {
+                kb.upsert(&f, "summaries", &std::fs::read_to_string(p).unwrap(), "t").unwrap();
+            }
+        };
+        put(&mut kb, "# Linked page\n\nThe zebra procedure is described in [keys](context/facts/keys.md). Source: https://wiki.example.com/z\n");
+        put(&mut kb, "# Loose page\n\nThe quokka procedure has no links at all.\n");
+        let found = kb.search("zebra procedure", &SearchOpts::default()).unwrap();
+        assert_eq!(found.len(), 1);
+        assert!(found[0].rel_path.ends_with(".bib.md"), "{}", found[0].rel_path);
+        assert_eq!(found[0].label, SUMMARY_LABEL);
+        assert!(!found[0].preview.contains("zebra procedure is described"), "no page prose in a result: {}", found[0].preview);
+        let q = kb.search("quokka", &SearchOpts::default()).unwrap();
+        assert!(q.is_empty(), "{:?}", q.iter().map(|h| h.rel_path.clone()).collect::<Vec<_>>());
+        assert_eq!(kb.search("quokka", &SearchOpts { include_untrusted: true, ..Default::default() }).unwrap().len(), 1);
     }
 }
