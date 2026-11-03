@@ -38,6 +38,7 @@ Start with the README, then the guides. The specs are the design and say, in a `
 - [event-envelope.schema.json](schemas/event-envelope.schema.json): mission event log lines and `delphi run --jsonl`
 - [handoff-envelope.schema.json](schemas/handoff-envelope.schema.json): handoffs between agents
 - [research-result.schema.json](schemas/research-result.schema.json): what a host agent gets back from research
+- [prompt-log.schema.json](schemas/prompt-log.schema.json): one entry of the artifact prompt log (spec 070)
 - [xenia-record.schema.json](schemas/xenia-record.schema.json) and [xenia-sidecar.schema.json](schemas/xenia-sidecar.schema.json): signed org memory records
 - [agent-manifest.schema.json](schemas/agent-manifest.schema.json) and [skill-manifest.schema.json](schemas/skill-manifest.schema.json): `AGENT.md` and `SKILL.md` frontmatter
 

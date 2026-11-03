@@ -524,3 +524,28 @@ Approved by the operator on 2026-11-01. Introduces three new canonical agents in
 | S3 | agent manifests in `agents/` and thematic mapping in `themes/greek/theme.md` | built (this PR) |
 | S4 | frontmatter, avatars, and engine integration | built (this PR) |
 | S5 | docs, catalog, and verification gates | built (this PR) |
+
+## Workspace administration and governed operator assistance (spec 069, approved 2026-11-02)
+
+Approved by the operator on 2026-11-02 following unanimous Council 014 deliberation with amendments (`architect`, `administrator`, `orchestrator`, `red-team`, `strategist`). Expands `administrator` to Workspace Topology & Administration and establishes a governed 3-tier model (autonomous Tier 1 diagnostics, gated Tier 2 Action Cards, consultative Tier 3 sovereign/auth commands) with path containment, taint gating, and batching invariants.
+
+| Slice | Content | Estimate | State |
+| :-- | :-- | --: | :-- |
+| S0 | Spec 069, Council 014 record, and tracker entry | 2 h | built (this PR) |
+| S1 | Diagnostic tool engine wiring (`inspect_system` in `tools.rs`) | 8 h | built (this PR) |
+| S2 | Action card proposal wiring (`propose_admin_action`, `pathguard`, taint gate, card RPC) | 10 h | built (this PR) |
+| S3 | Administrator role & skill updates (`AGENT.md`, `skills/workspace-administration/`) | 4 h | built (this PR) |
+| S4 | Orchestrator triage integration (`AGENT.md` guidelines & tool access) | 2 h | built (this PR) |
+| S5 | TUI action card rendering, docs, CLI reference, and integration tests | 8 h | built (this PR) |
+
+
+## Scope of No Spec, No Build and the artifact prompt log (spec 070, approved 2026-11-03)
+
+Approved by the operator on 2026-11-03. Keeps the spec gate for software, exempts artifacts and system operation, and adds a prompt log for artifacts. Amends GOVERNANCE §1.3 through ratification.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| S0 | the spec and tracker entry | built (this PR) |
+| PL1 | path classifier, fail-closed (`delphi-core/src/artifact.rs`) | built (this PR) |
+| PL2 | prompt-log writer, hash chain, redaction (`artifact.rs`); schema and write-path wiring | built (this PR) |
+| PL3 | GOVERNANCE §1.3 and matching text, by ratified proposal | docs, MCP rule text and invariant row built (this PR); §1.3 and `agents/builder/AGENT.md` ratified by the operator 2026-11-03 |

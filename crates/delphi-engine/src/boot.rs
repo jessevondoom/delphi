@@ -350,6 +350,7 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
         timers: Arc::new(timers),
         inventory: Arc::new(crate::inventory::Inventory::open(ws_dir.join("local/harness-tools.json"))),
         toolless: Default::default(),
+        operator_prompts: Default::default(),
         readonly_tasks: Default::default(),
         approver_calls: Default::default(),
         pace: Default::default(),

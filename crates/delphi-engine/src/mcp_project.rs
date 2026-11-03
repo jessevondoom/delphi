@@ -179,7 +179,7 @@ impl Project {
         Ok(json!({
             "project": self.describe(),
             "specs": specs,
-            "rule": "No Spec, No Build: only a spec whose status is `approved` is permission to build. A draft is a proposal. The status is what the file says; the operator's approval is recorded in the spec's own approved_by line."
+            "rule": "No Spec, No Build: only a spec whose status is `approved` is permission to build software (code, scripts, configuration). A draft is a proposal. Documents, media and Markdown notes are not software and need no spec (specs/070). The status is what the file says; the operator's approval is recorded in the spec's own approved_by line."
         })
         .to_string())
     }

@@ -4,7 +4,7 @@ Delphi is built mostly by its own agents under one operator, and human contribut
 
 ## The rules that matter most
 
-- **No Spec, No Build.** Build only against a spec whose `status` is `approved`, and name it in the commit: `Implements-Spec: specs/NNN-*.md`. If no spec covers your idea, propose one first (a draft in `specs/`) and get it approved.
+- **No Spec, No Build.** Build only against a spec whose `status` is `approved`, and name it in the commit: `Implements-Spec: specs/NNN-*.md`. If no spec covers your idea, propose one first (a draft in `specs/`) and get it approved. The rule covers software only; documents, decks, images and media need no spec but are logged by prompt, and Markdown notes and scaffolds are regular operation (`specs/070`).
 - **One slice per pull request**, and update the spec tracker (`missions/2026-10-23-foundational-design/spec-tracker.md`) in the same PR that changes a spec's state.
 - **A format is a spec.** If you change a file format, change its schema in [`schemas/`](schemas/) and its spec together.
 - **Agents are data.** Role behavior lives in `agents/<role>/AGENT.md`, `skills/*/SKILL.md` and the charter, never in a theme. Use role IDs in specs, config and manifests; display names appear only under `themes/` (the repo lint refuses them elsewhere).

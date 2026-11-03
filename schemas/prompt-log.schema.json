@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jessevondoom/delphi/schemas/prompt-log.schema.json",
+  "title": "Delphi Artifact Prompt Log Entry",
+  "description": "One line of local/artifact-log/<mission>/artifact-prompts.jsonl (spec 070 §3): the redacted operator prompt behind one artifact create or edit. Written by the daemon only; hash-chained.",
+  "type": "object",
+  "required": ["ts", "task_id", "artifact", "op", "prompt", "artifact_hash", "prev", "hash"],
+  "additionalProperties": false,
+  "properties": {
+    "ts": { "type": "string", "description": "UTC RFC 3339 time of the write." },
+    "task_id": { "type": "string", "minLength": 1 },
+    "artifact": { "type": "string", "minLength": 1, "description": "Logical path of the artifact." },
+    "op": { "enum": ["create", "edit"] },
+    "prompt": { "type": "string", "minLength": 1, "description": "The operator's prompt, redacted. Never context or a model reply." },
+    "artifact_hash": { "type": ["string", "null"], "description": "blake3 of the artifact after the write." },
+    "prev": { "type": "string", "description": "Hash of the previous entry, or `genesis`." },
+    "hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}

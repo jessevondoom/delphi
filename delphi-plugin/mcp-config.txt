@@ -1,0 +1,6 @@
+# ~/.copilot/mcp-config.json
+{
+  "mcpServers": {
+    "delphi": { "type": "local", "command": "delphi", "args": ["mcp"], "tools": ["*"] }
+  }
+}
