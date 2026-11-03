@@ -2270,6 +2270,10 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                 let model = attach_default(home, &mut kb)?;
                 let (d, c) = kb.counts()?;
                 println!("kb: {} document(s), {} chunk(s) in {}", d, c, db_path(ws).display());
+                let (pages, shown) = crate::kb_import::counts(ws);
+                if pages > 0 {
+                    println!("kb: {} imported summary page(s), {} in default search (the rest: `kb search --all`)", pages, shown);
+                }
                 match (model, kb.embedder()) {
                     (true, Some(e)) => {
                         let (v, _) = kb.vector_counts()?;

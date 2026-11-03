@@ -145,6 +145,8 @@ pub fn origin_default(zone: Zone, path: &str, rules: &OriginRules, clean_at_base
         Zone::Team | Zone::Bundle => Tier::L2,
         // No stamp for this exact content: the record was not computed here, so it is not trusted.
         Zone::Xenia => Tier::L0,
+        // An imported summary page is someone's text whatever its frontmatter says (`specs/068` §6.3); its bibliography is the schema-checked view that reads without the taint.
+        Zone::Local if path.starts_with("summaries/") && !path.ends_with(".bib.md") => Tier::L0,
         Zone::Local if TAINTED_OUTPUT_GLOBS.iter().any(|g| glob_match(g, path)) => Tier::L0,
         Zone::Local | Zone::Worktree => Tier::L3,
     }
