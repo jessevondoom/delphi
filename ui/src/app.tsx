@@ -22,7 +22,7 @@ import { openExternal, openFile } from './external.ts';
 import * as O from './org.ts';
 import { sessionDir } from './missions.ts';
 import { noteSources, passageOf, pin, previewOf, readNotes } from './research.ts';
-import { saveCommand } from './save.ts';
+import { saveCommand, attestCommand } from './save.ts';
 import { copyText, firstVisible, stepFocus, type Target } from './links.ts';
 import { execFile } from 'node:child_process';
 import { anchorBack, backShowing, bodyHeight, chatLinks, frame, replyAnchor, transcriptCount, typingOf, type Model } from './screen.ts';
@@ -321,6 +321,12 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
       if ('error' in s) { note(s.error, 'error'); return; }
       const child = execFile(info.delphi_exe!, s.args, { timeout: 30000 }, (err, out, errOut) => note((out || errOut || String(err?.message ?? 'no output')).trimEnd(), err ? 'error' : 'ok'));
       if (s.stdin !== undefined) child.stdin?.end(s.stdin); else child.stdin?.end();
+      return;
+    }
+    if (name === '/attest') {
+      const s = attestCommand(info, line.slice(name.length));
+      if ('error' in s) { note(s.error, 'error'); return; }
+      execFile(info.delphi_exe!, s.args, { timeout: 30000 }, (err, out, errOut) => note((out || errOut || String(err?.message ?? 'no output')).trimEnd(), err ? 'error' : 'ok')).stdin?.end();
       return;
     }
     if (name === '/connectors') {

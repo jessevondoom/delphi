@@ -149,6 +149,15 @@ pub fn validation_section(ws: &Path, now: i64) -> String {
     format!("\nFact validation: {cards}\n{waiting}{line}\n")
 }
 
+/// Key facts taken from summary pages that wait for the operator (`specs/068` §6.5). Silent when there are none.
+pub fn candidates_section(home: &Path) -> String {
+    let (open, recheck) = delphi_engine::library::Library::in_home(home).candidate_counts();
+    if open == 0 {
+        return String::new();
+    }
+    format!("\nSummary key facts: {open} waiting for you{}; `delphi kb attest` shows them one card at a time\n", if recheck > 0 { format!(" ({recheck} need a recheck against a changed source)") } else { String::new() })
+}
+
 pub fn render(items: &[Item]) -> String {
     let mut out = String::from("Roadmap items waiting on evidence. A rule being met means it is worth discussing, not that it is scheduled.\n\n");
     for i in items {

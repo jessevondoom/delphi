@@ -17,6 +17,8 @@ const MAX_SOURCES: usize = 200;
 /// The same bound the index applies to any file.
 pub const MAX_BYTES: usize = 2 * 1024 * 1024;
 const VALID_DAYS: i64 = 90;
+/// Pages one workspace holds; a runaway import stops here rather than filling the index (`specs/068` §9, item 5).
+const MAX_PAGES: usize = 2000;
 const KINDS: [&str; 8] = ["web", "paper", "repo", "private-doc", "slack", "wiki", "email", "other"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -295,6 +297,9 @@ pub fn import(ws: &Path, input: &Input, resolve: &dyn Fn(&str) -> Option<String>
 
     let dir = ws.join(DIR);
     let page = dir.join(format!("{}.md", id));
+    if !page.exists() && counts(ws).0 >= MAX_PAGES {
+        return Err(format!("this workspace already holds {} imported pages, the most it keeps; quarantine or merge some first", MAX_PAGES));
+    }
     let bibliography = dir.join(format!("{}.bib.md", id));
     let original = sha(input.text.as_bytes());
     let prior = std::fs::read_to_string(&page).ok();
@@ -304,15 +309,23 @@ pub fn import(ws: &Path, input: &Input, resolve: &dyn Fn(&str) -> Option<String>
         None => Outcome::New,
     };
 
+    if let (Outcome::NewVersion, Some(p)) = (&outcome, &prior) {
+        let (fm, old_body) = crate::workspace::split_frontmatter(p);
+        let stored = fm.and_then(|f| f.get("body_sha256").and_then(|v| v.as_str().map(String::from)));
+        if stored.is_some_and(|h| h != sha(old_body.as_bytes())) {
+            warnings.push("the page had edits made after import; they are kept in the prior copy under .versions/".into());
+        }
+    }
     let front = format!(
-        "---\nid: {id}\ntitle: {title}\nkind: summary\nauthor: operator-import\nsource_type: external_untrusted\ntaint: external_untrusted\norigin: operator_import\ninclusion: ratified\nvalidation: none\nconfidence: low\nindex_worthy: {iw}\nretrieved: {ret}\nimported: {now}\nvalid_until: {vu}\nchecked: {now}\noriginal_sha256: {sha}\nbibliography: {id}.bib.md\n---\n\n",
+        "---\nid: {id}\ntitle: {title}\nkind: summary\nauthor: operator-import\nsource_type: external_untrusted\ntaint: external_untrusted\norigin: operator_import\ninclusion: ratified\nvalidation: none\nconfidence: low\nindex_worthy: {iw}\nretrieved: {ret}\nimported: {now}\nvalid_until: {vu}\nchecked: {now}\noriginal_sha256: {sha}\nbody_sha256: {bsha}\nbibliography: {id}.bib.md\n---\n\n",
         id = id,
         title = quoted(&title),
         iw = index_worthy,
         ret = retrieved,
         now = date_of(input.now_secs),
         vu = date_of(input.now_secs + VALID_DAYS * 86400),
-        sha = original
+        sha = original,
+        bsha = sha(body.as_bytes())
     );
     let mut bib = format!("---\nid: {id}.bib\ntitle: {t}\nkind: bibliography\npage: {id}\nauthor: operator-import\nsource_type: external_untrusted\ntaint: external_untrusted\nindex_worthy: {iw}\nconfidence: low\n---\n\n# Bibliography: {title}\n\n", id = id, t = quoted(&format!("Bibliography: {}", title)), iw = index_worthy, title = title);
     bib.push_str(&if sources.is_empty() { "sources: none\n".to_string() } else { format!("sources: {}\n", sources.len()) });
@@ -417,6 +430,71 @@ pub fn renew(ws: &Path, id: &str, now_secs: i64) -> Result<Imported, String> {
 }
 
 const QUARANTINE: &str = ".quarantine";
+const LINKS: &str = ".links";
+
+/// Where a cited source was first matched to the library: `locator -> (source_id, content_hash)`. Kept apart from the
+/// bibliography, which import rewrites, so a later change to the source can still be seen (`specs/068` §7).
+fn baseline(ws: &Path, id: &str) -> BTreeMap<String, (String, String)> {
+    let v: serde_json::Value = std::fs::read(ws.join(DIR).join(LINKS).join(format!("{}.json", id))).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    v.as_object().into_iter().flatten().filter_map(|(k, e)| Some((k.clone(), (e["source_id"].as_str()?.to_string(), e["content_hash"].as_str()?.to_string())))).collect()
+}
+
+/// Match each cited locator to a library source and write `source_id` and `source_hash` into the bibliography (`specs/068` §6.7).
+/// `lookup` maps a locator to the library's `(source_id, content_hash)`. The first hash seen stays the baseline.
+/// Returns how many citations are linked.
+pub fn link_sources(ws: &Path, id: &str, lookup: &dyn Fn(&str) -> Option<(String, String)>) -> usize {
+    let path = ws.join(DIR).join(format!("{}.bib.md", id));
+    let Ok(text) = std::fs::read_to_string(&path) else { return 0 };
+    let mut base = baseline(ws, id);
+    let mut out = String::new();
+    let mut linked = 0;
+    for l in text.lines() {
+        if l.starts_with("  source_id:") || l.starts_with("  source_hash:") {
+            continue;
+        }
+        out.push_str(l);
+        out.push('\n');
+        if let Some(loc) = l.strip_prefix("- locator: ") {
+            if let Some((sid, h)) = lookup(loc.trim()) {
+                let (sid, h) = base.entry(loc.trim().to_string()).or_insert((sid, h)).clone();
+                out.push_str(&format!("  source_id: {}\n  source_hash: {}\n", sid, h));
+                linked += 1;
+            }
+        }
+    }
+    if out != text {
+        let _ = std::fs::write(&path, out);
+    }
+    let dir = ws.join(DIR).join(LINKS);
+    if !base.is_empty() && std::fs::create_dir_all(&dir).is_ok() {
+        let v: serde_json::Map<String, serde_json::Value> = base.iter().map(|(k, (s, h))| (k.clone(), serde_json::json!({"source_id": s, "content_hash": h}))).collect();
+        let _ = std::fs::write(dir.join(format!("{}.json", id)), serde_json::Value::Object(v).to_string());
+    }
+    linked
+}
+
+/// How a page's linked sources stand now: `(linked, changed)`. A source that is gone or has a new hash counts as changed.
+pub fn source_drift(ws: &Path, id: &str, lookup: &dyn Fn(&str) -> Option<(String, String)>) -> (usize, usize) {
+    let base = baseline(ws, id);
+    let changed = base.iter().filter(|(loc, (sid, h))| lookup(loc).is_none_or(|(s2, h2)| &s2 != sid || &h2 != h)).count();
+    (base.len(), changed)
+}
+
+/// `(id, title)` of every page set aside by `kb quarantine`.
+pub fn quarantined(ws: &Path) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = std::fs::read_dir(ws.join(DIR).join(QUARANTINE))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            let id = name.strip_suffix(".md").filter(|i| !i.ends_with(".bib"))?.to_string();
+            Some((id, field(&std::fs::read_to_string(e.path()).ok()?, "title")))
+        })
+        .collect();
+    out.sort();
+    out
+}
 
 /// Take a refuted or problematic page out of search and reading without deleting it (`specs/068` §7); `restore` puts it back.
 pub fn quarantine(ws: &Path, id: &str, restore: bool) -> Result<(), String> {
@@ -509,5 +587,36 @@ mod tests {
         assert_eq!((yes.links.len(), yes.unresolved), (1, 1));
         assert!(!run(d.path(), "# B\n\nSee [gone](nope.md).\n", &resolve).index_worthy);
         assert_eq!(counts(d.path()), (2, 1), "the counter counts pages, not their bibliographies");
+    }
+
+    #[test]
+    fn a_new_version_warns_when_the_page_was_edited_after_import_and_quarantined_pages_are_listed() {
+        let d = tempfile::tempdir().unwrap();
+        let ws = d.path();
+        let go = |text: &str, at: i64| import(ws, &Input { text, name_hint: "n.md", modified_secs: None, now_secs: at, keep_id: None }, &none).unwrap();
+        let first = go("# Edited page\n\nOriginal words.\n", 1_800_000_000);
+        std::fs::write(&first.page, std::fs::read_to_string(&first.page).unwrap().replace("Original words.", "Original words. Plus my note.")).unwrap();
+        let second = import(ws, &Input { text: "# Edited page\n\nOriginal words, rewritten.\n", name_hint: "n.md", modified_secs: None, now_secs: 1_800_000_100, keep_id: Some(&first.id) }, &none).unwrap();
+        assert!(second.warnings.iter().any(|w| w.contains("edits made after import")), "{:?}", second.warnings);
+        let kept = std::fs::read_dir(ws.join(DIR).join(".versions").join(&first.id)).unwrap().flatten().next().unwrap();
+        assert!(std::fs::read_to_string(kept.path()).unwrap().contains("Plus my note."));
+        quarantine(ws, &first.id, false).unwrap();
+        assert_eq!(quarantined(ws), vec![(first.id.clone(), "Edited page".to_string())]);
+        assert_eq!(counts(ws).0, 0);
+    }
+
+    #[test]
+    fn linked_sources_are_recorded_once_and_a_changed_hash_shows_as_drift() {
+        let d = tempfile::tempdir().unwrap();
+        let ws = d.path();
+        let r = run(ws, "# Rot\n\nKeys rotate ([runbook](https://wiki.example.com/rot)).\n", &none);
+        let held = |h: &'static str| move |l: &str| (l == "https://wiki.example.com/rot").then(|| ("src-1".to_string(), h.to_string()));
+        assert_eq!(link_sources(ws, &r.id, &held("sha256:aa")), 1);
+        let bib = std::fs::read_to_string(&r.bibliography).unwrap();
+        assert!(bib.contains("source_id: src-1") && bib.contains("source_hash: sha256:aa"));
+        assert_eq!(source_drift(ws, &r.id, &held("sha256:aa")), (1, 0));
+        link_sources(ws, &r.id, &held("sha256:bb"));
+        assert_eq!(source_drift(ws, &r.id, &held("sha256:bb")), (1, 1), "the first hash stays the baseline");
+        assert_eq!(source_drift(ws, &r.id, &|_| None), (1, 1), "a source that is gone counts as changed");
     }
 }

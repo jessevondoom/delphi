@@ -41,6 +41,32 @@ impl Library {
         self.claims().into_iter().filter(|c| c["origin"] == o && c["attestation"].is_null() && c["lifecycle"].is_null()).collect()
     }
 
+    /// Candidates with no model: each sentence of the page that appears word for word in a source the library holds whole.
+    /// The sentence is both the claim and its quote, so the daemon's guard accepts only what a source really says.
+    pub fn auto_candidates(&self, page_body: &str) -> Vec<Candidate> {
+        let sentences: Vec<String> = page_body
+            .split(['\n', '.', '!', '?'])
+            .map(|l| l.trim().trim_start_matches(['-', '*', '>', '#', ' ']).trim().to_string())
+            .filter(|l| l.split_whitespace().count() >= 6 && l.len() <= 300 && !l.contains("](") && !l.contains("http"))
+            .collect();
+        let mut out = Vec::new();
+        for (id, meta) in self.list() {
+            if !meta["purged"].is_null() {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(self.source_dir(&id).join("source.md")) else { continue };
+            for s in &sentences {
+                if text.contains(s.as_str()) && !out.iter().any(|c: &Candidate| &c.claim == s) {
+                    out.push(Candidate { claim: s.clone(), source_id: id.clone(), quote: s.clone(), locator: "quote".into() });
+                }
+            }
+            if out.len() >= MAX_PER_PAGE {
+                break;
+            }
+        }
+        out
+    }
+
     /// The anchor guard. Every candidate is checked against the stored text of its source; none is taken on the page's word.
     pub fn extract_candidates(&self, page_id: &str, cands: &[Candidate]) -> Extracted {
         let mut out = Extracted::default();
@@ -92,6 +118,34 @@ impl Library {
         out
     }
 
+    /// After a page is refreshed: any claim taken from it whose source has a newer version, or no longer holds the quote,
+    /// is marked `needs_recheck`. Its status is untouched and nothing is invalidated or deleted (`specs/068` §7). Returns how many.
+    pub fn flag_rechecks(&self, page_id: &str) -> usize {
+        let o = origin_of(page_id);
+        let mut n = 0;
+        for mut c in self.claims().into_iter().filter(|c| c["origin"] == o) {
+            let moved = c["anchors"].as_array().into_iter().flatten().any(|a| {
+                let Some(sid) = a["source_id"].as_str() else { return false };
+                let Some(meta) = self.read_meta(sid) else { return true };
+                let text = std::fs::read_to_string(self.source_dir(sid).join("source.md")).unwrap_or_default();
+                meta["version"].as_str().unwrap_or("1") != a["version"].as_str().unwrap_or("1") || !a["quote"].as_str().is_some_and(|q| text.contains(q))
+            });
+            if moved && c["needs_recheck"] != true {
+                c["needs_recheck"] = json!(true);
+                if self.save_claim(&c).is_ok() {
+                    n += 1;
+                }
+            }
+        }
+        n
+    }
+
+    /// Candidates waiting for the operator across every page, and how many of them need a recheck.
+    pub fn candidate_counts(&self) -> (usize, usize) {
+        let open: Vec<Value> = self.claims().into_iter().filter(|c| c["origin"].as_str().is_some_and(|o| o.starts_with("page:")) && c["attestation"].is_null() && c["lifecycle"].is_null()).collect();
+        (open.len(), open.iter().filter(|c| c["needs_recheck"] == true).count())
+    }
+
     /// The operator confirms the claim means what the source says and is true. Needs a live anchor, so the quote is still
     /// there; changes nothing else.
     pub fn attest_claim(&self, id: &str) -> Result<Value, String> {
@@ -107,6 +161,7 @@ impl Library {
         }
         let now = delphi_core::time::now_rfc3339();
         c["attestation"] = json!({"by": "operator", "at": now, "basis": "internal source"});
+        c["needs_recheck"] = json!(false);
         c["last_confirmed"] = json!(now);
         self.save_claim(&c)?;
         self.log("claim_attested", json!({"id": id}));
@@ -182,5 +237,32 @@ mod tests {
         assert!(l.attest_claim(b).is_err(), "a rejected claim cannot be attested");
         let plain = l.add_claim("Free text.", &ClaimOpts::default(), &[]).unwrap();
         assert!(l.attest_claim(plain["id"].as_str().unwrap()).is_err(), "not from a page");
+    }
+
+    #[test]
+    fn a_changed_source_marks_the_claim_for_recheck_without_changing_its_status() {
+        let (d, l, s) = setup();
+        let r = l.extract_candidates("runbook", &[cand(&s, "Billing retries three times.", "retries three times")]);
+        let id = &r.accepted[0];
+        assert_eq!(l.flag_rechecks("runbook"), 0);
+        l.attest_claim(id).unwrap();
+        let src = l.source_dir(&s).join("source.md");
+        std::fs::write(&src, SRC.replace("three times", "five times")).unwrap();
+        assert_eq!(l.flag_rechecks("runbook"), 1);
+        let c = l.claim(id).unwrap();
+        assert_eq!(c["needs_recheck"], true);
+        assert!(c["attestation"].is_object(), "nothing is invalidated or deleted");
+        assert_eq!(l.candidate_counts(), (0, 0), "an attested claim is no longer open");
+        drop(d);
+    }
+
+    #[test]
+    fn auto_candidates_are_only_sentences_a_held_source_says_word_for_word() {
+        let (_d, l, s) = setup();
+        let page = "# Notes\n\nThe billing service retries three times.\nA made up sentence about nothing at all here.\nSee [x](http://a.b/c) for more.\n";
+        let c = l.auto_candidates(page);
+        assert_eq!(c.len(), 1, "{c:?}");
+        assert_eq!((c[0].source_id.as_str(), c[0].quote.as_str()), (s.as_str(), "The billing service retries three times"));
+        assert_eq!(l.extract_candidates("notes", &c).accepted.len(), 1);
     }
 }
