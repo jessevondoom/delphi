@@ -1591,6 +1591,7 @@ impl Kb {
                     .entry(bundle.clone())
                     .or_insert_with(|| self.bundle_vector_counts(&bundle).ok().filter(|(done, total)| done < total).map(|(done, total)| format!("(lexical only: vectors {}% ready)", done * 100 / total)))
                     .clone(),
+                None if zone == "summaries" => summary_dates_note(&raw, &crate::kb_import::today()),
                 None => None,
             };
             let vouched_by = vouched.iter().find(|(p, _)| rel_path == *p || (p.ends_with('/') && rel_path.starts_with(p.as_str()))).map(|(_, o)| o.clone());
@@ -2179,12 +2180,12 @@ fn import_pages(kb: &Kb, ws: &Path, paths: &[&String]) -> i32 {
     let (mut new, mut updated, mut same, mut needs) = (0, 0, 0, 0);
     let many = files.len() > 1;
     for (name, modified, text) in &files {
-        match crate::kb_import::import(ws, &crate::kb_import::Input { text, name_hint: name, modified_secs: *modified, now_secs }, &|t| kb.resolve_link(t)) {
+        match crate::kb_import::import(ws, &crate::kb_import::Input { text, name_hint: name, modified_secs: *modified, now_secs, keep_id: None }, &|t| kb.resolve_link(t)) {
             Ok(r) => {
                 match r.outcome {
                     crate::kb_import::Outcome::New => new += 1,
                     crate::kb_import::Outcome::NewVersion => updated += 1,
-                    crate::kb_import::Outcome::Unchanged => same += 1,
+                    crate::kb_import::Outcome::Unchanged | crate::kb_import::Outcome::Renewed => same += 1,
                 }
                 if r.sources.is_empty() {
                     needs += 1;
@@ -2220,12 +2221,75 @@ fn collect_markdown(p: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// "valid until DATE", or once past it "last checked DATE" with the way to refresh: a stale page is still served, never called expired (`specs/068` §7).
+fn summary_dates_note(bibliography: &str, today: &str) -> Option<String> {
+    let get = |k: &str| bibliography.lines().find_map(|l| l.strip_prefix(k)).map(|v| v.trim().to_string()).filter(|v| v.len() == 10);
+    let until = get("valid_until:")?;
+    if until.as_str() >= today {
+        return Some(format!("(valid until {})", until));
+    }
+    Some(format!("(last checked {}; refresh: delphi kb refresh <id>)", get("checked:").unwrap_or(until)))
+}
+
+/// Refresh one page with new text under its existing id: a new version, the prior copy kept (`specs/068` §7).
+pub fn refresh_text(ws: &Path, id: &str, name: &str, text: &str) -> Result<crate::kb_import::Imported, String> {
+    let mut kb = Kb::open(&db_path(ws)).map_err(|e| e.to_string())?;
+    kb.refresh(ws, &now()).map_err(|e| e.to_string())?;
+    let now_secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    crate::kb_import::import(ws, &crate::kb_import::Input { text, name_hint: name, modified_secs: None, now_secs, keep_id: Some(id) }, &|t| kb.resolve_link(t))
+}
+
+fn refresh_cmd(ws: &Path, args: &[String]) -> i32 {
+    let rest: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
+    let now_secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    let Some(id) = rest.first() else {
+        let pages = crate::kb_import::pages(ws, &crate::kb_import::today());
+        let stale: Vec<_> = pages.iter().filter(|p| p.stale).collect();
+        if pages.is_empty() {
+            println!("kb: no imported summary pages yet (delphi kb import <file>)");
+            return 0;
+        }
+        println!("kb: {} imported summary page(s), {} stale", pages.len(), stale.len());
+        for p in &stale {
+            println!("  {}  \"{}\"  last checked {}", p.id, p.title, p.checked);
+        }
+        if !stale.is_empty() {
+            println!("  Still right:  delphi kb refresh <id> --still-current");
+            println!("  Rewritten:    delphi kb refresh <id> <new-file.md | ->   (the prior copy is kept)");
+        }
+        return 0;
+    };
+    let done = if args.iter().any(|a| a == "--still-current") {
+        crate::kb_import::renew(ws, id, now_secs)
+    } else if let Some(src) = rest.get(1) {
+        let mut text = String::new();
+        let read = if src.as_str() == "-" { std::io::Read::read_to_string(&mut std::io::Read::take(std::io::stdin(), crate::kb_import::MAX_BYTES as u64 + 1), &mut text).map(|_| ()) } else { std::fs::read_to_string(src.as_str()).map(|t| text = t) };
+        match read {
+            Ok(()) => refresh_text(ws, id, src, &text),
+            Err(e) => Err(format!("{}: {}", src, e)),
+        }
+    } else {
+        eprintln!("usage: delphi kb refresh [<id> (--still-current | <file.md | ->)]");
+        return 2;
+    };
+    match done {
+        Ok(r) => {
+            print!("{}", r.receipt());
+            0
+        }
+        Err(e) => {
+            eprintln!("delphi kb refresh: {}", e);
+            1
+        }
+    }
+}
+
 /// Import one page's text through the same code as `kb import` (the operator's keep in `kb review` calls this).
 pub fn import_text(ws: &Path, name: &str, text: &str) -> Result<crate::kb_import::Imported, String> {
     let mut kb = Kb::open(&db_path(ws)).map_err(|e| e.to_string())?;
     kb.refresh(ws, &now()).map_err(|e| e.to_string())?;
     let now_secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
-    crate::kb_import::import(ws, &crate::kb_import::Input { text, name_hint: name, modified_secs: None, now_secs }, &|t| kb.resolve_link(t))
+    crate::kb_import::import(ws, &crate::kb_import::Input { text, name_hint: name, modified_secs: None, now_secs, keep_id: None }, &|t| kb.resolve_link(t))
 }
 
 pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
@@ -2272,7 +2336,8 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                 println!("kb: {} document(s), {} chunk(s) in {}", d, c, db_path(ws).display());
                 let (pages, shown) = crate::kb_import::counts(ws);
                 if pages > 0 {
-                    println!("kb: {} imported summary page(s), {} in default search (the rest: `kb search --all`)", pages, shown);
+                    let stale = crate::kb_import::pages(ws, &crate::kb_import::today()).iter().filter(|p| p.stale).count();
+                    println!("kb: {} imported summary page(s), {} in default search (the rest: `kb search --all`){}", pages, shown, if stale > 0 { format!("; {} stale (`kb refresh`)", stale) } else { String::new() });
                 }
                 match (model, kb.embedder()) {
                     (true, Some(e)) => {
@@ -2300,6 +2365,26 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                 let mut kb = open()?;
                 kb.refresh(ws, &now())?;
                 Ok(import_pages(&kb, ws, &paths))
+            }
+            "refresh" => Ok(refresh_cmd(ws, &args[1..])),
+            "quarantine" => {
+                let restore = args.iter().any(|a| a == "--restore");
+                let Some(id) = args[1..].iter().find(|a| !a.starts_with("--")) else {
+                    eprintln!("usage: delphi kb quarantine <id> [--restore]");
+                    return Ok(2);
+                };
+                match crate::kb_import::quarantine(ws, id, restore) {
+                    Ok(()) => {
+                        let mut kb = open()?;
+                        kb.refresh(ws, &now())?;
+                        println!("{} page:{}{}", if restore { "Restored" } else { "Quarantined (kept, out of search)" }, id, if restore { "" } else { "  Undo: delphi kb quarantine <id> --restore" });
+                        Ok(0)
+                    }
+                    Err(e) => {
+                        eprintln!("delphi kb quarantine: {}", e);
+                        Ok(1)
+                    }
+                }
             }
             "search" => {
                 let query: Vec<&str> = args[1..].iter().filter(|a| !a.starts_with("--")).map(String::as_str).collect();
@@ -3592,7 +3677,7 @@ Set CARGO_TARGET_DIR inside isolated worktree and run with offline flag.
         let mut kb = Kb::open_in_memory().unwrap();
         kb.upsert("context/facts/keys.md", "context", "---\nsource_type: user_ratified\n---\n# Keys\n\nKeys are rotated.\n", "t").unwrap();
         let put = |kb: &mut Kb, text: &str| {
-            let r = crate::kb_import::import(ws, &crate::kb_import::Input { text, name_hint: "n.md", modified_secs: None, now_secs: 1_800_000_000 }, &|t| kb.resolve_link(t)).unwrap();
+            let r = crate::kb_import::import(ws, &crate::kb_import::Input { text, name_hint: "n.md", modified_secs: None, now_secs: 1_800_000_000, keep_id: None }, &|t| kb.resolve_link(t)).unwrap();
             for (p, f) in [(r.page.clone(), format!("summaries/{}.md", r.id)), (r.bibliography.clone(), format!("summaries/{}.bib.md", r.id))] {
                 kb.upsert(&f, "summaries", &std::fs::read_to_string(p).unwrap(), "t").unwrap();
             }
@@ -3607,5 +3692,43 @@ Set CARGO_TARGET_DIR inside isolated worktree and run with offline flag.
         let q = kb.search("quokka", &SearchOpts::default()).unwrap();
         assert!(q.is_empty(), "{:?}", q.iter().map(|h| h.rel_path.clone()).collect::<Vec<_>>());
         assert_eq!(kb.search("quokka", &SearchOpts { include_untrusted: true, ..Default::default() }).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_stale_page_is_still_served_labelled_last_checked_and_a_quarantined_one_leaves_search() {
+        assert_eq!(summary_dates_note("valid_until: 2027-01-01\nchecked: 2026-10-01\n", "2026-12-31").as_deref(), Some("(valid until 2027-01-01)"));
+        let late = summary_dates_note("valid_until: 2027-01-01\nchecked: 2026-10-01\n", "2027-01-02").unwrap();
+        assert!(late.contains("last checked 2026-10-01") && !late.contains("expired"), "{}", late);
+        let d = tempfile::tempdir().unwrap();
+        let ws = d.path();
+        let mut kb = Kb::open_in_memory().unwrap();
+        let r = crate::kb_import::import(ws, &crate::kb_import::Input { text: "# Old page\n\nThe narwhal procedure.\n", name_hint: "n.md", modified_secs: None, now_secs: 1_000_000_000, keep_id: None }, &|_| None).unwrap();
+        let put = |kb: &mut Kb| {
+            for (p, f) in [(r.page.clone(), format!("summaries/{}.md", r.id)), (r.bibliography.clone(), format!("summaries/{}.bib.md", r.id))] {
+                kb.upsert(&f, "summaries", &std::fs::read_to_string(p).unwrap(), "t").unwrap();
+            }
+        };
+        put(&mut kb);
+        let found = kb.search("narwhal", &SearchOpts { include_untrusted: true, ..Default::default() }).unwrap();
+        assert!(found[0].note.as_deref().is_some_and(|n| n.contains("last checked 2001-09-09")), "{:?}", found[0].note);
+        assert!(crate::kb_import::pages(ws, "2026-01-01")[0].stale);
+        // Renewing moves the dates and leaves the words alone.
+        let before = std::fs::read_to_string(&r.page).unwrap();
+        crate::kb_import::renew(ws, &r.id, 1_800_000_000).unwrap();
+        let after = std::fs::read_to_string(&r.page).unwrap();
+        assert!(after.contains("checked: 2027-01-15") && after.ends_with("The narwhal procedure.\n") && before.ends_with("The narwhal procedure.\n"));
+        assert!(std::fs::read_to_string(&r.bibliography).unwrap().contains("valid_until: 2027-04-15"));
+        assert!(!crate::kb_import::pages(ws, "2027-02-01")[0].stale);
+        // New text under the same id keeps the prior copy; an unknown id is refused.
+        let new = crate::kb_import::import(ws, &crate::kb_import::Input { text: "# Retitled\n\nThe narwhal procedure changed.\n", name_hint: "n.md", modified_secs: None, now_secs: 1_800_000_100, keep_id: Some(&r.id) }, &|_| None).unwrap();
+        assert_eq!((new.id.as_str(), new.outcome.clone()), (r.id.as_str(), crate::kb_import::Outcome::NewVersion));
+        assert!(ws.join(crate::kb_import::DIR).join(".versions").join(&r.id).is_dir());
+        assert!(crate::kb_import::import(ws, &crate::kb_import::Input { text: "# X\n", name_hint: "n.md", modified_secs: None, now_secs: 1, keep_id: Some("nope") }, &|_| None).is_err());
+        // Quarantine moves, never deletes, and is reversible; path tricks are refused.
+        crate::kb_import::quarantine(ws, &r.id, false).unwrap();
+        assert!(!r.page.exists() && ws.join(crate::kb_import::DIR).join(".quarantine").join(format!("{}.md", r.id)).is_file());
+        crate::kb_import::quarantine(ws, &r.id, true).unwrap();
+        assert!(r.page.is_file() && r.bibliography.is_file());
+        assert!(crate::kb_import::quarantine(ws, "../x", false).is_err());
     }
 }

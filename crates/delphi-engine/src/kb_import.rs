@@ -33,6 +33,8 @@ pub enum Outcome {
     New,
     NewVersion,
     Unchanged,
+    /// Content the same, checked again: `valid_until` moved on (`specs/068` §7).
+    Renewed,
 }
 
 #[derive(Debug, Clone)]
@@ -56,8 +58,12 @@ impl Imported {
         let mut s = match self.outcome {
             Outcome::Unchanged => format!("Already in the library, unchanged: \"{}\" → page:{}\n", self.title, self.id),
             Outcome::NewVersion => format!("Updated \"{}\" → page:{} (prior copy kept)\n", self.title, self.id),
+            Outcome::Renewed => format!("Checked again, still current: \"{}\" → page:{}\n", self.title, self.id),
             Outcome::New => format!("Imported \"{}\" → page:{}\n", self.title, self.id),
         };
+        if self.outcome == Outcome::Renewed {
+            return s;
+        }
         let found = if self.index_worthy { "searchable now" } else { "find it with `kb search --all`; link it to a checked entry to show by default" };
         s.push_str(&format!("  {} source{} found · {} link{} to KB pages · {}\n", self.sources.len(), plural(self.sources.len()), self.links.len(), plural(self.links.len()), found));
         s.push_str(&format!("  Bibliography: {} source{}, {} internal · {}\n", self.sources.len(), plural(self.sources.len()), self.internal, self.bibliography.file_name().and_then(|n| n.to_str()).unwrap_or("")));
@@ -208,11 +214,18 @@ fn date_of(secs: i64) -> String {
     delphi_core::time::format_unix_millis(secs, 0).chars().take(10).collect()
 }
 
+/// Today as `YYYY-MM-DD`.
+pub fn today() -> String {
+    date_of(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0))
+}
+
 pub struct Input<'a> {
     pub text: &'a str,
     pub name_hint: &'a str,
     pub modified_secs: Option<i64>,
     pub now_secs: i64,
+    /// Refresh: write a new version under this existing page id instead of deriving one from the title.
+    pub keep_id: Option<&'a str>,
 }
 
 /// The bare import counter (`specs/068` §9): imported pages, and how many of them show in default search.
@@ -245,7 +258,15 @@ pub fn import(ws: &Path, input: &Input, resolve: &dyn Fn(&str) -> Option<String>
     let title = plain(&first_heading(body).unwrap_or(stem), TITLE_MAX);
     let title = if title.is_empty() { "Untitled".to_string() } else { title };
     let retrieved = date_of(input.modified_secs.unwrap_or(input.now_secs));
-    let id = page_id(&title);
+    let id = match input.keep_id {
+        Some(k) => {
+            if !valid_id(k) || !ws.join(DIR).join(format!("{}.md", k)).is_file() {
+                return Err(format!("no imported page with id `{}`", k));
+            }
+            k.to_string()
+        }
+        None => page_id(&title),
+    };
 
     let mut sources: Vec<BibRecord> = citations(body, &retrieved);
     let found = sources.len();
@@ -284,7 +305,7 @@ pub fn import(ws: &Path, input: &Input, resolve: &dyn Fn(&str) -> Option<String>
     };
 
     let front = format!(
-        "---\nid: {id}\ntitle: {title}\nkind: summary\nauthor: operator-import\nsource_type: external_untrusted\ntaint: external_untrusted\norigin: operator_import\ninclusion: ratified\nvalidation: none\nconfidence: low\nindex_worthy: {iw}\nretrieved: {ret}\nimported: {now}\nvalid_until: {vu}\noriginal_sha256: {sha}\nbibliography: {id}.bib.md\n---\n\n",
+        "---\nid: {id}\ntitle: {title}\nkind: summary\nauthor: operator-import\nsource_type: external_untrusted\ntaint: external_untrusted\norigin: operator_import\ninclusion: ratified\nvalidation: none\nconfidence: low\nindex_worthy: {iw}\nretrieved: {ret}\nimported: {now}\nvalid_until: {vu}\nchecked: {now}\noriginal_sha256: {sha}\nbibliography: {id}.bib.md\n---\n\n",
         id = id,
         title = quoted(&title),
         iw = index_worthy,
@@ -296,7 +317,7 @@ pub fn import(ws: &Path, input: &Input, resolve: &dyn Fn(&str) -> Option<String>
     let mut bib = format!("---\nid: {id}.bib\ntitle: {t}\nkind: bibliography\npage: {id}\nauthor: operator-import\nsource_type: external_untrusted\ntaint: external_untrusted\nindex_worthy: {iw}\nconfidence: low\n---\n\n# Bibliography: {title}\n\n", id = id, t = quoted(&format!("Bibliography: {}", title)), iw = index_worthy, title = title);
     bib.push_str(&if sources.is_empty() { "sources: none\n".to_string() } else { format!("sources: {}\n", sources.len()) });
     bib.push_str(&if links.is_empty() { "links: none\n".to_string() } else { format!("links: {}\n", links.len()) });
-    bib.push_str(&format!("topic: {}\npage: {}.md\nvalidation: none\n", topic_line(body), id));
+    bib.push_str(&format!("topic: {}\npage: {}.md\nvalidation: none\nvalid_until: {}\nchecked: {}\n", topic_line(body), id, date_of(input.now_secs + VALID_DAYS * 86400), date_of(input.now_secs)));
     if !sources.is_empty() {
         bib.push_str("\n## Sources\n\n");
         for r in &sources {
@@ -327,12 +348,101 @@ pub fn import(ws: &Path, input: &Input, resolve: &dyn Fn(&str) -> Option<String>
     Ok(Imported { id, title, outcome, page, bibliography, sources, internal, links, unresolved, index_worthy, warnings })
 }
 
+fn valid_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 120 && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageState {
+    pub id: String,
+    pub title: String,
+    pub valid_until: String,
+    pub checked: String,
+    pub stale: bool,
+}
+
+fn field(text: &str, key: &str) -> String {
+    let pre = format!("{}:", key);
+    text.lines().take(40).find_map(|l| l.strip_prefix(pre.as_str())).map(|v| v.trim().trim_matches('"').to_string()).unwrap_or_default()
+}
+
+/// Every imported page with its dates. A page is stale once `today` (`YYYY-MM-DD`) is past `valid_until` (`specs/068` §7).
+pub fn pages(ws: &Path, today: &str) -> Vec<PageState> {
+    let mut out = Vec::new();
+    for e in std::fs::read_dir(ws.join(DIR)).into_iter().flatten().flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        let Some(id) = name.strip_suffix(".md").filter(|i| !i.ends_with(".bib")) else { continue };
+        let Ok(text) = std::fs::read_to_string(e.path()) else { continue };
+        let valid_until = field(&text, "valid_until");
+        let checked = match field(&text, "checked") {
+            c if c.is_empty() => field(&text, "imported"),
+            c => c,
+        };
+        out.push(PageState { id: id.to_string(), title: field(&text, "title"), stale: !valid_until.is_empty() && valid_until.as_str() < today, valid_until, checked });
+    }
+    out.sort_by(|a, b| a.valid_until.cmp(&b.valid_until).then(a.id.cmp(&b.id)));
+    out
+}
+
+/// Move the dates forward on a page and its bibliography without touching a word of the page (`kb refresh <id> --still-current`).
+pub fn renew(ws: &Path, id: &str, now_secs: i64) -> Result<Imported, String> {
+    if !valid_id(id) {
+        return Err(format!("no imported page with id `{}`", id));
+    }
+    let dir = ws.join(DIR);
+    let (page, bibliography) = (dir.join(format!("{}.md", id)), dir.join(format!("{}.bib.md", id)));
+    let text = std::fs::read_to_string(&page).map_err(|_| format!("no imported page with id `{}`", id))?;
+    let (vu, ck) = (date_of(now_secs + VALID_DAYS * 86400), date_of(now_secs));
+    let restamp = |t: &str, head_end: usize, anchor: &str| -> String {
+        let (head, rest) = t.split_at(head_end);
+        let mut out = String::new();
+        for l in head.lines() {
+            if l.starts_with("valid_until:") || l.starts_with("checked:") {
+                continue;
+            }
+            out.push_str(l);
+            out.push('\n');
+            if l.starts_with(anchor) {
+                out.push_str(&format!("valid_until: {}\nchecked: {}\n", vu, ck));
+            }
+        }
+        out + rest
+    };
+    let head_end = text.match_indices("\n---\n").next().map(|(i, _)| i + 1).unwrap_or(0);
+    std::fs::write(&page, restamp(&text, head_end, "original_sha256:")).map_err(|e| e.to_string())?;
+    let bib = std::fs::read_to_string(&bibliography).map_err(|e| format!("{}: {}", bibliography.display(), e))?;
+    let bib_end = bib.find("\n## ").map(|i| i + 1).unwrap_or(bib.len());
+    std::fs::write(&bibliography, restamp(&bib, bib_end, "validation:")).map_err(|e| e.to_string())?;
+    Ok(Imported { id: id.to_string(), title: field(&text, "title"), outcome: Outcome::Renewed, page, bibliography, sources: vec![], internal: 0, links: vec![], unresolved: 0, index_worthy: field(&text, "index_worthy") == "true", warnings: vec![] })
+}
+
+const QUARANTINE: &str = ".quarantine";
+
+/// Take a refuted or problematic page out of search and reading without deleting it (`specs/068` §7); `restore` puts it back.
+pub fn quarantine(ws: &Path, id: &str, restore: bool) -> Result<(), String> {
+    if !valid_id(id) {
+        return Err(format!("no imported page with id `{}`", id));
+    }
+    let (from, to) = if restore { (ws.join(DIR).join(QUARANTINE), ws.join(DIR)) } else { (ws.join(DIR), ws.join(DIR).join(QUARANTINE)) };
+    if !from.join(format!("{}.md", id)).is_file() {
+        return Err(format!("no {} page with id `{}`", if restore { "quarantined" } else { "imported" }, id));
+    }
+    std::fs::create_dir_all(&to).map_err(|e| e.to_string())?;
+    for ext in ["md", "bib.md"] {
+        let f = format!("{}.{}", id, ext);
+        if from.join(&f).exists() {
+            std::fs::rename(from.join(&f), to.join(&f)).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn run(ws: &Path, text: &str, resolve: &dyn Fn(&str) -> Option<String>) -> Imported {
-        import(ws, &Input { text, name_hint: "vault-notes.md", modified_secs: Some(1_700_000_000), now_secs: 1_800_000_000 }, resolve).unwrap()
+        import(ws, &Input { text, name_hint: "vault-notes.md", modified_secs: Some(1_700_000_000), now_secs: 1_800_000_000, keep_id: None }, resolve).unwrap()
     }
     fn none(_: &str) -> Option<String> {
         None
