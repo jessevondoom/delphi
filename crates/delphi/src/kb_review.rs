@@ -85,7 +85,7 @@ fn pick<'a>(entries: &'a [Entry], args: &[&str]) -> Result<Vec<&'a Entry>, Strin
         .collect()
 }
 
-pub fn run_in(ws_dir: &Path, args: &[String]) -> Result<String, String> {
+pub fn run_in(home: &Path, ws_dir: &Path, args: &[String]) -> Result<String, String> {
     let entries = pending(ws_dir)?;
     let verb = args.first().map(String::as_str).unwrap_or("list");
     let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
@@ -108,6 +108,7 @@ pub fn run_in(ws_dir: &Path, args: &[String]) -> Result<String, String> {
             for e in pick(&entries, &rest)? {
                 let r = delphi_engine::kb::import_text(ws_dir, &format!("{}.md", e.title), &page_of(e))?;
                 crate::learn_cmd::drop_note(ws_dir, &e.note)?;
+                delphi_engine::kb::link_sources(home, ws_dir, &r.id);
                 out.push_str(&r.receipt());
             }
             Ok(out)
@@ -124,8 +125,8 @@ pub fn run_in(ws_dir: &Path, args: &[String]) -> Result<String, String> {
     }
 }
 
-pub fn cli(ws_dir: &Path, args: &[String]) -> i32 {
-    match run_in(ws_dir, args) {
+pub fn cli(home: &Path, ws_dir: &Path, args: &[String]) -> i32 {
+    match run_in(home, ws_dir, args) {
         Ok(s) => {
             print!("{}", s);
             0
@@ -155,15 +156,15 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         stage(t.path(), "host-a", "h1", "Vault rotation");
         stage(t.path(), "host-b", "h1", "Other");
-        let listed = run_in(t.path(), &[]).unwrap();
+        let listed = run_in(t.path(), t.path(), &[]).unwrap();
         assert!(listed.contains("host-a/h1") && listed.contains("host-b/h1") && listed.contains("2 waiting") && !listed.contains("a lesson"), "{listed}");
-        assert!(run_in(t.path(), &["discard".into()]).is_err(), "a bare discard names nothing");
-        assert!(run_in(t.path(), &["discard".into(), "h1".into()]).unwrap_err().contains("more than one"));
-        run_in(t.path(), &["discard".into(), "host-a/h1".into()]).unwrap();
-        let after = run_in(t.path(), &[]).unwrap();
+        assert!(run_in(t.path(), t.path(), &["discard".into()]).is_err(), "a bare discard names nothing");
+        assert!(run_in(t.path(), t.path(), &["discard".into(), "h1".into()]).unwrap_err().contains("more than one"));
+        run_in(t.path(), t.path(), &["discard".into(), "host-a/h1".into()]).unwrap();
+        let after = run_in(t.path(), t.path(), &[]).unwrap();
         assert!(!after.contains("host-a/h1") && after.contains("1 waiting"), "{after}");
         assert!(!t.path().join("local/summaries").exists());
-        let st = run_in(t.path(), &["stats".into()]).unwrap();
+        let st = run_in(t.path(), t.path(), &["stats".into()]).unwrap();
         assert!(st.contains("2 proposed") && st.contains("1 waiting") && st.contains("1 decided"), "{st}");
         let page = page_of(&pending(t.path()).unwrap()[0]);
         assert!(page.starts_with("# Other\n") && page.contains("claude-code/x") && page.contains("## Sources"), "{page}");

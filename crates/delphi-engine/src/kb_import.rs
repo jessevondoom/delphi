@@ -430,6 +430,55 @@ pub fn renew(ws: &Path, id: &str, now_secs: i64) -> Result<Imported, String> {
 }
 
 const QUARANTINE: &str = ".quarantine";
+const LINKS: &str = ".links";
+
+/// Where a cited source was first matched to the library: `locator -> (source_id, content_hash)`. Kept apart from the
+/// bibliography, which import rewrites, so a later change to the source can still be seen (`specs/068` §7).
+fn baseline(ws: &Path, id: &str) -> BTreeMap<String, (String, String)> {
+    let v: serde_json::Value = std::fs::read(ws.join(DIR).join(LINKS).join(format!("{}.json", id))).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    v.as_object().into_iter().flatten().filter_map(|(k, e)| Some((k.clone(), (e["source_id"].as_str()?.to_string(), e["content_hash"].as_str()?.to_string())))).collect()
+}
+
+/// Match each cited locator to a library source and write `source_id` and `source_hash` into the bibliography (`specs/068` §6.7).
+/// `lookup` maps a locator to the library's `(source_id, content_hash)`. The first hash seen stays the baseline.
+/// Returns how many citations are linked.
+pub fn link_sources(ws: &Path, id: &str, lookup: &dyn Fn(&str) -> Option<(String, String)>) -> usize {
+    let path = ws.join(DIR).join(format!("{}.bib.md", id));
+    let Ok(text) = std::fs::read_to_string(&path) else { return 0 };
+    let mut base = baseline(ws, id);
+    let mut out = String::new();
+    let mut linked = 0;
+    for l in text.lines() {
+        if l.starts_with("  source_id:") || l.starts_with("  source_hash:") {
+            continue;
+        }
+        out.push_str(l);
+        out.push('\n');
+        if let Some(loc) = l.strip_prefix("- locator: ") {
+            if let Some((sid, h)) = lookup(loc.trim()) {
+                let (sid, h) = base.entry(loc.trim().to_string()).or_insert((sid, h)).clone();
+                out.push_str(&format!("  source_id: {}\n  source_hash: {}\n", sid, h));
+                linked += 1;
+            }
+        }
+    }
+    if out != text {
+        let _ = std::fs::write(&path, out);
+    }
+    let dir = ws.join(DIR).join(LINKS);
+    if !base.is_empty() && std::fs::create_dir_all(&dir).is_ok() {
+        let v: serde_json::Map<String, serde_json::Value> = base.iter().map(|(k, (s, h))| (k.clone(), serde_json::json!({"source_id": s, "content_hash": h}))).collect();
+        let _ = std::fs::write(dir.join(format!("{}.json", id)), serde_json::Value::Object(v).to_string());
+    }
+    linked
+}
+
+/// How a page's linked sources stand now: `(linked, changed)`. A source that is gone or has a new hash counts as changed.
+pub fn source_drift(ws: &Path, id: &str, lookup: &dyn Fn(&str) -> Option<(String, String)>) -> (usize, usize) {
+    let base = baseline(ws, id);
+    let changed = base.iter().filter(|(loc, (sid, h))| lookup(loc).is_none_or(|(s2, h2)| &s2 != sid || &h2 != h)).count();
+    (base.len(), changed)
+}
 
 /// `(id, title)` of every page set aside by `kb quarantine`.
 pub fn quarantined(ws: &Path) -> Vec<(String, String)> {
@@ -554,5 +603,20 @@ mod tests {
         quarantine(ws, &first.id, false).unwrap();
         assert_eq!(quarantined(ws), vec![(first.id.clone(), "Edited page".to_string())]);
         assert_eq!(counts(ws).0, 0);
+    }
+
+    #[test]
+    fn linked_sources_are_recorded_once_and_a_changed_hash_shows_as_drift() {
+        let d = tempfile::tempdir().unwrap();
+        let ws = d.path();
+        let r = run(ws, "# Rot\n\nKeys rotate ([runbook](https://wiki.example.com/rot)).\n", &none);
+        let held = |h: &'static str| move |l: &str| (l == "https://wiki.example.com/rot").then(|| ("src-1".to_string(), h.to_string()));
+        assert_eq!(link_sources(ws, &r.id, &held("sha256:aa")), 1);
+        let bib = std::fs::read_to_string(&r.bibliography).unwrap();
+        assert!(bib.contains("source_id: src-1") && bib.contains("source_hash: sha256:aa"));
+        assert_eq!(source_drift(ws, &r.id, &held("sha256:aa")), (1, 0));
+        link_sources(ws, &r.id, &held("sha256:bb"));
+        assert_eq!(source_drift(ws, &r.id, &held("sha256:bb")), (1, 1), "the first hash stays the baseline");
+        assert_eq!(source_drift(ws, &r.id, &|_| None), (1, 1), "a source that is gone counts as changed");
     }
 }

@@ -2145,7 +2145,7 @@ fn model_cmd(home: &Path, args: &[String]) -> Result<i32, KbError> {
 /// `delphi kb index|reindex|search|stats|miss|eval|model` for the workspace at `ws` under `home`.
 /// `delphi kb import`: one file, a directory of Markdown, or `-` for standard input (`specs/068` §3). One file prints its receipt;
 /// several print one summary line. Nothing is asked, and nothing blocks: a problem with a page is a warning, a bad file is skipped.
-fn import_pages(kb: &Kb, ws: &Path, paths: &[&String]) -> i32 {
+fn import_pages(kb: &Kb, home: &Path, ws: &Path, paths: &[&String]) -> i32 {
     let mut files: Vec<(String, Option<i64>, String)> = Vec::new();
     let mut failed = 0;
     for p in paths {
@@ -2182,6 +2182,7 @@ fn import_pages(kb: &Kb, ws: &Path, paths: &[&String]) -> i32 {
     for (name, modified, text) in &files {
         match crate::kb_import::import(ws, &crate::kb_import::Input { text, name_hint: name, modified_secs: *modified, now_secs, keep_id: None }, &|t| kb.resolve_link(t)) {
             Ok(r) => {
+                let linked = link_sources(home, ws, &r.id);
                 match r.outcome {
                     crate::kb_import::Outcome::New => new += 1,
                     crate::kb_import::Outcome::NewVersion => updated += 1,
@@ -2192,6 +2193,9 @@ fn import_pages(kb: &Kb, ws: &Path, paths: &[&String]) -> i32 {
                 }
                 if !many {
                     print!("{}", r.receipt());
+                    if linked > 0 {
+                        println!("  {} source{} linked to the library, so a change there is noticed at refresh", linked, if linked == 1 { "" } else { "s" });
+                    }
                 }
             }
             Err(e) => {
@@ -2221,6 +2225,71 @@ fn collect_markdown(p: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// Library sources by canonical URL, as `(source_id, content_hash)`.
+fn library_lookup(home: &Path) -> impl Fn(&str) -> Option<(String, String)> {
+    let norm = |u: &str| u.trim().trim_end_matches('/').to_lowercase();
+    let items: Vec<(String, String, String)> = crate::library::Library::in_home(home).list().into_iter().filter(|(_, m)| m["purged"].is_null()).filter_map(|(id, m)| Some((norm(m["canonical_url"].as_str()?), id, m["content_hash"].as_str()?.to_string()))).collect();
+    move |loc| {
+        let n = norm(loc);
+        items.iter().find(|(u, _, _)| *u == n).map(|(_, i, h)| (i.clone(), h.clone()))
+    }
+}
+
+/// Link a page's cited URLs to sources the library holds (`specs/068` §6.7). Returns how many are linked.
+pub fn link_sources(home: &Path, ws: &Path, id: &str) -> usize {
+    crate::kb_import::link_sources(ws, id, &library_lookup(home))
+}
+
+/// One pass of background refresh may run this long (the operator's limit).
+const REFRESH_BUDGET_SECS: u64 = 240;
+const REFRESH_COOLDOWN_SECS: i64 = 24 * 3600;
+
+/// Refresh stale pages by checking the sources they cite, within the time limit (`specs/068` §7). With no model, a page is
+/// renewed only when every library source it cites is unchanged since it was linked; a changed source leaves the page stale
+/// and marks its key facts for recheck; a page with no linked source is left alone. Each page is tried at most once a day.
+fn refresh_stale(home: &Path, ws: &Path, minutes: Option<u64>) -> i32 {
+    let budget = std::time::Duration::from_secs((minutes.unwrap_or(4) * 60).min(REFRESH_BUDGET_SECS));
+    let start = std::time::Instant::now();
+    let now_secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    let state = ws.join(crate::kb_import::DIR).join(".refresh.json");
+    let mut tried: serde_json::Map<String, serde_json::Value> = std::fs::read(&state).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    let lookup = library_lookup(home);
+    let lib = crate::library::Library::in_home(home);
+    let (mut renewed, mut changed_pages, mut unlinked, mut waiting, mut left) = (Vec::new(), Vec::new(), Vec::new(), 0, 0);
+    for p in crate::kb_import::pages(ws, &crate::kb_import::today()).into_iter().filter(|p| p.stale) {
+        if start.elapsed() >= budget {
+            left += 1;
+            continue;
+        }
+        if tried.get(&p.id).and_then(|v| v.as_i64()).is_some_and(|t| now_secs - t < REFRESH_COOLDOWN_SECS) {
+            waiting += 1;
+            continue;
+        }
+        crate::kb_import::link_sources(ws, &p.id, &lookup);
+        let (linked, changed) = crate::kb_import::source_drift(ws, &p.id, &lookup);
+        if linked > 0 && changed == 0 {
+            if crate::kb_import::renew(ws, &p.id, now_secs).is_ok() {
+                renewed.push(p.id.clone());
+            }
+        } else if changed > 0 {
+            lib.flag_rechecks(&p.id);
+            changed_pages.push((p.id.clone(), changed));
+        } else {
+            unlinked.push(p.id.clone());
+        }
+        tried.insert(p.id.clone(), serde_json::json!(now_secs));
+    }
+    let _ = std::fs::write(&state, serde_json::Value::Object(tried).to_string());
+    println!("kb refresh: {} renewed (every cited source unchanged), {} with a changed source, {} with no linked source{}{}", renewed.len(), changed_pages.len(), unlinked.len(), if waiting > 0 { format!(", {} tried within a day", waiting) } else { String::new() }, if left > 0 { format!(", {} left for the next pass (time limit {} min)", left, budget.as_secs() / 60) } else { String::new() });
+    for (id, n) in &changed_pages {
+        println!("  {}  {} cited source(s) changed; rewrite it: delphi kb refresh {} <new-file.md | ->", id, n, id);
+    }
+    for id in &unlinked {
+        println!("  {}  no cited source is in the library to check; still right? delphi kb refresh {} --still-current", id, id);
+    }
+    0
+}
+
 /// "valid until DATE", or once past it "last checked DATE" with the way to refresh: a stale page is still served, never called expired (`specs/068` §7).
 fn summary_dates_note(bibliography: &str, today: &str) -> Option<String> {
     let get = |k: &str| bibliography.lines().find_map(|l| l.strip_prefix(k)).map(|v| v.trim().to_string()).filter(|v| v.len() == 10);
@@ -2240,7 +2309,11 @@ pub fn refresh_text(ws: &Path, id: &str, name: &str, text: &str) -> Result<crate
 }
 
 fn refresh_cmd(home: &Path, ws: &Path, args: &[String]) -> i32 {
-    let rest: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
+    if args.iter().any(|a| a == "--stale") {
+        let minutes = args.iter().position(|a| a == "--minutes").and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok());
+        return refresh_stale(home, ws, minutes);
+    }
+    let rest: Vec<&String> = args.iter().filter(|a| !a.starts_with("--") && a.parse::<u64>().is_err()).collect();
     let now_secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
     let Some(id) = rest.first() else {
         let pages = crate::kb_import::pages(ws, &crate::kb_import::today());
@@ -2275,6 +2348,7 @@ fn refresh_cmd(home: &Path, ws: &Path, args: &[String]) -> i32 {
     match done {
         Ok(r) => {
             print!("{}", r.receipt());
+            link_sources(home, ws, &r.id);
             let n = crate::library::Library::in_home(home).flag_rechecks(&r.id);
             if n > 0 {
                 println!("  {} key fact(s) from this page need a recheck against their source (delphi kb attest {})", n, r.id);
@@ -2372,7 +2446,7 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                 }
                 let mut kb = open()?;
                 kb.refresh(ws, &now())?;
-                Ok(import_pages(&kb, ws, &paths))
+                Ok(import_pages(&kb, home, ws, &paths))
             }
             "refresh" => Ok(refresh_cmd(home, ws, &args[1..])),
             "extract" => Ok(crate::kb_extract::extract_cmd(home, ws, &args[1..])),
