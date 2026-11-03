@@ -6,6 +6,7 @@
 //! * [`ledger`]: the SQLite usage ledger, always rebuildable from the log (`specs/005` §2.4).
 //! * [`budget`]: pre-dispatch reservations and the halt-on-ceiling rule (`specs/003` §3.2).
 
+pub mod artifact;
 pub mod budget;
 pub mod bundle_trust;
 pub mod bundles;

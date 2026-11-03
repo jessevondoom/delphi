@@ -1041,6 +1041,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_artifact_the_operator_asked_for_is_logged_by_prompt_and_nothing_else_is() {
+        use crate::model::Step;
+        use crate::testkit::{ratify_spec, setup};
+        let f = setup(vec![Step::tool("a1", "write_archive", json!({"path": "evidence.zip", "members": ["specs/011-retry.md"]})), Step::text("Bundled it.")], 5.0, |_| {});
+        ratify_spec(&f);
+        f.engine.run_task(&f.m, "architect", "Bundle the retry spec as evidence").await.unwrap();
+        let dir = f.root.join(format!("workspaces/w/local/artifact-log/{}", f.m.id));
+        let log = delphi_core::artifact::PromptLog::open(&dir).unwrap();
+        assert_eq!(log.verify(), Ok(1), "one artifact, one entry (the provenance sidecar is not an artifact)");
+        let raw = std::fs::read_to_string(log.path()).unwrap();
+        let v: Value = serde_json::from_str(raw.lines().next().unwrap()).unwrap();
+        assert_eq!((v["prompt"].as_str(), v["op"].as_str()), (Some("Bundle the retry spec as evidence"), Some("create")));
+        assert!(v["artifact"].as_str().unwrap().ends_with("research/evidence.zip") && !raw.contains("Bundled it."), "{}", raw);
+    }
+
+    #[tokio::test]
     async fn through_the_engine_a_refusal_comes_back_before_any_card_and_writes_nothing() {
         use crate::model::Step;
         use crate::testkit::{events_of, ratify_spec, setup};

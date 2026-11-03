@@ -309,6 +309,8 @@ pub struct Engine {
     pub inventory: Arc<crate::inventory::Inventory>,
     /// Handoffs whose spans get no tools at all (an approver answers in text), by handoff id.
     pub(crate) toolless: Mutex<HashSet<String>>,
+    /// The operator prompt behind each operator-rooted task, for the artifact prompt log (`specs/070` §3). Tasks a timer, a host or another agent started have none.
+    pub(crate) operator_prompts: Mutex<HashMap<String, String>>,
     /// Tasks raised by a host agent (`specs/062` §6.3): every span of one, dispatched or not, runs narrowed to read-only.
     pub(crate) readonly_tasks: Mutex<HashSet<String>>,
     /// Model calls spent on provisional decisions, by task (`[optimistic] max_approver_calls`).
@@ -632,6 +634,13 @@ impl Engine {
         self.reconcile_bundles(m).await?;
         self.reconcile_xenia(m).await?;
         let operator_task = parent.is_none();
+        if operator_task && announce {
+            let mut prompts = self.operator_prompts.lock().unwrap();
+            if prompts.len() >= 4096 {
+                prompts.clear();
+            }
+            prompts.insert(task_id.clone(), prompt.to_string());
+        }
         // `@<bundle>:<agent>` from the console arrives as `bundle:<bundle>:<agent>`: the span is the agent's host role's,
         // attributed to the bundle agent, exactly as when a role dispatches it (`specs/023` §5B).
         let (target, bundle_agent) = if target.starts_with("bundle:") {
@@ -1906,6 +1915,7 @@ impl Engine {
                 Err(e) => result = tools::ToolResult::err(e),
             }
         }
+        self.log_artifact_prompts(sc, name, &stamps, &result.content);
         let mut events: Vec<EventEnvelope> = stamps.iter().map(|s| sc.ev("provenance.stamp", delphi_core::provenance::Index::stamp_payload(s.zone, &s.path, &s.blake3, s.tier))).collect();
         events.extend(asked.into_iter().map(|(kind, payload)| sc.ev(&kind, payload)));
         if sc.span.ceiling() != before {
@@ -1923,6 +1933,29 @@ impl Engine {
             }
         }
         Ok(result)
+    }
+
+    /// Artifacts this call wrote get an entry in the operator-prompt log (`specs/070` §3). Only a task the operator started has a
+    /// prompt; the rest are recorded in the event log alone. A failed log write never fails the tool call: it is reported as an event.
+    fn log_artifact_prompts(&self, sc: &SpanCtx, tool: &str, stamps: &[tools::Stamp], result: &str) {
+        let Some(prompt) = self.operator_prompts.lock().unwrap().get(&sc.task_id).cloned() else { return };
+        let by_tool = crate::artifacts::is_artifact_tool(tool);
+        let written: Vec<&tools::Stamp> = stamps
+            .iter()
+            .filter(|s| if by_tool { !s.path.ends_with(".provenance.md") } else { delphi_core::artifact::classify(&s.path, None) == delphi_core::artifact::Class::Artifact })
+            .collect();
+        if written.is_empty() {
+            return;
+        }
+        let op = if result.starts_with("replaced") { delphi_core::artifact::Op::Edit } else { delphi_core::artifact::Op::Create };
+        let dir = self.ws.dir.join("local/artifact-log").join(&sc.m.id);
+        let redactor = delphi_core::redact::Redactor::new();
+        for s in written {
+            let r = delphi_core::artifact::PromptLog::open(&dir).and_then(|l| l.append(&redactor, &sc.task_id, &s.path, op, &prompt, Some(&s.blake3)).map_err(std::io::Error::other));
+            if let Err(e) = r {
+                eprintln!("delphi: artifact prompt log: {}", e);
+            }
+        }
     }
 
     /// The registered project a Builder task works on: named by an `@project/<name>/…` pointer, else the

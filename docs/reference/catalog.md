@@ -8,7 +8,7 @@ What a bundle can attach to. A bundle names a **host role** by its id (never a t
 
 | id | job | default tier | skills |
 | :-- | :-- | :-- | :-- |
-| `administrator` | Process Topology, Delivery Sequencer & Council Parliamentarian | workhorse | `work-breakdown-structures`, `critical-path-sequencing`, `council-parliamentarian`, `roadmap-sequencing` |
+| `administrator` | Process Topology, Delivery Sequencer & Council Parliamentarian | workhorse | `work-breakdown-structures`, `critical-path-sequencing`, `council-parliamentarian`, `roadmap-sequencing`, `workspace-administration` |
 | `advocate` | User Experience Advocate, Behavioral Psychologist & Joy Specialist | workhorse | `persona-simulation`, `user-joy-heuristics`, `cognitive-walkthrough`, `tonal-calibration` |
 | `architect` | Systems Architect, Creative Designer & Spec Author | workhorse | `repo-cartography`, `ast-code-search`, `spec-authoring`, `diagram-generation`, `api-contract-design`, `trade-off-matrix`, `tui-design`, `oblique-strategies` |
 | `assistant` | Executive Assistant, Comms Triage & Operator Leverage Specialist | fast | `executive-briefing-distillation`, `transcript-action-extraction`, `tonal-calibration` |
@@ -88,4 +88,5 @@ What a bundle can attach to. A bundle names a **host role** by its id (never a t
 | `tui-design` | Design calm, borderless terminal interfaces: decks, headers, badges and character-cell rules. Use when adding or changing any TUI view, widget or layout in Ratatui. | `architect`, `builder`, `orchestrator` |
 | `user-joy-heuristics` | Audit software interfaces, TUI screens, and CLI interactions against emotional design levels, Kahneman's Peak-End Rule, and Nielsen's heuristics to maximize user joy and eliminate friction. | `advocate` |
 | `work-breakdown-structures` | Decompose complex, ambiguous epics into Mutually Exclusive, Collectively Exhaustive (MECE) task hierarchies. Use when scoping initiatives or planning sprint structures. | `administrator`, `orchestrator` |
+| `workspace-administration` | Diagnose workspace health, model endpoints, connectors, and project scopes, and formulate governed action proposals. Use when onboarding, configuring endpoints, or scaffolding projects. | `administrator` |
 | `worktree-isolation` | Create and prune isolated git worktrees for a task so builds never touch the operator's checkout. Use before any code change. | `builder` |

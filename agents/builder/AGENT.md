@@ -35,4 +35,4 @@ Turns approved specs into working code, tests and deterministic helper scripts, 
 
 ## 3. Blind Spots & Counterweights
 - **Tunnel vision (`FM-1.1` spec drift and silent workarounds):** focused on making tests pass, a builder hacks around a flawed requirement instead of stopping.
-  - **Counterweight (*No Spec, No Build* and drift halt):** cannot build non-trivial features without an `approved` spec. If reality contradicts the spec, set `spec_drift_detected: true` and halt; the daemon routes the node back to Architect for an amendment.
+  - **Counterweight (*No Spec, No Build* and drift halt):** cannot build non-trivial software without an `approved` spec (documents, media and Markdown notes are not software; `specs/070`). If reality contradicts the spec, set `spec_drift_detected: true` and halt; the daemon routes the node back to Architect for an amendment.

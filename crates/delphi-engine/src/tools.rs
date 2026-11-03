@@ -246,6 +246,18 @@ impl Registry {
             classify: classify_request_research,
             exec: ToolExec::Local(request_research),
         });
+        r.register(ToolSpec {
+            def: read_def("inspect_system", "Inspect Delphi system health, model endpoints, connectors, project scopes, or bundles. Read-only and side-effect free. Administrator and Orchestrator only.", json!({"type": "object", "required": ["subsystem"], "properties": {"subsystem": {"type": "string", "enum": ["doctor", "endpoints", "connectors", "projects", "bundles", "capabilities"], "description": "The subsystem to inspect."}, "target": {"type": "string", "description": "Optional specific target (e.g. endpoint name, project path, or connector name)."}}, "additionalProperties": false})),
+            requires_write_scope: false,
+            classify: classify_inspect_system,
+            exec: ToolExec::Local(inspect_system),
+        });
+        r.register(ToolSpec {
+            def: read_def("propose_admin_action", "Propose an administrative action that modifies workspace configuration, project scaffolding, or connectors. Emits an Action Card for synchronous operator approval. Administrator only.", json!({"type": "object", "required": ["action_type", "title", "summary", "command", "blast_radius"], "properties": {"action_type": {"type": "string", "enum": ["project_init", "project_index", "connector_pin", "bundle_add", "setup_scaffold"], "description": "The administrative action category."}, "title": {"type": "string", "maxLength": 100, "description": "Short summary title of the action."}, "summary": {"type": "string", "maxLength": 400, "description": "Detailed explanation of why this action is needed."}, "command": {"type": "string", "description": "The exact delphi command to execute upon approval."}, "blast_radius": {"type": "array", "items": {"type": "string"}, "description": "Files, directories, or config sections modified by this action."}}, "additionalProperties": false})),
+            requires_write_scope: false,
+            classify: classify_propose_admin_action,
+            exec: ToolExec::Local(propose_admin_action),
+        });
         for spec in crate::artifacts::specs() {
             r.register(spec);
         }
@@ -735,6 +747,396 @@ fn external_available(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
     ToolResult::ok(crate::hostmap::answer(map.as_ref(), need, now))
 }
 
+fn classify_inspect_system(tool: &str, args: &Value) -> Result<Classified, ToolError> {
+    let subsystem = str_arg(args, "subsystem")?;
+    match subsystem {
+        "doctor" | "endpoints" | "connectors" | "projects" | "bundles" | "capabilities" => {}
+        other => return Err(ToolError(format!("unknown subsystem `{}`; expected doctor, endpoints, connectors, projects, bundles, or capabilities", other))),
+    }
+    Ok(Classified {
+        tool: tool.into(),
+        tier: ToolTier::Green,
+        kind: ActionKind::Read,
+        summary: format!("inspect_system({})", subsystem),
+        payload: args.clone(),
+        pattern: format!("{} {}", tool, subsystem),
+    })
+}
+
+/// Inspect Delphi system health, endpoints, connectors, projects, bundles, or capabilities (spec 069 §4.1).
+/// Read-only and side-effect free. Exclusive to Administrator and Orchestrator.
+fn inspect_system(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
+    if ctx.role != "administrator" && ctx.role != "orchestrator" {
+        return ToolResult::err("only the administrator and orchestrator may inspect system status; say in your report what you could not do");
+    }
+    let subsystem = match str_arg(args, "subsystem") {
+        Ok(s) => s,
+        Err(e) => return ToolResult::err(e.0),
+    };
+    let target = str_arg(args, "target").ok().map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+    let ws_dir = ctx.guard.zones.local.parent().unwrap_or(&ctx.guard.zones.local);
+
+    match subsystem {
+        "doctor" => {
+            let mut checks = Vec::new();
+            let config_path = ws_dir.join("config.toml");
+            let has_config = config_path.exists();
+            checks.push(json!({
+                "check": "config.toml",
+                "ok": has_config,
+                "detail": if has_config { "workspace config present" } else { "config.toml missing; run delphi setup" }
+            }));
+
+            let cfg = std::fs::read_to_string(&config_path)
+                .ok()
+                .and_then(|t| delphi_adapter::config::Config::parse(&t).ok());
+
+            let endpoint_count = cfg.as_ref().map(|c| c.endpoints.len()).unwrap_or(0);
+            checks.push(json!({
+                "check": "endpoints",
+                "ok": endpoint_count > 0,
+                "detail": format!("{} model endpoint(s) configured", endpoint_count)
+            }));
+
+            let connector_count = cfg.as_ref().map(|c| c.connectors.len()).unwrap_or(0);
+            checks.push(json!({
+                "check": "connectors",
+                "ok": true,
+                "detail": format!("{} connector(s) configured", connector_count)
+            }));
+
+            let bundles_lock = ws_dir.join("local/bundles.lock");
+            let bundle_count = if bundles_lock.exists() {
+                delphi_core::bundles::read(ws_dir).map(|l| l.bundle.len()).unwrap_or(0)
+            } else {
+                0
+            };
+            checks.push(json!({
+                "check": "bundles",
+                "ok": true,
+                "detail": format!("{} bundle(s) installed", bundle_count)
+            }));
+
+            let projects_json = ws_dir.join("local/projects.json");
+            let project_count = if projects_json.exists() {
+                std::fs::read_to_string(&projects_json)
+                    .ok()
+                    .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+                    .and_then(|v| v.get("projects").and_then(|p| p.as_object()).map(|o| o.len()))
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+            checks.push(json!({
+                "check": "projects",
+                "ok": true,
+                "detail": format!("{} project scope(s) registered", project_count)
+            }));
+
+            let healthy = has_config && endpoint_count > 0;
+            ToolResult::ok(json!({
+                "subsystem": "doctor",
+                "healthy": healthy,
+                "workspace": ws_dir.display().to_string(),
+                "checks": checks
+            }).to_string())
+        }
+        "endpoints" => {
+            let config_path = ws_dir.join("config.toml");
+            if !config_path.exists() {
+                return ToolResult::ok(json!({
+                    "subsystem": "endpoints",
+                    "count": 0,
+                    "endpoints": [],
+                    "note": "no config.toml found; run delphi setup to configure a model endpoint"
+                }).to_string());
+            }
+            let cfg = match std::fs::read_to_string(&config_path) {
+                Ok(t) => delphi_adapter::config::Config::parse(&t).map_err(|e| e.join("; ")),
+                Err(e) => Err(format!("cannot read config.toml: {}", e)),
+            };
+            match cfg {
+                Ok(c) => {
+                    let eps: Vec<Value> = c.endpoints.into_iter().filter_map(|e| {
+                        if let Some(ref t) = target {
+                            if !e.id.eq_ignore_ascii_case(t) && !e.family.eq_ignore_ascii_case(t) {
+                                return None;
+                            }
+                        }
+                        Some(json!({
+                            "id": e.id,
+                            "family": e.family,
+                            "path": format!("{:?}", e.path),
+                            "cost_model": format!("{:?}", e.cost_model),
+                            "models": e.models
+                        }))
+                    }).collect();
+                    ToolResult::ok(json!({
+                        "subsystem": "endpoints",
+                        "count": eps.len(),
+                        "endpoints": eps
+                    }).to_string())
+                }
+                Err(err_msg) => ToolResult::err(err_msg),
+            }
+        }
+        "connectors" => {
+            let config_path = ws_dir.join("config.toml");
+            if !config_path.exists() {
+                return ToolResult::ok(json!({
+                    "subsystem": "connectors",
+                    "count": 0,
+                    "connectors": [],
+                    "note": "no config.toml found"
+                }).to_string());
+            }
+            let cfg = match std::fs::read_to_string(&config_path) {
+                Ok(t) => delphi_adapter::config::Config::parse(&t).map_err(|e| e.join("; ")),
+                Err(e) => Err(format!("cannot read config.toml: {}", e)),
+            };
+            match cfg {
+                Ok(c) => {
+                    let conns: Vec<Value> = c.connectors.into_iter().filter_map(|(name, conn)| {
+                        if let Some(ref t) = target {
+                            if !name.eq_ignore_ascii_case(t) {
+                                return None;
+                            }
+                        }
+                        Some(json!({
+                            "name": name,
+                            "url": conn.url,
+                            "tools": conn.tools.keys().cloned().collect::<Vec<_>>(),
+                            "roles": conn.roles,
+                            "account": conn.account,
+                            "login": conn.login
+                        }))
+                    }).collect();
+                    ToolResult::ok(json!({
+                        "subsystem": "connectors",
+                        "count": conns.len(),
+                        "connectors": conns
+                    }).to_string())
+                }
+                Err(err_msg) => ToolResult::err(err_msg),
+            }
+        }
+        "projects" => {
+            let projects_json = ws_dir.join("local/projects.json");
+            let list: Vec<Value> = if projects_json.exists() {
+                std::fs::read_to_string(&projects_json)
+                    .ok()
+                    .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+                    .and_then(|v| v.get("projects").and_then(|p| p.as_object()).map(|o| {
+                        o.values().filter_map(|pr| {
+                            let id = pr.get("project_id")?.as_str()?;
+                            let root = pr.get("root")?.as_str()?;
+                            let display = pr.get("display_name").and_then(|d| d.as_str()).unwrap_or(id);
+                            if let Some(ref t) = target {
+                                if !id.eq_ignore_ascii_case(t) && !root.contains(t.as_str()) && !display.eq_ignore_ascii_case(t) {
+                                    return None;
+                                }
+                            }
+                            Some(json!({
+                                "project_id": id,
+                                "root": root,
+                                "display_name": display
+                            }))
+                        }).collect()
+                    }))
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            ToolResult::ok(json!({
+                "subsystem": "projects",
+                "count": list.len(),
+                "projects": list
+            }).to_string())
+        }
+        "bundles" => {
+            let lock = delphi_core::bundles::read(ws_dir).unwrap_or_default();
+            let active: Vec<Value> = lock.bundle.into_iter().filter_map(|b| {
+                let full_name = format!("{}/{}", b.org, b.name);
+                if let Some(ref t) = target {
+                    if !b.name.eq_ignore_ascii_case(t) && !full_name.eq_ignore_ascii_case(t) {
+                        return None;
+                    }
+                }
+                Some(json!({
+                    "org": b.org,
+                    "name": b.name,
+                    "version": b.version,
+                    "hash": b.hash,
+                    "status": b.status,
+                    "provenance": b.provenance,
+                    "title": b.title
+                }))
+            }).collect();
+            ToolResult::ok(json!({
+                "subsystem": "bundles",
+                "count": active.len(),
+                "bundles": active
+            }).to_string())
+        }
+        "capabilities" => {
+            let map = crate::hostmap::home_of_local(&ctx.guard.zones.local).and_then(crate::hostmap::load);
+            match map {
+                Some(snap) => {
+                    let hits: Vec<Value> = if let Some(ref t) = target {
+                        crate::hostmap::lookup(&snap, t).into_iter().map(|h| {
+                            json!({
+                                "kind": h.kind,
+                                "name": h.name,
+                                "place": h.place,
+                                "state": format!("{:?}", h.state)
+                            })
+                        }).collect()
+                    } else {
+                        snap.clis.into_iter().map(|c| {
+                            json!({
+                                "cli": c.cli,
+                                "installed": c.installed,
+                                "path": c.path,
+                                "version": c.version,
+                                "auth": c.auth,
+                                "mcp_count": c.mcp.len(),
+                                "skills_count": c.skills.len()
+                            })
+                        }).collect()
+                    };
+                    ToolResult::ok(json!({
+                        "subsystem": "capabilities",
+                        "taken_unix": snap.taken_unix,
+                        "results": hits
+                    }).to_string())
+                }
+                None => ToolResult::ok(json!({
+                    "subsystem": "capabilities",
+                    "status": "unavailable",
+                    "note": "no capabilities.json found; run delphi capabilities to generate"
+                }).to_string()),
+            }
+        }
+        _ => ToolResult::err(format!("unrecognized subsystem `{}`", subsystem)),
+    }
+}
+
+const FORBIDDEN_ADMIN_SUBCOMMANDS: &[&str] = &[
+    "decisions ratify",
+    "decisions reject",
+    "validation latch",
+    "validation retract",
+    "claims validate",
+    "claims confirm",
+    "bundle trust",
+    "auth login",
+    "bundle sign",
+    "relay totp",
+];
+
+fn is_protected_admin_path(lower: &str) -> bool {
+    lower.starts_with(".delphi/auth")
+        || lower.starts_with("local/auth")
+        || lower.starts_with(".delphi/hooks")
+        || lower == "governance.md"
+        || lower == "review.md"
+        || lower == "context/heuristics.md"
+        || lower == "context/team-heuristics.md"
+        || lower == "heuristics.md"
+        || lower.ends_with("ratified.lock")
+}
+
+fn classify_propose_admin_action(tool: &str, args: &Value) -> Result<Classified, ToolError> {
+    let action_type = str_arg(args, "action_type")?;
+    match action_type {
+        "project_init" | "project_index" | "connector_pin" | "bundle_add" | "setup_scaffold" => {}
+        other => return Err(ToolError(format!("unknown action_type `{}`; expected project_init, project_index, connector_pin, bundle_add, or setup_scaffold", other))),
+    }
+    let title = str_arg(args, "title")?;
+    let command = str_arg(args, "command")?;
+    if !command.trim_start().starts_with("delphi ") {
+        return Err(ToolError("`command` must start with `delphi `".into()));
+    }
+    let lower_cmd = command.to_lowercase();
+    for forbidden in FORBIDDEN_ADMIN_SUBCOMMANDS {
+        if lower_cmd.contains(forbidden) {
+            return Err(ToolError(format!("`{}` is a sovereign command and cannot be proposed via an action card", forbidden)));
+        }
+    }
+    Ok(Classified {
+        tool: tool.into(),
+        tier: ToolTier::Amber,
+        kind: ActionKind::SpecDraft,
+        summary: format!("propose_admin_action({}: {})", action_type, title),
+        payload: args.clone(),
+        pattern: format!("{} {}", tool, action_type),
+    })
+}
+
+/// Propose an administrative action that modifies workspace configuration, project scaffolding, or connectors (spec 069 §4.2).
+/// Emits an Administrative Action Card for synchronous operator approval. Exclusive to Administrator.
+fn propose_admin_action(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
+    if ctx.role != "administrator" {
+        return ToolResult::err("only the administrator may propose administrative action cards; say in your report what you recommend");
+    }
+    if ctx.span.ceiling() < Tier::L2 {
+        return ToolResult::err("untrusted_context_mutation_denied: spans with untrusted or unverified federated taint cannot propose administrative actions");
+    }
+    if ctx.events.iter().any(|(kind, _)| kind == "admin.action_proposed") {
+        return ToolResult::err("only one administrative action card may be proposed per task turn; batch compound operations into a single plan card");
+    }
+    let action_type = match str_arg(args, "action_type") {
+        Ok(a) => a,
+        Err(e) => return ToolResult::err(e.0),
+    };
+    let title = crate::decision_model::clean(args.get("title").and_then(Value::as_str).unwrap_or(""), 100);
+    let summary = crate::decision_model::clean(args.get("summary").and_then(Value::as_str).unwrap_or(""), 400);
+    let command = crate::decision_model::clean(args.get("command").and_then(Value::as_str).unwrap_or(""), 300);
+    if title.is_empty() || summary.is_empty() || command.is_empty() {
+        return ToolResult::err("`title`, `summary`, and `command` are required");
+    }
+    if !command.trim_start().starts_with("delphi ") {
+        return ToolResult::err("`command` must start with `delphi `");
+    }
+    let lower_cmd = command.to_lowercase();
+    for forbidden in FORBIDDEN_ADMIN_SUBCOMMANDS {
+        if lower_cmd.contains(forbidden) {
+            return ToolResult::err(format!("prohibited_command: `{}` is a sovereign command and cannot be proposed via action cards; the operator must execute it directly in their terminal", forbidden));
+        }
+    }
+    let raw_blast = match args.get("blast_radius").and_then(Value::as_array) {
+        Some(arr) if !arr.is_empty() && arr.len() <= 20 => arr,
+        Some(arr) if arr.is_empty() => return ToolResult::err("`blast_radius` must contain at least 1 path"),
+        Some(_) => return ToolResult::err("`blast_radius` cannot exceed 20 paths"),
+        None => return ToolResult::err("missing array argument `blast_radius`"),
+    };
+    let mut blast_radius = Vec::new();
+    for p_val in raw_blast {
+        let p_str = match p_val.as_str() {
+            Some(s) if !s.trim().is_empty() => s.trim(),
+            _ => return ToolResult::err("each entry in `blast_radius` must be a non-empty string path"),
+        };
+        let canonical = match delphi_core::pathguard::canonical(p_str) {
+            Ok(c) => c,
+            Err(e) => return ToolResult::err(format!("path `{}` violates containment: {:?}", p_str, e)),
+        };
+        let lower = canonical.to_lowercase();
+        if is_protected_admin_path(&lower) {
+            return ToolResult::err(format!("path `{}` targets protected governance, authentication, or hook files", p_str));
+        }
+        blast_radius.push(canonical);
+    }
+    ctx.events.push(("admin.action_proposed".into(), json!({
+        "action_type": action_type,
+        "title": title,
+        "summary": summary,
+        "command": command,
+        "blast_radius": blast_radius,
+        "role": ctx.role
+    })));
+    ToolResult::ok(format!("administrative action card `{}` proposed for operator review: `{}` (blast radius: {} item(s))", title, command, blast_radius.len()))
+}
+
 /// Markdown and scratch notes are the system running, not building (`specs/064` §6): Green, whatever the permission mode.
 /// Not specs, not memory, not a pinned file. Classification is never the boundary: the path guard still decides.
 fn is_notes_write(path: &str) -> bool {
@@ -1192,8 +1594,8 @@ mod tests {
     fn the_registry_offers_write_tools_only_to_roles_with_a_write_scope_and_accepts_new_tools() {
         let mut r = Registry::builtin();
         let names = |d: Vec<ToolDef>| d.into_iter().map(|t| t.name).collect::<Vec<_>>();
-        assert_eq!(names(r.defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "recall_memory", "xenia_search", "xenia_help", "external_available", "request_research"]);
-        assert_eq!(names(r.defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "recall_memory", "xenia_search", "xenia_help", "external_available", "request_research", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"]);
+        assert_eq!(names(r.defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "recall_memory", "xenia_search", "xenia_help", "external_available", "request_research", "inspect_system", "propose_admin_action"]);
+        assert_eq!(names(r.defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "recall_memory", "xenia_search", "xenia_help", "external_available", "request_research", "inspect_system", "propose_admin_action", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"]);
         assert!(r.classify("nope", &json!({})).is_err());
         fn ping(_: &mut ToolCtx, _: &Value) -> ToolResult {
             ToolResult::ok("pong".to_string())
@@ -1848,8 +2250,8 @@ mod tests {
     #[test]
     fn tool_definitions_depend_on_the_role_having_write_scope() {
         let names = |d: Vec<ToolDef>| d.into_iter().map(|t| t.name).collect::<Vec<_>>();
-        assert_eq!(names(tool_defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "recall_memory", "xenia_search", "xenia_help", "external_available", "request_research"]);
-        assert_eq!(names(tool_defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "recall_memory", "xenia_search", "xenia_help", "external_available", "request_research", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"]);
+        assert_eq!(names(tool_defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "recall_memory", "xenia_search", "xenia_help", "external_available", "request_research", "inspect_system", "propose_admin_action"]);
+        assert_eq!(names(tool_defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "recall_memory", "xenia_search", "xenia_help", "external_available", "request_research", "inspect_system", "propose_admin_action", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"]);
     }
 
     #[test]
@@ -1978,5 +2380,199 @@ Quarantine external untrusted input.
         for bad in [json!({}), json!({"topic": ""}), json!({"topic": "x".repeat(201)}), json!({"topic": "a\u{7}b"})] {
             assert!(reg.classify("request_research", &bad).is_err(), "{}", bad);
         }
+    }
+
+    #[test]
+    fn inspect_system_refuses_non_admin_and_serves_admin_and_orchestrator() {
+        let mut f = fx(&[]);
+        let reg = Registry::builtin();
+
+        // 1. Classification
+        assert!(reg.classify("inspect_system", &json!({})).is_err());
+        assert!(reg.classify("inspect_system", &json!({"subsystem": "invalid"})).is_err());
+        let c = reg.classify("inspect_system", &json!({"subsystem": "doctor"})).unwrap();
+        assert_eq!((c.tier, c.kind), (ToolTier::Green, ActionKind::Read));
+
+        // 2. Role restriction: builder and scout are refused
+        let r_builder = run_tool_as(&mut f, "builder", "inspect_system", json!({"subsystem": "doctor"}));
+        assert!(r_builder.is_error);
+        assert!(r_builder.content.contains("only the administrator and orchestrator"));
+
+        let r_scout = run_tool_as(&mut f, "scout", "inspect_system", json!({"subsystem": "endpoints"}));
+        assert!(r_scout.is_error);
+        assert!(r_scout.content.contains("only the administrator and orchestrator"));
+
+        // 3. Administrator and Orchestrator succeed
+        let r_admin = run_tool_as(&mut f, "administrator", "inspect_system", json!({"subsystem": "doctor"}));
+        assert!(!r_admin.is_error, "doctor check failed: {}", r_admin.content);
+        assert!(r_admin.content.contains("\"subsystem\":\"doctor\""));
+        assert!(r_admin.content.contains("\"checks\""));
+
+        let r_orch = run_tool_as(&mut f, "orchestrator", "inspect_system", json!({"subsystem": "endpoints"}));
+        assert!(!r_orch.is_error, "endpoints check failed: {}", r_orch.content);
+        assert!(r_orch.content.contains("\"subsystem\":\"endpoints\""));
+
+        let r_conns = run_tool_as(&mut f, "administrator", "inspect_system", json!({"subsystem": "connectors"}));
+        assert!(!r_conns.is_error, "connectors check failed: {}", r_conns.content);
+        assert!(r_conns.content.contains("\"subsystem\":\"connectors\""));
+
+        let r_proj = run_tool_as(&mut f, "administrator", "inspect_system", json!({"subsystem": "projects"}));
+        assert!(!r_proj.is_error, "projects check failed: {}", r_proj.content);
+        assert!(r_proj.content.contains("\"subsystem\":\"projects\""));
+
+        let r_bundles = run_tool_as(&mut f, "administrator", "inspect_system", json!({"subsystem": "bundles"}));
+        assert!(!r_bundles.is_error, "bundles check failed: {}", r_bundles.content);
+        assert!(r_bundles.content.contains("\"subsystem\":\"bundles\""));
+
+        let r_caps = run_tool_as(&mut f, "administrator", "inspect_system", json!({"subsystem": "capabilities"}));
+        assert!(!r_caps.is_error, "capabilities check failed: {}", r_caps.content);
+        assert!(r_caps.content.contains("\"subsystem\":\"capabilities\""));
+
+        // 4. Test with configured config.toml
+        let cfg_sample = r#"
+[[endpoints]]
+id = "mock-claude"
+family = "claude"
+path = "api"
+credential = "env:ANTHROPIC_API_KEY"
+
+[connectors.github]
+url = "http://localhost:8080/mcp"
+hosts = ["localhost"]
+roles = ["builder"]
+tools = { search = "read" }
+"#;
+        fs::write(f.root.join("config.toml"), cfg_sample).unwrap();
+        let r_eps_configured = run_tool_as(&mut f, "orchestrator", "inspect_system", json!({"subsystem": "endpoints"}));
+        assert!(!r_eps_configured.is_error);
+        assert!(r_eps_configured.content.contains("mock-claude"));
+
+        let r_conns_configured = run_tool_as(&mut f, "administrator", "inspect_system", json!({"subsystem": "connectors"}));
+        assert!(!r_conns_configured.is_error);
+        assert!(r_conns_configured.content.contains("github"));
+    }
+
+    #[test]
+    fn propose_admin_action_enforces_invariants() {
+        let mut f = fx(&[]);
+        let reg = Registry::builtin();
+
+        // 1. Classification
+        assert!(reg.classify("propose_admin_action", &json!({})).is_err());
+        assert!(reg.classify("propose_admin_action", &json!({
+            "action_type": "invalid",
+            "title": "Title",
+            "summary": "Summary",
+            "command": "delphi setup",
+            "blast_radius": ["config.toml"]
+        })).is_err());
+
+        // Command must start with delphi
+        assert!(reg.classify("propose_admin_action", &json!({
+            "action_type": "setup_scaffold",
+            "title": "Title",
+            "summary": "Summary",
+            "command": "rm -rf /",
+            "blast_radius": ["config.toml"]
+        })).is_err());
+
+        // Sovereign command is rejected by classifier
+        assert!(reg.classify("propose_admin_action", &json!({
+            "action_type": "setup_scaffold",
+            "title": "Title",
+            "summary": "Summary",
+            "command": "delphi decisions ratify all",
+            "blast_radius": ["config.toml"]
+        })).is_err());
+
+        let c = reg.classify("propose_admin_action", &json!({
+            "action_type": "project_init",
+            "title": "Initialize project",
+            "summary": "Scaffolds new directory project",
+            "command": "delphi project init ./proj --yes",
+            "blast_radius": ["proj/_index.md"]
+        })).unwrap();
+        assert_eq!((c.tier, c.kind), (ToolTier::Amber, ActionKind::SpecDraft));
+
+        // 2. Role restriction: only administrator
+        let r_orch = run_tool_as(&mut f, "orchestrator", "propose_admin_action", json!({
+            "action_type": "project_init",
+            "title": "Init",
+            "summary": "Summary",
+            "command": "delphi project init ./proj",
+            "blast_radius": ["proj/_index.md"]
+        }));
+        assert!(r_orch.is_error);
+        assert!(r_orch.content.contains("only the administrator"));
+
+        // 3. Taint gate: span at L0 or L1 is refused
+        f.span = Span::with_ceiling("sp-tainted", Tier::L1);
+        let r_tainted = run_tool_as(&mut f, "administrator", "propose_admin_action", json!({
+            "action_type": "project_init",
+            "title": "Init",
+            "summary": "Summary",
+            "command": "delphi project init ./proj",
+            "blast_radius": ["proj/_index.md"]
+        }));
+        assert!(r_tainted.is_error);
+        assert!(r_tainted.content.contains("untrusted_context_mutation_denied"));
+
+        // Reset span ceiling to clean L5
+        f.span = Span::root("sp-clean");
+
+        // 4. Path containment: traversal or protected paths refused
+        let r_traversal = run_tool_as(&mut f, "administrator", "propose_admin_action", json!({
+            "action_type": "project_init",
+            "title": "Init",
+            "summary": "Summary",
+            "command": "delphi project init ../escape",
+            "blast_radius": ["../escape/_index.md"]
+        }));
+        assert!(r_traversal.is_error);
+        assert!(r_traversal.content.contains("violates containment"));
+
+        let r_protected = run_tool_as(&mut f, "administrator", "propose_admin_action", json!({
+            "action_type": "setup_scaffold",
+            "title": "Init",
+            "summary": "Summary",
+            "command": "delphi setup",
+            "blast_radius": ["governance.md"]
+        }));
+        assert!(r_protected.is_error);
+        assert!(r_protected.content.contains("targets protected"));
+
+        // 5. Valid proposal succeeds and emits event
+        let r_ok = run_tool_as(&mut f, "administrator", "propose_admin_action", json!({
+            "action_type": "project_init",
+            "title": "Initialize project scope",
+            "summary": "Scaffolds missing folders and index file",
+            "command": "delphi project init ./proj --yes",
+            "blast_radius": ["proj/_index.md"]
+        }));
+        assert!(!r_ok.is_error, "proposal failed: {}", r_ok.content);
+        assert!(r_ok.content.contains("administrative action card"));
+
+        // 6. Batching check: second proposal in same turn is refused
+        let mut ctx = ToolCtx {
+            guard: &f.guard,
+            span: &mut f.span,
+            index: &mut f.index,
+            rules: &f.rules,
+            probe: &AssumeClean,
+            role: "administrator",
+            mission_id: "m1",
+            now_rfc3339: "1970-01-01T00:00:10.000Z",
+            stamps: vec![],
+            events: vec![("admin.action_proposed".into(), json!({}))],
+        };
+        let r_spam = run(&mut ctx, "propose_admin_action", &json!({
+            "action_type": "project_init",
+            "title": "Second card",
+            "summary": "Summary",
+            "command": "delphi project init ./proj2",
+            "blast_radius": ["proj2/_index.md"]
+        }));
+        assert!(r_spam.is_error);
+        assert!(r_spam.content.contains("only one administrative action card may be proposed per task turn"));
     }
 }

@@ -273,6 +273,10 @@ fn the_daemon_and_the_tool_registry_reach_only_the_limited_admin_operations() {
     }
     assert!(names.iter().filter(|n| n.contains("xenia")).all(|n| n == "xenia_search" || n == "xenia_help"), "only the read-only search and the help text");
     for n in &names {
+        // Spec 069 propose_admin_action is workspace administration, not Xenia (and explicitly bans Xenia ops).
+        if n == "propose_admin_action" {
+            continue;
+        }
         for banned in ["sign", "publish", "endorse", "admin", "join", "withdraw", "roster", "tombstone", "dispute", "rotate", "propose", "genesis"] {
             assert!(!n.to_lowercase().contains(banned), "tool `{n}` looks like a Xenia write: {banned}");
         }

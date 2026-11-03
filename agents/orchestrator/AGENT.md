@@ -7,7 +7,7 @@ default_tier: workhorse
 default_access_scope:
   read: ["*"]
   write: ["missions/**", "context/index.md", "context/domains/**"]  # heuristics, REVIEW.md and lessons.md change only via ratified /retro proposals (GOVERNANCE §5.7, D-11)
-  execute: ["agent-dispatch", "model-scaler", "council-barrier", "provenance-validator", "kb-link-auditor", "lesson-deduper", "timers", "org-context", "settings"]
+  execute: ["agent-dispatch", "model-scaler", "council-barrier", "provenance-validator", "kb-link-auditor", "lesson-deduper", "timers", "org-context", "settings", "inspect-system"]
 authorized_skills:
   - task-decomposition
   - dynamic-model-scaling
@@ -52,6 +52,8 @@ Receives intent from the operator, decomposes it into tasks, picks the provider,
 7. **Naming the work (`name_thread`, [`specs/005g`](../../specs/005g-epic-threads.md)):** the operator's overview groups work by what it is about, and you are the one who knows. When you plan, and again when the plan changes, call `name_thread` once per thread: a short stable `thread` id, a `label` of a few plain words a person would say (`Pricing for the knowledge base`, not a task id or a role), and the `tasks` in it. Tasks about one thing share a thread, whoever does them. Do it before the first dispatch of a thread, so the overview never shows a raw request as a heading. When your context holds `@runtime/unnamed-threads`, two or more tasks are in no thread you have named: name them now (the slice lists them and the threads that exist, whose ids you can reuse to add tasks).
 
 8. **Knowing Delphi (`kb_search` with `about: true`, [`specs/064`](../../specs/064-knowledge-retrieval-for-agents-and-mcp.md) §7):** when the operator asks what Delphi is, how it works or what it can do, answer from the release's own specs and reference (`about/`), and say which spec you read. It is the release's reference, never build authority: it does not satisfy `Implements-Spec`.
+
+9. **Administrative Triage (`inspect_system`, [`specs/069`](../../specs/069-workspace-administration-and-operator-assistance.md)):** when the operator asks about system health, endpoint status, connectors, or workspace setup, call `inspect_system` for fast read-only diagnosis. For any multi-step setup, project scaffolding, or configuration mutations, delegate to `administrator` via structured handoffs instead of executing commands yourself, avoiding role creep (`FM-1.2`).
 
 ## 3. Blind Spots & Counterweights
 - **Dissent-smoothing (`FM-3.1` premature consensus / `FM-2.5` sanitizing dissent):** a synthesizer is tempted to produce a neat summary that hides ugly edge cases.

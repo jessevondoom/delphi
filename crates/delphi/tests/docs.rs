@@ -425,3 +425,18 @@ fn episode_frontmatter_satisfies_its_schema() {
         "status": "active", "mission": "m", "session_id": "s", "task_id": "t", "outcome": "maybe"
     }));
 }
+
+#[test]
+fn prompt_log_entries_satisfy_their_schema() {
+    let ok = serde_json::json!({
+        "ts": "2026-11-03T00:30:00.000Z", "task_id": "t_0001", "artifact": "missions/m1/artifacts/deck.html",
+        "op": "create", "prompt": "make a deck", "artifact_hash": null, "prev": "genesis", "hash": "a".repeat(64)
+    });
+    must_pass("prompt-log.schema.json", "valid entry", &ok);
+    let mut extra = ok.clone();
+    extra["reply"] = serde_json::json!("model text");
+    must_fail("prompt-log.schema.json", "a model reply is not a field", &extra);
+    let mut sys = ok.clone();
+    sys["prompt"] = serde_json::json!("");
+    must_fail("prompt-log.schema.json", "empty prompt", &sys);
+}

@@ -32,6 +32,7 @@ A row moves from ❌ to ✅ when its check ships with the test named in the spec
 | Code execution is Green only inside an OS sandbox | GOV §5.5 | Sandbox launcher (D-04) | Daemon | ❌ |
 | Constitution changes staged and ratified | GOV §5.7, §7 | Proposal queue; write gate on those paths | Daemon | ◐ `/ratify` with compare-and-swap (Step 2); agent-staged proposals Step 6 |
 | No Spec, No Build (`status: approved` before `IsolatedBuild`) | GOV §1.3, spec 003 §3.1 | DAG transition guard | Daemon | ❌ |
+| Write scope of No Spec, No Build: unlisted or executable types are Software; artifacts take a daemon-written, hash-chained prompt-log entry | GOV §1.3 (as amended by spec 070) | `delphi_core::artifact::classify`, `PromptLog` | Daemon | ◐ classifier and log built, §1.3 ratified 2026-11-03; write-path wiring pending |
 | `Implements-Spec:` on implementation PRs | `REV-ARCH-01` | PR lint | CI | ❌ |
 | Council Round 1 blind | GOV §3.2, spec 003 §4.1 | In-memory barrier | Daemon | ❌ |
 | No agent or sandboxed process writes any `.git` (file or dir, any depth); daemon git calls hardened | spec 001 §2.2, 008 §4 | Path guard + sandbox profile + git runner | Daemon | ◐ path-guard library (Step 1); sandbox and git runner Step 3 |
