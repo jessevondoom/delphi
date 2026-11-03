@@ -6,6 +6,11 @@ Release builds, with their notes and build attestations, are on the [releases pa
 
 This file starts with the work after v0.2.7. For earlier releases, the history is the merged pull requests and the per-spec notes under `specs/`; their entries below give dates, not detail.
 
+## 0.5.3 — 2026-11-03
+
+- Scope of *No Spec, No Build* and the artifact prompt log (spec 070): the spec gate covers software only. Documents, decks, images and media need no spec; each create or edit by an operator-started task is recorded in a daemon-written, hash-chained log of the operator's redacted prompt (`local/artifact-log/<mission>/artifact-prompts.jsonl`, schema `prompt-log.schema.json`). Markdown notes and scaffolds stay regular operation. GOVERNANCE §1.3 amended.
+- Workspace administration and governed operator assistance (spec 069) (#464).
+
 ## 0.5.2 — 2026-11-02
 
 - Self-updater size limit expansion (spec 006): separate downloaded archive safety limit (`MAX_ARCHIVE = 512 MiB`) and extracted binary limit (`MAX_BINARY = 384 MiB`) to support embedded neural models, seed compendiums, and preloaded vector caches (#457).
