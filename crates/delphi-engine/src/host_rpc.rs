@@ -20,7 +20,11 @@ pub const MAX_SUMMARY: usize = 1000;
 pub const MAX_ITEM: usize = 200;
 pub const MAX_ITEMS: usize = 10;
 pub const MAX_HANDOFF_POINTERS: usize = 20;
-pub const TRIGGERS: [&str; 3] = ["host_note", "host_summary", "host_transcript"];
+pub const TRIGGERS: [&str; 4] = ["host_note", "host_summary", "host_transcript", "host_kb_entry"];
+pub const MAX_KB_BODY: usize = 20_000;
+pub const MAX_KB_TITLE: usize = 120;
+pub const MAX_KB_SOURCES: usize = 20;
+pub const MAX_KB_ENTRIES: usize = 25;
 
 #[derive(Debug, PartialEq)]
 pub enum HostErr {
@@ -126,6 +130,56 @@ fn staged(c: &Caller, n: usize, trigger: &str, label: &str, summary: String, evi
     let mut e = EventEnvelope::new(&c.mission(), "learn.staged", json!({"id": format!("h{}", n + 1), "trigger": trigger, "summary": summary, "event_seqs": [], "tier": "L0", "source": label, "evidence": evidence}));
     e.agent = role.map(String::from);
     e
+}
+
+/// A body keeps its line breaks (it is markdown), loses other control characters, and is capped in bytes.
+pub fn clean_body(name: &str, s: &str, max: usize) -> Result<String, HostErr> {
+    let t: String = s.chars().map(|c| if c.is_control() && c != '\n' && c != '\t' { ' ' } else { c }).collect();
+    let t = t.trim().to_string();
+    if t.is_empty() {
+        return bad(format!("`{name}` is required"));
+    }
+    if t.len() > max {
+        return bad(format!("`{name}` is at most {max} bytes"));
+    }
+    Ok(t)
+}
+
+/// The kept-for-review entries a mission's log already holds.
+pub fn kb_entries_in(events: &[EventEnvelope]) -> usize {
+    events.iter().filter(|e| e.kind == "learn.staged" && e.payload["trigger"].as_str() == Some("host_kb_entry")).count()
+}
+
+/// The `learn.staged` event for `host.propose_kb_entry` (`specs/068` §5): one entry for the operator's keep-or-discard review.
+/// Staged at L0; the daemon sets author and tier, so nothing in the call can raise either.
+pub fn kb_entry_event(c: &Caller, p: &Value, already: usize, kb_already: usize) -> Result<EventEnvelope, HostErr> {
+    if kb_already >= MAX_KB_ENTRIES {
+        return bad(format!("{MAX_KB_ENTRIES} entries are already waiting for the operator in this session: carry on, or ask them to run `delphi kb review`"));
+    }
+    let title = clean("title", p["title"].as_str().unwrap_or(""), MAX_KB_TITLE)?;
+    let body = clean_body("body", p["body"].as_str().unwrap_or(""), MAX_KB_BODY)?;
+    let sources: Vec<String> = match p.get("sources").filter(|v| !v.is_null()) {
+        None => vec![],
+        Some(a) => {
+            let a = a.as_array().ok_or_else(|| HostErr::Invalid("`sources` must be a list of strings".into()))?;
+            if a.len() > MAX_KB_SOURCES {
+                return bad(format!("`sources` has at most {MAX_KB_SOURCES} items"));
+            }
+            a.iter().map(|v| clean("sources", v.as_str().unwrap_or(""), 300)).collect::<Result<_, _>>()?
+        }
+    };
+    let confidence = match p["confidence"].as_str() {
+        None | Some("") => "low".to_string(),
+        Some(k) if ["low", "medium", "high"].contains(&k) => k.to_string(),
+        Some(_) => return bad("`confidence` is low, medium or high"),
+    };
+    let label = c.label(p["model"].as_str());
+    let id = format!("h{}", already + 1);
+    let summary = format!("[{label}] KB entry: {title} ({} source(s), stated confidence {confidence})", sources.len());
+    let mut e = EventEnvelope::new(&c.mission(), "learn.staged", json!({"id": id, "trigger": "host_kb_entry", "summary": summary, "event_seqs": [], "tier": "L0", "source": label, "evidence": "the host's own research",
+        "kb_entry": {"title": title, "body": body, "sources": sources, "confidence": confidence}}));
+    e.agent = None;
+    Ok(e)
 }
 
 /// A servable role of this workspace, by ID.
@@ -558,5 +612,15 @@ mod tests {
         let v = council_view(&log, dir.path(), "t-1").unwrap();
         assert_eq!((v["state"].as_str(), v["ruling"]["decision"].as_str(), v["ruling"]["seat_positions"][0]["position"].as_str()), (Some("decided"), Some("table"), Some("table")));
         assert!(v["ruling"]["dissent"].as_str().unwrap().contains("keep a file"), "{v}");
+    }
+    #[test]
+    fn a_kb_entry_is_staged_at_l0_with_the_daemon_setting_author_and_tier_and_is_capped() {
+        let p = json!({"title": "Vault rotation", "body": "Keys rotate every 90 days.\n\nSee https://wiki.example.com/v", "sources": ["https://wiki.example.com/v"], "confidence": "high", "tier": "L5", "taint": "trusted"});
+        let e = kb_entry_event(&caller(), &p, 2, 0).unwrap();
+        assert_eq!((e.payload["tier"].as_str(), e.payload["trigger"].as_str(), e.payload["id"].as_str()), (Some("L0"), Some("host_kb_entry"), Some("h3")));
+        assert!(e.payload["kb_entry"]["body"].as_str().unwrap().contains('\n'), "markdown keeps its line breaks");
+        assert!(kb_entry_event(&caller(), &json!({"title": "t", "body": "b", "confidence": "certain"}), 0, 0).is_err());
+        assert!(kb_entry_event(&caller(), &json!({"title": "t"}), 0, 0).is_err());
+        assert!(kb_entry_event(&caller(), &p, 0, MAX_KB_ENTRIES).is_err(), "a session cannot flood the review queue");
     }
 }

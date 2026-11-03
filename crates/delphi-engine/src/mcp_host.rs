@@ -162,6 +162,24 @@ pub fn tools() -> Value {
             "annotations": writes("Propose a lesson to Delphi")
         },
         {
+            "name": "propose_kb_entry",
+            "title": "Propose a research entry for Delphi's knowledge base",
+            "description": "Hand Delphi research you gathered (a finding, a summary of internal sources) so the operator can keep it in the knowledge base. Give a title, the body in markdown, and the sources (URLs, paths or document names) it rests on. It is staged at tier L0 with your name on it, is not searchable and is never loaded into any agent's memory until the operator keeps it with `delphi kb review`; keeping it never marks it validated. Stages content only: it changes no file in your project.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "minLength": 1, "maxLength": 120},
+                    "body": {"type": "string", "minLength": 1, "maxLength": 20000, "description": "The research, as markdown. Cite sources inline as links."},
+                    "sources": {"type": "array", "maxItems": 20, "items": {"type": "string", "maxLength": 300}, "description": "URLs, paths or document names the body rests on."},
+                    "confidence": {"type": "string", "enum": ["low", "medium", "high"], "default": "low", "description": "Your own stated confidence; it is shown to the operator, not trusted."},
+                    "model": {"type": "string", "maxLength": 64, "description": "Your model name, self-reported."}
+                },
+                "required": ["title", "body"],
+                "additionalProperties": false
+            },
+            "annotations": writes("Propose a research entry to Delphi")
+        },
+        {
             "name": "record_session_summary",
             "title": "Record a session summary",
             "description": "Leave a short summary of what this session did, so a later Delphi session can learn from it. Staged for the operator at tier L0 and never loaded without ratification. Stages content only.",
@@ -399,6 +417,7 @@ impl Server {
             "get_skill" => arg("name").and_then(|n| self.packs().and_then(|p| p.skill(&n))),
             "search_kb" => query().and_then(|q| self.daemon("host.search_kb", &json!({"query": q, "limit": limit(5, 10)}))),
             "propose_note" => self.daemon("host.propose_note", args),
+            "propose_kb_entry" => self.daemon("host.propose_kb_entry", args),
             "record_session_summary" => self.daemon("host.record_session_summary", args),
             "handoff_put" => self.daemon("host.handoff_put", args),
             "handoff_get" => self.daemon("host.handoff_get", args),
@@ -582,9 +601,9 @@ mod tests {
         let r = call(&mut s, json!({"jsonrpc": "2.0", "id": 3, "method": "tools/list"}));
         let tools = r["result"]["tools"].as_array().unwrap();
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["search_kb", "list_roles", "get_agent", "list_skills", "get_skill", "specs_status", "search_project", "search_memory", "route", "propose_note", "record_session_summary", "handoff_put", "handoff_get", "request_help", "help_result", "request_council", "council_status", "council_result", "request_research", "research_status", "research_result"]);
+        assert_eq!(names, ["search_kb", "list_roles", "get_agent", "list_skills", "get_skill", "specs_status", "search_project", "search_memory", "route", "propose_note", "propose_kb_entry", "record_session_summary", "handoff_put", "handoff_get", "request_help", "help_result", "request_council", "council_status", "council_result", "request_research", "research_status", "research_result"]);
         for t in tools {
-            let writes = ["propose_note", "record_session_summary", "handoff_put", "request_help", "request_council", "request_research"].contains(&t["name"].as_str().unwrap());
+            let writes = ["propose_note", "propose_kb_entry", "record_session_summary", "handoff_put", "request_help", "request_council", "request_research"].contains(&t["name"].as_str().unwrap());
             assert_eq!(t["annotations"]["readOnlyHint"], !writes, "{}", t["name"]);
             assert_eq!(t["annotations"]["destructiveHint"], false, "{}", t["name"]);
             assert_eq!(t["annotations"]["openWorldHint"], t["name"] == "request_research", "{}", t["name"]);
@@ -745,7 +764,7 @@ mod tests {
             assert_eq!(r["result"]["isError"], true);
             assert!(r["result"]["content"][0]["text"].as_str().unwrap().starts_with("disabled_by_operator"));
         }
-        assert!(call(&mut s, json!({"jsonrpc": "2.0", "id": 9, "method": "tools/list"}))["result"]["tools"].as_array().unwrap().len() == 21);
+        assert!(call(&mut s, json!({"jsonrpc": "2.0", "id": 9, "method": "tools/list"}))["result"]["tools"].as_array().unwrap().len() == 22);
         std::fs::write(d.path().join("config.toml"), "[mcp]\nenabled = true\n").unwrap();
         assert_eq!(tool(&mut s, "no_such_tool")["error"]["code"], -32602);
         std::fs::write(d.path().join("config.toml"), "[mcp]\nenabled = false\n").unwrap();
