@@ -17,6 +17,8 @@ const MAX_SOURCES: usize = 200;
 /// The same bound the index applies to any file.
 pub const MAX_BYTES: usize = 2 * 1024 * 1024;
 const VALID_DAYS: i64 = 90;
+/// Pages one workspace holds; a runaway import stops here rather than filling the index (`specs/068` §9, item 5).
+const MAX_PAGES: usize = 2000;
 const KINDS: [&str; 8] = ["web", "paper", "repo", "private-doc", "slack", "wiki", "email", "other"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -295,6 +297,9 @@ pub fn import(ws: &Path, input: &Input, resolve: &dyn Fn(&str) -> Option<String>
 
     let dir = ws.join(DIR);
     let page = dir.join(format!("{}.md", id));
+    if !page.exists() && counts(ws).0 >= MAX_PAGES {
+        return Err(format!("this workspace already holds {} imported pages, the most it keeps; quarantine or merge some first", MAX_PAGES));
+    }
     let bibliography = dir.join(format!("{}.bib.md", id));
     let original = sha(input.text.as_bytes());
     let prior = std::fs::read_to_string(&page).ok();
@@ -304,15 +309,23 @@ pub fn import(ws: &Path, input: &Input, resolve: &dyn Fn(&str) -> Option<String>
         None => Outcome::New,
     };
 
+    if let (Outcome::NewVersion, Some(p)) = (&outcome, &prior) {
+        let (fm, old_body) = crate::workspace::split_frontmatter(p);
+        let stored = fm.and_then(|f| f.get("body_sha256").and_then(|v| v.as_str().map(String::from)));
+        if stored.is_some_and(|h| h != sha(old_body.as_bytes())) {
+            warnings.push("the page had edits made after import; they are kept in the prior copy under .versions/".into());
+        }
+    }
     let front = format!(
-        "---\nid: {id}\ntitle: {title}\nkind: summary\nauthor: operator-import\nsource_type: external_untrusted\ntaint: external_untrusted\norigin: operator_import\ninclusion: ratified\nvalidation: none\nconfidence: low\nindex_worthy: {iw}\nretrieved: {ret}\nimported: {now}\nvalid_until: {vu}\nchecked: {now}\noriginal_sha256: {sha}\nbibliography: {id}.bib.md\n---\n\n",
+        "---\nid: {id}\ntitle: {title}\nkind: summary\nauthor: operator-import\nsource_type: external_untrusted\ntaint: external_untrusted\norigin: operator_import\ninclusion: ratified\nvalidation: none\nconfidence: low\nindex_worthy: {iw}\nretrieved: {ret}\nimported: {now}\nvalid_until: {vu}\nchecked: {now}\noriginal_sha256: {sha}\nbody_sha256: {bsha}\nbibliography: {id}.bib.md\n---\n\n",
         id = id,
         title = quoted(&title),
         iw = index_worthy,
         ret = retrieved,
         now = date_of(input.now_secs),
         vu = date_of(input.now_secs + VALID_DAYS * 86400),
-        sha = original
+        sha = original,
+        bsha = sha(body.as_bytes())
     );
     let mut bib = format!("---\nid: {id}.bib\ntitle: {t}\nkind: bibliography\npage: {id}\nauthor: operator-import\nsource_type: external_untrusted\ntaint: external_untrusted\nindex_worthy: {iw}\nconfidence: low\n---\n\n# Bibliography: {title}\n\n", id = id, t = quoted(&format!("Bibliography: {}", title)), iw = index_worthy, title = title);
     bib.push_str(&if sources.is_empty() { "sources: none\n".to_string() } else { format!("sources: {}\n", sources.len()) });
@@ -418,6 +431,22 @@ pub fn renew(ws: &Path, id: &str, now_secs: i64) -> Result<Imported, String> {
 
 const QUARANTINE: &str = ".quarantine";
 
+/// `(id, title)` of every page set aside by `kb quarantine`.
+pub fn quarantined(ws: &Path) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = std::fs::read_dir(ws.join(DIR).join(QUARANTINE))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            let id = name.strip_suffix(".md").filter(|i| !i.ends_with(".bib"))?.to_string();
+            Some((id, field(&std::fs::read_to_string(e.path()).ok()?, "title")))
+        })
+        .collect();
+    out.sort();
+    out
+}
+
 /// Take a refuted or problematic page out of search and reading without deleting it (`specs/068` §7); `restore` puts it back.
 pub fn quarantine(ws: &Path, id: &str, restore: bool) -> Result<(), String> {
     if !valid_id(id) {
@@ -509,5 +538,21 @@ mod tests {
         assert_eq!((yes.links.len(), yes.unresolved), (1, 1));
         assert!(!run(d.path(), "# B\n\nSee [gone](nope.md).\n", &resolve).index_worthy);
         assert_eq!(counts(d.path()), (2, 1), "the counter counts pages, not their bibliographies");
+    }
+
+    #[test]
+    fn a_new_version_warns_when_the_page_was_edited_after_import_and_quarantined_pages_are_listed() {
+        let d = tempfile::tempdir().unwrap();
+        let ws = d.path();
+        let go = |text: &str, at: i64| import(ws, &Input { text, name_hint: "n.md", modified_secs: None, now_secs: at, keep_id: None }, &none).unwrap();
+        let first = go("# Edited page\n\nOriginal words.\n", 1_800_000_000);
+        std::fs::write(&first.page, std::fs::read_to_string(&first.page).unwrap().replace("Original words.", "Original words. Plus my note.")).unwrap();
+        let second = import(ws, &Input { text: "# Edited page\n\nOriginal words, rewritten.\n", name_hint: "n.md", modified_secs: None, now_secs: 1_800_000_100, keep_id: Some(&first.id) }, &none).unwrap();
+        assert!(second.warnings.iter().any(|w| w.contains("edits made after import")), "{:?}", second.warnings);
+        let kept = std::fs::read_dir(ws.join(DIR).join(".versions").join(&first.id)).unwrap().flatten().next().unwrap();
+        assert!(std::fs::read_to_string(kept.path()).unwrap().contains("Plus my note."));
+        quarantine(ws, &first.id, false).unwrap();
+        assert_eq!(quarantined(ws), vec![(first.id.clone(), "Edited page".to_string())]);
+        assert_eq!(counts(ws).0, 0);
     }
 }

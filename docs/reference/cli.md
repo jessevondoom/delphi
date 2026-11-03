@@ -317,9 +317,9 @@ The knowledge base: index it, search it.
 ```
   delphi kb index | reindex | stats | search <query> [--role <role>] [--untrusted|--all] [--staged] [--about]
   delphi kb import <file.md | dir | -> [--home <dir>] [--workspace <name>]
-  delphi kb review [show <ref> | keep <ref>…|--all | discard <ref>…|--all]
+  delphi kb review [stats | show <ref> | keep <ref>…|--all | discard <ref>…|--all]
   delphi kb refresh [<id> (--still-current | <file.md | ->)]
-  delphi kb quarantine <id> [--restore]
+  delphi kb quarantine [<id> [--restore]]
   delphi kb extract <page-id> <candidates.json | ->
   delphi kb attest [<page-id>]
   delphi kb serve [--bind <host:port>] [--workspace <name>] [--home <dir>]

@@ -2239,7 +2239,7 @@ pub fn refresh_text(ws: &Path, id: &str, name: &str, text: &str) -> Result<crate
     crate::kb_import::import(ws, &crate::kb_import::Input { text, name_hint: name, modified_secs: None, now_secs, keep_id: Some(id) }, &|t| kb.resolve_link(t))
 }
 
-fn refresh_cmd(ws: &Path, args: &[String]) -> i32 {
+fn refresh_cmd(home: &Path, ws: &Path, args: &[String]) -> i32 {
     let rest: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
     let now_secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
     let Some(id) = rest.first() else {
@@ -2275,6 +2275,10 @@ fn refresh_cmd(ws: &Path, args: &[String]) -> i32 {
     match done {
         Ok(r) => {
             print!("{}", r.receipt());
+            let n = crate::library::Library::in_home(home).flag_rechecks(&r.id);
+            if n > 0 {
+                println!("  {} key fact(s) from this page need a recheck against their source (delphi kb attest {})", n, r.id);
+            }
             0
         }
         Err(e) => {
@@ -2338,6 +2342,10 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                 if pages > 0 {
                     let stale = crate::kb_import::pages(ws, &crate::kb_import::today()).iter().filter(|p| p.stale).count();
                     println!("kb: {} imported summary page(s), {} in default search (the rest: `kb search --all`){}", pages, shown, if stale > 0 { format!("; {} stale (`kb refresh`)", stale) } else { String::new() });
+                    let q = crate::kb_import::quarantined(ws).len();
+                    if q > 0 {
+                        println!("kb: {} page(s) quarantined (kept, out of search; `kb quarantine` lists them)", q);
+                    }
                 }
                 match (model, kb.embedder()) {
                     (true, Some(e)) => {
@@ -2366,14 +2374,20 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                 kb.refresh(ws, &now())?;
                 Ok(import_pages(&kb, ws, &paths))
             }
-            "refresh" => Ok(refresh_cmd(ws, &args[1..])),
+            "refresh" => Ok(refresh_cmd(home, ws, &args[1..])),
             "extract" => Ok(crate::kb_extract::extract_cmd(home, ws, &args[1..])),
             "attest" => Ok(crate::kb_extract::attest_cmd(home, &args[1..])),
             "quarantine" => {
                 let restore = args.iter().any(|a| a == "--restore");
                 let Some(id) = args[1..].iter().find(|a| !a.starts_with("--")) else {
-                    eprintln!("usage: delphi kb quarantine <id> [--restore]");
-                    return Ok(2);
+                    let q = crate::kb_import::quarantined(ws);
+                    if q.is_empty() {
+                        println!("nothing is quarantined (delphi kb quarantine <id> sets a page aside; it is never deleted)");
+                    }
+                    for (id, title) in &q {
+                        println!("  {}  \"{}\"  restore: delphi kb quarantine {} --restore", id, title, id);
+                    }
+                    return Ok(0);
                 };
                 match crate::kb_import::quarantine(ws, id, restore) {
                     Ok(()) => {

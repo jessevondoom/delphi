@@ -92,6 +92,34 @@ impl Library {
         out
     }
 
+    /// After a page is refreshed: any claim taken from it whose source has a newer version, or no longer holds the quote,
+    /// is marked `needs_recheck`. Its status is untouched and nothing is invalidated or deleted (`specs/068` §7). Returns how many.
+    pub fn flag_rechecks(&self, page_id: &str) -> usize {
+        let o = origin_of(page_id);
+        let mut n = 0;
+        for mut c in self.claims().into_iter().filter(|c| c["origin"] == o) {
+            let moved = c["anchors"].as_array().into_iter().flatten().any(|a| {
+                let Some(sid) = a["source_id"].as_str() else { return false };
+                let Some(meta) = self.read_meta(sid) else { return true };
+                let text = std::fs::read_to_string(self.source_dir(sid).join("source.md")).unwrap_or_default();
+                meta["version"].as_str().unwrap_or("1") != a["version"].as_str().unwrap_or("1") || !a["quote"].as_str().is_some_and(|q| text.contains(q))
+            });
+            if moved && c["needs_recheck"] != true {
+                c["needs_recheck"] = json!(true);
+                if self.save_claim(&c).is_ok() {
+                    n += 1;
+                }
+            }
+        }
+        n
+    }
+
+    /// Candidates waiting for the operator across every page, and how many of them need a recheck.
+    pub fn candidate_counts(&self) -> (usize, usize) {
+        let open: Vec<Value> = self.claims().into_iter().filter(|c| c["origin"].as_str().is_some_and(|o| o.starts_with("page:")) && c["attestation"].is_null() && c["lifecycle"].is_null()).collect();
+        (open.len(), open.iter().filter(|c| c["needs_recheck"] == true).count())
+    }
+
     /// The operator confirms the claim means what the source says and is true. Needs a live anchor, so the quote is still
     /// there; changes nothing else.
     pub fn attest_claim(&self, id: &str) -> Result<Value, String> {
@@ -107,6 +135,7 @@ impl Library {
         }
         let now = delphi_core::time::now_rfc3339();
         c["attestation"] = json!({"by": "operator", "at": now, "basis": "internal source"});
+        c["needs_recheck"] = json!(false);
         c["last_confirmed"] = json!(now);
         self.save_claim(&c)?;
         self.log("claim_attested", json!({"id": id}));
@@ -182,5 +211,22 @@ mod tests {
         assert!(l.attest_claim(b).is_err(), "a rejected claim cannot be attested");
         let plain = l.add_claim("Free text.", &ClaimOpts::default(), &[]).unwrap();
         assert!(l.attest_claim(plain["id"].as_str().unwrap()).is_err(), "not from a page");
+    }
+
+    #[test]
+    fn a_changed_source_marks_the_claim_for_recheck_without_changing_its_status() {
+        let (d, l, s) = setup();
+        let r = l.extract_candidates("runbook", &[cand(&s, "Billing retries three times.", "retries three times")]);
+        let id = &r.accepted[0];
+        assert_eq!(l.flag_rechecks("runbook"), 0);
+        l.attest_claim(id).unwrap();
+        let src = l.source_dir(&s).join("source.md");
+        std::fs::write(&src, SRC.replace("three times", "five times")).unwrap();
+        assert_eq!(l.flag_rechecks("runbook"), 1);
+        let c = l.claim(id).unwrap();
+        assert_eq!(c["needs_recheck"], true);
+        assert!(c["attestation"].is_object(), "nothing is invalidated or deleted");
+        assert_eq!(l.candidate_counts(), (0, 0), "an attested claim is no longer open");
+        drop(d);
     }
 }

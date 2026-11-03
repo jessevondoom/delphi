@@ -91,6 +91,14 @@ pub fn run_in(ws_dir: &Path, args: &[String]) -> Result<String, String> {
     let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
     match verb {
         "list" => Ok(render_list(&entries)),
+        "stats" => {
+            let mut proposed = 0;
+            for (_, dir) in delphi_core::sessions::dirs(ws_dir) {
+                proposed += delphi_core::log::replay(&dir).map_err(|e| e.to_string())?.iter().filter(|e| e.kind == "learn.staged" && e.payload["trigger"].as_str() == Some(TRIGGER)).count();
+            }
+            let (pages, shown) = delphi_engine::kb_import::counts(ws_dir);
+            Ok(format!("capture: {} proposed by host agents · {} waiting for review · {} decided\nlibrary: {} imported page(s), {} in default search\n", proposed, entries.len(), proposed - entries.len().min(proposed), pages, shown))
+        }
         "show" => {
             let one = pick(&entries, &rest)?;
             Ok(one.iter().map(|e| format!("{}\n{}\n", e.title, page_of(e))).collect::<String>())
@@ -112,7 +120,7 @@ pub fn run_in(ws_dir: &Path, args: &[String]) -> Result<String, String> {
             }
             Ok(format!("discarded {} (the events stay in the log; nothing was added to the library)\n", n))
         }
-        other => Err(format!("`{}` is not a review verb (list, show, keep, discard)", other)),
+        other => Err(format!("`{}` is not a review verb (list, show, keep, discard, stats)", other)),
     }
 }
 
@@ -155,6 +163,8 @@ mod tests {
         let after = run_in(t.path(), &[]).unwrap();
         assert!(!after.contains("host-a/h1") && after.contains("1 waiting"), "{after}");
         assert!(!t.path().join("local/summaries").exists());
+        let st = run_in(t.path(), &["stats".into()]).unwrap();
+        assert!(st.contains("2 proposed") && st.contains("1 waiting") && st.contains("1 decided"), "{st}");
         let page = page_of(&pending(t.path()).unwrap()[0]);
         assert!(page.starts_with("# Other\n") && page.contains("claude-code/x") && page.contains("## Sources"), "{page}");
     }

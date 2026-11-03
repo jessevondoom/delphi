@@ -147,6 +147,8 @@ If slice 1 runs long, the bibliography sidecar ships as its first sub-step with 
 4. **Extract and attestation.** `kb extract` with the anchor guard (the guard lands before any attestation card), the validator queue, internal-source cards.
 5. **Deferred.** Agent-submitted `kind: summary`, quarantine UX polish, capture-rate metrics beyond the counter, per-origin caps, human-edit preservation.
 
+   Built: agent-submitted summaries ride `propose_kb_entry` (slice 2) and become pages only on the operator's keep; quarantine listing and a quarantined count in `kb stats`; `kb review stats` (proposed, waiting, decided, pages); a per-workspace cap of 2000 pages in place of per-origin caps (one origin exists today); a warning, with the edits kept under `.versions/`, when a new version replaces a page edited after import; `needs_recheck` on claims whose source changed at refresh; open key facts counted in `delphi needs`. Not built: a console attest card, validator-assisted queueing, ranking candidates by need.
+
 ## 10. Acceptance criteria
 
 - Importing a bare markdown file (no frontmatter) makes it findable in one command with a three-line receipt, labelled `external_unvalidated`, with taint at its recorded origin.
