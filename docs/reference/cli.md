@@ -320,7 +320,7 @@ The knowledge base: index it, search it.
   delphi kb review [stats | show <ref> | keep <ref>…|--all | discard <ref>…|--all]
   delphi kb refresh [<id> (--still-current | <file.md | ->)]
   delphi kb quarantine [<id> [--restore]]
-  delphi kb extract <page-id> <candidates.json | ->
+  delphi kb extract <page-id> (--auto | <candidates.json | ->)
   delphi kb attest [<page-id>]
   delphi kb serve [--bind <host:port>] [--workspace <name>] [--home <dir>]
 ```

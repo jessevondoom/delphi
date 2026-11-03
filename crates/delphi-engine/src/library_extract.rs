@@ -41,6 +41,32 @@ impl Library {
         self.claims().into_iter().filter(|c| c["origin"] == o && c["attestation"].is_null() && c["lifecycle"].is_null()).collect()
     }
 
+    /// Candidates with no model: each sentence of the page that appears word for word in a source the library holds whole.
+    /// The sentence is both the claim and its quote, so the daemon's guard accepts only what a source really says.
+    pub fn auto_candidates(&self, page_body: &str) -> Vec<Candidate> {
+        let sentences: Vec<String> = page_body
+            .split(['\n', '.', '!', '?'])
+            .map(|l| l.trim().trim_start_matches(['-', '*', '>', '#', ' ']).trim().to_string())
+            .filter(|l| l.split_whitespace().count() >= 6 && l.len() <= 300 && !l.contains("](") && !l.contains("http"))
+            .collect();
+        let mut out = Vec::new();
+        for (id, meta) in self.list() {
+            if !meta["purged"].is_null() {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(self.source_dir(&id).join("source.md")) else { continue };
+            for s in &sentences {
+                if text.contains(s.as_str()) && !out.iter().any(|c: &Candidate| &c.claim == s) {
+                    out.push(Candidate { claim: s.clone(), source_id: id.clone(), quote: s.clone(), locator: "quote".into() });
+                }
+            }
+            if out.len() >= MAX_PER_PAGE {
+                break;
+            }
+        }
+        out
+    }
+
     /// The anchor guard. Every candidate is checked against the stored text of its source; none is taken on the page's word.
     pub fn extract_candidates(&self, page_id: &str, cands: &[Candidate]) -> Extracted {
         let mut out = Extracted::default();
@@ -228,5 +254,15 @@ mod tests {
         assert!(c["attestation"].is_object(), "nothing is invalidated or deleted");
         assert_eq!(l.candidate_counts(), (0, 0), "an attested claim is no longer open");
         drop(d);
+    }
+
+    #[test]
+    fn auto_candidates_are_only_sentences_a_held_source_says_word_for_word() {
+        let (_d, l, s) = setup();
+        let page = "# Notes\n\nThe billing service retries three times.\nA made up sentence about nothing at all here.\nSee [x](http://a.b/c) for more.\n";
+        let c = l.auto_candidates(page);
+        assert_eq!(c.len(), 1, "{c:?}");
+        assert_eq!((c[0].source_id.as_str(), c[0].quote.as_str()), (s.as_str(), "The billing service retries three times"));
+        assert_eq!(l.extract_candidates("notes", &c).accepted.len(), 1);
     }
 }
