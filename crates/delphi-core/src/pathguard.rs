@@ -166,7 +166,7 @@ fn never_writable(key: &str) -> Option<String> {
     if exact.contains(&key) {
         return Some("constitution or heuristics (ratified proposals only)".into());
     }
-    for p in ["base/", "memory/", "agents/", "themes/"] {
+    for p in ["base/", "memory/", "agents/", "themes/", "summaries/"] {
         if key.starts_with(p) {
             return Some(format!("{} (ratified proposals only)", p.trim_end_matches('/')));
         }
@@ -317,6 +317,10 @@ impl Guard {
                 let _ = std::fs::create_dir_all(self.zones.local.join("scratch"));
             }
             return Some((self.zones.local.clone(), path.into()));
+        }
+        if key.starts_with("summaries/") {
+            // Imported summary pages (`specs/068`): readable, never writable by an agent; the daemon writes them.
+            return if access == Access::Read { Some((self.zones.local.clone(), path.into())) } else { None };
         }
         if key == "spec.md" {
             return Some((self.zones.base.clone(), path.into()));

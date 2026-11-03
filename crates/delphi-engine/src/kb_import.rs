@@ -215,6 +215,22 @@ pub struct Input<'a> {
     pub now_secs: i64,
 }
 
+/// The bare import counter (`specs/068` §9): imported pages, and how many of them show in default search.
+pub fn counts(ws: &Path) -> (usize, usize) {
+    let (mut pages, mut shown) = (0, 0);
+    for e in std::fs::read_dir(ws.join(DIR)).into_iter().flatten().flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        if !name.ends_with(".md") || name.ends_with(".bib.md") {
+            continue;
+        }
+        pages += 1;
+        if std::fs::read_to_string(e.path()).is_ok_and(|t| t.lines().take(30).any(|l| l.trim() == "index_worthy: true")) {
+            shown += 1;
+        }
+    }
+    (pages, shown)
+}
+
 /// Import one page. `resolve` maps a link target to a ratified, non-summary entry of the knowledge base, if there is one (§6.2).
 pub fn import(ws: &Path, input: &Input, resolve: &dyn Fn(&str) -> Option<String>) -> Result<Imported, String> {
     if input.text.len() > MAX_BYTES {
@@ -382,5 +398,6 @@ mod tests {
         assert!(yes.index_worthy);
         assert_eq!((yes.links.len(), yes.unresolved), (1, 1));
         assert!(!run(d.path(), "# B\n\nSee [gone](nope.md).\n", &resolve).index_worthy);
+        assert_eq!(counts(d.path()), (2, 1), "the counter counts pages, not their bibliographies");
     }
 }

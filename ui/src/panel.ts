@@ -4,6 +4,7 @@ import chalk from 'chalk';
 import wrapAnsi from 'wrap-ansi';
 import { renderMarkdown } from './markdown.ts';
 import type { Source } from './research.ts';
+import { plainLabel } from './save.ts';
 import type { Ev } from './input.ts';
 import * as Org from './org.ts';
 import * as T from './theme.ts';
@@ -87,6 +88,8 @@ export const hint = (p: Panel): string =>
 const wrap = (s: string, w: number) => wrapAnsi(s, Math.max(10, w), { hard: true, trim: false }).split('\n');
 
 /** The panel as exactly `h` lines. */
+const labelRows = (label: string, pal: T.Pal): string[] => { const l = plainLabel(label); return l ? ['  ' + chalk.bold(T.text(pal)(l.plain)), '  ' + T.dim(l.machine)] : ['  ' + T.dim(label)]; };
+
 export function view(p: Panel, src: Record<string, Source>, pal: T.Pal, w: number, h: number): string[] {
   if (p.kind === 'org') return Org.view(p, pal, w, h);
   const pad = (a: string[]) => [...a, ...Array(Math.max(0, h - a.length)).fill('')].slice(0, h);
@@ -99,7 +102,7 @@ export function view(p: Panel, src: Record<string, Source>, pal: T.Pal, w: numbe
     const rows = p.hits.map((hit, i) => (i === p.sel ? T.accent('  ❯ ') + chalk.bold(T.link(pathOf(hit.pointer))) : '    ' + T.link(pathOf(hit.pointer))) + T.dim(`  ${T.clip(hit.heading, Math.max(10, w - pathOf(hit.pointer).length - 10))}`));
     const sel = p.hits[Math.min(p.sel, p.hits.length - 1)]!;
     const room = Math.max(3, h - head.length - rows.length - 3);
-    return pad([...head, ...rows.slice(0, Math.max(3, h - 8)), rule, ...(sel.label ? ['  ' + T.dim(sel.label)] : []), ...wrap(sel.preview, w - 4).map((l) => '  ' + T.text(pal)(l)).slice(0, 6), ...(p.lines.length ? ['', ...preview(p.lines, room)] : [])]);
+    return pad([...head, ...rows.slice(0, Math.max(3, h - 8)), rule, ...(sel.label ? labelRows(sel.label, pal) : []), ...wrap(sel.preview, w - 4).map((l) => '  ' + T.text(pal)(l)).slice(0, 6), ...(p.lines.length ? ['', ...preview(p.lines, room)] : [])]);
   }
   if (p.kind === 'sources') {
     const list = sorted(src);

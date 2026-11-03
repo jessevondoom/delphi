@@ -22,6 +22,7 @@ import { openExternal, openFile } from './external.ts';
 import * as O from './org.ts';
 import { sessionDir } from './missions.ts';
 import { noteSources, passageOf, pin, previewOf, readNotes } from './research.ts';
+import { saveCommand } from './save.ts';
 import { copyText, firstVisible, stepFocus, type Target } from './links.ts';
 import { execFile } from 'node:child_process';
 import { anchorBack, backShowing, bodyHeight, chatLinks, frame, replyAnchor, transcriptCount, typingOf, type Model } from './screen.ts';
@@ -312,6 +313,14 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
       if (!arg) keepAnswer('pin');
       try { pin(info, mission, arg ? 'typed by the operator' : `${info.roles[last!.role ?? '']?.name ?? last!.role} (${last!.role})`, text); note('pinned to the mission notebook (/notes)', 'ok'); }
       catch (e: any) { note('could not pin: ' + e.message, 'error'); }
+      return;
+    }
+    if (name === '/save') {
+      const last = [...stateRef.current.blocks].reverse().find((b) => b.kind === 'reply');
+      const s = saveCommand(info, line.slice(name.length), last?.text);
+      if ('error' in s) { note(s.error, 'error'); return; }
+      const child = execFile(info.delphi_exe!, s.args, { timeout: 30000 }, (err, out, errOut) => note((out || errOut || String(err?.message ?? 'no output')).trimEnd(), err ? 'error' : 'ok'));
+      if (s.stdin !== undefined) child.stdin?.end(s.stdin); else child.stdin?.end();
       return;
     }
     if (name === '/connectors') {
