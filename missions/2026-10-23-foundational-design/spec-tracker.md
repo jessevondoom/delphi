@@ -579,7 +579,8 @@ Approved by the operator on 2026-11-04 after a three-seat Copilot Council, two r
 | L1 | launch-path line in `--check` and `doctor`; no receipt | built (this PR) |
 | C1 | `delphi connect claude-code --dry-run` and `--status`; executes nothing, writes nothing | built (this PR) |
 | C2 | exec path, Claude Code only, with `--remove` | built (this PR); GitHub-source proof recorded in spec 074 §8 |
-| C3 | Copilot, then Codex | gated on C2 |
+| C3 | Copilot | built (this PR); Council re-review and proof recorded in spec 074 §9 |
+| C3b | Codex | next; needs bound release identity (Council amendment) |
 
 ## Host cognitive parity and external orchestration (spec 072, approved 2026-11-03)
 

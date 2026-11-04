@@ -10,9 +10,8 @@ use std::process::{Command, Stdio};
 use delphi_engine::mcp_check::{self, State};
 use serde_json::{json, Value};
 
-use crate::connect_cmd::{self, sanitize, HostExe, HOST, SOURCE};
+use crate::connect_cmd::{self, sanitize, HostExe, Template, SOURCE};
 
-const TEMPLATE: &str = "claude-v1";
 const MAX_RECORD: u64 = 64 * 1024;
 const SAFE_PATH: &str = "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 
@@ -103,30 +102,75 @@ fn private_dir(path: &Path) -> Result<(), String> {
     std::fs::DirBuilder::new().recursive(true).mode(0o700).create(path).map_err(|e| e.to_string())
 }
 
-/// The host's marketplace named `delphi` as its own state records it: the GitHub repository, if any.
-pub fn marketplace_source(home: &Path) -> Option<Option<String>> {
-    let b = std::fs::read(home.join(".claude/plugins/known_marketplaces.json")).ok()?;
-    let v: Value = serde_json::from_slice(&b).ok()?;
-    let m = v.get("delphi")?;
-    Some(if m["source"]["source"] == "github" { m["source"]["repo"].as_str().map(str::to_string) } else { None })
+fn read_json(path: &Path) -> Option<Value> {
+    let m = std::fs::symlink_metadata(path).ok()?;
+    if !m.is_file() || m.len() > MAX_RECORD * 64 {
+        return None;
+    }
+    serde_json::from_slice(&std::fs::read(path).ok()?).ok()
 }
 
-fn installed_release(home: &Path) -> Option<String> {
-    let b = std::fs::read(home.join(".claude/plugins/installed_plugins.json")).ok()?;
-    let v: Value = serde_json::from_slice(&b).ok()?;
-    v["plugins"]["delphi@delphi"].as_array()?.iter().find(|e| e["scope"] == "user")?["version"].as_str().map(str::to_string)
+/// The GitHub repository a host's own state records for its marketplace named `delphi`. `Some(None)`: present, but not a GitHub source.
+pub fn marketplace_source(host: &str, home: &Path) -> Option<Option<String>> {
+    match host {
+        "claude-code" | "copilot" => {
+            let path = if host == "copilot" { home.join(".copilot/settings.json") } else { home.join(".claude/plugins/known_marketplaces.json") };
+            let v = read_json(&path)?;
+            let m = if host == "copilot" { v.get("extraKnownMarketplaces")?.get("delphi")? } else { v.get("delphi")? };
+            Some(if m["source"]["source"] == "github" { m["source"]["repo"].as_str().map(str::to_string) } else { None })
+        }
+        _ => None,
+    }
 }
 
-fn other_plugins_use_marketplace(home: &Path) -> bool {
-    let Ok(b) = std::fs::read(home.join(".claude/plugins/installed_plugins.json")) else { return false };
-    let Ok(v) = serde_json::from_slice::<Value>(&b) else { return false };
-    v["plugins"].as_object().is_some_and(|p| p.keys().any(|k| k.ends_with("@delphi") && k != "delphi@delphi"))
+/// The plugin's release as the host's own state records it (`unrecorded` where the host keeps none); `None` when it is not installed.
+pub fn installed_release(host: &str, home: &Path) -> Option<String> {
+    match host {
+        "claude-code" => {
+            let v = read_json(&home.join(".claude/plugins/installed_plugins.json"))?;
+            v["plugins"]["delphi@delphi"].as_array()?.iter().find(|e| e["scope"] == "user")?["version"].as_str().map(str::to_string)
+        }
+        "copilot" => {
+            read_json(&home.join(".copilot/settings.json"))?["enabledPlugins"].get("delphi@delphi")?.as_bool()?;
+            Some(copilot_installed(home).map_or_else(|| "unrecorded".to_string(), |(v, _)| v))
+        }
+        _ => None,
+    }
+}
+
+fn other_plugins_use_marketplace(host: &str, home: &Path) -> bool {
+    let keys: Vec<String> = match host {
+        "claude-code" => read_json(&home.join(".claude/plugins/installed_plugins.json")).and_then(|v| v["plugins"].as_object().map(|p| p.keys().cloned().collect())).unwrap_or_default(),
+        "copilot" => read_json(&home.join(".copilot/settings.json")).and_then(|v| v["enabledPlugins"].as_object().map(|p| p.keys().cloned().collect())).unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    keys.iter().any(|k| k.ends_with("@delphi") && k != "delphi@delphi")
+}
+
+/// Copilot's own installed copy: the release in its `plugin.json` and a digest of the two files that define the plugin. Bound into the record so
+/// a later manual reinstall is not mistaken for what connect added.
+pub fn copilot_installed(home: &Path) -> Option<(String, String)> {
+    let dir = home.join(".copilot/installed-plugins/delphi/delphi");
+    let manifest = std::fs::read(dir.join(".claude-plugin/plugin.json")).ok()?;
+    let mcp = std::fs::read(dir.join(".mcp.json")).unwrap_or_default();
+    let v: Value = serde_json::from_slice(&manifest).ok()?;
+    use sha2::Digest;
+    let mut h = sha2::Sha256::new();
+    h.update(&manifest);
+    h.update([0u8]);
+    h.update(&mcp);
+    Some((v["version"].as_str()?.to_string(), h.finalize().iter().map(|b| format!("{b:02x}")).collect()))
+}
+
+/// Delphi artifacts the host keeps that its settings do not show: a leftover installed copy is not "absent".
+fn leftover(host: &str, home: &Path) -> bool {
+    host == "copilot" && std::fs::symlink_metadata(home.join(".copilot/installed-plugins/delphi")).is_ok()
 }
 
 /// Whether the host stands where connect may add the plugin: nothing of Delphi's is present.
-pub fn addable(pre: &mcp_check::Check, home: &Path) -> bool {
-    let clean = (pre.state == State::Missing && pre.detail == "the Delphi plugin is not installed") || (pre.state == State::Unknown && pre.detail.starts_with("no Claude Code plugin state"));
-    clean && marketplace_source(home).is_none()
+pub fn addable(t: &Template, pre: &mcp_check::Check, home: &Path) -> bool {
+    let clean = (pre.state == State::Missing && pre.detail == "the Delphi plugin is not installed") || (pre.state == State::Unknown && pre.detail.starts_with("no "));
+    clean && marketplace_source(t.host, home).is_none() && installed_release(t.host, home).is_none() && !leftover(t.host, home)
 }
 
 struct Run<'a> {
@@ -166,8 +210,8 @@ fn run_dir(delphi_home: &Path) -> Result<PathBuf, String> {
     Ok(d)
 }
 
-fn audit(delphi_home: &Path, action: &str, exe: &HostExe, result: &str) {
-    let rec = json!({"type": "connect.attempt", "at": now(), "host": HOST, "template": TEMPLATE, "action": action, "exe_sha256": exe.sha256, "result": result});
+fn audit(delphi_home: &Path, t: &Template, action: &str, exe: &HostExe, result: &str) {
+    let rec = json!({"type": "connect.attempt", "at": now(), "host": t.host, "template": t.id, "action": action, "exe_sha256": exe.sha256, "result": result});
     let op = delphi_home.join("operator");
     if private_dir(&op).is_ok() {
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).mode(0o600).custom_flags(libc::O_NOFOLLOW).open(op.join("connect-audit.jsonl")) {
@@ -212,7 +256,7 @@ fn update_record(delphi_home: &Path, f: impl FnOnce(&mut serde_json::Map<String,
     std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
 }
 
-pub fn read_record(delphi_home: &Path) -> Result<Option<Value>, String> {
+pub fn read_record(delphi_home: &Path, host: &str) -> Result<Option<Value>, String> {
     let path = delphi_home.join("operator/connections.json");
     let Ok(m) = std::fs::symlink_metadata(&path) else { return Ok(None) };
     if !m.is_file() || m.len() > MAX_RECORD || m.mode() & 0o077 != 0 {
@@ -221,23 +265,20 @@ pub fn read_record(delphi_home: &Path) -> Result<Option<Value>, String> {
     let mut s = String::new();
     std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(&path).and_then(|mut f| f.read_to_string(&mut s)).map_err(|e| e.to_string())?;
     match serde_json::from_str::<Value>(&s) {
-        Ok(v @ Value::Object(_)) => Ok(v.get(HOST).cloned()),
+        Ok(v @ Value::Object(_)) => Ok(v.get(host).cloned()),
         _ => Err("connections.json is malformed".into()),
     }
 }
 
-pub const MANUAL_CURE_ADD: &str = "claude plugin marketplace add jessevondoom/delphi && claude plugin install delphi@delphi";
-pub const MANUAL_CURE_REMOVE: &str = "claude plugin uninstall delphi@delphi && claude plugin marketplace remove delphi";
-
 /// Add the marketplace and the plugin. The caller has already shown the plan and obtained `proof`.
-pub fn connect(proof: &ConsentProof, exe: &HostExe, home: &Path, delphi_home: &Path, release: &str) -> Result<String, Refusal> {
-    let pre = mcp_check::check_claude_code(home, release);
-    if !addable(&pre, home) {
+pub fn connect(t: &Template, proof: &ConsentProof, exe: &HostExe, home: &Path, delphi_home: &Path, release: &str) -> Result<String, Refusal> {
+    let pre = mcp_check::check_host(t.host, home, release).map_err(Refusal::Failed)?;
+    if !addable(t, &pre, home) {
         return Err(Refusal::NotAllowed("something of Delphi's is already present, and connect only adds what is absent; see `delphi connect claude-code --status`".into()));
     }
     let tmp = run_dir(delphi_home).map_err(Refusal::Failed)?;
     let r = Run { exe, home, tmp: &tmp };
-    let steps = connect_cmd::argv(&exe.canonical);
+    let steps = connect_cmd::argv(&exe.canonical, &t.add);
     let mut done = 0;
     let mut err = None;
     for s in &steps {
@@ -252,22 +293,23 @@ pub fn connect(proof: &ConsentProof, exe: &HostExe, home: &Path, delphi_home: &P
     let _ = std::fs::remove_dir_all(&tmp);
     if let Some(e) = err {
         let (kind, msg) = if done == 0 {
-            ("failed", format!("{e}. Nothing was added. Manual commands: {MANUAL_CURE_ADD}"))
+            ("failed", format!("{e}. Nothing was added. Manual commands: {}", t.manual_add))
         } else {
             ("partial", format!("partial: the marketplace was added but the plugin was not installed ({e}). Cure: claude plugin install delphi@delphi (or undo with: claude plugin marketplace remove delphi)"))
         };
-        audit(delphi_home, "add", exe, kind);
+        audit(delphi_home, t, "add", exe, kind);
         return Err(if done == 0 { Refusal::Failed(msg) } else { Refusal::Partial(msg) });
     }
-    let post = mcp_check::check_claude_code(home, release);
-    audit(delphi_home, "add", exe, post.state.name());
+    let post = mcp_check::check_host(t.host, home, release).map_err(Refusal::Failed)?;
+    audit(delphi_home, t, "add", exe, post.state.name());
     if post.state != State::Configured {
         return Err(Refusal::Partial(format!("the commands ran, but the check reads {}: {}. {}", post.state.name(), sanitize(&post.detail), post.fix.as_deref().unwrap_or("see `delphi connect claude-code --status`"))));
     }
-    let plugin_release = installed_release(home).unwrap_or_default();
-    let source = marketplace_source(home).flatten().unwrap_or_default();
+    let plugin_release = installed_release(t.host, home).unwrap_or_default();
+    let source = marketplace_source(t.host, home).flatten().unwrap_or_default();
+    let content = copilot_installed(home).filter(|_| t.host == "copilot").map(|(_, d)| d);
     update_record(delphi_home, |d| {
-        d.insert(HOST.into(), json!({"template": TEMPLATE, "at": now(), "plugin": "delphi@delphi", "plugin_release": plugin_release, "binary_release": release, "marketplace": {"name": "delphi", "source": source}}));
+        d.insert(t.host.into(), json!({"template": t.id, "at": now(), "plugin": "delphi@delphi", "plugin_release": plugin_release, "content_sha256": content, "binary_release": release, "marketplace": {"name": "delphi", "source": source}}));
         Ok(())
     })
     .map_err(|e| Refusal::Partial(format!("connected, but the record could not be written ({e}); `--remove` will not be available")))?;
@@ -275,42 +317,49 @@ pub fn connect(proof: &ConsentProof, exe: &HostExe, home: &Path, delphi_home: &P
 }
 
 /// Whether removal may proceed: the record, the plugin and the marketplace identity all still match.
-pub fn removable(home: &Path, delphi_home: &Path) -> Result<(), String> {
-    let rec = read_record(delphi_home)?.ok_or_else(|| format!("delphi has no record of connecting {HOST}, so it will not remove anything. Manual commands: {MANUAL_CURE_REMOVE}"))?;
+pub fn removable(t: &Template, home: &Path, delphi_home: &Path) -> Result<(), String> {
+    let rec = read_record(delphi_home, t.host)?.ok_or_else(|| format!("delphi has no record of connecting {}, so it will not remove anything. Manual commands: {}", t.host, t.manual_remove))?;
     let recorded = rec["marketplace"]["source"].as_str().unwrap_or_default();
-    match marketplace_source(home) {
+    match marketplace_source(t.host, home) {
         Some(Some(s)) if s == recorded && s == SOURCE => {}
-        _ => return Err(format!("the host's `delphi` marketplace no longer matches the record. Manual commands: {MANUAL_CURE_REMOVE}")),
+        _ => return Err(format!("the host's `delphi` marketplace no longer matches the record. Manual commands: {}", t.manual_remove)),
     }
-    if installed_release(home).is_none() {
-        return Err(format!("the plugin is not installed as the record says. Manual commands: {MANUAL_CURE_REMOVE}"));
+    if t.host == "copilot" {
+        let recorded = rec["content_sha256"].as_str().unwrap_or_default();
+        if copilot_installed(home).is_none_or(|(_, d)| d != recorded) {
+            return Err(format!("the installed plugin is not the copy connect recorded (it was updated or reinstalled). Manual commands: {}", t.manual_remove));
+        }
     }
-    if other_plugins_use_marketplace(home) {
-        return Err(format!("other plugins use the `delphi` marketplace, so it is not removed. Manual commands: {MANUAL_CURE_REMOVE}"));
+    if installed_release(t.host, home).is_none() {
+        return Err(format!("the plugin is not installed as the record says. Manual commands: {}", t.manual_remove));
+    }
+    if other_plugins_use_marketplace(t.host, home) {
+        return Err(format!("other plugins use the `delphi` marketplace, so it is not removed. Manual commands: {}", t.manual_remove));
     }
     Ok(())
 }
 
-pub fn remove_plan(exe: &HostExe) -> String {
-    let mut o = String::from("delphi connect --remove claude-code: plan (nothing has been run or written)\n");
+pub fn remove_plan(t: &Template, exe: &HostExe) -> String {
+    let mut o = format!("delphi connect {} --remove: plan (nothing has been run or written)\n", t.host);
     o.push_str(&format!("host CLI: {} (resolves to {})\n  sha256 {}\n", sanitize(&exe.listed.display().to_string()), sanitize(&exe.canonical.display().to_string()), exe.sha256));
-    let e = exe.canonical.display().to_string();
-    o.push_str(&format!("step 1: {} plugin uninstall delphi@delphi\nstep 2: {} plugin marketplace remove delphi\n", sanitize(&e), sanitize(&e)));
+    for (i, a) in connect_cmd::argv(&exe.canonical, &t.remove).iter().enumerate() {
+        o.push_str(&format!("step {}: {}\n", i + 1, a.iter().map(|x| sanitize(x)).collect::<Vec<_>>().join(" ")));
+    }
     o.push_str("environment: only a fixed safe PATH, HOME, LANG and LC_*, TERM and a private TMPDIR\n");
+    o.push_str(&format!("expected writes: {}\n", t.writes));
     o.push_str("only what connect added is removed, and only while the host's state still matches its record; its record is then deleted\n");
     o
 }
 
-pub fn remove_confirmation(plan: &str) -> String {
-    connect_cmd::confirmation(plan).replacen("CONNECT", "REMOVE", 1)
+pub fn remove_confirmation(host: &str, plan: &str) -> String {
+    connect_cmd::confirmation(host, plan).replacen("CONNECT", "REMOVE", 1)
 }
 
-pub fn remove(proof: &ConsentProof, exe: &HostExe, home: &Path, delphi_home: &Path) -> Result<String, Refusal> {
-    removable(home, delphi_home).map_err(Refusal::NotAllowed)?;
+pub fn remove(t: &Template, proof: &ConsentProof, exe: &HostExe, home: &Path, delphi_home: &Path) -> Result<String, Refusal> {
+    removable(t, home, delphi_home).map_err(Refusal::NotAllowed)?;
     let tmp = run_dir(delphi_home).map_err(Refusal::Failed)?;
     let r = Run { exe, home, tmp: &tmp };
-    let e = exe.canonical.display().to_string();
-    let steps = [vec![e.clone(), "plugin".into(), "uninstall".into(), "delphi@delphi".into()], vec![e, "plugin".into(), "marketplace".into(), "remove".into(), "delphi".into()]];
+    let steps = connect_cmd::argv(&exe.canonical, &t.remove);
     let mut failed = None;
     for s in &steps {
         if let Err(m) = r.step(proof, s) {
@@ -320,15 +369,15 @@ pub fn remove(proof: &ConsentProof, exe: &HostExe, home: &Path, delphi_home: &Pa
     }
     let _ = std::fs::remove_dir_all(&tmp);
     if let Some(m) = failed {
-        audit(delphi_home, "remove", exe, "failed");
-        return Err(Refusal::Partial(format!("{m}. Nothing is rolled back. Manual commands: {MANUAL_CURE_REMOVE}")));
+        audit(delphi_home, t, "remove", exe, "failed");
+        return Err(Refusal::Partial(format!("{m}. Nothing is rolled back. Manual commands: {}", t.manual_remove)));
     }
-    audit(delphi_home, "remove", exe, "removed");
-    if installed_release(home).is_some() || marketplace_source(home).is_some() {
-        return Err(Refusal::Partial(format!("the commands ran but Delphi's entries are still present. Manual commands: {MANUAL_CURE_REMOVE}")));
+    audit(delphi_home, t, "remove", exe, "removed");
+    if installed_release(t.host, home).is_some() || marketplace_source(t.host, home).is_some() || leftover(t.host, home) {
+        return Err(Refusal::Partial(format!("the commands ran but Delphi's entries are still present. Manual commands: {}", t.manual_remove)));
     }
     update_record(delphi_home, |d| {
-        d.remove(HOST);
+        d.remove(t.host);
         Ok(())
     })
     .map_err(|e| Refusal::Partial(format!("removed, but the record could not be cleared ({e})")))?;
@@ -344,30 +393,34 @@ mod tests {
         std::fs::canonicalize(t.path()).unwrap().parent().unwrap().to_path_buf()
     }
 
-    /// A fake `claude` that records argv and environment and writes the host state the real one writes.
-    fn fake_host(t: &tempfile::TempDir, fail_on: &str) -> HostExe {
+    /// A fake host CLI that records argv and environment and writes the host state the real one writes.
+    fn fake_host(t: &tempfile::TempDir, tm: &Template, fail_on: &str) -> HostExe {
         let dir = t.path().join("bin");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let rel = env!("CARGO_PKG_VERSION");
+        let (on_add, on_install, on_uninstall, on_remove) = if tm.host == "copilot" {
+            (
+                r#"mkdir -p "$HOME/.copilot"; echo '{"theme":"keep","extraKnownMarketplaces":{"delphi":{"source":{"source":"github","repo":"jessevondoom/delphi"}}}}' > "$HOME/.copilot/settings.json""#.to_string(),
+                format!(r#"d="$HOME/.copilot/installed-plugins/delphi/delphi"; mkdir -p "$d/.claude-plugin"; echo '{{"version":"{rel}"}}' > "$d/.claude-plugin/plugin.json"; echo '{{}}' > "$d/.mcp.json"; echo '{{"theme":"keep","extraKnownMarketplaces":{{"delphi":{{"source":{{"source":"github","repo":"jessevondoom/delphi"}}}}}},"enabledPlugins":{{"delphi@delphi":true}}}}' > "$HOME/.copilot/settings.json""#),
+                r#"rm -rf "$HOME/.copilot/installed-plugins/delphi"; echo '{"theme":"keep","extraKnownMarketplaces":{"delphi":{"source":{"source":"github","repo":"jessevondoom/delphi"}}},"enabledPlugins":{}}' > "$HOME/.copilot/settings.json""#.to_string(),
+                r#"echo '{"theme":"keep","extraKnownMarketplaces":{},"enabledPlugins":{}}' > "$HOME/.copilot/settings.json""#.to_string(),
+            )
+        } else {
+            (
+                r#"mkdir -p "$HOME/.claude/plugins"; echo '{"delphi":{"source":{"source":"github","repo":"jessevondoom/delphi"}}}' > "$HOME/.claude/plugins/known_marketplaces.json""#.to_string(),
+                format!(r#"echo '{{"version":2,"plugins":{{"delphi@delphi":[{{"scope":"user","version":"{rel}"}}]}}}}' > "$HOME/.claude/plugins/installed_plugins.json"; echo '{{"enabledPlugins":{{"delphi@delphi":true}}}}' > "$HOME/.claude/settings.json""#),
+                r#"echo '{"version":2,"plugins":{}}' > "$HOME/.claude/plugins/installed_plugins.json""#.to_string(),
+                r#"echo '{}' > "$HOME/.claude/plugins/known_marketplaces.json""#.to_string(),
+            )
+        };
         let script = format!(
-            r#"#!/bin/sh
-echo "$@" >> "$HOME/argv.log"
-env | sort > "$HOME/env.log"
-case "$*" in *"{fail_on}"*) exit 3;; esac
-mkdir -p "$HOME/.claude/plugins"
-case "$*" in
-  "plugin marketplace add jessevondoom/delphi") echo '{{"delphi":{{"source":{{"source":"github","repo":"jessevondoom/delphi"}}}}}}' > "$HOME/.claude/plugins/known_marketplaces.json";;
-  "plugin install delphi@delphi") echo '{{"version":2,"plugins":{{"delphi@delphi":[{{"scope":"user","version":"{rel}"}}]}}}}' > "$HOME/.claude/plugins/installed_plugins.json"; echo '{{"enabledPlugins":{{"delphi@delphi":true}}}}' > "$HOME/.claude/settings.json";;
-  "plugin uninstall delphi@delphi") echo '{{"version":2,"plugins":{{}}}}' > "$HOME/.claude/plugins/installed_plugins.json";;
-  "plugin marketplace remove delphi") echo '{{}}' > "$HOME/.claude/plugins/known_marketplaces.json";;
-esac
-"#,
-            rel = env!("CARGO_PKG_VERSION")
+            "#!/bin/sh\necho \"$@\" >> \"$HOME/argv.log\"\nenv | sort > \"$HOME/env.log\"\ncase \"$*\" in *\"{fail_on}\"*) exit 3;; esac\ncase \"$*\" in\n  \"plugin marketplace add jessevondoom/delphi\") {on_add};;\n  \"plugin install delphi@delphi\") {on_install};;\n  \"plugin uninstall delphi@delphi\") {on_uninstall};;\n  \"plugin marketplace remove delphi\") {on_remove};;\nesac\n"
         );
-        let p = dir.join("claude");
+        let p = dir.join(tm.exe);
         std::fs::write(&p, script).unwrap();
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
-        connect_cmd::find_host_above(&[dir], "claude", Some(&root(t))).unwrap()
+        connect_cmd::find_host_above(&[dir], tm.exe, Some(&root(t))).unwrap()
     }
 
     fn homes(t: &tempfile::TempDir) -> (PathBuf, PathBuf) {
@@ -378,40 +431,53 @@ esac
         (h, d)
     }
 
+    fn claude() -> &'static Template {
+        connect_cmd::template("claude-code").unwrap()
+    }
+
+    fn copilot() -> &'static Template {
+        connect_cmd::template("copilot").unwrap()
+    }
+
     #[test]
     fn a_connection_runs_the_fixed_argv_with_a_scrubbed_environment_and_records_it_then_removal_is_symmetric() {
-        let t = tempfile::tempdir().unwrap();
-        let (home, dh) = homes(&t);
-        let exe = fake_host(&t, "never-matches");
-        let out = connect(&consent::for_test(), &exe, &home, &dh, env!("CARGO_PKG_VERSION")).unwrap();
-        assert!(out.starts_with("connected"));
-        assert_eq!(std::fs::read_to_string(home.join("argv.log")).unwrap(), "plugin marketplace add jessevondoom/delphi\nplugin install delphi@delphi\n");
-        let env = std::fs::read_to_string(home.join("env.log")).unwrap();
-        assert!(!env.contains("GITHUB_TOKEN") && !env.contains("secret-token"), "an unlisted variable is dropped");
-        assert!(env.contains(&format!("PATH={SAFE_PATH}")) && env.contains("TMPDIR="));
-        let rec = read_record(&dh).unwrap().unwrap();
-        assert_eq!(rec["marketplace"]["source"], "jessevondoom/delphi");
-        let mode = std::fs::metadata(dh.join("operator/connections.json")).unwrap().mode() & 0o777;
-        assert_eq!(mode, 0o600);
-        assert_eq!(std::fs::metadata(dh.join("operator")).unwrap().mode() & 0o777, 0o700);
-        assert!(std::fs::read_to_string(dh.join("operator/connect-audit.jsonl")).unwrap().contains("\"result\":\"configured\""));
-        assert!(connect(&consent::for_test(), &exe, &home, &dh, env!("CARGO_PKG_VERSION")).unwrap_err().message().contains("already present"));
+        for tm in [claude(), copilot()] {
+            let t = tempfile::tempdir().unwrap();
+            let (home, dh) = homes(&t);
+            let exe = fake_host(&t, tm, "never-matches");
+            let out = connect(tm, &consent::for_test(), &exe, &home, &dh, env!("CARGO_PKG_VERSION")).unwrap();
+            assert!(out.starts_with("connected"), "{out}");
+            assert_eq!(std::fs::read_to_string(home.join("argv.log")).unwrap(), "plugin marketplace add jessevondoom/delphi\nplugin install delphi@delphi\n");
+            let env = std::fs::read_to_string(home.join("env.log")).unwrap();
+            assert!(!env.contains("GITHUB_TOKEN"), "an unlisted variable is dropped");
+            assert!(env.contains(&format!("PATH={SAFE_PATH}")) && env.contains("TMPDIR="));
+            let rec = read_record(&dh, tm.host).unwrap().unwrap();
+            assert_eq!(rec["marketplace"]["source"], "jessevondoom/delphi");
+            assert_eq!(std::fs::metadata(dh.join("operator/connections.json")).unwrap().mode() & 0o777, 0o600);
+            assert_eq!(std::fs::metadata(dh.join("operator")).unwrap().mode() & 0o777, 0o700);
+            assert!(std::fs::read_to_string(dh.join("operator/connect-audit.jsonl")).unwrap().contains("\"result\":\"configured\""));
+            assert!(connect(tm, &consent::for_test(), &exe, &home, &dh, env!("CARGO_PKG_VERSION")).unwrap_err().message().contains("already present"));
 
-        let out = remove(&consent::for_test(), &exe, &home, &dh).unwrap();
-        assert!(out.starts_with("removed"));
-        assert!(read_record(&dh).unwrap().is_none());
-        assert!(removable(&home, &dh).unwrap_err().contains("no record"));
+            let out = remove(tm, &consent::for_test(), &exe, &home, &dh).unwrap();
+            assert!(out.starts_with("removed"), "{out}");
+            assert!(read_record(&dh, tm.host).unwrap().is_none());
+            assert!(removable(tm, &home, &dh).unwrap_err().contains("no record"));
+            if tm.host == "copilot" {
+                let s = std::fs::read_to_string(home.join(".copilot/settings.json")).unwrap();
+                assert!(s.contains("\"theme\":\"keep\""), "the host's other settings survive: {s}");
+            }
+        }
     }
 
     #[test]
     fn a_failed_second_step_is_partial_and_writes_no_record_and_authorises_no_removal() {
         let t = tempfile::tempdir().unwrap();
         let (home, dh) = homes(&t);
-        let exe = fake_host(&t, "plugin install");
-        let e = connect(&consent::for_test(), &exe, &home, &dh, env!("CARGO_PKG_VERSION")).unwrap_err();
+        let exe = fake_host(&t, claude(), "plugin install");
+        let e = connect(claude(), &consent::for_test(), &exe, &home, &dh, env!("CARGO_PKG_VERSION")).unwrap_err();
         assert!(matches!(e, Refusal::Partial(_)) && e.message().contains("marketplace remove delphi"));
-        assert!(read_record(&dh).unwrap().is_none());
-        assert!(removable(&home, &dh).is_err());
+        assert!(read_record(&dh, "claude-code").unwrap().is_none());
+        assert!(removable(claude(), &home, &dh).is_err());
         assert!(std::fs::read_to_string(dh.join("operator/connect-audit.jsonl")).unwrap().contains("\"result\":\"partial\""));
     }
 
@@ -419,25 +485,44 @@ esac
     fn a_changed_host_binary_aborts_before_anything_runs() {
         let t = tempfile::tempdir().unwrap();
         let (home, dh) = homes(&t);
-        let exe = fake_host(&t, "never-matches");
+        let exe = fake_host(&t, claude(), "never-matches");
         std::fs::write(&exe.canonical, "#!/bin/sh\necho swapped > \"$HOME/swapped\"\n").unwrap();
-        let e = connect(&consent::for_test(), &exe, &home, &dh, env!("CARGO_PKG_VERSION")).unwrap_err();
+        let e = connect(claude(), &consent::for_test(), &exe, &home, &dh, env!("CARGO_PKG_VERSION")).unwrap_err();
         assert!(e.message().contains("changed after the plan"));
-        assert!(!home.join("swapped").exists() && read_record(&dh).unwrap().is_none());
+        assert!(!home.join("swapped").exists() && read_record(&dh, "claude-code").unwrap().is_none());
     }
 
     #[test]
     fn removal_refuses_when_the_marketplace_is_not_ours_or_the_record_is_unsafe() {
         let t = tempfile::tempdir().unwrap();
         let (home, dh) = homes(&t);
-        let exe = fake_host(&t, "never-matches");
-        connect(&consent::for_test(), &exe, &home, &dh, env!("CARGO_PKG_VERSION")).unwrap();
+        let exe = fake_host(&t, claude(), "never-matches");
+        connect(claude(), &consent::for_test(), &exe, &home, &dh, env!("CARGO_PKG_VERSION")).unwrap();
         std::fs::write(home.join(".claude/plugins/known_marketplaces.json"), r#"{"delphi":{"source":{"source":"github","repo":"someone/else"}}}"#).unwrap();
-        assert!(removable(&home, &dh).unwrap_err().contains("no longer matches"));
+        assert!(removable(claude(), &home, &dh).unwrap_err().contains("no longer matches"));
         std::fs::write(home.join(".claude/plugins/known_marketplaces.json"), r#"{"delphi":{"source":{"source":"github","repo":"jessevondoom/delphi"}}}"#).unwrap();
-        assert!(removable(&home, &dh).is_ok());
+        assert!(removable(claude(), &home, &dh).is_ok());
         std::fs::set_permissions(dh.join("operator/connections.json"), std::fs::Permissions::from_mode(0o644)).unwrap();
-        assert!(removable(&home, &dh).is_err(), "a group-readable record fails closed");
+        assert!(removable(claude(), &home, &dh).is_err(), "a group-readable record fails closed");
+    }
+
+    #[test]
+    fn copilot_removal_is_bound_to_the_copy_connect_installed_and_any_leftover_blocks_a_connect() {
+        let t = tempfile::tempdir().unwrap();
+        let (home, dh) = homes(&t);
+        let exe = fake_host(&t, copilot(), "never-matches");
+        connect(copilot(), &consent::for_test(), &exe, &home, &dh, env!("CARGO_PKG_VERSION")).unwrap();
+        assert!(removable(copilot(), &home, &dh).is_ok());
+        std::fs::write(home.join(".copilot/installed-plugins/delphi/delphi/.mcp.json"), r#"{"edited":true}"#).unwrap();
+        assert!(removable(copilot(), &home, &dh).unwrap_err().contains("not the copy connect recorded"));
+
+        let t2 = tempfile::tempdir().unwrap();
+        let (home2, dh2) = homes(&t2);
+        let exe2 = fake_host(&t2, copilot(), "never-matches");
+        std::fs::create_dir_all(home2.join(".copilot/installed-plugins/delphi")).unwrap();
+        std::fs::write(home2.join(".copilot/settings.json"), r#"{"enabledPlugins":{"delphi@delphi":false}}"#).unwrap();
+        let e = connect(copilot(), &consent::for_test(), &exe2, &home2, &dh2, env!("CARGO_PKG_VERSION")).unwrap_err();
+        assert!(e.message().contains("already present") && !home2.join("argv.log").exists(), "a disabled or leftover install is not absent");
     }
 
     #[test]
