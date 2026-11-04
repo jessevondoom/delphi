@@ -1469,6 +1469,15 @@ impl Kb {
         Ok(self.search_scored(query, opts)?.0)
     }
 
+    /// Look up a chunk's ID and full raw text by relative path and start line (`specs/072` §5).
+    pub fn chunk_content(&self, rel_path: &str, start_line: usize) -> Option<(i64, String)> {
+        self.conn.query_row(
+            "SELECT chunk_id, raw_content FROM kb_chunks WHERE rel_path = ?1 AND start_line = ?2",
+            params![rel_path, start_line as i64],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        ).ok()
+    }
+
     /// `search`, and the best score the reranker gave any result it read (`None` when it did not run).
     pub fn search_scored(&self, query: &str, opts: &SearchOpts) -> Result<(Vec<Hit>, Option<f32>), KbError> {
         let terms = match_terms(query);

@@ -140,27 +140,24 @@ impl Identity {
             badge: sanitize_identity_text(badge, 8),
             hex: if hex_ok { hex.to_string() } else { "#94a3b8".to_string() },
             ansi256,
-            via: via.map(|v| sanitize_identity_text(v, 40)).filter(|v| !v.is_empty()),
+            via: via.map(|v| sanitize_identity_text(v, 40)).filter(|v| !v.is_empty()).map(|_| "delphi".to_string()),
         }
     }
 
-    /// The plain signature: `⟦•_•⟧ Name (role)`, with ` via host` when a host adopted the role.
+    /// The plain signature: `⟦•_•⟧ Name (role) via delphi` (`specs/072` §3.1).
     pub fn signature(&self) -> String {
-        let via = self.via.as_ref().map(|v| format!(" via {}", v)).unwrap_or_default();
-        format!("{} {} ({}){}", self.badge, self.display_name, self.role, via)
+        format!("{} {} ({}) via delphi", self.badge, self.display_name, self.role)
     }
 
     /// The ANSI variant: the badge and name in the role's 256-colour, bold name. Built only from sanitised fields.
     pub fn styled(&self) -> String {
         let c = format!("\u{1b}[38;5;{}m", self.ansi256);
-        let via = self.via.as_ref().map(|v| format!(" via {}", v)).unwrap_or_default();
-        format!("{c}{}\u{1b}[0m {c}\u{1b}[1m{}\u{1b}[0m ({}){}", self.badge, self.display_name, self.role, via)
+        format!("{c}{}\u{1b}[0m {c}\u{1b}[1m{}\u{1b}[0m ({}) via delphi", self.badge, self.display_name, self.role)
     }
 
     /// The markdown variant: the badge in code, the name in bold, the role in parentheses.
     pub fn markdown(&self) -> String {
-        let via = self.via.as_ref().map(|v| format!(" via {}", v)).unwrap_or_default();
-        format!("`{}` **{}** ({}){}", self.badge.replace('`', ""), self.display_name.replace(['*', '`', '_'], ""), self.role, via)
+        format!("`{}` **{}** ({}) via delphi", self.badge.replace('`', ""), self.display_name.replace(['*', '`', '_'], ""), self.role)
     }
 }
 
@@ -201,13 +198,15 @@ mod tests {
         assert!(!id.markdown().contains('\u{1b}'));
         let styled = id.styled();
         assert_eq!(styled.matches('\u{1b}').count(), 5, "only the three colour codes and two resets we add: {styled:?}");
+        assert!(sig.ends_with(" via delphi"));
     }
 
     #[test]
     fn a_bad_colour_falls_back_and_via_marks_an_adopted_role() {
         let id = Identity::new("architect", "Name", "⟦•_•⟧", "red; drop", 1, Some("claude-code"));
         assert_eq!(id.hex, "#94a3b8");
-        assert_eq!(id.signature(), "⟦•_•⟧ Name (architect) via claude-code");
+        assert_eq!(id.signature(), "⟦•_•⟧ Name (architect) via delphi");
+        assert_eq!(id.via, Some("delphi".to_string()));
         assert_eq!(Identity::new("architect", "Name", "⟦•_•⟧", "#000000", 1, Some("\u{1b}")).via, None);
     }
 }

@@ -2911,7 +2911,7 @@ mod tests {
             let r = c.call("host.request_help", p(json!({"need": "How do retries work?", "tried": "grep", "suggested_target": "nobody"}))).unwrap();
             assert_eq!(r["status"], "answered", "{r}");
             assert_eq!(r["answered_by"], "orchestrator");
-            assert!(r["signature"].as_str().unwrap().ends_with("(orchestrator)") && r["identity"]["ansi"].as_str().unwrap().contains('\u{1b}'), "{r}");
+            assert!(r["signature"].as_str().unwrap().contains("(orchestrator) via delphi") && r["identity"]["ansi"].as_str().unwrap().contains('\u{1b}'), "{r}");
             assert!(r["answer"].as_str().unwrap().contains("three rungs"));
             // Another session cannot read it; the owner can, and it does not count again.
             let other = json!({"session": "fedcba9876543210", "tool": "x", "cwd": cwd, "help_id": r["help_id"]});

@@ -135,9 +135,9 @@ fn every_agent_and_skill_manifest_satisfies_its_schema() {
 fn research_results_follow_their_schema_and_refuse_control_characters_in_identity() {
     let ok = json!({
         "status": "done", "answer": "a", "source_ids": ["s1"], "kb_hits": [], "new_claims": 1, "budget_used": { "steps": 3 },
-        "answered_by": "scout", "signature": "⟦•_•⟧ Name (scout)",
+        "answered_by": "scout", "signature": "⟦•_•⟧ Name (scout) via delphi",
         "claims": [{ "id": "c1", "assertion": "x", "source_ids": ["s1"], "quote": "q", "locator": "p1", "retrieved": "2026-11-01", "licence": "cc-by", "knowledge_status": "noted", "contested": false, "from_trusted_source": true }],
-        "identity": { "role": "scout", "display_name": "Name", "badge": "⟦•_•⟧", "hex": "#123456", "ansi256": 33 }
+        "identity": { "role": "scout", "display_name": "Name", "badge": "⟦•_•⟧", "hex": "#123456", "ansi256": 33, "via": "delphi" }
     });
     must_pass("research-result.schema.json", "a research result", &ok);
     let mut bad = ok.clone();

@@ -215,11 +215,11 @@ mod tests {
         std::fs::create_dir_all(home.path().join("themes/greek")).unwrap();
         std::fs::write(home.path().join("themes/greek/theme.md"), "roles:\n  scout:         { name: \"Hermes\", epithet: \"x\" }\n").unwrap();
         let id = identity(ws.path(), home.path(), "scout", None);
-        assert_eq!(id.signature(), "⟦•••⟧ Hermes (scout)");
+        assert_eq!(id.signature(), "⟦•••⟧ Hermes (scout) via delphi");
         assert_eq!(display_name(ws.path(), home.path(), "builder"), "builder");
         let mut v = json!({});
         attach_identity(&mut v, &identity(ws.path(), home.path(), "scout", Some("claude-code")), "plain");
-        assert_eq!(v["signature"], "⟦•••⟧ Hermes (scout) via claude-code");
+        assert_eq!(v["signature"], "⟦•••⟧ Hermes (scout) via delphi");
         assert!(v["identity"]["ansi"].as_str().unwrap().contains("\u{1b}[38;5;226m") && v["identity"]["markdown"].as_str().unwrap().contains("**Hermes**"));
         assert!(!v["signature"].as_str().unwrap().contains('\u{1b}'));
         std::fs::write(ws.path().join("config.toml"), "[theme]\nname = \"../evil\"\n").unwrap();
