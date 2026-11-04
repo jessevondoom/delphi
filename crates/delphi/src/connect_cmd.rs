@@ -34,11 +34,14 @@ pub fn search_dirs(home: &Path) -> Vec<PathBuf> {
 }
 
 /// Every component of `canonical` must be owned by the user or root and not writable by group or others, and the file regular and executable.
-fn path_is_safe(canonical: &Path) -> Result<(), String> {
+fn path_is_safe(canonical: &Path, floor: Option<&Path>) -> Result<(), String> {
     // SAFETY: geteuid has no preconditions.
     let me = unsafe { libc::geteuid() };
     let mut cur = Some(canonical);
     while let Some(p) = cur {
+        if Some(p) == floor {
+            break;
+        }
         let m = std::fs::symlink_metadata(p).map_err(|_| format!("{} cannot be inspected", sanitize(&p.display().to_string())))?;
         if m.file_type().is_symlink() {
             return Err(format!("{} is a symlink after resolution", sanitize(&p.display().to_string())));
@@ -76,13 +79,18 @@ fn sha256_file(path: &Path) -> Result<String, String> {
 
 /// Find and check the host CLI named `name` in `dirs`; the first existing candidate decides (a later one is never a fallback for an unsafe one).
 pub fn find_host(dirs: &[PathBuf], name: &str) -> Result<HostExe, String> {
+    find_host_above(dirs, name, None)
+}
+
+/// As `find_host`, trusting everything at and above `floor` (tests only: a scratch directory sits under a sticky, world-writable `/tmp`).
+fn find_host_above(dirs: &[PathBuf], name: &str, floor: Option<&Path>) -> Result<HostExe, String> {
     for d in dirs {
         let listed = d.join(name);
         if std::fs::symlink_metadata(&listed).is_err() {
             continue;
         }
         let canonical = std::fs::canonicalize(&listed).map_err(|_| format!("{} does not resolve", sanitize(&listed.display().to_string())))?;
-        path_is_safe(&canonical)?;
+        path_is_safe(&canonical, floor)?;
         let m = std::fs::symlink_metadata(&canonical).map_err(|_| "the host CLI cannot be inspected".to_string())?;
         if !m.is_file() || m.mode() & 0o111 == 0 {
             return Err(format!("{} is not an executable regular file", sanitize(&canonical.display().to_string())));
@@ -186,6 +194,11 @@ mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 
+    /// The canonical scratch directory's parent: trusted, because the system temp directory is sticky and world-writable.
+    fn root(t: &tempfile::TempDir) -> PathBuf {
+        std::fs::canonicalize(t.path()).unwrap().parent().unwrap().to_path_buf()
+    }
+
     fn exe_in(dir: &Path, mode: u32) -> PathBuf {
         std::fs::create_dir_all(dir).unwrap();
         std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -201,10 +214,10 @@ mod tests {
         let real = exe_in(&t.path().join("share/versions"), 0o755);
         std::fs::create_dir_all(t.path().join("bin")).unwrap();
         std::os::unix::fs::symlink(&real, t.path().join("bin/claude")).unwrap();
-        let h = find_host(&[t.path().join("bin")], "claude").unwrap();
+        let h = find_host_above(&[t.path().join("bin")], "claude", Some(&root(&t))).unwrap();
         assert_eq!(h.canonical, std::fs::canonicalize(&real).unwrap());
         assert_eq!(h.sha256.len(), 64);
-        assert!(find_host(&[t.path().join("none")], "claude").unwrap_err().contains("was not found"));
+        assert!(find_host_above(&[t.path().join("none")], "claude", Some(&root(&t))).unwrap_err().contains("was not found"));
     }
 
     #[test]
@@ -213,13 +226,13 @@ mod tests {
         let d = t.path().join("a");
         exe_in(&d, 0o755);
         std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o775)).unwrap();
-        assert!(find_host(std::slice::from_ref(&d), "claude").unwrap_err().contains("writable by group or others"));
+        assert!(find_host_above(std::slice::from_ref(&d), "claude", Some(&root(&t))).unwrap_err().contains("writable by group or others"));
         let d2 = t.path().join("b");
         exe_in(&d2, 0o757);
-        assert!(find_host(&[d2], "claude").unwrap_err().contains("writable"));
+        assert!(find_host_above(&[d2], "claude", Some(&root(&t))).unwrap_err().contains("writable"));
         let d3 = t.path().join("c");
         exe_in(&d3, 0o644);
-        assert!(find_host(&[d3], "claude").unwrap_err().contains("not an executable"));
+        assert!(find_host_above(&[d3], "claude", Some(&root(&t))).unwrap_err().contains("not an executable"));
     }
 
     #[test]
@@ -229,14 +242,14 @@ mod tests {
         exe_in(&bad, 0o777);
         let good = t.path().join("good");
         exe_in(&good, 0o755);
-        assert!(find_host(&[bad, good], "claude").is_err());
+        assert!(find_host_above(&[bad, good], "claude", Some(&root(&t))).is_err());
     }
 
     #[test]
     fn the_plan_is_fixed_argv_sanitised_and_the_confirmation_binds_the_whole_plan() {
         let t = tempfile::tempdir().unwrap();
         exe_in(&t.path().join("x"), 0o755);
-        let mut h = find_host(&[t.path().join("x")], "claude").unwrap();
+        let mut h = find_host_above(&[t.path().join("x")], "claude", Some(&root(&t))).unwrap();
         let pre = mcp_check::Check { state: mcp_check::State::Missing, detail: "not installed\nFORGED: yes".into(), fix: None };
         let plan = render_plan(&h, &pre);
         assert!(plan.contains("plugin marketplace add jessevondoom/delphi") && plan.contains("plugin install delphi@delphi"));

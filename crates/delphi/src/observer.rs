@@ -117,13 +117,8 @@ fn rgb(c: (u8, u8, u8)) -> Color {
     Color::Rgb(c.0, c.1, c.2)
 }
 
-pub(crate) fn role_color(role: &str, pal: Pal) -> Color {
-    avatar::from_canonical_id(role)
-        .map(|r| {
-            let t = avatar::get_theme(r);
-            if pal.dark { rgb(t.chassis_rgb) } else { rgb(t.chassis_rgb_light) }
-        })
-        .unwrap_or(Color::Gray)
+pub(crate) fn role_color(role: &str) -> Color {
+    avatar::from_canonical_id(role).map(|r| rgb(avatar::get_theme(r).chassis_rgb)).unwrap_or(Color::Gray)
 }
 
 fn face_for(role: &str, state: &str) -> &'static str {
@@ -139,7 +134,7 @@ fn face_for(role: &str, state: &str) -> &'static str {
 
 /// `⟦•─•⟧` in the role's colour with bright eyes; the red-team's alert badge has gold eyes and crimson brackets.
 pub(crate) fn badge(role: &str, state: &str, pal: Pal) -> Vec<Span<'static>> {
-    let chassis = role_color(role, pal);
+    let chassis = role_color(role);
     let alert = role == "red-team" && state == "waiting on you";
     let eye = if alert { Color::Rgb(250, 204, 21) } else { pal.eye() };
     let mut out = vec![Span::styled("⟦", Style::default().fg(chassis))];
