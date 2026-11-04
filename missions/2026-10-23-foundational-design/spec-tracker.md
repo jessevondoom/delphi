@@ -594,3 +594,16 @@ Approved by the operator on 2026-11-03 following Council deliberation (`council-
 | S3 | Knowledge RAG retrieval (`kb_retrieve`) | built (this PR) |
 | S4 | Orchestrator guidance & dynamic role packs (`consult_orchestrator`, `spawn_agent_pack`) | built (this PR) |
 | S5 | Federated Council protocol and staging (`propose_council_record`) | built (this PR) |
+
+## Console adaptive contrast and dual-mode palette (spec 073, approved 2026-11-04)
+
+Approved by the operator on 2026-11-04 following unanimous Council 015 deliberation (`council-015-spec-073-console-adaptive-contrast`) with seats `architect`, `advocate`, `builder`, `red-team`, `strategist`, and `orchestrator`. Establishes the dual-mode semantic palette (WCAG 2.1 AA text $\ge 4.5:1$, glyphs $\ge 3.0:1$), ambient palette propagation (`usePal`, `currentPal`, `resetPal`, `withPal`), palette token caching, ANSI 16-color light fallbacks, OSC 11 response regex sanitization, and avatar role chassis contrast adaptation in Rust and TypeScript.
+
+| Slice | Content | Estimate | State |
+| :-- | :-- | --: | :-- |
+| S0 | spec 073 approval, Council 015 record, and tracker entry | 1 h | built (this PR) |
+| S1 | contrast math, caching, ambient context (`usePal`, `resetPal`, `withPal`) | 4 h | not started |
+| S2 | dual-mode semantic vocabulary and ANSI 16 fallback mappings | 6 h | not started |
+| S3 | avatar role chassis contrast adaptation in `avatar.rs`, `observer.rs`, and `theme.ts` | 5 h | not started |
+| S4 | automated WCAG AA contrast matrix test, OSC 11 unit test, and docs | 4 h | not started |
+
