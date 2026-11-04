@@ -9,6 +9,15 @@ This file starts with the work after v0.2.7. For earlier releases, the history i
 ## Unreleased
 
 - Install and update from a private repository (spec 076): `install.sh` and `delphi update` use your GitHub credentials (`gh`, `GH_TOKEN`, `GITHUB_TOKEN`) for the lookup and download, never sending a token to a mirror or a redirect host. Where a repository has no build attestations, the installer checks the maintainers' release signature instead; an attestation that exists and fails still stops the install. Homebrew works only while the repository is public.
+- Knowledge base search (spec 075): `delphi kb search` shows summary pages by default, with `--summaries` and `--bibs` to choose; the console follows `[tui] hide_bibliographies`. Agents still get the bibliography sidecar.
+
+## 0.5.4 — 2026-11-04
+
+- Host plugin marketplace (spec 071): Delphi is installable as a plugin in Claude Code, Copilot CLI and Codex from this repository (`<host> plugin marketplace add jessevondoom/delphi`). `delphi mcp --check <host>` and a `delphi doctor` line read each host's state, and `delphi mcp --print-config <host> --absolute` prints a snippet with this binary's full path (#467).
+- `delphi connect` (spec 074): `delphi connect claude-code|copilot` with `--dry-run`, `--status` and `--remove`. It shows the exact plan and the host binary's checksum and runs only after you type a confirmation phrase at a terminal; it refuses inside an agent seat. A launch-path line in `--check` and `doctor` says whether the host can find `delphi`. Codex is not yet supported (#467, #468, #469).
+- Host cognitive parity (spec 072): MCP hosts gain `consult_orchestrator`, `spawn_agent_pack`, `kb_retrieve`, `query_memory`, `scaffold_status` and `propose_council_record`, and answers are labelled `via delphi` (#466).
+- Console adaptive contrast (spec 073): a dual-mode palette for dark and light terminals at WCAG AA contrast, with role colours adapted for light backgrounds (#471).
+- The README is rewritten around research, trust and decisions; its reference detail moved into `docs/` (`features.md`, `how-it-works.md`, `specifications.md`, `reference/console.md`) (#470).
 
 ## 0.5.3 — 2026-11-03
 
