@@ -180,14 +180,14 @@ A host such as Claude Code starts it from its MCP configuration; it is not meant
 
 ### `delphi connect`
 
-Preview how Delphi connects to Claude Code (runs nothing).
+Add or remove the Delphi plugin in Claude Code, with your consent.
 
 ```
-  delphi connect claude-code --status
-  delphi connect claude-code --dry-run
+  delphi connect claude-code
+  delphi connect claude-code --status | --dry-run | --remove
 ```
 
-Spec 074 C1. `--status` is read-only (no TTY needed): it prints where Claude Code stands (`configured`, `missing`, `stale`, `incompatible`, `unknown`), the launch-path line and the next action. `--dry-run` finds the `claude` CLI only in fixed directories (~/.local/bin, ~/.claude/local, /opt/homebrew/bin, /usr/local/bin, /usr/bin; never your PATH), resolves it, requires every path component to belong to you or root and not be writable by group or others, hashes it, and prints the exact plan a future connection would carry out: the fixed argv (no shell), the environment policy, the source `jessevondoom/delphi`, the expected writes and network, the state found, and the confirmation phrase that exact plan will need. It runs nothing, not even `claude --version`, and writes nothing. Executing a connection is not available: it waits for a recorded proof against a real GitHub-sourced marketplace (spec 074 C2); until then use the commands `delphi mcp --print-config claude-code` prints. Exit codes: 0 ok · 1 the host CLI was not found or is unsafe · 2 usage.
+Spec 074 C1 and C2. `--status` is read-only (no TTY needed): it prints where Claude Code stands (`configured`, `missing`, `stale`, `incompatible`, `unknown`), the launch-path line and the next action. `--dry-run` finds the `claude` CLI only in fixed directories (~/.local/bin, ~/.claude/local, /opt/homebrew/bin, /usr/local/bin, /usr/bin; never your PATH), resolves it, requires every path component to belong to you or root and not be writable by group or others, hashes it, and prints the exact plan a future connection would carry out: the fixed argv (no shell), the environment policy, the source `jessevondoom/delphi`, the expected writes and network, the state found, and the confirmation phrase that exact plan will need. It runs nothing, not even `claude --version`, and writes nothing. Bare `delphi connect claude-code` needs a terminal on stdin and stdout, is refused inside an agent seat, shows the same plan on /dev/tty and runs only after you enter the exact phrase bound to that plan (pasting is fine). It runs `claude plugin marketplace add jessevondoom/delphi` then `claude plugin install delphi@delphi` as fixed argv with no shell, a safe PATH, HOME, LANG, LC_*, TERM and a private TMPDIR, and rechecks the executable's digest before each exec. It refuses if anything of Delphi's is already present. The source is a GitHub repository whose releases Claude Code tracks; nothing is pinned. After a verified success it records what it added (<home>/operator/connections.json, 0600) and appends an audit line; a partial result is reported with the manual cure and is never rolled back or recorded. `--remove` (same consent) runs `claude plugin uninstall delphi@delphi` and `claude plugin marketplace remove delphi` only while that record, the plugin and the marketplace source still match. It does not fix your PATH: see the launch-path line of `--status`. Same-user race between the digest check and exec is residual (spec 074 requirement 5). Exit codes: 0 ok · 1 the host CLI was not found or is unsafe, or the run failed or was partial · 2 usage, refusal or no consent.
 
 ### `delphi plugin`
 
