@@ -21,6 +21,9 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 pub const DEFAULT_API: &str = "https://api.github.com/repos/jessevondoom/delphi/releases";
+/// The same repository's release-asset API. A private repository's browser download URLs do not take a token, these do
+/// (`Accept: application/octet-stream`), so they are how assets are fetched from the project's own API (`specs/076` 3.2).
+pub const ORIGIN_ASSET_API: &str = "https://api.github.com/repos/jessevondoom/delphi/releases/assets/";
 /// Where the project's own release files are served from. Reading releases from the project's repository, an asset anywhere else is
 /// not one of its releases and is ignored: an installation comes from the originating repository or from a mirror the operator
 /// named (`DELPHI_RELEASES_URL`), never from a link a response happens to contain (`specs/036` section 7).
@@ -29,7 +32,40 @@ pub const ORIGIN_DOWNLOADS: &str = "https://github.com/jessevondoom/delphi/relea
 /// May a release asset at `url` be used when the releases were read from `api`? From the project's own API only its own downloads;
 /// from a mirror the operator chose, whatever the mirror says (the operator named it, and `main.rs` says so every time).
 fn in_origin(api: &str, url: &str) -> bool {
-    api.trim_end_matches('/') != DEFAULT_API || url.starts_with(ORIGIN_DOWNLOADS)
+    api.trim_end_matches('/') != DEFAULT_API || url.starts_with(ORIGIN_DOWNLOADS) || url.starts_with(ORIGIN_ASSET_API)
+}
+
+/// The token for GitHub's API: `GH_TOKEN`, then `GITHUB_TOKEN`, then `gh auth token`; none for a public repository.
+/// Looked up once, never printed, written or logged (`specs/076` section 2).
+fn github_token() -> Option<String> {
+    static TOKEN: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    TOKEN
+        .get_or_init(|| {
+            let env = |k: &str| std::env::var(k).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+            env("GH_TOKEN").or_else(|| env("GITHUB_TOKEN")).or_else(|| {
+                let out = std::process::Command::new("gh").args(["auth", "token"]).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output().ok()?;
+                let t = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                (out.status.success() && !t.is_empty()).then_some(t)
+            })
+        })
+        .clone()
+}
+
+/// Only GitHub's own API gets a token: not a mirror the operator named, and not the storage host an asset redirects to.
+fn takes_token(url: &str) -> bool {
+    url.starts_with("https://api.github.com/")
+}
+
+/// What to tell the operator when GitHub's API refuses a request (`specs/076` section 5). Never includes the token.
+fn refusal_hint(url: &str, status: u16, had_token: bool) -> &'static str {
+    if !takes_token(url) {
+        return "";
+    }
+    match (status, had_token) {
+        (401 | 404, false) => "; if the repository is private, run `gh auth login` (or set GH_TOKEN) and try again",
+        (401 | 403 | 404, true) => "; if the repository is in an organization with SAML single sign-on, authorize the token for it",
+        _ => "",
+    }
 }
 
 /// The maximum size allowed for a downloaded release tarball (specs/006 §4). Release tarballs package both
@@ -87,6 +123,14 @@ impl Release {
     }
 }
 
+/// Where to fetch one asset: from the project's own API its asset-API URL (which a token works on), otherwise the browser
+/// URL; either way only if it passes the origin rule.
+fn asset_url(a: &serde_json::Value, api: &str) -> Option<String> {
+    let own = a["url"].as_str().filter(|u| u.starts_with(ORIGIN_ASSET_API));
+    let url = own.or_else(|| a["browser_download_url"].as_str())?;
+    in_origin(api, url).then(|| url.to_string())
+}
+
 fn releases_from(body: &[u8], api: &str) -> Result<Vec<Release>> {
     let v: serde_json::Value = serde_json::from_slice(body).context("the releases answer is not JSON")?;
     let list = if v.is_array() { v } else { serde_json::Value::Array(vec![v]) };
@@ -99,7 +143,7 @@ fn releases_from(body: &[u8], api: &str) -> Result<Vec<Release>> {
             Some(Release {
                 tag: r["tag_name"].as_str()?.to_string(),
                 prerelease: r["prerelease"] == true,
-                assets: r["assets"].as_array()?.iter().filter_map(|a| Some((a["name"].as_str()?.to_string(), a["browser_download_url"].as_str()?.to_string()))).filter(|(_, url)| in_origin(api, url)).collect(),
+                assets: r["assets"].as_array()?.iter().filter_map(|a| Some((a["name"].as_str()?.to_string(), asset_url(a, api)?))).collect(),
             })
         })
         .collect())
@@ -298,9 +342,17 @@ impl Net for RealNet {
             return Err("refusing a download that is not over https".into());
         }
         rt.block_on(async {
-            let mut resp = client.get(url).header("accept", "application/octet-stream, application/vnd.github+json").send().await.map_err(|e| e.without_url().to_string())?;
+            let mut req = client.get(url).header("accept", "application/octet-stream, application/vnd.github+json");
+            let token = if takes_token(url) { github_token() } else { None };
+            if let Some(t) = &token {
+                // reqwest drops sensitive headers when a redirect leaves the host, so the storage host never sees it.
+                let mut v = delphi_adapter::reqwest::header::HeaderValue::from_str(&format!("Bearer {t}")).map_err(|_| "the GitHub token is not a valid header value".to_string())?;
+                v.set_sensitive(true);
+                req = req.header("authorization", v);
+            }
+            let mut resp = req.send().await.map_err(|e| e.without_url().to_string())?;
             if !resp.status().is_success() {
-                return Err(format!("HTTP {}", resp.status().as_u16()));
+                return Err(format!("HTTP {}{}", resp.status().as_u16(), refusal_hint(url, resp.status().as_u16(), token.is_some())));
             }
             let mut out = Vec::new();
             while let Some(chunk) = resp.chunk().await.map_err(|e| e.without_url().to_string())? {
@@ -410,6 +462,36 @@ mod tests {
 
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn the_project_repository_is_named_the_same_in_the_updater_and_the_installer() {
+        let repo = include_str!("../../../install.sh").lines().find_map(|l| l.strip_prefix("REPO=\"")?.strip_suffix('"')).expect("install.sh names REPO");
+        for url in [DEFAULT_API, ORIGIN_DOWNLOADS, ORIGIN_ASSET_API] {
+            assert!(url.contains(&format!("/{repo}/")), "{url} is not for {repo}");
+        }
+    }
+
+    #[test]
+    fn from_the_projects_own_api_assets_come_by_their_api_url_so_a_token_works_on_a_private_repository() {
+        let own = format!("{ORIGIN_ASSET_API}42");
+        let body = format!("[{{\"tag_name\":\"v9.9.9\",\"prerelease\":false,\"assets\":[{{\"name\":\"a.tar.gz\",\"url\":\"{own}\",\"browser_download_url\":\"{ORIGIN_DOWNLOADS}v9.9.9/a.tar.gz\"}},{{\"name\":\"b.tar.gz\",\"url\":\"https://evil.example/assets/1\",\"browser_download_url\":\"{ORIGIN_DOWNLOADS}v9.9.9/b.tar.gz\"}},{{\"name\":\"c.tar.gz\",\"url\":\"https://api.github.com/repos/someone-else/delphi/releases/assets/7\"}}]}}]");
+        let rel = &releases_from(body.as_bytes(), DEFAULT_API).unwrap()[0];
+        assert_eq!(rel.asset("a.tar.gz"), Some(own.as_str()));
+        assert_eq!(rel.asset("b.tar.gz"), Some(format!("{ORIGIN_DOWNLOADS}v9.9.9/b.tar.gz").as_str()), "a foreign api url is ignored, the browser url is used");
+        assert_eq!(rel.asset("c.tar.gz"), None, "an asset with no url from the project is dropped");
+    }
+
+    #[test]
+    fn only_githubs_api_takes_a_token_and_a_refusal_says_what_to_do_without_naming_one() {
+        assert!(takes_token(DEFAULT_API) && takes_token(&format!("{ORIGIN_ASSET_API}1")));
+        for no in ["https://github.com/x", "https://mirror.example/releases", "https://api.github.com.evil.example/x", "http://api.github.com/x"] {
+            assert!(!takes_token(no), "{no}");
+        }
+        assert!(refusal_hint(DEFAULT_API, 404, false).contains("gh auth login"));
+        assert!(refusal_hint(DEFAULT_API, 404, true).contains("single sign-on"));
+        assert!(refusal_hint(DEFAULT_API, 500, true).is_empty());
+        assert!(refusal_hint("https://mirror.example/releases", 404, false).is_empty());
+    }
 
     struct Fake(BTreeMap<String, Vec<u8>>);
 

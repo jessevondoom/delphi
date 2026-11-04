@@ -26,7 +26,8 @@
       "type": "object",
       "properties": {
         "auto_spawn_narrator": { "type": "boolean" },
-        "frame_rate_hz": { "type": "integer", "minimum": 1 }
+        "frame_rate_hz": { "type": "integer", "minimum": 1 },
+        "hide_bibliographies": { "type": "boolean", "description": "When searching the knowledge base in the console, resolve to summary markdown pages instead of bibliography sidecars (specs/075). Default true." }
       }
     },
     "models": {

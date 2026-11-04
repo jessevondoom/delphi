@@ -21,6 +21,7 @@ name = "greek"                 # display names, window labels and persona voice 
 [tui]
 auto_spawn_narrator = false   # Set true for automatic dual-window on launch
 frame_rate_hz = 60
+hide_bibliographies = true    # true (default): KB searches in console resolve to summary .md pages, not .bib.md sidecars (specs/075)
 
 # Model tiers per family, and per-model limits and prices (specs/002 §4). The access path and
 # credentials for each family are [[endpoints]] (specs/009, below). Fill in current model IDs and prices.

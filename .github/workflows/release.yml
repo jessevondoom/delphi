@@ -185,6 +185,8 @@ jobs:
           pattern: "*-*-*"
           merge-multiple: true
       - name: Attest build provenance
+        # A private repository on a plan without attestations cannot make one; install.sh then checks the release signature (specs/076).
+        continue-on-error: true
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: dist/*.tar.gz

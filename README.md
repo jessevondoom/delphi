@@ -70,10 +70,14 @@ Delphi is one Rust executable plus a full-screen console. There is no server to 
 ## Install
 
 ```sh
+gh release download --repo jessevondoom/delphi --pattern install.sh --output - | sh
+# a public repository also works without gh:
 curl -fsSL https://github.com/jessevondoom/delphi/releases/latest/download/install.sh | sh
-# or
+# Homebrew works only while the repository is public:
 brew tap jessevondoom/delphi https://github.com/jessevondoom/delphi && brew install delphi
 ```
+
+While the repository is private, the installer and `delphi update` read it with your GitHub credentials (`gh auth login`, or `GH_TOKEN`; authorize the token for an organization with single sign-on). Where the repository has no build attestations, the installer checks the maintainers' release signature the build carries instead ([`specs/076`](specs/076-private-repo-distribution.md)).
 
 macOS (Apple silicon and Intel) and Linux (x86_64 and aarch64). The installer puts `delphi` and `delphi-ui` in `~/.local/bin` (`--dir`, `DELPHI_INSTALL_DIR`), checks the download against its SHA-256 and the release's GitHub build attestation, and therefore needs the `gh` CLI signed in; without it the install stops unless `DELPHI_SKIP_ATTESTATION=1` accepts the checksum alone. `--version vX.Y.Z` installs a specific release; `--no-setup` skips the offer to run `delphi setup`.
 

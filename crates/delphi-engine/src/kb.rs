@@ -1338,6 +1338,18 @@ pub struct SearchOpts {
     pub xenia: XeniaView,
     /// Only documents in these zones (`specs/064` §5). Narrows, never widens; `None` is every zone the other rules allow.
     pub zones: Option<Vec<&'static str>>,
+    /// How to present summary results: as the .bib.md sidecar (default), as the .md summary page, or both (`specs/075`).
+    pub summary_target: SummaryTarget,
+}
+
+/// How summary hits are answered. Spec 068 defaults to Bibliography for agent safety;
+/// Spec 075 allows human CLI and TUI interfaces to target SummaryPage to view the full markdown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SummaryTarget {
+    #[default]
+    Bibliography,
+    SummaryPage,
+    Both,
 }
 
 /// The three ways to see the Xenia zone. The default sees none of it, so every ordinary search, listing and read is
@@ -1374,7 +1386,7 @@ pub enum Legs {
 
 impl Default for SearchOpts {
     fn default() -> Self {
-        SearchOpts { role: None, limit: 10, include_untrusted: false, include_attributed: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false, include_episodes: false, about: false, kinds: None, max_episodes: None, today: None, xenia: XeniaView::Off, zones: None }
+        SearchOpts { role: None, limit: 10, include_untrusted: false, include_attributed: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false, include_episodes: false, about: false, kinds: None, max_episodes: None, today: None, xenia: XeniaView::Off, zones: None, summary_target: SummaryTarget::Bibliography }
     }
 }
 
@@ -1575,14 +1587,45 @@ impl Kb {
             }
             let row = self.conn.query_row("SELECT c.rel_path, c.start_line, c.end_line, c.heading_path, c.raw_content, d.content_blake3, d.zone, d.source_type, d.status, d.web_corroborated FROM kb_chunks c JOIN kb_documents d ON d.doc_id = c.doc_id WHERE c.chunk_id = ?1", [id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?, r.get::<_, String>(7)?, r.get::<_, String>(8)?, r.get::<_, i64>(9)? != 0)));
             let Ok((rel_path, a, b, heading_path, raw, blake3, zone, tier_name, doc_status, web_corroborated)) = row else { continue };
-            // A hit on an imported page's body is answered with its bibliography: the page is found by what it says, but a reader
-            // gets metadata, not prose (`specs/068` §6.7). A page with no bibliography file is not returned.
-            let (rel_path, a, b, heading_path, raw, blake3) = if zone == "summaries" && !rel_path.ends_with(".bib.md") {
-                let sib = format!("{}.bib.md", rel_path.trim_end_matches(".md"));
-                let got = self.conn.query_row("SELECT c.rel_path, c.start_line, c.end_line, c.heading_path, c.raw_content, d.content_blake3 FROM kb_chunks c JOIN kb_documents d ON d.doc_id = c.doc_id WHERE c.rel_path = ?1 ORDER BY c.chunk_id LIMIT 1", [&sib], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?)));
-                match got {
-                    Ok(t) => t,
-                    Err(_) => continue,
+            // For imported summary pages, presentation depends on `opts.summary_target` (`specs/068` §6.7, `specs/075`):
+            // - `Bibliography` (default): hits on an imported page's body are answered with its .bib.md sidecar metadata.
+            // - `SummaryPage`: hits answer with the summary .md page and prose, suppressing .bib.md.
+            // - `Both`: direct matches on either are returned without substitution.
+            let (rel_path, a, b, heading_path, raw, blake3) = if zone == "summaries" {
+                match opts.summary_target {
+                    SummaryTarget::Bibliography => {
+                        if !rel_path.ends_with(".bib.md") {
+                            let sib = format!("{}.bib.md", rel_path.trim_end_matches(".md"));
+                            let got = self.conn.query_row(
+                                "SELECT c.rel_path, c.start_line, c.end_line, c.heading_path, c.raw_content, d.content_blake3 FROM kb_chunks c JOIN kb_documents d ON d.doc_id = c.doc_id WHERE c.rel_path = ?1 ORDER BY c.chunk_id LIMIT 1",
+                                [&sib],
+                                |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?)),
+                            );
+                            match got {
+                                Ok(t) => t,
+                                Err(_) => continue,
+                            }
+                        } else {
+                            (rel_path, a, b, heading_path, raw, blake3)
+                        }
+                    }
+                    SummaryTarget::SummaryPage => {
+                        if rel_path.ends_with(".bib.md") {
+                            let sib = format!("{}.md", rel_path.trim_end_matches(".bib.md"));
+                            let got = self.conn.query_row(
+                                "SELECT c.rel_path, c.start_line, c.end_line, c.heading_path, c.raw_content, d.content_blake3 FROM kb_chunks c JOIN kb_documents d ON d.doc_id = c.doc_id WHERE c.rel_path = ?1 ORDER BY c.chunk_id LIMIT 1",
+                                [&sib],
+                                |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?)),
+                            );
+                            match got {
+                                Ok(t) => t,
+                                Err(_) => continue,
+                            }
+                        } else {
+                            (rel_path, a, b, heading_path, raw, blake3)
+                        }
+                    }
+                    SummaryTarget::Both => (rel_path, a, b, heading_path, raw, blake3),
                 }
             } else {
                 (rel_path, a, b, heading_path, raw, blake3)
@@ -1600,7 +1643,15 @@ impl Kb {
                     .entry(bundle.clone())
                     .or_insert_with(|| self.bundle_vector_counts(&bundle).ok().filter(|(done, total)| done < total).map(|(done, total)| format!("(lexical only: vectors {}% ready)", done * 100 / total)))
                     .clone(),
-                None if zone == "summaries" => summary_dates_note(&raw, &crate::kb_import::today()),
+                None if zone == "summaries" => {
+                    let dates_text = if rel_path.ends_with(".bib.md") {
+                        raw.clone()
+                    } else {
+                        let sib = format!("{}.bib.md", rel_path.trim_end_matches(".md"));
+                        self.conn.query_row("SELECT c.raw_content FROM kb_chunks c WHERE c.rel_path = ?1 ORDER BY c.chunk_id LIMIT 1", [&sib], |r| r.get::<_, String>(0)).unwrap_or_else(|_| raw.clone())
+                    };
+                    summary_dates_note(&dates_text, &crate::kb_import::today())
+                }
                 None => None,
             };
             let vouched_by = vouched.iter().find(|(p, _)| rel_path == *p || (p.ends_with('/') && rel_path.starts_with(p.as_str()))).map(|(_, o)| o.clone());
@@ -2491,7 +2542,7 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                 let bundle = args.iter().position(|a| a == "--bundle" || a == "--org").and_then(|i| args.get(i + 1)).cloned();
                 let query: Vec<&str> = query.into_iter().filter(|a| Some(*a) != role.as_deref() && Some(*a) != bundle.as_deref()).collect();
                 if query.is_empty() {
-                    eprintln!("usage: delphi kb search <query> [--role <role>] [--untrusted] [--lexical] [--no-rerank] [--about] [--staged [--kind fact|episode]] [--bundle <org/name> | --org <org> | --no-bundles]");
+                    eprintln!("usage: delphi kb search <query> [--role <role>] [--untrusted] [--lexical] [--no-rerank] [--about] [--staged [--kind fact|episode]] [--bundle <org/name> | --org <org> | --no-bundles] [--summaries|--bibs]");
                     return Ok(2);
                 }
                 let mut kb = open()?;
@@ -2506,7 +2557,14 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                     }
                 }
                 let legs = if args.iter().any(|a| a == "--lexical") { Legs::LexicalOnly } else { Legs::Hybrid };
-                let mut opts = SearchOpts { role, include_untrusted: args.iter().any(|a| a == "--untrusted" || a == "--all"), legs, bundle, no_bundles: args.iter().any(|a| a == "--no-bundles"), include_staged: args.iter().any(|a| a == "--staged"), include_episodes: args.iter().any(|a| a == "--episodes"), about: args.iter().any(|a| a == "--about"), kinds: flag_value(args, "--kind").map(|k| k.split(',').map(|x| x.trim().to_string()).collect()), ..Default::default() };
+                let summary_target = if args.iter().any(|a| a == "--bibs" || a == "--bibliographies") {
+                    SummaryTarget::Bibliography
+                } else if args.iter().any(|a| a == "--both") {
+                    SummaryTarget::Both
+                } else {
+                    SummaryTarget::SummaryPage
+                };
+                let mut opts = SearchOpts { role, include_untrusted: args.iter().any(|a| a == "--untrusted" || a == "--all"), legs, bundle, no_bundles: args.iter().any(|a| a == "--no-bundles"), include_staged: args.iter().any(|a| a == "--staged"), include_episodes: args.iter().any(|a| a == "--episodes"), about: args.iter().any(|a| a == "--about"), kinds: flag_value(args, "--kind").map(|k| k.split(',').map(|x| x.trim().to_string()).collect()), summary_target, ..Default::default() };
                 if args.iter().any(|a| a == "--no-rerank") {
                     opts.rerank_weight = 0.0;
                 }
@@ -3791,6 +3849,23 @@ Set CARGO_TARGET_DIR inside isolated worktree and run with offline flag.
         let q = kb.search("quokka", &SearchOpts::default()).unwrap();
         assert!(q.is_empty(), "{:?}", q.iter().map(|h| h.rel_path.clone()).collect::<Vec<_>>());
         assert_eq!(kb.search("quokka", &SearchOpts { include_untrusted: true, ..Default::default() }).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn imported_pages_can_be_answered_with_the_summary_page_when_requested() {
+        let d = tempfile::tempdir().unwrap();
+        let ws = d.path();
+        let mut kb = Kb::open_in_memory().unwrap();
+        kb.upsert("context/facts/keys.md", "context", "---\nsource_type: user_ratified\n---\n# Keys\n\nKeys are rotated.\n", "t").unwrap();
+        let r = crate::kb_import::import(ws, &crate::kb_import::Input { text: "# Linked page\n\nThe zebra procedure is described in [keys](context/facts/keys.md). Source: https://wiki.example.com/z\n", name_hint: "n.md", modified_secs: None, now_secs: 1_800_000_000, keep_id: None }, &|t| kb.resolve_link(t)).unwrap();
+        for (p, f) in [(r.page.clone(), format!("summaries/{}.md", r.id)), (r.bibliography.clone(), format!("summaries/{}.bib.md", r.id))] {
+            kb.upsert(&f, "summaries", &std::fs::read_to_string(p).unwrap(), "t").unwrap();
+        }
+        let opts = SearchOpts { summary_target: SummaryTarget::SummaryPage, ..Default::default() };
+        let found = kb.search("zebra procedure", &opts).unwrap();
+        assert_eq!(found.len(), 1);
+        assert!(found[0].rel_path.ends_with(".md") && !found[0].rel_path.ends_with(".bib.md"), "{}", found[0].rel_path);
+        assert!(found[0].preview.contains("zebra procedure is described"), "summary prose in result: {}", found[0].preview);
     }
 
     #[test]

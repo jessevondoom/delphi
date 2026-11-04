@@ -540,7 +540,7 @@ fn kb_search(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
     if !db.is_file() {
         return ToolResult::ok("the knowledge base has no index yet".to_string());
     }
-    let opts = crate::kb::SearchOpts { role: Some(ctx.role.to_string()), limit, about: args.get("about").and_then(|v| v.as_bool()).unwrap_or(false), ..Default::default() };
+    let opts = crate::kb::SearchOpts { role: Some(ctx.role.to_string()), limit, about: args.get("about").and_then(|v| v.as_bool()).unwrap_or(false), summary_target: crate::kb::SummaryTarget::Bibliography, ..Default::default() };
     let home = crate::hostmap::home_of_local(&ctx.guard.zones.local).map(std::path::Path::to_path_buf).unwrap_or_default();
     let hits = match crate::retrieval::search(&home, &db, query, opts) {
         Ok(r) => r.hits,
