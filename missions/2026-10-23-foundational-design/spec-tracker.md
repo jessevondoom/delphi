@@ -549,3 +549,35 @@ Approved by the operator on 2026-11-03. Keeps the spec gate for software, exempt
 | PL1 | path classifier, fail-closed (`delphi-core/src/artifact.rs`) | built (this PR) |
 | PL2 | prompt-log writer, hash chain, redaction (`artifact.rs`); schema and write-path wiring | built (this PR) |
 | PL3 | GOVERNANCE §1.3 and matching text, by ratified proposal | docs, MCP rule text and invariant row built (this PR); §1.3 and `agents/builder/AGENT.md` ratified by the operator 2026-11-03 |
+
+## Host plugin marketplace and Claude plugin distribution (spec 071, draft)
+
+Draft, 2026-11-03, amended after three Council rounds (all three seats APPROVE-WITH-AMENDMENTS in the last; dissents recorded in §12). Approves only E1a, E1, E2 when ratified. Awaiting the operator. Nothing is built.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| E0 | spec 071 approval | draft, awaiting the operator |
+| E1a | `delphi mcp --print-config <host> --absolute` and guide text | not started |
+| E1 | `delphi docs ecosystem --check/--write`, `ecosystem/claude-code/`, root marketplace manifest, release-tag update channel with protected tags (D-5B), drift tests, CODEOWNERS | not started |
+| E1b | `install.sh` and `delphi init` next-step hint (text only) | not started |
+| E1s | stable executable path (spec-006 amendment first) | not started |
+| E2 | `delphi mcp --check claude-code`, one `delphi doctor` line (gated on Q-8) | not started |
+| E3 | installer and `delphi connect` | deferred to a Red-tier successor spec |
+| E4a | Copilot directory, next after E1 (operator priority), after its recorded proof (Q-1) | not started |
+| E4b-c | Gemini CLI and Codex directories, each after a recorded proof (Q-1) | not started |
+| E4d | Antigravity | blocked on official documentation |
+| E5 | launcher | rejected |
+
+## Host cognitive parity and external orchestration (spec 072, approved 2026-11-03)
+
+Approved by the operator on 2026-11-03 following Council deliberation (`council-2026-11-03-external-harness-parity`) on external harness cognitive parity. Establishes the `via delphi` attribution format, `orchestrator` guidance (`consult_orchestrator`, `spawn_agent_pack`), internal KB RAG retrieval (`kb_retrieve`), full scoped memory queries (`query_memory`), suggested scaffolding (`scaffold_status`), and the host-federated Council protocol (`propose_council_record`).
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| S0 | spec 072 approval and tracker entry | built (this PR) |
+| S1 | Identity update (`via delphi`) and `scaffold_status` | built (this PR) |
+| S2 | Full scoped memory query surface (`query_memory`) | built (this PR) |
+| S3 | Knowledge RAG retrieval (`kb_retrieve`) | built (this PR) |
+| S4 | Orchestrator guidance & dynamic role packs (`consult_orchestrator`, `spawn_agent_pack`) | built (this PR) |
+| S5 | Federated Council protocol and staging (`propose_council_record`) | built (this PR) |
+

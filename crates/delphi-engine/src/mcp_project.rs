@@ -184,6 +184,38 @@ impl Project {
         .to_string())
     }
 
+    /// Check whether the working directory is an initialized and registered Delphi project (`specs/072` §7).
+    /// Never writes to disk.
+    pub fn scaffold_status(&self, cwd: &Path) -> Result<String, String> {
+        let is_registered = self.active.project.is_some() && self.root.is_some();
+        let marker = cwd.join(".delphi-project");
+        let has_marker = marker.is_file();
+        let is_initialized = is_registered && has_marker;
+        let preview = vec![
+            ".delphi-project",
+            "_index.md",
+            "specs/",
+            "plans/",
+            "context/",
+            "research/",
+            "work/",
+        ];
+        let guidance = if is_initialized {
+            format!("This directory is an initialized Delphi project ({}).", self.describe())
+        } else {
+            "This directory is not an initialized Delphi project. You can recommend the operator run 'delphi project init' to create the standard spec-first folder structure, or continue working in ad-hoc mode.".to_string()
+        };
+        Ok(json!({
+            "initialized": is_initialized,
+            "registered": is_registered,
+            "working_directory": cwd.display().to_string(),
+            "scaffold_recommended": !is_initialized,
+            "suggested_command": "delphi project init",
+            "preview_paths": preview,
+            "guidance": guidance,
+        }).to_string())
+    }
+
     /// Paths the knowledge base ranks for `query`, best first, read from `state.db` without writing anything. Empty when there is
     /// no index, no installed model whose vectors the index holds, or nothing near: the keyword ranking then stands alone.
     fn semantic_order(&self, query: &str) -> Vec<String> {
@@ -243,6 +275,292 @@ impl Project {
             .map(|s| Doc { layer: s.layer, path: s.file.rel_path, source: s.file.default_source, file: s.file.path })
             .collect();
         Ok(json!({"project": self.describe(), "role": role, "results": rank(docs, query, limit, &self.semantic_order(query))}).to_string())
+    }
+
+    /// The active project ID, if inside a registered project.
+    pub fn active_project_id(&self) -> Option<String> {
+        self.active.project.as_ref().map(|id| id.as_str().to_string())
+    }
+
+    /// The workspace directory this project belongs to.
+    pub fn ws_dir(&self) -> &Path {
+        &self.ws_dir
+    }
+
+    /// Explore the full graph of Delphi agent memories, lessons, heuristics, decisions and reflections (`specs/072` §6).
+    pub fn query_memory(&self, query: &str, role: Option<&str>, facet: Option<&str>, limit: usize) -> Result<String, String> {
+        if let Some(r) = role {
+            if !valid_role(r) {
+                return Err("invalid arguments: `role` is a role ID such as `architect`".into());
+            }
+        }
+        let facet_filter = facet.unwrap_or("all");
+        let valid_facets = ["all", "lessons", "heuristics", "decisions", "reflections"];
+        if !valid_facets.contains(&facet_filter) {
+            return Err(format!(
+                "invalid arguments: `facet` must be one of: {}",
+                valid_facets.join(", ")
+            ));
+        }
+
+        let mut docs: Vec<Doc> = Vec::new();
+        for s in scope::layered_sources(&self.ws_dir, &self.active) {
+            let rel = &s.file.rel_path;
+            let is_lesson = s.file.zone == "memory" && memory_allowed(rel, role);
+            let is_heuristic = rel.ends_with("heuristics.md") || rel.contains("heuristics");
+            let is_decision = rel.contains("decision") || rel.contains("council");
+            let is_reflection = rel.contains("reflection") || rel.contains("retro") || rel.contains("summary");
+
+            let matches = match facet_filter {
+                "lessons" => is_lesson,
+                "heuristics" => is_heuristic,
+                "decisions" => is_decision,
+                "reflections" => is_reflection,
+                "all" => is_lesson || is_heuristic || is_decision || is_reflection,
+                _ => false,
+            };
+            if matches {
+                docs.push(Doc {
+                    layer: s.layer,
+                    path: s.file.rel_path,
+                    source: s.file.default_source,
+                    file: s.file.path,
+                });
+            }
+        }
+
+        if let Some(_root) = &self.root {
+            for (rel, file) in self.files() {
+                let is_decision = rel.starts_with("plans/") || rel.contains("decision") || rel.contains("council");
+                let is_reflection = rel.contains("reflection") || rel.contains("retro");
+                let matches = match facet_filter {
+                    "decisions" => is_decision,
+                    "reflections" => is_reflection,
+                    "all" => is_decision || is_reflection,
+                    _ => false,
+                };
+                if matches && !docs.iter().any(|d| d.path == rel) {
+                    docs.push(Doc {
+                        layer: "project".into(),
+                        path: rel,
+                        source: UNTRUSTED,
+                        file,
+                    });
+                }
+            }
+        }
+
+        let ranked = rank(docs, query, limit, &self.semantic_order(query));
+        let hits: Vec<Value> = ranked.into_iter().map(|mut h| {
+            if let Some(path) = h.get("path").and_then(Value::as_str) {
+                let facet = if path.ends_with("heuristics.md") || path.contains("heuristics") {
+                    "heuristics"
+                } else if path.contains("decision") || path.contains("council") || path.starts_with("plans/") {
+                    "decisions"
+                } else if path.contains("reflection") || path.contains("retro") || path.contains("summary") {
+                    "reflections"
+                } else {
+                    "lessons"
+                };
+                h["facet"] = json!(facet);
+            }
+            h
+        }).collect();
+
+        Ok(json!({
+            "project": self.describe(),
+            "facet": facet_filter,
+            "role": role,
+            "results": hits
+        }).to_string())
+    }
+
+    /// Retrieve chunked passages, sourced claims, and verified specifications from Delphi's knowledge base and project context (`specs/072` §5).
+    pub fn kb_retrieve(&self, query: &str, limit: usize, status_filter: &str, scope: &str) -> Result<String, String> {
+        if query.trim().is_empty() || query.chars().count() > MAX_QUERY {
+            return Err(format!("invalid arguments: `query` must be between 1 and {} characters", MAX_QUERY));
+        }
+        let valid_filters = ["all", "validated_only", "propositions_included"];
+        if !valid_filters.contains(&status_filter) {
+            return Err(format!(
+                "invalid arguments: `status_filter` must be one of: {}",
+                valid_filters.join(", ")
+            ));
+        }
+        let valid_scopes = ["all", "project_only", "core_only"];
+        if !valid_scopes.contains(&scope) {
+            return Err(format!(
+                "invalid arguments: `scope` must be one of: {}",
+                valid_scopes.join(", ")
+            ));
+        }
+        let limit = limit.clamp(1, MAX_LIMIT);
+        let ws = words(query);
+        if ws.is_empty() {
+            return Ok("No matching knowledge base passages found.".to_string());
+        }
+
+        struct Candidate {
+            chunk_id: String,
+            status: &'static str,
+            source: String,
+            confidence: &'static str,
+            passage: String,
+            score: f64,
+        }
+
+        let mut candidates: Vec<Candidate> = Vec::new();
+        let mut seen_sources = std::collections::HashSet::new();
+
+        // 1. Core KB chunks if scope is "all" or "core_only"
+        if scope == "all" || scope == "core_only" {
+            let db = self.ws_dir.join("local/state.db");
+            if let Ok(kb) = crate::kb::Kb::open(&db) {
+                let opts = crate::kb::SearchOpts {
+                    limit: limit * 2,
+                    include_untrusted: true,
+                    include_attributed: true,
+                    zones: Some(vec!["core", "specs", "context", "knowledge", "library", "bundles"]),
+                    ..Default::default()
+                };
+                if let Ok(hits) = kb.search(query, &opts) {
+                    for h in hits {
+                        let status_str = match h.status {
+                            "validated" => "validated",
+                            "checking" => "checking",
+                            "contested" => "contested",
+                            _ => "noted",
+                        };
+                        let filter_match = match status_filter {
+                            "validated_only" => status_str == "validated",
+                            "propositions_included" => matches!(status_str, "validated" | "checking" | "noted" | "contested"),
+                            "all" => true,
+                            _ => false,
+                        };
+                        if !filter_match {
+                            continue;
+                        }
+
+                        let (chunk_id_num, raw_content) = match kb.chunk_content(&h.rel_path, h.start_line) {
+                            Some((id, content)) => (id, content),
+                            None => {
+                                let path = self.ws_dir.join(&h.rel_path);
+                                if let Some(text) = read_capped(&path) {
+                                    let lines: Vec<&str> = text.lines().collect();
+                                    if h.start_line >= 1 && h.start_line <= lines.len() && h.end_line <= lines.len() && h.start_line <= h.end_line {
+                                        (h.start_line as i64, lines[h.start_line - 1..h.end_line].join("\n"))
+                                    } else {
+                                        (h.start_line as i64, h.preview.clone())
+                                    }
+                                } else {
+                                    (h.start_line as i64, h.preview.clone())
+                                }
+                            }
+                        };
+
+                        let confidence = match status_str {
+                            "validated" => "high",
+                            "checking" => "medium",
+                            _ => "low",
+                        };
+                        let source = h.pointer.clone();
+                        if seen_sources.insert(source.clone()) {
+                            candidates.push(Candidate {
+                                chunk_id: format!("CHK-{}", chunk_id_num),
+                                status: status_str,
+                                source,
+                                confidence,
+                                passage: raw_content.trim().to_string(),
+                                score: h.score,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Project chunks if scope is "all" or "project_only"
+        if scope == "all" || scope == "project_only" {
+            let order = self.semantic_order(query);
+            for (rel, file) in self.files() {
+                let Some(text) = read_capped(&file) else { continue };
+                let (fm, _) = split_frontmatter(&text);
+                let fm_status = fm.as_ref().and_then(|f| f.get("status")).and_then(|v| v.as_str()).unwrap_or("");
+                let status_str = if rel.starts_with("specs/") {
+                    if fm_status == "approved" {
+                        "validated"
+                    } else if fm_status == "draft" {
+                        "noted"
+                    } else if matches!(fm_status, "retired" | "superseded") {
+                        "retired"
+                    } else {
+                        "noted"
+                    }
+                } else {
+                    "noted"
+                };
+
+                let filter_match = match status_filter {
+                    "validated_only" => status_str == "validated",
+                    "propositions_included" => matches!(status_str, "validated" | "checking" | "noted" | "contested"),
+                    "all" => true,
+                    _ => false,
+                };
+                if !filter_match {
+                    continue;
+                }
+
+                let lead = order.iter().position(|p| *p == rel).map_or(0, |i| order.len() - i);
+                let chunks = crate::kb::chunk_markdown(&text);
+                for c in chunks {
+                    let lower = c.raw.to_lowercase();
+                    let distinct = ws.iter().filter(|w| lower.contains(w.as_str())).count();
+                    if distinct == 0 && lead == 0 {
+                        continue;
+                    }
+                    let total: usize = ws.iter().map(|w| lower.matches(w.as_str()).count().min(50)).sum();
+                    let score = (lead as f64 * 20.0) + (distinct as f64 * 10.0) + (total as f64);
+                    let confidence = match status_str {
+                        "validated" => "high",
+                        "checking" => "medium",
+                        _ => "low",
+                    };
+                    let source = format!("{}#L{}-L{}", rel, c.start_line, c.end_line);
+                    if seen_sources.insert(source.clone()) {
+                        let hash = blake3::hash(format!("{}:{}:{}", rel, c.start_line, c.end_line).as_bytes());
+                        let chunk_num = (u16::from_be_bytes([hash.as_bytes()[0], hash.as_bytes()[1]]) as usize % 900) + 100;
+                        candidates.push(Candidate {
+                            chunk_id: format!("CHK-{}", chunk_num),
+                            status: status_str,
+                            source,
+                            confidence,
+                            passage: c.raw.trim().to_string(),
+                            score,
+                        });
+                    }
+                }
+            }
+        }
+
+        if candidates.is_empty() {
+            return Ok("No matching knowledge base passages found.".to_string());
+        }
+
+        candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        candidates.truncate(limit);
+
+        let mut out = String::new();
+        for (i, c) in candidates.into_iter().enumerate() {
+            if i > 0 {
+                out.push_str("\n\n");
+            }
+            out.push_str(&format!(
+                "<!-- delphi:rag chunk_id=\"{}\" status=\"{}\" source=\"{}\" confidence=\"{}\" -->\n{}\n<!-- delphi:rag:end -->",
+                c.chunk_id, c.status, c.source, c.confidence, c.passage
+            ));
+        }
+
+        Ok(out)
     }
 }
 
@@ -389,5 +707,49 @@ mod tests {
         fs::write(other.join("lessons.md"), "other project quokka\n").unwrap();
         let hits = texts(&Project::new(&ws, &root).search_memory("quokka", Some("architect"), 10).unwrap());
         assert_eq!(hits.len(), 2, "{hits:?}");
+    }
+
+    #[test]
+    fn query_memory_respects_facets_and_tags_results() {
+        let (_t, ws, root) = fixture();
+        let p = Project::new(&ws, &root);
+        fs::create_dir_all(root.join("plans")).unwrap();
+        fs::write(root.join("plans/road.md"), "# Build plan\nDecision on quokka architecture\n").unwrap();
+
+        let all_res = p.query_memory("quokka", Some("architect"), Some("all"), 10).unwrap();
+        let all_val: Value = serde_json::from_str(&all_res).unwrap();
+        let hits = all_val["results"].as_array().unwrap();
+        assert!(hits.iter().any(|h| h["facet"] == "lessons"));
+        assert!(hits.iter().any(|h| h["facet"] == "decisions"));
+
+        let lessons_res = p.query_memory("quokka", Some("architect"), Some("lessons"), 10).unwrap();
+        let l_val: Value = serde_json::from_str(&lessons_res).unwrap();
+        assert!(l_val["results"].as_array().unwrap().iter().all(|h| h["facet"] == "lessons"));
+
+        let dec_res = p.query_memory("quokka", Some("architect"), Some("decisions"), 10).unwrap();
+        let d_val: Value = serde_json::from_str(&dec_res).unwrap();
+        assert!(d_val["results"].as_array().unwrap().iter().all(|h| h["facet"] == "decisions"));
+
+        assert!(p.query_memory("quokka", None, Some("invalid"), 10).is_err());
+    }
+
+    #[test]
+    fn kb_retrieve_returns_rag_annotated_passages_and_respects_filters() {
+        let (_t, ws, root) = fixture();
+        let p = Project::new(&ws, &root);
+
+        // Validated only: should return specs/001-a.md (status: approved) and NOT specs/002-b.md (status: draft)
+        let res = p.kb_retrieve("quokka", 5, "validated_only", "all").unwrap();
+        assert!(res.contains("<!-- delphi:rag chunk_id="), "missing opening tag: {}", res);
+        assert!(res.contains("status=\"validated\""), "expected status validated: {}", res);
+        assert!(res.contains("confidence=\"high\""), "expected confidence high: {}", res);
+        assert!(res.contains("the quokka procedure"), "expected passage content: {}", res);
+        assert!(res.contains("<!-- delphi:rag:end -->"), "missing closing tag: {}", res);
+        assert!(!res.contains("specs/002-b.md"), "draft spec should not appear in validated_only: {}", res);
+
+        // Invalid options fail cleanly
+        assert!(p.kb_retrieve("quokka", 5, "bogus_filter", "all").is_err());
+        assert!(p.kb_retrieve("quokka", 5, "all", "bogus_scope").is_err());
+        assert!(p.kb_retrieve("   ", 5, "all", "all").is_err());
     }
 }
