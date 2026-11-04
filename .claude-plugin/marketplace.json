@@ -1,0 +1,13 @@
+{
+  "name": "delphi",
+  "description": "Delphi for host agents: roles, project knowledge, Councils and memory over MCP",
+  "owner": { "name": "jessevondoom" },
+  "plugins": [
+    {
+      "name": "delphi",
+      "source": "./ecosystem/claude-code/delphi",
+      "description": "Delphi's roles, skills, project specs and memory, over MCP",
+      "version": "0.5.3"
+    }
+  ]
+}

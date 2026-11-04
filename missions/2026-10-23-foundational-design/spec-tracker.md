@@ -550,16 +550,16 @@ Approved by the operator on 2026-11-03. Keeps the spec gate for software, exempt
 | PL2 | prompt-log writer, hash chain, redaction (`artifact.rs`); schema and write-path wiring | built (this PR) |
 | PL3 | GOVERNANCE §1.3 and matching text, by ratified proposal | docs, MCP rule text and invariant row built (this PR); §1.3 and `agents/builder/AGENT.md` ratified by the operator 2026-11-03 |
 
-## Host plugin marketplace and Claude plugin distribution (spec 071, draft)
+## Host plugin marketplace and Claude plugin distribution (spec 071, approved for E1a, E1, E1b)
 
-Draft, 2026-11-03, amended after three Council rounds (all three seats APPROVE-WITH-AMENDMENTS in the last; dissents recorded in §12). Approves only E1a, E1, E2 when ratified. Awaiting the operator. Nothing is built.
+Approved by the operator 2026-11-04 after three Council rounds (all three seats APPROVE-WITH-AMENDMENTS in the last; dissents recorded in §12). Approves only E1a, E1, E1b and E2 (E2 gated on Q-8). Nothing is built.
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
-| E0 | spec 071 approval | draft, awaiting the operator |
-| E1a | `delphi mcp --print-config <host> --absolute` and guide text | not started |
-| E1 | `delphi docs ecosystem --check/--write`, `ecosystem/claude-code/`, root marketplace manifest, release-tag update channel with protected tags (D-5B), drift tests, CODEOWNERS | not started |
-| E1b | `install.sh` and `delphi init` next-step hint (text only) | not started |
+| E0 | spec 071 approval | approved by the operator 2026-11-04 (E1a, E1, E1b; E2 gated on Q-8) |
+| E1a | `delphi mcp --print-config <host> --absolute`, the Claude Code install hint, guide text | built (one branch with E1 and E1b; recorded host proofs Q-1/Q-3 not yet run) |
+| E1 | `delphi docs ecosystem --check/--write`, `ecosystem/claude-code/`, root marketplace manifest, release-tag update channel with protected tags (D-5B), drift tests, CODEOWNERS | built: generator, `ecosystem/claude-code/`, root marketplace, drift test, CODEOWNERS; no live `claude plugin install` proof yet |
+| E1b | `install.sh` and `delphi init` next-step hint (text only) | built |
 | E1s | stable executable path (spec-006 amendment first) | not started |
 | E2 | `delphi mcp --check claude-code`, one `delphi doctor` line (gated on Q-8) | not started |
 | E3 | installer and `delphi connect` | deferred to a Red-tier successor spec |

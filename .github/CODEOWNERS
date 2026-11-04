@@ -40,3 +40,8 @@
 /crates/delphi-engine/src/exec.rs           @jessevondoom
 /crates/delphi-engine/src/bridge.rs         @jessevondoom
 /crates/delphi-sandbox/                     @jessevondoom
+
+# What a host loads as a plugin: skill text that steers the host model, and the generator behind it (specs/071 section 4).
+/.claude-plugin/                            @jessevondoom
+/ecosystem/                                 @jessevondoom
+/crates/delphi-engine/src/mcp_hosts.rs      @jessevondoom

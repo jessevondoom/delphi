@@ -315,6 +315,30 @@ fn the_checked_in_reference_is_what_the_program_generates() {
 }
 
 #[test]
+fn the_plugin_and_marketplace_files_are_what_the_release_generates() {
+    let repo = root();
+    let out = Command::new(DELPHI).args(["docs", "ecosystem", "--check", "--repo", repo.to_str().unwrap()]).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let version = env!("CARGO_PKG_VERSION");
+    let manifest: Value = serde_json::from_str(&std::fs::read_to_string(repo.join(".claude-plugin/marketplace.json")).unwrap()).unwrap();
+    let plugin: Value = serde_json::from_str(&std::fs::read_to_string(repo.join("ecosystem/claude-code/delphi/.claude-plugin/plugin.json")).unwrap()).unwrap();
+    assert_eq!((manifest["plugins"][0]["version"].as_str(), plugin["version"].as_str()), (Some(version), Some(version)));
+    assert_eq!(manifest["plugins"][0]["name"], plugin["name"]);
+    assert!(repo.join(manifest["plugins"][0]["source"].as_str().unwrap()).join(".claude-plugin/plugin.json").exists());
+    assert!(!repo.join("delphi-plugin").exists(), "the stray one-off export is superseded by ecosystem/");
+
+    let scratch = tempfile::tempdir().unwrap();
+    let w = Command::new(DELPHI).args(["docs", "ecosystem", "--write", "--repo", scratch.path().to_str().unwrap()]).output().unwrap();
+    assert!(w.status.success());
+    for f in [".claude-plugin/marketplace.json", "ecosystem/README.md", "ecosystem/claude-code/delphi/.mcp.json", "ecosystem/claude-code/delphi/skills/delphi/SKILL.md"] {
+        assert_eq!(std::fs::read_to_string(scratch.path().join(f)).unwrap(), std::fs::read_to_string(repo.join(f)).unwrap(), "{f}");
+    }
+    std::fs::write(scratch.path().join("ecosystem/README.md"), "edited by hand").unwrap();
+    let c = Command::new(DELPHI).args(["docs", "ecosystem", "--check", "--repo", scratch.path().to_str().unwrap()]).output().unwrap();
+    assert!(!c.status.success(), "a hand edit must fail the check");
+}
+
+#[test]
 fn the_reference_lists_every_command_in_the_help() {
     let md = delphi(&["docs", "cli"]);
     for cmd in help_commands() {

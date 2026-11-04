@@ -3,7 +3,8 @@ id: spec-071-host-plugin-marketplace-and-durable-mcp-enablement
 title: "071: Host plugin marketplace and durable MCP enablement for Claude Code, Codex, Antigravity and Copilot"
 author: architect
 timestamp: 2026-11-03T22:50:00Z
-status: draft   # a proposal for a Council, then the operator. Nothing here is built until the status is `approved`.
+status: approved   # by the operator, 2026-11-04 ("yeah build as much as possible"), after three Council reviews: approves E1a, E1, E1b only. E2 stays gated on Q-8; E1s, E3, E4 and E5 are not approved (§10).
+approved_by: operator (2026-11-04)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +15,7 @@ tags: [spec, mcp, host-agents, plugins, marketplace, claude-code, copilot, codex
 
 # Spec 071: Host plugin marketplace and durable MCP enablement
 
-> **Status: draft, amended after three Council rounds (2026-11-03), awaiting the operator.** Round 1 (Delphi Council `t_0001`; no seat could read the file): E1-E2 only, defer the installer, reject the launcher. Round 2 (three Copilot-run seats that read the text): amendments applied. Round 3 (three seats, independent review then deliberation on every suggestion; all APPROVE-WITH-AMENDMENTS; §12): `delphi connect` and the stable path leave E1, E1a goes first, the production update channel follows protected release tags by operator decision D-5(B). **When ratified this spec approves only E1a, E1, E1b and E2** (as gated in §10); the operator-UX items of §5.4 ride on those slices. The installer, `delphi connect`, the stable path (E1s), the launcher and the other hosts' directories are not approved by it.
+> **Status: approved by the operator 2026-11-04 for E1a, E1 and E1b; amended after three Council rounds (2026-11-03).** Round 1 (Delphi Council `t_0001`; no seat could read the file): E1-E2 only, defer the installer, reject the launcher. Round 2 (three Copilot-run seats that read the text): amendments applied. Round 3 (three seats, independent review then deliberation on every suggestion; all APPROVE-WITH-AMENDMENTS; §12): `delphi connect` and the stable path leave E1, E1a goes first, the production update channel follows protected release tags by operator decision D-5(B). **This spec approves only E1a, E1, E1b and E2 (E2 not buildable until Q-8 is answered)** (as gated in §10); the operator-UX items of §5.4 ride on those slices. The installer, `delphi connect`, the stable path (E1s), the launcher and the other hosts' directories are not approved by it.
 >
 > **Based on:** Extends [`specs/062`](062-delphi-as-host-agent-mcp-server.md) §10 (`--print-config`, `delphi plugin export`) and [`specs/025`](025-plugin-skill-and-tool-compatibility.md). Amends nothing. 062 §10 ("nothing is installed for you") stands unchanged.
 
@@ -221,6 +222,7 @@ Requirements carried to the successor spec for `delphi connect` and any installe
 - **Q-6.** Nested defaults in `command` (`${DELPHI_BIN:-${HOME}/.local/bin/delphi}`) and `HOME` in GUI-launched hosts. Belongs to E1s.
 - **Q-7.** Gemini installs a repository root as the extension; does it accept a subdirectory, or does the extension need its own root? Decided by the E4b proof.
 - **Q-8 (gates E2).** The exact Claude Code settings path, schema version and JSON fields that show a plugin installed, enabled and its version, on a named Claude version, with a recorded fixture.
+- **Q-9 (not a slice here).** `request_council` from a host (`t_0001`, 2026-11-03) ran with no seat able to read the project file. Establish whether a host-raised Council can read the pointers it is given before the guide recommends it. Daemon-down behaviour is already clear (`daemon_not_running`, `mcp_daemon.rs`), so no change is proposed.
 - **Q-5.** Windows is out of scope here (POSIX paths only); the successor spec decides it.
 
 ## 14. Acceptance criteria

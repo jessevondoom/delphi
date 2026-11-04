@@ -6,19 +6,37 @@ It reads files, opens no network port, runs nothing, and serves this machine and
 
 ## Connect a host
 
+### Claude Code: the plugin (recommended)
+
+Install `delphi` first (`install.sh` or Homebrew), then use Claude Code's own marketplace commands. Installing the plugin grants Delphi nothing; your approvals are unchanged.
+
+```sh
+claude plugin marketplace add jessevondoom/delphi
+claude plugin install delphi@delphi
+```
+
+The plugin runs `delphi` from the host's `PATH`, so a GUI-launched Claude Code that cannot see `delphi` will not connect; use the absolute-path snippet below if that happens. It follows the latest release tag, so the host's normal plugin update brings the new skill text and declaration (spec 071 §4). Its files are generated into [`ecosystem/`](../../ecosystem/README.md) and checked by `delphi docs ecosystem --check`.
+
+Remove it with `claude plugin uninstall delphi@delphi` and `claude plugin marketplace remove delphi`. To turn Delphi off without removing it, set `[mcp] enabled = false` in `config.toml` or use `/mcp off`.
+
+### Any host: print the snippet
+
 Print the snippet for your tool and put it where the comment says:
 
 ```sh
 delphi mcp --print-config claude-code   # or copilot, codex, agy
+delphi mcp --print-config copilot --absolute
 ```
 
-For a plugin (Claude Code) or instructions files (the others), export them into a new directory. Nothing is installed for you and nothing is overwritten:
+A bare snippet runs `delphi` from the host's `PATH`. `--absolute` writes this binary's full path instead, so it works wherever the host starts; it refuses a build tree (`target`), a versioned Homebrew Cellar path (use the one on your PATH, such as `/opt/homebrew/bin/delphi`) and an unset `HOME`. After an upgrade that moves the binary, print the snippet again. Nothing is written for you.
+
+For instructions files (the other hosts), or a plugin directory of your own, export them into a new directory. Nothing is installed for you and nothing is overwritten:
 
 ```sh
 delphi plugin export --host claude-code --out ./delphi-plugin
 ```
 
-The plugin carries `.mcp.json` and a `delphi` skill that tells the host when to consult Delphi. The `agy` snippet follows the Gemini CLI's `settings.json` and is not yet verified against a live host.
+The plugin carries `.mcp.json` and a `delphi` skill that tells the host when to consult Delphi, and the skill names the release it was generated for (compare it with the server version the host shows). The `agy` snippet follows the Gemini CLI's `settings.json` and is not yet verified against a live host.
 
 ## What the host can do
 
