@@ -503,6 +503,7 @@ export function bodyHeight(m: Model, w: number, h: number): number {
 
 /** The whole screen: exactly `h` lines. */
 export function frame(m: Model, w: number, h: number): string[] {
+  T.usePal(m.pal);
   if (w < MIN_W || h < MIN_H) return tooSmall(w, h);
   const head = header(m, w);
   const prompt = promptOf(m, w);

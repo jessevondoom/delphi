@@ -4,20 +4,20 @@ One page: what each colour, glyph and weight in the console means. The rule is t
 
 ## The table
 
-| Meaning | Style (`ui/src/theme.ts`) | Glyph | With no colour |
-| :-- | :-- | :-- | :-- |
-| Role (who speaks) | the role's colour from the avatar spec | `●` | bold role label |
-| Needs you (card, question, digest) | `alert` (red, bold) | `▲` | bold, `!` in place of the glyph |
-| Working, in progress | `accent` (cyan) | `◐` (a spinner when motion allows) | `…` |
-| Done, validated | `ok` (green) | `●` | `✔` |
-| Noted | dim | `○` | `○` |
-| Contested | `warn` (yellow) | `◆` | `◆`, bold text |
-| Disproved, failed | `alert` | `✕` | `✕`, bold text |
-| Retired, superseded | `retired` (dim, struck through where supported) | `·` | `·` |
-| Link, pointer | `link` (cyan, underlined) | none | underline |
-| Mode in force (`auto`) | `auto` (the warning orange) | none | bold |
+| Meaning | Dark Style (`pal.dark = true`) | Light Style (`pal.dark = false`) | Glyph | With no colour |
+| :-- | :-- | :-- | :-- | :-- |
+| Role (who speaks) | the role's chassis colour from avatar spec | the role's adapted light chassis colour | `●` | bold role label |
+| Needs you (card, question, digest) | `alert` (Crimson-500 `#EF4444`, bold) | `alert` (Crimson-700 `#B91C1C`, bold) | `▲` | bold, `!` in place of the glyph |
+| Working, in progress | `accent` (Cyan-400 `#38BDF8`) | `accent` (Azure-700 `#0369A1`) | `◐` (spinner when motion allows) | `…` |
+| Done, validated | `ok` (Emerald-400 `#34D399`) | `ok` (Emerald-700 `#15803D`) | `●` | `✔` |
+| Noted | `muted` (Slate-400 `#94A3B8`) | `muted` (Slate-600 `#475569`) | `○` | `○` |
+| Contested | `warn` (Amber-300 `#FCD34D`) | `warn` (Ochre-800 `#92400E`) | `◆` | `◆`, bold text |
+| Disproved, failed | `alert` (Crimson-500 bold) | `alert` (Crimson-700 bold) | `✕` | `✕`, bold text |
+| Retired, superseded | `retired` (dim, strikethrough) | `retired` (Slate-400 `#94A3B8`, strikethrough) | `·` | `·` |
+| Link, pointer | `link` (Cyan-400, underlined) | `link` (Azure-700, underlined) | none | underline |
+| Mode in force (`auto`) | `auto` (Orange-500 `#F97316`, bold) | `auto` (Rust-800 `#C2410C`, bold) | none | bold |
 
-Every style has three looks: 256 and true colour, 16 colours, and none. At 16 colours the styles above stay pairwise distinct, and the role colours use the avatar library's own ANSI choice.
+Every style has three looks: 256 and true colour, 16 colours, and none. The console uses an adaptive dual-mode palette (`specs/073`): every foreground style satisfies WCAG 2.1 AA contrast ($\ge 4.5:1$ text, $\ge 3.0:1$ glyphs) across dark terminals, light terminals, and custom tints (Solarized Light, Dracula). At 16 colours the styles above stay pairwise distinct with dedicated ANSI fallbacks, and the role colours use the avatar library's own ANSI choices (`chassis_ansi` and `chassis_ansi_light`).
 
 ## Rules
 

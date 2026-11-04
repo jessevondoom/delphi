@@ -6,6 +6,7 @@
   "roles": {
     "architect": {
       "ansi": 14,
+      "ansi_light": 4,
       "badge": {
         "alarm": {
           "cells": "●_!",
@@ -49,6 +50,7 @@
         }
       },
       "chassis": "#38bdf8",
+      "chassis_light": "#0369a1",
       "crown": "▄▄▄▄▄▄▄",
       "crown_rgb": "#ffffff",
       "mascot": {
@@ -67,6 +69,7 @@
     },
     "builder": {
       "ansi": 11,
+      "ansi_light": 3,
       "badge": {
         "alarm": {
           "cells": "●_!",
@@ -110,6 +113,7 @@
         }
       },
       "chassis": "#f59e0b",
+      "chassis_light": "#b45309",
       "crown": "▄▄▄▄▄▄▄",
       "crown_rgb": "#f43f5e",
       "mascot": {
@@ -128,6 +132,7 @@
     },
     "operator": {
       "ansi": 7,
+      "ansi_light": 8,
       "badge": {
         "alarm": {
           "cells": "●_!",
@@ -171,6 +176,7 @@
         }
       },
       "chassis": "#94a3b8",
+      "chassis_light": "#475569",
       "crown": "▄▄▄▄▄▄▄",
       "crown_rgb": "#cbd5e1",
       "mascot": {
@@ -189,6 +195,7 @@
     },
     "orchestrator": {
       "ansi": 13,
+      "ansi_light": 5,
       "badge": {
         "alarm": {
           "cells": "●_!",
@@ -232,6 +239,7 @@
         }
       },
       "chassis": "#a855f7",
+      "chassis_light": "#7e22ce",
       "crown": "  ▄▄▄  ",
       "crown_rgb": "#facc15",
       "mascot": {
@@ -254,6 +262,7 @@
         "light": "#a16207"
       },
       "ansi": 9,
+      "ansi_light": 1,
       "badge": {
         "alarm": {
           "cells": "●_!",
@@ -297,6 +306,7 @@
         }
       },
       "chassis": "#ef4444",
+      "chassis_light": "#b91c1c",
       "crown": "▄     ▄",
       "crown_rgb": "#facc15",
       "mascot": {
@@ -315,6 +325,7 @@
     },
     "scout": {
       "ansi": 3,
+      "ansi_light": 3,
       "badge": {
         "alarm": {
           "cells": "•••",
@@ -358,6 +369,7 @@
         }
       },
       "chassis": "#ffff00",
+      "chassis_light": "#854d0e",
       "crown": "   ▄   ",
       "crown_rgb": "#4169e1",
       "mascot": {
@@ -376,6 +388,7 @@
     },
     "strategist": {
       "ansi": 10,
+      "ansi_light": 6,
       "badge": {
         "alarm": {
           "cells": "●_!",
@@ -419,6 +432,7 @@
         }
       },
       "chassis": "#14b8a6",
+      "chassis_light": "#0f766e",
       "crown": "▄▄ ▄ ▄▄",
       "crown_rgb": "#f9a8d4",
       "mascot": {

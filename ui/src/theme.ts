@@ -11,8 +11,10 @@ export type RoleInfo = { name: string; chassis: string; face: string; crown?: st
  */
 export type AvatarRole = {
   chassis: string;
+  chassis_light?: string;
   /** The ANSI colour (0-15) for a 16-colour terminal, chosen in the library. */
   ansi?: number;
+  ansi_light?: number;
   crown: string; crown_rgb: string; mascot_face: string;
   /** Per activity: the three cells between the brackets, and which of them is the mouth (the rest are eyes). */
   badge: Record<string, { cells: string; mouth: number | null }>;
@@ -53,6 +55,56 @@ export function terminalAnsiColor(n: number): string {
 /** Dark or light, and the terminal's background colour when it answered the query (`null`/absent: unknown, so no tint). */
 export type Pal = { dark: boolean; bg?: Rgb | null };
 
+let activePal: Pal = { dark: true, bg: null };
+export const currentPal = (): Pal => activePal;
+
+export function hexToRgb(hex: string): Rgb {
+  const clean = hex.replace(/^#/, '');
+  const n = parseInt(clean.length === 3 ? clean.split('').map((c) => c + c).join('') : clean, 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+export function rgbToHex(rgb: Rgb): string {
+  return '#' + rgb.map((c) => Math.max(0, Math.min(255, Math.round(c))).toString(16).padStart(2, '0')).join('');
+}
+
+export function linearizeComponent(c: number): number {
+  const norm = c / 255;
+  return norm <= 0.04045 ? norm / 12.92 : Math.pow((norm + 0.055) / 1.055, 2.4);
+}
+
+export function relativeLuminance(rgb: Rgb): number {
+  return 0.2126 * linearizeComponent(rgb[0]) + 0.7152 * linearizeComponent(rgb[1]) + 0.0722 * linearizeComponent(rgb[2]);
+}
+
+export function contrastRatio(a: Rgb, b: Rgb): number {
+  const l1 = relativeLuminance(a);
+  const l2 = relativeLuminance(b);
+  const max = Math.max(l1, l2);
+  const min = Math.min(l1, l2);
+  return (max + 0.05) / (min + 0.05);
+}
+
+export function ensureContrast(fg: Rgb, bg: Rgb, targetRatio = 4.5): Rgb {
+  if (contrastRatio(fg, bg) >= targetRatio) return fg;
+  const isLightBg = relativeLuminance(bg) >= 0.5;
+  let [r, g, b] = fg;
+  for (let i = 0; i < 25; i++) {
+    if (isLightBg) {
+      r = Math.floor(r * 0.88);
+      g = Math.floor(g * 0.88);
+      b = Math.floor(b * 0.88);
+    } else {
+      r = Math.min(255, Math.ceil(r + (255 - r) * 0.12));
+      g = Math.min(255, Math.ceil(g + (255 - g) * 0.12));
+      b = Math.min(255, Math.ceil(b + (255 - b) * 0.12));
+    }
+    const adjusted: Rgb = [r, g, b];
+    if (contrastRatio(adjusted, bg) >= targetRatio) return adjusted;
+  }
+  return isLightBg ? [0, 0, 0] : [255, 255, 255];
+}
+
 /**
  * What the terminal can show (`005e` §5). `NO_COLOR` (set to anything) and `TERM=dumb` mean no colour at all;
  * `TERM=dumb` also means no attributes (bold, dim, underline). Otherwise the colour depth comes from `COLORTERM`
@@ -70,46 +122,216 @@ export function capabilities(env: Record<string, string | undefined> = process.e
 
 let caps: Capabilities = capabilities();
 export const currentCapabilities = (): Capabilities => caps;
+
+type Style = (s: string) => string;
+const plainStyle = chalk as ChalkInstance;
+
+type Look = { rich: Style; basic?: Style; none?: Style };
+
+export type ResolvedTokens = {
+  body: Style;
+  muted: Style;
+  operator: Style;
+  accent: Style;
+  link: Style;
+  ok: Style;
+  warn: Style;
+  alert: Style;
+  auto: Style;
+  heading: Style;
+  retired: Style;
+  lesson: Style;
+  mission: Style;
+  syntax: {
+    kw: Style; str: Style; num: Style; com: Style; ty: Style;
+    add: Style; del: Style; hunk: Style;
+  };
+};
+
+function computeTokens(pal: Pal, c: Capabilities): ResolvedTokens {
+  const lookFor = (l: Look): Style => (s) => (c.color === 'none' ? l.none ?? ((x: string) => x) : c.color === '16' ? l.basic ?? l.rich : l.rich)(s);
+  const byFor = (colour: Style, none: Style = (s) => s): Style => (s) => (c.color === 'none' ? none : colour)(s);
+
+  if (pal.dark) {
+    const richAccent = (s: string) => chalk.cyan(s);
+    const richLink = (s: string) => chalk.cyan.underline(s);
+    const richOk = (s: string) => chalk.green(s);
+    const richWarn = (s: string) => chalk.yellow(s);
+    const richAlert = (s: string) => chalk.red.bold(s);
+    const richAuto = (s: string) => chalk.bold.hex('#f97316')(s);
+    const richHeading = (s: string) => chalk.bold.yellow(s);
+    const richLesson = (s: string) => chalk.magenta(s);
+    const richMission = (s: string) => chalk.blue(s);
+
+    const mutedStyle = (s: string) => chalk.dim(s);
+    const okStyle = lookFor({ rich: richOk });
+    return {
+      body: (s) => s,
+      muted: mutedStyle,
+      operator: mutedStyle,
+      accent: lookFor({ rich: richAccent }),
+      link: lookFor({ rich: richLink, none: (s) => chalk.underline(s) }),
+      ok: okStyle,
+      warn: lookFor({ rich: richWarn, none: (s) => chalk.bold(s) }),
+      alert: lookFor({ rich: richAlert, none: (s) => chalk.bold(s) }),
+      auto: lookFor({ rich: richAuto, basic: (s) => chalk.bold.redBright(s), none: (s) => chalk.bold(s) }),
+      heading: lookFor({ rich: richHeading, none: (s) => chalk.bold(s) }),
+      retired: (s) => chalk.dim.strikethrough(s),
+      lesson: lookFor({ rich: richLesson }),
+      mission: lookFor({ rich: richMission }),
+      syntax: {
+        kw: byFor((s) => chalk.magenta(s)),
+        str: byFor((s) => chalk.green(s)),
+        num: byFor((s) => chalk.yellow(s)),
+        com: mutedStyle,
+        ty: byFor((s) => chalk.cyan(s)),
+        add: okStyle,
+        del: byFor((s) => chalk.red(s)),
+        hunk: byFor((s) => chalk.cyan(s)),
+      },
+    };
+  } else {
+    const adjust = (hex: string, target = 4.5): string => {
+      if (!pal.bg || c.color !== 'truecolor') return hex;
+      return rgbToHex(ensureContrast(hexToRgb(hex), pal.bg, target));
+    };
+
+    const slate600 = adjust('#475569');
+    const azure700 = adjust('#0369a1');
+    const emerald700 = adjust('#15803d');
+    const ochre800 = adjust('#92400e');
+    const crimson700 = adjust('#b91c1c');
+    const rust800 = adjust('#c2410c');
+    const ochre900 = adjust('#78350f');
+    const purple700 = adjust('#7e22ce');
+    const blue700 = adjust('#1d4ed8');
+    const slate400 = adjust('#94a3b8', 3.0);
+
+    const mutedStyle = lookFor({
+      rich: (s) => chalk.hex(slate600)(s),
+      basic: (s) => chalk.ansi256(8)(s),
+      none: (s) => chalk.dim(s),
+    });
+    const okStyle = lookFor({
+      rich: (s) => chalk.hex(emerald700)(s),
+      basic: (s) => chalk.green(s),
+    });
+
+    return {
+      body: (s) => s,
+      muted: mutedStyle,
+      operator: mutedStyle,
+      accent: lookFor({
+        rich: (s) => chalk.hex(azure700)(s),
+        basic: (s) => chalk.blue(s),
+      }),
+      link: lookFor({
+        rich: (s) => chalk.hex(azure700).underline(s),
+        basic: (s) => chalk.blue.underline(s),
+        none: (s) => chalk.underline(s),
+      }),
+      ok: okStyle,
+      warn: lookFor({
+        rich: (s) => chalk.hex(ochre800)(s),
+        basic: (s) => chalk.yellow(s),
+        none: (s) => chalk.bold(s),
+      }),
+      alert: lookFor({
+        rich: (s) => chalk.hex(crimson700).bold(s),
+        basic: (s) => chalk.red.bold(s),
+        none: (s) => chalk.bold(s),
+      }),
+      auto: lookFor({
+        rich: (s) => chalk.hex(rust800).bold(s),
+        basic: (s) => chalk.bold.red(s),
+        none: (s) => chalk.bold(s),
+      }),
+      heading: lookFor({
+        rich: (s) => chalk.hex(ochre900).bold(s),
+        basic: (s) => chalk.yellow.bold(s),
+        none: (s) => chalk.bold(s),
+      }),
+      retired: lookFor({
+        rich: (s) => chalk.hex(slate400).strikethrough(s),
+        basic: (s) => chalk.ansi256(8).strikethrough(s),
+        none: (s) => chalk.dim.strikethrough(s),
+      }),
+      lesson: lookFor({
+        rich: (s) => chalk.hex(purple700)(s),
+        basic: (s) => chalk.magenta(s),
+      }),
+      mission: lookFor({
+        rich: (s) => chalk.hex(blue700)(s),
+        basic: (s) => chalk.blue(s),
+      }),
+      syntax: {
+        kw: byFor((s) => chalk.hex(purple700)(s)),
+        str: byFor((s) => chalk.hex(emerald700)(s)),
+        num: byFor((s) => chalk.hex(ochre800)(s)),
+        com: mutedStyle,
+        ty: byFor((s) => chalk.hex(azure700)(s)),
+        add: okStyle,
+        del: byFor((s) => chalk.hex(crimson700)(s)),
+        hunk: byFor((s) => chalk.hex(azure700)(s)),
+      },
+    };
+  }
+}
+
+let activeTokens: ResolvedTokens = computeTokens(activePal, caps);
+
 /** Adopt `c` and set how many colours chalk may write. Called once at start-up (and by tests). */
 export function useCapabilities(c: Capabilities): void {
   caps = c;
   chalk.level = !c.attributes ? 0 : c.color === 'truecolor' ? 3 : c.color === '256' ? 2 : 1;
+  activeTokens = computeTokens(activePal, c);
 }
 
-type Style = (s: string) => string;
-const plainStyle = chalk as ChalkInstance;
-/** `colour` normally; `none` when there is no colour, so structure and emphasis survive. */
-const by = (colour: Style, none: Style = (s) => s): Style => (s) => (caps.color === 'none' ? none : colour)(s);
+/** Adopt `p` as the ambient palette and precompute tokens. */
+export function usePal(p: Pal): void {
+  activePal = p;
+  activeTokens = computeTokens(p, caps);
+}
 
-// The semantic vocabulary (`specs/053` §3, docs/console-visual-language.md). Each style answers one
-// question and has three looks: `rich` (256 and true colour), `basic` (16 colours) and `none` (no colour: weight
-// or a glyph carries the meaning). Delphi draws with the terminal's own foreground and background, the ANSI colours
-// and attributes (`005e` §4.1), so every theme the person has chosen is the palette; role colours are the one exception.
-type Look = { rich: Style; basic?: Style; none?: Style };
-const look = (l: Look): Style => (s) => (caps.color === 'none' ? l.none ?? ((x: string) => x) : caps.color === '16' ? l.basic ?? l.rich : l.rich)(s);
+/** Reset to safe default dark mode; used for test isolation. */
+export function resetPal(): void {
+  usePal({ dark: true, bg: null });
+}
 
-export const body: Style = (s) => s;
-export const muted: Style = (s) => chalk.dim(s);
+/** Execute a scoped callback under a specified palette, restoring previous palette on return. */
+export function withPal<T>(p: Pal, fn: () => T): T {
+  const prev = activePal;
+  try {
+    usePal(p);
+    return fn();
+  } finally {
+    usePal(prev);
+  }
+}
+
+// The semantic vocabulary (`specs/053` §3, specs/073, docs/console-visual-language.md).
+export const body: Style = (s) => activeTokens.body(s);
+export const muted: Style = (s) => activeTokens.muted(s);
 /** The operator's own words step back. */
-export const operator: Style = muted;
+export const operator: Style = (s) => activeTokens.operator(s);
 /** Working, in progress; also the pointer and the keys: the one calm colour. */
-export const accent: Style = look({ rich: (s) => chalk.cyan(s) });
+export const accent: Style = (s) => activeTokens.accent(s);
 /** A link or pointer: underlined, so it reads without colour. */
-export const link: Style = look({ rich: (s) => chalk.cyan.underline(s), none: (s) => chalk.underline(s) });
+export const link: Style = (s) => activeTokens.link(s);
 /** Done, validated. */
-export const ok: Style = look({ rich: (s) => chalk.green(s) });
+export const ok: Style = (s) => activeTokens.ok(s);
 /** Contested, caution. */
-export const warn: Style = look({ rich: (s) => chalk.yellow(s), none: (s) => chalk.bold(s) });
+export const warn: Style = (s) => activeTokens.warn(s);
 /** Needs you, disproved, failed: the loudest style, reserved for what is waiting. */
-export const alert: Style = look({ rich: (s) => chalk.red.bold(s), none: (s) => chalk.bold(s) });
+export const alert: Style = (s) => activeTokens.alert(s);
 /** Approval mode `auto`: the warning-red colour, bold, never reverse video. */
-export const auto: Style = look({ rich: (s) => chalk.bold.hex('#f97316')(s), basic: (s) => chalk.bold.redBright(s), none: (s) => chalk.bold(s) });
-export const heading: Style = look({ rich: (s) => chalk.bold.yellow(s), none: (s) => chalk.bold(s) });
+export const auto: Style = (s) => activeTokens.auto(s);
+export const heading: Style = (s) => activeTokens.heading(s);
 /** Retired, superseded: dim, struck through where the terminal supports it. */
-export const retired: Style = (s) => chalk.dim.strikethrough(s);
+export const retired: Style = (s) => activeTokens.retired(s);
 /** The kinds of archive entry that have a colour of their own (`043`). */
-export const lesson: Style = look({ rich: (s) => chalk.magenta(s) });
-export const mission: Style = look({ rich: (s) => chalk.blue(s) });
+export const lesson: Style = (s) => activeTokens.lesson(s);
+export const mission: Style = (s) => activeTokens.mission(s);
 const bold: Style = (s) => chalk.bold(s);
 
 export type Meaning = 'role' | 'needs-you' | 'working' | 'done' | 'noted' | 'contested' | 'disproved' | 'retired' | 'link' | 'mode';
@@ -141,8 +363,14 @@ export const statusMark = (k: KnowledgeStatus): string => mark(STATUS_MEANING[k]
 
 /** Code and diffs in replies: colour only, never text. */
 export const syntax = {
-  kw: by((s) => chalk.magenta(s)), str: by((s) => chalk.green(s)), num: by((s) => chalk.yellow(s)), com: muted, ty: by((s) => chalk.cyan(s)),
-  add: ok, del: by((s) => chalk.red(s)), hunk: by((s) => chalk.cyan(s)),
+  get kw() { return activeTokens.syntax.kw; },
+  get str() { return activeTokens.syntax.str; },
+  get num() { return activeTokens.syntax.num; },
+  get com() { return activeTokens.syntax.com; },
+  get ty() { return activeTokens.syntax.ty; },
+  get add() { return activeTokens.syntax.add; },
+  get del() { return activeTokens.syntax.del; },
+  get hunk() { return activeTokens.syntax.hunk; },
 };
 
 /**
@@ -312,9 +540,25 @@ export function envTheme(env: Record<string, string | undefined> = process.env):
 
 export const roleName = (role: string, info: Info) => info.roles[role]?.name ?? role;
 export const roleColor = (role: string, info: Info): ChalkInstance => {
-  const ansi = info.avatar?.roles[role]?.ansi;
-  if (caps.color === '16' && ansi !== undefined) return chalk.ansi256(ansi); // the library's own choice, not the nearest guess
-  return tone(info.avatar?.roles[role]?.chassis ?? info.roles[role]?.chassis ?? '#94a3b8');
+  const isLight = !activePal.dark;
+  const roleSpec = info.avatar?.roles[role];
+  if (caps.color === '16') {
+    const ansi = isLight ? (roleSpec?.ansi_light ?? roleSpec?.ansi) : roleSpec?.ansi;
+    if (ansi !== undefined) return chalk.ansi256(ansi);
+  }
+  const fallbackLightChassis: Record<string, string> = {
+    orchestrator: '#7e22ce',
+    architect: '#0369a1',
+    builder: '#b45309',
+    'red-team': '#b91c1c',
+    strategist: '#0f766e',
+    scout: '#854d0e',
+    operator: '#475569',
+  };
+  const chassis = isLight
+    ? (roleSpec?.chassis_light ?? fallbackLightChassis[role] ?? roleSpec?.chassis ?? info.roles[role]?.chassis ?? '#475569')
+    : (roleSpec?.chassis ?? info.roles[role]?.chassis ?? '#94a3b8');
+  return tone(chassis);
 };
 /** A role's colour (`005e` §5): its chassis from the theme under colour; plain, with the glyphs carrying it, under none. */
 export const role = roleColor;
