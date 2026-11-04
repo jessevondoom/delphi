@@ -226,18 +226,21 @@ fn check_event_chains(ws: &Path, r: &mut Report) {
     }
 }
 
-/// The Delphi plugin in Claude Code (spec 071 E2): read-only, offline, and never a failure; the fix is printed, not run.
+/// The Delphi plugin in Claude Code, Copilot CLI and Codex (spec 071 E2, E4a, E4c): read-only, offline, and never a failure; the fix is printed, not run.
+/// A host with no Delphi plugin and no state files at all is skipped quietly.
 fn check_host_plugin(r: &mut Report) {
     let Some(home) = std::env::var("HOME").ok().filter(|h| Path::new(h).is_absolute()) else {
-        r.push(Level::Skipped, "15 host-plugin", "claude-code", "HOME is unset, so Claude Code's plugin state cannot be read");
+        r.push(Level::Skipped, "15 host-plugin", "claude-code, copilot, codex", "HOME is unset, so the hosts' plugin state cannot be read");
         return;
     };
-    let c = delphi_engine::mcp_check::check_claude_code(Path::new(&home), env!("CARGO_PKG_VERSION"));
-    let msg = format!("{}: {}. Launchable: {}{}", c.state.name(), c.detail, delphi_engine::mcp_check::LAUNCHABLE, c.fix.map(|f| format!(". Fix: `{f}`")).unwrap_or_default());
-    match c.state {
-        delphi_engine::mcp_check::State::Configured => r.push(Level::Ok, "15 host-plugin", "claude-code", msg),
-        delphi_engine::mcp_check::State::Stale | delphi_engine::mcp_check::State::Incompatible => r.warn("15 host-plugin", "claude-code", msg),
-        _ => r.push(Level::Skipped, "15 host-plugin", "claude-code", msg),
+    for host in ["claude-code", "copilot", "codex"] {
+        let Ok(c) = delphi_engine::mcp_check::check_host(host, Path::new(&home), env!("CARGO_PKG_VERSION")) else { continue };
+        let msg = format!("{}: {}. Launchable: {}{}", c.state.name(), c.detail, delphi_engine::mcp_check::LAUNCHABLE, c.fix.map(|f| format!(". Fix: `{f}`")).unwrap_or_default());
+        match c.state {
+            delphi_engine::mcp_check::State::Configured => r.push(Level::Ok, "15 host-plugin", host, msg),
+            delphi_engine::mcp_check::State::Stale | delphi_engine::mcp_check::State::Incompatible => r.warn("15 host-plugin", host, msg),
+            _ => r.push(Level::Skipped, "15 host-plugin", host, msg),
+        }
     }
 }
 

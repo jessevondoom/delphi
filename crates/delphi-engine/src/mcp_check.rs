@@ -1,4 +1,5 @@
-//! Spec 071 E2: is the Delphi plugin set up in Claude Code? A read-only, offline look at the two files Claude Code keeps
+//! Spec 071 E2 and E4a/E4c: is the Delphi plugin set up in Claude Code, Copilot CLI or Codex? A read-only, offline look at the files each host keeps.
+//! For Claude Code, the two files
 //! (`~/.claude/plugins/installed_plugins.json`, schema `version: 2`, and `~/.claude/settings.json`, key `enabledPlugins`),
 //! recorded on Claude Code 2.1.314. It never runs the binary, never follows a symlink, and never echoes a value from a file.
 
@@ -132,16 +133,78 @@ pub fn check_claude_code(home: &Path, binary_release: &str) -> Check {
     }
 }
 
+/// Copilot CLI (1.0.105): `~/.copilot/settings.json` `enabledPlugins`. A plugin from a local marketplace is loaded live and records no
+/// release, so only enabled or not is known and the release is never compared.
+pub fn check_copilot(home: &Path) -> Check {
+    let settings = match safe_read(&home.join(".copilot/settings.json")) {
+        Ok(Some(b)) => b,
+        Ok(None) => return unknown("no Copilot CLI settings were found, so this cannot be checked"),
+        Err(e) => return unknown(format!("settings.json {e}")),
+    };
+    let Ok(settings) = serde_json::from_slice::<serde_json::Value>(&settings) else { return unknown("settings.json is not valid JSON") };
+    let fix = "copilot plugin marketplace add jessevondoom/delphi && copilot plugin install delphi@delphi";
+    match settings["enabledPlugins"].get(PLUGIN_KEY).and_then(|v| v.as_bool()) {
+        Some(true) => Check { state: State::Configured, detail: "the Delphi plugin is installed and enabled (Copilot CLI records no release, so it is not compared)".into(), fix: None },
+        Some(false) => Check { state: State::Missing, detail: "the Delphi plugin is installed but disabled".into(), fix: Some(format!("copilot plugin install {PLUGIN_KEY}")) },
+        None => Check { state: State::Missing, detail: "the Delphi plugin is not installed".into(), fix: Some(fix.into()) },
+    }
+}
+
+/// Codex (0.166.0): `~/.codex/config.toml` `[plugins."delphi@delphi"] enabled`, and the release from the cache directory name under
+/// `~/.codex/plugins/cache/delphi/delphi/`.
+pub fn check_codex(home: &Path, binary_release: &str) -> Check {
+    let cfg = match safe_read(&home.join(".codex/config.toml")) {
+        Ok(Some(b)) => b,
+        Ok(None) => return unknown("no Codex configuration was found, so this cannot be checked"),
+        Err(e) => return unknown(format!("config.toml {e}")),
+    };
+    let Ok(cfg) = String::from_utf8(cfg).map_err(|_| ()).and_then(|t| t.parse::<toml::Table>().map_err(|_| ())) else { return unknown("config.toml is not valid TOML") };
+    let fix = "codex plugin marketplace add jessevondoom/delphi && codex plugin add delphi@delphi";
+    let enabled = cfg.get("plugins").and_then(|p| p.as_table()).and_then(|p| p.get(PLUGIN_KEY)).and_then(|p| p.as_table()).map(|p| p.get("enabled").and_then(|e| e.as_bool()));
+    match enabled {
+        None => return Check { state: State::Missing, detail: "the Delphi plugin is not installed".into(), fix: Some(fix.into()) },
+        Some(Some(false)) => return Check { state: State::Missing, detail: "the Delphi plugin is installed but disabled".into(), fix: Some(fix.into()) },
+        Some(_) => {}
+    }
+    let cache = home.join(".codex/plugins/cache/delphi/delphi");
+    let mut best: Option<(u64, u64, u64)> = None;
+    if let Ok(rd) = std::fs::read_dir(&cache) {
+        for e in rd.flatten() {
+            if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                best = best.max(e.file_name().to_str().and_then(parse_release));
+            }
+        }
+    }
+    let Some(plugin_release) = best else { return unknown("the plugin is enabled but its installed release cannot be read") };
+    compare(plugin_release, binary_release, &format!("codex plugin add {PLUGIN_KEY}"))
+}
+
+fn compare(plugin_release: (u64, u64, u64), binary_release: &str, update: &str) -> Check {
+    let release = show(plugin_release);
+    match parse_release(binary_release) {
+        Some(b) if plugin_release == b => Check { state: State::Configured, detail: format!("plugin {release} is installed and enabled"), fix: None },
+        Some(b) if plugin_release < b => Check { state: State::Stale, detail: format!("plugin {release} is older than this binary ({})", show(b)), fix: Some(update.into()) },
+        Some(b) => Check {
+            state: State::Incompatible,
+            detail: format!("plugin {release} is newer than this binary ({}) and may name tools it lacks", show(b)),
+            fix: Some("update delphi (install.sh, or `brew upgrade delphi`)".into()),
+        },
+        None => unknown("this binary's release cannot be compared"),
+    }
+}
+
 /// A release printed from its parsed numbers only, so no text from a file reaches the output.
 fn show(r: (u64, u64, u64)) -> String {
     format!("{}.{}.{}", r.0, r.1, r.2)
 }
 
-/// The check for any host name; every host but `claude-code` is `unverified` until its slice exists.
+/// The check for any host name; Claude Code, Copilot and Codex are read; `agy` is `unverified` until its slice exists.
 pub fn check_host(host: &str, home: &Path, binary_release: &str) -> Result<Check, String> {
     match host {
         "claude-code" => Ok(check_claude_code(home, binary_release)),
-        "copilot" | "codex" | "agy" => Ok(Check { state: State::Unverified, detail: "no check exists for this host yet".into(), fix: None }),
+        "copilot" => Ok(check_copilot(home)),
+        "codex" => Ok(check_codex(home, binary_release)),
+        "agy" => Ok(Check { state: State::Unverified, detail: "no check exists for this host yet".into(), fix: None }),
         other => Err(format!("unknown host `{other}`; one of {}", crate::mcp_hosts::HOSTS.join(", "))),
     }
 }
@@ -228,11 +291,44 @@ mod tests {
     }
 
     #[test]
-    fn other_hosts_are_unverified_and_an_unknown_host_is_refused() {
+    fn agy_is_unverified_and_an_unknown_host_is_refused() {
         let t = tempfile::tempdir().unwrap();
-        for h in ["copilot", "codex", "agy"] {
-            assert_eq!(check_host(h, t.path(), "0.5.3").unwrap().state, State::Unverified);
-        }
+        assert_eq!(check_host("agy", t.path(), "0.5.3").unwrap().state, State::Unverified);
         assert!(check_host("vim", t.path(), "0.5.3").is_err());
+    }
+
+    #[test]
+    fn copilot_is_read_from_enabled_plugins_and_never_echoes_a_secret() {
+        let t = tempfile::tempdir().unwrap();
+        assert_eq!(check_copilot(t.path()).state, State::Unknown);
+        write(t.path(), ".copilot/settings.json", r#"{"enabledPlugins":{"delphi@delphi":true},"token":"sk-SECRET"}"#);
+        let c = check_copilot(t.path());
+        assert_eq!(c.state, State::Configured);
+        assert!(!format!("{c:?}").contains("SECRET"));
+        write(t.path(), ".copilot/settings.json", r#"{"enabledPlugins":{"delphi@delphi":false}}"#);
+        assert_eq!(check_copilot(t.path()).state, State::Missing);
+        write(t.path(), ".copilot/settings.json", "{}");
+        assert_eq!(check_copilot(t.path()).state, State::Missing);
+        write(t.path(), ".copilot/settings.json", "// comment\n{");
+        assert_eq!(check_copilot(t.path()).state, State::Unknown);
+    }
+
+    #[test]
+    fn codex_reads_the_toml_flag_and_the_cache_release() {
+        let on = "[plugins.\"delphi@delphi\"]\nenabled = true\n";
+        let t = tempfile::tempdir().unwrap();
+        assert_eq!(check_codex(t.path(), "0.5.3").state, State::Unknown);
+        write(t.path(), ".codex/config.toml", "[tui]\nx = 1\n");
+        assert_eq!(check_codex(t.path(), "0.5.3").state, State::Missing);
+        write(t.path(), ".codex/config.toml", on);
+        assert_eq!(check_codex(t.path(), "0.5.3").state, State::Unknown, "no cache directory");
+        std::fs::create_dir_all(t.path().join(".codex/plugins/cache/delphi/delphi/0.5.3")).unwrap();
+        assert_eq!(check_codex(t.path(), "0.5.3").state, State::Configured);
+        assert_eq!(check_codex(t.path(), "0.6.0").state, State::Stale);
+        assert_eq!(check_codex(t.path(), "0.5.0").state, State::Incompatible);
+        write(t.path(), ".codex/config.toml", "[plugins.\"delphi@delphi\"]\nenabled = false\n");
+        assert_eq!(check_codex(t.path(), "0.5.3").state, State::Missing);
+        write(t.path(), ".codex/config.toml", "= not toml");
+        assert_eq!(check_codex(t.path(), "0.5.3").state, State::Unknown);
     }
 }
