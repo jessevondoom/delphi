@@ -28,15 +28,49 @@ pub fn docs(args: &[String]) -> i32 {
                 }
             }
         }
+        Some("ecosystem") => ecosystem(&args[1..]),
         Some("coverage") => {
             print!("{}", delphi_engine::coverage::markdown());
             0
         }
         _ => {
-            eprintln!("usage:\n  delphi docs cli                     the command reference, as Markdown\n  delphi docs man                     the same as a man page (roff)\n  delphi docs catalog [--repo <dir>]  the built-in roles and skills, as Markdown\n  delphi docs coverage                what Delphi does with every flag and command of the claude, agy and codex CLIs");
+            eprintln!("usage:\n  delphi docs cli                     the command reference, as Markdown\n  delphi docs man                     the same as a man page (roff)\n  delphi docs catalog [--repo <dir>]  the built-in roles and skills, as Markdown\n  delphi docs ecosystem [--repo <dir>] --check|--write  the plugin and marketplace files (spec 071)\n  delphi docs coverage                what Delphi does with every flag and command of the claude, agy and codex CLIs");
             2
         }
     }
+}
+
+/// `delphi docs ecosystem --check|--write`: the generated plugin and marketplace files of a checkout, for the release this binary is.
+fn ecosystem(args: &[String]) -> i32 {
+    let repo = args.iter().position(|a| a == "--repo").and_then(|i| args.get(i + 1)).map(String::as_str).unwrap_or(".");
+    let repo = std::path::Path::new(repo);
+    let version = env!("CARGO_PKG_VERSION");
+    if args.iter().any(|a| a == "--write") {
+        return match delphi_engine::mcp_hosts::write_ecosystem(repo, version) {
+            Ok(files) => {
+                for f in files {
+                    println!("wrote {}", repo.join(f).display());
+                }
+                0
+            }
+            Err(e) => {
+                eprintln!("delphi docs ecosystem: {e}");
+                2
+            }
+        };
+    }
+    if args.iter().any(|a| a == "--check") {
+        let drift = delphi_engine::mcp_hosts::ecosystem_drift(repo, version);
+        for d in &drift {
+            eprintln!("drift: {d}");
+        }
+        if !drift.is_empty() {
+            eprintln!("delphi docs ecosystem: run `delphi docs ecosystem --write` and commit the result");
+        }
+        return i32::from(!drift.is_empty());
+    }
+    eprintln!("usage: delphi docs ecosystem [--repo <dir>] --check|--write");
+    2
 }
 
 /// The built-in roles and skills of a checkout, read from the frontmatter of `agents/*/AGENT.md` and `skills/*/SKILL.md`.

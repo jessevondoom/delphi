@@ -550,23 +550,36 @@ Approved by the operator on 2026-11-03. Keeps the spec gate for software, exempt
 | PL2 | prompt-log writer, hash chain, redaction (`artifact.rs`); schema and write-path wiring | built (this PR) |
 | PL3 | GOVERNANCE §1.3 and matching text, by ratified proposal | docs, MCP rule text and invariant row built (this PR); §1.3 and `agents/builder/AGENT.md` ratified by the operator 2026-11-03 |
 
-## Host plugin marketplace and Claude plugin distribution (spec 071, draft)
+## Host plugin marketplace and Claude plugin distribution (spec 071, approved for E1a, E1, E1b)
 
-Draft, 2026-11-03, amended after three Council rounds (all three seats APPROVE-WITH-AMENDMENTS in the last; dissents recorded in §12). Approves only E1a, E1, E2 when ratified. Awaiting the operator. Nothing is built.
+Approved by the operator 2026-11-04 after three Council rounds (all three seats APPROVE-WITH-AMENDMENTS in the last; dissents recorded in §12). Approves only E1a, E1, E1b and E2 (E2 gated on Q-8). Nothing is built.
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
-| E0 | spec 071 approval | draft, awaiting the operator |
-| E1a | `delphi mcp --print-config <host> --absolute` and guide text | not started |
-| E1 | `delphi docs ecosystem --check/--write`, `ecosystem/claude-code/`, root marketplace manifest, release-tag update channel with protected tags (D-5B), drift tests, CODEOWNERS | not started |
-| E1b | `install.sh` and `delphi init` next-step hint (text only) | not started |
+| E0 | spec 071 approval | approved by the operator 2026-11-04 (E1a, E1, E1b; E2 gated on Q-8) |
+| E1a | `delphi mcp --print-config <host> --absolute`, the Claude Code install hint, guide text | built (one branch with E1 and E1b; recorded host proofs Q-1/Q-3 not yet run) |
+| E1 | `delphi docs ecosystem --check/--write`, `ecosystem/claude-code/`, root marketplace manifest, release-tag update channel with protected tags (D-5B), drift tests, CODEOWNERS | built: generator, `ecosystem/claude-code/`, root marketplace, drift test, CODEOWNERS; no live `claude plugin install` proof yet |
+| E1b | `install.sh` and `delphi init` next-step hint (text only) | built |
 | E1s | stable executable path (spec-006 amendment first) | not started |
-| E2 | `delphi mcp --check claude-code`, one `delphi doctor` line (gated on Q-8) | not started |
+| E2 | `delphi mcp --check claude-code`, one `delphi doctor` line (check 15) | built; Q-8 answered and live-proven on Claude Code 2.1.314 (local-directory marketplace) |
 | E3 | installer and `delphi connect` | deferred to a Red-tier successor spec |
-| E4a | Copilot directory, next after E1 (operator priority), after its recorded proof (Q-1) | not started |
-| E4b-c | Gemini CLI and Codex directories, each after a recorded proof (Q-1) | not started |
+| E4a | Copilot: proven live (Q-1); the Claude plugin installs unchanged, so hints and guide only | built (hint, guide and `--check`) |
+| E4b | Gemini CLI: rejects the Claude directory (needs `gemini-extension.json`) | not started |
+| E4c | Codex: proven live (Q-1); same plugin installs unchanged, so hints and guide only | built (hint, guide and `--check`) |
 | E4d | Antigravity | blocked on official documentation |
 | E5 | launcher | rejected |
+
+## Stable launch path and `delphi connect` (spec 074, approved for L0, L1, C1)
+
+Approved by the operator on 2026-11-04 after a three-seat Copilot Council, two rounds, all APPROVE-WITH-AMENDMENTS (amendments folded in). Successor to spec 071 E1s and E3.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| L0 | spec 074 approval and the spec 006 amendment paragraph | approved (this PR) |
+| L1 | launch-path line in `--check` and `doctor`; no receipt | built (this PR) |
+| C1 | `delphi connect claude-code --dry-run` and `--status`; executes nothing, writes nothing | built (this PR) |
+| C2 | exec path, Claude Code only | gated: needs the recorded GitHub-source proof (074 requirement 7) |
+| C3 | Copilot, then Codex | gated on C2 |
 
 ## Host cognitive parity and external orchestration (spec 072, approved 2026-11-03)
 
@@ -580,4 +593,3 @@ Approved by the operator on 2026-11-03 following Council deliberation (`council-
 | S3 | Knowledge RAG retrieval (`kb_retrieve`) | built (this PR) |
 | S4 | Orchestrator guidance & dynamic role packs (`consult_orchestrator`, `spawn_agent_pack`) | built (this PR) |
 | S5 | Federated Council protocol and staging (`propose_council_record`) | built (this PR) |
-

@@ -127,6 +127,8 @@ case ":$PATH:" in
   *) say ""; say "$DIR is not on your PATH. Add this line to your shell profile (~/.zshrc or ~/.bashrc):"; printf '  export PATH="%s:$PATH"\n' "$DIR" ;;
 esac
 
+say ""; say "To use Delphi from another coding tool (Claude Code, Copilot, Codex, agy): delphi mcp --print-config <host>"
+
 if [ "$SETUP" -eq 1 ] && ( : < /dev/tty ) 2>/dev/null; then
   printf '\nRun `delphi` now to finish setting up? [Y/n] ' > /dev/tty
   read -r answer < /dev/tty || answer=""

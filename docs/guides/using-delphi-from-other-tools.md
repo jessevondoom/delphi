@@ -6,19 +6,52 @@ It reads files, opens no network port, runs nothing, and serves this machine and
 
 ## Connect a host
 
+### Claude Code: the plugin (recommended)
+
+Install `delphi` first (`install.sh` or Homebrew), then use Claude Code's own marketplace commands. Installing the plugin grants Delphi nothing; your approvals are unchanged.
+
+```sh
+claude plugin marketplace add jessevondoom/delphi
+claude plugin install delphi@delphi
+```
+
+The plugin runs `delphi` from the host's `PATH`, so a GUI-launched Claude Code that cannot see `delphi` will not connect; use the absolute-path snippet below if that happens. It follows the latest release tag, so the host's normal plugin update brings the new skill text and declaration (spec 071 §4). Its files are generated into [`ecosystem/`](../../ecosystem/README.md) and checked by `delphi docs ecosystem --check`.
+
+Check it any time with `delphi mcp --check claude-code` (or `copilot`, `codex`; see line 15 of `delphi doctor`): it reads the host's plugin files, runs nothing, and says `configured`, `missing`, `stale` or `incompatible` with the command that fixes it. It cannot tell whether Claude Code can launch `delphi` (that stays `unknown`). Tested on Claude Code 2.1.314, Copilot CLI 1.0.105 and Codex 0.166.0. Copilot records no plugin release, so it is `configured` or `missing` only.
+
+Remove it with `claude plugin uninstall delphi@delphi` and `claude plugin marketplace remove delphi`. To turn Delphi off without removing it, set `[mcp] enabled = false` in `config.toml` or use `/mcp off`.
+
+To preview the Claude Code setup without running anything, use `delphi connect claude-code --dry-run` (the exact commands, the `claude` file it found and its checksum, what would be written) or `delphi connect claude-code --status`. Running the connection for you is not available yet; the commands above are the way. Neither `--check` nor `connect` can make a GUI- or service-launched host find `delphi`: the `launch path` line tells you whether a standard install location holds this binary, and `--print-config <host> --absolute` is the cure when the host cannot see your shell `PATH`.
+
+### Copilot CLI and Codex: the same plugin
+
+Both read this repository's `.claude-plugin/marketplace.json` and install the same plugin (tested on Copilot CLI 1.0.105 and Codex 0.166.0):
+
+```sh
+copilot plugin marketplace add jessevondoom/delphi && copilot plugin install delphi@delphi
+codex plugin marketplace add jessevondoom/delphi && codex plugin add delphi@delphi
+```
+
+Remove with `copilot plugin uninstall delphi@delphi` or `codex plugin remove delphi@delphi`. `delphi mcp --check copilot` and `--check codex` read them. The Gemini CLI rejects this plugin directory and Antigravity is not yet documented; use the snippet below for them.
+
+### Any host: print the snippet
+
 Print the snippet for your tool and put it where the comment says:
 
 ```sh
 delphi mcp --print-config claude-code   # or copilot, codex, agy
+delphi mcp --print-config copilot --absolute
 ```
 
-For a plugin (Claude Code) or instructions files (the others), export them into a new directory. Nothing is installed for you and nothing is overwritten:
+A bare snippet runs `delphi` from the host's `PATH`. `--absolute` writes this binary's full path instead, so it works wherever the host starts; it refuses a build tree (`target`), a versioned Homebrew Cellar path (use the one on your PATH, such as `/opt/homebrew/bin/delphi`) and an unset `HOME`. After an upgrade that moves the binary, print the snippet again. Nothing is written for you.
+
+For instructions files (the other hosts), or a plugin directory of your own, export them into a new directory. Nothing is installed for you and nothing is overwritten:
 
 ```sh
 delphi plugin export --host claude-code --out ./delphi-plugin
 ```
 
-The plugin carries `.mcp.json` and a `delphi` skill that tells the host when to consult Delphi. The `agy` snippet follows the Gemini CLI's `settings.json` and is not yet verified against a live host.
+The plugin carries `.mcp.json` and a `delphi` skill that tells the host when to consult Delphi, and the skill names the release it was generated for (compare it with the server version the host shows). The `agy` snippet follows the Gemini CLI's `settings.json` and is not yet verified against a live host.
 
 ## What the host can do
 

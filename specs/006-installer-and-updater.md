@@ -4,7 +4,7 @@ title: "006: Multi-Operator Distribution, Installer & Three-Zone Updater Engine"
 author: architect
 timestamp: 2026-10-23T07:54:00Z
 status: approved   # by the operator, 2026-10-23, after Council 002; amendments 004-A1, 006-A1..A6 approved by the operator 2026-10-23 to 2026-10-25 and folded in
-amendments: "2026-11-02, approved by the operator ('work on a fix'): raise self-update safety limits for embedded model and seed vectors (MAX_ARCHIVE 512 MiB, MAX_BINARY 384 MiB; §4)"
+amendments: "2026-11-04, approved by the operator (spec 074, 'approve 074'): the installed binary path is a stable contract (§2.2 item 4). 2026-11-02, approved by the operator ('work on a fix'): raise self-update safety limits for embedded model and seed vectors (MAX_ARCHIVE 512 MiB, MAX_BINARY 384 MiB; §4)"
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: user_ratified
@@ -54,6 +54,7 @@ The compiled `delphi` binary embeds the canonical read-only snapshot of all seed
    - Downloads `delphi-<version>-<target>.tar.gz`, `.sha256`, and `.minisig` from GitHub Releases.
    - Verifies both SHA-256 and the **Ed25519 Minisign signature** before installing to `~/.local/bin/delphi`.
 2. **Homebrew Tap (`brew install <org>/tap/delphi`):** Installs the binary, shell completions (`zsh`, `bash`, `fish`), and manpages. If the binary lives under a Homebrew prefix, `delphi update` does not swap it. It runs the Zone 1 merge only and tells the operator to run `brew upgrade`.
+4. **Stable binary path (amendment, spec 074, 2026-11-04).** The path an install writes is a contract other programs may rely on (an MCP host's `.mcp.json`, an `--absolute` snippet): the bootstrap script installs to `$DELPHI_INSTALL_DIR/delphi` (default `~/.local/bin/delphi`), `delphi update` replaces that same file in place and never moves it, and Homebrew's `bin/delphi` symlink is stable across upgrades (the versioned Cellar path is not). No install receipt is kept. `delphi mcp --check` and `delphi doctor` report from filesystem facts whether a stable path holds this binary.
 - **Platforms:** macOS and Linux only (`darwin`/`linux` × `arm64`/`x86_64`). Windows is unsupported, because Unix sockets, `flock`, and the sandbox are POSIX-specific (D-15, ratified 2026-10-23).
 3. **Onboarding (`delphi init [--non-interactive] [--workspace <name>] [--project <path>]`):**
    - Creates the workspace home (§3.1), seeds it from the binary, and registers one or more project repos by path. It writes **nothing** into any project repo, and needs **no network**.

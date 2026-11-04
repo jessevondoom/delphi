@@ -1,0 +1,5 @@
+{
+  "mcpServers": {
+    "delphi": { "command": "delphi", "args": ["mcp"] }
+  }
+}
