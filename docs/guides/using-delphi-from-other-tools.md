@@ -21,6 +21,17 @@ Check it any time with `delphi mcp --check claude-code` (or see line 15 of `delp
 
 Remove it with `claude plugin uninstall delphi@delphi` and `claude plugin marketplace remove delphi`. To turn Delphi off without removing it, set `[mcp] enabled = false` in `config.toml` or use `/mcp off`.
 
+### Copilot CLI and Codex: the same plugin
+
+Both read this repository's `.claude-plugin/marketplace.json` and install the same plugin (tested on Copilot CLI 1.0.105 and Codex 0.166.0):
+
+```sh
+copilot plugin marketplace add jessevondoom/delphi && copilot plugin install delphi@delphi
+codex plugin marketplace add jessevondoom/delphi && codex plugin add delphi@delphi
+```
+
+Remove with `copilot plugin uninstall delphi@delphi` or `codex plugin remove delphi@delphi`. `delphi mcp --check` does not read these hosts yet (it reports `unverified`). The Gemini CLI rejects this plugin directory and Antigravity is not yet documented; use the snippet below for them.
+
 ### Any host: print the snippet
 
 Print the snippet for your tool and put it where the comment says:

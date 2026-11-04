@@ -563,8 +563,9 @@ Approved by the operator 2026-11-04 after three Council rounds (all three seats 
 | E1s | stable executable path (spec-006 amendment first) | not started |
 | E2 | `delphi mcp --check claude-code`, one `delphi doctor` line (check 15) | built; Q-8 answered and live-proven on Claude Code 2.1.314 (local-directory marketplace) |
 | E3 | installer and `delphi connect` | deferred to a Red-tier successor spec |
-| E4a | Copilot directory, next after E1 (operator priority), after its recorded proof (Q-1) | not started |
-| E4b-c | Gemini CLI and Codex directories, each after a recorded proof (Q-1) | not started |
+| E4a | Copilot: proven live (Q-1); the Claude plugin installs unchanged, so hints and guide only | built (hint and guide; no host-state check) |
+| E4b | Gemini CLI: rejects the Claude directory (needs `gemini-extension.json`) | not started |
+| E4c | Codex: proven live (Q-1); same plugin installs unchanged, so hints and guide only | built (hint and guide; no host-state check) |
 | E4d | Antigravity | blocked on official documentation |
 | E5 | launcher | rejected |
 

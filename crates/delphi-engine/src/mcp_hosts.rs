@@ -54,6 +54,8 @@ pub fn absolute_command(exe: &Path, home: Option<&str>) -> Result<String, String
 pub fn install_hint(host: &str) -> Option<&'static str> {
     match host {
         "claude-code" => Some("# Or install the Delphi plugin (it runs `delphi` from your PATH):\n#   claude plugin marketplace add jessevondoom/delphi\n#   claude plugin install delphi@delphi\n# Remove it again: claude plugin uninstall delphi@delphi\n"),
+        "copilot" => Some("# Or install the Delphi plugin (it runs `delphi` from your PATH):\n#   copilot plugin marketplace add jessevondoom/delphi\n#   copilot plugin install delphi@delphi\n# Remove it again: copilot plugin uninstall delphi@delphi\n"),
+        "codex" => Some("# Or install the Delphi plugin (it runs `delphi` from your PATH):\n#   codex plugin marketplace add jessevondoom/delphi\n#   codex plugin add delphi@delphi\n# Remove it again: codex plugin remove delphi@delphi\n"),
         _ => None,
     }
 }
@@ -271,6 +273,8 @@ mod tests {
     #[test]
     fn only_a_built_host_has_an_install_hint() {
         assert!(install_hint("claude-code").unwrap().contains("claude plugin install delphi@delphi"));
-        assert!(install_hint("copilot").is_none() && install_hint("agy").is_none());
+        assert!(install_hint("copilot").unwrap().contains("copilot plugin install delphi@delphi"));
+        assert!(install_hint("codex").unwrap().contains("codex plugin add delphi@delphi"));
+        assert!(install_hint("agy").is_none() && install_hint("gemini").is_none());
     }
 }
