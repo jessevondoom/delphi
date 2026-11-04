@@ -198,6 +198,7 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
     }
     // 14. The central error log (specs/039): the effective level and where it came from, the file, its size and the drops.
     check_error_log(home, &mut r);
+    check_host_plugin(&mut r);
 
     // Checks are pushed as they are cheap to run; show them in their numbered order.
     r.findings.sort_by_key(|f| f.check.split(' ').next().and_then(|n| n.parse::<u32>().ok()).unwrap_or(u32::MAX));
@@ -222,6 +223,21 @@ fn check_event_chains(ws: &Path, r: &mut Report) {
     }
     if ok + unchained > 0 {
         r.push(Level::Ok, "8 event-chain", "", format!("{ok} mission log(s) chain-verified; {unchained} with events from before the chain (unchained, not covered)"));
+    }
+}
+
+/// The Delphi plugin in Claude Code (spec 071 E2): read-only, offline, and never a failure; the fix is printed, not run.
+fn check_host_plugin(r: &mut Report) {
+    let Some(home) = std::env::var("HOME").ok().filter(|h| Path::new(h).is_absolute()) else {
+        r.push(Level::Skipped, "15 host-plugin", "claude-code", "HOME is unset, so Claude Code's plugin state cannot be read");
+        return;
+    };
+    let c = delphi_engine::mcp_check::check_claude_code(Path::new(&home), env!("CARGO_PKG_VERSION"));
+    let msg = format!("{}: {}. Launchable: {}{}", c.state.name(), c.detail, delphi_engine::mcp_check::LAUNCHABLE, c.fix.map(|f| format!(". Fix: `{f}`")).unwrap_or_default());
+    match c.state {
+        delphi_engine::mcp_check::State::Configured => r.push(Level::Ok, "15 host-plugin", "claude-code", msg),
+        delphi_engine::mcp_check::State::Stale | delphi_engine::mcp_check::State::Incompatible => r.warn("15 host-plugin", "claude-code", msg),
+        _ => r.push(Level::Skipped, "15 host-plugin", "claude-code", msg),
     }
 }
 

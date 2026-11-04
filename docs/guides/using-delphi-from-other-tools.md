@@ -17,6 +17,8 @@ claude plugin install delphi@delphi
 
 The plugin runs `delphi` from the host's `PATH`, so a GUI-launched Claude Code that cannot see `delphi` will not connect; use the absolute-path snippet below if that happens. It follows the latest release tag, so the host's normal plugin update brings the new skill text and declaration (spec 071 §4). Its files are generated into [`ecosystem/`](../../ecosystem/README.md) and checked by `delphi docs ecosystem --check`.
 
+Check it any time with `delphi mcp --check claude-code` (or see line 15 of `delphi doctor`): it reads Claude Code's plugin files, runs nothing, and says `configured`, `missing`, `stale` or `incompatible` with the command that fixes it. It cannot tell whether Claude Code can launch `delphi` (that stays `unknown`). Tested on Claude Code 2.1.314.
+
 Remove it with `claude plugin uninstall delphi@delphi` and `claude plugin marketplace remove delphi`. To turn Delphi off without removing it, set `[mcp] enabled = false` in `config.toml` or use `/mcp off`.
 
 ### Any host: print the snippet

@@ -561,7 +561,7 @@ Approved by the operator 2026-11-04 after three Council rounds (all three seats 
 | E1 | `delphi docs ecosystem --check/--write`, `ecosystem/claude-code/`, root marketplace manifest, release-tag update channel with protected tags (D-5B), drift tests, CODEOWNERS | built: generator, `ecosystem/claude-code/`, root marketplace, drift test, CODEOWNERS; no live `claude plugin install` proof yet |
 | E1b | `install.sh` and `delphi init` next-step hint (text only) | built |
 | E1s | stable executable path (spec-006 amendment first) | not started |
-| E2 | `delphi mcp --check claude-code`, one `delphi doctor` line (gated on Q-8) | not started |
+| E2 | `delphi mcp --check claude-code`, one `delphi doctor` line (check 15) | built; Q-8 answered and live-proven on Claude Code 2.1.314 (local-directory marketplace) |
 | E3 | installer and `delphi connect` | deferred to a Red-tier successor spec |
 | E4a | Copilot directory, next after E1 (operator priority), after its recorded proof (Q-1) | not started |
 | E4b-c | Gemini CLI and Codex directories, each after a recorded proof (Q-1) | not started |
