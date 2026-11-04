@@ -6,6 +6,7 @@ Delphi is a team of AI agents in your terminal that plans, builds and reviews so
 
 - [Thesis](thesis.md): why Delphi exists, the claim it makes, and how to judge a change to it.
 - [Getting started](getting-started.md): install, the first session, your first build.
+- [Features](features.md): what Delphi can do, feature by feature.
 
 ## Guides
 
@@ -30,10 +31,13 @@ Delphi is a team of AI agents in your terminal that plans, builds and reviews so
 | Every command and option | [reference/cli.md](reference/cli.md), the man page [reference/delphi.1](reference/delphi.1), `delphi help <command>` |
 | Every `config.toml` section | [reference/config.md](reference/config.md) and the annotated template [`crates/delphi/config.example.toml`](../crates/delphi/config.example.toml) |
 | Machine-readable formats | [reference/schemas.md](reference/schemas.md) and [`schemas/`](../schemas/) |
+| Console slash commands and shell commands | [reference/console.md](reference/console.md) |
 | Shell completions | `delphi completions bash`, `zsh` or `fish` |
 
 `reference/cli.md` and `reference/delphi.1` are generated (`delphi docs cli`, `delphi docs man`); a test fails when they drift from the program.
 
 ## Design
+
+[How it works inside](how-it-works.md) (architecture, workspace layout, configuration, repository layout) and the [specification index](specifications.md).
 
 The specifications in [`specs/`](../specs/) say what each subsystem must do and why; the [charter](../GOVERNANCE.md) and the [review rubric](../REVIEW.md) govern the agents. Release history is in the [changelog](../CHANGELOG.md); how to contribute is in [CONTRIBUTING.md](../CONTRIBUTING.md).

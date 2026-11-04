@@ -10,7 +10,18 @@ curl -fsSL https://github.com/jessevondoom/delphi/releases/latest/download/insta
 
 The installer checks the download against its SHA-256 and the release's build attestation, so it needs the `gh` CLI signed in. Without `gh` it stops, unless you set `DELPHI_SKIP_ATTESTATION=1` to accept the checksum alone. It puts `delphi` and `delphi-ui` in `~/.local/bin`; make sure that directory is on your `PATH`. Homebrew works too: `brew tap jessevondoom/delphi https://github.com/jessevondoom/delphi && brew install delphi`.
 
-Check it: `delphi --version`. To build from source instead, see the README's [Install](../README.md#install).
+Check it: `delphi --version`. Homebrew works too: `brew tap jessevondoom/delphi https://github.com/jessevondoom/delphi && brew install delphi`. `install.sh` also takes `--dir` (or `DELPHI_INSTALL_DIR`), `--version vX.Y.Z` and `--no-setup`.
+
+**Updating.** `delphi update` fetches and verifies the newest release, replaces both executables, refreshes the built-in agents, skills and themes in your workspaces (as ratification proposals when they differ from yours; `--review` leaves them pending) and restarts any running daemon (`--no-restart` leaves it). `--check` shows what it would do, `--rollback` undoes all three steps, and `--dev` follows the rolling build of `main`. Release builds are signed (`delphi release` says whether yours is, and `delphi doctor` check 2): the first `delphi chat` or `delphi run` after an update ratifies the release's own files itself, your customized files are never touched, and a build whose signature does not hold is refused ([`specs/036`](../specs/036-signed-releases-and-start-time-refresh.md); `--require-signed`, `DELPHI_REQUIRE_SIGNED=1` or `[update] require_signed = true` also refuse an unsigned build; `DELPHI_NO_AUTO_UPDATE=1` turns the refresh off).
+
+**From source** needs Rust 1.85 or newer (the repo pins a toolchain in `rust-toolchain.toml`):
+
+```sh
+cargo build --release                      # target/release/delphi (the daemon is `delphi __core`)
+cd ui && npm ci && npm run build           # ui/dist/delphi-ui, the full-screen console (needs Bun from devDependencies)
+```
+
+Put `ui/dist/delphi-ui` next to `delphi` or point `$DELPHI_UI` at it; without it `delphi` uses the inline console. Release builds also pass `--features embedded-model` to compile the search models in; a plain `cargo build` searches by keyword only unless you install the models under `$DELPHI_HOME/models/` (`dev/fetch-model.sh`).
 
 ## 2. Open the console
 
