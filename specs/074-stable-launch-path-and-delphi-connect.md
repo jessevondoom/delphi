@@ -3,7 +3,7 @@ id: spec-074-stable-launch-path-and-delphi-connect
 title: "074: A stable launch path for host plugins, and `delphi connect`"
 author: architect
 timestamp: 2026-11-04T02:10:00Z
-status: approved   # by the operator, 2026-11-04 ("approve 074"), after a Council (3 seats, 2 rounds, all APPROVE-WITH-AMENDMENTS, amendments folded in): approves L0, L1 and C1. C2 stays gated on the recorded GitHub-source proof (requirement 7); C3 on C2 and its own proof.
+status: approved   # by the operator, 2026-11-04 ("approve 074"), after a Council (3 seats, 2 rounds, all APPROVE-WITH-AMENDMENTS, amendments folded in): approves L0, L1 and C1. C2 was gated on the recorded GitHub-source proof (requirement 7), recorded in §8 on 2026-11-04, and is built; C3 stays gated on its own proof and a Council re-review.
 approved_by: operator (2026-11-04)
 source_type: internal_generated
 confidence: low
@@ -88,3 +88,16 @@ Round 1 (2026-11-04, three Copilot seats: architect, red-team, strategist) retur
 ## 7. Acceptance criteria
 
 Approved by the operator after the Council; the slices above each meet their tests; no new code path acts without a TTY consent; `delphi lint`, clippy and tests pass.
+
+## 8. Recorded proof and build notes (C2, 2026-11-04)
+
+**Proof (requirement 7).** Claude Code 2.1.314, after PR #467 merged to `main`, with `~/.claude` backed up and restored afterwards:
+
+- `claude plugin marketplace add jessevondoom/delphi` cloned the GitHub repository, validated it and reported `Successfully added marketplace: delphi (declared in user settings)`. `known_marketplaces.json` records `{"source": {"source": "github", "repo": "jessevondoom/delphi"}}`.
+- `claude plugin install delphi@delphi` installed plugin 0.5.3, user scope, enabled.
+- `claude plugin update delphi@delphi` answered `already at the latest version (0.5.3)`: the host tracks the marketplace's release, as the plan says.
+- `uninstall` and `marketplace remove delphi` left `settings.json` with empty `enabledPlugins` and `extraKnownMarketplaces` keys (restored from backup in the proof).
+
+The plan text matches this behaviour. A live `delphi connect claude-code` and `--remove` under a pseudo-terminal then ran the same two steps each way against the real host, wrote a 0600 `connections.json` and an audit line, and cleared the record on removal.
+
+**Build notes.** The exec path is `crates/delphi/src/connect_run.rs`; `ConsentProof` is constructible only inside its `consent` module. Refusals: agent seat (`DELPHI_BRIDGE_*`), not entered as `delphi connect`, no TTY on stdin and stdout, no `/dev/tty`. The environment is an allowlist; the digest is rechecked before each exec; the `operator` directory is set to 0700. The host version is not recorded (it is never probed). The dependency-direction test of requirement 1 holds by construction (the engine, MCP and daemon crates do not depend on the `delphi` binary crate) and is not a separate test. Tests use a fake host CLI that records argv and environment.

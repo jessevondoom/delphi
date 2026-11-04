@@ -569,7 +569,7 @@ Approved by the operator 2026-11-04 after three Council rounds (all three seats 
 | E4d | Antigravity | blocked on official documentation |
 | E5 | launcher | rejected |
 
-## Stable launch path and `delphi connect` (spec 074, approved for L0, L1, C1)
+## Stable launch path and `delphi connect` (spec 074, approved for L0, L1, C1, C2)
 
 Approved by the operator on 2026-11-04 after a three-seat Copilot Council, two rounds, all APPROVE-WITH-AMENDMENTS (amendments folded in). Successor to spec 071 E1s and E3.
 
@@ -578,7 +578,7 @@ Approved by the operator on 2026-11-04 after a three-seat Copilot Council, two r
 | L0 | spec 074 approval and the spec 006 amendment paragraph | approved (this PR) |
 | L1 | launch-path line in `--check` and `doctor`; no receipt | built (this PR) |
 | C1 | `delphi connect claude-code --dry-run` and `--status`; executes nothing, writes nothing | built (this PR) |
-| C2 | exec path, Claude Code only | gated: needs the recorded GitHub-source proof (074 requirement 7) |
+| C2 | exec path, Claude Code only, with `--remove` | built (this PR); GitHub-source proof recorded in spec 074 §8 |
 | C3 | Copilot, then Codex | gated on C2 |
 
 ## Host cognitive parity and external orchestration (spec 072, approved 2026-11-03)
