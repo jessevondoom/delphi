@@ -4,7 +4,7 @@
 
 **A team of AI agents in your terminal for research, strategy and product work, whose answers carry their sources and whose actions wait for your approval.**
 
-> Status: pre-1.0, macOS and Linux, one person per install. Latest release: v0.5.3 (`delphi update --dev` follows `main`). What is proven and what is not: [Status and limitations](#status-and-limitations).
+> Status: pre-1.0, macOS and Linux, one person per install. Latest release: v0.5.4 (`delphi update --dev` follows `main`). What is proven and what is not: [Status and limitations](#status-and-limitations).
 
 ## What is Delphi?
 
@@ -16,7 +16,7 @@ Delphi is a harness, in the family of Claude Code and Codex, built for work that
 2. **Argues before it answers.** A **Council** puts a hard question to several models, each answering blind. They cross-examine one another, and you get a verdict *and* the strongest dissent.
 3. **Asks before it acts.** Reading is free. A merge, a new dependency or anything that leaves your machine shows you a card and waits. If nobody answers, the answer is no.
 
-The team is a set of roles: a scout and an investigator who find and check sources, a strategist, an architect, a writer, a red-team that attacks the plan, an orchestrator that coordinates, and a builder that writes code when a decision becomes software. You talk to one window.
+The team is a set of roles: a scout and an investigator who find and check sources, a strategist, an architect, a writer, a red-team that attacks the plan, an orchestrator that coordinates, a builder that writes code when a decision becomes software, and an administrator, an assistant and an advocate for delivery, your inbox and the user's point of view. You talk to one window.
 
 ```
 › /research pricing models for developer tools
@@ -26,7 +26,7 @@ The team is a set of roles: a scout and an investigator who find and check sourc
 › /build implement specs/011-free-tier.md
 ```
 
-Delphi is one Rust executable plus a full-screen console. It needs no server and no account. It uses the AI access you already have (an API key, a cloud such as Bedrock or Vertex, a corporate gateway, a local Ollama model, or your own `claude` or `agy` subscription). It keeps its state in `~/.delphi`, never reads your logins and writes into a project only what you register or scaffold.
+Delphi is one Rust executable plus a full-screen console that adapts to dark and light terminals. It needs no server and no account. It uses the AI access you already have (an API key, a cloud such as Bedrock or Vertex, a corporate gateway, a local Ollama model, or your own `claude` or `agy` subscription). It keeps its state in `~/.delphi`, never reads your logins and writes into a project only what you register or scaffold.
 
 ## Install
 
@@ -72,7 +72,15 @@ copilot plugin marketplace add jessevondoom/delphi && copilot plugin install del
 codex plugin marketplace add jessevondoom/delphi && codex plugin add delphi@delphi
 ```
 
-Installing the plugin grants Delphi nothing and changes none of your approvals. It follows the latest release, and the tool's normal plugin update brings new versions. Check the connection with `delphi mcp --check claude-code` (or `copilot`, `codex`). Antigravity and the Gemini CLI use a printed config snippet instead. Details, removal and the full tool list: [Using Delphi from other tools](docs/guides/using-delphi-from-other-tools.md).
+Or let Delphi run the two commands for you:
+
+```sh
+delphi connect claude-code --dry-run    # show the exact commands, the host binary and its checksum; run nothing
+delphi connect claude-code              # or `copilot`: show the plan, then run it after you type a confirmation phrase
+delphi connect claude-code --remove     # undo only what Delphi installed
+```
+
+`connect` needs a terminal and refuses to run from inside an agent. Codex uses the manual commands for now. Installing the plugin grants Delphi nothing and changes none of your approvals. It follows the latest release, and the tool's normal plugin update brings new versions. Check the connection with `delphi mcp --check claude-code` (or `copilot`, `codex`). Antigravity and the Gemini CLI use a printed config snippet instead. Details, removal and the full tool list: [Using Delphi from other tools](docs/guides/using-delphi-from-other-tools.md).
 
 ## How safety works
 

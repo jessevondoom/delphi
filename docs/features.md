@@ -51,6 +51,34 @@ An **org bundle** is a directory an organization publishes so every install star
 - **Xenia**, the signed org-level memory store ([`specs/011`](../specs/011-xenia-trust-model.md), [`012`](../specs/012-xenia-record-schema.md)): signed-record validation, roster chain, a hardened store clone and sync, standing, endorsements and tombstones, and a publish gate are built. `delphi xenia join|sync|status` and the signing commands (`publish`, `endorse`, `dispute`, `withdraw`, …) each sit behind a card you answer at a terminal; admin ceremonies (`xenia admin …`) need a person to type a code over the exact bytes. No store has been run against a real organization.
 - **Coming:** a registry that lets an organization scale to hundreds of specialist agents without growing the orchestrator's context, and bundle "role extensions" that teach a built-in role a company's craft ([`specs/041`](../specs/041-agent-registry-routing-and-role-extensions.md), approved, not built).
 
+## The wider team
+
+Besides the orchestrator, builder, architect, red-team, strategist and scout, the fleet has a **writer**, an **investigator**, a **validator**, a **messenger** (GitHub and external services) and, since [spec 067](../specs/067-fleet-expansion-administrator-assistant-advocate.md), three more:
+
+- **Administrator:** system mapping, delivery methods and the Council's parliamentarian. It structures a deadlock into a clean decision card for you and does not vote.
+- **Assistant:** triages messages, prepares meeting briefs and ingests threads and transcripts, with everything it reads held at untrusted taint.
+- **Advocate:** speaks for the person using the product, from human-centered design and usability heuristics.
+
+Which roles you talk to directly, and which only the orchestrator may dispatch, is your choice ([`specs/063`](../specs/063-agent-fleet-behaviors-and-dynamic-orchestration.md)): `/solo` locks a conversation to one agent, and `/quarantine <role>` blocks one. The catalog of every role and skill is [reference/catalog.md](reference/catalog.md).
+
+## Setup and operations by conversation
+
+Ask the **administrator** to diagnose an endpoint, a connector or a failed gate, or to register and scaffold a project ([`specs/069`](../specs/069-workspace-administration-and-operator-assistance.md)). Read-only diagnostics run on their own. Anything that changes setup shows you an action card first. Sovereign actions (ratifying, signing, authenticating) are never done for you; Delphi tells you the command.
+
+## Memory that carries over
+
+Specialist agents keep distilled **episodic memory** of past work (tool patterns, fixes, research findings), harvested only from tasks that mattered and retrieved when a similar task starts ([`specs/065`](../specs/065-episodic-traces-and-agent-long-term-memory.md)). Memory stays inside the machine and the role's scope; promotion into shared rules still needs your ratification.
+
+## Delphi from your other coding agents
+
+Claude Code, Copilot CLI and Codex can borrow Delphi's roles, specs, memory, knowledge base, research and Councils over MCP, installed as a plugin from this repository's marketplace ([guide](guides/using-delphi-from-other-tools.md)). Answers arrive labelled `via delphi` with their sources and knowledge status. `delphi mcp --check <host>` says whether a host is connected.
+
+`delphi connect` automates the plugin install. `delphi connect claude-code --dry-run` shows the exact commands, the host binary it found and its checksum. `delphi connect claude-code` and `delphi connect copilot` run the commands after you type a confirmation phrase at a terminal, and `--remove` undoes only what Delphi added. It refuses to run from inside an agent seat or without a terminal. Codex is not yet supported by `connect`; use the manual commands ([`specs/074`](../specs/074-stable-launch-path-and-delphi-connect.md)).
+
+## A console that adapts to your terminal
+
+The console picks a palette for dark or light terminals and for custom tints such as Solarized Light, keeping text at WCAG AA contrast and role colours distinct, down to 16 colours ([`specs/073`](../specs/073-console-adaptive-contrast-and-dual-mode-palette.md), [visual language](console-visual-language.md)).
+
 ## Learning without memory poisoning
 
 Lessons, rules, config changes and imported skills all arrive as proposals and take effect only when you `/ratify` them; rules the orchestrator proposes after a mission wait in `/retro`. Always-loaded rule files stay small. Cheap capture of staged notes (`delphi learn`) and a **training mode** (`delphi train validate|plan|run`) with research and code cases, truth packs, a blinded jury and a report measure whether a change in prompts or models actually helps ([`specs/031`](../specs/031-layered-learning-and-training-mode.md), [`037`](../specs/037-training-experiments-quality-and-efficiency.md)).

@@ -36,5 +36,15 @@ All in [`specs/`](../specs/); each file's `status` line says whether the operato
 | 045 | [Harness loop techniques](../specs/045-harness-loop-techniques.md) | approved; first slice built |
 | 046, 047 | [Harness and OpenAI coverage](../specs/046-harness-and-openai-coverage.md); [Codex CLI as a third harness](../specs/047-codex-harness-and-coverage.md) | approved; first slice built |
 | 063 | [Agent fleet behaviors, dynamic orchestration, and curated knowledge](../specs/063-agent-fleet-behaviors-and-dynamic-orchestration.md) | built |
+| 064 | [Knowledge retrieval for agents and MCP](../specs/064-knowledge-retrieval-for-agents-and-mcp.md) | partly built |
+| 065 | [Agent episodic memory and trace distillation](../specs/065-episodic-traces-and-agent-long-term-memory.md) | built |
+| 066 | [MCP research endpoint and role identity](../specs/066-mcp-research-endpoint-and-role-identity.md) | built |
+| 067 | [Fleet expansion: Administrator, Assistant, Advocate](../specs/067-fleet-expansion-administrator-assistant-advocate.md) | built |
+| 069 | [Workspace administration and governed operator assistance](../specs/069-workspace-administration-and-operator-assistance.md) | built |
+| 070 | [Scope of No Spec, No Build, and the artifact prompt log](../specs/070-spec-gate-scope-and-artifact-prompt-log.md) | built |
+| 071 | [Host plugin marketplace and durable MCP enablement](../specs/071-host-plugin-marketplace-and-durable-mcp-enablement.md) | built for Claude Code, Copilot CLI and Codex; Gemini CLI and Antigravity not started |
+| 072 | [Host cognitive parity and external orchestration](../specs/072-host-cognitive-parity-and-external-orchestration.md) | built |
+| 073 | [Console adaptive contrast and dual-mode palette](../specs/073-console-adaptive-contrast-and-dual-mode-palette.md) | built |
+| 074 | [A stable launch path, and `delphi connect`](../specs/074-stable-launch-path-and-delphi-connect.md) | built for Claude Code and Copilot CLI; Codex next |
 
 Two numbers are used twice (014 and 037); the file names are unique and the specs cite each other by name. Numbers 040 and 042 are reserved for specs not yet written. The machine-readable counterparts of the specs that define a format are in [`schemas/`](../schemas/) (see [`docs/reference/schemas.md`](reference/schemas.md)).

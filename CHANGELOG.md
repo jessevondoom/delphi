@@ -6,6 +6,14 @@ Release builds, with their notes and build attestations, are on the [releases pa
 
 This file starts with the work after v0.2.7. For earlier releases, the history is the merged pull requests and the per-spec notes under `specs/`; their entries below give dates, not detail.
 
+## 0.5.4 — 2026-11-04
+
+- Host plugin marketplace (spec 071): Delphi is installable as a plugin in Claude Code, Copilot CLI and Codex from this repository (`<host> plugin marketplace add jessevondoom/delphi`). `delphi mcp --check <host>` and a `delphi doctor` line read each host's state, and `delphi mcp --print-config <host> --absolute` prints a snippet with this binary's full path (#467).
+- `delphi connect` (spec 074): `delphi connect claude-code|copilot` with `--dry-run`, `--status` and `--remove`. It shows the exact plan and the host binary's checksum and runs only after you type a confirmation phrase at a terminal; it refuses inside an agent seat. A launch-path line in `--check` and `doctor` says whether the host can find `delphi`. Codex is not yet supported (#467, #468, #469).
+- Host cognitive parity (spec 072): MCP hosts gain `consult_orchestrator`, `spawn_agent_pack`, `kb_retrieve`, `query_memory`, `scaffold_status` and `propose_council_record`, and answers are labelled `via delphi` (#466).
+- Console adaptive contrast (spec 073): a dual-mode palette for dark and light terminals at WCAG AA contrast, with role colours adapted for light backgrounds (#471).
+- The README is rewritten around research, trust and decisions; its reference detail moved into `docs/` (`features.md`, `how-it-works.md`, `specifications.md`, `reference/console.md`) (#470).
+
 ## 0.5.3 — 2026-11-03
 
 - Scope of *No Spec, No Build* and the artifact prompt log (spec 070): the spec gate covers software only. Documents, decks, images and media need no spec; each create or edit by an operator-started task is recorded in a daemon-written, hash-chained log of the operator's redacted prompt (`local/artifact-log/<mission>/artifact-prompts.jsonl`, schema `prompt-log.schema.json`). Markdown notes and scaffolds stay regular operation. GOVERNANCE §1.3 amended.
