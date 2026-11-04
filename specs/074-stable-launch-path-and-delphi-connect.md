@@ -75,7 +75,7 @@ Tier: Red. The action writes another program's configuration and fetches skill t
 | L1 | launch-path line in `--check` and `doctor` (Part A); no receipt | L0 |
 | C1 | `delphi connect claude-code --dry-run` and `--status`: static plan (executable lookup and path safety, digest, rendered plan, preflight); executes nothing, writes nothing | L0 |
 | C2 | exec path for Claude Code only: consent confirmation, allowlist environment, digest recheck, record, verify, `--remove`, audit | C1, the recorded GitHub-source proof of requirement 7 |
-| C3 | Copilot first, then Codex templates; the next slice after C2, prioritized for the operator's daily Copilot use. C2 is not described as completing connect once | C2, a recorded proof per host, a short Council re-review of the template table |
+| C3 | Copilot (built, §9), then Codex (C3b) templates; the next slice after C2, prioritized for the operator's daily Copilot use. C2 is not described as completing connect once | C2, a recorded proof per host, a short Council re-review of the template table |
 
 ## 5. Testing
 
@@ -101,3 +101,17 @@ Approved by the operator after the Council; the slices above each meet their tes
 The plan text matches this behaviour. A live `delphi connect claude-code` and `--remove` under a pseudo-terminal then ran the same two steps each way against the real host, wrote a 0600 `connections.json` and an audit line, and cleared the record on removal.
 
 **Build notes.** The exec path is `crates/delphi/src/connect_run.rs`; `ConsentProof` is constructible only inside its `consent` module. Refusals: agent seat (`DELPHI_BRIDGE_*`), not entered as `delphi connect`, no TTY on stdin and stdout, no `/dev/tty`. The environment is an allowlist; the digest is rechecked before each exec; the `operator` directory is set to 0700. The host version is not recorded (it is never probed). The dependency-direction test of requirement 1 holds by construction (the engine, MCP and daemon crates do not depend on the `delphi` binary crate) and is not a separate test. Tests use a fake host CLI that records argv and environment.
+
+## 9. C3 template table, proof and Council re-review (Copilot, 2026-11-04)
+
+Codex follows as C3b (Council amendment: one host per slice).
+
+| Host | Fixed argv (no shell) | Identity and state read from | Provenance bound into the record |
+| :-- | :-- | :-- | :-- |
+| copilot (proven on Copilot CLI 1.0.105) | `copilot plugin marketplace add jessevondoom/delphi`, `copilot plugin install delphi@delphi`; removal `copilot plugin uninstall delphi@delphi`, `copilot plugin marketplace remove delphi` | `~/.copilot/settings.json` `extraKnownMarketplaces.delphi.source` (`github`, `jessevondoom/delphi`) and `enabledPlugins`; `~/.copilot/installed-plugins/delphi/delphi/` | the `plugin.json` release and a SHA-256 of `plugin.json` plus `.mcp.json`; removal needs the same digest |
+
+Proof (live, against the GitHub source): `marketplace add` and `install` succeeded (Copilot: `delphi@delphi (v0.5.3)`, settings gain `extraKnownMarketplaces` and `enabledPlugins`); `plugin update` answered `already at latest`; `uninstall` and `marketplace remove` succeeded and left empty `extraKnownMarketplaces` and `enabledPlugins` keys. Codex 0.166.0 (for C3b) recorded `[marketplaces.delphi]` as `source_type = "git"`, `source = "https://github.com/jessevondoom/delphi.git"`, a cache directory `~/.codex/plugins/cache/delphi/delphi/0.5.3`, `plugin remove` and `marketplace remove` clean.
+
+Council (three Copilot seats, one round, 2026-11-04). Strategist: APPROVE-WITH-AMENDMENTS (ship Copilot first and Codex separately; one explicit host only, no bare `connect` or `connect all`; share only the guarded exec mechanics, with per-host state adapters; leave `agy` out; every plan and doc keeps the claim limit that installing does not fix PATH). Architect and red-team: BLOCK on one point: `enabledPlugins` proves only an enabled identifier, so a later reinstall could be mistaken for what connect added, and a disabled or leftover install is not "absent". Adopted: the Copilot record binds the installed copy's release and content digest and `--remove` refuses on any difference (an updated plugin is left for the operator, with the manual cure); the preflight refuses on a leftover `installed-plugins/delphi` directory, a disabled entry or any `delphi` marketplace; the Codex slice must resolve zero-or-many cache releases by refusing, and bind the exact release. The host's other settings are rewritten by the host itself; the plan names the files written and the tests assert another key survives the fake host's rewrite; connect never repairs a config. A seat's concern that `connect` could then be widened by a generic table is met by the per-host adapters in `connect_run.rs`.
+
+Finding: on this machine Homebrew's `/usr/local/Caskroom` is group-writable (group `admin`), so the C1 safe-path rule refuses `/usr/local/bin/copilot -> /usr/local/Caskroom/...` with the manual commands. The rule was not loosened: that needs its own Council decision (for example trusting a group-writable directory owned by root with group `admin`).

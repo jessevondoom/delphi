@@ -11,9 +11,53 @@ use delphi_engine::mcp_check;
 
 use crate::connect_run;
 
-pub const HOST: &str = "claude-code";
 pub const SOURCE: &str = "jessevondoom/delphi";
 const MAX_EXE: u64 = 1024 * 1024 * 1024;
+
+/// One host's fixed commands (spec 074 C3 table). Every element is a constant: nothing from the operator, an agent, the environment or a file.
+pub struct Template {
+    pub host: &'static str,
+    pub exe: &'static str,
+    pub id: &'static str,
+    pub proven_on: &'static str,
+    pub dirs: &'static [&'static str],
+    pub add: [&'static [&'static str]; 2],
+    pub remove: [&'static [&'static str]; 2],
+    pub writes: &'static str,
+    pub manual_add: &'static str,
+    pub manual_remove: &'static str,
+}
+
+pub const TEMPLATES: [Template; 2] = [
+    Template {
+        host: "claude-code",
+        exe: "claude",
+        id: "claude-v1",
+        proven_on: "Claude Code 2.1.314",
+        dirs: &[".local/bin", ".claude/local", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"],
+        add: [&["plugin", "marketplace", "add", SOURCE], &["plugin", "install", "delphi@delphi"]],
+        remove: [&["plugin", "uninstall", "delphi@delphi"], &["plugin", "marketplace", "remove", "delphi"]],
+        writes: "~/.claude/plugins/ (marketplace and plugin files), ~/.claude/settings.json (enabledPlugins, extraKnownMarketplaces)",
+        manual_add: "claude plugin marketplace add jessevondoom/delphi && claude plugin install delphi@delphi",
+        manual_remove: "claude plugin uninstall delphi@delphi && claude plugin marketplace remove delphi",
+    },
+    Template {
+        host: "copilot",
+        exe: "copilot",
+        id: "copilot-v1",
+        proven_on: "Copilot CLI 1.0.105",
+        dirs: &[".local/bin", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"],
+        add: [&["plugin", "marketplace", "add", SOURCE], &["plugin", "install", "delphi@delphi"]],
+        remove: [&["plugin", "uninstall", "delphi@delphi"], &["plugin", "marketplace", "remove", "delphi"]],
+        writes: "~/.copilot/ (settings.json: enabledPlugins, extraKnownMarketplaces; installed-plugins/)",
+        manual_add: "copilot plugin marketplace add jessevondoom/delphi && copilot plugin install delphi@delphi",
+        manual_remove: "copilot plugin uninstall delphi@delphi && copilot plugin marketplace remove delphi",
+    },
+];
+
+pub fn template(host: &str) -> Option<&'static Template> {
+    TEMPLATES.iter().find(|t| t.host == host)
+}
 
 /// A host CLI found in a fixed directory, resolved and checked.
 #[derive(Debug, PartialEq, Eq)]
@@ -30,9 +74,9 @@ pub fn sanitize(s: &str) -> String {
     s.chars().flat_map(|c| if c.is_control() { c.escape_default().collect::<Vec<_>>() } else { vec![c] }).collect()
 }
 
-/// The fixed directories searched for the host CLI, in order. The operator's `PATH` is never a source.
-pub fn search_dirs(home: &Path) -> Vec<PathBuf> {
-    vec![home.join(".local/bin"), home.join(".claude/local"), "/opt/homebrew/bin".into(), "/usr/local/bin".into(), "/usr/bin".into()]
+/// The fixed directories searched for the host CLI, in order (relative entries are under `home`). The operator's `PATH` is never a source.
+pub fn search_dirs(t: &Template, home: &Path) -> Vec<PathBuf> {
+    t.dirs.iter().map(|d| if d.starts_with('/') { PathBuf::from(d) } else { home.join(d) }).collect()
 }
 
 /// Every component of `canonical` must be owned by the user or root and not writable by group or others, and the file regular and executable.
@@ -104,48 +148,44 @@ pub fn find_host_above(dirs: &[PathBuf], name: &str, floor: Option<&Path>) -> Re
 }
 
 /// The fixed argv of the two steps (no shell; every element is a constant).
-pub fn argv(exe: &Path) -> Vec<Vec<String>> {
-    let e = exe.display().to_string();
-    vec![
-        vec![e.clone(), "plugin".into(), "marketplace".into(), "add".into(), SOURCE.into()],
-        vec![e, "plugin".into(), "install".into(), "delphi@delphi".into()],
-    ]
+pub fn argv(exe: &Path, steps: &[&[&str]; 2]) -> Vec<Vec<String>> {
+    steps.iter().map(|st| std::iter::once(exe.display().to_string()).chain(st.iter().map(|x| x.to_string())).collect()).collect()
 }
 
 /// The plan text: everything the operator would consent to. Dynamic values are sanitised.
-pub fn render_plan(exe: &HostExe, pre: &mcp_check::Check, addable: bool) -> String {
+pub fn render_plan(t: &Template, exe: &HostExe, pre: &mcp_check::Check, addable: bool) -> String {
     let mut o = String::new();
-    o.push_str("delphi connect claude-code: plan (nothing has been run or written)\n");
+    o.push_str(&format!("delphi connect {}: plan (nothing has been run or written)\n", t.host));
     o.push_str(&format!("host CLI: {} (resolves to {})\n", sanitize(&exe.listed.display().to_string()), sanitize(&exe.canonical.display().to_string())));
     o.push_str(&format!("  owner uid {}, mode {:o}, sha256 {}\n", exe.uid, exe.mode, exe.sha256));
-    o.push_str("  the host version is not probed (that would run a program you have not consented to); the argv below was proven on Claude Code 2.1.314\n");
-    for (i, a) in argv(&exe.canonical).iter().enumerate() {
+    o.push_str(&format!("  the host version is not probed (that would run a program you have not consented to); the argv below was proven on {}\n", t.proven_on));
+    for (i, a) in argv(&exe.canonical, &t.add).iter().enumerate() {
         o.push_str(&format!("step {}: {}\n", i + 1, a.iter().map(|x| sanitize(x)).collect::<Vec<_>>().join(" ")));
     }
     o.push_str("working directory: a private temporary directory made at run time\n");
     o.push_str("environment: only a fixed safe PATH, HOME, LANG and LC_*, TERM and a private TMPDIR; proxy, token, loader, Git, npm, Python, Ruby and XDG variables are dropped\n");
-    o.push_str(&format!("source: {SOURCE}, a GitHub repository, fetched by Claude Code at connect time; it then tracks Delphi's releases (no commit or version is pinned: spec 071 D-5(B))\n"));
-    o.push_str("expected writes: ~/.claude/plugins/ (marketplace and plugin files), ~/.claude/settings.json (enabledPlugins, extraKnownMarketplaces)\n");
-    o.push_str("network: github.com, as Claude Code decides\n");
+    o.push_str(&format!("source: {SOURCE}, a GitHub repository, fetched by {} at connect time; it then tracks Delphi's releases (no commit or version is pinned: spec 071 D-5(B))\n", t.exe));
+    o.push_str(&format!("expected writes: {}\n", t.writes));
+    o.push_str("network: github.com, as the host decides\n");
     o.push_str(&format!("state found now: {}: {}\n", pre.state.name(), sanitize(&pre.detail)));
     if addable {
         o.push_str("this would add: the `delphi` marketplace and the `delphi@delphi` plugin\n");
     } else {
-        o.push_str("connect would refuse: it only adds what is absent. Use `delphi connect claude-code --status` for the cure\n");
+        o.push_str(&format!("connect would refuse: it only adds what is absent. Use `delphi connect {} --status` for the cure\n", t.host));
     }
-    o.push_str("removal: `delphi connect claude-code --remove`, only for what connect added and only while the host's state still matches its record\n");
+    o.push_str(&format!("removal: `delphi connect {} --remove`, only for what connect added and only while the host's state still matches its record\n", t.host));
     o.push_str("failure: there is no automatic rollback; a partial result is reported with the manual cure\n");
     o
 }
 
 /// The confirmation the execution path will require for this plan, bound to the whole plan text.
-pub fn confirmation(plan: &str) -> String {
+pub fn confirmation(host: &str, plan: &str) -> String {
     let h: String = Sha256::digest(plan.as_bytes()).iter().take(6).map(|b| format!("{b:02x}")).collect();
-    format!("CONNECT {HOST} {h}")
+    format!("CONNECT {host} {h}")
 }
 
 fn usage() -> i32 {
-    eprintln!("usage: delphi connect claude-code [--dry-run | --status | --remove]");
+    eprintln!("usage: delphi connect claude-code|copilot [--dry-run | --status | --remove]");
     2
 }
 
@@ -155,10 +195,10 @@ pub fn cmd(args: &[String]) -> i32 {
     let dry = rest.contains(&"--dry-run");
     let remove = rest.contains(&"--remove");
     let Some(host) = rest.iter().find(|a| !a.starts_with("--")) else { return usage() };
-    if *host != HOST {
-        eprintln!("delphi connect: only claude-code is supported so far; use the manual commands from `delphi mcp --print-config {}`", sanitize(host));
+    let Some(t) = template(host) else {
+        eprintln!("delphi connect: `{}` is not a host connect supports (claude-code, copilot); use the manual commands from `delphi mcp --print-config {}`", sanitize(host), sanitize(host));
         return 2;
-    }
+    };
     if [status, dry, remove].iter().filter(|x| **x).count() > 1 || rest.iter().any(|a| a.starts_with("--") && !matches!(*a, "--status" | "--dry-run" | "--remove")) {
         return usage();
     }
@@ -168,11 +208,17 @@ pub fn cmd(args: &[String]) -> i32 {
     };
     let home = Path::new(&home);
     let release = env!("CARGO_PKG_VERSION");
-    let pre = mcp_check::check_claude_code(home, release);
+    let pre = match mcp_check::check_host(t.host, home, release) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("delphi connect: {e}");
+            return 2;
+        }
+    };
     if status {
-        println!("claude-code: {}: {}", pre.state.name(), sanitize(&pre.detail));
-        println!("claude-code: launchable: {}", mcp_check::LAUNCHABLE);
-        println!("claude-code: launch path: {}", crate::launch_path_line(home));
+        println!("{}: {}: {}", t.host, pre.state.name(), sanitize(&pre.detail));
+        println!("{}: launchable: {}", t.host, mcp_check::LAUNCHABLE);
+        println!("{}: launch path: {}", t.host, crate::launch_path_line(home));
         println!("next: {}", pre.fix.as_deref().map(sanitize).unwrap_or_else(|| "nothing to do".into()));
         return 0;
     }
@@ -182,37 +228,37 @@ pub fn cmd(args: &[String]) -> i32 {
             return 2;
         }
     }
-    let addable = connect_run::addable(&pre, home);
-    let exe = match find_host(&search_dirs(home), "claude") {
+    let addable = connect_run::addable(t, &pre, home);
+    let exe = match find_host(&search_dirs(t, home), t.exe) {
         Ok(exe) => exe,
         Err(e) => {
-            eprintln!("delphi connect: {e}. Manual commands: {}", if remove { connect_run::MANUAL_CURE_REMOVE } else { connect_run::MANUAL_CURE_ADD });
+            eprintln!("delphi connect: {e}. Manual commands: {}", if remove { t.manual_remove } else { t.manual_add });
             return 1;
         }
     };
     if dry {
-        let plan = render_plan(&exe, &pre, addable);
+        let plan = render_plan(t, &exe, &pre, addable);
         print!("{plan}");
-        println!("confirmation that `delphi connect claude-code` will require for exactly this plan: {}", confirmation(&plan));
+        println!("confirmation that `delphi connect {}` will require for exactly this plan: {}", t.host, confirmation(t.host, &plan));
         return 0;
     }
     let delphi_home = crate::home::delphi_home(None);
     let (plan, expect) = if remove {
-        if let Err(e) = connect_run::removable(home, &delphi_home) {
+        if let Err(e) = connect_run::removable(t, home, &delphi_home) {
             eprintln!("delphi connect: {e}");
             return 2;
         }
-        let plan = connect_run::remove_plan(&exe);
-        let expect = connect_run::remove_confirmation(&plan);
+        let plan = connect_run::remove_plan(t, &exe);
+        let expect = connect_run::remove_confirmation(t.host, &plan);
         (plan, expect)
     } else {
         if !addable {
             eprintln!("delphi connect: something of Delphi's is already present, and connect only adds what is absent: {}: {}", pre.state.name(), sanitize(&pre.detail));
-            eprintln!("next: {}", pre.fix.as_deref().map(sanitize).unwrap_or_else(|| "see `delphi connect claude-code --status`".into()));
+            eprintln!("next: {}", pre.fix.as_deref().map(sanitize).unwrap_or_else(|| format!("see `delphi connect {} --status`", t.host)));
             return 2;
         }
-        let plan = render_plan(&exe, &pre, true);
-        let expect = confirmation(&plan);
+        let plan = render_plan(t, &exe, &pre, true);
+        let expect = confirmation(t.host, &plan);
         (plan, expect)
     };
     let proof = match connect_run::consent::ask(&plan, &expect) {
@@ -222,7 +268,7 @@ pub fn cmd(args: &[String]) -> i32 {
             return 2;
         }
     };
-    let result = if remove { connect_run::remove(&proof, &exe, home, &delphi_home) } else { connect_run::connect(&proof, &exe, home, &delphi_home, release) };
+    let result = if remove { connect_run::remove(t, &proof, &exe, home, &delphi_home) } else { connect_run::connect(t, &proof, &exe, home, &delphi_home, release) };
     match result {
         Ok(m) => {
             println!("{m}");
@@ -301,23 +347,24 @@ mod tests {
         exe_in(&t.path().join("x"), 0o755);
         let mut h = find_host_above(&[t.path().join("x")], "claude", Some(&root(&t))).unwrap();
         let pre = mcp_check::Check { state: mcp_check::State::Missing, detail: "not installed\nFORGED: yes".into(), fix: None };
-        let plan = render_plan(&h, &pre, true);
+        let plan = render_plan(template("copilot").unwrap(), &h, &pre, true);
         assert!(plan.contains("plugin marketplace add jessevondoom/delphi") && plan.contains("plugin install delphi@delphi"));
         assert!(plan.contains("not probed") && plan.contains("this would add"));
         assert!(!plan.contains("\nFORGED"), "a control character cannot start a new line");
-        let c = confirmation(&plan);
-        assert!(c.starts_with("CONNECT claude-code ") && c.len() == "CONNECT claude-code ".len() + 12);
+        let c = confirmation("copilot", &plan);
+        assert!(c.starts_with("CONNECT copilot ") && c.len() == "CONNECT copilot ".len() + 12);
         h.sha256 = "0".repeat(64);
-        assert_ne!(confirmation(&render_plan(&h, &pre, true)), c, "another plan needs another confirmation");
+        assert_ne!(confirmation("copilot", &render_plan(template("copilot").unwrap(), &h, &pre, true)), c, "another plan needs another confirmation");
         let present = mcp_check::Check { state: mcp_check::State::Configured, detail: "x".into(), fix: None };
-        assert!(render_plan(&h, &present, false).contains("connect would refuse"));
+        assert!(render_plan(template("copilot").unwrap(), &h, &present, false).contains("connect would refuse"));
     }
 
     #[test]
     fn nothing_executes_without_a_terminal_and_flags_are_exclusive() {
         let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(cmd(&a(&["claude-code"])), 2);
-        assert_eq!(cmd(&a(&["copilot", "--dry-run"])), 2);
+        assert_eq!(cmd(&a(&["copilot"])), 2);
+        assert_eq!(cmd(&a(&["codex", "--dry-run"])), 2);
         assert_eq!(cmd(&a(&["claude-code", "--dry-run", "--status"])), 2);
         assert_eq!(cmd(&a(&[])), 2);
     }
