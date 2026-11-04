@@ -123,13 +123,25 @@ export class InputParser {
     if (n === ']') { // OSC reply, e.g. the background colour: ESC ] 11 ; rgb:RRRR/GGGG/BBBB BEL
       const bel = s.indexOf('\x07', i), st = s.indexOf('\x1b\\', i);
       const end = bel >= 0 && (st < 0 || bel < st) ? bel : st;
-      if (end < 0) return 'incomplete';
+      if (end < 0) return s.length - i > 64 ? { len: 1, ev: null } : 'incomplete';
       const len = end + (end === bel ? 1 : 2) - i;
-      const m = /rgb:([0-9a-f]+)\/([0-9a-f]+)\/([0-9a-f]+)/i.exec(s.slice(i, end));
-      if (!m) return { len, ev: null };
-      const v = (h: string) => parseInt(h, 16) / (16 ** h.length - 1);
-      const rgb = [m[1]!, m[2]!, m[3]!].map((h) => Math.round(v(h) * 255)) as [number, number, number];
-      return { len, ev: { t: 'bg', dark: 0.2126 * v(m[1]!) + 0.7152 * v(m[2]!) + 0.0722 * v(m[3]!) < 0.5, rgb } };
+      if (len > 64) return { len, ev: null }; // discard oversized responses ([RED-01])
+      const slice = s.slice(i + 2, end); // after ESC ]
+      // Check for illegal control characters
+      if (/[\x00-\x08\x0b-\x1a\x1c-\x1f\x7f]/.test(slice)) return { len, ev: null };
+      const m = /^11;\s*rgb:([0-9a-fA-F]{2,4})\/([0-9a-fA-F]{2,4})\/([0-9a-fA-F]{2,4})$/i.exec(slice);
+      if (m) {
+        const v = (h: string) => parseInt(h, 16) / (16 ** h.length - 1);
+        const rgb = [m[1]!, m[2]!, m[3]!].map((h) => Math.round(v(h) * 255)) as [number, number, number];
+        return { len, ev: { t: 'bg', dark: 0.2126 * v(m[1]!) + 0.7152 * v(m[2]!) + 0.0722 * v(m[3]!) < 0.5, rgb } };
+      }
+      const mHex = /^11;\s*#?([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})$/i.exec(slice);
+      if (mHex) {
+        const rgb = [parseInt(mHex[1]!, 16), parseInt(mHex[2]!, 16), parseInt(mHex[3]!, 16)] as [number, number, number];
+        const dark = 0.2126 * (rgb[0] / 255) + 0.7152 * (rgb[1] / 255) + 0.0722 * (rgb[2] / 255) < 0.5;
+        return { len, ev: { t: 'bg', dark, rgb } };
+      }
+      return { len, ev: null };
     }
     // Alt+key: ESC then a character (Alt+Enter is ESC CR).
     if (n === '\r' || n === '\n') return { len: 2, ev: { t: 'key', k: 'enter', alt: true, shift: false, ctrl: false } };

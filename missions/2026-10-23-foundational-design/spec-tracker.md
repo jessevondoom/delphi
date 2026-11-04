@@ -602,8 +602,8 @@ Approved by the operator on 2026-11-04 following unanimous Council 015 deliberat
 | Slice | Content | Estimate | State |
 | :-- | :-- | --: | :-- |
 | S0 | spec 073 approval, Council 015 record, and tracker entry | 1 h | built (this PR) |
-| S1 | contrast math, caching, ambient context (`usePal`, `resetPal`, `withPal`) | 4 h | not started |
-| S2 | dual-mode semantic vocabulary and ANSI 16 fallback mappings | 6 h | not started |
-| S3 | avatar role chassis contrast adaptation in `avatar.rs`, `observer.rs`, and `theme.ts` | 5 h | not started |
-| S4 | automated WCAG AA contrast matrix test, OSC 11 unit test, and docs | 4 h | not started |
+| S1 | contrast math, caching, ambient context (`usePal`, `resetPal`, `withPal`) | 4 h | built (this PR) |
+| S2 | dual-mode semantic vocabulary and ANSI 16 fallback mappings | 6 h | built (this PR) |
+| S3 | avatar role chassis contrast adaptation in `avatar.rs`, `observer.rs`, and `theme.ts` | 5 h | built (this PR) |
+| S4 | automated WCAG AA contrast matrix test, OSC 11 unit test, and docs | 4 h | built (this PR) |
 

@@ -44,6 +44,15 @@ test('an escape sequence split across reads is completed, not dropped', () => {
 test('the background colour reply says dark or light', () => {
   assert.deepEqual(keys('\x1b]11;rgb:1a1a/1f1f/2929\x07'), [{ t: 'bg', dark: true, rgb: [26, 31, 41] }]);
   assert.deepEqual(keys('\x1b]11;rgb:ffff/ffff/ffff\x1b\\'), [{ t: 'bg', dark: false, rgb: [255, 255, 255] }]);
+  assert.deepEqual(keys('\x1b]11;#ffffff\x07'), [{ t: 'bg', dark: false, rgb: [255, 255, 255] }]);
+});
+
+test('OSC 11 sanitization: oversized and control-injected payloads are safely discarded', () => {
+  // Oversized payload (> 64 bytes)
+  const huge = '\x1b]11;rgb:' + 'f'.repeat(100) + '/ffff/ffff\x07';
+  assert.deepEqual(keys(huge), []);
+  // Injected control character
+  assert.deepEqual(keys('\x1b]11;rgb:ffff\x08/ffff/ffff\x07'), []);
 });
 
 test('escape then a control key in one read is two keypresses', () => {
