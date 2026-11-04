@@ -133,6 +133,31 @@ pub fn check_claude_code(home: &Path, binary_release: &str) -> Check {
     }
 }
 
+/// Spec 074 L1: whether a stable install location holds this binary, from `stat` alone (nothing is executed). The directories are
+/// `install_dir` (`$DELPHI_INSTALL_DIR`, if set), `~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin`. It says nothing about a host's own `PATH`.
+pub fn launch_path(home: &Path, install_dir: Option<&Path>, exe: &Path) -> String {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(me) = std::fs::metadata(exe) else { return "unknown (this binary cannot be inspected)".into() };
+    let mut dirs: Vec<std::path::PathBuf> = install_dir.filter(|d| d.is_absolute()).map(Path::to_path_buf).into_iter().collect();
+    dirs.extend([home.join(".local/bin"), "/opt/homebrew/bin".into(), "/usr/local/bin".into()]);
+    let mut other = false;
+    for d in dirs {
+        let cand = d.join("delphi");
+        match std::fs::metadata(&cand) {
+            Ok(m) if m.dev() == me.dev() && m.ino() == me.ino() => {
+                return format!("stable path {} is this binary; a host that cannot see your shell PATH can use `delphi mcp --print-config <host> --absolute`", cand.display());
+            }
+            Ok(_) => other = true,
+            Err(_) => {}
+        }
+    }
+    if other {
+        "no stable path holds this binary (a different `delphi` is installed in a standard location); run `delphi mcp --print-config <host> --absolute` from the one you want".into()
+    } else {
+        "no stable path holds this binary (it is not in a standard install location); install with install.sh or Homebrew, or use `delphi mcp --print-config <host> --absolute`".into()
+    }
+}
+
 /// Copilot CLI (1.0.105): `~/.copilot/settings.json` `enabledPlugins`. A plugin from a local marketplace is loaded live and records no
 /// release, so only enabled or not is known and the release is never compared.
 pub fn check_copilot(home: &Path) -> Check {
@@ -295,6 +320,27 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         assert_eq!(check_host("agy", t.path(), "0.5.3").unwrap().state, State::Unverified);
         assert!(check_host("vim", t.path(), "0.5.3").is_err());
+    }
+
+    #[test]
+    fn launch_path_finds_a_stable_location_holding_this_binary_by_identity() {
+        let t = tempfile::tempdir().unwrap();
+        let exe = t.path().join("elsewhere/delphi");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, "x").unwrap();
+        assert!(launch_path(t.path(), None, &exe).starts_with("no stable path holds this binary (it is not"));
+        let bin = t.path().join(".local/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("delphi"), "y").unwrap();
+        assert!(launch_path(t.path(), None, &exe).contains("a different `delphi`"));
+        std::fs::remove_file(bin.join("delphi")).unwrap();
+        std::os::unix::fs::symlink(&exe, bin.join("delphi")).unwrap();
+        assert!(launch_path(t.path(), None, &exe).starts_with(&format!("stable path {}", bin.join("delphi").display())));
+        let custom = t.path().join("custom");
+        std::fs::create_dir_all(&custom).unwrap();
+        std::fs::hard_link(&exe, custom.join("delphi")).unwrap();
+        assert!(launch_path(t.path(), Some(&custom), &exe).contains(&custom.join("delphi").display().to_string()));
+        assert!(launch_path(t.path(), None, &t.path().join("missing")).starts_with("unknown"));
     }
 
     #[test]

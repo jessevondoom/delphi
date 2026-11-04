@@ -21,6 +21,8 @@ Check it any time with `delphi mcp --check claude-code` (or `copilot`, `codex`; 
 
 Remove it with `claude plugin uninstall delphi@delphi` and `claude plugin marketplace remove delphi`. To turn Delphi off without removing it, set `[mcp] enabled = false` in `config.toml` or use `/mcp off`.
 
+To preview the Claude Code setup without running anything, use `delphi connect claude-code --dry-run` (the exact commands, the `claude` file it found and its checksum, what would be written) or `delphi connect claude-code --status`. Running the connection for you is not available yet; the commands above are the way. Neither `--check` nor `connect` can make a GUI- or service-launched host find `delphi`: the `launch path` line tells you whether a standard install location holds this binary, and `--print-config <host> --absolute` is the cure when the host cannot see your shell `PATH`.
+
 ### Copilot CLI and Codex: the same plugin
 
 Both read this repository's `.claude-plugin/marketplace.json` and install the same plugin (tested on Copilot CLI 1.0.105 and Codex 0.166.0):

@@ -233,6 +233,7 @@ fn check_host_plugin(r: &mut Report) {
         r.push(Level::Skipped, "15 host-plugin", "claude-code, copilot, codex", "HOME is unset, so the hosts' plugin state cannot be read");
         return;
     };
+    r.push(Level::Ok, "15 host-plugin", "launch path", crate::launch_path_line(Path::new(&home)));
     for host in ["claude-code", "copilot", "codex"] {
         let Ok(c) = delphi_engine::mcp_check::check_host(host, Path::new(&home), env!("CARGO_PKG_VERSION")) else { continue };
         let msg = format!("{}: {}. Launchable: {}{}", c.state.name(), c.detail, delphi_engine::mcp_check::LAUNCHABLE, c.fix.map(|f| format!(". Fix: `{f}`")).unwrap_or_default());
