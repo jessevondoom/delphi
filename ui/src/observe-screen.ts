@@ -338,6 +338,7 @@ function slot(m: OModel, w: number): string {
 }
 
 export function observeFrame(m: OModel, w: number, h: number): string[] {
+  T.usePal(m.pal);
   if (w < 28 || h < 9) return [`narrator needs 28x9`, `window is ${w}x${h}`].map((l) => [...l].slice(0, Math.max(0, w)).join('')).concat(Array(Math.max(0, h - 2)).fill('')).slice(0, Math.max(0, h));
   const head = header(m, w), foot = footer(m, w);
   const bodyH = Math.max(1, h - head.length - foot.length);
