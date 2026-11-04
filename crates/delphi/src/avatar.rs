@@ -42,8 +42,10 @@ pub enum AgentActivity {
 pub struct RoleTheme {
     pub role_id: &'static str,
     pub chassis_rgb: (u8, u8, u8),
+    pub chassis_rgb_light: (u8, u8, u8),
     /// The ANSI colour (0-15) a 16-colour terminal gets for the chassis (`specs/005e` §5): the nearest bright colour, chosen by hand.
     pub chassis_ansi: u8,
+    pub chassis_ansi_light: u8,
     pub crown_rgb: (u8, u8, u8),
     /// Strictly bottom-half block `▄` (7 display columns)
     pub crown_slice: &'static str,
@@ -57,7 +59,9 @@ pub const ROLES: [RoleTheme; 7] = [
     RoleTheme {
         role_id: "orchestrator",
         chassis_rgb: (168, 85, 247), // Violet #A855F7
+        chassis_rgb_light: (126, 34, 206), // Deep Purple #7E22CE
         chassis_ansi: 13,
+        chassis_ansi_light: 5,
         crown_rgb: (250, 204, 21),   // Gold #FACC15
         crown_slice: "  ▄▄▄  ",
         default_face: "•─•",
@@ -68,7 +72,9 @@ pub const ROLES: [RoleTheme; 7] = [
     RoleTheme {
         role_id: "builder",
         chassis_rgb: (245, 158, 11), // Amber #F59E0B
+        chassis_rgb_light: (180, 83, 9), // Deep Amber #B45309
         chassis_ansi: 11,
+        chassis_ansi_light: 3,
         crown_rgb: (244, 63, 94),    // Rose corners #F43F5E
         crown_slice: "▄▄▄▄▄▄▄",       // Rose ends + White center in render
         default_face: "•───•",
@@ -79,7 +85,9 @@ pub const ROLES: [RoleTheme; 7] = [
     RoleTheme {
         role_id: "architect",
         chassis_rgb: (56, 189, 248), // Cyan #38BDF8
+        chassis_rgb_light: (3, 105, 161), // Deep Blue #0369A1
         chassis_ansi: 14,
+        chassis_ansi_light: 4,
         crown_rgb: (255, 255, 255),  // White marble #FFFFFF
         crown_slice: "▄▄▄▄▄▄▄",
         default_face: "•_•",
@@ -90,7 +98,9 @@ pub const ROLES: [RoleTheme; 7] = [
     RoleTheme {
         role_id: "red-team",
         chassis_rgb: (239, 68, 68),  // Crimson #EF4444
+        chassis_rgb_light: (185, 28, 28), // Dark Red #B91C1C
         chassis_ansi: 9,
+        chassis_ansi_light: 1,
         crown_rgb: (250, 204, 21),   // Bronze Gold #FACC15
         crown_slice: "▄     ▄",
         default_face: "-_-",         // Sneaky squint default
@@ -101,7 +111,9 @@ pub const ROLES: [RoleTheme; 7] = [
     RoleTheme {
         role_id: "strategist",
         chassis_rgb: (20, 184, 166), // Teal #14B8A6
+        chassis_rgb_light: (15, 118, 110), // Deep Teal #0F766E
         chassis_ansi: 10,
+        chassis_ansi_light: 6,
         crown_rgb: (249, 168, 212),  // Light Pink #F9A8D4
         crown_slice: "▄▄ ▄ ▄▄",
         default_face: "•_•",
@@ -112,7 +124,9 @@ pub const ROLES: [RoleTheme; 7] = [
     RoleTheme {
         role_id: "scout",
         chassis_rgb: (255, 255, 0), // Bright Yellow #FFFF00
+        chassis_rgb_light: (133, 77, 14), // Olive Gold #854D0E
         chassis_ansi: 3,
+        chassis_ansi_light: 3,
         crown_rgb: (65, 105, 225),  // Royal Blue #4169E1
         crown_slice: "   ▄   ",
         default_face: "• • •",       // 3 all-seeing eyes, NO mouth
@@ -123,7 +137,9 @@ pub const ROLES: [RoleTheme; 7] = [
     RoleTheme {
         role_id: "operator",
         chassis_rgb: (148, 163, 184), // Slate #94A3B8
+        chassis_rgb_light: (71, 85, 105), // Deep Slate #475569
         chassis_ansi: 7,
+        chassis_ansi_light: 8,
         crown_rgb: (203, 213, 225),
         crown_slice: "▄▄▄▄▄▄▄",
         default_face: "•_•",
@@ -229,7 +245,7 @@ pub fn badge_mouth(role: AgentRole, activity: AgentActivity) -> Option<usize> {
 /// e.g. `⟦•_•⟧` or `⟦x?x⟧`
 pub fn render_badge(role: AgentRole, activity: AgentActivity, is_dark_mode: bool) -> String {
     let t = get_theme(role);
-    let c = fg(t.chassis_rgb);
+    let c = fg(if is_dark_mode { t.chassis_rgb } else { t.chassis_rgb_light });
     let eye_color = fg(if is_dark_mode { EYE_DARK } else { EYE_LIGHT });
     let cells: Vec<char> = badge_cells(role, activity).chars().collect();
     if activity == AgentActivity::WaitingApproval {
@@ -270,7 +286,9 @@ pub fn ui_spec() -> serde_json::Value {
         let mascot: Map<String, Value> = ACTIVITIES.iter().map(|(name, a)| ((*name).to_string(), json!(mascot_row(role, *a)))).collect();
         let mut r = json!({
             "chassis": hex_rgb(t.chassis_rgb),
+            "chassis_light": hex_rgb(t.chassis_rgb_light),
             "ansi": t.chassis_ansi,
+            "ansi_light": t.chassis_ansi_light,
             "crown": t.crown_slice,
             "crown_rgb": hex_rgb(t.crown_rgb),
             "mascot_face": t.default_face,
@@ -550,13 +568,22 @@ mod tests {
     /// `specs/005e` §5 names the 16-colour fallback of each role; the console reads it from `ui_spec`.
     #[test]
     fn every_role_has_a_sixteen_colour_fallback_and_the_table_of_005e_holds() {
-        let want = [("orchestrator", 13), ("architect", 14), ("builder", 11), ("red-team", 9), ("strategist", 10), ("scout", 3)];
-        for (role, ansi) in want {
+        let want = [
+            ("orchestrator", 13, 5),
+            ("architect", 14, 4),
+            ("builder", 11, 3),
+            ("red-team", 9, 1),
+            ("strategist", 10, 6),
+            ("scout", 3, 3),
+        ];
+        for (role, ansi, ansi_light) in want {
             let t = ROLES.iter().find(|t| t.role_id == role).unwrap();
             assert_eq!(t.chassis_ansi, ansi, "{}", role);
+            assert_eq!(t.chassis_ansi_light, ansi_light, "{}", role);
             assert_eq!(ui_spec()["roles"][role]["ansi"], ansi, "{}", role);
+            assert_eq!(ui_spec()["roles"][role]["ansi_light"], ansi_light, "{}", role);
         }
-        assert!(ROLES.iter().all(|t| t.chassis_ansi < 16));
+        assert!(ROLES.iter().all(|t| t.chassis_ansi < 16 && t.chassis_ansi_light < 16));
     }
 
     #[test]
@@ -575,7 +602,7 @@ mod tests {
                     assert!(!out.contains(if dark { "\x1b[38;2;15;23;42m" } else { "\x1b[38;2;255;255;255m" }), "{} {} dark={}: the other mode's eye colour leaked in", t.role_id, name, dark);
                     // Eyes are the cells that are not the mouth, whatever character they are: the red-team's `-_-` has `-` eyes.
                     if let Some(m) = badge_mouth(role, *a) {
-                        let chassis = fg(t.chassis_rgb);
+                        let chassis = fg(if dark { t.chassis_rgb } else { t.chassis_rgb_light });
                         let mouth_ch = cells.chars().nth(m).unwrap();
                         assert!(out.contains(&format!("{chassis}{mouth_ch}")), "{} {} mouth is chassis-coloured", t.role_id, name);
                     }
