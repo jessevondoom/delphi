@@ -170,7 +170,11 @@ pub fn display_name(ws_dir: &std::path::Path, home: &std::path::Path, role: &str
     } else {
         String::new()
     };
-    let resolver = if text.trim().is_empty() {
+    // An unsafe theme name shows the canonical role (spec 077, "Theme Isolation & Graceful Fallback"); a safe
+    // name whose file is missing keeps the built-in default names.
+    let resolver = if !safe {
+        delphi_core::theme_names::ThemeResolver::from_theme_text("")
+    } else if text.trim().is_empty() {
         delphi_core::theme_names::ThemeResolver::default()
     } else {
         delphi_core::theme_names::ThemeResolver::from_theme_text(&text)
