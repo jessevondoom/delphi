@@ -110,7 +110,7 @@ The external host model consults the `orchestrator` to determine workflow strate
 - `execution_contract`:
   - `constraints`: Specific rules and anti-patterns to enforce.
   - `context_pointers`: Files or specs the host should read first.
-  - `definition_of_done`: Deterministic predicates required before declaring completion.
+  - `definition_of_done`: Deterministic predicates required before declaring completion. *Amended by [`specs/082`](082-orchestrator-outside-delegation-contracts.md) §3: the predicates come from the task's optional `done_when` input as typed `{kind, value, status}` items; with none given the answer is one `unspecified` item, and Delphi's own gates are only ever `suggested`, inside the Delphi repository.*
 
 ### 4.2 Tool: `spawn_agent_pack`
 

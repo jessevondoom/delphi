@@ -646,7 +646,7 @@ Approved by the operator on 2026-11-05. Extends specs 072, 038 and 062. Task-der
 | Slice | Content | Estimate | State |
 | :-- | :-- | --: | :-- |
 | S0 | spec 082 approval and tracker entry | 1 h | approved (this branch) |
-| S1a | `consult_orchestrator` `done_when` input, typed `definition_of_done`, `unspecified` default | 4 h | not built |
+| S1a | `consult_orchestrator` `done_when` input, typed `definition_of_done`, `unspecified` default | 4 h | built (this branch) |
 | S1b | orchestrator §6 amendment; venue-not-settable test | 1 h | not built |
 | S1c | `done_when`/`stop_when` in envelope schema and template; `check handoff` requires them | 3 h | not built |
 | S2 | `check brief` shape check; `handoff-packaging` section | 4 h | not built |
