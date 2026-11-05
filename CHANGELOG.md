@@ -8,6 +8,10 @@ This file starts with the work after v0.2.7. For earlier releases, the history i
 
 ## Unreleased
 
+## 0.5.5 — 2026-11-05
+
+- Two specs approved, nothing built (079, 080): an ingress taint registry test where core assigns each ingress a ceiling by transport origin, and a knowledge-base read-count report with a `host_search_kb` event and an `invariant: security|constraint` attribute. Drafts 078 (Council scorecard) and 081 (conventions note) come from the same Council and are not approved. The spec tracker has the order and the open items.
+- `.delphi-project`, the marker `delphi project register` writes into a registered repository, is now ignored by this repository's `.gitignore`.
 - Install and update from a private repository (spec 076): `install.sh` and `delphi update` use your GitHub credentials (`gh`, `GH_TOKEN`, `GITHUB_TOKEN`) for the lookup and download, never sending a token to a mirror or a redirect host. Where a repository has no build attestations, the installer checks the maintainers' release signature instead; an attestation that exists and fails still stops the install. Homebrew works only while the repository is public.
 - Knowledge base search (spec 075): `delphi kb search` shows summary pages by default, with `--summaries` and `--bibs` to choose; the console follows `[tui] hide_bibliographies`. Agents still get the bibliography sidecar.
 
