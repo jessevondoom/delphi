@@ -161,7 +161,9 @@ impl Library for LiveLibrary {
 
 /// The display name the workspace's theme pack gives `role`, or the role's own id when there is none.
 pub fn display_name(ws_dir: &std::path::Path, home: &std::path::Path, role: &str) -> String {
-    let theme = std::fs::read_to_string(ws_dir.join("config.toml")).ok().and_then(|t| t.parse::<toml::Table>().ok()).and_then(|t| t.get("theme")?.get("name")?.as_str().map(String::from)).unwrap_or_else(|| "greek".into());
+    let theme = std::fs::read_to_string(ws_dir.join("config.toml")).ok().and_then(|t| t.parse::<toml::Table>().ok()).and_then(|t| t.get("theme")?.get("name")?.as_str().map(String::from));
+    let named = theme.is_some();
+    let theme = theme.unwrap_or_else(|| "greek".into());
     let safe = theme.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
     let text = if safe {
         std::fs::read_to_string(home.join("themes").join(&theme).join("theme.md"))
@@ -171,8 +173,13 @@ pub fn display_name(ws_dir: &std::path::Path, home: &std::path::Path, role: &str
         String::new()
     };
     let resolver = if text.trim().is_empty() {
-        // A missing, unreadable or unsafe theme falls back to the canonical role ID (spec 077, Theme Isolation), not to a built-in pack.
-        delphi_core::theme_names::ThemeResolver::new(std::collections::HashMap::new())
+        // A theme the workspace names but that is missing, unreadable or unsafe falls back to the canonical role ID (spec 077, Theme
+        // Isolation). A workspace that names none keeps the built-in default pack.
+        if named || !safe {
+            delphi_core::theme_names::ThemeResolver::new(std::collections::HashMap::new())
+        } else {
+            delphi_core::theme_names::ThemeResolver::default()
+        }
     } else {
         delphi_core::theme_names::ThemeResolver::from_theme_text(&text)
     };
