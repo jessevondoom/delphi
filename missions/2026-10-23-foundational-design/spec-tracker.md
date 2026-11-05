@@ -642,13 +642,13 @@ Approved by the operator on 2026-11-04. Extends specs 062, 071, 072, and 074; co
 
 
 
-## Council drafts: evidence from existing events (specs 078-081, draft 2026-11-05)
+## Council specs: evidence from existing events (specs 078-081, 2026-11-05)
 
-Drafted by the architect from the 2026-11-05 Council (both options), revised after the Red-Team and Strategist steps. The Strategist put the monolithic evidence ledger out: 081 is a conventions note, and the work is recipes over verified events plus one new event. None is approved; nothing is built.
+Drafted by the architect from the 2026-11-05 Council (both options), revised after the Red-Team and Strategist steps. The Strategist put the monolithic evidence ledger out: 081 is a conventions note, and the work is recipes over verified events plus one new event. The operator approved 079 and 080 on 2026-11-05 and asked that nothing be built yet; 078 and 081 stay drafts. Nothing is built.
 
 | Spec | Content | Wave | State |
 | :-- | :-- | :-- | :-- |
-| 079 | registry test: every ingress has a core-assigned origin ceiling; hard blocker for any `min_taint` figure | 1, first | draft |
-| 080 | KB read-count report from `fact.read` events; `host_search_kb` event, `invariant: security\|constraint` attribute (needs operator ratification), no automatic pruning | 1, after 079 | draft |
+| 079 | registry test: every ingress has a core-assigned origin ceiling; hard blocker for any `min_taint` figure | 1, first | approved 2026-11-05, not built |
+| 080 | KB read-count report from `fact.read` events; `host_search_kb` event, `invariant: security\|constraint` attribute (needs its own operator ratification), no automatic pruning | 1, after 079 | approved 2026-11-05, not built |
 | 078 | Council scorecard: cost by `task_id`, choice from `council.followed`, family spread a floor | 2 | draft |
 | 081 | conventions note: advisory-only invariants, row shape, missing events in order | note | draft |

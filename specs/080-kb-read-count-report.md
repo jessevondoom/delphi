@@ -1,9 +1,10 @@
 ---
 id: spec-080-kb-read-count-report
-title: '080: KB read-count report: a documented jq recipe, host-read event and security|constraint tag (draft)'
+title: '080: KB read-count report: a documented jq recipe, host-read event and security|constraint tag'
 author: architect
 timestamp: 2026-11-05T00:00:00Z
-status: draft
+status: approved
+approved_by: operator (2026-11-05)
 wave: 1 (order 2; slices W1.2, W1.3, W1.4)
 governed_by: GOVERNANCE.md
 review_rubric: REVIEW.md
@@ -15,11 +16,10 @@ tags:
 - knowledge-base
 - measurement
 - reporting
-- draft
 ---
 # Spec 080: KB read-count report
 
-> **Status: draft.** Council options A and B merged (Strategist decision), mission 2026-11-05-session. Nothing here is permission to build.
+> **Status: approved by the operator, 2026-11-05.** Council options A and B merged (Strategist decision), mission 2026-11-05-session. Approval is permission to build the slices in order, and the operator asked that nothing be built yet. The `invariant` attribute (W1.3) edits governed paths and needs its own ratification.
 > **Wave 1, order 2.** Slices in order: **W1.2** `host_search_kb` event, **W1.3** frontmatter invariant, **W1.4** jq recipe. No store, no persisted view, no `state.db`; every figure is computed on demand from `events.jsonl`.
 
 ## 1. Slices
@@ -41,16 +41,16 @@ Reads per fact over a period (and, after W1.3, facts never read, minus exempt on
 Scope statement on every output: **"agent reads only"** until W1.2 ships; after W1.2, host reads are counted from the new event, as a separate column.
 
 ## 3. Authority risk
-Read-only. The report **never prunes or demotes automatically**; any demotion is proposed and the operator ratifies it (GOVERNANCE §5.7, §7). Risks: (a) counts must not feed ranking or promotion: popularity is not truth, and a span re-reading a fact could game it (`[H-004]`); (b) zero reads is not evidence of low value for tagged `security|constraint` entries; they are excluded from the zero-read list by the W1.3 check, never merely by convention; (c) the report names fact ids and spans, not claim text (spec 040 §345).
+Read-only. The report **never prunes or demotes automatically**; any demotion is proposed and the operator ratifies it (GOVERNANCE §5.7, §7). Risks: (a) counts must not feed ranking or promotion: popularity is not truth, and a span re-reading a fact could game it (`[H-004]`); (b) zero reads is not evidence of low value for tagged `security|constraint` entries; they are excluded from the zero-read list by the W1.3 check, never merely by convention; (c) the report names fact ids and spans, not claim text (spec 040 §15.3).
 
 ## 4. What already covers it
 - The agent kb tool emits `fact.read` for each fact it returns (tools.rs:532 comment; fact_audit.rs:303-308). **"Counts are complete" is withdrawn:** it was false while `host_search_kb` appends nothing (service.rs:506-539). Say "agent reads only" until W1.2 ships.
-- The lineage report lists the spans and decisions a fact touched (spec 040 §337); fact_audit.rs:505-528 already reads `fact.read` events to list the readers of retracted facts.
-- **Spec 040 §449 counting reference: marked unbuilt.** `fact_audit.rs` exposes `queue_claim` (:594), `fact_read_events` (:304) and `retract_all` (:519, with `fact_store.rs:262`); a per-claim counting function was not found by name. Do not cite §449 as existing behaviour.
+- The lineage report lists the spans and decisions a fact touched (spec 040 §15.2); fact_audit.rs:505-528 already reads `fact.read` events to list the readers of retracted facts.
+- **Spec 040 §18.3 counting reference: marked unbuilt.** `fact_audit.rs` exposes `queue_claim` (:594), `fact_read_events` (:304) and `retract_all` (:519, with `fact_store.rs:262`); a per-claim counting function was not found by name. Do not cite §449 as existing behaviour.
 - Rule exposure and survival for memory (spec 050); Knowledge Window (spec 043). Not read in this session.
 
 ## 5. Simpler Alternative Considered
 A recipe over `events.jsonl` instead of a command, table, pane or store. Preferred: the agent-read data exists today. The only code is the one event (W1.2) and one tag check (W1.3).
 
 ## 6. Verification
-Recipe on a workspace with known `fact.read` events: counts match; a direct file read of a fact (denied, spec 040 §342) adds nothing. After W1.2: one `host.search_kb` call adds exactly one event with fact ids and a hit count and no query text (grep the log for the query string: no match). After W1.3: a tagged entry with zero reads is absent from the zero-read list and present in the exempt section; an agent attempt to set the attribute is refused; running any report changes no fact.
+Recipe on a workspace with known `fact.read` events: counts match; a direct file read of a fact (denied, spec 040 §15.2) adds nothing. After W1.2: one `host.search_kb` call adds exactly one event with fact ids and a hit count and no query text (grep the log for the query string: no match). After W1.3: a tagged entry with zero reads is absent from the zero-read list and present in the exempt section; an agent attempt to set the attribute is refused; running any report changes no fact.

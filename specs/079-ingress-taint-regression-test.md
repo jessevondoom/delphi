@@ -1,9 +1,10 @@
 ---
 id: spec-079-ingress-taint-regression-test
-title: '079: Ingress taint regression test: every ingress has a core-assigned origin ceiling (draft)'
+title: '079: Ingress taint regression test: every ingress has a core-assigned origin ceiling'
 author: architect
 timestamp: 2026-11-05T00:00:00Z
-status: draft
+status: approved
+approved_by: operator (2026-11-05)
 wave: 1 (order 1)
 governed_by: GOVERNANCE.md
 review_rubric: REVIEW.md
@@ -16,11 +17,10 @@ tags:
 - security
 - testing
 - ingress
-- draft
 ---
 # Spec 079: Ingress taint regression test
 
-> **Status: draft.** Council options A and B merged (Strategist decision), mission 2026-11-05-session. Nothing here is permission to build.
+> **Status: approved by the operator, 2026-11-05.** Council options A and B merged (Strategist decision), mission 2026-11-05-session. Approval is permission to build slice S1, and the operator asked that nothing be built yet.
 > **Wave 1, order 1.** **Hard blocker:** until S1 passes, no `min_taint` column and no area-1 figure (counts of tainted spans by origin or `cause`) may be published by any report, recipe or note (078, 080, 081). No `min_taint` column appears anywhere until S1 passes.
 
 ## 1. Smallest slice
@@ -35,9 +35,9 @@ Test code only; it changes no taint rule. Risk: letting a tool declare its own c
 
 ## 4. What already covers it
 - Taint is computed by `delphi-core` from the lowest-trust input in the span (GOVERNANCE §4.3, spec 001 §5).
-- Ingress firewall and sanitizer for federated peers (spec 007 §3); Xenia ingress (spec 011 §221).
-- Planted-canary test for staged notes (spec 031 AC-3) and the learning-loop eval (spec 031 §129). This covers memory promotion, not every ingress tool.
-- `kb_search` hides notes below the taint floor unless asked (spec 031 §221; spec 064 §45).
+- Ingress firewall and sanitizer for federated peers (spec 007 §3); Xenia ingress (spec 011 §7.2).
+- Planted-canary test for staged notes (spec 031 AC-3) and the learning-loop eval (spec 031 §4.6). This covers memory promotion, not every ingress tool.
+- `kb_search` hides notes below the taint floor unless asked (spec 031 §7.1; spec 064 §4).
 Gap: no test asserts that *every* ingress has a known origin mapped to a ceiling. S1 closes that gap.
 
 ## 5. Simpler Alternative Considered
