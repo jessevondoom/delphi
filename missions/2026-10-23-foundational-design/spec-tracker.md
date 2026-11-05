@@ -628,4 +628,16 @@ Approved by the operator on 2026-11-04. Makes `install.sh` and `delphi update` w
 | P1 | token lookup, `install.sh` and `delphi update` changes, tiered verification, tests | 1 day | built (this branch) |
 | P2 | marketplace proof against the private repository, workflow change, docs, CHANGELOG | 0.5 day | workflow, docs, CHANGELOG built (this branch); marketplace proof pending the private repository |
 
+## Host mention routing, themed alias resolution, and front-door problem solving (spec 077, approved 2026-11-04)
+
+Approved by the operator on 2026-11-04. Extends specs 062, 071, 072, and 074; complements specs 001 and 003. Establishes `@delphi` as the Front-Door Conductor mention (surfacing the lead orchestrator for task triage, complexity escalation, execution contracts, and specialist summoning) and enables dual-key mention resolution (`@<name>` and `@<role>`) dynamically mapped from the active workspace theme.
+
+| Slice | Content | Estimate | State |
+| :-- | :-- | --: | :-- |
+| S0 | spec 077 approval and tracker entry | 1 h | approved (this branch) |
+| S1 | core theme resolver extraction in `delphi-core::theme_names` and unit tests | 3 h | built (this branch) |
+| S2 | MCP dynamic alias resolution in `mcp_host.rs`, `list_roles` aliases, and `delphi_roster` | 4 h | built (this branch) |
+| S3 | Claude Code plugin skill (`SKILL.md`) update and project template instructions | 3 h | built (this branch) |
+
+
 

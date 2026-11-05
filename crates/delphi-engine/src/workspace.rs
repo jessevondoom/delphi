@@ -322,8 +322,71 @@ impl WorkspacePaths {
     }
 }
 
+/// A minimal but real ratified workspace in `root`, using the repository's own seed files.
+pub fn make_test_workspace(root: &std::path::Path) -> WorkspacePaths {
+    use std::fs;
+    let ws = WorkspacePaths::new(root, "w");
+    for d in ["team", "local/missions", "base"] {
+        fs::create_dir_all(ws.dir.join(d)).unwrap();
+    }
+    let ratified = ws.dir.join("local/ratified");
+    let write = |p: std::path::PathBuf, text: &str| {
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, text).unwrap();
+    };
+    let mut lock = std::collections::BTreeMap::new();
+    let mut add = |logical: &str, text: &str| {
+        write(ratified.join(logical), text);
+        lock.insert(logical.to_string(), hash(text.as_bytes()));
+        let live = match logical {
+            "context/team-heuristics.md" => ws.dir.join("team").join(logical),
+            "heuristics.md" => ws.dir.join("local").join(logical),
+            _ => ws.dir.join("base").join(logical),
+        };
+        write(live, text);
+    };
+    add("GOVERNANCE.md", "# Governance\nNever exceed your role's scope.\n");
+    for (role, text) in [
+        ("orchestrator", include_str!("../../../agents/orchestrator/AGENT.md")),
+        ("architect", include_str!("../../../agents/architect/AGENT.md")),
+        ("builder", include_str!("../../../agents/builder/AGENT.md")),
+        ("red-team", include_str!("../../../agents/red-team/AGENT.md")),
+        ("strategist", include_str!("../../../agents/strategist/AGENT.md")),
+        ("writer", include_str!("../../../agents/writer/AGENT.md")),
+        ("scout", include_str!("../../../agents/scout/AGENT.md")),
+        ("messenger", include_str!("../../../agents/messenger/AGENT.md")),
+        ("investigator", include_str!("../../../agents/investigator/AGENT.md")),
+        ("validator", include_str!("../../../agents/validator/AGENT.md")),
+    ] {
+        let text = if matches!(role, "orchestrator" | "architect" | "red-team" | "strategist") { text.replace("default_tier: workhorse", "default_tier: frontier") } else { text.to_string() };
+        add(&format!("agents/{}/AGENT.md", role), &text);
+    }
+    add("context/team-heuristics.md", "---\nid: t\n---\n### [T-001] Team rule\n- keep it short\n");
+    add("heuristics.md", "---\nid: w\n---\n### [W-001] Workspace rule\n- prefer small diffs\n");
+    let rel = "---\nid: h\n---\n### [H-001] Release rule\n- verify before claiming\n";
+    add("context/heuristics.md", rel);
+    write(ws.dir.join("local/ratified.lock"), &serde_json::json!({"files": lock}).to_string());
+    write(ws.dir.join("base/manifest.lock"), &serde_json::json!({"files": {"context/heuristics.md": hash(rel.as_bytes())}}).to_string());
+    let op = root.join("operator");
+    let oheur = "---\nid: o\n---\n### [O-001] Operator rule\n- terse answers\n";
+    let olesson = "---\nid: l\n---\n### Lesson\n- check the spec first\n";
+    let oprofile = "---\nid: p\n---\nPrefers Rust. Dislikes long preambles.\n";
+    write(op.join("ratified/heuristics.md"), oheur);
+    write(op.join("ratified/memory/agents/architect/lessons.md"), olesson);
+    write(op.join("ratified/profile.md"), oprofile);
+    write(op.join("ratified.lock"), &serde_json::json!({"files": {"heuristics.md": hash(oheur.as_bytes()), "memory/agents/architect/lessons.md": hash(olesson.as_bytes()), "profile.md": hash(oprofile.as_bytes())}}).to_string());
+    ws
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
+    use super::*;
+
+    /// A minimal but real ratified workspace in `root`, using the repository's own seed files.
+    pub(crate) fn make_workspace(root: &Path) -> WorkspacePaths {
+        make_test_workspace(root)
+    }
+
     // specs/035 D-14: the shipped roles start on Sonnet-class or lower; none on the top tier. The scout (Argos) starts lower still.
     #[test]
     fn no_shipped_role_starts_on_the_top_tier_and_the_scout_starts_lower() {
@@ -348,69 +411,6 @@ pub(crate) mod tests {
         assert_eq!((bare("deep-reasoning", ""), bare("code-craft", ""), bare("high-context-discovery", ""), bare("fast-triage", "")), ("workhorse", "workhorse", "workhorse", "fast"));
         assert_eq!(bare("deep-reasoning", "default_tier: enormous\n"), "workhorse");
         assert_eq!(bare("deep-reasoning", "default_tier: frontier\n"), "frontier", "an operator's own override can");
-    }
-
-    use super::*;
-
-    /// A minimal but real ratified workspace in `root`, using the repository's own seed files.
-    pub(crate) fn make_workspace(root: &Path) -> WorkspacePaths {
-        let ws = WorkspacePaths::new(root, "w");
-        for d in ["team", "local/missions", "base"] {
-            fs::create_dir_all(ws.dir.join(d)).unwrap();
-        }
-        let ratified = ws.dir.join("local/ratified");
-        let write = |p: PathBuf, text: &str| {
-            fs::create_dir_all(p.parent().unwrap()).unwrap();
-            fs::write(p, text).unwrap();
-        };
-        let mut lock = BTreeMap::new();
-        // Like `init`: every ratified file also exists live, release files in base/, team files in
-        // team/, workspace-private files in local/.
-        let mut add = |logical: &str, text: &str| {
-            write(ratified.join(logical), text);
-            lock.insert(logical.to_string(), hash(text.as_bytes()));
-            let live = match logical {
-                "context/team-heuristics.md" => ws.dir.join("team").join(logical),
-                "heuristics.md" => ws.dir.join("local").join(logical),
-                _ => ws.dir.join("base").join(logical),
-            };
-            write(live, text);
-        };
-        add("GOVERNANCE.md", "# Governance\nNever exceed your role's scope.\n");
-        for (role, text) in [
-            ("orchestrator", include_str!("../../../agents/orchestrator/AGENT.md")),
-            ("architect", include_str!("../../../agents/architect/AGENT.md")),
-            ("builder", include_str!("../../../agents/builder/AGENT.md")),
-            ("red-team", include_str!("../../../agents/red-team/AGENT.md")),
-            ("strategist", include_str!("../../../agents/strategist/AGENT.md")),
-            ("writer", include_str!("../../../agents/writer/AGENT.md")),
-            ("scout", include_str!("../../../agents/scout/AGENT.md")),
-            ("messenger", include_str!("../../../agents/messenger/AGENT.md")),
-            ("investigator", include_str!("../../../agents/investigator/AGENT.md")),
-            ("validator", include_str!("../../../agents/validator/AGENT.md")),
-        ] {
-            // These roles used to start on the top tier. The failover tests are about running out of the top model, so the test workspace
-            // keeps them there; the shipped manifests start on `workhorse` (`specs/035` D-14).
-            let text = if matches!(role, "orchestrator" | "architect" | "red-team" | "strategist") { text.replace("default_tier: workhorse", "default_tier: frontier") } else { text.to_string() };
-            add(&format!("agents/{}/AGENT.md", role), &text);
-        }
-        add("context/team-heuristics.md", "---\nid: t\n---\n### [T-001] Team rule\n- keep it short\n");
-        add("heuristics.md", "---\nid: w\n---\n### [W-001] Workspace rule\n- prefer small diffs\n");
-        // Release heuristics in base/ (ratified at init like every other protected release file), with its manifest lock.
-        let rel = "---\nid: h\n---\n### [H-001] Release rule\n- verify before claiming\n";
-        add("context/heuristics.md", rel);
-        write(ws.dir.join("local/ratified.lock"), &serde_json::json!({"files": lock}).to_string());
-        write(ws.dir.join("base/manifest.lock"), &serde_json::json!({"files": {"context/heuristics.md": hash(rel.as_bytes())}}).to_string());
-        // Operator home.
-        let op = root.join("operator");
-        let oheur = "---\nid: o\n---\n### [O-001] Operator rule\n- terse answers\n";
-        let olesson = "---\nid: l\n---\n### Lesson\n- check the spec first\n";
-        let oprofile = "---\nid: p\n---\nPrefers Rust. Dislikes long preambles.\n";
-        write(op.join("ratified/heuristics.md"), oheur);
-        write(op.join("ratified/memory/agents/architect/lessons.md"), olesson);
-        write(op.join("ratified/profile.md"), oprofile);
-        write(op.join("ratified.lock"), &serde_json::json!({"files": {"heuristics.md": hash(oheur.as_bytes()), "memory/agents/architect/lessons.md": hash(olesson.as_bytes()), "profile.md": hash(oprofile.as_bytes())}}).to_string());
-        ws
     }
 
     #[test]
