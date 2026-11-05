@@ -163,17 +163,19 @@ impl Library for LiveLibrary {
 pub fn display_name(ws_dir: &std::path::Path, home: &std::path::Path, role: &str) -> String {
     let theme = std::fs::read_to_string(ws_dir.join("config.toml")).ok().and_then(|t| t.parse::<toml::Table>().ok()).and_then(|t| t.get("theme")?.get("name")?.as_str().map(String::from)).unwrap_or_else(|| "greek".into());
     let safe = theme.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-    let text = if safe { std::fs::read_to_string(home.join("themes").join(&theme).join("theme.md")).unwrap_or_default() } else { String::new() };
-    let prefix = format!("{role}:");
-    text.lines()
-        .map(str::trim)
-        .filter(|l| l.starts_with(&prefix))
-        .find_map(|l| {
-            let rest = &l[l.find("name:")? + 5..];
-            let rest = rest.trim_start().strip_prefix('"')?;
-            Some(rest[..rest.find('"')?].to_string())
-        })
-        .unwrap_or_else(|| role.to_string())
+    let text = if safe {
+        std::fs::read_to_string(home.join("themes").join(&theme).join("theme.md"))
+            .or_else(|_| std::fs::read_to_string(ws_dir.join("local/ratified/themes").join(&theme).join("theme.md")))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let resolver = if text.trim().is_empty() {
+        delphi_core::theme_names::ThemeResolver::default()
+    } else {
+        delphi_core::theme_names::ThemeResolver::from_theme_text(&text)
+    };
+    resolver.display_name(role)
 }
 
 /// The identity of the Delphi role that answered.

@@ -27,11 +27,23 @@ pub struct RoleInfo {
     pub purpose: String,
     pub servable: bool,
     pub skills: Vec<String>,
+    pub display_name: String,
+    pub aliases: Vec<String>,
+    pub badge: String,
 }
 
 impl RoleInfo {
     pub fn to_json(&self) -> Value {
-        json!({"role": self.id, "title": self.title, "purpose": self.purpose, "servable": self.servable, "skills": self.skills})
+        json!({
+            "role": self.id,
+            "title": self.title,
+            "purpose": self.purpose,
+            "servable": self.servable,
+            "skills": self.skills,
+            "name": self.display_name,
+            "aliases": self.aliases,
+            "badge": self.badge
+        })
     }
 }
 
@@ -79,16 +91,49 @@ impl Packs {
         }
     }
 
+    pub fn theme_resolver(&self) -> delphi_core::theme_names::ThemeResolver {
+        let cfg = std::fs::read_to_string(self.ws.dir.join("config.toml")).unwrap_or_default();
+        let theme = toml::from_str::<toml::Value>(&cfg)
+            .ok()
+            .and_then(|v| v.get("theme").and_then(|t| t.get("name")).and_then(|n| n.as_str()).map(String::from))
+            .unwrap_or_else(|| "greek".into());
+        let safe = theme.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        let text = if safe {
+            std::fs::read_to_string(self.ws.home.join("themes").join(&theme).join("theme.md"))
+                .or_else(|_| std::fs::read_to_string(self.ws.dir.join("local/ratified/themes").join(&theme).join("theme.md")))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        if text.trim().is_empty() {
+            delphi_core::theme_names::ThemeResolver::default()
+        } else {
+            delphi_core::theme_names::ThemeResolver::from_theme_text(&text)
+        }
+    }
+
+    /// Resolve an incoming mention or role tag (@athena, @orchestrator, @delphi) to a canonical role ID.
+    pub fn resolve_role(&self, tag: &str) -> String {
+        self.theme_resolver().resolve(tag)
+    }
+
     pub fn roles(&self) -> Result<Vec<RoleInfo>, String> {
+        let resolver = self.theme_resolver();
         let mut out = Vec::new();
         for id in self.role_ids()? {
             let text = self.role_text(&id)?;
             let (fm, _) = split_frontmatter(&text);
+            let display_name = resolver.display_name(&id);
+            let aliases = resolver.aliases_for(&id);
+            let (badge, _, _) = delphi_core::research::role_look(&id);
             out.push(RoleInfo {
                 title: fm_str(&fm, "title").map(|t| one_line(&t, 80)).unwrap_or_else(|| id.clone()),
                 purpose: fm_str(&fm, "role").map(|t| one_line(&t, 200)).unwrap_or_default(),
                 servable: Packs::servable(&fm),
                 skills: fm.as_ref().and_then(|f| f.get("authorized_skills")).and_then(|v| v.as_sequence()).map(|s| s.iter().filter_map(|x| x.as_str()).filter(|n| valid_name(n)).map(String::from).collect()).unwrap_or_default(),
+                display_name,
+                aliases,
+                badge: badge.to_string(),
                 id,
             });
         }

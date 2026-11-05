@@ -1,3 +1,5 @@
+#![recursion_limit = "512"]
+
 //! `delphi-engine`: what runs inside the daemon: tools, approvals and the agent loop.
 
 pub mod agent_registry;

@@ -490,13 +490,9 @@ pub fn render_usage(v: &Value) -> String {
 }
 
 /// The role an `@tag` means: a role ID (`architect`) or the theme name that role holds (`Daedalus`), either in any case.
-/// An unknown tag is returned as written so the daemon says which role it does not know.
+/// An unknown tag is returned as written so the daemon says which role it does not know (`specs/077`).
 pub fn resolve_role(names: &HashMap<String, String>, tag: &str) -> String {
-    let want = tag.to_lowercase();
-    if names.contains_key(&want) {
-        return want;
-    }
-    names.iter().find(|(_, n)| n.to_lowercase() == want).map(|(id, _)| id.clone()).unwrap_or_else(|| tag.to_string())
+    delphi_core::theme_names::resolve_role(names, tag)
 }
 
 pub fn submit_params(mission: &str, target: Option<&str>, text: &str) -> Value {
