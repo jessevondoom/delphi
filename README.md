@@ -4,7 +4,7 @@
 
 **A team of AI agents in your terminal for research, strategy and product work, whose answers carry their sources and whose actions wait for your approval.**
 
-> Status: pre-1.0, macOS and Linux, one person per install. Latest release: v0.5.4 (`delphi update --dev` follows `main`). What is proven and what is not: [Status and limitations](#status-and-limitations).
+> Status: pre-1.0, macOS and Linux, one person per install. Latest release: v0.5.5 (`delphi update --dev` follows `main`). What is proven and what is not: [Status and limitations](#status-and-limitations).
 
 ## What is Delphi?
 
