@@ -639,5 +639,18 @@ Approved by the operator on 2026-11-04. Extends specs 062, 071, 072, and 074; co
 | S2 | MCP dynamic alias resolution in `mcp_host.rs`, `list_roles` aliases, and `delphi_roster` | 4 h | built (this branch) |
 | S3 | Claude Code plugin skill (`SKILL.md`) update and project template instructions | 3 h | built (this branch) |
 
+## Orchestrator outside delegation contracts (spec 082, approved 2026-11-05)
+
+Approved by the operator on 2026-11-05. Extends specs 072, 038 and 062. Task-derived `definition_of_done`, venue limits in orchestrator §6, `done_when`/`stop_when` in the handoff envelope, a presence-only brief shape check, then a two-arm experiment before anything else. Reviewed by a host-federated Council (record in the spec, §11). Numbers 078-081 are held by PR #474.
+
+| Slice | Content | Estimate | State |
+| :-- | :-- | --: | :-- |
+| S0 | spec 082 approval and tracker entry | 1 h | approved (this branch) |
+| S1a | `consult_orchestrator` `done_when` input, typed `definition_of_done`, `unspecified` default | 4 h | not built |
+| S1b | orchestrator §6 amendment; venue-not-settable test | 1 h | not built |
+| S1c | `done_when`/`stop_when` in envelope schema and template; `check handoff` requires them | 3 h | not built |
+| S2 | `check brief` shape check; `handoff-packaging` section | 4 h | not built |
+| E1 | pre-registered two-arm experiment on the 037 pack | 4 h | not built |
+
 
 
