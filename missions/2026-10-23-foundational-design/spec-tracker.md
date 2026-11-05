@@ -641,3 +641,12 @@ Approved by the operator on 2026-11-04. Extends specs 062, 071, 072, and 074; co
 
 
 
+
+## Council option B drafts: ingress taint test and KB read-count report (specs 079, 080, draft 2026-11-05)
+
+Drafted by the architect from the 2026-11-05 Council (option 2, PROCEED-WITH-CHANGES), revised after the Red-Team and Strategist steps. Wave 1, in this order. Spec 078 (Council scorecard, wave 2) is not in this slice. Neither draft is approved; nothing is built.
+
+| Spec | Content | State |
+| :-- | :-- | :-- |
+| 079 | registry test: every ingress has a core-assigned origin ceiling | draft |
+| 080 | KB read-count report from `fact.read` events, no automatic pruning | draft |
