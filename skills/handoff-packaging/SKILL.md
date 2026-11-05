@@ -46,6 +46,14 @@ An agent never receives a transcript. It receives a short envelope that points a
 
 No shell? Call the `check` tool with `kind: handoff` and the envelope's path; it returns the same verdict.
 
+## Briefing a model outside Delphi
+A host or an external seat does not run Delphi's gates and does not see this envelope. Whatever you write for it should state five things, and `delphi check brief <file>` reports which are present or absent (it judges shape only, never whether any is good):
+- **Deliverable:** one named artifact or answer.
+- **Done when:** what finished looks like, checkable by someone who was not there.
+- **Stop when:** what to do when it cannot proceed. If the receiver cannot be told what finished looks like, say so in the brief.
+- **Scope:** the paths, pointers or limits that bound the work.
+- **Tools:** each tool the task needs, taken from `external_available`, or `none`.
+
 ## Done when
 The check passes and a reader who has not seen this conversation could do the task from the envelope and the files it points at.
 
