@@ -655,11 +655,11 @@ Drafted by the architect from the 2026-11-05 Council (both options), revised aft
 
 ## Spec 083: learning signals and host diagnostics (2026-11-05)
 
-From the 2026-11-05 ranking of unbuilt work (five Claude seats, one family; see the PR body). Draft: not permission to build until the operator approves it.
+From the 2026-11-05 ranking of unbuilt work (five Claude seats, one family; see the PR body). Approved by the operator 2026-11-05.
 
 | Slice | Content | Hours | State |
 | :-- | :-- | --: | :-- |
-| S0 | spec 083 approval and tracker entry | 1 | draft, awaiting operator |
+| S0 | spec 083 approval and tracker entry | 1 | approved 2026-11-05 |
 | S1 | `delphi doctor` host-chain: first failing link and the printed fix | 7 | not built |
 | S2 | learning-health footer line: staged, to review, oldest age | 7 | not built |
 | S3 | recurrence count, dismissed-claim memory, seat-keyed claims (S3a dismissal, S3b the rest) | 14 | not built |

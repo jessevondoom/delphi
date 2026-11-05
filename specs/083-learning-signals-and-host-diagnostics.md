@@ -1,9 +1,10 @@
 ---
 id: spec-083-learning-signals-and-host-diagnostics
-title: '083: Learning signals and host diagnostics: four small slices from the 2026-11-05 Council ranking (draft)'
+title: '083: Learning signals and host diagnostics: four small slices from the 2026-11-05 Council ranking'
 author: architect
 timestamp: 2026-11-05T00:00:00Z
-status: draft
+status: approved
+approved_by: operator (2026-11-05)
 governed_by: GOVERNANCE.md
 review_rubric: REVIEW.md
 source_type: internal_generated
@@ -14,11 +15,10 @@ tags:
 - learning
 - doctor
 - host
-- draft
 ---
 # Spec 083: Learning signals and host diagnostics
 
-> **Status: draft. A draft is a proposal, not permission to build.** Approval by the operator makes slices S1-S4 buildable, one pull request each.
+> **Status: approved by the operator, 2026-11-05.** Slices S1-S4 are buildable, one pull request each.
 > **Origin:** the 2026-11-05 ranking of unbuilt work (strategist, red-team, builder, advocate and orchestrator seats, one model family; no cross-family round). These are the four phase-1 items that no approved spec covers. Spec 082 slices, the E1 experiment and the 037 pilot are covered elsewhere.
 > **Extends:** [`031`](031-layered-learning-and-training-mode.md) §3 (staging), [`062`](062-delphi-as-host-agent-mcp-server.md) §8 (host notes), [`074`](074-stable-launch-path-and-delphi-connect.md) / [`071`](071-host-plugin-marketplace-and-durable-mcp-enablement.md) (`--check`, doctor check 15).
 
