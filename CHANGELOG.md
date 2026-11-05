@@ -6,6 +6,11 @@ Release builds, with their notes and build attestations, are on the [releases pa
 
 This file starts with the work after v0.2.7. For earlier releases, the history is the merged pull requests and the per-spec notes under `specs/`; their entries below give dates, not detail.
 
+## Unreleased
+
+- Install and update from a private repository (spec 076): `install.sh` and `delphi update` use your GitHub credentials (`gh`, `GH_TOKEN`, `GITHUB_TOKEN`) for the lookup and download, never sending a token to a mirror or a redirect host. Where a repository has no build attestations, the installer checks the maintainers' release signature instead; an attestation that exists and fails still stops the install. Homebrew works only while the repository is public.
+- Knowledge base search (spec 075): `delphi kb search` shows summary pages by default, with `--summaries` and `--bibs` to choose; the console follows `[tui] hide_bibliographies`. Agents still get the bibliography sidecar.
+
 ## 0.5.4 — 2026-11-04
 
 - Host plugin marketplace (spec 071): Delphi is installable as a plugin in Claude Code, Copilot CLI and Codex from this repository (`<host> plugin marketplace add jessevondoom/delphi`). `delphi mcp --check <host>` and a `delphi doctor` line read each host's state, and `delphi mcp --print-config <host> --absolute` prints a snippet with this binary's full path (#467).

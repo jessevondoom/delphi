@@ -19,6 +19,7 @@ Defaults are those of the template; "—" means no default.
 | `[theme] name` | `greek` | display names, window labels and voice only; behavior never depends on it |
 | `[tui] auto_spawn_narrator` | `false` | open the second window on launch |
 | `[tui] frame_rate_hz` | `60` | |
+| `[tui] hide_bibliographies` | `true` | KB searches resolve to summary markdown pages instead of bibliography sidecars (spec 075) |
 | `[agents] interactive` | `["orchestrator"]` | roles the operator can directly @ on session start (spec 063) |
 | `[agents] forbidden` | `[]` | quarantined roles; orchestrator dispatch and direct interaction are blocked |
 | `[agents] fleet` | `"all"` | fleet visibility for the orchestrator (`all` or `interactive`) |

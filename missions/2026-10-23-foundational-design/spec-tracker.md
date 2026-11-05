@@ -607,3 +607,25 @@ Approved by the operator on 2026-11-04 following unanimous Council 015 deliberat
 | S3 | avatar role chassis contrast adaptation in `avatar.rs`, `observer.rs`, and `theme.ts` | 5 h | built (this PR) |
 | S4 | automated WCAG AA contrast matrix test, OSC 11 unit test, and docs | 4 h | built (this PR) |
 
+## Knowledge Base search operator presentation and summary filtering (spec 075, approved 2026-11-04)
+
+Approved by the operator on 2026-11-04. Extends spec 068, spec 004, and spec 005f. Defines dual-mode knowledge base search presentation: CLI flags (`--summaries` / `--bibs`), TUI default configuration (`[tui] hide_bibliographies = true`), and engine `SummaryTarget` options in `delphi_engine::kb` while preserving the `.bib.md` sidecar substitution for autonomous agent seats (`kb_search`).
+
+| Slice | Content | Estimate | State |
+| :-- | :-- | --: | :-- |
+| S0 | spec 075 approval and spec tracker entry | 1 h | built (this branch) |
+| S1 | engine search options (`SummaryTarget`), summary resolution, and unit tests | 4 h | built (this branch) |
+| S2 | CLI flags (`--summaries`, `--bibs`), synopsis, and doc regeneration | 3 h | built (this branch) |
+| S3 | TUI configuration (`[tui] hide_bibliographies`), daemon RPC, and console integration | 4 h | built (this branch) |
+
+## Private repository distribution (spec 076, approved 2026-11-04)
+
+Approved by the operator on 2026-11-04. Makes `install.sh` and `delphi update` work against a private repository (personal account and Enterprise Cloud organization) with a token from `gh`, and tiers verification (attestation, then the maintainers' release signature). Amends specs 006 and 036. Homebrew is out of scope.
+
+| Slice | Content | Estimate | State |
+| :-- | :-- | --: | :-- |
+| P0 | spec 076 approval and spec tracker entry | 2 h | built (this branch) |
+| P1 | token lookup, `install.sh` and `delphi update` changes, tiered verification, tests | 1 day | built (this branch) |
+| P2 | marketplace proof against the private repository, workflow change, docs, CHANGELOG | 0.5 day | workflow, docs, CHANGELOG built (this branch); marketplace proof pending the private repository |
+
+

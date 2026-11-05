@@ -1602,6 +1602,7 @@ impl EngineService {
         let staged = p["staged"].as_bool().unwrap_or(false);
         // The release's own specs and reference are searched only when asked for (`specs/064` §7).
         let about = p["about"].as_bool().unwrap_or(false);
+        let target_param = p["target"].as_str().map(String::from);
         let hits = tokio::task::spawn_blocking(move || -> Result<Vec<crate::kb::Hit>, crate::kb::KbError> {
             let mut kb = crate::kb::Kb::open(&ws.join("local/state.db"))?;
             // A search never waits for the model to read the corpus, and never answers from a stale index: the words
@@ -1615,7 +1616,20 @@ impl EngineService {
                     crate::kb::embed_in_background(&home, &ws);
                 }
             }
-            let mut opts = crate::kb::SearchOpts { role: role.clone(), include_staged: staged, about, ..Default::default() };
+            let summary_target = match target_param.as_deref() {
+                Some("bibliographies" | "bibs") => crate::kb::SummaryTarget::Bibliography,
+                Some("both") => crate::kb::SummaryTarget::Both,
+                Some("summaries" | "pages") => crate::kb::SummaryTarget::SummaryPage,
+                // `[tui] hide_bibliographies` (default true) decides what the console shows (`specs/075` §3.3).
+                _ => {
+                    let hide = std::fs::read_to_string(ws.join("config.toml")).ok()
+                        .and_then(|t| t.parse::<toml::Table>().ok())
+                        .and_then(|t| t.get("tui")?.get("hide_bibliographies")?.as_bool())
+                        .unwrap_or(true);
+                    if hide { crate::kb::SummaryTarget::SummaryPage } else { crate::kb::SummaryTarget::Bibliography }
+                }
+            };
+            let mut opts = crate::kb::SearchOpts { role: role.clone(), include_staged: staged, about, summary_target, ..Default::default() };
             if !rerank {
                 opts.rerank_weight = 0.0;
             }

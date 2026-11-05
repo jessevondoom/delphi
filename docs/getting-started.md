@@ -5,10 +5,10 @@ About ten minutes from nothing to your first reviewed change. macOS (Apple silic
 ## 1. Install
 
 ```sh
-curl -fsSL https://github.com/jessevondoom/delphi/releases/latest/download/install.sh | sh
+gh release download --repo jessevondoom/delphi --pattern install.sh --output - | sh
 ```
 
-The installer checks the download against its SHA-256 and the release's build attestation, so it needs the `gh` CLI signed in. Without `gh` it stops, unless you set `DELPHI_SKIP_ATTESTATION=1` to accept the checksum alone. It puts `delphi` and `delphi-ui` in `~/.local/bin`; make sure that directory is on your `PATH`. Homebrew works too: `brew tap jessevondoom/delphi https://github.com/jessevondoom/delphi && brew install delphi`.
+The installer checks the download against its SHA-256 and the release's build attestation, so it needs the `gh` CLI signed in (`gh auth login`, or `GH_TOKEN`; this is also what lets it read a private repository, with the token authorized for an organization that uses single sign-on). Where the repository has no attestations, it checks the maintainers' release signature carried by the build instead. Without `gh` it stops, unless you set `DELPHI_SKIP_ATTESTATION=1` to accept the checksum alone. (A public repository also installs anonymously: `curl -fsSL https://github.com/jessevondoom/delphi/releases/latest/download/install.sh | sh`.) It puts `delphi` and `delphi-ui` in `~/.local/bin`; make sure that directory is on your `PATH`. Homebrew works too, while the repository is public: `brew tap jessevondoom/delphi https://github.com/jessevondoom/delphi && brew install delphi`.
 
 Check it: `delphi --version`. Homebrew works too: `brew tap jessevondoom/delphi https://github.com/jessevondoom/delphi && brew install delphi`. `install.sh` also takes `--dir` (or `DELPHI_INSTALL_DIR`), `--version vX.Y.Z` and `--no-setup`.
 

@@ -31,10 +31,12 @@ Delphi is one Rust executable plus a full-screen console that adapts to dark and
 ## Install
 
 ```sh
+gh release download --repo jessevondoom/delphi --pattern install.sh --output - | sh
+# a public repository also works without gh:
 curl -fsSL https://github.com/jessevondoom/delphi/releases/latest/download/install.sh | sh
 ```
 
-This puts `delphi` and `delphi-ui` in `~/.local/bin`; make sure that directory is on your `PATH`. The installer checks the download against its SHA-256 and the release's build attestation, so it needs the `gh` CLI signed in. Without `gh` it stops, unless you set `DELPHI_SKIP_ATTESTATION=1` to accept the checksum alone.
+This puts `delphi` and `delphi-ui` in `~/.local/bin`; make sure that directory is on your `PATH`. The installer checks the download against its SHA-256 and the release's build attestation, so it needs the `gh` CLI signed in (or `GH_TOKEN`, which a private repository needs). Where the repository has no attestations, it checks the maintainers' release signature the build carries instead ([`specs/076`](specs/076-private-repo-distribution.md)). With neither it stops, unless you set `DELPHI_SKIP_ATTESTATION=1` to accept the checksum alone.
 
 Homebrew, updating, rollback and building from source: [Getting started](docs/getting-started.md#1-install). macOS (Apple silicon and Intel) and Linux (x86_64 and aarch64); no Windows.
 

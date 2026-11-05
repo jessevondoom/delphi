@@ -327,13 +327,13 @@ It reads files only and never runs the validator.
 The knowledge base: index it, search it.
 
 ```
-  delphi kb index | reindex | stats | search <query> [--role <role>] [--untrusted|--all] [--staged] [--about]
+  delphi kb search <query> [--role <role>] [--untrusted|--all] [--staged] [--about] [--summaries|--bibs]
   delphi kb import <file.md | dir | -> [--home <dir>] [--workspace <name>]
   delphi kb review [stats | show <ref> | keep <ref>…|--all | discard <ref>…|--all]
   delphi kb refresh [--stale [--minutes <n, at most 4>] | <id> (--still-current | <file.md | ->)]
   delphi kb quarantine [<id> [--restore]]
   delphi kb extract <page-id> (--auto | <candidates.json | ->)
-  delphi kb attest [<page-id>]
+  delphi kb index | reindex | stats | attest [<page-id>]
   delphi kb serve [--bind <host:port>] [--workspace <name>] [--home <dir>]
 ```
 
