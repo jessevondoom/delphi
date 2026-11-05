@@ -228,17 +228,17 @@ Approved by the operator 2026-10-28 ("make a plan, write a spec, and let's go").
 
 ## Benchmarking, context and memory (specs 048, 049, 050; drafted 2026-10-28)
 
-Drafted from a review of LangChain / LangSmith benchmarking, memory and context practice (recollection, unverified). Delphi uses no LangChain code; these take methods. **049 and 050 were approved by the operator on 2026-10-28**, with their provisional decisions accepted and the source check waived (every technique ships `off` or proposes only, and 048 measures it). **048 is still a draft**: its open decisions (efficiency flag threshold, external benchmark choice, CI use of behavior evals) are unanswered, and the GAIA-style anchor is under consideration. 049 refines slices H2/H3 of spec 045 and §4.3 of spec 030; 048 supplies the measuring instruments 045 H9 needs. A 049 or 050 slice that *measures* against 048 (CX2's retention numbers, CX4, CX5, CX6, ML6) waits for 048 BM1-BM3 to be approved and built; ML1, ML2, ML3 and CX1's code can start now, with defaults `off`.
+Drafted from a review of LangChain / LangSmith benchmarking, memory and context practice (recollection, unverified). Delphi uses no LangChain code; these take methods. **049 and 050 were approved by the operator on 2026-10-28**, with their provisional decisions accepted and the source check waived (every technique ships `off` or proposes only, and 048 measures it). **048 was approved by the operator on 2026-11-05**, with its provisional decisions standing and the source check waived (OD-1, as for 049 and 050); BM6 stays gated on OD-3 (the operator picks the external subset; the GAIA-style anchor is still only under consideration). 049 refines slices H2/H3 of spec 045 and §4.3 of spec 030; 048 supplies the measuring instruments 045 H9 needs. A 049 or 050 slice that *measures* against 048 (CX2's retention numbers, CX4, CX5, CX6, ML6) waits for 048 BM1-BM3 to be built; ML1, ML2, ML3 and CX1's code can start now, with defaults `off`.
 
 | Spec | Slice | Content | State |
 | :-- | :-- | :-- | :-- |
-| 048 | BM1 | harness arm kind (fixed model) and efficiency columns in the 037 report | draft |
-| 048 | BM2 | handoff fidelity eval (paraphrase loss) | draft |
-| 048 | BM3 | context retention eval | draft |
-| 048 | BM4 | tool-count degradation eval | draft |
-| 048 | BM5 | behavior suites (nudge, verify gate, budget, name_thread, record_change) | draft |
-| 048 | BM6 | external benchmark anchor (operator picks the subset) | draft |
-| 048 | BM7 | phase-effort arm (after 045 H4) | draft |
+| 048 | BM1 | harness arm kind (fixed model) and efficiency columns in the 037 report | approved 2026-11-05, not started |
+| 048 | BM2 | handoff fidelity eval (paraphrase loss) | approved 2026-11-05, not started |
+| 048 | BM3 | context retention eval | approved 2026-11-05, not started |
+| 048 | BM4 | tool-count degradation eval | approved 2026-11-05, not started |
+| 048 | BM5 | behavior suites (nudge, verify gate, budget, name_thread, record_change) | approved 2026-11-05, not started |
+| 048 | BM6 | external benchmark anchor (operator picks the subset) | approved 2026-11-05; gated on OD-3 (operator picks the subset) |
+| 048 | BM7 | phase-effort arm (after 045 H4) | approved 2026-11-05, not started |
 | 049 | CX1 | argument trimming and offload previews (folded into 045 H2); handoff design check | built 2026-10-29 with 045 H2 (trimming, previews, handles). Handoff design check for CX-6: `handoff.rs` carries the envelope as-is, so handles ride in `context_pointers`/result text within the 2,000-token limit; CX4 builds it. Not measured (048 unbuilt) |
 | 049 | CX2 | recoverable compaction (folded into 045 H3) | not started |
 | 049 | CX3 | context composition in accounting | not started |
