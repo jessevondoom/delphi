@@ -1,9 +1,10 @@
 ---
 id: spec-080-kb-read-count-report
-title: '080: KB read-count report: a documented jq recipe first (draft)'
+title: '080: KB read-count report: a documented jq recipe, host-read event and security|constraint tag (draft)'
 author: architect
 timestamp: 2026-11-05T00:00:00Z
 status: draft
+wave: 1 (order 2; slices W1.2, W1.3, W1.4)
 governed_by: GOVERNANCE.md
 review_rubric: REVIEW.md
 source_type: internal_generated
@@ -18,33 +19,38 @@ tags:
 ---
 # Spec 080: KB read-count report
 
-> **Status: draft.** Council option 2 (PROCEED-WITH-CHANGES), mission 2026-11-05-session. Nothing here is permission to build.
-> **Sequencing:** wave 1, order 2.
+> **Status: draft.** Council options A and B merged (Strategist decision), mission 2026-11-05-session. Nothing here is permission to build.
+> **Wave 1, order 2.** Slices in order: **W1.2** `host_search_kb` event, **W1.3** frontmatter invariant, **W1.4** jq recipe. No store, no persisted view, no `state.db`; every figure is computed on demand from `events.jsonl`.
 
-## 1. Smallest slice
-**S1 (recommended first): a documented `jq` recipe**, in the operator docs, that counts reads per fact from the mission event logs and prints the top N and the zero-read facts. No code, no command, no new store.
-The event is `validator.event` with `payload.kind == "fact.read"` (fact_audit.rs:528; spec 040 §345), not a top-level `fact.read` event type. The recipe selects on that shape:
+## 1. Slices
+**W1.2: `host_search_kb` event.** `host_search_kb` (service.rs:506-539) returns hits and appends no event today (verified: the body between :506 and :539 has no `append`). Add one daemon-appended event per call, carrying **fact ids and hit count only, no query text** (the query is up to 500 characters of caller text, service.rs:513-515, and must not be logged). It is a slice of this spec, not a new spec. Until it ships, every count is "agent reads only".
+
+**W1.3: frontmatter invariant `security|constraint`.** Rule and fact entries may carry an attribute `invariant: security` or `invariant: constraint` (negative constraints, security invariants). Adding the attribute to an existing governed-path entry is a governed-path change and **needs operator ratification** (GOVERNANCE §5.7); agents may not set it, and it never changes retrieval or taint. Add a check (a CI or `delphi` test, not prose) that the zero-read list **excludes** every tagged entry and prints them in a separate "exempt" section. Failure scenario it catches: a tagged entry showing up as a zero-read demotion candidate.
+
+**W1.4: jq recipe for top-N reads**, in the operator docs. No code, no command.
+The event is `validator.event` with `payload.kind == "fact.read"` and fields `kind`, `fact`, `span`, `role` (built by `fact_read_events`, fact_audit.rs:304-308; consumed at fact_audit.rs:528; asserted in tools.rs:1804):
 ```
-jq -c 'select(.type=="validator.event" and .payload.kind=="fact.read")' events.jsonl
+jq -r 'select(.type=="validator.event" and .payload.kind=="fact.read") | .payload.fact' events.jsonl | sort | uniq -c | sort -rn | head -N
 ```
-then groups by the fact id in the payload. (Field names beyond `kind` are to be confirmed against fact_audit.rs:528 before the recipe is published.)
-**S2 (only if the recipe is used and found awkward):** `delphi kb reads` wrapping the same query.
+(The envelope field name for the event kind in `events.jsonl` is written `type` in this draft; the Rust struct field is `kind`, e.g. service.rs:2513. **Not verified** which serialised name the file uses: confirm on a real log before publishing.)
+**The zero-read list is withheld until W1.3 lands.** Only the top-N ships first.
+**S2 (only if the recipe is found awkward):** `delphi kb reads` wrapping the same query.
 
 ## 2. Measurement
-Reads per fact over a period, and facts never read. Purpose: tell which knowledge earns its place, and give the operator evidence for a demotion decision.
+Reads per fact over a period (and, after W1.3, facts never read, minus exempt ones). Purpose: tell which knowledge earns its place, as evidence for a demotion decision the operator makes.
+Scope statement on every output: **"agent reads only"** until W1.2 ships; after W1.2, host reads are counted from the new event, as a separate column.
 
 ## 3. Authority risk
-Read-only. The report **never prunes or demotes automatically**; any demotion is proposed and the operator ratifies it (GOVERNANCE §5.7, §7). Risks: (a) read counts must not feed ranking or promotion automatically: popularity is not truth, and a count that raises a fact's score could be gamed by a span that re-reads it (taint and promotion rules stay `[H-004]`); (b) zero reads is not evidence of low value for **negative constraints** ("never do X") and **security invariants**, which matter most when they are not exercised. These are exempt from zero-read demotion: the report lists them separately and never as candidates; (c) the report names facts and spans, not claim text, matching spec 040 §345 (claim text stays in the mission record).
+Read-only. The report **never prunes or demotes automatically**; any demotion is proposed and the operator ratifies it (GOVERNANCE §5.7, §7). Risks: (a) counts must not feed ranking or promotion: popularity is not truth, and a span re-reading a fact could game it (`[H-004]`); (b) zero reads is not evidence of low value for tagged `security|constraint` entries; they are excluded from the zero-read list by the W1.3 check, never merely by convention; (c) the report names fact ids and spans, not claim text (spec 040 §345).
 
 ## 4. What already covers it
-- Agents reach facts only through the kb tool, which emits the `fact.read` audit event (span, fact, time) for every returned fact, so counts are complete, not a lower bound (spec 040 §342, §659; spec 064 §45).
-- The lineage report already lists the spans and decisions a fact touched (spec 040 §337).
-- Spec 040 §449 defines counting `fact.read` and kb retrievals per claim from daemon events. **Is that counting already built? Not verified:** spec 040 and the source (fact_audit.rs) were not readable in this session, so the answer is unknown. Check against code before choosing S2; the recipe does not depend on it.
-- Rule exposure and survival measurement exist for memory (spec 050); the Knowledge Window shows corpus growth (spec 043).
-Coverage change: the *event* and its counting rule exist; what is missing is only a ready query over them, which is why S1 is a recipe.
+- The agent kb tool emits `fact.read` for each fact it returns (tools.rs:532 comment; fact_audit.rs:303-308). **"Counts are complete" is withdrawn:** it was false while `host_search_kb` appends nothing (service.rs:506-539). Say "agent reads only" until W1.2 ships.
+- The lineage report lists the spans and decisions a fact touched (spec 040 §337); fact_audit.rs:505-528 already reads `fact.read` events to list the readers of retracted facts.
+- **Spec 040 §449 counting reference: marked unbuilt.** `fact_audit.rs` exposes `queue_claim` (:594), `fact_read_events` (:304) and `retract_all` (:519, with `fact_store.rs:262`); a per-claim counting function was not found by name. Do not cite §449 as existing behaviour.
+- Rule exposure and survival for memory (spec 050); Knowledge Window (spec 043). Not read in this session.
 
 ## 5. Simpler Alternative Considered
-A documented `jq` recipe over `events.jsonl` (S1) instead of a command, a table or a pane. Preferred first slice: the data is already complete and the operator can run it today. A dedicated report is deferred until the recipe is shown to be needed repeatedly.
+A recipe over `events.jsonl` instead of a command, table, pane or store. Preferred: the agent-read data exists today. The only code is the one event (W1.2) and one tag check (W1.3).
 
 ## 6. Verification
-Run the recipe on a workspace with known `validator.event` / `fact.read` events: counts match; a fact never returned shows zero; a direct file read of a fact (denied, spec 040 §342) adds nothing; a negative constraint or security invariant with zero reads appears in the exempt list, not the candidate list; running the report changes no fact.
+Recipe on a workspace with known `fact.read` events: counts match; a direct file read of a fact (denied, spec 040 §342) adds nothing. After W1.2: one `host.search_kb` call adds exactly one event with fact ids and a hit count and no query text (grep the log for the query string: no match). After W1.3: a tagged entry with zero reads is absent from the zero-read list and present in the exempt section; an agent attempt to set the attribute is refused; running any report changes no fact.
