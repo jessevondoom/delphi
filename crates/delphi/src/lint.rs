@@ -950,7 +950,7 @@ mod tests {
 
     #[test]
     fn envelopes_validated() {
-        let good = "handoff_id: h\nmission_id: m\nparent_span_id: s\ncaller_agent: orchestrator\ntarget_agent: architect\nobjective: o\ncontext_pointers: [{uri: 'specs/a.md#L1-L2', heading: h, blake3: x, reason: r}]\nexpected_output: {artifact_type: spec}\nrouting_directive: {model_tier: workhorse}\n";
+        let good = "handoff_id: h\nmission_id: m\nparent_span_id: s\ncaller_agent: orchestrator\ntarget_agent: architect\nobjective: o\ncontext_pointers: [{uri: 'specs/a.md#L1-L2', heading: h, blake3: x, reason: r}]\nexpected_output: {artifact_type: spec}\nrouting_directive: {model_tier: workhorse}\ndone_when: [{kind: file_exists, value: out.md}]\nstop_when: stop and report what blocks you\n";
         assert!(envelope_errors(good).is_empty(), "{:?}", envelope_errors(good));
         let bad = good.replace("architect", "athena").replace("specs/a.md", "/etc/passwd").replace("{model_tier: workhorse}", "{model_id: x}");
         assert_eq!(envelope_errors(&bad).len(), 4, "{:?}", envelope_errors(&bad));
@@ -958,6 +958,43 @@ mod tests {
         assert_eq!(envelope_errors(&good.replace("heading: h", "heading: ''")).len(), 1);
         let no_ptrs: String = good.lines().filter(|l| !l.starts_with("context_pointers")).map(|l| format!("{}\n", l)).collect();
         assert_eq!(envelope_errors(&no_ptrs).len(), 1);
+    }
+
+    /// `specs/082` §5: `done_when` and `stop_when` are required of an authored envelope, and each failure names the field.
+    #[test]
+    fn envelopes_need_done_when_and_stop_when() {
+        let base = "handoff_id: h\nmission_id: m\nparent_span_id: s\ncaller_agent: orchestrator\ntarget_agent: architect\nobjective: o\ncontext_pointers: [{uri: 'specs/a.md#L1-L2', heading: h, blake3: x, reason: r}]\nexpected_output: {artifact_type: spec}\n";
+        let with = |extra: &str| format!("{base}{extra}");
+        let ok = with("done_when: [{kind: command, value: cargo test}, {kind: operator_judgment, value: the operator agrees}]\nstop_when: report blocked\n");
+        assert!(envelope_errors(&ok).is_empty(), "{:?}", envelope_errors(&ok));
+        let one = |extra: &str, needle: &str| {
+            let e = envelope_errors(&with(extra));
+            assert_eq!(e.len(), 1, "{extra}: {e:?}");
+            assert!(e[0].contains(needle), "{extra}: {e:?}");
+        };
+        one("stop_when: s\n", "missing `done_when`");
+        one("done_when: [{kind: command, value: x}]\n", "missing `stop_when`");
+        one("done_when: []\nstop_when: s\n", "`done_when` is empty");
+        one("done_when: x\nstop_when: s\n", "`done_when` must be a list");
+        one("done_when: [{kind: shell, value: x}]\nstop_when: s\n", "done_when[0].kind");
+        one("done_when: [{kind: command, value: ''}]\nstop_when: s\n", "done_when[0].value");
+        one("done_when: [{kind: command, value: x, status: passed}]\nstop_when: s\n", "only `kind` and `value`");
+        one("done_when: [just words]\nstop_when: s\n", "must be a mapping");
+        one("done_when: [{kind: command, value: x}]\nstop_when: ''\n", "`stop_when` is empty");
+        let long = "x".repeat(301);
+        one(&format!("done_when: [{{kind: command, value: {long}}}]\nstop_when: s\n"), "done_when[0].value");
+        one(&format!("done_when: [{{kind: command, value: x}}]\nstop_when: {long}\n"), "`stop_when` is over");
+        let nine = "{kind: command, value: x}, ".repeat(9);
+        one(&format!("done_when: [{nine}]\nstop_when: s\n"), "has 9 items");
+    }
+
+    /// The template an agent starts from must itself pass the check it is checked by.
+    #[test]
+    fn the_handoff_template_passes_the_check() {
+        let t = include_str!("../../../skills/handoff-packaging/templates/handoff-envelope.yaml");
+        let e = envelope_errors(t);
+        // The template carries placeholder pointers; only the new fields are this test's concern.
+        assert!(!e.iter().any(|x| x.contains("done_when") || x.contains("stop_when")), "{e:?}");
     }
 
     #[test]

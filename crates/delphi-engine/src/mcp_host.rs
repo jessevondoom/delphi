@@ -757,13 +757,13 @@ impl Server {
     /// `done_when` the answer is one `unspecified` item, never Delphi's own gates for a task that did not ask for them; Delphi's
     /// gates are offered as `suggested` only when the working directory is the Delphi repository.
     fn definition_of_done(&self, done_when: Option<&Value>) -> Result<(Vec<Value>, &'static str), String> {
-        const KINDS: [&str; 4] = ["command", "file_exists", "artifact_field", "operator_judgment"];
+        use crate::checks::{DONE_KINDS as KINDS, DONE_MAX_CHARS, DONE_MAX_ITEMS};
         let bad = |m: &str| Err(format!("invalid arguments: `done_when` {m}"));
         let mut items: Vec<Value> = Vec::new();
         if let Some(v) = done_when {
             let Some(arr) = v.as_array() else { return bad("must be an array") };
-            if arr.len() > 8 {
-                return bad("has at most 8 items");
+            if arr.len() > DONE_MAX_ITEMS {
+                return bad(&format!("has at most {DONE_MAX_ITEMS} items"));
             }
             for it in arr {
                 let Some(obj) = it.as_object() else { return bad("items must be objects") };
@@ -775,8 +775,8 @@ impl Server {
                     return bad("item `kind` must be command, file_exists, artifact_field, or operator_judgment");
                 }
                 let value = obj.get("value").and_then(Value::as_str).unwrap_or("");
-                if value.trim().is_empty() || value.chars().count() > 300 {
-                    return bad("item `value` must be 1 to 300 characters");
+                if value.trim().is_empty() || value.chars().count() > DONE_MAX_CHARS {
+                    return bad(&format!("item `value` must be 1 to {DONE_MAX_CHARS} characters"));
                 }
                 items.push(json!({"kind": kind, "value": value, "status": "stated"}));
             }

@@ -40,6 +40,7 @@ An agent never receives a transcript. It receives a short envelope that points a
 2. Add `context_pointers`: for each, a workspace-relative `uri` with a line anchor (`specs/002-x.md#L40-L72`), the `heading` it falls under, a `blake3` of the content, and a one-line `reason` it matters. Point at the smallest range that answers the need.
 3. List constraints that cannot be violated (spec clauses, REVIEW.md rules) and name the `expected_output.artifact_type`.
 4. Set `routing_directive.model_tier` if the default is wrong for this task.
+4a. Add `done_when` (one to eight items, each a `kind` of `command`, `file_exists`, `artifact_field` or `operator_judgment` and a `value`) and `stop_when` (what the receiver does when it cannot proceed, such as "stop and report what blocks you; do not guess"). The check requires both. It cannot tell whether a criterion is a good one, so write one a stranger could check.
 5. Start from `templates/handoff-envelope.yaml`, save under `missions/<mission>/handoffs/`.
 6. Run `delphi check handoff <envelope>`. It enforces the required fields, the anchors, and the size cap (about 2,000 tokens).
 
