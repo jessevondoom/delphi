@@ -219,7 +219,20 @@ pub fn tools() -> Value {
                     "task": {"type": "string", "minLength": 1, "maxLength": 2000, "description": "The user's objective or coding problem."},
                     "ambiguity": {"type": "string", "enum": ["low", "medium", "high"], "default": "medium"},
                     "blast_radius": {"type": "string", "enum": ["isolated", "module", "system-wide"], "default": "module"},
-                    "proposed_approach": {"type": "string", "maxLength": 1000}
+                    "proposed_approach": {"type": "string", "maxLength": 1000},
+                    "done_when": {
+                        "type": "array", "maxItems": 8,
+                        "description": "What finished looks like, as checkable items (spec 082 §3). Recorded as the contract, never executed here.",
+                        "items": {
+                            "type": "object",
+                            "required": ["kind", "value"],
+                            "additionalProperties": false,
+                            "properties": {
+                                "kind": {"type": "string", "enum": ["command", "file_exists", "artifact_field", "operator_judgment"]},
+                                "value": {"type": "string", "minLength": 1, "maxLength": 300}
+                            }
+                        }
+                    }
                 },
                 "required": ["task"],
                 "additionalProperties": false
@@ -487,6 +500,12 @@ pub struct Server {
     cwd: PathBuf,
 }
 
+/// Whether `cwd` is inside the Delphi repository itself: an ancestor holds both `AGENTS.md` and `crates/delphi-engine/Cargo.toml`.
+/// Deterministic and read-only; it decides only whether Delphi's own gates may be *suggested* as a done contract (`specs/082` §3.2).
+fn is_delphi_repo(cwd: &Path) -> bool {
+    cwd.ancestors().any(|d| d.join("AGENTS.md").is_file() && d.join("crates/delphi-engine/Cargo.toml").is_file())
+}
+
 impl Server {
     /// `ws` is the workspace directory whose `config.toml` holds the `[mcp]` switch.
     pub fn new(ws: &Path) -> Server {
@@ -654,6 +673,7 @@ impl Server {
         if !["isolated", "module", "system-wide"].contains(&blast_radius) {
             return Err("invalid arguments: `blast_radius` must be isolated, module, or system-wide".to_string());
         }
+        let (definition_of_done, done_guidance) = self.definition_of_done(args.get("done_when"))?;
 
         let (escalation, rationale, roster) = if blast_radius == "system-wide" || (ambiguity == "high" && blast_radius == "module") {
             (
@@ -725,16 +745,51 @@ impl Server {
                     "External agent attribution invariant: ⟦badge⟧ Name (role) via delphi"
                 ],
                 "context_pointers": context_pointers,
-                "definition_of_done": [
-                    "All workspace unit and integration tests pass",
-                    "cargo clippy passes with zero warnings (-D warnings)",
-                    "delphi lint passes with 0 failures and 0 warnings",
-                    "Specification tracker updated for delivered slice"
-                ]
+                "definition_of_done": definition_of_done,
+                "definition_of_done_guidance": done_guidance
             }
         });
 
         Ok(out.to_string())
+    }
+
+    /// The done contract of `consult_orchestrator` (`specs/082` §3). Items are data: validated and returned, never run. With no
+    /// `done_when` the answer is one `unspecified` item, never Delphi's own gates for a task that did not ask for them; Delphi's
+    /// gates are offered as `suggested` only when the working directory is the Delphi repository.
+    fn definition_of_done(&self, done_when: Option<&Value>) -> Result<(Vec<Value>, &'static str), String> {
+        use crate::checks::{DONE_KINDS as KINDS, DONE_MAX_CHARS, DONE_MAX_ITEMS};
+        let bad = |m: &str| Err(format!("invalid arguments: `done_when` {m}"));
+        let mut items: Vec<Value> = Vec::new();
+        if let Some(v) = done_when {
+            let Some(arr) = v.as_array() else { return bad("must be an array") };
+            if arr.len() > DONE_MAX_ITEMS {
+                return bad(&format!("has at most {DONE_MAX_ITEMS} items"));
+            }
+            for it in arr {
+                let Some(obj) = it.as_object() else { return bad("items must be objects") };
+                if obj.keys().any(|k| k != "kind" && k != "value") {
+                    return bad("items have only `kind` and `value`");
+                }
+                let kind = obj.get("kind").and_then(Value::as_str).unwrap_or("");
+                if !KINDS.contains(&kind) {
+                    return bad("item `kind` must be command, file_exists, artifact_field, or operator_judgment");
+                }
+                let value = obj.get("value").and_then(Value::as_str).unwrap_or("");
+                if value.trim().is_empty() || value.chars().count() > DONE_MAX_CHARS {
+                    return bad(&format!("item `value` must be 1 to {DONE_MAX_CHARS} characters"));
+                }
+                items.push(json!({"kind": kind, "value": value, "status": "stated"}));
+            }
+        }
+        if !items.is_empty() {
+            return Ok((items, "The caller's own criteria, recorded as the contract. Delphi does not run them here; a host's report that one passed is a claim, not a result."));
+        }
+        if is_delphi_repo(&self.cwd) {
+            let gates = ["cargo test --workspace --locked", "cargo clippy --workspace --all-targets --locked -- -D warnings", "cargo run -q --locked -p delphi -- lint --repo .", "the spec tracker is updated for the delivered slice"];
+            let suggested = gates.iter().enumerate().map(|(i, g)| json!({"kind": if i < 3 { "command" } else { "operator_judgment" }, "value": g, "status": "suggested"})).collect();
+            return Ok((suggested, "No `done_when` was given. These are the Delphi repository's own gates (AGENTS.md), offered as suggestions; confirm them with the operator or pass `done_when`."));
+        }
+        Ok((vec![json!({"kind": "operator_judgment", "value": "unspecified: no done criterion was given", "status": "unspecified"})], "No `done_when` was given, so nothing defines finished. Ask the operator for a done criterion before starting, or pass `done_when`."))
     }
 
     /// Compile a specialized agent pack derived from a canonical Delphi archetype (`specs/072` §4.2).
@@ -1319,6 +1374,115 @@ mod tests {
         // Input validation errors
         assert_eq!(call_tool(&mut s, "consult_orchestrator", json!({}))["result"]["isError"], true);
         assert_eq!(call_tool(&mut s, "consult_orchestrator", json!({"task": "x", "blast_radius": "invalid"}))["result"]["isError"], true);
+    }
+
+    fn done_of(s: &mut Server, args: Value) -> Value {
+        let r = call_tool(s, "consult_orchestrator", args);
+        assert_eq!(r["result"]["isError"], false, "{r}");
+        let v: Value = serde_json::from_str(&text_of(&r)).unwrap();
+        v["execution_contract"].clone()
+    }
+
+    /// `specs/082` §4: where a run happens is never read from content. No tool takes a field that could set, override or hint at
+    /// it, so a host cannot claim to be somewhere it is not.
+    #[test]
+    fn no_tool_argument_can_set_a_venue() {
+        let (_t, dir, root) = project_ws();
+        let mut s = Server::new(&dir).with_cwd(&root);
+        init(&mut s);
+        let v = s.handle_bytes(br#"{"jsonrpc":"2.0","id":9,"method":"tools/list"}"#).expect("tools/list answers");
+        let tools = v["result"]["tools"].as_array().unwrap();
+        assert!(!tools.is_empty());
+        let banned = ["venue", "environment", "runtime", "harness", "sandbox", "trust", "tier_override", "inside", "outside"];
+        for t in tools {
+            let props = t["inputSchema"]["properties"].as_object().cloned().unwrap_or_default();
+            for k in props.keys() {
+                assert!(!banned.iter().any(|b| k.to_lowercase().contains(b)), "tool `{}` takes `{k}`, which could set a venue", t["name"]);
+            }
+        }
+        // A venue smuggled in as an extra argument is refused by the schema-checked tools, not read.
+        let r = call_tool(&mut s, "consult_orchestrator", json!({"task": "x", "venue": "inside"}));
+        let out = text_of(&r);
+        assert!(!out.contains("\"venue\""), "venue echoed: {out}");
+    }
+
+    #[test]
+    fn without_done_when_the_contract_is_unspecified_and_never_the_rust_gates() {
+        let (_t, dir, root) = project_ws();
+        let mut s = Server::new(&dir).with_cwd(&root);
+        init(&mut s);
+        let c = done_of(&mut s, json!({"task": "Summarise three competitor pricing pages"}));
+        let done = c["definition_of_done"].as_array().unwrap();
+        assert_eq!(done.len(), 1);
+        assert_eq!(done[0]["status"], "unspecified");
+        assert_eq!(done[0]["kind"], "operator_judgment");
+        let done_text = c["definition_of_done"].to_string();
+        for old in ["clippy", "cargo test", "delphi lint", "unit and integration tests", "tracker"] {
+            assert!(!done_text.contains(old), "old Rust gate `{old}` leaked: {done_text}");
+        }
+        assert!(c["definition_of_done_guidance"].as_str().unwrap().contains("Ask the operator"));
+    }
+
+    #[test]
+    fn done_when_round_trips_as_stated_and_is_never_executed() {
+        let (_t, dir, root) = project_ws();
+        let marker = root.join("ran.txt");
+        let mut s = Server::new(&dir).with_cwd(&root);
+        init(&mut s);
+        let c = done_of(&mut s, json!({"task": "x", "done_when": [
+            {"kind": "command", "value": format!("touch {}", marker.display())},
+            {"kind": "file_exists", "value": "report.md"},
+            {"kind": "artifact_field", "value": "report.md#verdict"},
+            {"kind": "operator_judgment", "value": "the operator approves the summary"}
+        ]}));
+        let done = c["definition_of_done"].as_array().unwrap();
+        assert_eq!(done.len(), 4);
+        assert!(done.iter().all(|d| d["status"] == "stated"));
+        assert_eq!(done[1], json!({"kind": "file_exists", "value": "report.md", "status": "stated"}));
+        assert!(!marker.exists(), "a command predicate was run");
+    }
+
+    #[test]
+    fn bad_done_when_is_refused() {
+        let (_t, dir, root) = project_ws();
+        let mut s = Server::new(&dir).with_cwd(&root);
+        init(&mut s);
+        let item = |k: &str, v: &str| json!({"kind": k, "value": v});
+        let nine: Vec<Value> = (0..9).map(|_| item("file_exists", "a")).collect();
+        for bad in [
+            json!(nine),
+            json!([item("shell", "ls")]),
+            json!([item("command", "")]),
+            json!([item("command", &"x".repeat(301))]),
+            json!([{"kind": "command", "value": "ls", "status": "passed"}]),
+            json!([{"kind": "command"}]),
+            json!(["ls"]),
+            json!("ls"),
+        ] {
+            let r = call_tool(&mut s, "consult_orchestrator", json!({"task": "x", "done_when": bad}));
+            assert_eq!(r["result"]["isError"], true, "accepted: {bad}");
+        }
+        let ok = call_tool(&mut s, "consult_orchestrator", json!({"task": "x", "done_when": [item("command", &"x".repeat(300))]}));
+        assert_eq!(ok["result"]["isError"], false);
+    }
+
+    #[test]
+    fn delphis_own_gates_are_only_suggested_inside_the_delphi_repo() {
+        let (_t, dir, root) = project_ws();
+        std::fs::write(root.join("AGENTS.md"), "# a\n").unwrap();
+        std::fs::create_dir_all(root.join("crates/delphi-engine")).unwrap();
+        std::fs::write(root.join("crates/delphi-engine/Cargo.toml"), "[package]\n").unwrap();
+        let sub = root.join("specs");
+        let mut s = Server::new(&dir).with_cwd(&sub);
+        init(&mut s);
+        let c = done_of(&mut s, json!({"task": "x"}));
+        let done = c["definition_of_done"].as_array().unwrap();
+        assert!(done.len() >= 3);
+        assert!(done.iter().all(|d| d["status"] == "suggested"));
+        assert!(done.iter().any(|d| d["value"].as_str().unwrap().contains("clippy")));
+        // Given criteria still win over the suggestion.
+        let c2 = done_of(&mut s, json!({"task": "x", "done_when": [{"kind": "file_exists", "value": "a.md"}]}));
+        assert_eq!(c2["definition_of_done"].as_array().unwrap().len(), 1);
     }
 
     #[test]

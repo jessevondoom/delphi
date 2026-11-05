@@ -639,5 +639,29 @@ Approved by the operator on 2026-11-04. Extends specs 062, 071, 072, and 074; co
 | S2 | MCP dynamic alias resolution in `mcp_host.rs`, `list_roles` aliases, and `delphi_roster` | 4 h | built (this branch) |
 | S3 | Claude Code plugin skill (`SKILL.md`) update and project template instructions | 3 h | built (this branch) |
 
+## Orchestrator outside delegation contracts (spec 082, approved 2026-11-05)
+
+Approved by the operator on 2026-11-05. Extends specs 072, 038 and 062. Task-derived `definition_of_done`, venue limits in orchestrator §6, `done_when`/`stop_when` in the handoff envelope, a presence-only brief shape check, then a two-arm experiment before anything else. Reviewed by a host-federated Council (record in the spec, §11). Numbers 078-081 are held by specs merged in PR #474.
+
+| Slice | Content | Estimate | State |
+| :-- | :-- | --: | :-- |
+| S0 | spec 082 approval and tracker entry | 1 h | approved (this branch) |
+| S1a | `consult_orchestrator` `done_when` input, typed `definition_of_done`, `unspecified` default | 4 h | built (this branch) |
+| S1b | orchestrator §6 amendment; venue-not-settable test | 1 h | built (this branch) |
+| S1c | `done_when`/`stop_when` in envelope schema and template; `check handoff` requires them | 3 h | built (this branch) |
+| S2 | `check brief` shape check; `handoff-packaging` section | 4 h | built (this branch) |
+| E1 | pre-registered two-arm experiment on the 037 pack | 4 h | not built |
 
 
+
+
+## Council specs: evidence from existing events (specs 078-081, 2026-11-05)
+
+Drafted by the architect from the 2026-11-05 Council (both options), revised after the Red-Team and Strategist steps. The Strategist put the monolithic evidence ledger out: 081 is a conventions note, and the work is recipes over verified events plus one new event. The operator approved 079 and 080 on 2026-11-05 and asked that nothing be built yet; 078 and 081 stay drafts. Nothing is built.
+
+| Spec | Content | Wave | State |
+| :-- | :-- | :-- | :-- |
+| 079 | registry test: every ingress has a core-assigned origin ceiling; hard blocker for any `min_taint` figure | 1, first | approved 2026-11-05, not built |
+| 080 | KB read-count report from `fact.read` events; `host_search_kb` event, `invariant: security\|constraint` attribute (needs its own operator ratification), no automatic pruning | 1, after 079 | approved 2026-11-05, not built |
+| 078 | Council scorecard: cost by `task_id`, choice from `council.followed`, family spread a floor | 2 | draft |
+| 081 | conventions note: advisory-only invariants, row shape, missing events in order | note | draft |

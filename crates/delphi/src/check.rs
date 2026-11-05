@@ -18,7 +18,7 @@ use std::path::Path;
 use unicode_width::UnicodeWidthStr;
 
 /// Every kind `delphi check` accepts. `lint` verifies that a `SKILL.md` names only these.
-pub const KINDS: [&str; 11] = ["dag", "handoff", "provenance", "rules", "review-md", "spec", "kb", "tui", "skill", "fact", "record"];
+pub const KINDS: [&str; 12] = ["dag", "handoff", "provenance", "rules", "review-md", "spec", "brief", "kb", "tui", "skill", "fact", "record"];
 
 /// Run one check. `target` is a file (a directory for `kb`, `skill` and `tui`); `repo` is the root against which
 /// `dag` resolves its `spec:` links.

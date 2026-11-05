@@ -15,6 +15,9 @@
 *.tmp
 scratch/
 
+# Identity marker written by `delphi project register` when this repository is registered as a project
+.delphi-project
+
 # OS artifacts
 .DS_Store
 Thumbs.db

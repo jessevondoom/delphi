@@ -169,7 +169,7 @@ impl Registry {
             exec: ToolExec::Local(search),
         });
         r.register(ToolSpec {
-            def: read_def("check", "Run a deterministic check on a document you can read and get a short verdict, instead of working the rule out yourself. Kinds: `dag` (task or milestone plan: cycles, unknown dependencies, tiers; reports parallel waves and the critical path), `handoff` (handoff envelope), `provenance` (provenance frontmatter), `rules` (Rule of 25 file), `review-md` (REVIEW.md budget), `spec` (spec sections and frontmatter).", json!({"type": "object", "required": ["kind", "path"], "properties": {"kind": {"type": "string", "enum": crate::checks::TEXT_KINDS}, "path": {"type": "string"}}})),
+            def: read_def("check", "Run a deterministic check on a document you can read and get a short verdict, instead of working the rule out yourself. Kinds: `dag` (task or milestone plan: cycles, unknown dependencies, tiers; reports parallel waves and the critical path), `handoff` (handoff envelope), `provenance` (provenance frontmatter), `rules` (Rule of 25 file), `review-md` (REVIEW.md budget), `spec` (spec sections and frontmatter), `brief` (a brief for a model outside Delphi: whether a deliverable, done criterion, stop condition, scope bound and tool dependency are each present or absent; shape only, never a judgment of quality).", json!({"type": "object", "required": ["kind", "path"], "properties": {"kind": {"type": "string", "enum": crate::checks::TEXT_KINDS}, "path": {"type": "string"}}})),
             requires_write_scope: false,
             classify: classify_read,
             exec: ToolExec::Local(check),
