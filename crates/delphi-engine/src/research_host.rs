@@ -171,7 +171,8 @@ pub fn display_name(ws_dir: &std::path::Path, home: &std::path::Path, role: &str
         String::new()
     };
     let resolver = if text.trim().is_empty() {
-        delphi_core::theme_names::ThemeResolver::default()
+        // A missing, unreadable or unsafe theme falls back to the canonical role ID (spec 077, Theme Isolation), not to a built-in pack.
+        delphi_core::theme_names::ThemeResolver::new(std::collections::HashMap::new())
     } else {
         delphi_core::theme_names::ThemeResolver::from_theme_text(&text)
     };
