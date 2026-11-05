@@ -1,3 +1,15 @@
+---
+id: build-plan-2026-11-05
+title: "Build plan 2026-11-05: context, handoffs, verification, emergency stop, measurement"
+author: strategist
+timestamp: 2026-11-05T00:00:00Z
+source_type: internal_generated
+confidence: medium
+status: active
+source_mission: 2026-10-23-foundational-design
+tags: [plan, harness, context, measurement]
+---
+
 # Build plan: context, handoffs, verification, emergency stop, measurement (2026-11-05)
 
 A durable plan for a session that may be cut off by token exhaustion. **A new session can resume from this file alone.** The tracker (`spec-tracker.md`) is the source of truth for state; this file is the order, the rules and the pointers.
