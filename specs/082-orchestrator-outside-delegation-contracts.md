@@ -128,7 +128,7 @@ A short addition to `agents/orchestrator/AGENT.md` §6, written as **limits on w
 
 ### 6.1 What is checked
 
-A "brief" is text Delphi sends or composes for a model outside its harness: the `spawn_agent_pack` specialization fields (`domain_focus`, `custom_heuristics`) and a prompt written for an external CLI seat. `delphi check brief <file|->` (and the `check` tool with `kind: brief`) reports, for each, **present or absent**:
+A "brief" is text Delphi sends or composes for a model outside its harness: the `spawn_agent_pack` specialization fields (`domain_focus`, `custom_heuristics`) and a prompt written for an external CLI seat. `delphi check brief <file>` (and the `check` tool with `kind: brief`; `check` reads a file, so there is no stdin form) reports, for each, **present or absent**. An item counts as present when its label (`Deliverable:`, `Done when:`, `Stop when:`, `Scope:`, `Tools:`, as a line start, heading or bullet, either case) has text under it; scope is also present when the brief contains a path with an extension or trailing slash, or a `#L` line pointer:
 
 | Item | Present means |
 | :-- | :-- |
