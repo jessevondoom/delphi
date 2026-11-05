@@ -1,9 +1,9 @@
 ---
 id: spec-048-harness-benchmarking-and-targeted-evals
-title: "048: Harness benchmarking and targeted evals: fixed-model arms, efficiency, handoff fidelity, tool-count and context-retention tests (draft)"
+title: "048: Harness benchmarking and targeted evals: fixed-model arms, efficiency, handoff fidelity, tool-count and context-retention tests"
 author: architect
 timestamp: 2026-10-28T18:00:00Z
-status: draft   # a proposal, not permission to build (No Spec, No Build). Needs operator approval; open decisions in §8.
+status: approved   # by the operator, 2026-11-05 ("approve 048"). Provisional answers to OD-1 to OD-4 stand; OD-1 (source check) is waived as for 049 and 050, because the figures are hypotheses this spec tests. BM6 stays gated on OD-3 (the operator picks the subset).
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +14,7 @@ tags: [spec, evaluation, benchmarking, harness, efficiency, handoff, draft]
 
 # Spec 048: Harness benchmarking and targeted evals
 
-> **Status: draft.** One of three specs from a review (2026-10-28) of what LangChain and LangSmith publish about agent benchmarking, memory and context. Siblings: `specs/049` (context management) and `specs/050` (memory lifecycle). Delphi uses no LangChain code; this takes the *methods*.
+> **Status: approved (2026-11-05).** BM1-BM5 and BM7 may be built; BM6 waits for the operator to pick the subset (OD-3). One of three specs from a review (2026-10-28) of what LangChain and LangSmith publish about agent benchmarking, memory and context. Siblings: `specs/049` (context management) and `specs/050` (memory lifecycle). Delphi uses no LangChain code; this takes the *methods*.
 
 ## 1. Why
 
