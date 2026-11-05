@@ -163,6 +163,8 @@ Before specifying venue tagging or the model-capability column, measure whether 
 - **Cases:** 10 existing cases, 3 seeds each, from the spec 037 pack, on one cheap seat (a Haiku or Flash seat).
 - **Scoring:** the existing deterministic checks only; passes and tokens, against the noise band of the seeds.
 - **Pre-registered before running:** the minimum number of runs, the smallest difference that counts, and the rule "no effect outside the noise band means nothing further is built from this spec".
+
+**Result (2026-11-05).** Run as `dev/train/e1/PREREG.md` registered it, with two stated deviations: five cases (only five 037 cases are short and deterministic) and a Flash seat. **No evidence of an effect on passes** (contract 6 of 15, terse 7 of 15), so nothing in §8 is built. The total hid two opposite movements (fabrication fell on a false-premise case; citations fell on others), which are hypotheses and not findings. Report: `dev/train/e1/REPORT.md`.
 - Spec 048 is a draft; this experiment uses 037 only and builds no 048 slice.
 - The experiment writes a report under `missions/`. It is run by the operator or an approved session, not on a schedule.
 

@@ -1,0 +1,13 @@
+case                          terse  contract    d   tokens(median) terse -> contract   recall% terse -> contract
+e1/lions-mane-claim          3/3       0/3      -3       215129 -> 171576          67 -> 70   
+e1/livewire-strategy         0/3       0/3      +0       280319 -> 319660          28 -> 22   
+e1/motogp-2027-regs          3/3       3/3      +0       284519 -> 281509          76 -> 88   
+e1/mycorrhizal-networks      0/3       0/3      +0       233378 -> 149811          50 -> 30   
+e1/phantom-paper             1/3       3/3      +2       233553 -> 175685          91 -> 100  
+total                        7/15      6/15     -1
+mean fact recall: terse 62%, contract 62%
+
+PRE-REGISTERED RULE
+total difference (contract - terse) = -1 passes of 15; cases pointing the same way as the total: 1 of 5
+NO EVIDENCE of an effect on passes (not evidence of no effect): build nothing from spec 082 section 8.
+secondary, tokens (never decides): 0 cases up, 1 down, 4 within 25%
