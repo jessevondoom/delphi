@@ -235,4 +235,25 @@ mod tests {
         std::fs::write(ws.path().join("config.toml"), "[theme]\nname = \"../evil\"\n").unwrap();
         assert_eq!(display_name(ws.path(), home.path(), "scout"), "scout");
     }
+
+    /// Spec 077 (Theme Isolation & Graceful Fallback): a theme the workspace names that does not exist falls back to the canonical role ID, not to the built-in
+    /// pack; a workspace that names none keeps the built-in default pack.
+    #[test]
+    fn a_named_theme_that_is_missing_shows_the_role_and_an_unnamed_one_keeps_the_default_pack() {
+        let (ws, home) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let builtin = delphi_core::theme_names::ThemeResolver::default().display_name("scout");
+        assert_ne!(builtin, "scout", "the default pack must name the scout, or this test proves nothing");
+        // No config at all: the default pack.
+        assert_eq!(display_name(ws.path(), home.path(), "scout"), builtin);
+        // A config that names no theme: the default pack.
+        std::fs::write(ws.path().join("config.toml"), "[other]\nx = 1\n").unwrap();
+        assert_eq!(display_name(ws.path(), home.path(), "scout"), builtin);
+        // A safe name whose file is missing: the role.
+        std::fs::write(ws.path().join("config.toml"), "[theme]\nname = \"nosuch\"\n").unwrap();
+        assert_eq!(display_name(ws.path(), home.path(), "scout"), "scout");
+        // The same name once its file exists: that theme.
+        std::fs::create_dir_all(home.path().join("themes/nosuch")).unwrap();
+        std::fs::write(home.path().join("themes/nosuch/theme.md"), "roles:\n  scout:         { name: \"Hermes\", epithet: \"x\" }\n").unwrap();
+        assert_eq!(display_name(ws.path(), home.path(), "scout"), "Hermes");
+    }
 }
