@@ -20,6 +20,14 @@ context_pointers:
 constraints:
   - "Rules that cannot be violated (cite the spec section or REVIEW.md rule)."
 
+# What finished looks like (specs/082 §5). One to eight checkable items; kind is
+# command | file_exists | artifact_field | operator_judgment. Nothing here is run by the check.
+done_when:
+  - kind: "file_exists"
+    value: "path/of/the/artifact.md"
+# What the receiver does when it cannot proceed. Up to 300 characters.
+stop_when: "Stop and report what is blocking you; do not guess."
+
 expected_output:
   artifact_type: "git-branch-and-test-report"
   required_fields: ["worktree_branch", "commit_sha", "test_summary", "spec_drift_detected"]

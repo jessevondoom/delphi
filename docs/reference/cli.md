@@ -551,7 +551,7 @@ Check a repository's Delphi files.
 The deterministic checks behind the built-in skills.
 
 ```
-  delphi check <dag|handoff|provenance|rules|review-md|spec|kb|tui|skill> <path> [--repo <path>]
+  delphi check <dag|handoff|provenance|rules|review-md|spec|brief|kb|tui|skill> <path> [--repo <path>]
   delphi check fact <claim.json> [--home <dir>] [--offline]
   delphi check record <mission-dir> --event <seq> [--hash <h>]
 ```
