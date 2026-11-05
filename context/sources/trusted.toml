@@ -198,3 +198,10 @@ publisher = "NPR"
 kind = "news"
 licence = "unknown"
 reuse = "summary-only"
+
+[[source]]
+host = "anthropic.com"
+publisher = "Anthropic"
+kind = "documentation"
+licence = "unknown"
+reuse = "summary-only"
