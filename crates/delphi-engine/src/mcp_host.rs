@@ -1383,6 +1383,29 @@ mod tests {
         v["execution_contract"].clone()
     }
 
+    /// `specs/082` §4: where a run happens is never read from content. No tool takes a field that could set, override or hint at
+    /// it, so a host cannot claim to be somewhere it is not.
+    #[test]
+    fn no_tool_argument_can_set_a_venue() {
+        let (_t, dir, root) = project_ws();
+        let mut s = Server::new(&dir).with_cwd(&root);
+        init(&mut s);
+        let v = s.handle_bytes(br#"{"jsonrpc":"2.0","id":9,"method":"tools/list"}"#).expect("tools/list answers");
+        let tools = v["result"]["tools"].as_array().unwrap();
+        assert!(!tools.is_empty());
+        let banned = ["venue", "environment", "runtime", "harness", "sandbox", "trust", "tier_override", "inside", "outside"];
+        for t in tools {
+            let props = t["inputSchema"]["properties"].as_object().cloned().unwrap_or_default();
+            for k in props.keys() {
+                assert!(!banned.iter().any(|b| k.to_lowercase().contains(b)), "tool `{}` takes `{k}`, which could set a venue", t["name"]);
+            }
+        }
+        // A venue smuggled in as an extra argument is refused by the schema-checked tools, not read.
+        let r = call_tool(&mut s, "consult_orchestrator", json!({"task": "x", "venue": "inside"}));
+        let out = text_of(&r);
+        assert!(!out.contains("\"venue\""), "venue echoed: {out}");
+    }
+
     #[test]
     fn without_done_when_the_contract_is_unspecified_and_never_the_rust_gates() {
         let (_t, dir, root) = project_ws();
