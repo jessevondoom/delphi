@@ -677,3 +677,15 @@ From the 2026-11-05 ranking of unbuilt work (five Claude seats, one family; see 
 | S2 | learning-health footer line: staged, to review, oldest age | 7 | not built |
 | S3 | recurrence count, dismissed-claim memory, seat-keyed claims (S3a dismissal, S3b the rest) | 14 | not built |
 | S4 | `duplicate_of` on `host.propose_note`, own session only | 5 | not built |
+
+## Spec 084: outcome stub, flip question, resume recap, learn history (2026-11-05, draft)
+
+Phase-2 items N5, N24, N14, N1 from the same ranking. Draft: a proposal for the operator, not permission to build. S1 needs an explicit operator call because the 082 E1 result was negative (spec 084 §1.2).
+
+| Slice | Content | Hours | State |
+| :-- | :-- | --: | :-- |
+| S0 | operator approves spec 084; tracker entry | 1 | draft |
+| S1 | typed `outcome` on `record_session_summary`, `untrusted/self_reported`, display-only | 7 | draft, not built |
+| S2 | `council_result` flip question, only with a real dissent | 9 | draft, not built |
+| S3 | three-line "what changed since I left" recap, events only | 8 | draft, not built |
+| S4 | `delphi learn history` ("co-occurred"), with `rule_id` on accept first | 9 | draft, not built |
