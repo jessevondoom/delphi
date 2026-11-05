@@ -665,3 +665,15 @@ Drafted by the architect from the 2026-11-05 Council (both options), revised aft
 | 080 | KB read-count report from `fact.read` events; `host_search_kb` event, `invariant: security\|constraint` attribute (needs its own operator ratification), no automatic pruning | 1, after 079 | approved 2026-11-05, not built |
 | 078 | Council scorecard: cost by `task_id`, choice from `council.followed`, family spread a floor | 2 | draft |
 | 081 | conventions note: advisory-only invariants, row shape, missing events in order | note | draft |
+
+## Spec 083: learning signals and host diagnostics (2026-11-05)
+
+From the 2026-11-05 ranking of unbuilt work (five Claude seats, one family; see the PR body). Approved by the operator 2026-11-05.
+
+| Slice | Content | Hours | State |
+| :-- | :-- | --: | :-- |
+| S0 | spec 083 approval and tracker entry | 1 | approved 2026-11-05 |
+| S1 | `delphi doctor` host-chain: first failing link and the printed fix | 7 | not built |
+| S2 | learning-health footer line: staged, to review, oldest age | 7 | not built |
+| S3 | recurrence count, dismissed-claim memory, seat-keyed claims (S3a dismissal, S3b the rest) | 14 | not built |
+| S4 | `duplicate_of` on `host.propose_note`, own session only | 5 | not built |
