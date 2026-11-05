@@ -28,6 +28,21 @@
       }
     },
     "constraints": { "type": "array", "items": { "type": "string" } },
+    "done_when": {
+      "type": "array",
+      "maxItems": 8,
+      "description": "What finished looks like, as checkable items (specs/082 §5). Not required by this schema, because envelopes built by code do not carry it; `delphi check handoff` requires it of an authored envelope. Recorded, never run.",
+      "items": {
+        "type": "object",
+        "required": ["kind", "value"],
+        "properties": {
+          "kind": { "enum": ["command", "file_exists", "artifact_field", "operator_judgment"] },
+          "value": { "type": "string", "minLength": 1, "maxLength": 300 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "stop_when": { "type": "string", "minLength": 1, "maxLength": 300, "description": "What the receiver does when it cannot proceed (specs/082 §5). `delphi check handoff` requires it of an authored envelope." },
     "expected_output": {
       "type": "object",
       "required": ["artifact_type"],

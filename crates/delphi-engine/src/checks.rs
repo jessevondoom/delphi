@@ -275,6 +275,7 @@ pub fn envelope_errors(text: &str) -> Vec<String> {
         Some(eo) if get_str(eo, "artifact_type").is_some() => {}
         _ => errs.push("expected_output.artifact_type is required".into()),
     }
+    errs.extend(done_stop_errors(&m));
     if let Some(rd) = m.get(Value::String("routing_directive".into())).and_then(|v| v.as_mapping()) {
         if get_str(rd, "model_tier").is_none() {
             errs.push("routing_directive.model_tier is required (tiers, never model IDs)".into());
@@ -284,6 +285,52 @@ pub fn envelope_errors(text: &str) -> Vec<String> {
                 errs.push(format!("routing_directive.{} is not allowed: models resolve from config tiers and failover follows ratified [access] order", k));
             }
         }
+    }
+    errs
+}
+
+/// The kinds of a done criterion (`specs/082` §3.1). The same closed set the MCP `done_when` input takes.
+pub const DONE_KINDS: [&str; 4] = ["command", "file_exists", "artifact_field", "operator_judgment"];
+/// At most this many done criteria, and this many characters in one value or in `stop_when`.
+pub const DONE_MAX_ITEMS: usize = 8;
+pub const DONE_MAX_CHARS: usize = 300;
+
+/// `done_when` and `stop_when` (`specs/082` §5). Shape only: each is present and well formed. Whether a criterion is *good* is
+/// not something this can say, and it does not try.
+fn done_stop_errors(m: &Mapping) -> Vec<String> {
+    let mut errs = Vec::new();
+    match m.get(Value::String("done_when".into())).map(|v| v.as_sequence()) {
+        None => errs.push("missing `done_when`: say what finished looks like (specs/082 §5)".into()),
+        Some(None) => errs.push("`done_when` must be a list".into()),
+        Some(Some(items)) if items.is_empty() => errs.push("`done_when` is empty: give at least one done criterion".into()),
+        Some(Some(items)) => {
+            if items.len() > DONE_MAX_ITEMS {
+                errs.push(format!("`done_when` has {} items (at most {})", items.len(), DONE_MAX_ITEMS));
+            }
+            for (i, it) in items.iter().enumerate() {
+                let Some(im) = it.as_mapping() else {
+                    errs.push(format!("`done_when[{i}]` must be a mapping with `kind` and `value`"));
+                    continue;
+                };
+                if im.keys().any(|k| !matches!(k.as_str(), Some("kind" | "value"))) {
+                    errs.push(format!("`done_when[{i}]` has only `kind` and `value`"));
+                }
+                match get_str(im, "kind") {
+                    Some(k) if DONE_KINDS.contains(&k) => {}
+                    _ => errs.push(format!("`done_when[{i}].kind` must be one of {}", DONE_KINDS.join(", "))),
+                }
+                match get_str(im, "value") {
+                    Some(v) if !v.trim().is_empty() && v.chars().count() <= DONE_MAX_CHARS => {}
+                    _ => errs.push(format!("`done_when[{i}].value` must be 1 to {DONE_MAX_CHARS} characters")),
+                }
+            }
+        }
+    }
+    match get_str(m, "stop_when") {
+        None => errs.push("missing `stop_when`: say what the receiver does when it cannot proceed (specs/082 §5)".into()),
+        Some(s) if s.trim().is_empty() => errs.push("`stop_when` is empty".into()),
+        Some(s) if s.chars().count() > DONE_MAX_CHARS => errs.push(format!("`stop_when` is over {DONE_MAX_CHARS} characters")),
+        Some(_) => {}
     }
     errs
 }
