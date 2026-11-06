@@ -713,4 +713,4 @@ From the operator's request to refine the outside Council (Claude Code, Copilot,
 | S2 | Panel: server-held barrier, `council_open/brief/submit/choose` | 24 | built (PR open) |
 | S3 | role subagents per host, `[host.models.*]`, Codex agents installer | 14 | built (PR open) |
 | S4 | one foreign-family seat (token ceiling, not a history-based estimate); `venue`/`blind` in the record front matter | 10 | built (PR open) |
-| S5 | pre-registered Panel-vs-Council experiment; decides the default | 12 | pre-registration merged (#505); S2/S3 merged; the run needs the operator's go and token caps |
+| S5 | pre-registered Panel-vs-Council experiment; decides the default | 12 | run 2026-11-06 (operator go, 350k per-run cap): verdict INCOMPLETE (4 of 8 questions qualify, 6 needed), notice unchanged; 2.10M of 8M tokens; report text in the PR description, data in `dev/train/e2/data/` (this PR); `REPORT.md` still to be added from it |

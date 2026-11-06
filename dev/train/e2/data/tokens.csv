@@ -2,11 +2,31 @@ question,run,tokens,cache_read,cache_write,events,models,note
 q1,b1,106736,291292,167655,7,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-8982dcd7ad7dfcd8; elapsed 150s; qcheck True
 q1,b2-attempt1,99962,337541,77116,7,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-9b3e0fd087e1ab73; elapsed 1437s; qcheck True
 q1,b2,9112,218802,61480,6,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-e1fb244752497cde; elapsed 1007s; qcheck True
-q2,b1,135130,325880,137360,7,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-8d7d674fc63fcecf; elapsed 1465s; qcheck True
+q2,b1-attempt1,135130,325880,137360,7,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-8d7d674fc63fcecf; elapsed 1465s; qcheck True
 q2,b2,110387,365993,85695,7,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-2ebc85d541da8fb6; elapsed 180s; qcheck True
 q3,b1,101050,311634,83776,7,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-0c8b378354e9d850; elapsed 170s; qcheck True
 q3,b2,112822,323160,84515,7,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-101439a5a610d46b; elapsed 191s; qcheck True
-q4,b1,15926,126612,58028,6,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-c2ad04a834d4fc48; elapsed 1289s; qcheck True
-q4,b2,34371,121302,79358,6,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-f71f0cd0c7bae0f8; elapsed 60s; qcheck True
+q4,b1-attempt1,15926,126612,58028,6,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-c2ad04a834d4fc48; elapsed 1289s; qcheck True
+q4,b2-attempt1,34371,121302,79358,6,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-f71f0cd0c7bae0f8; elapsed 60s; qcheck True
 q5,b1,117038,285672,84381,7,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-684737dfac571f48; elapsed 140s; qcheck True
 q5,b2,84225,302991,84287,7,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-15975f15b3fd0b8c; elapsed 150s; qcheck True
+q6,b1,97255,389964,87329,7,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-154a08fe4de6d250; elapsed 180s; qcheck True
+q6,b2,85274,335749,86448,7,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-85a89731bdcc62e5; elapsed 160s; qcheck True
+q7,b1-attempt1,107881,268512,81137,7,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-17d73e03ccc0d3dc; elapsed 150s; qcheck True
+q7,b2,85496,271443,83785,7,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-d00d31d28c3d7bcf; elapsed 160s; qcheck True
+q8,b1,88274,311004,89384,7,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-842910640b4a523b; elapsed 170s; qcheck True
+q8,b2,116014,371904,88254,7,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-d7adf831b47d73d4; elapsed 240s; qcheck True
+q2,b1,126258,362608,99102,7,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-7b2e7ea77520611c; elapsed 466s; qcheck True
+q4,b1,83679,310476,84505,7,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-d9cea3ed0632a270; elapsed 185s; qcheck True
+q4,b2,84976,305413,83440,7,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-0906c6570afae7a0; elapsed 150s; qcheck True
+q7,b1,116784,268576,84469,7,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-50496cc9579c6a87; elapsed 190s; qcheck True
+q1,panel-attempt1,15053,660254,122038,,claude-haiku-5-5+claude-opus-5-5+claude-sonnet-5-5,host-reported result.modelUsage input+output over all models incl subagents (cache excluded); panel-home agent.usage events 0
+q1,panel,14984,705054,132415,,claude-haiku-5-5+claude-opus-5-5+claude-sonnet-5-5,host-reported result.modelUsage input+output over all models incl subagents (cache excluded); panel-home agent.usage events 0
+q2,panel,25329,1128462,212442,,claude-haiku-5-5+claude-opus-5-5+claude-sonnet-5-5,host-reported result.modelUsage input+output over all models incl subagents (cache excluded); panel-home agent.usage events 0
+q3,panel,20935,1194487,149052,,claude-haiku-5-5+claude-opus-5-5+claude-sonnet-5-5,host-reported result.modelUsage input+output over all models incl subagents (cache excluded); panel-home agent.usage events 0
+q4,panel,16410,490123,139397,,claude-haiku-5-5+claude-opus-5-5+claude-sonnet-5-5,host-reported result.modelUsage input+output over all models incl subagents (cache excluded); panel-home agent.usage events 0
+q5,panel,30024,1386752,188063,,claude-haiku-5-5+claude-opus-5-5+claude-sonnet-5-5,host-reported result.modelUsage input+output over all models incl subagents (cache excluded); panel-home agent.usage events 0
+q6,panel,18996,1138656,195053,,claude-opus-5-5+claude-sonnet-5-5,host-reported result.modelUsage input+output over all models incl subagents (cache excluded); panel-home agent.usage events 0
+q7,panel,15359,763611,125255,,claude-haiku-5-5+claude-opus-5-5+claude-sonnet-5-5,host-reported result.modelUsage input+output over all models incl subagents (cache excluded); panel-home agent.usage events 0
+q8,panel,18826,660473,155862,,claude-haiku-5-5+claude-opus-5-5+claude-sonnet-5-5,host-reported result.modelUsage input+output over all models incl subagents (cache excluded); panel-home agent.usage events 0
+q2,aborted-start,2043,34454,26809,2,sonnet,discarded start of q2 B1 (tool stopped by me); counted in budget; no record

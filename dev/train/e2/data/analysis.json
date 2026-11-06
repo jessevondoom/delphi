@@ -1,0 +1,477 @@
+{
+  "council_repeat_added_total": 41,
+  "excluded": [
+    {
+      "id": "q1",
+      "venue_checks": {
+        "b1": "venue_missing",
+        "b2": "venue_missing",
+        "panel": "venue_mismatch"
+      },
+      "why": "unreadable: red-team"
+    },
+    {
+      "id": "q2",
+      "venue_checks": {
+        "b1": "venue_missing",
+        "b2": "venue_missing",
+        "panel": "venue_mismatch"
+      },
+      "why": "b1 unreadable: red-team"
+    },
+    {
+      "id": "q7",
+      "venue_checks": {
+        "b1": "venue_missing",
+        "b2": "venue_missing",
+        "panel": "venue_mismatch"
+      },
+      "why": "unreadable: red-team"
+    },
+    {
+      "id": "q8",
+      "venue_checks": {
+        "b1": "venue_missing",
+        "b2": "venue_missing",
+        "panel": "venue_mismatch"
+      },
+      "why": "unreadable: red-team"
+    }
+  ],
+  "headline_host": "claude-code",
+  "overlap_council_repeat": 0.0,
+  "overlap_panel": 0.0,
+  "p0_missed_by_panel": 3,
+  "panel_added_total": 52,
+  "per_question": [
+    {
+      "b2_vs_b1": {
+        "a_lacked": 7,
+        "a_lacked_p0": 1,
+        "a_only": [
+          "Agent-called staging tool alone fails silently when agents skip it; capture must be a daemon side effect of research-class runs (\u00a75.6), with propose_kb_entry only a supplement",
+          "Inbox must be quarantined: L0 with daemon-computed taint, out of always-loaded prompts, never promotable to heuristics/lessons/REVIEW (H-004); kb_search may show entries only labeled 'not validated'",
+          "Batch ratify can launder low-trust content: show per-entry trust and sources, require separate confirmation below internal_empirical, route through validate_claims/ratify_fact",
+          "Spec required before build (\u00a71.3): define research-class run, inbox schema, frontmatter, and that the MCP caller has no write or trust authority",
+          "Auto-capture vacuums prompt injections and intermediate noise into inbox",
+          "Searching unvalidated inbox in default kb_search leaks tainted claims",
+          "One-key batch ratify causes rubber-stamping and taint laundering",
+          "Agent-called propose_kb_entry (Strategist, Red-Team) repeats the current failure: agents skip the tool, and \u00a75.6 says discretion is not enforcement. Strategist's own mission-close check concedes this.",
+          "Capturing every output (Architect) floods the inbox and makes batch ratify a rubber stamp. Limit capture to completed research-class runs that cite at least one source, with dedup hash, size cap and T",
+          "Red-Team wants staged entries hidden from kb_search; Architect wants them searchable. Ruling: searchable only when labeled not validated, never in always-loaded prompts, never promotable to heuristics",
+          "Batch ratify must not raise taint. One-key validate-all could launder web-derived content. Route it through validate_claims. Any move to user_ratified needs a per-entry summary and a separate confirm"
+        ],
+        "b_lacked": 11,
+        "b_lacked_p0": 1,
+        "b_only": [
+          "MCP inbox write needs an approved spec and a ratified exception to MCP read-only authority before any build",
+          "Inbox must stay out of always-loaded prompts and promotion paths while remaining searchable with a 'not validated' label",
+          "Default kb_search indexing of unvalidated inbox entries causes taint cascades and retrieval poisoning",
+          "One-key batch ratification creates audit fatigue and launders unverified content",
+          "Unthrottled MCP staging allows inbox flooding and review denial-of-service",
+          "Tool-only capture relies on agent compliance and will not meet 'always'; add a coarse daemon end-of-research fallback stub",
+          "Batch ratification must not raise taint to user_ratified without the operator seeing sources"
+        ],
+        "both_empty": false,
+        "decision_class": [
+          "ALT",
+          "GO"
+        ],
+        "escalated": [
+          true,
+          true
+        ],
+        "matched": 0,
+        "n_a": 11,
+        "n_b": 7,
+        "overlap": 0.0,
+        "same_decision": false,
+        "same_plurality_label_exact": false,
+        "severity_mismatches": 0,
+        "union": 18
+      },
+      "id": "q3",
+      "panel_vs_b1": {
+        "a_lacked": 7,
+        "a_lacked_p0": 1,
+        "a_only": [
+          "Options 1 and 2 re-decide approved spec 068; a new tool or second store duplicates propose_kb_entry and splits provenance",
+          "Capture that depends only on the agent choosing to call a tool cannot deliver \"always\"; Delphi-run research must be staged by the daemon",
+          "Staged entries must stay out of search_kb (against the red-team's labelled-inbox retrieval); inclusion must never read as validity",
+          "Secret scrubbing and a local-only flag until ratified must run on the staging path, not only on import; check the sharing scope (Xenia, bundles) on keep",
+          "Pending or staged items must be excluded from retrieval, validated answers and bundle or Xenia export until ratified, and a test must enforce this.",
+          "Host-supplied sources, confidence and \"internal\" labels are untrusted claims. The daemon must derive taint and origin from the actual retrieval span, and must sign records daemon-side.",
+          "Auto-staging with batch keep invites rubber-stamping. It needs hash dedupe, per-source grouping, caps, expiry of untouched items, and a ratify-time sharing-scope and confidentiality check.",
+          "Secret scrubbing must run on the staging path (MCP and daemon), not only on import.",
+          "Store the source excerpt and hash alongside the paraphrase, so a later validator can recheck it.",
+          "Verify spec 068 and the tracker before any build, so the Council does not re-decide an approved spec or create a second store or schema.",
+          "Taint comes from the source span the daemon retrieved, never from host-supplied sources or confidence, so a host cannot launder web content as internal.",
+          "Pending inbox items must never feed validated answers or raise their own trust in search, and search must label them unvalidated."
+        ],
+        "b_lacked": 12,
+        "b_lacked_p0": 2,
+        "b_only": [
+          "MCP inbox write needs an approved spec and a ratified exception to MCP read-only authority before any build",
+          "Inbox must stay out of always-loaded prompts and promotion paths while remaining searchable with a 'not validated' label",
+          "Default kb_search indexing of unvalidated inbox entries causes taint cascades and retrieval poisoning",
+          "One-key batch ratification creates audit fatigue and launders unverified content",
+          "Unthrottled MCP staging allows inbox flooding and review denial-of-service",
+          "Tool-only capture relies on agent compliance and will not meet 'always'; add a coarse daemon end-of-research fallback stub",
+          "Batch ratification must not raise taint to user_ratified without the operator seeing sources"
+        ],
+        "both_empty": false,
+        "decision_class": [
+          "GO",
+          "GO"
+        ],
+        "escalated": [
+          true,
+          true
+        ],
+        "matched": 0,
+        "n_a": 12,
+        "n_b": 7,
+        "overlap": 0.0,
+        "same_decision": true,
+        "same_plurality_label_exact": false,
+        "severity_mismatches": 0,
+        "union": 19
+      },
+      "venue_checks": {
+        "b1": "venue_missing",
+        "b2": "venue_missing",
+        "panel": "venue_mismatch"
+      }
+    },
+    {
+      "b2_vs_b1": {
+        "a_lacked": 11,
+        "a_lacked_p0": 0,
+        "a_only": [
+          "Split inclusion from content_taint; import must not raise claim trust or reuse user_ratified tier",
+          "Imported file with unknown provenance defaults to external_untrusted; declared origin is a hint only",
+          "Summaries never count as evidence for ratify_fact nor as promotion source under H-004",
+          "Taint laundering via operator import overriding content taint",
+          "Context flooding and injection via unpartitioned summary search",
+          "Unscrubbed imports bypass size caps and credential redaction",
+          "Operator import must not raise claim taint: keep separate inclusion vs claim_status fields; all three seats agree, and a bare user_ratified stamp would launder agent/web-derived prose past H-004",
+          "Summaries must never be a source for ratify_fact, <fact> elements, or promotion into heuristics/REVIEW/lessons/skills; enforce in daemon code, not prose (GOVERNANCE 5.6)",
+          "Import path must apply the same scrubbing, size caps and data-fencing as the agent path; operator hand-over is not a bypass for secrets or injected instructions"
+        ],
+        "b_lacked": 9,
+        "b_lacked_p0": 1,
+        "b_only": [
+          "Operator import records inclusion only: taint is computed from content origin (agent-authored stays low) and validated stays none; the operator act must never launder into claim validity or user_ratif",
+          "Summary effective trust is the minimum of its own taint and its sources' taint; summaries can never feed H-004 promotion into heuristics, REVIEW, lessons or skills",
+          "Reject the watched folder as a door: any process that can write it bypasses intent. Import is explicit (CLI or TUI drop) or via propose_kb_entry; if a folder is ever built it stages into L0 only",
+          "Summary bodies are untrusted text: scrub secrets and local paths at import, retrieve inside a data fence, default search returns metadata and abstract, full body only on explicit read",
+          "Mandatory non-hideable label on every summary result, e.g. summary, operator-included, claims not validated",
+          "Heuristic import provenance permits taint laundering into user_ratified tier",
+          "Default full-text summary retrieval enables prompt injection and context stuffing",
+          "Unvalidated source IDs and unquarantined stale summaries corrupt KB lineage",
+          "Scope: ship only shared schema + operator import now; agent kind=summary and watched folder deferred to later phases",
+          "Watched folder must be cut: weakest ROI, new ingress surface any process can write, import already costs one command",
+          "Operator import ratifies inclusion only; daemon must compute taint from file provenance so import cannot launder agent-authored or low-taint content into user_ratified"
+        ],
+        "both_empty": false,
+        "decision_class": [
+          "GO",
+          "GO"
+        ],
+        "escalated": [
+          true,
+          false
+        ],
+        "matched": 0,
+        "n_a": 9,
+        "n_b": 11,
+        "overlap": 0.0,
+        "same_decision": true,
+        "same_plurality_label_exact": true,
+        "severity_mismatches": 0,
+        "union": 20
+      },
+      "id": "q4",
+      "panel_vs_b1": {
+        "a_lacked": 11,
+        "a_lacked_p0": 0,
+        "a_only": [
+          "Only an authenticated operator CLI/TUI call may record inclusion ratification; watched-folder and MCP doors stage only, and the daemon never ratifies on a filesystem event",
+          "The import confirm must show daemon-computed taint, link resolution, scrub results and dedupe inline (confused-deputy guard) without adding a second step",
+          "Taint for operator imports is the maximum over linked ids and declared sources; an unsourced body is tiered \"unattributed\", not clean, and operator inclusion never lowers taint",
+          "Frontmatter fields kind, author, origin, taint, trust and status are advisory input; the daemon sets them, and only kind and summarizes[] are honored after validation",
+          "Operator-import ratification is not bound to a human act: an agent running `delphi kb import` self-ratifies, so import needs an operator-only confirm channel (TUI or relay) and CLI from agent sessions",
+          "Summaries searchable immediately and merely ranked lower: they should be excluded from default agent kb_search, returned in a separate quoted-data section on opt-in",
+          "Import prompt must show taint, linked ids and diff to defeat confused-deputy laundering by an agent that wrote the file",
+          "summarizes[] links must be pinned by id plus content hash and verified; reverse links daemon-written as \"cited by\", never as support",
+          "Stale or retracted sources only flag the summary; it should drop out of default search until re-confirmed",
+          "Scrub before hashing and store the scrubbed bytes; strip hidden text, zero-width characters and data URIs so approved bytes equal indexed bytes",
+          "unparseable finding: Findings are listed below.",
+          "Taint must fail closed on unresolved or moved summarizes[] ids; a missing id must not read as clean.",
+          "Summaries must pin the content hash of each linked entry; without it, edits to atomic claims leave summaries silently stale.",
+          "Operator import must show the linked ids, computed taint and scrub result at the prompt, and must be one file per act; no batch or folder import may ratify.",
+          "Frontmatter fields for author, origin, taint and trust are ignored when read from file content; the daemon sets them from the actor and the ingest path."
+        ],
+        "b_lacked": 15,
+        "b_lacked_p0": 1,
+        "b_only": [
+          "Operator import records inclusion only: taint is computed from content origin (agent-authored stays low) and validated stays none; the operator act must never launder into claim validity or user_ratif",
+          "Summary effective trust is the minimum of its own taint and its sources' taint; summaries can never feed H-004 promotion into heuristics, REVIEW, lessons or skills",
+          "Reject the watched folder as a door: any process that can write it bypasses intent. Import is explicit (CLI or TUI drop) or via propose_kb_entry; if a folder is ever built it stages into L0 only",
+          "Summary bodies are untrusted text: scrub secrets and local paths at import, retrieve inside a data fence, default search returns metadata and abstract, full body only on explicit read",
+          "Mandatory non-hideable label on every summary result, e.g. summary, operator-included, claims not validated",
+          "Heuristic import provenance permits taint laundering into user_ratified tier",
+          "Default full-text summary retrieval enables prompt injection and context stuffing",
+          "Unvalidated source IDs and unquarantined stale summaries corrupt KB lineage",
+          "Scope: ship only shared schema + operator import now; agent kind=summary and watched folder deferred to later phases",
+          "Watched folder must be cut: weakest ROI, new ingress surface any process can write, import already costs one command",
+          "Operator import ratifies inclusion only; daemon must compute taint from file provenance so import cannot launder agent-authored or low-taint content into user_ratified"
+        ],
+        "both_empty": false,
+        "decision_class": [
+          "GO",
+          "GO"
+        ],
+        "escalated": [
+          true,
+          false
+        ],
+        "matched": 0,
+        "n_a": 15,
+        "n_b": 11,
+        "overlap": 0.0,
+        "same_decision": true,
+        "same_plurality_label_exact": true,
+        "severity_mismatches": 0,
+        "union": 26
+      },
+      "venue_checks": {
+        "b1": "venue_missing",
+        "b2": "venue_missing",
+        "panel": "venue_mismatch"
+      }
+    },
+    {
+      "b2_vs_b1": {
+        "a_lacked": 11,
+        "a_lacked_p0": 1,
+        "a_only": [
+          "Allow-list must be daemon-enforced by file type, path and content inspection, with a row in invariant-enforcement.md (5.6). Unlisted type = software.",
+          "Define 'executable or loaded' precisely: macros, script in HTML/SVG, notebooks, and anything under skills/agents/themes count as software or governed. Exempt types stay barred from governed paths.",
+          "Log must be daemon-written, append-only and fail-closed: agents get no write or delete access, and a failed log write denies the artifact write.",
+          "Allow-list changes must be Red-tier constitutional changes (5.7) to prevent drift.",
+          "Indirect prompt injection in verbatim-only log obscures poisoned context",
+          "Unspecced scratch and markdown ingestion circumvents prompt boundary gates",
+          "Autonomous subagent writes bypass audit trail via unqualified system origins",
+          "Allow-listed active content and CSS exfiltration bypass nominal AST checks",
+          "Allow-list must be closed, enumerated, fail-closed (unlisted = software); changes to it are Red-tier (\u00a75.7)",
+          "Prompt log must be daemon-written under daemon-only local/, append-only, fail-closed: if the entry cannot be written the artifact write is denied"
+        ],
+        "b_lacked": 10,
+        "b_lacked_p0": 2,
+        "b_only": [
+          "Artifact exemption must be a closed allow-list by type; unlisted, executable or loaded types (html, svg, macro-enabled office, notebooks) are software",
+          "Governed paths (specs/, memory/, agents/, skills/, themes/) stay under ratification regardless of extension, so Markdown allowed-always cannot reach them",
+          "Log must be daemon-written, append-only and verbatim, stored in daemon-only local/ per mission outside git and agent-writable paths (D-1), with a daemon check and an entry in invariant-enforcement.md",
+          "D-3: do not mix (system) entries into the operator-prompt log; record them in a separate daemon event log carrying origin span and computed taint, so agent-originated edits are attributable and the op",
+          "Log write failure must fail closed for artifact edits; each edit must link to the prompt id that caused it",
+          "Active content smuggling in exempt artifact formats",
+          "Decoupled audit logs break causal chain and obscure prompt injection",
+          "Unchecked scaffold definitions permit executable config bypass",
+          "Spec text was unreadable in Round 1, so no seat reviewed the actual draft; re-verify the amendments against it",
+          "Artifact allow-list must be closed, default to software, exclude script-capable types and governed paths, and make additions Red-tier",
+          "Log must be daemon-written, append-only and fail closed, with a daemon check and an entry in invariant-enforcement.md (\u00a75.6)"
+        ],
+        "both_empty": false,
+        "decision_class": [
+          "GO",
+          "GO"
+        ],
+        "escalated": [
+          true,
+          true
+        ],
+        "matched": 0,
+        "n_a": 10,
+        "n_b": 11,
+        "overlap": 0.0,
+        "same_decision": true,
+        "same_plurality_label_exact": true,
+        "severity_mismatches": 0,
+        "union": 21
+      },
+      "id": "q5",
+      "panel_vs_b1": {
+        "a_lacked": 11,
+        "a_lacked_p0": 1,
+        "a_only": [
+          "AC-6 chain detection contradicts OD-1 deferral of the verifier; no anchor against tail truncation",
+          "Class order undefined: Markdown or other files loaded as instructions escape the gate; Markdown vs plain-document Artifact overlap",
+          "Classification only at write time: rename, move, chmod, symlink and archives bypass it",
+          "Line 34 \"operator-approved prompt\" leaves System operation open-ended; enumerate it",
+          "PL2 still lists (system) entries, against \u00a73.5 and D-3",
+          "Markdown exemption must run after the loaded-as-instructions check, defined by path and consumer, not extension; the architect's \"accept the gap\" option is rejected",
+          "Class is fixed at write time; require reclassification on rename, move, chmod and symlink, and classify archives and containers (zip, PDF with JS or embedded files) as Software",
+          "AC-6 claims a broken chain is detected while OD-1 defers the verifier; move a minimal verifier into PL2 or drop the claim, and anchor the chain head per entry in the audit log to catch tail truncation",
+          "Unattributed writes (scheduled, sub-agent) are unspecified; state allowed with an audit-log entry only, and add the acceptance test (the architect's AC for D-3)",
+          "\"Verbatim\" contradicts pre-write scrubbing; define the redaction marker and record scrubbed spans as a count or hash; ship scrubbing before any writer, with a default retention",
+          "PL2 still lists (system) entries, contradicting \u00a73.5 and D-3; the content hash is \"optional\" in \u00a73.2 but mandatory in \u00a73.4; fix both so a builder does not create (system) entries",
+          "\"Operator-approved prompt\" in the System class is open-ended; replace it with an enumerated list of write types",
+          "PL2 writes \"(system)\" entries, contradicting section 3.5 and D-3; fix the slice text before any builder reads it.",
+          "AC-6 requires detecting a broken hash chain, but the verifier is deferred to a follow-up; tail truncation is undetectable without an anchor. Move a minimal verifier into PL2 and anchor the chain head",
+          "Post-write reclassification: rename, mode change (chmod +x), symlink into a governed path, and archives or containers can change class after the check. Require reclassification on rename, move and mod",
+          "\"Loaded\" versus Markdown overlap: Markdown is always System operation, but Markdown loaded as instructions (prompts, skills, AGENTS.md) is Software under section 2.1.3. Run the loaded/consumer check b",
+          "\"Verbatim\" (section 3.1, AC-3) conflicts with scrubbing before write (OD-1). Define the redaction marker and say that entries are verbatim except for scrubbed spans, recorded as a count or hash.",
+          "Interim secret retention: until PL2 scrubbing and a retention rule exist, pasted secrets sit on disk in the log. Make scrubbing a gate before any writer ships, or set a short interim default retention"
+        ],
+        "b_lacked": 18,
+        "b_lacked_p0": 2,
+        "b_only": [
+          "Artifact exemption must be a closed allow-list by type; unlisted, executable or loaded types (html, svg, macro-enabled office, notebooks) are software",
+          "Governed paths (specs/, memory/, agents/, skills/, themes/) stay under ratification regardless of extension, so Markdown allowed-always cannot reach them",
+          "Log must be daemon-written, append-only and verbatim, stored in daemon-only local/ per mission outside git and agent-writable paths (D-1), with a daemon check and an entry in invariant-enforcement.md",
+          "D-3: do not mix (system) entries into the operator-prompt log; record them in a separate daemon event log carrying origin span and computed taint, so agent-originated edits are attributable and the op",
+          "Log write failure must fail closed for artifact edits; each edit must link to the prompt id that caused it",
+          "Active content smuggling in exempt artifact formats",
+          "Decoupled audit logs break causal chain and obscure prompt injection",
+          "Unchecked scaffold definitions permit executable config bypass",
+          "Spec text was unreadable in Round 1, so no seat reviewed the actual draft; re-verify the amendments against it",
+          "Artifact allow-list must be closed, default to software, exclude script-capable types and governed paths, and make additions Red-tier",
+          "Log must be daemon-written, append-only and fail closed, with a daemon check and an entry in invariant-enforcement.md (\u00a75.6)"
+        ],
+        "both_empty": false,
+        "decision_class": [
+          "GO",
+          "GO"
+        ],
+        "escalated": [
+          true,
+          true
+        ],
+        "matched": 0,
+        "n_a": 18,
+        "n_b": 11,
+        "overlap": 0.0,
+        "same_decision": true,
+        "same_plurality_label_exact": true,
+        "severity_mismatches": 0,
+        "union": 29
+      },
+      "venue_checks": {
+        "b1": "venue_missing",
+        "b2": "venue_missing",
+        "panel": "venue_mismatch"
+      }
+    },
+    {
+      "b2_vs_b1": {
+        "a_lacked": 11,
+        "a_lacked_p0": 2,
+        "a_only": [
+          "D-2 installer writes host configs outside workspace: needs dry-run default, diff and confirm, backup, uninstall, owned-keys-only atomic merge, allowlisted paths, no symlinks, operator-console-only inv",
+          "D-3 launcher is executable content run unsandboxed by the host; defer. If kept: static exec-only shim, no network, hash-pinned in drift test, own Red-Team review (software under 1.3)",
+          "Marketplace must pin a ref or version (protected branch or signed tag), not track a moving default branch",
+          "TOCTOU and corruption risks in external host config mutation (D-2)",
+          "Unsandboxed launcher script bypasses runtime sandbox and taint lattice (D-3)",
+          "Marketplace catalog lacks commit hash pinning and prompt-injection screening (D-1)",
+          "Unresolved questions Q-1..Q-5 block authority-widening deliverables E3-E5",
+          "D-2 installer writes host configs outside workspace (\u00a75.4/\u00a75.5); needs its own spec and Red-Team review, not a rider on a marketplace spec",
+          "D-3 launcher script is executable content run unsandboxed by the host; no justification why a plain command entry in MCP config is insufficient; defer",
+          "No ref/version pin or protected-branch/signing for root marketplace.json; anyone with commit rights changes what installs",
+          "No seat could read spec 071, 062 or the code; Q-1..Q-5 unseen, so Round 1 consensus is not validated against the draft"
+        ],
+        "b_lacked": 11,
+        "b_lacked_p0": 2,
+        "b_only": [
+          "D-3 launcher script is executable content run by host outside sandbox (5.5); use a bare declarative command pointing at the installed delphi binary",
+          "D-2 installer writes outside workspace (5.4); defer to follow-up spec, ship diff/snippet-only first. If built: operator TTY only, refuse agent/MCP invocation, dry-run default, backup, atomic, idempote",
+          "Durable enablement must never touch host permission/allowlist settings or auto-enable Red-tier tools; limit to spec 062 read-scoped surface",
+          "Marketplace entry must pin a commit/ref, not a mutable branch, so plugin updates are an explicit act",
+          "Unsandboxed launcher scripts introduce host arbitrary code execution (D-3)",
+          "Host config mutation creates external state corruption and privilege escalation (D-2)",
+          "Marketplace manifests lack cryptographic pinning and supply-chain integrity (D-1)",
+          "Durable MCP enablement risks bypass of operator ratification on mutating tools",
+          "No seat could read spec 071, 062 or mcp_hosts.rs; ruling rests on the question summary and must be rechecked against the draft",
+          "D-3 launcher script ships executable content run unsandboxed by the host (\u00a75.5); a bare `command: delphi` needs no script, so cost exceeds return",
+          "D-2 installer writes outside the workspace (\u00a75.4) for mostly convenience; the snippet-and-paste flow already works. Defer to its own spec with a Red-Team pass. If built: operator-TTY only, dry-run dif"
+        ],
+        "both_empty": false,
+        "decision_class": [
+          "ALT",
+          "ALT"
+        ],
+        "escalated": [
+          true,
+          true
+        ],
+        "matched": 0,
+        "n_a": 11,
+        "n_b": 11,
+        "overlap": 0.0,
+        "same_decision": true,
+        "same_plurality_label_exact": false,
+        "severity_mismatches": 0,
+        "union": 22
+      },
+      "id": "q6",
+      "panel_vs_b1": {
+        "a_lacked": 11,
+        "a_lacked_p0": 2,
+        "a_only": [
+          "Spec 071 \u00a73/\u00a75.1 omit the shipped seat agents (architect, builder, red-team, strategist) and the delphi-council skill, including their Read/Grep/Glob grants; add them to the spec",
+          "install_codex_agents writes outside the workspace (plain fs::write, no symlink/TOCTOU refusal, assume_yes bypass); name its covering spec or bring it under the \u00a76 Red-tier rules",
+          "D-5(B) release-tag channel mitigations (tag protection, Code Owners enforcement, attestation) are asserted in prose; verify them by a test or doctor line",
+          "Seat agents and the delphi-council skill shipped in the plugin are not covered by 071 \u00a73/\u00a75.1; their Read/Grep/Glob grants let a brief steer reads of local secrets and exfiltrate them through the subm",
+          "D-5(B) tag-protection, Code Owners and attestation mitigations are prose only; they need a check that fails closed (\"unverified channel\") when they cannot be confirmed",
+          "No seat read specs/062 or the guide; the \"D-1 adds no authority\" claim and the absence of hand-edit instructions in the guide are unverified",
+          "Plugin seat agents and delphi-council skill are not listed in spec \u00a73/\u00a75.1; add spec cover for their prompts and tool grants"
+        ],
+        "b_lacked": 7,
+        "b_lacked_p0": 1,
+        "b_only": [
+          "D-3 launcher script is executable content run by host outside sandbox (5.5); use a bare declarative command pointing at the installed delphi binary",
+          "D-2 installer writes outside workspace (5.4); defer to follow-up spec, ship diff/snippet-only first. If built: operator TTY only, refuse agent/MCP invocation, dry-run default, backup, atomic, idempote",
+          "Durable enablement must never touch host permission/allowlist settings or auto-enable Red-tier tools; limit to spec 062 read-scoped surface",
+          "Marketplace entry must pin a commit/ref, not a mutable branch, so plugin updates are an explicit act",
+          "Unsandboxed launcher scripts introduce host arbitrary code execution (D-3)",
+          "Host config mutation creates external state corruption and privilege escalation (D-2)",
+          "Marketplace manifests lack cryptographic pinning and supply-chain integrity (D-1)",
+          "Durable MCP enablement risks bypass of operator ratification on mutating tools",
+          "No seat could read spec 071, 062 or mcp_hosts.rs; ruling rests on the question summary and must be rechecked against the draft",
+          "D-3 launcher script ships executable content run unsandboxed by the host (\u00a75.5); a bare `command: delphi` needs no script, so cost exceeds return",
+          "D-2 installer writes outside the workspace (\u00a75.4) for mostly convenience; the snippet-and-paste flow already works. Defer to its own spec with a Red-Team pass. If built: operator-TTY only, dry-run dif"
+        ],
+        "both_empty": false,
+        "decision_class": [
+          "GO",
+          "ALT"
+        ],
+        "escalated": [
+          true,
+          true
+        ],
+        "matched": 0,
+        "n_a": 7,
+        "n_b": 11,
+        "overlap": 0.0,
+        "same_decision": false,
+        "same_plurality_label_exact": false,
+        "severity_mismatches": 0,
+        "union": 18
+      },
+      "venue_checks": {
+        "b1": "venue_missing",
+        "b2": "venue_missing",
+        "panel": "venue_mismatch"
+      }
+    }
+  ],
+  "qualifying": 4,
+  "recall_council_repeat": 0.0,
+  "recall_panel": 0.0,
+  "reference_findings": 40,
+  "sd_council_repeat": 3,
+  "sd_panel": 3,
+  "verdict": "INCOMPLETE",
+  "why": "fewer than 6 qualifying questions"
+}

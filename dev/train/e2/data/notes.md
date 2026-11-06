@@ -66,6 +66,31 @@ session(s) is used, and the panel home's `agent.usage` events must show 0 (check
 - B2 attempt 2 (session host-e1fb244752497cde): the red-team seat abstained in Round 1 ("the CLI reported an error"). 1007 s, 9,112 tokens, decided on two seats.
   Second infrastructure failure: B2 for q1 is excluded (PREREG stop rule), degraded in the scorer.
 
+### q2-q8 (first pass, B1 then A then B2, driver /tmp/e2-s5/do_q.sh)
+- Every Panel run: a fresh `claude -p` session; question-check true for all eight final Panel records; panel-home `agent.usage` events: none (`{}`) in every Panel session.
+- The host asked the cost confirmation in turn 1 for q1 (attempt 2), q2 and q6 only; I answered "yes" by resuming the session. For q3, q4, q5, q7, q8 the host went straight on
+  (took naming a Panel in the prompt as the yes), so no "yes" was sent there. No steering anywhere.
+- Daemon failures seen (all in the red-team seat, which runs on agy/Gemini): "the CLI reported an error" after a long hang (q1 B2 twice, q2 B1, q4 B1) and
+  "the agy run changed a project checkout; its output is discarded" (q4 B2, q7 B1). A seat that fails this way is `unreadable` or `abstained` in the record. Per the PREREG stop rule
+  (infrastructure failure: re-run once in a new session) q2 B1, q4 B1, q4 B2 and q7 B1 were re-run once, after the first pass (the order deviates from B1, A, B2 for these). The original attempts
+  are kept as `*-attempt1`. q1 B2 was already re-run once (see above). A re-run that fails again stands and is excluded.
+- Panel red-team seat Round 2 came back `unreadable` for q1, q7 and q8 (no `recommendation` line; the seat ended with prose). These are not infrastructure failures and are NOT re-run.
+
+### After the re-runs
+- q2 B1 re-run failed the same way (Gemini hang then CLI error, red-team Round 2 unreadable): stands, excluded. q4 B1, q4 B2 and q7 B1 re-runs succeeded (three seats answered and critiqued).
+- Totals: daemon 21 sessions 1,918,650 tokens (+ 2,043 aborted start); Panel 9 `claude -p` runs 175,916 tokens (input + output, cache excluded; cache reads about 8.1M not counted);
+  total 2,096,609 of 8,000,000; largest run 135,130 (q2 B1 attempt 1) of 350,000. No run capped.
+- Isolation facts (iso.py over the final Panel streams): six Agent calls per Panel (3 seats x 2 rounds), q5 nine; seats submitted themselves with `council_submit`, except
+  q1 (moderator submitted the strategist's Round 1) and q5 (moderator submitted red-team and strategist Round 1).
+- Analysis run once: `score.py analyze manifest.json` -> INCOMPLETE (4 qualifying: q3, q4, q5, q6). Excluded: q1 (Panel red-team unreadable), q2 (B1 unreadable), q7 and q8 (Panel red-team unreadable).
+- score.py prints `venue_mismatch` for every Panel record because it expects `venue: host` and the records say `venue: panel`; daemon records have no venue line (`venue_missing`). Cross-check only.
+- Cleanup: both scratch homes (copies of real config and ratified files), the plugin copy and both daemons (pids 38287, 36453; first council daemon 36449 was killed during the incident) removed/stopped.
+- The report text could not be written to `dev/train/e2/REPORT.md` by this agent (the tool refused to write a report file); it is in the PR description.
+
+- Not committed: the printed ruling cards (`*.card.md`; they contain the theme name of the orchestrator badge, which the repository lint forbids outside themes/) and the launcher
+  scripts (absolute home paths, REV-SEC-05). The records themselves carry `venue:` and `blind:`. Arm A command line: `claude -p <prompt> --plugin-dir <copy of ecosystem/claude-code/delphi with .mcp.json
+  pointing at the built binary and the panel home> --strict-mcp-config --mcp-config <same server> --setting-sources project --model sonnet --permission-mode default --allowed-tools mcp__delphi Agent Task Read Grep Glob Skill --output-format stream-json --verbose`.
+
 ### Incident
 My first launch of the q2 chain used a tool-side background task that I then stopped (I feared a 10 minute kill); that aborted the q2 B1 start after ~2,043 tokens
 (session host-6456fe70295d01c0, never completed, no record). I restarted the council daemon (new pid 38287) so no orphan Council kept running, and relaunched q2 B1 from scratch
