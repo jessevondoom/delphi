@@ -168,11 +168,12 @@ mod tests {
         let (_d, l) = lib();
         let old = put(&l, "the staging cluster runs on three nodes", ClaimOpts::default());
         let fresh = put(&l, "the production cluster runs on nine nodes", ClaimOpts::default());
-        let soon = put(&l, "the sandbox profile allows loopback only", ClaimOpts { valid_until: Some("2026-11-05".into()), ..Default::default() });
-        set(&l, &old, "last_confirmed", "2026-07-01T00:00:00.000Z");
-        set(&l, &fresh, "last_confirmed", "2026-10-20T00:00:00.000Z");
-        set(&l, &soon, "last_confirmed", "2026-10-20T00:00:00.000Z");
-        let due = l.review_due("2026-10-29T09:00:00.000Z");
+        // The dates sit far in the future so the real clock never passes `valid_until` (a claim past it is retired, not due).
+        let soon = put(&l, "the sandbox profile allows loopback only", ClaimOpts { valid_until: Some("2099-03-15".into()), ..Default::default() });
+        set(&l, &old, "last_confirmed", "2098-11-08T00:00:00.000Z");
+        set(&l, &fresh, "last_confirmed", "2099-02-26T00:00:00.000Z");
+        set(&l, &soon, "last_confirmed", "2099-02-26T00:00:00.000Z");
+        let due = l.review_due("2099-03-08T09:00:00.000Z");
         assert_eq!(due.iter().map(|d| d.id.clone()).collect::<Vec<_>>(), vec![old.clone(), soon.clone()]);
         assert!(due[0].reason.contains("not confirmed for 120 days") && due[1].reason.contains("7 day(s) left"));
         let before = status(&l.claim(&old).unwrap());
@@ -181,7 +182,7 @@ mod tests {
         assert!(c["validation"].is_null());
         assert!(!l.review_due(&delphi_core::time::now_rfc3339()).iter().any(|d| d.id == old));
         let expired = put(&l, "the legacy endpoint is available", ClaimOpts { valid_until: Some("2020-01-01".into()), ..Default::default() });
-        assert!(l.review_due("2026-10-29T09:00:00.000Z").iter().all(|d| d.id != expired), "an expired claim is already retired, not due");
+        assert!(l.review_due("2099-03-08T09:00:00.000Z").iter().all(|d| d.id != expired), "an expired claim is already retired, not due");
         assert!(l.confirm_claim(&expired).is_err());
     }
 }
