@@ -238,7 +238,8 @@
         "capture": { "type": "boolean", "description": "Stage notes from denials, corrections, retries and escalations. Default true. Turning it off is allowed." },
         "max_notes": { "type": "integer", "minimum": 10, "maximum": 1000, "description": "Staged notes kept per mission; the oldest is dropped. Default 200." },
         "triggers": { "type": "array", "items": { "type": "string" }, "description": "Which capture triggers are on. Default all." },
-        "retro_min_tasks": { "type": "integer", "minimum": 3, "maximum": 200, "description": "Finished tasks before `delphi needs` says the coaching pass has material. Default 10." }
+        "retro_min_tasks": { "type": "integer", "minimum": 3, "maximum": 200, "description": "Finished tasks before `delphi needs` says the coaching pass has material. Default 10." },
+        "exposure_randomization": { "type": "boolean", "description": "Withhold a newly ratified rule from about half of its first 20 tasks to measure it; security and always rules and holdout tasks never. Default false." }
       }
     },
     "mcp": {

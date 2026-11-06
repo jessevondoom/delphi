@@ -801,6 +801,7 @@ pub struct LearningConfig {
     pub max_notes: Option<i64>,
     pub triggers: Option<Vec<String>>,
     pub retro_min_tasks: Option<i64>,
+    pub exposure_randomization: Option<bool>,
 }
 
 /// `[validator] mode` (`specs/040` §15.1). Ordered so that `min` is the stricter of two.

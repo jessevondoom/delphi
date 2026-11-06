@@ -253,11 +253,13 @@ pub struct LearningSettings {
     pub triggers: BTreeSet<String>,
     /// Finished tasks before `delphi needs` calls the coaching pass worth building on (`specs/031` §3.6).
     pub retro_min_tasks: usize,
+    /// Withhold a newly ratified rule from some of its first tasks to measure it (`specs/031` §3.4). Off by default.
+    pub exposure_randomization: bool,
 }
 
 impl Default for LearningSettings {
     fn default() -> Self {
-        LearningSettings { capture: true, max_notes: 200, triggers: TRIGGERS.iter().map(|t| t.to_string()).collect(), retro_min_tasks: 10 }
+        LearningSettings { capture: true, max_notes: 200, triggers: TRIGGERS.iter().map(|t| t.to_string()).collect(), retro_min_tasks: 10, exposure_randomization: false }
     }
 }
 
@@ -274,14 +276,20 @@ impl LearningSettings {
         let mut problems = Vec::new();
         let Some(t) = root.get("learning").and_then(|v| v.as_table()) else { return (s, problems) };
         for k in t.keys() {
-            if !["capture", "max_notes", "triggers", "retro_min_tasks"].contains(&k.as_str()) {
-                problems.push(format!("[learning] {}: not a setting (capture, max_notes, triggers, retro_min_tasks)", k));
+            if !["capture", "max_notes", "triggers", "retro_min_tasks", "exposure_randomization"].contains(&k.as_str()) {
+                problems.push(format!("[learning] {}: not a setting (capture, max_notes, triggers, retro_min_tasks, exposure_randomization)", k));
             }
         }
         if let Some(v) = t.get("capture") {
             match v.as_bool() {
                 Some(b) => s.capture = b,
                 None => problems.push("[learning] capture: expected true or false".into()),
+            }
+        }
+        if let Some(v) = t.get("exposure_randomization") {
+            match v.as_bool() {
+                Some(b) => s.exposure_randomization = b,
+                None => problems.push("[learning] exposure_randomization: expected true or false".into()),
             }
         }
         if let Some(v) = t.get("max_notes") {

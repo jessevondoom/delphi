@@ -151,6 +151,7 @@ sandbox = "off"
 # capture = true                     # stage notes from denials, corrections, retries and escalations
 # max_notes = 200                    # per mission, 10 to 1000; the oldest is dropped
 # triggers = ["denied_card", "correction", "recovery", "escalation", "rejected_decision"]
+# exposure_randomization = false    # opt in: withhold a new rule from about half of its first 20 tasks, to measure it (security and always rules never)
 # retro_min_tasks = 10               # finished tasks before `delphi needs` says the coaching pass has material (3 to 200)
 
 # Delphi for the other tools you code with (specs/062): `delphi mcp` is an MCP server on stdio, for this machine and this user only.

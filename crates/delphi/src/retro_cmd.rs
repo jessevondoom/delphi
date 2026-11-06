@@ -73,6 +73,33 @@ pub fn mine(ws_dir: &Path, opts: &Options) -> Result<String, String> {
     Ok(out)
 }
 
+/// `delphi retro stats`: how often tasks that carried each rule went first pass. Reads the logs and writes nothing; the
+/// numbers rank what to look at and never change a rule (`specs/031` §3.4).
+pub fn stats(ws_dir: &Path, opts: &Options) -> Result<String, String> {
+    let ids = match &opts.mission {
+        Some(m) => {
+            if m.is_empty() || m.contains(['/', '\\']) || m.starts_with('.') || !delphi_core::sessions::dir(ws_dir, m).is_dir() {
+                return Err(format!("no mission `{}` in this workspace (see `delphi missions`)", m));
+            }
+            vec![m.clone()]
+        }
+        None => crate::missions::list(ws_dir).into_iter().map(|r| r.id).collect(),
+    };
+    let (mut tasks, mut skills) = (Vec::new(), std::collections::BTreeMap::new());
+    for id in &ids {
+        let events = replay(&delphi_core::sessions::dir(ws_dir, id)).map_err(|e| format!("could not read the log of {}: {}", id, e))?;
+        tasks.extend(delphi_engine::learn::task_records(&events));
+        skills.extend(delphi_engine::learn_stats::skills_by_task(&events));
+    }
+    let on = std::fs::read_to_string(ws_dir.join("config.toml")).ok().and_then(|t| toml::from_str::<toml::Value>(&t).ok()).is_some_and(|root| delphi_engine::learn::LearningSettings::parse(&root).0.exposure_randomization);
+    let stats = delphi_engine::learn_stats::item_stats(&tasks, &skills);
+    if opts.json {
+        let rows: Vec<_> = stats.iter().map(|s| serde_json::json!({"kind": s.kind, "scope": s.scope, "id": s.id, "carried": s.carried, "first_pass": s.tuning.first_pass, "built": s.tuning.built, "score": s.score().show(), "priority": s.priority(), "note": "co-occurred, not caused"})).collect();
+        return serde_json::to_string_pretty(&rows).map(|s| s + "\n").map_err(|e| e.to_string());
+    }
+    Ok(delphi_engine::learn_stats::render(&stats, on))
+}
+
 pub fn render_list(items: &[LiveProposal]) -> String {
     if items.is_empty() {
         return "no proposals: the Orchestrator proposes rules after a mission, and they wait here for your review\n".into();
@@ -151,6 +178,9 @@ pub fn run_in(ws_dir: &Path, verb: &str, reference: Option<&str>, opts: &Options
     if verb == "mine" {
         return mine(ws_dir, opts);
     }
+    if verb == "stats" {
+        return stats(ws_dir, opts);
+    }
     let items = collect(ws_dir, opts)?;
     match verb {
         "list" if opts.json => serde_json::to_string_pretty(&items.iter().map(LiveProposal::to_json).collect::<Vec<_>>()).map(|s| s + "\n").map_err(|e| e.to_string()),
@@ -177,7 +207,7 @@ pub fn run_in(ws_dir: &Path, verb: &str, reference: Option<&str>, opts: &Options
             }
             Ok(out)
         }
-        other => Err(format!("`{}` is not a retro verb (list, show, stale, recurring, mine, accept, reject)", other)),
+        other => Err(format!("`{}` is not a retro verb (list, show, stale, recurring, mine, stats, accept, reject)", other)),
     }
 }
 
@@ -239,7 +269,7 @@ pub(crate) fn confirm(question: &str) -> bool {
 pub fn cli(ws_dir: &Path, args: &[String], opts: &Options) -> i32 {
     let positional: Vec<&str> = args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && (*i == 0 || !["--mission", "--workspace", "--home", "--scope", "--summary", "--uncertainty", "--reason"].contains(&args[*i - 1].as_str()))).map(|(_, a)| a.as_str()).collect();
     let Some(verb) = positional.first() else {
-        eprintln!("delphi retro: list | show <mission>/<id> | stale | mine | promote | promotions | accept | reject | withdraw");
+        eprintln!("delphi retro: list | show <mission>/<id> | stale | mine | stats | promote | promotions | accept | reject | withdraw");
         return 2;
     };
     if let Some(result) = crate::promote_cmd::cli(ws_dir, &positional, args, opts) {
