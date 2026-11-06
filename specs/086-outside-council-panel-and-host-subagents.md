@@ -219,7 +219,7 @@ All small, all independent of the Panel:
 | :-- | :-- | :-- | :-- |
 | S0a | §8 fixes F-1, F-2, F-4 (F-5 dropped) | small | this spec approved |
 | S0b | **Host conformance probe**: a script that, per host, runs a canary agent file and a two-seat parallel spawn, and records the §3 cells as `verified`/`failed`/`not run` in `docs/reference/` (like the agy conformance probe) | small | S0a not required; runs on the operator's machines |
-| S1 | `delphi-council` skill, the ruling card on Mode A, `council_frame` (tier suggestion, estimate, confirm) | small | S0a |
+| S1 | `delphi-council` skill, the ruling card and `phase` on Mode A, `council_frame` (tier notice, confirm). The token estimate from past `agent.usage` moves to S2, when framing goes daemon-side; until then `council_frame` says a Panel spends the host's tokens and a Council the operator's | small | S0a |
 | S2 | Panel: `council_open/brief/submit`, `council_choose`, the barrier and parse reusing `council.rs`; record `venue: host` | large | S1 |
 | S3 | Role subagents per host (§5.2), `[host.models.*]` (§6.3), the `--agents` installer for Codex | medium | S0b, S2 |
 | S4 | Foreign seat (§6.4) | medium | S2 |

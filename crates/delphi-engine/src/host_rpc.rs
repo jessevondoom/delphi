@@ -357,6 +357,71 @@ pub fn council_proposition(c: &Caller, p: &Value) -> Result<String, HostErr> {
     ))
 }
 
+/// Phrases in a question that make a formal (daemon) Council worth suggesting (spec 086 §4.5). A notice only: the Panel is
+/// allowed for every question, and nothing here refuses, blocks or asks twice.
+const FORMAL_HINTS: [(&str, &str); 9] = [
+    ("formal", "you asked for a formal review"),
+    ("full review", "you asked for a full review"),
+    ("approve the spec", "it approves or amends a spec"),
+    ("approve spec", "it approves or amends a spec"),
+    ("authority", "it touches authority or trust"),
+    ("sandbox", "it touches the sandbox"),
+    ("red tier", "it touches the red tier"),
+    ("irreversible", "it may be irreversible"),
+    ("cannot be undone", "it may be irreversible"),
+];
+
+/// `council_frame`: reads nothing, spends nothing, dispatches nothing. It restates the question as Delphi will fence it, names
+/// the Panel's seats and what the operator must say yes to, and adds a notice when a daemon Council fits better.
+pub fn council_frame(p: &Value) -> Result<Value, HostErr> {
+    let proposition = {
+        let question = clean("question", p["question"].as_str().unwrap_or(""), MAX_QUESTION)?;
+        let stakes = match p["stakes"].as_str() {
+            None | Some("") => "normal",
+            Some(s) if STAKES.contains(&s) => s,
+            Some(_) => return bad(format!("`stakes` is one of {}", STAKES.join(", "))),
+        };
+        let mut options = Vec::new();
+        for v in p.get("options").and_then(Value::as_array).into_iter().flatten() {
+            options.push(clean("options", v.as_str().unwrap_or(""), MAX_ITEM)?);
+        }
+        if options.len() > 8 {
+            return bad("at most 8 options");
+        }
+        (question, stakes, options, pointer_lines(p)?)
+    };
+    let (question, stakes, options, pointers) = proposition;
+    let hay = format!("{} {}", question.to_lowercase(), options.join(" ").to_lowercase());
+    let mut because: Vec<&str> = FORMAL_HINTS.iter().filter(|(k, _)| hay.contains(k)).map(|(_, why)| *why).collect();
+    if stakes == "high" {
+        because.push("you marked the stakes high");
+    }
+    because.dedup();
+    let notice = if because.is_empty() {
+        Value::Null
+    } else {
+        json!({
+            "suggest": "daemon_council",
+            "because": because,
+            "text": format!("A formal Council may fit better ({}): it adds seats from another model family and a barrier Delphi holds itself. A Panel is still allowed; this is a suggestion, not a block.", because.join("; ")),
+            "how": "call request_council with the same question, options and pointers; it spends the operator's tokens on Delphi's seats"
+        })
+    };
+    Ok(json!({
+        "framed": {"question": question, "stakes": stakes, "options": options, "pointers": pointers},
+        "default_tier": "panel",
+        "notice": notice,
+        "panel": {
+            "seats": ["architect", "red-team", "strategist"],
+            "model_note": "give the red-team seat a different model from the architect's where your host offers two or more; say 'one model' on the card if it does not",
+            "isolation": "run each seat as its own subagent, in parallel, each given only the question and the pointers, not the other seats' words; if your host cannot, say 'blind: no' in the first line",
+            "spends": "your host's tokens, not Delphi's"
+        },
+        "ask_the_operator": "Run a Panel of architect, red-team and strategist on this question? It uses your host's tokens (about three seats twice). Say yes to go ahead.",
+        "advice_only": true
+    }))
+}
+
 /// A Council's state and, once it is decided, its ruling, read from the host session's log (so a daemon restart loses nothing).
 /// `None` when this session never raised that Council.
 pub fn council_view(events: &[delphi_core::event::EventEnvelope], mission_dir: &Path, task_id: &str) -> Option<Value> {
@@ -378,7 +443,13 @@ pub fn council_view(events: &[delphi_core::event::EventEnvelope], mission_dir: &
             "not_decided"
         }
         (None, _) if of("task.failed").is_empty() => {
-            v["round"] = json!(if !of("council.critique").is_empty() { 2 } else if !positions.is_empty() { 1 } else { 0 });
+            let (r1, r2) = (positions.len(), of("council.critique").len());
+            v["round"] = json!(if r2 > 0 { 2 } else if r1 > 0 { 1 } else { 0 });
+            v["phase"] = json!(match (r1, r2) {
+                (0, _) => "convening: choosing the seats".to_string(),
+                (n, 0) => format!("round 1 (blind opening): {n} seat(s) have answered"),
+                (_, n) => format!("round 2 (cross-examination): {n} critique(s) in; the verdict follows"),
+            });
             "deliberating"
         }
         (None, _) => {
@@ -399,8 +470,66 @@ pub fn council_view(events: &[delphi_core::event::EventEnvelope], mission_dir: &
             "dissent": dissent, "record": ve.payload["path"],
             "note": "advice to you: it binds nothing in your project; the record stays in Delphi for the operator to review"
         });
+        let tokens: u64 = of("agent.usage").iter().map(|e| e.payload["input_tokens"].as_u64().unwrap_or(0) + e.payload["output_tokens"].as_u64().unwrap_or(0)).sum();
+        v["display"] = json!(ruling_card(&v, tokens));
     }
     Some(v)
+}
+
+/// A decided Council as one block of markdown for the operator (spec 086 §7), built from the structured ruling only, so every
+/// host shows the same thing. Dissent is the record's text unchanged; nothing here is summarised by a model. The host is told to
+/// show it as it stands.
+pub fn ruling_card(v: &Value, tokens: u64) -> String {
+    let r = &v["ruling"];
+    let text = |x: &Value| x.as_str().unwrap_or("").trim().to_string();
+    let mut s = String::new();
+    let homog = r["homogeneous"].as_bool().unwrap_or(false);
+    s.push_str(&format!(
+        "**Council ruling** · daemon Council · blind barrier held by Delphi · {}\n\n",
+        if homog { "one model family (homogeneous: the diversity guarantee did not hold)" } else { "seats span more than one model family" }
+    ));
+    s.push_str(&format!("**Decision:** {}\n\n", text(&r["decision"])));
+    if let Some(steps) = r["next_steps"].as_array().filter(|a| !a.is_empty()) {
+        s.push_str("**Next steps**\n");
+        for (i, st) in steps.iter().enumerate() {
+            let opt = st["option"].as_str().map(|o| format!(" (if {o})")).unwrap_or_default();
+            s.push_str(&format!("{}. `{}`{}: {}\n", i + 1, text(&st["role"]), opt, text(&st["objective"])));
+        }
+        s.push('\n');
+    }
+    let seats: Vec<String> = r["seat_positions"].as_array().into_iter().flatten().map(|p| format!("`{}` ({})", text(&p["seat"]), text(&p["status"]))).collect();
+    if !seats.is_empty() {
+        s.push_str(&format!("**Who sat:** {}\n\n", seats.join(", ")));
+    }
+    let split: Vec<String> = r["critiques"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|c| format!("`{}`: {}{}", text(&c["seat"]), c["recommendation"].as_str().unwrap_or("no readable critique"), match c["concur"].as_bool() { Some(false) => ", did not concur", _ => "" }))
+        .collect();
+    if !split.is_empty() {
+        s.push_str("**Where they stood in Round 2**\n");
+        for l in &split {
+            s.push_str(&format!("- {l}\n"));
+        }
+        s.push('\n');
+    }
+    if let Some(d) = r["dissent"].as_str().filter(|d| !d.trim().is_empty()) {
+        s.push_str("**Dissent (verbatim from the record)**\n");
+        for l in d.lines() {
+            s.push_str(&format!("> {l}\n"));
+        }
+        s.push('\n');
+    }
+    if let Some(why) = r["escalated"].as_str() {
+        s.push_str(&format!("**You must answer:** {why}.\n"));
+        for o in r["options_considered"].as_array().into_iter().flatten() {
+            s.push_str(&format!("- {}\n", text(&o["label"])));
+        }
+        s.push('\n');
+    }
+    s.push_str(&format!("**Cost:** {tokens} tokens on Delphi's seats. **Record:** `{}`.\n", text(&r["record"])));
+    s
 }
 
 /// A handoff envelope from a host's request: the daemon fills every field a host must not choose.
@@ -652,14 +781,37 @@ mod tests {
             e
         };
         let mut log = vec![EventEnvelope::new("m", COUNCIL_EVENT, json!({"task_id": "t-1"})), ev("council.stance", json!({"role": "architect", "status": "answered", "text": "table"}), "t-1")];
-        assert_eq!(council_view(&log, dir.path(), "t-1").unwrap()["state"], "deliberating");
+        let mid = council_view(&log, dir.path(), "t-1").unwrap();
+        assert_eq!(mid["state"], "deliberating");
+        assert_eq!(mid["phase"], "round 1 (blind opening): 1 seat(s) have answered", "the host is given words to narrate");
+        assert!(mid.get("display").is_none(), "no card before there is a ruling");
         assert!(council_view(&log, dir.path(), "t-2").is_none(), "a Council this session did not raise is not found");
-        log.push(ev("council.verdict", json!({"decision": "table", "path": "missions/m/councils/001-x.md", "options": [], "steps": []}), "t-1"));
+        log.push(ev("agent.usage", json!({"input_tokens": 100, "output_tokens": 20}), "t-1"));
+        log.push(ev("council.verdict", json!({"decision": "table", "path": "missions/m/councils/001-x.md", "options": [], "steps": [{"option": null, "role": "builder", "objective": "write it"}], "homogeneous": true}), "t-1"));
         log.push(ev("task.completed", json!({"status": "done", "reason": ""}), "t-1"));
         let v = council_view(&log, dir.path(), "t-1").unwrap();
+        let card = v["display"].as_str().unwrap();
+        assert!(card.contains("**Decision:** table") && card.contains("1. `builder`: write it") && card.contains("> - [P1] red-team: keep a file"), "{card}");
+        assert!(card.contains("homogeneous") && card.contains("120 tokens") && card.contains("missions/m/councils/001-x.md"), "{card}");
+        assert!(!card.contains("You must answer"), "an unescalated ruling asks nothing");
         assert_eq!((v["state"].as_str(), v["ruling"]["decision"].as_str(), v["ruling"]["seat_positions"][0]["position"].as_str()), (Some("decided"), Some("table"), Some("table")));
         assert!(v["ruling"]["dissent"].as_str().unwrap().contains("keep a file"), "{v}");
     }
+    #[test]
+    fn a_frame_always_allows_the_panel_and_only_suggests_a_formal_council() {
+        let plain = council_frame(&json!({"question": "Table or file for the cache?", "options": ["table", "file"]})).unwrap();
+        assert_eq!((plain["default_tier"].as_str(), plain["notice"].is_null(), plain["advice_only"].as_bool()), (Some("panel"), true, Some(true)));
+        assert!(plain["ask_the_operator"].as_str().unwrap().contains("host's tokens"));
+        let risky = council_frame(&json!({"question": "Should we approve the spec that changes sandbox authority? It is irreversible.", "stakes": "high"})).unwrap();
+        let why: Vec<&str> = risky["notice"]["because"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        assert!(why.contains(&"it touches the sandbox") && why.contains(&"it may be irreversible") && why.contains(&"you marked the stakes high"), "{why:?}");
+        assert_eq!(risky["default_tier"], "panel", "a risky question still gets a Panel: the notice suggests, it never blocks");
+        assert!(risky["notice"]["text"].as_str().unwrap().contains("not a block"));
+        for bad in [json!({}), json!({"question": "q", "stakes": "dire"}), json!({"question": "q", "context_pointers": [{"uri": "/etc/passwd", "reason": "r"}]})] {
+            assert!(council_frame(&bad).is_err(), "{bad}");
+        }
+    }
+
     #[test]
     fn a_kb_entry_is_staged_at_l0_with_the_daemon_setting_author_and_tier_and_is_capped() {
         let p = json!({"title": "Vault rotation", "body": "Keys rotate every 90 days.\n\nSee https://wiki.example.com/v", "sources": ["https://wiki.example.com/v"], "confidence": "high", "tier": "L5", "taint": "trusted"});

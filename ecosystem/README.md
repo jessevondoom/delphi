@@ -10,7 +10,7 @@ claude plugin marketplace add jessevondoom/delphi
 claude plugin install delphi@delphi
 ```
 
-The plugin only declares the MCP server (`delphi mcp`) and a skill that says when to consult Delphi. It carries no binary: install `delphi` with
+The plugin only declares the MCP server (`delphi mcp`) and two skills: one that says when to consult Delphi, and `delphi-council`, which runs a Panel of your own subagents or a formal Council (spec 086). It carries no binary: install `delphi` with
 `install.sh` or Homebrew first. The declaration runs `delphi` from the host's `PATH`; for an absolute path use `delphi mcp --print-config claude-code --absolute`.
 Installing the plugin grants Delphi nothing: it is not an approval.
 
