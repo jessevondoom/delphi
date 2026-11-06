@@ -380,7 +380,7 @@ Approved for implementation by the operator on 2026-10-30. Defines the run-anywh
 | :-- | :-- | :-- |
 | OE1 | Align lifecycle docs and installer completion language; make default-workspace setup resumable from any directory | built (installer guidance, run-anywhere docs, and `delphi setup` outside Git; not exercised end-to-end) |
 | OE2 | First-run choice for default vs explicit directory project; resumable project/model setup | approved, not built |
-| OE3 | Startup health-state rules and concise actionable notices | approved, not built |
+| OE3 | Startup health-state rules and concise actionable notices | built |
 | OE4 | Public release attestation verification without GitHub CLI login prerequisite | approved, not built |
 | OE5 | Update preview/notice alignment; exclude rollback and recovery redesign | approved, not built |
 | OE6 | Integration, reference docs and terminal walkthrough | approved, not built |
