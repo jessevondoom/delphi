@@ -235,8 +235,13 @@ impl EngineService {
         build(0).map_err(host_err)?;
         let _gate = self.host_gate.lock().await;
         let m = self.mission_at(Some(&c.mission()), c.cwd.to_str()).await?;
-        let already = h::proposals_in(&m.replay().map_err(engine_err)?);
+        let events = m.replay().map_err(engine_err)?;
+        let already = h::proposals_in(&events);
         let e = build(already).map_err(host_err)?;
+        // A note the operator dropped from this session is not staged again while it is unchanged (`specs/083` §5).
+        if !summary && crate::learn::host_note_dismissed(&events, e.payload["summary"].as_str().unwrap_or(""), "L0", delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339())) {
+            return Ok(json!({"staged": false, "reason": "the operator dropped this note earlier; it is offered again only with new evidence or after 90 days", "tier": "L0", "count": already}));
+        }
         let id = e.payload["id"].as_str().unwrap_or("").to_string();
         m.append(e).await.map_err(engine_err)?;
         Ok(json!({"staged": true, "ref": format!("{}/{}", m.id, id), "tier": "L0", "count": already + 1}))
