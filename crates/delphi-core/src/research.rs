@@ -113,19 +113,23 @@ pub fn sanitize_identity_text(s: &str, max_chars: usize) -> String {
 }
 
 /// A role's badge, colour (`#rrggbb`) and nearest 256-colour, the same as the console's avatar library (`crates/delphi/src/avatar.rs`
-/// is checked against this table by a test there). The investigator borrows the scout's look, as in the console; an unknown role
-/// gets the operator's.
+/// is checked against this table by a test there). Each of the thirteen roles has its own look (`specs/087` §3); the investigator
+/// no longer borrows the scout's. An unknown role gets the operator's. The light-terminal colours are in the library, not here (S3).
 pub fn role_look(role: &str) -> (&'static str, &'static str, u8) {
     match role {
         "orchestrator" => ("⟦•─•⟧", "#a855f7", 135),
-        "builder" => ("⟦•─•⟧", "#f59e0b", 214),
-        "architect" => ("⟦•_•⟧", "#38bdf8", 81),
-        "red-team" => ("⟦-_-⟧", "#ef4444", 203),
-        "strategist" => ("⟦•_•⟧", "#14b8a6", 37),
-        "scout" | "investigator" => ("⟦•••⟧", "#ffff00", 226),
-        "administrator" => ("⟦•─•⟧", "#64748b", 243),
-        "assistant" => ("⟦•_•⟧", "#3b82f6", 75),
-        "advocate" => ("⟦•_•⟧", "#f43f5e", 204),
+        "builder" => ("⟦•=•⟧", "#f59e0b", 214),
+        "architect" => ("⟦•o•⟧", "#38bdf8", 81),
+        "red-team" => ("⟦¬_¬⟧", "#ef4444", 203),
+        "strategist" => ("⟦•u•⟧", "#14b8a6", 37),
+        "scout" => ("⟦•••⟧", "#ffff00", 226),
+        "administrator" => ("⟦•.•⟧", "#68798f", 243),
+        "assistant" => ("⟦•‿•⟧", "#3b82f6", 75),
+        "advocate" => ("⟦•^•⟧", "#f43f5e", 204),
+        "messenger" => ("⟦•w•⟧", "#84cc16", 112),
+        "validator" => ("⟦¬_•⟧", "#22c55e", 41),
+        "writer" => ("⟦•_•⟧", "#fde68a", 222),
+        "investigator" => ("⟦•_•⟧", "#f1f5f9", 255),
         _ => ("⟦•_•⟧", "#94a3b8", 110),
     }
 }
