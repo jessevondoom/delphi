@@ -222,6 +222,21 @@ pub fn pointers_from_prompt(prompt: &str) -> Vec<ContextPointer> {
             out.push(ContextPointer { uri, heading: String::new(), blake3: String::new(), reason: "referenced by the operator".into() });
         }
     }
+    // A host's Council question lists its pointers as `- path: reason` lines under `Pointers:` (spec 086 F-2); without
+    // this the seats were never told which files to read. Same path rule as above; at most ten.
+    if let Some((_, block)) = prompt.split_once("--- BEGIN HOST QUESTION ---") {
+        let block = block.split("--- END HOST QUESTION ---").next().unwrap_or("");
+        for line in block.split_once("Pointers:").map(|(_, t)| t).unwrap_or("").lines() {
+            let Some(item) = line.trim().strip_prefix("- ") else { continue };
+            let (uri, reason) = item.split_once(": ").unwrap_or((item, ""));
+            let uri = uri.trim();
+            let looks_like_path = uri.contains('/') && !uri.starts_with('/') && !uri.split(['/', '#']).any(|s| s == "..");
+            if looks_like_path && out.len() < 10 && !out.iter().any(|p| p.uri == uri) {
+                let reason = if reason.trim().is_empty() { "named by the host".to_string() } else { reason.trim().chars().take(200).collect() };
+                out.push(ContextPointer { uri: uri.to_string(), heading: String::new(), blake3: String::new(), reason });
+            }
+        }
+    }
     out
 }
 
@@ -321,5 +336,13 @@ mod tests {
     fn at_references_become_pointers_only_when_they_look_like_logical_paths() {
         let p = pointers_from_prompt("Review @project/app/src/lib.rs, and @specs/009.md. Ping @architect about @/etc/passwd and @../x/y @project/app/src/lib.rs");
         assert_eq!(p.iter().map(|x| x.uri.as_str()).collect::<Vec<_>>(), vec!["@project/app/src/lib.rs", "specs/009.md"]);
+    }
+
+    #[test]
+    fn a_host_questions_pointer_lines_become_pointers_and_unsafe_ones_do_not() {
+        let q = "A host agent asks.\n--- BEGIN HOST QUESTION ---\nQuestion: ok?\nStakes: normal\nOptions:\n- Approve\nPointers:\n- specs/071-x.md: the draft under review\n- crates/a/src/mcp_hosts.rs\n- /etc/passwd: no\n- ../secret/y.md: no\n- Approve as written\n--- END HOST QUESTION ---\n- specs/after.md: outside the fence";
+        let p = pointers_from_prompt(q);
+        assert_eq!(p.iter().map(|x| (x.uri.as_str(), x.reason.as_str())).collect::<Vec<_>>(), vec![("specs/071-x.md", "the draft under review"), ("crates/a/src/mcp_hosts.rs", "named by the host")]);
+        assert!(pointers_from_prompt("Options:\n- specs/a.md: not a host question").is_empty(), "only a fenced host question is read this way");
     }
 }
