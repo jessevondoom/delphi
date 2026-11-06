@@ -275,10 +275,53 @@ Spec 084 S2 (draft) adds `ruling.flip_question` to `council_result`: Round 2 gai
 - Why red-team Round 2 is unreadable (F-1): only the symptom was read.
 - That the six records on the author's machine are representative.
 - Whether Copilot's `agents/` in a *plugin* and the `.agent.md` suffix behave as the reference says.
-- Not yet reviewed by a Council (OD-6: after S0a).
+- Reviewed by a daemon Council on 2026-11-06 (§15): escalated to the operator; the red-team's Round 2 was lost to an `agy` error, so the review lacks a readable Red-Team critique.
 
 Sources: Claude Code subagents (code.claude.com/docs/en/sub-agents); Copilot CLI custom agents and plugin reference (docs.github.com, 2026-11-05); Codex subagents (developers.openai.com/codex/subagents, now learn.chatgpt.com); Antigravity custom subagents and plugins (antigravity.google/docs/subagents, /plugins).
 
-## 15. Council review (OD-6)
+## 15. Council review (OD-6, run 2026-11-06)
 
-Pending: runs as the daemon Council after S0a lands. The ruling and its Minority Report are recorded here verbatim.
+**How it was run.** A daemon Council (architect, red-team, strategist; Claude and Gemini families) on the built spec, after S0a (the fixed parser) merged, from a *scratch* Delphi home using this repository's current build and the operator's model logins and ratified access config. The operator's installed daemon predated S0a (built 2026-11-05), so it was not used. Cost: 177,761 tokens on Delphi's seats; about 38 minutes. The question, options and pointers are in the record; the question asked what must change before the Panel is trusted as the default.
+
+**Ruling (verbatim).** The Council escalated to the operator: *5 unresolved P0 finding(s); Red-Team's Round 2 could not be read.*
+
+> **Decision:** needs the operator: Should Panel stay opt-in until the amendments and per-host live smoke tests pass, or be reworked first because of the host-scheduling risk to the barrier?
+
+Round 2 stood: architect PROCEED-WITH-CHANGES; strategist PROCEED-WITH-CHANGES, did not concur; red-team **no readable critique**. The red-team's Round 2 was not a parser failure this time: `agy` reported an error and returned a truncated JSON fragment ("the CLI reported an error: {\"concur\":false,...\"severity\":\"P0\"..." cut off), so the seat counts as unresolved, as the rule requires. The fragment's one complete finding was "Host-mediated scheduling breaks Blind Round 1 anti-anchoring". That `agy` structured-output error is a separate defect, not fixed here.
+
+**Accepted Risks & Minority Report (Red-Team / Dissent), verbatim from the record.**
+
+> - [P0] architect: Dissent must be copied verbatim by the server and shown beside the host summary; missing or timed-out seats listed explicitly, never dropped
+> - [P0] architect: Panel ruling must be advice only: add a test that it cannot satisfy any Council gate (spec approval, merge, ratification), citing spec 072 sections 1.1 and 8
+> - [P0] architect: Server must own and seal the barrier: single-use per-seat tokens, reveal only at quorum or deadline, no resubmission after release, round cap enforced by the server
+> - [P0] strategist: Panel ruling must not satisfy any gate a daemon Council satisfies (spec approval, merge, ratification); add a test proving it cannot unlock one (spec 072 §1.1, §8)
+> - [P0] strategist: Server must own the barrier: seats submit to the server, sealed, single-use per-seat token, reveal only at quorum or deadline; host never holds round 1 text early
+> - [P1] architect: Daemon-written fixed label on every ruling (PANEL, host-run, advisory, family count, homogeneous when one family, H-001/H-008 not met); host cannot edit it, and the card must look different from a Cou
+> - [P1] architect: Foreign-family seat: state its family and whether it was reached; show absent when missing so it is not read as whole-Panel diversity
+> - [P1] architect: Host controls seat prompts: use a server-written standard seat brief and record the prompt hash
+> - [P1] architect: Host file formats are vendor-doc only: mark as documented, not live-proven; make the default conditional on a passing per-host live smoke test, otherwise opt-in
+> - [P1] strategist: Daemon-written fixed label 'PANEL (host-run, advisory)' with family count and homogeneous grade per H-008; distinct card style from a Council verdict; host cannot edit it
+> - [P1] strategist: Dissent must be copied verbatim by the server and shown beside the host summary; absent or timed-out seats shown as absent, never dropped
+> - [P1] strategist: Host file formats are vendor-doc only: mark 'documented, not live-proven' and make default status per host conditional on a passing live smoke test; opt-in until then
+> - [P1] strategist: Host-chosen seat prompts can steer seats: use a server-written seat brief and record a prompt hash
+> - [P1] red-team: Round 2 gave no readable critique (treated as unresolved, not as agreement)
+
+**Next steps the Council named (if PROCEED-WITH-CHANGES).** Architect: amend this spec with the shared items (advice-only limits citing 072 §1.1 and §8, a server-sealed barrier with single-use tokens, verbatim dissent, the fixed label, a server seat brief with prompt hash, a card nonce). Builder: implement them in the Panel state machine with a test that a ruling cannot unlock any Council gate. Red-team: re-run the Round 2 review that failed, covering host-mediated scheduling of the barrier. Strategist: keep Panel opt-in per host until its smoke test passes, then recommend which hosts become default.
+
+### 15.1 Author's triage against the built code (not the Council's words)
+
+The seats read this spec and some code; several findings are already met, one is a real gap the Council did not name, and two conflict with decisions already taken.
+
+| Finding | State in the built code |
+| :-- | :-- |
+| Dissent copied verbatim by the server; absent seats never dropped | **Met.** The Minority Report is built by `council::minority_report` from the parsed critiques and checked by `lint_artifact`; an unreadable or abstaining seat is listed as unresolved, and the card's "Who sat" shows abstentions. |
+| Daemon-written fixed label; card distinct from a Council's | **Met.** The header reads "Panel ruling · host seats · barrier: held by Delphi · isolation: host-reported · blind … · families …" and a daemon Council's reads "Council ruling"; neither is settable by arguments. |
+| Foreign seat: state its family and whether it was reached | **Met** (S4): "2 families" only when a foreign seat sat; an abstaining foreign seat shows as abstained. |
+| Panel ruling must not satisfy any gate | **Partly met, and a gap found.** No gate consumes a Panel verdict: its consumers are `/follow` (operator-initiated), the observe pane and `learn.rs`. But `learn.rs` ("capture on contact", `council.verdict`) stages the decision, each seat's claim and the Minority Report as notes at **L3**, labelled "the Council's verdict", for a Panel too, whose seat text is host-written. Nothing auto-promotes them, but the label and tier overstate their provenance, against §11. **Fix to build:** stage Panel captures at L0, labelled as host-reported, and add the test the Council asked for (no consumer reads a Panel verdict as approval). |
+| Server owns and seals the barrier | **Mostly met.** Round 1 is held in daemon memory, released only when every seat has answered or abstained, one answer per seat per round, no resubmission, round numbers bounded. **Not built:** a reveal-at-deadline (a Panel waits until the moderator abstains a seat) and single-use per-seat *tokens*. Tokens would add little: the host holds every seat's calls, so Delphi cannot tell one subagent from another (§4.2 says so). The residual risk, a host that runs seats one after another in one context, is why the card says `blind` is host-reported. |
+| Server-written seat brief with a prompt hash | **Partly met.** The brief is server-written, but the host wraps it in its own prompt, and no hash is recorded. **Cheap to add:** record a hash of each brief in the `council.stance` event. |
+| Host file formats are vendor-doc only; default conditional on a live smoke test | **Agreed, and in tension with OD-1.** §3 and §14 already say so and the S0b probe exists, but no probe has been run live. OD-1 made the Panel the default for every question; this finding would make that default per host, and only on hosts whose probe passed. |
+
+### 15.2 Decision for the operator
+
+The Council asks: *stay opt-in until the amendments and per-host live smoke tests pass, or rework first because of the host-scheduling risk to the barrier?* Its seats leaned PROCEED-WITH-CHANGES, not rework. Recommended: (1) build the L0 staging fix and the no-gate test now (small); (2) record a brief hash; (3) keep the Panel the default as decided in OD-1 but have the skill and card say "not yet verified on this host" until that host's S0b probe has passed; (4) do not build single-use tokens. Which of these to adopt is the operator's call; this section changes no behaviour.
