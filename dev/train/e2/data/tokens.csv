@@ -1,0 +1,12 @@
+question,run,tokens,cache_read,cache_write,events,models,note
+q1,b1,106736,291292,167655,7,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-8982dcd7ad7dfcd8; elapsed 150s; qcheck True
+q1,b2-attempt1,99962,337541,77116,7,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-9b3e0fd087e1ab73; elapsed 1437s; qcheck True
+q1,b2,9112,218802,61480,6,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-e1fb244752497cde; elapsed 1007s; qcheck True
+q2,b1,135130,325880,137360,7,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-8d7d674fc63fcecf; elapsed 1465s; qcheck True
+q2,b2,110387,365993,85695,7,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-2ebc85d541da8fb6; elapsed 180s; qcheck True
+q3,b1,101050,311634,83776,7,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-0c8b378354e9d850; elapsed 170s; qcheck True
+q3,b2,112822,323160,84515,7,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-101439a5a610d46b; elapsed 191s; qcheck True
+q4,b1,15926,126612,58028,6,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-c2ad04a834d4fc48; elapsed 1289s; qcheck True
+q4,b2,34371,121302,79358,6,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-f71f0cd0c7bae0f8; elapsed 60s; qcheck True
+q5,b1,117038,285672,84381,7,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-684737dfac571f48; elapsed 140s; qcheck True
+q5,b2,84225,302991,84287,7,gemini-3.8-flash-medium+sonnet,council_id t_0001; session host-15975f15b3fd0b8c; elapsed 150s; qcheck True
