@@ -380,7 +380,7 @@ Approved for implementation by the operator on 2026-10-30. Defines the run-anywh
 | :-- | :-- | :-- |
 | OE1 | Align lifecycle docs and installer completion language; make default-workspace setup resumable from any directory | built (installer guidance, run-anywhere docs, and `delphi setup` outside Git; not exercised end-to-end) |
 | OE2 | First-run choice for default vs explicit directory project; resumable project/model setup | approved, not built |
-| OE3 | Startup health-state rules and concise actionable notices | approved, not built |
+| OE3 | Startup health-state rules and concise actionable notices | built |
 | OE4 | Public release attestation verification without GitHub CLI login prerequisite | approved, not built |
 | OE5 | Update preview/notice alignment; exclude rollback and recovery redesign | approved, not built |
 | OE6 | Integration, reference docs and terminal walkthrough | approved, not built |
@@ -661,7 +661,7 @@ Drafted by the architect from the 2026-11-05 Council (both options), revised aft
 
 | Spec | Content | Wave | State |
 | :-- | :-- | :-- | :-- |
-| 079 | registry test: every ingress has a core-assigned origin ceiling; hard blocker for any `min_taint` figure | 1, first | approved 2026-11-05, not built |
+| 079 | registry test: every ingress has a core-assigned origin ceiling; hard blocker for any `min_taint` figure | 1, first | approved 2026-11-05; S1 built (origin-ceiling test in `delphi-engine`), S2 canary not built |
 | 080 | KB read-count report from `fact.read` events; `host_search_kb` event, `invariant: security\|constraint` attribute (needs its own operator ratification), no automatic pruning | 1, after 079 | approved 2026-11-05, not built |
 | 078 | Council scorecard: cost by `task_id`, choice from `council.followed`, family spread a floor | 2 | draft |
 | 081 | conventions note: advisory-only invariants, row shape, missing events in order | note | draft |
@@ -689,3 +689,13 @@ Phase-2 items N5, N24, N14, N1 from the same ranking. Draft: a proposal for the 
 | S2 | `council_result` flip question, only with a real dissent | 9 | draft, not built |
 | S3 | three-line "what changed since I left" recap, events only | 8 | draft, not built |
 | S4 | `delphi learn history` ("co-occurred"), with `rule_id` on accept first | 9 | draft, not built |
+
+## Spec 085: a fixed standing-limits reminder (2026-11-05)
+
+From a Council of three Claude seats (one family, so homogeneous) that ranked eight ideas from Anthropic's published research. Approved by the operator 2026-11-05. The effect on behaviour is not measured here (spec 085 §7); compaction-note authority is a separate, unwritten spec.
+
+| Slice | Content | Hours | State |
+| :-- | :-- | --: | :-- |
+| S0 | spec 085 approval and tracker entry | 1 | approved 2026-11-05 |
+| S1 | fixed `STANDING_LIMITS` constant on the API path; the objective echo removed | 5 | in progress |
+| S2 | the same reminder as a second content block on bridged tool replies (harness seats) | 5 | not built |
