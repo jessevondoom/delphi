@@ -163,6 +163,11 @@ fn events_follow_the_envelope_schema() {
     let mut bad = agent;
     bad.as_object_mut().unwrap().remove("span_id");
     must_fail("event-envelope.schema.json", "an agent event without span_id", &bad);
+    // specs/083 S3a: `source_hash` on `learn.staged` is optional, and a hex digest when present.
+    let staged = |p: serde_json::Value| json!({ "v": 1, "seq": 5, "timestamp": "t", "mission_id": "m1", "type": "learn.staged", "payload": p });
+    must_pass("event-envelope.schema.json", "an older staged note", &staged(json!({ "id": "n5", "trigger": "denied_card" })));
+    must_pass("event-envelope.schema.json", "a staged note with a source_hash", &staged(json!({ "id": "n5", "source_hash": "0".repeat(64) })));
+    must_fail("event-envelope.schema.json", "a staged note with a bad source_hash", &staged(json!({ "id": "n5", "source_hash": "abc" })));
     must_fail("event-envelope.schema.json", "another major", &json!({ "v": 2, "seq": 1, "timestamp": "t", "mission_id": "m", "type": "x", "payload": {} }));
     must_fail("event-envelope.schema.json", "a non-object payload", &json!({ "v": 1, "seq": 1, "timestamp": "t", "mission_id": "m", "type": "x", "payload": [] }));
 }

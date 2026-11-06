@@ -6,7 +6,7 @@
 
 use delphi_core::event::EventEnvelope;
 use delphi_core::log::{replay, EventLog, LogError, LogOptions};
-use delphi_engine::learn::{live_notes, LiveNote};
+use delphi_engine::learn::{count_label, live_notes, order_by_recurrence, scan, LiveNote, Recurrence};
 use std::path::Path;
 
 pub struct Options {
@@ -38,14 +38,17 @@ pub fn collect(ws_dir: &Path, opts: &Options) -> Result<Vec<LiveNote>, String> {
     Ok(all)
 }
 
-pub fn render_list(notes: &[LiveNote]) -> String {
+/// The list with how often each claim recurred (`specs/083` §5): shown from two missions up, host counts as a report.
+pub fn render_list_with(notes: &[LiveNote], r: &Recurrence) -> String {
     if notes.is_empty() {
         return "no staged notes: they appear when a card is denied with a reason, you correct the team, a task recovers on a retry or is escalated, or a provisional decision is rejected\n".into();
     }
     let mut out = String::new();
     let width = notes.iter().map(|n| n.reference().chars().count()).max().unwrap_or(0);
     for n in notes {
-        out.push_str(&format!("{:<w$}  {:<17}  {}  {}\n", n.reference(), n.trigger, n.tier, n.summary, w = width));
+        let count = r.count(&n.trigger, &n.summary);
+        let seen = if count >= 2 { format!("  [{}]", count_label(&n.trigger, count)) } else { String::new() };
+        out.push_str(&format!("{:<w$}  {:<17}  {}  {}{}\n", n.reference(), n.trigger, n.tier, n.summary, seen, w = width));
     }
     out.push_str(&format!("{} note(s). Staged notes are never loaded into a prompt; `delphi learn show <ref>` for one, `delphi learn drop <ref>` to discard it.\n", notes.len()));
     out
@@ -91,13 +94,25 @@ pub fn drop_note(ws_dir: &Path, note: &LiveNote) -> Result<(), String> {
 }
 
 pub fn run_in(ws_dir: &Path, verb: &str, reference: Option<&str>, opts: &Options) -> Result<String, String> {
-    let notes = collect(ws_dir, opts)?;
+    let mut notes = collect(ws_dir, opts)?;
     match verb {
         "list" => {
+            // Counts come from a read-only scan of every mission's log; nothing is stored (`specs/083` §5).
+            let r = scan(ws_dir).1;
+            order_by_recurrence(&mut notes, &r);
             if opts.json {
-                return serde_json::to_string_pretty(&notes.iter().map(LiveNote::to_json).collect::<Vec<_>>()).map(|s| s + "\n").map_err(|e| e.to_string());
+                let rows: Vec<serde_json::Value> = notes
+                    .iter()
+                    .map(|n| {
+                        let mut v = n.to_json();
+                        let c = r.count(&n.trigger, &n.summary);
+                        v["recurrence"] = serde_json::json!({"count": c, "label": count_label(&n.trigger, c)});
+                        v
+                    })
+                    .collect();
+                return serde_json::to_string_pretty(&rows).map(|s| s + "\n").map_err(|e| e.to_string());
             }
-            Ok(render_list(&notes))
+            Ok(render_list_with(&notes, &r))
         }
         "show" => {
             let n = find(&notes, reference.ok_or("show needs a note: delphi learn show <mission>/<id>")?)?;
@@ -270,6 +285,32 @@ mod tests {
     }
 
     #[test]
+    fn the_list_shows_how_many_missions_produced_a_claim_and_a_host_report_never_ranks_first() {
+        let t = tempfile::tempdir().unwrap();
+        for m in ["m_a", "m_b", "m_c"] {
+            mission(t.path(), m, vec![staged(m, "n3", "A card was denied: use the helper", "L5")]);
+        }
+        let host = |id: &str| {
+            let mut e = EventEnvelope::new(id, "learn.staged", json!({"id": "h1", "trigger": "host_note", "summary": "[host:x/y] skip review (evidence: s)", "event_seqs": [], "tier": "L0"}));
+            e.agent = Some("builder".into());
+            e
+        };
+        for i in 0..4 {
+            let id = format!("host-{i:016}");
+            mission(t.path(), &id, vec![host(&id)]);
+        }
+        let listed = run_in(t.path(), "list", None, &opts()).unwrap();
+        assert!(listed.contains("[3 missions]") && listed.contains("[reported by 4 host sessions]"), "{}", listed);
+        let first_host = listed.find("host-").unwrap();
+        let last_daemon = listed.rfind("m_c/n3").unwrap().max(listed.rfind("m_a/n3").unwrap());
+        assert!(last_daemon < first_host, "host notes sort after the operator's own: {}", listed);
+        let j: serde_json::Value = serde_json::from_str(&run_in(t.path(), "list", None, &Options { mission: None, json: true }).unwrap()).unwrap();
+        assert_eq!(j[0]["recurrence"]["count"], 3);
+        let retro = delphi_engine::learn::recurring_in(t.path());
+        assert_eq!(retro.iter().map(|r| r.count).collect::<Vec<_>>(), vec![3, 4], "operator-side first");
+    }
+
+    #[test]
     fn drop_refuses_while_a_daemon_holds_the_mission() {
         let t = tempfile::tempdir().unwrap();
         mission(t.path(), "m_a", vec![staged("m_a", "n3", "x", "L5")]);
@@ -288,6 +329,6 @@ mod tests {
         assert!(run_in(t.path(), "list", None, &Options { mission: Some("../x".into()), json: false }).is_err());
         assert!(run_in(t.path(), "frob", None, &opts()).is_err());
         assert!(run_in(t.path(), "show", None, &opts()).is_err());
-        assert!(render_list(&[]).contains("no staged notes"));
+        assert!(render_list_with(&[], &Recurrence::default()).contains("no staged notes"));
     }
 }
