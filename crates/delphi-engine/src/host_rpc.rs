@@ -576,6 +576,10 @@ pub fn ruling_card(v: &Value, tokens: u64) -> String {
         }
         s.push('\n');
     }
+    if v["venue"] == "panel" {
+        // Every Panel says so until a live per-host check exists at runtime (spec 086 section 15.2): the host support is documented, not proven.
+        s.push_str("**Host support:** the host's subagent formats are vendor-documented, not yet live-verified on this machine (`dev/host-probe` checks them); isolation and models are the host's word.\n\n");
+    }
     let cost = if v["venue"] == "panel" {
         if v["foreign_seat"].is_object() { format!("{tokens} tokens on the seat Delphi ran; the other seats ran on your host's tokens (not measured here)") } else { "seats ran on your host's tokens (not measured here); Delphi spent none".to_string() }
     } else {
@@ -867,6 +871,25 @@ mod tests {
         let dissent = v["ruling"]["dissent"].as_str().unwrap();
         assert!(dissent.contains("[P0] red-team: data loss on retry") && !dissent.contains("Unanimous"), "{dissent}");
         assert!(crate::council::lint_artifact(doc).iter().all(|p| !p.contains("Unanimous")), "the linter reads the same section");
+    }
+
+    /// A Panel's ruling is advice (spec 072 section 1.1): no code path may treat a `council.verdict` as an approval, a merge or a
+    /// ratification. This lists every engine source file that reads the event, so a new reader is a deliberate, reviewed change. The
+    /// readers today: the Council itself, the host view, the operator's `/follow`, the live observer and the learning stager (which stages
+    /// a Panel's capture at L0).
+    #[test]
+    fn only_the_known_files_read_a_council_verdict() {
+        let allowed = ["council.rs", "host_rpc.rs", "service.rs", "observe.rs", "learn.rs"];
+        let mut found = Vec::new();
+        for e in std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/src")).unwrap().flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.ends_with(".rs") && std::fs::read_to_string(e.path()).unwrap().contains("\"council.verdict\"") {
+                found.push(name);
+            }
+        }
+        found.sort();
+        let unexpected: Vec<&String> = found.iter().filter(|f| !allowed.contains(&f.as_str())).collect();
+        assert!(unexpected.is_empty(), "a new reader of council.verdict must be reviewed against spec 086 section 15 (a Panel verdict is advice and satisfies no gate): {unexpected:?}");
     }
 
     #[test]

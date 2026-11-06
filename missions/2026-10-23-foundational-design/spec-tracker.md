@@ -727,3 +727,4 @@ From the operator's request to refine the outside Council (Claude Code, Copilot,
 | S3 | role subagents per host, `[host.models.*]`, Codex agents installer | 14 | built (PR open) |
 | S4 | one foreign-family seat (token ceiling, not a history-based estimate); `venue`/`blind` in the record front matter | 10 | built (PR open) |
 | S5 | pre-registered Panel-vs-Council experiment; decides the default | 12 | pre-registration merged (#505); S2/S3 merged; the run needs the operator's go and token caps |
+| S6 | follow-ups from the Council review: Panel captures at L0, verdict `venue`, brief hash, host-support line, list of `council.verdict` readers | 4 | built (PR open) |
