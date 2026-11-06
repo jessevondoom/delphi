@@ -8,6 +8,8 @@ This file starts with the work after v0.2.7. For earlier releases, the history i
 
 ## Unreleased
 
+- Agent identity outside the console (spec 087 S3): a Delphi answer's identity now reads `⟦badge⟧ Name (role, via delphi)` (it was `Name (role) via delphi`) and arrives as one ready-to-print `display` line. A role a host adopts with `get_agent` shows the same identity and notice; the old "acting as" wording is gone. New `[mcp] badge_mode = "dark" | "light"` picks the colour pair for the ANSI form. Results may carry advisory `boundary_line` and `return_line`, and `delphi_roster` opens with a roster line (it takes an optional `speaking` list). Hosts may drop all of these.
+
 ## 0.5.5 — 2026-11-05
 
 - Two specs approved, nothing built (079, 080): an ingress taint registry test where core assigns each ingress a ceiling by transport origin, and a knowledge-base read-count report with a `host_search_kb` event and an `invariant: security|constraint` attribute. Drafts 078 (Council scorecard) and 081 (conventions note) come from the same Council and are not approved. The spec tracker has the order and the open items.

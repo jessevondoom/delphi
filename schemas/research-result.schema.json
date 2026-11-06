@@ -28,7 +28,10 @@
     "answered_by": { "type": "string", "minLength": 1 },
     "consulted": { "type": "array", "items": { "type": "string" } },
     "identity": { "$ref": "#/$defs/identity" },
-    "signature": { "type": "string", "minLength": 1, "description": "The identity as plain text, or the variant chosen by [mcp] badge_style." }
+    "signature": { "type": "string", "minLength": 1, "description": "The identity line in the form chosen by [mcp] badge_style: the same string as `display`, kept for hosts that read it." },
+    "display": { "type": "string", "minLength": 1, "description": "The one line a host prints first (specs/087 section 5.2): the badge, the name and `(role, via delphi)`, in the form [mcp] badge_style names and, for ansi, the colour pair [mcp] badge_mode names. On a Council result it is followed by the ruling card." },
+    "boundary_line": { "type": "string", "maxLength": 300, "description": "Advice: `── Name (role) takes over: reason ──`, for when the speaker changes (specs/087 section 5.4). A host may drop it." },
+    "return_line": { "type": "string", "maxLength": 300, "description": "Advice: the matching line for when control comes back." }
   },
   "additionalProperties": false,
   "$defs": {
@@ -58,7 +61,9 @@
         "badge": { "type": "string", "minLength": 1, "maxLength": 8, "pattern": "^[^\\u0000-\\u001f\\u007f]*$" },
         "hex": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
         "ansi256": { "type": "integer", "minimum": 0, "maximum": 255 },
-        "via": { "type": "string", "maxLength": 40, "description": "Present when a host adopted the role: not a Delphi agent answering." },
+        "hex_light": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$", "description": "The colour for a light terminal (specs/087 section 5.1)." },
+        "ansi256_light": { "type": "integer", "minimum": 0, "maximum": 255 },
+        "via": { "type": "string", "maxLength": 40, "description": "Present when a host adopted the role. It does not change how the identity reads: the line always ends `, via delphi)` (specs/087 section 5.3)." },
         "variants": {
           "type": "object",
           "properties": { "plain": { "type": "string" }, "ansi": { "type": "string" }, "markdown": { "type": "string" } },
