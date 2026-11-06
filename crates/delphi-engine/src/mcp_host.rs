@@ -405,6 +405,23 @@ pub fn tools() -> Value {
             "annotations": annotations("Fetch the answer to a help request")
         },
         {
+            "name": "council_frame",
+            "title": "Frame a question for a Council or Panel",
+            "description": "Before you convene anything: restates the question as Delphi will fence it, names the Panel's seats (architect, red-team, strategist) and the question to put to the operator before tokens are spent, and adds a notice when a formal Council would fit better (a spec approval, authority or trust, anything irreversible, high stakes). It reads nothing, spends nothing and dispatches nothing. A Panel is allowed for every question; the notice is a suggestion, never a block.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string", "minLength": 1, "maxLength": 2000, "description": "What should be decided."},
+                    "options": {"type": "array", "maxItems": 8, "items": {"type": "string", "maxLength": 200}, "description": "The choices you are weighing, if any."},
+                    "stakes": {"type": "string", "enum": ["low", "normal", "high"], "default": "normal"},
+                    "context_pointers": {"type": "array", "maxItems": 10, "items": {"type": "object", "properties": {"uri": {"type": "string", "maxLength": 200}, "reason": {"type": "string", "maxLength": 200}}, "required": ["uri", "reason"], "additionalProperties": false}, "description": "Project-relative files the seats should look at."}
+                },
+                "required": ["question"],
+                "additionalProperties": false
+            },
+            "annotations": annotations("Frame a question for a Council or Panel")
+        },
+        {
             "name": "request_council",
             "title": "Ask Delphi's Council to rule",
             "description": "Put a question to Delphi's Council: seats argue it blind, critique each other, and the Orchestrator rules, with the dissent kept. Returns a council_id at once; the Council takes a few minutes, so check it with council_status and read the ruling with council_result. The ruling is advice and binds nothing in your project. It spends the operator's tokens as any Council does: state the question and the options plainly.",
@@ -437,7 +454,7 @@ pub fn tools() -> Value {
         {
             "name": "council_result",
             "title": "Read a Council's ruling",
-            "description": "The ruling of a Council this session raised: the decision, next steps, the options considered, each seat's position, the dissent verbatim, the unresolved findings and the record. Pass wait: true to wait up to 25 seconds if it is still deliberating.",
+            "description": "The ruling of a Council this session raised: the decision, next steps, the options considered, each seat's position, the dissent verbatim, the unresolved findings and the record. Pass wait: true to wait up to 25 seconds if it is still deliberating. A decided Council also carries a ready-made `display` card: show it to the operator as it stands, without paraphrasing the dissent. While it deliberates, council_status gives a `phase` line to pass on.",
             "inputSchema": {
                 "type": "object",
                 "properties": {"council_id": {"type": "string", "minLength": 1, "maxLength": 64}, "wait": {"type": "boolean", "default": false}},
@@ -605,6 +622,7 @@ impl Server {
             "handoff_get" => self.daemon("host.handoff_get", args),
             "request_help" => self.daemon_slow("host.request_help", args),
             "help_result" => self.daemon_slow("host.help_result", args),
+            "council_frame" => crate::host_rpc::council_frame(args).map(|v| v.to_string()).map_err(|e| e.to_string()),
             "request_council" => self.daemon("host.request_council", args),
             "council_status" => self.daemon("host.council_status", args),
             "council_result" => self.daemon_slow("host.council_result", args),
@@ -1121,7 +1139,7 @@ mod tests {
         let r = call(&mut s, json!({"jsonrpc": "2.0", "id": 3, "method": "tools/list"}));
         let tools = r["result"]["tools"].as_array().unwrap();
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["search_kb", "list_roles", "delphi_roster", "get_agent", "list_skills", "get_skill", "specs_status", "scaffold_status", "search_project", "search_memory", "query_memory", "kb_retrieve", "consult_orchestrator", "spawn_agent_pack", "route", "propose_note", "propose_kb_entry", "propose_council_record", "record_session_summary", "handoff_put", "handoff_get", "request_help", "help_result", "request_council", "council_status", "council_result", "request_research", "research_status", "research_result"]);
+        assert_eq!(names, ["search_kb", "list_roles", "delphi_roster", "get_agent", "list_skills", "get_skill", "specs_status", "scaffold_status", "search_project", "search_memory", "query_memory", "kb_retrieve", "consult_orchestrator", "spawn_agent_pack", "route", "propose_note", "propose_kb_entry", "propose_council_record", "record_session_summary", "handoff_put", "handoff_get", "request_help", "help_result", "council_frame", "request_council", "council_status", "council_result", "request_research", "research_status", "research_result"]);
         for t in tools {
             let writes = ["propose_note", "propose_kb_entry", "propose_council_record", "record_session_summary", "handoff_put", "request_help", "request_council", "request_research"].contains(&t["name"].as_str().unwrap());
             assert_eq!(t["annotations"]["readOnlyHint"], !writes, "{}", t["name"]);
@@ -1298,7 +1316,7 @@ mod tests {
             assert_eq!(r["result"]["isError"], true);
             assert!(r["result"]["content"][0]["text"].as_str().unwrap().starts_with("disabled_by_operator"));
         }
-        assert!(call(&mut s, json!({"jsonrpc": "2.0", "id": 9, "method": "tools/list"}))["result"]["tools"].as_array().unwrap().len() == 29);
+        assert!(call(&mut s, json!({"jsonrpc": "2.0", "id": 9, "method": "tools/list"}))["result"]["tools"].as_array().unwrap().len() == 30);
         std::fs::write(d.path().join("config.toml"), "[mcp]\nenabled = true\n").unwrap();
         assert_eq!(tool(&mut s, "no_such_tool")["error"]["code"], -32602);
         std::fs::write(d.path().join("config.toml"), "[mcp]\nenabled = false\n").unwrap();
