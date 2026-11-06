@@ -699,3 +699,18 @@ From a Council of three Claude seats (one family, so homogeneous) that ranked ei
 | S0 | spec 085 approval and tracker entry | 1 | approved 2026-11-05 |
 | S1 | fixed `STANDING_LIMITS` constant on the API path; the objective echo removed | 5 | built (PR open) |
 | S2 | the same reminder as a second content block on bridged tool replies (harness seats) | 5 | built (PR open) |
+
+## Spec 086: the Council outside Delphi (2026-11-05, approved 2026-11-06)
+
+From the operator's request to refine the outside Council (Claude Code, Copilot, Codex, agy). Host facts are from vendor docs, not live-proven (spec 086 §3, §14). Approved by the operator 2026-11-06: the Panel is the default and allowed for every question (warning only); a full Council review of the spec follows S0a. Spec 084 S2 (flip question) is not a conflict: ordering rules in 086 §14a.
+
+| Slice | Content | Hours | State |
+| :-- | :-- | --: | :-- |
+| S0 | spec 086 approval and tracker entry | 1 | approved 2026-11-06 |
+| S0a | daemon Council fixes: unreadable Round 2 (diagnose first), file excerpts, title from the question, merged Minority Report | 10 | approved, not built |
+| S0b | host conformance probe for the four hosts | 6 | approved, not built |
+| S1 | `delphi-council` skill, ruling card, `council_frame` | 10 | approved, not built |
+| S2 | Panel: server-held barrier, `council_open/brief/submit/choose` | 24 | approved, not built |
+| S3 | role subagents per host, `[host.models.*]`, Codex agents installer | 14 | approved, not built |
+| S4 | one foreign-family seat | 10 | approved, not built |
+| S5 | pre-registered Panel-vs-Council experiment; decides the default | 12 | needs operator go |
