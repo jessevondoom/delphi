@@ -198,7 +198,22 @@ pub fn note_event(c: &Caller, ws: &WorkspacePaths, p: &Value, already: usize) ->
     let text = clean("text", p["text"].as_str().unwrap_or(""), MAX_NOTE)?;
     let evidence = clean("evidence", p["evidence"].as_str().unwrap_or(""), MAX_EVIDENCE).map_err(|_| HostErr::Invalid(format!("`evidence` is required (a session or transcript pointer, at most {MAX_EVIDENCE} characters): without it the note cannot be checked for duplicates or contradictions")))?;
     let label = c.label(p["model"].as_str());
-    Ok(staged(c, already, "host_note", &label, format!("[{label}] {text} (evidence: {evidence})"), &evidence, Some(&role)))
+    let mut e = staged(c, already, "host_note", &label, format!("[{label}] {text} (evidence: {evidence})"), &evidence, Some(&role));
+    // specs/083 S4: the key for `duplicate_of`; the summary carries the evidence, so it cannot be the key.
+    e.payload["norm_text"] = json!(norm_text(&text));
+    Ok(e)
+}
+
+/// `text` lower-cased, with every run of non-alphanumeric characters collapsed to one space (`specs/083` §6).
+pub fn norm_text(text: &str) -> String {
+    text.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" ")
+}
+
+/// The id of an earlier note in THIS host session's own log (`events` is its `host-<session>` mission) with the same `norm_text`.
+/// Only `host_note` events count; nothing from any other mission is ever passed in.
+pub fn duplicate_of(events: &[EventEnvelope], new: &EventEnvelope) -> Option<String> {
+    let key = new.payload["norm_text"].as_str()?;
+    events.iter().find(|e| e.kind == "learn.staged" && e.payload["trigger"].as_str() == Some("host_note") && e.payload["norm_text"].as_str() == Some(key)).and_then(|e| e.payload["id"].as_str().map(String::from))
 }
 
 /// The `learn.staged` event for one transcript finding (`specs/062` §8.3): the same L0, role-keyed, evidence-carrying note as a
@@ -533,6 +548,38 @@ mod tests {
             assert!(matches!(note_event(&caller(), &w, &p, 0), Err(HostErr::Invalid(_))), "{what}");
         }
         assert!(note_event(&caller(), &w, &ok, 500).is_ok(), "there is no limit on how many a session stages");
+    }
+
+    #[test]
+    fn a_repeated_note_names_its_earlier_twin_by_text_alone_and_nothing_else_is_ever_matched() {
+        let (_t, w) = ws();
+        let note = |text: &str, ev: &str| note_event(&caller(), &w, &json!({"role": "builder", "text": text, "evidence": ev}), 0).unwrap();
+        let first = note("Run the  formatter, before tests.", "turn 1");
+        let again = note("run the formatter before TESTS", "a different evidence");
+        assert_eq!(again.payload["norm_text"], "run the formatter before tests");
+        assert_eq!(duplicate_of(std::slice::from_ref(&first), &again).as_deref(), Some("h1"), "evidence differs, text matches");
+        let mut logged = first.clone();
+        logged.payload["id"] = json!("h7");
+        assert_eq!(duplicate_of(&[logged.clone()], &again).as_deref(), Some("h7"));
+        assert_eq!(duplicate_of(&[logged.clone()], &note("Something else.", "turn 1")), None);
+        // An operator note, a summary or a transcript finding with the same key is never revealed.
+        for trigger in ["operator_note", "host_transcript", "host_summary", "manual"] {
+            let mut other = logged.clone();
+            other.payload["trigger"] = json!(trigger);
+            assert_eq!(duplicate_of(&[other], &again), None, "{trigger}");
+        }
+    }
+
+    #[test]
+    fn a_host_cannot_set_trust_status_or_origin_on_a_note() {
+        let (_t, w) = ws();
+        let p = json!({"role": "builder", "text": "Lesson.", "evidence": "e", "tier": "L5", "trust": "high", "status": "ratified", "origin": "operator", "source": "operator", "trigger": "operator_note", "duplicate_of": "h1", "norm_text": "x"});
+        let e = note_event(&caller(), &w, &p, 0).unwrap();
+        assert_eq!((e.payload["tier"].as_str(), e.payload["trigger"].as_str(), e.payload["source"].as_str()), (Some("L0"), Some("host_note"), Some("host:claude-code/unknown")));
+        assert_eq!(e.payload["norm_text"], "lesson");
+        for k in ["trust", "status", "origin", "duplicate_of"] {
+            assert!(e.payload.get(k).is_none(), "{k}");
+        }
     }
 
     #[test]

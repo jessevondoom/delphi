@@ -235,11 +235,17 @@ impl EngineService {
         build(0).map_err(host_err)?;
         let _gate = self.host_gate.lock().await;
         let m = self.mission_at(Some(&c.mission()), c.cwd.to_str()).await?;
-        let already = h::proposals_in(&m.replay().map_err(engine_err)?);
+        let log = m.replay().map_err(engine_err)?;
+        let already = h::proposals_in(&log);
         let e = build(already).map_err(host_err)?;
         let id = e.payload["id"].as_str().unwrap_or("").to_string();
+        let dup = h::duplicate_of(&log, &e); // specs/083 S4: this session's own mission log only
         m.append(e).await.map_err(engine_err)?;
-        Ok(json!({"staged": true, "ref": format!("{}/{}", m.id, id), "tier": "L0", "count": already + 1}))
+        let mut out = json!({"staged": true, "ref": format!("{}/{}", m.id, id), "tier": "L0", "count": already + 1});
+        if let Some(d) = dup {
+            out["duplicate_of"] = json!(d);
+        }
+        Ok(out)
     }
 
     /// `host.propose_kb_entry` (`specs/068` §5): stage one research entry for the operator's keep-or-discard review. It is never
@@ -2820,6 +2826,12 @@ mod tests {
             };
             let ok = c.call("host.propose_note", with(json!({"role": role2, "text": "Prefer small commits.", "evidence": "session abc, turn 2", "model": "opus"}))).unwrap();
             assert_eq!((ok["staged"].clone(), ok["tier"].clone(), ok["count"].clone()), (json!(true), json!("L0"), json!(1)));
+            assert!(ok.get("duplicate_of").is_none());
+            // specs/083 S4: the same session's repeat names its twin; another session's identical text gets nothing.
+            let twin = c.call("host.propose_note", with(json!({"role": role2, "text": "prefer small commits", "evidence": "other evidence"}))).unwrap();
+            assert_eq!((twin["staged"].clone(), twin["duplicate_of"].clone(), twin["count"].clone()), (json!(true), json!("h1"), json!(2)));
+            let stranger = c.call("host.propose_note", with(json!({"session": "zzzzzzzz01234567", "role": role2, "text": "Prefer small commits.", "evidence": "e"}))).unwrap();
+            assert!(stranger.get("duplicate_of").is_none(), "{stranger}");
             assert_eq!(rpc_code(c.call("host.propose_note", with(json!({"role": role2, "text": "No evidence."})))), Some(code::INVALID_PARAMS));
             assert_eq!(rpc_code(c.call("host.propose_note", with(json!({"role": "messenger", "text": "x", "evidence": "e"})))), Some(code::INVALID_PARAMS));
             assert!(c.call("host.record_session_summary", with(json!({"summary": "Did the thing", "decisions": ["a"]}))).is_ok());
@@ -2847,7 +2859,7 @@ mod tests {
         .await;
         let events = replay_log(&delphi_core::sessions::dir(&ws_dir, "host-abcdef0123456789"));
         let live = crate::learn::live_notes("host-abcdef0123456789", &events);
-        assert_eq!(live.len(), 25, "{live:?}");
+        assert_eq!(live.len(), 26,"{live:?}");
         assert!(live.iter().all(|n| n.tier == "L0" && n.summary.starts_with("[host:claude-code/")), "{live:?}");
         assert_eq!(live[0].role.as_deref(), Some(role.as_str()));
     }
