@@ -548,6 +548,10 @@ mod tests {
             assert_eq!(hex, format!("#{r:02x}{g:02x}{b:02x}"), "{}", t.role_id);
             let role = from_canonical_id(t.role_id).unwrap();
             assert_eq!(badge, format!("⟦{}⟧", badge_cells(role, AgentActivity::Idle)), "{}", t.role_id);
+            // Spec 087 §5.1: the outside identity's light colour is the library's `chassis_rgb_light`.
+            let (hex_light, _) = delphi_core::research::role_look_light(t.role_id);
+            let (lr, lg, lb) = t.chassis_rgb_light;
+            assert_eq!(hex_light, format!("#{lr:02x}{lg:02x}{lb:02x}"), "{} light colour", t.role_id);
         }
         // Spec 087: the investigator has a look of its own, and so has every other core role.
         assert_ne!(delphi_core::research::role_look("investigator"), delphi_core::research::role_look("scout"));

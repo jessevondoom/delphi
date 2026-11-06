@@ -697,6 +697,27 @@ pub struct McpConfig {
     pub allow_remote: bool,
     /// Which form of a Delphi agent's identity the `signature` field carries (`specs/066` §7); every form is always sent.
     pub badge_style: BadgeStyle,
+    /// Which colour pair the ANSI form of an identity uses (`specs/087` §5.1): Delphi cannot see the host's terminal background,
+    /// so the operator says it once. The plain and markdown forms carry no colour and ignore it.
+    pub badge_mode: BadgeMode,
+}
+
+/// `[mcp] badge_mode`: the terminal background the ANSI identity is coloured for.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BadgeMode {
+    #[default]
+    Dark,
+    Light,
+}
+
+impl BadgeMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BadgeMode::Dark => "dark",
+            BadgeMode::Light => "light",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
@@ -720,7 +741,7 @@ impl BadgeStyle {
 
 impl Default for McpConfig {
     fn default() -> McpConfig {
-        McpConfig { enabled: true, allow_remote: false, badge_style: BadgeStyle::Plain }
+        McpConfig { enabled: true, allow_remote: false, badge_style: BadgeStyle::Plain, badge_mode: BadgeMode::Dark }
     }
 }
 
@@ -1605,6 +1626,10 @@ pub(crate) mod tests {
         assert_eq!(McpConfig::read("").unwrap().badge_style, BadgeStyle::Plain);
         assert_eq!(McpConfig::read("[mcp]\nbadge_style = \"markdown\"\n").unwrap().badge_style.as_str(), "markdown");
         assert!(McpConfig::read("[mcp]\nbadge_style = \"neon\"\n").is_none() && !McpConfig::enabled_in("[mcp]\nbadge_style = \"neon\"\n"));
+        // Spec 087 §5.1: the colour pair of the ANSI form; dark unless the operator says light.
+        assert_eq!(McpConfig::read("").unwrap().badge_mode, BadgeMode::Dark);
+        assert_eq!(McpConfig::read("[mcp]\nbadge_mode = \"light\"\n").unwrap().badge_mode.as_str(), "light");
+        assert!(McpConfig::read("[mcp]\nbadge_mode = \"sepia\"\n").is_none());
     }
 
     #[test]
