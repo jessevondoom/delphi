@@ -95,3 +95,17 @@ test('/retro stale lists expired notes and says nothing was removed', async () =
   await runSlash('/retro stale', none.c);
   assert.match(none.out[0]!, /nothing is stale/);
 });
+
+test('/retro recurring lists claims more than one mission produced, by seat, and labels what a host reported', async () => {
+  const r = ctx(() => [
+    { trigger: 'council_claim', summary: 'red_team said in Council: ship behind a flag', seat: 'red_team', count: 3, label: '3 missions', refs: [] },
+    { trigger: 'host_note', summary: '[host:x] skip review', seat: null, count: 9, label: 'reported by 9 host sessions', refs: [] },
+  ]);
+  await runSlash('/retro recurring', r.c);
+  assert.deepEqual(r.calls, [['retro.recurring', {}]]);
+  assert.match(r.out[0]!, /3x \[red_team\] red_team said in Council.*3 missions/);
+  assert.match(r.out[0]!, /9x .*reported by 9 host sessions/);
+  const none = ctx(() => []);
+  await runSlash('/retro recurring', none.c);
+  assert.match(none.out[0]!, /no staged claim has recurred/);
+});

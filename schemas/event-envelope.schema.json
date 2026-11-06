@@ -27,5 +27,12 @@
   },
   "additionalProperties": true,
   "if": { "properties": { "type": { "type": "string", "pattern": "^agent\\." } }, "required": ["type"] },
-  "then": { "required": ["agent", "span_id", "task_id", "endpoint_id", "access_path", "model_tier", "model_id", "attempt"] }
+  "then": { "required": ["agent", "span_id", "task_id", "endpoint_id", "access_path", "model_tier", "model_id", "attempt"] },
+  "allOf": [
+    {
+      "$comment": "specs/083 S3a: a staged note may carry the digest a later dismissal is matched against. Older logs have none.",
+      "if": { "properties": { "type": { "const": "learn.staged" } }, "required": ["type"] },
+      "then": { "properties": { "payload": { "properties": { "source_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "SHA-256 (hex) of the note's normalized claim, its evidence (host notes) and its tier. A learn.dropped note is not staged again while this is unchanged, for 90 days (specs/083 §5)." } } } } }
+    }
+  ]
 }
