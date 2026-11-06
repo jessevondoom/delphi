@@ -11,7 +11,7 @@ import type { Ev } from '../src/input.ts';
 import { newInbox } from '../src/inbox.ts';
 import { cycleMode, MODES, modeNote, nextMode } from '../src/mode.ts';
 import { BLINK_SLOT_MS, faceOf, SUCCESS_MS, stripFaces, STRIP_ROLES, THINKING_WINDOW_MS, tickKey, TICK_MS } from '../src/motion.ts';
-import { footer, frame, header, titleRow, type Model } from '../src/screen.ts';
+import { footer, frame, header, learnLine, titleRow, type Learn, type Model } from '../src/screen.ts';
 import * as T from '../src/theme.ts';
 import { info, plain, snapshot, stateWorld } from './helpers.ts';
 
@@ -210,6 +210,39 @@ test('the scope and library counter sit on the footer, quiet, and give way to th
   const narrow = plain(footer(model({ info: scoped, state: noted(['a']), bundles: 2 }), 64));
   assert.match(narrow, /^0 tokens {2}· {2}default/);
   assert.equal(stringWidth(narrow), 64);
+});
+
+test('the learning line (083 S2): counts and an age from the daemon, quiet, hidden at zero, yielding first when narrow', () => {
+  const DAY = 86_400_000;
+  const now = Date.parse('2026-11-05T12:00:00Z');
+  const scoped = { ...info, workspace_name: 'acme', mission: 'm-7' };
+  const at = (l: Learn | undefined, w: number, extra: Partial<Model> = {}) => footer(model({ info: scoped, now, learn: l, ...extra }), w);
+  // Zero: nothing staged, nothing to review: nothing said (and never "all clear").
+  assert.doesNotMatch(plain(at({ staged: 0, review: 0 }, 120)), /learn/);
+  assert.doesNotMatch(plain(at(undefined, 120)), /learn/);
+  assert.equal(learnLine({ staged: 0, review: 0, oldest: '2026-10-01T00:00:00Z' }, now), '');
+  // One, many, and the age in whole days from the model's clock.
+  assert.equal(learnLine({ staged: 1, review: 0, oldest: new Date(now - 2 * DAY - 5).toISOString() }, now), 'learn: 1 staged · oldest 2d');
+  assert.equal(learnLine({ staged: 3, review: 1, oldest: new Date(now - 6 * DAY).toISOString() }, now), 'learn: 3 staged · 1 to review · oldest 6d');
+  assert.equal(learnLine({ staged: 0, review: 2, oldest: new Date(now - 1000).toISOString() }, now), 'learn: 2 to review · oldest 0d');
+  // No timestamp, or one that does not read: no age, never a made-up one; the age follows `now`, with no clock of its own.
+  assert.equal(learnLine({ staged: 3, review: 1 }, now), 'learn: 3 staged · 1 to review');
+  assert.equal(learnLine({ staged: 3, review: 1, oldest: 'yesterday' }, now), 'learn: 3 staged · 1 to review');
+  assert.equal(learnLine({ staged: 1, review: 0, oldest: new Date(now).toISOString() }, now + 3 * DAY), 'learn: 1 staged · oldest 3d');
+  // Quiet: the same dim ink as the rest of the footer, no alert colour.
+  const raw = at({ staged: 3, review: 1, oldest: new Date(now - 6 * DAY).toISOString() }, 140);
+  assert.match(plain(raw), /learn: 3 staged · 1 to review · oldest 6d/);
+  assert.equal(raw.match(/\x1b\[[0-9;]*m(?=learn:)/)?.[0], T.dim('x').match(/^\x1b\[[0-9;]*m/)?.[0], 'dim, like the scope and the counters');
+  // Narrow: the learning line yields before the scope's counters, and the tokens and mode never do.
+  const l = { staged: 3, review: 1, oldest: new Date(now - 6 * DAY).toISOString() };
+  const wide = plain(at(l, 120));
+  assert.match(wide, /^0 tokens {2}· {2}default {2}· {2}acme\/m-7 {2}· {2}learn: 3 staged · 1 to review · oldest 6d {2,}← \/ \? →/);
+  const narrow = plain(at(l, 56));
+  assert.match(narrow, /^0 tokens {2}· {2}default/);
+  assert.doesNotMatch(narrow, /learn/);
+  assert.equal(stringWidth(narrow), 56);
+  const goldens = [['zero', { staged: 0, review: 0 }, 100], ['one', { staged: 1, review: 0, oldest: new Date(now - DAY).toISOString() }, 100], ['many', l, 100], ['narrow', l, 60]] as const;
+  for (const [name, v, w] of goldens) { const g = snapshot(`footer-learn-${name}-${w}`, [footer(model({ info: scoped, now, learn: v }), w)]); assert.ok(g.ok, g.message); }
 });
 
 test('a staged note is counted once, however often it is announced, and a new session starts the count over', async () => {
