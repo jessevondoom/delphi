@@ -36,6 +36,8 @@ export type Model = {
   quitArmed?: boolean;
   /** Candidates waiting in the decisions pane's `learn` kind, and the org bundles added: the quiet scope line (`specs/053` §5). */
   review?: number; bundles?: number;
+  /** The learning queue from the daemon (`learn.health`, `specs/083` §4): staged notes, items to review, and the daemon's timestamp of the oldest. */
+  learn?: Learn;
   /** The knowledge window on the left deck (`archives.ts`); the app owns it and makes the `kb.get` calls. */
   arch?: A.Arch;
   /** Link mode in the chat (`specs/029`, `ctrl+o`): the pointers and addresses in the transcript can be focused and followed. */
@@ -82,18 +84,34 @@ const modeLabel = (mode: string): string => (mode === 'mission-auto' ? T.auto('a
 /** What this session added to the library, in the quiet words of `specs/053` §5: `+3 noted · 1 to review`; empty when nothing was. Never alert-coloured. */
 export const libraryCounter = (noted: number, review: number): string => [noted ? `+${noted} noted` : '', review ? `${review} to review` : ''].filter(Boolean).join(' · ');
 
+/** The daemon's `learn.health` answer: counts, and the daemon-stamped time of the oldest waiting item (ISO) when it has one. */
+export type Learn = { staged: number; review: number; oldest?: string };
+
+/**
+ * `learn: 3 staged · 1 to review · oldest 6d` (`specs/083` §4): counts and an age, nothing else. Empty when nothing is staged and
+ * nothing waits. No score and no colour; zero is never shown as healthy. The age is whole days from the daemon's timestamp to
+ * `now` (the model's clock), and is left out when that timestamp is absent or unreadable.
+ */
+export const learnLine = (l: Learn | undefined, now: number): string => {
+  if (!l || (l.staged <= 0 && l.review <= 0)) return '';
+  const t = l.oldest ? Date.parse(l.oldest) : NaN;
+  const age = Number.isFinite(t) && now > 0 ? `oldest ${Math.max(0, Math.floor((now - t) / 86_400_000))}d` : '';
+  return 'learn: ' + [l.staged > 0 ? `${l.staged} staged` : '', l.review > 0 ? `${l.review} to review` : '', age].filter(Boolean).join(' · ');
+};
+
 export function footer(m: Model, w: number): string {
   const k = m.state.tokens >= 1000 ? (m.state.tokens / 1000).toFixed(1) + 'k' : String(m.state.tokens);
   const pending = Object.keys(m.state.approvals).length;
   const asks = m.state.blocks.filter((b) => b.kind === 'user').length;
   const scope = [m.info.workspace_name, m.info.mission].filter(Boolean).join('/');
   const counter = libraryCounter(m.state.noted.length, m.review ?? 0);
+  const learn = learnLine(m.learn, m.now);
   const base = [T.dim(`${k} tokens`), modeLabel(m.mode), m.state.session ? T.dim(`session ${m.state.session} · ${asks} ask${asks === 1 ? '' : 's'}`) : '', m.noModel ? T.dim('no model') : '', pending ? T.dim(`${pending} waiting`) : ''];
-  const extras = [scope ? T.dim(scope) : '', m.bundles ? T.dim(`${m.bundles} bundle${m.bundles === 1 ? '' : 's'}`) : '', counter ? T.dim(counter) : ''];
+  const extras = [scope ? T.dim(scope) : '', m.bundles ? T.dim(`${m.bundles} bundle${m.bundles === 1 ? '' : 's'}`) : '', counter ? T.dim(counter) : '', learn ? T.dim(learn) : ''];
   const room = w - T.width(nav(m.deck, w)) - 2;
   const join = (xs: string[]) => xs.filter(Boolean).join(T.dim(SEP));
-  // The scope and the counter give way, the bundles first, when the window is narrow; the tokens and the mode never do.
-  const tries = [[0, 1, 2], [0, 2], [2], []].map((keep) => join([...base, ...keep.map((i) => extras[i]!)]));
+  // The scope, the counters and the learning line give way, the bundles first and the learning line next, when the window is narrow; the tokens and the mode never do.
+  const tries = [[0, 1, 2, 3], [0, 2, 3], [0, 2], [2], []].map((keep) => join([...base, ...keep.map((i) => extras[i]!)]));
   const left = tries.find((t) => T.width(t) <= room) ?? tries[tries.length - 1]!;
   return T.spread(left, nav(m.deck, w), w);
 }
