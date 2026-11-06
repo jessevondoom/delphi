@@ -531,7 +531,7 @@ pub(crate) mod tests {
             lessons: "L".into(),
             context_slices: vec![ContextSlice { label: "a.rs".into(), tier: "L4".into(), text: "fn f<T>() {}".into() }],
             contract: "Fix it.".into(),
-            reminder: Some("Stay in scope.".into()),
+            reminder: Some(crate::ipr::STANDING_LIMITS.into()),
             nonce: "nn".into(),
         }
     }
@@ -700,7 +700,7 @@ pub(crate) mod tests {
         let user = msgs[2]["content"].as_array().unwrap();
         assert_eq!(user[0]["type"], "tool_result");
         assert_eq!(user[0]["tool_use_id"], "toolu_01A");
-        assert!(user[1]["text"].as_str().unwrap().contains("Stay in scope."));
+        assert!(user[1]["text"].as_str().unwrap().contains(crate::ipr::STANDING_LIMITS));
         assert_eq!(user[1]["cache_control"], json!({"type": "ephemeral"}));
         assert_eq!(c.body["thinking"], json!({"type": "enabled", "budget_tokens": 2048}));
         assert_eq!(c.body["temperature"], json!(1.0), "forced to 1.0 when thinking is on");

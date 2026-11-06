@@ -938,7 +938,7 @@ impl Engine {
                 lessons: snapshot.lessons,
                 context_slices: slices,
                 contract: handoff.contract_text(),
-                reminder: Some(handoff.reminder_text()),
+                reminder: Some(delphi_adapter::ipr::STANDING_LIMITS.to_string()),
                 nonce,
             };
             let defs = self.span_tool_defs(&sc).await?;
