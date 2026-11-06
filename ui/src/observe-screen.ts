@@ -296,8 +296,8 @@ function strip(m: OModel, w: number): string {
     if (seatsDone.has(r)) return T.badge(r, 'idle', m.info, m.pal, 'success');
     const a = m.st.agents[r];
     const hot = seatsThinking.has(r);
-    const f = faceOf(a || hot ? { state: (hot ? 'running' : a!.state) as never, doing: '', thinkingAt: hot ? now : undefined } : undefined, r, now, still);
-    return T.badge(r, f.state, m.info, m.pal, f.frame);
+    const f = faceOf(a || hot ? { state: (hot ? 'running' : a!.state) as never, doing: '', thinkingAt: hot ? now : undefined } : undefined, r, now, still, T.blinkSteps(r, m.info));
+    return T.badge(r, f.state, m.info, m.pal, f.frame, false, f.step);
   }).join(' '), w);
 }
 

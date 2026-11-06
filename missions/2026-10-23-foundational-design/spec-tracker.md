@@ -710,7 +710,7 @@ Approved by the operator 2026-11-06, from a conversation that day: 28 chosen bad
 | S1 | thirteen core roles in `ROLES`: faces, blink frames, light/dark colors | 9 | built (PR open) |
 | S2 | the name pool in the theme pack; picker; `pool_slot` on the start event | 9 | not built |
 | S3 | outside: light/dark identity, `badge_mode`, `display` in the one-identity form, handoff and roster lines | 9 | not built |
-| S4 | console: three-frame scout blink; pool agents in panes | 6 | not built |
+| S4 | console: three-frame scout blink; pool agents in panes | 6 | blink built (PR open); pool agents in panes waits on S2 |
 | S5 | recognition check with the operator | 3 | not built |
 
 ## Spec 086: the Council outside Delphi (2026-11-05, approved 2026-11-06)

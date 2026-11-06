@@ -4,7 +4,7 @@ import chalk from 'chalk';
 import stringWidth from 'string-width';
 import wrapAnsi from 'wrap-ansi';
 import { tintCard } from './blocks.ts';
-import { faceOf, pulseOn } from './motion.ts';
+import { faceOf, pulseOn, type Face } from './motion.ts';
 import type { OModel, OState } from './observe-screen.ts';
 import * as T from './theme.ts';
 import { sanitize } from './theme.ts';
@@ -108,8 +108,8 @@ function seatCard(m: OModel, c: Council, seat: Council['seats'][number], phase: 
   const st = c.stances.find((x) => x.role === role);
   const node = seatNode(m, c, role);
   const hot = now.thinking.has(role);
-  const face = phase === 'verdict' ? { frame: 'success', state: 'idle' as const } : faceOf(hot ? { state: 'running', doing: '', thinkingAt: m.now ?? 0 } : undefined, role, m.now ?? 0, m.still ?? true);
-  const head = T.badge(role, face.state, m.info, m.pal, face.frame) + ' ' + T.roleColor(role, m.info).bold(clean(T.roleName(role, m.info), inner - 6));
+  const face: Face = phase === 'verdict' ? { frame: 'success', state: 'idle' } : faceOf(hot ? { state: 'running', doing: '', thinkingAt: m.now ?? 0 } : undefined, role, m.now ?? 0, m.still ?? true, T.blinkSteps(role, m.info));
+  const head = T.badge(role, face.state, m.info, m.pal, face.frame, false, face.step) + ' ' + T.roleColor(role, m.info).bold(clean(T.roleName(role, m.info), inner - 6));
   const rows: string[] = [head];
   if (phase === 'blind') {
     const answered = Boolean(st?.answered);
