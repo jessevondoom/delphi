@@ -25,7 +25,7 @@ import { noteSources, passageOf, pin, previewOf, readNotes } from './research.ts
 import { saveCommand, attestCommand } from './save.ts';
 import { copyText, firstVisible, stepFocus, type Target } from './links.ts';
 import { execFile } from 'node:child_process';
-import { anchorBack, backShowing, bodyHeight, chatLinks, frame, replyAnchor, transcriptCount, typingOf, type Model } from './screen.ts';
+import { anchorBack, backShowing, bodyHeight, chatLinks, frame, replyAnchor, transcriptCount, typingOf, type Learn, type Model } from './screen.ts';
 import { helpKey } from './help.ts';
 import { AUTO_CONFIRM_NOTE, cycleMode, modeNote } from './mode.ts';
 import { STRIP_ROLES, stillMotion, tickKey, TICK_MS, typingFrame } from './motion.ts';
@@ -86,6 +86,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
   const [panel, setPanel] = useState<P.Panel | null>(null);
   const [noModel, setNoModel] = useState(false);
   const [bundles, setBundles] = useState(0);
+  const [learn, setLearn] = useState<Learn | undefined>(undefined);
   const [search, setSearch] = useState<{ q: string; at: number; match: string | null } | null>(null);
 
   // Several keys can arrive in one read, so the key handler works on refs it updates itself, not on the last render.
@@ -109,6 +110,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
   const inboxRef = useRef(inbox);
   /** The daemon's list of everything the operator owes (specs/044), kept beside the cards. A failed call leaves the cards-only list. */
   const loadDecisions = () => {
+    cmd.call('learn.health', {}).then((r: any) => setLearn(r && (r.staged > 0 || r.review > 0) ? { staged: Number(r.staged) || 0, review: Number(r.review) || 0, ...(typeof r.oldest_at === 'string' ? { oldest: r.oldest_at } : {}) } : undefined)).catch(() => {});
     cmd.call('decision.list', { mission_id: mission }).then((r: any) => {
       const items = D.parse(r);
       const next = { ...inboxRef.current, items, loaded: true, pane: D.reconcile(inboxRef.current.pane, items) };
@@ -816,8 +818,8 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
   }, [lineCount]);
 
   const comps = search ? null : completions(composer.chars, composer.cur, { ...info, projects }, listDir);
-  const model: Model = { ...base, review: inbox.items.filter((d) => d.kind === 'learn').length, bundles, still, quitArmed, now, back, arch, links: lm ?? undefined, reader: rdr, help, menu: comps ? { items: comps.items, sel } : null, search: search ? { q: search.q, match: search.match } : null };
-  const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, arch, lm, rdr, sel, help, size, pal, expandTools, queue, search, inbox, mode, panel, noModel, still, quitArmed, bundles]);
+  const model: Model = { ...base, review: inbox.items.filter((d) => d.kind === 'learn').length, bundles, learn, still, quitArmed, now, back, arch, links: lm ?? undefined, reader: rdr, help, menu: comps ? { items: comps.items, sel } : null, search: search ? { q: search.q, match: search.match } : null };
+  const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, arch, lm, rdr, sel, help, size, pal, expandTools, queue, search, inbox, mode, panel, noModel, still, quitArmed, bundles, learn]);
   const shown = useSelection(term, lines);
   return (
     <Box flexDirection="column" height={size.h} width={size.w}>
