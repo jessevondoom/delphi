@@ -141,7 +141,7 @@ pub const ROLES: [RoleTheme; 14] = [
         default_face: "• • •",       // 3 all-seeing eyes, NO mouth
         badge_face: "•••",
         blink_face: "- - -",
-        blink_badge: "---",
+        blink_badge: "-••",
     },
     // The seven roles below are spec 087's. Dark and light chassis were chosen by measurement: every pair of core
     // roles stays at least `MIN_DELTA_E_DARK` / `MIN_DELTA_E_LIGHT` apart (CIELAB, tested below) and every light
@@ -327,7 +327,7 @@ pub fn badge_cells(role: AgentRole, activity: AgentActivity) -> String {
     if role == AgentRole::Scout {
         // The scout has no mouth: it speaks only through its sensor eyes.
         return match activity {
-            Blink => "---",
+            Blink => "-••",
             ThinkingLeft => "…  ",
             ThinkingRight => "  …",
             Working => "···",
@@ -349,6 +349,16 @@ pub fn badge_cells(role: AgentRole, activity: AgentActivity) -> String {
         WaitingApproval | Escalated => unreachable!("returned above"),
     }
     .into()
+}
+
+/// The frames of a role's blink, one per console tick (spec 087 §3.2). Most roles close their eyes in one frame, their
+/// `blink_badge`; the scout closes one eye at a time and never all three ("never all asleep"). The first frame is always
+/// `badge_cells(role, Blink)`, so a console that only knows one blink frame still draws a blink.
+pub fn blink_steps(role: AgentRole) -> Vec<&'static str> {
+    match role {
+        AgentRole::Scout => vec!["-••", "•-•", "••-"],
+        _ => vec![get_theme(role).blink_badge],
+    }
 }
 
 /// Which of the three cells is the mouth (drawn in the role colour); `None` when every cell is an eye.
@@ -412,6 +422,8 @@ pub fn ui_spec() -> serde_json::Value {
             "crown_rgb": hex_rgb(t.crown_rgb),
             "mascot_face": t.default_face,
             "badge": badge,
+            // The blink's frames, one per tick; `badge.blink` is the first (spec 087 §3.2).
+            "blink_steps": blink_steps(role),
             "mascot": mascot,
         });
         if role == AgentRole::RedTeam {
@@ -711,8 +723,8 @@ mod tests {
 
     // ---- spec 087 §3 and §6.1 ----
 
-    /// The core table of spec 087 §3.1, pinned: role id, idle face, blink face. The scout's three-frame blink is S4's; its
-    /// first frame is `---` here.
+    /// The core table of spec 087 §3.1, pinned: role id, idle face, blink face (the first frame of the blink; the scout's blink has
+    /// three frames, see `blink_steps`).
     const CORE_FACES: [(&str, &str, &str); 13] = [
         ("orchestrator", "•─•", "-─-"),
         ("builder", "•=•", ">=<"),
@@ -726,7 +738,7 @@ mod tests {
         ("red-team", "¬_¬", "-_-"),
         ("writer", "•_•", "•_-"),
         ("investigator", "•_•", "-_•"),
-        ("scout", "•••", "---"),
+        ("scout", "•••", "-••"),
     ];
 
     #[test]
@@ -765,6 +777,29 @@ mod tests {
                 assert!(face.chars().all(|c| ALLOWED.contains(c)), "{id} {face} uses a character outside the allowed set");
             }
         }
+    }
+
+    #[test]
+    fn a_blink_is_a_list_of_frames_and_the_first_is_the_badges_blink() {
+        for t in ROLES.iter() {
+            let role = from_canonical_id(t.role_id).unwrap();
+            let steps = blink_steps(role);
+            assert!(!steps.is_empty(), "{}", t.role_id);
+            assert_eq!(steps[0], badge_cells(role, AgentActivity::Blink), "{} first frame", t.role_id);
+            assert_eq!(ui_spec()["roles"][t.role_id]["blink_steps"], serde_json::json!(steps), "{}", t.role_id);
+            let idle = badge_cells(role, AgentActivity::Idle);
+            for s in &steps {
+                assert_eq!(s.chars().count(), 3, "{} {s}", t.role_id);
+                assert_ne!(*s, idle, "{} has a blink frame equal to its idle face", t.role_id);
+            }
+        }
+        // Only the scout has more than one frame, and it never closes all three eyes: one eye at a time.
+        for t in ROLES.iter().filter(|t| t.role_id != "scout") {
+            assert_eq!(blink_steps(from_canonical_id(t.role_id).unwrap()).len(), 1, "{}", t.role_id);
+        }
+        let scout = blink_steps(AgentRole::Scout);
+        assert_eq!(scout, ["-••", "•-•", "••-"]);
+        assert!(scout.iter().all(|s| s.matches('-').count() == 1), "the scout keeps two eyes open in every frame");
     }
 
     #[test]

@@ -49,6 +49,9 @@
           "mouth": 1
         }
       },
+      "blink_steps": [
+        "-.-"
+      ],
       "chassis": "#68798f",
       "chassis_light": "#5b6b82",
       "crown": "▄ ▄ ▄ ▄",
@@ -112,6 +115,9 @@
           "mouth": 1
         }
       },
+      "blink_steps": [
+        "*^*"
+      ],
       "chassis": "#f43f5e",
       "chassis_light": "#be123c",
       "crown": "▄  ▄  ▄",
@@ -175,6 +181,9 @@
           "mouth": 1
         }
       },
+      "blink_steps": [
+        "-o-"
+      ],
       "chassis": "#38bdf8",
       "chassis_light": "#0369a1",
       "crown": "▄▄▄▄▄▄▄",
@@ -238,6 +247,9 @@
           "mouth": 1
         }
       },
+      "blink_steps": [
+        "-‿-"
+      ],
       "chassis": "#3b82f6",
       "chassis_light": "#1d4ed8",
       "crown": "  ▄ ▄  ",
@@ -301,6 +313,9 @@
           "mouth": 1
         }
       },
+      "blink_steps": [
+        ">=<"
+      ],
       "chassis": "#f59e0b",
       "chassis_light": "#b45309",
       "crown": "▄▄▄▄▄▄▄",
@@ -364,6 +379,9 @@
           "mouth": 1
         }
       },
+      "blink_steps": [
+        "-_•"
+      ],
       "chassis": "#f1f5f9",
       "chassis_light": "#57534e",
       "crown": "▄▄ ▄ ▄▄",
@@ -427,6 +445,9 @@
           "mouth": 1
         }
       },
+      "blink_steps": [
+        "·w·"
+      ],
       "chassis": "#84cc16",
       "chassis_light": "#4d7c0f",
       "crown": "▄▄   ▄▄",
@@ -490,6 +511,9 @@
           "mouth": 1
         }
       },
+      "blink_steps": [
+        "-_-"
+      ],
       "chassis": "#94a3b8",
       "chassis_light": "#475569",
       "crown": "▄▄▄▄▄▄▄",
@@ -553,6 +577,9 @@
           "mouth": 1
         }
       },
+      "blink_steps": [
+        "-─-"
+      ],
       "chassis": "#a855f7",
       "chassis_light": "#7e22ce",
       "crown": "  ▄▄▄  ",
@@ -620,6 +647,9 @@
           "mouth": 1
         }
       },
+      "blink_steps": [
+        "-_-"
+      ],
       "chassis": "#ef4444",
       "chassis_light": "#b91c1c",
       "crown": "▄     ▄",
@@ -647,7 +677,7 @@
           "mouth": null
         },
         "blink": {
-          "cells": "---",
+          "cells": "-••",
           "mouth": null
         },
         "escalated": {
@@ -683,6 +713,11 @@
           "mouth": null
         }
       },
+      "blink_steps": [
+        "-••",
+        "•-•",
+        "••-"
+      ],
       "chassis": "#ffff00",
       "chassis_light": "#854d0e",
       "crown": "   ▄   ",
@@ -746,6 +781,9 @@
           "mouth": 1
         }
       },
+      "blink_steps": [
+        "-u-"
+      ],
       "chassis": "#14b8a6",
       "chassis_light": "#0f766e",
       "crown": "▄▄ ▄ ▄▄",
@@ -809,6 +847,9 @@
           "mouth": 1
         }
       },
+      "blink_steps": [
+        "-_-"
+      ],
       "chassis": "#22c55e",
       "chassis_light": "#15803d",
       "crown": " ▄▄▄▄▄ ",
@@ -872,6 +913,9 @@
           "mouth": 1
         }
       },
+      "blink_steps": [
+        "•_-"
+      ],
       "chassis": "#fde68a",
       "chassis_light": "#a16207",
       "crown": "▄ ▄▄▄ ▄",
