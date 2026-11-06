@@ -1,0 +1,9 @@
+Question: Operators do research via Delphi (TUI or MCP, e.g. from Claude Code agents) using internal sources; the material is accurate and valuable but nothing is saved to the knowledge base, so the operator must save it externally as markdown. What is the best path so that research always fills the KB with minimal operator friction (most may remain pending validation)? Consider authority limits (MCP is read-only, staging at L0, ratification by operator), trust of content, and provenance.
+Stakes: normal
+Options:
+- Add an MCP tool propose_research/propose_kb_entry that stages research (with sources, provenance) in a KB inbox at L0 awaiting batch validation
+- Extend record_session_summary / propose_note to carry research artifacts into the KB inbox
+- TUI auto-captures research outputs to a KB inbox with a one-key batch ratify
+- Agent descriptions/skills instruct roles to always stage findings; no new tools
+Pointers:
+(none)
