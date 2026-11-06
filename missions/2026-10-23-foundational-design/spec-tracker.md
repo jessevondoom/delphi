@@ -661,7 +661,7 @@ Drafted by the architect from the 2026-11-05 Council (both options), revised aft
 
 | Spec | Content | Wave | State |
 | :-- | :-- | :-- | :-- |
-| 079 | registry test: every ingress has a core-assigned origin ceiling; hard blocker for any `min_taint` figure | 1, first | approved 2026-11-05, not built |
+| 079 | registry test: every ingress has a core-assigned origin ceiling; hard blocker for any `min_taint` figure | 1, first | approved 2026-11-05; S1 built (origin-ceiling test in `delphi-engine`), S2 canary not built |
 | 080 | KB read-count report from `fact.read` events; `host_search_kb` event, `invariant: security\|constraint` attribute (needs its own operator ratification), no automatic pruning | 1, after 079 | approved 2026-11-05, not built |
 | 078 | Council scorecard: cost by `task_id`, choice from `council.followed`, family spread a floor | 2 | draft |
 | 081 | conventions note: advisory-only invariants, row shape, missing events in order | note | draft |
