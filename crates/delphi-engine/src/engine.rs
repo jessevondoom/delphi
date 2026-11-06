@@ -1659,6 +1659,7 @@ impl Engine {
         let seen = crate::models::discover(&cfg, None, (self.clock_unix)());
         list = crate::models::merge(list, seen);
         crate::models::classify(&rules, &mut list);
+        crate::models::designate_emergency(&cfg, &mut list);
         let mut a = crate::assign::Assign::build(&rules, &sc.role, &list, cfg.routing.evidence_enough);
         a.evidence = crate::assign::read_evidence(&self.ws.dir, &sc.role);
         a.near_cap = crate::assign::read_near_cap(&self.ws.dir);

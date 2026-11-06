@@ -99,8 +99,38 @@ fn marker(ws_dir: &Path) -> PathBuf {
     ws_dir.join("local/onboarded")
 }
 
+/// What a clean bill of health is bound to: this release and the exact model-access settings (`config.toml`).
+/// A new release or a changed config invalidates it, so the doctor runs again; nothing else is read.
+fn health_stamp(ws_dir: &Path) -> String {
+    let cfg = std::fs::read(ws_dir.join("config.toml")).unwrap_or_default();
+    format!("{} {}", env!("CARGO_PKG_VERSION"), &blake3::hash(&cfg).to_hex()[..16])
+}
+
 fn healthy_before(ws_dir: &Path) -> bool {
-    std::fs::read_to_string(marker(ws_dir)).map(|v| v.trim() == env!("CARGO_PKG_VERSION")).unwrap_or(false)
+    std::fs::read_to_string(marker(ws_dir)).map(|v| v.trim() == health_stamp(ws_dir)).unwrap_or(false)
+}
+
+/// The single startup notice for a report, or none. One line, static text, no ids: what is wrong and what to do.
+/// A failure that blocks safe operation outranks warnings. Warnings the operator already declined to fix this
+/// launch (`skip_setup`) are not repeated. The full report stays in `delphi doctor`.
+pub fn notice(r: &Report, skip_setup: bool) -> Option<String> {
+    fn short(m: &str) -> String {
+        let one = m.lines().next().unwrap_or("").trim();
+        if one.chars().count() > 90 {
+            format!("{}...", one.chars().take(87).collect::<String>())
+        } else {
+            one.to_string()
+        }
+    }
+    let fails: Vec<_> = r.findings.iter().filter(|f| f.level == Level::Fail).collect();
+    if let Some(f) = fails.first() {
+        let more = if fails.len() > 1 { format!(" (+{} more)", fails.len() - 1) } else { String::new() };
+        return Some(format!("delphi: blocked by a failed check, {}: {}{}. Run `delphi doctor`.", f.check, short(&f.message), more));
+    }
+    let warns: Vec<_> = r.findings.iter().filter(|f| f.level == Level::Warn && !(skip_setup && f.check == "7 model-access" && f.message.starts_with("no endpoints configured"))).collect();
+    let f = warns.first()?;
+    let more = if warns.len() > 1 { format!(" (+{} more)", warns.len() - 1) } else { String::new() };
+    Some(format!("delphi: warning, {}{}. Not blocking; `delphi doctor` has the details.", short(&f.message), more))
 }
 
 /// Run what `remedies` found, asking before each. Returns true if anything ran.
@@ -206,13 +236,10 @@ fn onboard(ui: &mut dyn Ui, home: &Path, ws: &Workspace, cwd: &Path) {
         // Only a clean bill of health is remembered; a failure is shown again next time.
         let after = if found.is_empty() { report } else { crate::doctor::run(home, ws, &opts) };
         if after.worst() < Level::Fail {
-            let _ = std::fs::write(marker(&ws.dir), env!("CARGO_PKG_VERSION"));
-        } else {
-            eprintln!("delphi: the doctor found problems that need your attention:");
-            for f in after.findings.iter().filter(|f| f.level == Level::Fail) {
-                eprintln!("  [fail] {}: {} {}", f.check, f.location, f.message);
-            }
-            eprintln!("  run `delphi doctor` for the full report.\n");
+            let _ = std::fs::write(marker(&ws.dir), health_stamp(&ws.dir));
+        }
+        if let Some(n) = notice(&after, declined.contains(&Remedy::Setup)) {
+            eprintln!("{}\n", n);
         }
     }
 }
@@ -329,6 +356,43 @@ mod tests {
         onboard(&mut ui, &home, &ws, &proj);
         let setup_asks = ui.asked.iter().filter(|q| q.as_str() == Remedy::Setup.question()).count();
         assert_eq!(setup_asks, 1, "asked: {:?}", ui.asked);
+    }
+
+    #[test]
+    fn the_notice_is_one_static_line_that_names_the_problem_and_the_fix() {
+        assert!(notice(&Report::default(), false).is_none());
+        let mut r = Report::default();
+        r.warn("10 harness", "claude-sub", "`claude` is installed but not signed in: run `claude auth login`");
+        r.warn("7 model-access", "x", "last probe: expired");
+        let n = notice(&r, false).unwrap();
+        assert!(!n.contains('\n') && n.contains("not signed in") && n.contains("(+1 more)") && n.contains("delphi doctor"), "{n}");
+        r.push(Level::Fail, "3 taint-audit", "config.toml", "x".repeat(300));
+        r.push(Level::Fail, "5 other", "", "second");
+        let n = notice(&r, false).unwrap();
+        assert!(n.starts_with("delphi: blocked") && n.contains("(+1 more)") && n.len() < 200 && !n.contains('\n'), "{n}");
+    }
+
+    #[test]
+    fn a_declined_setup_is_not_repeated_as_a_warning() {
+        let mut r = Report::default();
+        r.warn("7 model-access", "", "no endpoints configured (`delphi endpoints add`, specs/009)");
+        assert!(notice(&r, true).is_none());
+        assert!(notice(&r, false).is_some());
+    }
+
+    #[test]
+    fn a_changed_config_or_release_invalidates_the_healthy_stamp() {
+        let t = tempfile::tempdir().unwrap();
+        let ws = t.path();
+        std::fs::create_dir_all(ws.join("local")).unwrap();
+        std::fs::write(ws.join("config.toml"), "a = 1").unwrap();
+        assert!(!healthy_before(ws));
+        std::fs::write(marker(ws), health_stamp(ws)).unwrap();
+        assert!(healthy_before(ws));
+        std::fs::write(ws.join("config.toml"), "a = 2").unwrap();
+        assert!(!healthy_before(ws), "a changed config reruns the doctor");
+        std::fs::write(marker(ws), env!("CARGO_PKG_VERSION")).unwrap();
+        assert!(!healthy_before(ws), "an old-format marker reruns once");
     }
 
     #[test]

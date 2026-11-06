@@ -198,7 +198,7 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
     }
     // 14. The central error log (specs/039): the effective level and where it came from, the file, its size and the drops.
     check_error_log(home, &mut r);
-    check_host_plugin(&mut r);
+    check_host_plugin(home, ws, &mut r);
 
     // Checks are pushed as they are cheap to run; show them in their numbered order.
     r.findings.sort_by_key(|f| f.check.split(' ').next().and_then(|n| n.parse::<u32>().ok()).unwrap_or(u32::MAX));
@@ -227,20 +227,125 @@ fn check_event_chains(ws: &Path, r: &mut Report) {
 }
 
 /// The Delphi plugin in Claude Code, Copilot CLI and Codex (spec 071 E2, E4a, E4c): read-only, offline, and never a failure; the fix is printed, not run.
-/// A host with no Delphi plugin and no state files at all is skipped quietly.
-fn check_host_plugin(r: &mut Report) {
-    let Some(home) = std::env::var("HOME").ok().filter(|h| Path::new(h).is_absolute()) else {
+/// A host with no Delphi plugin and no state files at all is skipped quietly. Then the ordered host chain (spec 083 S1).
+fn check_host_plugin(home: &Path, ws: &Workspace, r: &mut Report) {
+    let Some(h) = std::env::var("HOME").ok().filter(|h| Path::new(h).is_absolute()) else {
         r.push(Level::Skipped, "15 host-plugin", "claude-code, copilot, codex", "HOME is unset, so the hosts' plugin state cannot be read");
+        host_chain(&ws.dir, None, &probe_socket, &[], r);
         return;
     };
-    r.push(Level::Ok, "15 host-plugin", "launch path", crate::launch_path_line(Path::new(&home)));
+    r.push(Level::Ok, "15 host-plugin", "launch path", crate::launch_path_line(Path::new(&h)));
+    let mut checks = Vec::new();
     for host in ["claude-code", "copilot", "codex"] {
-        let Ok(c) = delphi_engine::mcp_check::check_host(host, Path::new(&home), env!("CARGO_PKG_VERSION")) else { continue };
-        let msg = format!("{}: {}. Launchable: {}{}", c.state.name(), c.detail, delphi_engine::mcp_check::LAUNCHABLE, c.fix.map(|f| format!(". Fix: `{f}`")).unwrap_or_default());
+        let Ok(c) = delphi_engine::mcp_check::check_host(host, Path::new(&h), env!("CARGO_PKG_VERSION")) else { continue };
+        let msg = format!("{}: {}. Launchable: {}{}", c.state.name(), c.detail, delphi_engine::mcp_check::LAUNCHABLE, c.fix.as_ref().map(|f| format!(". Fix: `{f}`")).unwrap_or_default());
         match c.state {
             delphi_engine::mcp_check::State::Configured => r.push(Level::Ok, "15 host-plugin", host, msg),
             delphi_engine::mcp_check::State::Stale | delphi_engine::mcp_check::State::Incompatible => r.warn("15 host-plugin", host, msg),
             _ => r.push(Level::Skipped, "15 host-plugin", host, msg),
+        }
+        checks.push((host, c));
+    }
+    let sock = delphi_core::spawn::layout(home, &ws.dir).ok().map(|l| l.host_sock);
+    host_chain(&ws.dir, sock.as_deref(), &probe_socket, &checks, r);
+}
+
+/// What connecting to the host socket showed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Probe {
+    /// Something accepted the connection.
+    Reachable,
+    /// No socket file: no daemon for this workspace.
+    Absent,
+    /// A socket file nobody listens on: a daemon that died.
+    Stale,
+    /// Anything else, including no answer in time.
+    Unknown,
+}
+
+/// Connect and close, with a short timeout. No byte is sent, so no method runs: it cannot spend tokens or stage anything.
+fn probe_socket(path: &Path) -> Probe {
+    let p = path.to_path_buf();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(std::os::unix::net::UnixStream::connect(&p).map(drop));
+    });
+    match rx.recv_timeout(std::time::Duration::from_millis(500)) {
+        Ok(Ok(())) => Probe::Reachable,
+        Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => Probe::Absent,
+        Ok(Err(e)) if e.kind() == std::io::ErrorKind::ConnectionRefused => Probe::Stale,
+        _ => Probe::Unknown,
+    }
+}
+
+// The fixed table of printed fixes (spec 083 S3). Text only: doctor never runs one, and none names an operator path.
+const FIX_DAEMON: &str = "start Delphi with `delphi` (it starts the daemon), or `delphi daemon restart`";
+const FIX_ENABLED: &str = "in the console type `/mcp on`, or set `enabled = true` under `[mcp]` in config.toml";
+const FIX_CONFIG: &str = "repair config.toml so that it parses as TOML, then run `delphi doctor` again";
+
+/// The links host tools depend on, in order: (1) the daemon answers on its host socket, (2) `[mcp] enabled`, (3) a host has the
+/// plugin. Names the first link that fails and prints its fix; a link whose state cannot be read is unknown, never healthy.
+fn host_chain(ws_dir: &Path, sock: Option<&Path>, probe: &dyn Fn(&Path) -> Probe, hosts: &[(&str, delphi_engine::mcp_check::Check)], r: &mut Report) {
+    use delphi_engine::mcp_check::State;
+    const C: &str = "15 host-chain";
+    // (state, what, fix): `None` for a link that holds.
+    let mut first: Option<(usize, &str, String, Option<String>)> = None;
+    let mut note = |n: usize, name: &'static str, ok: bool, unknown: bool, what: String, fix: Option<String>, r: &mut Report| {
+        let loc = format!("link {n} {name}");
+        if ok {
+            r.push(Level::Ok, C, loc, what);
+        } else {
+            let shown = match &fix {
+                Some(f) if !unknown => format!("{what}. Fix: {f}"),
+                _ => what.clone(),
+            };
+            r.push(Level::Skipped, C, loc, shown); // never a warning: a daemon that is not running is normal, and host tools are optional
+            if first.is_none() {
+                first = Some((n, name, what, fix));
+            }
+        }
+    };
+
+    // 1. The daemon, by connect-and-close on the host socket (`<hash>.host.sock`, made by the daemon: `delphi __core`).
+    let sock_name = sock.and_then(|s| s.file_name()).map(|n| format!("run/{}", n.to_string_lossy()));
+    let (ok, unknown, what, fix) = match (sock, &sock_name) {
+        (Some(s), Some(n)) => match probe(s) {
+            Probe::Reachable => (true, false, format!("the daemon answers on its host socket ({n}, owned by the daemon)"), None),
+            Probe::Absent => (false, false, format!("no daemon is running for this workspace (no host socket {n})"), Some(FIX_DAEMON.to_string())),
+            Probe::Stale => (false, false, format!("the host socket {n} is left over from a daemon that is no longer running"), Some(FIX_DAEMON.to_string())),
+            Probe::Unknown => (false, true, format!("unknown: the host socket {n} did not answer a plain connect in time"), None),
+        },
+        _ => (false, true, "unknown: the host socket path could not be worked out".to_string(), None),
+    };
+    note(1, "daemon", ok, unknown, what, fix, r);
+
+    // 2. `[mcp] enabled`, read through the one reader the daemon itself uses.
+    match delphi_engine::host_rpc::gate(ws_dir) {
+        Ok(_) => note(2, "mcp-enabled", true, false, "`[mcp] enabled` is on".into(), None, r),
+        Err(_) => {
+            let readable = std::fs::read_to_string(ws_dir.join("config.toml")).map(|t| delphi_adapter::config::McpConfig::read(&t).is_some()).unwrap_or_else(|e| e.kind() == std::io::ErrorKind::NotFound);
+            if readable {
+                note(2, "mcp-enabled", false, false, "`[mcp] enabled` is off, so every host call is refused".into(), Some(FIX_ENABLED.into()), r);
+            } else {
+                note(2, "mcp-enabled", false, false, "config.toml cannot be read as written, so every host call is refused".into(), Some(FIX_CONFIG.into()), r);
+            }
+        }
+    }
+
+    // 3. The plugin, from the same `check_host` read as the per-host lines above: one host that is configured is enough.
+    if hosts.iter().any(|(_, c)| c.state == State::Configured) {
+        note(3, "host-plugin", true, false, "a host has the Delphi plugin installed".into(), None, r);
+    } else if let Some((h, c)) = hosts.iter().find(|(_, c)| matches!(c.state, State::Stale | State::Incompatible | State::Missing) && c.fix.is_some()) {
+        note(3, "host-plugin", false, false, format!("{h}: {}", c.state.name()), c.fix.clone().map(|f| format!("`{f}`")), r);
+    } else {
+        note(3, "host-plugin", false, true, "unknown: no host's plugin state could be read".into(), None, r);
+    }
+
+    match first {
+        None => r.push(Level::Ok, C, "first failing link", "none: every link holds"),
+        Some((n, name, what, fix)) => {
+            let fix = fix.map(|f| format!(" Fix: {f}")).unwrap_or_default();
+            r.push(Level::Skipped, C, "first failing link", format!("link {n} {name}: {what}.{fix} (printed only; doctor changes nothing)"));
         }
     }
 }
@@ -436,6 +541,8 @@ fn check_pool(ws: &Workspace, home: &Path, cfg_text: &str, r: &mut Report) {
     for e in stuck {
         r.warn("11 model pool", format!("{}/{}", e.endpoint_id, e.model_id), delphi_engine::pool::describe(&e, now));
     }
+    // Spec 056 M6: the emergency stop-gap, one line either way; not being configured is a note, not a failure.
+    r.push(if cfg.routing.emergency.is_some() { Level::Ok } else { Level::Skipped }, "11 model pool", "", delphi_engine::emergency::line(&cfg));
     // Spec 056 M1: a model no class rule places is trialled on low-risk tasks only, until its results or the operator place it.
     match delphi_engine::models::ClassRules::load(&ws.dir) {
         Err(e) => r.warn("11 model pool", "model-classes.toml", e),
@@ -935,6 +1042,138 @@ mod tests {
         assert_eq!(r.exit_code(), 0);
         assert!(r.findings.iter().any(|f| f.check.starts_with("3") && f.level == Level::Ok));
         assert!(r.findings.iter().any(|f| f.check.starts_with("5") && f.level == Level::Ok));
+    }
+
+    // specs/083 S1: the ordered host chain names the first failing link, prints a fixed fix, writes nothing and sends nothing.
+    mod host_chain_tests {
+        use super::*;
+        use delphi_engine::mcp_check::{Check, State};
+
+        fn walk(d: &Path) -> Vec<PathBuf> {
+            let mut out = vec![];
+            for e in fs::read_dir(d).into_iter().flatten().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    out.extend(walk(&p));
+                } else {
+                    out.push(p);
+                }
+            }
+            out
+        }
+        fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+            let mut v: Vec<_> = walk(dir).into_iter().map(|p| { let b = fs::read(&p).unwrap_or_default(); (p, b) }).collect();
+            v.sort();
+            v
+        }
+        fn ok_host() -> Vec<(&'static str, Check)> {
+            vec![("claude-code", Check { state: State::Configured, detail: "ok".into(), fix: None })]
+        }
+        fn chain(ws: &Path, probe: Probe, hosts: &[(&str, Check)]) -> Vec<(String, Level, String)> {
+            let before = snapshot(ws);
+            let mut r = Report::default();
+            let sock = ws.join("run/abc.host.sock");
+            host_chain(ws, Some(&sock), &|_| probe, hosts, &mut r);
+            assert_eq!(snapshot(ws), before, "doctor wrote to disk");
+            r.findings.iter().filter(|f| f.check == "15 host-chain").map(|f| (f.location.clone(), f.level, f.message.clone())).collect()
+        }
+        fn first(lines: &[(String, Level, String)]) -> String {
+            lines.iter().find(|l| l.0 == "first failing link").unwrap().2.clone()
+        }
+        fn ws_with(cfg: &str) -> tempfile::TempDir {
+            let t = tempfile::tempdir().unwrap();
+            fs::write(t.path().join("config.toml"), cfg).unwrap();
+            t
+        }
+        const ON: &str = "[mcp]\nenabled = true\n";
+
+        #[test]
+        fn every_link_holding_says_so() {
+            let t = ws_with(ON);
+            let l = chain(t.path(), Probe::Reachable, &ok_host());
+            assert!(first(&l).starts_with("none"), "{l:?}");
+            assert!(l.iter().all(|x| x.1 == Level::Ok));
+        }
+
+        #[test]
+        fn a_missing_socket_is_link_one_with_the_daemon_fix() {
+            let t = ws_with(ON);
+            let f = first(&chain(t.path(), Probe::Absent, &ok_host()));
+            assert!(f.starts_with("link 1 daemon"), "{f}");
+            assert!(f.contains("delphi daemon restart") && f.contains("run/abc.host.sock"));
+            assert!(!f.contains(t.path().to_str().unwrap()), "no operator path");
+        }
+
+        #[test]
+        fn a_leftover_socket_is_link_one_and_says_it_is_stale() {
+            let t = ws_with(ON);
+            assert!(first(&chain(t.path(), Probe::Stale, &ok_host())).contains("left over"));
+        }
+
+        #[test]
+        fn a_silent_socket_is_unknown_not_healthy_and_has_no_fix() {
+            let t = ws_with(ON);
+            let f = first(&chain(t.path(), Probe::Unknown, &ok_host()));
+            assert!(f.starts_with("link 1 daemon: unknown"), "{f}");
+            assert!(!f.contains("Fix:"));
+        }
+
+        #[test]
+        fn disabled_mcp_is_link_two_when_the_daemon_is_fine() {
+            let t = ws_with("[mcp]\nenabled = false\n");
+            let f = first(&chain(t.path(), Probe::Reachable, &ok_host()));
+            assert!(f.starts_with("link 2 mcp-enabled") && f.contains("/mcp on"), "{f}");
+        }
+
+        #[test]
+        fn an_unreadable_config_is_link_two_with_the_repair_fix_and_is_not_called_disabled() {
+            let t = ws_with("[mcp\nbroken");
+            let f = first(&chain(t.path(), Probe::Reachable, &ok_host()));
+            assert!(f.starts_with("link 2") && f.contains("cannot be read") && !f.contains("is off"), "{f}");
+        }
+
+        #[test]
+        fn the_first_failing_link_wins_when_several_fail() {
+            let t = ws_with("[mcp]\nenabled = false\n");
+            let l = chain(t.path(), Probe::Absent, &[]);
+            assert!(first(&l).starts_with("link 1"));
+            assert_eq!(l.iter().filter(|x| x.0.starts_with("link ") && x.1 == Level::Skipped).count(), 3, "{l:?}");
+        }
+
+        #[test]
+        fn a_missing_or_stale_plugin_is_link_three_with_the_hosts_own_fix() {
+            let t = ws_with(ON);
+            for st in [State::Missing, State::Stale, State::Incompatible] {
+                let hosts = vec![("codex", Check { state: st, detail: "d".into(), fix: Some("codex plugin add delphi".into()) })];
+                let f = first(&chain(t.path(), Probe::Reachable, &hosts));
+                assert!(f.starts_with("link 3 host-plugin") && f.contains("`codex plugin add delphi`") && f.contains(st.name()), "{f}");
+            }
+        }
+
+        #[test]
+        fn plugin_state_that_cannot_be_read_is_unknown() {
+            let t = ws_with(ON);
+            let hosts = vec![("copilot", Check { state: State::Unknown, detail: "d".into(), fix: None })];
+            assert!(first(&chain(t.path(), Probe::Reachable, &hosts)).starts_with("link 3 host-plugin: unknown"));
+        }
+
+        #[test]
+        fn the_real_probe_connects_and_closes_without_sending_a_byte() {
+            use std::io::Read;
+            let t = tempfile::tempdir().unwrap();
+            let sock = t.path().join("h.sock");
+            assert_eq!(probe_socket(&sock), Probe::Absent);
+            let l = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+            let h = std::thread::spawn(move || {
+                let (mut c, _) = l.accept().unwrap();
+                let mut b = Vec::new();
+                c.read_to_end(&mut b).unwrap();
+                b
+            });
+            assert_eq!(probe_socket(&sock), Probe::Reachable);
+            assert!(h.join().unwrap().is_empty(), "the probe sent bytes");
+            assert_eq!(probe_socket(&sock), Probe::Stale);
+        }
     }
 
     // specs/024 §4.6: doctor says when an added bundle's cache is gone or changed, and when it is past its review date.

@@ -74,7 +74,7 @@ Drafted at the operator's request; text merged on their "go" 2026-10-26 (renumbe
 | L1 | staging tier: `staged_notes`, kb zone `staged`, `note` tool, triggers 1-5, caps, taint stamping | 031 §3.1-3.2 | L0; OD-1 | 16 | L1a merged (#196): `learn.staged` events, triggers 1-5, taint, caps, `[learning]`, `delphi learn`; L1b built (PR open): kb zone `staged` (opt-in search), `note` tool (see 031 §7.1) |
 | L2 | `propose` tool, `/retro` deck, ratification apply path, dedupe, scope routing | 031 §3.5; 004 §4.2 | L1 | 20 | L2a merged (#274): `suggest_rule` tool, `learn.proposed` events, `delphi retro list/show`; L2b merged (#288): `retro accept/reject`, CAS apply, caps, dedupe, no-relaxation and privacy checks; L2c built (PR open): `retro.*` daemon methods, `/retro` in the Ink console, `/retro run`, Orchestrator instructions; nothing run live |
 | L3 | skill candidates (trigger 6), patch proposals, trigger-test check | 031 §3.3 | L2 | 18 | not started |
-| L4 | `rule_stats`, `skill_stats`, scores, exposure randomization, decay | 031 §3.4; 004 §5.6 | L0, L2; OD-2 | 14 | not started |
+| L4 | `rule_stats`, `skill_stats`, scores, exposure randomization, decay | 031 §3.4; 004 §5.6 | L0, L2; OD-2 | 14 | L4a built: `delphi retro stats` (`learn_stats.rs`): rule and skill stats from daemon-written events, 95% Wilson interval with n, `not enough data` below 10 finished build tasks, `co-occurred` labelling, one-in-five holdout counted apart, decay as display priority only (floor 0.25, nothing dropped), `[learning] exposure_randomization` (default off) and the deterministic withhold decision (never security/always rules, never on holdout). Not built: withholding wired into snapshot loading, the `withheld` arm in stats, `skills` in `snapshot.loaded` (skills are not logged yet), the `/retro` console deck block |
 | L5 | `delphi customize note/rule/skill/profile`, bounded `[learning]` config | 031 §3.5-3.6 | L2 | 12 | built; as-built in 031 §7.1 (no `operator export` yet) |
 | L6 | `delphi train`: case format, overlay, safety rules, budget, report | 031 §4 | `delphi run` (built); OD-3 | 24 | L6a built (#186: validate, plan, case format, home rule); L6b merged (#202: `delphi train run`, overlay via ratified copy + lock, fake-binary tests; no live run, seed cases still unrun, scenarios and policy cards not supported) |
 | L7 | seed suites: learning-loop, role-behavior, orchestration, skill-trigger | 031 §4.6 | L6 (L1 for learning-loop) | 20 | not started |
@@ -356,7 +356,7 @@ Asked for by the operator on 2026-10-28: no hard-coded favorites; discover what 
 | M3 | `[grades]`, `delphi agent promote`, `nerf`, `grades` | built (`[grades]` is a ratified access block; `delphi-engine/src/grades.rs`, `delphi/src/agent_cmd.rs`; `agent.graded` journaled in `local/grades.jsonl`; the engine applies a role's grade as a step in `assign_for`) |
 | M4 | ratchet and suggestions from retrospectives | not started |
 | M5 | `delphi models calibrate` | not started |
-| M6 | `emergency` local class: save state when every seat is exhausted, re-verify on recovery, doctor line | not started |
+| M6 | `emergency` local class: save state when every seat is exhausted, re-verify on recovery, doctor line | built in part (`delphi-engine/src/emergency.rs`; `[routing] emergency_endpoint`/`emergency_model`, off by default, local endpoints only; `Class::Emergency` below every floor and refused by `route::ineligible` under both assignments; trigger only when every ratified seat is out; `Task` allow-list read/summarise/write-state; `save_state` writes a labeled `emergency` record under `<mission>/handoffs/`; `recover` re-checks branches, uncommitted files, journal pointers and PRs and removes the label only after a floor-meeting verifier answers; doctor and `capabilities --models` print the fixed line). Not built: the engine loop does not yet call `trigger`/`save_state`/`recover` and no model-client `Writer` exists, so nothing saves state live; the dispatch refusal on a pending record is the `pending` function only |
 
 ## Project scopes, scaffolding, indexes and promotion (spec 058, approved 2026-10-30)
 
@@ -380,7 +380,7 @@ Approved for implementation by the operator on 2026-10-30. Defines the run-anywh
 | :-- | :-- | :-- |
 | OE1 | Align lifecycle docs and installer completion language; make default-workspace setup resumable from any directory | built (installer guidance, run-anywhere docs, and `delphi setup` outside Git; not exercised end-to-end) |
 | OE2 | First-run choice for default vs explicit directory project; resumable project/model setup | approved, not built |
-| OE3 | Startup health-state rules and concise actionable notices | approved, not built |
+| OE3 | Startup health-state rules and concise actionable notices | built |
 | OE4 | Public release attestation verification without GitHub CLI login prerequisite | approved, not built |
 | OE5 | Update preview/notice alignment; exclude rollback and recovery redesign | approved, not built |
 | OE6 | Integration, reference docs and terminal walkthrough | approved, not built |
@@ -661,7 +661,7 @@ Drafted by the architect from the 2026-11-05 Council (both options), revised aft
 
 | Spec | Content | Wave | State |
 | :-- | :-- | :-- | :-- |
-| 079 | registry test: every ingress has a core-assigned origin ceiling; hard blocker for any `min_taint` figure | 1, first | approved 2026-11-05, not built |
+| 079 | registry test: every ingress has a core-assigned origin ceiling; hard blocker for any `min_taint` figure | 1, first | approved 2026-11-05; S1 built (origin-ceiling test in `delphi-engine`), S2 canary not built |
 | 080 | KB read-count report from `fact.read` events; `host_search_kb` event, `invariant: security\|constraint` attribute (needs its own operator ratification), no automatic pruning | 1, after 079 | approved 2026-11-05, not built |
 | 078 | Council scorecard: cost by `task_id`, choice from `council.followed`, family spread a floor | 2 | draft |
 | 081 | conventions note: advisory-only invariants, row shape, missing events in order | note | draft |
@@ -673,10 +673,22 @@ From the 2026-11-05 ranking of unbuilt work (five Claude seats, one family; see 
 | Slice | Content | Hours | State |
 | :-- | :-- | --: | :-- |
 | S0 | spec 083 approval and tracker entry | 1 | approved 2026-11-05 |
-| S1 | `delphi doctor` host-chain: first failing link and the printed fix | 7 | not built |
+| S1 | `delphi doctor` host-chain: first failing link and the printed fix | 7 | built: daemon link probed by connect-and-close on the host socket, no fallback needed |
 | S2 | learning-health footer line: staged, to review, oldest age | 7 | built (`learn.health` read RPC from the logs; footer `learn:` line, golden `footer-learn-*`), 2026-11-05 |
-| S3 | recurrence count, dismissed-claim memory, seat-keyed claims (S3a dismissal, S3b the rest) | 14 | not built |
-| S4 | `duplicate_of` on `host.propose_note`, own session only | 5 | built (PR open) |
+| S3 | recurrence count, dismissed-claim memory, seat-keyed claims (S3a dismissal, S3b the rest) | 14 | built (S3a and S3b, one PR); host counts are reports, council_minority has no seat and stays out |
+| S4 | `duplicate_of` on `host.propose_note`, own session only | 5 | built (#486), 2026-11-05 |
+
+## Spec 084: outcome stub, flip question, resume recap, learn history (2026-11-05, draft)
+
+Phase-2 items N5, N24, N14, N1 from the same ranking. Draft: a proposal for the operator, not permission to build. S1 needs an explicit operator call because the 082 E1 result was negative (spec 084 §1.2).
+
+| Slice | Content | Hours | State |
+| :-- | :-- | --: | :-- |
+| S0 | operator approves spec 084; tracker entry | 1 | draft |
+| S1 | typed `outcome` on `record_session_summary`, `untrusted/self_reported`, display-only | 7 | draft, not built |
+| S2 | `council_result` flip question, only with a real dissent | 9 | draft, not built |
+| S3 | three-line "what changed since I left" recap, events only | 8 | draft, not built |
+| S4 | `delphi learn history` ("co-occurred"), with `rule_id` on accept first | 9 | draft, not built |
 
 ## Spec 085: a fixed standing-limits reminder (2026-11-05)
 

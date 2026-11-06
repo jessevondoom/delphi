@@ -52,7 +52,8 @@ pub fn level(c: Class) -> Option<i32> {
         Class::Quick | Class::Local => Some(0),
         Class::Steady => Some(1),
         Class::Deep => Some(2),
-        Class::Unclassified => None,
+        // Below every floor: it has no rank to compare, so no floor is ever met by it.
+        Class::Emergency | Class::Unclassified => None,
     }
 }
 
@@ -66,7 +67,7 @@ impl Assign {
             preferred: parse(policy.map(|p| p.preferred.as_str())),
             plan_making: policy.is_some_and(|p| p.plan_making),
             plan_following: policy.is_some_and(|p| p.plan_following),
-            classes: candidates.iter().filter(|c| c.presence == Presence::Ready).map(|c| (c.endpoint_id.clone(), c.model_id.clone(), c.class)).collect(),
+            classes: candidates.iter().filter(|c| c.presence == Presence::Ready && c.class != Class::Emergency).map(|c| (c.endpoint_id.clone(), c.model_id.clone(), c.class)).collect(),
             gone: candidates.iter().filter(|c| c.presence == Presence::Gone).map(|c| (c.endpoint_id.clone(), c.model_id.clone())).collect(),
             evidence: vec![],
             enough,

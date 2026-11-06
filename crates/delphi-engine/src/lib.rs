@@ -76,6 +76,7 @@ pub mod merge_class;
 pub mod checks;
 pub mod frontmatter;
 pub mod gates;
+pub mod emergency;
 pub mod handoff;
 pub mod hooks;
 pub mod hooks_run;
@@ -85,6 +86,7 @@ pub mod harness_opts;
 pub mod harness_run;
 pub mod inventory;
 pub mod learn;
+pub mod learn_stats;
 pub mod memory_audit;
 pub mod embed;
 pub mod kb;
@@ -145,3 +147,6 @@ pub(crate) mod testkit;
 
 #[cfg(test)]
 mod timer_tests;
+
+#[cfg(test)]
+mod ingress_origin_tests;

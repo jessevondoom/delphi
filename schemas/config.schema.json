@@ -58,6 +58,8 @@
         "registry": { "enum": ["flat", "auto"], "description": "How the orchestrator learns of bundle agents (specs/041). flat: one line per agent, up to 20. auto: past 20, a domain index and the search_agent_registry tool." },
         "assignment": { "enum": ["static", "discovered"], "description": "How a dispatch picks its model (specs/056). static: the role's tier. discovered: capability class, measured results and quota." },
         "evidence_enough": { "type": "integer", "minimum": 1, "description": "Measured results per (role, kind, model) after which a model is scored by them alone." },
+        "emergency_endpoint": { "type": "string", "description": "A local endpoint (cost_model = local) whose model saves state when every ratified seat is out of quota (specs/056 section 3.5). Set together with emergency_model; off when unset." },
+        "emergency_model": { "type": "string", "description": "The model on emergency_endpoint that writes the unverified emergency hand-off record." },
         "reserve": { "type": "object", "additionalProperties": { "type": "number", "minimum": 0, "maximum": 1 }, "description": "Role to the share of the mission budget no other role may spend." },
         "pool": {
           "type": "object",
@@ -238,7 +240,8 @@
         "capture": { "type": "boolean", "description": "Stage notes from denials, corrections, retries and escalations. Default true. Turning it off is allowed." },
         "max_notes": { "type": "integer", "minimum": 10, "maximum": 1000, "description": "Staged notes kept per mission; the oldest is dropped. Default 200." },
         "triggers": { "type": "array", "items": { "type": "string" }, "description": "Which capture triggers are on. Default all." },
-        "retro_min_tasks": { "type": "integer", "minimum": 3, "maximum": 200, "description": "Finished tasks before `delphi needs` says the coaching pass has material. Default 10." }
+        "retro_min_tasks": { "type": "integer", "minimum": 3, "maximum": 200, "description": "Finished tasks before `delphi needs` says the coaching pass has material. Default 10." },
+        "exposure_randomization": { "type": "boolean", "description": "Withhold a newly ratified rule from about half of its first 20 tasks to measure it; security and always rules and holdout tasks never. Default false." }
       }
     },
     "mcp": {
