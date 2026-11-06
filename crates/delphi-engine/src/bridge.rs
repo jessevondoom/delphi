@@ -248,6 +248,12 @@ impl Bridge {
     /// [`Bridge::start`], and with a [`HookPolicy`] the server also answers the `agy` gate hook and sends a [`HookNote`]
     /// for every decision.
     pub async fn start_gated(tools: Vec<ToolDef>, instructions: String, program: &Path, hook: Option<HookPolicy>) -> std::io::Result<(Bridge, mpsc::Receiver<BridgeCall>, mpsc::UnboundedReceiver<HookNote>)> {
+        Bridge::start_with_reminder(tools, instructions, program, hook, None).await
+    }
+
+    /// [`Bridge::start_gated`], and with a `reminder` (`specs/085` §4) the reply to every call that ran carries it as a
+    /// second content block, after the tool's own result.
+    pub async fn start_with_reminder(tools: Vec<ToolDef>, instructions: String, program: &Path, hook: Option<HookPolicy>, reminder: Option<String>) -> std::io::Result<(Bridge, mpsc::Receiver<BridgeCall>, mpsc::UnboundedReceiver<HookNote>)> {
         // A unix socket path must fit in about 100 bytes, so the directory is short and sits in the temp dir.
         let mut base = std::env::temp_dir();
         if base.as_os_str().len() > 60 {
@@ -271,7 +277,7 @@ impl Bridge {
         let (tx, rx) = mpsc::channel::<BridgeCall>(16);
         let (notes, notes_rx) = mpsc::unbounded_channel::<HookNote>();
         let refusals = Arc::new(std::sync::Mutex::new(Refusals::default()));
-        let shared = Arc::new(Shared { tools: tools.iter().map(|t| mcp_tool(t, hook.is_some())).collect(), names: tools.iter().map(|t| t.name.clone()).collect(), instructions, token: token.clone(), tx, hook, notes, refusals: refusals.clone() });
+        let shared = Arc::new(Shared { tools: tools.iter().map(|t| mcp_tool(t, hook.is_some())).collect(), names: tools.iter().map(|t| t.name.clone()).collect(), instructions, token: token.clone(), tx, hook, notes, refusals: refusals.clone(), reminder });
         let accept = tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
                 let shared = shared.clone();
@@ -341,6 +347,8 @@ struct Shared {
     hook: Option<HookPolicy>,
     notes: mpsc::UnboundedSender<HookNote>,
     refusals: Arc<std::sync::Mutex<Refusals>>,
+    /// The span's standing-limits reminder (`specs/085` §4): a second content block on the reply to a call that ran.
+    reminder: Option<String>,
 }
 
 fn same_token(a: &str, b: &str) -> bool {
@@ -404,6 +412,7 @@ async fn handle(shared: &Shared, req: &Value) -> Option<Value> {
         "tools/call" => {
             let name = req["params"]["name"].as_str().unwrap_or("").to_string();
             let call_id = req["params"]["_meta"]["claudecode/toolUseId"].as_str().unwrap_or("").to_string();
+            let mut ran = false;
             let content = if !shared.names.contains(&name) {
                 let mut r = shared.refusals.lock().unwrap();
                 r.not_offered = r.not_offered.saturating_add(1);
@@ -419,14 +428,25 @@ async fn handle(shared: &Shared, req: &Value) -> Option<Value> {
                 if shared.tx.send(BridgeCall { name, args, call_id, reply }).await.is_err() {
                     ToolResult { content: "this task has ended; the tool was not run".into(), is_error: true }
                 } else {
-                    rx.await.unwrap_or(ToolResult { content: "this task ended before the tool finished".into(), is_error: true })
+                    match rx.await {
+                        Ok(r) => {
+                            ran = true;
+                            r
+                        }
+                        Err(_) => ToolResult { content: "this task ended before the tool finished".into(), is_error: true },
+                    }
                 }
             };
             let mut text = content.content;
             if text.chars().count() > MAX_REPLY_CHARS {
                 text = text.chars().take(MAX_REPLY_CHARS).collect::<String>() + "\n[the result was cut at the bridge's size limit]";
             }
-            json!({"jsonrpc": "2.0", "id": id, "result": {"content": [{"type": "text", "text": text}], "isError": content.is_error}})
+            // The reminder is the last block and is added after the size cut, so a long result cannot push it out.
+            let mut blocks = vec![json!({"type": "text", "text": text})];
+            if let (true, Some(r)) = (ran, &shared.reminder) {
+                blocks.push(json!({"type": "text", "text": r}));
+            }
+            json!({"jsonrpc": "2.0", "id": id, "result": {"content": blocks, "isError": content.is_error}})
         }
         // The Antigravity CLI's `PreToolUse` gate asks whether a tool call may run (`run_agy_hook`).
         "delphi/hook" => match &shared.hook {

@@ -580,7 +580,7 @@ impl Engine {
             }
             gate_policy = policy.clone();
             let started = match std::env::current_exe() {
-                Ok(exe) => Bridge::start_gated(bridge_defs.clone(), bridge_instructions(&bridge_defs), &exe, policy).await,
+                Ok(exe) => Bridge::start_with_reminder(bridge_defs.clone(), bridge_instructions(&bridge_defs), &exe, policy, ipr.reminder_text()).await,
                 Err(e) => Err(e),
             };
             match started {
