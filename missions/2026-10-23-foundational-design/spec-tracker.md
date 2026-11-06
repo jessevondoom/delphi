@@ -697,5 +697,5 @@ From a Council of three Claude seats (one family, so homogeneous) that ranked ei
 | Slice | Content | Hours | State |
 | :-- | :-- | --: | :-- |
 | S0 | spec 085 approval and tracker entry | 1 | approved 2026-11-05 |
-| S1 | fixed `STANDING_LIMITS` constant on the API path; the objective echo removed | 5 | in progress |
+| S1 | fixed `STANDING_LIMITS` constant on the API path; the objective echo removed | 5 | built (PR open) |
 | S2 | the same reminder as a second content block on bridged tool replies (harness seats) | 5 | not built |

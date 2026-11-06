@@ -151,10 +151,6 @@ impl HandoffEnvelope {
         s.push_str(&format!("\nFrom: {} → {}\n", self.caller_agent, self.target_agent));
         s
     }
-
-    pub fn reminder_text(&self) -> String {
-        format!("Stay within the objective and constraints of this task: {}", self.objective.chars().take(200).collect::<String>())
-    }
 }
 
 /// The pointers to the project's `AGENTS.md` for a task (`specs/025` §5.1): for each file the task names under a registered
