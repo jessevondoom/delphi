@@ -198,6 +198,8 @@ struct HelpRun {
     session: String,
     result: Option<Value>,
     at: Instant,
+    /// The host's own words for what it needed (redacted and cut), the reason on the turn-boundary line (`specs/087` §5.4).
+    need: String,
 }
 
 /// The roles a help task consulted, in order (the root span is the orchestrator's own).
@@ -389,7 +391,8 @@ impl EngineService {
                 // Finished answers are kept for an hour so a slow one can be fetched, then dropped.
                 let mut helps = self.helps.lock().unwrap();
                 helps.retain(|_, r| r.result.is_none() || r.at.elapsed() < Duration::from_secs(3600));
-                helps.insert(task_id.clone(), HelpRun { session: c.session.clone(), result: None, at: Instant::now() });
+                let need: String = self.engine.secrets.redact(p["need"].as_str().unwrap_or("")).chars().take(200).collect();
+                helps.insert(task_id.clone(), HelpRun { session: c.session.clone(), result: None, at: Instant::now(), need });
             }
             (task_id, m)
         };
@@ -413,7 +416,8 @@ impl EngineService {
                 r.at = Instant::now();
             }
         });
-        Ok(self.signed_help(self.wait_help(&task_id, HELP_WAIT).await))
+        let v = self.wait_help(&task_id, HELP_WAIT).await;
+        Ok(self.signed_help(v, &task_id))
     }
 
     /// `host.request_research` (`specs/066` §3): queue a research job and return its id at once. The scout searches the trusted lists
@@ -479,7 +483,7 @@ impl EngineService {
         };
         if v["answered_by"].as_str().is_some() {
             let id = crate::research_host::identity(&ws.dir, &ws.home, "scout", None);
-            crate::research_host::attach_identity(&mut v, &id, self.badge_style());
+            crate::research_host::attach_identity(&mut v, &id, self.badge_style(), self.badge_mode(), Some("the research you asked for"));
         }
         Ok(v)
     }
@@ -652,11 +656,18 @@ impl EngineService {
         crate::host_rpc::gate(&self.engine.ws.dir).map(|c| c.badge_style.as_str()).unwrap_or("plain")
     }
 
-    /// An answer from a Delphi role carries who gave it (`specs/066` §7): the last role consulted, or the orchestrator.
-    fn signed_help(&self, mut v: Value) -> Value {
+    /// `[mcp] badge_mode`, read at each call: which colour pair the ANSI form of an identity uses (`specs/087` §5.1).
+    fn badge_mode(&self) -> &'static str {
+        crate::host_rpc::gate(&self.engine.ws.dir).map(|c| c.badge_mode.as_str()).unwrap_or("dark")
+    }
+
+    /// An answer from a Delphi role carries who gave it (`specs/066` §7): the last role consulted, or the orchestrator. It also
+    /// carries the turn-boundary lines (`specs/087` §5.4), with the host's own request as the reason.
+    fn signed_help(&self, mut v: Value, help_id: &str) -> Value {
         if let Some(role) = v["answered_by"].as_str().map(String::from) {
             let ws = &self.engine.ws;
-            crate::research_host::attach_identity(&mut v, &crate::research_host::identity(&ws.dir, &ws.home, &role, None), self.badge_style());
+            let need = self.helps.lock().unwrap().get(help_id).map(|r| r.need.clone()).unwrap_or_default();
+            crate::research_host::attach_identity(&mut v, &crate::research_host::identity(&ws.dir, &ws.home, &role, None), self.badge_style(), self.badge_mode(), Some(&need));
         }
         v
     }
@@ -664,16 +675,20 @@ impl EngineService {
     /// Each seat that spoke is named as in the console; the ruling is the orchestrator's.
     fn signed_council(&self, mut v: Value) -> Value {
         let ws = &self.engine.ws;
-        let sign = |role: &str| crate::research_host::identity(&ws.dir, &ws.home, role, None).signature();
+        let (style, mode) = (self.badge_style(), self.badge_mode());
+        let light = mode == "light";
+        let sign = |role: &str| crate::research_host::identity(&ws.dir, &ws.home, role, None);
         for key in ["seat_positions", "critiques"] {
             for p in v["ruling"][key].as_array_mut().into_iter().flatten() {
                 if let Some(r) = p["seat"].as_str().map(String::from) {
-                    p["signature"] = json!(sign(&r));
+                    let id = sign(&r);
+                    p["signature"] = json!(id.signature());
+                    p["display"] = json!(id.display(style, light));
                 }
             }
         }
         if v.get("ruling").is_some() {
-            crate::research_host::attach_identity(&mut v, &crate::research_host::identity(&ws.dir, &ws.home, "orchestrator", None), self.badge_style());
+            crate::research_host::attach_identity(&mut v, &crate::research_host::identity(&ws.dir, &ws.home, "orchestrator", None), style, mode, Some("the Council's ruling"));
         }
         v
     }
@@ -702,7 +717,8 @@ impl EngineService {
         if !mine {
             return Err(err(code::INVALID_PARAMS, "no such help request for this session"));
         }
-        Ok(self.signed_help(self.wait_help(&id, Duration::from_secs(25)).await))
+        let v = self.wait_help(&id, Duration::from_secs(25)).await;
+        Ok(self.signed_help(v, &id))
     }
 
     async fn host_handoff_put(&self, p: Value, ctx: CallContext) -> RpcOutcome {
@@ -3168,7 +3184,12 @@ mod tests {
             let r = c.call("host.request_help", p(json!({"need": "How do retries work?", "tried": "grep", "suggested_target": "nobody"}))).unwrap();
             assert_eq!(r["status"], "answered", "{r}");
             assert_eq!(r["answered_by"], "orchestrator");
-            assert!(r["signature"].as_str().unwrap().contains("(orchestrator) via delphi") && r["identity"]["ansi"].as_str().unwrap().contains('\u{1b}'), "{r}");
+            assert!(r["signature"].as_str().unwrap().contains("(orchestrator, via delphi)") && r["identity"]["ansi"].as_str().unwrap().contains('\u{1b}'), "{r}");
+            // Spec 087 §5.2 to §5.4: one pre-rendered line to print, the host's own words as the reason, and a line back.
+            assert_eq!(r["display"], r["signature"], "{r}");
+            assert!(r["boundary_line"].as_str().unwrap().contains("(orchestrator) takes over: How do retries work?"), "{r}");
+            assert!(r["return_line"].as_str().unwrap().contains("(orchestrator) hands back"), "{r}");
+            assert_eq!(r["identity"]["color_light"], "#7e22ce", "{r}");
             assert!(r["answer"].as_str().unwrap().contains("three rungs"));
             // Another session cannot read it; the owner can, and it does not count again.
             let other = json!({"session": "fedcba9876543210", "tool": "x", "cwd": cwd, "help_id": r["help_id"]});
@@ -3290,6 +3311,9 @@ mod tests {
             assert_eq!((got["state"].as_str(), got["venue"].as_str(), got["ruling"]["decision"].as_str()), (Some("decided"), Some("panel"), Some("use a table")), "{got}");
             let card = got["display"].as_str().unwrap();
             assert!(card.contains("**Panel ruling**") && card.contains("isolation: host-reported") && card.contains("opus") && card.contains("Delphi spent none"), "{card}");
+            // Spec 087 §5.2: the identity line leads the card in `display`, and `signature` is that line alone.
+            assert!(card.starts_with("⟦") && card.contains("(orchestrator, via delphi)\n\n**Panel ruling**"), "{card}");
+            assert!(got["signature"].as_str().unwrap().ends_with("(orchestrator, via delphi)") && !got["signature"].as_str().unwrap().contains('\n'), "{got}");
             assert!(got["ruling"]["dissent"].as_str().unwrap().contains("Unanimous"), "{got}");
             assert_eq!(rpc_code(c.call("host.council_choose", p(json!({"council_id": id, "option": "table"})))), Some(code::INVALID_PARAMS), "nothing escalated, nothing to choose");
             assert_eq!(rpc_code(c.call("host.council_submit", p(json!({"council_id": id, "seat": "architect", "round": 1, "text": "late"})))), Some(code::INVALID_PARAMS), "a finished Panel takes no more answers");

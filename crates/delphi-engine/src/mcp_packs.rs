@@ -202,6 +202,13 @@ impl Packs {
         crate::research_host::identity(&self.ws.dir, &self.ws.home, role, via)
     }
 
+    /// The line a host prints for `role`, in the operator's form and colour pair (`[mcp] badge_style`, `badge_mode`; plain and
+    /// dark when the file cannot be read): `⟦•_•⟧ Name (role, via delphi)` (`specs/087` §5.3).
+    pub fn display(&self, role: &str, via: Option<&str>) -> String {
+        let (style, light) = crate::host_rpc::gate(&self.ws.dir).map(|c| (c.badge_style.as_str(), c.badge_mode.as_str() == "light")).unwrap_or(("plain", false));
+        self.identity(role, via).display(style, light)
+    }
+
     pub fn pack(&self, role: &str, include_profile: bool) -> Result<String, String> {
         let text = self.role_text(role)?;
         let (fm, _) = split_frontmatter(&text);

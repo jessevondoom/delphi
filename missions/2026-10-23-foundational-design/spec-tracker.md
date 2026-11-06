@@ -707,10 +707,10 @@ Approved by the operator 2026-11-06, from a conversation that day: 28 chosen bad
 | Slice | Content | Hours | State |
 | :-- | :-- | --: | :-- |
 | S0 | operator approves spec 087 and answers OD-1 and OD-5; tracker entry | 1 | approved 2026-11-06 |
-| S1 | thirteen core roles in `ROLES`: faces, blink frames, light/dark colors | 9 | built (PR open) |
+| S1 | thirteen core roles in `ROLES`: faces, blink frames, light/dark colors | 9 | built (merged, #512) |
 | S2 | the name pool in the theme pack; picker; `pool_slot` on the start event | 9 | built in part (PR open): pool, loader checks, picker, `spawn_agent_pack` naming, `pool_slot` in the envelope and schema; the engine does not yet stamp `pool_slot` on an event |
-| S3 | outside: light/dark identity, `badge_mode`, `display` in the one-identity form, handoff and roster lines | 9 | not built |
-| S4 | console: three-frame scout blink; pool agents in panes | 6 | not built |
+| S3 | outside: light/dark identity, `badge_mode`, `display` in the one-identity form, handoff and roster lines | 9 | built (merged, #515) |
+| S4 | console: three-frame scout blink; pool agents in panes | 6 | blink built (merged, #513); pool agents in panes waits on S2 |
 | S5 | recognition check with the operator | 3 | not built |
 
 ## Spec 086: the Council outside Delphi (2026-11-05, approved 2026-11-06)

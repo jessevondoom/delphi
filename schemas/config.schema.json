@@ -251,7 +251,8 @@
       "properties": {
         "enabled": { "type": "boolean", "default": true, "description": "false: every tool call is answered `disabled_by_operator`. Read at each call, so it takes effect at once. A config.toml that cannot be read as written also turns it off." },
         "allow_remote": { "type": "boolean", "default": false, "description": "Reserved for a later spec. true is refused in this version." },
-        "badge_style": { "type": "string", "enum": ["plain", "ansi", "markdown"], "default": "plain", "description": "Which form of a Delphi agent's identity the `signature` field carries (specs/066 section 7). Plain is the default; the ansi and markdown forms are always sent beside it." }
+        "badge_style": { "type": "string", "enum": ["plain", "ansi", "markdown"], "default": "plain", "description": "Which form of a Delphi agent's identity the `display` and `signature` fields carry (specs/066 section 7, specs/087 section 5). Plain is the default; the ansi and markdown forms are always sent beside it." },
+        "badge_mode": { "type": "string", "enum": ["dark", "light"], "default": "dark", "description": "The terminal background the ANSI form of an identity is coloured for (specs/087 section 5.1). Delphi cannot see the host's terminal, so the operator says it once. The plain and markdown forms carry no colour and ignore it." }
       }
     },
     "host": {
