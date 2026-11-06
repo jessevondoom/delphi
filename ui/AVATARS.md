@@ -20,5 +20,14 @@ unreadable (the test checks 4.5:1 against white).
 3. `npm test` in `ui/` checks the new role or face in every console state on dark and light terminals (five columns wide,
    eye colour by position, mascot rows seven columns, alert-eye contrast) without a new TypeScript test.
 
-Which cell of a badge is the mouth is named by position in the spec, never guessed from the character: the red-team's
-`-_-` has `-` eyes.
+Which cell of a badge is the mouth is named by position in the spec, never guessed from the character: a face like the
+red-team's `¬_¬` has `¬` eyes, and its blink `-_-` has `-` eyes.
+
+## The thirteen core roles (spec 087)
+
+Every role has its own idle badge and its own blink, listed in `CORE_FACES` in `avatar.rs` (a test pins it to spec 087 §3.1).
+Only the writer and the investigator, the twins, share an idle face; they differ by colour and by mirrored winks. Rules the
+tests hold: faces are three cells from a width-1 character set, a blink never equals its idle face, every chassis clears the
+contrast gate in both modes (3.0:1 on dark, 4.0:1 on light; the roles added by 087 reach 4.5:1), and no two chassis are closer
+than the spread measured when 087 was written (CIELAB distance 14 on dark, 9 on light). At 16 colours the codes are distinct
+but approximate in hue, so the face and the name carry the identity. The scout's three-frame blink is spec 087 S4.
