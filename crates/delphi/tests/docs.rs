@@ -160,6 +160,12 @@ fn events_follow_the_envelope_schema() {
         "agent": "builder", "span_id": "s", "task_id": "t1", "endpoint_id": "e", "access_path": "api", "model_tier": "fast", "model_id": "x", "attempt": 1
     });
     must_pass("event-envelope.schema.json", "an agent event", &agent);
+    // specs/087 §4.3: a one-off agent's pool slot is a slot id, never a name.
+    let mut slotted = agent.clone();
+    slotted["pool_slot"] = json!("pool-07");
+    must_pass("event-envelope.schema.json", "an event with a pool slot", &slotted);
+    slotted["pool_slot"] = json!("a-display-name");
+    must_fail("event-envelope.schema.json", "an event whose pool slot is a name", &slotted);
     let mut bad = agent;
     bad.as_object_mut().unwrap().remove("span_id");
     must_fail("event-envelope.schema.json", "an agent event without span_id", &bad);

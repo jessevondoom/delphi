@@ -1,12 +1,17 @@
 //! Theme packs (`specs/001` §6): schema, field sanitizer, and the voice-only linter.
 
 use crate::frontmatter::{self, ROLES};
+use delphi_engine::agent_pool::{self, PoolEntry};
 use serde_yaml::{Mapping, Value};
 
 pub struct Theme {
     pub labels: Vec<(String, String)>,
     /// (role, name, epithet, persona)
     pub roles: Vec<(String, String, String, String)>,
+    /// The name pool for one-off agents (`specs/087` §4); empty when the pack has none.
+    pub pool: Vec<PoolEntry>,
+    /// Each non-ASCII glyph a badge face uses, and the one ASCII character that stands for it (`specs/087` §6.2).
+    pub ascii_glyphs: Vec<(char, char)>,
 }
 
 impl Theme {
@@ -79,7 +84,22 @@ pub fn parse(text: &str) -> Result<Theme, Vec<String>> {
         }
         None => errs.push("`roles` mapping is missing".into()),
     }
-    let theme = Theme { labels, roles };
+    let root_value = Value::Mapping(root.clone());
+    let pool = match agent_pool::pool_from_value(&root_value) {
+        Ok(p) => p,
+        Err(e) => {
+            errs.extend(e);
+            Vec::new()
+        }
+    };
+    let ascii_glyphs = match agent_pool::ascii_glyphs_from_value(&root_value) {
+        Ok(g) => g,
+        Err(e) => {
+            errs.extend(e);
+            Vec::new()
+        }
+    };
+    let theme = Theme { labels, roles, pool, ascii_glyphs };
     errs.extend(check(&theme));
     if errs.is_empty() {
         Ok(theme)
@@ -119,6 +139,7 @@ pub fn check(t: &Theme) -> Vec<String> {
             }
         }
     }
+    errs.extend(check_pool(t));
     for (key, value) in &t.labels {
         if value.trim().is_empty() {
             errs.push(format!("labels.{} is empty", key));
@@ -131,6 +152,29 @@ pub fn check(t: &Theme) -> Vec<String> {
         }
         if let Some(c) = forbidden_char(value) {
             errs.push(format!("labels.{} contains forbidden character U+{:04X}", key, c as u32));
+        }
+    }
+    errs
+}
+
+/// The pool rules of `specs/087` §6.1, against the core roles' real faces from the avatar library.
+fn check_pool(t: &Theme) -> Vec<String> {
+    if t.pool.is_empty() {
+        return Vec::new();
+    }
+    let core: Vec<&crate::avatar::RoleTheme> = crate::avatar::ROLES.iter().filter(|r| r.role_id != "operator").collect();
+    let idle: Vec<&str> = core.iter().map(|r| r.badge_face).collect();
+    let all: Vec<&str> = core.iter().flat_map(|r| [r.badge_face, r.blink_badge]).collect();
+    let others: Vec<String> = t.roles.iter().map(|r| r.1.clone()).chain(t.labels.iter().map(|l| l.1.clone())).collect();
+    let mut errs = agent_pool::validate(&t.pool, &idle, &all, &others, &t.ascii_glyphs);
+    for e in &t.pool {
+        for s in std::iter::once(&e.name).chain(e.keywords.iter()) {
+            if let Some(c) = forbidden_char(s) {
+                errs.push(format!("pool {} contains forbidden character U+{:04X}", e.slot, c as u32));
+            }
+        }
+        if ROLES.contains(&e.name.to_lowercase().as_str()) {
+            errs.push(format!("pool {} name `{}` collides with a canonical role ID", e.slot, e.name));
         }
     }
     errs
@@ -218,5 +262,77 @@ mod tests {
         let text = include_str!("../../../themes/greek/theme.md");
         let t = parse(text).unwrap_or_else(|e| panic!("{:?}", e));
         assert_eq!(t.roles.len(), 13);
+        assert_eq!(t.pool.len(), 36, "the default pack carries the 36-name pool of specs/087");
+        assert!(!t.ascii_glyphs.is_empty());
+    }
+
+    fn greek() -> String {
+        include_str!("../../../themes/greek/theme.md").to_string()
+    }
+
+    fn errors_of(text: &str) -> String {
+        parse(text).err().map(|e| e.join("\n")).unwrap_or_default()
+    }
+
+    #[test]
+    fn a_pack_without_a_pool_is_still_valid() {
+        let t = parse(&pack(None, None, None)).unwrap();
+        assert!(t.pool.is_empty());
+    }
+
+    #[test]
+    fn pool_rules_are_enforced_by_the_pack_loader() {
+        let pack = parse(&greek()).unwrap();
+        let (first, second) = (pack.pool[0].name.clone(), pack.pool[1].name.clone());
+        // A repeated name.
+        let e = errors_of(&greek().replacen(&format!("name: \"{second}\""), &format!("name: \"{first}\""), 1));
+        assert!(e.contains("is not unique"), "{e}");
+        // A core role's face (the red-team's glare) on a pool entry.
+        let e = errors_of(&greek().replacen("face: \">_<\"", "face: \"¬_¬\"", 1));
+        assert!(e.contains("core role's face"), "{e}");
+        // A face outside the allowed set, and a face of the wrong length.
+        let e = errors_of(&greek().replacen("face: \">_<\"", "face: \"☃_☃\"", 1));
+        assert!(e.contains("outside the allowed set"), "{e}");
+        let e = errors_of(&greek().replacen("face: \">_<\"", "face: \">_\"", 1));
+        assert!(e.contains("not exactly three cells"), "{e}");
+        // Too few keywords.
+        let e = errors_of(&greek().replacen("[strong, blunt, labor, finish-the-job]", "[strong, blunt]", 1));
+        assert!(e.contains("2 keywords"), "{e}");
+        // A pool that is not 36 long.
+        let e = errors_of(&greek().replacen("  - { slot: \"pool-36\"", "  - { slot: \"pool-36x\", name: \"Extra\", keywords: [aaa, bbb, ccc], face: \"×_×\" }\n  - { slot: \"pool-36\"", 1));
+        assert!(e.contains("37 entries"), "{e}");
+        // A pool name that is also a role's name.
+        let role_name = pack.roles[0].1.clone();
+        let e = errors_of(&greek().replacen(&format!("name: \"{second}\""), &format!("name: \"{role_name}\""), 1));
+        assert!(e.contains("also a role's name"), "{e}");
+        // A glyph with no ASCII stand-in.
+        let e = errors_of(&greek().replacen("\"■\": \"#\", ", "", 1));
+        assert!(e.contains("no entry for `■`"), "{e}");
+    }
+
+    /// Pool names are display strings from the pack. No Rust source writes one as a string literal (`specs/087` §4, §11).
+    #[test]
+    fn no_rust_source_writes_a_pool_name_as_a_string() {
+        let t = parse(&greek()).unwrap();
+        let mut stack = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..")];
+        let mut hits = Vec::new();
+        while let Some(d) = stack.pop() {
+            for entry in std::fs::read_dir(&d).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    if !matches!(path.file_name().and_then(|n| n.to_str()), Some("target" | "node_modules" | ".git")) {
+                        stack.push(path);
+                    }
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let text = std::fs::read_to_string(&path).unwrap_or_default();
+                    for e in &t.pool {
+                        if text.contains(&format!("\"{}\"", e.name)) {
+                            hits.push(format!("{} writes \"{}\"", path.display(), e.name));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(hits.is_empty(), "{hits:?}");
     }
 }

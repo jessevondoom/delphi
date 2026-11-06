@@ -15,6 +15,7 @@
     "span_id": { "type": "string" },
     "parent_span_id": { "type": "string" },
     "agent": { "type": "string", "description": "Canonical role ID, never a theme name." },
+    "pool_slot": { "type": "string", "pattern": "^pool-[0-9]{2}$", "description": "The name-pool slot a one-off agent of that role was given (specs/087 §4.3), so a replay shows the same name. A slot, never a theme name; absent for the core roles and for events written before spec 087." },
     "endpoint_id": { "type": "string" },
     "access_path": { "type": "string" },
     "model_tier": { "type": "string" },

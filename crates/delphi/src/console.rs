@@ -756,7 +756,7 @@ mod tests {
 
     #[test]
     fn the_header_shows_the_working_agent_or_a_waiting_decision() {
-        let names: HashMap<String, String> = [("orchestrator", "Athena"), ("red-team", "Nemesis")].iter().map(|(a, b)| (a.to_string(), b.to_string())).collect();
+        let names: HashMap<String, String> = [("orchestrator", "Athena"), ("red-team", "Redwing")].iter().map(|(a, b)| (a.to_string(), b.to_string())).collect();
         let mut o = obs(&["orchestrator", "red-team"]);
         o.apply(&json!({"seq": 1, "type": "dag.node.added", "task_id": "t_1", "agent": "orchestrator", "payload": {"node_id": "n1", "role": "orchestrator", "depth": 0}}));
         let e = Editor::default();
@@ -764,7 +764,7 @@ mod tests {
         assert!(working.contains("Athena: working · 2 tasks running") && !working.contains("all agents idle"), "{}", working);
         o.apply(&json!({"seq": 2, "type": "approval.requested", "task_id": "t_1", "agent": "red-team", "payload": {"approval_id": "ap_1", "role": "red-team", "summary": "merge"}}));
         let alert = render(&view(&e, &o, &names, Some("red-tier; /y /n /d"), 1), 100);
-        assert!(alert.contains("⟦x?x⟧ Nemesis: decision needed · red-tier; /y /n /d"), "{}", alert);
+        assert!(alert.contains("⟦x?x⟧ Redwing: decision needed · red-tier; /y /n /d"), "{}", alert);
     }
 
     #[test]
