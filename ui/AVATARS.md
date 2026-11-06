@@ -30,4 +30,10 @@ Only the writer and the investigator, the twins, share an idle face; they differ
 tests hold: faces are three cells from a width-1 character set, a blink never equals its idle face, every chassis clears the
 contrast gate in both modes (3.0:1 on dark, 4.0:1 on light; the roles added by 087 reach 4.5:1), and no two chassis are closer
 than the spread measured when 087 was written (CIELAB distance 14 on dark, 9 on light). At 16 colours the codes are distinct
-but approximate in hue, so the face and the name carry the identity. The scout's three-frame blink is spec 087 S4.
+but approximate in hue, so the face and the name carry the identity.
+
+A blink is a list of frames, `blink_steps` in the spec (`avatar::blink_steps`), one frame per timer tick; the first frame is
+`badge.blink`. Most roles have one frame. The scout has three (`-••`, `•-•`, `••-`): one eye closes at a time and all three
+never do. `faceOf` returns `{ frame: 'blink', step }`, `tickKey` includes the step so every frame is repainted, and with
+reduce motion there is no blink in any frame. A face the library has no blink for (a spawned agent) blinks mechanically: each
+eye cell becomes `-` and the mouth stays (`mechanicalBlink` in `theme.ts`). The mascot's blink row stays a single frame.

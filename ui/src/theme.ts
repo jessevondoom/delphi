@@ -18,6 +18,8 @@ export type AvatarRole = {
   crown: string; crown_rgb: string; mascot_face: string;
   /** Per activity: the three cells between the brackets, and which of them is the mouth (the rest are eyes). */
   badge: Record<string, { cells: string; mouth: number | null }>;
+  /** The blink's frames, one per timer tick; the first is `badge.blink`. Absent from an older `delphi`: one frame. */
+  blink_steps?: string[];
   /** Per activity: the seven cells of the mascot's face row. */
   mascot: Record<string, string>;
   /** Eye colour while the role waits on the operator, by terminal background. */
@@ -487,15 +489,37 @@ export type AgentState = 'idle' | 'running' | 'waiting on you' | 'escalated';
 /** The library's name for what each console state looks like. */
 export const ACTIVITY: Record<AgentState, string> = { idle: 'idle', running: 'working', 'waiting on you': 'waiting_approval', escalated: 'escalated' };
 
+/** How many frames a role's blink has: the library's `blink_steps`, or one (an older `delphi` sends none). */
+export const blinkSteps = (role: string, info: Info): number => Math.max(1, info.avatar?.roles[role]?.blink_steps?.length ?? 1);
+
+/**
+ * A blink for a face the library has no blink for (a spawned agent): every eye cell becomes `-` and the mouth stays
+ * (spec 087 §3.2). `mouth` is the mouth's cell (default the middle one), or `null` when every cell is an eye. Returns null
+ * when the face would blink to itself, such as `-_-`, or is not three cells: there is no blink to show.
+ */
+export function mechanicalBlink(cells: string, mouth: number | null = 1): string | null {
+  const chars = [...cells];
+  if (chars.length !== 3) return null;
+  const closed = chars.map((c, i) => (i === mouth || c === ' ' ? c : '-')).join('');
+  return closed === cells ? null : closed;
+}
+
 /** The three cells and the mouth's index: from the library's data, or the built-in faces for an older `delphi`. */
-function badgeCells(role: string, state: AgentState, info: Info, frame?: string): { cells: string[]; mouth: number | null } {
+function badgeCells(role: string, state: AgentState, info: Info, frame?: string, step = 0): { cells: string[]; mouth: number | null } {
   const spec = info.avatar?.roles[role]?.badge[frame ?? ACTIVITY[state]];
-  if (spec) return { cells: [...spec.cells], mouth: spec.mouth };
+  if (spec) {
+    // Later frames of a multi-frame blink come from the library; the mouth is the blink's own.
+    const later = frame === 'blink' && step > 0 ? info.avatar?.roles[role]?.blink_steps?.[step] : undefined;
+    return { cells: [...(later ?? spec.cells)], mouth: spec.mouth };
+  }
   // Older `delphi`: the animation frames of `005a` §4, built in.
   const scout = role === 'scout';
   const animated: Record<string, string> = scout
     ? { blink: '---', thinking_left: '…  ', thinking_right: '  …', success: '^^^' }
     : { blink: '-_-', thinking_left: '•• ', thinking_right: ' ••', success: '^─^' };
+  // A face with no blink of its own (a role the library does not know) closes its eyes and keeps its mouth.
+  const own = frame === 'blink' && !scout ? mechanicalBlink(info.roles[role]?.face ?? '') : null;
+  if (own) return { cells: [...own], mouth: 1 };
   if (frame && animated[frame]) return { cells: [...animated[frame]!], mouth: scout || frame.startsWith('thinking') ? null : 1 };
   const cells = state === 'waiting on you' ? 'x?x' : state === 'escalated' ? 'x_x' : state === 'running' ? (role === 'scout' ? '···' : '•─•') : (info.roles[role]?.face ?? '•_•');
   return { cells: [...cells], mouth: role === 'scout' || state === 'waiting on you' ? null : 1 };
@@ -514,13 +538,14 @@ export function eyeColor(role: string, state: AgentState, info: Info, p: Pal): s
  * Which cell is the mouth comes from the library's data, not from the character: the red-team's `-_-` has `-` eyes.
  * `frame` is the library's activity name when the badge animates (`motion.ts`); without it, the state's own frame.
  * `crossed` swaps the eyes for dim `x`s (the "press Ctrl+C again" window).
+ * `step` is the frame of a multi-frame blink (`Face.step` from `motion.ts`; 0 or absent is the first).
  */
-export function badge(role: string, state: AgentState, info: Info, p: Pal, frame?: string, crossed = false): string {
+export function badge(role: string, state: AgentState, info: Info, p: Pal, frame?: string, crossed = false, step = 0): string {
   const chassis = roleColor(role, info);
   // The library's eye colours need true colour; below it the eyes are the terminal's own foreground, bold (`005e` §12).
   const eye = caps.color === 'truecolor' ? chalk.hex(eyeColor(role, state, info, p))
     : state === 'waiting on you' && info.avatar?.roles[role]?.alert_eye && caps.color !== 'none' ? chalk.bold.yellow : chalk.bold;
-  const { cells, mouth } = badgeCells(role, state, info, frame);
+  const { cells, mouth } = badgeCells(role, state, info, frame, step);
   // `crossed` (Ctrl+C pressed once): every eye becomes a lightly drawn `x`; the mouth and any blank cell stay.
   return chassis('⟦') + cells.map((c, i) => (i === mouth ? chassis(c) : crossed && c !== ' ' ? chalk.dim(eye('x')) : eye(c))).join('') + chassis('⟧');
 }
