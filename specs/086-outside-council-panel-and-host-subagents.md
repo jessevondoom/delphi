@@ -226,6 +226,7 @@ All small, all independent of the Panel:
 | S3 | Role subagents per host (§5.2), `[host.models.*]` (§6.3), the `--agents` installer for Codex | medium | S0b, S2 |
 | S4 | Foreign seat (§6.4) | medium | S2 |
 | S5 | Experiment (§10) and the decision on the default | medium | S2, S3, operator's go |
+| S6 | Follow-ups from the Council review (§15): a Panel's learning captures stage at L0 and say they are the host's words; the `council.verdict` event says `venue`; every stance records a hash of the brief it was given; the card and skill say host support is documented, not live-verified; a test lists the only files that read `council.verdict` | small | §15, operator's decision of 2026-11-06 |
 
 Each slice updates `missions/2026-10-23-foundational-design/spec-tracker.md`, regenerates `docs/reference/`, `ecosystem/` and the schemas, and runs the three gates. Role ids only outside `themes/`.
 
@@ -326,4 +327,4 @@ The seats read this spec and some code; several findings are already met, one is
 
 ### 15.2 Decision for the operator
 
-The Council asks: *stay opt-in until the amendments and per-host live smoke tests pass, or rework first because of the host-scheduling risk to the barrier?* Its seats leaned PROCEED-WITH-CHANGES, not rework. Recommended: (1) build the L0 staging fix and the no-gate test now (small); (2) record a brief hash; (3) keep the Panel the default as decided in OD-1 but have the skill and card say "not yet verified on this host" until that host's S0b probe has passed; (4) do not build single-use tokens. Which of these to adopt is the operator's call; this section changes no behaviour.
+The Council asks: *stay opt-in until the amendments and per-host live smoke tests pass, or rework first because of the host-scheduling risk to the barrier?* Its seats leaned PROCEED-WITH-CHANGES, not rework. Recommended: (1) build the L0 staging fix and the no-gate test now (small); (2) record a brief hash; (3) keep the Panel the default as decided in OD-1 but have the skill and card say "not yet verified on this host" until that host's S0b probe has passed; (4) do not build single-use tokens. **Decided by the operator, 2026-11-06: follow the recommendations** (1) to (4). (1) to (3) are slice S6 (§9); (4) single-use tokens are not built. The S5 experiment runs with a per-run cap of 350,000 tokens (amended in `dev/train/e2/PREREG.md` before any run).
