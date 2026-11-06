@@ -530,11 +530,14 @@ pub struct Routing {
     pub reserve: BTreeMap<String, f64>,
     /// `[routing] registry` (`specs/041`).
     pub registry: RegistryMode,
+    /// `[routing] emergency_endpoint` and `emergency_model` (`specs/056` §3.5): a local model that only saves state when
+    /// every ratified seat is out of quota. Both set, or neither (off). Never part of ordinary routing.
+    pub emergency: Option<(String, String)>,
 }
 
 impl Default for Routing {
     fn default() -> Routing {
-        Routing { pool: None, targets: BTreeMap::new(), tuning: PoolTuning::default(), assignment: Assignment::Static, evidence_enough: DEFAULT_EVIDENCE_ENOUGH, reserve: BTreeMap::new(), registry: RegistryMode::Flat }
+        Routing { pool: None, targets: BTreeMap::new(), tuning: PoolTuning::default(), assignment: Assignment::Static, evidence_enough: DEFAULT_EVIDENCE_ENOUGH, reserve: BTreeMap::new(), registry: RegistryMode::Flat, emergency: None }
     }
 }
 
@@ -1062,6 +1065,11 @@ impl Config {
                     None => errs.push("[routing] registry must be \"flat\" or \"auto\"".into()),
                 }
             }
+            match (r.get("emergency_endpoint").and_then(|v| v.as_str()), r.get("emergency_model").and_then(|v| v.as_str())) {
+                (None, None) => {}
+                (Some(e), Some(m)) if !e.trim().is_empty() && !m.trim().is_empty() => cfg.routing.emergency = Some((e.trim().into(), m.trim().into())),
+                _ => errs.push("[routing] emergency_endpoint and emergency_model must both be set to non-empty strings, or neither".into()),
+            }
             if let Some(n) = r.get("evidence_enough") {
                 match n.as_integer().filter(|n| *n >= 1) {
                     Some(n) => cfg.routing.evidence_enough = n as u32,
@@ -1104,6 +1112,11 @@ impl Config {
             }
         }
         errs.extend(cfg.validate());
+        if let Some((e, _)) = &cfg.routing.emergency {
+            if !cfg.endpoint(e).is_some_and(|ep| ep.is_local()) {
+                errs.push(format!("[routing] emergency_endpoint `{}` must be a configured endpoint with cost_model = \"local\"", e));
+            }
+        }
         if errs.is_empty() {
             Ok(cfg)
         } else {
@@ -1698,6 +1711,17 @@ allowed_endpoints = ["corp-gateway", "bedrock-us"]
         assert_eq!((c.grades.of("architect", None), c.grades.of("builder", None), c.grades.of("builder", Some("docs")), c.grades.of("builder", Some("code")), c.grades.of("writer", None)), (1, -1, -2, -1, 0));
         assert!(with_routing("[grades]\narchitect = 3").is_err());
         assert!(with_routing("[grades]\narchitect = \"high\"").is_err());
+    }
+
+    #[test]
+    fn the_emergency_model_is_off_unless_both_keys_name_a_local_endpoint() {
+        assert_eq!(with_routing("").unwrap().routing.emergency, None);
+        let ep = "[[endpoints]]\nid = \"here\"\nfamily = \"claude\"\npath = \"api\"\ncredential = \"env:K\"\ncost_model = \"local\"\nbase_url = \"http://localhost:11434\"\n";
+        let ok = with_routing(&format!("{ep}[routing]\nemergency_endpoint = \"here\"\nemergency_model = \"tiny\"")).unwrap();
+        assert_eq!(ok.routing.emergency, Some(("here".into(), "tiny".into())));
+        for bad in ["[routing]\nemergency_endpoint = \"here\"", "[routing]\nemergency_model = \"tiny\"", "[routing]\nemergency_endpoint = \"nope\"\nemergency_model = \"tiny\""] {
+            assert!(with_routing(&format!("{ep}{bad}")).is_err(), "{bad}");
+        }
     }
 
     #[test]

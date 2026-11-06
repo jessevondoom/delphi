@@ -187,6 +187,10 @@ fn context_of(cfg: &Config, key: &PoolKey) -> u64 {
 /// Why a pair can never serve this request, or `None` if it is eligible.
 pub(crate) fn ineligible(cfg: &Config, key: &PoolKey, req: &RouteRequest) -> Option<String> {
     let ep = cfg.endpoint(&key.endpoint_id)?;
+    // The emergency model (`specs/056` §3.5) is never eligible, under either assignment, whatever the load.
+    if crate::emergency::is_emergency(cfg, &key.endpoint_id, &key.model_id) {
+        return Some("it is the emergency model: it only saves state when every seat is out of quota".into());
+    }
     if !cfg.is_allowed(&ep.id) {
         return Some("the endpoint is not in allowed_endpoints".into());
     }

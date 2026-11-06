@@ -81,6 +81,11 @@ max_parallel_agents = 4
 # a card only when no pool member meets a role's floor. `delphi capabilities --models` shows each model's class.
 # assignment = "static"
 # evidence_enough = 8                # measured results per (role, kind, model) after which a model is scored by them alone
+# Emergency stop-gap (specs/056 §3.5; off unless both are set). A local model (an endpoint with cost_model = "local") that, only when every
+# ratified seat is out of quota, reads and writes one hand-off record of the mission's state, marked unverified until a capable model re-checks it.
+# It never serves ordinary work, approves, ratifies or leaves the sandbox.
+# emergency_endpoint = "<local endpoint id>"
+# emergency_model = "<model id>"
 # [routing.reserve]                  # share of the mission budget no other role may spend (assignment = "discovered")
 # validator = 0.15
 

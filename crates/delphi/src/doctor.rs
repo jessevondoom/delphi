@@ -436,6 +436,8 @@ fn check_pool(ws: &Workspace, home: &Path, cfg_text: &str, r: &mut Report) {
     for e in stuck {
         r.warn("11 model pool", format!("{}/{}", e.endpoint_id, e.model_id), delphi_engine::pool::describe(&e, now));
     }
+    // Spec 056 M6: the emergency stop-gap, one line either way; not being configured is a note, not a failure.
+    r.push(if cfg.routing.emergency.is_some() { Level::Ok } else { Level::Skipped }, "11 model pool", "", delphi_engine::emergency::line(&cfg));
     // Spec 056 M1: a model no class rule places is trialled on low-risk tasks only, until its results or the operator place it.
     match delphi_engine::models::ClassRules::load(&ws.dir) {
         Err(e) => r.warn("11 model pool", "model-classes.toml", e),

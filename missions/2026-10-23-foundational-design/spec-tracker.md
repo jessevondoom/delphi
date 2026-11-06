@@ -356,7 +356,7 @@ Asked for by the operator on 2026-10-28: no hard-coded favorites; discover what 
 | M3 | `[grades]`, `delphi agent promote`, `nerf`, `grades` | built (`[grades]` is a ratified access block; `delphi-engine/src/grades.rs`, `delphi/src/agent_cmd.rs`; `agent.graded` journaled in `local/grades.jsonl`; the engine applies a role's grade as a step in `assign_for`) |
 | M4 | ratchet and suggestions from retrospectives | not started |
 | M5 | `delphi models calibrate` | not started |
-| M6 | `emergency` local class: save state when every seat is exhausted, re-verify on recovery, doctor line | not started |
+| M6 | `emergency` local class: save state when every seat is exhausted, re-verify on recovery, doctor line | built in part (`delphi-engine/src/emergency.rs`; `[routing] emergency_endpoint`/`emergency_model`, off by default, local endpoints only; `Class::Emergency` below every floor and refused by `route::ineligible` under both assignments; trigger only when every ratified seat is out; `Task` allow-list read/summarise/write-state; `save_state` writes a labeled `emergency` record under `<mission>/handoffs/`; `recover` re-checks branches, uncommitted files, journal pointers and PRs and removes the label only after a floor-meeting verifier answers; doctor and `capabilities --models` print the fixed line). Not built: the engine loop does not yet call `trigger`/`save_state`/`recover` and no model-client `Writer` exists, so nothing saves state live; the dispatch refusal on a pending record is the `pending` function only |
 
 ## Project scopes, scaffolding, indexes and promotion (spec 058, approved 2026-10-30)
 
