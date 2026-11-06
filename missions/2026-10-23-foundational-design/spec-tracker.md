@@ -728,3 +728,17 @@ From the operator's request to refine the outside Council (Claude Code, Copilot,
 | S4 | one foreign-family seat (token ceiling, not a history-based estimate); `venue`/`blind` in the record front matter | 10 | built (PR open) |
 | S5 | pre-registered Panel-vs-Council experiment; decides the default | 12 | pre-registration merged (#505); S2/S3 merged; the run needs the operator's go and token caps |
 | S6 | follow-ups from the Council review: Panel captures at L0, verdict `venue`, brief hash, host-support line, list of `council.verdict` readers | 4 | built (PR open) |
+
+## Spec 088: a spec compile step (2026-11-06, draft)
+
+From a conversation with the operator on 2026-11-06 and a prior-art survey (spec 088 §9; part of it unverified). A draft: not approved, nothing built. Extract-never-rewrite is the stated invariant; a per-spec JSON for agents and grouped markdown views for review; slices S4 onward wait on a measurement after S3 (spec 088 §8, item 10).
+
+| Slice | Content | Hours | State |
+| :-- | :-- | --: | :-- |
+| S0 | spec 088 approval and tracker entry | 1 | draft, awaits the operator |
+| S1 | move the canonical specs to `specs/source/`; trailers resolve by number | 6 | not built |
+| S2 | shared parser, tier 0 compile, schema, frontmatter `group` | 16 | not built |
+| S3 | index and group views, drift tests, `specs show/list`, MCP; start of the measurement | 12 | not built |
+| S4 | requirement tags, revisions, tombstones, amendments, registry check | 16 | not built |
+| S5 | `spec-driven-build` skill, retrofit tool, tag the specs still being built | 20 | not built |
+| S6 | coverage report (warn-only) | 10 | not built |
