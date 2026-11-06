@@ -615,8 +615,10 @@ pub fn render_artifact(a: &ArtifactInput) -> String {
 pub fn lint_artifact(text: &str) -> Vec<String> {
     let mut problems = Vec::new();
     const HEADING: &str = "## Accepted Risks & Minority Report (Red-Team / Dissent)";
-    let Some(at) = text.rfind(HEADING) else { return vec![format!("missing the `{}` section", HEADING)] };
-    let minority = &text[at + HEADING.len()..];
+    // At a line start, like the real heading: quoted seat text cannot begin a line with it.
+    let anchored = format!("\n{HEADING}");
+    let Some(at) = text.rfind(anchored.as_str()) else { return vec![format!("missing the `{}` section", HEADING)] };
+    let minority = &text[at + anchored.len()..];
     let structured = text.split("## Round 2 structured output").nth(1).and_then(|t| t.split("\n## ").next()).unwrap_or("");
     let (mut blocking, mut red_concur) = (Vec::new(), false);
     for line in structured.lines().filter_map(|l| l.strip_prefix("- ")) {
@@ -720,14 +722,14 @@ pub fn assign_lenses(seats: &[String], lenses: &[Lens]) -> LensPlan {
 
 // ── prompts ─────────────────────────────────────────────────────────────────
 
-fn round1_objective(proposition: &str) -> String {
+pub(crate) fn round1_objective(proposition: &str) -> String {
     format!(
         "COUNCIL, ROUND 1 (blind). No other seat's view is available to you, and you will not be shown theirs until everyone has answered.\n\nProposition: {}\n\nGive your opening stance from your own role's point of view. Reply as plain text in this shape: first a line `OPTION: <your preferred approach in at most six words>`, then your reasoning in at most 350 words, then the risks you see. Do not ask questions and do not write any files.",
         proposition.trim()
     )
 }
 
-fn round2_objective(role: &str, proposition: &str) -> String {
+pub(crate) fn round2_objective(role: &str, proposition: &str) -> String {
     let attack = match role {
         "red-team" => "Read every Round 1 stance and attack it: failure modes, security flaws, anything that breaks under load or abuse.",
         "strategist" => "Read every Round 1 stance and attack scope creep, timeline, cost and return on effort.",
@@ -741,7 +743,7 @@ fn round2_objective(role: &str, proposition: &str) -> String {
     )
 }
 
-fn synthesis_objective(proposition: &str, escalation: Option<&str>, labels: &[String]) -> String {
+pub(crate) fn synthesis_objective(proposition: &str, escalation: Option<&str>, labels: &[String]) -> String {
     let shape = crate::council_next::format_instruction(labels);
     format!(
         "COUNCIL, SYNTHESIS. You are the arbiter. The seats' stances and critiques are attached as context slices. Proposition: {}\n\nWrite the verdict in at most 250 words of plain prose: what the Council recommends and why, where the seats agreed, and where they did not. {} You do not write the Minority Report: the daemon copies the critics' open P0/P1 items into the record verbatim, so do not restate or soften them.\n\n{}",
@@ -855,6 +857,48 @@ impl Engine {
         m.release_blocks(&task_id).await?; // never leave anything held, whatever happened
         self.broker.end_task(&task_id);
         let (status, text) = result?;
+        self.finish_task(m, task_id, crate::engine::SpanOutcome { status, text, turns: 0, ceiling: delphi_core::provenance::Tier::L5 }).await
+    }
+
+    /// A host Panel's Round 1 has released (`specs/086` §4): the stances join the log as a daemon Council's do, and the plan is recorded
+    /// as host-reported (the daemon cannot know the family or prove the isolation of a seat a host ran itself).
+    pub async fn panel_released(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, proposition: &str, stances: &BTreeMap<String, Stance>, models: &BTreeMap<String, String>) -> Result<(), EngineError> {
+        let emit = |kind: &str, payload: Value| {
+            let mut e = EventEnvelope::new(&m.id, kind, payload);
+            e.task_id = Some(task_id.to_string());
+            e
+        };
+        m.append(emit("council.started", json!({"proposition": proposition, "venue": "panel", "seats": stances.keys().map(|r| json!({"role": r, "family": "host-reported", "model": models.get(r)})).collect::<Vec<_>>(), "homogeneous": true, "notes": ["a host Panel: isolation and model names are host-reported; Delphi holds the barrier"]}))).await?;
+        for (role, st) in stances {
+            let (status, text) = match st {
+                Stance::Said(t) => ("answered", t.clone()),
+                Stance::Abstained(w) => ("abstained", w.clone()),
+            };
+            m.append(emit("council.stance", json!({"round": 1, "role": role, "status": status, "text": self.secrets.redact(&text), "model": models.get(role)}))).await?;
+        }
+        Ok(())
+    }
+
+    /// Too few seats answered: nothing is decided, and the operator is told why (as a daemon Council does).
+    pub async fn panel_escalate(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, why: String) -> Result<crate::engine::TaskOutcome, EngineError> {
+        m.release_blocks(&task_id).await?;
+        self.finish_task(m, task_id, crate::engine::SpanOutcome { status: Status::Escalated(why), text: String::new(), turns: 0, ceiling: delphi_core::provenance::Tier::L5 }).await
+    }
+
+    /// The moderator's verdict arrived: the same decision, steps and record a daemon Council writes, from the Panel's held state.
+    pub async fn panel_conclude(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, panel: &crate::council_panel::Panel) -> Result<crate::engine::TaskOutcome, EngineError> {
+        let stances = panel.stances().cloned().unwrap_or_default();
+        let (round2, round2_text) = panel.parsed_round2();
+        for (role, c) in &round2 {
+            let mut e = EventEnvelope::new(&m.id, "council.critique", json!({"round": 2, "role": role, "readable": c.is_some(), "recommendation": c.as_ref().map(|c| c.recommendation.label()), "concur": c.as_ref().and_then(|c| c.concur), "findings": c.as_ref().map(|c| c.findings.iter().map(|(s, t)| json!({"severity": s, "title": t})).collect::<Vec<_>>()).unwrap_or_default(), "text": round2_text.get(role).map(|t| self.secrets.redact(t))}));
+            e.task_id = Some(task_id.clone());
+            m.append(e).await?;
+        }
+        let decision = decide(&round2);
+        let plan = Assignment { seats: panel.seats().iter().map(|r| SeatPlan { role: r.clone(), family: "host-reported".into(), avoid: vec![], tier: None }).collect(), homogeneous: true, notes: vec!["a host Panel: isolation and model names are host-reported".into()] };
+        let synthesis = panel.verdict().unwrap_or("(The moderator wrote no verdict; the structured record above and below is complete.)").to_string();
+        let (status, text) = self.conclude(m, &task_id, &panel.proposition, &plan, &stances, &round2, &round2_text, &decision, None, synthesis).await?;
+        m.release_blocks(&task_id).await?;
         self.finish_task(m, task_id, crate::engine::SpanOutcome { status, text, turns: 0, ceiling: delphi_core::provenance::Tier::L5 }).await
     }
 
@@ -1012,6 +1056,18 @@ impl Engine {
                 synthesis = t;
             }
         }
+        self.conclude(m, task_id, proposition, &plan, &stances, &round2, &round2_text, &decision, lens_plan.as_ref(), synthesis).await
+    }
+
+    /// From the deterministic decision to the record: the steps that follow, the Council record on disk, the `council.verdict` event
+    /// and the text the operator is shown. A daemon Council and a host Panel (`specs/086`) both end here, so both write the same record.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn conclude(&self, m: &Arc<MissionState>, task_id: &str, proposition: &str, plan: &Assignment, stances: &BTreeMap<String, Stance>, round2: &Round2, round2_text: &BTreeMap<String, String>, decision: &Decision, lens_plan: Option<&LensPlan>, mut synthesis: String) -> Result<(Status, String), EngineError> {
+        let emit = |kind: &str, payload: Value| {
+            let mut e = EventEnvelope::new(&m.id, kind, payload);
+            e.task_id = Some(task_id.to_string());
+            e
+        };
         // A verdict that ends in prose is a checkbox: it ends in a decision and the steps that follow (`specs/003` §4.2).
         let step_roles: Vec<String> = self.settings.enabled_agents.iter().filter(|r| *r != "orchestrator").cloned().collect();
         let labels: Vec<String> = if decision.escalation.is_some() { decision.options.iter().map(|(l, _)| l.clone()).collect() } else { Vec::new() };
@@ -1028,7 +1084,7 @@ impl Engine {
         let n = Self::next_council_number(m);
         let slug = slugify(headline(proposition));
         let stamp = self.now();
-        let doc = render_artifact(&ArtifactInput { mission_id: &m.id, n, slug: &slug, proposition, timestamp: &stamp, plan: &plan, stances: &stances, round2: &round2, round2_text: &round2_text, decision: &decision, synthesis: &synthesis, follow: &follow, lenses: lens_plan.as_ref() });
+        let doc = render_artifact(&ArtifactInput { mission_id: &m.id, n, slug: &slug, proposition, timestamp: &stamp, plan, stances, round2, round2_text, decision, synthesis: &synthesis, follow: &follow, lenses: lens_plan });
         let dir = m.dir.join("councils");
         std::fs::create_dir_all(&dir).map_err(|e| EngineError::Invalid(e.to_string()))?;
         let rel = format!("missions/{}/councils/{}", m.id, artifact_name(n, &slug));
@@ -1051,7 +1107,7 @@ impl Engine {
             text.push_str(&next);
         }
         text.push_str("\n\nMinority report:\n");
-        text.push_str(minority_report(&round2, &decision, plan.homogeneous).trim_end());
+        text.push_str(minority_report(round2, decision, plan.homogeneous).trim_end());
         text.push_str(&format!("\n\nSaved: {}", rel));
         let status = match &decision.escalation {
             Some(why) => Status::Escalated(format!("Council escalated: {}", why)),
