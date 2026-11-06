@@ -178,10 +178,12 @@ Where the host offers two or more models, the red-team seat takes a different mo
 
 Generated agent files use **aliases and tiers** the host documents (Claude `opus`/`sonnet`/`haiku`/`fable`; agy `pro`/`flash`), never full model ids. For hosts that take free model names (Copilot, Codex) the file sets no model and the plan comes from the operator's mapping, `[host.models.<host>]` (role → model name), shown by `council_frame`; with no mapping, the seat inherits and the card says `1 model`. A hard-coded model name in a generated file fails the drift test.
 
-### 6.4 One foreign seat (S3, optional)
+### 6.4 One foreign seat (S4, optional)
 
 A Panel may add one seat run by **Delphi's own harness** from another family (normally red-team), via the existing seat machinery. It spends the operator's tokens on the daemon side, so `council_frame` lists it and the estimate includes it; it runs only on the operator's yes. With it, the card can honestly say `2 families`.
 
+
+**Built (S4):** `council_open` takes `foreign_seat` (architect, red-team or strategist) and `blind` (yes or no). Delphi picks a family other than the host's (a guess from the model name the host reported, else the tool; none for Copilot), runs that one seat through its own harness in the background for both rounds, and feeds its answers through the same rules as any seat. The host cannot brief or answer for it. If no other family is configured, `council_open` refuses and says so. The record's front matter gains `venue: panel`, `blind`, `foreign_seat` and `foreign_family`, and the card says "2 families" only when a foreign seat sat. **Deviation:** the token figure is a *ceiling* (two calls at the configured output limit plus input), not an estimate from past `agent.usage`, because no Council cost has been measured; it is stated in the `council_open` answer and described by `council_frame`.
 ---
 
 ## 7. The ruling card

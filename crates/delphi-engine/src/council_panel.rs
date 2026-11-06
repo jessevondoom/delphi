@@ -17,6 +17,23 @@ pub const PANEL_TTL: std::time::Duration = std::time::Duration::from_secs(6 * 36
 /// Panels open at once across all sessions of one daemon.
 pub const MAX_PANELS: usize = 32;
 
+/// The model family a host is probably on, from the model name it reported, else from which tool it is. Host-reported, so a guess:
+/// it only decides which family Delphi's own seat avoids (`None` when nothing says; Copilot serves several families).
+pub fn host_family(model: Option<&str>, tool: &str) -> Option<&'static str> {
+    let m = model.unwrap_or("").to_lowercase();
+    for (needle, fam) in [("claude", "claude"), ("opus", "claude"), ("sonnet", "claude"), ("haiku", "claude"), ("gemini", "gemini"), ("gpt", "openai"), ("codex", "openai"), ("o3", "openai"), ("o4", "openai")] {
+        if m.contains(needle) {
+            return Some(fam);
+        }
+    }
+    match tool.to_lowercase().as_str() {
+        t if t.contains("claude") => Some("claude"),
+        t if t.contains("codex") => Some("openai"),
+        t if t.contains("agy") || t.contains("gemini") || t.contains("antigravity") => Some("gemini"),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PanelErr {
     UnknownSeat(String),
@@ -65,12 +82,31 @@ pub struct Panel {
     /// Model names the host reported, by seat. Self-reported; shown as such.
     pub models: BTreeMap<String, String>,
     opened: std::time::Instant,
+    /// A seat Delphi itself runs on another model family (`specs/086` §6.4): `(role, family)`. The host cannot brief or answer for it.
+    foreign: Option<(String, String)>,
+    /// What the host said about isolation when it opened the Panel: `yes`, `no` or `unknown`. Host-reported.
+    pub blind: String,
 }
 
 impl Panel {
     pub fn new(proposition: &str) -> Panel {
         let seats: Vec<String> = PANEL_SEATS.iter().map(|s| s.to_string()).collect();
-        Panel { proposition: proposition.to_string(), barrier: Barrier::new(&seats), seats, released: None, answered: Vec::new(), round2: BTreeMap::new(), verdict: None, models: BTreeMap::new(), opened: std::time::Instant::now() }
+        Panel { proposition: proposition.to_string(), barrier: Barrier::new(&seats), seats, released: None, answered: Vec::new(), round2: BTreeMap::new(), verdict: None, models: BTreeMap::new(), opened: std::time::Instant::now(), foreign: None, blind: "unknown".into() }
+    }
+
+    /// Give one seat to Delphi: it runs on `family`, the host may neither brief nor answer for it.
+    pub fn reserve(&mut self, seat: &str, family: &str) -> Result<(), PanelErr> {
+        self.check_seat(seat)?;
+        self.foreign = Some((seat.to_string(), family.to_string()));
+        Ok(())
+    }
+
+    pub fn foreign(&self) -> Option<(&str, &str)> {
+        self.foreign.as_ref().map(|(r, f)| (r.as_str(), f.as_str()))
+    }
+
+    fn reserved(&self, seat: &str) -> bool {
+        self.foreign.as_ref().is_some_and(|(r, _)| r == seat)
     }
 
     /// How long this Panel has been open; an abandoned one is dropped after a while (`PANEL_TTL`).
@@ -101,6 +137,13 @@ impl Panel {
 
     /// The text a seat is given for `round`. Round 2 is refused until Round 1 has released; the verdict brief until Round 2 is complete.
     pub fn brief(&self, seat: &str, round: u8) -> Result<String, PanelErr> {
+        if self.reserved(seat) {
+            return Err(PanelErr::Closed(format!("`{seat}` is run by Delphi on another model family: you do not brief or answer for it")));
+        }
+        self.brief_inner(seat, round)
+    }
+
+    fn brief_inner(&self, seat: &str, round: u8) -> Result<String, PanelErr> {
         match round {
             1 => {
                 self.check_seat(seat)?;
@@ -138,12 +181,31 @@ impl Panel {
         }
     }
 
+    /// The brief for the seat Delphi runs itself (its own prompt, built by the daemon), for either round.
+    pub fn brief_for_delphi(&self, round: u8) -> Result<String, PanelErr> {
+        let seat = self.foreign.as_ref().map(|(r, _)| r.clone()).ok_or_else(|| PanelErr::UnknownSeat("(no foreign seat)".into()))?;
+        self.brief_inner(&seat, round)
+    }
+
     fn check_seat(&self, seat: &str) -> Result<(), PanelErr> {
         if self.seats.iter().any(|s| s == seat) { Ok(()) } else { Err(PanelErr::UnknownSeat(seat.to_string())) }
     }
 
     /// Take a seat's answer (`abstain` names why it cannot answer, instead of a stance). Round 1 is held until every seat is in.
     pub fn submit(&mut self, seat: &str, round: u8, text: &str, abstain: Option<&str>, model: Option<&str>) -> Result<Step, PanelErr> {
+        if self.reserved(seat) {
+            return Err(PanelErr::Closed(format!("`{seat}` is run by Delphi on another model family: you do not brief or answer for it")));
+        }
+        self.submit_inner(seat, round, text, abstain, model)
+    }
+
+    /// The answer of the seat Delphi runs itself. Only the daemon calls this.
+    pub fn submit_by_delphi(&mut self, round: u8, text: &str, abstain: Option<&str>, model: Option<&str>) -> Result<Step, PanelErr> {
+        let seat = self.foreign.as_ref().map(|(r, _)| r.clone()).ok_or_else(|| PanelErr::UnknownSeat("(no foreign seat)".into()))?;
+        self.submit_inner(&seat, round, text, abstain, model)
+    }
+
+    fn submit_inner(&mut self, seat: &str, round: u8, text: &str, abstain: Option<&str>, model: Option<&str>) -> Result<Step, PanelErr> {
         // The model a seat reports is kept only for an answer that is accepted (never for an unknown seat or a duplicate).
         let note_model = |this: &mut Panel| {
             if let Some(m) = model.filter(|m| !m.trim().is_empty()) {
@@ -323,6 +385,36 @@ mod tests {
         assert!(q.submit("orchestrator", 3, "", None, None).is_err() && q.submit("orchestrator", 3, "x", Some("tired"), None).is_err(), "an empty verdict is refused");
         assert!(q.verdict().is_none());
         assert!(q.age() < PANEL_TTL);
+    }
+
+    #[test]
+    fn the_hosts_family_is_a_guess_from_its_model_name_then_its_tool() {
+        assert_eq!(host_family(Some("claude-sonnet-5-5"), "copilot-cli"), Some("claude"), "the model wins over the tool");
+        assert_eq!(host_family(Some("GPT-5"), "claude-code"), Some("openai"));
+        assert_eq!(host_family(None, "claude-code"), Some("claude"));
+        assert_eq!(host_family(Some("unknown"), "agy"), Some("gemini"));
+        assert_eq!(host_family(None, "copilot-cli"), None, "Copilot serves several families: no guess");
+    }
+
+    #[test]
+    fn a_seat_delphi_runs_cannot_be_briefed_or_answered_by_the_host() {
+        let mut p = Panel::new("q");
+        p.reserve("red-team", "gemini").unwrap();
+        assert_eq!(p.foreign(), Some(("red-team", "gemini")));
+        assert!(p.brief("red-team", 1).unwrap_err().to_string().contains("run by Delphi"));
+        assert!(p.submit("red-team", 1, "forged", None, Some("x")).is_err(), "the host cannot answer for Delphi's seat");
+        assert!(p.models.is_empty());
+        assert!(p.brief_for_delphi(1).unwrap().contains("ROUND 1 (blind)"));
+        p.submit("architect", 1, "A", None, None).unwrap();
+        assert!(p.brief_for_delphi(2).is_err(), "Delphi's own seat is held at the barrier too");
+        assert_eq!(p.submit_by_delphi(1, "R", None, Some("gem-w")).unwrap(), Step::Waiting(vec!["strategist".into()]));
+        assert!(matches!(p.submit("strategist", 1, "S", None, None).unwrap(), Step::Released(_)));
+        assert!(p.brief_for_delphi(2).unwrap().contains("--- architect ---"));
+        p.submit("architect", 2, GOOD, None, None).unwrap();
+        p.submit("strategist", 2, GOOD, None, None).unwrap();
+        assert_eq!(p.submit_by_delphi(2, GOOD, None, None).unwrap(), Step::RoundTwoDone);
+        assert_eq!(p.models.get("red-team").map(String::as_str), Some("gem-w"));
+        assert!(Panel::new("q").submit_by_delphi(1, "x", None, None).is_err(), "no foreign seat, no Delphi answer");
     }
 
     #[test]

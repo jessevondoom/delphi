@@ -712,5 +712,5 @@ From the operator's request to refine the outside Council (Claude Code, Copilot,
 | S1 | `delphi-council` skill, ruling card + `phase`, `council_frame` (no token estimate yet: moves to S4) | 10 | built (PR open) |
 | S2 | Panel: server-held barrier, `council_open/brief/submit/choose` | 24 | built (PR open) |
 | S3 | role subagents per host, `[host.models.*]`, Codex agents installer | 14 | built (PR open) |
-| S4 | one foreign-family seat | 10 | approved, not built |
+| S4 | one foreign-family seat (token ceiling, not a history-based estimate); `venue`/`blind` in the record front matter | 10 | built (PR open) |
 | S5 | pre-registered Panel-vs-Council experiment; decides the default | 12 | needs operator go |

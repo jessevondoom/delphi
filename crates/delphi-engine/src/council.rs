@@ -501,6 +501,8 @@ pub struct ArtifactInput<'a> {
     pub follow: &'a crate::council_next::Followup,
     /// Set for a Council run with `--lenses`: the record says which seat argued from which perspective.
     pub lenses: Option<&'a LensPlan>,
+    /// Extra front-matter lines (each ending in a newline), after `council_format`: a Panel says `venue`, `blind` and any foreign seat.
+    pub front: &'a str,
 }
 
 /// Model text goes into the record as a blockquote, so nothing a seat writes can open a heading of its own
@@ -535,6 +537,9 @@ pub fn render_artifact(a: &ArtifactInput) -> String {
         a.mission_id,
         a.n
     );
+    if !a.front.is_empty() {
+        s = s.replacen("council_format: 1\n---", &format!("council_format: 1\n{}---", a.front), 1);
+    }
     s.push_str(&format!("# Council {:03}\n\n**Proposition:** {}\n\n", a.n, a.proposition.trim()));
     s.push_str("## Seats\n\n| Seat | Family | Round 1 | Round 2 |\n| :-- | :-- | :-- | :-- |\n");
     for p in &a.plan.seats {
@@ -860,15 +865,46 @@ impl Engine {
         self.finish_task(m, task_id, crate::engine::SpanOutcome { status, text, turns: 0, ceiling: delphi_core::provenance::Tier::L5 }).await
     }
 
+    /// The family for the seat Delphi runs in a Panel: not the host's (when known), preferring the role's configured family.
+    /// `None` when no other usable family is configured, and the Panel refuses to promise a foreign seat it cannot seat.
+    pub fn panel_foreign_family(&self, role: &str, host_family: Option<&str>) -> Option<String> {
+        let available = self.available_families();
+        let wanted = self.cfg.get().family_for_role(role).to_string();
+        let ok = |f: &String| Some(f.as_str()) != host_family;
+        if available.contains(&wanted) && ok(&wanted) {
+            return Some(wanted);
+        }
+        available.into_iter().find(ok)
+    }
+
+    /// An upper bound, in tokens, on what Delphi's seat can spend in a Panel: two calls (opening and cross-examination), each limited to
+    /// `max_tokens` of output, plus the question and the other stances as input. A ceiling, not a forecast: no Council cost is measured yet.
+    pub fn panel_foreign_ceiling_tokens(&self) -> u64 {
+        2 * self.settings.max_tokens + 2 * 12_000
+    }
+
+    /// Run the seat Delphi owns in a Panel for `round` (1 or 2). Round 2 reads the Round 1 stances the barrier released. The answer is
+    /// the seat's own words on the family chosen for it; a seat that fails or times out abstains and the Panel goes on.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn panel_foreign_run(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, panel_brief: String, proposition: &str, role: &str, family: &str, round: u8, stances: Option<&BTreeMap<String, Stance>>) -> Stance {
+        let plan = SeatPlan { role: role.to_string(), family: family.to_string(), avoid: vec![], tier: Some(self.role_default_tier(role)) };
+        let pointers = pointers_from_prompt(proposition);
+        let h = self.council_handoff(m, task_id, role, if round == 1 { "r1" } else { "r2" }, &plan, panel_brief, pointers);
+        let slices: Vec<ContextSlice> = stances.map(|st| st.iter().filter_map(|(r, s)| s.text().map(|t| ContextSlice { label: format!("council/round1/{}", r), tier: "L3".into(), text: t.chars().take(6000).collect() })).collect()).unwrap_or_default();
+        let schema = if round == 2 { Some(critique_schema()) } else { None };
+        self.run_seat(m, task_id, h, slices, schema, self.settings.council_seat_timeout).await
+    }
+
     /// A host Panel's Round 1 has released (`specs/086` §4): the stances join the log as a daemon Council's do, and the plan is recorded
     /// as host-reported (the daemon cannot know the family or prove the isolation of a seat a host ran itself).
-    pub async fn panel_released(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, proposition: &str, stances: &BTreeMap<String, Stance>, models: &BTreeMap<String, String>) -> Result<(), EngineError> {
+    #[allow(clippy::too_many_arguments)]
+    pub async fn panel_released(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, proposition: &str, stances: &BTreeMap<String, Stance>, models: &BTreeMap<String, String>, foreign: Option<(&str, &str)>, blind: &str) -> Result<(), EngineError> {
         let emit = |kind: &str, payload: Value| {
             let mut e = EventEnvelope::new(&m.id, kind, payload);
             e.task_id = Some(task_id.to_string());
             e
         };
-        m.append(emit("council.started", json!({"proposition": proposition, "venue": "panel", "seats": stances.keys().map(|r| json!({"role": r, "family": "host-reported", "model": models.get(r)})).collect::<Vec<_>>(), "homogeneous": true, "notes": ["a host Panel: isolation and model names are host-reported; Delphi holds the barrier"]}))).await?;
+        m.append(emit("council.started", json!({"proposition": proposition, "venue": "panel", "blind": blind, "foreign": foreign.map(|(r, f)| json!({"role": r, "family": f})), "seats": stances.keys().map(|r| json!({"role": r, "family": if foreign.is_some_and(|(fr, _)| fr == r) { foreign.map(|(_, f)| f).unwrap_or("host-reported") } else { "host-reported" }, "model": models.get(r)})).collect::<Vec<_>>(), "homogeneous": foreign.is_none(), "notes": ["a host Panel: isolation and model names are host-reported; Delphi holds the barrier"]}))).await?;
         for (role, st) in stances {
             let (status, text) = match st {
                 Stance::Said(t) => ("answered", t.clone()),
@@ -895,9 +931,15 @@ impl Engine {
             m.append(e).await?;
         }
         let decision = decide(&round2);
-        let plan = Assignment { seats: panel.seats().iter().map(|r| SeatPlan { role: r.clone(), family: "host-reported".into(), avoid: vec![], tier: None }).collect(), homogeneous: true, notes: vec!["a host Panel: isolation and model names are host-reported".into()] };
+        let foreign = panel.foreign();
+        let plan = Assignment {
+            seats: panel.seats().iter().map(|r| SeatPlan { role: r.clone(), family: match foreign { Some((fr, ff)) if fr == r => ff.to_string(), _ => "host-reported".into() }, avoid: vec![], tier: None }).collect(),
+            homogeneous: foreign.is_none(),
+            notes: vec!["a host Panel: isolation and model names are host-reported".into()],
+        };
         let synthesis = panel.verdict().unwrap_or("(The moderator wrote no verdict; the structured record above and below is complete.)").to_string();
-        let (status, text) = self.conclude(m, &task_id, &panel.proposition, &plan, &stances, &round2, &round2_text, &decision, None, synthesis).await?;
+        let front = format!("venue: panel\nblind: {}\n{}", panel.blind, foreign.map(|(r, f)| format!("foreign_seat: {r}\nforeign_family: {f}\n")).unwrap_or_default());
+        let (status, text) = self.conclude(m, &task_id, &panel.proposition, &plan, &stances, &round2, &round2_text, &decision, None, &front, synthesis).await?;
         m.release_blocks(&task_id).await?;
         self.finish_task(m, task_id, crate::engine::SpanOutcome { status, text, turns: 0, ceiling: delphi_core::provenance::Tier::L5 }).await
     }
@@ -1056,13 +1098,13 @@ impl Engine {
                 synthesis = t;
             }
         }
-        self.conclude(m, task_id, proposition, &plan, &stances, &round2, &round2_text, &decision, lens_plan.as_ref(), synthesis).await
+        self.conclude(m, task_id, proposition, &plan, &stances, &round2, &round2_text, &decision, lens_plan.as_ref(), "", synthesis).await
     }
 
     /// From the deterministic decision to the record: the steps that follow, the Council record on disk, the `council.verdict` event
     /// and the text the operator is shown. A daemon Council and a host Panel (`specs/086`) both end here, so both write the same record.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn conclude(&self, m: &Arc<MissionState>, task_id: &str, proposition: &str, plan: &Assignment, stances: &BTreeMap<String, Stance>, round2: &Round2, round2_text: &BTreeMap<String, String>, decision: &Decision, lens_plan: Option<&LensPlan>, mut synthesis: String) -> Result<(Status, String), EngineError> {
+    pub(crate) async fn conclude(&self, m: &Arc<MissionState>, task_id: &str, proposition: &str, plan: &Assignment, stances: &BTreeMap<String, Stance>, round2: &Round2, round2_text: &BTreeMap<String, String>, decision: &Decision, lens_plan: Option<&LensPlan>, front: &str, mut synthesis: String) -> Result<(Status, String), EngineError> {
         let emit = |kind: &str, payload: Value| {
             let mut e = EventEnvelope::new(&m.id, kind, payload);
             e.task_id = Some(task_id.to_string());
@@ -1084,7 +1126,7 @@ impl Engine {
         let n = Self::next_council_number(m);
         let slug = slugify(headline(proposition));
         let stamp = self.now();
-        let doc = render_artifact(&ArtifactInput { mission_id: &m.id, n, slug: &slug, proposition, timestamp: &stamp, plan, stances, round2, round2_text, decision, synthesis: &synthesis, follow: &follow, lenses: lens_plan });
+        let doc = render_artifact(&ArtifactInput { mission_id: &m.id, n, slug: &slug, proposition, timestamp: &stamp, plan, stances, round2, round2_text, decision, synthesis: &synthesis, follow: &follow, lenses: lens_plan, front });
         let dir = m.dir.join("councils");
         std::fs::create_dir_all(&dir).map_err(|e| EngineError::Invalid(e.to_string()))?;
         let rel = format!("missions/{}/councils/{}", m.id, artifact_name(n, &slug));
@@ -1118,7 +1160,7 @@ impl Engine {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn s(v: &[&str]) -> Vec<String> {
@@ -1281,7 +1323,7 @@ mod tests {
         let stances: BTreeMap<String, Stance> = [("architect".to_string(), Stance::Said("Use a queue.".into())), ("red-team".to_string(), Stance::Said("It drops on crash.".into()))].into_iter().collect();
         let texts: BTreeMap<String, String> = [("architect".to_string(), "ok".to_string()), ("red-team".to_string(), "no".to_string())].into_iter().collect();
         let d = decide(round2);
-        render_artifact(&ArtifactInput { mission_id: "m1", n: 7, slug: "queue-or-cron", proposition: "Queue or cron?", timestamp: "2026-10-24T00:00:00Z", plan: &plan, stances: &stances, round2, round2_text: &texts, decision: &d, synthesis, follow: &Default::default(), lenses: None })
+        render_artifact(&ArtifactInput { mission_id: "m1", n: 7, slug: "queue-or-cron", proposition: "Queue or cron?", timestamp: "2026-10-24T00:00:00Z", plan: &plan, stances: &stances, round2, round2_text: &texts, decision: &d, synthesis, follow: &Default::default(), lenses: None, front: "" })
     }
 
     #[test]
@@ -1321,12 +1363,45 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// The testkit workspace with a second family, so seats really route to different endpoints.
-    fn two_families(f: &Fx) {
+    pub(crate) fn two_families(f: &Fx) {
         let text = crate::testkit::CONFIG
             .replace("[access]", "[models.gemini]\nfast = \"gem-f\"\nworkhorse = \"gem-w\"\nfrontier = \"gem-p\"\n[models.catalog.\"gem-w\"]\nmax_output_tokens = 64000\nmin_thinking_budget = 128\nmax_thinking_budget = 32000\ninput_usd_per_mtok = 2.0\noutput_usd_per_mtok = 12.0\n[models.catalog.\"gem-p\"]\nmax_output_tokens = 64000\nmin_thinking_budget = 128\nmax_thinking_budget = 32000\ninput_usd_per_mtok = 2.0\noutput_usd_per_mtok = 12.0\n[[endpoints]]\nid = \"gem\"\nfamily = \"gemini\"\npath = \"api\"\ncredential = \"env:K\"\n[access]")
             .replace("allowed_endpoints = [\"direct\", \"backup\", ], ", "")
             .replace("allowed_endpoints = [\"direct\", \"backup\"]", "allowed_endpoints = [\"direct\", \"backup\", \"gem\"]");
         f.engine.cfg.set(delphi_adapter::config::Config::parse(&text).unwrap());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_panels_foreign_seat_runs_on_another_family_and_none_exists_in_a_one_family_workspace() {
+        let f = crate::testkit::setup(vec![], 50.0, |_| {});
+        assert_eq!(f.engine.panel_foreign_family("red-team", Some("claude")), None, "one family configured: nothing to seat");
+        two_families(&f);
+        assert_eq!(f.engine.panel_foreign_family("red-team", Some("claude")).as_deref(), Some("gemini"));
+        assert_eq!(f.engine.panel_foreign_family("red-team", Some("gemini")).as_deref(), Some("claude"), "it avoids the host's family");
+        assert!(f.engine.panel_foreign_ceiling_tokens() > 0);
+        f.model.respond_with(|body| if body.to_string().contains("COUNCIL, ROUND 2") { Step::text("RECOMMENDATION: PROCEED\nFINDING P2 naming\nCONCUR: yes\nROUND 2 COMPLETE") } else { Step::text("OPTION: x\nmy stance") });
+        let tid = f.m.next_task_id();
+        let mut created = EventEnvelope::new(&f.m.id, "task.created", json!({"prompt": "q", "target": "council", "flow": "council"}));
+        created.task_id = Some(tid.clone());
+        f.m.append(created).await.unwrap();
+        let r1 = f.engine.panel_foreign_run(&f.m, &tid, "COUNCIL, ROUND 1 (blind). Proposition: q".into(), "q", "red-team", "gemini", 1, None).await;
+        assert!(matches!(&r1, Stance::Said(t) if t.contains("my stance")), "{r1:?}");
+        let mut st = BTreeMap::new();
+        st.insert("architect".to_string(), Stance::Said("A".into()));
+        let r2 = f.engine.panel_foreign_run(&f.m, &tid, "COUNCIL, ROUND 2. Proposition: q".into(), "q", "red-team", "gemini", 2, Some(&st)).await;
+        assert!(matches!(&r2, Stance::Said(t) if parse_critique(t).is_some()), "{r2:?}");
+    }
+
+    #[test]
+    fn a_panel_record_says_its_venue_and_whether_it_was_blind_in_the_front_matter() {
+        let d = decide(&BTreeMap::new());
+        let plan = Assignment { seats: vec![], homogeneous: false, notes: vec![] };
+        let follow = crate::council_next::Followup::default();
+        let doc = render_artifact(&ArtifactInput { mission_id: "m", n: 1, slug: "q", proposition: "q", timestamp: "t", plan: &plan, stances: &BTreeMap::new(), round2: &BTreeMap::new(), round2_text: &BTreeMap::new(), decision: &d, synthesis: "s", follow: &follow, lenses: None, front: "venue: panel\nblind: yes\n" });
+        let head = doc.split("\n---\n").next().unwrap();
+        assert!(head.contains("council_format: 1\nvenue: panel\nblind: yes"), "{head}");
+        let plain = render_artifact(&ArtifactInput { mission_id: "m", n: 1, slug: "q", proposition: "q", timestamp: "t", plan: &plan, stances: &BTreeMap::new(), round2: &BTreeMap::new(), round2_text: &BTreeMap::new(), decision: &d, synthesis: "s", follow: &follow, lenses: None, front: "" });
+        assert!(!plain.contains("venue:"), "a daemon Council's record is unchanged");
     }
 
     fn who(body: &serde_json::Value) -> &'static str {

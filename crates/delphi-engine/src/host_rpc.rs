@@ -407,9 +407,22 @@ pub fn council_frame(p: &Value) -> Result<Value, HostErr> {
             "how": "call request_council with the same question, options and pointers; it spends the operator's tokens on Delphi's seats"
         })
     };
+    let foreign = match p["foreign_seat"].as_str().filter(|r| !r.is_empty()) {
+        None => Value::Null,
+        Some(r) if ["architect", "red-team", "strategist"].contains(&r) => json!({
+            "seat": r,
+            "what": "one seat run by Delphi's own harness on a model family other than your host's, so the Panel can honestly span two families",
+            "spends": "the operator's tokens (Delphi's side): two calls by that seat, opening and cross-examination; the other seats stay on your host's tokens",
+            "ceiling": "council_open states the ceiling in tokens (from the configured output limit); it is an upper bound, not a forecast",
+            "needs": "a second configured model family; council_open refuses if there is none",
+            "ask_the_operator": format!("Also have Delphi run the {r} seat on another model family? That spends the operator's Delphi tokens (two calls). Say yes to include it."),
+        }),
+        Some(_) => return bad("`foreign_seat` is one of architect, red-team, strategist"),
+    };
     Ok(json!({
         "framed": {"question": question, "stakes": stakes, "options": options, "pointers": pointers},
         "default_tier": "panel",
+        "foreign_seat": foreign,
         "notice": notice,
         "panel": {
             "seats": ["architect", "red-team", "strategist"],
@@ -427,11 +440,18 @@ pub fn council_frame(p: &Value) -> Result<Value, HostErr> {
 pub fn council_view(events: &[delphi_core::event::EventEnvelope], mission_dir: &Path, task_id: &str) -> Option<Value> {
     let raised = events.iter().find(|e| e.kind == COUNCIL_EVENT && e.payload["task_id"] == task_id)?;
     let panel = raised.payload["venue"] == "panel";
+    let started = events.iter().find(|e| e.kind == "council.started" && e.task_id.as_deref() == Some(task_id));
     let mine: Vec<&delphi_core::event::EventEnvelope> = events.iter().filter(|e| e.task_id.as_deref() == Some(task_id)).collect();
     let of = |k: &str| mine.iter().copied().filter(|e| e.kind == k).collect::<Vec<_>>();
     let done = mine.iter().find(|e| e.kind == "task.completed");
     let verdict = of("council.verdict").into_iter().next();
     let mut v = json!({"council_id": task_id, "venue": if panel { "panel" } else { "daemon" }});
+    if let Some(f) = started.map(|e| e.payload["foreign"].clone()).filter(|f| f.is_object()) {
+        v["foreign_seat"] = f;
+    }
+    if let Some(b) = started.and_then(|e| e.payload["blind"].as_str()) {
+        v["blind"] = json!(b);
+    }
     let positions: Vec<Value> = of("council.stance").iter().map(|e| json!({"seat": e.payload["role"], "status": e.payload["status"], "position": e.payload["text"], "model": e.payload["model"]})).collect();
     let state = match (done, &verdict) {
         (Some(d), Some(_)) if d.payload["status"] == "done" => "decided",
@@ -491,11 +511,20 @@ pub fn ruling_card(v: &Value, tokens: u64) -> String {
     if v["venue"] == "panel" {
         // A Panel's seats were run by the host: Delphi held the barrier and the rules, the rest is the host's word (spec 086 section 4.2).
         let models: std::collections::BTreeSet<&str> = r["seat_positions"].as_array().into_iter().flatten().filter_map(|p| p["model"].as_str()).collect();
+        let blind = match v["blind"].as_str() {
+            Some("yes") => "blind: yes (host-reported)",
+            Some("no") => "blind: NO (the host could not isolate its seats)",
+            _ => "blind: not reported",
+        };
+        let families = match v["foreign_seat"]["family"].as_str() {
+            Some(f) => format!("2 families: the host's and {f} (seat `{}` run by Delphi)", v["foreign_seat"]["role"].as_str().unwrap_or("?")),
+            None => "1 family reported".to_string(),
+        };
         s.push_str(&format!(
-            "**Panel ruling** · host seats · barrier: held by Delphi · isolation: host-reported · {}\n\n",
+            "**Panel ruling** · host seats · barrier: held by Delphi · isolation: host-reported · {blind} · {families} · {}\n\n",
             match models.len() {
                 0 => "models: not reported".to_string(),
-                n => format!("1 family reported · {n} model(s): {}", models.into_iter().collect::<Vec<_>>().join(", ")),
+                n => format!("{n} model(s): {}", models.into_iter().collect::<Vec<_>>().join(", ")),
             }
         ));
     } else {
@@ -547,7 +576,11 @@ pub fn ruling_card(v: &Value, tokens: u64) -> String {
         }
         s.push('\n');
     }
-    let cost = if v["venue"] == "panel" { "seats ran on your host's tokens (not measured here); Delphi spent none".to_string() } else { format!("{tokens} tokens on Delphi's seats") };
+    let cost = if v["venue"] == "panel" {
+        if v["foreign_seat"].is_object() { format!("{tokens} tokens on the seat Delphi ran; the other seats ran on your host's tokens (not measured here)") } else { "seats ran on your host's tokens (not measured here); Delphi spent none".to_string() }
+    } else {
+        format!("{tokens} tokens on Delphi's seats")
+    };
     s.push_str(&format!("**Cost:** {cost}. **Record:** `{}`.\n", text(&r["record"])));
     s
 }
