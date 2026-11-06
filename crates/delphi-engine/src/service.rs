@@ -243,8 +243,13 @@ impl EngineService {
             return Ok(json!({"staged": false, "reason": "the operator dropped this note earlier; it is offered again only with new evidence or after 90 days", "tier": "L0", "count": already}));
         }
         let id = e.payload["id"].as_str().unwrap_or("").to_string();
+        let dup = h::duplicate_of(&events, &e); // specs/083 S4: this session's own mission log only
         m.append(e).await.map_err(engine_err)?;
-        Ok(json!({"staged": true, "ref": format!("{}/{}", m.id, id), "tier": "L0", "count": already + 1}))
+        let mut out = json!({"staged": true, "ref": format!("{}/{}", m.id, id), "tier": "L0", "count": already + 1});
+        if let Some(d) = dup {
+            out["duplicate_of"] = json!(d);
+        }
+        Ok(out)
     }
 
     /// `host.propose_kb_entry` (`specs/068` §5): stage one research entry for the operator's keep-or-discard review. It is never
@@ -2158,6 +2163,12 @@ impl EngineService {
         ))
     }
 
+    /// `learn.health`: staged notes, items waiting for review and the daemon timestamp of the oldest (`specs/083` §4). A read of the logs.
+    fn learn_health(&self, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        Ok(crate::digest::health(&self.engine.ws.dir).to_json())
+    }
+
     /// Expired staged notes and rules files past their review window (`specs/050` ML-3). A read; nothing here changes an entry.
     fn retro_stale(&self, ctx: CallContext) -> RpcOutcome {
         need_console(&ctx)?;
@@ -2733,6 +2744,7 @@ impl Extension for ServiceExt {
                 "retro.list" => svc.retro_list(ctx),
                 "retro.stale" => svc.retro_stale(ctx),
                 "retro.recurring" => svc.retro_recurring(ctx),
+                "learn.health" => svc.learn_health(ctx),
                 "retro.accept" => svc.retro_resolve(params, ctx, true).await,
                 "retro.reject" => svc.retro_resolve(params, ctx, false).await,
                 "retro.promotions" => svc.retro_promotions(ctx),
@@ -2833,6 +2845,12 @@ mod tests {
             };
             let ok = c.call("host.propose_note", with(json!({"role": role2, "text": "Prefer small commits.", "evidence": "session abc, turn 2", "model": "opus"}))).unwrap();
             assert_eq!((ok["staged"].clone(), ok["tier"].clone(), ok["count"].clone()), (json!(true), json!("L0"), json!(1)));
+            assert!(ok.get("duplicate_of").is_none());
+            // specs/083 S4: the same session's repeat names its twin; another session's identical text gets nothing.
+            let twin = c.call("host.propose_note", with(json!({"role": role2, "text": "prefer small commits", "evidence": "other evidence"}))).unwrap();
+            assert_eq!((twin["staged"].clone(), twin["duplicate_of"].clone(), twin["count"].clone()), (json!(true), json!("h1"), json!(2)));
+            let stranger = c.call("host.propose_note", with(json!({"session": "zzzzzzzz01234567", "role": role2, "text": "Prefer small commits.", "evidence": "e"}))).unwrap();
+            assert!(stranger.get("duplicate_of").is_none(), "{stranger}");
             assert_eq!(rpc_code(c.call("host.propose_note", with(json!({"role": role2, "text": "No evidence."})))), Some(code::INVALID_PARAMS));
             assert_eq!(rpc_code(c.call("host.propose_note", with(json!({"role": "messenger", "text": "x", "evidence": "e"})))), Some(code::INVALID_PARAMS));
             assert!(c.call("host.record_session_summary", with(json!({"summary": "Did the thing", "decisions": ["a"]}))).is_ok());
@@ -2860,7 +2878,7 @@ mod tests {
         .await;
         let events = replay_log(&delphi_core::sessions::dir(&ws_dir, "host-abcdef0123456789"));
         let live = crate::learn::live_notes("host-abcdef0123456789", &events);
-        assert_eq!(live.len(), 25, "{live:?}");
+        assert_eq!(live.len(), 26,"{live:?}");
         assert!(live.iter().all(|n| n.tier == "L0" && n.summary.starts_with("[host:claude-code/")), "{live:?}");
         assert_eq!(live[0].role.as_deref(), Some(role.as_str()));
     }
@@ -3794,7 +3812,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let every_mutating_method_the_daemon_has = ["handoff.resume", "mcp.get", "mcp.set", "task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "kb.open", "research.start", "projects.list", "pending.pass", "pending.list", "pending.ratify", "pending.discard", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "retro.list", "retro.stale", "retro.recurring", "retro.accept", "retro.reject", "retro.promotions", "retro.promote", "retro.withdraw", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
+            let every_mutating_method_the_daemon_has = ["handoff.resume", "mcp.get", "mcp.set", "task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "kb.open", "research.start", "projects.list", "pending.pass", "pending.list", "pending.ratify", "pending.discard", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "retro.list", "retro.stale", "retro.recurring", "learn.health", "retro.accept", "retro.reject", "retro.promotions", "retro.promote", "retro.withdraw", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
             for m in every_mutating_method_the_daemon_has {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }
