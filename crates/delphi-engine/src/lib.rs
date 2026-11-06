@@ -62,6 +62,7 @@ pub mod org_context;
 pub mod core_main;
 pub mod council;
 pub mod council_next;
+pub mod council_panel;
 pub mod distill;
 pub mod build;
 pub mod capabilities;
