@@ -226,6 +226,7 @@ All small, all independent of the Panel:
 | S3 | Role subagents per host (§5.2), `[host.models.*]` (§6.3), the `--agents` installer for Codex | medium | S0b, S2 |
 | S4 | Foreign seat (§6.4) | medium | S2 |
 | S5 | Experiment (§10) and the decision on the default | medium | S2, S3, operator's go |
+| S6 | Follow-ups from the Council review (§15): a Panel's learning captures stage at L0 and say they are the host's words; the `council.verdict` event says `venue`; every stance records a hash of the brief it was given; the card and skill say host support is documented, not live-verified; a test lists the only files that read `council.verdict` | small | §15, operator's decision of 2026-11-06 |
 
 Each slice updates `missions/2026-10-23-foundational-design/spec-tracker.md`, regenerates `docs/reference/`, `ecosystem/` and the schemas, and runs the three gates. Role ids only outside `themes/`.
 

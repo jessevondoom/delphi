@@ -689,9 +689,13 @@ impl Stager {
             // Capture on contact (`specs/052` KS-2): the claim is a sentence the daemon already holds or one the operator typed.
             // Nothing here asks the operator anything, calls a model, or promotes: it stages a `noted` candidate.
             "council.verdict" => {
+                // A host Panel's seats and verdict are the host's words (spec 086 section 15): staged at L0 and named as such, never as
+                // "the Council's". A daemon Council is unchanged.
+                let panel = e.payload["venue"] == "panel";
+                let (who, base) = if panel { ("The host Panel's", Tier::L0) } else { ("The Council's", Tier::L3) };
                 let decision = e.payload["decision"].as_str().unwrap_or("").trim();
                 if !decision.is_empty() {
-                    out.extend(self.contact(e, "council_verdict", format!("The Council's verdict: {}", decision), Tier::L3, ""));
+                    out.extend(self.contact(e, "council_verdict", format!("{} verdict{}: {}", who, if panel { " (host-reported)" } else { "" }, decision), base, ""));
                 }
                 let minority: Vec<String> = e.payload["unresolved"]
                     .as_array()
@@ -704,11 +708,11 @@ impl Stager {
                     let (seat, claim) = (c["seat"].as_str().unwrap_or("a seat"), c["claim"].as_str().unwrap_or("").trim());
                     if !claim.is_empty() {
                         let suffix: &'static str = ["c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7"][i];
-                        out.extend(self.contact(e, "council_claim", format!("{} said in Council: {}", seat, claim), Tier::L3, suffix));
+                        out.extend(self.contact(e, "council_claim", format!("{} said in {}: {}", seat, if panel { "a host Panel (host-reported)" } else { "Council" }, claim), base, suffix));
                     }
                 }
                 if !minority.is_empty() {
-                    out.extend(self.contact(e, "council_minority", format!("The Council's Minority Report left unresolved: {}", minority.join("; ")), Tier::L3, "m"));
+                    out.extend(self.contact(e, "council_minority", format!("{} Minority Report left unresolved: {}", who, minority.join("; ")), base, "m"));
                 }
             }
             "task.output" => {
@@ -1220,6 +1224,20 @@ mod tests {
         assert_eq!(kinds, vec![("council_verdict", "n1".to_string()), ("council_minority", "n1m".to_string()), ("decision_resolved", "n3".to_string())], "a repeat and a bare click stage nothing");
         assert!(n[1].summary.contains("no index (P1)") && n[2].tier == Tier::L5 && n[0].tier == Tier::L3);
         assert!(!n[2].summary.contains('\n') && !n[2].summary.contains('\u{7}'), "typed text cannot forge a line");
+    }
+
+    #[test]
+    fn a_host_panels_verdict_claims_and_dissent_stage_at_l0_and_say_they_are_the_hosts_words() {
+        let verdict = json!({"venue": "panel", "decision": "build the table", "claims": [{"seat": "architect", "claim": "A table is enough."}], "unresolved": [{"severity": "P1", "seat": "red-team", "title": "no index"}]});
+        let n = stage(&[at(1, None, "council.verdict", verdict)]);
+        assert_eq!(n.len(), 3, "the verdict, one claim, the minority report");
+        for note in &n {
+            assert_eq!(note.tier, Tier::L0, "{}: a Panel's seat text is the host's, so it is never staged above L0", note.summary);
+            assert!(note.summary.contains("host Panel") && !note.summary.starts_with("The Council"), "{}", note.summary);
+        }
+        // A daemon Council is unchanged.
+        let d = stage(&[at(1, None, "council.verdict", json!({"venue": "daemon", "decision": "build the table"}))]);
+        assert_eq!((d[0].tier, d[0].summary.starts_with("The Council's verdict")), (Tier::L3, true));
     }
 
     #[test]

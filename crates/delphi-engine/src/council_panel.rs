@@ -301,6 +301,12 @@ impl Panel {
         self.released.as_ref()
     }
 
+    /// A hash of the brief a seat is given for `round` (the host wraps it in its own prompt, so this is what Delphi can vouch for: the text
+    /// Delphi wrote). `None` where no brief exists yet. Recorded on the stance events so the record shows what each seat was briefed with.
+    pub fn brief_hash(&self, seat: &str, round: u8) -> Option<String> {
+        self.brief_inner(seat, round).ok().map(|b| blake3::hash(b.as_bytes()).to_hex().to_string())
+    }
+
     /// After a failed write of the record: forget the verdict so the moderator can submit it again.
     pub fn reopen_verdict(&mut self) {
         self.verdict = None;
@@ -394,6 +400,17 @@ mod tests {
         assert_eq!(host_family(None, "claude-code"), Some("claude"));
         assert_eq!(host_family(Some("unknown"), "agy"), Some("gemini"));
         assert_eq!(host_family(None, "copilot-cli"), None, "Copilot serves several families: no guess");
+    }
+
+    #[test]
+    fn a_brief_has_a_stable_hash_and_none_before_it_exists() {
+        let mut p = Panel::new("q");
+        let h1 = p.brief_hash("architect", 1).unwrap();
+        assert_eq!(h1.len(), 64);
+        assert_eq!(p.brief_hash("red-team", 1).as_deref(), Some(h1.as_str()), "every seat gets the same blind brief, so the same hash");
+        assert!(p.brief_hash("architect", 2).is_none(), "no Round 2 brief before the barrier releases");
+        round_one(&mut p);
+        assert_ne!(p.brief_hash("architect", 2).unwrap(), h1);
     }
 
     #[test]

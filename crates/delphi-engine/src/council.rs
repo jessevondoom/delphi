@@ -898,7 +898,7 @@ impl Engine {
     /// A host Panel's Round 1 has released (`specs/086` §4): the stances join the log as a daemon Council's do, and the plan is recorded
     /// as host-reported (the daemon cannot know the family or prove the isolation of a seat a host ran itself).
     #[allow(clippy::too_many_arguments)]
-    pub async fn panel_released(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, proposition: &str, stances: &BTreeMap<String, Stance>, models: &BTreeMap<String, String>, foreign: Option<(&str, &str)>, blind: &str) -> Result<(), EngineError> {
+    pub async fn panel_released(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, proposition: &str, stances: &BTreeMap<String, Stance>, models: &BTreeMap<String, String>, foreign: Option<(&str, &str)>, blind: &str, brief_hashes: &BTreeMap<String, String>) -> Result<(), EngineError> {
         let emit = |kind: &str, payload: Value| {
             let mut e = EventEnvelope::new(&m.id, kind, payload);
             e.task_id = Some(task_id.to_string());
@@ -910,7 +910,7 @@ impl Engine {
                 Stance::Said(t) => ("answered", t.clone()),
                 Stance::Abstained(w) => ("abstained", w.clone()),
             };
-            m.append(emit("council.stance", json!({"round": 1, "role": role, "status": status, "text": self.secrets.redact(&text), "model": models.get(role)}))).await?;
+            m.append(emit("council.stance", json!({"round": 1, "role": role, "status": status, "text": self.secrets.redact(&text), "model": models.get(role), "brief_hash": brief_hashes.get(role)}))).await?;
         }
         Ok(())
     }
@@ -926,7 +926,7 @@ impl Engine {
         let stances = panel.stances().cloned().unwrap_or_default();
         let (round2, round2_text) = panel.parsed_round2();
         for (role, c) in &round2 {
-            let mut e = EventEnvelope::new(&m.id, "council.critique", json!({"round": 2, "role": role, "readable": c.is_some(), "recommendation": c.as_ref().map(|c| c.recommendation.label()), "concur": c.as_ref().and_then(|c| c.concur), "findings": c.as_ref().map(|c| c.findings.iter().map(|(s, t)| json!({"severity": s, "title": t})).collect::<Vec<_>>()).unwrap_or_default(), "text": round2_text.get(role).map(|t| self.secrets.redact(t))}));
+            let mut e = EventEnvelope::new(&m.id, "council.critique", json!({"round": 2, "role": role, "readable": c.is_some(), "recommendation": c.as_ref().map(|c| c.recommendation.label()), "concur": c.as_ref().and_then(|c| c.concur), "findings": c.as_ref().map(|c| c.findings.iter().map(|(s, t)| json!({"severity": s, "title": t})).collect::<Vec<_>>()).unwrap_or_default(), "text": round2_text.get(role).map(|t| self.secrets.redact(t)), "brief_hash": panel.brief_hash(role, 2)}));
             e.task_id = Some(task_id.clone());
             m.append(e).await?;
         }
@@ -1131,7 +1131,7 @@ impl Engine {
         std::fs::create_dir_all(&dir).map_err(|e| EngineError::Invalid(e.to_string()))?;
         let rel = format!("missions/{}/councils/{}", m.id, artifact_name(n, &slug));
         std::fs::write(dir.join(artifact_name(n, &slug)), self.secrets.redact(&doc)).map_err(|e| EngineError::Invalid(e.to_string()))?;
-        m.append(emit("council.verdict", json!({"n": n, "decision": follow.decision, "steps": crate::council_next::steps_json(&follow.steps), "from_findings": follow.from_findings, "path": rel, "escalated": decision.escalation, "homogeneous": plan.homogeneous, "unresolved": decision.unresolved.iter().map(|(s, r, t)| json!({"severity": s, "seat": r, "title": t})).collect::<Vec<_>>(), "options": decision.options.iter().map(|(l, s)| json!({"label": l, "seats": s})).collect::<Vec<_>>(), "claims": stances.iter().filter_map(|(r, s)| s.text().map(|t| json!({"seat": r, "claim": crate::learn::first_sentence(t)}))).collect::<Vec<_>>()}))).await?;
+        m.append(emit("council.verdict", json!({"venue": if front.lines().any(|l| l == "venue: panel") { "panel" } else { "daemon" }, "n": n, "decision": follow.decision, "steps": crate::council_next::steps_json(&follow.steps), "from_findings": follow.from_findings, "path": rel, "escalated": decision.escalation, "homogeneous": plan.homogeneous, "unresolved": decision.unresolved.iter().map(|(s, r, t)| json!({"severity": s, "seat": r, "title": t})).collect::<Vec<_>>(), "options": decision.options.iter().map(|(l, s)| json!({"label": l, "seats": s})).collect::<Vec<_>>(), "claims": stances.iter().filter_map(|(r, s)| s.text().map(|t| json!({"seat": r, "claim": crate::learn::first_sentence(t)}))).collect::<Vec<_>>()}))).await?;
 
         let mut text = String::new();
         match &decision.escalation {
