@@ -235,11 +235,15 @@ impl EngineService {
         build(0).map_err(host_err)?;
         let _gate = self.host_gate.lock().await;
         let m = self.mission_at(Some(&c.mission()), c.cwd.to_str()).await?;
-        let log = m.replay().map_err(engine_err)?;
-        let already = h::proposals_in(&log);
+        let events = m.replay().map_err(engine_err)?;
+        let already = h::proposals_in(&events);
         let e = build(already).map_err(host_err)?;
+        // A note the operator dropped from this session is not staged again while it is unchanged (`specs/083` §5).
+        if !summary && crate::learn::host_note_dismissed(&events, e.payload["summary"].as_str().unwrap_or(""), "L0", delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339())) {
+            return Ok(json!({"staged": false, "reason": "the operator dropped this note earlier; it is offered again only with new evidence or after 90 days", "tier": "L0", "count": already}));
+        }
         let id = e.payload["id"].as_str().unwrap_or("").to_string();
-        let dup = h::duplicate_of(&log, &e); // specs/083 S4: this session's own mission log only
+        let dup = h::duplicate_of(&events, &e); // specs/083 S4: this session's own mission log only
         m.append(e).await.map_err(engine_err)?;
         let mut out = json!({"staged": true, "ref": format!("{}/{}", m.id, id), "tier": "L0", "count": already + 1});
         if let Some(d) = dup {
@@ -2171,6 +2175,13 @@ impl EngineService {
         Ok(Value::Array(crate::retro::stale(&self.engine.ws.home, &self.engine.ws.dir, &delphi_core::bundles::today()).iter().map(|s| s.to_json()).collect()))
     }
 
+    /// The staged claims more than one mission produced, with Council claims keyed by seat (`specs/083` §5). A read of the logs;
+    /// nothing here stages, proposes or changes anything.
+    fn retro_recurring(&self, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        Ok(Value::Array(crate::learn::recurring_in(&self.engine.ws.dir).iter().map(|r| r.to_json()).collect()))
+    }
+
     /// Accept or reject one proposal by its `ref` (`<mission>/<id>`). Accepting writes the scope's `heuristics.md` through the
     /// compare-and-swap path, then the proposal's own mission records `learn.proposal_resolved` and the file is stamped L5,
     /// as `ratify.apply` does. `scope` is the operator's choice at ratification. The call is the operator's act: console only.
@@ -2732,6 +2743,7 @@ impl Extension for ServiceExt {
                 "ratify.apply" => svc.ratify_change(params, ctx, false).await,
                 "retro.list" => svc.retro_list(ctx),
                 "retro.stale" => svc.retro_stale(ctx),
+                "retro.recurring" => svc.retro_recurring(ctx),
                 "learn.health" => svc.learn_health(ctx),
                 "retro.accept" => svc.retro_resolve(params, ctx, true).await,
                 "retro.reject" => svc.retro_resolve(params, ctx, false).await,
@@ -3800,7 +3812,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let every_mutating_method_the_daemon_has = ["handoff.resume", "mcp.get", "mcp.set", "task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "kb.open", "research.start", "projects.list", "pending.pass", "pending.list", "pending.ratify", "pending.discard", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "retro.list", "retro.stale", "learn.health", "retro.accept", "retro.reject", "retro.promotions", "retro.promote", "retro.withdraw", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
+            let every_mutating_method_the_daemon_has = ["handoff.resume", "mcp.get", "mcp.set", "task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "kb.open", "research.start", "projects.list", "pending.pass", "pending.list", "pending.ratify", "pending.discard", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "retro.list", "retro.stale", "retro.recurring", "learn.health", "retro.accept", "retro.reject", "retro.promotions", "retro.promote", "retro.withdraw", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
             for m in every_mutating_method_the_daemon_has {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }
