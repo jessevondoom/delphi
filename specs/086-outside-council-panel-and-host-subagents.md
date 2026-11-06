@@ -178,10 +178,12 @@ Where the host offers two or more models, the red-team seat takes a different mo
 
 Generated agent files use **aliases and tiers** the host documents (Claude `opus`/`sonnet`/`haiku`/`fable`; agy `pro`/`flash`), never full model ids. For hosts that take free model names (Copilot, Codex) the file sets no model and the plan comes from the operator's mapping, `[host.models.<host>]` (role → model name), shown by `council_frame`; with no mapping, the seat inherits and the card says `1 model`. A hard-coded model name in a generated file fails the drift test.
 
-### 6.4 One foreign seat (S3, optional)
+### 6.4 One foreign seat (S4, optional)
 
 A Panel may add one seat run by **Delphi's own harness** from another family (normally red-team), via the existing seat machinery. It spends the operator's tokens on the daemon side, so `council_frame` lists it and the estimate includes it; it runs only on the operator's yes. With it, the card can honestly say `2 families`.
 
+
+**Built (S4):** `council_open` takes `foreign_seat` (architect, red-team or strategist) and `blind` (yes or no). Delphi picks a family other than the host's (a guess from the model name the host reported, else the tool; none for Copilot), runs that one seat through its own harness in the background for both rounds, and feeds its answers through the same rules as any seat. The host cannot brief or answer for it. If no other family is configured, `council_open` refuses and says so. The record's front matter gains `venue: panel`, `blind`, `foreign_seat` and `foreign_family`, and the card says "2 families" only when a foreign seat sat. **Deviation:** the token figure is a *ceiling* (two calls at the configured output limit plus input), not an estimate from past `agent.usage`, because no Council cost has been measured; it is stated in the `council_open` answer and described by `council_frame`.
 ---
 
 ## 7. The ruling card
@@ -206,7 +208,7 @@ A Panel may add one seat run by **Delphi's own harness** from another family (no
 All small, all independent of the Panel:
 
 - **F-1 (diagnosed 2026-11-06; fixed in S0a):** the red-team seat returned a valid JSON critique (`concur: true`, three findings) followed by prose and a line-format copy of itself. `parse_critique` required the whole reply to be one JSON value, so a readable critique was thrown away and escalated as a P1. Now the first complete object is the critique; trailing text can only add a finding (a P0 named only in the prose still blocks) or disagree on the recommendation or `CONCUR:` (then the reply is unreadable, never a guess). A repair retry is **not** built: with the cause fixed, add it only if a later record shows a genuinely unreadable reply.
-- **F-2 (cause corrected):** the pointers never reached the seats at all. `pointers_from_prompt` read only `@path` tokens, while a host question lists `- path: reason` lines under `Pointers:`. S0a reads those lines (project-relative, no `..`, at most ten) into the handoff. Resolving pointers into capped excerpts stays with the Panel brief (S2); a seat's own file tools read them in the daemon Council.
+- **F-2 (cause corrected):** the pointers never reached the seats at all. `pointers_from_prompt` read only `@path` tokens, while a host question lists `- path: reason` lines under `Pointers:`. S0a reads those lines (project-relative, no `..`, at most ten) into the handoff. Resolving pointers into capped excerpts was not built with the Panel (S2): a Panel seat reads the pointed-to files with its host's own read tools, which the generated Claude Code seat files allow (`Read`, `Grep`, `Glob` only, never `Edit`, `Write` or `Bash`) and every seat's instructions require. Excerpts in `council_brief` stay a possible later change.
 - **F-4:** the record's file name and title come from the `Question:` line, not the fence preamble. The mission goal and the caller label in metadata are left for S1 (they live in the host session setup).
 - **F-5 (dropped as written):** the Minority Report is verbatim by design and `lint_artifact` requires each blocking item line exactly, and seats word one concern differently, so merging needs a model. The card (§7) groups the same lines by seat and counts them instead; the record is unchanged.
 - Mode A's `council_status` gets the `phase` text and `council_result` the `display` card (§7), so Mode A and Panel read alike.
@@ -219,8 +221,8 @@ All small, all independent of the Panel:
 | :-- | :-- | :-- | :-- |
 | S0a | §8 fixes F-1, F-2, F-4 (F-5 dropped) | small | this spec approved |
 | S0b | **Host conformance probe**: a script that, per host, runs a canary agent file and a two-seat parallel spawn, and records the §3 cells as `verified`/`failed`/`not run` in `docs/reference/` (like the agy conformance probe) | small | S0a not required; runs on the operator's machines |
-| S1 | `delphi-council` skill, the ruling card and `phase` on Mode A, `council_frame` (tier notice, confirm). The token estimate from past `agent.usage` moves to S2, when framing goes daemon-side; until then `council_frame` says a Panel spends the host's tokens and a Council the operator's | small | S0a |
-| S2 | Panel: `council_open/brief/submit`, `council_choose`, the barrier and parse reusing `council.rs`; record `venue: host` | large | S1 |
+| S1 | `delphi-council` skill, the ruling card and `phase` on Mode A, `council_frame` (tier notice, confirm). The token estimate from past `agent.usage` moves to S4: a Panel spends none of Delphi's tokens (S2), so it has nothing to estimate until a foreign seat is added; until then `council_frame` says a Panel spends the host's tokens and a Council the operator's | small | S0a |
+| S2 | Panel: `council_open/brief/submit`, `council_choose`, the barrier and parse reusing `council.rs`; record `venue: panel`. Built with the three seats fixed (architect, red-team, strategist), at most four Panels open per session, Round 1 held in daemon memory (a daemon restart ends an open Panel) | large | S1 |
 | S3 | Role subagents per host (§5.2), `[host.models.*]` (§6.3), the `--agents` installer for Codex | medium | S0b, S2 |
 | S4 | Foreign seat (§6.4) | medium | S2 |
 | S5 | Experiment (§10) and the decision on the default | medium | S2, S3, operator's go |

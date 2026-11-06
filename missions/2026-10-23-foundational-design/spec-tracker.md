@@ -709,8 +709,8 @@ From the operator's request to refine the outside Council (Claude Code, Copilot,
 | S0 | spec 086 approval and tracker entry | 1 | approved 2026-11-06 |
 | S0a | daemon Council fixes: trailing-text Round 2 (cause found), host pointers reach seats, title from the question; merged Minority Report dropped | 10 | built (PR #501) |
 | S0b | host conformance probe for the four hosts | 6 | built (PR open) |
-| S1 | `delphi-council` skill, ruling card + `phase`, `council_frame` (no token estimate yet: moves to S2) | 10 | built (PR open) |
-| S2 | Panel: server-held barrier, `council_open/brief/submit/choose` | 24 | approved, not built |
-| S3 | role subagents per host, `[host.models.*]`, Codex agents installer | 14 | approved, not built |
-| S4 | one foreign-family seat | 10 | approved, not built |
-| S5 | pre-registered Panel-vs-Council experiment; decides the default | 12 | needs operator go |
+| S1 | `delphi-council` skill, ruling card + `phase`, `council_frame` (no token estimate yet: moves to S4) | 10 | built (PR open) |
+| S2 | Panel: server-held barrier, `council_open/brief/submit/choose` | 24 | built (PR open) |
+| S3 | role subagents per host, `[host.models.*]`, Codex agents installer | 14 | built (PR open) |
+| S4 | one foreign-family seat (token ceiling, not a history-based estimate); `venue`/`blind` in the record front matter | 10 | built (PR open) |
+| S5 | pre-registered Panel-vs-Council experiment; decides the default | 12 | pre-registration merged (#505); S2/S3 merged; the run needs the operator's go and token caps |

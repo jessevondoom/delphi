@@ -587,6 +587,39 @@ pub struct Config {
     pub retrieval: RetrievalConfig,
     /// `[agents]`: operator direct interaction, fleet accessibility, and quarantine (`specs/063` §3.1).
     pub agents: AgentsConfig,
+    /// `[host.models.<host>]`: the model name each council role's subagent file asks for on a host that takes free names (`specs/086` §6.3).
+    pub host: HostConfig,
+}
+
+/// Hosts whose subagent files may name a model freely (the others take fixed aliases or tiers that Delphi chooses).
+pub const HOST_MODEL_HOSTS: &[&str] = &["copilot", "codex"];
+/// The roles that have a council subagent file (`specs/086` §5.2).
+pub const HOST_COUNCIL_ROLES: &[&str] = &["architect", "red-team", "strategist", "builder"];
+
+/// `[host]` (`specs/086` §6.3). Only `models`: host, then role, to a model name. No entry means the file sets no model line.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HostConfig {
+    pub models: BTreeMap<String, BTreeMap<String, String>>,
+}
+
+impl HostConfig {
+    fn check(&self) -> Result<(), String> {
+        for (host, roles) in &self.models {
+            if !HOST_MODEL_HOSTS.contains(&host.as_str()) {
+                return Err(format!("models.{host}: unknown host (only {} take a model name from you; Claude Code and agy use aliases that Delphi chooses)", HOST_MODEL_HOSTS.join(" and ")));
+            }
+            for (role, model) in roles {
+                if !HOST_COUNCIL_ROLES.contains(&role.as_str()) {
+                    return Err(format!("models.{host}.{role}: unknown role (one of {})", HOST_COUNCIL_ROLES.join(", ")));
+                }
+                if model.is_empty() || model.len() > 80 || !model.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | ':' | '/')) {
+                    return Err(format!("models.{host}.{role}: `{model}` is not a model name (1 to 80 letters, digits and . _ - : /)"));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// `[agents]` (`specs/063` §3.1). Operator direct interaction, fleet accessibility, and quarantine.
@@ -1012,6 +1045,15 @@ impl Config {
             match v.clone().try_into::<RetrievalConfig>() {
                 Ok(v) => cfg.retrieval = v,
                 Err(e) => errs.push(format!("[retrieval]: {}", e)),
+            }
+        }
+        if let Some(v) = root.get("host") {
+            match v.clone().try_into::<HostConfig>() {
+                Ok(v) => match v.check() {
+                    Ok(()) => cfg.host = v,
+                    Err(e) => errs.push(format!("[host]: {e}")),
+                },
+                Err(e) => errs.push(format!("[host]: {}", e)),
             }
         }
         if let Some(v) = root.get("agents") {
@@ -1539,6 +1581,17 @@ impl Config {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn host_models_map_a_role_to_a_name_for_free_name_hosts_and_refuse_the_rest() {
+        let c = Config::parse("[host.models.codex]\narchitect = \"gpt-x\"\nred-team = \"o9\"\n[host.models.copilot]\nbuilder = \"claude-y\"\n").unwrap();
+        assert_eq!(c.host.models["codex"]["red-team"], "o9");
+        assert!(Config::parse("").unwrap().host.models.is_empty());
+        for (bad, word) in [("[host.models.agy]\narchitect = \"pro\"\n", "unknown host"), ("[host.models.claude-code]\narchitect = \"opus\"\n", "unknown host"), ("[host.models.codex]\nwriter = \"x\"\n", "unknown role"), ("[host.models.codex]\narchitect = \"a b\"\n", "not a model name"), ("[host.models.codex]\narchitect = \"\"\n", "not a model name"), ("[host]\nsurprise = 1\n", "unknown field")] {
+            let e = Config::parse(bad).unwrap_err().join(" ");
+            assert!(e.contains(word), "{bad}: {e}");
+        }
+    }
 
     #[test]
     fn mcp_defaults_on_and_refuses_remote_access() {
