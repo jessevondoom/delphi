@@ -356,7 +356,7 @@ Asked for by the operator on 2026-10-28: no hard-coded favorites; discover what 
 | M3 | `[grades]`, `delphi agent promote`, `nerf`, `grades` | built (`[grades]` is a ratified access block; `delphi-engine/src/grades.rs`, `delphi/src/agent_cmd.rs`; `agent.graded` journaled in `local/grades.jsonl`; the engine applies a role's grade as a step in `assign_for`) |
 | M4 | ratchet and suggestions from retrospectives | not started |
 | M5 | `delphi models calibrate` | not started |
-| M6 | `emergency` local class: save state when every seat is exhausted, re-verify on recovery, doctor line | built in part (`delphi-engine/src/emergency.rs`; `[routing] emergency_endpoint`/`emergency_model`, off by default, local endpoints only; `Class::Emergency` below every floor and refused by `route::ineligible` under both assignments; trigger only when every ratified seat is out; `Task` allow-list read/summarise/write-state; `save_state` writes a labeled `emergency` record under `<mission>/handoffs/`; `recover` re-checks branches, uncommitted files, journal pointers and PRs and removes the label only after a floor-meeting verifier answers; doctor and `capabilities --models` print the fixed line). Not built: the engine loop does not yet call `trigger`/`save_state`/`recover` and no model-client `Writer` exists, so nothing saves state live; the dispatch refusal on a pending record is the `pending` function only |
+| M6 | `emergency` local class: save state when every seat is exhausted, re-verify on recovery, doctor line | built and wired (pieces in `delphi-engine/src/emergency.rs` (#496), called by the engine through `emergency_run.rs`; `[routing] emergency_endpoint`/`emergency_model`, off by default, local endpoints only; `Class::Emergency` below every floor and refused by `route::ineligible` under both assignments; trigger only when every ratified seat is out; `Task` allow-list read/summarise/write-state; `save_state` writes a labeled `emergency` record under `<mission>/handoffs/`; `recover` re-checks branches, uncommitted files, journal pointers and PRs and removes the label only after a floor-meeting verifier answers; doctor and `capabilities --models` print the fixed line). Wired in the follow-up slice: `model_turn` calls `Engine::emergency_step` after each route. On `Route::NoModel` with `trigger` true it gathers git and mission-log facts by code, the emergency model (a tool-less `one_shot_raw` call through the ordinary model client, `permits` checked when `ModelWriter` is built) writes the prose, `save_state` writes the labeled record under `<mission>/handoffs/`, and `emergency.saved` is logged; the task then waits for a real seat as before. While a labeled record stands no span takes a turn and no harness fallback runs; the first span routed to a seat that meets its role's floor makes that seat the verifier (`recover`: label removed only on a non-empty answer; the emergency model and below-floor models are refused) and `emergency.recovered` is logged; a failed, empty or below-floor verification logs `emergency.blocked` and stops the span with the label on. The events show in /observe and the chat log. With the keys unset `emergency_step` returns first and nothing changes (test). Tested with a scripted model (whole path, failed and empty verifier, a pending record blocks a new dispatch, unset = no change) and once live on Ollama (gemma4 wrote the record; PR body has the outcome). Not proven: open PRs are not read (the engine reaches no network; the recorded list is carried over); no real paid-seat quota outage has run it (the live check used local models as the ratified seat); the verifier is the span's own seat, so a pool of only local models cannot verify for a `steady`-floor role and that mission stays held |
 
 ## Project scopes, scaffolding, indexes and promotion (spec 058, approved 2026-10-30)
 
@@ -678,17 +678,17 @@ From the 2026-11-05 ranking of unbuilt work (five Claude seats, one family; see 
 | S3 | recurrence count, dismissed-claim memory, seat-keyed claims (S3a dismissal, S3b the rest) | 14 | built (S3a and S3b, one PR); host counts are reports, council_minority has no seat and stays out |
 | S4 | `duplicate_of` on `host.propose_note`, own session only | 5 | built (#486), 2026-11-05 |
 
-## Spec 084: outcome stub, flip question, resume recap, learn history (2026-11-05, draft)
+## Spec 084: outcome stub, flip question, resume recap, learn history (2026-11-05)
 
-Phase-2 items N5, N24, N14, N1 from the same ranking. Draft: a proposal for the operator, not permission to build. S1 needs an explicit operator call because the 082 E1 result was negative (spec 084 §1.2).
+Phase-2 items N5, N24, N14, N1 from the same ranking. Approved by the operator 2026-11-05. S1 is held: the operator has not answered Q-1 (the 082 E1 result was negative, spec 084 §1.2). Q-2 and Q-3 take the suggested defaults provisionally.
 
 | Slice | Content | Hours | State |
 | :-- | :-- | --: | :-- |
-| S0 | operator approves spec 084; tracker entry | 1 | draft |
-| S1 | typed `outcome` on `record_session_summary`, `untrusted/self_reported`, display-only | 7 | draft, not built |
-| S2 | `council_result` flip question, only with a real dissent | 9 | draft, not built |
-| S3 | three-line "what changed since I left" recap, events only | 8 | draft, not built |
-| S4 | `delphi learn history` ("co-occurred"), with `rule_id` on accept first | 9 | draft, not built |
+| S0 | operator approves spec 084; tracker entry | 1 | approved 2026-11-05 |
+| S1 | typed `outcome` on `record_session_summary`, `untrusted/self_reported`, display-only | 7 | held on Q-1, not built |
+| S2 | `council_result` flip question, only with a real dissent | 9 | approved, not built |
+| S3 | three-line "what changed since I left" recap, events only | 8 | approved, not built |
+| S4 | `delphi learn history` ("co-occurred"), with `rule_id` on accept first | 9 | approved, not built |
 
 ## Spec 085: a fixed standing-limits reminder (2026-11-05)
 
@@ -697,8 +697,8 @@ From a Council of three Claude seats (one family, so homogeneous) that ranked ei
 | Slice | Content | Hours | State |
 | :-- | :-- | --: | :-- |
 | S0 | spec 085 approval and tracker entry | 1 | approved 2026-11-05 |
-| S1 | fixed `STANDING_LIMITS` constant on the API path; the objective echo removed | 5 | in progress |
-| S2 | the same reminder as a second content block on bridged tool replies (harness seats) | 5 | not built |
+| S1 | fixed `STANDING_LIMITS` constant on the API path; the objective echo removed | 5 | built (PR open) |
+| S2 | the same reminder as a second content block on bridged tool replies (harness seats) | 5 | built (PR open) |
 
 ## Spec 086: the Council outside Delphi (2026-11-05, approved 2026-11-06)
 

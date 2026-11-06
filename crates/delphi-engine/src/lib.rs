@@ -77,6 +77,7 @@ pub mod checks;
 pub mod frontmatter;
 pub mod gates;
 pub mod emergency;
+pub mod emergency_run;
 pub mod handoff;
 pub mod hooks;
 pub mod hooks_run;

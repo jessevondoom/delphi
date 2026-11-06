@@ -134,9 +134,12 @@ pub struct Record {
     pub corrections: Vec<String>,
 }
 
-/// A model that turns a prompt into text. The real one is a call through the model client; tests script it.
-pub trait Writer {
-    fn complete(&self, prompt: &str) -> Result<String, String>;
+/// The future a [`Writer`] returns.
+pub type WriteFuture<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send + 'a>>;
+
+/// A model that turns a prompt into text. The real one is `emergency_run::ModelWriter`, a call through the model client; tests script it.
+pub trait Writer: Send + Sync {
+    fn complete<'a>(&'a self, prompt: &'a str) -> WriteFuture<'a>;
 }
 
 fn cap(s: &str) -> String {
@@ -153,10 +156,10 @@ fn prompt_for(facts: &Facts) -> String {
 
 /// Write the emergency record under `<mission_dir>/handoffs/`. Needs the emergency model configured; the summary is the model's, the
 /// checklist is `facts` as given. The record is labeled and its summary capped. Returns the record's path.
-pub fn save_state(cfg: &Config, mission_dir: &Path, mut facts: Facts, trig: &Trigger, writer: &dyn Writer, now: i64) -> Result<PathBuf, String> {
+pub async fn save_state(cfg: &Config, mission_dir: &Path, mut facts: Facts, trig: &Trigger, writer: &dyn Writer, now: i64) -> Result<PathBuf, String> {
     let (ep, model) = cfg.routing.emergency.clone().ok_or("no emergency model is configured; a quota stop saves no summary (the journal and git state remain)")?;
     facts.exhausted_seats = trig.exhausted.clone();
-    let summary = writer.complete(&prompt_for(&facts)).map_err(|e| format!("the emergency model could not write the summary: {e}"))?;
+    let summary = writer.complete(&prompt_for(&facts)).await.map_err(|e| format!("the emergency model could not write the summary: {e}"))?;
     let record = Record { kind: KIND.into(), label: Some(LABEL.into()), created_unix: now, written_by: format!("{ep}/{model}"), facts, summary: cap(&summary), verified_by: None, corrections: vec![] };
     let dir = mission_dir.join(DIR);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -222,7 +225,7 @@ pub struct Verifier<'a> {
 /// Recovery (§3.5): a model that meets `floor` re-reads the record, each checkable claim is checked against git and the journal as they
 /// are now, the record is corrected, and only then is the label removed. The emergency model cannot verify its own record, and neither
 /// can any model below the floor. If the verifier's call fails the record stays labeled and the error is returned.
-pub fn recover(cfg: &Config, path: &Path, floor: &str, verifier: &Verifier, now_facts: &Facts, journal_ids: &[String]) -> Result<Record, String> {
+pub async fn recover(cfg: &Config, path: &Path, floor: &str, verifier: &Verifier<'_>, now_facts: &Facts, journal_ids: &[String]) -> Result<Record, String> {
     if is_emergency(cfg, &verifier.endpoint_id, &verifier.model_id) {
         return Err("the emergency model cannot verify its own record".into());
     }
@@ -273,7 +276,7 @@ pub fn recover(cfg: &Config, path: &Path, floor: &str, verifier: &Verifier, now_
         rec.summary,
         serde_json::to_string_pretty(&rec.facts).unwrap_or_default()
     );
-    let corrected = verifier.writer.complete(&prompt).map_err(|e| format!("verification failed, the record stays labeled `{LABEL}`: {e}"))?;
+    let corrected = verifier.writer.complete(&prompt).await.map_err(|e| format!("verification failed, the record stays labeled `{LABEL}`: {e}"))?;
     if corrected.trim().is_empty() {
         return Err(format!("the verifier returned nothing, the record stays labeled `{LABEL}`"));
     }
@@ -297,7 +300,7 @@ pub fn line(cfg: &Config) -> String {
 mod tests {
     use super::*;
     use crate::pool::State;
-    use std::cell::RefCell;
+    use std::sync::Mutex;
 
     const NOW: i64 = 1_790_000_000;
 
@@ -354,18 +357,19 @@ assignment = "discovered"
     }
 
     struct Script {
-        replies: RefCell<Vec<Result<String, String>>>,
-        prompts: RefCell<Vec<String>>,
+        replies: Mutex<Vec<Result<String, String>>>,
+        prompts: Mutex<Vec<String>>,
     }
     impl Script {
         fn new(r: Vec<Result<String, String>>) -> Script {
-            Script { replies: RefCell::new(r), prompts: RefCell::new(vec![]) }
+            Script { replies: Mutex::new(r), prompts: Mutex::new(vec![]) }
         }
     }
     impl Writer for Script {
-        fn complete(&self, prompt: &str) -> Result<String, String> {
-            self.prompts.borrow_mut().push(prompt.into());
-            self.replies.borrow_mut().remove(0)
+        fn complete<'a>(&'a self, prompt: &'a str) -> WriteFuture<'a> {
+            self.prompts.lock().unwrap().push(prompt.into());
+            let r = self.replies.lock().unwrap().remove(0);
+            Box::pin(async move { r })
         }
     }
 
@@ -431,13 +435,13 @@ assignment = "discovered"
         }
     }
 
-    #[test]
-    fn the_record_carries_the_checklist_and_the_unverified_label_and_blocks_resuming() {
+    #[tokio::test]
+    async fn the_record_carries_the_checklist_and_the_unverified_label_and_blocks_resuming() {
         let tmp = tempfile::tempdir().unwrap();
         let c = cfg(true);
         let t = trigger(&c, &[down("m-mid-a", State::Exhausted), down("m-mid-b", State::Exhausted)], NOW).unwrap();
         let w = Script::new(vec![Ok("Slice a is half done. ".repeat(500))]);
-        let path = save_state(&c, tmp.path(), facts(), &t, &w, NOW).unwrap();
+        let path = save_state(&c, tmp.path(), facts(), &t, &w, NOW).await.unwrap();
         assert!(path.starts_with(tmp.path().join(DIR)) && path.file_name().unwrap().to_str().unwrap().starts_with("emergency-"));
         let r = read_record(&path).unwrap();
         assert_eq!((r.kind.as_str(), r.label.as_deref(), r.written_by.as_str()), (KIND, Some(LABEL), "ep-l/m-tiny-l"));
@@ -445,51 +449,51 @@ assignment = "discovered"
         assert_eq!(r.facts.exhausted_seats.len(), 2);
         assert!(!r.facts.journal_pointers.is_empty() && !r.facts.branches.is_empty() && !r.facts.in_flight.is_empty() && r.facts.patch.is_some());
         assert_eq!(pending(tmp.path()), vec![path], "nothing resumes while a labeled record stands");
-        assert!(save_state(&cfg(false), tmp.path(), facts(), &t, &w, NOW).is_err(), "not configured: no record");
+        assert!(save_state(&cfg(false), tmp.path(), facts(), &t, &w, NOW).await.is_err(), "not configured: no record");
     }
 
     fn now_facts() -> Facts {
         Facts { journal_pointers: vec![], open_prs: vec!["#1 a slice".into(), "#2 another".into()], branches: vec![Branch { name: "slice-a".into(), head: "ccc".into() }], changed_files: vec!["src/x.rs".into(), "src/y.rs".into()], patch: Some("local/y.patch".into()), in_flight: vec![], exhausted_seats: vec![] }
     }
 
-    fn saved(tmp: &Path, c: &Config) -> PathBuf {
+    async fn saved(tmp: &Path, c: &Config) -> PathBuf {
         let t = Trigger { exhausted: vec![] };
-        save_state(c, tmp, facts(), &t, &Script::new(vec![Ok("draft".into())]), NOW).unwrap()
+        save_state(c, tmp, facts(), &t, &Script::new(vec![Ok("draft".into())]), NOW).await.unwrap()
     }
 
-    #[test]
-    fn recovery_corrects_each_claim_against_git_and_the_journal_then_removes_the_label() {
+    #[tokio::test]
+    async fn recovery_corrects_each_claim_against_git_and_the_journal_then_removes_the_label() {
         let tmp = tempfile::tempdir().unwrap();
         let c = cfg(true);
-        let path = saved(tmp.path(), &c);
+        let path = saved(tmp.path(), &c).await;
         let w = Script::new(vec![Ok("Corrected summary.".into())]);
         let v = Verifier { endpoint_id: "ep-a".into(), model_id: "m-mid-a".into(), class: Class::Steady, writer: &w };
         let mut now = now_facts();
         now.journal_pointers = vec!["ev_1".into()];
-        let r = recover(&c, &path, "steady", &v, &now, &["ev_1".to_string()]).unwrap();
+        let r = recover(&c, &path, "steady", &v, &now, &["ev_1".to_string()]).await.unwrap();
         assert_eq!((r.label, r.verified_by.as_deref(), r.summary.as_str()), (None, Some("ep-a/m-mid-a"), "Corrected summary."));
         assert_eq!(r.facts.branches, now.branches, "the head now wins and the vanished branch is gone");
         assert_eq!(r.facts.changed_files.len(), 2);
         assert_eq!(r.facts.journal_pointers, vec!["ev_1".to_string()], "a pointer the journal does not hold is dropped");
         assert_eq!(r.facts.open_prs.len(), 2);
         assert!(r.corrections.iter().any(|f| f.contains("head was aaa and is ccc")) && r.corrections.iter().any(|f| f.contains("`old` no longer exists")));
-        assert!(w.prompts.borrow()[0].contains("unverified"), "the verifier is told the summary is unverified");
+        assert!(w.prompts.lock().unwrap()[0].contains("unverified"), "the verifier is told the summary is unverified");
         assert!(pending(tmp.path()).is_empty(), "now dispatch may resume");
     }
 
-    #[test]
-    fn a_weak_or_emergency_verifier_or_a_failed_call_leaves_the_label_on() {
+    #[tokio::test]
+    async fn a_weak_or_emergency_verifier_or_a_failed_call_leaves_the_label_on() {
         let tmp = tempfile::tempdir().unwrap();
         let c = cfg(true);
-        let path = saved(tmp.path(), &c);
+        let path = saved(tmp.path(), &c).await;
         let w = Script::new(vec![Err("down".into()), Ok("  ".into())]);
         let mk = |ep: &str, m: &str, class| Verifier { endpoint_id: ep.into(), model_id: m.into(), class, writer: &w };
-        assert!(recover(&c, &path, "steady", &mk("ep-l", "m-tiny-l", Class::Steady), &now_facts(), &[]).unwrap_err().contains("its own record"));
-        assert!(recover(&c, &path, "steady", &mk("ep-a", "m-mid-a", Class::Quick), &now_facts(), &[]).unwrap_err().contains("floor"));
-        assert!(recover(&c, &path, "steady", &mk("ep-a", "m-mid-a", Class::Emergency), &now_facts(), &[]).is_err(), "the emergency class meets no floor");
-        assert_eq!(w.prompts.borrow().len(), 0, "a refused verifier is never called");
-        assert!(recover(&c, &path, "steady", &mk("ep-a", "m-mid-a", Class::Deep), &now_facts(), &[]).unwrap_err().contains("stays labeled"));
-        assert!(recover(&c, &path, "steady", &mk("ep-a", "m-mid-a", Class::Deep), &now_facts(), &[]).unwrap_err().contains("stays labeled"));
+        assert!(recover(&c, &path, "steady", &mk("ep-l", "m-tiny-l", Class::Steady), &now_facts(), &[]).await.unwrap_err().contains("its own record"));
+        assert!(recover(&c, &path, "steady", &mk("ep-a", "m-mid-a", Class::Quick), &now_facts(), &[]).await.unwrap_err().contains("floor"));
+        assert!(recover(&c, &path, "steady", &mk("ep-a", "m-mid-a", Class::Emergency), &now_facts(), &[]).await.is_err(), "the emergency class meets no floor");
+        assert_eq!(w.prompts.lock().unwrap().len(), 0, "a refused verifier is never called");
+        assert!(recover(&c, &path, "steady", &mk("ep-a", "m-mid-a", Class::Deep), &now_facts(), &[]).await.unwrap_err().contains("stays labeled"));
+        assert!(recover(&c, &path, "steady", &mk("ep-a", "m-mid-a", Class::Deep), &now_facts(), &[]).await.unwrap_err().contains("stays labeled"));
         assert_eq!(pending(tmp.path()).len(), 1);
         assert_eq!(read_record(&path).unwrap().label.as_deref(), Some(LABEL));
     }
