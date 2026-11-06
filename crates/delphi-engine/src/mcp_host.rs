@@ -414,6 +414,7 @@ pub fn tools() -> Value {
                     "question": {"type": "string", "minLength": 1, "maxLength": 2000, "description": "What should be decided."},
                     "options": {"type": "array", "maxItems": 8, "items": {"type": "string", "maxLength": 200}, "description": "The choices you are weighing, if any."},
                     "stakes": {"type": "string", "enum": ["low", "normal", "high"], "default": "normal"},
+                    "foreign_seat": {"type": "string", "enum": ["architect", "red-team", "strategist"], "description": "Optional: have Delphi run this one seat on a model family other than your host's. Spends the operator's Delphi tokens; ask first (council_frame says how)."},
                     "context_pointers": {"type": "array", "maxItems": 10, "items": {"type": "object", "properties": {"uri": {"type": "string", "maxLength": 200}, "reason": {"type": "string", "maxLength": 200}}, "required": ["uri", "reason"], "additionalProperties": false}, "description": "Project-relative files the seats should look at."}
                 },
                 "required": ["question"],
@@ -424,13 +425,15 @@ pub fn tools() -> Value {
         {
             "name": "council_open",
             "title": "Open a Panel",
-            "description": "Start a Panel: a Council whose seats (architect, red-team, strategist) are YOUR OWN subagents, with the moderator's verdict as round 3. Delphi holds the state: Round 1 stays hidden until every seat has answered, Round 2 is parsed by the same strict rules a daemon Council uses, and the dissent is copied verbatim. Returns a council_id and what to do next. Spends none of Delphi's tokens; the seats use your host's. Ask the operator first (council_frame gives the question). Whether each seat really ran in a separate context, and on which model, is your word and is recorded as host-reported. A ruling is advice and binds nothing.",
+            "description": "Start a Panel: a Council whose seats (architect, red-team, strategist) are YOUR OWN subagents, with the moderator's verdict as round 3. Delphi holds the state: Round 1 stays hidden until every seat has answered, Round 2 is parsed by the same strict rules a daemon Council uses, and the dissent is copied verbatim. Returns a council_id and what to do next. Spends none of Delphi's tokens; the seats use your host's. Ask the operator first (council_frame gives the question). Whether each seat really ran in a separate context, and on which model, is your word and is recorded as host-reported. With foreign_seat, Delphi runs that one seat itself on another model family (it spends the operator's Delphi tokens, so ask first); you do not brief or answer for it. A ruling is advice and binds nothing.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "question": {"type": "string", "minLength": 1, "maxLength": 2000, "description": "What the Panel should decide."},
                     "options": {"type": "array", "maxItems": 8, "items": {"type": "string", "maxLength": 200}, "description": "The choices you are weighing, if any."},
                     "stakes": {"type": "string", "enum": ["low", "normal", "high"], "default": "normal"},
+                    "foreign_seat": {"type": "string", "enum": ["architect", "red-team", "strategist"], "description": "Optional: have Delphi run this one seat on a model family other than your host's. Spends the operator's Delphi tokens; ask first (council_frame says how)."},
+                    "blind": {"type": "string", "enum": ["yes", "no"], "description": "Whether you will run each seat in its own isolated context (yes) or could not (no). Host-reported; recorded as such."},
                     "context_pointers": {"type": "array", "maxItems": 10, "items": {"type": "object", "properties": {"uri": {"type": "string", "maxLength": 200}, "reason": {"type": "string", "maxLength": 200}}, "required": ["uri", "reason"], "additionalProperties": false}, "description": "Project-relative files the seats should look at."},
                     "model": {"type": "string", "maxLength": 64, "description": "Your model name, self-reported."}
                 },
