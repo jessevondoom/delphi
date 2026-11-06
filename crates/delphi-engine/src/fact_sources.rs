@@ -52,8 +52,8 @@ const EXCLUDED: [&str; 14] = [
 const WEAK: [&str; 21] = [
     "wikimedia.org", "wikia.com", "fandom.com", "reddit.com", "quora.com", "stackoverflow.com", "stackexchange.com", "medium.com", "substack.com", "x.com", "twitter.com", "facebook.com", "youtube.com", "discogs.com", "musicbrainz.org", "imdb.com", "genius.com", "blogspot.com", "wordpress.com", "tumblr.com", "linkedin.com",
 ];
-const PRIMARY: [&str; 31] = [
-    "ietf.org", "rfc-editor.org", "w3.org", "whatwg.org", "ecma-international.org", "unicode.org", "iso.org", "nist.gov", "legislation.gov.uk", "europa.eu", "sec.gov", "doi.org", "pubmed.ncbi.nlm.nih.gov", "clinicaltrials.gov", "arxiv.org", "crates.io", "pypi.org", "npmjs.com", "github.com", "copyright.gov", "loc.gov", "ascap.com", "bmi.com", "docs.rs", "rust-lang.org", "python.org", "kernel.org", "postgresql.org", "mozilla.org", "owasp.org", "iana.org",
+const PRIMARY: [&str; 32] = [
+    "ietf.org", "rfc-editor.org", "w3.org", "whatwg.org", "ecma-international.org", "unicode.org", "iso.org", "nist.gov", "legislation.gov.uk", "europa.eu", "sec.gov", "doi.org", "pubmed.ncbi.nlm.nih.gov", "clinicaltrials.gov", "arxiv.org", "crates.io", "pypi.org", "npmjs.com", "github.com", "copyright.gov", "loc.gov", "ascap.com", "bmi.com", "docs.rs", "rust-lang.org", "python.org", "kernel.org", "postgresql.org", "mozilla.org", "owasp.org", "iana.org", "anthropic.com",
 ];
 const REPUTABLE: [&str; 48] = [
     "britannica.com", "apnews.com", "reuters.com", "bbc.co.uk", "bbc.com", "nytimes.com", "theguardian.com", "washingtonpost.com", "npr.org", "annualreviews.org", "si.edu", "smithsonianmag.com", "nationalgeographic.com", "billboard.com", "allmusic.com", "nature.com", "science.org",
