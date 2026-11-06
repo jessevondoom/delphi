@@ -132,6 +132,54 @@ pub fn act(mission_id: &str, n: &LiveNote, action: &str) -> Result<Vec<EventEnve
     Ok(out)
 }
 
+/// The learning queue at a glance (`specs/083` §4): how many notes sit staged, how many proposals and promotions wait for
+/// the operator, and when the oldest of them arrived. Counts and an age, never a score; derived from the logs on every call.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Health {
+    pub staged: usize,
+    pub review: usize,
+    /// The daemon's own timestamp of the oldest waiting item; `None` when nothing waits or no timestamp parses.
+    pub oldest: Option<String>,
+}
+
+impl Health {
+    pub fn to_json(&self) -> Value {
+        json!({"staged": self.staged, "review": self.review, "oldest_at": self.oldest})
+    }
+}
+
+/// [`Health`] of a set of missions' events, each as `(mission id, events)`. Only the daemon's event timestamps feed the age.
+pub fn health_of(missions: &[(String, Vec<EventEnvelope>)]) -> Health {
+    let mut h = Health::default();
+    let mut oldest: Option<(i64, String)> = None;
+    let mut see = |ts: &str| {
+        if let Some(s) = delphi_core::time::parse_rfc3339(ts) {
+            if oldest.as_ref().is_none_or(|(o, _)| s < *o) {
+                oldest = Some((s, ts.to_string()));
+            }
+        }
+    };
+    for (id, events) in missions {
+        let notes = live_notes(id, events);
+        h.staged += notes.len();
+        notes.iter().for_each(|n| see(&n.timestamp));
+        let proposals = crate::learn::live_proposals(id, events);
+        h.review += proposals.len();
+        proposals.iter().for_each(|p| see(&p.timestamp));
+        let promotions = crate::promote::live_promotions(id, events);
+        h.review += promotions.len();
+        promotions.iter().for_each(|p| see(&p.timestamp));
+    }
+    h.oldest = oldest.map(|(_, t)| t);
+    h
+}
+
+/// [`health_of`] over every mission of the workspace. Reads the logs and nothing else.
+pub fn health(ws_dir: &std::path::Path) -> Health {
+    let missions: Vec<(String, Vec<EventEnvelope>)> = delphi_core::sessions::dirs(ws_dir).into_iter().filter_map(|(id, path)| Some((id, delphi_core::log::replay(&path).ok()?))).collect();
+    health_of(&missions)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,5 +251,27 @@ mod tests {
         assert_eq!(dismissed[0].kind, "learn.dropped");
         assert_eq!(act("m1", &n, "check").unwrap().len(), 1);
         assert!(act("m1", &n, "approve").is_err());
+    }
+
+    #[test]
+    fn health_counts_staged_and_waiting_and_dates_the_oldest_from_daemon_timestamps_only() {
+        assert_eq!(health_of(&[]), Health::default());
+        let mut dropped = EventEnvelope::new("m1", "learn.dropped", json!({"id": "n1"}));
+        dropped.seq = 9;
+        let mut proposed = EventEnvelope::new("m2", "learn.proposed", json!({"op": "add", "scope": "workspace", "text": "Run the formatter first.", "rationale": "r", "target": "", "tier": "L3"}));
+        proposed.seq = 2;
+        proposed.timestamp = "2026-10-30T08:00:00Z".into();
+        let m1 = vec![staged(1, "n1", "agent_note", "L2", "2026-10-01T00:00:00Z"), staged(2, "n2", "agent_note", "L2", "2026-11-01T00:00:00Z"), staged(3, "n3", "agent_note", "L2", "2026-11-02T00:00:00Z"), dropped];
+        let h = health_of(&[("m1".into(), m1), ("m2".into(), vec![proposed.clone()])]);
+        assert_eq!((h.staged, h.review), (2, 1), "a dropped note no longer counts");
+        assert_eq!(h.oldest.as_deref(), Some("2026-10-30T08:00:00Z"), "the dropped note's date does not count either");
+        assert_eq!(h.to_json()["oldest_at"], "2026-10-30T08:00:00Z");
+        let mut resolved = EventEnvelope::new("m2", "learn.proposal_resolved", json!({"id": "p2", "resolution": "rejected"}));
+        resolved.seq = 3;
+        assert_eq!(health_of(&[("m2".into(), vec![proposed.clone(), resolved])]), Health::default(), "a resolved proposal leaves the queue");
+        let mut undated = proposed;
+        undated.timestamp = "not a time".into();
+        let h = health_of(&[("m2".into(), vec![undated])]);
+        assert_eq!((h.review, h.oldest), (1, None), "no usable timestamp: counted, but no age");
     }
 }
