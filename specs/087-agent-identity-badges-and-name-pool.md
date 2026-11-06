@@ -3,7 +3,8 @@ id: spec-087-agent-identity-badges-and-name-pool
 title: "087: Agent identity: a distinct badge and light/dark color for every role, a name pool for dynamic agents, and a visible signal outside the console"
 author: architect
 timestamp: 2026-11-06T12:00:00Z
-status: draft   # proposal only; not permission to build (AGENTS.md). Awaits the operator's approval and answers to OD-1 to OD-5 (§10).
+status: approved   # by the operator, 2026-11-06 (answers to OD-1 and OD-5 given; OD-2 to OD-4 take the recommendations, §10)
+approved_by: operator (2026-11-06)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +15,7 @@ tags: [spec, identity, badge, avatar, theme, dynamic-agents, mcp, outside]
 
 # Spec 087: Agent identity
 
-> **Status: draft, 2026-11-06.** Written from an operator conversation on 2026-11-06. The operator chose the 28 badge faces (30 offered, #2 and #14 dropped as too wide), kept all 36 names, and approved the twin and core-role proposals in §3. Nothing here is built.
+> **Status: approved by the operator, 2026-11-06.** Written from an operator conversation on 2026-11-06. The operator chose the 28 badge faces (30 offered, #2 and #14 dropped as too wide), kept all 36 names, and approved the twin and core-role proposals in §3. Decisions OD-1 and OD-5 were answered (§10); OD-2 to OD-4 take the recommendations. Slices follow §9, one per pull request. Nothing here is built.
 > **Extends:** [`specs/005a`](005a-terminal-avatar-system.md) (badges and mascots), [`specs/073`](073-console-adaptive-contrast-and-dual-mode-palette.md) (light and dark palettes), [`specs/066`](066-mcp-research-endpoint-and-role-identity.md) §7 and [`specs/072`](072-host-cognitive-parity-and-external-orchestration.md) §3.1 (the signature line outside).
 > **Number:** 086 is a draft in PR #498, so this is 087.
 
@@ -30,12 +31,13 @@ Today that signal is weak, and weakest outside the console (verified on main, §
 2. **Per-role blink frames** (§3.2), so a blink is a gesture of the role and not one shared dash.
 3. **A pool of 36 Greek names, each with keywords and a badge face** (§4), for the one-off agents Delphi spawns by role. The format stays the same: `⟦face⟧ Name (role)`.
 4. **Light and dark colors on the outside identity** (§5.1), reused from the console's role colors.
-5. **A visible, honest signal outside the console** (§5.2 to §5.4): what a host should print when Delphi answers, when the host adopts a role, and when the speaker changes.
+5. **The same identity outside the console** (§5.2 to §5.4): the name, badge and role an agent has inside are what a host shows outside, with only `, via delphi` added after the role, and a turn-boundary line when the speaker changes.
 
 ### 1.1 Non-goals
 
 - **No authority.** A badge, a name or a color is a label. A pool name grants nothing; a dynamic agent's scope, tools and counterweights come from its **role** (`agents/<role>/AGENT.md`), exactly as now. Nothing here lets text raise its own trust.
 - **No behaviour from the theme.** Pool names live in the theme pack and change display only (AGENTS.md). Code refers to role IDs and to pool *slots*, never to a name.
+- **No "host is acting as" label.** The operator decided (OD-5) that the `via delphi` after the role is the only reminder needed while a host runs an agent. Role consistency for the operator's perception comes first (§5.3).
 - **No mascot redesign.** The 3-line mascot (spec 005a, 028) is not redrawn. §10 OD-1 says how its face follows the badge.
 - **No guarantee a host shows anything.** A host may strip or summarize tool output. §5 raises the odds and says so; it cannot force display (§8).
 - **Color is never the only carrier.** Face plus name plus role must identify an agent in plain text (§6).
@@ -160,7 +162,7 @@ A pool agent wears **its role's chassis color** (dark and light), so a spawned b
 1. **The orchestrator picks** when it defines a dynamic agent (inside Delphi through the roster, outside through `spawn_agent_pack`): it matches the task's words against the keywords and takes the best-scoring free entry.
 2. **A deterministic fallback.** With no clear match, or if a host asks for no choice, the name is the free entry at `hash(agent_id) mod 36`, scanning forward. The same agent keeps the same identity for its life and across a replay.
 3. **No two live agents in one session share a name.** Prefer a face different from every live agent of the same role. If all 36 are live, the next takes a numeral (`Heracles II`); this is rare enough that it is not designed further (OD-3).
-4. **The role stays visible.** The signature is `⟦•_•⟧ Sisyphus (builder) via delphi`. A pool name never replaces the role ID in the signature, in events or in the handoff.
+4. **The role stays visible.** The signature outside is `⟦•_•⟧ Sisyphus (builder, via delphi)`; inside it is the same without the notice. A pool name never replaces the role ID in the signature, in events or in the handoff.
 5. **Stored with the agent.** The chosen slot is recorded in the agent's start event, so a replay and the transcript show the same name. The event gains a `pool_slot` field; its schema is updated in the slice that adds it.
 
 ### 4.4 Safety
@@ -181,19 +183,17 @@ Outside, Delphi serves text over MCP; the host decides what to print. This secti
 
 ### 5.2 A pre-rendered `display` line
 
-Every signed result carries a ready-made `display` string, already in the form chosen by `badge_style` and `badge_mode`, and the tool description tells the host to print it verbatim first. Today the host must load a skill, build the line and choose a form; the skill remains for hosts that want the detail (`knowledge_status` and the rest). A result with no signature has no `display`.
+Every signed result carries a ready-made `display` string in the form of §5.3 (`⟦face⟧ Name (role, via delphi)`), already rendered as chosen by `badge_style` and `badge_mode`, and the tool description tells the host to print it verbatim first. Today the host must load a skill, build the line and choose a form; the skill remains for hosts that want the detail (`knowledge_status` and the rest). A result with no signature has no `display`.
 
-### 5.3 Three kinds of voice
+### 5.3 One identity, inside and outside
 
-A reader can tell three things apart, and each has its own mark:
+Decided by the operator on 2026-11-06 (OD-5): an agent keeps **the same name, badge and role everywhere**, so the operator's picture of who is who does not change with the venue. The only difference outside is a short `via delphi` notice inside the role's parentheses.
 
-| Voice | Mark |
-| :-- | :-- |
-| Delphi answered (a result from `request_help`, `council_result`, `research_result`) | the signed `display` line, `via delphi` |
-| The host is **acting as** a role it adopted with `get_agent` | a `frame_line` returned by `get_agent`: `⟦¬_¬⟧ acting as <display name> (red-team), via <host tool>`, plainly not a Delphi answer |
-| The host's own voice | no mark |
+- **The form.** Inside the console an agent is shown as `⟦face⟧ Name (role)`. Outside it is the same text with `, via delphi` added after the role, inside its parentheses: `⟦¬_¬⟧ <display name> (red-team, via delphi)`. The notice is shorter than today's trailing `via delphi` and sits inside the role's parentheses, so the line stays one unit.
+- **A host that runs an agent** (it adopted the role with `get_agent`, so it is the host's model doing the work) shows that same identity with the same `via delphi` notice. That notice is the only reminder that a host, not Delphi's own seat, is running it. There is **no separate "host is acting as" label** and no `frame_line`; the operator decided one is not wanted, neither required nor recommended.
+- **The host's own voice** (words that are not a Delphi agent's) carries no mark, as now.
 
-`frame_line` is the missing signal in §2 item 6. It never uses the words "Delphi answered", never carries `via delphi`, and is sanitized like the identity.
+Consequences, so they are not a surprise: the `delphi-attribution` skill's step 5 ("never sign as Delphi yourself; say you are acting as that role") is replaced in S3 by this rule, and `Identity.via` (set today only when a host adopts a role) is kept but no longer changes how the line reads. The `via delphi` notice does not tell a reader whether Delphi's own seat or a host's model wrote the text. That ambiguity is accepted by the decision and is listed in §8.
 
 ### 5.4 Hand-offs and the roster
 
@@ -225,7 +225,7 @@ Width-1 in the common terminal fonts: `• · ° ^ _ - ─ = . o O u w ~ > < * �
 - `avatar.rs` test: all thirteen core roles are in `ROLES` (today seven are); `role_look` matches `ROLES` for all of them (extends the existing check).
 - `ui/test/avatar.test.ts` and `contrast.test.ts` run the new roles in every console state on dark and light terminals, with no new TypeScript, through `DELPHI_WRITE_UI_SPEC=1` (`ui/AVATARS.md`).
 - `ui/test/reduce-motion.test.ts` stays green; add a case for the three-frame blink.
-- Golden outputs for `display`, `frame_line` and the turn-boundary line in the plain, ANSI and markdown forms.
+- Golden outputs for `display` and the turn-boundary line in the plain, ANSI and markdown forms.
 - Docs and schema drift: `cargo test -p delphi --test docs` after the config key.
 
 ---
@@ -243,7 +243,8 @@ Nothing in this spec has been tried with an operator or a host. Whether distinct
 3. **Ambiguous-width glyphs** may misalign rows in some terminals. The ASCII fallback (§6.2) is the answer, and it loses the variety.
 4. **Hosts decide.** §5.5.
 5. **Twin faces are identical.** In a plain, colorless transcript the writer and the investigator differ by name and wink only; the name is always present.
-6. **No mascot work.** The 3-line mascots for the new roles follow OD-1 and may look thinner than the badges.
+6. **No mascot work.** The 3-line mascots for the new roles follow the badge (OD-1) and may look thinner than the badges; the operator will revisit this later.
+7. **`via delphi` does not say who wrote the text.** A host's model running an adopted role and Delphi's own seat show the same line (§5.3). This is the accepted cost of keeping the identity consistent; the conformance probe (spec 086 S0b) is where any difference in what hosts do should be recorded, not the line.
 
 ---
 
@@ -253,31 +254,32 @@ One slice per pull request, in this order. Each updates the spec tracker.
 
 | Slice | Content | Hours |
 | :-- | :-- | --: |
-| S0 | operator approves this spec and answers OD-1 to OD-5; tracker entry | 1 |
+| S0 | operator approves this spec and answers OD-1 and OD-5; tracker entry | 1 |
 | S1 | the thirteen core roles in `ROLES`: faces, blink frames, light/dark colors, `role_look` for all; library fixture and tests; the lint rules of §6.1 that concern core roles | 9 |
 | S2 | the pool in the theme pack; lint; picker (`hash(agent_id)` fallback and keyword match); `pool_slot` on the start event, with its schema; roster and `spawn_agent_pack` use it | 9 |
-| S3 | outside: `hex_light`, `badge_mode`, `display`, `frame_line` on `get_agent`, turn-boundary and roster lines; goldens; config schema and docs | 9 |
+| S3 | outside: `hex_light`, `badge_mode`, `display` in the §5.3 form, the `delphi-attribution` skill step 5 rewritten, turn-boundary and roster lines; goldens; config schema and docs | 9 |
 | S4 | console: three-frame scout blink in `faceOf`; pool agents shown in the agents pane, epic threads and Observe; reduce-motion case | 6 |
 | S5 | the recognition check of §7, once S1 to S3 are merged and an operator is available | 3 |
 
 ---
 
-## 10. Open decisions
+## 10. Decisions
 
-| # | Question | Recommendation |
+OD-1 and OD-5 were answered by the operator on 2026-11-06. OD-2 to OD-4 were not contested and take the recommendations.
+
+| # | Question | Decision |
 | :-- | :-- | :-- |
-| OD-1 | The 7-column mascot face for the new roles: derive from the badge, or draw each? | Derive: the badge cells, centered, except builder keeps `•───•`. Revisit with spec 028. |
+| OD-1 | The 7-column mascot face for the new roles: derive from the badge, or draw each? | **Decided: follow the badge for now** (the badge cells, centered; the builder keeps `•───•`). The operator will revisit this later, with spec 028. |
 | OD-2 | `badge_mode` as a config key, or always dark in the ANSI form? | The key; a light-terminal operator otherwise gets unreadable gold and silver. |
 | OD-3 | When all 36 pool names are live: a numeral (`Heracles II`), or refuse to spawn? | Numeral. It is cosmetic; refusing would block work for a label. |
 | OD-4 | The writer's wink `•_-`: keep, or `‾_‾` to keep it clear of the success frame? | Keep; the cells already differ. |
-| OD-5 | Is the host-acting label (`frame_line`) required of a host, or recommended? | Recommended in the tool description. Delphi cannot enforce what a host prints (§5.5), so "required" would be a claim it cannot check. |
-
+| OD-5 | Is a host-acting label (`frame_line`) required of a host, or recommended? | **Decided: neither; there is no such label.** Keeping the role's identity consistent matters more for the operator's perception, and while a host runs an agent the `via delphi` after the role is a sufficient reminder. The name stays the same inside and outside, except for that shorter notice inside the role's parentheses (§5.3). |
 ---
 
 ## 11. Review checklist
 
 - A pool name, badge or color grants nothing and changes no scope; scope comes from the role.
 - No code outside `themes/` names a theme character; code uses role IDs and `pool-NN` slots.
-- A host-acted role is never labelled as a Delphi answer, and a Delphi answer is never unsigned when a signature exists.
+- An agent's name, badge and role read the same inside and outside; the only outside difference is `, via delphi` after the role. A Delphi answer is never unsigned when a signature exists.
 - Every new color passes the existing contrast gate in both modes; every new animation takes its timing from `motion.ts` and honours reduce motion.
 - The core table is the only place a core face is defined; the fixture is regenerated from `avatar.rs`.

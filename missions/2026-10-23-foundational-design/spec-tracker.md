@@ -702,13 +702,13 @@ From a Council of three Claude seats (one family, so homogeneous) that ranked ei
 
 ## Spec 087: agent identity, badges and a name pool (2026-11-06)
 
-Draft from an operator conversation on 2026-11-06: 28 chosen badge faces, 36 Greek names kept, the writer and investigator as twins, a revised 13-role core set. Not approved; OD-1 to OD-5 (spec 087 §10) are open. Whether it helps the operator follow a multi-agent exchange is not measured (spec 087 §7).
+Approved by the operator 2026-11-06, from a conversation that day: 28 chosen badge faces, 36 Greek names kept, the writer and investigator as twins, a revised 13-role core set. OD-1 (mascots follow the badge) and OD-5 (no host-acting label; the name is the same inside and outside, plus ", via delphi" inside the role parentheses) are decided; OD-2 to OD-4 take the recommendations. Whether it helps the operator follow a multi-agent exchange is not measured (spec 087 §7).
 
 | Slice | Content | Hours | State |
 | :-- | :-- | --: | :-- |
-| S0 | operator approves spec 087 and answers OD-1 to OD-5; tracker entry | 1 | draft, awaiting approval |
+| S0 | operator approves spec 087 and answers OD-1 and OD-5; tracker entry | 1 | approved 2026-11-06 |
 | S1 | thirteen core roles in `ROLES`: faces, blink frames, light/dark colors | 9 | not built |
 | S2 | the name pool in the theme pack; picker; `pool_slot` on the start event | 9 | not built |
-| S3 | outside: light/dark identity, `badge_mode`, `display`, `frame_line`, handoff and roster lines | 9 | not built |
+| S3 | outside: light/dark identity, `badge_mode`, `display` in the one-identity form, handoff and roster lines | 9 | not built |
 | S4 | console: three-frame scout blink; pool agents in panes | 6 | not built |
 | S5 | recognition check with the operator | 3 | not built |
