@@ -247,8 +247,14 @@ pub struct Critique {
 /// critique, and the seat's Round 2 counts as unreadable rather than as agreement.
 pub fn parse_critique(text: &str) -> Option<Critique> {
     // A CLI that was given `critique_schema()` answers with that object, as compact JSON.
+    // Some CLIs add prose, or a second copy in the line format, after the object (seen on real host Councils, 2026-11-05):
+    // the first complete object is the critique, and what follows may only add findings or disagree (`with_trailing`).
     if text.trim_start().starts_with('{') {
-        return serde_json::from_str::<serde_json::Value>(text.trim()).ok().and_then(|v| critique_from_json(&v));
+        let t = text.trim();
+        let mut it = serde_json::Deserializer::from_str(t).into_iter::<serde_json::Value>();
+        let first = it.next()?.ok()?;
+        let c = critique_from_json(&first)?;
+        return with_trailing(c, &t[it.byte_offset()..]);
     }
     let (mut rec, mut concur, mut complete) = (None, None, false);
     let mut findings = Vec::new();
@@ -258,46 +264,85 @@ pub fn parse_critique(text: &str) -> Option<Critique> {
         if head("ROUND 2 COMPLETE") {
             complete = true;
         } else if head("RECOMMENDATION") {
-            let v = l[14..].trim_start_matches([':', ' ', '\t']).trim();
-            let up = v.to_uppercase();
-            rec = Some(if up.starts_with("PROCEED-WITH-CHANGES") || up.starts_with("PROCEED WITH CHANGES") {
-                Rec::ProceedWithChanges
-            } else if up.starts_with("DO-NOT-PROCEED") || up.starts_with("DO NOT PROCEED") {
-                Rec::DoNotProceed
-            } else if up.starts_with("PROCEED") {
-                Rec::Proceed
-            } else if up.starts_with("ALTERNATIVE") {
-                let name = v[11..].trim_start_matches([':', ' ', '\t']).trim();
-                if name.is_empty() {
-                    return None;
-                }
-                Rec::Alternative(name.chars().take(80).collect::<String>().to_lowercase())
-            } else {
-                return None;
-            });
+            rec = Some(recommendation_of(l[14..].trim_start_matches([':', ' ', '\t']).trim())?);
         } else if head("CONCUR") {
-            let v = l[6..].trim_start_matches([':', ' ', '\t']).trim().to_lowercase();
-            concur = match v.as_str() {
-                "yes" | "true" => Some(true),
-                "no" | "false" => Some(false),
-                _ => None,
-            };
+            concur = concur_of(l[6..].trim_start_matches([':', ' ', '\t']));
         } else if head("FINDING") {
-            let rest = l[7..].trim_start_matches([':', '-', ' ', '\t']);
-            let mut it = rest.splitn(2, char::is_whitespace);
-            let sev = it.next().unwrap_or("").trim_matches(|c: char| !c.is_alphanumeric()).to_uppercase();
-            if matches!(sev.as_str(), "P0" | "P1" | "P2" | "P3") {
-                findings.push((sev, it.next().unwrap_or("").trim().chars().take(200).collect()));
-            } else {
-                // A finding that cannot be read is still a finding: it blocks rather than vanishing.
-                findings.push(("P1".to_string(), format!("unparseable finding: {}", l.chars().take(150).collect::<String>())));
-            }
+            // A finding that cannot be read is still a finding: it blocks rather than vanishing.
+            findings.push(finding_of(l));
         }
     }
     if !complete {
         return None;
     }
     Some(Critique { recommendation: rec?, findings, concur })
+}
+
+/// Text after a structured critique. It never removes anything: a finding it names that the object lacks is added (so a
+/// P0 in the prose still blocks), and a recommendation or `CONCUR:` that disagrees with the object makes the whole
+/// reply unreadable, which escalates, rather than guessing which one the seat meant.
+fn with_trailing(mut c: Critique, rest: &str) -> Option<Critique> {
+    for line in rest.lines() {
+        let l = line.trim().trim_start_matches(['-', '*', '•', ' ']).trim();
+        let head = |w: &str| l.get(..w.len()).is_some_and(|h| h.eq_ignore_ascii_case(w));
+        if head("RECOMMENDATION") {
+            match recommendation_of(l[14..].trim_start_matches([':', ' ', '\t']).trim()) {
+                Some(r) if r == c.recommendation => {}
+                _ => return None,
+            }
+        } else if head("CONCUR") {
+            if let (Some(theirs), Some(ours)) = (concur_of(l[6..].trim_start_matches([':', ' ', '\t'])), c.concur) {
+                if theirs != ours {
+                    return None;
+                }
+            }
+        } else if head("FINDING") {
+            let f = finding_of(l);
+            if !c.findings.contains(&f) {
+                c.findings.push(f);
+            }
+        }
+    }
+    Some(c)
+}
+
+fn recommendation_of(v: &str) -> Option<Rec> {
+    let up = v.to_uppercase();
+    Some(if up.starts_with("PROCEED-WITH-CHANGES") || up.starts_with("PROCEED WITH CHANGES") {
+        Rec::ProceedWithChanges
+    } else if up.starts_with("DO-NOT-PROCEED") || up.starts_with("DO NOT PROCEED") {
+        Rec::DoNotProceed
+    } else if up.starts_with("PROCEED") {
+        Rec::Proceed
+    } else if up.starts_with("ALTERNATIVE") {
+        let name = v[11..].trim_start_matches([':', ' ', '\t']).trim();
+        if name.is_empty() {
+            return None;
+        }
+        Rec::Alternative(name.chars().take(80).collect::<String>().to_lowercase())
+    } else {
+        return None;
+    })
+}
+
+fn concur_of(v: &str) -> Option<bool> {
+    match v.trim().to_lowercase().as_str() {
+        "yes" | "true" => Some(true),
+        "no" | "false" => Some(false),
+        _ => None,
+    }
+}
+
+/// A `FINDING` line as `(severity, title)`; one whose severity cannot be read is still a finding, as a P1.
+fn finding_of(l: &str) -> (String, String) {
+    let rest = l[7..].trim_start_matches([':', '-', ' ', '\t']);
+    let mut it = rest.splitn(2, char::is_whitespace);
+    let sev = it.next().unwrap_or("").trim_matches(|c: char| !c.is_alphanumeric()).to_uppercase();
+    if matches!(sev.as_str(), "P0" | "P1" | "P2" | "P3") {
+        (sev, it.next().unwrap_or("").trim().chars().take(200).collect())
+    } else {
+        ("P1".to_string(), format!("unparseable finding: {}", l.chars().take(150).collect::<String>()))
+    }
 }
 
 /// The Round 2 reply as a JSON Schema, for a CLI that can validate its answer against one (`specs/021` §5).
@@ -456,6 +501,8 @@ pub struct ArtifactInput<'a> {
     pub follow: &'a crate::council_next::Followup,
     /// Set for a Council run with `--lenses`: the record says which seat argued from which perspective.
     pub lenses: Option<&'a LensPlan>,
+    /// Extra front-matter lines (each ending in a newline), after `council_format`: a Panel says `venue`, `blind` and any foreign seat.
+    pub front: &'a str,
 }
 
 /// Model text goes into the record as a blockquote, so nothing a seat writes can open a heading of its own
@@ -490,6 +537,9 @@ pub fn render_artifact(a: &ArtifactInput) -> String {
         a.mission_id,
         a.n
     );
+    if !a.front.is_empty() {
+        s = s.replacen("council_format: 1\n---", &format!("council_format: 1\n{}---", a.front), 1);
+    }
     s.push_str(&format!("# Council {:03}\n\n**Proposition:** {}\n\n", a.n, a.proposition.trim()));
     s.push_str("## Seats\n\n| Seat | Family | Round 1 | Round 2 |\n| :-- | :-- | :-- | :-- |\n");
     for p in &a.plan.seats {
@@ -570,8 +620,10 @@ pub fn render_artifact(a: &ArtifactInput) -> String {
 pub fn lint_artifact(text: &str) -> Vec<String> {
     let mut problems = Vec::new();
     const HEADING: &str = "## Accepted Risks & Minority Report (Red-Team / Dissent)";
-    let Some(at) = text.rfind(HEADING) else { return vec![format!("missing the `{}` section", HEADING)] };
-    let minority = &text[at + HEADING.len()..];
+    // At a line start, like the real heading: quoted seat text cannot begin a line with it.
+    let anchored = format!("\n{HEADING}");
+    let Some(at) = text.rfind(anchored.as_str()) else { return vec![format!("missing the `{}` section", HEADING)] };
+    let minority = &text[at + anchored.len()..];
     let structured = text.split("## Round 2 structured output").nth(1).and_then(|t| t.split("\n## ").next()).unwrap_or("");
     let (mut blocking, mut red_concur) = (Vec::new(), false);
     for line in structured.lines().filter_map(|l| l.strip_prefix("- ")) {
@@ -597,6 +649,17 @@ pub fn lint_artifact(text: &str) -> Vec<String> {
         problems.push("the Minority Report is empty".to_string());
     }
     problems
+}
+
+/// What a Council is about, for its file name and title. A host's question arrives inside a fence with a preamble
+/// ("A host agent (...) asks the Council to rule..."); the name should come from the `Question:` line, not the preamble.
+pub fn headline(proposition: &str) -> &str {
+    proposition
+        .split_once("--- BEGIN HOST QUESTION ---")
+        .and_then(|(_, rest)| rest.lines().find_map(|l| l.trim().strip_prefix("Question:")))
+        .map(str::trim)
+        .filter(|q| !q.is_empty())
+        .unwrap_or(proposition)
 }
 
 pub fn slugify(s: &str) -> String {
@@ -664,14 +727,14 @@ pub fn assign_lenses(seats: &[String], lenses: &[Lens]) -> LensPlan {
 
 // ── prompts ─────────────────────────────────────────────────────────────────
 
-fn round1_objective(proposition: &str) -> String {
+pub(crate) fn round1_objective(proposition: &str) -> String {
     format!(
         "COUNCIL, ROUND 1 (blind). No other seat's view is available to you, and you will not be shown theirs until everyone has answered.\n\nProposition: {}\n\nGive your opening stance from your own role's point of view. Reply as plain text in this shape: first a line `OPTION: <your preferred approach in at most six words>`, then your reasoning in at most 350 words, then the risks you see. Do not ask questions and do not write any files.",
         proposition.trim()
     )
 }
 
-fn round2_objective(role: &str, proposition: &str) -> String {
+pub(crate) fn round2_objective(role: &str, proposition: &str) -> String {
     let attack = match role {
         "red-team" => "Read every Round 1 stance and attack it: failure modes, security flaws, anything that breaks under load or abuse.",
         "strategist" => "Read every Round 1 stance and attack scope creep, timeline, cost and return on effort.",
@@ -685,7 +748,7 @@ fn round2_objective(role: &str, proposition: &str) -> String {
     )
 }
 
-fn synthesis_objective(proposition: &str, escalation: Option<&str>, labels: &[String]) -> String {
+pub(crate) fn synthesis_objective(proposition: &str, escalation: Option<&str>, labels: &[String]) -> String {
     let shape = crate::council_next::format_instruction(labels);
     format!(
         "COUNCIL, SYNTHESIS. You are the arbiter. The seats' stances and critiques are attached as context slices. Proposition: {}\n\nWrite the verdict in at most 250 words of plain prose: what the Council recommends and why, where the seats agreed, and where they did not. {} You do not write the Minority Report: the daemon copies the critics' open P0/P1 items into the record verbatim, so do not restate or soften them.\n\n{}",
@@ -799,6 +862,85 @@ impl Engine {
         m.release_blocks(&task_id).await?; // never leave anything held, whatever happened
         self.broker.end_task(&task_id);
         let (status, text) = result?;
+        self.finish_task(m, task_id, crate::engine::SpanOutcome { status, text, turns: 0, ceiling: delphi_core::provenance::Tier::L5 }).await
+    }
+
+    /// The family for the seat Delphi runs in a Panel: not the host's (when known), preferring the role's configured family.
+    /// `None` when no other usable family is configured, and the Panel refuses to promise a foreign seat it cannot seat.
+    pub fn panel_foreign_family(&self, role: &str, host_family: Option<&str>) -> Option<String> {
+        let available = self.available_families();
+        let wanted = self.cfg.get().family_for_role(role).to_string();
+        let ok = |f: &String| Some(f.as_str()) != host_family;
+        if available.contains(&wanted) && ok(&wanted) {
+            return Some(wanted);
+        }
+        available.into_iter().find(ok)
+    }
+
+    /// An upper bound, in tokens, on what Delphi's seat can spend in a Panel: two calls (opening and cross-examination), each limited to
+    /// `max_tokens` of output, plus the question and the other stances as input. A ceiling, not a forecast: no Council cost is measured yet.
+    pub fn panel_foreign_ceiling_tokens(&self) -> u64 {
+        2 * self.settings.max_tokens + 2 * 12_000
+    }
+
+    /// Run the seat Delphi owns in a Panel for `round` (1 or 2). Round 2 reads the Round 1 stances the barrier released. The answer is
+    /// the seat's own words on the family chosen for it; a seat that fails or times out abstains and the Panel goes on.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn panel_foreign_run(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, panel_brief: String, proposition: &str, role: &str, family: &str, round: u8, stances: Option<&BTreeMap<String, Stance>>) -> Stance {
+        let plan = SeatPlan { role: role.to_string(), family: family.to_string(), avoid: vec![], tier: Some(self.role_default_tier(role)) };
+        let pointers = pointers_from_prompt(proposition);
+        let h = self.council_handoff(m, task_id, role, if round == 1 { "r1" } else { "r2" }, &plan, panel_brief, pointers);
+        let slices: Vec<ContextSlice> = stances.map(|st| st.iter().filter_map(|(r, s)| s.text().map(|t| ContextSlice { label: format!("council/round1/{}", r), tier: "L3".into(), text: t.chars().take(6000).collect() })).collect()).unwrap_or_default();
+        let schema = if round == 2 { Some(critique_schema()) } else { None };
+        self.run_seat(m, task_id, h, slices, schema, self.settings.council_seat_timeout).await
+    }
+
+    /// A host Panel's Round 1 has released (`specs/086` §4): the stances join the log as a daemon Council's do, and the plan is recorded
+    /// as host-reported (the daemon cannot know the family or prove the isolation of a seat a host ran itself).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn panel_released(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, proposition: &str, stances: &BTreeMap<String, Stance>, models: &BTreeMap<String, String>, foreign: Option<(&str, &str)>, blind: &str) -> Result<(), EngineError> {
+        let emit = |kind: &str, payload: Value| {
+            let mut e = EventEnvelope::new(&m.id, kind, payload);
+            e.task_id = Some(task_id.to_string());
+            e
+        };
+        m.append(emit("council.started", json!({"proposition": proposition, "venue": "panel", "blind": blind, "foreign": foreign.map(|(r, f)| json!({"role": r, "family": f})), "seats": stances.keys().map(|r| json!({"role": r, "family": if foreign.is_some_and(|(fr, _)| fr == r) { foreign.map(|(_, f)| f).unwrap_or("host-reported") } else { "host-reported" }, "model": models.get(r)})).collect::<Vec<_>>(), "homogeneous": foreign.is_none(), "notes": ["a host Panel: isolation and model names are host-reported; Delphi holds the barrier"]}))).await?;
+        for (role, st) in stances {
+            let (status, text) = match st {
+                Stance::Said(t) => ("answered", t.clone()),
+                Stance::Abstained(w) => ("abstained", w.clone()),
+            };
+            m.append(emit("council.stance", json!({"round": 1, "role": role, "status": status, "text": self.secrets.redact(&text), "model": models.get(role)}))).await?;
+        }
+        Ok(())
+    }
+
+    /// Too few seats answered: nothing is decided, and the operator is told why (as a daemon Council does).
+    pub async fn panel_escalate(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, why: String) -> Result<crate::engine::TaskOutcome, EngineError> {
+        m.release_blocks(&task_id).await?;
+        self.finish_task(m, task_id, crate::engine::SpanOutcome { status: Status::Escalated(why), text: String::new(), turns: 0, ceiling: delphi_core::provenance::Tier::L5 }).await
+    }
+
+    /// The moderator's verdict arrived: the same decision, steps and record a daemon Council writes, from the Panel's held state.
+    pub async fn panel_conclude(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, panel: &crate::council_panel::Panel) -> Result<crate::engine::TaskOutcome, EngineError> {
+        let stances = panel.stances().cloned().unwrap_or_default();
+        let (round2, round2_text) = panel.parsed_round2();
+        for (role, c) in &round2 {
+            let mut e = EventEnvelope::new(&m.id, "council.critique", json!({"round": 2, "role": role, "readable": c.is_some(), "recommendation": c.as_ref().map(|c| c.recommendation.label()), "concur": c.as_ref().and_then(|c| c.concur), "findings": c.as_ref().map(|c| c.findings.iter().map(|(s, t)| json!({"severity": s, "title": t})).collect::<Vec<_>>()).unwrap_or_default(), "text": round2_text.get(role).map(|t| self.secrets.redact(t))}));
+            e.task_id = Some(task_id.clone());
+            m.append(e).await?;
+        }
+        let decision = decide(&round2);
+        let foreign = panel.foreign();
+        let plan = Assignment {
+            seats: panel.seats().iter().map(|r| SeatPlan { role: r.clone(), family: match foreign { Some((fr, ff)) if fr == r => ff.to_string(), _ => "host-reported".into() }, avoid: vec![], tier: None }).collect(),
+            homogeneous: foreign.is_none(),
+            notes: vec!["a host Panel: isolation and model names are host-reported".into()],
+        };
+        let synthesis = panel.verdict().unwrap_or("(The moderator wrote no verdict; the structured record above and below is complete.)").to_string();
+        let front = format!("venue: panel\nblind: {}\n{}", panel.blind, foreign.map(|(r, f)| format!("foreign_seat: {r}\nforeign_family: {f}\n")).unwrap_or_default());
+        let (status, text) = self.conclude(m, &task_id, &panel.proposition, &plan, &stances, &round2, &round2_text, &decision, None, &front, synthesis).await?;
+        m.release_blocks(&task_id).await?;
         self.finish_task(m, task_id, crate::engine::SpanOutcome { status, text, turns: 0, ceiling: delphi_core::provenance::Tier::L5 }).await
     }
 
@@ -956,6 +1098,18 @@ impl Engine {
                 synthesis = t;
             }
         }
+        self.conclude(m, task_id, proposition, &plan, &stances, &round2, &round2_text, &decision, lens_plan.as_ref(), "", synthesis).await
+    }
+
+    /// From the deterministic decision to the record: the steps that follow, the Council record on disk, the `council.verdict` event
+    /// and the text the operator is shown. A daemon Council and a host Panel (`specs/086`) both end here, so both write the same record.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn conclude(&self, m: &Arc<MissionState>, task_id: &str, proposition: &str, plan: &Assignment, stances: &BTreeMap<String, Stance>, round2: &Round2, round2_text: &BTreeMap<String, String>, decision: &Decision, lens_plan: Option<&LensPlan>, front: &str, mut synthesis: String) -> Result<(Status, String), EngineError> {
+        let emit = |kind: &str, payload: Value| {
+            let mut e = EventEnvelope::new(&m.id, kind, payload);
+            e.task_id = Some(task_id.to_string());
+            e
+        };
         // A verdict that ends in prose is a checkbox: it ends in a decision and the steps that follow (`specs/003` §4.2).
         let step_roles: Vec<String> = self.settings.enabled_agents.iter().filter(|r| *r != "orchestrator").cloned().collect();
         let labels: Vec<String> = if decision.escalation.is_some() { decision.options.iter().map(|(l, _)| l.clone()).collect() } else { Vec::new() };
@@ -970,9 +1124,9 @@ impl Engine {
 
         // ── The record.
         let n = Self::next_council_number(m);
-        let slug = slugify(proposition);
+        let slug = slugify(headline(proposition));
         let stamp = self.now();
-        let doc = render_artifact(&ArtifactInput { mission_id: &m.id, n, slug: &slug, proposition, timestamp: &stamp, plan: &plan, stances: &stances, round2: &round2, round2_text: &round2_text, decision: &decision, synthesis: &synthesis, follow: &follow, lenses: lens_plan.as_ref() });
+        let doc = render_artifact(&ArtifactInput { mission_id: &m.id, n, slug: &slug, proposition, timestamp: &stamp, plan, stances, round2, round2_text, decision, synthesis: &synthesis, follow: &follow, lenses: lens_plan, front });
         let dir = m.dir.join("councils");
         std::fs::create_dir_all(&dir).map_err(|e| EngineError::Invalid(e.to_string()))?;
         let rel = format!("missions/{}/councils/{}", m.id, artifact_name(n, &slug));
@@ -995,7 +1149,7 @@ impl Engine {
             text.push_str(&next);
         }
         text.push_str("\n\nMinority report:\n");
-        text.push_str(minority_report(&round2, &decision, plan.homogeneous).trim_end());
+        text.push_str(minority_report(round2, decision, plan.homogeneous).trim_end());
         text.push_str(&format!("\n\nSaved: {}", rel));
         let status = match &decision.escalation {
             Some(why) => Status::Escalated(format!("Council escalated: {}", why)),
@@ -1006,7 +1160,7 @@ impl Engine {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn s(v: &[&str]) -> Vec<String> {
@@ -1097,6 +1251,23 @@ mod tests {
     }
 
     #[test]
+    fn a_structured_critique_with_trailing_text_is_read_and_the_text_can_only_add_or_conflict() {
+        // The shape a real Gemini seat returned (host Councils, 2026-11-05): the object, then prose, then a line-format copy.
+        let real = "{\"concur\":true,\"findings\":[{\"severity\":\"P1\",\"title\":\"a\"}],\"recommendation\":\"PROCEED-WITH-CHANGES\"}\nThe Council converges.\n\nRECOMMENDATION: PROCEED-WITH-CHANGES\nFINDING P1 a\nCONCUR: yes\nROUND 2 COMPLETE\nRECOMMENDATION: PROCEED-WITH-CHANGES\nFINDING P1 a\nCONCUR: yes\nROUND 2 COMPLETE";
+        let c = parse_critique(real).unwrap();
+        assert_eq!((c.recommendation.clone(), c.concur, c.findings.len()), (Rec::ProceedWithChanges, Some(true), 1), "a repeated finding is not counted twice");
+        // A P0 that only the prose names still blocks.
+        let more = parse_critique("{\"recommendation\":\"PROCEED\",\"findings\":[],\"concur\":true}\nFINDING P0 data loss").unwrap();
+        assert_eq!(more.findings, vec![("P0".to_string(), "data loss".to_string())]);
+        // A disagreement is unreadable, never a guess.
+        assert!(parse_critique("{\"recommendation\":\"PROCEED\",\"findings\":[],\"concur\":true}\nRECOMMENDATION: DO-NOT-PROCEED").is_none());
+        assert!(parse_critique("{\"recommendation\":\"PROCEED\",\"findings\":[],\"concur\":true}\nCONCUR: no").is_none());
+        // Plain trailing prose changes nothing; a broken object is still no critique.
+        assert_eq!(parse_critique("{\"recommendation\":\"PROCEED\",\"findings\":[],\"concur\":false} thanks!").unwrap().concur, Some(false));
+        assert!(parse_critique("{\"recommendation\":\"PROCEED\" oops}").is_none());
+    }
+
+    #[test]
     fn a_structured_critique_reads_like_the_line_format_and_the_same_rules_hold() {
         let ok = parse_critique(r#"{"recommendation":"PROCEED-WITH-CHANGES","findings":[{"severity":"p0","title":"data loss on retry"},{"severity":"P2","title":"naming"}],"concur":false}"#).unwrap();
         assert_eq!((ok.recommendation, ok.concur), (Rec::ProceedWithChanges, Some(false)));
@@ -1152,7 +1323,7 @@ mod tests {
         let stances: BTreeMap<String, Stance> = [("architect".to_string(), Stance::Said("Use a queue.".into())), ("red-team".to_string(), Stance::Said("It drops on crash.".into()))].into_iter().collect();
         let texts: BTreeMap<String, String> = [("architect".to_string(), "ok".to_string()), ("red-team".to_string(), "no".to_string())].into_iter().collect();
         let d = decide(round2);
-        render_artifact(&ArtifactInput { mission_id: "m1", n: 7, slug: "queue-or-cron", proposition: "Queue or cron?", timestamp: "2026-10-24T00:00:00Z", plan: &plan, stances: &stances, round2, round2_text: &texts, decision: &d, synthesis, follow: &Default::default(), lenses: None })
+        render_artifact(&ArtifactInput { mission_id: "m1", n: 7, slug: "queue-or-cron", proposition: "Queue or cron?", timestamp: "2026-10-24T00:00:00Z", plan: &plan, stances: &stances, round2, round2_text: &texts, decision: &d, synthesis, follow: &Default::default(), lenses: None, front: "" })
     }
 
     #[test]
@@ -1177,6 +1348,11 @@ mod tests {
     fn slugs_are_short_and_safe() {
         assert_eq!(slugify("How should we do cross-instance context sharing?"), "how-should-we-do-cross-instance-context");
         assert_eq!(slugify("???"), "decision");
+        let fenced = "A host agent (host:claude-code/x), working in another tool, asks the Council to rule.\n--- BEGIN HOST QUESTION ---\nQuestion: Should we cache the index?\nStakes: normal\n--- END HOST QUESTION ---";
+        assert_eq!(headline(fenced), "Should we cache the index?", "the name comes from the question, not the preamble");
+        assert_eq!(slugify(headline(fenced)), "should-we-cache-the-index");
+        assert_eq!(headline("plain question"), "plain question");
+        assert_eq!(headline("--- BEGIN HOST QUESTION ---\nQuestion:\n"), "--- BEGIN HOST QUESTION ---\nQuestion:\n", "an empty question falls back to the whole text");
         assert_eq!(artifact_name(7, "x"), "007-x.md");
     }
 
@@ -1187,12 +1363,45 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// The testkit workspace with a second family, so seats really route to different endpoints.
-    fn two_families(f: &Fx) {
+    pub(crate) fn two_families(f: &Fx) {
         let text = crate::testkit::CONFIG
             .replace("[access]", "[models.gemini]\nfast = \"gem-f\"\nworkhorse = \"gem-w\"\nfrontier = \"gem-p\"\n[models.catalog.\"gem-w\"]\nmax_output_tokens = 64000\nmin_thinking_budget = 128\nmax_thinking_budget = 32000\ninput_usd_per_mtok = 2.0\noutput_usd_per_mtok = 12.0\n[models.catalog.\"gem-p\"]\nmax_output_tokens = 64000\nmin_thinking_budget = 128\nmax_thinking_budget = 32000\ninput_usd_per_mtok = 2.0\noutput_usd_per_mtok = 12.0\n[[endpoints]]\nid = \"gem\"\nfamily = \"gemini\"\npath = \"api\"\ncredential = \"env:K\"\n[access]")
             .replace("allowed_endpoints = [\"direct\", \"backup\", ], ", "")
             .replace("allowed_endpoints = [\"direct\", \"backup\"]", "allowed_endpoints = [\"direct\", \"backup\", \"gem\"]");
         f.engine.cfg.set(delphi_adapter::config::Config::parse(&text).unwrap());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_panels_foreign_seat_runs_on_another_family_and_none_exists_in_a_one_family_workspace() {
+        let f = crate::testkit::setup(vec![], 50.0, |_| {});
+        assert_eq!(f.engine.panel_foreign_family("red-team", Some("claude")), None, "one family configured: nothing to seat");
+        two_families(&f);
+        assert_eq!(f.engine.panel_foreign_family("red-team", Some("claude")).as_deref(), Some("gemini"));
+        assert_eq!(f.engine.panel_foreign_family("red-team", Some("gemini")).as_deref(), Some("claude"), "it avoids the host's family");
+        assert!(f.engine.panel_foreign_ceiling_tokens() > 0);
+        f.model.respond_with(|body| if body.to_string().contains("COUNCIL, ROUND 2") { Step::text("RECOMMENDATION: PROCEED\nFINDING P2 naming\nCONCUR: yes\nROUND 2 COMPLETE") } else { Step::text("OPTION: x\nmy stance") });
+        let tid = f.m.next_task_id();
+        let mut created = EventEnvelope::new(&f.m.id, "task.created", json!({"prompt": "q", "target": "council", "flow": "council"}));
+        created.task_id = Some(tid.clone());
+        f.m.append(created).await.unwrap();
+        let r1 = f.engine.panel_foreign_run(&f.m, &tid, "COUNCIL, ROUND 1 (blind). Proposition: q".into(), "q", "red-team", "gemini", 1, None).await;
+        assert!(matches!(&r1, Stance::Said(t) if t.contains("my stance")), "{r1:?}");
+        let mut st = BTreeMap::new();
+        st.insert("architect".to_string(), Stance::Said("A".into()));
+        let r2 = f.engine.panel_foreign_run(&f.m, &tid, "COUNCIL, ROUND 2. Proposition: q".into(), "q", "red-team", "gemini", 2, Some(&st)).await;
+        assert!(matches!(&r2, Stance::Said(t) if parse_critique(t).is_some()), "{r2:?}");
+    }
+
+    #[test]
+    fn a_panel_record_says_its_venue_and_whether_it_was_blind_in_the_front_matter() {
+        let d = decide(&BTreeMap::new());
+        let plan = Assignment { seats: vec![], homogeneous: false, notes: vec![] };
+        let follow = crate::council_next::Followup::default();
+        let doc = render_artifact(&ArtifactInput { mission_id: "m", n: 1, slug: "q", proposition: "q", timestamp: "t", plan: &plan, stances: &BTreeMap::new(), round2: &BTreeMap::new(), round2_text: &BTreeMap::new(), decision: &d, synthesis: "s", follow: &follow, lenses: None, front: "venue: panel\nblind: yes\n" });
+        let head = doc.split("\n---\n").next().unwrap();
+        assert!(head.contains("council_format: 1\nvenue: panel\nblind: yes"), "{head}");
+        let plain = render_artifact(&ArtifactInput { mission_id: "m", n: 1, slug: "q", proposition: "q", timestamp: "t", plan: &plan, stances: &BTreeMap::new(), round2: &BTreeMap::new(), round2_text: &BTreeMap::new(), decision: &d, synthesis: "s", follow: &follow, lenses: None, front: "" });
+        assert!(!plain.contains("venue:"), "a daemon Council's record is unchanged");
     }
 
     fn who(body: &serde_json::Value) -> &'static str {
