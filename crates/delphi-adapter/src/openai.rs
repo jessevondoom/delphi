@@ -278,7 +278,7 @@ mod tests {
         assert!(m[2]["content"].is_null());
         assert_eq!(m[2]["tool_calls"][0]["function"]["arguments"], "{\"path\":\"a.rs\"}");
         assert_eq!((m[3]["tool_call_id"].as_str(), m[3]["content"].as_str()), (Some("call_1"), Some("ERROR: boom")));
-        assert!(m[4]["content"].as_str().unwrap().contains("Stay in scope."), "the reminder follows the tool results");
+        assert!(m[4]["content"].as_str().unwrap().contains(crate::ipr::STANDING_LIMITS), "the reminder follows the tool results");
         let all = c.body.to_string();
         assert!(!all.contains("secret plan") && !all.contains("SIG"), "reasoning and signatures never cross a compat gateway");
         assert_eq!(c.downgraded_reasoning_blocks, 1);
