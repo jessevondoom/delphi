@@ -677,3 +677,13 @@ From the 2026-11-05 ranking of unbuilt work (five Claude seats, one family; see 
 | S2 | learning-health footer line: staged, to review, oldest age | 7 | built (`learn.health` read RPC from the logs; footer `learn:` line, golden `footer-learn-*`), 2026-11-05 |
 | S3 | recurrence count, dismissed-claim memory, seat-keyed claims (S3a dismissal, S3b the rest) | 14 | built (S3a and S3b, one PR); host counts are reports, council_minority has no seat and stays out |
 | S4 | `duplicate_of` on `host.propose_note`, own session only | 5 | built (#486), 2026-11-05 |
+
+## Spec 085: a fixed standing-limits reminder (2026-11-05)
+
+From a Council of three Claude seats (one family, so homogeneous) that ranked eight ideas from Anthropic's published research. Approved by the operator 2026-11-05. The effect on behaviour is not measured here (spec 085 §7); compaction-note authority is a separate, unwritten spec.
+
+| Slice | Content | Hours | State |
+| :-- | :-- | --: | :-- |
+| S0 | spec 085 approval and tracker entry | 1 | approved 2026-11-05 |
+| S1 | fixed `STANDING_LIMITS` constant on the API path; the objective echo removed | 5 | in progress |
+| S2 | the same reminder as a second content block on bridged tool replies (harness seats) | 5 | not built |
