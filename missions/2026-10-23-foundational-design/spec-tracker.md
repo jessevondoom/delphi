@@ -708,7 +708,7 @@ From the operator's request to refine the outside Council (Claude Code, Copilot,
 | :-- | :-- | --: | :-- |
 | S0 | spec 086 approval and tracker entry | 1 | approved 2026-11-06 |
 | S0a | daemon Council fixes: unreadable Round 2 (diagnose first), file excerpts, title from the question, merged Minority Report | 10 | approved, not built |
-| S0b | host conformance probe for the four hosts | 6 | approved, not built |
+| S0b | host conformance probe for the four hosts | 6 | built (PR open) |
 | S1 | `delphi-council` skill, ruling card, `council_frame` | 10 | approved, not built |
 | S2 | Panel: server-held barrier, `council_open/brief/submit/choose` | 24 | approved, not built |
 | S3 | role subagents per host, `[host.models.*]`, Codex agents installer | 14 | approved, not built |
