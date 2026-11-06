@@ -247,8 +247,14 @@ pub struct Critique {
 /// critique, and the seat's Round 2 counts as unreadable rather than as agreement.
 pub fn parse_critique(text: &str) -> Option<Critique> {
     // A CLI that was given `critique_schema()` answers with that object, as compact JSON.
+    // Some CLIs add prose, or a second copy in the line format, after the object (seen on real host Councils, 2026-11-05):
+    // the first complete object is the critique, and what follows may only add findings or disagree (`with_trailing`).
     if text.trim_start().starts_with('{') {
-        return serde_json::from_str::<serde_json::Value>(text.trim()).ok().and_then(|v| critique_from_json(&v));
+        let t = text.trim();
+        let mut it = serde_json::Deserializer::from_str(t).into_iter::<serde_json::Value>();
+        let first = it.next()?.ok()?;
+        let c = critique_from_json(&first)?;
+        return with_trailing(c, &t[it.byte_offset()..]);
     }
     let (mut rec, mut concur, mut complete) = (None, None, false);
     let mut findings = Vec::new();
@@ -258,46 +264,85 @@ pub fn parse_critique(text: &str) -> Option<Critique> {
         if head("ROUND 2 COMPLETE") {
             complete = true;
         } else if head("RECOMMENDATION") {
-            let v = l[14..].trim_start_matches([':', ' ', '\t']).trim();
-            let up = v.to_uppercase();
-            rec = Some(if up.starts_with("PROCEED-WITH-CHANGES") || up.starts_with("PROCEED WITH CHANGES") {
-                Rec::ProceedWithChanges
-            } else if up.starts_with("DO-NOT-PROCEED") || up.starts_with("DO NOT PROCEED") {
-                Rec::DoNotProceed
-            } else if up.starts_with("PROCEED") {
-                Rec::Proceed
-            } else if up.starts_with("ALTERNATIVE") {
-                let name = v[11..].trim_start_matches([':', ' ', '\t']).trim();
-                if name.is_empty() {
-                    return None;
-                }
-                Rec::Alternative(name.chars().take(80).collect::<String>().to_lowercase())
-            } else {
-                return None;
-            });
+            rec = Some(recommendation_of(l[14..].trim_start_matches([':', ' ', '\t']).trim())?);
         } else if head("CONCUR") {
-            let v = l[6..].trim_start_matches([':', ' ', '\t']).trim().to_lowercase();
-            concur = match v.as_str() {
-                "yes" | "true" => Some(true),
-                "no" | "false" => Some(false),
-                _ => None,
-            };
+            concur = concur_of(l[6..].trim_start_matches([':', ' ', '\t']));
         } else if head("FINDING") {
-            let rest = l[7..].trim_start_matches([':', '-', ' ', '\t']);
-            let mut it = rest.splitn(2, char::is_whitespace);
-            let sev = it.next().unwrap_or("").trim_matches(|c: char| !c.is_alphanumeric()).to_uppercase();
-            if matches!(sev.as_str(), "P0" | "P1" | "P2" | "P3") {
-                findings.push((sev, it.next().unwrap_or("").trim().chars().take(200).collect()));
-            } else {
-                // A finding that cannot be read is still a finding: it blocks rather than vanishing.
-                findings.push(("P1".to_string(), format!("unparseable finding: {}", l.chars().take(150).collect::<String>())));
-            }
+            // A finding that cannot be read is still a finding: it blocks rather than vanishing.
+            findings.push(finding_of(l));
         }
     }
     if !complete {
         return None;
     }
     Some(Critique { recommendation: rec?, findings, concur })
+}
+
+/// Text after a structured critique. It never removes anything: a finding it names that the object lacks is added (so a
+/// P0 in the prose still blocks), and a recommendation or `CONCUR:` that disagrees with the object makes the whole
+/// reply unreadable, which escalates, rather than guessing which one the seat meant.
+fn with_trailing(mut c: Critique, rest: &str) -> Option<Critique> {
+    for line in rest.lines() {
+        let l = line.trim().trim_start_matches(['-', '*', '•', ' ']).trim();
+        let head = |w: &str| l.get(..w.len()).is_some_and(|h| h.eq_ignore_ascii_case(w));
+        if head("RECOMMENDATION") {
+            match recommendation_of(l[14..].trim_start_matches([':', ' ', '\t']).trim()) {
+                Some(r) if r == c.recommendation => {}
+                _ => return None,
+            }
+        } else if head("CONCUR") {
+            if let (Some(theirs), Some(ours)) = (concur_of(l[6..].trim_start_matches([':', ' ', '\t'])), c.concur) {
+                if theirs != ours {
+                    return None;
+                }
+            }
+        } else if head("FINDING") {
+            let f = finding_of(l);
+            if !c.findings.contains(&f) {
+                c.findings.push(f);
+            }
+        }
+    }
+    Some(c)
+}
+
+fn recommendation_of(v: &str) -> Option<Rec> {
+    let up = v.to_uppercase();
+    Some(if up.starts_with("PROCEED-WITH-CHANGES") || up.starts_with("PROCEED WITH CHANGES") {
+        Rec::ProceedWithChanges
+    } else if up.starts_with("DO-NOT-PROCEED") || up.starts_with("DO NOT PROCEED") {
+        Rec::DoNotProceed
+    } else if up.starts_with("PROCEED") {
+        Rec::Proceed
+    } else if up.starts_with("ALTERNATIVE") {
+        let name = v[11..].trim_start_matches([':', ' ', '\t']).trim();
+        if name.is_empty() {
+            return None;
+        }
+        Rec::Alternative(name.chars().take(80).collect::<String>().to_lowercase())
+    } else {
+        return None;
+    })
+}
+
+fn concur_of(v: &str) -> Option<bool> {
+    match v.trim().to_lowercase().as_str() {
+        "yes" | "true" => Some(true),
+        "no" | "false" => Some(false),
+        _ => None,
+    }
+}
+
+/// A `FINDING` line as `(severity, title)`; one whose severity cannot be read is still a finding, as a P1.
+fn finding_of(l: &str) -> (String, String) {
+    let rest = l[7..].trim_start_matches([':', '-', ' ', '\t']);
+    let mut it = rest.splitn(2, char::is_whitespace);
+    let sev = it.next().unwrap_or("").trim_matches(|c: char| !c.is_alphanumeric()).to_uppercase();
+    if matches!(sev.as_str(), "P0" | "P1" | "P2" | "P3") {
+        (sev, it.next().unwrap_or("").trim().chars().take(200).collect())
+    } else {
+        ("P1".to_string(), format!("unparseable finding: {}", l.chars().take(150).collect::<String>()))
+    }
 }
 
 /// The Round 2 reply as a JSON Schema, for a CLI that can validate its answer against one (`specs/021` §5).
@@ -597,6 +642,17 @@ pub fn lint_artifact(text: &str) -> Vec<String> {
         problems.push("the Minority Report is empty".to_string());
     }
     problems
+}
+
+/// What a Council is about, for its file name and title. A host's question arrives inside a fence with a preamble
+/// ("A host agent (...) asks the Council to rule..."); the name should come from the `Question:` line, not the preamble.
+pub fn headline(proposition: &str) -> &str {
+    proposition
+        .split_once("--- BEGIN HOST QUESTION ---")
+        .and_then(|(_, rest)| rest.lines().find_map(|l| l.trim().strip_prefix("Question:")))
+        .map(str::trim)
+        .filter(|q| !q.is_empty())
+        .unwrap_or(proposition)
 }
 
 pub fn slugify(s: &str) -> String {
@@ -970,7 +1026,7 @@ impl Engine {
 
         // ── The record.
         let n = Self::next_council_number(m);
-        let slug = slugify(proposition);
+        let slug = slugify(headline(proposition));
         let stamp = self.now();
         let doc = render_artifact(&ArtifactInput { mission_id: &m.id, n, slug: &slug, proposition, timestamp: &stamp, plan: &plan, stances: &stances, round2: &round2, round2_text: &round2_text, decision: &decision, synthesis: &synthesis, follow: &follow, lenses: lens_plan.as_ref() });
         let dir = m.dir.join("councils");
@@ -1097,6 +1153,23 @@ mod tests {
     }
 
     #[test]
+    fn a_structured_critique_with_trailing_text_is_read_and_the_text_can_only_add_or_conflict() {
+        // The shape a real Gemini seat returned (host Councils, 2026-11-05): the object, then prose, then a line-format copy.
+        let real = "{\"concur\":true,\"findings\":[{\"severity\":\"P1\",\"title\":\"a\"}],\"recommendation\":\"PROCEED-WITH-CHANGES\"}\nThe Council converges.\n\nRECOMMENDATION: PROCEED-WITH-CHANGES\nFINDING P1 a\nCONCUR: yes\nROUND 2 COMPLETE\nRECOMMENDATION: PROCEED-WITH-CHANGES\nFINDING P1 a\nCONCUR: yes\nROUND 2 COMPLETE";
+        let c = parse_critique(real).unwrap();
+        assert_eq!((c.recommendation.clone(), c.concur, c.findings.len()), (Rec::ProceedWithChanges, Some(true), 1), "a repeated finding is not counted twice");
+        // A P0 that only the prose names still blocks.
+        let more = parse_critique("{\"recommendation\":\"PROCEED\",\"findings\":[],\"concur\":true}\nFINDING P0 data loss").unwrap();
+        assert_eq!(more.findings, vec![("P0".to_string(), "data loss".to_string())]);
+        // A disagreement is unreadable, never a guess.
+        assert!(parse_critique("{\"recommendation\":\"PROCEED\",\"findings\":[],\"concur\":true}\nRECOMMENDATION: DO-NOT-PROCEED").is_none());
+        assert!(parse_critique("{\"recommendation\":\"PROCEED\",\"findings\":[],\"concur\":true}\nCONCUR: no").is_none());
+        // Plain trailing prose changes nothing; a broken object is still no critique.
+        assert_eq!(parse_critique("{\"recommendation\":\"PROCEED\",\"findings\":[],\"concur\":false} thanks!").unwrap().concur, Some(false));
+        assert!(parse_critique("{\"recommendation\":\"PROCEED\" oops}").is_none());
+    }
+
+    #[test]
     fn a_structured_critique_reads_like_the_line_format_and_the_same_rules_hold() {
         let ok = parse_critique(r#"{"recommendation":"PROCEED-WITH-CHANGES","findings":[{"severity":"p0","title":"data loss on retry"},{"severity":"P2","title":"naming"}],"concur":false}"#).unwrap();
         assert_eq!((ok.recommendation, ok.concur), (Rec::ProceedWithChanges, Some(false)));
@@ -1177,6 +1250,11 @@ mod tests {
     fn slugs_are_short_and_safe() {
         assert_eq!(slugify("How should we do cross-instance context sharing?"), "how-should-we-do-cross-instance-context");
         assert_eq!(slugify("???"), "decision");
+        let fenced = "A host agent (host:claude-code/x), working in another tool, asks the Council to rule.\n--- BEGIN HOST QUESTION ---\nQuestion: Should we cache the index?\nStakes: normal\n--- END HOST QUESTION ---";
+        assert_eq!(headline(fenced), "Should we cache the index?", "the name comes from the question, not the preamble");
+        assert_eq!(slugify(headline(fenced)), "should-we-cache-the-index");
+        assert_eq!(headline("plain question"), "plain question");
+        assert_eq!(headline("--- BEGIN HOST QUESTION ---\nQuestion:\n"), "--- BEGIN HOST QUESTION ---\nQuestion:\n", "an empty question falls back to the whole text");
         assert_eq!(artifact_name(7, "x"), "007-x.md");
     }
 
