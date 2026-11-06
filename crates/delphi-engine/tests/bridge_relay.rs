@@ -251,3 +251,54 @@ async fn a_relay_with_the_wrong_token_gets_nothing_and_a_relay_without_one_refus
     let no_token = Command::new(env!("CARGO_BIN_EXE_delphi-core")).args(["__mcp-bridge"]).env("DELPHI_BRIDGE_SOCKET", "/nonexistent").env_remove("DELPHI_BRIDGE_TOKEN").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status().unwrap();
     assert_eq!(no_token.code(), Some(2));
 }
+
+/// Calls through the real relay, the span answering each call that reaches it with the next scripted reply.
+async fn calls_with_reminder(reminder: Option<&str>, names: Vec<&'static str>, replies: Vec<String>) -> Vec<Value> {
+    let (bridge, mut calls, _notes) = Bridge::start_with_reminder(defs(), String::new(), std::path::Path::new(env!("CARGO_BIN_EXE_delphi-core")), None, reminder.map(String::from)).await.unwrap();
+    let span = tokio::spawn(async move {
+        for text in replies {
+            let call = calls.recv().await.expect("a call");
+            call.reply.send(ToolResult { content: text, is_error: false }).unwrap();
+        }
+    });
+    let mut child = relay(&bridge.socket(), bridge.token());
+    let mut stdin = child.stdin.take().unwrap();
+    let mut out = BufReader::new(child.stdout.take().unwrap());
+    let got = tokio::task::spawn_blocking(move || {
+        let mut ask = |req: Value| -> Value {
+            writeln!(stdin, "{}", req).unwrap();
+            stdin.flush().unwrap();
+            let mut line = String::new();
+            out.read_line(&mut line).unwrap();
+            serde_json::from_str(&line).unwrap()
+        };
+        names.iter().enumerate().map(|(i, n)| ask(json!({"jsonrpc": "2.0", "id": i + 1, "method": "tools/call", "params": {"name": n, "arguments": {}}}))).collect::<Vec<_>>()
+    })
+    .await
+    .unwrap();
+    span.await.unwrap();
+    assert!(tokio::task::spawn_blocking(move || child.wait().unwrap()).await.unwrap().success(), "the relay ends cleanly when its input closes");
+    got
+}
+
+// specs/085 §6: the tool's own text stays the first block; the reminder is a second block on a call that ran, still there
+// after a long result is cut, and absent from a refusal.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_call_that_ran_carries_the_reminder_as_a_second_block_and_a_refusal_does_not() {
+    let reminder = "<reminder nonce=\"n\">\nfixed limits\n</reminder>";
+    let long = "x".repeat(400_050);
+    let got = calls_with_reminder(Some(reminder), vec!["timer", "no_such_tool", "timer"], vec!["timer tm_0001 set".into(), long]).await;
+    let blocks = |v: &Value| v["result"]["content"].as_array().unwrap().iter().map(|b| b["text"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    assert_eq!(blocks(&got[0]), ["timer tm_0001 set", reminder], "the tool's text first, the reminder second");
+    assert_eq!(blocks(&got[1]).len(), 1, "a refused call has no reminder: {:?}", blocks(&got[1]));
+    let cut = blocks(&got[2]);
+    assert_eq!(cut.len(), 2);
+    assert!(cut[0].ends_with("[the result was cut at the bridge's size limit]") && cut[1] == reminder, "the reminder survives the size cut");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn without_a_reminder_the_reply_is_one_block_as_before() {
+    let got = calls_with_reminder(None, vec!["timer"], vec!["timer tm_0001 set".into()]).await;
+    assert_eq!(got[0]["result"]["content"], json!([{"type": "text", "text": "timer tm_0001 set"}]));
+    assert_eq!(got[0]["result"]["isError"], json!(false));
+}
