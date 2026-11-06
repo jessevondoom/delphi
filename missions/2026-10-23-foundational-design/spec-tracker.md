@@ -675,5 +675,5 @@ From the 2026-11-05 ranking of unbuilt work (five Claude seats, one family; see 
 | S0 | spec 083 approval and tracker entry | 1 | approved 2026-11-05 |
 | S1 | `delphi doctor` host-chain: first failing link and the printed fix | 7 | not built |
 | S2 | learning-health footer line: staged, to review, oldest age | 7 | not built |
-| S3 | recurrence count, dismissed-claim memory, seat-keyed claims (S3a dismissal, S3b the rest) | 14 | S3a built (PR for S3, commit 1); S3b in the same PR |
+| S3 | recurrence count, dismissed-claim memory, seat-keyed claims (S3a dismissal, S3b the rest) | 14 | built (S3a and S3b, one PR); host counts are reports, council_minority has no seat and stays out |
 | S4 | `duplicate_of` on `host.propose_note`, own session only | 5 | not built |

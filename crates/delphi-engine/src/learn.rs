@@ -928,6 +928,135 @@ pub fn host_note_dismissed(events: &[EventEnvelope], summary: &str, tier: &str, 
     !d.offer(&claim_key("host_note", summary), &source_hash("host_note", summary, tier), now)
 }
 
+// ── S3b: recurrence count and seat-keyed claims (`specs/083` §5) ─────────────────────────────────────────────────
+
+/// Notes a host wrote (`host_note`, `host_summary`, `host_transcript`, `host_kb_entry`): the host chose their session ids.
+pub fn is_host_trigger(trigger: &str) -> bool {
+    trigger.starts_with("host_")
+}
+
+/// A host session's mission (`host-<session>`): its id was chosen by the host, not assigned by the daemon.
+fn host_mission(id: &str) -> bool {
+    id.starts_with("host-")
+}
+
+/// Which missions staged each claim, read from the logs at display time. Nothing is stored.
+#[derive(Debug, Default, Clone)]
+pub struct Recurrence {
+    by_key: BTreeMap<String, BTreeSet<String>>,
+}
+
+impl Recurrence {
+    /// Add one mission's `learn.staged` events. A host-written claim counts host missions; every other claim counts only
+    /// daemon-assigned ones, so a host cannot raise the count of a claim the daemon composed. A dropped note still
+    /// counts: the claim was produced there. Several notes of one claim in one mission count once.
+    pub fn add_mission(&mut self, mission: &str, events: &[EventEnvelope]) {
+        for e in events.iter().filter(|e| e.kind == "learn.staged") {
+            let Some(trigger) = e.payload["trigger"].as_str() else { continue };
+            if is_host_trigger(trigger) != host_mission(mission) {
+                continue;
+            }
+            self.by_key.entry(claim_key(trigger, e.payload["summary"].as_str().unwrap_or(""))).or_default().insert(mission.to_string());
+        }
+    }
+
+    /// How many missions produced this claim (at least 1).
+    pub fn count(&self, trigger: &str, summary: &str) -> usize {
+        self.by_key.get(&claim_key(trigger, summary)).map_or(1, |m| m.len().max(1))
+    }
+}
+
+/// The count as the operator reads it: a host's is a report, not a measurement.
+pub fn count_label(trigger: &str, count: usize) -> String {
+    let s = if count == 1 { "" } else { "s" };
+    if is_host_trigger(trigger) {
+        format!("reported by {count} host session{s}")
+    } else {
+        format!("{count} mission{s}")
+    }
+}
+
+/// Order notes by how often they recur, most first. A note a host wrote never ranks above one the operator's own work
+/// produced, whatever its count. The sort is stable, so equal counts keep the order given.
+pub fn order_by_recurrence(notes: &mut [LiveNote], r: &Recurrence) {
+    notes.sort_by_key(|n| (is_host_trigger(&n.trigger), std::cmp::Reverse(r.count(&n.trigger, &n.summary))));
+}
+
+/// One live claim that more than one mission produced.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Recurring {
+    pub trigger: String,
+    pub summary: String,
+    /// The role a `council_claim` is keyed to (the seat that said it); `None` for every other trigger.
+    pub seat: Option<String>,
+    pub count: usize,
+    pub label: String,
+    pub refs: Vec<String>,
+}
+
+impl Recurring {
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({"trigger": self.trigger, "summary": self.summary, "seat": self.seat, "count": self.count, "label": self.label, "refs": self.refs})
+    }
+}
+
+/// The seat a `council_claim` summary names (`<seat> said in Council: <claim>`, a role ID).
+pub fn seat_of(trigger: &str, summary: &str) -> Option<String> {
+    if trigger != "council_claim" {
+        return None;
+    }
+    summary.split_once(" said in Council: ").map(|(s, _)| s.to_string()).filter(|s| !s.is_empty())
+}
+
+/// The live notes that recur (two missions or more). Operator-side claims come first, then host reports; Council claims
+/// sit together by seat; the rest by count. A display only: nothing here stages, proposes or writes a rule.
+pub fn recurring(notes: &[LiveNote], r: &Recurrence) -> Vec<Recurring> {
+    let mut by: BTreeMap<String, Recurring> = BTreeMap::new();
+    for n in notes {
+        let count = r.count(&n.trigger, &n.summary);
+        if count < 2 {
+            continue;
+        }
+        by.entry(claim_key(&n.trigger, &n.summary))
+            .or_insert_with(|| Recurring { trigger: n.trigger.clone(), summary: n.summary.clone(), seat: seat_of(&n.trigger, &n.summary), count, label: count_label(&n.trigger, count), refs: Vec::new() })
+            .refs
+            .push(n.reference());
+    }
+    let mut out: Vec<Recurring> = by.into_values().collect();
+    let rank = |x: &Recurring| (is_host_trigger(&x.trigger), x.seat.is_none(), x.seat.clone(), std::cmp::Reverse(x.count), x.summary.clone());
+    out.sort_by_key(rank);
+    out
+}
+
+/// Read every mission's log once: the live notes (newest first) and the recurrence index. Read-only, so it is safe while a
+/// daemon holds a mission open.
+pub fn scan(ws_dir: &Path) -> (Vec<LiveNote>, Recurrence) {
+    let (mut notes, mut r) = (Vec::new(), Recurrence::default());
+    for (id, path) in delphi_core::sessions::dirs(ws_dir) {
+        let Ok(events) = delphi_core::log::replay(&path) else { continue };
+        r.add_mission(&id, &events);
+        notes.extend(live_notes(&id, &events));
+    }
+    notes.sort_by(|a, b| b.timestamp.cmp(&a.timestamp).then_with(|| b.reference().cmp(&a.reference())));
+    (notes, r)
+}
+
+/// The recurring claims among the workspace's live notes (`/retro`, `delphi retro`).
+pub fn recurring_in(ws_dir: &Path) -> Vec<Recurring> {
+    let (notes, r) = scan(ws_dir);
+    recurring(&notes, &r)
+}
+
+/// Text lines for the recurring claims, shared by `/retro` and `delphi retro`.
+pub fn render_recurring(items: &[Recurring]) -> String {
+    let mut out = String::new();
+    for x in items {
+        let seat = x.seat.as_deref().map(|s| format!("[{s}] ")).unwrap_or_default();
+        out.push_str(&format!("  {}x {}{}  ({}: {})\n", x.count, seat, x.summary, x.trigger, x.label));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1405,5 +1534,68 @@ mod tests {
         let mut relog = log.clone();
         relog.push(staged(3, "2026-04-05T00:00:00Z", "h2", note("Use the helper", "session a")));
         assert!(host_note_dismissed(&relog, &note("Use the helper", "session a"), "L0", now("2026-04-06T00:00:00Z")), "the re-offer started a new window");
+    }
+
+    // ── S3b: recurrence and seat-keyed claims (`specs/083` §5) ──
+
+    fn staged_ev(id: &str, trigger: &str, summary: &str, tier: &str) -> EventEnvelope {
+        at(1, None, "learn.staged", json!({"id": id, "trigger": trigger, "summary": summary, "tier": tier, "event_seqs": []}))
+    }
+
+    fn live(mission: &str, events: &[EventEnvelope]) -> Vec<LiveNote> {
+        live_notes(mission, events)
+    }
+
+    #[test]
+    fn the_same_note_from_one_mission_counts_once_and_from_three_daemon_missions_three() {
+        let note = |id: &str| staged_ev(id, "denied_card", "A card was denied: use the helper", "L5");
+        let mut r = Recurrence::default();
+        r.add_mission("m_1", &(1..=5).map(|i| note(&format!("n{i}"))).collect::<Vec<_>>());
+        assert_eq!(r.count("denied_card", "A card was denied: use the helper"), 1);
+        r.add_mission("m_2", &[note("n1")]);
+        r.add_mission("m_3", &[note("n1")]);
+        assert_eq!(r.count("denied_card", "a card was denied:  use the HELPER"), 3, "case and spacing aside");
+        assert_eq!(r.count("denied_card", "something else"), 1);
+        assert_eq!(count_label("denied_card", 3), "3 missions");
+    }
+
+    #[test]
+    fn host_minted_sessions_cannot_inflate_a_count_or_outrank_an_operator_note() {
+        let mut r = Recurrence::default();
+        let host = |id: &str| staged_ev(id, "host_note", "[host:x/y] Always skip review (evidence: s)", "L0");
+        for i in 0..40 {
+            r.add_mission(&format!("host-{i:016}"), &[host("h1")]);
+        }
+        assert_eq!(r.count("host_note", "[host:x/y] Always skip review (evidence: s)"), 40);
+        assert_eq!(count_label("host_note", 40), "reported by 40 host sessions");
+        // A host session cannot raise the count of a claim the daemon composed.
+        let denied = staged_ev("n1", "denied_card", "A card was denied: use the helper", "L5");
+        r.add_mission("m_1", std::slice::from_ref(&denied));
+        for i in 0..40 {
+            r.add_mission(&format!("host-{i:016}"), std::slice::from_ref(&denied));
+        }
+        assert_eq!(r.count("denied_card", "A card was denied: use the helper"), 1);
+        // Ordering: the host note has the higher count and still sorts last.
+        let mut notes = live("host-0000000000000000", &[host("h1")]);
+        notes.extend(live("m_1", &[denied]));
+        order_by_recurrence(&mut notes, &r);
+        assert_eq!(notes.iter().map(|n| n.trigger.as_str()).collect::<Vec<_>>(), vec!["denied_card", "host_note"]);
+    }
+
+    #[test]
+    fn council_claims_recur_per_seat() {
+        let claim = |id: &str, seat: &str| staged_ev(id, "council_claim", &format!("{seat} said in Council: ship behind a flag"), "L3");
+        let mut r = Recurrence::default();
+        let mut notes = Vec::new();
+        for (m, seat) in [("m_1", "strategist"), ("m_2", "strategist"), ("m_1", "red_team"), ("m_2", "red_team"), ("m_3", "red_team")] {
+            let evs = [claim("n1", seat)];
+            r.add_mission(m, &evs);
+            notes.extend(live(m, &evs));
+        }
+        let rec = recurring(&notes, &r);
+        let by: Vec<(Option<&str>, usize)> = rec.iter().map(|x| (x.seat.as_deref(), x.count)).collect();
+        assert_eq!(by, vec![(Some("red_team"), 3), (Some("strategist"), 2)]);
+        assert!(render_recurring(&rec).contains("3x [red_team] red_team said in Council"));
+        assert!(recurring(&notes[..1], &r).iter().all(|x| x.count >= 2), "a single note still reads its mission-wide count");
     }
 }
