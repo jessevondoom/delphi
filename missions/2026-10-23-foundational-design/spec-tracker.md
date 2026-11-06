@@ -713,4 +713,4 @@ From the operator's request to refine the outside Council (Claude Code, Copilot,
 | S2 | Panel: server-held barrier, `council_open/brief/submit/choose` | 24 | built (PR open) |
 | S3 | role subagents per host, `[host.models.*]`, Codex agents installer | 14 | approved, not built |
 | S4 | one foreign-family seat | 10 | approved, not built |
-| S5 | pre-registered Panel-vs-Council experiment; decides the default | 12 | needs operator go |
+| S5 | pre-registered Panel-vs-Council experiment; decides the default | 12 | pre-registration written (PR open); run needs operator go and S2/S3 merged |
