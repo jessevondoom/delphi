@@ -254,6 +254,22 @@
         "badge_style": { "type": "string", "enum": ["plain", "ansi", "markdown"], "default": "plain", "description": "Which form of a Delphi agent's identity the `signature` field carries (specs/066 section 7). Plain is the default; the ansi and markdown forms are always sent beside it." }
       }
     },
+    "host": {
+      "type": "object",
+      "description": "Subagent files for the other tools (specs/086 section 6.3).",
+      "additionalProperties": false,
+      "properties": {
+        "models": {
+          "type": "object",
+          "description": "Host, then council role, to the model name that host's generated subagent file asks for. Only hosts that take free names; no entry means the file sets no model.",
+          "additionalProperties": false,
+          "properties": {
+            "copilot": { "$ref": "#/$defs/hostRoleModels" },
+            "codex": { "$ref": "#/$defs/hostRoleModels" }
+          }
+        }
+      }
+    },
     "retrieval": {
       "type": "object",
       "description": "Knowledge retrieval for agents (specs/064 section 4).",
@@ -266,6 +282,17 @@
   },
   "additionalProperties": true,
   "$defs": {
+    "hostRoleModels": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "architect": { "$ref": "#/$defs/hostModelName" },
+        "red-team": { "$ref": "#/$defs/hostModelName" },
+        "strategist": { "$ref": "#/$defs/hostModelName" },
+        "builder": { "$ref": "#/$defs/hostModelName" }
+      }
+    },
+    "hostModelName": { "type": "string", "pattern": "^[A-Za-z0-9._:/-]{1,80}$" },
     "searchEngine": {
       "type": "object",
       "additionalProperties": false,
