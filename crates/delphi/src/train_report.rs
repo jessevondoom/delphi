@@ -29,6 +29,18 @@ pub struct RunRow {
     pub tokens_out: u64,
     pub attempts: u32,
     pub promotions: u32,
+    /// The plain arm this one varies (`specs/048` BM-1), and the model ids the run used.
+    pub base: Option<String>,
+    pub models: Vec<String>,
+    /// Effort (`specs/048` BM-2); zero in a row written before these were kept.
+    pub turns: u32,
+    pub tool_calls: u32,
+    pub tool_errors: u32,
+    pub nudges: u32,
+    pub hard_stops: u32,
+    pub escalations: u32,
+    pub cache_read: u64,
+    pub cache_input: u64,
 }
 
 pub fn read_rows(work: &Path) -> Vec<RunRow> {
@@ -43,11 +55,21 @@ pub fn read_rows(work: &Path) -> Vec<RunRow> {
             tokens_out: v["tokens_out"].as_u64().unwrap_or(0),
             attempts: v["attempts"].as_u64().unwrap_or(0) as u32,
             promotions: v["promotions"].as_u64().unwrap_or(0) as u32,
+            base: v["base"].as_str().map(String::from),
+            models: v["models"].as_object().map(|m| m.keys().cloned().collect()).unwrap_or_default(),
+            turns: v["turns"].as_u64().unwrap_or(0) as u32,
+            tool_calls: v["tool_calls"].as_u64().unwrap_or(0) as u32,
+            tool_errors: v["by_tool"].as_object().map(|m| m.values().map(|t| t["errors"].as_u64().unwrap_or(0) as u32).sum()).unwrap_or(0),
+            nudges: v["nudges"].as_u64().unwrap_or(0) as u32,
+            hard_stops: v["hard_stops"].as_u64().unwrap_or(0) as u32,
+            escalations: v["escalations"].as_u64().unwrap_or(0) as u32,
+            cache_read: v["cache_read_tokens"].as_u64().unwrap_or(0),
+            cache_input: v["cache_input_tokens"].as_u64().unwrap_or(0),
         })
     }).collect()
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ArmStats {
     pub arm: String,
     pub graded: usize,
@@ -59,6 +81,19 @@ pub struct ArmStats {
     pub tokens_out: u64,
     pub attempts: f64,
     pub promotions: u32,
+    /// The plain arm this one varies, and the models its runs used (`specs/048` BM-1).
+    pub base: Option<String>,
+    pub models: BTreeSet<String>,
+    /// Sums over the graded runs (`specs/048` BM-2). `has_effort` is false for rows written before these were kept.
+    pub has_effort: bool,
+    pub turns: u64,
+    pub tool_calls: u64,
+    pub tool_errors: u64,
+    pub nudges: u64,
+    pub hard_stops: u64,
+    pub escalations: u64,
+    pub cache_read: u64,
+    pub cache_input: u64,
 }
 
 impl ArmStats {
@@ -83,6 +118,19 @@ impl ArmStats {
     fn tokens_per_run(&self) -> Option<f64> {
         (self.graded > 0).then(|| (self.tokens_in + self.tokens_out) as f64 / self.graded as f64)
     }
+
+    pub fn turns_per_pass(&self) -> Option<f64> {
+        (self.passed > 0 && self.has_effort).then(|| self.turns as f64 / self.passed as f64)
+    }
+
+    pub fn calls_per_pass(&self) -> Option<f64> {
+        (self.passed > 0 && self.has_effort).then(|| self.tool_calls as f64 / self.passed as f64)
+    }
+
+    /// Cache reads over the input side of the calls after each span's first, 0 to 1.
+    pub fn cache_hit_rate(&self) -> Option<f64> {
+        (self.cache_input > 0).then(|| self.cache_read as f64 / self.cache_input as f64)
+    }
 }
 
 pub fn arm_stats(rows: &[RunRow]) -> Vec<ArmStats> {
@@ -103,6 +151,17 @@ pub fn arm_stats(rows: &[RunRow]) -> Vec<ArmStats> {
             tokens_out: graded.iter().map(|r| r.tokens_out).sum(),
             attempts: if graded.is_empty() { 0.0 } else { graded.iter().map(|r| f64::from(r.attempts)).sum::<f64>() / graded.len() as f64 },
             promotions: graded.iter().map(|r| r.promotions).sum(),
+            base: rs.iter().find_map(|r| r.base.clone()),
+            models: graded.iter().flat_map(|r| r.models.iter().cloned()).collect(),
+            has_effort: graded.iter().any(|r| r.turns > 0),
+            turns: graded.iter().map(|r| u64::from(r.turns)).sum(),
+            tool_calls: graded.iter().map(|r| u64::from(r.tool_calls)).sum(),
+            tool_errors: graded.iter().map(|r| u64::from(r.tool_errors)).sum(),
+            nudges: graded.iter().map(|r| u64::from(r.nudges)).sum(),
+            hard_stops: graded.iter().map(|r| u64::from(r.hard_stops)).sum(),
+            escalations: graded.iter().map(|r| u64::from(r.escalations)).sum(),
+            cache_read: graded.iter().map(|r| r.cache_read).sum(),
+            cache_input: graded.iter().map(|r| r.cache_input).sum(),
         }
     }).collect()
 }
@@ -163,6 +222,120 @@ pub fn judge_consistency(rows: &[JudgeRow], key: &[KeyRow]) -> BTreeMap<String, 
     out
 }
 
+/// `specs/048` OD-2 (provisional): tokens per passing case up by more than this share is a cost to flag.
+pub const COST_FLAG: f64 = 0.25;
+
+/// What a harness arm did against its base, on the same model, cases and seeds (`specs/048` BM-1, BM-2, AC-2).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Effect {
+    /// Either side has fewer than [`MIN_SEEDS`] graded seeds: nothing is concluded (`specs/031` section 4.5).
+    NoEvidence(usize),
+    /// One side never passed, so tokens per pass cannot be compared.
+    NoPasses,
+    /// More passes, beyond the noise, for tokens per pass up by more than [`COST_FLAG`]: a trade, not a win.
+    BetterAtMoreCost,
+    Better,
+    /// Fewer passes, beyond the noise.
+    Worse,
+    /// Tokens per pass up by more than [`COST_FLAG`] and the pass rate no better than the noise: the flag of OD-2.
+    CostlierNotBetter,
+    CheaperSameQuality,
+    NoDifference,
+}
+
+impl Effect {
+    pub fn text(&self) -> String {
+        match self {
+            Effect::NoEvidence(n) => format!("no evidence (fewest graded seeds {}, below {})", n, MIN_SEEDS),
+            Effect::NoPasses => "no comparison (an arm has no passing run)".into(),
+            Effect::BetterAtMoreCost => format!("a trade: more passes for tokens per pass up by over {:.0}% <- flagged", COST_FLAG * 100.0),
+            Effect::Better => "better, at no large extra cost".into(),
+            Effect::Worse => "worse: fewer passes, beyond the noise".into(),
+            Effect::CostlierNotBetter => format!("costlier, not better: tokens per pass up by over {:.0}% with the pass rate inside the noise <- flagged", COST_FLAG * 100.0),
+            Effect::CheaperSameQuality => format!("cheaper, same quality: tokens per pass down by over {:.0}% inside the noise", COST_FLAG * 100.0),
+            Effect::NoDifference => "no difference beyond the noise".into(),
+        }
+    }
+}
+
+/// The standard error of the difference between two pass rates: the noise a gain must beat to count.
+pub fn noise(base: &ArmStats, arm: &ArmStats) -> f64 {
+    let term = |s: &ArmStats| s.pass_rate().map_or(0.0, |p| p * (1.0 - p) / s.graded as f64);
+    (term(base) + term(arm)).sqrt()
+}
+
+pub fn effect(base: &ArmStats, arm: &ArmStats) -> Effect {
+    let fewest = base.seeds.min(arm.seeds);
+    if fewest < MIN_SEEDS {
+        return Effect::NoEvidence(fewest);
+    }
+    let (Some(bt), Some(at), Some(br), Some(ar)) = (base.tokens_per_pass(), arm.tokens_per_pass(), base.pass_rate(), arm.pass_rate()) else { return Effect::NoPasses };
+    let (gain, se, rel) = (ar - br, noise(base, arm), at / bt - 1.0);
+    if gain > se {
+        if rel > COST_FLAG { Effect::BetterAtMoreCost } else { Effect::Better }
+    } else if gain < -se {
+        Effect::Worse
+    } else if rel > COST_FLAG {
+        Effect::CostlierNotBetter
+    } else if rel < -COST_FLAG {
+        Effect::CheaperSameQuality
+    } else {
+        Effect::NoDifference
+    }
+}
+
+fn delta(arm: Option<f64>, base: Option<f64>) -> String {
+    match (arm, base) {
+        (Some(a), Some(b)) if b > 0.0 => format!("{:+.0}%", (a / b - 1.0) * 100.0),
+        _ => "—".into(),
+    }
+}
+
+fn per(sum: u64, n: usize) -> String {
+    if n == 0 { "—".into() } else { format!("{:.1}", sum as f64 / n as f64) }
+}
+
+fn ratio(v: Option<f64>) -> String {
+    v.map_or("—".into(), |v| format!("{:.0}%", v * 100.0))
+}
+
+/// The efficiency table and, when any arm varies another, the fixed-model comparison (`specs/048` BM-1, BM-2).
+fn effort_sections(stats: &[ArmStats]) -> String {
+    let mut out = String::new();
+    if stats.iter().any(|s| s.has_effort) {
+        out.push_str("\nEFFORT (per graded run; per-pass columns divide by passing runs)\n");
+        out.push_str(&format!("{:<22}{:>10}{:>10}{:>9}{:>11}{:>11}{:>10}{:>8}{:>7}{:>7}\n", "arm", "turns/run", "calls/run", "errors", "turns/pass", "calls/pass", "cache hit", "nudges", "stops", "escal."));
+        for s in stats.iter().filter(|s| s.has_effort) {
+            let n = |v: Option<f64>| v.map_or("—".into(), |v| format!("{:.1}", v));
+            out.push_str(&format!("{:<22}{:>10}{:>10}{:>9}{:>11}{:>11}{:>10}{:>8}{:>7}{:>7}\n", s.arm, per(s.turns, s.graded), per(s.tool_calls, s.graded), s.tool_errors, n(s.turns_per_pass()), n(s.calls_per_pass()), ratio(s.cache_hit_rate()), s.nudges, s.hard_stops, s.escalations));
+        }
+    }
+    let variants: Vec<&ArmStats> = stats.iter().filter(|s| s.base.is_some()).collect();
+    if !variants.is_empty() {
+        out.push_str("\nHARNESS EFFECT (fixed model: each harness arm against its base, same cases and seeds)\n");
+        let mut groups: BTreeMap<String, Vec<&ArmStats>> = BTreeMap::new();
+        for v in variants {
+            groups.entry(v.models.iter().cloned().collect::<Vec<_>>().join(", ")).or_default().push(v);
+        }
+        for (models, arms) in groups {
+            out.push_str(&format!("  model: {}\n", if models.is_empty() { "(not recorded)".into() } else { models }));
+            for a in arms {
+                let base_name = a.base.as_deref().unwrap_or("");
+                let Some(b) = stats.iter().find(|s| s.arm == base_name) else {
+                    out.push_str(&format!("    {} vs {}: the base has no runs in this study\n", a.arm, base_name));
+                    continue;
+                };
+                let (ar, br) = (a.pass_rate().unwrap_or(0.0), b.pass_rate().unwrap_or(0.0));
+                out.push_str(&format!("    {} vs {}: pass rate {} vs {} ({:+.0} points, noise {:.0}); tokens/pass {} vs {} ({}); turns/pass {}; calls/pass {}\n      -> {}\n",
+                    a.arm, b.arm, pct(a.passed, a.graded), pct(b.passed, b.graded), (ar - br) * 100.0, noise(b, a) * 100.0,
+                    toks(a.tokens_per_pass()), toks(b.tokens_per_pass()), delta(a.tokens_per_pass(), b.tokens_per_pass()),
+                    delta(a.turns_per_pass(), b.turns_per_pass()), delta(a.calls_per_pass(), b.calls_per_pass()), effect(b, a).text()));
+            }
+        }
+    }
+    out
+}
+
 fn pct(n: usize, d: usize) -> String {
     if d == 0 { "—".into() } else { format!("{:.0}%", 100.0 * n as f64 / d as f64) }
 }
@@ -195,6 +368,8 @@ pub fn render(work: &Path, judge_models: &BTreeMap<String, Vec<String>>) -> Stri
     if min_seeds < MIN_SEEDS {
         out.push_str(&format!("NO EVIDENCE FOR A RANKING: the arm with the fewest graded seeds has {} (the report ranks nothing below {}). These numbers size the study; they do not choose between arms.\n", min_seeds, MIN_SEEDS));
     }
+
+    out.push_str(&effort_sections(&stats));
 
     // Case by arm.
     let cases: BTreeSet<&str> = rows.iter().map(|r| r.case.as_str()).collect();
@@ -282,7 +457,7 @@ mod tests {
     use serde_json::json;
 
     fn run(case: &str, arm: &str, seed: u32, passed: Option<bool>, cost: f64, tin: u64, tout: u64) -> RunRow {
-        RunRow { case: case.into(), arm: arm.into(), seed, passed, cost_usd: cost, tokens_in: tin, tokens_out: tout, attempts: 1, promotions: 0 }
+        RunRow { case: case.into(), arm: arm.into(), seed, passed, cost_usd: cost, tokens_in: tin, tokens_out: tout, attempts: 1, promotions: 0, base: None, models: vec![], turns: 0, tool_calls: 0, tool_errors: 0, nudges: 0, hard_stops: 0, escalations: 0, cache_read: 0, cache_input: 0 }
     }
 
     #[test]
@@ -309,7 +484,7 @@ mod tests {
 
     #[test]
     fn the_frontier_keeps_the_arms_nothing_beats_on_both_axes() {
-        let mk = |arm: &str, passed: usize, graded: usize, cost: f64| ArmStats { arm: arm.into(), graded, ungraded: 0, passed, seeds: 3, cost_usd: cost * graded as f64, tokens_in: 0, tokens_out: 0, attempts: 1.0, promotions: 0 };
+        let mk = |arm: &str, passed: usize, graded: usize, cost: f64| ArmStats { arm: arm.into(), graded, ungraded: 0, passed, seeds: 3, cost_usd: cost * graded as f64, tokens_in: 0, tokens_out: 0, attempts: 1.0, promotions: 0, ..Default::default() };
         let stats = vec![mk("cheap-weak", 2, 10, 0.1), mk("mid", 7, 10, 0.5), mk("dominated", 6, 10, 0.9), mk("big", 9, 10, 2.0), mk("big-twin", 9, 10, 2.5)];
         let f = frontier(&stats, |s| s.cost_per_run());
         assert_eq!(f, vec!["cheap-weak", "mid", "big"], "dominated (worse than mid for more) and big-twin (same as big for more) drop out");
@@ -363,6 +538,64 @@ mod tests {
             assert!(r.contains(want), "{} in\n{}", want, r);
         }
         assert!(r.contains("FRONTIER") && r.contains("by cost: claude-arm"), "{}", r);
+    }
+
+    /// Twelve graded runs (4 cases x 3 seeds) of one arm: `passed` of them pass, each using `tokens` tokens and `turns` turns.
+    fn twelve(arm: &str, base: Option<&str>, passed: usize, tokens: u64, turns: u32, seeds: u32) -> Vec<RunRow> {
+        (0..12u32).map(|i| {
+            let mut r = run(&format!("c{}", i % 4), arm, 1 + i % seeds, Some((i as usize) < passed), 0.0, tokens, 0);
+            (r.base, r.models, r.turns, r.tool_calls) = (base.map(String::from), vec!["haiku".into()], turns, turns * 2);
+            r
+        }).collect()
+    }
+
+    #[test]
+    fn a_harness_arm_is_judged_against_its_base_by_passes_beyond_the_noise_and_tokens_per_pass() {
+        let base = |passed, tokens, seeds| arm_stats(&twelve("base", None, passed, tokens, 10, seeds)).remove(0);
+        let arm = |passed, tokens, seeds| arm_stats(&twelve("var", Some("base"), passed, tokens, 10, seeds)).remove(0);
+        // Base: 6 of 12 for 1000 tokens a run, so 2000 tokens per pass.
+        let b = base(6, 1000, 3);
+        assert!((b.tokens_per_pass().unwrap() - 2000.0).abs() < 1e-9);
+        // AC-2: more passes (10 of 12) but 2500 tokens a run, so 3000 per pass, up 50 %: flagged as a trade, not a win.
+        let e = effect(&b, &arm(10, 2500, 3));
+        assert_eq!(e, Effect::BetterAtMoreCost);
+        assert!(e.text().contains("<- flagged") && e.text().contains("25%"), "{}", e.text());
+        assert_eq!(effect(&b, &arm(10, 1100, 3)), Effect::Better, "10 of 12 for 1320 per pass is a gain at no large cost");
+        // The OD-2 flag: no more passes, 3000 tokens per pass.
+        let e = effect(&b, &arm(6, 1500, 3));
+        assert_eq!(e, Effect::CostlierNotBetter);
+        assert!(e.text().starts_with("costlier, not better") && e.text().contains("<- flagged"));
+        assert_eq!(effect(&b, &arm(6, 500, 3)), Effect::CheaperSameQuality);
+        assert_eq!(effect(&b, &arm(6, 1100, 3)), Effect::NoDifference, "10 % more tokens is inside the share");
+        assert_eq!(effect(&b, &arm(7, 1000, 3)), Effect::NoDifference, "one more pass in twelve is inside the noise");
+        assert_eq!(effect(&b, &arm(2, 1000, 3)), Effect::Worse);
+        // Too few seeds on either side concludes nothing, however large the gap.
+        assert_eq!(effect(&b, &arm(12, 100, 2)), Effect::NoEvidence(2));
+        assert_eq!(effect(&base(6, 1000, 1), &arm(12, 100, 3)), Effect::NoEvidence(1));
+        // An arm that never passes has no tokens per pass to compare.
+        assert_eq!(effect(&b, &arm(0, 1000, 3)), Effect::NoPasses);
+    }
+
+    #[test]
+    fn the_report_shows_effort_and_sets_each_harness_arm_against_its_base_and_leaves_old_rows_alone() {
+        let t = tempfile::tempdir().unwrap();
+        let w = t.path().join("w");
+        crate::train::prepare_work_home(&w).unwrap();
+        let to_line = |r: &RunRow| json!({"case": r.case, "arm": r.arm, "seed": r.seed, "passed": r.passed, "cost_usd": 0.0, "tokens_in": r.tokens_in, "tokens_out": 0, "attempts": 1, "promotions": 0,
+            "base": r.base, "models": {"haiku": {"calls": 1}}, "turns": r.turns, "tool_calls": r.tool_calls, "nudges": 2, "hard_stops": 1, "escalations": 0, "cache_read_tokens": 60, "cache_input_tokens": 100,
+            "by_tool": {"read_file": {"calls": 5, "errors": 3}}}).to_string();
+        let rows: Vec<RunRow> = [twelve("solo-haiku", None, 6, 1000, 10, 3), twelve("nudge-off", Some("solo-haiku"), 6, 1500, 14, 3), twelve("orphan", Some("missing"), 6, 1000, 10, 3)].concat();
+        fs::write(w.join("rows.jsonl"), rows.iter().map(to_line).collect::<Vec<_>>().join("\n") + "\n").unwrap();
+        let r = render(&w, &BTreeMap::new());
+        for want in ["EFFORT", "turns/pass", "nudge-off", "60%", "model: haiku", "nudge-off vs solo-haiku: pass rate 50% vs 50% (+0 points", "tokens/pass 3.0k vs 2.0k (+50%)", "turns/pass +40%", "-> costlier, not better", "orphan vs missing: the base has no runs in this study"] {
+            assert!(r.contains(want), "{} in\n{}", want, r);
+        }
+        assert!(!r.contains("solo-haiku vs"), "a plain arm is not compared with anything");
+        // Rows written before effort was kept: no effort table, and no harness section without a variant.
+        let old = json!({"case": "c0", "arm": "solo-haiku", "seed": 1, "passed": true, "cost_usd": 0.1, "tokens_in": 10, "tokens_out": 5, "attempts": 1, "promotions": 0}).to_string();
+        fs::write(w.join("rows.jsonl"), old + "\n").unwrap();
+        let r = render(&w, &BTreeMap::new());
+        assert!(!r.contains("EFFORT") && !r.contains("HARNESS EFFECT"), "{}", r);
     }
 
     #[test]

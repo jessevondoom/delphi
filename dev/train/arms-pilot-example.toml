@@ -46,3 +46,11 @@ expect_models = ["claude-fable", "claude-haiku", "claude-sonnet", "gemini"]
 name = "cheap-first"
 template_home = "../../../delphi-train-homes/cheap-first"
 expect_models = ["claude-haiku", "claude-sonnet", "claude-fable"]
+
+# A harness arm (specs/048 BM-1): the same model as `base`, with `[loop]` switches (specs/045) set in its copy of the home.
+# It takes the base's template_home and expect_models, so leave them out. The report sets it against its base.
+[[arm]]
+name = "solo-haiku-no-nudge"
+base = "solo-haiku"
+[arm.loop]
+nudge = false
