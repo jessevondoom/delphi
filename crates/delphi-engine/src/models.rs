@@ -20,6 +20,9 @@ pub enum Class {
     Steady,
     Quick,
     Local,
+    /// Below every role floor (`specs/056` §3.5). Only configuration puts a model here (`[routing] emergency_*`); no rule can.
+    /// Never eligible for dispatch; it saves state when every ratified seat is out of quota.
+    Emergency,
     #[default]
     Unclassified,
 }
@@ -31,6 +34,7 @@ impl Class {
             Class::Steady => "steady",
             Class::Quick => "quick",
             Class::Local => "local",
+            Class::Emergency => "emergency",
             Class::Unclassified => "unclassified",
         }
     }
@@ -40,6 +44,7 @@ impl Class {
             "steady" => Class::Steady,
             "quick" => Class::Quick,
             "local" => Class::Local,
+            "emergency" => Class::Emergency,
             "unclassified" => Class::Unclassified,
             _ => return None,
         })
@@ -180,9 +185,10 @@ pub fn run_inventory(cfg: &Config, ws_dir: &Path, snap: Option<&Snapshot>, now: 
     let rules = ClassRules::load(ws_dir).map_err(std::io::Error::other)?;
     let mut list = merge(load(ws_dir), discover(cfg, snap, now));
     classify(&rules, &mut list);
+    designate_emergency(cfg, &mut list);
     list.sort_by(|a, b| (a.presence != Presence::Ready, &a.endpoint_id, &a.model_id).cmp(&(b.presence != Presence::Ready, &b.endpoint_id, &b.model_id)));
     save(ws_dir, &list)?;
-    Ok(if json { serde_json::to_string_pretty(&list).unwrap_or_default() + "\n" } else { render(&list) })
+    Ok(if json { serde_json::to_string_pretty(&list).unwrap_or_default() + "\n" } else { format!("{}\n{}", crate::emergency::line(cfg), render(&list)) })
 }
 
 /// The shipped rules (`model_classes.toml`).
@@ -244,7 +250,7 @@ impl ClassRules {
         let r: ClassRules = toml::from_str(text).map_err(|e| format!("class rules: {e}"))?;
         for rule in &r.rules {
             match Class::parse(&rule.class) {
-                Some(Class::Unclassified) | None => return Err(format!("class rules: rule `{}` has class `{}`; use deep, steady, quick or local", rule.id, rule.class)),
+                Some(Class::Unclassified | Class::Emergency) | None => return Err(format!("class rules: rule `{}` has class `{}`; use deep, steady, quick or local (the emergency model is set in config.toml, not by a rule)", rule.id, rule.class)),
                 Some(_) => {}
             }
         }
@@ -294,6 +300,15 @@ pub fn classify(rules: &ClassRules, list: &mut [Candidate]) {
     for c in list.iter_mut() {
         c.class = rules.class_of(c);
         c.wide = ratio > 0.0 && medians.iter().find(|(f, _)| *f == c.family).is_some_and(|(_, m)| c.context_tokens as f64 >= ratio * *m as f64);
+    }
+}
+
+/// Mark the configured emergency model (`[routing] emergency_*`, `specs/056` §3.5). Call after [`classify`]; it overrides the rules,
+/// so an emergency model is never also `local` or `quick` and therefore never in the eligible set.
+pub fn designate_emergency(cfg: &Config, list: &mut [Candidate]) {
+    for c in list.iter_mut().filter(|c| crate::emergency::is_emergency(cfg, &c.endpoint_id, &c.model_id)) {
+        c.class = Class::Emergency;
+        c.wide = false;
     }
 }
 

@@ -58,6 +58,8 @@
         "registry": { "enum": ["flat", "auto"], "description": "How the orchestrator learns of bundle agents (specs/041). flat: one line per agent, up to 20. auto: past 20, a domain index and the search_agent_registry tool." },
         "assignment": { "enum": ["static", "discovered"], "description": "How a dispatch picks its model (specs/056). static: the role's tier. discovered: capability class, measured results and quota." },
         "evidence_enough": { "type": "integer", "minimum": 1, "description": "Measured results per (role, kind, model) after which a model is scored by them alone." },
+        "emergency_endpoint": { "type": "string", "description": "A local endpoint (cost_model = local) whose model saves state when every ratified seat is out of quota (specs/056 section 3.5). Set together with emergency_model; off when unset." },
+        "emergency_model": { "type": "string", "description": "The model on emergency_endpoint that writes the unverified emergency hand-off record." },
         "reserve": { "type": "object", "additionalProperties": { "type": "number", "minimum": 0, "maximum": 1 }, "description": "Role to the share of the mission budget no other role may spend." },
         "pool": {
           "type": "object",

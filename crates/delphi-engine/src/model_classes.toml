@@ -12,6 +12,13 @@ version = 1
 [wide]
 min_context_ratio = 3.0
 
+# The emergency class (§3.5) is not a rule: only [routing] emergency_endpoint/emergency_model in config.toml places a model there.
+# It sits below every floor, is never eligible for dispatch, and may run only these tasks (and none that approves, ratifies, merges,
+# spends or leaves the sandbox). Everything it writes is labeled "unverified, generated" until a model that meets the floor re-reads it.
+[emergency]
+tasks = ["read", "summarise", "write-state"]
+label = "unverified, generated"
+
 [[rule]]
 id = "open-weights-here"
 local = true

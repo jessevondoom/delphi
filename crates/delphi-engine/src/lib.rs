@@ -76,6 +76,7 @@ pub mod merge_class;
 pub mod checks;
 pub mod frontmatter;
 pub mod gates;
+pub mod emergency;
 pub mod handoff;
 pub mod hooks;
 pub mod hooks_run;
