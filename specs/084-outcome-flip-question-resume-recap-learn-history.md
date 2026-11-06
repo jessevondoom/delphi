@@ -3,7 +3,8 @@ id: spec-084-outcome-flip-question-resume-recap-learn-history
 title: '084: Outcome stub, flip question, resume recap, learn history: four phase-2 slices from the 2026-11-05 Council ranking'
 author: architect
 timestamp: 2026-11-05T00:00:00Z
-status: draft
+status: approved
+approved_by: operator (2026-11-05)
 governed_by: GOVERNANCE.md
 review_rubric: REVIEW.md
 source_type: internal_generated
@@ -18,7 +19,7 @@ tags:
 ---
 # Spec 084: Outcome stub, flip question, resume recap, learn history
 
-> **Status: draft.** A proposal for the operator, not permission to build. Nothing here may be built until the operator sets `status: approved`.
+> **Status: approved by the operator, 2026-11-05.** Slices S2, S3 and S4 are buildable, one pull request each. **S1 is NOT buildable until the operator answers Q-1** (§10): approval of the spec did not decide it. Q-2 and Q-3 take the suggested defaults below on a provisional basis (S3 defines "left" as the last operator-originated event and adds no `console.detached` event; S2 ships only if at least 50 percent of real dissents yield a usable flip question), and the operator may overrule either.
 > **Origin:** the phase-2 items (N5, N24, N14, N1) of the 2026-11-05 Council ranking that no approved spec covers (strategist, red-team, builder, advocate, orchestrator seats; one model family, no cross-family round). Phase 1 is spec 083.
 > **Extends:** [`082`](082-orchestrator-outside-delegation-contracts.md) §8 item 1 (result ingest), [`062`](062-delphi-as-host-agent-mcp-server.md) §8 (host notes), [`003`](003-collaboration-and-council.md) / [`004`](004-memory-and-coaching.md) (Council dissent, `/retro`), [`030`](030-console-sessions-and-conversation-context.md) (sessions).
 
@@ -130,6 +131,8 @@ For each accepted rule, list the later tasks whose `snapshot.loaded` (`engine.rs
 - Gates for every slice: the three AGENTS.md commands. Trailer `Implements-Spec: specs/084-outcome-flip-question-resume-recap-learn-history.md`. The tracker row moves in the same pull request.
 
 ## 10. Open questions
+
+Approved 2026-11-05 with Q-1 still open (S1 held) and Q-2 / Q-3 on the suggested defaults, provisionally.
 
 - Q-1 (S1): drop S1 because E1 was negative (§1.2), or keep it as a stub?
 - Q-2 (S3): is "left" the last operator-originated event, or is a stored `console.detached` event worth adding?
