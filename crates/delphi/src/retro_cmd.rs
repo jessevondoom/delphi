@@ -113,6 +113,15 @@ pub fn render_list(items: &[LiveProposal]) -> String {
     out
 }
 
+/// The staged claims more than one mission produced (`specs/083` §5): counts for the operator's reading, never a threshold
+/// that proposes or writes a rule. Empty when nothing recurs.
+pub fn render_recurring_section(items: &[delphi_engine::learn::Recurring]) -> String {
+    if items.is_empty() {
+        return String::new();
+    }
+    format!("\nrecurring staged notes ({}): a count to read, not a rule; `delphi learn list` has them all\n{}", items.len(), delphi_engine::learn::render_recurring(items))
+}
+
 pub fn render_one(p: &LiveProposal) -> String {
     let target = if p.target.is_empty() { String::new() } else { format!("  target:    {}\n", p.target) };
     format!(
@@ -175,7 +184,16 @@ pub fn run_in(ws_dir: &Path, verb: &str, reference: Option<&str>, opts: &Options
     let items = collect(ws_dir, opts)?;
     match verb {
         "list" if opts.json => serde_json::to_string_pretty(&items.iter().map(LiveProposal::to_json).collect::<Vec<_>>()).map(|s| s + "\n").map_err(|e| e.to_string()),
-        "list" => Ok(render_list(&items)),
+        "list" => {
+            let mut out = render_list(&items);
+            out.push_str(&render_recurring_section(&delphi_engine::learn::recurring_in(ws_dir)));
+            Ok(out)
+        }
+        "recurring" if opts.json => serde_json::to_string_pretty(&delphi_engine::learn::recurring_in(ws_dir).iter().map(|r| r.to_json()).collect::<Vec<_>>()).map(|s| s + "\n").map_err(|e| e.to_string()),
+        "recurring" => {
+            let rec = delphi_engine::learn::recurring_in(ws_dir);
+            Ok(if rec.is_empty() { "no staged claim has recurred in more than one mission\n".into() } else { render_recurring_section(&rec) })
+        }
         "show" => {
             let p = find(&items, reference.ok_or("show needs a proposal: delphi retro show <mission>/<id>")?)?;
             if opts.json {
@@ -189,7 +207,7 @@ pub fn run_in(ws_dir: &Path, verb: &str, reference: Option<&str>, opts: &Options
             }
             Ok(out)
         }
-        other => Err(format!("`{}` is not a retro verb (list, show, stale, mine, stats, accept, reject)", other)),
+        other => Err(format!("`{}` is not a retro verb (list, show, stale, recurring, mine, stats, accept, reject)", other)),
     }
 }
 

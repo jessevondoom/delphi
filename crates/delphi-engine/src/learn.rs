@@ -355,6 +355,11 @@ pub struct StagedNote {
 }
 
 impl StagedNote {
+    /// The digest of what this note says and how far it is trusted (`specs/083` §5, `source_hash` on `learn.staged`).
+    pub fn source_hash(&self) -> String {
+        source_hash(self.trigger, &self.summary, self.tier.as_str())
+    }
+
     /// The note's id: the `seq` of the event that triggered it, so a replay names it the same way.
     pub fn id(&self) -> String {
         format!("n{}{}", self.event_seqs.last().copied().unwrap_or(0), self.id_suffix)
@@ -365,6 +370,8 @@ impl StagedNote {
         if let Some(d) = &self.valid_until {
             payload["valid_until"] = serde_json::json!(d);
         }
+        // S3 (specs/083 §5): the digest a later dismissal is matched against.
+        payload["source_hash"] = serde_json::json!(self.source_hash());
         let mut e = EventEnvelope::new(mission_id, "learn.staged", payload);
         e.task_id = self.task_id.clone();
         e.agent = self.role.clone();
@@ -592,6 +599,8 @@ pub struct Stager {
     contact_seen: std::collections::BTreeSet<String>,
     /// The opening sentence of each task's last answer, newest last, for `answer.accepted`.
     outputs: std::collections::VecDeque<(String, String)>,
+    /// Notes the operator dropped, so a non-contact claim is not offered again unchanged (`specs/083` §5).
+    dismissed: Dismissals,
 }
 
 impl Stager {
@@ -642,6 +651,7 @@ impl Stager {
         let mut out = Vec::new();
         match e.kind.as_str() {
             "learn.staged" => {
+                self.dismissed.see(e);
                 // A live capture is counted when it is decided; its own event arrives here a moment later.
                 if let Some(id) = e.payload["id"].as_str().filter(|id| !self.live.iter().any(|l| l == id)) {
                     self.live.push_back(id.to_string());
@@ -652,6 +662,7 @@ impl Stager {
                 return out;
             }
             "learn.dropped" => {
+                self.dismissed.see(e);
                 if let Some(id) = e.payload["id"].as_str() {
                     self.live.retain(|l| l != id);
                 }
@@ -782,6 +793,20 @@ impl Stager {
             }
             _ => {}
         }
+        // A claim the operator dropped is not offered again while it is unchanged (`specs/083` §5). Contact claims have
+        // their own memory (`contact_seen`) and are not asked.
+        let now = delphi_core::time::parse_rfc3339(&e.timestamp);
+        out.retain(|c| match c {
+            Capture::Note(n) if !is_contact(n.trigger) => {
+                let (key, hash) = (claim_key(n.trigger, &n.summary), n.source_hash());
+                let offer = self.dismissed.offer(&key, &hash, now);
+                if offer {
+                    self.dismissed.note_staged(&n.id(), key, hash);
+                }
+                offer
+            }
+            _ => true,
+        });
         // The cap counts live notes including the ones about to be written; the oldest go first.
         let new = out.len();
         let mut evict = Vec::new();
@@ -799,6 +824,245 @@ impl Stager {
         evict.extend(out);
         evict
     }
+}
+
+// ── S3a: dismissed-claim memory (`specs/083` §5) ────────────────────────────────────────────────────────────────
+
+/// A dismissal holds for this long; after it the claim is offered once more (`specs/083` §5).
+pub const DISMISSAL_WINDOW_SECS: i64 = 90 * 86_400;
+
+fn norm(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+}
+
+/// A host note's summary is `[label] text (evidence: e)`; its claim is the text alone, so new evidence for the same text
+/// is a changed source, not a new claim.
+fn host_parts(summary: &str) -> (String, String) {
+    const EV: &str = " (evidence: ";
+    let body = summary.strip_prefix('[').and_then(|r| r.split_once("] ")).map_or(summary, |(_, b)| b);
+    match body.rfind(EV) {
+        Some(i) => (body[..i].to_string(), body[i + EV.len()..].trim_end().trim_end_matches(')').to_string()),
+        None => (body.to_string(), String::new()),
+    }
+}
+
+/// The subject a dismissal is keyed by: the claim, case and spacing aside.
+pub fn claim_key(trigger: &str, summary: &str) -> String {
+    if trigger == "host_note" {
+        format!("host_note:{}", norm(&host_parts(summary).0))
+    } else {
+        subject_key(trigger, summary)
+    }
+}
+
+/// `source_hash` of a `learn.staged` payload: SHA-256 (hex) of the claim, its evidence (host notes only) and its tier. The
+/// same claim with other evidence, or a higher tier, hashes differently, so a dismissal does not hide it.
+pub fn source_hash(trigger: &str, summary: &str, tier: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let evidence = if trigger == "host_note" { norm(&host_parts(summary).1) } else { String::new() };
+    Sha256::digest(format!("{}\n{}\n{}", claim_key(trigger, summary), evidence, tier).as_bytes()).iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+/// What the operator dropped, rebuilt from the log. A dropped claim is held until its source changes or its window ends.
+/// Contact claims are not here: `contact_seen` already keeps them from coming back.
+#[derive(Debug, Default, Clone)]
+pub struct Dismissals {
+    /// `id -> (claim key, source hash)` of every non-contact note staged.
+    staged: BTreeMap<String, (String, String)>,
+    /// `claim key -> (source hash, start of the window)`. A window without a time (an unreadable stamp) never ends.
+    held: BTreeMap<String, (String, Option<i64>)>,
+}
+
+impl Dismissals {
+    /// Feed it a mission's `learn.staged` and `learn.dropped` events in order. An eviction by the note cap is not a dismissal.
+    pub fn see(&mut self, e: &EventEnvelope) {
+        match e.kind.as_str() {
+            "learn.staged" => {
+                let (Some(id), Some(trigger)) = (e.payload["id"].as_str(), e.payload["trigger"].as_str()) else { return };
+                if is_contact(trigger) {
+                    return;
+                }
+                let summary = e.payload["summary"].as_str().unwrap_or("");
+                let hash = e.payload["source_hash"].as_str().map(String::from).unwrap_or_else(|| source_hash(trigger, summary, e.payload["tier"].as_str().unwrap_or("L0")));
+                let key = claim_key(trigger, summary);
+                // A note staged after a dismissal is the claim's re-offer: it starts the next window (or, if its source
+                // changed, ends the dismissal).
+                if let Some((held_hash, since)) = self.held.get_mut(&key) {
+                    if *held_hash == hash {
+                        *since = delphi_core::time::parse_rfc3339(&e.timestamp).or(*since);
+                    } else {
+                        self.held.remove(&key);
+                    }
+                }
+                self.note_staged(id, key, hash);
+            }
+            "learn.dropped" if e.payload["reason"] != "evicted" => {
+                if let Some((key, hash)) = e.payload["id"].as_str().and_then(|id| self.staged.get(id)).cloned() {
+                    self.held.insert(key, (hash, delphi_core::time::parse_rfc3339(&e.timestamp)));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Remember a note staged just now (a live capture is not observed again as an event).
+    pub fn note_staged(&mut self, id: &str, key: String, hash: String) {
+        self.staged.insert(id.to_string(), (key, hash));
+    }
+
+    /// May the claim be staged at `now`? A changed source always may. An unchanged one may once its window is over, and
+    /// that offer starts the next window, so a poisoned claim comes back at most once per window.
+    pub fn offer(&mut self, key: &str, hash: &str, now: Option<i64>) -> bool {
+        let Some((held_hash, since)) = self.held.get_mut(key) else { return true };
+        if held_hash != hash {
+            self.held.remove(key);
+            return true;
+        }
+        match (*since, now) {
+            (Some(a), Some(n)) if n - a >= DISMISSAL_WINDOW_SECS => {
+                *since = Some(n);
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+/// Would a host note be a claim the operator already dropped from this log, unchanged and inside its window? Hosts stage
+/// notes without the `Stager`, so `host_stage` asks here against the host session's own mission.
+pub fn host_note_dismissed(events: &[EventEnvelope], summary: &str, tier: &str, now: Option<i64>) -> bool {
+    let mut d = Dismissals::default();
+    events.iter().for_each(|e| d.see(e));
+    !d.offer(&claim_key("host_note", summary), &source_hash("host_note", summary, tier), now)
+}
+
+// ── S3b: recurrence count and seat-keyed claims (`specs/083` §5) ─────────────────────────────────────────────────
+
+/// Notes a host wrote (`host_note`, `host_summary`, `host_transcript`, `host_kb_entry`): the host chose their session ids.
+pub fn is_host_trigger(trigger: &str) -> bool {
+    trigger.starts_with("host_")
+}
+
+/// A host session's mission (`host-<session>`): its id was chosen by the host, not assigned by the daemon.
+fn host_mission(id: &str) -> bool {
+    id.starts_with("host-")
+}
+
+/// Which missions staged each claim, read from the logs at display time. Nothing is stored.
+#[derive(Debug, Default, Clone)]
+pub struct Recurrence {
+    by_key: BTreeMap<String, BTreeSet<String>>,
+}
+
+impl Recurrence {
+    /// Add one mission's `learn.staged` events. A host-written claim counts host missions; every other claim counts only
+    /// daemon-assigned ones, so a host cannot raise the count of a claim the daemon composed. A dropped note still
+    /// counts: the claim was produced there. Several notes of one claim in one mission count once.
+    pub fn add_mission(&mut self, mission: &str, events: &[EventEnvelope]) {
+        for e in events.iter().filter(|e| e.kind == "learn.staged") {
+            let Some(trigger) = e.payload["trigger"].as_str() else { continue };
+            if is_host_trigger(trigger) != host_mission(mission) {
+                continue;
+            }
+            self.by_key.entry(claim_key(trigger, e.payload["summary"].as_str().unwrap_or(""))).or_default().insert(mission.to_string());
+        }
+    }
+
+    /// How many missions produced this claim (at least 1).
+    pub fn count(&self, trigger: &str, summary: &str) -> usize {
+        self.by_key.get(&claim_key(trigger, summary)).map_or(1, |m| m.len().max(1))
+    }
+}
+
+/// The count as the operator reads it: a host's is a report, not a measurement.
+pub fn count_label(trigger: &str, count: usize) -> String {
+    let s = if count == 1 { "" } else { "s" };
+    if is_host_trigger(trigger) {
+        format!("reported by {count} host session{s}")
+    } else {
+        format!("{count} mission{s}")
+    }
+}
+
+/// Order notes by how often they recur, most first. A note a host wrote never ranks above one the operator's own work
+/// produced, whatever its count. The sort is stable, so equal counts keep the order given.
+pub fn order_by_recurrence(notes: &mut [LiveNote], r: &Recurrence) {
+    notes.sort_by_key(|n| (is_host_trigger(&n.trigger), std::cmp::Reverse(r.count(&n.trigger, &n.summary))));
+}
+
+/// One live claim that more than one mission produced.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Recurring {
+    pub trigger: String,
+    pub summary: String,
+    /// The role a `council_claim` is keyed to (the seat that said it); `None` for every other trigger.
+    pub seat: Option<String>,
+    pub count: usize,
+    pub label: String,
+    pub refs: Vec<String>,
+}
+
+impl Recurring {
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({"trigger": self.trigger, "summary": self.summary, "seat": self.seat, "count": self.count, "label": self.label, "refs": self.refs})
+    }
+}
+
+/// The seat a `council_claim` summary names (`<seat> said in Council: <claim>`, a role ID).
+pub fn seat_of(trigger: &str, summary: &str) -> Option<String> {
+    if trigger != "council_claim" {
+        return None;
+    }
+    summary.split_once(" said in Council: ").map(|(s, _)| s.to_string()).filter(|s| !s.is_empty())
+}
+
+/// The live notes that recur (two missions or more). Operator-side claims come first, then host reports; Council claims
+/// sit together by seat; the rest by count. A display only: nothing here stages, proposes or writes a rule.
+pub fn recurring(notes: &[LiveNote], r: &Recurrence) -> Vec<Recurring> {
+    let mut by: BTreeMap<String, Recurring> = BTreeMap::new();
+    for n in notes {
+        let count = r.count(&n.trigger, &n.summary);
+        if count < 2 {
+            continue;
+        }
+        by.entry(claim_key(&n.trigger, &n.summary))
+            .or_insert_with(|| Recurring { trigger: n.trigger.clone(), summary: n.summary.clone(), seat: seat_of(&n.trigger, &n.summary), count, label: count_label(&n.trigger, count), refs: Vec::new() })
+            .refs
+            .push(n.reference());
+    }
+    let mut out: Vec<Recurring> = by.into_values().collect();
+    let rank = |x: &Recurring| (is_host_trigger(&x.trigger), x.seat.is_none(), x.seat.clone(), std::cmp::Reverse(x.count), x.summary.clone());
+    out.sort_by_key(rank);
+    out
+}
+
+/// Read every mission's log once: the live notes (newest first) and the recurrence index. Read-only, so it is safe while a
+/// daemon holds a mission open.
+pub fn scan(ws_dir: &Path) -> (Vec<LiveNote>, Recurrence) {
+    let (mut notes, mut r) = (Vec::new(), Recurrence::default());
+    for (id, path) in delphi_core::sessions::dirs(ws_dir) {
+        let Ok(events) = delphi_core::log::replay(&path) else { continue };
+        r.add_mission(&id, &events);
+        notes.extend(live_notes(&id, &events));
+    }
+    notes.sort_by(|a, b| b.timestamp.cmp(&a.timestamp).then_with(|| b.reference().cmp(&a.reference())));
+    (notes, r)
+}
+
+/// The recurring claims among the workspace's live notes (`/retro`, `delphi retro`).
+pub fn recurring_in(ws_dir: &Path) -> Vec<Recurring> {
+    let (notes, r) = scan(ws_dir);
+    recurring(&notes, &r)
+}
+
+/// Text lines for the recurring claims, shared by `/retro` and `delphi retro`.
+pub fn render_recurring(items: &[Recurring]) -> String {
+    let mut out = String::new();
+    for x in items {
+        let seat = x.seat.as_deref().map(|s| format!("[{s}] ")).unwrap_or_default();
+        out.push_str(&format!("  {}x {}{}  ({}: {})\n", x.count, seat, x.summary, x.trigger, x.label));
+    }
+    out
 }
 
 #[cfg(test)]
@@ -1171,5 +1435,175 @@ mod tests {
             }
         }
         out
+    }
+
+    // ── S3a: dismissed-claim memory (`specs/083` §5) ──
+
+    fn stamped(seq: u64, ts: &str, task: Option<&str>, kind: &str, payload: Value) -> EventEnvelope {
+        let mut e = at(seq, task, kind, payload);
+        e.timestamp = ts.into();
+        e
+    }
+
+    fn denial(seq: u64, ts: &str, task: &str, reason: &str) -> EventEnvelope {
+        stamped(seq, ts, Some(task), "approval.resolved", json!({"resolution": "denied", "reason": reason}))
+    }
+
+    fn drop_of(seq: u64, ts: &str, id: &str, reason: &str) -> EventEnvelope {
+        stamped(seq, ts, None, "learn.dropped", json!({"id": id, "reason": reason}))
+    }
+
+    fn notes_of(s: &mut Stager, e: &EventEnvelope) -> Vec<StagedNote> {
+        s.observe(e).into_iter().filter_map(|c| if let Capture::Note(n) = c { Some(n) } else { None }).collect()
+    }
+
+    #[test]
+    fn a_staged_note_carries_a_source_hash_that_follows_its_claim_and_tier() {
+        let a = stage(&[denial(5, "", "t", "never touch the lockfile")]);
+        let ev = a[0].to_event("m_1");
+        assert_eq!(ev.payload["source_hash"].as_str(), Some(a[0].source_hash().as_str()));
+        assert_eq!(a[0].source_hash().len(), 64);
+        let spaced = stage(&[denial(9, "", "t", "Never  touch the LOCKFILE")]);
+        assert_eq!(a[0].source_hash(), spaced[0].source_hash(), "case and spacing do not change the claim");
+        let other = stage(&[denial(9, "", "t", "never touch the manifest")]);
+        assert_ne!(a[0].source_hash(), other[0].source_hash());
+    }
+
+    #[test]
+    fn a_dropped_note_is_not_staged_again_until_its_source_hash_changes() {
+        let mut s = Stager::new(LearningSettings::default());
+        let first = notes_of(&mut s, &denial(5, "2026-01-01T00:00:00Z", "t1", "never touch the lockfile"));
+        assert_eq!(first.len(), 1);
+        assert!(s.observe(&drop_of(6, "2026-01-02T00:00:00Z", &first[0].id(), "operator")).is_empty());
+        assert!(notes_of(&mut s, &denial(9, "2026-01-03T00:00:00Z", "t2", "Never touch the  lockfile")).is_empty(), "the same claim stays dismissed");
+        // The same words from a task that read untrusted content have another tier, so another source.
+        s.observe(&stamped(10, "2026-01-03T00:00:00Z", Some("t3"), "span.taint", json!({"ceiling": "L0"})));
+        let changed = notes_of(&mut s, &denial(11, "2026-01-04T00:00:00Z", "t3", "never touch the lockfile"));
+        assert_eq!(changed.len(), 1, "a changed source offers the claim again");
+        assert_eq!(changed[0].tier, Tier::L0);
+        // And once the source changed, the old dismissal is gone.
+        assert_eq!(notes_of(&mut s, &denial(13, "2026-01-05T00:00:00Z", "t4", "never touch the lockfile")).len(), 1);
+    }
+
+    #[test]
+    fn the_memory_survives_a_restart_because_it_is_rebuilt_from_the_log() {
+        let mut s = Stager::new(LearningSettings::default());
+        let n = notes_of(&mut s, &denial(5, "2026-01-01T00:00:00Z", "t1", "use the helper")).remove(0);
+        let mut staged = n.to_event("m_1");
+        staged.seq = 6;
+        staged.timestamp = "2026-01-01T00:00:01Z".into();
+        let log = vec![denial(5, "2026-01-01T00:00:00Z", "t1", "use the helper"), staged, drop_of(7, "2026-01-02T00:00:00Z", "n5", "operator")];
+        let mut again = Stager::replay(LearningSettings::default(), &log);
+        assert!(notes_of(&mut again, &denial(9, "2026-01-03T00:00:00Z", "t2", "use the helper")).is_empty());
+    }
+
+    #[test]
+    fn a_dismissal_expires_after_ninety_days_and_the_claim_comes_back_once_per_window() {
+        let mut s = Stager::new(LearningSettings::default());
+        let n = notes_of(&mut s, &denial(5, "2026-01-01T00:00:00Z", "t1", "use the helper")).remove(0);
+        s.observe(&drop_of(6, "2026-01-01T00:00:00Z", &n.id(), "operator"));
+        assert!(notes_of(&mut s, &denial(9, "2026-03-31T00:00:00Z", "t2", "use the helper")).is_empty(), "day 89 is still inside the window");
+        let back = notes_of(&mut s, &denial(11, "2026-04-02T00:00:00Z", "t3", "use the helper"));
+        assert_eq!(back.len(), 1, "day 91 offers it again");
+        // The offer started a new window, whether or not the operator drops it again.
+        assert!(notes_of(&mut s, &denial(13, "2026-04-03T00:00:00Z", "t4", "use the helper")).is_empty(), "not again within the window");
+        s.observe(&drop_of(14, "2026-04-04T00:00:00Z", &back[0].id(), "operator"));
+        assert!(notes_of(&mut s, &denial(15, "2026-06-30T00:00:00Z", "t5", "use the helper")).is_empty(), "a second drop holds for a full window again");
+        assert_eq!(notes_of(&mut s, &denial(17, "2026-07-05T00:00:00Z", "t6", "use the helper")).len(), 1);
+    }
+
+    #[test]
+    fn an_eviction_by_the_cap_is_not_a_dismissal_and_contact_claims_keep_their_own_rule() {
+        let mut s = Stager::new(LearningSettings::default());
+        let n = notes_of(&mut s, &denial(5, "2026-01-01T00:00:00Z", "t1", "use the helper")).remove(0);
+        s.observe(&drop_of(6, "2026-01-02T00:00:00Z", &n.id(), "evicted"));
+        assert_eq!(notes_of(&mut s, &denial(9, "2026-01-03T00:00:00Z", "t2", "use the helper")).len(), 1);
+        let verdict = |seq| stamped(seq, "2026-01-04T00:00:00Z", Some("t"), "council.verdict", json!({"decision": "Ship it"}));
+        let v = notes_of(&mut s, &verdict(20));
+        assert_eq!(v.len(), 1);
+        s.observe(&drop_of(21, "2099-01-01T00:00:00Z", &v[0].id(), "operator"));
+        assert!(notes_of(&mut s, &verdict(22)).is_empty(), "a contact claim stays dismissed with no expiry (contact_seen)");
+    }
+
+    #[test]
+    fn a_host_note_is_dismissed_by_its_text_and_returns_with_new_evidence_or_after_the_window() {
+        let note = |text: &str, ev: &str| format!("[host:claude/x] {text} (evidence: {ev})");
+        let staged = |seq: u64, ts: &str, id: &str, summary: String| {
+            let mut e = stamped(seq, ts, None, "learn.staged", json!({"id": id, "trigger": "host_note", "summary": summary, "tier": "L0"}));
+            e.agent = Some("builder".into());
+            e
+        };
+        let log = vec![staged(1, "2026-01-01T00:00:00Z", "h1", note("Use the helper", "session a")), drop_of(2, "2026-01-02T00:00:00Z", "h1", "operator")];
+        let now = |d: &str| delphi_core::time::parse_rfc3339(d);
+        let again = |summary: String, d: &str| host_note_dismissed(&log, &summary, "L0", now(d));
+        assert!(again(note("use the  helper", "session a"), "2026-01-10T00:00:00Z"), "same text, same evidence");
+        assert!(!again(note("use the helper", "session b, new transcript"), "2026-01-10T00:00:00Z"), "new evidence offers it again");
+        assert!(!again(note("use the helper", "session a"), "2026-04-05T00:00:00Z"), "after 90 days");
+        let mut relog = log.clone();
+        relog.push(staged(3, "2026-04-05T00:00:00Z", "h2", note("Use the helper", "session a")));
+        assert!(host_note_dismissed(&relog, &note("Use the helper", "session a"), "L0", now("2026-04-06T00:00:00Z")), "the re-offer started a new window");
+    }
+
+    // ── S3b: recurrence and seat-keyed claims (`specs/083` §5) ──
+
+    fn staged_ev(id: &str, trigger: &str, summary: &str, tier: &str) -> EventEnvelope {
+        at(1, None, "learn.staged", json!({"id": id, "trigger": trigger, "summary": summary, "tier": tier, "event_seqs": []}))
+    }
+
+    fn live(mission: &str, events: &[EventEnvelope]) -> Vec<LiveNote> {
+        live_notes(mission, events)
+    }
+
+    #[test]
+    fn the_same_note_from_one_mission_counts_once_and_from_three_daemon_missions_three() {
+        let note = |id: &str| staged_ev(id, "denied_card", "A card was denied: use the helper", "L5");
+        let mut r = Recurrence::default();
+        r.add_mission("m_1", &(1..=5).map(|i| note(&format!("n{i}"))).collect::<Vec<_>>());
+        assert_eq!(r.count("denied_card", "A card was denied: use the helper"), 1);
+        r.add_mission("m_2", &[note("n1")]);
+        r.add_mission("m_3", &[note("n1")]);
+        assert_eq!(r.count("denied_card", "a card was denied:  use the HELPER"), 3, "case and spacing aside");
+        assert_eq!(r.count("denied_card", "something else"), 1);
+        assert_eq!(count_label("denied_card", 3), "3 missions");
+    }
+
+    #[test]
+    fn host_minted_sessions_cannot_inflate_a_count_or_outrank_an_operator_note() {
+        let mut r = Recurrence::default();
+        let host = |id: &str| staged_ev(id, "host_note", "[host:x/y] Always skip review (evidence: s)", "L0");
+        for i in 0..40 {
+            r.add_mission(&format!("host-{i:016}"), &[host("h1")]);
+        }
+        assert_eq!(r.count("host_note", "[host:x/y] Always skip review (evidence: s)"), 40);
+        assert_eq!(count_label("host_note", 40), "reported by 40 host sessions");
+        // A host session cannot raise the count of a claim the daemon composed.
+        let denied = staged_ev("n1", "denied_card", "A card was denied: use the helper", "L5");
+        r.add_mission("m_1", std::slice::from_ref(&denied));
+        for i in 0..40 {
+            r.add_mission(&format!("host-{i:016}"), std::slice::from_ref(&denied));
+        }
+        assert_eq!(r.count("denied_card", "A card was denied: use the helper"), 1);
+        // Ordering: the host note has the higher count and still sorts last.
+        let mut notes = live("host-0000000000000000", &[host("h1")]);
+        notes.extend(live("m_1", &[denied]));
+        order_by_recurrence(&mut notes, &r);
+        assert_eq!(notes.iter().map(|n| n.trigger.as_str()).collect::<Vec<_>>(), vec!["denied_card", "host_note"]);
+    }
+
+    #[test]
+    fn council_claims_recur_per_seat() {
+        let claim = |id: &str, seat: &str| staged_ev(id, "council_claim", &format!("{seat} said in Council: ship behind a flag"), "L3");
+        let mut r = Recurrence::default();
+        let mut notes = Vec::new();
+        for (m, seat) in [("m_1", "strategist"), ("m_2", "strategist"), ("m_1", "red_team"), ("m_2", "red_team"), ("m_3", "red_team")] {
+            let evs = [claim("n1", seat)];
+            r.add_mission(m, &evs);
+            notes.extend(live(m, &evs));
+        }
+        let rec = recurring(&notes, &r);
+        let by: Vec<(Option<&str>, usize)> = rec.iter().map(|x| (x.seat.as_deref(), x.count)).collect();
+        assert_eq!(by, vec![(Some("red_team"), 3), (Some("strategist"), 2)]);
+        assert!(render_recurring(&rec).contains("3x [red_team] red_team said in Council"));
+        assert!(recurring(&notes[..1], &r).iter().all(|x| x.count >= 2), "a single note still reads its mission-wide count");
     }
 }
