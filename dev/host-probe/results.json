@@ -133,8 +133,8 @@
   },
   {
     "host": "agy",
-    "cli_version": null,
-    "date": null,
+    "cli_version": "agy 1.5.3",
+    "date": "2026-11-07",
     "cells": {
       "definition": {
         "status": "not run"
@@ -149,13 +149,16 @@
         "status": "not run"
       },
       "parallel": {
-        "status": "not run"
+        "status": "not run",
+        "note": "the probe's seats run `date`/`sleep`; in headless `agy -p` a subagent has no tools unless its frontmatter declares `tools: [run_command]`, and then the `command` permission is auto-denied (\"headless mode cannot prompt for\"). The fix is an allow rule under `permissions.allow` in agy's settings.json (a workspace `.agents/settings.json` was tried and was not read) or `--dangerously-skip-permissions`; neither was applied without the operator's say-so"
       },
       "model_pin": {
-        "status": "not run"
+        "status": "not run",
+        "note": "seats did not run to completion"
       },
       "mcp": {
-        "status": "not run"
+        "status": "not run",
+        "note": "`agy mcp list` reports no MCP servers configured on this machine, so there is nothing for a seat to call; the operator's agy config was not touched"
       },
       "tools": {
         "status": "not run"
@@ -167,7 +170,8 @@
         "status": "not run"
       },
       "discovered": {
-        "status": "not run"
+        "status": "verified",
+        "note": "by a manual diagnostic, not the probe's own run: in a temp dir with one `.agents/agents/delphi-canary-a.md`, `agy -p` invoked the custom subagent and returned its reply (`canary-a-ran`). The probe's own run reported 0 of 2 seats because its seats need a shell tool (see parallel)"
       }
     }
   }
