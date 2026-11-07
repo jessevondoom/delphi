@@ -210,10 +210,19 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
 
 /// `14 error-log`: read-only; says what is recorded and where, and warns when records were lost.
 /// `16 usage-quality` (spec 093 §5 I): read-only. Lists `agent.usage` calls whose price, model or token receipt is unknown.
-/// Such calls are EXCLUDED from share-of-limit totals and are never counted as zero. Output is a count and at most 10 examples:
-/// ids, model and the missing field only, never prompt or response text.
+/// Today the usage and spend totals add such a call as 0 (`Ledger::totals`, `usage.get`, the observer), so they understate real use
+/// by an amount nobody can state; this check says how many and which. It is not a fix: making the totals skip them needs a field
+/// on `Totals` and is its own slice. Not flagged, because they are expected: a cancelled or interrupted span (charged at its
+/// reservation, `usage_source = estimated`) and a call on a `cost_model = "local"` endpoint (free, with no prices by design).
+/// Output is a count and at most 10 examples: ids, model and the missing field only, never prompt or response text.
 fn check_usage_quality(ws: &Path, r: &mut Report) {
     const SHOWN: usize = 10;
+    let local: std::collections::HashSet<String> = toml::from_str::<toml::Value>(&fs::read_to_string(ws.join("config.toml")).unwrap_or_default())
+        .ok()
+        .and_then(|v| {
+            v.get("endpoints").and_then(|e| e.as_array()).map(|a| a.iter().filter(|e| e.get("cost_model").and_then(|c| c.as_str()) == Some("local")).filter_map(|e| e.get("id").and_then(|i| i.as_str()).map(String::from)).collect())
+        })
+        .unwrap_or_default();
     let (mut calls, mut bad, mut unreadable) = (0u64, 0u64, 0u64);
     let mut examples: Vec<(String, String)> = Vec::new();
     for (id, path) in delphi_core::sessions::dirs(ws).into_iter().filter(|(_, p)| p.join("events").is_dir()) {
@@ -239,13 +248,17 @@ fn check_usage_quality(ws: &Path, r: &mut Report) {
             let ok = matches!(p["outcome"].as_str(), None | Some("ok"));
             match p["usage_source"].as_str() {
                 Some("reported") => {}
-                Some("estimated") => missing.push("token receipt estimated, not reported"),
+                // A successful call whose tokens were estimated has no receipt; a cancelled or interrupted one is charged at its
+                // reservation on purpose.
+                Some("estimated") if ok => missing.push("token receipt estimated, not reported"),
+                Some("estimated") => {}
                 _ => missing.push("usage_source missing"),
             }
             if ok && tokens == 0 {
                 missing.push("token receipt missing (no tokens)");
             }
-            if p["cost_model"].as_str() == Some("metered") && ok && tokens > 0 && p["cost_usd"].as_f64().unwrap_or(0.0) == 0.0 {
+            let on_local = e.endpoint_id.as_deref().is_some_and(|id| local.contains(id));
+            if p["cost_model"].as_str() == Some("metered") && ok && tokens > 0 && p["cost_usd"].as_f64().unwrap_or(0.0) == 0.0 && !on_local {
                 missing.push("price unknown (metered, tokens but cost 0)");
             }
             if !missing.is_empty() {
@@ -271,7 +284,7 @@ fn check_usage_quality(ws: &Path, r: &mut Report) {
     r.warn(
         "16 usage-quality",
         "",
-        format!("{bad} of {calls} usage record(s) have an unknown price, model or token receipt. They are EXCLUDED from share-of-limit totals and never counted as zero; the ledger's token and dollar sums still add them as 0 until it learns to skip them. Showing {}:", examples.len()),
+        format!("{bad} of {calls} usage record(s) have an unknown price, model or token receipt. The usage and spend totals add each one as 0, so they understate real use by an amount that cannot be stated. Showing {}:", examples.len()),
     );
     for (loc, msg) in examples {
         r.warn("16 usage-quality", loc, msg);
@@ -1151,10 +1164,56 @@ mod tests {
         check_usage_quality(&ws.dir, &mut r);
         let f: Vec<_> = r.findings.iter().filter(|f| f.check == "16 usage-quality").collect();
         assert_eq!(f.len(), 11, "one summary and at most 10 examples");
-        assert!(f[0].message.contains("15 of 16") && f[0].message.contains("EXCLUDED") && f[0].message.contains("never counted as zero"), "{}", f[0].message);
+        assert!(f[0].message.contains("15 of 16") && f[0].message.contains("add each one as 0") && f[0].message.contains("understate"), "{}", f[0].message);
         let all: String = f.iter().map(|x| format!("{} {}", x.location, x.message)).collect();
         assert!(all.contains("model unknown") && all.contains("price unknown") && all.contains("token receipt missing") && all.contains("estimated") && !all.contains("SECRET"));
         let _ = home;
+    }
+
+    /// Spec 093 B2-I: two things that look like unknowns are expected and must not be flagged, or the warning is noise.
+    #[test]
+    fn usage_quality_does_not_flag_a_cancelled_span_or_a_free_local_model() {
+        let (_t, _home, ws, _p) = setup();
+        fs::write(ws.dir.join("config.toml"), "[[endpoints]]\nid = \"ollama\"\nfamily = \"local\"\ncost_model = \"local\"\n").unwrap();
+        let m = ws.dir.join("local/missions/m1");
+        let mut log = delphi_core::log::EventLog::open(&m, Default::default()).unwrap();
+        let mut put = |endpoint: &str, p: serde_json::Value| {
+            let mut e = delphi_core::event::EventEnvelope::new("m1", "agent.usage", p);
+            e.task_id = Some("t_1".into());
+            (e.agent, e.span_id, e.endpoint_id, e.access_path, e.model_tier, e.model_id, e.attempt) =
+                (Some("builder".into()), Some("s1".into()), Some(endpoint.into()), Some("api".into()), Some("fast".into()), Some("some-model".into()), Some(1));
+            log.append(e).unwrap();
+        };
+        let base = |extra: serde_json::Value| {
+            let mut v = serde_json::json!({"provider": "x", "input_tokens": 0, "output_tokens": 0, "reserved_usd": 0.0, "cost_model": "metered"});
+            for (k, x) in extra.as_object().unwrap() {
+                v[k] = x.clone();
+            }
+            v
+        };
+        // A local model: tokens, cost 0, metered. Free by design.
+        put("ollama", base(serde_json::json!({"input_tokens": 50, "output_tokens": 20, "cost_usd": 0.0, "usage_source": "reported", "outcome": "ok"})));
+        // A span cancelled mid-flight, charged at its reservation on purpose.
+        put("direct", base(serde_json::json!({"cost_usd": 0.25, "reserved_usd": 0.25, "usage_source": "estimated", "outcome": "cancelled"})));
+        // And one ordinary good call.
+        put("direct", base(serde_json::json!({"input_tokens": 10, "output_tokens": 5, "cost_usd": 0.01, "usage_source": "reported", "outcome": "ok"})));
+        drop(log);
+        let mut r = Report::default();
+        check_usage_quality(&ws.dir, &mut r);
+        let f: Vec<_> = r.findings.iter().filter(|f| f.check == "16 usage-quality").collect();
+        assert!(f.iter().all(|x| x.level != Level::Warn), "nothing here is unknown: {:?}", f.iter().map(|x| x.message.clone()).collect::<Vec<_>>());
+        assert!(f.iter().any(|x| x.message.contains("3 usage record(s), none with an unknown")), "{:?}", f.iter().map(|x| x.message.clone()).collect::<Vec<_>>());
+        // The same cost-0 call on an endpoint that is NOT local is an unknown price.
+        let mut log = delphi_core::log::EventLog::open(&m, Default::default()).unwrap();
+        let mut e = delphi_core::event::EventEnvelope::new("m1", "agent.usage", base(serde_json::json!({"input_tokens": 50, "output_tokens": 20, "cost_usd": 0.0, "usage_source": "reported", "outcome": "ok"})));
+        e.task_id = Some("t_1".into());
+        (e.agent, e.span_id, e.endpoint_id, e.access_path, e.model_tier, e.model_id, e.attempt) =
+            (Some("builder".into()), Some("s1".into()), Some("direct".into()), Some("api".into()), Some("fast".into()), Some("some-model".into()), Some(1));
+        log.append(e).unwrap();
+        drop(log);
+        let mut r = Report::default();
+        check_usage_quality(&ws.dir, &mut r);
+        assert!(r.findings.iter().any(|x| x.check == "16 usage-quality" && x.message.contains("price unknown")));
     }
 
     #[test]
