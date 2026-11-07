@@ -90,11 +90,55 @@ pub(crate) struct HarnessErr {
     /// An `agy` run that ended because the CLI reported an error (not quota, not a guard, not a timeout) before it used any
     /// tool: the one failure a Council or Panel seat may try again (`specs/089` P4b).
     pub cli_error: bool,
+    pub kind: FailKind,
+}
+
+/// What kind of failure a harness run was, beyond its reason text (`specs/093` section 5 E): an answer the CLI never produced
+/// is not the same as one it produced and the schema refused, and an error printed as the answer is neither.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FailKind {
+    Other,
+    /// A schema-validated answer was expected and the CLI returned none (retryable).
+    AnswerNotFound,
+    /// The CLI found an answer and refused it: its own schema validation gave up.
+    AnswerRefused,
+    /// The CLI reported success but its answer is one of its own error messages.
+    InBandError,
+}
+
+/// The CLI's own error line sent as a successful answer (a "cannot load model" style message). Deliberately narrow: only the
+/// first non-empty line, at most 80 characters, matched whole against a short per-CLI list. It can only turn a success into a
+/// failure; a miss changes nothing.
+pub(crate) fn in_band_error(cli: Cli, text: &str) -> bool {
+    let line = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+    let known: &[&str] = match cli {
+        Cli::Agy => &["error: failed to load model", "error: cannot load model", "error: model unavailable"],
+        Cli::Claude => &["error: cannot load model", "error: model not found"],
+        Cli::Codex => &["error: failed to load model", "error: model not found"],
+        Cli::Copilot => &["error: model not available", "error: cannot load model"],
+    };
+    line.chars().count() <= 80 && known.iter().any(|k| line.eq_ignore_ascii_case(k))
+}
+
+/// The kind of a CLI's final `result`. An error result whose subtype names structured output is a refusal (the answer was found
+/// and failed validation); a success with a schema asked for and no answer or words is "not found"; a success whose text is the
+/// CLI's own error line is in-band. Anything else is `Other`, so a miss behaves as before.
+fn classify_result(cli: Cli, wants_schema: bool, cli_error: bool, subtype: &str, text: &str, has_structured: bool, no_words: bool) -> FailKind {
+    if cli_error {
+        return if subtype.contains("structured") { FailKind::AnswerRefused } else { FailKind::Other };
+    }
+    if !has_structured && in_band_error(cli, text) {
+        FailKind::InBandError
+    } else if wants_schema && !has_structured && no_words {
+        FailKind::AnswerNotFound
+    } else {
+        FailKind::Other
+    }
 }
 
 impl HarnessErr {
     fn retry(reason: impl Into<String>) -> HarnessErr {
-        HarnessErr { reason: reason.into(), retryable: true, cli_error: false }
+        HarnessErr { reason: reason.into(), retryable: true, cli_error: false, kind: FailKind::Other }
     }
 }
 
@@ -660,6 +704,8 @@ impl Engine {
         let mut vendor_meter: Option<(u64, u64)> = None;
         let mut cap_alerted: Vec<u64> = Vec::new();
         let mut failure: Option<(String, bool)> = None;
+        let mut fail_kind = FailKind::Other;
+        let wants_schema = launch.opts.json_schema.is_some();
         let mut exit_code: Option<i32> = None;
         let mut exhaustion: Option<delphi_adapter::exhaust::Exhaustion> = None;
         let mut used_tools = false;
@@ -821,6 +867,15 @@ impl Engine {
                             None => format!("the CLI reported an error: {}", Some(text.as_str()).filter(|t| !t.is_empty()).unwrap_or(subtype.as_str()).chars().take(200).collect::<String>()),
                         }, !used_tools));
                     }
+                    let no_words = text.trim().is_empty() && text_parts.iter().all(|t| t.trim().is_empty());
+                    fail_kind = classify_result(cli, wants_schema, is_error && exhaustion.is_none(), subtype, text, structured.is_some(), no_words);
+                    if !is_error {
+                        match fail_kind {
+                            FailKind::InBandError => failure = Some((format!("the CLI reported success but its answer is an error: {}", text.trim().chars().take(100).collect::<String>()), !used_tools)),
+                            FailKind::AnswerNotFound => failure = Some(("the CLI finished without the schema-validated answer that was asked for".into(), !used_tools)),
+                            _ => {}
+                        }
+                    }
                     metered = metered.max(usage.metered());
                     if metered > self.settings.harness_token_cap && failure.is_none() {
                         failure = Some((format!("the CLI used {} tokens, over the {} cap for a span", metered, self.settings.harness_token_cap), false));
@@ -960,7 +1015,7 @@ impl Engine {
             // A failed harness run in the central error log (`specs/039`): the reason, the exit code and the redacted tail of stderr.
             // A spent quota is a decision (warn), anything else an error.
             if delphi_core::elog::enabled(delphi_core::elog::Level::Warn) {
-                let ctx = json!({"mission": sc.m.id, "task": sc.task_id, "span": sc.span_id, "harness": launch.program, "model": launch.model, "exit_code": exit_code, "stderr_tail": session.stderr_tail().await, "reason": if retryable { "retryable" } else { "final" }});
+                let ctx = json!({"mission": sc.m.id, "task": sc.task_id, "span": sc.span_id, "harness": launch.program, "model": launch.model, "exit_code": exit_code, "stderr_tail": session.stderr_tail().await, "reason": if retryable { "retryable" } else { "final" }, "kind": format!("{:?}", fail_kind)});
                 if exhaustion.is_some() {
                     delphi_core::elog::warn("harness", "harness_exhausted", &reason, ctx);
                 } else {
@@ -968,7 +1023,7 @@ impl Engine {
                 }
             }
             sc.m.append_batch(batch).await?;
-            return Ok(Err(HarnessErr { reason, retryable, cli_error: cli == Cli::Agy && cli_error_seen && !any_tool && exhaustion.is_none() }));
+            return Ok(Err(HarnessErr { reason, retryable, cli_error: cli == Cli::Agy && cli_error_seen && !any_tool && exhaustion.is_none(), kind: fail_kind }));
         }
         let text = final_text.filter(|t| !t.trim().is_empty()).unwrap_or_else(|| text_parts.join("\n"));
         let block = delphi_adapter::blocks::ContentBlock::Text { text: text.clone() };
@@ -1170,6 +1225,55 @@ echo "$a_{t}" >> answers.txt"#, t = tool, i = input);
         assert!(t.elapsed() < Duration::from_secs(10), "the CLI was killed, not waited for");
         let usage = events_of(&f, "agent.usage");
         assert_eq!((usage[0].payload["outcome"].as_str(), usage[0].payload["cost_model"].as_str()), (Some("error"), Some("subscription")));
+    }
+
+    #[test]
+    fn the_in_band_error_classifier_is_narrow() {
+        assert!(in_band_error(Cli::Agy, "\n  Error: Cannot load model \n"));
+        // Only the first non-empty line, whole-line, and only the CLI's own list.
+        assert!(in_band_error(Cli::Agy, "Error: cannot load model\nmore"));
+        assert!(!in_band_error(Cli::Agy, "The answer: Error: cannot load model"));
+        assert!(!in_band_error(Cli::Agy, "Intro\nError: cannot load model"));
+        assert!(!in_band_error(Cli::Claude, "error: failed to load model"));
+        assert!(!in_band_error(Cli::Agy, &format!("error: cannot load model {}", "x".repeat(80))));
+        let k = |schema, err, sub, text, st, none| classify_result(Cli::Agy, schema, err, sub, text, st, none);
+        assert_eq!(k(true, true, "error_max_structured_output_retries", "", false, true), FailKind::AnswerRefused);
+        assert_eq!(k(true, true, "error_max_turns", "", false, true), FailKind::Other);
+        assert_eq!(k(true, false, "success", "", false, true), FailKind::AnswerNotFound);
+        assert_eq!(k(false, false, "success", "", false, true), FailKind::Other);
+        assert_eq!(k(true, false, "success", "", true, true), FailKind::Other);
+        assert_eq!(k(false, false, "success", "Error: cannot load model", false, false), FailKind::InBandError);
+    }
+
+    #[tokio::test]
+    async fn a_cli_that_prints_an_error_as_its_answer_and_exits_zero_is_not_a_successful_step() {
+        let ok = r#"echo '{"type":"result","subtype":"success","is_error":false,"result":"Error: cannot load model","total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}'"#;
+        let (f, _s) = fixture(&format!("{}\n{}\nexit 0", INIT, ok), |_| {});
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        match &out.status {
+            Status::Escalated(r) => assert!(r.contains("reported success but its answer is an error"), "{}", r),
+            other => panic!("{:?}", other),
+        }
+        // A real answer that merely mentions the phrase is untouched.
+        let fine = r#"echo '{"type":"result","subtype":"success","result":"Plan: handle the Error: cannot load model case","total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}'"#;
+        let (g, _s2) = fixture(&format!("{}\n{}", INIT, fine), |_| {});
+        assert_eq!(g.engine.run_task(&g.m, "architect", "Plan the change").await.unwrap().status, Status::Done);
+    }
+
+    #[tokio::test]
+    async fn a_schema_answer_that_never_came_is_told_apart_from_one_the_cli_refused() {
+        let empty = r#"echo '{"type":"result","subtype":"success","result":"","total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}'"#;
+        let refused = r#"echo '{"type":"result","subtype":"error_max_structured_output_retries","is_error":true,"result":"","total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}'"#;
+        for (body, want) in [(empty, "without the schema-validated answer"), (refused, "the CLI reported an error")] {
+            let (f, _s) = fixture(&format!("{}\n{}", INIT, body), |_| {});
+            let tid = f.m.next_task_id();
+            f.engine.schemas.lock().unwrap().insert(format!("ho_{}", tid), crate::council::critique_schema());
+            let out = f.engine.run_task_with_id(&f.m, tid, "architect", "Critique the plan").await.unwrap();
+            match &out.status {
+                Status::Escalated(r) => assert!(r.contains(want), "{}", r),
+                other => panic!("{:?}", other),
+            }
+        }
     }
 
     #[tokio::test]
