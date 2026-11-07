@@ -281,3 +281,19 @@ Everything in 13.4 waits for the operator's explicit go on OD-4 (spec 089 §10);
 - Every MCP array schema keeps `items`.
 
 **Not claimed.** This cannot make a host obey the wording. The card shows what the host reported, and nothing server-side sees what the operator typed. The two values raise no trust and satisfy no gate. The headless verification on two questions (byte-identical question, no invented options; about 40,000 host tokens) was not run in this slice.
+
+
+## 16. P7 result (a headless host can survive the foreign seat's wait)
+
+**Authority.** The operator, 2026-11-07: "do the fix for the foreign-seat wait-flow". Cause, from E3 (8 of 10 A2 attempts, `dev/train/e3/data/notes.md`): the headless `claude -p` host polled `council_status`, or asked `council_brief` for the verdict, while the foreign seat's Round 2 was outstanding, was refused or told "deliberating", did it two or three times and ended its turn, so the process exited and no record was written. A second cause was in our own text: the `delphi-council` skill said of the foreign seat "do not brief, answer for or wait on it".
+
+**Built.**
+- `Panel::pending_on_delphi(round)` (pure): the seat Delphi owns, only when every host seat is in for that round (1 = the Round 2 brief, 2 = the verdict brief) and Delphi's seat is not. `waiting_on()` (`delphi_seat` | `host_seats` | none) and `foreign_state()` (`running` | `answered` | `abstained`; a Round 1 abstention shows once the barrier releases) sit beside it.
+- `host.council_brief` for round 2 or 3: when the refusal is "not yet" and `pending_on_delphi` holds, it polls every 500 ms for up to 25 s (the panels mutex is never held across a sleep) and returns the brief when it opens. If still not ready it returns a successful `{state: "waiting_on_delphi_seat", waiting_for: "<seat> (run by Delphi)", retry_after_seconds: 5, do_not_end_your_turn: true, note}`. A seat the host owns that is missing stays an error, at once.
+- `host.council_status` on a Panel (new optional `wait`, default true): waits up to 25 s while only Delphi's seat is outstanding; reports `waiting_on`, `foreign_seat_state` and the seat's state in `phase`; while Delphi's seat is outstanding it adds `retry_after_seconds` and `do_not_end_your_turn`. `state` stays `deliberating`.
+- Text: the skill now says the host must not brief or answer FOR the seat but MUST wait for it (keep calling `council_status` with wait; never end the turn; never write the verdict early; only `decided`, `needs_operator`, `not_decided` or `failed` ends the wait). The same is in the `council_open`, `council_brief` and `council_status` tool descriptions, the `council_open` answer (`next`, foreign note) and `docs/guides/using-delphi-from-other-tools.md`. A test fails if the old "wait on it" wording returns. Spec 086 §6.4 never said to not wait and is unchanged.
+- Bound: confirmed in `run_seat` that a seat past `council_seat_timeout` (600 s) abstains ("no answer within 600s"), and a Panel test pins that an abstaining Delphi seat completes Round 2 and opens the verdict brief, so the wait always ends.
+
+**Not changed.** What the foreign seat does or costs, the barrier, the shape check, any authority rule.
+
+**Cannot do.** It cannot make a host keep polling: a host that ends its turn after one waiting answer still loses the Panel. It makes the instruction explicit, the response a success rather than a refusal, and the wait server-side (up to 25 s per call). Whether A2 now completes is unmeasured: no live run was made in this slice (the operator's separate decision). Tests use the scripted model only.
