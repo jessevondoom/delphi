@@ -25,7 +25,11 @@ export type AvatarRole = {
   /** Eye colour while the role waits on the operator, by terminal background. */
   alert_eye?: { dark: string; light: string };
 };
-export type AvatarSpec = { version: number; eye: { dark: string; light: string }; roles: Record<string, AvatarRole> };
+export type AvatarSpec = {
+  version: number; eye: { dark: string; light: string }; roles: Record<string, AvatarRole>;
+  /** Each non-ASCII glyph a badge or mascot face can use, and its ASCII stand-in (`DELPHI_ASCII_BADGES`, spec 087 §6.2). Absent from an older `delphi`. */
+  ascii_glyphs?: Record<string, string>;
+};
 
 export type Info = {
   console_socket: string; narrator_socket: string; workspace: string; mission: string | null;
@@ -40,6 +44,8 @@ export type Info = {
   interactive_agents?: string[];
   /** Roles quarantined by operator (`specs/063`). */
   forbidden_agents?: string[];
+  /** The active theme's name pool (`specs/087` §4): slot id to the name and three-cell face a one-off agent wears. Events carry only the slot; absent from an older `delphi`. */
+  pool?: Record<string, { name: string; face: string }>;
 };
 
 /** Convert the standard ANSI 256-colour palette to the display hex used by OpenTUI spans. */
@@ -504,6 +510,63 @@ export function mechanicalBlink(cells: string, mouth: number | null = 1): string
   return closed === cells ? null : closed;
 }
 
+/** A number from 1 to 99 as a roman numeral, for a name already worn (`Sisyphus II`, `specs/087` §4.3). */
+export function roman(n: number): string {
+  let rest = Math.max(1, Math.min(99, Math.floor(n))), out = '';
+  for (const [v, s] of [[90, 'XC'], [50, 'L'], [40, 'XL'], [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I']] as const) while (rest >= v) { out += s; rest -= v; }
+  return out;
+}
+
+/**
+ * The name and face a one-off agent wears (`specs/087` §4): looked up by the slot its start event recorded, in the theme the
+ * daemon sent, so a replay shows the theme's current names. `numeral` is 2 or more when a live agent already wore the name.
+ * `undefined` when the slot is unknown (an older `delphi`, or a theme that dropped the pool): the caller shows the role.
+ */
+export function poolIdentity(info: Info, slot: string | undefined, numeral?: number): { name: string; face: string } | undefined {
+  const e = slot ? info.pool?.[slot] : undefined;
+  if (!e || [...e.face].length !== 3) return undefined;
+  return { name: sanitize(e.name) + (numeral && numeral > 1 ? ' ' + roman(numeral) : ''), face: e.face };
+}
+
+/**
+ * The badge of a one-off agent: its own face between the brackets, in its role's colour (`specs/087` §4.2). While it is
+ * idle or working it shows the face (its identity); it blinks with the mechanical blink; the other states use the role's
+ * library frames (thinking, waiting, escalated), which are the same for every face. Same drawing as `badge`.
+ */
+export function poolBadge(role: string, face: string, state: AgentState, info: Info, p: Pal, frame?: string): string {
+  const name = frame ?? ACTIVITY[state];
+  const lib = name === 'idle' || name === 'working' || name === 'blink' ? undefined : info.avatar?.roles[role]?.badge[name];
+  const cells = lib ? [...lib.cells] : [...(name === 'blink' ? mechanicalBlink(face) ?? face : face)];
+  const mouth = lib ? lib.mouth : 1;
+  const chassis = roleColor(role, info);
+  const eye = caps.color === 'truecolor' ? chalk.hex(eyeColor(role, state, info, p))
+    : state === 'waiting on you' && info.avatar?.roles[role]?.alert_eye && caps.color !== 'none' ? chalk.bold.yellow : chalk.bold;
+  // The ASCII switch (spec 087 §6.2) applies to a one-off agent's face and brackets like any other badge.
+  const shown = (s: string) => asciiCells(s, info);
+  return chassis(shown('⟦')) + cells.map((c, i) => (i === mouth ? chassis(shown(c)) : eye(shown(c)))).join('') + chassis(shown('⟧'));
+}
+
+/**
+ * Plain-ASCII badges: `DELPHI_ASCII_BADGES=1` (the same convention as `DELPHI_REDUCE_MOTION`), for a terminal or font that
+ * cannot draw `⟦•─•⟧`. The badge keeps its five columns; only the glyphs change (spec 087 §6.2).
+ */
+export const asciiBadgesRequested = (env: Record<string, string | undefined> = process.env): boolean => env.DELPHI_ASCII_BADGES === '1';
+let asciiBadgesOn = asciiBadgesRequested();
+/** Set the switch (a test, or a future setting); returns what it was. */
+export function useAsciiBadges(on: boolean): boolean { const was = asciiBadgesOn; asciiBadgesOn = on; return was; }
+export const currentAsciiBadges = (): boolean => asciiBadgesOn;
+
+/**
+ * `s` with every non-ASCII character replaced through the table the library sends (`ascii_glyphs`): the console keeps no table
+ * of its own, so the Rust side, the outside identity and this agree by construction. A glyph the table lacks becomes `?`.
+ * Unchanged when ASCII is not asked for, and when there is no table (an older `delphi` sends none).
+ */
+export function asciiCells(s: string, info: Info): string {
+  const table = info.avatar?.ascii_glyphs;
+  if (!asciiBadgesOn || !table) return s;
+  return [...s].map((c) => ((c.codePointAt(0) ?? 0) < 128 ? c : table[c] ?? '?')).join('');
+}
+
 /** The three cells and the mouth's index: from the library's data, or the built-in faces for an older `delphi`. */
 function badgeCells(role: string, state: AgentState, info: Info, frame?: string, step = 0): { cells: string[]; mouth: number | null } {
   const spec = info.avatar?.roles[role]?.badge[frame ?? ACTIVITY[state]];
@@ -547,7 +610,8 @@ export function badge(role: string, state: AgentState, info: Info, p: Pal, frame
     : state === 'waiting on you' && info.avatar?.roles[role]?.alert_eye && caps.color !== 'none' ? chalk.bold.yellow : chalk.bold;
   const { cells, mouth } = badgeCells(role, state, info, frame, step);
   // `crossed` (Ctrl+C pressed once): every eye becomes a lightly drawn `x`; the mouth and any blank cell stay.
-  return chassis('⟦') + cells.map((c, i) => (i === mouth ? chassis(c) : crossed && c !== ' ' ? chalk.dim(eye('x')) : eye(c))).join('') + chassis('⟧');
+  const shown = (s: string) => asciiCells(s, info);
+  return chassis(shown('⟦')) + cells.map((c, i) => (i === mouth ? chassis(shown(c)) : crossed && c !== ' ' ? chalk.dim(eye('x')) : eye(shown(c)))).join('') + chassis(shown('⟧'));
 }
 
 /**

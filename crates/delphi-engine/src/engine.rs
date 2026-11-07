@@ -290,6 +290,9 @@ pub struct Engine {
     /// A JSON Schema a handoff's answer must match, by handoff id (`specs/021` §5). A CLI harness validates against it;
     /// an API endpoint ignores it, and the reader of the answer accepts either shape.
     pub(crate) schemas: Mutex<HashMap<String, String>>,
+    /// The name-pool identities the live bundle-agent spans of each mission wear (`specs/087` §4.3): mission id to
+    /// `(span id, identity)`, so no two live agents of a mission share a name. Not the model `pool` below.
+    pub(crate) name_live: Mutex<HashMap<String, Vec<(String, crate::agent_pool::LiveAgent)>>>,
     /// The connector host (`specs/010`): MCP sessions, pins, the payload store.
     pub connectors: Arc<crate::connectors::ConnectorHost>,
     /// Which `(endpoint, model)` pairs are usable now (`specs/002` §4.1). Outcomes are recorded here; routing reads it from M3.
@@ -788,12 +791,26 @@ impl Engine {
             let thinking = handoff.routing_directive.thinking_budget_tokens.unwrap_or_else(|| manifest.thinking_budget());
             let mut sc = SpanCtx { served_tier: Mutex::new(None), m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), readonly: self.readonly_tasks.lock().unwrap().contains(task_id), output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), bundle_agent, streak: Default::default(), lp: crate::loopctl::SpanLoop::from_history(&history) };
 
+            // A resumed bundle agent keeps the name its start event recorded.
+            if !fresh {
+                if let Some(slot) = rec.as_ref().and_then(|r| r.spans.get(&span_id)).and_then(|s| s.pool_slot.clone()) {
+                    self.name_restore(&m.id, &span_id, &role, &slot);
+                }
+            }
             if fresh {
                 let mut open = vec![
                     sc.ev("dag.node.added", json!({"node_id": span_id, "role": role, "parent": handoff.parent_span_id, "depth": depth, "ceiling": sc.span.ceiling().as_str(), "nonce": nonce, "bundle_agent": handoff.bundle_agent, "tier": sc.tier, "default_tier": self.default_tier_of(&sc.role, &sc.manifest), "tier_reason": handoff.routing_directive.tier_reason})),
                     sc.ev("handoff.sent", json!({"handoff": serde_json::to_value(&handoff).expect("handoff serializes")})),
                     sc.ev("dag.node.state", json!({"node_id": span_id, "state": "running"})),
                 ];
+                // A bundle agent wears a name from the theme's pool (`specs/087` §4.3). The start event records only the slot
+                // (and, for a name already worn, the numeral); the name itself is resolved from the theme when shown.
+                if let Some(p) = self.name_pick(&m.id, &span_id, &role, &handoff) {
+                    open[0].pool_slot = Some(p.slot.clone());
+                    if p.numeral > 1 {
+                        open[0].payload["pool_numeral"] = json!(p.numeral);
+                    }
+                }
                 for t in &snapshot.trims {
                     open.push(sc.ev("snapshot.trim", json!({"note": t})));
                 }
@@ -1081,6 +1098,7 @@ impl Engine {
                 Status::Escalated(r) => json!({"node_id": sc.span_id, "state": "escalated", "reason": r}),
             };
             m.append(sc.ev("dag.node.state", state)).await?;
+            self.name_release(&m.id, &sc.span_id);
             Ok(SpanOutcome { status, text, turns, ceiling: sc.span.ceiling() })
         })
     }
@@ -1702,6 +1720,47 @@ impl Engine {
     /// Whether bundle agents are found by search rather than listed: asked for, and more of them than the list holds.
     fn registry_routes(&self) -> bool {
         self.cfg.get().routing.registry == delphi_adapter::config::RegistryMode::Auto && crate::bundle_load::catalog_counts(&self.ws).0 > crate::bundle_load::CATALOG_MAX
+    }
+
+    /// The name a bundle agent's span wears (`specs/087` §4.3). A bundle agent is the one-off specialist Delphi starts by
+    /// role; a core role dispatched as itself keeps its own identity and gets none. Picked from the active theme's pool by
+    /// the words of the agent's id and the objective, never the same as another live span of the mission, and remembered
+    /// until [`Engine::name_release`]. `None` when the span is no bundle agent or the theme has no pool.
+    pub(crate) fn name_pick(&self, mission: &str, span_id: &str, role: &str, handoff: &HandoffEnvelope) -> Option<crate::agent_pool::Pick> {
+        let agent = handoff.bundle_agent.as_ref()?;
+        let pool = crate::mcp_packs::Packs::new(self.ws.clone()).pool();
+        let mut all = self.name_live.lock().ok()?;
+        let live = all.entry(mission.to_string()).or_default();
+        let task = format!("{} {}", agent, handoff.objective.chars().take(400).collect::<String>());
+        let lives: Vec<crate::agent_pool::LiveAgent> = live.iter().map(|(_, l)| l.clone()).collect();
+        let pick = crate::agent_pool::pick(&pool, role, &task, span_id, &lives)?;
+        if !live.iter().any(|(s, _)| s == span_id) {
+            live.push((span_id.to_string(), crate::agent_pool::LiveAgent { agent_id: span_id.to_string(), role: role.to_string(), slot: pick.slot.clone(), numeral: pick.numeral }));
+        }
+        Some(pick)
+    }
+
+    /// A resumed span keeps the slot its start event recorded; the numeral is the order it is rebuilt in.
+    pub(crate) fn name_restore(&self, mission: &str, span_id: &str, role: &str, slot: &str) {
+        let Ok(mut all) = self.name_live.lock() else { return };
+        let live = all.entry(mission.to_string()).or_default();
+        if live.iter().any(|(s, _)| s == span_id) {
+            return;
+        }
+        let numeral = live.iter().filter(|(_, l)| l.slot == slot).count() as u32 + 1;
+        live.push((span_id.to_string(), crate::agent_pool::LiveAgent { agent_id: span_id.to_string(), role: role.to_string(), slot: slot.to_string(), numeral }));
+    }
+
+    /// The span ended: its name is free for the next agent.
+    pub(crate) fn name_release(&self, mission: &str, span_id: &str) {
+        if let Ok(mut all) = self.name_live.lock() {
+            if let Some(live) = all.get_mut(mission) {
+                live.retain(|(s, _)| s != span_id);
+                if live.is_empty() {
+                    all.remove(mission);
+                }
+            }
+        }
     }
 
     pub(crate) async fn span_tool_defs(&self, sc: &SpanCtx) -> Result<Vec<ToolDef>, EngineError> {
@@ -4438,6 +4497,59 @@ mod tests {
         assert_eq!(events_of(&f, "dag.node.added").len(), 1, "no child span was started: only the dispatcher's own");
         let last = f.model.requests()[3].body["messages"].to_string();
         assert!(last.contains("changed after the bundle was added") && last.contains("has no agent `ghost`") && last.contains("Claude Code only"), "{}", last);
+    }
+
+    // specs/087 §4.3: a bundle agent is a one-off specialist, so its start event records the name-pool slot it wears; the
+    // orchestrator that dispatched it is a core role and records none. The event carries the slot, never the name.
+    #[tokio::test]
+    async fn a_bundle_agent_wears_a_pool_name_recorded_on_its_start_event() {
+        let f = setup(vec![Step::tool("d1", "dispatch_agent", json!({"role": "bundle:plat/reviewer", "objective": "Review the plan"})), Step::text("Reviewed."), Step::text("Final.")], 5.0, |_| {});
+        agent_bundle(&f);
+        f.engine.run_task(&f.m, "orchestrator", "Plan something").await.unwrap();
+        let added = events_of(&f, "dag.node.added");
+        assert_eq!(added[0].pool_slot, None, "a core role keeps its own identity");
+        let slot = added[1].pool_slot.clone().expect("the bundle agent's start event records its slot");
+        assert!(slot.starts_with("pool-") && slot.len() == 7, "{slot}");
+        assert!(added[1].payload.get("pool_numeral").is_none(), "a free name carries no numeral");
+        let line = serde_json::to_string(&added[1]).unwrap();
+        for e in crate::agent_pool::default_pool() {
+            assert!(!line.contains(&e.name), "the log holds the slot, not the name `{}`", e.name);
+        }
+        // The span ended, so its name is free again.
+        assert!(f.engine.name_live.lock().unwrap().get(&f.m.id).is_none_or(|v| v.is_empty()), "the name is released when the span ends");
+    }
+
+    // specs/087 §4.3: no two live agents of a mission share a name; a name is free again when its span ends; a resumed
+    // span gets back the slot its start event recorded.
+    #[tokio::test]
+    async fn live_bundle_agents_never_share_a_name_and_a_released_name_is_free() {
+        let f = setup(vec![], 5.0, |_| {});
+        agent_bundle(&f);
+        let mut h = HandoffEnvelope::root(&f.m.id, "t_1", "red-team", "Review the plan", vec![]);
+        h.bundle_agent = Some("acme/plat:reviewer".into());
+        let a = f.engine.name_pick(&f.m.id, "sp_a", "red-team", &h).unwrap();
+        let b = f.engine.name_pick(&f.m.id, "sp_b", "red-team", &h).unwrap();
+        assert_ne!(a.slot, b.slot, "two live agents on the same words get two names");
+        assert_eq!(f.engine.name_pick(&f.m.id, "sp_a", "red-team", &h).unwrap().slot, a.slot, "a live agent keeps its own");
+        f.engine.name_release(&f.m.id, "sp_a");
+        assert!(f.engine.name_live.lock().unwrap()[&f.m.id].iter().all(|(s, _)| s != "sp_a"), "the released span is no longer live");
+        let c = f.engine.name_pick(&f.m.id, "sp_c", "red-team", &h).unwrap();
+        assert_ne!(c.slot, b.slot, "a third agent never takes a live agent's name");
+        // The picker chooses by a hash of the agent, so the same agent asking again gets the same name back, now free.
+        assert_eq!(f.engine.name_pick(&f.m.id, "sp_a", "red-team", &h).unwrap().slot, a.slot);
+        // A core role dispatched as itself is not named.
+        let plain = HandoffEnvelope::root(&f.m.id, "t_2", "builder", "Build it", vec![]);
+        assert!(f.engine.name_pick(&f.m.id, "sp_d", "builder", &plain).is_none());
+        // Recovery: the slot comes back from the recorded event, and the restored span is live again.
+        let mut ev = EventEnvelope::new(&f.m.id, "dag.node.added", json!({"node_id": "sp_e", "role": "red-team", "depth": 1}));
+        ev.task_id = Some("t_1".into());
+        ev.span_id = Some("sp_e".into());
+        ev.pool_slot = Some("pool-36".into());
+        let rec = crate::recovery::rebuild(&[ev]);
+        assert_eq!(rec.spans["sp_e"].pool_slot.as_deref(), Some("pool-36"));
+        f.engine.name_restore(&f.m.id, "sp_e", "red-team", "pool-36");
+        let again = f.engine.name_pick(&f.m.id, "sp_e", "red-team", &h).unwrap();
+        assert_eq!(again.slot, "pool-36", "the restored span keeps its slot");
     }
 
     // specs/023 §5B: the console's `@<bundle>:<agent>` starts the agent as a task of its host role, attributed to the agent.

@@ -154,6 +154,7 @@ const ENV: &[(&str, &str)] = &[
     ("DELPHI_THEME", "dark or light, when the terminal cannot say"),
     ("NO_COLOR", "no colour at all; TERM=dumb also drops styling"),
     ("DELPHI_REDUCE_MOTION", "1 stops every console animation (also /reduce-motion)"),
+    ("DELPHI_ASCII_BADGES", "1 draws agent badges in plain ASCII, for fonts that cannot show them"),
     ("DELPHI_NO_ONBOARD", "1 skips the first-run questions"),
     ("DELPHI_LOG", "off, error (default), warn or debug: what `delphi logs` keeps"),
 ];

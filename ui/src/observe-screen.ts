@@ -20,7 +20,7 @@ export type RoleTools = { calls: number; errors: number; last: string; streak?: 
 export type Provider = { endpoint: string; family: string; models: number; cooling: number; out: number; back_ms: number | null };
 export type OState = {
   agents: Record<string, AgentRow>;
-  nodes: Record<string, { id: string; role: string; parent: string | null; depth: number; task_id: string; state: string; waiting?: string; endpoint?: string; model?: string; tier?: string; default_tier?: string; requested_tier?: string; tier_reason?: string; tokens: number; cost_usd: number; started_ms: number; ended_ms: number | null; after: string[] }>;
+  nodes: Record<string, { id: string; role: string; parent: string | null; depth: number; task_id: string; state: string; waiting?: string; endpoint?: string; model?: string; tier?: string; default_tier?: string; requested_tier?: string; tier_reason?: string; pool_slot?: string; pool_numeral?: number; tokens: number; cost_usd: number; started_ms: number; ended_ms: number | null; after: string[] }>;
   /** `tokens` is everything the task's agents used, counted as the mission total is; a daemon that predates it sends none. */
   tasks: Record<string, { id: string; flow: string; prompt: string; status: string; output?: string; session?: string; tokens?: Tokens }>;
   /** The console sessions of the mission, oldest first; the last is the current one (`specs/030`). Work from every session stays on the screen while it runs. */
@@ -109,7 +109,7 @@ const text = (m: OModel) => T.text(m.pal);
  * chin is a darker shade of the body. Without a known background the crown falls back to `▄`, and without colour the
  * whole figure to glyphs.
  */
-export function mascot(role: string, state: string, info: T.Info, pal: T.Pal): [string, string, string] {
+export function mascot(role: string, state: string, info: T.Info, pal: T.Pal, face?: string): [string, string, string] {
   const r = info.roles[role], lib = info.avatar?.roles[role];
   // A role the library has no sprite for (a generic sub-agent) gets a plain slate one.
   const generic = !r && !lib;
@@ -125,6 +125,8 @@ export function mascot(role: string, state: string, info: T.Info, pal: T.Pal): [
   }).join('');
   // The face row comes from the library's data; the built-in rows serve an older `delphi` that does not send it.
   let row = lib?.mascot[T.ACTIVITY[state as T.AgentState] ?? 'idle'];
+  // A one-off agent's own face (`specs/087` §4.2, OD-1): the mascot of its role wears the face of its name while it works or rests.
+  if (face && [...face].length === 3 && state !== 'waiting on you' && state !== 'escalated') row = `  ${face}  `;
   if (!row) {
     let face: string;
     if (role === 'scout') face = state === 'waiting on you' ? 'x ? x' : state === 'running' ? '· · ·' : '• • •';
@@ -133,7 +135,8 @@ export function mascot(role: string, state: string, info: T.Info, pal: T.Pal): [
     const pad = 7 - [...face].length;
     row = ' '.repeat(Math.floor(pad / 2)) + face + ' '.repeat(pad - Math.floor(pad / 2));
   }
-  return [crown, T.onChassis(chassis, row), T.chin(chassis)];
+  // `DELPHI_ASCII_BADGES`: the face's glyphs in ASCII (the crown is colour, not a face); unchanged otherwise (spec 087 §6.2).
+  return [crown, T.onChassis(chassis, T.asciiCells(row, info)), T.chin(chassis)];
 }
 
 const name = (m: OModel, role: string) => T.roleName(role, m.info);
@@ -166,15 +169,30 @@ const band = (m: OModel, line: string, w: number): string => {
 const NO_TOKENS: Tokens = { input: 0, cache_read: 0, cache_write: 0, output: 0, thinking: 0 };
 const subAgent = (n: OState['nodes'][string]): AgentRow => ({ role: n.role, state: n.state, task_id: n.task_id, endpoint: n.endpoint ?? '', tier: n.tier ?? '', model: n.model ?? '', default_tier: n.default_tier, upscaled: false, tokens: { ...NO_TOKENS, input: n.tokens }, cost_usd: n.cost_usd, calls: 0 });
 
-/** Who is at work right now: the agents that are not idle, and every running node whose role has no agent (sub-agents). */
-export function activeAgents(st: OState): AgentRow[] {
-  const rows = ordered(st).filter((a) => a.state !== 'idle');
+/** A roster row that is one one-off agent: a node wearing a name-pool slot (`specs/087` §4.3), rather than its whole role. */
+export type PoolRow = AgentRow & { pool?: { slot: string; numeral?: number; node: string } };
+
+/** The nodes that wear a pool name and are in one of `states`, oldest first. */
+const poolNodes = (st: OState, states: string[]) => Object.values(st.nodes).filter((n) => n.pool_slot && states.includes(n.state)).sort((a, b) => a.started_ms - b.started_ms || a.id.localeCompare(b.id));
+
+/**
+ * Who is at work right now: the agents that are not idle, every running node whose role has no agent (sub-agents), and
+ * each running one-off agent on its own row. A role whose only running nodes are one-off agents is not shown a second time
+ * as itself: those agents are its work.
+ */
+export function activeAgents(st: OState): PoolRow[] {
+  const onlyPooled = (role: string) => {
+    const running = Object.values(st.nodes).filter((n) => n.role === role && n.state === 'running');
+    return running.length > 0 && running.every((n) => n.pool_slot);
+  };
+  const rows: PoolRow[] = ordered(st).filter((a) => a.state !== 'idle' && !(a.state === 'running' && onlyPooled(a.role)));
   const seen = new Set<string>();
   for (const n of Object.values(st.nodes)) {
-    if (n.state !== 'running' || st.agents[n.role] || seen.has(n.role)) continue;
+    if (n.state !== 'running' || n.pool_slot || st.agents[n.role] || seen.has(n.role)) continue;
     seen.add(n.role);
     rows.push(subAgent(n));
   }
+  for (const n of poolNodes(st, ['running'])) rows.push({ ...subAgent(n), pool: { slot: n.pool_slot!, numeral: n.pool_numeral, node: n.id } });
   return rows;
 }
 
@@ -202,26 +220,35 @@ function agents(m: OModel, w: number, _h: number): string[] {
   const out: string[] = [];
   const active = activeAgents(m.st);
   const idle = active.length === 0;
-  const orch: AgentRow = m.st.agents.orchestrator ?? { role: 'orchestrator', state: 'idle', task_id: '', endpoint: '', tier: '', model: '', upscaled: false, tokens: NO_TOKENS, cost_usd: 0, calls: 0 };
+  const orch: PoolRow = m.st.agents.orchestrator ?? { role: 'orchestrator', state: 'idle', task_id: '', endpoint: '', tier: '', model: '', upscaled: false, tokens: NO_TOKENS, cost_usd: 0, calls: 0 };
   for (const a of idle ? [orch] : active) {
-    const mk = mascot(a.role, a.state, m.info, m.pal);
+    // A one-off agent wears the face and name of its pool slot; its role's colour and mascot are its own (`specs/087` §4.2).
+    const one = a.pool ? T.poolIdentity(m.info, a.pool.slot, a.pool.numeral) : undefined;
+    const mk = mascot(a.role, a.state, m.info, m.pal, one?.face);
+    // The nodes this row stands for: its own, or every running span of its role.
+    const mine = a.pool ? Object.values(m.st.nodes).filter((n) => n.id === a.pool!.node) : Object.values(m.st.nodes).filter((n) => n.role === a.role && n.state === 'running');
     // The model it is really on, with where that stands against what its role starts on (`specs/035` D-16); and why, if the orchestrator chose it.
     const vs = V.mark(a.tier, a.default_tier);
-    const why = Object.values(m.st.nodes).filter((n) => n.role === a.role && n.state === 'running' && n.tier_reason).map((n) => n.tier_reason!)[0];
+    const why = mine.filter((n) => n.tier_reason).map((n) => n.tier_reason!)[0];
     const model = a.model ? `${a.tier}${vs ? " " + vs : ""} · ${clean(a.model, 28)}${a.upscaled ? ' ⬆' : ''}` : idle ? 'the system is idle' : 'no call yet';
     const versusNote = a.model && vs ? dim(`  ${V.words(a.tier, a.default_tier)}${why ? ' · ' + clean(why, 40) : ''}`) : '';
-    const nm = name(m, a.role);
+    const nm = one ? clean(one.name, 24) : name(m, a.role);
     const logged = a.tokens.input + a.tokens.cache_read + a.tokens.cache_write + a.tokens.output + a.tokens.thinking;
-    // What the running spans of this role have used so far but not yet logged; shown as an estimate until the span ends.
-    const live = Object.values(m.st.nodes).filter((n) => n.role === a.role && n.state === 'running').reduce((t, n) => t + (m.liveTokens?.[n.id] ?? m.liveEst?.[n.id] ?? 0), 0);
+    // What the running spans of this row have used so far but not yet logged; shown as an estimate until the span ends.
+    const live = mine.reduce((t, n) => t + (m.liveTokens?.[n.id] ?? m.liveEst?.[n.id] ?? 0), 0);
     const total = logged + live;
+    // `⟦face⟧ Name (role)` for a one-off agent, the same line the outside shows without its `via delphi`. Its role's tool counters,
+    // quiet note and cap meter belong to the role as a whole, so they stay off its row.
+    const head = one
+      ? T.poolBadge(a.role, one.face, a.state as T.AgentState, m.info, m.pal) + ' ' + roleCol(m, a.role).bold(nm) + dim(` (${a.role})  `)
+      : roleCol(m, a.role).bold(nm) + dim(`  ${nm === a.role ? '' : a.role + '  '}`);
     const meta = [
-      roleCol(m, a.role).bold(nm) + dim(`  ${nm === a.role ? '' : a.role + '  '}`) + colored(`${glyph(a.state)} ${a.state}`, stateColor(a.state)) + (a.state === 'running' ? quietNote(m, a.role) : ''),
+      head + colored(`${glyph(a.state)} ${a.state}`, stateColor(a.state)) + (a.state === 'running' && !one ? quietNote(m, a.role) : ''),
       text(m)(model) + (a.task_id && a.state !== 'idle' ? dim(` · ${a.task_id}`) : '') + versusNote,
-      dim(`${live > 0 ? '~' : ''}${kilo(total)} tokens`) + capMeter(m, a.role),
+      dim(`${live > 0 ? '~' : ''}${kilo(total)} tokens`) + (one ? '' : capMeter(m, a.role)),
     ];
     // The tool counters take a row of their own under the summary, so the summary keeps the width.
-    const extra = toolsLine(m, a, false);
+    const extra = one ? '' : toolsLine(m, a, false);
     // The running agent's facts sit on a tinted band; the mascot keeps its own colours.
     mk.forEach((line, i) => {
       const tail = '   ' + meta[i]!;
@@ -292,13 +319,22 @@ function strip(m: OModel, w: number): string {
   const seatsThinking = c ? seatsNow(m, c).thinking : new Set<string>();
   const seatsDone = c && phaseOf(c) === 'verdict' ? new Set(c.seats.map((x) => x.role)) : new Set<string>();
   const roles = STRIP_ROLES.filter((r) => m.info.roles[r]);
-  return T.clip(roles.map((r) => {
+  const core = roles.map((r) => {
     if (seatsDone.has(r)) return T.badge(r, 'idle', m.info, m.pal, 'success');
     const a = m.st.agents[r];
     const hot = seatsThinking.has(r);
     const f = faceOf(a || hot ? { state: (hot ? 'running' : a!.state) as never, doing: '', thinkingAt: hot ? now : undefined } : undefined, r, now, still, T.blinkSteps(r, m.info));
     return T.badge(r, f.state, m.info, m.pal, f.frame, false, f.step);
-  }).join(' '), w);
+  });
+  // The one-off agents that are alive (`specs/087` §4): each its own face, in its role's colour, after the six. A queued one rests
+  // and blinks (the mechanical blink, at a time of its own); a running one shows its face while it works. Reduce motion stills them.
+  const one = poolNodes(m.st, ['pending', 'running']).flatMap((n) => {
+    const id = T.poolIdentity(m.info, n.pool_slot, n.pool_numeral);
+    if (!id) return [];
+    const f = faceOf(n.state === 'running' ? { state: 'running' as never, doing: '' } : undefined, n.id, now, still);
+    return [T.poolBadge(n.role, id.face, f.state, m.info, m.pal, f.frame)];
+  });
+  return T.clip([...core, ...one].join(' '), w);
 }
 
 /** `delphi v0.5 · epic`: directly under the strip, no path and no mission id. */

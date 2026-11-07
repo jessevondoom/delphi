@@ -157,8 +157,8 @@ class Measures(Base):
         self.assertEqual(rec["decision_class"], "NONE")
 
     def test_blind_label_and_venue(self):
-        p = score.parse_record(self.w("a.md", record(BASIC, extra_front="venue: host\nblind: yes\n")))
-        self.assertEqual((p["venue"], p["blind"]), ("host", "yes"))
+        p = score.parse_record(self.w("a.md", record(BASIC, extra_front="venue: panel\nblind: yes\n")))
+        self.assertEqual((p["venue"], p["blind"]), ("panel", "yes"))
         self.assertEqual(score.degraded(p, panel=True), [])
         q = score.parse_record(self.w("b.md", record(BASIC)))
         self.assertEqual(q["blind"], "unknown")
@@ -166,6 +166,10 @@ class Measures(Base):
         self.assertEqual(score.venue_check(p, "panel"), "ok")
         self.assertEqual(score.venue_check(p, "council"), "venue_mismatch")
         self.assertEqual(score.venue_check(q, "panel"), "venue_missing")
+        d = score.parse_record(self.w("d.md", record(BASIC, extra_front="venue: daemon\n")))
+        self.assertEqual(score.venue_check(d, "council"), "ok")
+        self.assertEqual(score.venue_check(d, "panel"), "venue_mismatch")
+        self.assertEqual(score.venue_check(q, "council"), "venue_missing")
 
 
 class Constants(unittest.TestCase):
@@ -186,7 +190,7 @@ def mk_manifest(d, spec):
     qs = []
     for qid, p, b1, b2 in spec:
         row = {"id": qid, "panel": {}}
-        for name, txt, front in (("p", p, "venue: host\nblind: yes\n"), ("b1", b1, ""), ("b2", b2, "")):
+        for name, txt, front in (("p", p, "venue: panel\nblind: yes\n"), ("b1", b1, "venue: daemon\n"), ("b2", b2, "venue: daemon\n")):
             f = d / ("%s-%s.md" % (qid, name))
             f.write_text(record(txt, extra_front=front), encoding="utf-8")
             if name == "p":

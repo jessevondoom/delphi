@@ -700,6 +700,10 @@ pub struct McpConfig {
     /// Which colour pair the ANSI form of an identity uses (`specs/087` §5.1): Delphi cannot see the host's terminal background,
     /// so the operator says it once. The plain and markdown forms carry no colour and ignore it.
     pub badge_mode: BadgeMode,
+    /// Whether the badge in an identity is plain ASCII (`[0-0]` for `⟦•─•⟧`, `specs/087` §6.2): for a host whose terminal or font
+    /// cannot draw the badge's characters. `DELPHI_ASCII_BADGES=1` in the environment of the process that builds the identity
+    /// has the same effect; this key is the one a host-spawned server always sees.
+    pub badge_ascii: bool,
 }
 
 /// `[mcp] badge_mode`: the terminal background the ANSI identity is coloured for.
@@ -741,7 +745,7 @@ impl BadgeStyle {
 
 impl Default for McpConfig {
     fn default() -> McpConfig {
-        McpConfig { enabled: true, allow_remote: false, badge_style: BadgeStyle::Plain, badge_mode: BadgeMode::Dark }
+        McpConfig { enabled: true, allow_remote: false, badge_style: BadgeStyle::Plain, badge_mode: BadgeMode::Dark, badge_ascii: false }
     }
 }
 
@@ -1630,6 +1634,10 @@ pub(crate) mod tests {
         assert_eq!(McpConfig::read("").unwrap().badge_mode, BadgeMode::Dark);
         assert_eq!(McpConfig::read("[mcp]\nbadge_mode = \"light\"\n").unwrap().badge_mode.as_str(), "light");
         assert!(McpConfig::read("[mcp]\nbadge_mode = \"sepia\"\n").is_none());
+        // Spec 087 §6.2: the badge is Unicode unless the operator asks for ASCII.
+        assert!(!McpConfig::read("").unwrap().badge_ascii);
+        assert!(McpConfig::read("[mcp]\nbadge_ascii = true\n").unwrap().badge_ascii);
+        assert!(McpConfig::read("[mcp]\nbadge_ascii = \"yes\"\n").is_none());
     }
 
     #[test]

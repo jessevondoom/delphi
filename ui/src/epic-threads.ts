@@ -17,7 +17,7 @@ type Paint = (s: string) => string;
 
 export type Status = 'done' | 'running' | 'queued' | 'stuck';
 /** One step of a thread. `gist` is the short form the beats are built from; `detail` is a verdict or what a build is doing. */
-export type Entry = { status: Status; text: string; gist: string; detail: string; role: string | null; at: number; since: number; critical: boolean; sub: Entry[] };
+export type Entry = { status: Status; text: string; gist: string; detail: string; role: string | null; pool?: { slot: string; numeral?: number }; at: number; since: number; critical: boolean; sub: Entry[] };
 export type Tie = { thread: string; label: string; dir: 'waits' | 'feeds'; open: boolean };
 export type State = 'needs-you' | 'active' | 'ahead' | 'settled';
 /** `named` is whether the orchestrator gave the thread its label (`name_thread`); otherwise the window made one up (`autoLabel`).
@@ -136,7 +136,7 @@ export function threads(m: OModel, now: number): { list: Thread[]; path: Path } 
     for (const n of nodes) {
       const it = items.get(n.id);
       const tag = ofTask(n.task_id);
-      const e = entry(nodeStatus(n), tag ? `${verb(n.role)} · ${tag}` : verb(n.role), { role: n.role, at: it?.start ?? 0, since: n.started_ms, gist: verb(n.role), critical: !!it?.critical });
+      const e = entry(nodeStatus(n), tag ? `${verb(n.role)} · ${tag}` : verb(n.role), { role: n.role, pool: n.pool_slot ? { slot: n.pool_slot, numeral: n.pool_numeral } : undefined, at: it?.start ?? 0, since: n.started_ms, gist: verb(n.role), critical: !!it?.critical });
       const b = buildsLeft.get(n.task_id);
       if (b && n.role === 'builder') { e.sub = buildSub(b); buildsLeft.delete(n.task_id); }
       entries.push(e);
@@ -245,7 +245,10 @@ export function epicThreads(m: OModel, w: number, h: number): string[] {
     if (done.length) rows.push(line('done', fit([...verdicts, ...(plain ? [`${plain} step${plain === 1 ? '' : 's'} done`] : [])], room), false));
     const now_ = t.entries.filter((e) => e.status === 'running' || e.status === 'stuck');
     if (now_.length) rows.push(line(now_.some((e) => e.status === 'stuck' || e.sub.some((x) => x.status === 'stuck')) ? 'stuck' : 'running', fit(now_.map((e) => {
-      const who = e.role && e.status === 'running' ? `${T.roleName(e.role, m.info)} ${verbing(e.role)} ${span(now - e.since)}` : '';
+      // A one-off agent is `⟦face⟧ Name (role)` (`specs/087` §4); this row is measured text, so the badge is drawn plain here.
+      const one = e.pool ? T.poolIdentity(m.info, e.pool.slot, e.pool.numeral) : undefined;
+      const label = one && e.role ? `⟦${one.face}⟧ ${one.name} (${e.role})` : e.role ? T.roleName(e.role, m.info) : '';
+      const who = e.role && e.status === 'running' ? `${label} ${verbing(e.role)} ${span(now - e.since)}` : '';
       const what = e.role ? doingNow(e) : [e.gist, e.detail].filter(Boolean).join(' · ');
       return [who, what].filter(Boolean).join(' · ') || verb(e.role ?? e.text);
     }), room), true));
