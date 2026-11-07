@@ -785,7 +785,7 @@ From the operator's plan of 2026-11-07, after Council `t_0005` on the `approve` 
 | S1 | spec 094, its approval, and the `003`/`006`/`GOVERNANCE` text | 3-4 | approved 2026-11-07 (PR #561 open) |
 | S2a | the builder's git skill, trigger-routing evals, authorization (no executable code) | 4-5 | built (PR #562 open; merges after #561) |
 | S2b | behavior evals: fixture repos in conflicted states, a harness, checks that the builder resolved correctly | 6-8 | not started (needs executable code) |
-| S3 | `delphi merge` core: queue, preconditions, ledger, `<PR>` and `--all`, gate-changing class | 14-18 | not started |
+| S3 | `delphi merge` core: queue, preconditions, ledger, `<PR>` and `--all`, gate-changing class | 14-18 | built (PR open, stacked on #561): `merge/{forge,gates,record,check,approve,mod}.rs`, `merge-gates.toml`; run against real PRs read-only; `log`, `fix`, `cleanup`, `--auto` print that they are not built |
 | S4 | cleanup after merge and the backlog sweep | 6-8 | not started |
 | S5 | merge error log, `merge fix`, builder hand-off | 8-10 | not started |
 | S6 | `--auto` session mode | 8-10 | not started |

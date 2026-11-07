@@ -1,0 +1,378 @@
+//! `delphi merge`: the core-repo merge flow (spec 094).
+//!
+//! Agents queue a ready pull request with a label; the operator's instruction starts a merge; this command derives the facts
+//! from git and `gh`, refuses anything that is not ready, records the approval, and merges only the head commit it derived.
+//! Cleanup (S4), the error log and `merge fix` (S5) and `--auto` (S6) plug into the hooks marked below.
+//!
+//! This module is on the gate list (`merge-gates.toml`): a pull request that changes it needs a human at a terminal.
+
+pub mod approve;
+pub mod check;
+pub mod forge;
+pub mod gates;
+pub mod record;
+
+#[cfg(test)]
+mod fake;
+#[cfg(test)]
+mod flow_tests;
+
+use approve::{attest, StdTerminal, Target, Terminal};
+use check::{evaluate, Verdict, QUEUE_LABEL, REVIEW_LABEL};
+use forge::{Forge, ForgeError, Gh};
+use record::{Attestation, Ledger, Record};
+use std::time::Duration;
+
+/// What happened to one pull request.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Outcome {
+    Merged { pr: u64, head: String },
+    /// `--dry-run`: it would merge; nothing was written.
+    DryRun { pr: u64, head: String, gate_changing: bool },
+    Refused { pr: u64, reasons: Vec<String> },
+    /// Gate-changing, in a batch: left for a human.
+    NeedsHuman { pr: u64, paths: Vec<String> },
+    /// The operator did not approve (or the approval was not acceptable).
+    Declined { pr: u64, why: String },
+    Failed { pr: u64, detail: String },
+}
+
+impl Outcome {
+    /// Counts as success for the exit code: merged, would merge, or deliberately left for a human.
+    pub fn ok(&self) -> bool {
+        matches!(self, Outcome::Merged { .. } | Outcome::DryRun { .. } | Outcome::NeedsHuman { .. })
+    }
+    pub fn line(&self) -> String {
+        match self {
+            Outcome::Merged { pr, head } => format!("#{pr}: merged (head {})", short(head)),
+            Outcome::DryRun { pr, head, gate_changing } => format!("#{pr}: would merge (head {}){}", short(head), if *gate_changing { "; it changes a gate, so a person must confirm at a terminal" } else { "" }),
+            Outcome::Refused { pr, reasons } => format!("#{pr}: not merged, because {}", reasons.join("; ")),
+            Outcome::NeedsHuman { pr, paths } => format!("#{pr}: left for a human, it changes a gate ({}); labelled `{REVIEW_LABEL}`. Merge it yourself: delphi merge {pr}", paths.join(", ")),
+            Outcome::Declined { pr, why } => format!("#{pr}: not merged: {why}"),
+            Outcome::Failed { pr, detail } => format!("#{pr}: FAILED: {detail}"),
+        }
+    }
+}
+
+fn short(sha: &str) -> &str {
+    &sha[..sha.len().min(10)]
+}
+
+/// Everything a merge needs besides the pull request number.
+pub struct Ctx<'a> {
+    pub forge: &'a dyn Forge,
+    pub ledger: &'a Ledger,
+    pub term: &'a mut dyn Terminal,
+    pub quote: Option<String>,
+    pub dry_run: bool,
+    pub session: Option<String>,
+    /// How long to wait before asking again when GitHub has not finished working out mergeability.
+    pub settle: Duration,
+    pub now: fn() -> String,
+}
+
+/// Evaluate, and ask again a few times while the only objection is that GitHub is still computing mergeability (it is, right after
+/// another pull request merged).
+fn verdict(ctx: &Ctx, n: u64) -> Result<Verdict, ForgeError> {
+    let mut tries = 0;
+    loop {
+        let v = evaluate(ctx.forge, n)?;
+        let only_unknown = !v.refusals.is_empty() && v.refusals.iter().all(|r| r.starts_with("GitHub has not finished"));
+        if only_unknown && tries < 8 {
+            tries += 1;
+            std::thread::sleep(ctx.settle);
+            continue;
+        }
+        return Ok(v);
+    }
+}
+
+fn queued(v: &Verdict) -> bool {
+    v.pr.labels.iter().any(|l| l == QUEUE_LABEL)
+}
+
+/// Merge pull request `n`. `batch` is the approval already obtained for a whole `--all` run; without it, this asks.
+pub fn merge_one(ctx: &mut Ctx, n: u64, batch: Option<&Attestation>) -> Outcome {
+    let v = match verdict(ctx, n) {
+        Ok(v) => v,
+        Err(e) => return Outcome::Failed { pr: n, detail: e.to_string() },
+    };
+    let mut reasons = v.refusals.clone();
+    // A gate-changing pull request is never queueable, so only an ordinary one must carry the label.
+    if !v.gate_changing() && !queued(&v) {
+        reasons.insert(0, format!("it is not queued (no `{QUEUE_LABEL}` label; an agent queues it with `delphi merge queue {n}`)"));
+    }
+    if !reasons.is_empty() {
+        return Outcome::Refused { pr: n, reasons };
+    }
+    if v.gate_changing() && batch.is_some() {
+        let _ = ctx.forge.set_label(n, REVIEW_LABEL, true);
+        return Outcome::NeedsHuman { pr: n, paths: v.gate_hits };
+    }
+    if ctx.dry_run {
+        let gate_changing = v.gate_changing();
+        return Outcome::DryRun { pr: n, head: v.pr.head_sha, gate_changing };
+    }
+    if v.gate_changing() && ctx.term.is_interactive() {
+        ctx.term.show(&format!("#{n} changes a gate:\n  {}\n", v.gate_hits.join("\n  ")));
+        match ctx.forge.diff(n) {
+            Ok(d) => ctx.term.show(&d),
+            Err(e) => return Outcome::Failed { pr: n, detail: format!("could not read the diff to show you: {e}") },
+        }
+    }
+    let att = match batch {
+        Some(a) => a.clone(),
+        None => match attest(ctx.term, ctx.quote.as_deref(), Target::Pr(n), v.gate_changing()) {
+            Ok(a) => a,
+            Err(why) => return Outcome::Declined { pr: n, why },
+        },
+    };
+    let rec = v.record(att, ctx.session.clone(), (ctx.now)());
+    finish(ctx, &v, rec)
+}
+
+/// Write the record, merge exactly the head that was derived, and leave the evidence.
+fn finish(ctx: &mut Ctx, v: &Verdict, rec: Record) -> Outcome {
+    let n = v.pr.number;
+    if let Err(e) = ctx.ledger.append(&rec.to_json("approved")) {
+        return Outcome::Failed { pr: n, detail: format!("cannot write the ledger ({e}); not merging without a record") };
+    }
+    match ctx.forge.merge(n, &v.pr.head_sha) {
+        Ok(()) => {
+            let _ = ctx.ledger.append(&rec.to_json("merged"));
+            if let Err(e) = ctx.forge.comment(n, &rec.comment()) {
+                eprintln!("delphi merge: #{n} merged, but the comment could not be posted: {e}");
+            }
+            after_merge(ctx, v);
+            Outcome::Merged { pr: n, head: v.pr.head_sha.clone() }
+        }
+        Err(e) => {
+            let mut row = rec.to_json("failed");
+            row["detail"] = serde_json::json!(e.to_string());
+            let _ = ctx.ledger.append(&row);
+            Outcome::Failed { pr: n, detail: e.to_string() }
+        }
+    }
+}
+
+/// Hook for slice S4: remove the remote branch, the local branch and the worktrees of a merged pull request.
+fn after_merge(_ctx: &mut Ctx, _v: &Verdict) {}
+
+/// Merge several queued pull requests, each re-evaluated just before it merges (the base moved after the last one).
+pub fn merge_many(ctx: &mut Ctx, numbers: &[u64], batch: Option<&Attestation>) -> Vec<Outcome> {
+    numbers.iter().map(|n| merge_one(ctx, *n, batch)).collect()
+}
+
+/// Add a ready, ordinary pull request to the queue. A gate-changing one is labelled for a human instead.
+pub fn queue_one(forge: &dyn Forge, n: u64) -> Result<String, String> {
+    let v = evaluate(forge, n).map_err(|e| e.to_string())?;
+    if !v.ready() {
+        return Err(format!("#{n} is not ready to queue: {}", v.refusals.join("; ")));
+    }
+    if v.gate_changing() {
+        let _ = forge.set_label(n, REVIEW_LABEL, true);
+        return Err(format!("#{n} changes a gate ({}), so it is not queueable; labelled `{REVIEW_LABEL}`. A human merges it with `delphi merge {n}` at a terminal", v.gate_hits.join(", ")));
+    }
+    forge.set_label(n, QUEUE_LABEL, true).map_err(|e| e.to_string())?;
+    Ok(format!("#{n} queued (head {})", short(&v.pr.head_sha)))
+}
+
+/// One line per queued pull request: what `delphi merge --all` would do with it.
+pub fn status_lines(forge: &dyn Forge) -> Result<Vec<String>, String> {
+    let list = forge.queued(QUEUE_LABEL).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for n in list {
+        let v = evaluate(forge, n).map_err(|e| e.to_string())?;
+        out.push(if !v.refusals.is_empty() {
+            format!("#{n}: not ready: {}", v.refusals.join("; "))
+        } else if v.gate_changing() {
+            format!("#{n}: ready, but it changes a gate ({}): needs a human", v.gate_hits.join(", "))
+        } else {
+            format!("#{n}: ready (head {})", short(&v.pr.head_sha))
+        });
+    }
+    if out.is_empty() {
+        out.push(format!("nothing is queued (no open pull request has the `{QUEUE_LABEL}` label)"));
+    }
+    Ok(out)
+}
+
+// ---- the command line ------------------------------------------------------------------------------------------------------
+
+#[derive(Debug, PartialEq)]
+enum Sub {
+    Merge(Vec<u64>),
+    All,
+    Auto,
+    Queue(u64),
+    Status,
+    Log,
+    Fix,
+    Cleanup,
+}
+
+#[derive(Debug, PartialEq)]
+struct Parsed {
+    sub: Sub,
+    home: Option<String>,
+    quote: Option<String>,
+    dry_run: bool,
+}
+
+fn pr_number(s: &str) -> Option<u64> {
+    s.trim_start_matches('#').parse::<u64>().ok().filter(|n| *n > 0)
+}
+
+/// `args` is what `main` hands every command: the command line with the command word itself already removed.
+fn parse(args: &[String]) -> Result<Parsed, String> {
+    let (mut home, mut quote, mut dry_run, mut all, mut auto) = (None, None, false, false, false);
+    let mut words: Vec<&str> = Vec::new();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--home" => home = Some(it.next().cloned().ok_or("--home needs a directory")?),
+            "--operator-said" => quote = Some(it.next().cloned().ok_or("--operator-said needs the operator's words")?),
+            "--dry-run" => dry_run = true,
+            "--all" => all = true,
+            "--auto" => auto = true,
+            f if f.starts_with("--") => return Err(format!("unknown option `{f}` (see `delphi help merge`)")),
+            w => words.push(w),
+        }
+    }
+    let sub = match (words.first().copied(), all, auto) {
+        (_, true, true) => return Err("--all and --auto are different modes; pick one".into()),
+        (Some(w), false, false) if matches!(w, "queue" | "status" | "log" | "fix" | "cleanup") => match w {
+            "queue" => Sub::Queue(words.get(1).and_then(|n| pr_number(n)).ok_or("usage: delphi merge queue <PR>")?),
+            "status" => Sub::Status,
+            "log" => Sub::Log,
+            "fix" => Sub::Fix,
+            _ => Sub::Cleanup,
+        },
+        (_, true, false) if words.is_empty() => Sub::All,
+        (_, false, true) if words.is_empty() => Sub::Auto,
+        (_, true, false) | (_, false, true) => return Err("--all and --auto take no pull request numbers".into()),
+        (Some(_), false, false) => Sub::Merge(words.iter().map(|w| pr_number(w).ok_or(format!("`{w}` is not a pull request number"))).collect::<Result<Vec<_>, _>>()?),
+        (None, false, false) => return Err("usage: delphi merge <PR>... | --all | --auto | queue <PR> | status (see `delphi help merge`)".into()),
+    };
+    Ok(Parsed { sub, home, quote, dry_run })
+}
+
+pub fn cli(args: &[String]) -> i32 {
+    let p = match parse(args) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("delphi merge: {e}");
+            return 2;
+        }
+    };
+    let forge = Gh;
+    match p.sub {
+        Sub::Queue(n) => match queue_one(&forge, n) {
+            Ok(m) => {
+                println!("{m}");
+                0
+            }
+            Err(e) => {
+                eprintln!("delphi merge: {e}");
+                1
+            }
+        },
+        Sub::Status => match status_lines(&forge) {
+            Ok(lines) => {
+                lines.iter().for_each(|l| println!("{l}"));
+                0
+            }
+            Err(e) => {
+                eprintln!("delphi merge: {e}");
+                4
+            }
+        },
+        Sub::Log => stub("log", "S5"),
+        Sub::Fix => stub("fix", "S5"),
+        Sub::Cleanup => stub("cleanup", "S4"),
+        Sub::Auto => stub("--auto", "S6"),
+        Sub::Merge(ref numbers) => run_merges(&p, &forge, numbers.clone(), false),
+        Sub::All => match forge.queued(QUEUE_LABEL) {
+            Ok(list) if list.is_empty() => {
+                println!("nothing is queued");
+                0
+            }
+            Ok(list) => run_merges(&p, &forge, list, true),
+            Err(e) => {
+                eprintln!("delphi merge: {e}");
+                4
+            }
+        },
+    }
+}
+
+fn stub(what: &str, slice: &str) -> i32 {
+    eprintln!("delphi merge {what}: arrives with slice {slice} of spec 094 and is not built yet");
+    2
+}
+
+fn run_merges(p: &Parsed, forge: &Gh, numbers: Vec<u64>, batch: bool) -> i32 {
+    // An agent seat started by a Delphi daemon never merges (spec 094 §3.8). The check is an environment variable, so it is a
+    // courtesy message, not the control; the control is deferred to the hardening pass (§5).
+    if crate::xenia_terminal::inside_an_agent_seat() && !p.dry_run {
+        eprintln!("delphi merge: refused; merging is the operator's, and this process was started by an agent seat");
+        return 2;
+    }
+    let home = crate::home::delphi_home(p.home.as_deref());
+    let ledger = Ledger::at(&home);
+    let mut term = StdTerminal;
+    let batch_att = if batch && !p.dry_run {
+        term.show(&format!("{} queued pull request(s): {}", numbers.len(), numbers.iter().map(|n| format!("#{n}")).collect::<Vec<_>>().join(", ")));
+        match attest(&mut term, p.quote.as_deref(), Target::Batch, false) {
+            Ok(a) => Some(a),
+            Err(why) => {
+                eprintln!("delphi merge: {why}");
+                return 1;
+            }
+        }
+    } else {
+        None
+    };
+    let mut ctx = Ctx { forge, ledger: &ledger, term: &mut term, quote: p.quote.clone(), dry_run: p.dry_run, session: None, settle: Duration::from_secs(3), now: delphi_core::time::now_rfc3339 };
+    let outcomes = if batch { merge_many(&mut ctx, &numbers, batch_att.as_ref()) } else { numbers.iter().map(|n| merge_one(&mut ctx, *n, None)).collect() };
+    outcomes.iter().for_each(|o| println!("{}", o.line()));
+    if outcomes.iter().any(|o| matches!(o, Outcome::Failed { detail, .. } if detail.contains("cannot run `gh`"))) {
+        return 4;
+    }
+    if outcomes.iter().all(|o| o.ok()) {
+        0
+    } else {
+        1
+    }
+}
+
+#[cfg(test)]
+mod parse_tests {
+    use super::*;
+
+    /// The arguments as `main` passes them: the words after `delphi`, without the command word `merge`.
+    fn a(s: &str) -> Vec<String> {
+        s.split_whitespace().filter(|w| *w != "merge").map(String::from).collect()
+    }
+
+    #[test]
+    fn the_command_line_forms_parse() {
+        assert_eq!(parse(&a("merge 552 #553")).unwrap().sub, Sub::Merge(vec![552, 553]));
+        assert!(parse(&a("merge --all --dry-run")).unwrap().dry_run);
+        assert_eq!(parse(&a("merge --all")).unwrap().sub, Sub::All);
+        assert_eq!(parse(&a("merge --auto")).unwrap().sub, Sub::Auto);
+        assert_eq!(parse(&a("merge queue 7")).unwrap().sub, Sub::Queue(7));
+        assert_eq!(parse(&a("merge status")).unwrap().sub, Sub::Status);
+        assert_eq!(parse(&a("--home /x merge 5")).unwrap().home.as_deref(), Some("/x"));
+        let q = vec!["5".to_string(), "--operator-said".to_string(), "merge #5 now".to_string()];
+        assert_eq!(parse(&q).unwrap().quote.as_deref(), Some("merge #5 now"));
+    }
+
+    #[test]
+    fn nonsense_is_a_usage_error() {
+        for bad in ["merge", "merge --all --auto", "merge --all 5", "merge abc", "merge 0", "merge --bogus 5", "merge queue", "merge queue x"] {
+            assert!(parse(&a(bad)).is_err(), "{bad}");
+        }
+        assert!(parse(&["5".to_string(), "--operator-said".to_string()]).is_err());
+    }
+}

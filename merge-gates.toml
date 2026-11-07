@@ -1,0 +1,27 @@
+# Paths that decide what is allowed to merge (spec 094 section 3.4).
+#
+# A pull request that touches any of these is "gate-changing": `delphi merge` never merges it by `--all` or `--auto`, refuses a
+# chat-quote approval, and needs a human at a terminal who has been shown the whole diff.
+#
+# `delphi merge` reads this file from the BASE branch, never from the pull request, so a change here cannot weaken the list that
+# judges it. This file is on its own list. When the base branch has no such file, the same list is built into the program
+# (crates/delphi/src/merge/gates.rs); a test keeps the two identical.
+#
+# Patterns are repository-relative. `*` stands for any run of characters inside one path segment; `**` for any number of whole
+# segments. Matching ignores case, on purpose. An empty list is refused.
+
+paths = [
+    ".github/**",
+    "deny.toml",
+    "GOVERNANCE.md",
+    "REVIEW.md",
+    "AGENTS.md",
+    "context/heuristics.md",
+    "merge-gates.toml",
+    "crates/delphi/tests/spawn_sites.*",
+    "crates/delphi/tests/must_run.rs",
+    "crates/delphi/tests/home_isolation.rs",
+    "crates/delphi/tests/deny_policy.rs",
+    "crates/delphi-engine/src/service_gates_tests.rs",
+    "crates/delphi/src/merge/**",
+]
