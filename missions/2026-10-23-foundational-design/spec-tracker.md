@@ -757,6 +757,7 @@ From the operator's request to refine the outside Council (Claude Code, Copilot,
 | S5 | pre-registered Panel-vs-Council experiment; decides the default | 12 | run 2026-11-06 (operator go, 350k per-run cap): verdict INCOMPLETE (4 of 8 questions qualify, 6 needed), notice unchanged; 2.10M of 8M tokens; report in `dev/train/e2/REPORT.md`, data in `dev/train/e2/data/`; fixes planned in spec 089 (draft) |
 | S6 | follow-ups from the Council review: Panel captures at L0, verdict `venue`, brief hash, host-support line, list of `council.verdict` readers | 4 | built (merged, #511) |
 | S7 | Round 2 reader (C1a): first complete critique wins, identical repeats tolerated, a conflicting later block or object refuses the reply, `trailer` counts and bytes on `council.critique` (daemon and Panel share one reader; reply to the 2026-11-07 Councils 002/003) | 3 | built (PR open) |
+| S8 | seat diagnostics (C1c): `parsed` (R1 `OPTION:` line, R2 critique) and `declined` (the shared refusal tagger, moved to `delphi_engine::refusal`) in the Council record's Seats table and on `council.stance`/`council.critique`; diagnostics only, never a score or input to ranking or routing (spec 078); receipt untouched | 3 | built (PR open) |
 
 ## Spec 089: Panel hardening from the E2 run (2026-11-06, approved)
 

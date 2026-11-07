@@ -596,6 +596,27 @@ pub struct ArtifactInput<'a> {
     pub front: &'a str,
 }
 
+/// Two deterministic diagnostics for one seat, for the Seats table: did each round's reply parse (`R1 yes/no`, `R2 yes/no`, a
+/// round the seat did not take is left out; `—` when neither ran) and did a reply begin by declining. DIAGNOSTICS ONLY
+/// (`specs/078` Goodhart rule): shown beside the seat, never a seat score, never read by ranking, routing or the decision.
+/// They hold no seat text.
+pub fn seat_diagnostics(role: &str, stances: &BTreeMap<String, Stance>, round2: &Round2, round2_text: &BTreeMap<String, String>) -> (String, &'static str) {
+    let yn = |b: bool| if b { "yes" } else { "no" };
+    let mut parsed: Vec<String> = Vec::new();
+    let mut declined = false;
+    if let Some(Stance::Said(t)) = stances.get(role) {
+        parsed.push(format!("R1 {}", yn(crate::refusal::round1_parsed(t))));
+        declined |= crate::refusal::declines(t).is_some();
+    }
+    if let Some(c) = round2.get(role) {
+        parsed.push(format!("R2 {}", yn(c.is_some())));
+        if let Some(t) = round2_text.get(role) {
+            declined |= crate::refusal::declines(t).is_some();
+        }
+    }
+    (if parsed.is_empty() { "—".to_string() } else { parsed.join(", ") }, if declined { "yes" } else { "no" })
+}
+
 /// Model text goes into the record as a blockquote, so nothing a seat writes can open a heading of its own
 /// (a forged Minority Report section, say).
 fn quote(t: &str) -> String {
@@ -632,7 +653,7 @@ pub fn render_artifact(a: &ArtifactInput) -> String {
         s = s.replacen("council_format: 1\n---", &format!("council_format: 1\n{}---", a.front), 1);
     }
     s.push_str(&format!("# Council {:03}\n\n**Proposition:** {}\n\n", a.n, a.proposition.trim()));
-    s.push_str("## Seats\n\n| Seat | Family | Round 1 | Round 2 |\n| :-- | :-- | :-- | :-- |\n");
+    s.push_str("## Seats\n\n| Seat | Family | Round 1 | Round 2 | Parsed | Declined |\n| :-- | :-- | :-- | :-- | :-- | :-- |\n");
     for p in &a.plan.seats {
         let r1 = match a.stances.get(&p.role) {
             Some(Stance::Said(_)) => "answered".to_string(),
@@ -644,7 +665,8 @@ pub fn render_artifact(a: &ArtifactInput) -> String {
             Some(None) => "unreadable",
             None => "—",
         };
-        s.push_str(&format!("| `{}` | {} | {} | {} |\n", p.role, p.family, r1, r2));
+        let (parsed, declined) = seat_diagnostics(&p.role, a.stances, a.round2, a.round2_text);
+        s.push_str(&format!("| `{}` | {} | {} | {} | {} | {} |\n", p.role, p.family, r1, r2, parsed, declined));
     }
     s.push_str(&format!("\n{}\n\n", if a.plan.homogeneous { "**Homogeneous (low diversity):** one model family only, so the `[H-001]` diversity guarantee did not hold." } else { "Heterogeneous: the seats span more than one model family (`[H-001]`)." }));
     for n in &a.plan.notes {
@@ -1026,7 +1048,7 @@ impl Engine {
         let stances = panel.stances().cloned().unwrap_or_default();
         let (round2, round2_text) = panel.parsed_round2();
         for (role, c) in &round2 {
-            let mut e = EventEnvelope::new(&m.id, "council.critique", json!({"round": 2, "role": role, "readable": c.is_some(), "recommendation": c.as_ref().map(|c| c.recommendation.label()), "concur": c.as_ref().and_then(|c| c.concur), "findings": c.as_ref().map(|c| c.findings.iter().map(|(s, t)| json!({"severity": s, "title": t})).collect::<Vec<_>>()).unwrap_or_default(), "text": round2_text.get(role).map(|t| self.secrets.redact(t)), "brief_hash": panel.brief_hash(role, 2), "format_retries": panel.format_retries(role), "trailer": trailer_json(round2_text.get(role))}));
+            let mut e = EventEnvelope::new(&m.id, "council.critique", json!({"round": 2, "role": role, "readable": c.is_some(), "declined": round2_text.get(role).is_some_and(|t| crate::refusal::declines(t).is_some()), "recommendation": c.as_ref().map(|c| c.recommendation.label()), "concur": c.as_ref().and_then(|c| c.concur), "findings": c.as_ref().map(|c| c.findings.iter().map(|(s, t)| json!({"severity": s, "title": t})).collect::<Vec<_>>()).unwrap_or_default(), "text": round2_text.get(role).map(|t| self.secrets.redact(t)), "brief_hash": panel.brief_hash(role, 2), "format_retries": panel.format_retries(role), "trailer": trailer_json(round2_text.get(role))}));
             e.task_id = Some(task_id.clone());
             m.append(e).await?;
         }
@@ -1145,7 +1167,7 @@ impl Engine {
                 Stance::Said(t) => ("answered", t.clone()),
                 Stance::Abstained(w) => ("abstained", w.clone()),
             };
-            m.append(emit("council.stance", json!({"round": 1, "role": role, "status": status, "text": text}))).await?;
+            m.append(emit("council.stance", json!({"round": 1, "role": role, "status": status, "text": text, "parsed": s.text().map(crate::refusal::round1_parsed), "declined": s.text().is_some_and(|t| crate::refusal::declines(t).is_some())}))).await?;
         }
         let answered: Vec<&String> = stances.iter().filter(|(_, s)| s.text().is_some()).map(|(r, _)| r).collect();
         if answered.len() < 2 {
@@ -1180,7 +1202,7 @@ impl Engine {
             }
         }
         for (role, c) in &round2 {
-            m.append(emit("council.critique", json!({"round": 2, "role": role, "readable": c.is_some(), "recommendation": c.as_ref().map(|c| c.recommendation.label()), "concur": c.as_ref().and_then(|c| c.concur), "findings": c.as_ref().map(|c| c.findings.iter().map(|(s, t)| json!({"severity": s, "title": t})).collect::<Vec<_>>()).unwrap_or_default(), "text": round2_text.get(role), "trailer": trailer_json(round2_text.get(role))}))).await?;
+            m.append(emit("council.critique", json!({"round": 2, "role": role, "readable": c.is_some(), "declined": round2_text.get(role).is_some_and(|t| crate::refusal::declines(t).is_some()), "recommendation": c.as_ref().map(|c| c.recommendation.label()), "concur": c.as_ref().and_then(|c| c.concur), "findings": c.as_ref().map(|c| c.findings.iter().map(|(s, t)| json!({"severity": s, "title": t})).collect::<Vec<_>>()).unwrap_or_default(), "text": round2_text.get(role), "trailer": trailer_json(round2_text.get(role))}))).await?;
         }
         let decision = decide(&round2);
 
@@ -1487,6 +1509,31 @@ pub(crate) mod tests {
         let dark = r(vec![("architect", crit(Rec::Proceed, &[], None)), ("red-team", None)]);
         assert!(decide(&dark).escalation.as_deref().unwrap().contains("could not be read"));
         assert!(minority_report(&dark, &decide(&dark), false).contains("no readable critique"));
+    }
+
+    #[test]
+    fn the_seat_table_shows_parsed_and_declined_and_holds_no_seat_text() {
+        let seat = |r: &str| SeatPlan { role: r.into(), family: "claude".into(), avoid: vec![], tier: None };
+        let plan = Assignment { seats: vec![seat("architect"), seat("red-team"), seat("strategist")], homogeneous: true, notes: vec![] };
+        let stances: BTreeMap<String, Stance> = [
+            ("architect".to_string(), Stance::Said("OPTION: queue\nBecause.".into())),
+            ("red-team".to_string(), Stance::Said("I can't reproduce that list, sorry.".into())),
+            ("strategist".to_string(), Stance::Abstained("timed out".into())),
+        ].into_iter().collect();
+        let mut round2: Round2 = BTreeMap::new();
+        round2.insert("architect".into(), Some(Critique { recommendation: Rec::Proceed, findings: vec![], concur: Some(true) }));
+        round2.insert("red-team".into(), None);
+        let texts: BTreeMap<String, String> = [("architect".to_string(), "fine".to_string()), ("red-team".to_string(), "garbled".to_string())].into_iter().collect();
+        let d = decide(&round2);
+        let doc = render_artifact(&ArtifactInput { mission_id: "m", n: 1, slug: "q", proposition: "q", timestamp: "t", plan: &plan, stances: &stances, round2: &round2, round2_text: &texts, decision: &d, synthesis: "s", follow: &Default::default(), lenses: None, front: "" });
+        assert!(doc.contains("| Parsed | Declined |"), "{doc}");
+        assert!(doc.contains("| `architect` | claude | answered | critique | R1 yes, R2 yes | no |"), "{doc}");
+        // An unreadable reply is still listed, with parsed no; the refusal-shaped Round 1 sets declined.
+        assert!(doc.contains("| `red-team` | claude | answered | unreadable | R1 no, R2 no | yes |"), "{doc}");
+        assert!(doc.contains("| `strategist` | claude | abstained (timed out) | — | — | no |"), "{doc}");
+        // The diagnostics are two short words per seat: none of the seat's text is in them.
+        let (p, dcl) = seat_diagnostics("red-team", &stances, &round2, &texts);
+        assert!(!format!("{p}{dcl}").contains("reproduce"));
     }
 
     fn artifact(round2: &Round2, synthesis: &str, homogeneous: bool) -> String {
