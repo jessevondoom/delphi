@@ -134,6 +134,15 @@ pub struct Node {
     /// 2 or more when the slot was already worn by a live agent (`<name> II`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pool_numeral: Option<u32>,
+    /// The bundle agent this node runs, from its start event (`acme/plat:reviewer`); `role` is the host role it runs as.
+    /// Cleaned of control characters and cut. Absent for a node that is not a bundle agent. The detail views show it whole.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bundle_agent: Option<String>,
+    /// What a one-off agent shows in the role's place (`specs/087` §4.3 item 4, OD-6): the bundle agent's own name (the part
+    /// after the last `:`), through [`delphi_core::research::one_off_label`]. Absent when there is none to show or it would pass
+    /// for a defined role; the console then shows `role`. Computed here, once, so the console keeps no list of role names.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     /// When the node was added and when it finished (`done` or `escalated`), as Unix milliseconds from the event
     /// timestamps. `ended_ms` is absent while it runs. 0 when the event carried no readable timestamp.
     pub started_ms: u64,
@@ -337,6 +346,9 @@ pub struct ObserverState {
     /// The newest child of each parent node, to derive `Node::after`.
     #[serde(skip)]
     last_child: BTreeMap<String, String>,
+    /// The active theme's display names for the roles a one-off agent's label may not pass for (see [`ObserverState::set_core_names`]).
+    #[serde(skip)]
+    core_names: Vec<String>,
 }
 
 const PACE_MINUTES: usize = 12;
@@ -580,6 +592,18 @@ impl ObserverState {
         st
     }
 
+    /// Tell the state the active theme's display names for the defined roles, so a one-off agent's label that equals one of
+    /// them is not shown (`specs/087` §4.3 item 4). The role ids themselves are always refused. Set before events are applied.
+    pub fn set_core_names(&mut self, names: Vec<String>) {
+        self.core_names = names;
+    }
+
+    /// The bundle agent's own name for `agent` (`acme/plat:reviewer` gives `reviewer`), as the label rule sees it.
+    fn bundle_label(&self, agent: &str) -> Option<String> {
+        let own = agent.rsplit(':').next().unwrap_or(agent);
+        delphi_core::research::one_off_label(own, &self.core_names)
+    }
+
     fn say(&mut self, line: String) {
         self.narrative.push_back(line);
         while self.narrative.len() > NARRATIVE_CAP {
@@ -786,7 +810,9 @@ impl ObserverState {
                 if let Some(par) = &parent {
                     self.last_child.insert(par.clone(), id.clone());
                 }
-                self.nodes.insert(id.clone(), Node { id: id.clone(), role: r.clone(), parent, depth: p["depth"].as_u64().unwrap_or(0), task_id: task.clone(), state: "pending".into(), default_tier: s(&p["default_tier"]), requested_tier: s(&p["tier"]), tier_reason: sanitize(p["tier_reason"].as_str().unwrap_or("")).split_whitespace().collect::<Vec<_>>().join(" ").chars().take(200).collect(), started_ms: ts_ms(e), after, pool_slot: e["pool_slot"].as_str().filter(|s| is_pool_slot(s)).map(String::from), pool_numeral: p["pool_numeral"].as_u64().filter(|n| (2..=99).contains(n)).map(|n| n as u32), ..Default::default() });
+                // The bundle agent this span runs (`dag.node.added` records it), cleaned and cut; its own name is the label.
+                let bundle_agent: Option<String> = p["bundle_agent"].as_str().map(|b| sanitize(b).chars().take(120).collect::<String>()).filter(|b| !b.trim().is_empty());
+                self.nodes.insert(id.clone(), Node { id: id.clone(), role: r.clone(), parent, depth: p["depth"].as_u64().unwrap_or(0), task_id: task.clone(), state: "pending".into(), default_tier: s(&p["default_tier"]), requested_tier: s(&p["tier"]), tier_reason: sanitize(p["tier_reason"].as_str().unwrap_or("")).split_whitespace().collect::<Vec<_>>().join(" ").chars().take(200).collect(), started_ms: ts_ms(e), after, pool_slot: e["pool_slot"].as_str().filter(|s| is_pool_slot(s)).map(String::from), pool_numeral: p["pool_numeral"].as_u64().filter(|n| (2..=99).contains(n)).map(|n| n as u32), bundle_agent: bundle_agent.clone(), label: bundle_agent.as_deref().and_then(|b| self.bundle_label(b)), ..Default::default() });
                 if let Some(a) = self.agents.get_mut(&r) {
                     a.state = "running".into();
                     a.task_id = task;
@@ -1154,6 +1180,45 @@ mod tests {
         let j = serde_json::to_value(&st).unwrap();
         assert_eq!(j["nodes"]["n2"]["pool_slot"], "pool-36");
         assert!(j["nodes"]["n1"].get("pool_slot").is_none(), "nodes without a slot serialize as before");
+    }
+
+    // Spec 087 OD-6: a bundle agent's own name is what a one-off shows in the role's place, unless it would pass for a defined role.
+    #[test]
+    fn a_bundle_agents_name_is_its_label_unless_it_would_pass_for_a_defined_role() {
+        let mut st = ObserverState::default();
+        st.set_core_names(vec!["Hephaestus".into(), "Ares".into(), "the Muses".into()]);
+        let start = |seq: u64, id: &str, agent: Option<&str>| {
+            let mut p = json!({"node_id": id, "role": "red-team", "depth": 1});
+            if let Some(a) = agent {
+                p["bundle_agent"] = json!(a);
+            }
+            ev(seq, "dag.node.added", "t_1", "red-team", p)
+        };
+        st.apply(&start(1, "plain", None));
+        st.apply(&start(2, "ok", Some("acme/plat:reviewer")));
+        st.apply(&start(3, "role", Some("acme/plat:validator")));
+        st.apply(&start(4, "theme", Some("acme/plat:Hephaestus")));
+        st.apply(&start(5, "hostile", Some("acme/plat:x) (orchestrator\u{1b}[2J")));
+        st.apply(&start(6, "bare", Some("reviewer")));
+        let label = |id: &str| st.nodes[id].label.clone();
+        assert_eq!((label("plain"), st.nodes["plain"].bundle_agent.clone()), (None, None), "a node that is no bundle agent has neither");
+        assert_eq!(label("ok").as_deref(), Some("reviewer"));
+        assert_eq!(st.nodes["ok"].bundle_agent.as_deref(), Some("acme/plat:reviewer"), "the detail views keep the whole id");
+        assert_eq!(st.nodes["ok"].role, "red-team", "the base role is the host role, untouched");
+        assert_eq!(label("role"), None, "a bundle agent named after a defined role shows the role instead");
+        assert_eq!(label("theme"), None, "and so does one named after the theme's name for a role");
+        assert_eq!(label("hostile").as_deref(), Some("x orchestrator"), "cleaned: the escape sequence is gone and so are the parentheses");
+        assert_eq!(label("bare").as_deref(), Some("reviewer"), "an id with no `:` is its own name");
+        let j = serde_json::to_value(&st).unwrap();
+        assert_eq!(j["nodes"]["ok"]["label"], "reviewer");
+        assert_eq!(j["nodes"]["ok"]["bundle_agent"], "acme/plat:reviewer");
+        assert!(j["nodes"]["plain"].get("label").is_none() && j["nodes"]["role"].get("label").is_none(), "no label serializes as before");
+        assert!(j.get("core_names").is_none(), "the names the rule uses are not sent to the console");
+        // Without the theme's names only the role ids are refused.
+        let mut bare = ObserverState::default();
+        bare.apply(&start(1, "theme", Some("acme/plat:Hephaestus")));
+        bare.apply(&start(2, "role", Some("acme/plat:ORCHESTRATOR")));
+        assert_eq!((bare.nodes["theme"].label.as_deref(), bare.nodes["role"].label.clone()), (Some("Hephaestus"), None));
     }
 
     fn usage(seq: u64, span: &str, role: &str, tier: &str, cost: f64) -> Value {

@@ -14,6 +14,26 @@ pub const PANEL_SEATS: [&str; 3] = ["architect", "red-team", "strategist"];
 pub const MODERATOR: &str = "orchestrator";
 /// An unfinished Panel is dropped after this long, so an abandoned one cannot hold a slot for good.
 pub const PANEL_TTL: std::time::Duration = std::time::Duration::from_secs(6 * 3600);
+/// A Round 2 reply that is not in the critique shape is sent back this many times before the next one is taken as it stands (and counted
+/// unreadable, exactly as before): a stuck seat cannot block a Panel, and nothing downstream is loosened (spec 089 F1).
+pub const MAX_SHAPE_REJECTIONS: u8 = 2;
+
+/// What a rejected Round 2 reply is told: what is missing and the exact closing lines.
+fn round2_shape_message(text: &str, attempt: u8) -> String {
+    let has = |w: &str| text.lines().any(|l| l.trim().trim_start_matches(['-', '*', '•', ' ']).to_uppercase().starts_with(w));
+    let mut missing = Vec::new();
+    if !has("RECOMMENDATION") && !text.trim_start().starts_with('{') {
+        missing.push("a RECOMMENDATION line");
+    }
+    if !has("ROUND 2 COMPLETE") && !text.trim_start().starts_with('{') {
+        missing.push("the ROUND 2 COMPLETE line");
+    }
+    format!(
+        "Your Round 2 reply is not in the required shape{} (rejection {attempt} of {MAX_SHAPE_REJECTIONS}: after that the next reply is recorded as given, and a reply the rules cannot read counts as an unresolved item, never as agreement). You may keep your reasoning, but END the reply with exactly these lines, and resubmit it with council_submit:\nRECOMMENDATION: PROCEED | PROCEED-WITH-CHANGES | DO-NOT-PROCEED | ALTERNATIVE: <label>\nFINDING P0 <short title>   (one line per defect: P0 blocks, P1 major, P2 minor, P3 note; none if you have none)\nCONCUR: yes | no\nROUND 2 COMPLETE",
+        if missing.is_empty() { String::new() } else { format!(" (missing {})", missing.join(" and ")) }
+    )
+}
+
 /// Panels open at once across all sessions of one daemon.
 pub const MAX_PANELS: usize = 32;
 
@@ -42,6 +62,8 @@ pub enum PanelErr {
     NotYet(String),
     Duplicate(String),
     Closed(String),
+    /// A Round 2 reply that does not parse as a critique: not stored, the seat may resubmit (spec 089 F1).
+    BadShape(String),
 }
 
 impl std::fmt::Display for PanelErr {
@@ -52,6 +74,7 @@ impl std::fmt::Display for PanelErr {
             PanelErr::NotYet(w) => write!(f, "{w}"),
             PanelErr::Duplicate(s) => write!(f, "`{s}` already answered this round"),
             PanelErr::Closed(w) => write!(f, "{w}"),
+            PanelErr::BadShape(w) => write!(f, "{w}"),
         }
     }
 }
@@ -84,6 +107,8 @@ pub struct Panel {
     opened: std::time::Instant,
     /// A seat Delphi itself runs on another model family (`specs/086` §6.4): `(role, family)`. The host cannot brief or answer for it.
     foreign: Option<(String, String)>,
+    /// How many times each seat's Round 2 reply was sent back for its shape (spec 089 F1).
+    rejections: BTreeMap<String, u8>,
     /// What the host said about isolation when it opened the Panel: `yes`, `no` or `unknown`. Host-reported.
     pub blind: String,
 }
@@ -91,7 +116,7 @@ pub struct Panel {
 impl Panel {
     pub fn new(proposition: &str) -> Panel {
         let seats: Vec<String> = PANEL_SEATS.iter().map(|s| s.to_string()).collect();
-        Panel { proposition: proposition.to_string(), barrier: Barrier::new(&seats), seats, released: None, answered: Vec::new(), round2: BTreeMap::new(), verdict: None, models: BTreeMap::new(), opened: std::time::Instant::now(), foreign: None, blind: "unknown".into() }
+        Panel { proposition: proposition.to_string(), barrier: Barrier::new(&seats), seats, released: None, answered: Vec::new(), round2: BTreeMap::new(), verdict: None, models: BTreeMap::new(), opened: std::time::Instant::now(), foreign: None, rejections: BTreeMap::new(), blind: "unknown".into() }
     }
 
     /// Give one seat to Delphi: it runs on `family`, the host may neither brief nor answer for it.
@@ -196,16 +221,17 @@ impl Panel {
         if self.reserved(seat) {
             return Err(PanelErr::Closed(format!("`{seat}` is run by Delphi on another model family: you do not brief or answer for it")));
         }
-        self.submit_inner(seat, round, text, abstain, model)
+        self.submit_inner(seat, round, text, abstain, model, true)
     }
 
     /// The answer of the seat Delphi runs itself. Only the daemon calls this.
     pub fn submit_by_delphi(&mut self, round: u8, text: &str, abstain: Option<&str>, model: Option<&str>) -> Result<Step, PanelErr> {
         let seat = self.foreign.as_ref().map(|(r, _)| r.clone()).ok_or_else(|| PanelErr::UnknownSeat("(no foreign seat)".into()))?;
-        self.submit_inner(&seat, round, text, abstain, model)
+        // Delphi's own seat is not sent back for its shape: it cannot be re-asked without another model call (spec 089 P4b covers a retry).
+        self.submit_inner(&seat, round, text, abstain, model, false)
     }
 
-    fn submit_inner(&mut self, seat: &str, round: u8, text: &str, abstain: Option<&str>, model: Option<&str>) -> Result<Step, PanelErr> {
+    fn submit_inner(&mut self, seat: &str, round: u8, text: &str, abstain: Option<&str>, model: Option<&str>, check_shape: bool) -> Result<Step, PanelErr> {
         // The model a seat reports is kept only for an answer that is accepted (never for an unknown seat or a duplicate).
         let note_model = |this: &mut Panel| {
             if let Some(m) = model.filter(|m| !m.trim().is_empty()) {
@@ -246,6 +272,15 @@ impl Panel {
                 }
                 if self.round2.contains_key(seat) {
                     return Err(PanelErr::Duplicate(seat.to_string()));
+                }
+                // A reply that cannot be read as a critique is sent back, unstored, so the seat can fix it while it still can; after
+                // MAX_SHAPE_REJECTIONS it is taken as it stands and counts unreadable, as it always did (spec 089 F1).
+                if check_shape && abstain.is_none() && crate::council::parse_critique(text).is_none() {
+                    let n = self.rejections.get(seat).copied().unwrap_or(0);
+                    if n < MAX_SHAPE_REJECTIONS {
+                        self.rejections.insert(seat.to_string(), n + 1);
+                        return Err(PanelErr::BadShape(round2_shape_message(text, n + 1)));
+                    }
                 }
                 // An abstaining seat in Round 2 is recorded as an unreadable critique (never as agreement).
                 self.round2.insert(seat.to_string(), if abstain.is_some() { String::new() } else { text.to_string() });
@@ -307,6 +342,11 @@ impl Panel {
         self.brief_inner(seat, round).ok().map(|b| blake3::hash(b.as_bytes()).to_hex().to_string())
     }
 
+    /// How many times this seat's Round 2 reply was sent back for its shape.
+    pub fn format_retries(&self, seat: &str) -> u8 {
+        self.rejections.get(seat).copied().unwrap_or(0)
+    }
+
     /// After a failed write of the record: forget the verdict so the moderator can submit it again.
     pub fn reopen_verdict(&mut self) {
         self.verdict = None;
@@ -363,6 +403,11 @@ mod tests {
         round_one(&mut p);
         assert!(p.brief("orchestrator", 3).is_err(), "no verdict brief before Round 2 is complete");
         p.submit("architect", 2, GOOD, None, None).unwrap();
+        // Prose with no closing lines is sent back twice; the third is taken as it stands and is unreadable.
+        for _ in 0..MAX_SHAPE_REJECTIONS {
+            assert!(matches!(p.submit("red-team", 2, "I think it is fine, no format", None, None), Err(PanelErr::BadShape(_))));
+        }
+        assert_eq!(p.format_retries("red-team"), MAX_SHAPE_REJECTIONS);
         p.submit("red-team", 2, "I think it is fine, no format", None, None).unwrap();
         assert_eq!(p.submit("strategist", 2, GOOD, None, None).unwrap(), Step::RoundTwoDone);
         let (r2, _) = p.parsed_round2();
@@ -373,6 +418,36 @@ mod tests {
         assert_eq!(p.submit("orchestrator", 3, "DECISION: x", None, None).unwrap(), Step::Concluded);
         assert_eq!(p.verdict(), Some("DECISION: x"));
         assert_eq!(p.models.get("architect").map(String::as_str), Some("opus"), "the model a host names is kept, as reported");
+    }
+
+    #[test]
+    fn a_round_two_reply_without_the_closing_lines_is_sent_back_unstored_and_a_corrected_one_is_accepted() {
+        let mut p = Panel::new("q");
+        round_one(&mut p);
+        let e = p.submit("red-team", 2, "A long, good critique in prose that never says what it recommends.", None, Some("rejected-model")).unwrap_err();
+        let msg = e.to_string();
+        assert!(msg.contains("missing a RECOMMENDATION line and the ROUND 2 COMPLETE line") && msg.contains("CONCUR: yes | no") && msg.contains("rejection 1 of 2"), "{msg}");
+        assert_eq!(p.models.get("red-team").map(String::as_str), Some("sonnet"), "a rejected reply stores nothing, not even a new model name (Round 1's stands)");
+        // The same seat may fix it: this is accepted and counts as readable.
+        assert!(matches!(p.submit("red-team", 2, GOOD, None, Some("sonnet-2")), Ok(Step::Waiting(_))));
+        let (r2, _) = p.parsed_round2();
+        assert!(r2["red-team"].is_some());
+        assert_eq!(p.format_retries("red-team"), 1);
+        assert_eq!(p.models.get("red-team").map(String::as_str), Some("sonnet-2"), "an accepted reply records its model");
+        // An abstain is never sent back, and a structured JSON critique is a valid shape.
+        assert!(p.submit("architect", 2, "", Some("could not run"), None).is_ok());
+        assert!(p.submit("strategist", 2, r#"{"recommendation":"PROCEED","findings":[],"concur":true}"#, None, None).is_ok());
+    }
+
+    #[test]
+    fn delphis_own_seat_is_never_sent_back_for_its_shape() {
+        let mut p = Panel::new("q");
+        p.reserve("red-team", "gemini").unwrap();
+        p.submit("architect", 1, "A", None, None).unwrap();
+        p.submit("strategist", 1, "S", None, None).unwrap();
+        assert!(matches!(p.submit_by_delphi(1, "R", None, None).unwrap(), Step::Released(_)));
+        assert!(p.submit_by_delphi(2, "prose only", None, None).is_ok(), "Delphi cannot re-ask its own seat without another model call");
+        assert_eq!(p.format_retries("red-team"), 0);
     }
 
     #[test]

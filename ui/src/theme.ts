@@ -529,6 +529,18 @@ export function poolIdentity(info: Info, slot: string | undefined, numeral?: num
 }
 
 /**
+ * What a one-off agent shows where its role would go (`specs/087` §4.3 item 4, OD-6): the label the daemon sent, or the role.
+ * The daemon has already refused a label that would pass for a defined role or is empty (`one_off_label` in `delphi-core`),
+ * so the console keeps no list of role names; it only cleans the text again. Under `DELPHI_ASCII_BADGES` every non-ASCII
+ * character is `?`, so a wide or ambiguous-width character cannot move a row's columns. Clipping to the pane is the caller's.
+ */
+export function shownRole(label: string | undefined, role: string): string {
+  const l = label ? sanitize(label).replace(/\s+/g, ' ').trim() : '';
+  const s = l || role;
+  return asciiBadgesOn ? [...s].map((c) => ((c.codePointAt(0) ?? 0) < 128 ? c : '?')).join('') : s;
+}
+
+/**
  * The badge of a one-off agent: its own face between the brackets, in its role's colour (`specs/087` §4.2). While it is
  * idle or working it shows the face (its identity); it blinks with the mechanical blink; the other states use the role's
  * library frames (thinking, waiting, escalated), which are the same for every face. Same drawing as `badge`.

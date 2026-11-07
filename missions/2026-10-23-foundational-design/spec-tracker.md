@@ -712,7 +712,7 @@ Approved by the operator 2026-11-06, from a conversation that day: 28 chosen bad
 | S3 | outside: light/dark identity, `badge_mode`, `display` in the one-identity form, handoff and roster lines | 9 | built (merged, #515) |
 | S4 | console: three-frame scout blink; pool agents in panes | 6 | blink built (merged, #513); pool agents built (PR open) in the Observer's roster, strip and epic threads, names looked up in the theme's pool sent with the start-up info; the chat console's own strip still shows the six roles only |
 | S5 | recognition check with the operator | 3 | materials prepared 2026-11-06 (Council 003); waits on the operator's reading |
-| S6 | one-off agents show their specialization (outside) or bundle agent id (inside) in the role's place (OD-6, spec 087 §10) | 5 | not built; decision recorded |
+| S6 | one-off agents show their specialization (outside) or bundle agent id (inside) in the role's place (OD-6, spec 087 §10) | 5 | built (PR open): the rule `one_off_label` once in `delphi-core`; `Identity.label`; `spawn_agent_pack` line and pack; the observer node's `label` and `bundle_agent`; the roster, agents pane and epic threads; ASCII; not seen in a live mission |
 
 ## Spec 086: the Council outside Delphi (2026-11-05, approved 2026-11-06)
 
@@ -737,10 +737,10 @@ From the E2 report (verdict INCOMPLETE). Approved 2026-11-06 on the operator's i
 | Slice | Content | Hours | State |
 | :-- | :-- | --: | :-- |
 | P0 | spec 089 approval and tracker entry | 1 | approved 2026-11-06 |
-| P1 | server-side Round 2 shape check at submit; seat-file closing lines | 5 | approved, not built |
-| P2 | scorer venue fix; `venue: daemon` on daemon records; useful question-limit message | 3 | built (PR open) |
+| P1 | server-side Round 2 shape check at submit (host seats; two rejections, then taken as unreadable); seat-file closing lines; `format_retries` recorded | 5 | built (PR open) |
+| P2 | scorer venue fix; `venue: daemon` on daemon records; useful question-limit message | 3 | built (merged, #524) |
 | P3 | skill wording (verbatim question, confirmation rule), `operator_confirmed`, options source | 4 | approved, not built |
 | P4a | `agy` seat reliability: reproduce the checkout-guard false positive, classify the hangs | 3 | built (PR open); P4b waits for OD-4 |
-| P4b | `agy` fix: guard scope, first-output watchdog, one retry | 6-10 | approved; waits for an explicit go on OD-4 |
-| P5 | matcher v2 with a negative control; exploratory `RESCORE.md` of E2 | 5 | built (PR open); v2 FAILED validation: agreement 0.15 (needs 0.30), false-match 0.0 |
+| P4b | `agy` fix: one retry after a CLI error, discard message names the paths (guard unchanged by decision; watchdog deferred) | 6-10 | built (PR open): retry and path message; guard unchanged by decision; live capture held |
+| P5 | matcher v2 with a negative control; exploratory `RESCORE.md` of E2 | 5 | built (merged, #523); v2 FAILED validation: agreement 0.15 (needs 0.30), false-match 0.0 |
 | P6 | E3 pre-registration (the run needs the operator's go) | 6 | approved; the run needs an explicit go |

@@ -161,6 +161,18 @@ impl Library for LiveLibrary {
 
 /// The display name the workspace's theme pack gives `role`, or the role's own id when there is none.
 pub fn display_name(ws_dir: &std::path::Path, home: &std::path::Path, role: &str) -> String {
+    theme_resolver(ws_dir, home).display_name(role)
+}
+
+/// The theme's display names for the roles a one-off agent's label may not pass for (`specs/087` §4.3 item 4): what
+/// [`delphi_core::research::one_off_label`] and [`crate::observe::ObserverState::set_core_names`] take. The pack is read once.
+pub fn core_display_names(ws_dir: &std::path::Path, home: &std::path::Path) -> Vec<String> {
+    let resolver = theme_resolver(ws_dir, home);
+    delphi_core::research::RESERVED_LABEL_IDS.iter().map(|r| resolver.display_name(r)).filter(|n| !n.is_empty()).collect()
+}
+
+/// The resolver for the workspace's active theme pack.
+fn theme_resolver(ws_dir: &std::path::Path, home: &std::path::Path) -> delphi_core::theme_names::ThemeResolver {
     let theme = std::fs::read_to_string(ws_dir.join("config.toml")).ok().and_then(|t| t.parse::<toml::Table>().ok()).and_then(|t| t.get("theme")?.get("name")?.as_str().map(String::from));
     let named = theme.is_some();
     let theme = theme.unwrap_or_else(|| "greek".into());
@@ -172,7 +184,7 @@ pub fn display_name(ws_dir: &std::path::Path, home: &std::path::Path, role: &str
     } else {
         String::new()
     };
-    let resolver = if text.trim().is_empty() {
+    if text.trim().is_empty() {
         // A theme the workspace names but that is missing, unreadable or unsafe falls back to the canonical role ID (spec 077, Theme
         // Isolation). A workspace that names none keeps the built-in default pack.
         if named || !safe {
@@ -182,8 +194,7 @@ pub fn display_name(ws_dir: &std::path::Path, home: &std::path::Path, role: &str
         }
     } else {
         delphi_core::theme_names::ThemeResolver::from_theme_text(&text)
-    };
-    resolver.display_name(role)
+    }
 }
 
 /// Whether the badges Delphi sends a host are plain ASCII (`specs/087` §6.2): `[mcp] badge_ascii = true` in the workspace's
@@ -220,6 +231,10 @@ pub fn attach_identity(result: &mut Value, id: &Identity, style: &str, mode: &st
         "role": id.role, "display_name": id.display_name, "badge": id.badge, "color": id.hex, "color_light": id.hex_light,
         "plain": id.signature(), "ansi": id.styled(light), "markdown": id.markdown(),
     });
+    // A one-off agent's label (`specs/087` §4.3 item 4); `role` above stays its base role.
+    if let Some(label) = &id.label {
+        result["identity"]["label"] = json!(label);
+    }
     if let Some(reason) = turn {
         result["boundary_line"] = json!(id.boundary_line(reason));
         result["return_line"] = json!(id.return_line());

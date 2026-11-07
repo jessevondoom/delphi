@@ -15,7 +15,7 @@ delphi v0.5 · epic
   ────────────────────────────────────────────────────────────────────────────────────────────────
  ◐ Retry queue                                                           44k tok 61%  ▰▰▰▱▱▱ 3 of 7
    ✔ chose table 2 of 3 · 2 steps done
-   ▶ ⟦×_×⟧ Sisyphus (builder) building 5:00 · tests 12 of 14 passed
+   ▶ ⟦×_×⟧ Sisyphus (flaky-test-hunter) building 5:00 · tests 12 of 14 passed
    ○ audit → research → wrap up
   ────────────────────────────────────────────────────────────────────────────────────────────────
   ✔ settled  Competitor onboarding 9.3k
