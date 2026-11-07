@@ -900,13 +900,20 @@ impl Engine {
     /// A host Panel's Round 1 has released (`specs/086` §4): the stances join the log as a daemon Council's do, and the plan is recorded
     /// as host-reported (the daemon cannot know the family or prove the isolation of a seat a host ran itself).
     #[allow(clippy::too_many_arguments)]
-    pub async fn panel_released(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, proposition: &str, stances: &BTreeMap<String, Stance>, models: &BTreeMap<String, String>, foreign: Option<(&str, &str)>, blind: &str, brief_hashes: &BTreeMap<String, String>) -> Result<(), EngineError> {
+    pub async fn panel_released(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, proposition: &str, stances: &BTreeMap<String, Stance>, models: &BTreeMap<String, String>, foreign: Option<(&str, &str)>, blind: &str, claims: (Option<bool>, Option<&str>), brief_hashes: &BTreeMap<String, String>) -> Result<(), EngineError> {
         let emit = |kind: &str, payload: Value| {
             let mut e = EventEnvelope::new(&m.id, kind, payload);
             e.task_id = Some(task_id.to_string());
             e
         };
-        m.append(emit("council.started", json!({"proposition": proposition, "venue": "panel", "blind": blind, "foreign": foreign.map(|(r, f)| json!({"role": r, "family": f})), "seats": stances.keys().map(|r| json!({"role": r, "family": if foreign.is_some_and(|(fr, _)| fr == r) { foreign.map(|(_, f)| f).unwrap_or("host-reported") } else { "host-reported" }, "model": models.get(r)})).collect::<Vec<_>>(), "homogeneous": foreign.is_none(), "notes": ["a host Panel: isolation and model names are host-reported; Delphi holds the barrier"]}))).await?;
+        let mut started = json!({"proposition": proposition, "venue": "panel", "blind": blind, "foreign": foreign.map(|(r, f)| json!({"role": r, "family": f})), "seats": stances.keys().map(|r| json!({"role": r, "family": if foreign.is_some_and(|(fr, _)| fr == r) { foreign.map(|(_, f)| f).unwrap_or("host-reported") } else { "host-reported" }, "model": models.get(r)})).collect::<Vec<_>>(), "homogeneous": foreign.is_none(), "notes": ["a host Panel: isolation and model names are host-reported; Delphi holds the barrier"]});
+        if let Some(c) = claims.0 {
+            started["operator_confirmed"] = json!(c);
+        }
+        if let Some(o) = claims.1 {
+            started["options_source"] = json!(o);
+        }
+        m.append(emit("council.started", started)).await?;
         for (role, st) in stances {
             let (status, text) = match st {
                 Stance::Said(t) => ("answered", t.clone()),
