@@ -900,11 +900,13 @@ fn run_inner(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize, row:
     let mission = summary["mission_id"].as_str().filter(|m| !m.is_empty() && !m.contains(['/', '\\', '.'])).ok_or("the summary names no mission")?;
     let events = delphi_core::log::replay(&delphi_core::sessions::dir(&ws_dir, mission)).map_err(|e| format!("could not read the mission log: {}", e))?;
     row.usage = usage_by_model(&events);
-    // A model that reported its quota reached and answered nothing says nothing about the arm: the run is not graded (like a slept-through
-    // run), and `--resume` tries it again. Counting it as a failed case would score the account's limits as the model's behavior (the
-    // 2026-11-07 A/B counted eleven such runs as failures before this was caught).
+    // A model that reported its quota reached and gave no answer, whether it stopped before the first call or part-way through, says nothing
+    // about the arm: the run is not graded (like a slept-through run), and `--resume` tries it again. Counting it as a failed case would
+    // score the account's limits as the model's behavior (the 2026-11-07 A/B counted such runs as failures before this was caught).
     if let Some(x) = events.iter().find(|e| e.kind == "model.exhausted") {
-        if row.usage.values().all(|u| u.tokens_in() + u.tokens_out() == 0) {
+        let spent = row.usage.values().any(|u| u.tokens_in() + u.tokens_out() > 0);
+        let stopped = events.iter().rev().find(|e| e.kind == "task.output").is_some_and(|e| e.payload["text"].as_str().is_some_and(|t| t.trim_start().starts_with("[escalated to the operator:")));
+        if !spent || stopped {
             let reset = x.payload["reset_at"].as_i64().map(|t| format!(", resets {}", crate::train_arms::utc(t))).unwrap_or_default();
             return Err(format!("infrastructure: {} on {} reported its quota reached{}; the run is not graded (`--resume` tries it again)", x.payload["model_id"].as_str().unwrap_or("a model"), x.payload["endpoint_id"].as_str().unwrap_or("an endpoint"), reset));
         }
@@ -1407,6 +1409,13 @@ mod tests {
         train::prepare_work_home(&config.work_dir).unwrap();
         let row = run_all(&config, &[&c]).0.remove(0);
         assert_eq!((row.passed.is_some(), row.error.clone()), (true, None), "{:?}", row);
+        // Quota reached part-way through: tokens were spent on a first call, but the final answer is the stop. Not graded either.
+        let t3 = tempfile::tempdir().unwrap();
+        let canned = mission(t3.path(), &[usage(500), ("model.exhausted", json!({"endpoint_id": "agy-sub", "model_id": "m", "reason": "quota reached"})), ("task.output", json!({"status": "escalated", "text": "[escalated to the operator: the CLI is out of quota: quota reached]"})), ("task.completed", json!({"status": "escalated"}))]);
+        let config = cfg(t3.path(), &canned, vec![baseline()], 10.0);
+        train::prepare_work_home(&config.work_dir).unwrap();
+        let row = run_all(&config, &[&c]).0.remove(0);
+        assert!(row.passed.is_none() && row.error.as_deref().is_some_and(|e| e.contains("infrastructure")), "{:?}", row);
     }
 
     #[test]
