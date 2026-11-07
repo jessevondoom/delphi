@@ -782,7 +782,8 @@ From the operator's plan of 2026-11-07, after Council `t_0005` on the `approve` 
 | Slice | Content | Hours | State |
 | :-- | :-- | --: | :-- |
 | S1 | spec 094, its approval, and the `003`/`006`/`GOVERNANCE` text | 3-4 | draft (PR open) |
-| S2 | the builder's git skill: research, skill, evals, authorization | 6-8 | drafted on a branch; waits for approval |
+| S2a | the builder's git skill, trigger-routing evals, authorization (no executable code) | 4-5 | drafted on a branch; waits for approval |
+| S2b | behavior evals: fixture repos in conflicted states, a harness, checks that the builder resolved correctly | 6-8 | not started (needs executable code) |
 | S3 | `delphi merge` core: queue, preconditions, ledger, `<PR>` and `--all`, gate-changing class | 14-18 | not started |
 | S4 | cleanup after merge and the backlog sweep | 6-8 | not started |
 | S5 | merge error log, `merge fix`, builder hand-off | 8-10 | not started |

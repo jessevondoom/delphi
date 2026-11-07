@@ -129,7 +129,8 @@ The operator's decision (2026-11-07): this is a controlled team and environment;
 | Slice | Content | Hours |
 | :-- | :-- | --: |
 | S1 | this spec, its approval, and the `003`/`006` text fix | 3-4 |
-| S2 | the builder's git skill: research, skill, evals, authorization | 6-8 |
+| S2a | the builder's git skill, its trigger-routing evals (the only eval format that exists: does the skill load for the task) and its authorization; no executable code | 4-5 |
+| S2b | behavior evals: fixture git repositories in conflicted states, a harness that builds them, and checks that the builder resolved each correctly (executable; the existing suite check kinds cannot express this) | 6-8 |
 | S3 | `delphi merge` core: queue, preconditions, ledger, `<PR>` and `--all`, the gate-changing class, both attestations | 14-18 |
 | S4 | cleanup after merge, `cleanup --merged`, the safe-delete rules | 6-8 |
 | S5 | the error log, `merge log`, `merge fix`, the builder hand-off | 8-10 |
@@ -137,7 +138,7 @@ The operator's decision (2026-11-07): this is a controlled team and environment;
 | S7 | agent rules, deny rule, operator guide, the vocabulary table | 3-4 |
 | S8 | hardening (deferred; a separate spec) | |
 
-S2 does not depend on code and can run beside S1.
+S2a does not depend on code and can run beside S1 (it is drafted on a branch; nothing in it merges before this spec is approved). S2b needs the executable harness and so waits for approval.
 
 ## 7. Acceptance criteria
 
@@ -147,7 +148,8 @@ S2 does not depend on code and can run beside S1.
 - AC-4: `--auto` stops at each of its caps, on `STOP`, on Ctrl-C and after two consecutive errors, and no merge it makes lacks a session reference in the ledger. A test drives a fake forge through each stop.
 - AC-5: after a merge the remote branch, local branch and associated worktrees are gone; a locked, dirty or current-directory worktree is skipped and reported; a branch whose PR is not merged is never deleted; `--dry-run` changes nothing.
 - AC-6: every refusal and failure writes an `errors.jsonl` entry with a class; `merge log --open` lists it; `merge fix` creates a builder task whose worktree is on the PR branch.
-- AC-7: the skill's evals pass on the seeded cases: tracker double-append, module-list conflict, generated-file conflict, lockfile conflict, behind-base, and a semantic conflict that merges textually but breaks the build (which the builder must not resolve by picking a side).
+- AC-7a (S2a): for each seeded case (tracker double-append, module-list conflict, generated-file conflict, lockfile conflict, behind-base, a semantic conflict that merges textually but breaks the build) there is a trigger-routing case that loads the skill for the builder. This proves the skill is found, not that it is followed.
+- AC-7b (S2b): for the same cases a fixture repository in the conflicted state is built, the builder resolves it, and a check passes: both tracker additions kept in order; both `mod` lines kept and the build green; the generated file regenerated and not hand-merged; the lockfile taken from the base and the build `--locked`; the branch updated by a merge and not a rebase; and, for the semantic case, **no side picked by file** (no `--ours`/`--theirs` on code) and the merge not pushed while the build is red.
 - AC-8: with the Delphi binary absent, every PR the flow touched can still be merged and its branch deleted with plain `gh`/`git`, and the label and PR comment say what happened.
 
 ## 8. Non-goals
