@@ -74,6 +74,10 @@ pub trait Forge {
     fn merge(&self, n: u64, expect_head: &str) -> Result<(), ForgeError>;
     fn comment(&self, n: u64, body: &str) -> Result<(), ForgeError>;
     fn set_label(&self, n: u64, label: &str, on: bool) -> Result<(), ForgeError>;
+    /// The base branch of every open pull request (cleanup keeps a remote branch another open pull request is based on).
+    fn open_bases(&self) -> Result<Vec<String>, ForgeError>;
+    /// `(number, head branch)` of the most recently merged pull requests, at most `limit`.
+    fn merged_branches(&self, limit: usize) -> Result<Vec<(u64, String)>, ForgeError>;
 }
 
 /// Characters allowed in a ref or a path that goes into an API URL. Anything else is refused, not escaped.
@@ -184,6 +188,17 @@ impl Forge for Gh {
     fn set_label(&self, n: u64, label: &str, on: bool) -> Result<(), ForgeError> {
         let flag = if on { "--add-label" } else { "--remove-label" };
         self.run("change a label", &["pr", "edit", &n.to_string(), flag, label], &[]).map(|_| ())
+    }
+
+    fn open_bases(&self) -> Result<Vec<String>, ForgeError> {
+        let v = self.json("list open pull requests", &["pr", "list", "--state", "open", "--limit", "200", "--json", "baseRefName"], &[])?;
+        Ok(v.as_array().into_iter().flatten().map(|p| s(p, "baseRefName")).collect())
+    }
+
+    fn merged_branches(&self, limit: usize) -> Result<Vec<(u64, String)>, ForgeError> {
+        let lim = limit.to_string();
+        let v = self.json("list merged pull requests", &["pr", "list", "--state", "merged", "--limit", &lim, "--json", "number,headRefName"], &[])?;
+        Ok(v.as_array().into_iter().flatten().filter_map(|p| Some((p["number"].as_u64()?, s(p, "headRefName")))).collect())
     }
 }
 

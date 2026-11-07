@@ -8,12 +8,15 @@
 
 pub mod approve;
 pub mod check;
+pub mod cleanup;
 pub mod errors;
 pub mod fix;
 pub mod forge;
 pub mod gates;
 pub mod record;
 
+#[cfg(test)]
+mod cleanup_tests;
 #[cfg(test)]
 mod fake;
 #[cfg(test)]
@@ -69,6 +72,8 @@ pub struct Ctx<'a> {
     pub term: &'a mut dyn Terminal,
     pub quote: Option<String>,
     pub dry_run: bool,
+    /// The repository to clean up after a merge; `None` leaves cleanup out (tests that have no repository).
+    pub git: Option<&'a cleanup::Git>,
     pub session: Option<String>,
     /// How long to wait before asking again when GitHub has not finished working out mergeability.
     pub settle: Duration,
@@ -109,13 +114,10 @@ fn note(ctx: &Ctx, out: &Outcome) {
         return;
     }
     let now = (ctx.now)();
-    let put = |pr: u64, head: &str, class: errors::Class, detail: &str| match ctx.errors.record(pr, head, class, detail, &now) {
-        Ok(e) if e.attempts == 1 => log_central(pr, class, e.attempts),
-        Ok(_) => {}
-        Err(e) => eprintln!("delphi merge: could not write the error log: {e}"),
-    };
+    let put = |pr: u64, head: &str, class: errors::Class, detail: &str| put_error(ctx.errors, &now, pr, head, class, detail);
     match out {
-        Outcome::Merged { pr, .. } => ctx.errors.resolve_pr(*pr, &now),
+        // A merge resolves what was open for it; that happens in `finish`, before cleanup, so a cleanup problem stays open.
+        Outcome::Merged { .. } => {}
         Outcome::Refused { pr, reasons, head } => {
             for class in reasons.iter().filter_map(|r| classify_refusal(r)) {
                 let detail = reasons.iter().filter(|r| classify_refusal(r) == Some(class)).cloned().collect::<Vec<_>>().join("; ");
@@ -124,6 +126,15 @@ fn note(ctx: &Ctx, out: &Outcome) {
         }
         Outcome::Failed { pr, detail, head } => put(*pr, head, classify_failure(detail), detail),
         Outcome::DryRun { .. } | Outcome::NeedsHuman { .. } | Outcome::Declined { .. } => {}
+    }
+}
+
+/// Write one problem to the error log, and to the central log the first time it is seen.
+fn put_error(errors: &Errors, now: &str, pr: u64, head: &str, class: errors::Class, detail: &str) {
+    match errors.record(pr, head, class, detail, now) {
+        Ok(e) if e.attempts == 1 => log_central(pr, class, e.attempts),
+        Ok(_) => {}
+        Err(e) => eprintln!("delphi merge: could not write the error log: {e}"),
     }
 }
 
@@ -178,7 +189,14 @@ fn finish(ctx: &mut Ctx, v: &Verdict, rec: Record) -> Outcome {
             if let Err(e) = ctx.forge.comment(n, &rec.comment()) {
                 eprintln!("delphi merge: #{n} merged, but the comment could not be posted: {e}");
             }
-            after_merge(ctx, v);
+            // The merge resolves what was open for this pull request. Cleanup then runs and never changes the outcome of the
+            // merge; a step that could not finish (a locked worktree, a branch another pull request is based on) is printed and
+            // stays open in the error log, because only a person can settle it.
+            let now = (ctx.now)();
+            ctx.errors.resolve_pr(n, &now);
+            for problem in after_merge(ctx, v) {
+                put_error(ctx.errors, &now, n, &v.pr.head_sha, errors::Class::Cleanup, &problem);
+            }
             Outcome::Merged { pr: n, head: v.pr.head_sha.clone() }
         }
         Err(e) => {
@@ -190,8 +208,13 @@ fn finish(ctx: &mut Ctx, v: &Verdict, rec: Record) -> Outcome {
     }
 }
 
-/// Hook for slice S4: remove the remote branch, the local branch and the worktrees of a merged pull request.
-fn after_merge(_ctx: &mut Ctx, _v: &Verdict) {}
+/// Remove the remote branch, the local branch and the worktrees of the merged pull request. Returns the failures.
+fn after_merge(ctx: &mut Ctx, v: &Verdict) -> Vec<String> {
+    match ctx.git {
+        Some(git) => cleanup::cleanup_pr(git, ctx.forge, v.pr.number, false).problems,
+        None => Vec::new(),
+    }
+}
 
 /// Merge several queued pull requests, each re-evaluated just before it merges (the base moved after the last one).
 pub fn merge_many(ctx: &mut Ctx, numbers: &[u64], batch: Option<&Attestation>) -> Vec<Outcome> {
@@ -243,7 +266,7 @@ enum Sub {
     Status,
     Log,
     Fix(u64),
-    Cleanup,
+    Cleanup(Vec<u64>),
 }
 
 #[derive(Debug, PartialEq)]
@@ -261,6 +284,10 @@ struct Parsed {
     done: bool,
     /// `fix`: the builder stopped; a person must look, and why.
     needs_human: Option<String>,
+    /// `cleanup`: sweep every merged pull request whose branch is still around.
+    merged: bool,
+    /// `cleanup --merged`: the one explicit yes a mass delete needs.
+    yes: bool,
 }
 
 fn pr_number(s: &str) -> Option<u64> {
@@ -269,7 +296,7 @@ fn pr_number(s: &str) -> Option<u64> {
 
 /// `args` is what `main` hands every command: the command line with the command word itself already removed.
 fn parse(args: &[String]) -> Result<Parsed, String> {
-    let (mut home, mut quote, mut dry_run, mut all, mut auto) = (None, None, false, false, false);
+    let (mut home, mut quote, mut dry_run, mut all, mut auto, mut merged, mut yes) = (None, None, false, false, false, false, false);
     let (mut open, mut json, mut pr, mut done, mut needs_human) = (false, false, None, false, None);
     let mut words: Vec<&str> = Vec::new();
     let mut it = args.iter();
@@ -285,6 +312,8 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
             "--needs-human" => needs_human = Some(it.next().cloned().ok_or("--needs-human needs the reason, in words")?),
             "--all" => all = true,
             "--auto" => auto = true,
+            "--merged" => merged = true,
+            "--yes" => yes = true,
             f if f.starts_with("--") => return Err(format!("unknown option `{f}` (see `delphi help merge`)")),
             w => words.push(w),
         }
@@ -296,7 +325,7 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
             "status" => Sub::Status,
             "log" => Sub::Log,
             "fix" => Sub::Fix(words.get(1).and_then(|n| pr_number(n)).ok_or("usage: delphi merge fix <PR> [--done | --needs-human \"<why>\"]")?),
-            _ => Sub::Cleanup,
+            _ => Sub::Cleanup(words[1..].iter().map(|w| pr_number(w).ok_or(format!("`{w}` is not a pull request number"))).collect::<Result<Vec<_>, _>>()?),
         },
         (_, true, false) if words.is_empty() => Sub::All,
         (_, false, true) if words.is_empty() => Sub::Auto,
@@ -304,7 +333,10 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
         (Some(_), false, false) => Sub::Merge(words.iter().map(|w| pr_number(w).ok_or(format!("`{w}` is not a pull request number"))).collect::<Result<Vec<_>, _>>()?),
         (None, false, false) => return Err("usage: delphi merge <PR>... | --all | --auto | queue <PR> | status (see `delphi help merge`)".into()),
     };
-    Ok(Parsed { sub, home, quote, dry_run, open, json, pr, done, needs_human })
+    if (merged || yes) && !matches!(sub, Sub::Cleanup(_)) {
+        return Err("--merged and --yes belong to `delphi merge cleanup`".into());
+    }
+    Ok(Parsed { sub, home, quote, dry_run, open, json, pr, done, needs_human, merged, yes })
 }
 
 pub fn cli(args: &[String]) -> i32 {
@@ -339,7 +371,7 @@ pub fn cli(args: &[String]) -> i32 {
         },
         Sub::Log => log_cmd(&p),
         Sub::Fix(n) => fix_cmd(&p, &forge, n),
-        Sub::Cleanup => stub("cleanup", "S4"),
+        Sub::Cleanup(ref numbers) => cleanup::run(&forge, numbers, p.merged, p.dry_run, p.yes),
         Sub::Auto => stub("--auto", "S6"),
         Sub::Merge(ref numbers) => run_merges(&p, &forge, numbers.clone(), false),
         Sub::All => match forge.queued(QUEUE_LABEL) {
@@ -458,7 +490,8 @@ fn run_merges(p: &Parsed, forge: &Gh, numbers: Vec<u64>, batch: bool) -> i32 {
     } else {
         None
     };
-    let mut ctx = Ctx { forge, ledger: &ledger, errors: &error_log, term: &mut term, quote: p.quote.clone(), dry_run: p.dry_run, session: None, settle: Duration::from_secs(3), now: delphi_core::time::now_rfc3339 };
+    let git = cleanup::Git::here();
+    let mut ctx = Ctx { forge, ledger: &ledger, errors: &error_log, term: &mut term, quote: p.quote.clone(), dry_run: p.dry_run, git: Some(&git), session: None, settle: Duration::from_secs(3), now: delphi_core::time::now_rfc3339 };
     let outcomes = if batch { merge_many(&mut ctx, &numbers, batch_att.as_ref()) } else { numbers.iter().map(|n| merge_one(&mut ctx, *n, None)).collect() };
     outcomes.iter().for_each(|o| println!("{}", o.line()));
     if outcomes.iter().any(|o| matches!(o, Outcome::Failed { detail, .. } if detail.contains("cannot run `gh`"))) {

@@ -27,9 +27,8 @@ pub enum Class {
     Forge,
     Ledger,
     MergeFailed,
-    /// A step after a merge could not finish (a locked worktree, a branch another pull request is based on). Recorded by the
-    /// cleanup of slice S4.
-    #[allow(dead_code)]
+    /// A step after a merge could not finish (a locked worktree, a branch another pull request is based on). Recorded when the
+    /// cleanup after a merge returns a problem; it stays open, because only a person can settle it.
     Cleanup,
 }
 
