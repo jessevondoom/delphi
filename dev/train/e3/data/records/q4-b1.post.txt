@@ -1,0 +1,2 @@
+host-de65eecff177b808 {"t_0001": {"cache_read": 298623, "cache_write": 84430, "events": 7, "models": ["gemini-3.8-flash-medium", "sonnet"], "tokens": 77997}} retries 0 fail_lines 0 ['/tmp/e3/home-council/workspaces/delphi/local/sessions/host-de65eecff177b808/councils/001-extending-council-t-0001-s-ruling-stagin.md']
+copied record -> /tmp/e3/records/q4-b1.md

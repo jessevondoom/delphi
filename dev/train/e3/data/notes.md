@@ -45,3 +45,7 @@ The operator wrote on 2026-11-07: "replace the weak questions. you can raise the
 ### q3 (kind: host-raised design question with options)
 - B1 (host-8e5dc086fd98c3a8): 100,497 Delphi-side tokens, 0 harness.retry, three seats answered and critiqued, escalated (5 unresolved P0).
 - A1 (host-60b2b43b08b8952b): venue panel, blind yes, question verbatim true, 6 Agent calls (parallel pairs of three), 17,931 host tokens, Delphi-side 0.
+
+### q4 (kind: host-raised design question with options)
+- B1 (host-de65eecff177b808): 77,997 Delphi-side tokens, 0 harness.retry, three seats answered and critiqued, escalated (1 unresolved P0).
+- A1 (host-bd0743c3b67ca7ad): venue panel, blind yes, question verbatim true, 6 Agent calls, 17,470 host tokens, Delphi-side 0.
