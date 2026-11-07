@@ -185,7 +185,7 @@ Any such change is its own pull request under its own spec text. Nothing is prom
   section 1). Panel arm: the host-reported total where the host reports one; otherwise the Panel is marked `host-side, not
   measured` and its tokens count as **0 in the sum but are printed as missing**, never estimated.
 - **Caps (set before measuring any Council's cost; the first figures are a guess, not a measurement):** 400,000 tokens per
-  run, 8,000,000 tokens across the whole experiment. The operator may **lower** a cap before the first run (a commit changing this
+  run (lowered to 350,000 by Amendment 1 below), 8,000,000 tokens across the whole experiment. The operator may **lower** a cap before the first run (a commit changing this
   file's caps, made before the first run); no cap is raised after the first run. The dry run (RUNBOOK) prints the eight source
   Councils' recorded token costs so the operator can judge the caps before saying go.
 - The foreign seat (S4) is not used, so no extra daemon spend is incurred inside a Panel.
@@ -195,7 +195,7 @@ Any such change is its own pull request under its own spec text. Nothing is prom
 - **Budget:** when either cap is reached, the running run is allowed to finish only if it is still under its own per-run cap;
   no new run starts. The report states which questions are complete. A verdict is given only if `q >= 6` qualifying questions
   exist; otherwise INCOMPLETE.
-- **Per-run cap:** a run that passes 400,000 tokens is stopped, recorded as `capped`, counted against the budget, and excluded
+- **Per-run cap:** a run that passes 350,000 tokens (Amendment 1; was 400,000) is stopped, recorded as `capped`, counted against the budget, and excluded
   from the rule.
 - **Infrastructure failure** (daemon down, host crash, timeout, rate limit): the run is re-run once in a new session. A second
   failure excludes it. A run is **never** dropped, re-run or replaced because its result is disliked.
@@ -240,6 +240,13 @@ Any such change is its own pull request under its own spec text. Nothing is prom
    set and this build.
 9. **Question type.** Six of eight questions are of one kind (a host asking whether to approve a spec or a plan). The two
    open questions (q1, q7) have no pointers and so test the Panel's brief less.
+
+## Amendment 1 (2026-11-06, before the first run)
+
+The operator wrote on 2026-11-06: "go on s5 using a 350k token cap". This is the go, and it lowers the per-run cap from 400,000
+to **350,000 tokens**. The total cap stays **8,000,000**. The headline host is Claude Code only; no other host is run. A cap is
+lowered here, never raised, as the Budget section allows before the first run. Nothing else in this file changes. This commit is
+made before any model call of the experiment.
 
 ## How it is run
 
