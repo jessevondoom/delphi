@@ -25,12 +25,17 @@ const WRITES: &[&str] = &[".append(", "fs::write(", "write_all(", "remove_file("
 fn sources() -> Vec<(String, Vec<String>)> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut out = vec![];
+    // Production code ends where the test module starts. A single `#[cfg(test)]` item earlier in the file (a test-only
+    // constant, say) is not the end of it; a first draft cut there and lost the dispatcher.
+    let test_mod = Regex::new(r"(?m)^#\[cfg\(test\)\]\s*\n(?:#\[[^\n]*\]\s*\n)*(?:pub(?:\([a-z]+\))?\s+)?mod\s").unwrap();
     for e in std::fs::read_dir(dir).unwrap().flatten() {
         let name = e.file_name().to_string_lossy().to_string();
         if name.starts_with("service") && name.ends_with(".rs") && !name.ends_with("_tests.rs") {
             let text = std::fs::read_to_string(e.path()).unwrap();
-            // Production code only: a handler's tests may call anything.
-            let prod = text.split("\n#[cfg(test)]").next().unwrap_or("").to_string();
+            let prod = match test_mod.find(&text) {
+                Some(m) => text[..m.start()].to_string(),
+                None => text,
+            };
             out.push((name, prod.split('\n').map(String::from).collect()));
         }
     }

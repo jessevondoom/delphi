@@ -190,7 +190,7 @@ Asked for and approved by the operator on 2026-10-28. `copilot` 1.0.105 is logge
 | Slice | Content | State |
 | :-- | :-- | :-- |
 | S0 | this spec | approved 2026-11-07 |
-| S1 | `seat.rs`: the daemon-written `seat.receipt` (requested and served model, resolved family, carrier and its policy, tool grant, prompt hash), the ratified family table with owner and expiry, the schema, a `delphi doctor` expiry warning | not started |
+| S1 | `seat.rs`: the daemon-written `seat.receipt` (requested and served model, resolved family, carrier and its policy, tool grant, prompt hash), the ratified family table with owner and expiry, the schema, a `delphi doctor` expiry warning | built: `seat.rs`, `model_families.toml` (shipped, with a workspace `model-families.toml` override), `Event::Served`, `served_model` on the API `Completed`, one receipt per harness seat and per API seat, doctor check `11 model families`. The served model is read for Claude (init), Copilot and the three API providers; `agy` and Codex report none yet (S5), so their receipts say `unknown`. No live run |
 | S2 | opt-in `require_families` and a count budget on the Panel's `foreign_seat` | not started |
 | S3 | receipts in `train run` rows; a family comparison whose arms differ in prompt hash or carrier policy is labelled confounded | not started |
 | S4 | `ask_family`: one read-only foreign seat answers one question, advice only, returns its receipt | not started |
@@ -677,6 +677,7 @@ Approved by the operator on 2026-11-05. Extends specs 072, 038 and 062. Task-der
 | S1c | `done_when`/`stop_when` in envelope schema and template; `check handoff` requires them | 3 h | built (this branch) |
 | S2 | `check brief` shape check; `handoff-packaging` section | 4 h | built (this branch) |
 | E1 | pre-registered two-arm experiment on the 037 pack | 4 h | run 2026-11-05: no evidence of an effect (6 of 15 vs 7 of 15); `dev/train/e1/REPORT.md`; section 8 stays unbuilt |
+| C1b | orchestrator item 10: read for itself when a read-only delegation is refused (§4.1); approved by the operator 2026-11-07; 3 of 3 genuine runs against 0 of 4 without the rule | 1 h | built (this branch) |
 
 
 
@@ -755,6 +756,7 @@ From the operator's request to refine the outside Council (Claude Code, Copilot,
 | S4 | one foreign-family seat (token ceiling, not a history-based estimate); `venue`/`blind` in the record front matter | 10 | built (PR open) |
 | S5 | pre-registered Panel-vs-Council experiment; decides the default | 12 | run 2026-11-06 (operator go, 350k per-run cap): verdict INCOMPLETE (4 of 8 questions qualify, 6 needed), notice unchanged; 2.10M of 8M tokens; report in `dev/train/e2/REPORT.md`, data in `dev/train/e2/data/`; fixes planned in spec 089 (draft) |
 | S6 | follow-ups from the Council review: Panel captures at L0, verdict `venue`, brief hash, host-support line, list of `council.verdict` readers | 4 | built (merged, #511) |
+| S7 | Round 2 reader (C1a): first complete critique wins, identical repeats tolerated, a conflicting later block or object refuses the reply, `trailer` counts and bytes on `council.critique` (daemon and Panel share one reader; reply to the 2026-11-07 Councils 002/003) | 3 | built (PR open) |
 
 ## Spec 089: Panel hardening from the E2 run (2026-11-06, approved)
 
@@ -770,6 +772,7 @@ From the E2 report (verdict INCOMPLETE). Approved 2026-11-06 on the operator's i
 | P4b | `agy` fix: one retry after a CLI error, discard message names the paths (guard unchanged by decision; watchdog deferred) | 6-10 | built (PR open): retry and path message; guard unchanged by decision; live capture held |
 | P5 | matcher v2 with a negative control; exploratory `RESCORE.md` of E2 | 5 | built (merged, #523); v2 FAILED validation: agreement 0.15 (needs 0.30), false-match 0.0 |
 | P6 | E3 pre-registration and run | 6 | pre-registration merged (#531), Amendment 1 merged (#536); run 2026-11-07 (operator go, 2.0M cap): A1 (headline) verdict NO EVIDENCE (same decision 5/6, readable 18/18, but escalation 1/6 against the Council's 10/12); A2 INCOMPLETE (2 of 6 questions: the headless host stopped before the foreign seat answered in 8 of 10 attempts); section 4.5 notice unchanged; 1.88M of 2.0M Delphi-side, 261k of 400k host-side; report `dev/train/e3/REPORT.md`, data `dev/train/e3/data/`; merged (#543); the foreign-seat wait-flow fix is spec 089 P7 |
+| P7 | a headless host survives the foreign seat: server-side wait (brief round 2/3, status), non-error `waiting_on_delphi_seat` answer, `waiting_on`, skill and tool text now say to wait for it | 4 | built (PR open); operator go 2026-11-07; live A2 check not run |
 
 ## Spec 093: authority invariants as tests (2026-11-07, approved)
 

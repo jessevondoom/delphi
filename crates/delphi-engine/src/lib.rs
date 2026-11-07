@@ -24,6 +24,7 @@ pub mod fact_sources;
 pub mod fact_store;
 pub mod fact_tools;
 pub mod scope;
+pub mod seat;
 pub mod promote;
 pub mod session;
 pub mod settings_run;

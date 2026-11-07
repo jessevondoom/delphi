@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jessevondoom/delphi/schemas/seat-receipt.schema.json",
+  "title": "Delphi Seat Receipt",
+  "description": "The payload of a `seat.receipt` event (spec 091 SR-1). Written by the daemon when a seat ends, from what the carrier reported: never from the model's own words, and never with prompt text or tool arguments. `served.model` is carrier-claimed.",
+  "type": "object",
+  "required": ["seat_id", "requested", "served", "carrier", "tool_grant", "prompt_hash", "tokens_in", "tokens_out", "outcome"],
+  "properties": {
+    "seat_id": { "type": "string", "minLength": 1 },
+    "requested": {
+      "type": "object",
+      "required": ["endpoint", "model"],
+      "properties": { "endpoint": { "type": "string" }, "model": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "served": {
+      "type": "object",
+      "required": ["model", "carrier_claimed", "family", "family_source"],
+      "properties": {
+        "model": { "type": ["string", "null"], "description": "As the carrier reported it; null when it reported nothing." },
+        "carrier_claimed": { "const": true },
+        "family": { "type": "string", "pattern": "^[a-z0-9-]+$", "description": "From model-families.toml; `unknown` when the table does not map the model or none was reported." },
+        "family_source": { "enum": ["table", "unknown"] }
+      },
+      "additionalProperties": false
+    },
+    "carrier": {
+      "type": "object",
+      "required": ["kind", "cli_version", "tools_offered", "dispatch_allowed"],
+      "properties": {
+        "kind": { "enum": ["claude", "agy", "codex", "copilot", "api"] },
+        "cli_version": { "type": ["string", "null"] },
+        "tools_offered": { "type": "array", "items": { "type": "string" } },
+        "dispatch_allowed": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "tool_grant": { "type": "object", "description": "What Delphi granted, by name." },
+    "prompt_hash": { "type": "string", "pattern": "^blake3:[0-9a-f]{64}$" },
+    "tokens_in": { "type": "integer", "minimum": 0 },
+    "tokens_out": { "type": "integer", "minimum": 0 },
+    "outcome": { "enum": ["ok", "error", "model_mismatch"] }
+  },
+  "additionalProperties": false
+}

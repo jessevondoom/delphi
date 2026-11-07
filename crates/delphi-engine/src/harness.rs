@@ -194,6 +194,8 @@ impl Tokens {
 pub enum Event {
     /// `tools` are the names the CLI will offer the model; `mcp_servers` are `(name, status)`.
     Init { session_id: String, tools: Vec<String>, mcp_servers: Option<Vec<(String, String)>> },
+    /// The model the CLI says it is running (carrier-claimed: the seat receipt records it, `specs/091` SR-1). Never taken from the model's text.
+    Served(String),
     Text(String),
     /// A fragment of the answer as it is written (Claude with `partial_messages`). The finished text still arrives as
     /// [`Event::Text`], so a consumer that shows deltas must not show that too.
@@ -224,11 +226,16 @@ pub fn parse_line(line: &str) -> Vec<Event> {
     let Ok(m) = serde_json::from_str::<Value>(line) else { return vec![] };
     let mut out = Vec::new();
     match m["type"].as_str() {
-        Some("system") if m["subtype"] == "init" => out.push(Event::Init {
-            session_id: m["session_id"].as_str().unwrap_or("").into(),
-            tools: names_of(&m["tools"]),
-            mcp_servers: m["mcp_servers"].as_array().map(|a| a.iter().map(|s| (s["name"].as_str().unwrap_or("").to_string(), s["status"].as_str().unwrap_or("").to_string())).collect()),
-        }),
+        Some("system") if m["subtype"] == "init" => {
+            out.push(Event::Init {
+                session_id: m["session_id"].as_str().unwrap_or("").into(),
+                tools: names_of(&m["tools"]),
+                mcp_servers: m["mcp_servers"].as_array().map(|a| a.iter().map(|s| (s["name"].as_str().unwrap_or("").to_string(), s["status"].as_str().unwrap_or("").to_string())).collect()),
+            });
+            if let Some(model) = m["model"].as_str().filter(|s| !s.is_empty()) {
+                out.push(Event::Served(model.into()));
+            }
+        }
         Some("assistant") => {
             for b in m["message"]["content"].as_array().into_iter().flatten() {
                 match b["type"].as_str() {
@@ -782,6 +789,14 @@ impl CopilotParser {
         CopilotParser { expected: expected_model.into(), ..Default::default() }
     }
 
+    /// Note the model the stream reports; a change is passed on once, for the seat receipt.
+    fn report(&mut self, model: &str, out: &mut Vec<Event>) {
+        if self.reported.as_deref() != Some(model) {
+            self.reported = Some(model.into());
+            out.push(Event::Served(model.into()));
+        }
+    }
+
     pub fn line(&mut self, line: &str) -> Vec<Event> {
         let Ok(m) = serde_json::from_str::<Value>(line) else { return vec![] };
         let d = &m["data"];
@@ -789,12 +804,12 @@ impl CopilotParser {
         match m["type"].as_str() {
             Some("session.tools_updated") => {
                 if let Some(model) = d["model"].as_str() {
-                    self.reported = Some(model.into());
+                    self.report(model, &mut out);
                 }
             }
             Some("assistant.message") => {
                 if let Some(model) = d["model"].as_str() {
-                    self.reported = Some(model.into());
+                    self.report(model, &mut out);
                 }
                 if let Some(t) = d["content"].as_str().filter(|t| !t.trim().is_empty()) {
                     self.last = t.into();
@@ -1951,6 +1966,8 @@ read never
     fn copilot_lines_become_events_and_the_last_non_empty_message_is_the_result() {
         let mut p = CopilotParser::new("m-1");
         let ev: Vec<Event> = copilot_run("m-1").iter().flat_map(|l| p.line(l)).collect();
+        assert_eq!(ev[0], Event::Served("m-1".into()), "the model the stream reports, once, for the seat receipt (specs/091)");
+        let ev = &ev[1..];
         assert!(matches!(&ev[0], Event::ToolUse { id, name, input } if id == "c1" && name == "view" && input["path"] == "/a"), "{:?}", ev);
         assert_eq!(ev[1], Event::ToolResult { id: "c1".into(), is_error: true });
         assert_eq!(ev[2], Event::Text("the answer".into()), "an empty tool-turn message is not text");
