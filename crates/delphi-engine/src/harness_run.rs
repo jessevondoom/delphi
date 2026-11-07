@@ -87,13 +87,47 @@ fn summarize(name: &str, input: &Value) -> String {
 pub(crate) struct HarnessErr {
     pub reason: String,
     pub retryable: bool,
+    /// An `agy` run that ended because the CLI reported an error (not quota, not a guard, not a timeout) before it used any
+    /// tool: the one failure a Council or Panel seat may try again (`specs/089` P4b).
+    pub cli_error: bool,
 }
 
 impl HarnessErr {
     fn retry(reason: impl Into<String>) -> HarnessErr {
-        HarnessErr { reason: reason.into(), retryable: true }
+        HarnessErr { reason: reason.into(), retryable: true, cli_error: false }
     }
 }
+
+/// The paths whose `git status --porcelain -z` entries appear or disappear between two snapshots of the registered projects
+/// (the first five, then "and N more"). With several projects each path is prefixed by the project's name.
+pub(crate) fn changed_paths(names: &[&str], before: &[String], after: &[String]) -> String {
+    let entries = |s: &str| -> Vec<String> { s.split('\0').filter(|e| !e.is_empty()).map(String::from).collect() };
+    let mut all: Vec<String> = Vec::new();
+    for (i, (b, a)) in before.iter().zip(after.iter()).enumerate() {
+        let (b, a) = (entries(b), entries(a));
+        let prefix = if names.len() > 1 { format!("{}/", names.get(i).copied().unwrap_or("?")) } else { String::new() };
+        for e in b.iter().filter(|e| !a.contains(e)).chain(a.iter().filter(|e| !b.contains(e))) {
+            // An entry is "XY path"; the status letters are not part of the path.
+            let path = e.get(3..).filter(|_| e.len() > 3 && e.as_bytes()[2] == b' ').unwrap_or(e.as_str());
+            let p = format!("{}{}", prefix, path);
+            if !all.contains(&p) {
+                all.push(p);
+            }
+        }
+    }
+    if all.is_empty() {
+        return "(status text only)".into();
+    }
+    let more = all.len().saturating_sub(5);
+    let mut s = all.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
+    if more > 0 {
+        s.push_str(&format!(" and {} more", more));
+    }
+    s
+}
+
+/// The shortest time left on a seat's clock for which a retry is worth starting.
+pub(crate) const RETRY_MIN_REMAINING: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// The Delphi tools whose job the CLI's own built-ins do for a Builder, so offering both would give it two ways
 /// to touch the same files, one of them outside the worktree guard.
@@ -625,6 +659,8 @@ impl Engine {
         let mut exit_code: Option<i32> = None;
         let mut exhaustion: Option<delphi_adapter::exhaust::Exhaustion> = None;
         let mut used_tools = false;
+        // Any tool call at all (even a read-only one) and whether the failure is the CLI's own `result` error: the retry's conditions.
+        let (mut any_tool, mut cli_error_seen) = (false, false);
         let (hub, span_id) = (self.hub.clone(), sc.span_id.clone());
         let mut live = LiveRedactor::new(sc.m.secrets());
         loop {
@@ -635,6 +671,7 @@ impl Engine {
             let ev = tokio::select! {
                 biased;
                 Some(call) = async { match bridge_rx.as_mut() { Some(rx) => rx.recv().await, None => std::future::pending().await } } => {
+                    any_tool = true;
                     if !READ_ONLY_TOOLS.contains(&call.name.as_str()) {
                         used_tools = true;
                     }
@@ -713,6 +750,7 @@ impl Engine {
                 }
                 Event::ToolUse { name, input, .. } => {
                     // A Delphi tool counts as acting when its call runs (above), by its own kind.
+                    any_tool = true;
                     used_tools |= !name.starts_with(TOOL_PREFIX);
                     let line = self.secrets.redact(&summarize(&name, &input));
                     sc.m.append(sc.agent_ev("harness.tool", json!({"tool": name, "summary": line}), ep, &launch.model)).await?;
@@ -767,6 +805,7 @@ impl Engine {
                         if let Some(x) = delphi_adapter::exhaust::classify_cli_error(text, now) {
                             exhaustion.get_or_insert(x);
                         }
+                        cli_error_seen = exhaustion.is_none();
                         failure = Some((match &exhaustion {
                             Some(x) => format!("the CLI is out of quota: {}", self.secrets.redact(&x.to_string())),
                             None => format!("the CLI reported an error: {}", Some(text.as_str()).filter(|t| !t.is_empty()).unwrap_or(subtype.as_str()).chars().take(200).collect::<String>()),
@@ -881,8 +920,11 @@ impl Engine {
         }
         if failure.is_none() {
             if let Some(before) = projects_before {
-                if project_state(self) != before {
-                    failure = Some(("the agy run changed a project checkout; its output is discarded (`git status` differs from before)".into(), false));
+                let after = project_state(self);
+                if after != before {
+                    let names: Vec<&str> = self.projects.iter().map(|(n, _)| n.as_str()).collect();
+                    let paths = changed_paths(&names, &before, &after);
+                    failure = Some((self.secrets.redact(&format!("the agy run changed a project checkout; its output is discarded (`git status` differs from before): {}", paths)).chars().take(600).collect(), false));
                 }
             }
         }
@@ -898,7 +940,7 @@ impl Engine {
                 }
             }
             sc.m.append_batch(batch).await?;
-            return Ok(Err(HarnessErr { reason, retryable }));
+            return Ok(Err(HarnessErr { reason, retryable, cli_error: cli == Cli::Agy && cli_error_seen && !any_tool && exhaustion.is_none() }));
         }
         let text = final_text.filter(|t| !t.trim().is_empty()).unwrap_or_else(|| text_parts.join("\n"));
         let block = delphi_adapter::blocks::ContentBlock::Text { text: text.clone() };
@@ -1995,6 +2037,169 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer",
         use_agy(&f);
         let out = f.engine.run_task(&f.m, "architect", "Review the plan").await.unwrap();
         assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "a good answer"), "{}", out.text);
+    }
+
+    // ---- one retry of an agy seat after a CLI error, and the guard message (`specs/089` P4b) ----
+
+    /// A stand-in `agy` that keeps a count of its starts in `count`, fails with `error_result` while the count is at most `fails`,
+    /// and finishes with "a good answer" after that.
+    fn flaky_agy(dir: &std::path::Path, count: &std::path::Path, fails: u32, error_result: &str) -> String {
+        fake_cli(
+            dir,
+            &format!(
+                "n=$(cat '{c}' 2>/dev/null || echo 0)\nn=$((n+1))\necho $n > '{c}'\necho '{{\"event\":\"init\",\"init\":{{}}}}'\nif [ $n -le {fails} ]; then\n{err}\nexit 0\nfi\necho '{{\"event\":\"result\",\"result\":{{\"status\":\"SUCCESS\",\"response\":\"a good answer\",\"usage\":{{\"input_tokens\":20,\"output_tokens\":4}}}}}}'",
+                c = count.display(),
+                fails = fails,
+                err = error_result
+            ),
+        )
+    }
+
+    const AGY_CLI_ERROR: &str = r#"echo '{"event":"result","result":{"status":"ERROR","response":"","error":"internal error","usage":{"input_tokens":50,"output_tokens":0}}}'"#;
+
+    async fn seat(f: &Fx) -> crate::council::Stance {
+        let tid = f.m.next_task_id();
+        let mut created = delphi_core::event::EventEnvelope::new(&f.m.id, "task.created", json!({"prompt": "q", "target": "council", "flow": "council"}));
+        created.task_id = Some(tid.clone());
+        f.m.append(created).await.unwrap();
+        f.engine.panel_foreign_run(&f.m, &tid, "COUNCIL, ROUND 1 (blind). Proposition: q".into(), "q", "architect", "gemini", 1, None).await
+    }
+
+    fn starts(count: &std::path::Path) -> u32 {
+        fs::read_to_string(count).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0)
+    }
+
+    fn retry_fx(prog: String, timeout: Duration) -> Fx {
+        let f = setup_with_exec(vec![], 5.0, |s| { s.agy_program = prog; s.council_seat_timeout = timeout; }, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        crate::worktree::tests::init_repo(&f.root.join("proj"), &f.root.join("git-home"));
+        use_agy_only(&f);
+        f
+    }
+
+    #[tokio::test]
+    async fn an_agy_seat_that_the_cli_failed_is_tried_once_more_and_keeps_the_second_answer() {
+        let scripts = tempfile::tempdir().unwrap();
+        let count = scripts.path().join("count");
+        let f = retry_fx(flaky_agy(scripts.path(), &count, 1, AGY_CLI_ERROR), Duration::from_secs(600));
+        let s = seat(&f).await;
+        assert!(matches!(&s, crate::council::Stance::Said(t) if t == "a good answer"), "{s:?}");
+        assert_eq!(starts(&count), 2);
+        let r = events_of(&f, "harness.retry");
+        assert_eq!(r.len(), 1);
+        assert_eq!((r[0].payload["attempt"].as_i64(), r[0].payload["role"].as_str()), (Some(2), Some("architect")));
+        assert!(r[0].payload["reason"].as_str().unwrap().contains("the CLI reported an error: internal error"));
+        assert!(r[0].payload["remaining_ms"].as_u64().unwrap() > 500_000);
+        let usage = events_of(&f, "agent.usage");
+        assert_eq!(usage.len(), 2, "both attempts' usage is logged");
+        assert_eq!(usage.iter().filter(|e| e.payload["outcome"] == "error").count(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_second_cli_error_abstains_with_the_second_reason_and_there_is_no_third_try() {
+        let scripts = tempfile::tempdir().unwrap();
+        let count = scripts.path().join("count");
+        let second = r#"echo '{"event":"result","result":{"status":"ERROR","response":"","error":"still broken","usage":{}}}'"#;
+        let prog = fake_cli(
+            scripts.path(),
+            &format!("n=$(cat '{c}' 2>/dev/null || echo 0)\nn=$((n+1))\necho $n > '{c}'\necho '{{\"event\":\"init\",\"init\":{{}}}}'\nif [ $n -eq 1 ]; then\n{a}\nelse\n{b}\nfi", c = count.display(), a = AGY_CLI_ERROR, b = second),
+        );
+        let f = retry_fx(prog, Duration::from_secs(600));
+        let s = seat(&f).await;
+        assert!(matches!(&s, crate::council::Stance::Abstained(r) if r.contains("still broken")), "{s:?}");
+        assert_eq!(starts(&count), 2);
+        assert_eq!(events_of(&f, "harness.retry").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_agy_seat_is_not_retried_after_a_tool_a_quota_error_a_guard_failure_a_timeout_or_with_no_time_left() {
+        // After a tool.
+        let scripts = tempfile::tempdir().unwrap();
+        let count = scripts.path().join("count");
+        let with_tool = format!(
+            r#"echo '{{"event":"step_update","step_update":{{"step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"view_file","tool_info":{{"parameters":{{}}}}}}}}'
+{}"#,
+            AGY_CLI_ERROR
+        );
+        let f = retry_fx(flaky_agy(scripts.path(), &count, 5, &with_tool), Duration::from_secs(600));
+        assert!(matches!(seat(&f).await, crate::council::Stance::Abstained(_)));
+        assert_eq!((starts(&count), events_of(&f, "harness.retry").len()), (1, 0), "a tool was used");
+
+        // A quota error.
+        let scripts = tempfile::tempdir().unwrap();
+        let count = scripts.path().join("count");
+        let quota = r#"echo '{"event":"result","result":{"status":"ERROR","response":"","error":"Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 136h12m54s.","usage":{}}}'"#;
+        let f = retry_fx(flaky_agy(scripts.path(), &count, 5, quota), Duration::from_secs(600));
+        assert!(matches!(seat(&f).await, crate::council::Stance::Abstained(_)));
+        assert_eq!((starts(&count), events_of(&f, "harness.retry").len()), (1, 0), "quota");
+
+        // A guard failure: the run writes into the checkout and answers.
+        let scripts = tempfile::tempdir().unwrap();
+        let count = scripts.path().join("count");
+        let prog = fake_cli(
+            scripts.path(),
+            &format!("n=$(cat '{c}' 2>/dev/null || echo 0)\nn=$((n+1))\necho $n > '{c}'\necho '{{\"event\":\"init\",\"init\":{{}}}}'\necho x > \"$(pwd)/../../../../../proj/injected-$n.txt\"\necho '{{\"event\":\"result\",\"result\":{{\"status\":\"SUCCESS\",\"response\":\"ok\",\"usage\":{{}}}}}}'", c = count.display()),
+        );
+        let f = retry_fx(prog, Duration::from_secs(600));
+        assert!(matches!(seat(&f).await, crate::council::Stance::Abstained(r) if r.contains("changed a project checkout")));
+        assert_eq!((starts(&count), events_of(&f, "harness.retry").len()), (1, 0), "guard");
+
+        // A timeout.
+        let scripts = tempfile::tempdir().unwrap();
+        let count = scripts.path().join("count");
+        let prog = fake_cli(scripts.path(), &format!("n=$(cat '{c}' 2>/dev/null || echo 0)\necho $((n+1)) > '{c}'\nsleep 30", c = count.display()));
+        let f = retry_fx(prog, Duration::from_secs(2));
+        assert!(matches!(seat(&f).await, crate::council::Stance::Abstained(r) if r.contains("no answer within 2s")));
+        assert_eq!((starts(&count), events_of(&f, "harness.retry").len()), (1, 0), "timeout");
+
+        // A CLI error with less than the minimum time left on the seat's clock.
+        let scripts = tempfile::tempdir().unwrap();
+        let count = scripts.path().join("count");
+        let f = retry_fx(flaky_agy(scripts.path(), &count, 1, AGY_CLI_ERROR), Duration::from_secs(5));
+        assert!(matches!(seat(&f).await, crate::council::Stance::Abstained(r) if r.contains("internal error")));
+        assert_eq!((starts(&count), events_of(&f, "harness.retry").len()), (1, 0), "no time left");
+    }
+
+    #[tokio::test]
+    async fn the_council_records_one_stance_for_a_retried_seat() {
+        // The stance is made from the seat's final outcome only: a retried seat yields exactly one `Said`.
+        let scripts = tempfile::tempdir().unwrap();
+        let count = scripts.path().join("count");
+        let f = retry_fx(flaky_agy(scripts.path(), &count, 1, AGY_CLI_ERROR), Duration::from_secs(600));
+        let _ = seat(&f).await;
+        assert_eq!(events_of(&f, "harness.retry").len(), 1);
+        assert_eq!(events_of(&f, "agent.turn.complete").len(), 1, "one turn completes: the retried run's");
+    }
+
+    #[test]
+    fn the_discard_message_names_the_changed_paths_up_to_five() {
+        let before = vec![String::new()];
+        let two = vec!["?? a.txt\0?? b.txt\0".to_string()];
+        assert_eq!(changed_paths(&["proj"], &before, &two), "a.txt, b.txt");
+        let seven = vec![(1..=7).map(|i| format!("?? f{}.txt\0", i)).collect::<String>()];
+        assert_eq!(changed_paths(&["proj"], &before, &seven), "f1.txt, f2.txt, f3.txt, f4.txt, f5.txt and 2 more");
+        // A path that disappears is named too, and two projects are told apart.
+        let (b2, a2) = (vec!["?? x\0".to_string(), String::new()], vec![String::new(), " M y\0".to_string()]);
+        assert_eq!(changed_paths(&["one", "two"], &b2, &a2), "one/x, two/y");
+    }
+
+    #[tokio::test]
+    async fn an_agy_run_that_changes_a_checkout_has_the_paths_in_its_discard_message() {
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = fake_cli(
+            scripts.path(),
+            r#"echo '{"event":"init","init":{}}'
+echo x > "$(pwd)/../../../../../proj/one.txt"
+echo x > "$(pwd)/../../../../../proj/two.txt"
+echo '{"event":"result","result":{"status":"SUCCESS","response":"ok","usage":{}}}'"#,
+        );
+        let f = setup_with_exec(vec![], 5.0, |s| s.agy_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        crate::worktree::tests::init_repo(&f.root.join("proj"), &f.root.join("git-home"));
+        use_agy(&f);
+        let out = f.engine.run_task(&f.m, "architect", "Review the plan").await.unwrap();
+        match &out.status {
+            Status::Escalated(r) => assert!(r.contains("(`git status` differs from before): one.txt, two.txt"), "{}", r),
+            other => panic!("{:?}", other),
+        }
     }
 
     // ---- the Delphi tool bridge (`specs/020`) ----

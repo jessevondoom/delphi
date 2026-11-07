@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import stringWidth from 'string-width';
 import { activeAgents, observeFrame, type OModel, type OState } from '../src/observe-screen.ts';
-import { mechanicalBlink, poolIdentity, roman, type Info } from '../src/theme.ts';
+import { mechanicalBlink, poolIdentity, roman, shownRole, useAsciiBadges, type Info } from '../src/theme.ts';
 import { BLINK_SLOT_MS, blinkOffset } from '../src/motion.ts';
 import { info as base, namedWorld, NOW } from './threads-fixture.ts';
 import { snapshot } from './helpers.ts';
@@ -17,6 +17,10 @@ const info: Info = { ...base, pool: { 'pool-36': { name: 'Sisyphus', face: '×_�
 function world(): OState {
   const s = namedWorld();
   s.nodes['d3']!.pool_slot = 'pool-36';
+  // OD-6: the running one-off agent is a bundle agent whose own name the daemon sent as its label; the queued one has none to show
+  // (the daemon refused it, or it had none), so it keeps its role.
+  s.nodes['d3']!.bundle_agent = 'acme/plat:flaky-test-hunter';
+  s.nodes['d3']!.label = 'flaky-test-hunter';
   s.nodes['d4']!.pool_slot = 'pool-02';
   s.nodes['d4']!.pool_numeral = 2;
   return s;
@@ -46,7 +50,9 @@ test('the roster shows each running one-off agent on its own row, and its role n
   assert.deepEqual(pooled.map((r) => [r.pool!.slot, r.role]), [['pool-36', 'builder']], 'only the running one-off agent: the queued one is not at work');
   assert.ok(!rows.some((r) => !r.pool && r.role === 'builder' && r.state === 'running'), 'the builder\'s only running span is the one-off agent, so the role row is not shown again');
   const text = frame('agents', 100, 34).map(plain).join('\n');
-  assert.ok(text.includes('⟦×_×⟧ Sisyphus (builder)'), text);
+  assert.ok(text.includes('⟦×_×⟧ Sisyphus (flaky-test-hunter)'), text);
+  assert.ok(!text.includes('Sisyphus (builder)'), 'what it is for stands where the role was');
+  assert.ok(text.includes('runs as builder'), 'the base role is on the detail line, where scope is shown');
   assert.ok(/× ?_ ?×/.test(text), 'the mascot wears the face of its name');
 });
 
@@ -70,7 +76,7 @@ test('without the pool (an older delphi) the strip and the roster are what they 
 
 test('the epic threads name a one-off agent where they name the role', () => {
   const text = frame('epic', 100, 34).map(plain).join('\n');
-  assert.ok(text.includes('⟦×_×⟧ Sisyphus (builder)'), text);
+  assert.ok(text.includes('⟦×_×⟧ Sisyphus (flaky-test-hunter)'), text);
 });
 
 test('every view fits the window with one-off agents on screen, at the sizes the Observer uses', () => {
@@ -86,4 +92,65 @@ test('golden: the roster and the epic threads with one-off agents', () => {
     const r = snapshot(name, frame(view, w, h));
     assert.ok(r.ok, r.message);
   }
+});
+
+// ---- OD-6: a one-off agent shows what it is for where its role would be (spec 087 §4.3 item 4) ----
+
+test('shownRole: the label the daemon sent, cleaned, or the role when there is none', () => {
+  assert.equal(shownRole('flaky-test-hunter', 'builder'), 'flaky-test-hunter');
+  assert.equal(shownRole(undefined, 'builder'), 'builder', 'an older delphi sends no label');
+  assert.equal(shownRole('', 'builder'), 'builder');
+  assert.equal(shownRole('   ', 'builder'), 'builder');
+  assert.equal(shownRole('  auth   flow\tattacker ', 'builder'), 'auth flow attacker');
+  const hostile = shownRole('tester\x1b[2J\x07\u202e', 'builder');
+  assert.ok(!/[\x00-\x1f\u202e]/.test(hostile), `no control or bidi character reaches the screen: ${JSON.stringify(hostile)}`);
+});
+
+test('a label the daemon did not send (refused, or none) leaves the role on the roster row, with no clipped-label detail', () => {
+  const st = world();
+  st.nodes['d4']!.state = 'running';
+  st.nodes['d4']!.label = undefined;
+  const text = observeFrame(model('agents', { st }), 100, 34).map(plain).join('\n');
+  assert.ok(text.includes('⟦•─•⟧ Atlas II (red-team)'), text);
+  assert.ok(text.includes('runs as red-team'), text);
+});
+
+test('a long label is clipped on the roster row and given whole on the detail line; every row still fits', () => {
+  const long = 'reviews every migration for locking problems before it ships to production';
+  const st = world();
+  st.nodes['d3']!.label = long;
+  for (const [w, h] of [[110, 34], [100, 34], [70, 20], [40, 12]] as const) {
+    const lines = observeFrame(model('agents', { st }), w, h);
+    for (const l of lines) assert.ok(stringWidth(l) <= w, `${w}x${h}: line wider than the window: ${plain(l)}`);
+  }
+  const text = observeFrame(model('agents', { st }), 110, 34).map(plain).join('\n');
+  assert.ok(text.includes('⟦×_×⟧ Sisyphus (reviews every migration…)'), text);
+  // The detail line gives the label as wide as the pane allows (110 columns holds 54 characters of it), with `…` when it cannot.
+  assert.ok(text.includes('runs as builder · reviews every migration for locking problems before'), text);
+  const wide = observeFrame(model('agents', { st: (() => { const s = world(); s.nodes['d3']!.label = 'x'.repeat(30); return s; })() }), 160, 34).map(plain).join('\n');
+  assert.ok(wide.includes('runs as builder · ' + 'x'.repeat(30)), 'a wide pane shows the whole label');
+  const epic = observeFrame(model('epic', { st }), 100, 34).map(plain).join('\n');
+  assert.ok(epic.includes('Sisyphus (reviews every migration…)') || epic.includes('Sisyphus (reviews every migrati'), epic);
+});
+
+test('in ASCII mode a label with wide or non-ASCII characters is question marks, so no row moves', () => {
+  const st = world();
+  st.nodes['d3']!.label = '測試 runner •';
+  const was = useAsciiBadges(true);
+  try {
+    assert.equal(shownRole('測試 runner •', 'builder'), '?? runner ?');
+    const lines = observeFrame(model('agents', { st }), 100, 34);
+    const text = lines.map(plain).join('\n');
+    assert.ok(text.includes('(?? runner ?)'), text);
+    assert.ok(!/[測試•]/.test(text.split('\n').filter((l) => l.includes('Sisyphus')).join('\n')), 'no wide character on the one-off agent\'s rows');
+    for (const l of lines) assert.ok(stringWidth(l) <= 100);
+  } finally { useAsciiBadges(was); }
+  // With the switch off the label is drawn as sent.
+  assert.equal(shownRole('測試 runner •', 'builder'), '測試 runner •');
+});
+
+test('the strip, the colours and the mascot of a one-off agent stay its base role\'s', () => {
+  const a = frame('agents', 100, 34)[0]!;
+  const b = observeFrame(model('agents', { st: (() => { const s = world(); s.nodes['d3']!.label = undefined; return s; })() }), 100, 34)[0]!;
+  assert.equal(a, b, 'the strip does not depend on the label: it holds only the badge');
 });

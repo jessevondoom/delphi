@@ -23,6 +23,16 @@ unreadable (the test checks 4.5:1 against white).
 Which cell of a badge is the mouth is named by position in the spec, never guessed from the character: a face like the
 red-team's `¬_¬` has `¬` eyes, and its blink `-_-` has `-` eyes.
 
+## One-off agents (spec 087 §4)
+
+A one-off agent (a bundle agent the daemon dispatches, or one `spawn_agent_pack` compiles for a host) wears a name and a face from the
+theme's name pool, in its base role's colour: `⟦face⟧ Name (what it is for)`. What it is for takes the role's place in the
+parenthetical (OD-6): outside, the `specialization` it was spawned with; inside, the bundle agent's own name, from the start event's
+`bundle_agent`. The daemon computes it once (`one_off_label` in `delphi-core`, sent as `label` on the node), so the console keeps no list
+of role names: a label that equals a role id or the theme's name for a role, or is empty after cleaning, is not sent and the row shows
+the role. The roster row clips the label to 24 columns with `…` and its detail line gives the base role (`runs as builder`) and the
+label as wide as the pane allows. With `DELPHI_ASCII_BADGES=1` every non-ASCII character of a label is `?`.
+
 ## The thirteen core roles (spec 087)
 
 Every role has its own idle badge and its own blink, listed in `CORE_FACES` in `avatar.rs` (a test pins it to spec 087 §3.1).

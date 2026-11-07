@@ -281,6 +281,8 @@ pub struct Engine {
     pub exec: Arc<exec::ExecEnv>,
     /// Context slices a driver hands a span directly, by handoff id (Council Round 2 peers' stances).
     pub(crate) injected: Mutex<HashMap<String, Vec<delphi_adapter::ipr::ContextSlice>>>,
+    /// When each Council or Panel seat's clock runs out, by handoff id (`run_seat`): the time a retry of an `agy` seat has left.
+    pub(crate) seat_deadlines: Mutex<HashMap<String, std::time::Instant>>,
     /// What each mission has been told about the added bundles (`bundle_events.rs`): mission id to bundle id to hash.
     pub(crate) bundle_seen: Mutex<HashMap<String, crate::bundle_events::Seen>>,
     /// What each mission has been told about the joined Xenia stores (`xenia_events.rs`): mission id to store to journal seq.
@@ -970,7 +972,19 @@ impl Engine {
             if let Some(hep) = if setup_error.is_none() && handoff.distill.is_none() { self.route_harness(&sc) } else { None } {
                 harness_tried = true;
                 sc.harness_tried.store(true, std::sync::atomic::Ordering::SeqCst);
-                match self.run_harness(&mut sc, &ipr, &hep).await? {
+                let mut first = self.run_harness(&mut sc, &ipr, &hep).await?;
+                // One more try of an `agy` seat that the CLI itself failed before it used a tool, in a fresh process, on the seat's remaining
+                // time (`specs/089` P4b). Never a timeout, a quota error, a guard failure or a second failure; the first run's usage is logged.
+                if let Err(f) = &first {
+                    let left = self.seat_deadlines.lock().unwrap().get(&handoff.handoff_id).map(|d| d.saturating_duration_since(std::time::Instant::now()));
+                    if let (true, true, Some(left)) = (f.cli_error, f.retryable, left) {
+                        if left >= crate::harness_run::RETRY_MIN_REMAINING {
+                            m.append(sc.ev("harness.retry", json!({"task_id": sc.task_id, "role": sc.role, "attempt": 2, "reason": self.secrets.redact(&f.reason).chars().take(200).collect::<String>(), "remaining_ms": left.as_millis() as u64}))).await?;
+                            first = self.run_harness(&mut sc, &ipr, &hep).await?;
+                        }
+                    }
+                }
+                match first {
                     Ok(text) => harness_result = Some(Ok(text)),
                     Err(f) if f.retryable && self.has_api_route(&sc) => {
                         m.append(sc.ev("harness.fallback", json!({"from": hep.id, "to": "api", "reason": self.secrets.redact(&f.reason)}))).await?;
