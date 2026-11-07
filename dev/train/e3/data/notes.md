@@ -66,3 +66,6 @@ Delphi-side about 810k of 2,000,000; host-side about 173k of 400,000. Phase 2 (B
 - q2 B2 (host-79c58b1f3272015b): 92,973 Delphi-side, 0 retry, 3 seats readable, escalated (5 unresolved P0).
 - q3 B2 (host-b99d5cdb269b422e): 77,930 Delphi-side, 0 retry, 3 seats readable, escalated (5 unresolved P0).
 - q4 B2 (host-69d8827e84928491): 83,911 Delphi-side, 0 retry, 3 seats readable, escalated (Round 2 conflict).
+- q5 B2 (host-f173e6960b87048d): 116,313 Delphi-side (largest run, under 350,000), 0 retry, 3 seats readable, escalated (10 unresolved P0).
+- q6 B2 (host-9125946a3bbcf40a): 81,769 Delphi-side, 0 retry, 3 seats readable, escalated (1 unresolved P0, conflict).
+- Phase 2 done: Delphi-side total 1,345,669 of 2,000,000 after all 12 Councils and the q1/q2 A2 attempts; host-side 173,225 of 400,000. The deferred A2 runs for q3 to q6 follow.
