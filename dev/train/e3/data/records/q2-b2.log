@@ -1,0 +1,7 @@
+args {"question": "Is Delphi falling short of letting an operator use it from the MCP endpoint, via agentic systems, to get: (1) RAG over the full knowledge base, (2) agent specialties and subject-matter expertise, (3) research reporting and strategy, (4) guidance in spec-driven agentic development? Analyze gaps against specs 062/064/013/038/041 and the MCP tool surface; recommend how the Council would
+started {"council_id": "t_0001", "note": "a Council runs for a few minutes: ask again with council_status, then council_result; its ruling is advice and binds nothing in your project", "state": "convening"}
+0 s ('deliberating', 'convening: choosing the seats')
+30 s ('deliberating', 'round 1 (blind opening): 3 seat(s) have answered')
+140 s ('deliberating', 'round 2 (cross-examination): 3 critique(s) in; the verdict follows')
+160 s ('needs_operator', None)
+done needs_operator

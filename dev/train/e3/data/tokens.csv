@@ -5,12 +5,14 @@ q1,a2-attempt1,host,10010,
 q1,a2,delphi,29155,retries=0
 q1,a2,host,8697,
 q1,b1,delphi,93253,retries=0
+q1,b2,delphi,82059,retries=0
 q2,a1,host,25732,
 q2,a2-attempt1,delphi,78891,retries=0
 q2,a2-attempt1,host,16564,
 q2,a2,delphi,99832,retries=0
 q2,a2,host,21148,
 q2,b1,delphi,104838,retries=0
+q2,b2,delphi,92973,retries=0
 q3,a1,host,17931,
 q3,b1,delphi,100497,retries=0
 q4,a1,host,17470,

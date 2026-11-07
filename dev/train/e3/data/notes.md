@@ -60,3 +60,7 @@ The operator wrote on 2026-11-07: "replace the weak questions. you can raise the
 
 ### Phase 1 total (before phase 2)
 Delphi-side about 810k of 2,000,000; host-side about 173k of 400,000. Phase 2 (B2 on all six, in order) starts; the q3 to q6 A2 runs are deferred until after phase 2 (deviation 6).
+
+### Phase 2 (B2)
+- q1 B2 (host-171490cb89b0af34): 82,059 Delphi-side, 0 retry, 3 seats readable, not escalated.
+- q2 B2 (host-79c58b1f3272015b): 92,973 Delphi-side, 0 retry, 3 seats readable, escalated (5 unresolved P0).
