@@ -219,7 +219,7 @@ function agents(m: OModel, w: number, _h: number): string[] {
   const out: string[] = [];
   const active = activeAgents(m.st);
   const idle = active.length === 0;
-  const orch: AgentRow = m.st.agents.orchestrator ?? { role: 'orchestrator', state: 'idle', task_id: '', endpoint: '', tier: '', model: '', upscaled: false, tokens: NO_TOKENS, cost_usd: 0, calls: 0 };
+  const orch: PoolRow = m.st.agents.orchestrator ?? { role: 'orchestrator', state: 'idle', task_id: '', endpoint: '', tier: '', model: '', upscaled: false, tokens: NO_TOKENS, cost_usd: 0, calls: 0 };
   for (const a of idle ? [orch] : active) {
     // A one-off agent wears the face and name of its pool slot; its role's colour and mascot are its own (`specs/087` §4.2).
     const one = a.pool ? T.poolIdentity(m.info, a.pool.slot, a.pool.numeral) : undefined;
