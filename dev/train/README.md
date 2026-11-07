@@ -37,7 +37,7 @@ a cost cap, a time cap and at least one deterministic `[[check]]`:
 `delphi train run --arms-file arms.toml` runs every arm on every case and seed; each arm has its own template home (its
 routing is configuration) and may declare `expect_models`, the model ids or prefixes it may use. A run in which any
 other model made a call is not graded: it no longer measures that arm. See `arms-pilot-example.toml`. Rows record tokens
-in and out, calls and cost per model, attempts and mid-run model swaps.
+in and out, calls and cost per model, attempts and mid-run model swaps. A run whose model reports its quota reached and answers nothing is **not graded** (its row has an `error` beginning `infrastructure:` and the reset time); `--resume` runs it again. It is not a failed case.
 
 ### Harness arms (`specs/048` BM-1)
 

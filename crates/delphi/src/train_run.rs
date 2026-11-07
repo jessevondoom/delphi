@@ -900,6 +900,15 @@ fn run_inner(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize, row:
     let mission = summary["mission_id"].as_str().filter(|m| !m.is_empty() && !m.contains(['/', '\\', '.'])).ok_or("the summary names no mission")?;
     let events = delphi_core::log::replay(&delphi_core::sessions::dir(&ws_dir, mission)).map_err(|e| format!("could not read the mission log: {}", e))?;
     row.usage = usage_by_model(&events);
+    // A model that reported its quota reached and answered nothing says nothing about the arm: the run is not graded (like a slept-through
+    // run), and `--resume` tries it again. Counting it as a failed case would score the account's limits as the model's behavior (the
+    // 2026-11-07 A/B counted eleven such runs as failures before this was caught).
+    if let Some(x) = events.iter().find(|e| e.kind == "model.exhausted") {
+        if row.usage.values().all(|u| u.tokens_in() + u.tokens_out() == 0) {
+            let reset = x.payload["reset_at"].as_i64().map(|t| format!(", resets {}", crate::train_arms::utc(t))).unwrap_or_default();
+            return Err(format!("infrastructure: {} on {} reported its quota reached{}; the run is not graded (`--resume` tries it again)", x.payload["model_id"].as_str().unwrap_or("a model"), x.payload["endpoint_id"].as_str().unwrap_or("an endpoint"), reset));
+        }
+    }
     row.cost_usd = row.usage.values().map(|u| u.cost_usd).sum();
     row.promotions = events.iter().filter(|e| e.kind == "model.promoted").count() as u32;
     row.eff = efficiency_of(&events);
@@ -1374,6 +1383,30 @@ mod tests {
         }
         // A long answer is never tagged, even if it starts that way.
         assert!(declines(&format!("I can't be exact. {}", "x".repeat(1300))).is_none());
+    }
+
+    #[test]
+    fn a_run_whose_model_hit_its_quota_and_answered_nothing_is_not_graded_but_one_that_answered_is() {
+        let t = tempfile::tempdir().unwrap();
+        let c = case(t.path(), "[[check]]\nkind = \"file_unchanged\"\npath = \"keep.txt\"\n");
+        let usage = |tokens: u64| ("agent.usage", json!({"provider": "p", "input_tokens": tokens, "output_tokens": 0, "cost_usd": 0.0, "reserved_usd": 0.0, "usage_source": "reported", "cost_model": "metered", "outcome": "ok"}));
+        let exhausted = ("model.exhausted", json!({"endpoint_id": "agy-sub", "model_id": "claude-sonnet-5-5-medium", "raw": "Individual quota reached.", "reason": "quota reached", "reset_at": 1_794_101_522}));
+        let stop = ("task.output", json!({"status": "escalated", "text": "[escalated to the operator: the CLI is out of quota: quota reached]"}));
+        // Quota reached and no tokens: an infrastructure stop, not a failed case.
+        let canned = mission(t.path(), &[usage(0), exhausted.clone(), stop, ("task.completed", json!({"status": "escalated"}))]);
+        let config = cfg(t.path(), &canned, vec![baseline()], 10.0);
+        train::prepare_work_home(&config.work_dir).unwrap();
+        let row = run_all(&config, &[&c]).0.remove(0);
+        assert_eq!(row.passed, None, "not graded: {:?}", row);
+        let e = row.error.unwrap();
+        assert!(e.contains("infrastructure") && e.contains("claude-sonnet-5-5-medium on agy-sub") && e.contains("resets 2026-11-08 01:32Z") && e.contains("--resume"), "{}", e);
+        // The same event with tokens spent: the model answered, so the run is graded as usual.
+        let t2 = tempfile::tempdir().unwrap();
+        let canned = mission(t2.path(), &[usage(500), exhausted, ("task.completed", json!({"status": "done"}))]);
+        let config = cfg(t2.path(), &canned, vec![baseline()], 10.0);
+        train::prepare_work_home(&config.work_dir).unwrap();
+        let row = run_all(&config, &[&c]).0.remove(0);
+        assert_eq!((row.passed.is_some(), row.error.clone()), (true, None), "{:?}", row);
     }
 
     #[test]
