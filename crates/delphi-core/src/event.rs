@@ -23,6 +23,10 @@ pub struct EventEnvelope {
     /// Canonical role ID, never a theme name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
+    /// The pool slot (`pool-01`..`pool-36`) a one-off agent of that role was given (`specs/087` §4.3), so a replay shows the
+    /// same name. A slot, never a theme name; absent for the core roles and for events written before spec 087.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pool_slot: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub endpoint_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -61,6 +65,7 @@ impl EventEnvelope {
             span_id: None,
             parent_span_id: None,
             agent: None,
+            pool_slot: None,
             endpoint_id: None,
             access_path: None,
             model_tier: None,
@@ -100,6 +105,13 @@ impl EventEnvelope {
         }
         if !self.payload.is_object() {
             return Err("payload must be a JSON object".into());
+        }
+        // A pool slot is `pool-NN`: a slot id, never a theme name (`specs/087` §4.3).
+        if let Some(s) = &self.pool_slot {
+            let ok = s.len() == 7 && s.starts_with("pool-") && s[5..].bytes().all(|b| b.is_ascii_digit());
+            if !ok {
+                return Err(format!("pool_slot `{}` is not a slot id (pool-NN)", s));
+            }
         }
         if self.kind.starts_with("agent.") {
             let missing: Vec<&str> = [
@@ -189,6 +201,22 @@ mod tests {
         assert!(u.validate().unwrap_err().contains("agent.usage payload"));
         assert!(EventEnvelope::new("", "mission.created", json!({})).validate().is_err());
         assert!(EventEnvelope::new("m1", "x", json!([1])).validate().is_err());
+    }
+
+    #[test]
+    fn a_pool_slot_is_a_slot_id_and_is_left_out_of_events_that_have_none() {
+        let bare = serde_json::to_string(&agent_event()).unwrap();
+        assert!(!bare.contains("pool_slot"), "an event with no slot is byte-for-byte what it was (the hash chain depends on it)");
+        let mut e = agent_event();
+        e.pool_slot = Some("pool-07".into());
+        assert!(e.validate().is_ok());
+        let line = serde_json::to_string(&e).unwrap();
+        assert!(line.contains("\"pool_slot\":\"pool-07\""));
+        assert_eq!(parse_line(&line).unwrap().pool_slot.as_deref(), Some("pool-07"));
+        for bad in ["pool-7", "pool-007", "Name", "pool-0x", ""] {
+            e.pool_slot = Some(bad.into());
+            assert!(e.validate().is_err(), "`{bad}` must not pass for a slot");
+        }
     }
 
     #[test]

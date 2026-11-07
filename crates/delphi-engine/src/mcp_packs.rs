@@ -91,7 +91,9 @@ impl Packs {
         }
     }
 
-    pub fn theme_resolver(&self) -> delphi_core::theme_names::ThemeResolver {
+    /// The active theme's name (`[theme] name` in the workspace config, `greek` by default) and its pack's text, which is
+    /// empty when it has none of its own.
+    fn theme_pack(&self) -> (String, String) {
         let cfg = std::fs::read_to_string(self.ws.dir.join("config.toml")).unwrap_or_default();
         let theme = toml::from_str::<toml::Value>(&cfg)
             .ok()
@@ -105,11 +107,28 @@ impl Packs {
         } else {
             String::new()
         };
+        (theme, text)
+    }
+
+    pub fn theme_resolver(&self) -> delphi_core::theme_names::ThemeResolver {
+        let text = self.theme_pack().1;
         if text.trim().is_empty() {
             delphi_core::theme_names::ThemeResolver::default()
         } else {
             delphi_core::theme_names::ThemeResolver::from_theme_text(&text)
         }
+    }
+
+    /// The name pool of the active theme (`specs/087` §4): the pack's own when it has one. The default `greek` theme falls
+    /// back to the built-in pack's pool, because a home created before spec 087 holds a copy of that pack without one. Any
+    /// other theme without a pool has none. Entries that fail [`crate::agent_pool::usable`] are dropped.
+    pub fn pool(&self) -> Vec<crate::agent_pool::PoolEntry> {
+        let (name, text) = self.theme_pack();
+        let mut pool = crate::agent_pool::pool_from_theme_text(&text);
+        if pool.is_empty() && (name == "greek" || text.trim().is_empty()) {
+            pool = crate::agent_pool::default_pool();
+        }
+        pool.into_iter().filter(crate::agent_pool::usable).collect()
     }
 
     /// Resolve an incoming mention or role tag (@athena, @orchestrator, @delphi) to a canonical role ID.

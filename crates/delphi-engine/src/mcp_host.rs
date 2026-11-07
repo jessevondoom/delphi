@@ -586,6 +586,9 @@ pub struct Server {
     /// The host's own name from `initialize`, used only as a label in `get_agent`'s "via" line.
     client: Option<String>,
     cwd: PathBuf,
+    /// The one-off agents `spawn_agent_pack` has named in this session, so no two share a name (`specs/087` §4.3). Lives
+    /// as long as the session; it is a label table, not a record of anything running.
+    pool_live: std::sync::Mutex<Vec<crate::agent_pool::LiveAgent>>,
 }
 
 /// Whether `cwd` is inside the Delphi repository itself: an ancestor holds both `AGENTS.md` and `crates/delphi-engine/Cargo.toml`.
@@ -600,7 +603,7 @@ impl Server {
         // A workspace directory is `<home>/workspaces/<name>`.
         let packs = ws.parent().and_then(Path::parent).zip(ws.file_name().and_then(|n| n.to_str())).map(|(home, name)| Packs::new(WorkspacePaths::new(home, name)));
         let cwd = std::env::current_dir().unwrap_or_else(|_| ws.to_path_buf());
-        Server { config_path: Some(ws.join("config.toml")), packs, project: Some(Project::new(ws, &cwd)), link: HostLink::for_workspace(ws, &cwd), initialized: false, client: None, cwd }
+        Server { config_path: Some(ws.join("config.toml")), packs, project: Some(Project::new(ws, &cwd)), link: HostLink::for_workspace(ws, &cwd), initialized: false, client: None, cwd, pool_live: Default::default() }
     }
 
     /// Resolve the project from `cwd` instead of this process's working directory.
@@ -618,7 +621,7 @@ impl Server {
     /// No workspace resolved: the defaults, which are on.
     pub fn without_workspace() -> Server {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        Server { config_path: None, packs: None, project: None, link: None, initialized: false, client: None, cwd }
+        Server { config_path: None, packs: None, project: None, link: None, initialized: false, client: None, cwd, pool_live: Default::default() }
     }
 
     /// Read at every tool call. A workspace with no `config.toml` yet has the defaults, which are on; a file that exists but
@@ -897,6 +900,24 @@ impl Server {
         Ok((vec![json!({"kind": "operator_judgment", "value": "unspecified: no done criterion was given", "status": "unspecified"})], "No `done_when` was given, so nothing defines finished. Ask the operator for a done criterion before starting, or pass `done_when`."))
     }
 
+    /// Give a one-off agent a name from the active theme's pool, and remember it for this session so the next one gets
+    /// another. The same `(role, specialization)` always gets the same identity back (`specs/087` §4.3).
+    fn pool_identity(&self, role: &str, specialization: &str, domain_focus: &str) -> Option<crate::agent_pool::Pick> {
+        let pool = self.packs().ok()?.pool();
+        let agent_id = format!("{}\u{0}{}", role, specialization);
+        let mut live = self.pool_live.lock().ok()?;
+        let task = format!("{} {}", specialization, domain_focus);
+        let pick = crate::agent_pool::pick(&pool, role, &task, &agent_id, &live)?;
+        if !live.iter().any(|l| l.agent_id == agent_id) {
+            // A session names a few dozen agents at most; the cap only guards a host that spawns without end.
+            if live.len() >= crate::agent_pool::POOL_SIZE * 8 {
+                live.remove(0);
+            }
+            live.push(crate::agent_pool::LiveAgent { agent_id, role: role.to_string(), slot: pick.slot.clone(), numeral: pick.numeral });
+        }
+        Some(pick)
+    }
+
     /// Compile a specialized agent pack derived from a canonical Delphi archetype (`specs/072` §4.2).
     fn spawn_agent_pack(&self, args: &Value) -> Result<String, String> {
         let raw_role = args.get("base_role").and_then(Value::as_str).ok_or_else(|| "invalid arguments: `base_role` is required and must be a string".to_string())?;
@@ -934,6 +955,9 @@ impl Server {
             vec![]
         };
 
+        // The name this one-off agent wears (`specs/087` §4.3); none when the theme has no pool.
+        let identity = self.pool_identity(base_role, specialization, domain_focus);
+
         // 1. Universal Delphi Governance Preamble (Spec 072 §3.2 & §4.2)
         let mut pack = String::from("# Delphi Ephemeral Agent Pack: ");
         pack.push_str(specialization);
@@ -945,7 +969,14 @@ impl Server {
         pack.push_str("- No Spec, No Build: building software requires an approved specification (status: approved).\n");
         pack.push_str("- Never commit past failing gates (tests, clippy, repo lint).\n");
         pack.push_str("- Do not widen authority: external agents act under host shell permissions; red actions always ask.\n");
-        pack.push_str("- Attribution invariant: identify as ⟦badge⟧ Name (role, via delphi).\n\n");
+        match &identity {
+            Some(p) => pack.push_str(&format!("- Attribution invariant: identify as ⟦{}⟧ {} ({}, via delphi).\n\n", p.face, p.name, base_role)),
+            None => pack.push_str("- Attribution invariant: identify as ⟦badge⟧ Name (role, via delphi).\n\n"),
+        }
+        if let Some(p) = &identity {
+            pack.push_str("## Identity\n");
+            pack.push_str(&format!("- Name: {} (a label from the active theme; it grants nothing)\n- Badge: ⟦{}⟧\n- Role: {} (scope, tools and counterweights come from the role)\n- Pool slot: {}\n\n", p.name, p.face, base_role, p.slot));
+        }
 
         // 2. Canonical base_role pack
         pack.push_str("## Base Archetype Profile: ");
@@ -1590,6 +1621,33 @@ mod tests {
         // Given criteria still win over the suggestion.
         let c2 = done_of(&mut s, json!({"task": "x", "done_when": [{"kind": "file_exists", "value": "a.md"}]}));
         assert_eq!(c2["definition_of_done"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn spawn_agent_pack_names_a_one_off_agent_from_the_pool_and_keeps_names_apart() {
+        let (_t, dir, root) = project_ws();
+        let mut s = Server::new(&dir).with_cwd(&root);
+        init(&mut s);
+        let pool = crate::agent_pool::default_pool();
+        let ask = |s: &mut Server, spec: &str| {
+            let r = call_tool(s, "spawn_agent_pack", json!({"base_role": "investigator", "specialization": spec, "domain_focus": "chase the flaky regression"}));
+            assert_eq!(r["result"]["isError"], false, "{r}");
+            text_of(&r)
+        };
+        // The task's words are pool-36's keywords (flaky, regression).
+        let a = ask(&mut s, "flaky-test-hunter");
+        assert!(a.contains("- Pool slot: pool-36"), "{a}");
+        assert!(a.contains(&format!("identify as ⟦{}⟧ {} (investigator, via delphi)", pool[35].face, pool[35].name)), "{a}");
+        assert!(a.contains("it grants nothing") && a.contains("scope, tools and counterweights come from the role"));
+        // The same agent asked for again keeps its identity.
+        assert!(ask(&mut s, "flaky-test-hunter").contains("- Pool slot: pool-36"));
+        // Another agent in the same session never shares the name, even on the same words.
+        let b = ask(&mut s, "regression-hunter");
+        assert!(b.contains("- Pool slot: pool-") && !b.contains("- Pool slot: pool-36"), "{b}");
+        // A fresh session starts over.
+        let mut s2 = Server::new(&dir).with_cwd(&root);
+        init(&mut s2);
+        assert!(ask(&mut s2, "regression-hunter").contains("- Pool slot: pool-36"));
     }
 
     #[test]

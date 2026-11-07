@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-const DEFAULT_THEME_TEXT: &str = include_str!("../../../themes/greek/theme.md");
+pub const DEFAULT_THEME_TEXT: &str = include_str!("../../../themes/greek/theme.md");
 
 /// Maps canonical role IDs to themed display names, and resolves mentions.
 #[derive(Debug, Clone, PartialEq)]
