@@ -1,0 +1,3 @@
+args {"question": "Review draft spec 071 (host plugin marketplace and durable MCP enablement). Decide D-1 (one repo, generated drift-tested ecosystem/ folder + root .claude-plugin/marketplace.json), D-2 (operator-run `delphi mcp --install` that edits host config files outside the workspace, with the \u00a76.2 safeguards), D-3 (allow a small launcher script in a plugin). Also flag authority-widening ris
+started {"council_id": "t_0001", "note": "a Council runs for a few minutes: ask again with council_status, then council_result; its ruling is advice and binds nothing in your project", "state": "convening"}
+0 s ('deliberating', 'convening: choosing the seats')
