@@ -1,0 +1,11 @@
+Question: Is Delphi falling short of letting an operator use it from the MCP endpoint, via agentic systems, to get: (1) RAG over the full knowledge base, (2) agent specialties and subject-matter expertise, (3) research reporting and strategy, (4) guidance in spec-driven agentic development? Analyze gaps against specs 062/064/013/038/041 and the MCP tool surface; recommend how the Council would close each, prioritized.
+Stakes: high
+Options:
+- MCP surface is sufficient
+- Close gaps via new tools/resources
+- Close gaps via prompts and plugin guidance only
+Pointers:
+- specs/062-delphi-as-host-agent-mcp-server.md: MCP server spec
+- specs/064-knowledge-retrieval-for-agents-and-mcp.md: retrieval spec
+- specs/041-agent-registry-routing-and-role-extensions.md: roles and routing
+- specs/003-collaboration-and-council.md: council

@@ -1,0 +1,1 @@
+i'd like to have this system write it's own readme. better to have you do it or use claude?

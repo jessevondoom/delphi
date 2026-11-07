@@ -1,0 +1,12 @@
+{"questions": [
+  {"id": "q1", "b1": "records/q1-b1.md.txt", "b2": "records/q1-b2.md.txt", "a1": "records/q1-a1.md.txt",
+   "a2": {"status": "excluded", "why": "no record written on two attempts: the headless host stopped polling while the foreign seat was outstanding"}},
+  {"id": "q2", "b1": "records/q2-b1.md.txt", "b2": "records/q2-b2.md.txt", "a1": "records/q2-a1.md.txt",
+   "a2": {"status": "excluded", "why": "no record written on two attempts: the headless host stopped polling while the foreign seat was outstanding"}},
+  {"id": "q3", "b1": "records/q3-b1.md.txt", "b2": "records/q3-b2.md.txt", "a1": "records/q3-a1.md.txt", "a2": "records/q3-a2.md.txt"},
+  {"id": "q4", "b1": "records/q4-b1.md.txt", "b2": "records/q4-b2.md.txt", "a1": "records/q4-a1.md.txt",
+   "a2": {"status": "excluded", "why": "no record written on two attempts: the headless host stopped polling while the foreign seat was outstanding"}},
+  {"id": "q5", "b1": "records/q5-b1.md.txt", "b2": "records/q5-b2.md.txt", "a1": "records/q5-a1.md.txt", "a2": "records/q5-a2.md.txt"},
+  {"id": "q6", "b1": "records/q6-b1.md.txt", "b2": "records/q6-b2.md.txt", "a1": "records/q6-a1.md.txt",
+   "a2": {"status": "excluded", "why": "first attempt wrote no record; the re-run was not started because the pre-run cap check (1,876,691 + 135,130 > 2,000,000) forbids it"}}
+]}

@@ -1,0 +1,2 @@
+host-f173e6960b87048d {"t_0001": {"cache_read": 611314, "cache_write": 82550, "events": 7, "models": ["gemini-3.8-flash-medium", "sonnet"], "tokens": 116313}} retries 0 fail_lines 0 ['/tmp/e3/home-council/workspaces/delphi/local/sessions/host-f173e6960b87048d/councils/001-should-draft-spec-070-be-approved-it-kee.md']
+copied record -> /tmp/e3/records/q5-b2.md

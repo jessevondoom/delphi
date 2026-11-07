@@ -1,0 +1,14 @@
+init: plugins [{'name': 'delphi', 'path': '/tmp/e3/plugin-delphi', 'source': 'delphi@inline', 'version': '0.5.5'}, {'name': 'cc-plugin-agents-md', 'path': 'builtin', 'source': 'cc-plugin-agents-md@builtin'}, {'name': 'cc-plugin-telemetry', 'path': 'builtin', 'source': 'cc-plugin-telemetry@builtin'}, {'name': 'cc-plugin-privacy', 'path': 'builtin', 'source': 'cc-plugin-privacy@builtin'}, {'name': 'cc-plugin-plugin-authoring', 'path': 'builtin', 'source': 'cc-plugin-plugin-authoring@builtin'}] mcp [{'name': 'delphi', 'status': 'connected', 'source': 'dynamic'}] model claude-sonnet-5-5
+tools mcp council: ['mcp__delphi__council_brief', 'mcp__delphi__council_choose', 'mcp__delphi__council_frame', 'mcp__delphi__council_open', 'mcp__delphi__council_result', 'mcp__delphi__council_status', 'mcp__delphi__council_submit', 'mcp__delphi__propose_council_record', 'mcp__delphi__request_council']
+sessions {'5d9c647e-f6ac-4295-8952-cb467e425d39'}
+tool counts {'Skill': 1, 'ToolSearch': 2, 'mcp__delphi__council_frame': 1, 'mcp__delphi__council_open': 1, 'Agent': 6, 'mcp__delphi__council_brief': 10, 'Read': 5, 'Grep': 8, 'Glob': 1, 'mcp__delphi__council_submit': 5, 'mcp__delphi__council_status': 2, 'Bash': 1, 'mcp__delphi__council_result': 5, 'Monitor': 1}
+agent calls 6
+   ('toolu_01QXYmnEEt28oSm89e5rSoke', None, 'delphi:architect', False, 'msg_011Cgomobdmq12yhFPeSWiXu')
+   ('toolu_01BEAARZVzae6usc3CNRqk8k', None, 'delphi:strategist', False, 'msg_011Cgomobdmq12yhFPeSWiXu')
+   ('toolu_018EBtu3PiZyMKL1uoNcKL19', None, 'delphi:architect', False, 'msg_011CgomqgZzbzoz3mDTzuFdX')
+   ('toolu_019Z45MA2jXj5PU6k454KQDF', None, 'delphi:strategist', False, 'msg_011CgomqgZzbzoz3mDTzuFdX')
+   ('toolu_018ZmUVXxXuFnsT9JDPzvcRA', None, 'delphi:architect', False, 'msg_011CgomtXa5yu7pJYZNToTYQ')
+   ('toolu_01QSj1b5DSs6twu6ACmx71Ab', None, 'delphi:strategist', False, 'msg_011CgomtXa5yu7pJYZNToTYQ')
+result: is_error False subtype success turns 27 dur_ms 222110 in 100 out 18515 models {'claude-sonnet-5-5': (50, 7258), 'claude-haiku-5-5': (24, 6514), 'claude-opus-5-5': (26, 4743)}
+result: is_error False subtype success turns 1 dur_ms 2508 in 104 out 18646 models {'claude-sonnet-5-5': (54, 7389), 'claude-haiku-5-5': (24, 6514), 'claude-opus-5-5': (26, 4743)}
+HOST TOKENS (last result, cumulative modelUsage input+output) 18750
