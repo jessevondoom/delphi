@@ -62,14 +62,14 @@ CLI version: agy 1.5.3. Probed: 2026-11-07.
 
 | Cell | Result | Vendor-docs claim |
 | :-- | :-- | :-- |
-| Agent discovered | verified (by a manual diagnostic, not the probe's own run: in a temp dir with one `.agents/agents/delphi-canary-a.md`, `agy -p` invoked the custom subagent and returned its reply (`canary-a-ran`). The probe's own run reported 0 of 2 seats because its seats need a shell tool (see parallel)) | the canary file under `.agents/agents/` is listed |
+| Agent discovered | verified (by manual runs, not the probe's own: in a temp dir with `.agents/agents/delphi-canary-*.md`, `agy -p` invoked the custom subagent(s) and they replied. The probe's own runs reported 0 of 2 seats (see parallel)) | the canary file under `.agents/agents/` is listed |
 | Subagent definition | not run | `<name>.md` or `<name>/agent.md` |
 | Ships in a plugin | not run | yes, `plugins/<plugin>/agents/` |
 | Project / user location | not run | `.agents/agents/`, `~/.gemini/config/agents/` |
 | Isolated context | not run | yes (no parent history) |
-| Parallel seats | not run (the probe's seats run `date`/`sleep`; in headless `agy -p` a subagent has no tools unless its frontmatter declares `tools: [run_command]`, and then the `command` permission is auto-denied ("headless mode cannot prompt for"). The fix is an allow rule under `permissions.allow` in agy's settings.json (a workspace `.agents/settings.json` was tried and was not read) or `--dangerously-skip-permissions`; neither was applied without the operator's say-so) | yes, `invoke_subagent`, concurrent |
-| Pin a model per agent | not run (seats did not run to completion) | `model:` `inherit`, `flash` or `pro` (tiers, not versions) |
-| MCP in a seat | not run (`agy mcp list` reports no MCP servers configured on this machine, so there is nothing for a seat to call; the operator's agy config was not touched) | `mcpServers:` per agent is the only documented route; inheritance docs silent |
+| Parallel seats | failed (the probe failed 3 of 3 times; one hand-run of the identical prompt and canary files passed (both seats ran, started 2 s apart and overlapped by about 8 s). Seats need a shell tool: a subagent has no tools unless it declares them (`tools: [run_command]`, now in the probe's agy canary), and headless `agy -p` soft-denies a `RunCommand` unless a `command(...)` allow rule in agy's own settings.json matches the command text EXACTLY (`command(date)` matched `date` but not `date +%s`). With exact rules for `date +%s` and `sleep 8` in place (since rolled back) one seat ran `date +%s`, yet the full probe still failed on every run: any rewording of a command is denied and ends the turn (agy log: "Print mode: soft-denying tool confirmation RunCommand"). Not reliable without `--dangerously-skip-permissions`, which was not used) | yes, `invoke_subagent`, concurrent |
+| Pin a model per agent | not run (the probe's seats did not run to completion) | `model:` `inherit`, `flash` or `pro` (tiers, not versions) |
+| MCP in a seat | not run (`agy mcp list` reports no MCP servers configured on this machine, so there is nothing for a seat to call; the operator's agy MCP config was not touched) | `mcpServers:` per agent is the only documented route; inheritance docs silent |
 | Tool allowlist | not run | `tools` (a wrong name may hang the subagent) |
 | Nesting limit | not run | 10 |
 | Slash entry | not run | skills load with `/<skill-name>` |

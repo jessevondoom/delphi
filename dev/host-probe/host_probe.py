@@ -165,6 +165,9 @@ def canary_files(host, pin):
             out[f".codex/agents/{name}.toml"] = "\n".join(lines) + "\n"
         elif host == "agy":
             fm = ["---", f"name: {name}", f"description: {DESCRIPTION}"]
+            # agy gives a subagent no tools unless its frontmatter declares them (docs: `tools` defaults to empty); the seats run
+            # `date +%s` and `sleep 8`, and headless agy also needs a matching `command(...)` allow rule in its settings.json.
+            fm.append("tools: [run_command]")
             if pin:
                 fm.append(f"model: {pin}")
             out[f".agents/agents/{name}.md"] = "\n".join(fm + ["---", "", body])
