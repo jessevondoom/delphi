@@ -172,13 +172,13 @@ Asked for and approved by the operator on 2026-10-28. `copilot` 1.0.105 is logge
 | S2 | read-only introspection; approval bridge; Builder only after it is proven | built: `CopilotAcp` over stdio via `copilot --acp`, approval bridge mapping `session/request_permission` to Amber cards, answered `allow_once` or `reject` only (spec 051 §6.4 i); setup and doctor detect `copilot` and offer `copilot-sub` Builder seats; Builders route through ACP approval bridge |
 | S3 | `--plan` lane, vision | not started |
 
-## Seats, model families and launching agents on any carrier (spec 091, draft 2026-11-07)
+## Seats, model families and launching agents on any carrier (spec 091, approved 2026-11-07)
 
-A **draft**, not permission to build. Written after Council `t_0002` (architect, strategist, red-team) on the operator's goal of Delphi agents running on the outside across model families, for arms testing, Panels and red-team work. The operator decided on 2026-11-07 that a release-gate sweep labels `homogeneous` and does not fail closed, and that `require_families` is opt-in. Widens no authority; the separate question of Red actions in headless tests is spec 092. Extends 086, 062, 051, 047, 056, 037, 048.
+**Approved by the operator on 2026-11-07** ("approve all of the above": option C with a thin receipt first, and the recommended answers to OD-1 to OD-4). Written after Council `t_0002` (architect, strategist, red-team) on the operator's goal of Delphi agents running on the outside across model families, for arms testing, Panels and red-team work. The operator decided on 2026-11-07 that a release-gate sweep labels `homogeneous` and does not fail closed, and that `require_families` is opt-in. Widens no authority; the separate question of Red actions in headless tests is spec 092. Extends 086, 062, 051, 047, 056, 037, 048.
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
-| S0 | this spec | draft; awaits the operator's approval |
+| S0 | this spec | approved 2026-11-07 |
 | S1 | `seat.rs`: the daemon-written `seat.receipt` (requested and served model, resolved family, carrier and its policy, tool grant, prompt hash), the ratified family table with owner and expiry, the schema, a `delphi doctor` expiry warning | not started |
 | S2 | opt-in `require_families` and a count budget on the Panel's `foreign_seat` | not started |
 | S3 | receipts in `train run` rows; a family comparison whose arms differ in prompt hash or carrier policy is labelled confounded | not started |

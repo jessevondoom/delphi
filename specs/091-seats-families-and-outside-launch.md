@@ -3,7 +3,8 @@ id: spec-091-seats-families-and-outside-launch
 title: "091: Seats, model families and launching agents on any carrier: receipts, a family table, an opt-in diversity requirement, and an ask-another-family tool"
 author: architect
 timestamp: 2026-11-07T00:00:00Z
-status: draft   # a proposal, not permission to build (No Spec, No Build). The operator decided two points on 2026-11-07 (§9); everything else is the architect's recommendation after Council t_0002.
+status: approved   # by the operator, 2026-11-07 ("approve all of the above"): the Council's option C with a thin receipt first, the two decisions of §9 and the recommended answers to OD-1 to OD-4.
+approved_by: operator (2026-11-07)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +15,7 @@ tags: [spec, seats, families, harness, panel, red-team, arms, copilot, agy, code
 
 # Spec 091: Seats, model families and launching agents on any carrier
 
-> **Status: draft.** Extends [`specs/086`](086-outside-council-panel-and-host-subagents.md) (the Panel and `foreign_seat`), [`specs/062`](062-delphi-as-host-agent-mcp-server.md) (Delphi for host agents), [`specs/051`](051-copilot-cli-harness.md) and [`specs/047`](047-codex-harness-and-coverage.md) (Copilot and Codex as harnesses), [`specs/056`](056-discovered-model-assignment.md) (model classes and quota), [`specs/037`](037-training-experiments-quality-and-efficiency.md) and [`specs/048`](048-harness-benchmarking-and-targeted-evals.md) (arms). Uses `GOVERNANCE.md` H-001 (a family is a training lineage, whoever serves it) and `context/heuristics.md` H-007, H-008. **Widens no authority.** The separate question of letting a Red action run without a live operator is `specs/092`.
+> **Status: approved by the operator, 2026-11-07.** Extends [`specs/086`](086-outside-council-panel-and-host-subagents.md) (the Panel and `foreign_seat`), [`specs/062`](062-delphi-as-host-agent-mcp-server.md) (Delphi for host agents), [`specs/051`](051-copilot-cli-harness.md) and [`specs/047`](047-codex-harness-and-coverage.md) (Copilot and Codex as harnesses), [`specs/056`](056-discovered-model-assignment.md) (model classes and quota), [`specs/037`](037-training-experiments-quality-and-efficiency.md) and [`specs/048`](048-harness-benchmarking-and-targeted-evals.md) (arms). Uses `GOVERNANCE.md` H-001 (a family is a training lineage, whoever serves it) and `context/heuristics.md` H-007, H-008. **Widens no authority.** The separate question of letting a Red action run without a live operator is `specs/092`.
 
 ## 1. Why
 
@@ -80,7 +81,7 @@ The operator's goal (2026-11-07): Delphi agents running on the outside, in any h
 
 | Slice | Contents | Depends on |
 | :-- | :-- | :-- |
-| S0 | this spec: approval | |
+| S0 | this spec: **approved by the operator, 2026-11-07** | |
 | S1 | SR-1 and SR-2: `seat.rs`, the event, the schema, the table and `delphi doctor` expiry warning | S0 |
 | S2 | SR-3 and SR-4 on the Panel's `foreign_seat` | S1 |
 | S3 | SR-6: receipts in arm rows; the confounded label | S1 |
@@ -95,12 +96,12 @@ A reserve for the operator's subscription window; a generalised seat layer; any 
 
 ## 9. Decisions
 
-**Decided by the operator, 2026-11-07:** (1) a release-gate sweep labels `homogeneous` and does not fail closed; (2) `require_families` is opt-in. **Open (the architect's recommendation in brackets):**
+**Decided by the operator, 2026-11-07:** (1) a release-gate sweep labels `homogeneous` and does not fail closed; (2) `require_families` is opt-in; (3) "approve all of the above", accepting the recommended answers below:
 
-- **OD-1** Who owns `model-families.toml` and how long an entry lives. [The operator; 90 days.]
-- **OD-2** The default count budget. [Three foreign seats and 200K input tokens per task, 20 foreign seats per mission.]
-- **OD-3** Whether `ask_family` may name a model or only a family. [Family only at first.]
-- **OD-4** Whether a red-team sweep should prefer two families by default. [Yes, labelled when it could not (Council t_0002: the strategist and architect); the red-team seat wanted it required whenever configured.]
+- **OD-1** Who owns `model-families.toml` and how long an entry lives. **Decided:** the operator; 90 days.
+- **OD-2** The default count budget. **Decided:** three foreign seats and 200K input tokens per task, 20 foreign seats per mission.
+- **OD-3** Whether `ask_family` may name a model or only a family. **Decided:** family only at first.
+- **OD-4** Whether a red-team sweep should prefer two families by default. **Decided:** yes, labelled `homogeneous` when it could not (Council `t_0002`: the strategist and architect); the red-team seat wanted it required whenever configured, and the operator's decision (1) keeps it a label.
 
 ## 10. Known limits
 
