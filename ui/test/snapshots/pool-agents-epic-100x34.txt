@@ -1,0 +1,34 @@
+⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧ ⟦•─•⟧ ⟦×_×⟧
+delphi v0.5 · epic
+
+ ✔ nothing needs you
+
+ ▌ critical path  Vector database choice → Pricing tiers                               about 11 min
+
+▌◐ Vector database choice                                                18k tok 26%  ▰▰▱▱▱▱ 1 of 3
+▌  ✔ 1 step done
+▌  ▶ daedalus designing 11:00
+▌  ○ audit                                                                    ⇢ feeds Pricing tiers
+  ────────────────────────────────────────────────────────────────────────────────────────────────
+▌○ Pricing tiers                                                                      ▱▱▱▱▱▱ 0 of 2
+▌  ○ plan → wrap up                                               ⇠ waits on Vector database choice
+  ────────────────────────────────────────────────────────────────────────────────────────────────
+ ◐ Retry queue                                                           44k tok 61%  ▰▰▰▱▱▱ 3 of 7
+   ✔ chose table 2 of 3 · 2 steps done
+   ▶ ⟦×_×⟧ Sisyphus (builder) building 5:00 · tests 12 of 14 passed
+   ○ audit → research → wrap up
+  ────────────────────────────────────────────────────────────────────────────────────────────────
+  ✔ settled  Competitor onboarding 9.3k
+
+
+
+
+
+
+
+
+
+
+                                                                                 pace  ▁▁▂▃▄▆█▇▅▄▃▂
+────────────────────────────────────────────────────────────────────────────────────────────────────
+1 running  ·  71.5k tokens                                                       ← →  ·  ○ ○ ● ○ ○ ○

@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import chalk from 'chalk';
 import stringWidth from 'string-width';
-import { ACTIVITY, asciiBadgesRequested, asciiCells, badge, currentAsciiBadges, currentCapabilities, useAsciiBadges, useCapabilities, type AgentState, type AvatarSpec, type Info } from '../src/theme.ts';
+import { ACTIVITY, asciiBadgesRequested, asciiCells, badge, currentAsciiBadges, currentCapabilities, poolBadge, useAsciiBadges, useCapabilities, type AgentState, type AvatarSpec, type Info } from '../src/theme.ts';
 import { mascot } from '../src/observe-screen.ts';
 
 const spec: AvatarSpec = JSON.parse(readFileSync(new URL('./fixtures/avatar-spec.json', import.meta.url), 'utf8'));
@@ -95,4 +95,18 @@ test('with no table (an older delphi) or the switch off, text is left exactly as
   assert.equal(withAscii(false, () => asciiCells('⟦•─•⟧', info)), '⟦•─•⟧');
   assert.equal(withAscii(true, () => asciiCells('⟦•─•⟧', info)), '[0-0]');
   assert.equal(withAscii(true, () => asciiCells('♥_♥', info)), '?_?', 'a glyph the library does not know is a question mark, never a wide character');
+});
+
+// A one-off agent's badge (spec 087 §4) goes through the same switch as every other badge.
+test('a one-off agent\'s badge is five ASCII columns under the switch, in every state, blink included', () => {
+  const pool: Info = { ...info, pool: { 'pool-36': { name: 'Sisyphus', face: '×_×' }, 'pool-04': { name: 'Theseus', face: '◔_◔' } } };
+  for (const face of ['×_×', '◔_◔', '•─•']) {
+    for (const st of STATES) for (const frame of [undefined, 'blink']) {
+      const on = plain(withAscii(true, () => poolBadge('builder', face, st, pool, { dark: true }, frame)));
+      assert.equal(stringWidth(on), 5, `${face} ${st} ${frame}`);
+      assert.ok(isAscii(on), `${face} ${st} ${frame} -> ${on}`);
+      const off = plain(withAscii(false, () => poolBadge('builder', face, st, pool, { dark: true }, frame)));
+      assert.ok(off.startsWith('⟦') && off.endsWith('⟧'), `off keeps the Unicode brackets: ${off}`);
+    }
+  }
 });

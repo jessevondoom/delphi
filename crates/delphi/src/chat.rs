@@ -1131,6 +1131,13 @@ pub(crate) fn ui_info(console: &Path, narrator: &Path, ws_dir: &Path, mission: O
             (t.role_id.to_string(), json!({"name": names.get(t.role_id).cloned().unwrap_or_else(|| t.role_id.to_string()), "chassis": format!("#{:02x}{:02x}{:02x}", r, g, b), "face": t.badge_face, "crown": t.crown_slice, "crown_rgb": format!("#{:02x}{:02x}{:02x}", t.crown_rgb.0, t.crown_rgb.1, t.crown_rgb.2)}))
         })
         .collect();
+    // The name pool of the active theme (`specs/087` §4): slot to the name and face a one-off agent wears. Events carry only
+    // the slot; the console looks the name up here, so a replay shows the theme's current names. Empty when the theme has no pool.
+    let pool: serde_json::Map<String, Value> = delphi_engine::mcp_packs::Packs::new(delphi_engine::workspace::WorkspacePaths { home: std::path::PathBuf::from(&home), dir: ws_dir.to_path_buf() })
+        .pool()
+        .into_iter()
+        .map(|e| (e.slot, json!({"name": e.name, "face": e.face})))
+        .collect();
     let cwd = std::env::current_dir().ok().map(|p| p.display().to_string()).unwrap_or_default();
     // Home first, then each registered project: what `/projects` offers (`specs/058` §15).
     let mut projects = vec![json!({"name": "default", "root": ws_dir, "home": true})];
@@ -1153,7 +1160,7 @@ pub(crate) fn ui_info(console: &Path, narrator: &Path, ws_dir: &Path, mission: O
         },
         Err(_) => (vec!["orchestrator".into()], Vec::new()),
     };
-    json!({"projects": projects, "console_socket": console, "narrator_socket": narrator, "workspace": ws_dir, "mission": mission, "version": env!("CARGO_PKG_VERSION"), "cwd": cwd, "roles": roles, "avatar": crate::avatar::ui_spec(), "delphi_exe": exe, "workspace_name": ws_name, "home": home, "interactive_agents": interactive, "forbidden_agents": forbidden})
+    json!({"projects": projects, "console_socket": console, "narrator_socket": narrator, "workspace": ws_dir, "mission": mission, "version": env!("CARGO_PKG_VERSION"), "cwd": cwd, "roles": roles, "avatar": crate::avatar::ui_spec(), "pool": pool, "delphi_exe": exe, "workspace_name": ws_name, "home": home, "interactive_agents": interactive, "forbidden_agents": forbidden})
 }
 
 /// `delphi daemon status|stop|restart`.
@@ -1358,6 +1365,11 @@ mod tests {
         assert_eq!(v["roles"]["orchestrator"]["name"], "Orch");
         assert_eq!(v["roles"]["orchestrator"]["chassis"], "#a855f7");
         assert_eq!(v["roles"]["builder"]["name"], "builder", "an unthemed role keeps its id");
+        // Spec 087 §4: the name pool reaches the UI as slot to name and face, so events carry only the slot.
+        let pool = v["pool"].as_object().expect("the info carries the name pool");
+        assert_eq!(pool.len(), 36);
+        assert_eq!(pool["pool-36"]["face"], "×_×");
+        assert!(pool.values().all(|e| e["name"].as_str().is_some_and(|n| !n.is_empty()) && e["face"].as_str().is_some_and(|f| f.chars().count() == 3)));
         // The paths are the machine's own (a checkout called `thread-tokens` is not a secret), so only the rest is searched.
         let mut rest = v.clone();
         for path in ["cwd", "workspace", "workspace_name", "home", "delphi_exe", "console_socket", "narrator_socket"] {
