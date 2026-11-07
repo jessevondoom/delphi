@@ -15,8 +15,10 @@ q2,b1,delphi,104838,retries=0
 q2,b2,delphi,92973,retries=0
 q3,a1,host,17931,
 q3,b1,delphi,100497,retries=0
+q3,b2,delphi,77930,retries=0
 q4,a1,host,17470,
 q4,b1,delphi,77997,retries=0
+q4,b2,delphi,83911,retries=0
 q5,a1,host,21267,
 q5,b1,delphi,99432,retries=0
 q6,a1,host,20074,

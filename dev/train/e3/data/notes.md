@@ -64,3 +64,5 @@ Delphi-side about 810k of 2,000,000; host-side about 173k of 400,000. Phase 2 (B
 ### Phase 2 (B2)
 - q1 B2 (host-171490cb89b0af34): 82,059 Delphi-side, 0 retry, 3 seats readable, not escalated.
 - q2 B2 (host-79c58b1f3272015b): 92,973 Delphi-side, 0 retry, 3 seats readable, escalated (5 unresolved P0).
+- q3 B2 (host-b99d5cdb269b422e): 77,930 Delphi-side, 0 retry, 3 seats readable, escalated (5 unresolved P0).
+- q4 B2 (host-69d8827e84928491): 83,911 Delphi-side, 0 retry, 3 seats readable, escalated (Round 2 conflict).
