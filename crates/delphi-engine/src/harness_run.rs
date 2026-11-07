@@ -1945,6 +1945,58 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"ok","usage":{}}
         assert!(!out.text.contains("ok"), "the output is discarded");
     }
 
+    /// CHARACTERIZATION (spec 089 P4a, hypothesis H-1): documents CURRENT behaviour that slice P4b is expected to change,
+    /// so this test is expected to be rewritten (to assert the output is kept) if the operator approves OD-4.
+    /// The fake `agy` here does nothing wrong: it never touches any path. A writer that is not the seat (here the test,
+    /// standing in for an editor, a build or another session's commit) creates a file in the registered project while the
+    /// run is in flight, and the guard still discards the seat's good answer. The guard compares `git status` of every
+    /// registered checkout before and after and cannot tell who wrote.
+    #[tokio::test]
+    async fn characterization_an_unrelated_write_to_a_registered_checkout_during_an_agy_run_discards_a_good_answer() {
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = fake_cli(
+            scripts.path(),
+            r#"echo '{"event":"init","init":{}}'
+sleep 2
+echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer","usage":{}}}'"#,
+        );
+        let f = setup_with_exec(vec![], 5.0, |s| s.agy_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        crate::worktree::tests::init_repo(&f.root.join("proj"), &f.root.join("git-home"));
+        use_agy(&f);
+        let unrelated = f.root.join("proj/written-by-someone-else.txt");
+        let writer = {
+            let p = unrelated.clone();
+            async move {
+                tokio::time::sleep(Duration::from_millis(700)).await;
+                fs::write(p, "not the seat\n").unwrap();
+            }
+        };
+        let (out, ()) = tokio::join!(f.engine.run_task(&f.m, "architect", "Review the plan"), writer);
+        let out = out.unwrap();
+        assert!(unrelated.exists());
+        match &out.status {
+            Status::Escalated(r) => assert!(r.contains("changed a project checkout"), "{}", r),
+            other => panic!("{:?}", other),
+        }
+        assert!(!out.text.contains("a good answer"), "today the good answer is discarded; P4b would keep it");
+    }
+
+    /// The same run with no writer at all keeps the answer: the guard is silent when the checkout is unchanged.
+    #[tokio::test]
+    async fn an_agy_run_that_leaves_every_project_checkout_alone_keeps_its_answer() {
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = fake_cli(
+            scripts.path(),
+            r#"echo '{"event":"init","init":{}}'
+echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer","usage":{}}}'"#,
+        );
+        let f = setup_with_exec(vec![], 5.0, |s| s.agy_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        crate::worktree::tests::init_repo(&f.root.join("proj"), &f.root.join("git-home"));
+        use_agy(&f);
+        let out = f.engine.run_task(&f.m, "architect", "Review the plan").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "a good answer"), "{}", out.text);
+    }
+
     // ---- the Delphi tool bridge (`specs/020`) ----
 
     /// A stand-in MCP client: reads the config the engine gave the CLI, connects to the bridge's socket with the span's
