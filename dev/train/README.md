@@ -87,6 +87,22 @@ case for a real model: the model gets `fixture/artifact.md` and a prompt that na
 `items.json`, which the model never sees. A new seed is a new case, so a fresh seed is a holdout. `--items` is 5 to 200 (every
 kind appears from 5).
 
+## Context retention (`specs/048` BM-7)
+
+Do facts survive a compaction? A session tells the assistant N exact facts early (the same seeded items as handoff fidelity),
+runs a stretch of routine work, then compacts or starts fresh; a probe asks for each fact by name.
+
+```sh
+delphi train retention run --seed 7 --facts 10 --filler 40 --keep 4     # scripted: no model, no cost
+```
+
+It scores five conditions: **no compaction** (the upper bound), a **summary** that states no value, a **summary with a handle**
+to the dropped turns kept whole (`specs/049` CX-3, modelled here and not built) when the model follows the handle and when it
+ignores it, and a **new session**. The scripted model answers only from what it can see, so the table shows what the instrument
+can tell apart (a summary alone loses every fact; a handle recovers them only if followed; the handle costs a few dozen
+characters, not the history), not what any real model does. A live run waits on the compaction itself (`specs/045` H3); its
+probe answers will be scored by the same `exact_items` check, over the same items (`train_items`).
+
 ## Reviewing a truth pack (your job before any research run)
 
 Each research case has a generated **review sheet** beside its pack: open `truth/review-sheet.md` in

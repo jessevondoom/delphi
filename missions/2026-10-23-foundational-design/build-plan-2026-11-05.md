@@ -80,7 +80,7 @@ Stop and review the numbers with the operator. Decide (a) which of H1-H3 default
 ## 6. Progress log (append one line per slice or interruption)
 
 - 2026-11-05: spec 048 approved (BM6 gated on OD-3); this plan written. No slice started.
-- 2026-11-06: B1 (BM1) built in worktree `worktree-bm1-harness-arm`: harness arm kind plus effort columns and the harness-effect section. A2 (M6) had merged as #496. BM1 merged as #502. 2026-11-06: B2 (BM2) built in worktree `worktree-bm2-handoff-fidelity` (scripted chain and `gen`; live run not done). Next: BM3 (stacked on BM2: it reuses `train_items.rs`), A3 (H3 + CX2), A4 (CX3).
+- 2026-11-06: B1 (BM1) built in worktree `worktree-bm1-harness-arm`: harness arm kind plus effort columns and the harness-effect section. A2 (M6) had merged as #496. BM1 merged as #502. 2026-11-06: B2 (BM2) built in worktree `worktree-bm2-handoff-fidelity` (scripted chain and `gen`; live run not done). 2026-11-07: B3 (BM3) built, stacked on BM2 (scripted retention instrument; live run waits on H3). Next: A3 (H3 + CX2), A4 (CX3), then CX4 / CX5 once BM2 / BM3 merge.
 
 ## 7. Open on the operator
 
