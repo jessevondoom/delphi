@@ -724,6 +724,8 @@ pub(crate) fn connect(home: &Path, ws_dir: &Path, mission: Option<String>, names
     if let Ok(snap) = cmd.call("observe.snapshot", json!({"mission_id": mission_id})) {
         let roles: Vec<String> = snap["enabled_agents"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
         obs = delphi_engine::observe::ObserverState::new(&roles);
+        // A one-off agent's label may not pass for a defined role under the theme's name either (`specs/087` §4.3 item 4).
+        obs.set_core_names(names.values().cloned().collect());
         for e in snap["events"].as_array().into_iter().flatten() {
             obs.apply(e);
         }

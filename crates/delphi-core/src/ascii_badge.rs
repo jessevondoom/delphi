@@ -57,9 +57,23 @@ pub fn ascii_cells(s: &str) -> String {
         .collect()
 }
 
+/// Free text (a one-off agent's label, `specs/087` §4.3 item 4) as ASCII: every non-ASCII character becomes `?`. The face
+/// tables above are for badges; a label can hold any character, and a wide or ambiguous-width one must not move the columns
+/// of a row when the operator asked for ASCII, so it is not run through them (a `•` in a label would otherwise read as `0`).
+pub fn ascii_text(s: &str) -> String {
+    s.chars().map(|c| if c.is_ascii() { c } else { '?' }).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn free_text_becomes_question_marks_not_face_glyphs() {
+        assert_eq!(ascii_text("flaky-test-hunter"), "flaky-test-hunter");
+        assert_eq!(ascii_text("測試•x"), "???x");
+        assert_eq!(ascii_cells("•"), "0", "the badge table would have turned the bullet into a digit");
+    }
 
     #[test]
     fn a_badge_keeps_five_columns_and_becomes_ascii() {

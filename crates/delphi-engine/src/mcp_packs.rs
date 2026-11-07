@@ -119,6 +119,13 @@ impl Packs {
         }
     }
 
+    /// The active theme's display names for the roles a one-off agent's label may not pass for (`specs/087` §4.3 item 4):
+    /// what [`delphi_core::research::one_off_label`] compares a label with, besides the role ids themselves.
+    pub fn core_names(&self) -> Vec<String> {
+        let resolver = self.theme_resolver();
+        delphi_core::research::RESERVED_LABEL_IDS.iter().map(|r| resolver.display_name(r)).filter(|n| !n.is_empty()).collect()
+    }
+
     /// The name pool of the active theme (`specs/087` §4): the pack's own when it has one. The default `greek` theme falls
     /// back to the built-in pack's pool, because a home created before spec 087 holds a copy of that pack without one. Any
     /// other theme without a pool has none. Entries that fail [`crate::agent_pool::usable`] are dropped.

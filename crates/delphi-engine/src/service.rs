@@ -1768,6 +1768,8 @@ impl EngineService {
         events.retain(|e| crate::observe::KINDS.contains(&e.kind.as_str()));
         let skip = events.len().saturating_sub(4000);
         let mut st = crate::observe::ObserverState::new(&self.engine.settings.enabled_agents);
+        // A one-off agent's label may not pass for a defined role, whatever the active theme calls it (`specs/087` §4.3 item 4).
+        st.set_core_names(crate::research_host::core_display_names(&self.engine.ws.dir, &self.engine.ws.home));
         for e in events.into_iter().skip(skip) {
             st.apply(&serde_json::to_value(e).expect("events serialize"));
         }
