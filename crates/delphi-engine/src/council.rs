@@ -928,7 +928,7 @@ impl Engine {
         let stances = panel.stances().cloned().unwrap_or_default();
         let (round2, round2_text) = panel.parsed_round2();
         for (role, c) in &round2 {
-            let mut e = EventEnvelope::new(&m.id, "council.critique", json!({"round": 2, "role": role, "readable": c.is_some(), "recommendation": c.as_ref().map(|c| c.recommendation.label()), "concur": c.as_ref().and_then(|c| c.concur), "findings": c.as_ref().map(|c| c.findings.iter().map(|(s, t)| json!({"severity": s, "title": t})).collect::<Vec<_>>()).unwrap_or_default(), "text": round2_text.get(role).map(|t| self.secrets.redact(t)), "brief_hash": panel.brief_hash(role, 2)}));
+            let mut e = EventEnvelope::new(&m.id, "council.critique", json!({"round": 2, "role": role, "readable": c.is_some(), "recommendation": c.as_ref().map(|c| c.recommendation.label()), "concur": c.as_ref().and_then(|c| c.concur), "findings": c.as_ref().map(|c| c.findings.iter().map(|(s, t)| json!({"severity": s, "title": t})).collect::<Vec<_>>()).unwrap_or_default(), "text": round2_text.get(role).map(|t| self.secrets.redact(t)), "brief_hash": panel.brief_hash(role, 2), "format_retries": panel.format_retries(role)}));
             e.task_id = Some(task_id.clone());
             m.append(e).await?;
         }

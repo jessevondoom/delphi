@@ -80,6 +80,7 @@ Stop and review the numbers with the operator. Decide (a) which of H1-H3 default
 ## 6. Progress log (append one line per slice or interruption)
 
 - 2026-11-05: spec 048 approved (BM6 gated on OD-3); this plan written. No slice started.
+- 2026-11-06: B1 (BM1) built in worktree `worktree-bm1-harness-arm`: harness arm kind plus effort columns and the harness-effect section. A2 (M6) had merged as #496. Next: BM2, BM3 (both depend on BM1), A3 (H3 + CX2), A4 (CX3).
 
 ## 7. Open on the operator
 

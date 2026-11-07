@@ -232,7 +232,7 @@ Drafted from a review of LangChain / LangSmith benchmarking, memory and context 
 
 | Spec | Slice | Content | State |
 | :-- | :-- | :-- | :-- |
-| 048 | BM1 | harness arm kind (fixed model) and efficiency columns in the 037 report | approved 2026-11-05, not started |
+| 048 | BM1 | harness arm kind (fixed model) and efficiency columns in the 037 report | built 2026-11-06: an `[[arm]]` with `base = "<arm>"` and `[arm.loop]` switches takes its base's template home, `expect_models` and overlay (`train_run.rs` `parse_arms`; switch names and value kinds checked by `loopctl::check_switch`, so a typo is refused before a run; applied to the run's copy of `config.toml`, `[loop]` not being a pinned block). Rows keep turns, tool calls by tool with errors, nudges, hard stops, budget warnings, verify turns, escalations and cache read share (`efficiency_of`, reusing `toolreport` and `ctxacct`). `delphi train report` prints an EFFORT table and a HARNESS EFFECT section per model: pass rate with the noise (one standard error of the difference), tokens, turns and calls per pass, and the OD-2 verdict (`costlier, not better` over 25 % tokens per pass with the rate inside the noise; `a trade` for more passes at that cost; `no evidence` under 3 seeds). Tests: AC-1 (arm and base on one model, case and seed, both in the report) and AC-2 (the flag). Not built: harness arms that vary the tool set or a prompt section (switches and overlay only); per-tool names in the report (rows keep `by_tool`); no live run (scripted fake binary only) |
 | 048 | BM2 | handoff fidelity eval (paraphrase loss) | approved 2026-11-05, not started |
 | 048 | BM3 | context retention eval | approved 2026-11-05, not started |
 | 048 | BM4 | tool-count degradation eval | approved 2026-11-05, not started |
@@ -737,8 +737,8 @@ From the E2 report (verdict INCOMPLETE). Approved 2026-11-06 on the operator's i
 | Slice | Content | Hours | State |
 | :-- | :-- | --: | :-- |
 | P0 | spec 089 approval and tracker entry | 1 | approved 2026-11-06 |
-| P1 | server-side Round 2 shape check at submit; seat-file closing lines | 5 | approved, not built |
-| P2 | scorer venue fix; `venue: daemon` on daemon records; useful question-limit message | 3 | built (PR open) |
+| P1 | server-side Round 2 shape check at submit (host seats; two rejections, then taken as unreadable); seat-file closing lines; `format_retries` recorded | 5 | built (PR open) |
+| P2 | scorer venue fix; `venue: daemon` on daemon records; useful question-limit message | 3 | built (merged, #524) |
 | P3 | skill wording (verbatim question, confirmation rule), `operator_confirmed`, options source | 4 | approved, not built |
 | P4a | `agy` seat reliability: reproduce the checkout-guard false positive, classify the hangs | 3 | built (PR open); P4b waits for OD-4 |
 | P4b | `agy` fix: one retry after a CLI error, discard message names the paths (guard unchanged by decision; watchdog deferred) | 6-10 | built (PR open): retry and path message; guard unchanged by decision; live capture held |
