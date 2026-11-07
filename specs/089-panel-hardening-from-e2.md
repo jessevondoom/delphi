@@ -3,18 +3,19 @@ id: spec-089-panel-hardening-from-e2
 title: "089: Panel hardening from the E2 run: a server-side Round 2 shape check, honest question handling and confirmation, scorer and record fixes, agy seat reliability, and a matcher that can tell findings apart"
 author: architect
 timestamp: 2026-11-06T22:00:00Z
-status: draft
+status: approved   # by the operator's instruction of 2026-11-06 ("begin work on the remaining slices"); OD-1, OD-2, OD-3 and OD-5 take the recommendations; P4b and the E3 run wait for the operator's explicit go (§10)
+approved_by: operator (2026-11-06)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
 confidence: medium   # evidence is one experiment (E2, 8 questions, one host); causes marked "known" were read in code, those marked "hypothesis" were not reproduced
 source_mission: 2026-10-23-foundational-design
-tags: [spec, council, panel, mcp, host-agents, reliability, measurement, draft]
+tags: [spec, council, panel, mcp, host-agents, reliability, measurement]
 ---
 
 # Spec 089: Panel hardening from the E2 run
 
-> **Status: draft.** A plan for the operator, not permission to build (No Spec, No Build). Nothing here may be built until the operator sets `status: approved`.
+> **Status: approved, 2026-11-06,** on the operator's instruction to begin work on the slices. That instruction did not answer the five decisions one by one, so this spec reads it as follows (§10): OD-1, OD-2, OD-3 and OD-5 take the recommendations; **OD-4 and the E3 run are not taken** and need the operator's explicit go, because one narrows a safety guard and the other spends about 1.5M tokens. P1, P2, P3, P4a and P5 may be built now; P4b and P6 wait.
 > **Extends:** [`specs/086`](086-outside-council-panel-and-host-subagents.md) (the Panel, its skill and its S5 experiment), and its pre-registered experiment `dev/train/e2/` (`dev/train/e2/REPORT.md`, saved by PR #518, and `dev/train/e2/PREREG.md`). Reads [`specs/003`](003-collaboration-and-council.md) §4 and [`specs/047`](047-codex-harness-and-coverage.md) only where named.
 > **Origin:** the E2 report (2026-11-06): verdict `INCOMPLETE`, and nine concrete defects and gaps, seven in the product and two in the measurement.
 
@@ -176,6 +177,9 @@ Order: P1 and P2 first (small, deterministic, no operator decision); P5 in paral
 ---
 
 ## 10. Decisions for the operator
+
+**Status (2026-11-06):** OD-1, OD-2, OD-3 and OD-5 are taken as recommended. OD-4 is **open**: P4a (diagnosis, which changes no guard) goes ahead; P4b (changing the guard) needs the operator's explicit go after the reproduction is shown. The E3 run (P6) also needs an explicit go.
+
 
 - **OD-1 (confirmation).** Ask for a yes only when the host proposes a Panel the operator did not ask for, or for a foreign seat or high stakes (recommended), or keep "always confirm" and make the skill and card say so more firmly? *Recommendation:* the former; E2 shows hosts skip the second ask anyway.
 - **OD-2 (agy retry).** One automatic retry of a harness seat after a CLI error, tokens counted? *Recommendation:* yes, for CLI errors only.
