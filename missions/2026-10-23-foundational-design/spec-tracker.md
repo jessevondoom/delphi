@@ -745,16 +745,17 @@ From the E2 report (verdict INCOMPLETE). Approved 2026-11-06 on the operator's i
 | P5 | matcher v2 with a negative control; exploratory `RESCORE.md` of E2 | 5 | built (merged, #523); v2 FAILED validation: agreement 0.15 (needs 0.30), false-match 0.0 |
 | P6 | E3 pre-registration (the run needs the operator's go) | 6 | approved; the run needs an explicit go |
 
-## Spec 088: a spec compile step (2026-11-06, draft)
+## Spec 088: a spec compile step (2026-11-07, draft)
 
-From a conversation with the operator on 2026-11-06 and a prior-art survey (spec 088 §9; part of it unverified). A draft: not approved, nothing built. Extract-never-rewrite is the stated invariant; a per-spec JSON for agents and grouped markdown views for review; slices S4 onward wait on a measurement after S3 (spec 088 §8, item 10).
+From conversations with the operator on 2026-11-06 and 2026-11-07, a prior-art survey (spec 088 §9, part unverified), a Council and a Panel (spec 088 §12). A draft: not approved, nothing built. Re-sequenced after review: stage 1 is a tier-0 compile that runs in place (no move, no renumbering, no edit to an approved spec) and writes to `compiled/specs/`; requirement IDs, the registry and supersession are stage 2 and wait on a measurement (OD-5, "ambiguous means stop"). The operator approved the nine groups and decided to commit the markdown views. The operator's direction to move the sources and renumber specs 014, 037 and 061 is kept as a **deferred decision** (spec 088 §11.2; owner: the operator; trigger: the OD-5 verdict or ninety days after S3, whichever is first), because the engine treats `specs/` as governed by path prefix. Hours are estimates.
 
-| Slice | Content | Hours | State |
+| Slice | Content | Hours (likely) | State |
 | :-- | :-- | --: | :-- |
 | S0 | spec 088 approval and tracker entry | 1 | draft, awaits the operator |
-| S1 | move the canonical specs to `specs/source/`; trailers resolve by number | 6 | not built |
-| S2 | shared parser, tier 0 compile, schema, frontmatter `group` | 16 | not built |
-| S3 | index and group views, drift tests, `specs show/list`, MCP; start of the measurement | 12 | not built |
-| S4 | requirement tags, revisions, tombstones, amendments, registry check | 16 | not built |
-| S5 | `spec-driven-build` skill, retrofit tool, tag the specs still being built | 20 | not built |
-| S6 | coverage report (warn-only) | 10 | not built |
+| S1 | lint rejects a new spec taking a taken number; mapping paragraph in CONTRIBUTING | 3 | not built |
+| S2a | shared parser in `delphi-core`; `spec_refs` moved onto it (own PR, revertible) | 12 | not built |
+| S2b | tier-0 compile, schema, `compiled/groups.toml`, exclusions of `compiled/` | 22 | not built |
+| S3 | views, `specs show/list/report`, MCP, `spec-driven-build` skill, read counter; the measurement starts | 16 | not built |
+| S4 | (stage 2) requirement tags, revisions, tombstones, amendments, registry, supersession | 16 | conditional on OD-5 |
+| S5 | (stage 2) retrofit tool, tag the specs still being built | 20 | conditional |
+| S6 | (stage 2) coverage report, warn-only | 10 | conditional |
