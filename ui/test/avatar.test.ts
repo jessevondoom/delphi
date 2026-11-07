@@ -56,12 +56,12 @@ test('eyes are deep slate on a light terminal and white on a dark one, for every
   });
 });
 
-test('the mouth is the cell the library says it is, not whichever character looks like one: the red-team\'s -_- has - eyes', () => {
+test('the mouth is the cell the library says it is, not whichever character looks like one: the red-team\'s ¬_¬ has ¬ eyes', () => {
   withColour(() => {
     const idle = spec.roles['red-team']!.badge.idle!;
-    assert.equal(idle.cells, '-_-');
+    assert.equal(idle.cells, '¬_¬');
     const out = badge('red-team', 'idle', info, { dark: false });
-    assert.ok(out.includes(rgb(spec.eye.light) + '-'), 'the first eye is eye-coloured');
+    assert.ok(out.includes(rgb(spec.eye.light) + '¬'), 'the first eye is eye-coloured');
     assert.ok(out.includes(rgb(spec.roles['red-team']!.chassis) + '_'), 'the mouth is chassis-coloured');
     assert.equal((out.match(new RegExp(rgb(spec.eye.light).replace(/\[/g, '\\['), 'g')) ?? []).length, 2, 'two eyes');
   });
@@ -83,8 +83,8 @@ test('an older delphi that sends no spec still gets correct badges, eyes by posi
   const old: Info = { ...info, avatar: undefined };
   withColour(() => {
     const out = badge('red-team', 'idle', old, { dark: false });
-    assert.equal(plain(out), '⟦-_-⟧');
-    assert.ok(out.includes(rgb('#0f172a') + '-'), 'eyes are dark on light even when they are dashes');
+    assert.equal(plain(out), '⟦¬_¬⟧');
+    assert.ok(out.includes(rgb('#0f172a') + '¬'), 'eyes are dark on light even when they are not dots');
     assert.equal(plain(badge('scout', 'running', old, { dark: true })), '⟦···⟧');
   });
 });

@@ -20,5 +20,31 @@ unreadable (the test checks 4.5:1 against white).
 3. `npm test` in `ui/` checks the new role or face in every console state on dark and light terminals (five columns wide,
    eye colour by position, mascot rows seven columns, alert-eye contrast) without a new TypeScript test.
 
-Which cell of a badge is the mouth is named by position in the spec, never guessed from the character: the red-team's
-`-_-` has `-` eyes.
+Which cell of a badge is the mouth is named by position in the spec, never guessed from the character: a face like the
+red-team's `¬_¬` has `¬` eyes, and its blink `-_-` has `-` eyes.
+
+## The thirteen core roles (spec 087)
+
+Every role has its own idle badge and its own blink, listed in `CORE_FACES` in `avatar.rs` (a test pins it to spec 087 §3.1).
+Only the writer and the investigator, the twins, share an idle face; they differ by colour and by mirrored winks. Rules the
+tests hold: faces are three cells from a width-1 character set, a blink never equals its idle face, every chassis clears the
+contrast gate in both modes (3.0:1 on dark, 4.0:1 on light; the roles added by 087 reach 4.5:1), and no two chassis are closer
+than the spread measured when 087 was written (CIELAB distance 14 on dark, 9 on light). At 16 colours the codes are distinct
+but approximate in hue, so the face and the name carry the identity.
+
+A blink is a list of frames, `blink_steps` in the spec (`avatar::blink_steps`), one frame per timer tick; the first frame is
+`badge.blink`. Most roles have one frame. The scout has three (`-••`, `•-•`, `••-`): one eye closes at a time and all three
+never do. `faceOf` returns `{ frame: 'blink', step }`, `tickKey` includes the step so every frame is repainted, and with
+reduce motion there is no blink in any frame. A face the library has no blink for (a spawned agent) blinks mechanically: each
+eye cell becomes `-` and the mouth stays (`mechanicalBlink` in `theme.ts`). The mascot's blink row stays a single frame.
+
+## ASCII badges (spec 087 §6.2)
+
+`DELPHI_ASCII_BADGES=1` draws every badge and every mascot face row in ASCII of the same width: `⟦•─•⟧` is `[0-0]`, `⟦¬_¬⟧` is
+`[~_~]`. There is one table, `delphi_core::ascii_badge::FACE_GLYPHS` (plus the two brackets); `avatar::ui_spec` sends it as
+`ascii_glyphs`, so the console keeps none of its own, and a theme pack's `ascii_glyphs` (which the name-pool lint reads) must
+equal it (a test). A glyph with no entry becomes `?`, so the result is always ASCII. The table is chosen so that no two core
+roles collapse onto one ASCII face except the twins, a blink never equals its idle face, and no pool name looks like a core
+role (all three are tests). Only the glyphs change: colours, the mouth cell and the blink frames are the same. What a host is
+sent is `[mcp] badge_ascii` (a server a host started does not see your shell). Left as they are: the mascot crown's `▄`
+blocks (colour, not a face), the title-bar mark, and the fallback faces an older `delphi` that sends no table is drawn with.

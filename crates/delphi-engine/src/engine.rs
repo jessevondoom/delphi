@@ -1224,13 +1224,19 @@ impl Engine {
             let now = (self.clock_unix)();
             let route = resolve_route(&cfg, &self.pool.snapshot(), now, &self.route_request(sc, true));
             let note = exhausted_note.as_ref().map(|n| format!(": {}", n)).unwrap_or_default();
+            // The emergency stop-gap (`specs/056` §3.5): save state when every seat is out; hold everything while a labeled record stands,
+            // and verify it with the first seat that meets the floor. Returns at once when `[routing] emergency_*` is unset.
+            let emergency_hold = match self.emergency_step(sc, &route, now).await? {
+                Ok(hold) => hold,
+                Err(esc) => return Ok(Err(esc)),
+            };
             let (key, passed_over) = match &route {
                 Route::Target { key, .. } => (key.clone(), None),
                 Route::Similar { key, target, why, .. } => (key.clone(), Some((target.clone(), why.clone()))),
                 // The API has nothing as capable as the target, but a subscription harness does: hand the span to it
                 // (the span loop does that on this signal) before asking about a weaker API model or waiting. Only for a span's first turn:
                 // a harness cannot resume, so later turns ask or wait instead.
-                Route::Weaker { .. } | Route::NoModel { .. } if turn_index == 1 && !sc.harness_tried.load(std::sync::atomic::Ordering::SeqCst) && self.route_harness(sc).is_some() => {
+                Route::Weaker { .. } | Route::NoModel { .. } if turn_index == 1 && !emergency_hold && !sc.harness_tried.load(std::sync::atomic::Ordering::SeqCst) && self.route_harness(sc).is_some() => {
                     return Ok(Err(Escalate(format!("{}{}: a subscription harness can serve this span instead", EXHAUSTED, note))));
                 }
                 Route::Weaker { key, target, why, back_at, lost, .. } => {

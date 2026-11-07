@@ -251,7 +251,25 @@
       "properties": {
         "enabled": { "type": "boolean", "default": true, "description": "false: every tool call is answered `disabled_by_operator`. Read at each call, so it takes effect at once. A config.toml that cannot be read as written also turns it off." },
         "allow_remote": { "type": "boolean", "default": false, "description": "Reserved for a later spec. true is refused in this version." },
-        "badge_style": { "type": "string", "enum": ["plain", "ansi", "markdown"], "default": "plain", "description": "Which form of a Delphi agent's identity the `signature` field carries (specs/066 section 7). Plain is the default; the ansi and markdown forms are always sent beside it." }
+        "badge_style": { "type": "string", "enum": ["plain", "ansi", "markdown"], "default": "plain", "description": "Which form of a Delphi agent's identity the `display` and `signature` fields carry (specs/066 section 7, specs/087 section 5). Plain is the default; the ansi and markdown forms are always sent beside it." },
+        "badge_mode": { "type": "string", "enum": ["dark", "light"], "default": "dark", "description": "The terminal background the ANSI form of an identity is coloured for (specs/087 section 5.1). Delphi cannot see the host's terminal, so the operator says it once. The plain and markdown forms carry no colour and ignore it." },
+        "badge_ascii": { "type": "boolean", "default": false, "description": "Whether the badge in an identity is plain ASCII (for example [0-0] for the badge with the bullet-dash-bullet face), for a host whose terminal or font cannot draw the badge characters (specs/087 section 6.2). DELPHI_ASCII_BADGES=1 in the environment of the process that builds the identity has the same effect." }
+      }
+    },
+    "host": {
+      "type": "object",
+      "description": "Subagent files for the other tools (specs/086 section 6.3).",
+      "additionalProperties": false,
+      "properties": {
+        "models": {
+          "type": "object",
+          "description": "Host, then council role, to the model name that host's generated subagent file asks for. Only hosts that take free names; no entry means the file sets no model.",
+          "additionalProperties": false,
+          "properties": {
+            "copilot": { "$ref": "#/$defs/hostRoleModels" },
+            "codex": { "$ref": "#/$defs/hostRoleModels" }
+          }
+        }
       }
     },
     "retrieval": {
@@ -266,6 +284,17 @@
   },
   "additionalProperties": true,
   "$defs": {
+    "hostRoleModels": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "architect": { "$ref": "#/$defs/hostModelName" },
+        "red-team": { "$ref": "#/$defs/hostModelName" },
+        "strategist": { "$ref": "#/$defs/hostModelName" },
+        "builder": { "$ref": "#/$defs/hostModelName" }
+      }
+    },
+    "hostModelName": { "type": "string", "pattern": "^[A-Za-z0-9._:/-]{1,80}$" },
     "searchEngine": {
       "type": "object",
       "additionalProperties": false,

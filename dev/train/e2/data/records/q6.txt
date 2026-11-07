@@ -1,0 +1,12 @@
+Question: Review draft spec 071 (host plugin marketplace and durable MCP enablement). Decide D-1 (one repo, generated drift-tested ecosystem/ folder + root .claude-plugin/marketplace.json), D-2 (operator-run `delphi mcp --install` that edits host config files outside the workspace, with the §6.2 safeguards), D-3 (allow a small launcher script in a plugin). Also flag authority-widening risks, missing safeguards, and whether Q-1..Q-5 block approval.
+Stakes: normal
+Options:
+- Approve as written
+- Approve with amendments (name them)
+- Approve E1-E2 only; defer installer (E3) and launcher (E5)
+- Reject / rework
+Pointers:
+- specs/071-host-plugin-marketplace-and-durable-mcp-enablement.md: the draft spec under review
+- specs/062-delphi-as-host-agent-mcp-server.md: spec being extended (§10, §3.2, Q-5)
+- crates/delphi-engine/src/mcp_hosts.rs: current snippet and export generator
+- docs/guides/using-delphi-from-other-tools.md: current operator guide

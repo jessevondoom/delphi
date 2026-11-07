@@ -1,0 +1,162 @@
+[
+  {
+    "host": "claude-code",
+    "cli_version": null,
+    "date": null,
+    "cells": {
+      "definition": {
+        "status": "not run"
+      },
+      "plugin": {
+        "status": "not run"
+      },
+      "location": {
+        "status": "not run"
+      },
+      "isolated": {
+        "status": "not run"
+      },
+      "parallel": {
+        "status": "not run"
+      },
+      "model_pin": {
+        "status": "not run"
+      },
+      "mcp": {
+        "status": "not run"
+      },
+      "tools": {
+        "status": "not run"
+      },
+      "nesting": {
+        "status": "not run"
+      },
+      "slash": {
+        "status": "not run"
+      },
+      "discovered": {
+        "status": "not run"
+      }
+    }
+  },
+  {
+    "host": "copilot",
+    "cli_version": null,
+    "date": null,
+    "cells": {
+      "definition": {
+        "status": "not run"
+      },
+      "plugin": {
+        "status": "not run"
+      },
+      "location": {
+        "status": "not run"
+      },
+      "isolated": {
+        "status": "not run"
+      },
+      "parallel": {
+        "status": "not run"
+      },
+      "model_pin": {
+        "status": "not run"
+      },
+      "mcp": {
+        "status": "not run"
+      },
+      "tools": {
+        "status": "not run"
+      },
+      "nesting": {
+        "status": "not run"
+      },
+      "slash": {
+        "status": "not run"
+      },
+      "discovered": {
+        "status": "not run"
+      }
+    }
+  },
+  {
+    "host": "codex",
+    "cli_version": null,
+    "date": null,
+    "cells": {
+      "definition": {
+        "status": "not run"
+      },
+      "plugin": {
+        "status": "not run"
+      },
+      "location": {
+        "status": "not run"
+      },
+      "isolated": {
+        "status": "not run"
+      },
+      "parallel": {
+        "status": "not run"
+      },
+      "model_pin": {
+        "status": "not run"
+      },
+      "mcp": {
+        "status": "not run"
+      },
+      "tools": {
+        "status": "not run"
+      },
+      "nesting": {
+        "status": "not run"
+      },
+      "slash": {
+        "status": "not run"
+      },
+      "discovered": {
+        "status": "not run"
+      }
+    }
+  },
+  {
+    "host": "agy",
+    "cli_version": null,
+    "date": null,
+    "cells": {
+      "definition": {
+        "status": "not run"
+      },
+      "plugin": {
+        "status": "not run"
+      },
+      "location": {
+        "status": "not run"
+      },
+      "isolated": {
+        "status": "not run"
+      },
+      "parallel": {
+        "status": "not run"
+      },
+      "model_pin": {
+        "status": "not run"
+      },
+      "mcp": {
+        "status": "not run"
+      },
+      "tools": {
+        "status": "not run"
+      },
+      "nesting": {
+        "status": "not run"
+      },
+      "slash": {
+        "status": "not run"
+      },
+      "discovered": {
+        "status": "not run"
+      }
+    }
+  }
+]

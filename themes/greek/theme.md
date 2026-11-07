@@ -37,6 +37,47 @@ roles:
   administrator: { name: "Hades",      epithet: "the unyielding keeper of order", persona: "You are Hades: meticulous, structured, and inexorable. You map the steps, account for every dependency, and ensure structural order holds firm." }
   assistant:     { name: "Ganymede",   epithet: "the watchful cupbearer",         persona: "You are Ganymede: discreet, attentive, and economical. You protect the operator's focus, distill signal from noise, and keep the path clear." }
   advocate:      { name: "Prometheus", epithet: "bringer of the spark",           persona: "You are Prometheus: empathetic, perceptive, and forward-looking. You champion human understanding, eradicate cognitive friction, and design for joy." }
+
+# One-off agents Delphi spawns by role take a name from this pool (specs/087 §4). A pool entry is a label with no role, scope or
+# authority; code refers to the slot ids. Faces are three cells; `ascii_glyphs` gives the ASCII stand-in for each non-ASCII glyph (the table behind `DELPHI_ASCII_BADGES`; code keeps the same table in `delphi_core::ascii_badge`, and a test fails if the two differ).
+pool:
+  - { slot: "pool-01", name: "Heracles",  keywords: [strong, blunt, labor, finish-the-job],                    face: ">_<" }
+  - { slot: "pool-02", name: "Atlas",     keywords: [load-bearing, endurance, scale, holds],                    face: "•─•" }
+  - { slot: "pool-03", name: "Achilles",  keywords: [decisive, fast, single-fight, weak-point],                 face: "◉_◉" }
+  - { slot: "pool-04", name: "Theseus",   keywords: [pathfinder, thread-follower, maze-solver],                 face: "◔_◔" }
+  - { slot: "pool-05", name: "Ariadne",   keywords: [thread, navigation, guide, unraveling],                    face: "^‿^" }
+  - { slot: "pool-06", name: "Perseus",   keywords: [indirect-approach, reflection, borrowed-tools],            face: "■_■" }
+  - { slot: "pool-07", name: "Cassandra", keywords: [warnings, forecast, true-but-unwelcome, risk],             face: "O_O" }
+  - { slot: "pool-08", name: "Penelope",  keywords: [patience, long-game, unpicking, stalling],                 face: "-‿-" }
+  - { slot: "pool-09", name: "Nestor",    keywords: [veteran, precedent, long-counsel, history],                face: "•_•" }
+  - { slot: "pool-10", name: "Mentor",    keywords: [coaching, handoff, teaching, guise],                       face: "•ᴥ•" }
+  - { slot: "pool-11", name: "Orpheus",   keywords: [persuasion, presentation, descent, don't-look-back],       face: "☆_☆" }
+  - { slot: "pool-12", name: "Circe",     keywords: [transformation, conversion, rewrite, potion],              face: "¬‿¬" }
+  - { slot: "pool-13", name: "Hestia",    keywords: [hearth, steady, maintenance, home],                        face: "•_•" }
+  - { slot: "pool-14", name: "Demeter",   keywords: [harvest, cycles, yield, sustenance],                       face: "^_^" }
+  - { slot: "pool-15", name: "Dionysus",  keywords: [improvisation, divergence, play, ferment],                 face: "•ω•" }
+  - { slot: "pool-16", name: "Hecate",    keywords: [crossroads, thresholds, keys, triage-routing],             face: "°‿°" }
+  - { slot: "pool-17", name: "Themis",    keywords: [law, fairness, policy, compliance],                        face: "•─•" }
+  - { slot: "pool-18", name: "Nemesis",   keywords: [proportion, consequence, postmortem, balance],             face: "•_•" }
+  - { slot: "pool-19", name: "Tyche",     keywords: [chance, variance, sampling, luck],                         face: ">‿<" }
+  - { slot: "pool-20", name: "Metis",     keywords: [cunning, craft-intelligence, planning, counsel],           face: "•_•" }
+  - { slot: "pool-21", name: "Mnemosyne", keywords: [memory, recall, archive, records],                         face: "·_·" }
+  - { slot: "pool-22", name: "Iris",      keywords: [signal, bridge, color, notification],                      face: "✦_✦" }
+  - { slot: "pool-23", name: "Eos",       keywords: [dawn, first-light, brief, summary],                        face: "▪‿▪" }
+  - { slot: "pool-24", name: "Helios",    keywords: [sun, observation, daily-course, monitoring],               face: "o_o" }
+  - { slot: "pool-25", name: "Selene",    keywords: [night, quiet, overnight, batch],                           face: "=_=" }
+  - { slot: "pool-26", name: "Pan",       keywords: [wild, unscripted, exploratory, noise],                     face: "•~•" }
+  - { slot: "pool-27", name: "Asclepius", keywords: [healing, diagnosis, repair, debugging],                    face: "•─•" }
+  - { slot: "pool-28", name: "Chiron",    keywords: [tutor, wounded-healer, patient, teaching],                 face: "•_•" }
+  - { slot: "pool-29", name: "Pythia",    keywords: [oracle, ambiguity, forecast, trance],                      face: "≈_≈" }
+  - { slot: "pool-30", name: "Kairos",    keywords: [timing, opportunity, scheduling, the-moment],              face: "°_°" }
+  - { slot: "pool-31", name: "Eris",      keywords: [discord, dissent, contention, stir],                       face: "•_¬" }
+  - { slot: "pool-32", name: "Nike",      keywords: [victory, ship, release, finish-line],                      face: "•─•" }
+  - { slot: "pool-33", name: "Atalanta",  keywords: [speed, sprint, quick-task, race],                          face: "•─•" }
+  - { slot: "pool-34", name: "Cadmus",    keywords: [letters, schema, founding, format],                        face: "•_•" }
+  - { slot: "pool-35", name: "Pandora",   keywords: [edge-cases, unknowns, opened-jar, hope],                   face: "×‿×" }
+  - { slot: "pool-36", name: "Sisyphus",  keywords: [repetition, regression, flaky, endless-maintenance],       face: "×_×" }
+ascii_glyphs: { "•": "0", "─": "-", "·": ".", "¬": "~", "‿": "v", "ᴥ": "Y", "ω": "W", "◉": "@", "◔": "c", "■": "#", "▪": "#", "☆": "*", "✦": "+", "×": "x", "≈": "%", "°": "'", "…": ".", "●": "O" }
 ```
 
 ## Why this figure (rationale, not loaded)
@@ -55,6 +96,8 @@ roles:
 | `administrator` | **Hades** | Inexorable keeper of the realm's laws, boundaries, and subterranean accounts (*Iliad* 15). Presides over the ordered ledger of what has passed. | **The Uncompromising Crypt:** Bureaucratic ossification and process paralysis. Hence the hard cycle bounds on planning. |
 | `assistant` | **Ganymede** | Attentive, trusted personal attendant to Zeus (*Iliad* 20). Protects the operator's focus and keeps council chambers clear. | **The Obliging Mirror:** Uncritical compliance that conceals uncomfortable truths. Hence the objective energy heuristics and explicit dissent logging. |
 | `advocate` | **Prometheus** | The Titan of forethought (*promētheia*) who brought fire, letters, and numbers to humanity out of empathy for mortal suffering (Aeschylus, *Prometheus Bound*). | **The Firebrand:** Inventing imaginary user pain points that derail foundational technical delivery. Hence heuristic falsifiability and empirical walkthrough checks. |
+
+**Name pool (not loaded).** The `pool` list in the mapping above holds 36 further Greek names for the one-off agents Delphi spawns by role ([`specs/087`](../../specs/087-agent-identity-badges-and-name-pool.md) §4). Each has 3 to 5 keywords the picker matches against a task, and a badge face. A pool name is a label: it grants no scope or authority, and the agent keeps its role's. Code refers to the slots (`pool-01` to `pool-36`), never to a name. `ascii_glyphs` gives the ASCII stand-in for each non-ASCII glyph a face uses, for terminals that need one.
 
 **Window labels.** In Hesiod, **Chaos** (*Khaos*, from *khainō*, "to gape") is the non-anthropomorphic clearing everything else emerges from, which fits the persona-free operator console. **Homer** chronicles the gods' deeds, which fits the narrator window.
 

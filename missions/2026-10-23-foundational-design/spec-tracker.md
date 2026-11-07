@@ -356,7 +356,7 @@ Asked for by the operator on 2026-10-28: no hard-coded favorites; discover what 
 | M3 | `[grades]`, `delphi agent promote`, `nerf`, `grades` | built (`[grades]` is a ratified access block; `delphi-engine/src/grades.rs`, `delphi/src/agent_cmd.rs`; `agent.graded` journaled in `local/grades.jsonl`; the engine applies a role's grade as a step in `assign_for`) |
 | M4 | ratchet and suggestions from retrospectives | not started |
 | M5 | `delphi models calibrate` | not started |
-| M6 | `emergency` local class: save state when every seat is exhausted, re-verify on recovery, doctor line | built in part (`delphi-engine/src/emergency.rs`; `[routing] emergency_endpoint`/`emergency_model`, off by default, local endpoints only; `Class::Emergency` below every floor and refused by `route::ineligible` under both assignments; trigger only when every ratified seat is out; `Task` allow-list read/summarise/write-state; `save_state` writes a labeled `emergency` record under `<mission>/handoffs/`; `recover` re-checks branches, uncommitted files, journal pointers and PRs and removes the label only after a floor-meeting verifier answers; doctor and `capabilities --models` print the fixed line). Not built: the engine loop does not yet call `trigger`/`save_state`/`recover` and no model-client `Writer` exists, so nothing saves state live; the dispatch refusal on a pending record is the `pending` function only |
+| M6 | `emergency` local class: save state when every seat is exhausted, re-verify on recovery, doctor line | built and wired (pieces in `delphi-engine/src/emergency.rs` (#496), called by the engine through `emergency_run.rs`; `[routing] emergency_endpoint`/`emergency_model`, off by default, local endpoints only; `Class::Emergency` below every floor and refused by `route::ineligible` under both assignments; trigger only when every ratified seat is out; `Task` allow-list read/summarise/write-state; `save_state` writes a labeled `emergency` record under `<mission>/handoffs/`; `recover` re-checks branches, uncommitted files, journal pointers and PRs and removes the label only after a floor-meeting verifier answers; doctor and `capabilities --models` print the fixed line). Wired in the follow-up slice: `model_turn` calls `Engine::emergency_step` after each route. On `Route::NoModel` with `trigger` true it gathers git and mission-log facts by code, the emergency model (a tool-less `one_shot_raw` call through the ordinary model client, `permits` checked when `ModelWriter` is built) writes the prose, `save_state` writes the labeled record under `<mission>/handoffs/`, and `emergency.saved` is logged; the task then waits for a real seat as before. While a labeled record stands no span takes a turn and no harness fallback runs; the first span routed to a seat that meets its role's floor makes that seat the verifier (`recover`: label removed only on a non-empty answer; the emergency model and below-floor models are refused) and `emergency.recovered` is logged; a failed, empty or below-floor verification logs `emergency.blocked` and stops the span with the label on. The events show in /observe and the chat log. With the keys unset `emergency_step` returns first and nothing changes (test). Tested with a scripted model (whole path, failed and empty verifier, a pending record blocks a new dispatch, unset = no change) and once live on Ollama (gemma4 wrote the record; PR body has the outcome). Not proven: open PRs are not read (the engine reaches no network; the recorded list is carried over); no real paid-seat quota outage has run it (the live check used local models as the ratified seat); the verifier is the span's own seat, so a pool of only local models cannot verify for a `steady`-floor role and that mission stays held |
 
 ## Project scopes, scaffolding, indexes and promotion (spec 058, approved 2026-10-30)
 
@@ -698,4 +698,34 @@ From a Council of three Claude seats (one family, so homogeneous) that ranked ei
 | :-- | :-- | --: | :-- |
 | S0 | spec 085 approval and tracker entry | 1 | approved 2026-11-05 |
 | S1 | fixed `STANDING_LIMITS` constant on the API path; the objective echo removed | 5 | built (PR open) |
-| S2 | the same reminder as a second content block on bridged tool replies (harness seats) | 5 | not built |
+| S2 | the same reminder as a second content block on bridged tool replies (harness seats) | 5 | built (PR open) |
+
+## Spec 087: agent identity, badges and a name pool (2026-11-06)
+
+Approved by the operator 2026-11-06, from a conversation that day: 28 chosen badge faces, 36 Greek names kept, the writer and investigator as twins, a revised 13-role core set. OD-1 (mascots follow the badge) and OD-5 (no host-acting label; the name is the same inside and outside, plus ", via delphi" inside the role parentheses) are decided; OD-2 to OD-4 take the recommendations. Whether it helps the operator follow a multi-agent exchange is not measured (spec 087 §7).
+
+| Slice | Content | Hours | State |
+| :-- | :-- | --: | :-- |
+| S0 | operator approves spec 087 and answers OD-1 and OD-5; tracker entry | 1 | approved 2026-11-06 |
+| S1 | thirteen core roles in `ROLES`: faces, blink frames, light/dark colors | 9 | built (merged, #512) |
+| S2 | the name pool in the theme pack; picker; `pool_slot` on the start event | 9 | built in part (PR open): pool, loader checks, picker, `spawn_agent_pack` naming, `pool_slot` in the envelope and schema; the engine does not yet stamp `pool_slot` on an event |
+| S3 | outside: light/dark identity, `badge_mode`, `display` in the one-identity form, handoff and roster lines | 9 | built (merged, #515) |
+| S4 | console: three-frame scout blink; pool agents in panes | 6 | blink built (merged, #513); pool agents in panes waits on S2 |
+| S5 | recognition check with the operator | 3 | materials prepared 2026-11-06 (Council 003); waits on the operator's reading |
+| S6 | one-off agents show their specialization (outside) or bundle agent id (inside) in the role's place (OD-6, spec 087 §10) | 5 | not built; decision recorded |
+
+## Spec 086: the Council outside Delphi (2026-11-05, approved 2026-11-06)
+
+From the operator's request to refine the outside Council (Claude Code, Copilot, Codex, agy). Host facts are from vendor docs, not live-proven (spec 086 §3, §14). Approved by the operator 2026-11-06: the Panel is the default and allowed for every question (warning only); a full Council review of the spec follows S0a. Spec 084 S2 (flip question) is not a conflict: ordering rules in 086 §14a.
+
+| Slice | Content | Hours | State |
+| :-- | :-- | --: | :-- |
+| S0 | spec 086 approval and tracker entry | 1 | approved 2026-11-06 |
+| S0a | daemon Council fixes: trailing-text Round 2 (cause found), host pointers reach seats, title from the question; merged Minority Report dropped | 10 | built (PR #501) |
+| S0b | host conformance probe for the four hosts | 6 | built (PR open) |
+| S1 | `delphi-council` skill, ruling card + `phase`, `council_frame` (no token estimate yet: moves to S4) | 10 | built (PR open) |
+| S2 | Panel: server-held barrier, `council_open/brief/submit/choose` | 24 | built (PR open) |
+| S3 | role subagents per host, `[host.models.*]`, Codex agents installer | 14 | built (PR open) |
+| S4 | one foreign-family seat (token ceiling, not a history-based estimate); `venue`/`blind` in the record front matter | 10 | built (PR open) |
+| S5 | pre-registered Panel-vs-Council experiment; decides the default | 12 | run 2026-11-06 (operator go, 350k per-run cap): verdict INCOMPLETE (4 of 8 questions qualify, 6 needed), notice unchanged; 2.10M of 8M tokens; report text in the PR description, data in `dev/train/e2/data/` (this PR); `REPORT.md` still to be added from it |
+| S6 | follow-ups from the Council review: Panel captures at L0, verdict `venue`, brief hash, host-support line, list of `council.verdict` readers | 4 | built (merged, #511) |

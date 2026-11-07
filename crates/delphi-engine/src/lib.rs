@@ -2,6 +2,7 @@
 
 //! `delphi-engine`: what runs inside the daemon: tools, approvals and the agent loop.
 
+pub mod agent_pool;
 pub mod agent_registry;
 pub mod approval;
 pub mod shellsafe;
@@ -62,6 +63,7 @@ pub mod org_context;
 pub mod core_main;
 pub mod council;
 pub mod council_next;
+pub mod council_panel;
 pub mod distill;
 pub mod build;
 pub mod capabilities;
@@ -77,6 +79,7 @@ pub mod checks;
 pub mod frontmatter;
 pub mod gates;
 pub mod emergency;
+pub mod emergency_run;
 pub mod handoff;
 pub mod hooks;
 pub mod hooks_run;

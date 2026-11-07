@@ -7,6 +7,7 @@
 //! * [`budget`]: pre-dispatch reservations and the halt-on-ceiling rule (`specs/003` §3.2).
 
 pub mod artifact;
+pub mod ascii_badge;
 pub mod budget;
 pub mod bundle_trust;
 pub mod bundles;
