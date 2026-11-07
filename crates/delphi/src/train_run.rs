@@ -1594,6 +1594,12 @@ mod tests {
         let mut row = Row { case: "s/c".into(), arm: "a".into(), seed: 1, exit_code: Some(0), wall_secs: 0.0, cost_usd: 0.0, passed: Some(true), failed_checks: vec![], notes: vec![], usage: BTreeMap::new(), attempts: 0, promotions: 0, dir: String::new(), error: None, base: None, eff: Efficiency::default(), seats: Vec::new() };
         row.seats = seats.clone();
         assert_eq!(Row::from_json(&row.to_json()).unwrap().seats, seats);
+        // The key names are a contract for scripts that read rows.jsonl: `family` is the SERVED family, there is no `served_family`.
+        let j = row.to_json()["seats"][0].clone();
+        let mut keys: Vec<&str> = j.as_object().unwrap().keys().map(|k| k.as_str()).collect();
+        keys.sort();
+        assert_eq!(keys, ["carrier", "dispatch_allowed", "family", "outcome", "prompt_hash", "requested", "served_model", "tools"]);
+        assert_eq!(j["family"], "claude");
     }
 
     #[test]

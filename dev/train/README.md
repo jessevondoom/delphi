@@ -100,6 +100,11 @@ family table, `model_families.toml`), the carrier (harness kind), the tools offe
 hash and the outcome. A carrier that reports no model (Copilot and `agy` until 091 S5) gives `unknown`; the report prints
 `unknown` and never guesses a family from the requested model. Rows written before this have no `seats` and add nothing.
 
+The keys of a `seats` entry are `requested`, `served_model`, `family`, `carrier`, `tools`, `dispatch_allowed`, `prompt_hash`,
+`outcome`. `family` **is** the served family (there is no `served_family` key, and no `requested` family: the requested model's
+vendor is never guessed); `unknown` means the carrier reported no model or the table has no entry. `family_source` lives on the
+`seat.receipt` event, not in the row. A script that reads `served_family` gets nothing for every carrier.
+
 `delphi train report` adds two sections when any row has seats:
 
 - **SEATS SERVED**: per arm, the carriers, served models, families and the count of tools offered. A served model that is not
