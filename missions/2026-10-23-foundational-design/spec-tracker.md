@@ -743,4 +743,4 @@ From the E2 report (verdict INCOMPLETE). Approved 2026-11-06 on the operator's i
 | P4a | `agy` seat reliability: reproduce the checkout-guard false positive, classify the hangs | 3 | built (PR open); P4b waits for OD-4 |
 | P4b | `agy` fix: one retry after a CLI error, discard message names the paths (guard unchanged by decision; watchdog deferred) | 6-10 | built (PR open): retry and path message; guard unchanged by decision; live capture held |
 | P5 | matcher v2 with a negative control; exploratory `RESCORE.md` of E2 | 5 | built (merged, #523); v2 FAILED validation: agreement 0.15 (needs 0.30), false-match 0.0 |
-| P6 | E3 pre-registration (the run needs the operator's go) | 6 | approved; the run needs an explicit go |
+| P6 | E3 pre-registration (the run needs the operator's go) | 6 | pre-registration written (PR open); the run needs P3 merged and the operator's explicit go |
