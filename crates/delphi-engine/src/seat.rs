@@ -351,6 +351,80 @@ pub fn served_for_task(events: &[delphi_core::event::EventEnvelope], task_id: &s
     (fams, tokens)
 }
 
+/// The label a seat's verdict carries when no receipt of it shows a tool that could read the repo (`specs/086` §7).
+pub const UNVERIFIED_AGAINST_REPO: &str = "unverified-against-repo";
+
+/// True when this receipt's carrier was granted nothing that can read a repository: no built-in, no native tool, no Delphi bridge
+/// tool. A Copilot ACP seat counts as tool-less whatever it reports (`specs/086` §6.4). A receipt that says nothing about tools
+/// counts as tool-less too: the label errs towards "unverified".
+pub fn receipt_toolless(p: &Value) -> bool {
+    if p["carrier"]["kind"].as_str() == Some("copilot") {
+        return true;
+    }
+    let g = &p["tool_grant"];
+    g["builtin"].as_str().is_none_or(|b| b == "none") && g["native"].as_array().is_none_or(|a| a.is_empty()) && g["bridge"].as_array().is_none_or(|a| a.is_empty())
+}
+
+/// One seat Delphi ran, as its receipts say (`specs/086` §6.4, §7).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SeatSummary {
+    pub role: String,
+    pub served_model: Option<String>,
+    pub family: String,
+    pub carrier: String,
+    pub tools_offered: Vec<String>,
+    /// At least one receipt ended `ok`.
+    pub sat: bool,
+    /// It sat, and none of its `ok` receipts shows a tool that could read the repo.
+    pub unverified_against_repo: bool,
+    pub tokens: u64,
+}
+
+impl SeatSummary {
+    pub fn to_value(&self) -> Value {
+        json!({"seat": self.role, "served_model": self.served_model, "family": self.family, "carrier": self.carrier, "tools_offered": self.tools_offered, "sat": self.sat, "unverified_against_repo": self.unverified_against_repo, "tokens": self.tokens})
+    }
+}
+
+/// The seats of `task_id` from its receipts, one per role, in the order they first appear. Text is never read: receipts hold none.
+pub fn seat_summaries(events: &[delphi_core::event::EventEnvelope], task_id: &str) -> Vec<SeatSummary> {
+    let mut out: Vec<SeatSummary> = Vec::new();
+    for e in events.iter().filter(|e| e.kind == RECEIPT_KIND && e.task_id.as_deref() == Some(task_id)) {
+        let role = e.agent.clone().unwrap_or_default();
+        let ok = e.payload["outcome"] == "ok";
+        let tokens = e.payload["tokens_in"].as_u64().unwrap_or(0) + e.payload["tokens_out"].as_u64().unwrap_or(0);
+        let tools: Vec<String> = e.payload["carrier"]["tools_offered"].as_array().into_iter().flatten().filter_map(|t| t.as_str().map(String::from)).collect();
+        let at = match out.iter().position(|s| s.role == role) {
+            Some(i) => i,
+            None => {
+                out.push(SeatSummary { role: role.clone(), served_model: None, family: UNKNOWN.into(), carrier: String::new(), tools_offered: Vec::new(), sat: false, unverified_against_repo: false, tokens: 0 });
+                out.len() - 1
+            }
+        };
+        let s = &mut out[at];
+        s.tokens += tokens;
+        // The seat is described by its first receipt that sat (the first at all while none has).
+        if ok && !s.sat {
+            s.sat = true;
+            s.served_model = e.payload["served"]["model"].as_str().map(String::from);
+            s.family = e.payload["served"]["family"].as_str().unwrap_or(UNKNOWN).to_string();
+            s.carrier = e.payload["carrier"]["kind"].as_str().unwrap_or("").to_string();
+            s.unverified_against_repo = true;
+        }
+        if ok {
+            for t in tools {
+                if !s.tools_offered.contains(&t) {
+                    s.tools_offered.push(t);
+                }
+            }
+            if !receipt_toolless(&e.payload) {
+                s.unverified_against_repo = false;
+            }
+        }
+    }
+    out
+}
+
 /// The count budget on foreign seats (`specs/091` SR-4), per Council: `None` when the plan fits, else the fixed sentence.
 /// It names the cap and never echoes the question.
 pub fn over_budget(seats: u32, tokens: u64, max_seats: u32, max_tokens: u64) -> Option<String> {
@@ -602,5 +676,37 @@ mod tests {
         // The same model through a second carrier is the host's own family again: one family.
         let v = view("claude", None);
         assert_eq!((v["ruling"]["families"].clone(), v["ruling"]["homogeneous"].clone(), v["ruling"]["require_families_met"].clone()), (json!(["claude"]), json!(true), json!(null)), "{v}");
+    }
+
+    // specs/086 §7: the label that travels with a tool-less seat's verdict.
+    #[test]
+    fn a_seat_with_no_repo_reading_tool_in_any_receipt_is_unverified_against_the_repo() {
+        let rcpt = |agent: &str, carrier: &str, bridge: Value, outcome: &str| {
+            let mut e = delphi_core::event::EventEnvelope::new("m", RECEIPT_KIND, json!({"served": {"model": "m-1", "family": "gemini"}, "carrier": {"kind": carrier, "tools_offered": bridge.clone()}, "tool_grant": {"builtin": "none", "native": [], "bridge": bridge}, "tokens_in": 4, "tokens_out": 2, "outcome": outcome}));
+            e.task_id = Some("t".into());
+            e.agent = Some(agent.into());
+            e
+        };
+        let log = vec![
+            rcpt("a", "api", json!(["read_file"]), "ok"),
+            rcpt("a", "api", json!([]), "ok"),
+            rcpt("b", "api", json!([]), "ok"),
+            rcpt("c", "copilot", json!(["view"]), "ok"),
+            rcpt("d", "api", json!(["read_file"]), "error"),
+            rcpt("e", "api", json!([]), "ok"),
+        ];
+        let s = seat_summaries(&log, "t");
+        let flag = |r: &str| s.iter().find(|x| x.role == r).map(|x| (x.sat, x.unverified_against_repo)).unwrap();
+        assert_eq!(flag("a"), (true, false), "tools in Round 1 are enough, though Round 2 had none");
+        assert_eq!(flag("b"), (true, true), "no tool anywhere");
+        assert_eq!(flag("c"), (true, true), "a Copilot ACP seat is tool-less whatever it lists");
+        assert_eq!(flag("d"), (false, false), "a seat that did not sit carries no verdict to label");
+        assert_eq!(s.iter().find(|x| x.role == "a").unwrap().tokens, 12);
+        assert_eq!(s.len(), 5, "one entry per seat, in order of first receipt");
+        let v = s[0].to_value();
+        assert_eq!((v["family"].as_str(), v["served_model"].as_str(), v["carrier"].as_str()), (Some("gemini"), Some("m-1"), Some("api")));
+        // A receipt that says nothing of tools counts as tool-less.
+        assert!(receipt_toolless(&json!({"served": {}})));
+        assert!(!receipt_toolless(&json!({"tool_grant": {"builtin": "none", "native": ["Read"], "bridge": []}})));
     }
 }

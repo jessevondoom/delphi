@@ -183,11 +183,11 @@ Where the host offers two or more models, the red-team seat takes a different mo
 
 Generated agent files use **aliases and tiers** the host documents (Claude `opus`/`sonnet`/`haiku`/`fable`; agy `pro`/`flash`), never full model ids. For hosts that take free model names (Copilot, Codex) the file sets no model and the plan comes from the operator's mapping, `[host.models.<host>]` (role → model name), shown by `council_frame`; with no mapping, the seat inherits and the card says `1 model`. A hard-coded model name in a generated file fails the drift test.
 
-### 6.4 Foreign seats (S4 built for one; N seats approved by the operator, 2026-11-07, not yet built)
+### 6.4 Foreign seats (S4 built for one; N seats approved by the operator, 2026-11-07, built as C3a)
 
 A Panel may add foreign seats run by **Delphi's own harness**, each from a family other than the host's (normally red-team first), via the existing seat machinery. This replaces "exactly one foreign seat" (Council t_0004, 2026-11-07). It spends the operator's tokens on the daemon side, so `council_frame` lists each seat and the estimate includes it; each runs only on the operator's yes.
 
-- **Gated on spec 091.** N seats need the seat receipts (`specs/091` SR-1) and the count budget (SR-4). `specs/091` S1, S2, S3 and S5 are built (receipts, families, `require_families`, count budget); the N-seat code itself (C3a) is not yet built, so the Panel stays at one foreign seat, as built below.
+- **Gated on spec 091.** N seats need the seat receipts (`specs/091` SR-1) and the count budget (SR-4). `specs/091` S1, S2, S3 and S5 are built (receipts, families, `require_families`, count budget); the N-seat code (C3a) is built: `council_open` takes `foreign_seats`, a list of `{role, family?, tools?}` (roles distinct, `tools` `none` by default or `readonly`), bounded by `[seats] max_foreign_seats` and `max_foreign_tokens` and refused before any spend; `foreign_seat` (one) stays as it was. The carrier choice rule in `council_frame` (C3b) is not built.
 - **Count families, not seats.** A family is a training lineage regardless of provider (`GOVERNANCE.md` H-001): the same model through two carriers is one family. The card says `N families` from the receipts' `family`, never from the number of seats; `unknown` does not count.
 - **Label, do not block.** When fewer than two families sat, the result is labelled `homogeneous` (`context/heuristics.md` H-008). It is never refused for that unless the caller set `require_families` (`specs/091` SR-3).
 - **Carrier choice.** Tool-less carriers sit critique and second-opinion seats. A tool seat is used for verification. The `council_frame` yes shows each seat's carrier, tools and budget before the operator answers.
