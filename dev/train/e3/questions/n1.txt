@@ -1,4 +1,0 @@
-Question: Should Spec 073 be approved, establishing a dual-mode semantic palette, ambient palette propagation in the console, avatar role chassis contrast adaptation in Rust and TypeScript, relative luminance contrast calculation, and automated WCAG 2.1 AA verification gates?
-Stakes: normal
-Pointers:
-- specs/073-console-adaptive-contrast-and-dual-mode-palette.md: the spec the question is about
