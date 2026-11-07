@@ -92,6 +92,23 @@ your home already has an endpoint of that id it must be the same family and harn
 is read-only and has no Delphi tools (`specs/051`), so run it on text-only cases: the research suite, or an **inline**
 fidelity case (below). The catalogue of model ids is per account (`copilot --acp`, `session/new`); a model that is not in it is refused.
 
+## Which model really ran (`specs/091` SR-6)
+
+Each row in `rows.jsonl` carries `seats`: one entry per distinct seat of the run, read from the mission log's `seat.receipt`
+events. An entry has the requested model, the **served** model as the carrier reported it, the served family (mapped by the
+family table, `model_families.toml`), the carrier (harness kind), the tools offered, whether dispatch was allowed, the prompt
+hash and the outcome. A carrier that reports no model (Copilot and `agy` until 091 S5) gives `unknown`; the report prints
+`unknown` and never guesses a family from the requested model. Rows written before this have no `seats` and add nothing.
+
+`delphi train report` adds two sections when any row has seats:
+
+- **SEATS SERVED**: per arm, the carriers, served models, families and the count of tools offered. A served model that is not
+  the requested one (a different model, not a dated suffix of it) is printed as a **FINDING**: the arm did not test what it named.
+- **FAMILY COMPARISONS**: for every two arms whose served families differ, **clean** when their prompt hashes, tools offered and
+  carrier policy (carrier, dispatch allowed) are all the same, and **CONFOUNDED** with the reasons otherwise. If either arm's family is
+  unknown the line says so and is never called clean. A confounded comparison measures the carrier or the prompt as much as the
+  family; do not read a family effect from it.
+
 ## Handoff fidelity (`specs/048` BM-5)
 
 What does a relay lose between a seat and the operator? A seat reads an artifact with N exact items (a commit hash, a file
