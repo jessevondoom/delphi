@@ -28,6 +28,8 @@ q4,a2,host,13582,
 q4,b1,delphi,77997,retries=0
 q4,b2,delphi,83911,retries=0
 q5,a1,host,21267,
+q5,a2,delphi,89957,retries=0
+q5,a2,host,18750,
 q5,b1,delphi,99432,retries=0
 q5,b2,delphi,116313,retries=0
 q6,a1,host,20074,
