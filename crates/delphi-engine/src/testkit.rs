@@ -162,6 +162,7 @@ fn assemble(t: tempfile::TempDir, root: PathBuf, steps: Vec<Step>, budget_usd: f
         tools: Arc::new(crate::tools::Registry::builtin().with_validator(delphi_adapter::config::ValidatorMode::Advisory)),
         exec: Arc::new(crate::exec::ExecEnv::new(&ws_dir_for_exec, exec_cfg, delphi_sandbox::Sandbox::detect().ok())),
         injected: Default::default(),
+        seat_deadlines: Default::default(),
         bundle_seen: Default::default(),
         xenia_seen: Default::default(),
         org_cache: Default::default(),

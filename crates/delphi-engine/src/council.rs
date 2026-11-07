@@ -820,7 +820,7 @@ impl Engine {
 
     /// Run one seat's span under a timeout. A seat that fails, escalates or times out abstains; it never
     /// blocks the others.
-    async fn run_seat(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, h: HandoffEnvelope, slices: Vec<ContextSlice>, schema: Option<String>, timeout: Duration) -> Stance {
+    pub(crate) async fn run_seat(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, h: HandoffEnvelope, slices: Vec<ContextSlice>, schema: Option<String>, timeout: Duration) -> Stance {
         let handoff_id = h.handoff_id.clone();
         if let Some(s) = schema {
             self.schemas.lock().unwrap().insert(handoff_id.clone(), s);
@@ -828,7 +828,9 @@ impl Engine {
         // Always registered, even with no slices (Round 1 has none): a span with an entry here is a Council seat, which the
         // org-context slice is withheld from so that Round 1 stays blind (`specs/026` §3.1).
         self.injected.lock().unwrap().insert(handoff_id.clone(), slices);
+        self.seat_deadlines.lock().unwrap().insert(handoff_id.clone(), std::time::Instant::now() + timeout);
         let out = tokio::time::timeout(timeout, self.run_span(m, task_id, h, None, 1)).await;
+        self.seat_deadlines.lock().unwrap().remove(&handoff_id);
         self.injected.lock().unwrap().remove(&handoff_id);
         self.schemas.lock().unwrap().remove(&handoff_id);
         match out {
