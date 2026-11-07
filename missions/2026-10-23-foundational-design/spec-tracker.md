@@ -744,3 +744,12 @@ From the E2 report (verdict INCOMPLETE). Approved 2026-11-06 on the operator's i
 | P4b | `agy` fix: one retry after a CLI error, discard message names the paths (guard unchanged by decision; watchdog deferred) | 6-10 | built (PR open): retry and path message; guard unchanged by decision; live capture held |
 | P5 | matcher v2 with a negative control; exploratory `RESCORE.md` of E2 | 5 | built (merged, #523); v2 FAILED validation: agreement 0.15 (needs 0.30), false-match 0.0 |
 | P6 | E3 pre-registration (the run needs the operator's go) | 6 | pre-registration written (PR open); the run needs P3 merged and the operator's explicit go |
+
+## Spec 090: renumber the three shared spec numbers, once (2026-11-07, draft)
+
+From a review of draft spec 088, which found that 014, 037 and 061 are each used by two specs. A draft: not approved, nothing built. One pull request renames one spec of each pair inside `specs/` (no move), rewrites path pointers, decides every bare citation in a map the operator samples, adds a `delphi lint` rule against duplicate numbers, and leaves a mapping paragraph for history. Recommended choice (OD-1): documents and dataviz, training experiments, encyclopedia search pages move; the relay spec keeps 014, so GOVERNANCE.md and REVIEW.md are untouched. New numbers are the next three free when the work starts (expected 091 to 093). Hours are estimates; no trial rewrite was run.
+
+| Slice | Content | Hours (likely) | State |
+| :-- | :-- | --: | :-- |
+| S0 | spec 090 approval and tracker entry; the three numbers claimed | 1 | draft, awaits the operator |
+| S1 | renames, path pointers, citation map and decisions, one-time check, lint rule, CONTRIBUTING mapping | 12 | not built |
