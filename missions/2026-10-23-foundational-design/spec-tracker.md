@@ -737,8 +737,8 @@ From the E2 report (verdict INCOMPLETE). Approved 2026-11-06 on the operator's i
 | Slice | Content | Hours | State |
 | :-- | :-- | --: | :-- |
 | P0 | spec 089 approval and tracker entry | 1 | approved 2026-11-06 |
-| P1 | server-side Round 2 shape check at submit; seat-file closing lines | 5 | approved, not built |
-| P2 | scorer venue fix; `venue: daemon` on daemon records; useful question-limit message | 3 | built (PR open) |
+| P1 | server-side Round 2 shape check at submit (host seats; two rejections, then taken as unreadable); seat-file closing lines; `format_retries` recorded | 5 | built (PR open) |
+| P2 | scorer venue fix; `venue: daemon` on daemon records; useful question-limit message | 3 | built (merged, #524) |
 | P3 | skill wording (verbatim question, confirmation rule), `operator_confirmed`, options source | 4 | approved, not built |
 | P4a | `agy` seat reliability: reproduce the checkout-guard false positive, classify the hangs | 3 | built (PR open); P4b waits for OD-4 |
 | P4b | `agy` fix: guard scope, first-output watchdog, one retry | 6-10 | approved; waits for an explicit go on OD-4 |

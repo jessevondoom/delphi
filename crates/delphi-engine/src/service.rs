@@ -3352,6 +3352,11 @@ mod tests {
                 c.call("host.council_submit", p(json!({"council_id": id, "seat": seat, "round": 1, "text": "OPTION: ship"}))).unwrap();
             }
             c.call("host.council_submit", p(json!({"council_id": id, "seat": "architect", "round": 2, "text": good}))).unwrap();
+            // Prose with no closing lines is sent back twice (spec 089 F1); the third is taken as it stands and is unreadable.
+            for _ in 0..2 {
+                let e = c.call("host.council_submit", p(json!({"council_id": id, "seat": "red-team", "round": 2, "text": "looks fine to me"}))).unwrap_err().to_string();
+                assert!(e.contains("not in the required shape") && e.contains("ROUND 2 COMPLETE"), "{e}");
+            }
             c.call("host.council_submit", p(json!({"council_id": id, "seat": "red-team", "round": 2, "text": "looks fine to me"}))).unwrap();
             c.call("host.council_submit", p(json!({"council_id": id, "seat": "strategist", "round": 2, "text": good}))).unwrap();
             c.call("host.council_submit", p(json!({"council_id": id, "seat": "orchestrator", "round": 3, "text": "DECISION: needs the operator"}))).unwrap();
@@ -3444,6 +3449,50 @@ mod tests {
             assert!(who.iter().any(|m| m.contains("run by Delphi")), "the seat Delphi ran is labelled as such: {who:?}");
         })
         .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_panel_seat_whose_round_two_reply_lacks_the_closing_lines_is_sent_back_and_can_fix_it() {
+        let f = setup(vec![], 5.0, |_| {});
+        let ws_dir = f.engine.ws.dir.clone();
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            c.hello(&htok).unwrap();
+            let p = |extra: Value| {
+                let mut b = json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cwd});
+                for (k, v) in extra.as_object().unwrap() {
+                    b[k] = v.clone();
+                }
+                b
+            };
+            let good = "RECOMMENDATION: PROCEED-WITH-CHANGES\nFINDING P2 naming\nCONCUR: yes\nROUND 2 COMPLETE";
+            let id = c.call("host.council_open", p(json!({"question": "Table or file?"}))).unwrap()["council_id"].as_str().unwrap().to_string();
+            for seat in ["architect", "red-team", "strategist"] {
+                c.call("host.council_submit", p(json!({"council_id": id, "seat": seat, "round": 1, "text": "OPTION: table"}))).unwrap();
+            }
+            for seat in ["architect", "strategist"] {
+                c.call("host.council_submit", p(json!({"council_id": id, "seat": seat, "round": 2, "text": good}))).unwrap();
+            }
+            // The red-team's first Round 2 is a good critique in prose with no closing lines: it is sent back, not stored.
+            let e = c.call("host.council_submit", p(json!({"council_id": id, "seat": "red-team", "round": 2, "text": "Main attack: the barrier relies on the host. I would proceed with changes.", "model": "sonnet"}))).unwrap_err().to_string();
+            assert!(e.contains("missing a RECOMMENDATION line") && e.contains("rejection 1 of 2"), "{e}");
+            assert!(c.call("host.council_brief", p(json!({"council_id": id, "seat": "orchestrator", "round": 3}))).is_err(), "the Panel is still waiting for the red-team's Round 2");
+            // It resubmits with the lines and the Panel completes with a readable red-team critique, so no escalation for lack of one.
+            let done = c.call("host.council_submit", p(json!({"council_id": id, "seat": "red-team", "round": 2, "text": format!("Main attack: the barrier relies on the host.\n{good}"), "model": "sonnet"}))).unwrap();
+            assert_eq!(done["round_2"], "complete");
+            c.call("host.council_submit", p(json!({"council_id": id, "seat": "orchestrator", "round": 3, "text": "DECISION: use a table\nNEXT builder: write the table"}))).unwrap();
+            let got = c.call("host.council_result", p(json!({"council_id": id}))).unwrap();
+            assert_eq!(got["state"], "decided", "a readable red-team critique means no escalation: {got}");
+            assert!(got["ruling"]["dissent"].as_str().unwrap().contains("Unanimous"), "{got}");
+        })
+        .await;
+        let events = replay_log(&delphi_core::sessions::dir(&ws_dir, "host-abcdef0123456789"));
+        let red = events.iter().find(|e| e.kind == "council.critique" && e.payload["role"] == "red-team").unwrap();
+        assert_eq!((red.payload["readable"].as_bool(), red.payload["format_retries"].as_u64()), (Some(true), Some(1)), "the record says it was sent back once");
     }
 
     fn replay_log(dir: &std::path::Path) -> Vec<delphi_core::event::EventEnvelope> {
