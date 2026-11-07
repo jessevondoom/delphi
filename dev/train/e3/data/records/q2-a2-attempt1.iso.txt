@@ -1,0 +1,11 @@
+init: plugins [{'name': 'delphi', 'path': '/tmp/e3/plugin-delphi', 'source': 'delphi@inline', 'version': '0.5.5'}, {'name': 'cc-plugin-agents-md', 'path': 'builtin', 'source': 'cc-plugin-agents-md@builtin'}, {'name': 'cc-plugin-telemetry', 'path': 'builtin', 'source': 'cc-plugin-telemetry@builtin'}, {'name': 'cc-plugin-privacy', 'path': 'builtin', 'source': 'cc-plugin-privacy@builtin'}, {'name': 'cc-plugin-plugin-authoring', 'path': 'builtin', 'source': 'cc-plugin-plugin-authoring@builtin'}] mcp [{'name': 'delphi', 'status': 'connected', 'source': 'dynamic'}] model claude-sonnet-5-5
+tools mcp council: ['mcp__delphi__council_brief', 'mcp__delphi__council_choose', 'mcp__delphi__council_frame', 'mcp__delphi__council_open', 'mcp__delphi__council_result', 'mcp__delphi__council_status', 'mcp__delphi__council_submit', 'mcp__delphi__propose_council_record', 'mcp__delphi__request_council']
+sessions {'d3c2fd1b-c66e-4c5c-910d-744c604b1a51'}
+tool counts {'Skill': 1, 'ToolSearch': 1, 'mcp__delphi__council_frame': 1, 'mcp__delphi__council_open': 1, 'Agent': 4, 'mcp__delphi__council_brief': 6, 'Glob': 3, 'Read': 9, 'Grep': 16, 'mcp__delphi__council_submit': 4, 'mcp__delphi__council_result': 3, 'mcp__delphi__council_status': 1, 'Bash': 1}
+agent calls 4
+   ('toolu_017ZnxPKDXoW7c6gXnXuCBMW', None, 'delphi:architect', False, 'msg_011CgogopRssZjxaRNwb9mDv')
+   ('toolu_01N7AFftCHTBu4vSpyhuv9VA', None, 'delphi:strategist', False, 'msg_011CgogopRssZjxaRNwb9mDv')
+   ('toolu_01EgXqntcNC17ynhxMCae4TW', None, 'delphi:architect', False, 'msg_011Cgogsc8JyfiNsiHqNcuTv')
+   ('toolu_01QRehvXcHm9BWsjKZyTmzZw', None, 'delphi:strategist', False, 'msg_011Cgogsc8JyfiNsiHqNcuTv')
+result: is_error False subtype success turns 17 dur_ms 189435 in 92 out 16472 models {'claude-sonnet-5-5': (32, 3617), 'claude-haiku-5-5': (22, 5294), 'claude-opus-5-5': (38, 7561)}
+HOST TOKENS (last result, cumulative modelUsage input+output) 16564

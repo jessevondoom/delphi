@@ -1,0 +1,19 @@
+init: plugins [{'name': 'delphi', 'path': '/tmp/e3/plugin-delphi', 'source': 'delphi@inline', 'version': '0.5.5'}, {'name': 'cc-plugin-agents-md', 'path': 'builtin', 'source': 'cc-plugin-agents-md@builtin'}, {'name': 'cc-plugin-telemetry', 'path': 'builtin', 'source': 'cc-plugin-telemetry@builtin'}, {'name': 'cc-plugin-privacy', 'path': 'builtin', 'source': 'cc-plugin-privacy@builtin'}, {'name': 'cc-plugin-plugin-authoring', 'path': 'builtin', 'source': 'cc-plugin-plugin-authoring@builtin'}] mcp [{'name': 'delphi', 'status': 'connected', 'source': 'dynamic'}] model claude-sonnet-5-5
+tools mcp council: ['mcp__delphi__council_brief', 'mcp__delphi__council_choose', 'mcp__delphi__council_frame', 'mcp__delphi__council_open', 'mcp__delphi__council_result', 'mcp__delphi__council_status', 'mcp__delphi__council_submit', 'mcp__delphi__propose_council_record', 'mcp__delphi__request_council']
+sessions {'3ae43c50-b490-47bb-8324-945f10c327d1'}
+tool counts {'Skill': 1, 'ToolSearch': 1, 'mcp__delphi__council_frame': 1, 'mcp__delphi__council_open': 1, 'Agent': 6, 'mcp__delphi__council_brief': 7, 'Glob': 2, 'Grep': 22, 'Read': 14, 'mcp__delphi__council_submit': 8, 'mcp__delphi__council_result': 1}
+agent calls 6
+   ('toolu_01AgFGW8cT873RtCyUUJP2Hx', None, 'delphi:architect', None, 'msg_011CgogaLDPHxRLiog83rCup')
+   ('toolu_018E75JfmZ6mKm1yi7XMas1s', None, 'delphi:red-team', None, 'msg_011CgogaLDPHxRLiog83rCup')
+   ('toolu_01GuTxuFU4WeFnuxa3NZ45yp', None, 'delphi:strategist', None, 'msg_011CgogaLDPHxRLiog83rCup')
+   ('toolu_01X1CCDJiwAhiaZsKQ1UCCe7', None, 'delphi:architect', None, 'msg_011CgogeHG9V1NGsAidsVJm2')
+   ('toolu_01QquN41LyQLapZjszMBUEp6', None, 'delphi:red-team', None, 'msg_011CgogeHG9V1NGsAidsVJm2')
+   ('toolu_015viEryz5coyS1xwScFo7fm', None, 'delphi:strategist', None, 'msg_011CgogeHG9V1NGsAidsVJm2')
+result: is_error False subtype success turns 9 dur_ms 19459 in 130 out 22103 models {'claude-sonnet-5-5': (58, 7528), 'claude-opus-5-5': (40, 7582), 'claude-haiku-5-5': (32, 6993)}
+result: is_error False subtype success turns 1 dur_ms 2801 in 130 out 22103 models {'claude-sonnet-5-5': (58, 7528), 'claude-opus-5-5': (40, 7582), 'claude-haiku-5-5': (32, 6993)}
+result: is_error False subtype success turns 1 dur_ms 1854 in 130 out 22103 models {'claude-sonnet-5-5': (58, 7528), 'claude-opus-5-5': (40, 7582), 'claude-haiku-5-5': (32, 6993)}
+result: is_error False subtype success turns 4 dur_ms 6871 in 130 out 22103 models {'claude-sonnet-5-5': (58, 7528), 'claude-opus-5-5': (40, 7582), 'claude-haiku-5-5': (32, 6993)}
+result: is_error False subtype success turns 1 dur_ms 3754 in 130 out 22103 models {'claude-sonnet-5-5': (58, 7528), 'claude-opus-5-5': (40, 7582), 'claude-haiku-5-5': (32, 6993)}
+result: is_error False subtype success turns 1 dur_ms 13697 in 130 out 22103 models {'claude-sonnet-5-5': (58, 7528), 'claude-opus-5-5': (40, 7582), 'claude-haiku-5-5': (32, 6993)}
+result: is_error False subtype success turns 4 dur_ms 38452 in 140 out 25592 models {'claude-sonnet-5-5': (68, 11017), 'claude-opus-5-5': (40, 7582), 'claude-haiku-5-5': (32, 6993)}
+HOST TOKENS (input+output over all results) 159130
