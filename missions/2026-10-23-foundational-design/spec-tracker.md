@@ -773,7 +773,7 @@ From the E2 report (verdict INCOMPLETE). Approved 2026-11-06 on the operator's i
 
 ## Spec 093: authority invariants as tests (2026-11-07, approved)
 
-From Council `t_0001` over two research notes (CAO, Paperclip); the operator chose two batches, each one slice. Approved 2026-11-07 on the operator's instruction to begin; OD-1 to OD-5 take the recommendations. Spec 080 W1.2 gains an acceptance criterion from OD-4 (done in the B1 pull request).
+From Council `t_0001` over two research notes (CAO, Paperclip); the operator chose two batches, each one slice. Approved 2026-11-07 on the operator's instruction to begin; OD-1 to OD-5 take the recommendations. The acceptance criterion from OD-4 belongs in spec 080 W1.2; it is not added here, because editing an approved spec voids its ratified hash, so it waits for an amendment the operator ratifies.
 
 | Slice | Content | Hours | State |
 | :-- | :-- | --: | :-- |

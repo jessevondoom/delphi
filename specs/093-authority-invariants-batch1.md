@@ -101,6 +101,18 @@ Each slice is one pull request. B2 is not started until B1 has merged.
 - **OD-4. Where A goes.** Recommend recording it as an acceptance criterion on spec 080 W1.2 in that spec's next amendment.
 - **OD-5. Spec number.** 093 if still free when approved.
 
-## 9. Tests that pin this spec
+## 9. Differences from the design (slice B1, built 2026-11-07)
+
+Recorded here, as `specs/031` does, so the spec says what was built. The operator re-ratifies the spec's new hash (`local/ratified.lock`); this edit voids the earlier one.
+
+- **K1.** The scan found **49 sites in 27 files**, not about 70 in 40-odd: the first count included test code. The pattern also counts `Command::from(`, because a harness seat is started by `plain_command(...)` wrapped in `tokio::process::Command::from`, which a `Command::new`-only scan misses. A `#[cfg(test)] mod` is taken to run to the end of the file (clippy forbids items after it). Classes are in `spawn_sites.toml`; "only `sandbox` may run agent-chosen arguments" is documented there, not enforced by the test.
+- **K2.** CI files are **unchanged**: the older switches (`DELPHI_REQUIRE_UI`, `DELPHI_REQUIRE_SANDBOX`) are the registered names and still work, and `DELPHI_REQUIRE=<family,...>` is accepted beside them. There were only two families that could skip; the UI vitest suites have no skip logic and the harness `live_*` test is `#[ignore]`d on purpose. `tests/must_run.rs` checks CI against the registry (no job requiring an unregistered family, no registered family without a requiring job or a consumer).
+- **K3.** `help <command>` for every command in the generated reference, `--version`, `docs cli|catalog|man`, and `--help` for seven commands, all create nothing. The `init --help` trap no longer reproduces. A negative control (`delphi init` does create `~/.delphi` under the redirected `HOME`) keeps the test from passing vacuously.
+- **J.** The audit is `missions/2026-10-23-foundational-design/authority-audit-2026-11-07.md`. J1 is pinned by `service_gates_tests.rs` (97 of 112 RPC methods check scope; 15 are reviewed getters). J2 needed **no new test**: `engine.rs` already pins ask, confirm, decline and restart. J3 is pinned by a `harness.rs` test (a seat's stdin is written only in `start`, `settle_connectors` and `decide`). One finding stays open: `inside_an_agent_seat()` is an environment-variable check, a courtesy message and not the boundary.
+- **L1.** Added: a parser test (reasoning never becomes an event), an engine test (a fake CLI seat streams its words to a narrator client and never its reasoning), and two UI tests (the 8000-character bound; a late frame does not revive a spoken reply). **Finding, not fixed:** the console folds the words of every running span into one session-wide `live` string, so two concurrent seats interleave; the per-span tail in spec 005e is not what is built. Own slice.
+- **P.** cargo-deny **0.20.2**, not 0.18.5: the older one cannot parse the current advisory database (CVSS 4.0). The first run found real advisories, now listed as exceptions with reasons and review dates (`deny_policy.rs` fails when a date is missing or past). **Seven are on the relay's IMAP TLS stack** (`imap 3.0.0-alpha.15` with `rustls 0.22.4` and `rustls-webpki 0.102.8`) with a review date of 2026-11-21: the fix is a newer `imap`, which is a dependency decision for the operator. The CI job builds cargo-deny from source on every run (a few minutes); caching it is a later optimisation.
+- **A (OD-4).** Not edited into spec 080: editing an approved spec voids its ratified hash, so it waits for an amendment the operator ratifies.
+
+## 10. Tests that pin this spec
 
 The slice tests above are the spec's tests. In addition: the spawn list test is run in the normal `cargo test --workspace` (not behind a feature), and the must-run helper has a unit test for each of its three outcomes (required and present, required and missing, not required).
