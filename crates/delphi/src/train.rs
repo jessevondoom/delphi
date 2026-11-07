@@ -503,6 +503,9 @@ pub fn run(args: &[String]) -> i32 {
     if sub == Some("fidelity") {
         return crate::train_fidelity::cli(args, suites_dir(&repo).as_deref());
     }
+    if sub == Some("retention") {
+        return crate::train_retention::cli(args);
+    }
     let Some(root) = suites_dir(&repo) else {
         eprintln!("delphi train: {} has no dev/train/suites; training mode is for a source checkout (pass --repo <path>)", repo.display());
         return 2;

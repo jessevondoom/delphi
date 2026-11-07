@@ -43,6 +43,7 @@ mod retro_cmd;
 mod train_run;
 mod train_items;
 mod train_fidelity;
+mod train_retention;
 mod train_arms;
 mod train_hidden;
 mod train_judge;
