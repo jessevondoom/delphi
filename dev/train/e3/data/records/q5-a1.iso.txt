@@ -1,0 +1,13 @@
+init: plugins [{'name': 'delphi', 'path': '/tmp/e3/plugin-delphi', 'source': 'delphi@inline', 'version': '0.5.5'}, {'name': 'cc-plugin-agents-md', 'path': 'builtin', 'source': 'cc-plugin-agents-md@builtin'}, {'name': 'cc-plugin-telemetry', 'path': 'builtin', 'source': 'cc-plugin-telemetry@builtin'}, {'name': 'cc-plugin-privacy', 'path': 'builtin', 'source': 'cc-plugin-privacy@builtin'}, {'name': 'cc-plugin-plugin-authoring', 'path': 'builtin', 'source': 'cc-plugin-plugin-authoring@builtin'}] mcp [{'name': 'delphi', 'status': 'connected', 'source': 'dynamic'}] model claude-sonnet-5-5
+tools mcp council: ['mcp__delphi__council_brief', 'mcp__delphi__council_choose', 'mcp__delphi__council_frame', 'mcp__delphi__council_open', 'mcp__delphi__council_result', 'mcp__delphi__council_status', 'mcp__delphi__council_submit', 'mcp__delphi__propose_council_record', 'mcp__delphi__request_council']
+sessions {'88f7db2b-9ec4-42b8-a6c7-0019b6fc0dc5'}
+tool counts {'Skill': 1, 'ToolSearch': 1, 'mcp__delphi__council_frame': 1, 'mcp__delphi__council_open': 1, 'Agent': 6, 'mcp__delphi__council_brief': 7, 'Glob': 1, 'Read': 7, 'Grep': 9, 'mcp__delphi__council_submit': 8, 'mcp__delphi__council_result': 1}
+agent calls 6
+   ('toolu_0178wWBKVEGkNDGgg3vbGZHQ', None, 'delphi:architect', False, 'msg_011CgoibaqDoeXg31tmGKatS')
+   ('toolu_01JsaMVvjAoHyyAHNHmcZiT5', None, 'delphi:red-team', False, 'msg_011CgoibaqDoeXg31tmGKatS')
+   ('toolu_01FreymJ4HHxhvvLYbSvSWz8', None, 'delphi:strategist', False, 'msg_011CgoibaqDoeXg31tmGKatS')
+   ('toolu_01Ly7zs32egvw14HECNb7RTE', None, 'delphi:architect', False, 'msg_011CgoidqY4HrQAAFT3XrUCj')
+   ('toolu_01XCEkd2L3KgvNyN2uNgpqbT', None, 'delphi:red-team', False, 'msg_011CgoidqY4HrQAAFT3XrUCj')
+   ('toolu_018pJhH5BWuaisao7aq2Nfc5', None, 'delphi:strategist', False, 'msg_011CgoidqY4HrQAAFT3XrUCj')
+result: is_error False subtype success turns 15 dur_ms 84034 in 86 out 21181 models {'claude-sonnet-5-5': (40, 10432), 'claude-opus-5-5': (20, 4104), 'claude-haiku-5-5': (26, 6645)}
+HOST TOKENS (last result, cumulative modelUsage input+output) 21267

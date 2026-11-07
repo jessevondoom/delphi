@@ -1,0 +1,25 @@
+{
+  "b1": {
+    "escalation_rate": 0.625,
+    "p0p1_present": 8,
+    "readable_rate": 0.9583,
+    "records": 8
+  },
+  "b2": {
+    "escalation_rate": 0.75,
+    "p0p1_present": 8,
+    "readable_rate": 1.0,
+    "records": 8
+  },
+  "council_pooled": {
+    "escalation_rate": 0.6875,
+    "readable_rate": 0.9787,
+    "records": 16
+  },
+  "panel": {
+    "escalation_rate": 1.0,
+    "p0p1_present": 8,
+    "readable_rate": 0.875,
+    "records": 8
+  }
+}

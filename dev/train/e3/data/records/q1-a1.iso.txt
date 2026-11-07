@@ -1,0 +1,13 @@
+init: plugins [{'name': 'delphi', 'path': '/tmp/e3/plugin-delphi', 'source': 'delphi@inline', 'version': '0.5.5'}, {'name': 'cc-plugin-agents-md', 'path': 'builtin', 'source': 'cc-plugin-agents-md@builtin'}, {'name': 'cc-plugin-telemetry', 'path': 'builtin', 'source': 'cc-plugin-telemetry@builtin'}, {'name': 'cc-plugin-privacy', 'path': 'builtin', 'source': 'cc-plugin-privacy@builtin'}, {'name': 'cc-plugin-plugin-authoring', 'path': 'builtin', 'source': 'cc-plugin-plugin-authoring@builtin'}] mcp [{'name': 'delphi', 'status': 'connected', 'source': 'dynamic'}] model claude-sonnet-5-5
+tools mcp council: ['mcp__delphi__council_brief', 'mcp__delphi__council_choose', 'mcp__delphi__council_frame', 'mcp__delphi__council_open', 'mcp__delphi__council_result', 'mcp__delphi__council_status', 'mcp__delphi__council_submit', 'mcp__delphi__propose_council_record', 'mcp__delphi__request_council']
+sessions {'953f5a54-4588-4389-adec-c4c032a5e4a3'}
+tool counts {'Skill': 1, 'ToolSearch': 1, 'mcp__delphi__council_frame': 1, 'mcp__delphi__council_open': 1, 'Agent': 6, 'mcp__delphi__council_brief': 7, 'Grep': 1, 'mcp__delphi__council_submit': 9, 'mcp__delphi__council_result': 1}
+agent calls 6
+   ('toolu_014N7HfnwbqhitEhqpfC3M3J', None, 'delphi:architect', False, 'msg_011CgofjfQB5tXDqci5ZYqFU')
+   ('toolu_01B3RdSgEcCNbhRX75fuodJs', None, 'delphi:red-team', False, 'msg_011CgofjfQB5tXDqci5ZYqFU')
+   ('toolu_01K8zvchgtRxcPjK2Soy8Yz9', None, 'delphi:strategist', False, 'msg_011CgofjfQB5tXDqci5ZYqFU')
+   ('toolu_01MZErnYGgisVqPe5z19sqH5', None, 'delphi:architect', False, 'msg_011CgofmCtYXMuvXqo2tnsxJ')
+   ('toolu_01LgPyoiHmSLveR8JsC9hvP9', None, 'delphi:red-team', False, 'msg_011CgofmCtYXMuvXqo2tnsxJ')
+   ('toolu_01Wwa3Q2v2W89bF6sVGBcP96', None, 'delphi:strategist', False, 'msg_011CgofmCtYXMuvXqo2tnsxJ')
+result: is_error False subtype success turns 15 dur_ms 66128 in 66 out 14266 models {'claude-sonnet-5-5': (38, 6644), 'claude-opus-5-5': (14, 2747), 'claude-haiku-5-5': (14, 4875)}
+HOST TOKENS (last result, cumulative modelUsage input+output) 14332
