@@ -729,3 +729,18 @@ From the operator's request to refine the outside Council (Claude Code, Copilot,
 | S4 | one foreign-family seat (token ceiling, not a history-based estimate); `venue`/`blind` in the record front matter | 10 | built (PR open) |
 | S5 | pre-registered Panel-vs-Council experiment; decides the default | 12 | run 2026-11-06 (operator go, 350k per-run cap): verdict INCOMPLETE (4 of 8 questions qualify, 6 needed), notice unchanged; 2.10M of 8M tokens; report in `dev/train/e2/REPORT.md`, data in `dev/train/e2/data/`; fixes planned in spec 089 (draft) |
 | S6 | follow-ups from the Council review: Panel captures at L0, verdict `venue`, brief hash, host-support line, list of `council.verdict` readers | 4 | built (merged, #511) |
+
+## Spec 089: Panel hardening from the E2 run (2026-11-06, approved)
+
+From the E2 report (verdict INCOMPLETE). Approved 2026-11-06 on the operator's instruction to begin the slices; OD-1/2/3/5 take the recommendations; OD-4 (narrowing the `agy` guard) and the E3 run wait for an explicit go (spec 089 §10).
+
+| Slice | Content | Hours | State |
+| :-- | :-- | --: | :-- |
+| P0 | spec 089 approval and tracker entry | 1 | approved 2026-11-06 |
+| P1 | server-side Round 2 shape check at submit; seat-file closing lines | 5 | approved, not built |
+| P2 | scorer venue fix; `venue: daemon` on daemon records; useful question-limit message | 3 | approved, not built |
+| P3 | skill wording (verbatim question, confirmation rule), `operator_confirmed`, options source | 4 | approved, not built |
+| P4a | `agy` seat reliability: reproduce the checkout-guard false positive, classify the hangs | 3 | approved, not built |
+| P4b | `agy` fix: guard scope, first-output watchdog, one retry | 6-10 | approved; waits for an explicit go on OD-4 |
+| P5 | matcher v2 with a negative control; exploratory `RESCORE.md` of E2 | 5 | approved, not built |
+| P6 | E3 pre-registration (the run needs the operator's go) | 6 | approved; the run needs an explicit go |
