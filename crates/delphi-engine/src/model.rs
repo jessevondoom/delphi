@@ -245,7 +245,7 @@ impl ModelClient for ScriptedModel {
                             on_event(StreamEvent::TextDelta { index: i, text: text.clone() });
                         }
                     }
-                    Ok(Completed { blocks, usage, stop_reason: Some(stop_reason.into()) })
+                    Ok(Completed { blocks, usage, stop_reason: Some(stop_reason.into()), served_model: None })
                 }
                 Step::Interrupt => {
                     on_event(StreamEvent::TextDelta { index: 0, text: "partial ".into() });
