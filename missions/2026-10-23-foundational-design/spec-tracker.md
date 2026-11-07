@@ -666,6 +666,7 @@ Approved by the operator on 2026-11-05. Extends specs 072, 038 and 062. Task-der
 | S1c | `done_when`/`stop_when` in envelope schema and template; `check handoff` requires them | 3 h | built (this branch) |
 | S2 | `check brief` shape check; `handoff-packaging` section | 4 h | built (this branch) |
 | E1 | pre-registered two-arm experiment on the 037 pack | 4 h | run 2026-11-05: no evidence of an effect (6 of 15 vs 7 of 15); `dev/train/e1/REPORT.md`; section 8 stays unbuilt |
+| C1b | orchestrator item 10: read for itself when a read-only delegation is refused (§4.1); approved by the operator 2026-11-07; 3 of 3 genuine runs against 0 of 4 without the rule | 1 h | built (this branch) |
 
 
 
