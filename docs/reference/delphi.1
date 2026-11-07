@@ -389,7 +389,7 @@ promote or nerf a role: the class of model it is assigned.
 .fi
 .PP
 A grade (\-2 to 2) is kept in the ratified [grades] table. promote and nerf edit config.toml and show the diff; nothing changes until you /ratify it.
-grades lists them with the measured results beside each. Delphi may suggest a grade and never applies one. Refused inside an agent seat.
+grades lists them with the measured results beside each. Delphi may suggest a grade and never applies one. `\-\-auto` runs one bounded session for as long as the command runs: it merges queued pull requests oldest first, one at a time, each re\-checked just before it merges, and stops at the first of: the cap on merged pull requests (default 10), the time cap (4h), a STOP file at $DELPHI_HOME/merge/STOP, Ctrl\-C, 2 errors in a row, or 30 idle minutes. It never merges a pull request that changes a gate (those are left for a person at a terminal) and cannot change its own limits while it runs. A chat quote must ask for automatic merging; the number of one pull request or `all` does not. Refused inside an agent seat.
 .SS delphi learn
 notes staged from denials, corrections, retries and escalations.
 .PP
@@ -430,13 +430,13 @@ merge queued pull requests of this repository, with a recorded approval (spec 09
 .PP
 .nf
   delphi merge <PR>... [\-\-operator\-said "<the operator's words>"] [\-\-dry\-run] [\-\-home <dir>]
+  delphi merge \-\-auto [\-\-operator\-said "<words>"] [\-\-max\-prs <n>] [\-\-for 4h] [\-\-idle 30m] [\-\-pause\-after\-errors <n>] [\-\-poll 60s] [\-\-home <dir>]
   delphi merge \-\-all [\-\-operator\-said "<words>"] [\-\-dry\-run]
   delphi merge queue <PR>
   delphi merge status
   delphi merge log [\-\-open] [\-\-pr <n>] [\-\-json] [\-\-home <dir>]
   delphi merge fix <PR> [\-\-done | \-\-needs\-human "<why>"] [\-\-home <dir>]
   delphi merge cleanup [<PR>...] [\-\-merged] [\-\-dry\-run] [\-\-yes]
-  (not built yet: \-\-auto)
 .fi
 .PP
 The core\-repo merge flow (specs/094). Agents queue a ready pull request with the `merge\-queue` label (`delphi merge queue <PR>`); a merge is started by the operator.

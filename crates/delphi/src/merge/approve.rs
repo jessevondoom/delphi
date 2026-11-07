@@ -46,6 +46,9 @@ pub enum Target {
     Pr(u64),
     /// A batch (`--all`): a quote must say `all`, `every` or `each`.
     Batch,
+    /// A bounded `--auto` session: a quote must ask for automatic merging (`auto`, `automatically`, `as they come in`).
+    /// Neither a single pull request's number nor "all" authorizes a session that merges pull requests which do not exist yet.
+    Auto,
 }
 
 /// A quote is words from the operator, not a payload: bounded, printable, one paragraph at most.
@@ -68,6 +71,7 @@ pub fn quote_binds(quote: &str, target: Target) -> bool {
     match target {
         Target::Pr(n) => Regex::new(&format!(r"(^|[^0-9]){n}([^0-9]|$)")).map(|re| re.is_match(quote)).unwrap_or(false),
         Target::Batch => Regex::new(r"(?i)\b(all|every|each)\b").map(|re| re.is_match(quote)).unwrap_or(false),
+        Target::Auto => Regex::new(r"(?i)\b(auto|automatic|automatically|as they (come|are queued|arrive|land))\b").map(|re| re.is_match(quote)).unwrap_or(false),
     }
 }
 
@@ -76,6 +80,7 @@ pub fn attest(term: &mut dyn Terminal, quote: Option<&str>, target: Target, gate
     let (what, word) = match target {
         Target::Pr(n) => (format!("pull request #{n}"), n.to_string()),
         Target::Batch => ("every queued pull request listed above".to_string(), "all".to_string()),
+        Target::Auto => ("a bounded --auto session (it merges queued pull requests as they arrive, within the caps shown above)".to_string(), "auto".to_string()),
     };
     if gate_changing {
         if quote.is_some() {
@@ -92,6 +97,7 @@ pub fn attest(term: &mut dyn Terminal, quote: Option<&str>, target: Target, gate
             return Err(match target {
                 Target::Pr(n) => format!("the quote does not name pull request #{n}; the operator's request must mention it (or run the command in a terminal)"),
                 Target::Batch => "the quote does not say `all`, `every` or `each`; the operator's request must ask for the whole queue (or run the command in a terminal)".to_string(),
+                Target::Auto => "the quote does not ask for automatic merging (`auto`, `automatically`, `as they come in`); a request to merge one pull request or `all` does not authorize a session (or run the command in a terminal)".to_string(),
             });
         }
         return Ok(Attestation::ChatQuote(q.to_string()));
@@ -193,6 +199,21 @@ mod tests {
         assert!(attest(&mut no_tty, None, Target::Pr(552), true).unwrap_err().contains("needs a person"));
         let mut ok = FakeTerminal::new(true, &["552"]);
         assert_eq!(attest(&mut ok, None, Target::Pr(552), true), Ok(Attestation::Tty));
+    }
+
+    #[test]
+    fn a_session_needs_its_own_words_and_neither_a_number_nor_all_will_do() {
+        assert!(quote_binds("go into auto mode for the evening", Target::Auto));
+        assert!(quote_binds("merge them automatically", Target::Auto));
+        assert!(quote_binds("merge PRs as they come in", Target::Auto));
+        assert!(!quote_binds("merge #552", Target::Auto));
+        assert!(!quote_binds("merge all of them", Target::Auto));
+        assert!(!quote_binds("author of the change", Target::Auto), "a word that merely contains `auto` is not the word");
+        let mut q = FakeTerminal::new(false, &[]);
+        assert!(matches!(attest(&mut q, Some("run auto for two hours"), Target::Auto, false), Ok(Attestation::ChatQuote(_))));
+        assert!(attest(&mut q, Some("merge all"), Target::Auto, false).unwrap_err().contains("does not authorize a session"));
+        let mut tty = FakeTerminal::new(true, &["auto"]);
+        assert_eq!(attest(&mut tty, None, Target::Auto, false), Ok(Attestation::Tty));
     }
 
     #[test]
