@@ -270,3 +270,14 @@ Everything in 13.4 waits for the operator's explicit go on OD-4 (spec 089 §10);
 **Tests** (`harness_run.rs`): retry then success; second failure; no retry after a tool, on a quota error, after a guard failure, on a timeout, or with less than 10 s left; both usage events; the message with 2 and 7 paths and through the guard. The P4a characterization test and `an_agy_run_that_touches_a_project_checkout_is_discarded` pass unchanged.
 
 **Held.** The live H-2 capture (about 110,000 of the operator's tokens, one Council, error log on, a scratch home with no registered projects, commands in 13.3) waits until the operator decides on E3. Nothing in this slice ran a model or a real `agy`.
+
+
+## 15. P3 result (skill wording, confirmation rule, host-reported claims)
+
+**Built.**
+- The `delphi-council` skill and the `council_frame` and `council_open` descriptions now say: pass the operator's words as `question` exactly as given; add no options, stakes or framing sentence the operator did not give; if options would help, ask the operator for them. They state the confirmation rule (OD-1, as recommended): ask for a yes only when the host is proposing a Panel the operator did not ask for, the Panel includes a foreign seat, or stakes are `high`; when the operator asked for a Panel or Council by name, state the plan in one line and proceed.
+- `council_frame` takes `requested_by` (`operator` | `host`, default `host`) and `options_source` (`operator` | `host` | `none`). Its answer no longer has `ask_the_operator`; it has `confirmation: {needed, why, ask}`. `needed` is true when `requested_by` is `host`, or a foreign seat is present, or stakes are `high`; otherwise `needed` is false and `ask` is null. (A foreign seat keeps its own `ask_the_operator` text inside `foreign_seat`.)
+- `council_open` takes `operator_confirmed` and `options_source`. `foreign_seat` without `operator_confirmed: true` is refused before anything is written. Both values are stored on the Panel's `council.started` event (`operator_confirmed` and `options_source` absent when not given; `options_source: unstated` when options came without a source). The Panel ruling card shows `**Options:** from the operator | added by the host | none given | source not stated (host-reported)` and, when a foreign seat sat and was confirmed, `**Foreign seat confirmed by the operator:** yes (host-reported)`.
+- Every MCP array schema keeps `items`.
+
+**Not claimed.** This cannot make a host obey the wording. The card shows what the host reported, and nothing server-side sees what the operator typed. The two values raise no trust and satisfy no gate. The headless verification on two questions (byte-identical question, no invented options; about 40,000 host tokens) was not run in this slice.

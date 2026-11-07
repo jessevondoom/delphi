@@ -111,12 +111,15 @@ pub struct Panel {
     rejections: BTreeMap<String, u8>,
     /// What the host said about isolation when it opened the Panel: `yes`, `no` or `unknown`. Host-reported.
     pub blind: String,
+    /// Host-reported (spec 089 F2): whether the operator said yes to a foreign seat, and who supplied the options. Raise no trust.
+    pub operator_confirmed: Option<bool>,
+    pub options_source: Option<String>,
 }
 
 impl Panel {
     pub fn new(proposition: &str) -> Panel {
         let seats: Vec<String> = PANEL_SEATS.iter().map(|s| s.to_string()).collect();
-        Panel { proposition: proposition.to_string(), barrier: Barrier::new(&seats), seats, released: None, answered: Vec::new(), round2: BTreeMap::new(), verdict: None, models: BTreeMap::new(), opened: std::time::Instant::now(), foreign: None, rejections: BTreeMap::new(), blind: "unknown".into() }
+        Panel { proposition: proposition.to_string(), barrier: Barrier::new(&seats), seats, released: None, answered: Vec::new(), round2: BTreeMap::new(), verdict: None, models: BTreeMap::new(), opened: std::time::Instant::now(), foreign: None, rejections: BTreeMap::new(), blind: "unknown".into(), operator_confirmed: None, options_source: None }
     }
 
     /// Give one seat to Delphi: it runs on `family`, the host may neither brief nor answer for it.

@@ -115,16 +115,16 @@ async fn panel_step(engine: Arc<Engine>, panels: Panels, m: Arc<MissionState>, i
     match step {
         Step::Waiting(missing) => Ok(json!({"council_id": id, "accepted": true, "round": round, "waiting_for": missing})),
         Step::Released(stances) => {
-            let (prop, models, foreign, blind) = {
+            let (prop, models, foreign, blind, claims) = {
                 let g = panels.lock().unwrap();
                 let panel = g.get(&key).ok_or_else(gone)?;
-                (panel.proposition.clone(), panel.models.clone(), panel.foreign().map(|(r, f)| (r.to_string(), f.to_string())), panel.blind.clone())
+                (panel.proposition.clone(), panel.models.clone(), panel.foreign().map(|(r, f)| (r.to_string(), f.to_string())), panel.blind.clone(), (panel.operator_confirmed, panel.options_source.clone()))
             };
             let hashes: std::collections::BTreeMap<String, String> = {
                 let g = panels.lock().unwrap();
                 g.get(&key).map(|pn| stances.keys().filter_map(|r| pn.brief_hash(r, 1).map(|h| (r.clone(), h))).collect()).unwrap_or_default()
             };
-            engine.panel_released(&m, &id, &prop, &stances, &models, foreign.as_ref().map(|(r, f)| (r.as_str(), f.as_str())), &blind, &hashes).await.map_err(engine_err)?;
+            engine.panel_released(&m, &id, &prop, &stances, &models, foreign.as_ref().map(|(r, f)| (r.as_str(), f.as_str())), &blind, (claims.0, claims.1.as_deref()), &hashes).await.map_err(engine_err)?;
             let answered = stances.values().filter(|s| s.text().is_some()).count();
             if answered < 2 {
                 panels.lock().unwrap().remove(&key);
@@ -525,6 +525,16 @@ impl EngineService {
         h::gate(&ws.dir).map_err(host_err)?;
         let c = h::Caller::parse(&p).map_err(host_err)?;
         let proposition = h::council_proposition(&c, &p).map_err(host_err)?;
+        let options_source = h::options_source_of(&p).map_err(host_err)?;
+        let operator_confirmed = match p.get("operator_confirmed") {
+            None | Some(Value::Null) => None,
+            Some(Value::Bool(b)) => Some(*b),
+            Some(_) => return Err(err(code::INVALID_PARAMS, "`operator_confirmed` is true or false")),
+        };
+        if p["foreign_seat"].as_str().is_some_and(|r| !r.is_empty()) && operator_confirmed != Some(true) {
+            return Err(err(code::INVALID_PARAMS, "a foreign seat spends the operator's Delphi tokens: ask the operator, and pass operator_confirmed: true only if they said yes (or open the Panel without foreign_seat)"));
+        }
+        let has_options = p.get("options").and_then(Value::as_array).is_some_and(|a| !a.is_empty());
         let mut foreign: Option<(String, String)> = None;
         let (task_id, m) = {
             let _gate = self.host_gate.lock().await;
@@ -547,6 +557,12 @@ impl EngineService {
             created.task_id = Some(task_id.clone());
             m.append(created).await.map_err(engine_err)?;
             let mut panel = crate::council_panel::Panel::new(&proposition);
+            panel.operator_confirmed = operator_confirmed;
+            panel.options_source = match options_source {
+                Some(s) => Some(s.to_string()),
+                None if has_options => Some("unstated".to_string()),
+                None => None,
+            };
             panel.blind = match p["blind"].as_str() {
                 Some("yes") => "yes".into(),
                 Some("no") => "no".into(),
@@ -3315,6 +3331,7 @@ mod tests {
             assert!(card.contains("**Panel ruling**") && card.contains("isolation: host-reported") && card.contains("opus") && card.contains("Delphi spent none"), "{card}");
             // Spec 087 §5.2: the identity line leads the card in `display`, and `signature` is that line alone.
             assert!(card.starts_with("⟦") && card.contains("(orchestrator, via delphi)\n\n**Panel ruling**"), "{card}");
+            assert!(card.contains("**Options:** source not stated (host-reported)") && !card.contains("Foreign seat confirmed"), "{card}");
             assert!(got["signature"].as_str().unwrap().ends_with("(orchestrator, via delphi)") && !got["signature"].as_str().unwrap().contains('\n'), "{got}");
             assert!(got["ruling"]["dissent"].as_str().unwrap().contains("Unanimous"), "{got}");
             assert_eq!(rpc_code(c.call("host.council_choose", p(json!({"council_id": id, "option": "table"})))), Some(code::INVALID_PARAMS), "nothing escalated, nothing to choose");
@@ -3392,10 +3409,18 @@ mod tests {
             let mut c = Client::connect(&hs).unwrap();
             c.hello(&ht).unwrap();
             let p = json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cw, "question": "q?", "foreign_seat": "red-team", "model": "claude-opus"});
-            c.call("host.council_open", p).unwrap_err().to_string()
+            let unconfirmed = c.call("host.council_open", p.clone()).unwrap_err().to_string();
+            let mut denied = p.clone();
+            denied["operator_confirmed"] = json!(false);
+            let said_no = c.call("host.council_open", denied).unwrap_err().to_string();
+            let mut ok = p;
+            ok["operator_confirmed"] = json!(true);
+            format!("{unconfirmed}\n{said_no}\n{}", c.call("host.council_open", ok).unwrap_err())
         })
         .await;
-        assert!(one_family.contains("none is configured"), "{one_family}");
+        let lines: Vec<&str> = one_family.lines().collect();
+        assert!(lines[0].contains("operator_confirmed: true") && lines[1].contains("operator_confirmed: true"), "foreign_seat without operator_confirmed is refused: {one_family}");
+        assert!(lines[2].contains("none is configured"), "{one_family}");
         crate::council::tests::two_families(&f);
         f.model.respond_with(|body| if body.to_string().contains("COUNCIL, ROUND 2") { Step::text("RECOMMENDATION: PROCEED-WITH-CHANGES\nFINDING P2 naming\nCONCUR: yes\nROUND 2 COMPLETE") } else { Step::text("OPTION: table\nDelphi's seat says table.") });
         blocking(move || {
@@ -3410,7 +3435,7 @@ mod tests {
                 b
             };
             let good = "RECOMMENDATION: PROCEED-WITH-CHANGES\nFINDING P2 naming\nCONCUR: yes\nROUND 2 COMPLETE";
-            let r = c.call("host.council_open", p(json!({"question": "Table or file?", "foreign_seat": "red-team", "model": "claude-opus", "blind": "yes"}))).unwrap();
+            let r = c.call("host.council_open", p(json!({"question": "Table or file?", "foreign_seat": "red-team", "model": "claude-opus", "blind": "yes", "operator_confirmed": true, "options": ["table", "file"], "options_source": "operator"}))).unwrap();
             let id = r["council_id"].as_str().unwrap().to_string();
             assert_eq!((r["foreign_seat"]["seat"].as_str(), r["foreign_seat"]["family"].as_str()), (Some("red-team"), Some("gemini")), "it avoids the host's family: {r}");
             assert!(r["foreign_seat"]["ceiling_tokens"].as_u64().unwrap() > 0 && r["foreign_seat"]["spends"].as_str().unwrap().contains("operator's tokens"), "{r}");
@@ -3447,6 +3472,7 @@ mod tests {
             assert_eq!((got["state"].as_str(), got["venue"].as_str(), got["blind"].as_str()), (Some("decided"), Some("panel"), Some("yes")), "{got}");
             let card = got["display"].as_str().unwrap();
             assert!(card.contains("2 families") && card.contains("seat `red-team` run by Delphi") && card.contains("blind: yes (host-reported)") && card.contains("tokens on the seat Delphi ran"), "{card}");
+            assert!(card.contains("**Options:** from the operator (host-reported)") && card.contains("**Foreign seat confirmed by the operator:** yes (host-reported)"), "{card}");
             let who: Vec<&str> = got["ruling"]["seat_positions"].as_array().unwrap().iter().filter_map(|p| p["model"].as_str()).collect();
             assert!(who.iter().any(|m| m.contains("run by Delphi")), "the seat Delphi ran is labelled as such: {who:?}");
         })

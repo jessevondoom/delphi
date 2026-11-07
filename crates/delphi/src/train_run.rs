@@ -261,6 +261,21 @@ fn eval_check(c: &Check, ctx: &Ctx) -> Result<(), String> {
                 Err(format!("pattern `{}` {} in the deliverable", pattern, if *present { "is missing" } else { "appears" }))
             }
         }
+        Check::ExactItems { file, min } => {
+            let text = fs::read_to_string(ctx.case.dir.join(file)).map_err(|e| format!("{}: {}", file, e))?;
+            let wanted: Vec<String> = serde_json::from_str(&text).map_err(|e| format!("{} is not a JSON array of strings ({})", file, e))?;
+            if wanted.is_empty() {
+                return Err(format!("{} lists no items", file));
+            }
+            let missing: Vec<&String> = wanted.iter().filter(|w| !ctx.deliverable.contains(w.as_str())).collect();
+            let share = (wanted.len() - missing.len()) as f64 / wanted.len() as f64;
+            if share + 1e-9 >= *min {
+                Ok(())
+            } else {
+                let first: Vec<String> = missing.iter().take(3).map(|m| format!("`{}`", m.chars().take(40).collect::<String>())).collect();
+                Err(format!("{} of {} exact items present ({:.0}%), wanted {:.0}%; first missing: {}", wanted.len() - missing.len(), wanted.len(), share * 100.0, min * 100.0, first.join(", ")))
+            }
+        }
         Check::FileExists(p) => ctx.repo.join(p).is_file().then_some(()).ok_or_else(|| format!("{} does not exist", p)),
         Check::FileContains { path, text } => match fs::read_to_string(ctx.repo.join(path)) {
             Ok(t) if t.contains(text.as_str()) => Ok(()),
@@ -799,6 +814,10 @@ fn summary_of(stdout: &str) -> Option<Value> {
     stdout.lines().rev().find_map(|l| serde_json::from_str::<Value>(l).ok().filter(|v| v["type"] == "run.summary"))
 }
 
+/// The name of a run's project directory, and so of its `@project/<name>/` zone: the daemon names a project by its directory.
+/// A case whose prompt points at a fixture file must give the path with this name (`train_fidelity`).
+pub(crate) const REPO_DIR: &str = "repo";
+
 /// One case, one seed, one arm, in its own directory under the working directory.
 pub fn run_one(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize) -> Row {
     let label = format!("{}/{}", case.suite, case.id);
@@ -825,7 +844,7 @@ fn run_inner(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize, row:
         return Err(format!("{} already exists; a run directory is never reused, or two runs' events would mix", dir.display()));
     }
     row.dir = format!("r{:03}", index);
-    let (home, repo) = (dir.join("home"), dir.join("repo"));
+    let (home, repo) = (dir.join("home"), dir.join(REPO_DIR));
     copy_tree(arm.template_home.as_ref().unwrap_or(&cfg.template_home), &home)?;
     let ws_dir = home.join("workspaces").join(&cfg.workspace);
     let cfg_path = ws_dir.join("config.toml");
@@ -1310,6 +1329,35 @@ mod tests {
         for want in ["EFFORT", "HARNESS EFFECT", "model: m", "nudge-off vs baseline", "no evidence (fewest graded seeds 1, below 3)"] {
             assert!(r.contains(want), "{} in\n{}", want, r);
         }
+    }
+
+    #[test]
+    fn a_fidelity_case_passes_only_when_the_deliverable_keeps_every_exact_item() {
+        use crate::train_fidelity::{run_chain, write_case, Relay};
+        use crate::train_items::{artifact, generate};
+        let t0 = tempfile::tempdir().unwrap();
+        let dir = t0.path().join("suites/fidelity/cases/fid-1-10");
+        write_case(&dir, 1, 10, "dev").unwrap();
+        let c = train::load_case(&dir, "fidelity").unwrap();
+        let (its, doc) = (generate(1, 10), artifact(&generate(1, 10)));
+        // Each run gets its own scratch root; the case (and its answer key) is shared.
+        let run_with = |text: &str| -> Row {
+            let t = tempfile::tempdir().unwrap();
+            let canned = mission(t.path(), &[("task.output", json!({"status": "done", "text": text})), ("task.completed", json!({"status": "done"}))]);
+            let config = cfg(t.path(), &canned, vec![baseline()], 10.0);
+            train::prepare_work_home(&config.work_dir).unwrap();
+            run_all(&config, &[&c]).0.remove(0)
+        };
+        let verbatim = run_with(&run_chain(&doc, &its, Relay::Verbatim).finalized);
+        assert_eq!((verbatim.passed, verbatim.failed_checks.clone()), (Some(true), vec![]), "{:?}", verbatim);
+        assert_eq!(run_with(&run_chain(&doc, &its, Relay::Handle).finalized).passed, Some(true), "a handle relay that quotes the raw output keeps every item");
+        let lossy = run_with(&run_chain(&doc, &its, Relay::Paraphrase).finalized);
+        assert_eq!(lossy.passed, Some(false));
+        assert!(lossy.failed_checks[0].contains("0 of 10 exact items present (0%), wanted 100%"), "{:?}", lossy.failed_checks);
+        // Nine of ten is not enough at min = 1.0, and the message names what went missing.
+        let nine = run_with(&its[..9].iter().map(|i| i.text.as_str()).collect::<Vec<_>>().join("\n"));
+        assert_eq!(nine.passed, Some(false));
+        assert!(nine.failed_checks[0].contains("9 of 10") && nine.failed_checks[0].contains(&its[9].text.chars().take(40).collect::<String>()), "{:?}", nine.failed_checks);
     }
 
     /// A research case with a truth pack beside it (verified or a draft).
