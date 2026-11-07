@@ -708,10 +708,11 @@ Approved by the operator 2026-11-06, from a conversation that day: 28 chosen bad
 | :-- | :-- | --: | :-- |
 | S0 | operator approves spec 087 and answers OD-1 and OD-5; tracker entry | 1 | approved 2026-11-06 |
 | S1 | thirteen core roles in `ROLES`: faces, blink frames, light/dark colors | 9 | built (merged, #512) |
-| S2 | the name pool in the theme pack; picker; `pool_slot` on the start event | 9 | built in part (PR open): pool, loader checks, picker, `spawn_agent_pack` naming, `pool_slot` in the envelope and schema; the engine does not yet stamp `pool_slot` on an event |
+| S2 | the name pool in the theme pack; picker; `pool_slot` on the start event | 9 | built (PR open): pool, loader checks, picker, `spawn_agent_pack` naming, `pool_slot` in the envelope and schema; the daemon stamps `pool_slot` (and a numeral for a name already worn) on a bundle agent's `dag.node.added`, restores it on resume and frees it when the span ends; a core role dispatched as itself gets none; the `DELPHI_ASCII_BADGES` switch is not built |
 | S3 | outside: light/dark identity, `badge_mode`, `display` in the one-identity form, handoff and roster lines | 9 | built (merged, #515) |
-| S4 | console: three-frame scout blink; pool agents in panes | 6 | blink built (merged, #513); pool agents in panes waits on S2 |
-| S5 | recognition check with the operator | 3 | not built |
+| S4 | console: three-frame scout blink; pool agents in panes | 6 | blink built (merged, #513); pool agents built (PR open) in the Observer's roster, strip and epic threads, names looked up in the theme's pool sent with the start-up info; the chat console's own strip still shows the six roles only |
+| S5 | recognition check with the operator | 3 | materials prepared 2026-11-06 (Council 003); waits on the operator's reading |
+| S6 | one-off agents show their specialization (outside) or bundle agent id (inside) in the role's place (OD-6, spec 087 §10) | 5 | not built; decision recorded |
 
 ## Spec 086: the Council outside Delphi (2026-11-05, approved 2026-11-06)
 
@@ -726,7 +727,7 @@ From the operator's request to refine the outside Council (Claude Code, Copilot,
 | S2 | Panel: server-held barrier, `council_open/brief/submit/choose` | 24 | built (PR open) |
 | S3 | role subagents per host, `[host.models.*]`, Codex agents installer | 14 | built (PR open) |
 | S4 | one foreign-family seat (token ceiling, not a history-based estimate); `venue`/`blind` in the record front matter | 10 | built (PR open) |
-| S5 | pre-registered Panel-vs-Council experiment; decides the default | 12 | run 2026-11-06 (operator go, 350k per-run cap): verdict INCOMPLETE (4 of 8 questions qualify, 6 needed), notice unchanged; 2.10M of 8M tokens; report text in the PR description, data in `dev/train/e2/data/` (this PR); `REPORT.md` still to be added from it |
+| S5 | pre-registered Panel-vs-Council experiment; decides the default | 12 | run 2026-11-06 (operator go, 350k per-run cap): verdict INCOMPLETE (4 of 8 questions qualify, 6 needed), notice unchanged; 2.10M of 8M tokens; report in `dev/train/e2/REPORT.md`, data in `dev/train/e2/data/`; fixes planned in spec 089 (draft) |
 | S6 | follow-ups from the Council review: Panel captures at L0, verdict `venue`, brief hash, host-support line, list of `council.verdict` readers | 4 | built (merged, #511) |
 
 ## Spec 089: Panel hardening from the E2 run (2026-11-06, approved)
@@ -737,9 +738,9 @@ From the E2 report (verdict INCOMPLETE). Approved 2026-11-06 on the operator's i
 | :-- | :-- | --: | :-- |
 | P0 | spec 089 approval and tracker entry | 1 | approved 2026-11-06 |
 | P1 | server-side Round 2 shape check at submit; seat-file closing lines | 5 | approved, not built |
-| P2 | scorer venue fix; `venue: daemon` on daemon records; useful question-limit message | 3 | approved, not built |
+| P2 | scorer venue fix; `venue: daemon` on daemon records; useful question-limit message | 3 | built (PR open) |
 | P3 | skill wording (verbatim question, confirmation rule), `operator_confirmed`, options source | 4 | approved, not built |
 | P4a | `agy` seat reliability: reproduce the checkout-guard false positive, classify the hangs | 3 | built (PR open); P4b waits for OD-4 |
 | P4b | `agy` fix: one retry after a CLI error, discard message names the paths (guard unchanged by decision; watchdog deferred) | 6-10 | built (PR open): retry and path message; guard unchanged by decision; live capture held |
-| P5 | matcher v2 with a negative control; exploratory `RESCORE.md` of E2 | 5 | approved, not built |
+| P5 | matcher v2 with a negative control; exploratory `RESCORE.md` of E2 | 5 | built (merged, #523); v2 FAILED validation: agreement 0.15 (needs 0.30), false-match 0.0 |
 | P6 | E3 pre-registration (the run needs the operator's go) | 6 | approved; the run needs an explicit go |

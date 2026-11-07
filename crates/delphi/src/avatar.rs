@@ -371,18 +371,25 @@ pub fn badge_mouth(role: AgentRole, activity: AgentActivity) -> Option<usize> {
 }
 
 /// Renders a single-line badge (exact 5 display characters).
-/// e.g. `⟦•_•⟧` or `⟦x?x⟧`
+/// e.g. `⟦•_•⟧` or `⟦x?x⟧`; plain ASCII (`[0_0]`) when `DELPHI_ASCII_BADGES=1` (`specs/087` §6.2).
 pub fn render_badge(role: AgentRole, activity: AgentActivity, is_dark_mode: bool) -> String {
+    render_badge_with(role, activity, is_dark_mode, delphi_core::ascii_badge::requested_by_env())
+}
+
+/// [`render_badge`] with the ASCII choice made by the caller (the environment is a process-wide input a test should not depend on).
+pub fn render_badge_with(role: AgentRole, activity: AgentActivity, is_dark_mode: bool, ascii: bool) -> String {
     let t = get_theme(role);
     let c = fg(if is_dark_mode { t.chassis_rgb } else { t.chassis_rgb_light });
     let eye_color = fg(if is_dark_mode { EYE_DARK } else { EYE_LIGHT });
-    let cells: Vec<char> = badge_cells(role, activity).chars().collect();
+    let shown = |s: String| if ascii { delphi_core::ascii_badge::ascii_cells(&s) } else { s };
+    let cells: Vec<char> = shown(badge_cells(role, activity)).chars().collect();
+    let (open, close) = (shown("⟦".into()), shown("⟧".into()));
     if activity == AgentActivity::WaitingApproval {
-        return format!("{c}⟦{eye_color}{DIM}{}{RESET}{eye_color}{BOLD}{}{RESET}{eye_color}{DIM}{}{RESET}{c}⟧{RESET}", cells[0], cells[1], cells[2]);
+        return format!("{c}{open}{eye_color}{DIM}{}{RESET}{eye_color}{BOLD}{}{RESET}{eye_color}{DIM}{}{RESET}{c}{close}{RESET}", cells[0], cells[1], cells[2]);
     }
     let mouth = badge_mouth(role, activity);
     let body: String = cells.iter().enumerate().map(|(i, ch)| format!("{}{ch}", if Some(i) == mouth { &c } else { &eye_color })).collect();
-    format!("{c}⟦{body}{c}⟧{RESET}")
+    format!("{c}{open}{body}{c}{close}{RESET}")
 }
 
 /// Every activity by the name the full-screen console looks it up under.
@@ -432,7 +439,14 @@ pub fn ui_spec() -> serde_json::Value {
         }
         roles.insert(t.role_id.to_string(), r);
     }
-    json!({"version": 1, "eye": {"dark": hex_rgb(EYE_DARK), "light": hex_rgb(EYE_LIGHT)}, "roles": roles})
+    // The one ASCII table (`delphi_core::ascii_badge`), so the console keeps none of its own: every glyph a face, a mascot row
+    // or the brackets use, and the ASCII character `DELPHI_ASCII_BADGES=1` draws in its place (spec 087 §6.2).
+    let ascii_glyphs: Map<String, Value> = delphi_core::ascii_badge::FACE_GLYPHS
+        .iter()
+        .chain(delphi_core::ascii_badge::BRACKET_GLYPHS.iter())
+        .map(|(g, a)| (g.to_string(), json!(a.to_string())))
+        .collect();
+    json!({"version": 1, "eye": {"dark": hex_rgb(EYE_DARK), "light": hex_rgb(EYE_LIGHT)}, "ascii_glyphs": ascii_glyphs, "roles": roles})
 }
 
 /// The seven cells of a mascot's face row (eyes and mouth in dark ink on the role-coloured body).
@@ -469,6 +483,11 @@ pub fn mascot_row(role: AgentRole, activity: AgentActivity) -> String {
 /// Line 2: Face (chassis background fill, black facial features)
 /// Line 3: Chin (seven spaces on a darker shade of the chassis: painted, not a `▀` glyph, which leaves a gap above it)
 pub fn render_mascot(role: AgentRole, activity: AgentActivity) -> [String; 3] {
+    render_mascot_with(role, activity, delphi_core::ascii_badge::requested_by_env())
+}
+
+/// [`render_mascot`] with the ASCII choice made by the caller (`DELPHI_ASCII_BADGES`, `specs/087` §6.2).
+pub fn render_mascot_with(role: AgentRole, activity: AgentActivity, ascii: bool) -> [String; 3] {
     let t = get_theme(role);
     let c_bg = bg(t.chassis_rgb);
     let eye_fg = "\x1b[38;2;15;23;42m"; // Black features on solid body
@@ -483,8 +502,9 @@ pub fn render_mascot(role: AgentRole, activity: AgentActivity) -> [String; 3] {
         _ => format!("{}{}{RESET}", fg(t.crown_rgb), t.crown_slice),
     };
 
-    // Line 2: Solid Face (strictly 7 characters)
+    // Line 2: Solid Face (strictly 7 characters); plain ASCII glyphs when asked (the crown's `▄` blocks are decoration, not a face)
     let row = mascot_row(role, activity);
+    let row = if ascii { delphi_core::ascii_badge::ascii_cells(&row) } else { row };
     let l2 = if activity == AgentActivity::WaitingApproval {
         format!("{c_bg}{eye_fg} x {BOLD}?{RESET}{c_bg}{eye_fg} x {RESET}")
     } else {
@@ -608,7 +628,7 @@ mod tests {
 
         for r in roles {
             for a in activities {
-                let badge = render_badge(r, a, true);
+                let badge = render_badge_with(r, a, true, false);
                 let clean = strip_ansi(&badge);
                 assert_eq!(
                     clean.chars().count(),
@@ -639,7 +659,7 @@ mod tests {
 
         for r in roles {
             for a in activities {
-                let lines = render_mascot(r, a);
+                let lines = render_mascot_with(r, a, false);
                 for (idx, line) in lines.iter().enumerate() {
                     let clean = strip_ansi(line);
                     assert_eq!(
@@ -668,7 +688,7 @@ mod tests {
             AgentActivity::Surprise,
             AgentActivity::Success,
         ] {
-            let lines = render_mascot(AgentRole::Scout, a);
+            let lines = render_mascot_with(AgentRole::Scout, a, false);
             let clean = strip_ansi(&lines[1]);
             assert!(
                 !clean.contains('_') && !clean.contains('─'),
@@ -884,6 +904,80 @@ mod tests {
         }
     }
 
+    // ---- spec 087 §6.2: the ASCII fallback (`DELPHI_ASCII_BADGES`) ----
+
+    use delphi_core::ascii_badge::ascii_cells;
+
+    #[test]
+    fn in_ascii_every_badge_state_is_five_ascii_columns_for_every_role() {
+        for t in ROLES.iter() {
+            let role = from_canonical_id(t.role_id).unwrap();
+            for (name, a) in ACTIVITIES.iter() {
+                let out = strip_ansi(&render_badge_with(role, *a, true, true));
+                assert!(out.is_ascii() && out.chars().count() == 5, "{} {}: '{}'", t.role_id, name, out);
+                assert!(out.starts_with('[') && out.ends_with(']'), "{} {}: '{}'", t.role_id, name, out);
+                // The Unicode badge is untouched when ASCII is not asked for.
+                let uni = strip_ansi(&render_badge_with(role, *a, true, false));
+                assert!(uni.starts_with('⟦') && uni.chars().count() == 5, "{} {}: '{}'", t.role_id, name, uni);
+                let row = strip_ansi(&render_mascot_with(role, *a, true)[1]);
+                assert!(row.is_ascii() && row.chars().count() == 7, "mascot {} {}: '{}'", t.role_id, name, row);
+            }
+            for step in blink_steps(role) {
+                let s = ascii_cells(step);
+                assert!(s.is_ascii() && s.chars().count() == 3, "{} blink step {step} -> {s}", t.role_id);
+            }
+        }
+    }
+
+    #[test]
+    fn in_ascii_the_core_roles_stay_apart_and_a_blink_still_differs_from_its_idle() {
+        let mut seen: std::collections::HashMap<String, &str> = std::collections::HashMap::new();
+        for (id, idle, blink) in CORE_FACES {
+            let (i, b) = (ascii_cells(idle), ascii_cells(blink));
+            assert_ne!(i, b, "{id}: the blink looks like the idle face in ASCII ({i})");
+            if let Some(other) = seen.insert(i.clone(), id) {
+                assert!(
+                    [other, id].iter().all(|r| ["writer", "investigator"].contains(r)),
+                    "{other} and {id} are both `{i}` in ASCII; only the twins may share a face"
+                );
+            }
+        }
+        // A few forms, so a change to the table is a visible decision.
+        assert_eq!(ascii_cells("•─•"), "0-0");
+        assert_eq!(ascii_cells("¬_¬"), "~_~");
+        assert_eq!(ascii_cells("¬_•"), "~_0");
+        assert_eq!(ascii_cells("•••"), "000");
+        assert_eq!(ascii_cells("•o•"), "0o0", "the architect and the scout differ");
+    }
+
+    #[test]
+    fn the_console_is_sent_the_ascii_table_and_keeps_none_of_its_own() {
+        let spec = ui_spec();
+        let table = spec["ascii_glyphs"].as_object().expect("ui_spec carries ascii_glyphs");
+        for (g, a) in delphi_core::ascii_badge::FACE_GLYPHS.iter().chain(delphi_core::ascii_badge::BRACKET_GLYPHS.iter()) {
+            assert_eq!(table[&g.to_string()], a.to_string().as_str(), "{g}");
+        }
+        // Every non-ASCII character any badge or mascot row can contain is in the table.
+        let mut chars = std::collections::BTreeSet::new();
+        for (_, r) in spec["roles"].as_object().unwrap() {
+            for (_, b) in r["badge"].as_object().unwrap() {
+                chars.extend(b["cells"].as_str().unwrap().chars());
+            }
+            for (_, m) in r["mascot"].as_object().unwrap() {
+                chars.extend(m.as_str().unwrap().chars());
+            }
+            for s in r["blink_steps"].as_array().unwrap() {
+                chars.extend(s.as_str().unwrap().chars());
+            }
+            chars.extend(r["mascot_face"].as_str().unwrap().chars());
+        }
+        chars.insert('⟦');
+        chars.insert('⟧');
+        for c in chars.into_iter().filter(|c| !c.is_ascii()) {
+            assert!(table.contains_key(&c.to_string()), "`{c}` is drawn in a badge but has no ASCII stand-in");
+        }
+    }
+
     #[test]
     fn every_badge_state_is_five_columns_and_the_eyes_are_dark_on_light_terminals() {
         let spec = ui_spec();
@@ -895,7 +989,7 @@ mod tests {
                 assert_eq!(spec["roles"][t.role_id]["badge"][*name]["cells"], cells.as_str());
                 assert_eq!(mascot_row(role, *a).chars().count(), 7, "mascot {} {}", t.role_id, name);
                 for (dark, eye) in [(true, "\x1b[38;2;255;255;255m"), (false, "\x1b[38;2;15;23;42m")] {
-                    let out = render_badge(role, *a, dark);
+                    let out = render_badge_with(role, *a, dark, false);
                     assert!(out.contains(eye), "{} {} dark={}: eyes use {:?}", t.role_id, name, dark, eye);
                     assert!(!out.contains(if dark { "\x1b[38;2;15;23;42m" } else { "\x1b[38;2;255;255;255m" }), "{} {} dark={}: the other mode's eye colour leaked in", t.role_id, name, dark);
                     // Eyes are the cells that are not the mouth, whatever character they are: the red-team's `-_-` has `-` eyes.

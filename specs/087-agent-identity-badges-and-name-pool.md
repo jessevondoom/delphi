@@ -162,7 +162,9 @@ A pool agent wears **its role's chassis color** (dark and light), so a spawned b
 1. **The orchestrator picks** when it defines a dynamic agent (inside Delphi through the roster, outside through `spawn_agent_pack`): it matches the task's words against the keywords and takes the best-scoring free entry.
 2. **A deterministic fallback.** With no clear match, or if a host asks for no choice, the name is the free entry at `hash(agent_id) mod 36`, scanning forward. The same agent keeps the same identity for its life and across a replay.
 3. **No two live agents in one session share a name.** Prefer a face different from every live agent of the same role. If all 36 are live, the next takes a numeral (`Heracles II`); this is rare enough that it is not designed further (OD-3).
-4. **The role stays visible.** The signature outside is `⟦•_•⟧ Sisyphus (builder, via delphi)`; inside it is the same without the notice. A pool name never replaces the role ID in the signature, in events or in the handoff.
+4. **A one-off agent shows what it is for, in the role's place (OD-6).** The parenthetical holds the agent's *specialization*, not its base role: outside, `⟦•_•⟧ Sisyphus (flaky-test-hunter, via delphi)`, where `flaky-test-hunter` is the `specialization` the caller gave `spawn_agent_pack`; inside, the same line without the notice, where the label is the dispatched bundle agent's id (`reviewer` for `bundle:plat/reviewer`). A defined role is unchanged (the builder stays `<display name> (builder)`, OD-5).
+   - **The base role is not lost.** It stays in the event record, the handoff and the registry dispatch record, in the agent's colour (the base role's chassis, §4.2), in the pack (`derived from <base role>`), and in the detail views that show an agent's scope. It is the base role, not the label, that decides scope, tools and counterweights.
+   - **The label is untrusted text.** It is caller-written (at most 64 characters), so it is sanitized like every identity string, and a console clips it to the pane width with `…`, the full label staying in the detail view. A label that matches a canonical role ID or any core role's display name (case-insensitively), or is empty after sanitizing, is not shown: the base role ID is shown instead. A one-off agent can therefore never wear a defined role's name in that spot.
 5. **Stored with the agent.** The chosen slot is recorded in the agent's start event, so a replay and the transcript show the same name. The event gains a `pool_slot` field; its schema is updated in the slice that adds it.
 
 ### 4.4 Safety
@@ -187,7 +189,7 @@ Every signed result carries a ready-made `display` string in the form of §5.3 (
 
 ### 5.3 One identity, inside and outside
 
-Decided by the operator on 2026-11-06 (OD-5): an agent keeps **the same name, badge and role everywhere**, so the operator's picture of who is who does not change with the venue. The only difference outside is a short `via delphi` notice inside the role's parentheses.
+Decided by the operator on 2026-11-06 (OD-5): a defined agent keeps **the same name, badge and role everywhere** (a one-off agent shows its specialization where the role would be: OD-6, §4.3 item 4), so the operator's picture of who is who does not change with the venue. The only difference outside is a short `via delphi` notice inside the role's parentheses.
 
 - **The form.** Inside the console an agent is shown as `⟦face⟧ Name (role)`. Outside it is the same text with `, via delphi` added after the role, inside its parentheses: `⟦¬_¬⟧ <display name> (red-team, via delphi)`. The notice is shorter than today's trailing `via delphi` and sits inside the role's parentheses, so the line stays one unit.
 - **A host that runs an agent** (it adopted the role with `get_agent`, so it is the host's model doing the work) shows that same identity with the same `via delphi` notice. That notice is the only reminder that a host, not Delphi's own seat, is running it. There is **no separate "host is acting as" label** and no `frame_line`; the operator decided one is not wanted, neither required nor recommended.
@@ -244,7 +246,8 @@ Nothing in this spec has been tried with an operator or a host. Whether distinct
 4. **Hosts decide.** §5.5.
 5. **Twin faces are identical.** In a plain, colorless transcript the writer and the investigator differ by name and wink only; the name is always present.
 6. **No mascot work.** The 3-line mascots for the new roles follow the badge (OD-1) and may look thinner than the badges; the operator will revisit this later.
-7. **`via delphi` does not say who wrote the text.** A host's model running an adopted role and Delphi's own seat show the same line (§5.3). This is the accepted cost of keeping the identity consistent; the conformance probe (spec 086 S0b) is where any difference in what hosts do should be recorded, not the line.
+7. **A one-off agent's base role is shown only by colour on the line (OD-6).** Two one-off agents with different specializations on the same base role share a colour and read as different jobs, which is the point; but an operator who wants the base role of `flaky-test-hunter` must open the detail view or read the colour.
+8. **`via delphi` does not say who wrote the text.** A host's model running an adopted role and Delphi's own seat show the same line (§5.3). This is the accepted cost of keeping the identity consistent; the conformance probe (spec 086 S0b) is where any difference in what hosts do should be recorded, not the line.
 
 ---
 
@@ -260,12 +263,13 @@ One slice per pull request, in this order. Each updates the spec tracker.
 | S3 | outside: `hex_light`, `badge_mode`, `display` in the §5.3 form, the `delphi-attribution` skill step 5 rewritten, turn-boundary and roster lines; goldens; config schema and docs | 9 |
 | S4 | console: three-frame scout blink in `faceOf`; pool agents shown in the agents pane, epic threads and Observe; reduce-motion case | 6 |
 | S5 | the recognition check of §7, once S1 to S3 are merged and an operator is available | 3 |
+| S6 | OD-6: one-off agents show their specialization (outside) or bundle agent id (inside) in the role's place; the collision guard; clipping; detail views keep the base role; goldens | 5 |
 
 ---
 
 ## 10. Decisions
 
-OD-1 and OD-5 were answered by the operator on 2026-11-06. OD-2 to OD-4 were not contested and take the recommendations.
+OD-1 and OD-5 were answered by the operator on 2026-11-06, and OD-6 was added by the operator the same day after S1 to S4 were built. OD-2 to OD-4 were not contested and take the recommendations.
 
 | # | Question | Decision |
 | :-- | :-- | :-- |
@@ -274,12 +278,14 @@ OD-1 and OD-5 were answered by the operator on 2026-11-06. OD-2 to OD-4 were not
 | OD-3 | When all 36 pool names are live: a numeral (`Heracles II`), or refuse to spawn? | Numeral. It is cosmetic; refusing would block work for a label. |
 | OD-4 | The writer's wink `•_-`: keep, or `‾_‾` to keep it clear of the success frame? | Keep; the cells already differ. |
 | OD-5 | Is a host-acting label (`frame_line`) required of a host, or recommended? | **Decided: neither; there is no such label.** Keeping the role's identity consistent matters more for the operator's perception, and while a host runs an agent the `via delphi` after the role is a sufficient reminder. The name stays the same inside and outside, except for that shorter notice inside the role's parentheses (§5.3). |
+| OD-6 | For a one-off agent, what goes in the parenthetical: its base role, or what it is for? | **Decided: its specialization** ("it will lessen confusion and add context for the operator"). Outside that is the `specialization` given to `spawn_agent_pack`; inside it is the bundle agent's id. The base role stays in events, handoffs, colour, the pack and detail views, and a label that would pass for a defined role falls back to the base role (§4.3 item 4). Defined roles are unchanged. |
+
 ---
 
 ## 11. Review checklist
 
 - A pool name, badge or color grants nothing and changes no scope; scope comes from the role.
 - No code outside `themes/` names a theme character; code uses role IDs and `pool-NN` slots.
-- An agent's name, badge and role read the same inside and outside; the only outside difference is `, via delphi` after the role. A Delphi answer is never unsigned when a signature exists.
+- A defined agent's name, badge and role read the same inside and outside, and a one-off agent's label (its specialization, or its bundle agent id) is the same inside and outside and is never a defined role's name; the only outside difference is `, via delphi` after the role or label. A Delphi answer is never unsigned when a signature exists.
 - Every new color passes the existing contrast gate in both modes; every new animation takes its timing from `motion.ts` and honours reduce motion.
 - The core table is the only place a core face is defined; the fixture is regenerated from `avatar.rs`.

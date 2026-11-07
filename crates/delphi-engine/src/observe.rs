@@ -127,6 +127,13 @@ pub struct Node {
     pub tier_reason: String,
     /// What it is waiting for, if anything: `waiting on you`, or `waiting for a model: <why>`.
     pub waiting: String,
+    /// The name-pool slot this agent wears (`specs/087` §4.3), from its start event: a slot id, never a theme name. The
+    /// console looks the name up in the theme when it draws it. Absent for a core role.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pool_slot: Option<String>,
+    /// 2 or more when the slot was already worn by a live agent (`<name> II`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pool_numeral: Option<u32>,
     /// When the node was added and when it finished (`done` or `escalated`), as Unix milliseconds from the event
     /// timestamps. `ended_ms` is absent while it runs. 0 when the event carried no readable timestamp.
     pub started_ms: u64,
@@ -542,6 +549,11 @@ pub fn tool_stats(events: &[delphi_core::event::EventEnvelope]) -> BTreeMap<Stri
 }
 
 /// Unix milliseconds of an event envelope's RFC 3339 `timestamp`, or 0.
+/// `pool-01`..`pool-99`: the shape of a name-pool slot id (`specs/087` §4.1); anything else in the log is ignored.
+fn is_pool_slot(s: &str) -> bool {
+    s.len() == 7 && s.starts_with("pool-") && s[5..].bytes().all(|b| b.is_ascii_digit())
+}
+
 fn ts_ms(e: &Value) -> u64 {
     let t = e["timestamp"].as_str().unwrap_or("");
     let secs = delphi_core::time::parse_rfc3339(t).unwrap_or(0).max(0) as u64;
@@ -774,7 +786,7 @@ impl ObserverState {
                 if let Some(par) = &parent {
                     self.last_child.insert(par.clone(), id.clone());
                 }
-                self.nodes.insert(id.clone(), Node { id: id.clone(), role: r.clone(), parent, depth: p["depth"].as_u64().unwrap_or(0), task_id: task.clone(), state: "pending".into(), default_tier: s(&p["default_tier"]), requested_tier: s(&p["tier"]), tier_reason: sanitize(p["tier_reason"].as_str().unwrap_or("")).split_whitespace().collect::<Vec<_>>().join(" ").chars().take(200).collect(), started_ms: ts_ms(e), after, ..Default::default() });
+                self.nodes.insert(id.clone(), Node { id: id.clone(), role: r.clone(), parent, depth: p["depth"].as_u64().unwrap_or(0), task_id: task.clone(), state: "pending".into(), default_tier: s(&p["default_tier"]), requested_tier: s(&p["tier"]), tier_reason: sanitize(p["tier_reason"].as_str().unwrap_or("")).split_whitespace().collect::<Vec<_>>().join(" ").chars().take(200).collect(), started_ms: ts_ms(e), after, pool_slot: e["pool_slot"].as_str().filter(|s| is_pool_slot(s)).map(String::from), pool_numeral: p["pool_numeral"].as_u64().filter(|n| (2..=99).contains(n)).map(|n| n as u32), ..Default::default() });
                 if let Some(a) = self.agents.get_mut(&r) {
                     a.state = "running".into();
                     a.task_id = task;
@@ -1122,6 +1134,26 @@ mod tests {
 
     fn ev(seq: u64, kind: &str, task: &str, agent: &str, payload: Value) -> Value {
         json!({"seq": seq, "type": kind, "task_id": task, "agent": agent, "payload": payload})
+    }
+
+    // Spec 087 §4.3: a node's start event carries the name-pool slot of a one-off agent, so a replay shows the same name. The
+    // slot is a shape the observer checks; a forged value in the log is ignored, and a core role has none.
+    #[test]
+    fn a_node_keeps_the_pool_slot_and_numeral_its_start_event_recorded() {
+        let mut st = ObserverState::default();
+        st.apply(&ev(1, "dag.node.added", "t_1", "builder", json!({"node_id": "n1", "role": "builder", "depth": 0})));
+        let mut named = ev(2, "dag.node.added", "t_1", "red-team", json!({"node_id": "n2", "role": "red-team", "depth": 1, "pool_numeral": 2}));
+        named["pool_slot"] = json!("pool-36");
+        st.apply(&named);
+        let mut forged = ev(3, "dag.node.added", "t_1", "red-team", json!({"node_id": "n3", "role": "red-team", "depth": 1, "pool_numeral": 400}));
+        forged["pool_slot"] = json!("a display name\u{1b}[2J");
+        st.apply(&forged);
+        assert_eq!((st.nodes["n1"].pool_slot.clone(), st.nodes["n1"].pool_numeral), (None, None), "a core role has no pool slot");
+        assert_eq!((st.nodes["n2"].pool_slot.as_deref(), st.nodes["n2"].pool_numeral), (Some("pool-36"), Some(2)));
+        assert_eq!((st.nodes["n3"].pool_slot.clone(), st.nodes["n3"].pool_numeral), (None, None), "a value that is no slot id or numeral is dropped");
+        let j = serde_json::to_value(&st).unwrap();
+        assert_eq!(j["nodes"]["n2"]["pool_slot"], "pool-36");
+        assert!(j["nodes"]["n1"].get("pool_slot").is_none(), "nodes without a slot serialize as before");
     }
 
     fn usage(seq: u64, span: &str, role: &str, tier: &str, cost: f64) -> Value {

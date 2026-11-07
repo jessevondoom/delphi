@@ -1100,7 +1100,7 @@ impl Engine {
                 synthesis = t;
             }
         }
-        self.conclude(m, task_id, proposition, &plan, &stances, &round2, &round2_text, &decision, lens_plan.as_ref(), "", synthesis).await
+        self.conclude(m, task_id, proposition, &plan, &stances, &round2, &round2_text, &decision, lens_plan.as_ref(), "venue: daemon\n", synthesis).await
     }
 
     /// From the deterministic decision to the record: the steps that follow, the Council record on disk, the `council.verdict` event
@@ -1403,7 +1403,7 @@ pub(crate) mod tests {
         let head = doc.split("\n---\n").next().unwrap();
         assert!(head.contains("council_format: 1\nvenue: panel\nblind: yes"), "{head}");
         let plain = render_artifact(&ArtifactInput { mission_id: "m", n: 1, slug: "q", proposition: "q", timestamp: "t", plan: &plan, stances: &BTreeMap::new(), round2: &BTreeMap::new(), round2_text: &BTreeMap::new(), decision: &d, synthesis: "s", follow: &follow, lenses: None, front: "" });
-        assert!(!plain.contains("venue:"), "a daemon Council's record is unchanged");
+        assert!(!plain.contains("venue:"), "a record rendered with no front matter says no venue");
     }
 
     fn who(body: &serde_json::Value) -> &'static str {

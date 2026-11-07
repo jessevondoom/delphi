@@ -177,6 +177,20 @@ pub fn validate(pool: &[PoolEntry], core_idle_faces: &[&str], core_faces: &[&str
             _ => {}
         }
     }
+    // In ASCII two different faces must stay different (`DELPHI_ASCII_BADGES`, spec 087 §6.2): a spawned agent must not look
+    // like a core role, or like another name, once the glyphs are replaced. Faces that are the same to begin with (the twins,
+    // the generic `•_•` and `•─•`) are the same on purpose.
+    let mut by_ascii: std::collections::HashMap<String, &str> = std::collections::HashMap::new();
+    for f in core_idle_faces.iter().copied().chain(pool.iter().map(|e| e.face.as_str())) {
+        let a = ascii_face(f, glyphs);
+        match by_ascii.get(&a) {
+            Some(other) if *other != f => errs.push(format!("faces `{}` and `{}` are the same in ASCII (`{}`)", other, f, a)),
+            Some(_) => {}
+            None => {
+                by_ascii.insert(a, f);
+            }
+        }
+    }
     errs
 }
 
@@ -399,6 +413,36 @@ mod tests {
             let a = ascii_face(f, &g);
             assert!(a.chars().count() == 3 && a.is_ascii(), "{f} -> {a}");
         }
+    }
+
+    #[test]
+    fn the_packs_ascii_table_is_the_one_the_code_uses() {
+        // The pack and `delphi_core::ascii_badge` must say the same thing, or a spawned agent's badge would differ between
+        // the console (the code's table) and a custom theme's lint (the pack's).
+        let mut pack = glyphs();
+        pack.sort_unstable();
+        let mut code: Vec<(char, char)> = delphi_core::ascii_badge::FACE_GLYPHS.to_vec();
+        code.sort_unstable();
+        assert_eq!(pack, code);
+    }
+
+    #[test]
+    fn in_ascii_no_two_different_faces_collapse_into_one() {
+        let g = glyphs();
+        let mut seen: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        for f in core_idle().into_iter().map(String::from).chain(pool().iter().map(|e| e.face.clone())) {
+            let a = ascii_face(&f, &g);
+            if let Some(other) = seen.insert(a.clone(), f.clone()) {
+                assert_eq!(other, f, "`{other}` and `{f}` are both `{a}` in ASCII");
+            }
+        }
+        // A pack whose table does collapse two faces is reported.
+        let mut bad = g.clone();
+        for e in bad.iter_mut().filter(|(k, _)| *k == '‿') {
+            e.1 = '_';
+        }
+        let e = validate(&pool(), &core_idle(), &core_all(), &[], &bad);
+        assert!(e.iter().any(|m| m.contains("same in ASCII")), "{e:?}");
     }
 
     #[test]
