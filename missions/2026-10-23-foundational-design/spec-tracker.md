@@ -100,6 +100,7 @@ Asked for by the operator on 2026-10-26; pilot budget **80 engineering hours** (
 | X5 | operator review CLI, disagreement ledger (`train review|disputes|resolve`) | 8 | built (PR open) |
 | X6 | report (`train report`): pass rate, cost per pass, frontier, judge breakdown | 6 | built (PR open) |
 | X7 | pilot supervision and debugging | 11 | not started |
+| X8 | an arm may bring an endpoint the home lacks (`[arm.endpoint.<id>]`: family and harness), throwaway copy only, so one Copilot login runs as several vendors' models; `delphi train fidelity gen --inline` puts the report in the prompt for tool-less seats | 3 | built 2026-11-07 (PR pending): `train_arms.rs` (`ExtraEndpoint`), `train_fidelity.rs`. Live: Copilot catalogue read over ACP (24 models); see the PR for the first results |
 
 R4-R6 truth packs join in the first study phase.
 
