@@ -101,6 +101,8 @@ pub mod retrieval;
 pub mod xenia_read;
 #[cfg(test)]
 mod xenia_scope_tests;
+#[cfg(test)]
+mod service_gates_tests;
 pub mod vecext;
 pub mod mission;
 pub mod grades;
