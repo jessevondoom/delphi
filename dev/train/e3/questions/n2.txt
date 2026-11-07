@@ -1,0 +1,4 @@
+Question: Should Spec 069 be approved, establishing a 3-tier governed model for setup and CLI assistance, routing operational tasks through the `administrator`, and adding the `inspect_system` and `propose_admin_action` engine tools?
+Stakes: normal
+Pointers:
+- specs/069-workspace-administration-and-operator-assistance.md: the spec the question is about
