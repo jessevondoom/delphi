@@ -179,7 +179,7 @@ Asked for and approved by the operator on 2026-10-28. `copilot` 1.0.105 is logge
 | Slice | Content | State |
 | :-- | :-- | :-- |
 | S0 | this spec | approved 2026-11-07 |
-| S1 | `seat.rs`: the daemon-written `seat.receipt` (requested and served model, resolved family, carrier and its policy, tool grant, prompt hash), the ratified family table with owner and expiry, the schema, a `delphi doctor` expiry warning | not started |
+| S1 | `seat.rs`: the daemon-written `seat.receipt` (requested and served model, resolved family, carrier and its policy, tool grant, prompt hash), the ratified family table with owner and expiry, the schema, a `delphi doctor` expiry warning | built: `seat.rs`, `model_families.toml` (shipped, with a workspace `model-families.toml` override), `Event::Served`, `served_model` on the API `Completed`, one receipt per harness seat and per API seat, doctor check `11 model families`. The served model is read for Claude (init), Copilot and the three API providers; `agy` and Codex report none yet (S5), so their receipts say `unknown`. No live run |
 | S2 | opt-in `require_families` and a count budget on the Panel's `foreign_seat` | not started |
 | S3 | receipts in `train run` rows; a family comparison whose arms differ in prompt hash or carrier policy is labelled confounded | not started |
 | S4 | `ask_family`: one read-only foreign seat answers one question, advice only, returns its receipt | not started |

@@ -239,6 +239,7 @@ pub struct Assembler {
     stop_reason: Option<String>,
     saw_call: bool,
     finished: bool,
+    served_model: Option<String>,
 }
 
 impl Assembler {
@@ -331,6 +332,9 @@ impl Assembler {
             let kind = e["status"].as_str().map(String::from).or_else(|| e["code"].as_u64().map(|c| c.to_string())).unwrap_or_else(|| "error".into());
             return Err(StreamError::Provider { kind, message: e["message"].as_str().unwrap_or("").to_string() });
         }
+        if let Some(m) = v["modelVersion"].as_str().filter(|s| !s.is_empty()) {
+            self.served_model = Some(m.into());
+        }
         let mut out = Vec::new();
         if let Some(reason) = v["promptFeedback"]["blockReason"].as_str() {
             return Err(StreamError::Provider { kind: "blocked".into(), message: format!("the prompt was blocked ({})", reason) });
@@ -373,7 +377,7 @@ impl Assembler {
             return Err(StreamError::Incomplete);
         }
         self.done.sort_by_key(|(i, s, _)| (*i, *s));
-        Ok(Completed { blocks: self.done.into_iter().map(|(_, _, b)| b).collect(), usage: self.usage, stop_reason: self.stop_reason })
+        Ok(Completed { blocks: self.done.into_iter().map(|(_, _, b)| b).collect(), usage: self.usage, stop_reason: self.stop_reason, served_model: self.served_model })
     }
 }
 
