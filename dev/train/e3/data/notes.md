@@ -72,3 +72,4 @@ Delphi-side about 810k of 2,000,000; host-side about 173k of 400,000. Phase 2 (B
 
 ### Deferred A2 runs (after phase 2)
 - q3 A2 attempt 1 (host-c82d33c466bf0bd6): no record (host stopped while the foreign seat was outstanding); 101,776 Delphi-side (2 usage events), 13,762 host. attempt 2 (host-119e148bab2f6996): RECORD WRITTEN this time (the host used Monitor and `council_status` polling and waited): venue panel, blind yes, `foreign_seat: red-team`, `foreign_family: gemini`, question verbatim true, 4 Agent calls (architect and strategist, two rounds), foreign red-team seat readable; 89,850 Delphi-side (foreign seat), 16,750 host; 0 harness.retry. First usable A2.
+- q4 A2: attempt 1 (host-84de48a340252d7e) no record, 78,255 Delphi-side + 12,010 host; attempt 2 (host-6be9dcbb047d78fc) no record, 80,710 + 13,582. EXCLUDED (second failure).
