@@ -20,7 +20,7 @@ export type RoleTools = { calls: number; errors: number; last: string; streak?: 
 export type Provider = { endpoint: string; family: string; models: number; cooling: number; out: number; back_ms: number | null };
 export type OState = {
   agents: Record<string, AgentRow>;
-  nodes: Record<string, { id: string; role: string; parent: string | null; depth: number; task_id: string; state: string; waiting?: string; endpoint?: string; model?: string; tier?: string; default_tier?: string; requested_tier?: string; tier_reason?: string; pool_slot?: string; pool_numeral?: number; tokens: number; cost_usd: number; started_ms: number; ended_ms: number | null; after: string[] }>;
+  nodes: Record<string, { id: string; role: string; parent: string | null; depth: number; task_id: string; state: string; waiting?: string; endpoint?: string; model?: string; tier?: string; default_tier?: string; requested_tier?: string; tier_reason?: string; pool_slot?: string; pool_numeral?: number; bundle_agent?: string; label?: string; tokens: number; cost_usd: number; started_ms: number; ended_ms: number | null; after: string[] }>;
   /** `tokens` is everything the task's agents used, counted as the mission total is; a daemon that predates it sends none. */
   tasks: Record<string, { id: string; flow: string; prompt: string; status: string; output?: string; session?: string; tokens?: Tokens }>;
   /** The console sessions of the mission, oldest first; the last is the current one (`specs/030`). Work from every session stays on the screen while it runs. */
@@ -94,6 +94,8 @@ const ordered = (st: OState) => Object.values(st.agents).sort((a, b) => (ORDER.i
 const tokTotal = (t: Tokens) => t.input + t.cache_read + t.cache_write + t.output + t.thinking;
 const glyph = (s: string) => ({ done: '✔', green: '✔', merged: '✔', running: '●', escalated: '✖', failed: '✖', red: '✖', refused: '✖', 'waiting on you': '►', pending: '○', idle: '○' } as Record<string, string>)[s] ?? '·';
 const stateColor = (s: string): Paint => ({ done: T.ok, green: T.ok, merged: T.ok, running: T.accent, escalated: T.alert, failed: T.alert, red: T.alert, refused: T.alert, 'waiting on you': T.warn } as Record<string, Paint>)[s] ?? T.muted;
+/** The widest a one-off agent's label is drawn on its roster row (`specs/087` §4.3 item 4); the detail line carries the rest. */
+const ONE_OFF_LABEL_COLS = 24;
 const clean = (s: string, n: number) => { const t = sanitize(s).replace(/\n/g, ' '); return [...t].length <= n ? t : [...t].slice(0, Math.max(0, n - 1)).join('') + '…'; };
 const wrap = (s: string, w: number) => wrapAnsi(s, Math.max(4, w), { hard: true, trim: false }).split('\n');
 const rule = (m: OModel, w: number, title = '') => { const head = title ? `── ${title} ` : ''; return T.rule(m.pal)(head + '─'.repeat(Math.max(0, w - [...head].length))); };
@@ -239,13 +241,17 @@ function agents(m: OModel, w: number, _h: number): string[] {
     const total = logged + live;
     // `⟦face⟧ Name (role)` for a one-off agent, the same line the outside shows without its `via delphi`. Its role's tool counters,
     // quiet note and cap meter belong to the role as a whole, so they stay off its row.
+    // In the role's place it shows what the agent is for (`specs/087` §4.3 item 4, OD-6): the label the daemon sent, clipped to
+    // the row; the whole label and the base role it runs as are on the token line below. Its colour is the base role's.
+    const shown = one ? T.shownRole(m.st.nodes[a.pool!.node]?.label, a.role) : a.role;
     const head = one
-      ? T.poolBadge(a.role, one.face, a.state as T.AgentState, m.info, m.pal) + ' ' + roleCol(m, a.role).bold(nm) + dim(` (${a.role})  `)
+      ? T.poolBadge(a.role, one.face, a.state as T.AgentState, m.info, m.pal) + ' ' + roleCol(m, a.role).bold(nm) + dim(` (${clean(shown, ONE_OFF_LABEL_COLS)})  `)
       : roleCol(m, a.role).bold(nm) + dim(`  ${nm === a.role ? '' : a.role + '  '}`);
+    const scope = one ? dim(` · runs as ${a.role}${[...shown].length > ONE_OFF_LABEL_COLS ? ' · ' + clean(shown, Math.max(ONE_OFF_LABEL_COLS, w - 56)) : ''}`) : '';
     const meta = [
       head + colored(`${glyph(a.state)} ${a.state}`, stateColor(a.state)) + (a.state === 'running' && !one ? quietNote(m, a.role) : ''),
       text(m)(model) + (a.task_id && a.state !== 'idle' ? dim(` · ${a.task_id}`) : '') + versusNote,
-      dim(`${live > 0 ? '~' : ''}${kilo(total)} tokens`) + (one ? '' : capMeter(m, a.role)),
+      dim(`${live > 0 ? '~' : ''}${kilo(total)} tokens`) + scope + (one ? '' : capMeter(m, a.role)),
     ];
     // The tool counters take a row of their own under the summary, so the summary keeps the width.
     const extra = one ? '' : toolsLine(m, a, false);

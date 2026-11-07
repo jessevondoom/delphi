@@ -712,7 +712,7 @@ Approved by the operator 2026-11-06, from a conversation that day: 28 chosen bad
 | S3 | outside: light/dark identity, `badge_mode`, `display` in the one-identity form, handoff and roster lines | 9 | built (merged, #515) |
 | S4 | console: three-frame scout blink; pool agents in panes | 6 | blink built (merged, #513); pool agents built (PR open) in the Observer's roster, strip and epic threads, names looked up in the theme's pool sent with the start-up info; the chat console's own strip still shows the six roles only |
 | S5 | recognition check with the operator | 3 | materials prepared 2026-11-06 (Council 003); waits on the operator's reading |
-| S6 | one-off agents show their specialization (outside) or bundle agent id (inside) in the role's place (OD-6, spec 087 §10) | 5 | not built; decision recorded |
+| S6 | one-off agents show their specialization (outside) or bundle agent id (inside) in the role's place (OD-6, spec 087 §10) | 5 | built (PR open): the rule `one_off_label` once in `delphi-core`; `Identity.label`; `spawn_agent_pack` line and pack; the observer node's `label` and `bundle_agent`; the roster, agents pane and epic threads; ASCII; not seen in a live mission |
 
 ## Spec 086: the Council outside Delphi (2026-11-05, approved 2026-11-06)
 
