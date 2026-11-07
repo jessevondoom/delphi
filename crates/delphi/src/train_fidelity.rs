@@ -137,8 +137,11 @@ pub fn to_json(seed: u64, n: usize, outcomes: &[Outcome]) -> serde_json::Value {
 
 // ── a case for a real model ─────────────────────────────────────────────────────────────────────────────────────
 
-/// The prompt: it names no item, and asks for exactness.
-const PROMPT: &str = "Ask the investigator to read artifact.md in the project and report back to you. Then give me every identifier, hash, file path, number, line of code and quoted sentence it contains, character for character, as a list. Do not paraphrase, shorten or round anything.";
+/// The prompt: it names no item, and asks for exactness. It gives the file's full logical path: a project is read through
+/// `@project/<name>/`, and a model that is told only "in the project" guesses the path and is refused (the first live run).
+fn prompt() -> String {
+    format!("Ask the investigator to read @project/{}/artifact.md and report back to you. Then give me every identifier, hash, file path, number, line of code and quoted sentence it contains, character for character, as a list. Do not paraphrase, shorten or round anything.", crate::train_run::REPO_DIR)
+}
 
 /// Write a case directory (`case.toml`, `fixture/artifact.md`, `items.json`) for `delphi train run`. `items.json` sits outside
 /// the fixture, so the model under test never sees the answer key.
@@ -150,7 +153,7 @@ pub fn write_case(dir: &Path, seed: u64, n: usize, split: &str) -> Result<(), St
     fs::write(dir.join("items.json"), items::items_json(&its)).map_err(|e| e.to_string())?;
     let toml = format!(
         "id = \"{id}\"\nsuite = \"fidelity\"\nkind = \"task\"\nrole = \"orchestrator\"\nsplit = \"{split}\"\ntags = [\"handoff\"]\nmax_cost_usd = 1.0\ntimeout_secs = 900\nprompt = \"{prompt}\"\n\n# The final answer keeps every item byte for byte (seed {seed}, {n} items; `delphi train fidelity gen` made this case).\n[[check]]\nkind = \"exact_items\"\npath = \"items.json\"\nmin = 1.0\n",
-        id = id, split = split, prompt = PROMPT, seed = seed, n = n
+        id = id, split = split, prompt = prompt(), seed = seed, n = n
     );
     fs::write(dir.join("case.toml"), toml).map_err(|e| e.to_string())
 }
@@ -319,7 +322,11 @@ mod tests {
         for f in fs::read_dir(dir.join("fixture")).unwrap().flatten() {
             assert!(f.file_name() != "items.json", "the answer key is not in the fixture");
         }
-        assert!(!case.prompt.as_deref().unwrap().contains(&its[0].text), "the prompt gives nothing away");
+        let prompt = case.prompt.as_deref().unwrap();
+        assert!(!prompt.contains(&its[0].text), "the prompt gives nothing away");
+        // The path is the one the daemon resolves: a project is addressed by its directory name (the first live run was refused
+        // for writing `@project/artifact.md`).
+        assert!(prompt.contains("@project/repo/artifact.md") && crate::train_run::REPO_DIR == "repo", "{}", prompt);
         // The command: a fresh directory is required, arguments are checked, and `run` needs no repository.
         let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         let out = t.path().join("new-case");
