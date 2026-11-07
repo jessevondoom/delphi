@@ -4,6 +4,7 @@ title: "039: The central error log"
 author: architect
 timestamp: 2026-10-27T12:00:00Z
 status: approved   # by the operator, 2026-10-27; built in #256
+amendments: "2026-11-07, approved by the operator ('approve the items in 3', after a Council review of Anthropic's context-engineering posts): a failed tool call records why, as one of four kinds, and the names of its arguments (never a value or a hash of one)"
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -71,7 +72,7 @@ because no zone maps it. No RPC method returns log contents; the operator and th
 | a method refused on the narrator or relay socket | `rpc_forbidden` | warn |
 | a client connection ended in an I/O error | `connection_error` | warn |
 | a task ended in an error (all six sites that write `task.failed`) | `task_failed` | error |
-| a tool call returned an error (tool, role, span; not the text) | `tool_failed` | warn |
+| a tool call returned an error (tool, role, span, why it failed and the names of its arguments; not the text and not a value) | `tool_failed` | warn |
 | a harness (`claude`, `agy`) run failed: reason, exit code, redacted stderr tail | `harness_failed` | error |
 | a harness run ended on a spent quota | `harness_exhausted` | warn |
 | a provider call failed: endpoint, model, HTTP status, error type; never the body or the provider's message | `provider_*` | error / warn (throttle, quota, unreachable) |
@@ -86,6 +87,8 @@ because no zone maps it. No RPC method returns log contents; the operator and th
 | the tool bridge relay cannot reach the span's server | `bridge_unreachable` | error |
 | the retrieval reranker or embedder cannot be used | `kb_*` | warn |
 | console: uncaught exception, unhandled rejection, React render error, console stopped | `uncaught_exception`, `unhandled_rejection`, `render_error`, `console_stopped` | error |
+
+**`tool_failed` context (amended 2026-11-07).** `kind` is one of `timeout` (the operator's approval timed out, or a command was killed at its limit), `denied` (policy refused the call: a path outside the role's zones, a role without the permission, a read-only span), `invalid_args` (the call could not be attempted: a missing or malformed argument, an unknown tool) or `tool_error` (it ran and failed, or the text matched none of the others). It was the constant `is_error`. It is read from the **first line** of the result (a command's output, which may say anything, begins with `$ <command>`; its timeout marker is on the second line), so it is a lower bound: a refusal worded some other way is a `tool_error`, never the reverse. `arg_keys` lists the call's top-level argument **names**, sorted, at most 12, each at most 32 characters of letters, digits, `_` and `-` (a model chooses these, so anything else is left out). Values are never logged, and neither is a hash of one: a hash of a low-entropy value (a short path, a small number, a yes) can be guessed back from the log, so a repeat call is not detected by hashing. Repeats stay with the loop nudge (`specs/045` T1), which already names the tool and the count. The same `kind` is stored on the `tool.result` and `harness.bridge_call` events as `failure` (not on a success), so `specs/033` can count it.
 
 ## 4. Commands
 

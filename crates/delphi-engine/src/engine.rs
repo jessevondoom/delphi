@@ -1006,9 +1006,12 @@ impl Engine {
                             Some((content, is_error)) => tools::ToolResult { content, is_error }, // already persisted before the interruption
                             None => {
                                 let mut r = self.exec_tool(&mut sc, &id, &name, &args, &rec).await?;
-                                if r.is_error {
-                                    // The tool and the span, never the result text: a refusal or a failed command is routine for an agent, so warn.
-                                    delphi_core::elog::warn("tool", "tool_failed", "a tool call returned an error", json!({"mission": sc.m.id, "task": sc.task_id, "span": sc.span_id, "tool": name, "role": sc.role, "kind": "is_error"}));
+                                // Classified before any note or hint is added to the text.
+                                let failure = r.is_error.then(|| tools::failure_kind(&r.content));
+                                if let Some(kind) = failure {
+                                    // The tool, the span, why it failed and the names of its arguments, never the result text or a value: a refusal or a
+                                    // failed command is routine for an agent, so warn (`specs/039` §3).
+                                    delphi_core::elog::warn("tool", "tool_failed", "a tool call returned an error", json!({"mission": sc.m.id, "task": sc.task_id, "span": sc.span_id, "tool": name, "role": sc.role, "kind": kind, "arg_keys": tools::arg_keys(&args)}));
                                     let db = self.ws.dir.join("local/state.db");
                                     if let Some(hint) = crate::kb::find_proactive_hint(&db, &sc.role, &r.content, sc.span.ceiling()) {
                                         r.content.push_str(&format!("\n\n{}", hint));
@@ -1032,11 +1035,15 @@ impl Engine {
                                     }
                                 }
                                 // Durable before the next tool runs (or waits for an approval): a crash must not re-run a finished side effect.
-                                let payload = match sc.content_ref.take() {
+                                let mut payload = match sc.content_ref.take() {
                                     // A connector result: the log holds a pointer to the payload store, never the text.
                                     Some(h) => json!({"turn_index": result_index, "tool_call_id": id, "name": name, "content": format!("[connector result stored as @payload/{}, {} characters]", h, r.content.chars().count()), "content_ref": h, "is_error": r.is_error}),
                                     None => json!({"turn_index": result_index, "tool_call_id": id, "name": name, "content": r.content, "is_error": r.is_error}),
                                 };
+                                // Why it failed, so the tool counters can tell a bad call from a refusal (`specs/033` §2); absent on a success.
+                                if let (Some(kind), Some(o)) = (failure, payload.as_object_mut()) {
+                                    o.insert("failure".into(), json!(kind));
+                                }
                                 m.append(sc.ev("tool.result", payload)).await?;
                                 r
                             }
@@ -4341,6 +4348,24 @@ mod tests {
         assert_eq!(events_of(&f, "dag.node.added").len(), 1, "no child span");
         let r = events_of(&f, "tool.result");
         assert!(r[0].payload["is_error"] == true && r[0].payload["content"].as_str().unwrap().contains("agent-dispatch"), "{:?}", r[0].payload);
+    }
+
+    // `specs/039` §3, `specs/033` §2: a failed call records why, in the mission log, so the tool counters can tell a bad call from a
+    // refusal; the names of its arguments go to the error log and never a value.
+    #[tokio::test]
+    async fn a_failed_tool_call_records_why_and_the_tool_counters_count_it() {
+        let f = setup(
+            vec![Step::tool("d1", "dispatch_agent", json!({"role": "strategist", "objective": "Do something"})), Step::tool("r1", "read_file", json!({})), Step::text("ok")],
+            5.0,
+            |_| {},
+        );
+        f.engine.run_task(&f.m, "architect", "Draft a plan").await.unwrap();
+        let r = events_of(&f, "tool.result");
+        assert_eq!(r.iter().map(|e| (e.payload["name"].as_str().unwrap(), e.payload["is_error"] == true, e.payload["failure"].as_str())).collect::<Vec<_>>(), [("dispatch_agent", true, Some("denied")), ("read_file", true, Some("invalid_args"))], "{:?}", r.iter().map(|e| &e.payload).collect::<Vec<_>>());
+        // The same events feed the counters.
+        let report = crate::toolreport::report(&f.m.replay().unwrap());
+        assert_eq!((report.by_tool["dispatch_agent"].denied, report.by_tool["dispatch_agent"].invalid_args), (1, 0));
+        assert_eq!((report.by_tool["read_file"].invalid_args, report.by_tool["read_file"].denied, report.by_tool["read_file"].errors), (1, 0, 1));
     }
 
     #[tokio::test]
