@@ -1,0 +1,9 @@
+Question: Extending council t_0001's ruling (staging-only propose_kb_entry, L0 inbox, daemon-computed taint, excluded from kb_search until ratified, per-entry ratification, caps/dedupe/scrubbing, TUI as front end on the same inbox), all of which stays. Add: operators want to directly accept agent-summarized markdown files (human-legible roll-ups, encyclopedia-style page summaries, semi-permanent captures of internal research) for reference and inclusion in the KB. They may be labeled/treated differently from atomic entries. Propose the path: how are markdown files ingested (drop a file in a folder, TUI import, MCP propose of a file), how are they typed/labeled (e.g. kind: summary page vs atomic claim), how do provenance, taint and trust tier work for files the operator explicitly hands over vs agent-submitted ones, how do they link to the atomic entries they summarize, how are they searched/visible, and how is the friction minimal (operator-initiated import should be one step and may count as operator ratification of inclusion, but not of claim validity)?
+Stakes: normal
+Options:
+- Operator-import path: `delphi kb import <file.md>` / TUI drag-in; operator act = ratified for inclusion, labeled kind=summary, not claim-validated, searchable immediately with a visible label
+- Agent-submitted path: propose_kb_entry accepts kind=summary with a markdown body; stays in L0 inbox until operator ratifies
+- Both paths share one schema (frontmatter: kind, sources, retrieved, author, taint) so summaries and atomic entries link by id
+- Watched inbox folder in the workspace where dropped markdown is auto-staged (not auto-ratified)
+Pointers:
+(none)

@@ -1,0 +1,11 @@
+{"headline": "claude-code",
+ "questions": [
+  {"id": "q1", "b1": "/tmp/e2-s5/records/q1-b1.md", "b2": "/tmp/e2-s5/records/q1-b2.md", "panel": {"claude-code": "/tmp/e2-s5/records/q1-panel-claude-code.md"}},
+  {"id": "q2", "b1": "/tmp/e2-s5/records/q2-b1.md", "b2": "/tmp/e2-s5/records/q2-b2.md", "panel": {"claude-code": "/tmp/e2-s5/records/q2-panel-claude-code.md"}},
+  {"id": "q3", "b1": "/tmp/e2-s5/records/q3-b1.md", "b2": "/tmp/e2-s5/records/q3-b2.md", "panel": {"claude-code": "/tmp/e2-s5/records/q3-panel-claude-code.md"}},
+  {"id": "q4", "b1": "/tmp/e2-s5/records/q4-b1.md", "b2": "/tmp/e2-s5/records/q4-b2.md", "panel": {"claude-code": "/tmp/e2-s5/records/q4-panel-claude-code.md"}},
+  {"id": "q5", "b1": "/tmp/e2-s5/records/q5-b1.md", "b2": "/tmp/e2-s5/records/q5-b2.md", "panel": {"claude-code": "/tmp/e2-s5/records/q5-panel-claude-code.md"}},
+  {"id": "q6", "b1": "/tmp/e2-s5/records/q6-b1.md", "b2": "/tmp/e2-s5/records/q6-b2.md", "panel": {"claude-code": "/tmp/e2-s5/records/q6-panel-claude-code.md"}},
+  {"id": "q7", "b1": "/tmp/e2-s5/records/q7-b1.md", "b2": "/tmp/e2-s5/records/q7-b2.md", "panel": {"claude-code": "/tmp/e2-s5/records/q7-panel-claude-code.md"}},
+  {"id": "q8", "b1": "/tmp/e2-s5/records/q8-b1.md", "b2": "/tmp/e2-s5/records/q8-b2.md", "panel": {"claude-code": "/tmp/e2-s5/records/q8-panel-claude-code.md"}}
+ ]}
