@@ -102,7 +102,7 @@ pub fn failure_kind(content: &str) -> &'static str {
     let head: String = c.lines().take(2).collect::<Vec<_>>().join("\n");
     if first.starts_with("The approval timed out") || head.contains("[timed out and was killed") {
         "timeout"
-    } else if first.starts_with("denied:") || first.contains("was denied") || first.contains("does not authorize") || first.starts_with("this task was raised by a host agent") || first.starts_with("this span answers in text only") || first.contains("is not among the tools of") {
+    } else if first.starts_with("denied:") || first.starts_with("The operator denied this action") || first.contains("was denied") || first.contains("does not authorize") || first.starts_with("this task was raised by a host agent") || first.starts_with("this span answers in text only") || first.contains("is not among the tools of") {
         "denied"
     } else if first.starts_with("missing ") || first.starts_with("unknown ") || first.contains(" must be ") || first.contains("invalid arguments") || first.starts_with("the only argument is") {
         "invalid_args"
@@ -1645,6 +1645,9 @@ mod tests {
             // Refused by policy.
             ("denied: this path does not belong to any readable zone", "denied"),
             ("denied: `.git` is never accessible", "denied"),
+            // The operator, or a headless run that has no operator, refused a card: the commonest denial in a training run.
+            ("The operator denied this action: headless run: a Red action is never approved without the operator. Do not retry it; propose an alternative or ask.", "denied"),
+            ("The operator denied this action. Do not retry it; propose an alternative or ask.", "denied"),
             ("this role's manifest does not authorize timers", "denied"),
             ("`xenia_help` is not among the tools of the bundle agent a/b", "denied"),
             ("this span answers in text only; it has no tools", "denied"),
