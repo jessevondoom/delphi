@@ -3,7 +3,8 @@ id: spec-094-core-repo-merge-flow
 title: "094: The core-repo merge flow: a queue, `delphi merge`, a session-scoped `--auto`, cleanup after merge, a merge error log and a builder that can fix what fails"
 author: architect
 timestamp: 2026-11-07T22:00:00Z
-status: draft   # a proposal, not permission: only the operator approves a spec (specs/003 3.1.2)
+status: approved   # by the operator, 2026-11-07 ("approve the outstanding draft specs in this workstream"); OD-1 to OD-5 take the recommendations, as when the operator approved the plan
+approved_by: operator (2026-11-07)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +15,7 @@ tags: [spec, merge, pull-requests, workflow, approvals, authority, builder, git,
 
 # Spec 094: The core-repo merge flow
 
-> **Status: draft.** Written on the operator's approval of the plan of 2026-11-07. No code is built until the operator approves this spec. Slices follow §6, one per pull request.
+> **Status: approved by the operator, 2026-11-07.** Decisions OD-1 to OD-5 (§9) take the recommendations. Approval is permission to build the slices in §6, one per pull request, in order. The `GOVERNANCE.md` bullet and the `003`/`006` paragraphs in this pull request take effect when it merges, and the operator reviews the `GOVERNANCE.md` commit (`dece7ec7`) as part of that merge.
 > **Origin:** Council `t_0005` (2026-11-07) reviewed the operator's proposal for `delphi approve`, `delphi ratify` and `delphi merge`; its seats agreed that content-bound records, a separate gate-changing class and keeping Delphi optional were needed, and wanted `--auto` cut. The operator chose to keep a session-scoped `--auto` and to defer the hardening (§5).
 > **Amends, when approved:** `specs/003` §3.1.2 and `specs/006` §3.1 (the hash pin of an approved spec in `ratified.lock` and the daemon's "blocks Builder unless the hash is ratified" govern work run through a Delphi daemon on specs inside a workspace's tree; Delphi's own repository is built from host-agent sessions as well, and there a spec is approved by its frontmatter and the operator's recorded instruction, with no pin) and `GOVERNANCE.md` §1.1 (how a core-repo merge is approved). Both edits are in this pull request. The `GOVERNANCE.md` edit is a constitutional change (§5.7) and is a gate-changing change under §3.4: the operator reviews it line by line.
 

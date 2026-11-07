@@ -776,14 +776,14 @@ From the E2 report (verdict INCOMPLETE). Approved 2026-11-06 on the operator's i
 | P6 | E3 pre-registration and run | 6 | pre-registration merged (#531), Amendment 1 merged (#536); run 2026-11-07 (operator go, 2.0M cap): A1 (headline) verdict NO EVIDENCE (same decision 5/6, readable 18/18, but escalation 1/6 against the Council's 10/12); A2 INCOMPLETE (2 of 6 questions: the headless host stopped before the foreign seat answered in 8 of 10 attempts); section 4.5 notice unchanged; 1.88M of 2.0M Delphi-side, 261k of 400k host-side; report `dev/train/e3/REPORT.md`, data `dev/train/e3/data/`; merged (#543); the foreign-seat wait-flow fix is spec 089 P7 |
 | P7 | a headless host survives the foreign seat: server-side wait (brief round 2/3, status), non-error `waiting_on_delphi_seat` answer, `waiting_on`, skill and tool text now say to wait for it | 4 | built (PR open); operator go 2026-11-07; live A2 check not run |
 
-## Spec 094: the core-repo merge flow (2026-11-07, draft)
+## Spec 094: the core-repo merge flow (2026-11-07, approved)
 
-From the operator's plan of 2026-11-07, after Council `t_0005` on the `approve` / `ratify` / `merge` proposal. A draft is a proposal: nothing is built until the operator approves it. The agent identity, branch protection and a terminal or authenticator approval are deliberately deferred to a hardening pass (S8) due before repository access is widened.
+From the operator's plan of 2026-11-07, after Council `t_0005` on the `approve` / `ratify` / `merge` proposal. Approved 2026-11-07 on the operator's instruction ("approve the outstanding draft specs in this workstream"); OD-1 to OD-5 take the recommendations. The agent identity, branch protection and a terminal or authenticator approval are deliberately deferred to a hardening pass (S8) due before repository access is widened.
 
 | Slice | Content | Hours | State |
 | :-- | :-- | --: | :-- |
-| S1 | spec 094, its approval, and the `003`/`006`/`GOVERNANCE` text | 3-4 | draft (PR open) |
-| S2a | the builder's git skill, trigger-routing evals, authorization (no executable code) | 4-5 | drafted on a branch; waits for approval |
+| S1 | spec 094, its approval, and the `003`/`006`/`GOVERNANCE` text | 3-4 | approved 2026-11-07 (PR #561 open) |
+| S2a | the builder's git skill, trigger-routing evals, authorization (no executable code) | 4-5 | built (PR #562 open; merges after #561) |
 | S2b | behavior evals: fixture repos in conflicted states, a harness, checks that the builder resolved correctly | 6-8 | not started (needs executable code) |
 | S3 | `delphi merge` core: queue, preconditions, ledger, `<PR>` and `--all`, gate-changing class | 14-18 | not started |
 | S4 | cleanup after merge and the backlog sweep | 6-8 | not started |
