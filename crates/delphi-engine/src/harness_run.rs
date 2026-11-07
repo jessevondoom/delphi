@@ -109,6 +109,10 @@ pub(crate) enum FailKind {
 /// The CLI's own error line sent as a successful answer (a "cannot load model" style message). Deliberately narrow: only the
 /// first non-empty line, at most 80 characters, matched whole against a short per-CLI list. It can only turn a success into a
 /// failure; a miss changes nothing.
+///
+/// **The strings below are plausible guesses, not text captured from the real CLIs**, so today this catches little: the mechanism
+/// is what is proven (tests use a fake CLI). When a real CLI is seen exiting 0 with an error as its answer, add that exact line
+/// here with a test, and say which CLI version printed it.
 pub(crate) fn in_band_error(cli: Cli, text: &str) -> bool {
     let line = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
     let known: &[&str] = match cli {

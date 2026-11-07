@@ -782,5 +782,5 @@ From Council `t_0001` over two research notes (CAO, Paperclip); the operator cho
 | Slice | Content | Hours | State |
 | :-- | :-- | --: | :-- |
 | B0 | spec 093 approval and tracker entry | 1 | approved 2026-11-07 (PR #552) |
-| B1 | spawn-site ratchet, generalized must-run gate, home isolation, three authority audits, `cargo deny` gate, harness live-text test | 14-20 | in progress |
-| B2 | previous-release resume fixture with a named error, usage data-quality view | 8-12 | not started (waits for B1) |
+| B1 | spawn-site ratchet, generalized must-run gate, home isolation, three authority audits, `cargo deny` gate, harness live-text test | 14-20 | built (merged, #552) |
+| B2 | newer-schema log error and a v0.5.5 log fixture, typed harness result failures, usage-quality doctor check | 8-12 | built (PR open); findings: totals add an unknown price as 0 (own slice); the in-band error list is unverified guesses |
