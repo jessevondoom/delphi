@@ -1,8 +1,8 @@
 [
   {
     "host": "claude-code",
-    "cli_version": null,
-    "date": null,
+    "cli_version": "2.1.319 (Claude Code)",
+    "date": "2026-11-07",
     "cells": {
       "definition": {
         "status": "not run"
@@ -17,13 +17,16 @@
         "status": "not run"
       },
       "parallel": {
-        "status": "not run"
+        "status": "verified",
+        "note": "verified on 1 of 2 live runs: run 1 the seats ran one after the other (failed); run 2 they overlapped by 14 s. Asking for parallel seats in plain words does not reliably get them in `claude -p`"
       },
       "model_pin": {
-        "status": "not run"
+        "status": "verified",
+        "note": "seats ran with model: haiku (accepted, not proof it was used)"
       },
       "mcp": {
-        "status": "not run"
+        "status": "verified",
+        "note": "direct: a seat called list_roles itself"
       },
       "tools": {
         "status": "not run"
@@ -35,7 +38,8 @@
         "status": "not run"
       },
       "discovered": {
-        "status": "not run"
+        "status": "verified",
+        "note": "both canary seats ran"
       }
     }
   },
