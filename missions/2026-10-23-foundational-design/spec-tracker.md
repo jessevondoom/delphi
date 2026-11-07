@@ -112,6 +112,17 @@ Asked for by the operator on 2026-10-27. Built in one slice and approved after t
 | E1 | `$DELPHI_HOME/logs/delphi.log.jsonl`, `delphi logs`, `delphi debug bundle`, `delphi doctor` check 14, console error boundary | merged (#256) |
 | E2 | `tool_failed` records why a call failed (`timeout`, `denied`, `invalid_args`, `tool_error`, from the first line of the result) and the names of its arguments, never a value or a hash of one; the same kind is stored as `failure` on `tool.result` and `harness.bridge_call` and counted per tool as `invalid_args` and `denied` by `observe::ToolCount` and `toolreport` (spec 033 §6). Amended 2026-11-07 at the operator's approval (Council action 2) | built 2026-11-07 (PR pending): `tools::failure_kind`, `tools::arg_keys`, `engine.rs`, `harness_run.rs`, `observe.rs`, `toolreport.rs`. Not built: `repeat_calls` (a hash of arguments can be guessed back; the loop nudge is the signal); a kind for a CLI seat's own native tools (`harness.tool` carries no outcome); a column for the kind in the console or `delphi tools`. Logs written before this carry no kind |
 
+## Operator-authorized tests (spec 092, draft 2026-11-07)
+
+A **draft**, not permission to build. It narrowly amends spec 016's "Red is never allowed" for **headless runs only**: a test the operator authorized may run named Red actions, and an agent may *request* an authorization with its context and risk (the request is inert, staged at L0, and never effective for the run that wrote it). Council `t_0003` (stakes high) chose **approve with changes, narrower first**: a sandboxed shell command only, matched by exact canonical argv with a pinned binary, a mandatory OS sandbox, a disposable project snapshot and a required run binding. Its red-team seat's PATH-shadowing and worktree-poisoning P0s are closed in the text. Needs the operator's approval and a readable red-team re-review before any slice starts.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| S0 | this spec | draft; awaits the operator's approval and a red-team re-review |
+| S1 | the request tool and its staging rules, `delphi test review`, `delphi test authorize --from-request`, the protected store | not started |
+| S2 | `--on-card authorization:<id>`, sandbox-or-refuse, the snapshot, canonical matching, atomic use, the deny-list; amends `AGENTS.md` and 016 §3 | not started |
+| S3 | the training runner flag and the report mark | not started |
+
 ## Roadmap steps, for cross-reference
 
 | Step | State |
