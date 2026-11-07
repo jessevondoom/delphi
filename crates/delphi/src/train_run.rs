@@ -814,6 +814,10 @@ fn summary_of(stdout: &str) -> Option<Value> {
     stdout.lines().rev().find_map(|l| serde_json::from_str::<Value>(l).ok().filter(|v| v["type"] == "run.summary"))
 }
 
+/// The name of a run's project directory, and so of its `@project/<name>/` zone: the daemon names a project by its directory.
+/// A case whose prompt points at a fixture file must give the path with this name (`train_fidelity`).
+pub(crate) const REPO_DIR: &str = "repo";
+
 /// One case, one seed, one arm, in its own directory under the working directory.
 pub fn run_one(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize) -> Row {
     let label = format!("{}/{}", case.suite, case.id);
@@ -840,7 +844,7 @@ fn run_inner(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize, row:
         return Err(format!("{} already exists; a run directory is never reused, or two runs' events would mix", dir.display()));
     }
     row.dir = format!("r{:03}", index);
-    let (home, repo) = (dir.join("home"), dir.join("repo"));
+    let (home, repo) = (dir.join("home"), dir.join(REPO_DIR));
     copy_tree(arm.template_home.as_ref().unwrap_or(&cfg.template_home), &home)?;
     let ws_dir = home.join("workspaces").join(&cfg.workspace);
     let cfg_path = ws_dir.join("config.toml");
