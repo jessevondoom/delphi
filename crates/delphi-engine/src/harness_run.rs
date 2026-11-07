@@ -429,6 +429,7 @@ impl Engine {
         let id = if call.call_id.is_empty() { format!("bridge-{}", call.name) } else { call.call_id.clone() };
         let started = std::time::Instant::now();
         let mut r = self.exec_tool(sc, &id, &call.name, &call.args, &None).await?;
+        let failure = r.is_error.then(|| crate::tools::failure_kind(&r.content));
         // From the call arriving to its answer, so a call held for an approval card counts the operator's time too.
         let duration_ms = started.elapsed().as_millis() as u64;
         match self.note_tool_call(sc, &call.name, &call.args, r.is_error).await? {
@@ -440,11 +441,14 @@ impl Engine {
             let text = call.args.to_string();
             if text.chars().count() > 4000 { Value::String(text.chars().take(4000).collect()) } else { call.args.clone() }
         };
-        let payload = match sc.content_ref.take() {
+        let mut payload = match sc.content_ref.take() {
             // A connector result: the log holds a pointer to the payload store, never the text.
             Some(h) => json!({"tool_call_id": id, "name": call.name, "arguments": arguments, "content": format!("[connector result stored as @payload/{}, {} characters]", h, r.content.chars().count()), "content_ref": h, "is_error": r.is_error, "duration_ms": duration_ms}),
             None => json!({"tool_call_id": id, "name": call.name, "arguments": arguments, "content": r.content.chars().take(32_000).collect::<String>(), "truncated_in_log": r.content.chars().count() > 32_000, "is_error": r.is_error, "duration_ms": duration_ms}),
         };
+        if let (Some(kind), Some(o)) = (failure, payload.as_object_mut()) {
+            o.insert("failure".into(), json!(kind));
+        }
         sc.m.append(sc.agent_ev("harness.bridge_call", payload, ep, model)).await?;
         // The CLI may have gone while the call waited for the operator; nobody is left to answer, which is fine.
         let _ = call.reply.send(r);

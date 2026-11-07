@@ -6,6 +6,9 @@ after the first run starts voids the experiment (start a new one and say so). Re
 been run.** The run needs the operator's separate, explicit, written "run E3" (RUNBOOK section 0); the operator's approval of this
 design and of the budget on 2026-11-07 is not that go.
 
+**Amended once, before any run: see "Amendment 1" at the end of this file** (questions q1 to q6, B2 on all six, Delphi-side cap
+2,000,000). Where an earlier number or rule conflicts with it, Amendment 1 governs.
+
 ## Question
 
 After the E2 fixes (spec 089 P1 to P4b), on the same kind of framed question, does a Panel run by Claude Code's own subagents
@@ -25,7 +28,7 @@ findings as the Council (see "What changed from E2").
 2. **Two Panel arms**, Claude-only (A1) and with a foreign red-team seat (A2).
 3. **Claude Code only.** No other host unless the S0b probe shows *parallel isolated subagents* `verified`; it has not been run
    live, so none is planned.
-4. **Questions** are four that qualified under E2's rule plus two new ones chosen by a written rule (below).
+4. **Questions** are four that qualified under E2's rule plus two new ones chosen by a written rule (below). **Superseded by Amendment 1: the two new ones are E2's q1 and q2 (rule R2).**
 5. **A smaller design** that fits the operator's caps (budget section).
 
 ## Arms
@@ -38,7 +41,7 @@ findings as the Council (see "What changed from E2").
   the operator's written word in the run prompt (a foreign seat spends Delphi tokens, spec 089 OD-1); it is host-reported.
 - **B1, daemon Council** (`request_council`, Mode A), seats and families as configured. The reference for the decision class.
 - **B2, repeat daemon Council**, a second fresh run of B1. **The noise floor:** how far B2 is from B1 is the most agreement a Panel
-  can fairly be asked for. B2 is run on four of the six questions only (budget).
+  can fairly be asked for. B2 is run on four of the six questions only (budget). **Superseded by Amendment 1: B2 is run on all six.**
 - **Same input.** Each question is one text file passed byte for byte to every run, in a new session, against the same repository
   commit (recorded in the manifest). Nothing carries over between runs; no Panel stance is shown to a Council and no Council
   record to a Panel; a Panel's escalation is never followed by a daemon Council inside the experiment. Each arm family uses its
@@ -55,6 +58,8 @@ seats in the operator's configuration (architect and strategist on Claude, red-t
 same red-team family as the Council's, which is the point of A2 (it equalises family spread with B1).
 
 ## Question set (fixed by written rules, before any E3 outcome was looked at)
+
+**Superseded by Amendment 1 for n1 and n2: the set is q1, q2, q3, q4, q5, q6 (rule R2). Rule N, the n1 and n2 rows and their question files below stand only as the record of what was first registered.**
 
 **Rule E (carried over).** The four questions that **qualified under E2's pre-registered rule**: q3, q4, q5, q6 (`dev/train/e2/data/analysis.json`
 lists them as the four qualifying). Their question files are E2's, unchanged.
@@ -83,7 +88,7 @@ The q3 to q6 question files are `dev/train/e2/data/records/q3.txt` to `q6.txt` (
 the n1 and n2 files are produced by `python3 -I dev/train/e3/score_e3.py make-question <source record>` and committed under
 `dev/train/e3/questions/`. A mismatch of any hash at the dry run stops the experiment until the operator writes down what to do.
 
-Notes fixed now: n1 and n2 ask whether a spec "should be approved"; both specs are now approved and built, so a seat that reads the
+Notes fixed now (superseded by Amendment 1: n1 and n2 are no longer in the set): n1 and n2 ask whether a spec "should be approved"; both specs are now approved and built, so a seat that reads the
 pointer sees that. This is a known weakness of the two new questions (threat 8) and is why they are listed as a different kind
 from q3 to q6 (design questions with options).
 
@@ -92,7 +97,7 @@ A question is **complete** when it has B1, A1 and A2 (and B2 where scheduled).
 ## Seeds and repeats
 
 Sampling cannot be seeded through the hosts or the daemon, so no seed is chosen. Run order is fixed in the RUNBOOK: phase 1, per
-question in the order q3, q4, q5, q6, n1, n2: B1, A1, A2; phase 2: B2 on q3, q4, q5, q6. Each run is a fresh session. No run is
+question in the order q3, q4, q5, q6, n1, n2: B1, A1, A2; phase 2: B2 on q3, q4, q5, q6. **Superseded by Amendment 1: phase 1 runs q1, q2, q3, q4, q5, q6; phase 2 runs B2 on all six.** Each run is a fresh session. No run is
 repeated to replace a result; failures are handled by the stop rules only.
 
 ## Measures (fixed; computed by `score_e3.py`, no model judges anything)
@@ -130,7 +135,7 @@ Daemon Councils and the foreign seat: `score_e3.py tokens`, summed by `task_id` 
 **host-side** tokens, reported separately. A Panel's Delphi-side events must be 0 for A1 and non-zero only for the foreign seat in A2.
 Tokens decide nothing in the rule except through the caps and stop rules.
 
-### Constants (the test checks that `score_e3.py` carries these exact values)
+### Constants (the test checks that `score_e3.py` carries these exact values; `CAP_DELPHI_TOTAL` is superseded by Amendment 1, which repeats the block)
 
 ```
 MIN_QUALIFYING = 5
@@ -154,7 +159,7 @@ Applied separately to A1 and A2. **A1 is the headline** (the Panel as shipped, c
 replaces it, and says only what the foreign seat changed. Let, for an arm X:
 
 - `Q` = the questions where X's record, B1's record are usable and B1's class is not NONE (the arm's *qualifying* questions);
-- `S` = the questions in `Q` that also have a usable B2 (at most four: q3 to q6);
+- `S` = the questions in `Q` that also have a usable B2 (at most four: q3 to q6; superseded by Amendment 1: at most six);
 - `sd` = questions in `Q` where X and B1 have the same decision; `sd_s` = the same, in `S` only; `sd_b2_s` = questions in `S` where B2 and B1
   have the same decision;
 - `read_x`, `read_c` = M2 for X and for the Council; `esc_x`, `esc_c` = M3; `missed` = M4 over `Q`.
@@ -185,7 +190,9 @@ red-team reply was kept as unreadable); the point of E3 is whether the fixes mov
 
 ## Budget (tokens, never dollars)
 
-The operator approved, on 2026-11-07: a **per-run cap of 350,000 tokens**, a **total Delphi-side cap of 1,500,000 tokens** (daemon
+**The figures in this section (B2 on four questions, 1,096,000 planned, 1,471,000 with the reserve, the 1,500,000 cap and the 1,125,000 trigger) are superseded by Amendment 1.**
+
+The operator approved, on 2026-11-07: a **per-run cap of 350,000 tokens**, a **total Delphi-side cap of 1,500,000 tokens** (superseded by Amendment 1: 2,000,000) (daemon
 Councils and the foreign seat), and a **host-side cap of 400,000 tokens** across the experiment for Panel host tokens (host-account
 tokens, counted and reported separately). Caps are never raised after the first run; the operator may lower them in a commit before it.
 
@@ -215,6 +222,8 @@ four E2-qualifying ones are kept, plus two new ones); B2 on the two new question
 the two new ones have no repeat-Council comparison); and a repeat Council or Panel per arm. It keeps both Panel arms on every question.
 
 ## Stop rules and exclusions
+
+(The Delphi-side numbers 1,500,000 and 1,125,000 below are superseded by Amendment 1: 2,000,000 and 1,500,000. Everything else stands.)
 
 - **Caps.** Before any Council starts, the running Delphi-side total plus 135,130 (E2's largest run) must stay at or under 1,500,000, and the
   host-side total plus 30,024 at or under 400,000; otherwise no new run starts. A run that passes 350,000 on its own side is stopped, recorded
@@ -254,7 +263,7 @@ Any such change is its own pull request under its own spec text.
 
 ## Power, honestly
 
-Six questions on one host, one run of each Panel arm, four noise-floor repeats. One question flipping moves `sd` by 17 points (25 within the
+Six questions on one host, one run of each Panel arm, four noise-floor repeats (Amendment 1: six). One question flipping moves `sd` by 17 points (25 within the
 four-question subset). M4 has almost no power: in E2 every arm raised a P0/P1 on 8 of 8 questions, so `missed` is expected to be 0 for
 everyone; it can catch a collapse, not a difference. M2 and M3 are counts of seats and records (about 15 to 18 seats per arm, six records); a
 single unreadable seat moves the readable rate by about five points. The reference B1 is itself a model output, and the noise floor rests on
@@ -272,10 +281,10 @@ E3's numbers are never shown to a seat, put in a prompt, used to rank models or 
 
 1. **Same decision is coarse.** GO against GO includes "proceed with changes" on both sides; a Panel and a Council can agree on the class and
    differ on everything that matters. The experiment measures the class, not the content.
-2. **The reference is a model output** and differs from itself (B2). With four repeats the noise estimate is itself rough.
-3. **A GO prior.** The Panel said GO on 8 of 8 in E2, and n1, n2 are "should this spec be approved" questions about specs that are now
+2. **The reference is a model output** and differs from itself (B2). With four repeats the noise estimate is itself rough. (Amendment 1: six repeats.)
+3. **A GO prior.** (Amendment 1: n1 and n2 are no longer in the set; the GO prior stands for the Panel.) The Panel said GO on 8 of 8 in E2, and n1, n2 are "should this spec be approved" questions about specs that are now
    approved and built. Agreement on GO can be agreement on the easy answer.
-4. **Contamination.** The repository checkout the seats read contains the source Council records for n1, n2 (and 007) and the approved specs.
+4. **Contamination.** (Amendment 1 changes this: see threat 11.) The repository checkout the seats read contains the source Council records for n1, n2 (and 007) and the approved specs.
    Mitigation in the RUNBOOK: the run checkout is a throwaway worktree with those three records deleted; the specs and the tracker remain
    and can reveal the outcome. For q3 to q6 the scratch homes hold none of E2's sessions; paraphrases cannot be ruled out.
 5. **Family spread.** A1 is single-family and B1 is cross-family; A2 equalises the red-team family but its foreign seat is Delphi-run, so A2 is
@@ -285,7 +294,7 @@ E3's numbers are never shown to a seat, put in a prompt, used to rank models or 
    count against the Council's and A2's readable rates, not against A1.
 7. **Isolation is host-reported.** A moderator that pastes stances between seats defeats `blind: yes` and the server cannot see it. The label
    is a claim. The confirmation and options-source fields (P3) are host-reported too.
-8. **Different question kinds.** q3 to q6 are host-raised design questions with options; n1, n2 are single yes/no approval questions; the
+8. **Different question kinds.** (Amendment 1: n1 and n2 are replaced by q1 and q2; see threat 12.) q3 to q6 are host-raised design questions with options; n1, n2 are single yes/no approval questions; the
    rule is applied to all six pooled. The kinds are listed per question in the report.
 9. **Authors as scorers.** No model scores; the rules were written by an agent of the headline host's family before any data. The E2 lesson
    that a crude matcher can silently zero a measure applies: `score_e3.py` is tested on fixtures for each measure, and a measure that is
@@ -298,3 +307,154 @@ See `RUNBOOK.md`. Scoring: `python3 -I dev/train/e3/score_e3.py`, tested by `pyt
 first and alone; `score_e3.py`, its tests, the n1 and n2 question files and the runbook follow in a second commit, both before any run. A later
 change to `score_e3.py` that alters any definition above voids the experiment; a bug fix that does not is allowed before the first run and is
 noted in the report.
+
+## Amendment 1 (2026-11-07, before any E3 run)
+
+Made after the pre-registration above was merged (PR #531) and **before any E3 run**: no model, host, daemon, Council or Panel has been
+started for E3 at the time of this commit, and no token has been spent. Where a number or rule earlier in this file conflicts with
+this section, **this section governs**; the earlier text is left readable and marked "superseded by Amendment 1" where it stands.
+Nothing in the decision rule (the thresholds, the SUPPORTED / WORSE / NO EVIDENCE / INCOMPLETE tests, the measures M1 to M5) is
+changed.
+
+### The operator's words
+
+On 2026-11-07, after the design was reviewed, the operator wrote (quoted exactly):
+
+> replace the weak questions. you can raise the max budget to 2M tokens. then run e3
+
+Earlier on the same day the operator had also approved the E3 design changes and the budget (the header of this file records that
+approval as not being a go). The words above are the operator's **explicit written go** to run E3, after this amendment is
+committed and reviewed (RUNBOOK section 0). The "weak questions" are n1 (Council 015, spec 073) and n2 (Council 014, spec 069):
+they ask whether a spec should be approved, and both specs are approved and built, so a seat that reads the pointer finds the
+answer in the repository (threats 3, 4 and 8 above said so).
+
+### What changed (exactly)
+
+1. **Questions.** n1 and n2 are replaced by E2's q1 and q2. The set becomes **q1, q2, q3, q4, q5, q6**. The files are E2's own, byte
+   for byte (hashes below); `questions/n1.txt` and `questions/n2.txt` are deleted, and the `make-question` command is no longer used
+   for the question set (the command stays in `score_e3.py`, tested, unused).
+2. **Arms.** B1, A1 and A2 on all six questions, **and B2 (the repeat Council, the noise floor) on all six** (it was four).
+3. **Budget.** The per-run cap stays 350,000 tokens. The **Delphi-side total cap is raised from 1,500,000 to 2,000,000 tokens** by the
+   operator (the 25% re-run reserve becomes 500,000). The host-side Panel cap stays 400,000. The operator chose to spend the raised cap
+   on a **complete noise floor**, not on more questions.
+4. **Run order.** Phase 1, per question in the order q1, q2, q3, q4, q5, q6: B1, A1, A2. Phase 2: B2 on all six, in the same order.
+5. **Run prompts** for A1 and A2 follow the merged P3 wording (RUNBOOK section 3): the prompt says the operator asked for a Panel by
+   name, and, because q2 has stakes `high` (which makes `council_frame` ask for a confirmation even for a Panel the operator named),
+   that the operator has already confirmed the cost and the stakes. The `operator_confirmed: true` of A2 is as before.
+6. **Contamination mitigation** (RUNBOOK section 1): the throwaway run checkout no longer deletes the three repository Council
+   records (they are no longer question sources); it deletes E2's results and E3's own files instead (see threat 11).
+
+### Rule R2 (written after E2's outcomes were known)
+
+**R2:** of the E2 questions that did **not** qualify under E2's pre-registered rule (q1, q2, q7, q8; `dev/train/e2/data/analysis.json`
+lists four qualifying questions: q3 to q6), take the two with the **lowest ids**. That is **q1 and q2**. The rule is mechanical; it is
+the same shape as Rule E, applied to the other half of E2's set.
+
+**Candour.** R2 was written **after E2's outcomes were known**. It replaces Rule N for n1 and n2 and is not a rule written blind. The
+reasons for it are stated here, not hidden: (a) n1 and n2 had their answers in the repository; (b) q1 and q2 are open questions, and
+their E2 failures were exactly the failure modes the P1 to P4b fixes address (q1: an unreadable Panel red-team critique, the
+Round 2 defect P1; q2: `agy` seat failures in the daemon Council, the retry of P4b), so including them tests the fixes. **The
+limitation:** q1 and q2 were hard for the arms in E2, so they may depress agreement and readability for **both** the Panel and the
+Council. **They are not used to set, change or tune any threshold**, and every threshold above was fixed before they were chosen. The
+verdict is applied to the six together, and the report lists q1 and q2 beside the rest so a reader can see what each did.
+
+### Amended question set
+
+q3 to q6 are unchanged. The two question files for q1 and q2 are `dev/train/e2/data/records/q1.txt` and `q2.txt`; E2 produced them
+by its own `extract-question`, and they are **copied byte-identical**, never regenerated (RUNBOOK section 1 checks the hashes).
+
+| id | origin | source (relative to `~/.delphi/workspaces/delphi/local/`) | sha256 of the source record (E2's table) | sha256 of the question file (E2's file) |
+| :-- | :-- | :-- | :-- | :-- |
+| q1 | E2, did not qualify (R2, lowest id) | `missions/2026-10-26-session/councils/001-i-d-like-to-have-this-system-write-it-s.md` | `dfb0683cc88ef2c9c85e18b0c5772ef16787fabe68c98e6b6f97f70fdd381cfa` | `c3434e2655c7138f185a1152178714812621715ff17737b13ef61266652b5eb1` |
+| q2 | E2, did not qualify (R2, second lowest id) | `sessions/host-e524cfbf6ce8cd8d/councils/001-a-host-agent-host-copilot-cli-claude-son.md` | `eeb9312a77f835c80527c9a906f541ab75369c727a268d92ae7b62b460266d71` | `70debdea02ebdd8c2df1c3285b07c2c9627c59f5538e3bac0a83d43b91dbbd1b` |
+| q3 | E2, qualified | `sessions/host-3d16647e8cd5bbfd/councils/001-a-host-agent-host-copilot-cli-unknown-wo.md` | `a5e6913f3338d6cbbffda7e4aad28f7dcc7b7ae1f339a820c8e39ea25ad410ec` | `72ccc85220b78c754a51931a720c6ca8c975bed80228dd060c4d48aab5fd49cb` |
+| q4 | E2, qualified | `sessions/host-3d16647e8cd5bbfd/councils/002-a-host-agent-host-copilot-cli-claude-son.md` | `073bc87cc9c2d36af0d87c6662766d69d82e2b6e31f87d540231678ef578e447` | `4bb43686cf4c82ffed15e7e79c43aa968283400b2650bd67c0f1fbd70c070771` |
+| q5 | E2, qualified | `sessions/host-da390f3c6d52f9b3/councils/001-a-host-agent-host-copilot-cli-claude-son.md` | `45ebee7407d04337f7b1a9e3f95622bfac457c289978fde6886da31d275599cf` | `5e12a2f3e3c254ed55f7ab03ad8ed851524e4020dea27c8f1f40dd6c3e5a8a29` |
+| q6 | E2, qualified | `sessions/host-b7e82fd45591cf41/councils/001-a-host-agent-host-copilot-cli-unknown-wo.md` | `b9558c2332cd8668ba35062178afafcc6048dca6fad071c5d074f204648976be` | `c50c3050208bc1b47a3ac6b3e3a75535d6bad71864d59543650a4698f298e404` |
+
+Kinds: q1 is a one-sentence operator-typed question with no options, no pointers and no stakes line; q2 is a long host-raised question
+with stakes `high`, three options and four pointers; q3 to q6 are host-raised design questions with options. The report lists the kind
+per question. A mismatch of any hash at the dry run stops the experiment until the operator writes down what to do. A question is
+**complete** when it has B1, A1, A2 and B2.
+
+### Amended constants
+
+Only `CAP_DELPHI_TOTAL` differs from the block above. The test checks that `score_e3.py` carries **this** block (the last one in the
+file) and that the original block above still shows the pre-amendment value.
+
+```
+MIN_QUALIFYING = 5
+MIN_NOISE_QUESTIONS = 3
+SD_ABSOLUTE_SLACK = 2
+SD_RELATIVE_OK = 1
+SD_RELATIVE_WORSE = 2
+READABLE_WORSE = 1/4
+ESCALATION_OK = 1/4
+ESCALATION_WORSE = 1/2
+MISSED_OK = 1
+MISSED_WORSE = 3
+CAP_PER_RUN = 350000
+CAP_DELPHI_TOTAL = 2000000
+CAP_HOST_TOTAL = 400000
+```
+
+### Amended decision-rule counts
+
+The rule is as written: `S` is the set of qualifying questions that also have a usable B2, and `|S| >= 3` is still required. `S` is
+now **at most six** (was four), and `|Q| <= 6`. The thresholds are not touched. One question flipping now moves `sd` by 17 points in
+both `Q` and `S`.
+
+### Amended budget (tokens, never dollars)
+
+Costs are E2's measured ones, as in the original section: a daemon session averaged 91,364 (planned **91,600**), a Panel averaged
+19,546 host-side (planned **19,500**), a foreign seat is an estimate (planned **30,000**; its live cost is a stated unknown).
+
+| item | count | planned each | Delphi-side | host-side |
+| :-- | --: | --: | --: | --: |
+| B1, all six questions | 6 | 91,600 | 549,600 | |
+| B2, all six questions | 6 | 91,600 | 549,600 | |
+| A2 foreign red-team seat | 6 | 30,000 | 180,000 | |
+| A1 Panels | 6 | 19,500 | 0 | 117,000 |
+| A2 Panels (host seats) | 6 | 19,500 | (counted above) | 117,000 |
+| **Planned total** | | | **1,279,200** | **234,000** |
+
+12 Councils (6 B1 + 6 B2) = 1,099,200; plus 6 foreign seats = 180,000; **1,279,200** planned. **Reserve:** 25% of the 2,000,000 cap =
+**500,000**, held for re-runs under the stop rules (about five re-run Councils, 5 x 91,600 = 458,000). 1,279,200 + 500,000 = **1,779,200**,
+within 2,000,000 with **220,800** spare. Host side: 12 Panels x 19,500 = 234,000, within the unchanged 400,000 cap (166,000 spare; at E2's
+largest Panel, 30,024, twelve Panels would cost 360,288). The per-run cap is unchanged at 350,000. The caps are never raised after the
+first run.
+
+**Amended stop-rule numbers.** The pre-run cap check is: the running Delphi-side total plus 135,130 (E2's largest run) must stay at or
+under **2,000,000**; the host-side total plus 30,024 at or under 400,000. If the planned spend overruns **1,500,000** (the 2,000,000 cap
+less the 500,000 reserve) before phase 2, the B2 runs not yet done are dropped, last question first, and the INCOMPLETE rule decides.
+(Phase 1 plans 729,600 Delphi-side, so this is expected not to bite.) All other stop rules and exclusions are unchanged.
+
+### New and changed threats to validity
+
+Threats 3, 4 and 8 above talked about n1 and n2; they no longer apply to a question in the set, **except as follows**.
+
+11. **Contamination of q1 to q6 inside the repository (changed threat 4).** The repository checkout the seats read holds E2's whole data
+    (`dev/train/e2/data/records/` has E2's Panel and Council records for q1 to q8, `REPORT.md`, `RESCORE.md`, `analysis.json`) and E3's own
+    files. A seat that searches the repository could read E2's answers to the same question. Mitigation, in the RUNBOOK dry run: the
+    throwaway run checkout has `dev/train/e2/data/`, `dev/train/e2/REPORT.md`, `dev/train/e2/RESCORE.md`, `dev/train/e3/` removed before the first run, the deletion is written into the notes, and the question files are copied out first. The
+    specs, the tracker and the other Council records remain and can reveal context. (The original pre-registration did not mention that
+    E2's records were in the repository for q3 to q6 either; this is stated here so the gap is visible.)
+12. **Hard questions depress both sides (new).** q1 and q2 were chosen by R2, after E2's outcomes were known, because E2 went badly on them.
+    They may lower agreement, readable rates or the number of usable records for the Panel and the Council alike, and q2 (stakes `high`,
+    long) is the most expensive kind. Because the rule compares the Panel with a Council on the same questions and with the Council's
+    own repeat, a hard question hurts the reference too, but it can still push a verdict to NO EVIDENCE or INCOMPLETE. The R2 choice is
+    not used to tune a threshold; the report states the effect of q1 and q2 separately.
+13. **Selection after the fact (new).** R2 is a mechanical rule, but it was written once the E2 outcomes were visible and the operator
+    wanted different questions. A reader should treat the pre-registration as strong for q3 to q6 and for every threshold, and as
+    weaker for the choice of q1 and q2.
+14. **Power (changed).** Six questions each with a repeat Council: `|S|` is up to six, so the noise-floor comparison rests on six pairs
+    and not four. Everything else in "Power, honestly" stands.
+
+The earlier text of "Seeds and repeats", "Budget", "Stop rules", "Power" and the question-set section that gives four B2 runs, 1,500,000,
+1,096,000, 1,471,000, 1,125,000 or n1/n2 is **superseded by Amendment 1**; the original "design the operator first had in mind"
+comparison (16 Councils, 2,080,600 with reserve) is historical and unchanged.
+
+### How the amendment is committed
+
+This section is committed **first and alone**, in a commit that says it is made before any E3 run. The runbook, the scorer, its tests, the
+deletion of `questions/n1.txt` and `questions/n2.txt` and the tracker row follow in a second commit, also before any run.

@@ -809,6 +809,17 @@ mod tests {
         assert_eq!(held, vec!["upload.wikimedia.org".to_string(), "commons.wikimedia.org".to_string()], "hosts the research list reads but the validator does not trust: {:?}", held);
     }
 
+    #[test]
+    fn the_shipped_list_reads_anthropics_posts_summary_only_over_https_and_refuses_look_alikes() {
+        use delphi_adapter::research::trusted::Reuse;
+        let l = TrustedList::parse(include_str!("../../../context/sources/trusted.toml"), None).unwrap();
+        let s = l.allows_url("https://www.anthropic.com/engineering/advanced-tool-use").expect("Anthropic's posts are on the list");
+        assert_eq!((s.publisher.as_str(), s.reuse), ("Anthropic", Reuse::SummaryOnly), "a vendor's figures are kept as a summary, never stored whole");
+        for bad in ["http://www.anthropic.com/news/x", "https://www.anthropic.com.evil.org/x", "https://anthropic.evil.com/x", "https://www.notanthropic.com/x"] {
+            assert!(l.allows_url(bad).is_none(), "{}", bad);
+        }
+    }
+
     #[tokio::test]
     async fn a_weak_page_is_held_outside_the_index_and_a_project_keeps_its_own() {
         let page = html(&format!("<h1>Byzantine fault</h1><p>{}</p>", PROSE));
