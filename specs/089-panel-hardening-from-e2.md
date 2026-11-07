@@ -202,3 +202,57 @@ Order: P1 and P2 first (small, deterministic, no operator decision); P5 in paral
 - That a seat told its reply was rejected will fix it rather than repeat it: F1's smoke test is the first evidence.
 - That the Panel's all-GO result (E-8) disappears once critiques are readable.
 - Matcher v2's thresholds are a reasoned start, fixed before use, not tuned.
+
+---
+
+## 13. P4a result (diagnosis only; no behaviour changed)
+
+P4a changed no guard, no timeout and no condition. It added two tests in `crates/delphi-engine/src/harness_run.rs` and read the code. No model, no real `agy`, no daemon Council was run, so H-2 is **not** classified here (see 13.3).
+
+### 13.1 Facts read in the code
+
+| | Fact | Result |
+| :-- | :-- | :-- |
+| (a) | For an `agy` run, `project_state` is `git status` of **every** entry of `engine.projects` (`harness_run.rs:487-488`), compared after the run (`harness_run.rs:882-887`); any difference sets `failure` with "the agy run changed a project checkout; its output is discarded" and `retryable = false`. It compares anything, not only what the seat could have changed: nothing ties a difference to the seat. What it captures (`worktree.rs:262-267`): `git status --porcelain -z --untracked-files=all` text, so tracked changes (index and worktree state letters), and every untracked path. Not captured: file contents (a file already modified and modified again looks the same), timestamps (a bare `touch` changes nothing), ignored files. A failing `git status` is captured as an error marker, so a change from ok to error (or back) also trips it. | **Confirmed** |
+| (b) | `engine.projects` is the `[workspace] projects` list of the operator's `config.toml`, canonicalised once at boot (`boot.rs:31-47`, set at `boot.rs:334`). It is a daemon-wide list, fixed for the daemon's life: it does not depend on who raised the Council, so a Council from a host session or from the console guards the same set, which may be several checkouts and is typically the very checkouts the operator is editing. The seat's own cwd is an empty scratch directory (`harness_run.rs:490-497`), not a checkout. | **Confirmed** |
+| (c) | `run_seat` wraps `run_span` in `tokio::time::timeout(council_seat_timeout)` (`council.rs:831`; 600 s at `engine.rs:103,169`, not configurable from `config.toml`). On expiry the future is dropped; the harness `Session` has `kill_on_drop(true)` (`harness.rs:1112`) and a `Drop` that sends SIGKILL to the whole process group (`harness.rs:1325-1332`), so the child **is** killed, not only abandoned. The seat then reads "no answer within 600s" (`council.rs:841`). There **is** an idle watchdog for harness seats: `harness_idle`, 300 s (`engine.rs:90,159`), applied to every `session.next` (`harness_run.rs:675`, `harness.rs:1265-1281`); it kills the process group and ends with "the <cli> CLI stopped responding and was killed" (`harness_run.rs:790`). It is an *idle* clock, reset by any event, including `agy`'s step updates; it is not a "first output" clock. | **Confirmed** (the question's premise "no watchdog" is not true; a first-output one is absent) |
+| (d) | "the CLI reported an error: ..." is built at `harness_run.rs:772` from a CLI `result` event with `is_error` (the CLI's own error text, first 200 characters, else the subtype). A failed run is logged to the central error log (`harness_run.rs:889-898`) as component `harness`, code `harness_failed` (or `harness_exhausted` when quota), with `mission`, `task`, `span`, `harness` (program), `model`, `exit_code`, `stderr_tail` (redacted when read; piped only when the log level is `error` or lower, which is the default) and `reason: retryable|final`. | **Confirmed** |
+| (e) | There is no retry of a harness seat on the same CLI. A *retryable* failure (CLI error before any tool was used) falls back to the family's API endpoints when one exists (`engine.rs:954-960`, event `harness.fallback`); otherwise the span escalates and the seat abstains. Nothing re-runs `agy`. | **Confirmed** (none) |
+
+One finding that bears on H-2: a CLI error that arrives only after 20-25 minutes does not fit the code's own clocks. A stall with no events would end at 300 s with "stopped responding" (idle) and a seat is cut off at 600 s with "no answer within 600s". "The CLI reported an error" after 20-25 minutes needs either `agy` emitting events steadily (so the idle clock never fires) and then returning an error before 600 s, or the 20-25 minutes being the Council's whole wall time (two rounds, other seats, the fallback and the wait for the slowest seat) rather than one seat's. Which one is not known from E2's report; the logs below settle it.
+
+### 13.2 H-1: reproduced
+
+`characterization_an_unrelated_write_to_a_registered_checkout_during_an_agy_run_discards_a_good_answer` runs a fake `agy` that touches nothing and prints a good answer after two seconds, while the test (not the seat) creates a file in the registered project. The seat is escalated with "changed a project checkout" and its answer is discarded. A companion test shows the same run with no writer is kept. So H-1 is **reproduced at the level of the guard's logic**: the guard cannot tell a seat's write from anyone else's. That the two E2 failures were *in fact* caused by unrelated writes (the experiment's own progress commits, an editor) is consistent but still not proven by E2's data. The test passes today and documents behaviour that P4b is expected to change (it is named `characterization_` for that reason). The existing `an_agy_run_that_touches_a_project_checkout_is_discarded` (the seat itself writes into the project) already covers the case that must keep failing closed after any fix, and was not changed.
+
+### 13.3 What the logs must show to classify H-2, and how to capture it
+
+Per failing seat run, in `<home>/logs/delphi.log.jsonl`, the `harness_failed` entry gives the classification:
+
+| Observed | Reading |
+| :-- | :-- |
+| `exit_code` set, `stderr_tail` mentions auth, quota, rate limit or 429 | account or quota problem, not a stall |
+| `reason` "the CLI reported an error", short elapsed time between the `harness.started` event and the failure, empty stderr | `agy` returned a quick error; the 20-25 minutes were elsewhere (queueing, other seats, rounds) |
+| elapsed time near 300 s and "stopped responding" | a true stall, the idle watchdog already catches it (add first-output only if first output is late but *not* idle) |
+| elapsed time near 600 s and "no answer within 600s" | seat timeout, child killed by drop; `agy` was alive but slow |
+| long elapsed time with step events (`delphi logs --level debug` and the mission's `harness.*` events) and a final error | `agy` was working and failed late: retry may help, a first-output watchdog would not |
+
+The elapsed times come from the event log timestamps of the span (`harness.started` to `agent.usage` with `outcome: error`), which `delphi debug bundle --mission <id>` includes.
+
+Commands (all exist in `docs/reference/cli.md`: `delphi logs` at line 495, `delphi debug bundle` at line 512, `DELPHI_LOG` at line 655), to run on a live scratch home with one Council that exercises the `agy` seat, using the operator's own tokens (about 110,000, spec 089 §9):
+
+```sh
+DELPHI_LOG=debug delphi --home <scratch> ...            # raise the log level for the daemon that runs the Council
+delphi logs --home <scratch> --level warn --component harness --json --lines 200
+delphi debug bundle --home <scratch> --mission <mission-id> -o /tmp/agy-bundle.zip
+```
+
+Run the Council only on a scratch home whose `[workspace] projects` is empty or a throwaway repository, so the guard cannot confound a hang with H-1.
+
+### 13.4 Recommended fix design for P4b (a PROPOSAL; awaiting OD-4 and OD-2; nothing here is built)
+
+1. **Guard scope (OD-4).** Keep the guard's fail-closed rule, but compare only what the seat could have changed. Recommended: take a content-aware snapshot (paths in `git status` plus a hash of each listed file) of each project **before and after**, and discard only when a path changed that was *not already changing independently*: sample the status again a short moment before the run's start and after its end, and treat a path as the seat's only if its state changed between the last pre-run sample and the first post-run sample *and* the seat's process group was alive at the time (the run has one process group, `harness.rs` `pgid`). The pure form of this is weaker than the present guard (a concurrent unrelated writer and a real seat write are indistinguishable by status alone); the stronger alternative is to make the seat unable to write at all (OS sandbox, deny-write on registered checkouts, if the existing execution sandbox can be applied to a harness process; not checked in P4a) and then drop the status guard for read-only roles to an advisory event. Risks: the first form can miss a real seat write that coincides with an unrelated one in the same file; the second depends on the platform sandbox (off on some hosts) and is a larger change. Choose with the operator.
+2. **First-output watchdog.** Only if 13.3 shows a late-first-output stall (not a quick error, not an idle stall, which the 300 s idle clock already kills). Enforced in the same place as the idle clock: a first-event deadline in `Session::next` (`harness.rs:1265`), set from the observed first-output times (for example 3x the p95), implemented as a shorter `idle` argument for the first call from `harness_run.rs:675`. The child is killed through the same `Session::kill` (SIGKILL to the process group). Risks: a legitimately slow first token (a large context) is killed early and the seat abstains; the value must come from observation, not a guess.
+3. **One retry on CLI error (OD-2).** Only for a `result` error that is not quota-exhausted, not a guard failure and not a timeout, before any tool was used (already the `retryable` flag, `harness_run.rs:772`), in a fresh process, tokens counted, event `harness.retry`. Place it in `run_harness`'s caller (`engine.rs:954`) before the API fallback. Risks: double the tokens on a persistent failure; a rate limit made worse by a immediate retry (so add a short fixed delay), and a retried run lengthens the seat within the same 600 s budget, so the retry needs the *remaining* time, not a new 600 s.
+
+Everything in 13.4 waits for the operator's explicit go on OD-4 (spec 089 §10); P4a does not presuppose it.
