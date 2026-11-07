@@ -358,6 +358,26 @@ const PACE_MINUTES: usize = 12;
 pub struct ToolCount {
     pub calls: u32,
     pub errors: u32,
+    /// Of the errors: calls that could not be attempted (a missing or malformed argument, an unknown tool) and calls policy refused
+    /// (`specs/033` §2). Both are zero for a log written before the kind was kept; they count what the log says, no more.
+    pub invalid_args: u32,
+    pub denied: u32,
+}
+
+impl ToolCount {
+    /// Count one failure by the kind its event recorded.
+    pub fn count_failure(&mut self, kind: Option<&str>) {
+        match kind {
+            Some("invalid_args") => self.invalid_args += 1,
+            Some("denied") => self.denied += 1,
+            _ => {}
+        }
+    }
+}
+
+/// The kind of failure a `tool.result` or `harness.bridge_call` event records, if it records one.
+pub fn tool_failure_of<'a>(kind: &str, p: &'a Value) -> Option<&'a str> {
+    if matches!(kind, "tool.result" | "harness.bridge_call") { p["failure"].as_str() } else { None }
 }
 
 /// The newest run of the same tool in one span: how many times in a row, and how many of the latest of those failed. A
@@ -547,6 +567,7 @@ pub fn tool_stats(events: &[delphi_core::event::EventEnvelope]) -> BTreeMap<Stri
         let c = r.by_tool.entry(tool).or_default();
         c.calls += 1;
         c.errors += failed as u32;
+        c.count_failure(tool_failure_of(&e.kind, &e.payload));
     }
     for r in out.values_mut() {
         if r.by_tool.len() > MAX_TOOLS_PER_ROLE {
@@ -1465,8 +1486,8 @@ mod tests {
         let s = tool_stats(&log);
         let b = &s["builder"];
         assert_eq!((b.calls, b.errors, b.last.as_str()), (4, 1, "Bash"));
-        assert_eq!(b.by_tool["read_file"], ToolCount { calls: 2, errors: 1 });
-        assert_eq!(b.by_tool["record_change"], ToolCount { calls: 1, errors: 0 });
+        assert_eq!(b.by_tool["read_file"], ToolCount { calls: 2, errors: 1, ..Default::default() });
+        assert_eq!(b.by_tool["record_change"], ToolCount { calls: 1, errors: 0, ..Default::default() });
         assert_eq!(b.streak, Streak { tool: "Bash".into(), n: 1, failed: 0 });
         assert_eq!(s["writer"].by_tool.keys().collect::<Vec<_>>(), ["WebSearch"], "control sequences are removed");
         let text = serde_json::to_string(&s).unwrap();

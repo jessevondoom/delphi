@@ -2,7 +2,7 @@
 //! models report finished work through `record_change` (`specs/032`). Pure: events in, a report out. It reads names,
 //! counts and event kinds only; no arguments, results or text.
 
-use crate::observe::{tool_call_of, ToolCount};
+use crate::observe::{tool_call_of, tool_failure_of, ToolCount};
 use delphi_core::event::EventEnvelope;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -163,6 +163,7 @@ pub fn report(events: &[EventEnvelope]) -> Report {
         let c = r.by_tool.entry(tool).or_default();
         c.calls += 1;
         c.errors += failed as u32;
+        c.count_failure(tool_failure_of(&e.kind, &e.payload));
         if let Some(t) = e.task_id.clone().filter(|t| !t.is_empty()) {
             let n = called.entry(t).or_default();
             n.0 += 1;
@@ -286,6 +287,35 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_call_is_counted_by_the_kind_its_event_records_and_an_old_log_counts_no_kind() {
+        let failed = |kind: &str, tool: &str, failure: Option<&str>| {
+            let mut p = json!({"name": tool, "is_error": true});
+            if let Some(f) = failure {
+                p["failure"] = json!(f);
+            }
+            ev(kind, "a", None, p)
+        };
+        let log = vec![
+            call("a", "read_file"),
+            failed("tool.result", "read_file", Some("invalid_args")),
+            failed("tool.result", "read_file", Some("invalid_args")),
+            failed("harness.bridge_call", "read_file", Some("denied")),
+            failed("tool.result", "read_file", Some("tool_error")),
+            failed("tool.result", "read_file", Some("timeout")),
+            // A log written before the kind was kept: it is an error, of a kind nobody recorded.
+            failed("tool.result", "read_file", None),
+            failed("tool.result", "write_file", Some("denied")),
+        ];
+        let r = report(&log);
+        let rf = &r.by_tool["read_file"];
+        assert_eq!((rf.calls, rf.errors, rf.invalid_args, rf.denied), (7, 6, 2, 1), "tool_error, timeout and an unrecorded kind are errors and no more");
+        assert_eq!((r.by_tool["write_file"].errors, r.by_tool["write_file"].denied, r.by_tool["write_file"].invalid_args), (1, 1, 0));
+        // A kind on an event that is not a tool result is not counted.
+        assert_eq!(tool_failure_of("agent.usage", &json!({"failure": "denied"})), None);
+        assert_eq!(tool_failure_of("tool.result", &json!({"name": "x", "is_error": false})), None, "a success records no kind");
+    }
+
+    #[test]
     fn adoption_is_the_share_of_runs_that_changed_something_and_recorded_it_by_model() {
         let log = vec![
             ev("agent.usage", "a", Some("model-x"), json!({})),
@@ -316,8 +346,8 @@ mod tests {
     fn the_prometheus_text_has_counters_by_role_tool_and_model_and_escapes_labels() {
         let mut stats = BTreeMap::new();
         let mut t = crate::observe::RoleTools::default();
-        t.by_tool.insert("read_file".into(), ToolCount { calls: 3, errors: 1 });
-        t.by_tool.insert("record_change".into(), ToolCount { calls: 2, errors: 0 });
+        t.by_tool.insert("read_file".into(), ToolCount { calls: 3, errors: 1, ..Default::default() });
+        t.by_tool.insert("record_change".into(), ToolCount { calls: 2, errors: 0, ..Default::default() });
         stats.insert("builder".to_string(), t);
         let log = vec![ev("agent.usage", "a", Some("model \"x\""), json!({})), call("a", "write_file"), call("a", "record_change")];
         let text = prometheus(&stats, &report(&log));

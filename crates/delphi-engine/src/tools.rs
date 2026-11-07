@@ -91,6 +91,35 @@ impl ToolResult {
     }
 }
 
+/// Why a tool call failed, as one of a closed set (`specs/039` §3, `specs/033` §2): `timeout`, `denied` (policy refused it),
+/// `invalid_args` (the call could not be attempted: a missing or malformed argument, an unknown tool) or `tool_error` (it ran and
+/// failed). Read from the **first line** of the result, because that is where Delphi's own refusals put their words and a
+/// command's output, which may contain any phrase, begins with `$ <command>`; the timeout marker of a command is on its second
+/// line. A lower bound, not a proof: a refusal worded some other way is a `tool_error`, never the reverse for output.
+pub fn failure_kind(content: &str) -> &'static str {
+    let c = content.trim_start();
+    let first = c.lines().next().unwrap_or("");
+    let head: String = c.lines().take(2).collect::<Vec<_>>().join("\n");
+    if first.starts_with("The approval timed out") || head.contains("[timed out and was killed") {
+        "timeout"
+    } else if first.starts_with("denied:") || first.contains("was denied") || first.contains("does not authorize") || first.starts_with("this task was raised by a host agent") || first.starts_with("this span answers in text only") || first.contains("is not among the tools of") {
+        "denied"
+    } else if first.starts_with("missing ") || first.starts_with("unknown ") || first.contains(" must be ") || first.contains("invalid arguments") || first.starts_with("the only argument is") {
+        "invalid_args"
+    } else {
+        "tool_error"
+    }
+}
+
+/// The names of a call's top-level arguments, sorted, for the error log: names only, never a value or a hash of one (a low-entropy
+/// value can be guessed back from its hash). A name that is not a short identifier is left out, since a model chooses these.
+pub fn arg_keys(args: &Value) -> Vec<String> {
+    let mut keys: Vec<String> = args.as_object().map(|o| o.keys().filter(|k| !k.is_empty() && k.len() <= 32 && k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')).cloned().collect()).unwrap_or_default();
+    keys.sort();
+    keys.truncate(12);
+    keys
+}
+
 /// A provenance stamp the engine must record as a `provenance.stamp` event.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Stamp {
@@ -1608,6 +1637,52 @@ mod tests {
         assert!(r.register_external("slack", ext("slack.search")).is_err());
         assert!(r.register_external("slack", ext("gmail.search")).is_err());
         assert!(r.register_external("slack", ext("slack.")).is_err());
+    }
+
+    #[test]
+    fn a_failure_is_classified_from_the_first_line_by_the_words_delphi_itself_uses() {
+        for (text, want) in [
+            // Refused by policy.
+            ("denied: this path does not belong to any readable zone", "denied"),
+            ("denied: `.git` is never accessible", "denied"),
+            ("this role's manifest does not authorize timers", "denied"),
+            ("`xenia_help` is not among the tools of the bundle agent a/b", "denied"),
+            ("this span answers in text only; it has no tools", "denied"),
+            ("this task was raised by a host agent and runs read-only: it can read and advise", "denied"),
+            // Timed out: the operator's approval, and a command's own header on its second line.
+            ("The approval timed out and was denied. Do not retry it; propose an alternative.", "timeout"),
+            ("$ cargo test\n[timed out and was killed, 30.0s, sandboxed, no network]\n", "timeout"),
+            // The call could not be attempted.
+            ("missing string argument `path`", "invalid_args"),
+            ("missing array argument `tasks`", "invalid_args"),
+            ("`query` must be 1 to 500 characters", "invalid_args"),
+            ("unknown tool `no_such_tool`", "invalid_args"),
+            ("unknown subsystem `x`; expected doctor, endpoints", "invalid_args"),
+            ("the only argument is `query`", "invalid_args"),
+            // It ran and failed, or the text says nothing we know.
+            ("$ cargo build\n[exit 101, 2.0s, sandboxed, no network]\nerror: could not compile `x`", "tool_error"),
+            ("content is 900000 bytes; the limit is 262144", "tool_error"),
+            ("", "tool_error"),
+        ] {
+            assert_eq!(failure_kind(text), want, "{}", text);
+        }
+        // A command's output is never read for these words, whatever it says: only its first line and its status line count.
+        assert_eq!(failure_kind("$ ./check\n[exit 1, 0.1s, sandboxed, no network]\nthe value must be positive\naccess was denied\nconnection timed out"), "tool_error");
+        assert_eq!(failure_kind("  \n denied: padded"), "denied", "leading blank space hides nothing: the first line is the first non-blank one");
+    }
+
+    #[test]
+    fn the_error_log_gets_argument_names_and_never_a_value() {
+        let mut args = json!({"path": "/secret/token.txt", "content": "hunter2", "a name with spaces": 1, "": 2, "ok-name_1": 4});
+        args.as_object_mut().unwrap().insert("x".repeat(33), json!(3));
+        assert_eq!(arg_keys(&args), ["content", "ok-name_1", "path"], "sorted, and only short identifiers");
+        let all = format!("{:?}", arg_keys(&args));
+        assert!(!all.contains("hunter2") && !all.contains("secret"), "{}", all);
+        let many: serde_json::Map<String, Value> = (0..30).map(|i| (format!("k{:02}", i), json!(i))).collect();
+        assert_eq!(arg_keys(&Value::Object(many)).len(), 12);
+        for not_an_object in [json!(null), json!("path"), json!(["path"]), json!(3)] {
+            assert!(arg_keys(&not_an_object).is_empty());
+        }
     }
 
     use super::*;
