@@ -351,6 +351,8 @@ pub struct Row {
     pub base: Option<String>,
     /// What the run did, beside whether it passed (`specs/048` BM-2).
     pub eff: Efficiency,
+    /// The seats that ran, from the log's `seat.receipt` events (`specs/091` SR-6): served model and family as the carrier reported them.
+    pub seats: Vec<SeatNote>,
 }
 
 /// The effort a run took, read from its mission log: counts only, no text (`specs/048` BM-2).
@@ -404,6 +406,76 @@ pub fn efficiency_of(events: &[EventEnvelope]) -> Efficiency {
     e
 }
 
+/// One distinct seat of a run, read from a `seat.receipt` event (`specs/091` SR-6): what was asked for, what the carrier said was served,
+/// and what the seat was offered. The served model and family are the carrier's claim; `unknown` is kept as `unknown`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SeatNote {
+    pub requested: String,
+    /// `None` when the carrier reported nothing (Copilot and agy until 091 S5).
+    pub served_model: Option<String>,
+    pub family: String,
+    pub carrier: String,
+    pub tools: Vec<String>,
+    pub dispatch_allowed: bool,
+    pub prompt_hash: String,
+    pub outcome: String,
+}
+
+impl SeatNote {
+    pub fn to_json(&self) -> Value {
+        json!({"requested": self.requested, "served_model": self.served_model, "family": self.family, "carrier": self.carrier, "tools": self.tools,
+               "dispatch_allowed": self.dispatch_allowed, "prompt_hash": self.prompt_hash, "outcome": self.outcome})
+    }
+
+    pub fn from_json(v: &Value) -> Option<SeatNote> {
+        Some(SeatNote {
+            requested: v["requested"].as_str()?.into(),
+            served_model: v["served_model"].as_str().map(String::from),
+            family: v["family"].as_str().unwrap_or(delphi_engine::seat::UNKNOWN).into(),
+            carrier: v["carrier"].as_str().unwrap_or("").into(),
+            tools: v["tools"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(),
+            dispatch_allowed: v["dispatch_allowed"].as_bool().unwrap_or(false),
+            prompt_hash: v["prompt_hash"].as_str().unwrap_or("").into(),
+            outcome: v["outcome"].as_str().unwrap_or("").into(),
+        })
+    }
+
+    /// The served model is a different model from the requested one: the daemon marked it, or the two ids differ once `.` and `_`
+    /// are read as `-` and neither is a prefix of the other (a dated suffix is the same model). Nothing reported is not a mismatch.
+    pub fn mismatch(&self) -> bool {
+        if self.outcome == "model_mismatch" {
+            return true;
+        }
+        let norm = |m: &str| m.to_lowercase().replace(['.', '_'], "-");
+        self.served_model.as_deref().is_some_and(|s| {
+            let (s, r) = (norm(s), norm(&self.requested));
+            !(s.starts_with(&r) || r.starts_with(&s))
+        })
+    }
+}
+
+/// The distinct seats of a run, from its `seat.receipt` events. Two receipts alike in everything but tokens are one seat.
+pub fn seats_of(events: &[EventEnvelope]) -> Vec<SeatNote> {
+    let mut out: Vec<SeatNote> = Vec::new();
+    for e in events.iter().filter(|e| e.kind == delphi_engine::seat::RECEIPT_KIND) {
+        let p = &e.payload;
+        let note = SeatNote {
+            requested: p["requested"]["model"].as_str().unwrap_or("").into(),
+            served_model: p["served"]["model"].as_str().map(String::from),
+            family: p["served"]["family"].as_str().unwrap_or(delphi_engine::seat::UNKNOWN).into(),
+            carrier: p["carrier"]["kind"].as_str().unwrap_or("").into(),
+            tools: p["carrier"]["tools_offered"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(),
+            dispatch_allowed: p["carrier"]["dispatch_allowed"].as_bool().unwrap_or(false),
+            prompt_hash: p["prompt_hash"].as_str().unwrap_or("").into(),
+            outcome: p["outcome"].as_str().unwrap_or("").into(),
+        };
+        if !out.contains(&note) {
+            out.push(note);
+        }
+    }
+    out
+}
+
 /// One model's share of a run, summed from its `agent.usage` events.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ModelUse {
@@ -451,7 +523,7 @@ impl Row {
                "cost_usd": (self.cost_usd * 10000.0).round() / 10000.0, "passed": self.passed, "failed_checks": self.failed_checks, "notes": self.notes, "error": self.error,
                "attempts": self.attempts, "promotions": self.promotions, "dir": self.dir, "base": self.base,
                "turns": self.eff.turns, "tool_calls": self.eff.calls(), "nudges": self.eff.nudges, "hard_stops": self.eff.hard_stops, "budget_warnings": self.eff.budget_warnings,
-               "gates": self.eff.gates, "escalations": self.eff.escalations, "cache_read_tokens": self.eff.cache_read, "cache_input_tokens": self.eff.cache_input,
+               "seats": self.seats.iter().map(SeatNote::to_json).collect::<Vec<_>>(), "gates": self.eff.gates, "escalations": self.eff.escalations, "cache_read_tokens": self.eff.cache_read, "cache_input_tokens": self.eff.cache_input,
                "by_tool": self.eff.tool_calls.iter().map(|(t, (c, e))| (t.clone(), json!({"calls": c, "errors": e}))).collect::<serde_json::Map<String, Value>>(),
                "tokens_in": self.usage.values().map(ModelUse::tokens_in).sum::<u64>(), "tokens_out": self.usage.values().map(ModelUse::tokens_out).sum::<u64>(),
                "models": self.usage.iter().map(|(m, u)| (m.clone(), json!({"calls": u.calls, "tokens_in": u.tokens_in(), "tokens_out": u.tokens_out(), "cost_usd": (u.cost_usd * 10000.0).round() / 10000.0}))).collect::<serde_json::Map<String, Value>>()})
@@ -478,6 +550,7 @@ impl Row {
             error: v["error"].as_str().map(String::from),
             base: v["base"].as_str().map(String::from),
             eff: Efficiency::default(),
+            seats: v["seats"].as_array().map(|a| a.iter().filter_map(SeatNote::from_json).collect()).unwrap_or_default(),
         })
     }
 }
@@ -821,7 +894,7 @@ pub(crate) const REPO_DIR: &str = "repo";
 /// One case, one seed, one arm, in its own directory under the working directory.
 pub fn run_one(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize) -> Row {
     let label = format!("{}/{}", case.suite, case.id);
-    let mut row = Row { case: label.clone(), arm: arm.name.clone(), seed, exit_code: None, wall_secs: 0.0, cost_usd: 0.0, passed: None, failed_checks: Vec::new(), notes: Vec::new(), usage: BTreeMap::new(), attempts: 0, promotions: 0, dir: String::new(), error: None, base: arm.base.clone(), eff: Efficiency::default() };
+    let mut row = Row { case: label.clone(), arm: arm.name.clone(), seed, exit_code: None, wall_secs: 0.0, cost_usd: 0.0, passed: None, failed_checks: Vec::new(), notes: Vec::new(), usage: BTreeMap::new(), attempts: 0, promotions: 0, dir: String::new(), error: None, base: arm.base.clone(), eff: Efficiency::default(), seats: Vec::new() };
     if let Err(e) = run_inner(cfg, case, arm, seed, index, &mut row) {
         row.error = Some(e);
         row.passed = None;
@@ -914,6 +987,7 @@ fn run_inner(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize, row:
     row.cost_usd = row.usage.values().map(|u| u.cost_usd).sum();
     row.promotions = events.iter().filter(|e| e.kind == "model.promoted").count() as u32;
     row.eff = efficiency_of(&events);
+    row.seats = seats_of(&events);
     // An arm is a staffing decision. If any other model did the work, the run says nothing about the arm.
     let strangers: Vec<&String> = row.usage.keys().filter(|m| !arm.expect_models.is_empty() && !arm.expect_models.iter().any(|x| m.starts_with(x.as_str()))).collect();
     if !strangers.is_empty() {
@@ -1503,6 +1577,26 @@ mod tests {
     }
 
     #[test]
+    fn a_row_keeps_the_served_model_family_carrier_and_tools_from_the_seat_receipts() {
+        let receipt = |model: &str, served: Option<&str>, family: &str, kind: &str, tokens: u64| event("seat.receipt", json!({
+            "seat_id": "sp_1.s1", "requested": {"endpoint": "ep", "model": model},
+            "served": {"model": served, "carrier_claimed": true, "family": family, "family_source": if family == "unknown" { "unknown" } else { "table" }},
+            "carrier": {"kind": kind, "cli_version": null, "tools_offered": ["read_file"], "dispatch_allowed": false},
+            "tool_grant": {}, "prompt_hash": "blake3:aa", "tokens_in": tokens, "tokens_out": 1, "outcome": "ok"}));
+        // Two receipts alike but for tokens are one seat; a carrier that reported nothing stays unknown.
+        let seats = seats_of(&[receipt("m1", Some("m1-2026"), "claude", "claude", 5), receipt("m1", Some("m1-2026"), "claude", "claude", 9), receipt("g1", None, "unknown", "copilot", 3)]);
+        assert_eq!(seats.len(), 2);
+        assert_eq!((seats[0].served_model.as_deref(), seats[0].family.as_str(), seats[0].carrier.as_str(), seats[0].tools.clone()), (Some("m1-2026"), "claude", "claude", vec!["read_file".to_string()]));
+        assert_eq!((seats[1].served_model.clone(), seats[1].family.as_str()), (None, "unknown"));
+        assert!(!seats[0].mismatch() && !seats[1].mismatch(), "a dated suffix is not a mismatch, and nothing reported is not one");
+        assert!(seats_of(&[receipt("m1", Some("other-model"), "unknown", "claude", 1)])[0].mismatch());
+        // The row writes them and reads them back.
+        let mut row = Row { case: "s/c".into(), arm: "a".into(), seed: 1, exit_code: Some(0), wall_secs: 0.0, cost_usd: 0.0, passed: Some(true), failed_checks: vec![], notes: vec![], usage: BTreeMap::new(), attempts: 0, promotions: 0, dir: String::new(), error: None, base: None, eff: Efficiency::default(), seats: Vec::new() };
+        row.seats = seats.clone();
+        assert_eq!(Row::from_json(&row.to_json()).unwrap().seats, seats);
+    }
+
+    #[test]
     fn a_row_records_tokens_by_model_attempts_and_promotions() {
         let t = tempfile::tempdir().unwrap();
         let canned = usage_mission(t.path(), &[("haiku-x", 1000, 4000, 200, 0, 0.01), ("haiku-x", 500, 0, 100, 50, 0.01), ("fable-x", 2000, 0, 800, 600, 0.9)]);
@@ -1820,7 +1914,7 @@ mod tests {
 
     #[test]
     fn the_report_labels_deltas_as_no_evidence_unless_the_arms_separate() {
-        let row = |arm: &str, seed: u32, pass: bool| Row { case: "s/c1".into(), arm: arm.into(), seed, exit_code: Some(0), wall_secs: 1.0, cost_usd: 0.25, passed: Some(pass), failed_checks: vec![], notes: vec![], usage: BTreeMap::new(), attempts: 0, promotions: 0, dir: String::new(), error: None, base: None, eff: Efficiency::default() };
+        let row = |arm: &str, seed: u32, pass: bool| Row { case: "s/c1".into(), arm: arm.into(), seed, exit_code: Some(0), wall_secs: 1.0, cost_usd: 0.25, passed: Some(pass), failed_checks: vec![], notes: vec![], usage: BTreeMap::new(), attempts: 0, promotions: 0, dir: String::new(), error: None, base: None, eff: Efficiency::default(), seats: Vec::new() };
         let arms = vec!["baseline".to_string(), "candidate".to_string()];
         let two: Vec<Row> = vec![row("baseline", 1, false), row("baseline", 2, false), row("candidate", 1, true), row("candidate", 2, true)];
         let r = report(&two, &arms, &[]);
@@ -1935,7 +2029,7 @@ mod tests {
         again.work_dir = t.path().join("w3");
         again.rows_path = Some(again.work_dir.join("rows.jsonl"));
         train::prepare_work_home(&again.work_dir).unwrap();
-        append_row(again.rows_path.as_ref().unwrap(), &Row { case: "s/c1".into(), arm: "baseline".into(), seed: 1, exit_code: Some(4), wall_secs: 0.1, cost_usd: 0.0, passed: None, failed_checks: vec![], notes: vec![], usage: BTreeMap::new(), attempts: 0, promotions: 0, dir: "r001".into(), error: Some("infrastructure".into()), base: None, eff: Efficiency::default() });
+        append_row(again.rows_path.as_ref().unwrap(), &Row { case: "s/c1".into(), arm: "baseline".into(), seed: 1, exit_code: Some(4), wall_secs: 0.1, cost_usd: 0.0, passed: None, failed_checks: vec![], notes: vec![], usage: BTreeMap::new(), attempts: 0, promotions: 0, dir: "r001".into(), error: Some("infrastructure".into()), base: None, eff: Efficiency::default(), seats: Vec::new() });
         again.resume = true;
         let (rerun, _) = run_all(&again, &[&c]);
         assert_eq!((rerun.len(), rerun[0].dir.as_str()), (1, "r002"), "the ungraded run was tried again");
