@@ -383,6 +383,8 @@ pub struct Completed {
     pub blocks: Vec<ContentBlock>,
     pub usage: Usage,
     pub stop_reason: Option<String>,
+    /// The model the provider's stream says answered (a claim by the provider, for the seat receipt); `None` when it did not say.
+    pub served_model: Option<String>,
 }
 
 #[derive(Default)]
@@ -392,6 +394,7 @@ pub struct Assembler {
     usage: Usage,
     stop_reason: Option<String>,
     stopped: bool,
+    served_model: Option<String>,
 }
 
 fn meta(signature: Option<String>, data: Option<String>) -> ProviderMeta {
@@ -412,6 +415,7 @@ impl Assembler {
         match kind {
             "ping" => {}
             "message_start" => {
+                self.served_model = v["message"]["model"].as_str().filter(|s| !s.is_empty()).map(String::from);
                 let u = &v["message"]["usage"];
                 self.usage.input_tokens = u["input_tokens"].as_u64().unwrap_or(0);
                 self.usage.cache_read_tokens = u["cache_read_input_tokens"].as_u64().unwrap_or(0);
@@ -502,7 +506,7 @@ impl Assembler {
             return Err(StreamError::Incomplete);
         }
         self.done.sort_by_key(|(i, _)| *i);
-        Ok(Completed { blocks: self.done.into_iter().map(|(_, b)| b).collect(), usage: self.usage, stop_reason: self.stop_reason })
+        Ok(Completed { blocks: self.done.into_iter().map(|(_, b)| b).collect(), usage: self.usage, stop_reason: self.stop_reason, served_model: self.served_model })
     }
 }
 
@@ -590,6 +594,15 @@ pub(crate) mod tests {
             }
         }
         asm.finish()
+    }
+
+    // specs/091 SR-1: the model the provider's stream names is kept as a claim; a stream that names none leaves it empty.
+    #[test]
+    fn the_model_the_stream_names_is_kept_for_the_seat_receipt() {
+        assert_eq!(parse(&fixture(), 64).unwrap().served_model, None);
+        let named = fixture().replace("\"id\":\"msg_1\"", "\"id\":\"msg_1\",\"model\":\"served-x\"");
+        assert!(named.contains("served-x"), "the fixture's message_start carries the id");
+        assert_eq!(parse(&named, 64).unwrap().served_model.as_deref(), Some("served-x"));
     }
 
     #[test]

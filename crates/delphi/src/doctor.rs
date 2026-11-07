@@ -186,6 +186,8 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
 
     // 11. Model pool (specs/002 §4.1): which models are out of quota right now, from the daemon's saved state.
     check_pool(ws, home, &cfg, &mut r);
+    // The family table (specs/091 SR-2): a file that does not parse, and entries past their expiry date.
+    check_families(&ws.dir, &delphi_core::bundles::today(), &mut r);
 
     // 9. Sandbox (D-24): optional. Reported, never a warning unless the config asks for it and it is missing.
     let wanted = toml::from_str::<toml::Value>(&cfg).ok().and_then(|v| v.get("exec").and_then(|e| e.get("sandbox")).and_then(|s| s.as_str().map(String::from))).unwrap_or_else(|| "off".into());
@@ -522,6 +524,22 @@ fn check_coverage_drift(cfg_text: &str, help: &dyn Fn(&str, &[&str]) -> Option<S
             let shown: Vec<String> = items.iter().take(6).map(|i| i.describe()).collect();
             let more = if items.len() > 6 { format!(" and {} more", items.len() - 6) } else { String::new() };
             r.warn("10 harness", format!("{} surface", cli), format!("the installed {} shows {}{} with no disposition in crates/delphi-engine/coverage/{}.cov: it is newer than this Delphi knows. Nothing breaks (Delphi passes only the flags it uses); a Delphi update classifies it", cli, shown.join(", "), more, cli));
+        }
+    }
+}
+
+/// `model-families.toml` (specs/091 SR-2). An expired entry still applies; this says who has to renew it.
+fn check_families(ws_dir: &Path, today: &str, r: &mut Report) {
+    match delphi_engine::seat::FamilyTable::load(ws_dir) {
+        Err(e) => r.warn("11 model families", delphi_engine::seat::FAMILIES_OVERRIDE, format!("{e}; seat receipts use the shipped table until it is fixed")),
+        Ok(t) => {
+            let expired = t.expired(today);
+            for e in &expired {
+                r.warn("11 model families", format!("{} -> {}", e.pattern, e.family), format!("expired {} (owner: {}); it still applies, so renew or remove it in model-families.toml", e.expires, e.owner));
+            }
+            if expired.is_empty() {
+                r.push(Level::Ok, "11 model families", "", format!("{} entries, none expired", t.entries.len()));
+            }
         }
     }
 }
@@ -1243,6 +1261,23 @@ mod tests {
         let f = r.findings.iter().find(|f| f.check == "11 model pool" && f.level == Level::Warn).expect("a warning for the exhausted pair");
         assert!(f.location == "direct/sonnet-x" && f.message.contains("quota reached") && (f.message.contains("in 2d") || f.message.contains("in 3d")), "{:?}", f);
         assert_eq!(r.exit_code(), 0, "a spent quota is a warning, not a failure");
+    }
+
+    // specs/091 SR-2: an expired family entry still applies, but doctor warns; a malformed table warns and names the file.
+    #[test]
+    fn an_expired_family_entry_and_a_malformed_table_are_warnings() {
+        let (_t, home, ws, _p) = setup();
+        let r = run(&home, &ws, &Options::default());
+        assert!(r.findings.iter().any(|f| f.check == "11 model families" && f.level == Level::Ok), "the shipped table is in date");
+        fs::write(ws.dir.join("model-families.toml"), "[[family]]\npattern = \"old-*\"\nfamily = \"old\"\nowner = \"operator\"\nexpires = \"2020-01-01\"\n").unwrap();
+        let r = run(&home, &ws, &Options::default());
+        let f = r.findings.iter().find(|f| f.check == "11 model families" && f.level == Level::Warn).expect("a warning for the expired entry");
+        assert!(f.location == "old-* -> old" && f.message.contains("expired 2020-01-01") && f.message.contains("still applies"), "{:?}", f);
+        assert_eq!(r.exit_code(), 0, "an expired entry is a warning, not a failure");
+        fs::write(ws.dir.join("model-families.toml"), "[[family]]\npattern = \"x\"\nfamily = \"unknown\"\nowner = \"o\"\nexpires = \"2030-01-01\"\n").unwrap();
+        let r = run(&home, &ws, &Options::default());
+        let f = r.findings.iter().find(|f| f.check == "11 model families" && f.level == Level::Warn).expect("a warning for the malformed file");
+        assert!(f.location == "model-families.toml" && f.message.contains("reserved"), "{:?}", f);
     }
 
     // specs/010 §9 (offline part): a connector with no ratified tool definitions offers agents nothing, and doctor says so.

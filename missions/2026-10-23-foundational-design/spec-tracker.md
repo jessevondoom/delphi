@@ -35,7 +35,7 @@ One row per spec. Three separate questions, because they diverge: **Approved** (
 | 011 Xenia trust model | yes (text, by "ratify all") | yes (X0-X10) | tests, fuzz, scratch-store drill | Phase 1 build: X0-X10 merged (plan: xenia-phase-1-plan.md; gates in xenia-x10-verification.md). Gates 1-7 of 011 §1.4 met by automated tests; gate 8 (3-human, 2-week dogfood, X11), the independent red-team sweep and a live store with real admin identities are the operator's |
 | 012 Xenia record schema | yes (text, by "ratify all") | yes (kinds `memory`, `endorsement`, `tombstone`, and `bundle` from B8) | tests, fuzz | same; not exercised on a live store. 2026-10-29 (D-32): pointer scheme is `xenia://<kind>/<id>[@rev]` (bare form refused), `delphi://` refused, `xenia://cap/` reserved |
 | 013 Librarian and internal retrieval | yes | no ("scoped, not yet built") | n/a | after 011/012 |
-| 020 Harness tool bridge, seat profiles & tool inventory | yes | yes (§8.7 Antigravity Builder activation and diagnostic parity) | tests, agy live probe | none |
+| 020 Harness tool bridge, seat profiles & tool inventory | yes | yes (§8.7 Antigravity Builder activation and diagnostic parity; 2026-11-07 a refused path says what a path looks like and which projects there are, §4) | tests, agy live probe; 2026-11-07 live before/after on a Haiku seat, one case, 3 seeds each: 0 of 3 (0 of 4 with an earlier run) became 3 of 3 once the refusal named the project | none |
 | 022 The sharing layer (overview, plan, decisions) | yes (decisions OD-1..OD-9, 2026-10-25; text on merge of PR #155; ratified in full 2026-10-28) | yes (code in `delphi-bundle`, `bundle_*.rs`, `org_context.rs`; per-slice state below) | n/a | B0: apply the 022 §5 amendments; then the slices below |
 | 023 Org bundle standard (manifest, layout, knowledge, skills, agents, behavior, vectors) | yes (2026-10-25; ratified in full 2026-10-28) | yes (code in `delphi-bundle`, `bundle_*.rs`, `org_context.rs`; per-slice state below) | n/a | B1 |
 | 024 Bundle provenance, adding, precedence, lifecycle | yes (2026-10-25; ratified in full 2026-10-28) | yes (code in `delphi-bundle`, `bundle_*.rs`, `org_context.rs`; per-slice state below) | n/a | B2, B4, B6 |
@@ -100,6 +100,7 @@ Asked for by the operator on 2026-10-26; pilot budget **80 engineering hours** (
 | X5 | operator review CLI, disagreement ledger (`train review|disputes|resolve`) | 8 | built (PR open) |
 | X6 | report (`train report`): pass rate, cost per pass, frontier, judge breakdown | 6 | built (PR open) |
 | X7 | pilot supervision and debugging | 11 | not started |
+| X8 | an arm may bring an endpoint the home lacks (`[arm.endpoint.<id>]`: family and harness), throwaway copy only, so one Copilot login runs as several vendors' models; `delphi train fidelity gen --inline` puts the report in the prompt for tool-less seats | 3 | built 2026-11-07 (PR pending): `train_arms.rs` (`ExtraEndpoint`), `train_fidelity.rs`. Live: Copilot catalogue read over ACP (24 models); see the PR for the first results |
 
 R4-R6 truth packs join in the first study phase.
 
@@ -189,7 +190,7 @@ Asked for and approved by the operator on 2026-10-28. `copilot` 1.0.105 is logge
 | Slice | Content | State |
 | :-- | :-- | :-- |
 | S0 | this spec | approved 2026-11-07 |
-| S1 | `seat.rs`: the daemon-written `seat.receipt` (requested and served model, resolved family, carrier and its policy, tool grant, prompt hash), the ratified family table with owner and expiry, the schema, a `delphi doctor` expiry warning | not started |
+| S1 | `seat.rs`: the daemon-written `seat.receipt` (requested and served model, resolved family, carrier and its policy, tool grant, prompt hash), the ratified family table with owner and expiry, the schema, a `delphi doctor` expiry warning | built: `seat.rs`, `model_families.toml` (shipped, with a workspace `model-families.toml` override), `Event::Served`, `served_model` on the API `Completed`, one receipt per harness seat and per API seat, doctor check `11 model families`. The served model is read for Claude (init), Copilot and the three API providers; `agy` and Codex report none yet (S5), so their receipts say `unknown`. No live run |
 | S2 | opt-in `require_families` and a count budget on the Panel's `foreign_seat` | not started |
 | S3 | receipts in `train run` rows; a family comparison whose arms differ in prompt hash or carrier policy is labelled confounded | not started |
 | S4 | `ask_family`: one read-only foreign seat answers one question, advice only, returns its receipt | not started |
@@ -676,6 +677,7 @@ Approved by the operator on 2026-11-05. Extends specs 072, 038 and 062. Task-der
 | S1c | `done_when`/`stop_when` in envelope schema and template; `check handoff` requires them | 3 h | built (this branch) |
 | S2 | `check brief` shape check; `handoff-packaging` section | 4 h | built (this branch) |
 | E1 | pre-registered two-arm experiment on the 037 pack | 4 h | run 2026-11-05: no evidence of an effect (6 of 15 vs 7 of 15); `dev/train/e1/REPORT.md`; section 8 stays unbuilt |
+| C1b | orchestrator item 10: read for itself when a read-only delegation is refused (§4.1); approved by the operator 2026-11-07; 3 of 3 genuine runs against 0 of 4 without the rule | 1 h | built (this branch) |
 
 
 
@@ -754,6 +756,7 @@ From the operator's request to refine the outside Council (Claude Code, Copilot,
 | S4 | one foreign-family seat (token ceiling, not a history-based estimate); `venue`/`blind` in the record front matter | 10 | built (PR open) |
 | S5 | pre-registered Panel-vs-Council experiment; decides the default | 12 | run 2026-11-06 (operator go, 350k per-run cap): verdict INCOMPLETE (4 of 8 questions qualify, 6 needed), notice unchanged; 2.10M of 8M tokens; report in `dev/train/e2/REPORT.md`, data in `dev/train/e2/data/`; fixes planned in spec 089 (draft) |
 | S6 | follow-ups from the Council review: Panel captures at L0, verdict `venue`, brief hash, host-support line, list of `council.verdict` readers | 4 | built (merged, #511) |
+| S7 | Round 2 reader (C1a): first complete critique wins, identical repeats tolerated, a conflicting later block or object refuses the reply, `trailer` counts and bytes on `council.critique` (daemon and Panel share one reader; reply to the 2026-11-07 Councils 002/003) | 3 | built (PR open) |
 
 ## Spec 089: Panel hardening from the E2 run (2026-11-06, approved)
 
@@ -768,5 +771,5 @@ From the E2 report (verdict INCOMPLETE). Approved 2026-11-06 on the operator's i
 | P4a | `agy` seat reliability: reproduce the checkout-guard false positive, classify the hangs | 3 | built (PR open); P4b waits for OD-4 |
 | P4b | `agy` fix: one retry after a CLI error, discard message names the paths (guard unchanged by decision; watchdog deferred) | 6-10 | built (PR open): retry and path message; guard unchanged by decision; live capture held |
 | P5 | matcher v2 with a negative control; exploratory `RESCORE.md` of E2 | 5 | built (merged, #523); v2 FAILED validation: agreement 0.15 (needs 0.30), false-match 0.0 |
-| P6 | E3 pre-registration and run | 6 | pre-registration merged (#531), Amendment 1 merged (#536); run 2026-11-07 (operator go, 2.0M cap): A1 (headline) verdict NO EVIDENCE (same decision 5/6, readable 18/18, but escalation 1/6 against the Council's 10/12); A2 INCOMPLETE (2 of 6 questions: the headless host stopped before the foreign seat answered in 8 of 10 attempts); section 4.5 notice unchanged; 1.88M of 2.0M Delphi-side, 261k of 400k host-side; report in the PR description (the file tool refused `REPORT.md`), data `dev/train/e3/data/`; PR open |
+| P6 | E3 pre-registration and run | 6 | pre-registration merged (#531), Amendment 1 merged (#536); run 2026-11-07 (operator go, 2.0M cap): A1 (headline) verdict NO EVIDENCE (same decision 5/6, readable 18/18, but escalation 1/6 against the Council's 10/12); A2 INCOMPLETE (2 of 6 questions: the headless host stopped before the foreign seat answered in 8 of 10 attempts); section 4.5 notice unchanged; 1.88M of 2.0M Delphi-side, 261k of 400k host-side; report `dev/train/e3/REPORT.md`, data `dev/train/e3/data/`; merged (#543); the foreign-seat wait-flow fix is spec 089 P7 |
 | P7 | a headless host survives the foreign seat: server-side wait (brief round 2/3, status), non-error `waiting_on_delphi_seat` answer, `waiting_on`, skill and tool text now say to wait for it | 4 | built (PR open); operator go 2026-11-07; live A2 check not run |

@@ -900,6 +900,17 @@ fn run_inner(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize, row:
     let mission = summary["mission_id"].as_str().filter(|m| !m.is_empty() && !m.contains(['/', '\\', '.'])).ok_or("the summary names no mission")?;
     let events = delphi_core::log::replay(&delphi_core::sessions::dir(&ws_dir, mission)).map_err(|e| format!("could not read the mission log: {}", e))?;
     row.usage = usage_by_model(&events);
+    // A model that reported its quota reached and gave no answer, whether it stopped before the first call or part-way through, says nothing
+    // about the arm: the run is not graded (like a slept-through run), and `--resume` tries it again. Counting it as a failed case would
+    // score the account's limits as the model's behavior (the 2026-11-07 A/B counted such runs as failures before this was caught).
+    if let Some(x) = events.iter().find(|e| e.kind == "model.exhausted") {
+        let spent = row.usage.values().any(|u| u.tokens_in() + u.tokens_out() > 0);
+        let stopped = events.iter().rev().find(|e| e.kind == "task.output").is_some_and(|e| e.payload["text"].as_str().is_some_and(|t| t.trim_start().starts_with("[escalated to the operator:")));
+        if !spent || stopped {
+            let reset = x.payload["reset_at"].as_i64().map(|t| format!(", resets {}", crate::train_arms::utc(t))).unwrap_or_default();
+            return Err(format!("infrastructure: {} on {} reported its quota reached{}; the run is not graded (`--resume` tries it again)", x.payload["model_id"].as_str().unwrap_or("a model"), x.payload["endpoint_id"].as_str().unwrap_or("an endpoint"), reset));
+        }
+    }
     row.cost_usd = row.usage.values().map(|u| u.cost_usd).sum();
     row.promotions = events.iter().filter(|e| e.kind == "model.promoted").count() as u32;
     row.eff = efficiency_of(&events);
@@ -931,11 +942,31 @@ fn run_inner(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize, row:
     }
     row.failed_checks = case.checks.iter().filter_map(|c| eval_check(c, &ctx).err()).collect();
     row.passed = Some(row.failed_checks.is_empty());
+    // A model that declines scores like one that fails, but it is a different finding: say so, so a refusal is never read as a loss.
+    if row.passed == Some(false) {
+        if let Some(n) = declines(&ctx.deliverable) {
+            row.notes.push(n);
+        }
+    }
     let models: Vec<String> = row.usage.keys().cloned().collect();
     if let Err(e) = crate::train_judge::file_bundle(&cfg.work_dir, &draft, &crate::train_judge::Filing { arm: &arm.name, case: &format!("{}/{}", case.suite, case.id), seed, models: &models, passed: row.passed, failed: &row.failed_checks }) {
         row.notes.push(format!("no bundle for the jury: {}", e));
     }
     Ok(())
+}
+
+/// Does a short answer begin by declining ("I can't reproduce ...")? A refusal fails every content check the same way a wrong
+/// answer does; the 2026-11-07 Copilot runs showed one model declining to list hashes and paths (`specs/091` §1). Anchored at the
+/// start and limited to short answers, so a long answer that merely contains "I can't" is not tagged.
+pub(crate) fn declines(deliverable: &str) -> Option<String> {
+    let t = deliverable.trim_start();
+    if t.chars().count() > 1200 {
+        return None;
+    }
+    let re = regex::Regex::new(r"(?i)^\W*(i(\s+(can.?t|cannot|won.?t|will\s+not|am\s+(unable|not\s+able))|.?m\s+(unable|not\s+able))|sorry|unable\s+to)\b").ok()?;
+    re.find(t)?;
+    let start: String = t.chars().take(50).collect();
+    Some(format!("the answer declines (it begins \"{}...\"): a refusal, not a lossy answer", start.split_whitespace().collect::<Vec<_>>().join(" ")))
 }
 
 // ── the whole run ───────────────────────────────────────────────────────────────────────────────────────────────
@@ -1329,6 +1360,62 @@ mod tests {
         for want in ["EFFORT", "HARNESS EFFECT", "model: m", "nudge-off vs baseline", "no evidence (fewest graded seeds 1, below 3)"] {
             assert!(r.contains(want), "{} in\n{}", want, r);
         }
+    }
+
+    #[test]
+    fn a_short_answer_that_begins_by_declining_is_tagged_and_other_answers_are_not() {
+        for yes in [
+            "I can\u{2019}t reproduce a bulk list of exact repository identifiers, paths, limits, and security rotation details.",
+            "I can't reproduce the report's exact rollback hashes.",
+            "I cannot do that.",
+            "  I'm unable to list them.",
+            "Sorry, I won't list those.",
+            "Unable to comply.",
+        ] {
+            let n = declines(yes).unwrap_or_else(|| panic!("not tagged: {}", yes));
+            assert!(n.contains("a refusal, not a lossy answer"), "{}", n);
+        }
+        for no in [
+            "- Finding 1: `0f171a65`\n- Finding 2: `src/a.rs`",
+            "Here is the list. I can't be sure about line 7.",
+            "The investigator said it can't be done, but here are the items: ...",
+            "",
+        ] {
+            assert!(declines(no).is_none(), "wrongly tagged: {}", no);
+        }
+        // A long answer is never tagged, even if it starts that way.
+        assert!(declines(&format!("I can't be exact. {}", "x".repeat(1300))).is_none());
+    }
+
+    #[test]
+    fn a_run_whose_model_hit_its_quota_and_answered_nothing_is_not_graded_but_one_that_answered_is() {
+        let t = tempfile::tempdir().unwrap();
+        let c = case(t.path(), "[[check]]\nkind = \"file_unchanged\"\npath = \"keep.txt\"\n");
+        let usage = |tokens: u64| ("agent.usage", json!({"provider": "p", "input_tokens": tokens, "output_tokens": 0, "cost_usd": 0.0, "reserved_usd": 0.0, "usage_source": "reported", "cost_model": "metered", "outcome": "ok"}));
+        let exhausted = ("model.exhausted", json!({"endpoint_id": "agy-sub", "model_id": "claude-sonnet-5-5-medium", "raw": "Individual quota reached.", "reason": "quota reached", "reset_at": 1_794_101_522}));
+        let stop = ("task.output", json!({"status": "escalated", "text": "[escalated to the operator: the CLI is out of quota: quota reached]"}));
+        // Quota reached and no tokens: an infrastructure stop, not a failed case.
+        let canned = mission(t.path(), &[usage(0), exhausted.clone(), stop, ("task.completed", json!({"status": "escalated"}))]);
+        let config = cfg(t.path(), &canned, vec![baseline()], 10.0);
+        train::prepare_work_home(&config.work_dir).unwrap();
+        let row = run_all(&config, &[&c]).0.remove(0);
+        assert_eq!(row.passed, None, "not graded: {:?}", row);
+        let e = row.error.unwrap();
+        assert!(e.contains("infrastructure") && e.contains("claude-sonnet-5-5-medium on agy-sub") && e.contains("resets 2026-11-08 01:32Z") && e.contains("--resume"), "{}", e);
+        // The same event with tokens spent: the model answered, so the run is graded as usual.
+        let t2 = tempfile::tempdir().unwrap();
+        let canned = mission(t2.path(), &[usage(500), exhausted, ("task.completed", json!({"status": "done"}))]);
+        let config = cfg(t2.path(), &canned, vec![baseline()], 10.0);
+        train::prepare_work_home(&config.work_dir).unwrap();
+        let row = run_all(&config, &[&c]).0.remove(0);
+        assert_eq!((row.passed.is_some(), row.error.clone()), (true, None), "{:?}", row);
+        // Quota reached part-way through: tokens were spent on a first call, but the final answer is the stop. Not graded either.
+        let t3 = tempfile::tempdir().unwrap();
+        let canned = mission(t3.path(), &[usage(500), ("model.exhausted", json!({"endpoint_id": "agy-sub", "model_id": "m", "reason": "quota reached"})), ("task.output", json!({"status": "escalated", "text": "[escalated to the operator: the CLI is out of quota: quota reached]"})), ("task.completed", json!({"status": "escalated"}))]);
+        let config = cfg(t3.path(), &canned, vec![baseline()], 10.0);
+        train::prepare_work_home(&config.work_dir).unwrap();
+        let row = run_all(&config, &[&c]).0.remove(0);
+        assert!(row.passed.is_none() && row.error.as_deref().is_some_and(|e| e.contains("infrastructure")), "{:?}", row);
     }
 
     #[test]

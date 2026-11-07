@@ -145,15 +145,34 @@ fn prompt() -> String {
 
 /// Write a case directory (`case.toml`, `fixture/artifact.md`, `items.json`) for `delphi train run`. `items.json` sits outside
 /// the fixture, so the model under test never sees the answer key.
+#[cfg(test)]
 pub fn write_case(dir: &Path, seed: u64, n: usize, split: &str) -> Result<(), String> {
+    write_case_with(dir, seed, n, split, false)
+}
+
+/// What an inline case asks: the report is in the prompt, so a seat with no tools (a Copilot seat today) can take it.
+const INLINE_PROMPT: &str = "Below is a report an investigator wrote. Give me every identifier, hash, file path, number, line of code and quoted sentence it contains, character for character, as a list. Do not paraphrase, shorten or round anything.";
+
+/// [`write_case`], and with `inline` the artifact is in the prompt itself and not only in `fixture/`. It measures the last hop
+/// only (the Orchestrator's answer to the operator), but it needs no tool, so it runs on a seat that has none.
+pub fn write_case_with(dir: &Path, seed: u64, n: usize, split: &str, inline: bool) -> Result<(), String> {
     let its = items::generate(seed, n);
     let id = dir.file_name().and_then(|s| s.to_str()).ok_or("the case directory has no name")?;
     fs::create_dir_all(dir.join("fixture")).map_err(|e| format!("{}: {}", dir.display(), e))?;
     fs::write(dir.join("fixture/artifact.md"), items::artifact(&its)).map_err(|e| e.to_string())?;
     fs::write(dir.join("items.json"), items::items_json(&its)).map_err(|e| e.to_string())?;
+    let prompt_toml = if inline {
+        let doc = items::artifact(&its);
+        if doc.contains("'''") {
+            return Err("the artifact contains three single quotes and cannot be written as a literal TOML string".into());
+        }
+        format!("'''\n{}\n\n---\n{}---'''", INLINE_PROMPT, doc)
+    } else {
+        format!("\"{}\"", prompt())
+    };
     let toml = format!(
-        "id = \"{id}\"\nsuite = \"fidelity\"\nkind = \"task\"\nrole = \"orchestrator\"\nsplit = \"{split}\"\ntags = [\"handoff\"]\nmax_cost_usd = 1.0\ntimeout_secs = 900\nprompt = \"{prompt}\"\n\n# The final answer keeps every item byte for byte (seed {seed}, {n} items; `delphi train fidelity gen` made this case).\n[[check]]\nkind = \"exact_items\"\npath = \"items.json\"\nmin = 1.0\n",
-        id = id, split = split, prompt = prompt(), seed = seed, n = n
+        "id = \"{id}\"\nsuite = \"fidelity\"\nkind = \"task\"\nrole = \"orchestrator\"\nsplit = \"{split}\"\ntags = [\"handoff\"]\nmax_cost_usd = 1.0\ntimeout_secs = 900\nprompt = {prompt}\n\n# The final answer keeps every item byte for byte (seed {seed}, {n} items; `delphi train fidelity gen` made this case).\n[[check]]\nkind = \"exact_items\"\npath = \"items.json\"\nmin = 1.0\n",
+        id = id, split = split, prompt = prompt_toml, seed = seed, n = n
     );
     fs::write(dir.join("case.toml"), toml).map_err(|e| e.to_string())
 }
@@ -162,7 +181,7 @@ fn flag(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
 }
 
-const USAGE: &str = "delphi train fidelity run [--seed <n>] [--items <n>] [--relay verbatim|paraphrase|handle|all] [--json]\n  delphi train fidelity gen [--seed <n>] [--items <n>] [--split dev|holdout] --out <new case dir>\n  run scores a scripted chain (no model, no cost). gen writes a case for `delphi train run` (suite `fidelity`).";
+const USAGE: &str = "delphi train fidelity run [--seed <n>] [--items <n>] [--relay verbatim|paraphrase|handle|all] [--json]\n  delphi train fidelity gen [--seed <n>] [--items <n>] [--split dev|holdout] [--inline] --out <new case dir>\n  run scores a scripted chain (no model, no cost). gen writes a case for `delphi train run` (suite `fidelity`); --inline puts the report in the prompt, for a seat with no tools.";
 
 /// `delphi train fidelity run|gen ...` (`args[0]` is `fidelity`).
 pub fn cli(args: &[String], suites: Option<&Path>) -> i32 {
@@ -215,7 +234,7 @@ pub fn cli(args: &[String], suites: Option<&Path>) -> i32 {
                 eprintln!("delphi train fidelity: {} already exists; give a new directory", out.display());
                 return 2;
             }
-            match write_case(&out, seed, n, &split) {
+            match write_case_with(&out, seed, n, &split, args.iter().any(|a| a == "--inline")) {
                 Ok(()) => {
                     println!("wrote {}: {} items (seed {}); `delphi train validate` checks it, `delphi train run` runs it on an arm", out.display(), n, seed);
                     0
@@ -286,6 +305,29 @@ mod tests {
         let j = to_json(4, 10, &outcomes);
         assert_eq!((j["relays"][1]["relay"].as_str(), j["relays"][1]["at_operator"].as_f64(), j["relays"][2]["at_operator"].as_f64()), (Some("paraphrase"), Some(0.0), Some(1.0)));
         assert_eq!(j["relays"][0]["kinds"]["hash"]["at_seat"].as_u64(), Some(2));
+    }
+
+    #[test]
+    fn an_inline_case_carries_the_report_in_its_prompt_for_a_seat_with_no_tools() {
+        let t = tempfile::tempdir().unwrap();
+        let dir = t.path().join("suites/fidelity/cases/fid-3-10i");
+        write_case_with(&dir, 3, 10, "dev", true).unwrap();
+        let case = crate::train::load_case(&dir, "fidelity").unwrap();
+        let (its, prompt) = (items::generate(3, 10), case.prompt.clone().unwrap());
+        // The prompt holds the whole report, byte for byte, so every item can be copied; the answer key is still outside the fixture.
+        assert!(its.iter().all(|i| prompt.contains(&i.text)), "{}", prompt);
+        assert!(prompt.starts_with("Below is a report an investigator wrote.") && !prompt.contains("@project/"), "no path to read: {}", &prompt[..120]);
+        assert!(dir.join("fixture/artifact.md").is_file() && dir.join("items.json").is_file());
+        assert!(matches!(&case.checks[0], crate::train::Check::ExactItems { file, .. } if file == "items.json"));
+        // The ordinary case does not carry the items in its prompt.
+        let plain = t.path().join("suites/fidelity/cases/fid-3-10");
+        write_case(&plain, 3, 10, "dev").unwrap();
+        assert!(!its.iter().any(|i| crate::train::load_case(&plain, "fidelity").unwrap().prompt.unwrap().contains(&i.text)));
+        // The command takes the flag.
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let out = t.path().join("cmd-case");
+        assert_eq!(cli(&a(&["fidelity", "gen", "--inline", "--out", out.to_str().unwrap()]), None), 0);
+        assert!(fs::read_to_string(out.join("case.toml")).unwrap().contains("Below is a report an investigator wrote."));
     }
 
     #[test]

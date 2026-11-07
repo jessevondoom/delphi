@@ -44,6 +44,8 @@ An **arm** is one way of staffing a task. Each arm has its own template home (ra
 
 The pilot runs the first eight. Arms the operator cannot reach (a quota out, a model not on the account) are skipped and listed, never substituted silently.
 
+**An arm may bring an endpoint (added 2026-11-07).** `[arm.endpoint.<id>]` with a `family` and a `harness` (`claude`, `agy`, `codex` or `copilot`) adds an endpoint to that arm's throwaway home when the operator's home lacks it, so one Copilot login can be run as several vendors' models. It exists only in the copy; the operator's ratified access block is never edited, and an endpoint the home already has must agree in family and harness or the arm is refused. This is what lets the pilot staff an arm from a carrier the operator has not ratified, for a measurement only: it gives no seat any authority in a real home.
+
 ## 3. The suite: nine tasks
 
 Agents are given each task as an ordinary request. Nothing tells them it is a test or that a reference exists.
