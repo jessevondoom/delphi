@@ -744,3 +744,17 @@ From the E2 report (verdict INCOMPLETE). Approved 2026-11-06 on the operator's i
 | P4b | `agy` fix: one retry after a CLI error, discard message names the paths (guard unchanged by decision; watchdog deferred) | 6-10 | built (PR open): retry and path message; guard unchanged by decision; live capture held |
 | P5 | matcher v2 with a negative control; exploratory `RESCORE.md` of E2 | 5 | built (merged, #523); v2 FAILED validation: agreement 0.15 (needs 0.30), false-match 0.0 |
 | P6 | E3 pre-registration (the run needs the operator's go) | 6 | approved; the run needs an explicit go |
+
+## Spec 088: a spec compile step (2026-11-06, draft)
+
+From a conversation with the operator on 2026-11-06 and a prior-art survey (spec 088 §9; part of it unverified). A draft: not approved, nothing built. Extract-never-rewrite is the stated invariant; a per-spec JSON for agents and grouped markdown views for review; slices S4 onward wait on a measurement after S3 (spec 088 §8, item 10).
+
+| Slice | Content | Hours | State |
+| :-- | :-- | --: | :-- |
+| S0 | spec 088 approval and tracker entry | 1 | draft, awaits the operator |
+| S1 | move the canonical specs to `specs/source/`; trailers resolve by number | 6 | not built |
+| S2 | shared parser, tier 0 compile, schema, frontmatter `group` | 16 | not built |
+| S3 | index and group views, drift tests, `specs show/list`, MCP; start of the measurement | 12 | not built |
+| S4 | requirement tags, revisions, tombstones, amendments, registry check | 16 | not built |
+| S5 | `spec-driven-build` skill, retrofit tool, tag the specs still being built | 20 | not built |
+| S6 | coverage report (warn-only) | 10 | not built |
