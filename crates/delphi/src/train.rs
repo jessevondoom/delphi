@@ -60,6 +60,10 @@ pub enum Check {
     /// At least this share of the exact strings listed in a JSON array in the case directory (outside the fixture, so the model
     /// never sees it) appear byte for byte in the deliverable (`specs/048` BM-5 handoff fidelity, BM-7 context retention).
     ExactItems { file: String, min: f64 },
+    /// A review answer's `FINDING <line> <kind>: ...` lines, scored against a key of planted defects and decoys in the case
+    /// directory (outside the fixture): at least `min_recall` of the defects caught and at most `max_false_positives` decoys
+    /// flagged. The figures are diagnostics, not a seat score (`train_defects`, `specs/078`).
+    ReviewFindings { file: String, min_recall: f64, max_false_positives: u64 },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -193,6 +197,20 @@ fn parse_check(t: &toml::Table, at: &str, problems: &mut Problems) -> Option<Che
                 Some(min) => Some(Check::ExactItems { file, min }),
                 None => {
                     problems.push(format!("{}: `exact_items` needs `min` above 0 and at most 1", at));
+                    None
+                }
+            }
+        }
+        Some("review_findings") => {
+            let file = path(problems)?;
+            let Some(min_recall) = t.get("min_recall").and_then(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64))).filter(|m| *m > 0.0 && *m <= 1.0) else {
+                problems.push(format!("{}: `review_findings` needs `min_recall` above 0 and at most 1", at));
+                return None;
+            };
+            match t.get("max_false_positives").and_then(|v| v.as_integer()).filter(|n| *n >= 0) {
+                Some(n) => Some(Check::ReviewFindings { file, min_recall, max_false_positives: n as u64 }),
+                None => {
+                    problems.push(format!("{}: `review_findings` needs `max_false_positives`, a whole number from 0", at));
                     None
                 }
             }
@@ -502,6 +520,9 @@ pub fn run(args: &[String]) -> i32 {
     // The scripted chain needs no checkout, and `gen` names its own output directory.
     if sub == Some("fidelity") {
         return crate::train_fidelity::cli(args, suites_dir(&repo).as_deref());
+    }
+    if sub == Some("defects") {
+        return crate::train_defects::cli(args, suites_dir(&repo).as_deref());
     }
     if sub == Some("retention") {
         return crate::train_retention::cli(args);

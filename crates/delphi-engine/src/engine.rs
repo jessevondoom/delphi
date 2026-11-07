@@ -988,7 +988,8 @@ impl Engine {
                 // time (`specs/089` P4b). Never a timeout, a quota error, a guard failure or a second failure; the first run's usage is logged.
                 if let Err(f) = &first {
                     let left = self.seat_deadlines.lock().unwrap().get(&handoff.handoff_id).map(|d| d.saturating_duration_since(std::time::Instant::now()));
-                    if let (true, true, Some(left)) = (f.cli_error, f.retryable, left) {
+                    // A refused answer was found and judged; another run is not a retry of a crash.
+                    if let (true, true, Some(left)) = (f.cli_error && f.kind != crate::harness_run::FailKind::AnswerRefused, f.retryable, left) {
                         if left >= crate::harness_run::RETRY_MIN_REMAINING {
                             m.append(sc.ev("harness.retry", json!({"task_id": sc.task_id, "role": sc.role, "attempt": 2, "reason": self.secrets.redact(&f.reason).chars().take(200).collect::<String>(), "remaining_ms": left.as_millis() as u64}))).await?;
                             first = self.run_harness(&mut sc, &ipr, &hep).await?;

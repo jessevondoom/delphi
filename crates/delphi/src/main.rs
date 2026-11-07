@@ -42,6 +42,7 @@ mod promote_cmd;
 mod retro_cmd;
 mod train_run;
 mod train_items;
+mod train_defects;
 mod train_fidelity;
 mod train_retention;
 mod train_arms;
