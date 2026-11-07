@@ -3,7 +3,8 @@ id: spec-093-authority-invariants-batch1
 title: "093: Authority invariants as tests: spawn-site ratchet, must-run gate, home isolation, dependency gate (batch 1), resume and usage honesty (batch 2)"
 author: architect
 timestamp: 2026-11-07T20:00:00Z
-status: draft   # a proposal, not permission: only the operator approves a spec (specs/003 §3.1.2)
+status: approved   # by the operator, 2026-11-07 ("the spec is approved. start building batch one"); OD-1 to OD-5 take the recommendations
+approved_by: operator (2026-11-07)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +15,7 @@ tags: [spec, tests, invariants, authority, ci, supply-chain, resume, usage]
 
 # Spec 093: Authority invariants as tests
 
-> **Status: draft.** Written on the operator's instruction to build the first batch of a Council-advised list. No code is built until the operator approves this spec. Slices follow §6, one per pull request.
+> **Status: approved by the operator, 2026-11-07.** Decisions OD-1 to OD-5 (§8) take the recommendations. Approval is permission to build the slices in order, one per pull request (§6). B2 waits for B1 to merge.
 > **Number:** 090 is a draft in PR #535, 091 and 092 are branches in flight, so this is 093. Check `gh pr list` before approving.
 > **Origin:** two research notes (`cao-lessons-for-delphi.md`, `paperclip-lessons-for-delphi.md`, on the operator's Desktop) and Council `t_0001` (2026-11-07), which could not decide between two batching plans and escalated; the operator chose **two batches, each one slice**. The Council's seats agreed that tests and audits come before specs, that the list of ten was too wide, and that several premises needed checking first. §1 records what the check found.
 
@@ -79,8 +80,8 @@ Every item here **narrows or verifies**. None adds a code path that acts outside
 
 | Slice | Content | Hours | State |
 | :-- | :-- | --: | :-- |
-| B0 | this spec, approval, tracker entry | 1 | draft |
-| B1 | K1, K2, K3, J1-J3, P, L1 (§4) | 14-20 | not started |
+| B0 | this spec, approval, tracker entry | 1 | approved 2026-11-07 |
+| B1 | K1, K2, K3, J1-J3, P, L1 (§4) | 14-20 | in progress |
 | B2 | E, I (§5) | 8-12 | not started |
 
 Each slice is one pull request. B2 is not started until B1 has merged.
