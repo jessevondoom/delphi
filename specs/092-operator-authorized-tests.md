@@ -3,7 +3,8 @@ id: spec-092-operator-authorized-tests
 title: "092: Operator-authorized tests: an advance, scoped, recorded approval of named Red actions in a headless test run"
 author: architect
 timestamp: 2026-11-07T00:00:00Z
-status: draft   # a proposal, not permission to build. It amends an invariant of spec 016 (Red is never allowed), so it needs the operator's approval and a readable red-team re-review of this text before any slice starts (§6, S0).
+status: approved   # by the operator, 2026-11-07 ("approve all of the above"): the sandboxed-shell-only first slice (OD-0) and the recommended answers to OD-1 to OD-5. It amends an invariant of spec 016, so S1 does not start until a red-team re-review of this text in a readable form has passed (§6, S0).
+approved_by: operator (2026-11-07)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +15,7 @@ tags: [spec, approvals, authority, red-team, headless, testing, security, sandbo
 
 # Spec 092: Operator-authorized tests
 
-> **Status: draft.** Amends invariant 1 of [`specs/016`](016-headless-run.md) §3 ("Red is never allowed") in one narrow way, for headless runs only. Builds on [`specs/014`](014-relay-and-away-mode.md) §7.1 (a live Red approval with step-up; the number 014 is shared with another spec, see draft 090), [`specs/005`](005-console-and-narrator-tui.md) (the permission modes and the Green, Amber and Red tiers) with `GOVERNANCE.md` §5, and [`specs/037`](037-training-experiments-quality-and-efficiency.md) (throwaway homes). Companion to `specs/091`, which widens no authority.
+> **Status: approved by the operator, 2026-11-07; slice S1 starts after the red-team re-review (§6).** Amends invariant 1 of [`specs/016`](016-headless-run.md) §3 ("Red is never allowed") in one narrow way, for headless runs only. Builds on [`specs/014`](014-relay-and-away-mode.md) §7.1 (a live Red approval with step-up; the number 014 is shared with another spec, see draft 090), [`specs/005`](005-console-and-narrator-tui.md) (the permission modes and the Green, Amber and Red tiers) with `GOVERNANCE.md` §5, and [`specs/037`](037-training-experiments-quality-and-efficiency.md) (throwaway homes). Companion to `specs/091`, which widens no authority.
 
 ## 1. Why
 
@@ -79,7 +80,7 @@ On 2026-11-07 every `agy` arm of a headless training run tried to dispatch an in
 
 | Slice | Contents |
 | :-- | :-- |
-| S0 | this spec: the operator's approval, and a red-team re-review of v2 in a readable form (the previous Round 2 was intact in the record and unreadable to the Council's reader) |
+| S0 | this spec. **Approved by the operator, 2026-11-07.** Still required before S1: a red-team re-review of this text in a readable form (the previous Round 2 was intact in the record and unreadable to the Council's reader) |
 | S1 | TA-0, TA-0r and TA-1: the request tool and its staging rules, `delphi test review`, `delphi test authorize --from-request`, the protected store; tests for the staging, display and forgery rows of §5 |
 | S2 | TA-2, TA-3 and TA-5: the flag, sandbox-or-refuse, the snapshot, canonical matching, atomic use, the deny-list; the 016 invariants re-tested; a test for every remaining row of §5 |
 | S3 | TA-4: the training runner flag and the report mark |
@@ -100,14 +101,14 @@ Authorizing anything for an agent's own benefit. A standing "allow red" mode. Au
 
 ## 9. Decisions
 
-**Direction from the operator, 2026-11-07:** a test the operator authorizes may run Red actions headless; an agent may request one with context and risk. **Council advice (`t_0003`):** staged approval, the sandboxed-shell slice first, with the P0s above written in before implementation. **For the operator:**
+**Direction from the operator, 2026-11-07:** a test the operator authorizes may run Red actions headless; an agent may request one with context and risk. **Council advice (`t_0003`):** staged approval, the sandboxed-shell slice first, with the P0s above written in before implementation. **Decided by the operator, 2026-11-07 ("approve all of the above"): OD-0 approved and the recommended answers to OD-1 to OD-5 accepted:**
 
-- **OD-0** Approve the sandboxed-shell-only first slice, with the P0s above closed in this text. [Recommended.]
-- **OD-1** Which commands the first authorization may name. [Offline test runners already built in the throwaway home, nothing else.]
-- **OD-2** Maximum lifetime and uses. [24 hours and 50 uses, shorter for the first slice.]
-- **OD-3** Whether creating an authorization requires the operator's step-up. [Yes.]
-- **OD-4** Whether one authorization may cover several runs of a study. [No: a run binding is required, so a study needs one per run or a launcher that mints them from one operator act. To be decided with S3.]
-- **OD-5** How many requests may be pending, and for how long. [Five per mission, expiring after seven days.]
+- **OD-0** The sandboxed-shell-only first slice, with the P0s above closed in this text. **Approved.**
+- **OD-1** Which commands the first authorization may name. **Decided:** offline test runners already built in the throwaway home, nothing else.
+- **OD-2** Maximum lifetime and uses. **Decided:** 24 hours and 50 uses, shorter for the first slice.
+- **OD-3** Whether creating an authorization requires the operator's step-up. **Decided:** yes.
+- **OD-4** Whether one authorization may cover several runs of a study. **Decided:** no: a run binding is required, so a study needs one per run or a launcher that mints them from one operator act. The launcher is decided with S3.
+- **OD-5** How many requests may be pending, and for how long. **Decided:** five per mission, expiring after seven days.
 
 ## 10. Known limits
 
