@@ -515,13 +515,16 @@ Merge queued pull requests of this repository, with a recorded approval (spec 09
   delphi merge --all [--operator-said "<words>"] [--dry-run]
   delphi merge queue <PR>
   delphi merge status
-  (not built yet: --auto, log, fix, cleanup)
+  delphi merge log [--open] [--pr <n>] [--json] [--home <dir>]
+  delphi merge fix <PR> [--done | --needs-human "<why>"] [--home <dir>]
+  (not built yet: --auto, cleanup)
 ```
 
 The core-repo merge flow (specs/094). Agents queue a ready pull request with the `merge-queue` label (`delphi merge queue <PR>`); a merge is started by the operator.
 For each pull request the command derives, from git and `gh`, the head commit, the changed paths and their hash, the base commit, the checks and the linked spec (the `Implements-Spec:` trailer); nothing is typed. It refuses unless the pull request is open, not a draft, queued, mergeable, every check passes and the spec is approved on the base branch (or the change is inside the bounded exemption of specs/003). A refusal lists every reason.
 Approval is `tty` (you type the PR number; `all` for --all) or `chat-quote` (an agent passes your own words with --operator-said; the quote must name the pull request, or say all/every/each for --all). A chat quote is self-attested by the caller and is recorded as such. The merge is a merge commit, made only if the head is still the one derived, and the decision is appended to $DELPHI_HOME/merge/ledger.jsonl and posted on the pull request.
 A pull request that touches a path in merge-gates.toml (read from the BASE branch; the file is on its own list) changes a gate: it is never queued, never merged by --all, refuses a chat quote, and needs you at a terminal, shown the whole diff. --dry-run changes nothing.
+When a pull request cannot merge for a reason somebody must act on (a conflict, a red check, no checks, an unapproved spec, a head that moved, a `gh` failure), an entry is written to $DELPHI_HOME/merge/errors.jsonl and the central log (`delphi logs`); waiting (a draft, running checks) is not an error. The same problem on the same head is one more attempt, not a new entry, and a merge resolves the entries open for it. `log` shows them and the latest ledger rows. `fix <PR>` prepares a worktree on the pull request's branch (or points at the one where it is already checked out), writes a brief for the builder (the git-merge-and-conflict-resolution skill; never a rebase or force-push; stop on a gate file, more than 10 conflicting files or red tests) and moves the entry to `fixing`; the builder reports `--done` once it has pushed (the head must have moved; the earlier approval no longer applies) or `--needs-human` with the reason.
 Refused inside an agent seat. Needs the GitHub CLI (`gh`) signed in. Exit codes: 0 ok · 1 refused, declined or failed · 2 usage or refusal · 4 `gh` missing or unreachable.
 
 ## Inspect
