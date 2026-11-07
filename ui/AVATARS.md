@@ -37,3 +37,14 @@ A blink is a list of frames, `blink_steps` in the spec (`avatar::blink_steps`), 
 never do. `faceOf` returns `{ frame: 'blink', step }`, `tickKey` includes the step so every frame is repainted, and with
 reduce motion there is no blink in any frame. A face the library has no blink for (a spawned agent) blinks mechanically: each
 eye cell becomes `-` and the mouth stays (`mechanicalBlink` in `theme.ts`). The mascot's blink row stays a single frame.
+
+## ASCII badges (spec 087 §6.2)
+
+`DELPHI_ASCII_BADGES=1` draws every badge and every mascot face row in ASCII of the same width: `⟦•─•⟧` is `[0-0]`, `⟦¬_¬⟧` is
+`[~_~]`. There is one table, `delphi_core::ascii_badge::FACE_GLYPHS` (plus the two brackets); `avatar::ui_spec` sends it as
+`ascii_glyphs`, so the console keeps none of its own, and a theme pack's `ascii_glyphs` (which the name-pool lint reads) must
+equal it (a test). A glyph with no entry becomes `?`, so the result is always ASCII. The table is chosen so that no two core
+roles collapse onto one ASCII face except the twins, a blink never equals its idle face, and no pool name looks like a core
+role (all three are tests). Only the glyphs change: colours, the mouth cell and the blink frames are the same. What a host is
+sent is `[mcp] badge_ascii` (a server a host started does not see your shell). Left as they are: the mascot crown's `▄`
+blocks (colour, not a face), the title-bar mark, and the fallback faces an older `delphi` that sends no table is drawn with.

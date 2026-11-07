@@ -969,13 +969,19 @@ impl Server {
         pack.push_str("- No Spec, No Build: building software requires an approved specification (status: approved).\n");
         pack.push_str("- Never commit past failing gates (tests, clippy, repo lint).\n");
         pack.push_str("- Do not widen authority: external agents act under host shell permissions; red actions always ask.\n");
+        // The badge as the operator wants it drawn: Unicode, or plain ASCII of the same width (`specs/087` §6.2).
+        let ascii = self.packs().map(|p| p.ascii_badges()).unwrap_or_else(|_| delphi_core::ascii_badge::requested_by_env());
+        let badge_of = |face: &str| {
+            let b = format!("⟦{}⟧", face);
+            if ascii { delphi_core::ascii_badge::ascii_cells(&b) } else { b }
+        };
         match &identity {
-            Some(p) => pack.push_str(&format!("- Attribution invariant: identify as ⟦{}⟧ {} ({}, via delphi).\n\n", p.face, p.name, base_role)),
+            Some(p) => pack.push_str(&format!("- Attribution invariant: identify as {} {} ({}, via delphi).\n\n", badge_of(&p.face), p.name, base_role)),
             None => pack.push_str("- Attribution invariant: identify as ⟦badge⟧ Name (role, via delphi).\n\n"),
         }
         if let Some(p) = &identity {
             pack.push_str("## Identity\n");
-            pack.push_str(&format!("- Name: {} (a label from the active theme; it grants nothing)\n- Badge: ⟦{}⟧\n- Role: {} (scope, tools and counterweights come from the role)\n- Pool slot: {}\n\n", p.name, p.face, base_role, p.slot));
+            pack.push_str(&format!("- Name: {} (a label from the active theme; it grants nothing)\n- Badge: {}\n- Role: {} (scope, tools and counterweights come from the role)\n- Pool slot: {}\n\n", p.name, badge_of(&p.face), base_role, p.slot));
         }
 
         // 2. Canonical base_role pack
@@ -1746,6 +1752,36 @@ mod tests {
         assert!(content.contains("tier: L0"));
         assert!(content.contains("Red-team dissent: Unbounded channel risk if downstream blocks."));
         assert!(content.contains("DECISION: Yes, for network boundary only."));
+    }
+
+    #[test]
+    fn with_badge_ascii_set_every_badge_a_host_is_sent_is_plain_ascii() {
+        // Spec 087 §6.2: `[mcp] badge_ascii = true` swaps the Unicode badge for the same five columns of ASCII, in the roster,
+        // the roster line, a spawned agent's pack and the identity a result carries; names and roles are untouched.
+        let (_t, dir, root) = project_ws();
+        std::fs::write(dir.join("config.toml"), "[mcp]\nbadge_ascii = true\n").unwrap();
+        let mut s = Server::new(&dir).with_cwd(&root);
+        init(&mut s);
+
+        let roster = text_of(&call_tool(&mut s, "delphi_roster", json!({})));
+        assert!(!roster.contains('⟦') && !roster.contains('⟧'), "{roster}");
+        assert!(roster.starts_with("On the roster: [") && roster.contains("| [0-0] |"), "{roster}");
+        let speaking = text_of(&call_tool(&mut s, "delphi_roster", json!({"speaking": ["athena", "red-team"]})));
+        let line = speaking.lines().next().unwrap();
+        assert!(line.starts_with("Now speaking: [0-0] ") && line.contains("[~_~] "), "{line}");
+        assert!(line.contains("(orchestrator)") && line.contains("(red-team)"), "{line}");
+
+        let pack = text_of(&call_tool(&mut s, "spawn_agent_pack", json!({"base_role": "investigator", "specialization": "flaky-test-hunter", "domain_focus": "chase the flaky regression"})));
+        // The task's words are pool-36's keywords (flaky, regression): `×_×`, which is `x_x` in ASCII.
+        assert!(pack.contains("- Badge: [x_x]\n") && pack.contains("identify as [x_x] "), "{pack}");
+        assert!(!pack.contains("- Badge: ⟦") && !pack.contains("identify as ⟦"), "{pack}");
+
+        // The default is still the Unicode badge.
+        let (_t2, dir2, root2) = project_ws();
+        let mut s2 = Server::new(&dir2).with_cwd(&root2);
+        init(&mut s2);
+        let roster2 = text_of(&call_tool(&mut s2, "delphi_roster", json!({})));
+        assert!(roster2.contains("| ⟦•─•⟧ |") && !roster2.contains("[0-0]"), "{roster2}");
     }
 
     #[test]

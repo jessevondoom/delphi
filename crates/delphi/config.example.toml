@@ -165,6 +165,7 @@ sandbox = "off"
 # allow_remote = false               # reserved for a later spec; true is refused
 # badge_style = "plain"             # plain | ansi | markdown: which form of a Delphi agent's identity (⟦•_•⟧ Name (role, via delphi)) the `display` and `signature` fields carry; every form is sent
 # badge_mode = "dark"               # dark | light: the terminal background the ANSI form is coloured for (Delphi cannot see your terminal); plain and markdown carry no colour
+# badge_ascii = false               # true: the badge in an identity is plain ASCII ([0-0] for ⟦•─•⟧), for a host whose font cannot draw it; DELPHI_ASCII_BADGES=1 does the same where Delphi itself runs
 
 # Model names for the council subagent files that `delphi mcp --install codex --agents` and `delphi plugin export` write (specs/086 section 6.3).
 # Only Copilot and Codex take a free name; Claude Code and agy use aliases Delphi picks. No entry: the file sets no model and the seat inherits.

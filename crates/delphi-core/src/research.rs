@@ -195,6 +195,13 @@ impl Identity {
         self
     }
 
+    /// The badge as plain ASCII of the same five columns (`specs/087` §6.2): `⟦•─•⟧` becomes `[0-0]`. For a host whose terminal
+    /// or font cannot draw the Unicode badge (`[mcp] badge_ascii`, `DELPHI_ASCII_BADGES=1`). The name and role are untouched.
+    pub fn ascii(mut self) -> Identity {
+        self.badge = crate::ascii_badge::ascii_cells(&self.badge);
+        self
+    }
+
     /// The plain signature: `⟦•_•⟧ Name (role, via delphi)`. Inside the console the same line has no notice; outside it ends
     /// `, via delphi)` and nothing else tells the two apart (`specs/087` §5.3, decided by the operator, OD-5).
     pub fn signature(&self) -> String {
@@ -321,6 +328,23 @@ mod tests {
         // Without `with_light` the light pair is the dark one.
         let plain = Identity::new("builder", "H", "⟦•=•⟧", "#f59e0b", 214, None);
         assert_eq!((plain.hex_light.as_str(), plain.ansi256_light), ("#f59e0b", 214));
+    }
+
+    #[test]
+    fn an_ascii_identity_has_an_ascii_badge_in_every_form_and_keeps_the_name_and_role() {
+        // Spec 087 §6.2: the same five columns, no Unicode in the badge; the notice and the name are unchanged.
+        for role in ["orchestrator", "builder", "red-team", "validator", "scout", "writer", "investigator", "messenger"] {
+            let (badge, hex, ansi) = role_look(role);
+            let id = Identity::new(role, "Name", badge, hex, ansi, Some("host")).ascii();
+            assert!(id.badge.is_ascii() && id.badge.chars().count() == 5, "{role}: {}", id.badge);
+            for line in [id.display("plain", false), id.display("ansi", false), id.display("markdown", false)] {
+                assert!(line.contains(&id.badge), "{role}: {line}");
+                assert!(line.contains("Name") && line.contains(&format!("({role}, via delphi)")), "{role}: {line}");
+            }
+        }
+        let id = Identity::new("red-team", "Name", "⟦¬_¬⟧", "#ef4444", 203, None).ascii();
+        assert_eq!(id.badge, "[~_~]");
+        assert_eq!(id.signature(), "[~_~] Name (red-team, via delphi)");
     }
 
     #[test]

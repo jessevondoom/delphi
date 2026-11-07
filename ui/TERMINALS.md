@@ -35,6 +35,7 @@ Source execution requires Node.js 26.4.0 or newer with `--experimental-ffi`; the
 | `Alt+Enter` (new line) | `ESC CR` | `Ctrl+J` |
 | Mouse wheel and drag | SGR mouse reporting (presses, releases, motion while a button is held) | `PgUp` `PgDn` scroll; `/mouse off` hands selection back to the terminal |
 | Animation | nothing special | `DELPHI_REDUCE_MOTION=1`, `NO_COLOR` or `TERM=dumb` keep the badges static; animation is on by default, also over ssh and in tmux |
+| Badge glyphs | a font that draws `⟦ ⟧ • ─ ¬` and the rest at one column each | `DELPHI_ASCII_BADGES=1` draws every badge and mascot face in ASCII of the same width (`[0-0]` for `⟦•─•⟧`, `[~_~]` for `⟦¬_¬⟧`); the table comes from the library, so the console keeps none of its own. The mascot's crown blocks are colour, not a face, and stay. Colours and blinks do not change |
 | Paste | bracketed paste | pasting still works; a paste containing a return may be sent as separate lines |
 | Dark or light | `OSC 11` background reply | `DELPHI_THEME`, then `COLORFGBG`, then dark (see `AVATARS.md`) |
 | Message tint | the `OSC 11` reply's colour: 8 % toward white on dark, 6 % toward black on light (true colour); the grey ramp (256 colours); ANSI 8 or 7 (16 colours) | a terminal that does not answer, `NO_COLOR` and `TERM=dumb` get the rail: a dim `│` at the left of each message row, no fill, no caps. `DELPHI_THEME` still decides dark or light but cannot supply the colour itself |
