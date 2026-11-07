@@ -22,36 +22,36 @@ CLI version: not recorded. Probed: never.
 
 ## Copilot CLI
 
-CLI version: not recorded. Probed: never.
+CLI version: GitHub Copilot CLI 1.0.105.. Probed: 2026-11-07.
 
 | Cell | Result | Vendor-docs claim |
 | :-- | :-- | :-- |
-| Agent discovered | not run | the canary file under `.github/agents/` is listed |
+| Agent discovered | verified (both canary seats ran) | the canary file under `.github/agents/` is listed |
 | Subagent definition | not run | `<id>.agent.md` |
 | Ships in a plugin | not run | yes in legacy plugins, `agents/`; "Agent Plugins 1.0" does not define portable agents |
 | Project / user location | not run | `.github/agents/`, `~/.copilot/agents/` |
 | Isolated context | not run | yes (own context window) |
-| Parallel seats | not run | docs silent (blog says the main agent can run them in parallel) |
-| Pin a model per agent | not run | `model:` (+ `model-policy`) |
-| MCP in a seat | not run | `mcp-servers:` in a plugin agent's frontmatter; inheritance docs silent |
+| Parallel seats | verified (seats overlapped by 11s) | docs silent (blog says the main agent can run them in parallel) |
+| Pin a model per agent | not run (no pin written; pass --pin HOST=MODEL) | `model:` (+ `model-policy`) |
+| MCP in a seat | verified (direct: a seat called list_roles itself) | `mcp-servers:` in a plugin agent's frontmatter; inheritance docs silent |
 | Tool allowlist | not run | not documented as a standalone field |
 | Nesting limit | not run | n/a |
 | Slash entry | not run | plugin `commands` field, or skill |
 
 ## Codex CLI
 
-CLI version: not recorded. Probed: never.
+CLI version: codex-cli 0.166.0. Probed: 2026-11-07.
 
 | Cell | Result | Vendor-docs claim |
 | :-- | :-- | :-- |
-| Agent discovered | not run | the canary file under `.codex/agents/` is listed |
+| Agent discovered | verified (both canary seats ran) | the canary file under `.codex/agents/` is listed |
 | Subagent definition | not run | `<name>.toml` |
 | Ships in a plugin | not run | docs silent |
 | Project / user location | not run | `.codex/agents/`, `~/.codex/agents/` |
 | Isolated context | not run | yes |
-| Parallel seats | not run | yes, but only when the prompt asks ("one agent per seat"); `agents.max_concurrent_threads_per_session` |
-| Pin a model per agent | not run | `model` and `model_reasoning_effort` |
-| MCP in a seat | not run | inherits the parent's MCP servers; the file cannot set `mcp_servers` |
+| Parallel seats | verified (seats overlapped by 10s) | yes, but only when the prompt asks ("one agent per seat"); `agents.max_concurrent_threads_per_session` |
+| Pin a model per agent | not run (no pin written; pass --pin HOST=MODEL) | `model` and `model_reasoning_effort` |
+| MCP in a seat | verified (relayed: the seat saw no MCP tools) | inherits the parent's MCP servers; the file cannot set `mcp_servers` |
 | Tool allowlist | not run | feature switches only; no sandbox override |
 | Nesting limit | not run | not specified |
 | Slash entry | not run | skill |

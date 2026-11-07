@@ -41,8 +41,8 @@
   },
   {
     "host": "copilot",
-    "cli_version": null,
-    "date": null,
+    "cli_version": "GitHub Copilot CLI 1.0.105.",
+    "date": "2026-11-07",
     "cells": {
       "definition": {
         "status": "not run"
@@ -57,13 +57,16 @@
         "status": "not run"
       },
       "parallel": {
-        "status": "not run"
+        "status": "verified",
+        "note": "seats overlapped by 11s"
       },
       "model_pin": {
-        "status": "not run"
+        "status": "not run",
+        "note": "no pin written; pass --pin HOST=MODEL"
       },
       "mcp": {
-        "status": "not run"
+        "status": "verified",
+        "note": "direct: a seat called list_roles itself"
       },
       "tools": {
         "status": "not run"
@@ -75,14 +78,15 @@
         "status": "not run"
       },
       "discovered": {
-        "status": "not run"
+        "status": "verified",
+        "note": "both canary seats ran"
       }
     }
   },
   {
     "host": "codex",
-    "cli_version": null,
-    "date": null,
+    "cli_version": "codex-cli 0.166.0",
+    "date": "2026-11-07",
     "cells": {
       "definition": {
         "status": "not run"
@@ -97,13 +101,16 @@
         "status": "not run"
       },
       "parallel": {
-        "status": "not run"
+        "status": "verified",
+        "note": "seats overlapped by 10s"
       },
       "model_pin": {
-        "status": "not run"
+        "status": "not run",
+        "note": "no pin written; pass --pin HOST=MODEL"
       },
       "mcp": {
-        "status": "not run"
+        "status": "verified",
+        "note": "relayed: the seat saw no MCP tools"
       },
       "tools": {
         "status": "not run"
@@ -115,7 +122,8 @@
         "status": "not run"
       },
       "discovered": {
-        "status": "not run"
+        "status": "verified",
+        "note": "both canary seats ran"
       }
     }
   },
