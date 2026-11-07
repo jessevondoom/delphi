@@ -12,7 +12,7 @@ use crate::research_run::{BoxFut, ClaimRec, Extracted, Library, Page, Scout, Val
 use delphi_adapter::research::search::{search, ProviderSpec, Row};
 use delphi_adapter::research::transport::{HttpTransport, Transport};
 use delphi_adapter::research::trusted::TrustedList;
-use delphi_core::research::{role_look, Identity};
+use delphi_core::research::{role_look, role_look_light, Identity};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -161,6 +161,18 @@ impl Library for LiveLibrary {
 
 /// The display name the workspace's theme pack gives `role`, or the role's own id when there is none.
 pub fn display_name(ws_dir: &std::path::Path, home: &std::path::Path, role: &str) -> String {
+    theme_resolver(ws_dir, home).display_name(role)
+}
+
+/// The theme's display names for the roles a one-off agent's label may not pass for (`specs/087` §4.3 item 4): what
+/// [`delphi_core::research::one_off_label`] and [`crate::observe::ObserverState::set_core_names`] take. The pack is read once.
+pub fn core_display_names(ws_dir: &std::path::Path, home: &std::path::Path) -> Vec<String> {
+    let resolver = theme_resolver(ws_dir, home);
+    delphi_core::research::RESERVED_LABEL_IDS.iter().map(|r| resolver.display_name(r)).filter(|n| !n.is_empty()).collect()
+}
+
+/// The resolver for the workspace's active theme pack.
+fn theme_resolver(ws_dir: &std::path::Path, home: &std::path::Path) -> delphi_core::theme_names::ThemeResolver {
     let theme = std::fs::read_to_string(ws_dir.join("config.toml")).ok().and_then(|t| t.parse::<toml::Table>().ok()).and_then(|t| t.get("theme")?.get("name")?.as_str().map(String::from));
     let named = theme.is_some();
     let theme = theme.unwrap_or_else(|| "greek".into());
@@ -172,7 +184,7 @@ pub fn display_name(ws_dir: &std::path::Path, home: &std::path::Path, role: &str
     } else {
         String::new()
     };
-    let resolver = if text.trim().is_empty() {
+    if text.trim().is_empty() {
         // A theme the workspace names but that is missing, unreadable or unsafe falls back to the canonical role ID (spec 077, Theme
         // Isolation). A workspace that names none keeps the built-in default pack.
         if named || !safe {
@@ -182,27 +194,51 @@ pub fn display_name(ws_dir: &std::path::Path, home: &std::path::Path, role: &str
         }
     } else {
         delphi_core::theme_names::ThemeResolver::from_theme_text(&text)
-    };
-    resolver.display_name(role)
+    }
+}
+
+/// Whether the badges Delphi sends a host are plain ASCII (`specs/087` §6.2): `[mcp] badge_ascii = true` in the workspace's
+/// `config.toml`, or `DELPHI_ASCII_BADGES=1` in this process's environment. The config key is the one that always reaches a
+/// server a host started, which does not inherit the operator's shell.
+pub fn ascii_badges(ws_dir: &std::path::Path) -> bool {
+    delphi_core::ascii_badge::requested_by_env() || crate::host_rpc::gate(ws_dir).map(|c| c.badge_ascii).unwrap_or(false)
 }
 
 /// The identity of the Delphi role that answered.
 pub fn identity(ws_dir: &std::path::Path, home: &std::path::Path, role: &str, via: Option<&str>) -> Identity {
     let (badge, hex, ansi) = role_look(role);
-    Identity::new(role, &display_name(ws_dir, home, role), badge, hex, ansi, via)
+    let (hex_light, ansi_light) = role_look_light(role);
+    let id = Identity::new(role, &display_name(ws_dir, home, role), badge, hex, ansi, via).with_light(hex_light, ansi_light);
+    if ascii_badges(ws_dir) { id.ascii() } else { id }
 }
 
-/// Add the identity to a result, in every form so the host can choose: `signature` is the plain one (the default), and `identity`
-/// carries the plain, ANSI and markdown variants. Strings come from [`Identity`], which strips control characters.
-pub fn attach_identity(result: &mut Value, id: &Identity, style: &str) {
-    let plain = id.signature();
-    let signature = match style {
-        "ansi" => id.styled(),
-        "markdown" => id.markdown(),
-        _ => plain.clone(),
+/// Add the identity to a result, in every form so the host can choose (`specs/087` §5.2, §5.3). `display` is the one line a host
+/// prints: the form `style` names, in the colour pair `badge_mode` names, ending `(role, via delphi)`. `signature` carries the
+/// same string for hosts that already read it, and `identity` has the plain, ANSI (in the chosen pair) and markdown variants and
+/// both colours. `turn`, when given, is the reason the speaker changed: the result then also carries a `boundary_line` and a
+/// `return_line` (§5.4), advisory text a host may drop. Strings come from [`Identity`], which strips control characters.
+pub fn attach_identity(result: &mut Value, id: &Identity, style: &str, mode: &str, turn: Option<&str>) {
+    let light = mode == "light";
+    let display = id.display(style, light);
+    // A Council result already has a `display`: its ruling card (`specs/086`), meant to be printed whole. The identity line goes
+    // first and the card follows, so there is still one string to print and the card is never lost.
+    result["display"] = match result["display"].as_str() {
+        Some(card) if !card.is_empty() => json!(format!("{display}\n\n{card}")),
+        _ => json!(display),
     };
-    result["signature"] = json!(signature);
-    result["identity"] = json!({"role": id.role, "display_name": id.display_name, "badge": id.badge, "color": id.hex, "plain": plain, "ansi": id.styled(), "markdown": id.markdown()});
+    result["signature"] = json!(display);
+    result["identity"] = json!({
+        "role": id.role, "display_name": id.display_name, "badge": id.badge, "color": id.hex, "color_light": id.hex_light,
+        "plain": id.signature(), "ansi": id.styled(light), "markdown": id.markdown(),
+    });
+    // A one-off agent's label (`specs/087` §4.3 item 4); `role` above stays its base role.
+    if let Some(label) = &id.label {
+        result["identity"]["label"] = json!(label);
+    }
+    if let Some(reason) = turn {
+        result["boundary_line"] = json!(id.boundary_line(reason));
+        result["return_line"] = json!(id.return_line());
+    }
 }
 
 #[cfg(test)]
@@ -225,15 +261,59 @@ mod tests {
         std::fs::create_dir_all(home.path().join("themes/greek")).unwrap();
         std::fs::write(home.path().join("themes/greek/theme.md"), "roles:\n  scout:         { name: \"Hermes\", epithet: \"x\" }\n").unwrap();
         let id = identity(ws.path(), home.path(), "scout", None);
-        assert_eq!(id.signature(), "⟦•••⟧ Hermes (scout) via delphi");
+        assert_eq!(id.signature(), "⟦•••⟧ Hermes (scout, via delphi)");
         assert_eq!(display_name(ws.path(), home.path(), "builder"), "builder");
         let mut v = json!({});
-        attach_identity(&mut v, &identity(ws.path(), home.path(), "scout", Some("claude-code")), "plain");
-        assert_eq!(v["signature"], "⟦•••⟧ Hermes (scout) via delphi");
+        attach_identity(&mut v, &identity(ws.path(), home.path(), "scout", Some("claude-code")), "plain", "dark", None);
+        assert_eq!(v["signature"], "⟦•••⟧ Hermes (scout, via delphi)");
+        assert_eq!(v["display"], v["signature"], "display is the line to print; signature is the same string");
+        assert!(v.get("boundary_line").is_none(), "no reason, no turn-boundary lines");
         assert!(v["identity"]["ansi"].as_str().unwrap().contains("\u{1b}[38;5;226m") && v["identity"]["markdown"].as_str().unwrap().contains("**Hermes**"));
         assert!(!v["signature"].as_str().unwrap().contains('\u{1b}'));
+        // Spec 087 §5.1: the light pair for a light terminal, in the ANSI form only.
+        let (mut dark, mut light) = (json!({}), json!({}));
+        let scout = identity(ws.path(), home.path(), "scout", None);
+        attach_identity(&mut dark, &scout, "ansi", "dark", None);
+        attach_identity(&mut light, &scout, "ansi", "light", None);
+        assert!(dark["display"].as_str().unwrap().starts_with("\u{1b}[38;5;226m"), "{dark}");
+        assert!(light["display"].as_str().unwrap().starts_with("\u{1b}[38;5;94m"), "{light}");
+        assert_eq!((light["identity"]["color"].as_str(), light["identity"]["color_light"].as_str()), (Some("#ffff00"), Some("#854d0e")));
+        let mut turn = json!({});
+        attach_identity(&mut turn, &scout, "plain", "dark", Some("map the repo"));
+        assert_eq!(turn["boundary_line"], "── Hermes (scout) takes over: map the repo ──");
+        assert_eq!(turn["return_line"], "── Hermes (scout) hands back ──");
+        // A result that already has a `display` (a Council's ruling card) keeps it: the identity line leads and the card follows.
+        let mut ruled = json!({"display": "**Council ruling** · daemon Council\n\n**Decision:** x"});
+        attach_identity(&mut ruled, &scout, "plain", "dark", None);
+        assert_eq!(ruled["display"], "⟦•••⟧ Hermes (scout, via delphi)\n\n**Council ruling** · daemon Council\n\n**Decision:** x");
+        assert_eq!(ruled["signature"], "⟦•••⟧ Hermes (scout, via delphi)", "signature is the identity line alone");
         std::fs::write(ws.path().join("config.toml"), "[theme]\nname = \"../evil\"\n").unwrap();
         assert_eq!(display_name(ws.path(), home.path(), "scout"), "scout");
+    }
+
+    #[test]
+    fn an_ascii_workspace_sends_ascii_badges_in_every_form_and_keeps_the_rest_of_the_line() {
+        // Spec 087 §6.2: `[mcp] badge_ascii = true`. (`DELPHI_ASCII_BADGES` is read the same way; tests do not set process
+        // environment, which other tests share.)
+        let (ws, home) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        std::fs::write(ws.path().join("config.toml"), "[mcp]\nbadge_ascii = true\n").unwrap();
+        assert!(ascii_badges(ws.path()));
+        let id = identity(ws.path(), home.path(), "red-team", Some("claude-code"));
+        assert_eq!(id.badge, "[~_~]");
+        let mut v = json!({});
+        attach_identity(&mut v, &id, "plain", "dark", None);
+        assert!(v["display"].as_str().unwrap().starts_with("[~_~] "), "{v}");
+        assert!(v["display"].as_str().unwrap().ends_with("(red-team, via delphi)"), "{v}");
+        for form in ["plain", "ansi", "markdown"] {
+            let s = v["identity"][form].as_str().unwrap();
+            assert!(!s.contains('⟦') && !s.contains('⟧'), "{form}: {s}");
+        }
+        assert_eq!(v["identity"]["badge"], "[~_~]");
+        // A config that turns it off, or says nothing, leaves the Unicode badge.
+        std::fs::write(ws.path().join("config.toml"), "[mcp]\nbadge_ascii = false\n").unwrap();
+        if !delphi_core::ascii_badge::requested_by_env() {
+            assert_eq!(identity(ws.path(), home.path(), "red-team", None).badge, "⟦¬_¬⟧");
+        }
     }
 
     /// Spec 077 (Theme Isolation & Graceful Fallback): a theme the workspace names that does not exist falls back to the canonical role ID, not to the built-in

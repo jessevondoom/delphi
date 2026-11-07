@@ -71,6 +71,29 @@ impl LoopConfig {
     }
 }
 
+/// The `[loop]` keys and the kind of value each takes: `b` a boolean, `n` a count (`n1`: at least 1).
+const SWITCHES: [(&str, &str); 9] = [
+    ("nudge", "b"), ("nudge_edits", "n1"), ("budget_warnings", "b"), ("verify_gate", "b"), ("workspace_bootstrap", "b"),
+    ("tool_result_limit_kb", "n"), ("clear_after_kb", "n"), ("trim_arguments_kb", "n"), ("keep_recent_turns", "n1"),
+];
+
+/// Is `key = value` something `[loop]` reads? [`LoopConfig::from_root`] ignores what it does not know, so a misspelt switch
+/// in an experiment would silently leave the technique at its default and the "harness arm" would measure nothing.
+/// `delphi train run` calls this for each switch a harness arm sets (`specs/048` BM-1).
+pub fn check_switch(key: &str, value: &toml::Value) -> Result<(), String> {
+    let Some((_, kind)) = SWITCHES.iter().find(|(k, _)| *k == key) else {
+        return Err(format!("`{}` is not a [loop] switch (they are: {})", key, SWITCHES.iter().map(|(k, _)| *k).collect::<Vec<_>>().join(", ")));
+    };
+    match (*kind, value) {
+        ("b", toml::Value::Boolean(_)) => Ok(()),
+        ("n", toml::Value::Integer(n)) if *n >= 0 => Ok(()),
+        ("n1", toml::Value::Integer(n)) if *n >= 1 => Ok(()),
+        ("b", _) => Err(format!("[loop] `{}` must be true or false", key)),
+        ("n1", _) => Err(format!("[loop] `{}` must be a whole number, 1 or more", key)),
+        _ => Err(format!("[loop] `{}` must be a whole number, 0 or more", key)),
+    }
+}
+
 /// What a finished tool call makes the engine do.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Reaction {
@@ -245,6 +268,24 @@ mod tests {
 
     fn cfg() -> LoopConfig {
         LoopConfig::default()
+    }
+
+    #[test]
+    fn an_experiment_may_set_only_switches_the_loop_reads_with_the_right_kind_of_value() {
+        let v = |s: &str| s.parse::<toml::Value>().unwrap();
+        assert!(check_switch("nudge", &v("true")).is_ok() && check_switch("clear_after_kb", &v("0")).is_ok() && check_switch("keep_recent_turns", &v("1")).is_ok());
+        // A misspelt key would leave the technique at its default and the arm would measure nothing.
+        let e = check_switch("nudges", &v("true")).unwrap_err();
+        assert!(e.contains("`nudges` is not a [loop] switch") && e.contains("verify_gate"), "{}", e);
+        for (k, val, want) in [("nudge", "1", "true or false"), ("clear_after_kb", "-1", "0 or more"), ("keep_recent_turns", "0", "1 or more"), ("nudge_edits", "\"4\"", "1 or more")] {
+            assert!(check_switch(k, &v(val)).unwrap_err().contains(want), "{} = {}", k, val);
+        }
+        // Every key it accepts really changes the loop's configuration (the list cannot drift from `from_root`).
+        for (k, kind) in SWITCHES {
+            // The switches are all on by default, and the counts default to something other than 9.
+            let set = if kind == "b" { format!("[loop]\n{} = false\n", k) } else { format!("[loop]\n{} = 9\n", k) };
+            assert_ne!(LoopConfig::from_root(&toml::from_str(&set).unwrap()), cfg(), "{}", set);
+        }
     }
 
     #[test]

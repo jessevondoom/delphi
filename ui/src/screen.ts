@@ -75,7 +75,7 @@ export function titleRow(m: Model, w: number): string {
  */
 export function header(m: Model, w: number): string[] {
   const roles = STRIP_ROLES.filter((r) => m.info.roles[r]);
-  const strip = roles.map((r) => { const f = faceOf(m.state.agents[r], r, m.now, m.still ?? false); return T.badge(r, f.state, m.info, m.pal, f.frame, m.quitArmed ?? false); }).join(' ');
+  const strip = roles.map((r) => { const f = faceOf(m.state.agents[r], r, m.now, m.still ?? false, T.blinkSteps(r, m.info)); return T.badge(r, f.state, m.info, m.pal, f.frame, m.quitArmed ?? false, f.step); }).join(' ');
   return [T.clip(strip, w), titleRow(m, w)];
 }
 

@@ -116,6 +116,9 @@ pub fn clean(name: &str, s: &str, max: usize) -> Result<String, HostErr> {
         return bad(format!("`{name}` is required"));
     }
     if t.chars().count() > max {
+        if name == "question" {
+            return bad(format!("`question` is at most {max} characters: put detail in project files and pass them as `context_pointers`"));
+        }
         return bad(format!("`{name}` is at most {max} characters"));
     }
     Ok(t)
@@ -701,6 +704,15 @@ mod tests {
 
     fn caller() -> Caller {
         Caller::parse(&json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": "/tmp/x"})).unwrap()
+    }
+
+    #[test]
+    fn an_over_long_question_says_where_the_detail_goes() {
+        let long = "x".repeat(MAX_QUESTION + 1);
+        let HostErr::Invalid(m) = clean("question", &long, MAX_QUESTION).unwrap_err() else { panic!("not Invalid") };
+        assert_eq!(m, "`question` is at most 2000 characters: put detail in project files and pass them as `context_pointers`");
+        let HostErr::Invalid(m) = clean("title", &long, 10).unwrap_err() else { panic!("not Invalid") };
+        assert_eq!(m, "`title` is at most 10 characters");
     }
 
     #[test]

@@ -198,6 +198,8 @@ struct HelpRun {
     session: String,
     result: Option<Value>,
     at: Instant,
+    /// The host's own words for what it needed (redacted and cut), the reason on the turn-boundary line (`specs/087` §5.4).
+    need: String,
 }
 
 /// The roles a help task consulted, in order (the root span is the orchestrator's own).
@@ -389,7 +391,8 @@ impl EngineService {
                 // Finished answers are kept for an hour so a slow one can be fetched, then dropped.
                 let mut helps = self.helps.lock().unwrap();
                 helps.retain(|_, r| r.result.is_none() || r.at.elapsed() < Duration::from_secs(3600));
-                helps.insert(task_id.clone(), HelpRun { session: c.session.clone(), result: None, at: Instant::now() });
+                let need: String = self.engine.secrets.redact(p["need"].as_str().unwrap_or("")).chars().take(200).collect();
+                helps.insert(task_id.clone(), HelpRun { session: c.session.clone(), result: None, at: Instant::now(), need });
             }
             (task_id, m)
         };
@@ -413,7 +416,8 @@ impl EngineService {
                 r.at = Instant::now();
             }
         });
-        Ok(self.signed_help(self.wait_help(&task_id, HELP_WAIT).await))
+        let v = self.wait_help(&task_id, HELP_WAIT).await;
+        Ok(self.signed_help(v, &task_id))
     }
 
     /// `host.request_research` (`specs/066` §3): queue a research job and return its id at once. The scout searches the trusted lists
@@ -479,7 +483,7 @@ impl EngineService {
         };
         if v["answered_by"].as_str().is_some() {
             let id = crate::research_host::identity(&ws.dir, &ws.home, "scout", None);
-            crate::research_host::attach_identity(&mut v, &id, self.badge_style());
+            crate::research_host::attach_identity(&mut v, &id, self.badge_style(), self.badge_mode(), Some("the research you asked for"));
         }
         Ok(v)
     }
@@ -652,11 +656,18 @@ impl EngineService {
         crate::host_rpc::gate(&self.engine.ws.dir).map(|c| c.badge_style.as_str()).unwrap_or("plain")
     }
 
-    /// An answer from a Delphi role carries who gave it (`specs/066` §7): the last role consulted, or the orchestrator.
-    fn signed_help(&self, mut v: Value) -> Value {
+    /// `[mcp] badge_mode`, read at each call: which colour pair the ANSI form of an identity uses (`specs/087` §5.1).
+    fn badge_mode(&self) -> &'static str {
+        crate::host_rpc::gate(&self.engine.ws.dir).map(|c| c.badge_mode.as_str()).unwrap_or("dark")
+    }
+
+    /// An answer from a Delphi role carries who gave it (`specs/066` §7): the last role consulted, or the orchestrator. It also
+    /// carries the turn-boundary lines (`specs/087` §5.4), with the host's own request as the reason.
+    fn signed_help(&self, mut v: Value, help_id: &str) -> Value {
         if let Some(role) = v["answered_by"].as_str().map(String::from) {
             let ws = &self.engine.ws;
-            crate::research_host::attach_identity(&mut v, &crate::research_host::identity(&ws.dir, &ws.home, &role, None), self.badge_style());
+            let need = self.helps.lock().unwrap().get(help_id).map(|r| r.need.clone()).unwrap_or_default();
+            crate::research_host::attach_identity(&mut v, &crate::research_host::identity(&ws.dir, &ws.home, &role, None), self.badge_style(), self.badge_mode(), Some(&need));
         }
         v
     }
@@ -664,16 +675,20 @@ impl EngineService {
     /// Each seat that spoke is named as in the console; the ruling is the orchestrator's.
     fn signed_council(&self, mut v: Value) -> Value {
         let ws = &self.engine.ws;
-        let sign = |role: &str| crate::research_host::identity(&ws.dir, &ws.home, role, None).signature();
+        let (style, mode) = (self.badge_style(), self.badge_mode());
+        let light = mode == "light";
+        let sign = |role: &str| crate::research_host::identity(&ws.dir, &ws.home, role, None);
         for key in ["seat_positions", "critiques"] {
             for p in v["ruling"][key].as_array_mut().into_iter().flatten() {
                 if let Some(r) = p["seat"].as_str().map(String::from) {
-                    p["signature"] = json!(sign(&r));
+                    let id = sign(&r);
+                    p["signature"] = json!(id.signature());
+                    p["display"] = json!(id.display(style, light));
                 }
             }
         }
         if v.get("ruling").is_some() {
-            crate::research_host::attach_identity(&mut v, &crate::research_host::identity(&ws.dir, &ws.home, "orchestrator", None), self.badge_style());
+            crate::research_host::attach_identity(&mut v, &crate::research_host::identity(&ws.dir, &ws.home, "orchestrator", None), style, mode, Some("the Council's ruling"));
         }
         v
     }
@@ -702,7 +717,8 @@ impl EngineService {
         if !mine {
             return Err(err(code::INVALID_PARAMS, "no such help request for this session"));
         }
-        Ok(self.signed_help(self.wait_help(&id, Duration::from_secs(25)).await))
+        let v = self.wait_help(&id, Duration::from_secs(25)).await;
+        Ok(self.signed_help(v, &id))
     }
 
     async fn host_handoff_put(&self, p: Value, ctx: CallContext) -> RpcOutcome {
@@ -1752,6 +1768,8 @@ impl EngineService {
         events.retain(|e| crate::observe::KINDS.contains(&e.kind.as_str()));
         let skip = events.len().saturating_sub(4000);
         let mut st = crate::observe::ObserverState::new(&self.engine.settings.enabled_agents);
+        // A one-off agent's label may not pass for a defined role, whatever the active theme calls it (`specs/087` §4.3 item 4).
+        st.set_core_names(crate::research_host::core_display_names(&self.engine.ws.dir, &self.engine.ws.home));
         for e in events.into_iter().skip(skip) {
             st.apply(&serde_json::to_value(e).expect("events serialize"));
         }
@@ -3168,7 +3186,12 @@ mod tests {
             let r = c.call("host.request_help", p(json!({"need": "How do retries work?", "tried": "grep", "suggested_target": "nobody"}))).unwrap();
             assert_eq!(r["status"], "answered", "{r}");
             assert_eq!(r["answered_by"], "orchestrator");
-            assert!(r["signature"].as_str().unwrap().contains("(orchestrator) via delphi") && r["identity"]["ansi"].as_str().unwrap().contains('\u{1b}'), "{r}");
+            assert!(r["signature"].as_str().unwrap().contains("(orchestrator, via delphi)") && r["identity"]["ansi"].as_str().unwrap().contains('\u{1b}'), "{r}");
+            // Spec 087 §5.2 to §5.4: one pre-rendered line to print, the host's own words as the reason, and a line back.
+            assert_eq!(r["display"], r["signature"], "{r}");
+            assert!(r["boundary_line"].as_str().unwrap().contains("(orchestrator) takes over: How do retries work?"), "{r}");
+            assert!(r["return_line"].as_str().unwrap().contains("(orchestrator) hands back"), "{r}");
+            assert_eq!(r["identity"]["color_light"], "#7e22ce", "{r}");
             assert!(r["answer"].as_str().unwrap().contains("three rungs"));
             // Another session cannot read it; the owner can, and it does not count again.
             let other = json!({"session": "fedcba9876543210", "tool": "x", "cwd": cwd, "help_id": r["help_id"]});
@@ -3290,6 +3313,9 @@ mod tests {
             assert_eq!((got["state"].as_str(), got["venue"].as_str(), got["ruling"]["decision"].as_str()), (Some("decided"), Some("panel"), Some("use a table")), "{got}");
             let card = got["display"].as_str().unwrap();
             assert!(card.contains("**Panel ruling**") && card.contains("isolation: host-reported") && card.contains("opus") && card.contains("Delphi spent none"), "{card}");
+            // Spec 087 §5.2: the identity line leads the card in `display`, and `signature` is that line alone.
+            assert!(card.starts_with("⟦") && card.contains("(orchestrator, via delphi)\n\n**Panel ruling**"), "{card}");
+            assert!(got["signature"].as_str().unwrap().ends_with("(orchestrator, via delphi)") && !got["signature"].as_str().unwrap().contains('\n'), "{got}");
             assert!(got["ruling"]["dissent"].as_str().unwrap().contains("Unanimous"), "{got}");
             assert_eq!(rpc_code(c.call("host.council_choose", p(json!({"council_id": id, "option": "table"})))), Some(code::INVALID_PARAMS), "nothing escalated, nothing to choose");
             assert_eq!(rpc_code(c.call("host.council_submit", p(json!({"council_id": id, "seat": "architect", "round": 1, "text": "late"})))), Some(code::INVALID_PARAMS), "a finished Panel takes no more answers");
@@ -3328,6 +3354,11 @@ mod tests {
                 c.call("host.council_submit", p(json!({"council_id": id, "seat": seat, "round": 1, "text": "OPTION: ship"}))).unwrap();
             }
             c.call("host.council_submit", p(json!({"council_id": id, "seat": "architect", "round": 2, "text": good}))).unwrap();
+            // Prose with no closing lines is sent back twice (spec 089 F1); the third is taken as it stands and is unreadable.
+            for _ in 0..2 {
+                let e = c.call("host.council_submit", p(json!({"council_id": id, "seat": "red-team", "round": 2, "text": "looks fine to me"}))).unwrap_err().to_string();
+                assert!(e.contains("not in the required shape") && e.contains("ROUND 2 COMPLETE"), "{e}");
+            }
             c.call("host.council_submit", p(json!({"council_id": id, "seat": "red-team", "round": 2, "text": "looks fine to me"}))).unwrap();
             c.call("host.council_submit", p(json!({"council_id": id, "seat": "strategist", "round": 2, "text": good}))).unwrap();
             c.call("host.council_submit", p(json!({"council_id": id, "seat": "orchestrator", "round": 3, "text": "DECISION: needs the operator"}))).unwrap();
@@ -3420,6 +3451,50 @@ mod tests {
             assert!(who.iter().any(|m| m.contains("run by Delphi")), "the seat Delphi ran is labelled as such: {who:?}");
         })
         .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_panel_seat_whose_round_two_reply_lacks_the_closing_lines_is_sent_back_and_can_fix_it() {
+        let f = setup(vec![], 5.0, |_| {});
+        let ws_dir = f.engine.ws.dir.clone();
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            c.hello(&htok).unwrap();
+            let p = |extra: Value| {
+                let mut b = json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cwd});
+                for (k, v) in extra.as_object().unwrap() {
+                    b[k] = v.clone();
+                }
+                b
+            };
+            let good = "RECOMMENDATION: PROCEED-WITH-CHANGES\nFINDING P2 naming\nCONCUR: yes\nROUND 2 COMPLETE";
+            let id = c.call("host.council_open", p(json!({"question": "Table or file?"}))).unwrap()["council_id"].as_str().unwrap().to_string();
+            for seat in ["architect", "red-team", "strategist"] {
+                c.call("host.council_submit", p(json!({"council_id": id, "seat": seat, "round": 1, "text": "OPTION: table"}))).unwrap();
+            }
+            for seat in ["architect", "strategist"] {
+                c.call("host.council_submit", p(json!({"council_id": id, "seat": seat, "round": 2, "text": good}))).unwrap();
+            }
+            // The red-team's first Round 2 is a good critique in prose with no closing lines: it is sent back, not stored.
+            let e = c.call("host.council_submit", p(json!({"council_id": id, "seat": "red-team", "round": 2, "text": "Main attack: the barrier relies on the host. I would proceed with changes.", "model": "sonnet"}))).unwrap_err().to_string();
+            assert!(e.contains("missing a RECOMMENDATION line") && e.contains("rejection 1 of 2"), "{e}");
+            assert!(c.call("host.council_brief", p(json!({"council_id": id, "seat": "orchestrator", "round": 3}))).is_err(), "the Panel is still waiting for the red-team's Round 2");
+            // It resubmits with the lines and the Panel completes with a readable red-team critique, so no escalation for lack of one.
+            let done = c.call("host.council_submit", p(json!({"council_id": id, "seat": "red-team", "round": 2, "text": format!("Main attack: the barrier relies on the host.\n{good}"), "model": "sonnet"}))).unwrap();
+            assert_eq!(done["round_2"], "complete");
+            c.call("host.council_submit", p(json!({"council_id": id, "seat": "orchestrator", "round": 3, "text": "DECISION: use a table\nNEXT builder: write the table"}))).unwrap();
+            let got = c.call("host.council_result", p(json!({"council_id": id}))).unwrap();
+            assert_eq!(got["state"], "decided", "a readable red-team critique means no escalation: {got}");
+            assert!(got["ruling"]["dissent"].as_str().unwrap().contains("Unanimous"), "{got}");
+        })
+        .await;
+        let events = replay_log(&delphi_core::sessions::dir(&ws_dir, "host-abcdef0123456789"));
+        let red = events.iter().find(|e| e.kind == "council.critique" && e.payload["role"] == "red-team").unwrap();
+        assert_eq!((red.payload["readable"].as_bool(), red.payload["format_retries"].as_u64()), (Some(true), Some(1)), "the record says it was sent back once");
     }
 
     fn replay_log(dir: &std::path::Path) -> Vec<delphi_core::event::EventEnvelope> {

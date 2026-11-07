@@ -1,0 +1,14 @@
+Question: Is it worth pursuing the "context engineering lessons" work for Delphi (analysis in ~/Desktop/delphi-context-engineering-council-2026-11-05.md), and in what order? Anthropic's context-engineering posts were re-verified against primary sources: figures hold (tool search 77K to 8.7K tokens, contextual retrieval top-20 failures 5.7% to 1.9% with BM25 and rerank, 15x multi-agent tokens, feature-list JSON with an agent-flippable passes flag). A prior four-seat review found most first-pass gaps already specced (045 find_tool, 048 evals, 078 rejects accuracy scoring) and proposed six actions: (1) spec 062 amendment: actionable tool errors, truncation hints, a concise/full detail enum; (2) spec 039/033: log tool failures by kind, arg-key names and hashes only, per-tool errors/invalid_args/repeat_calls; (3) KB chunk contextualization test under spec 064; (4) optional tool-manifest examples; (5) 048 measurement order, scripted-CI first; (6) docs-only edits to 049, 050, 048, 063, 040. Parked: find_tool until schema tokens in a span exceed ~10k, agent-written code as skills (rejected), PII tokenization, CI prompt-eval gate. Constraints: No Spec No Build, no new authority, tokens not dollars, Gemini seats reject array schemas without items. Note: the research scout could not reach anthropic.com because it is not on the trusted-source list. Weigh: which actions are worth building now, which to drop, is anything missing, and is the whole effort a good use of tokens versus the unbuilt 045/048/049 backlog?
+Stakes: normal
+Options:
+- Pursue all six actions in the stated order
+- Pursue only actions 1, 2 and 6 now; defer the rest until 045/048 baselines exist
+- Pause: finish the unbuilt 045/048/049 backlog first, then revisit
+- Drop it: the gains do not justify the spec and token cost
+Pointers:
+- specs/045-harness-loop-techniques.md: T8 find_tool, section 6 bar
+- specs/048-harness-benchmarking-and-targeted-evals.md: BM-1..BM-7 measurement plan
+- specs/062-delphi-as-host-agent-mcp-server.md: tool errors and detail mode amendment target
+- specs/064-knowledge-retrieval-for-agents-and-mcp.md: contextual retrieval follow-up
+- specs/049-context-management-recoverable-compaction-and-handles.md: confidence: low, cite primary posts
+- specs/039-error-log.md: tool_failed kind logging

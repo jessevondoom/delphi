@@ -18,12 +18,18 @@ export type AvatarRole = {
   crown: string; crown_rgb: string; mascot_face: string;
   /** Per activity: the three cells between the brackets, and which of them is the mouth (the rest are eyes). */
   badge: Record<string, { cells: string; mouth: number | null }>;
+  /** The blink's frames, one per timer tick; the first is `badge.blink`. Absent from an older `delphi`: one frame. */
+  blink_steps?: string[];
   /** Per activity: the seven cells of the mascot's face row. */
   mascot: Record<string, string>;
   /** Eye colour while the role waits on the operator, by terminal background. */
   alert_eye?: { dark: string; light: string };
 };
-export type AvatarSpec = { version: number; eye: { dark: string; light: string }; roles: Record<string, AvatarRole> };
+export type AvatarSpec = {
+  version: number; eye: { dark: string; light: string }; roles: Record<string, AvatarRole>;
+  /** Each non-ASCII glyph a badge or mascot face can use, and its ASCII stand-in (`DELPHI_ASCII_BADGES`, spec 087 §6.2). Absent from an older `delphi`. */
+  ascii_glyphs?: Record<string, string>;
+};
 
 export type Info = {
   console_socket: string; narrator_socket: string; workspace: string; mission: string | null;
@@ -38,6 +44,8 @@ export type Info = {
   interactive_agents?: string[];
   /** Roles quarantined by operator (`specs/063`). */
   forbidden_agents?: string[];
+  /** The active theme's name pool (`specs/087` §4): slot id to the name and three-cell face a one-off agent wears. Events carry only the slot; absent from an older `delphi`. */
+  pool?: Record<string, { name: string; face: string }>;
 };
 
 /** Convert the standard ANSI 256-colour palette to the display hex used by OpenTUI spans. */
@@ -487,15 +495,106 @@ export type AgentState = 'idle' | 'running' | 'waiting on you' | 'escalated';
 /** The library's name for what each console state looks like. */
 export const ACTIVITY: Record<AgentState, string> = { idle: 'idle', running: 'working', 'waiting on you': 'waiting_approval', escalated: 'escalated' };
 
+/** How many frames a role's blink has: the library's `blink_steps`, or one (an older `delphi` sends none). */
+export const blinkSteps = (role: string, info: Info): number => Math.max(1, info.avatar?.roles[role]?.blink_steps?.length ?? 1);
+
+/**
+ * A blink for a face the library has no blink for (a spawned agent): every eye cell becomes `-` and the mouth stays
+ * (spec 087 §3.2). `mouth` is the mouth's cell (default the middle one), or `null` when every cell is an eye. Returns null
+ * when the face would blink to itself, such as `-_-`, or is not three cells: there is no blink to show.
+ */
+export function mechanicalBlink(cells: string, mouth: number | null = 1): string | null {
+  const chars = [...cells];
+  if (chars.length !== 3) return null;
+  const closed = chars.map((c, i) => (i === mouth || c === ' ' ? c : '-')).join('');
+  return closed === cells ? null : closed;
+}
+
+/** A number from 1 to 99 as a roman numeral, for a name already worn (`Sisyphus II`, `specs/087` §4.3). */
+export function roman(n: number): string {
+  let rest = Math.max(1, Math.min(99, Math.floor(n))), out = '';
+  for (const [v, s] of [[90, 'XC'], [50, 'L'], [40, 'XL'], [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I']] as const) while (rest >= v) { out += s; rest -= v; }
+  return out;
+}
+
+/**
+ * The name and face a one-off agent wears (`specs/087` §4): looked up by the slot its start event recorded, in the theme the
+ * daemon sent, so a replay shows the theme's current names. `numeral` is 2 or more when a live agent already wore the name.
+ * `undefined` when the slot is unknown (an older `delphi`, or a theme that dropped the pool): the caller shows the role.
+ */
+export function poolIdentity(info: Info, slot: string | undefined, numeral?: number): { name: string; face: string } | undefined {
+  const e = slot ? info.pool?.[slot] : undefined;
+  if (!e || [...e.face].length !== 3) return undefined;
+  return { name: sanitize(e.name) + (numeral && numeral > 1 ? ' ' + roman(numeral) : ''), face: e.face };
+}
+
+/**
+ * What a one-off agent shows where its role would go (`specs/087` §4.3 item 4, OD-6): the label the daemon sent, or the role.
+ * The daemon has already refused a label that would pass for a defined role or is empty (`one_off_label` in `delphi-core`),
+ * so the console keeps no list of role names; it only cleans the text again. Under `DELPHI_ASCII_BADGES` every non-ASCII
+ * character is `?`, so a wide or ambiguous-width character cannot move a row's columns. Clipping to the pane is the caller's.
+ */
+export function shownRole(label: string | undefined, role: string): string {
+  const l = label ? sanitize(label).replace(/\s+/g, ' ').trim() : '';
+  const s = l || role;
+  return asciiBadgesOn ? [...s].map((c) => ((c.codePointAt(0) ?? 0) < 128 ? c : '?')).join('') : s;
+}
+
+/**
+ * The badge of a one-off agent: its own face between the brackets, in its role's colour (`specs/087` §4.2). While it is
+ * idle or working it shows the face (its identity); it blinks with the mechanical blink; the other states use the role's
+ * library frames (thinking, waiting, escalated), which are the same for every face. Same drawing as `badge`.
+ */
+export function poolBadge(role: string, face: string, state: AgentState, info: Info, p: Pal, frame?: string): string {
+  const name = frame ?? ACTIVITY[state];
+  const lib = name === 'idle' || name === 'working' || name === 'blink' ? undefined : info.avatar?.roles[role]?.badge[name];
+  const cells = lib ? [...lib.cells] : [...(name === 'blink' ? mechanicalBlink(face) ?? face : face)];
+  const mouth = lib ? lib.mouth : 1;
+  const chassis = roleColor(role, info);
+  const eye = caps.color === 'truecolor' ? chalk.hex(eyeColor(role, state, info, p))
+    : state === 'waiting on you' && info.avatar?.roles[role]?.alert_eye && caps.color !== 'none' ? chalk.bold.yellow : chalk.bold;
+  // The ASCII switch (spec 087 §6.2) applies to a one-off agent's face and brackets like any other badge.
+  const shown = (s: string) => asciiCells(s, info);
+  return chassis(shown('⟦')) + cells.map((c, i) => (i === mouth ? chassis(shown(c)) : eye(shown(c)))).join('') + chassis(shown('⟧'));
+}
+
+/**
+ * Plain-ASCII badges: `DELPHI_ASCII_BADGES=1` (the same convention as `DELPHI_REDUCE_MOTION`), for a terminal or font that
+ * cannot draw `⟦•─•⟧`. The badge keeps its five columns; only the glyphs change (spec 087 §6.2).
+ */
+export const asciiBadgesRequested = (env: Record<string, string | undefined> = process.env): boolean => env.DELPHI_ASCII_BADGES === '1';
+let asciiBadgesOn = asciiBadgesRequested();
+/** Set the switch (a test, or a future setting); returns what it was. */
+export function useAsciiBadges(on: boolean): boolean { const was = asciiBadgesOn; asciiBadgesOn = on; return was; }
+export const currentAsciiBadges = (): boolean => asciiBadgesOn;
+
+/**
+ * `s` with every non-ASCII character replaced through the table the library sends (`ascii_glyphs`): the console keeps no table
+ * of its own, so the Rust side, the outside identity and this agree by construction. A glyph the table lacks becomes `?`.
+ * Unchanged when ASCII is not asked for, and when there is no table (an older `delphi` sends none).
+ */
+export function asciiCells(s: string, info: Info): string {
+  const table = info.avatar?.ascii_glyphs;
+  if (!asciiBadgesOn || !table) return s;
+  return [...s].map((c) => ((c.codePointAt(0) ?? 0) < 128 ? c : table[c] ?? '?')).join('');
+}
+
 /** The three cells and the mouth's index: from the library's data, or the built-in faces for an older `delphi`. */
-function badgeCells(role: string, state: AgentState, info: Info, frame?: string): { cells: string[]; mouth: number | null } {
+function badgeCells(role: string, state: AgentState, info: Info, frame?: string, step = 0): { cells: string[]; mouth: number | null } {
   const spec = info.avatar?.roles[role]?.badge[frame ?? ACTIVITY[state]];
-  if (spec) return { cells: [...spec.cells], mouth: spec.mouth };
+  if (spec) {
+    // Later frames of a multi-frame blink come from the library; the mouth is the blink's own.
+    const later = frame === 'blink' && step > 0 ? info.avatar?.roles[role]?.blink_steps?.[step] : undefined;
+    return { cells: [...(later ?? spec.cells)], mouth: spec.mouth };
+  }
   // Older `delphi`: the animation frames of `005a` §4, built in.
   const scout = role === 'scout';
   const animated: Record<string, string> = scout
     ? { blink: '---', thinking_left: '…  ', thinking_right: '  …', success: '^^^' }
     : { blink: '-_-', thinking_left: '•• ', thinking_right: ' ••', success: '^─^' };
+  // A face with no blink of its own (a role the library does not know) closes its eyes and keeps its mouth.
+  const own = frame === 'blink' && !scout ? mechanicalBlink(info.roles[role]?.face ?? '') : null;
+  if (own) return { cells: [...own], mouth: 1 };
   if (frame && animated[frame]) return { cells: [...animated[frame]!], mouth: scout || frame.startsWith('thinking') ? null : 1 };
   const cells = state === 'waiting on you' ? 'x?x' : state === 'escalated' ? 'x_x' : state === 'running' ? (role === 'scout' ? '···' : '•─•') : (info.roles[role]?.face ?? '•_•');
   return { cells: [...cells], mouth: role === 'scout' || state === 'waiting on you' ? null : 1 };
@@ -514,15 +613,17 @@ export function eyeColor(role: string, state: AgentState, info: Info, p: Pal): s
  * Which cell is the mouth comes from the library's data, not from the character: the red-team's `-_-` has `-` eyes.
  * `frame` is the library's activity name when the badge animates (`motion.ts`); without it, the state's own frame.
  * `crossed` swaps the eyes for dim `x`s (the "press Ctrl+C again" window).
+ * `step` is the frame of a multi-frame blink (`Face.step` from `motion.ts`; 0 or absent is the first).
  */
-export function badge(role: string, state: AgentState, info: Info, p: Pal, frame?: string, crossed = false): string {
+export function badge(role: string, state: AgentState, info: Info, p: Pal, frame?: string, crossed = false, step = 0): string {
   const chassis = roleColor(role, info);
   // The library's eye colours need true colour; below it the eyes are the terminal's own foreground, bold (`005e` §12).
   const eye = caps.color === 'truecolor' ? chalk.hex(eyeColor(role, state, info, p))
     : state === 'waiting on you' && info.avatar?.roles[role]?.alert_eye && caps.color !== 'none' ? chalk.bold.yellow : chalk.bold;
-  const { cells, mouth } = badgeCells(role, state, info, frame);
+  const { cells, mouth } = badgeCells(role, state, info, frame, step);
   // `crossed` (Ctrl+C pressed once): every eye becomes a lightly drawn `x`; the mouth and any blank cell stay.
-  return chassis('⟦') + cells.map((c, i) => (i === mouth ? chassis(c) : crossed && c !== ' ' ? chalk.dim(eye('x')) : eye(c))).join('') + chassis('⟧');
+  const shown = (s: string) => asciiCells(s, info);
+  return chassis(shown('⟦')) + cells.map((c, i) => (i === mouth ? chassis(shown(c)) : crossed && c !== ' ' ? chalk.dim(eye('x')) : eye(shown(c)))).join('') + chassis(shown('⟧'));
 }
 
 /**

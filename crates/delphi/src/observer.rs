@@ -137,17 +137,25 @@ fn face_for(role: &str, state: &str) -> &'static str {
     }
 }
 
-/// `⟦•─•⟧` in the role's colour with bright eyes; the red-team's alert badge has gold eyes and crimson brackets.
+/// `⟦•─•⟧` in the role's colour with bright eyes; the red-team's alert badge has gold eyes and crimson brackets. Plain ASCII
+/// of the same five columns (`[0-0]`) when `DELPHI_ASCII_BADGES=1` (`specs/087` §6.2).
 pub(crate) fn badge(role: &str, state: &str, pal: Pal) -> Vec<Span<'static>> {
+    badge_with(role, state, pal, delphi_core::ascii_badge::requested_by_env())
+}
+
+/// [`badge`] with the ASCII choice made by the caller. The colours are chosen from the face as designed, so asking for ASCII
+/// changes the glyphs and nothing else.
+pub(crate) fn badge_with(role: &str, state: &str, pal: Pal, ascii: bool) -> Vec<Span<'static>> {
     let chassis = role_color(role, pal);
     let alert = role == "red-team" && state == "waiting on you";
     let eye = if alert { Color::Rgb(250, 204, 21) } else { pal.eye() };
-    let mut out = vec![Span::styled("⟦", Style::default().fg(chassis))];
+    let shown = |s: &str| if ascii { delphi_core::ascii_badge::ascii_cells(s) } else { s.to_string() };
+    let mut out = vec![Span::styled(shown("⟦"), Style::default().fg(chassis))];
     for ch in face_for(role, state).chars() {
         let c = if matches!(ch, '─' | '_' | '-') { chassis } else { eye };
-        out.push(Span::styled(ch.to_string(), Style::default().fg(c)));
+        out.push(Span::styled(shown(&ch.to_string()), Style::default().fg(c)));
     }
-    out.push(Span::styled("⟧", Style::default().fg(chassis)));
+    out.push(Span::styled(shown("⟧"), Style::default().fg(chassis)));
     out
 }
 
@@ -212,7 +220,7 @@ mod tests {
 
     #[test]
     fn badges_follow_the_eye_contrast_rule_in_dark_and_light() {
-        let colours = |role: &str, state: &str, dark: bool| badge(role, state, Pal { dark }).into_iter().map(|s| (s.content.to_string(), s.style.fg)).collect::<Vec<_>>();
+        let colours = |role: &str, state: &str, dark: bool| badge_with(role, state, Pal { dark }, false).into_iter().map(|s| (s.content.to_string(), s.style.fg)).collect::<Vec<_>>();
         let dark = colours("orchestrator", "idle", true);
         assert_eq!(dark.iter().map(|(c, _)| c.as_str()).collect::<String>(), "⟦•─•⟧");
         assert_eq!(dark[1].1, Some(Color::Rgb(255, 255, 255)), "eyes are bright white on dark");
@@ -225,6 +233,22 @@ mod tests {
         for role in ["orchestrator", "builder", "architect", "red-team", "strategist", "scout"] {
             for st in ["idle", "running", "waiting on you", "escalated"] {
                 assert_eq!(colours(role, st, true).iter().map(|(c, _)| c.chars().count()).sum::<usize>(), 5, "{} {}", role, st);
+            }
+        }
+    }
+
+    #[test]
+    fn the_ascii_badge_changes_the_glyphs_and_nothing_else() {
+        // Spec 087 §6.2: `[0-0]` for `⟦•─•⟧`, the same five columns and the same colours.
+        let spans = |role: &str, state: &str, ascii: bool| badge_with(role, state, Pal { dark: true }, ascii).into_iter().map(|s| (s.content.to_string(), s.style.fg)).collect::<Vec<_>>();
+        let text = |v: &[(String, Option<Color>)]| v.iter().map(|(c, _)| c.as_str()).collect::<String>();
+        assert_eq!(text(&spans("orchestrator", "idle", true)), "[0-0]");
+        assert_eq!(text(&spans("red-team", "idle", true)), "[~_~]");
+        for role in ["orchestrator", "builder", "architect", "red-team", "strategist", "scout", "writer", "investigator", "validator", "messenger"] {
+            for st in ["idle", "running", "waiting on you", "escalated"] {
+                let (uni, asc) = (spans(role, st, false), spans(role, st, true));
+                assert!(text(&asc).is_ascii() && text(&asc).chars().count() == 5, "{role} {st}: {}", text(&asc));
+                assert_eq!(uni.iter().map(|(_, c)| *c).collect::<Vec<_>>(), asc.iter().map(|(_, c)| *c).collect::<Vec<_>>(), "{role} {st}: colours are the same");
             }
         }
     }

@@ -232,7 +232,7 @@ Drafted from a review of LangChain / LangSmith benchmarking, memory and context 
 
 | Spec | Slice | Content | State |
 | :-- | :-- | :-- | :-- |
-| 048 | BM1 | harness arm kind (fixed model) and efficiency columns in the 037 report | approved 2026-11-05, not started |
+| 048 | BM1 | harness arm kind (fixed model) and efficiency columns in the 037 report | built 2026-11-06: an `[[arm]]` with `base = "<arm>"` and `[arm.loop]` switches takes its base's template home, `expect_models` and overlay (`train_run.rs` `parse_arms`; switch names and value kinds checked by `loopctl::check_switch`, so a typo is refused before a run; applied to the run's copy of `config.toml`, `[loop]` not being a pinned block). Rows keep turns, tool calls by tool with errors, nudges, hard stops, budget warnings, verify turns, escalations and cache read share (`efficiency_of`, reusing `toolreport` and `ctxacct`). `delphi train report` prints an EFFORT table and a HARNESS EFFECT section per model: pass rate with the noise (one standard error of the difference), tokens, turns and calls per pass, and the OD-2 verdict (`costlier, not better` over 25 % tokens per pass with the rate inside the noise; `a trade` for more passes at that cost; `no evidence` under 3 seeds). Tests: AC-1 (arm and base on one model, case and seed, both in the report) and AC-2 (the flag). Not built: harness arms that vary the tool set or a prompt section (switches and overlay only); per-tool names in the report (rows keep `by_tool`); no live run (scripted fake binary only) |
 | 048 | BM2 | handoff fidelity eval (paraphrase loss) | approved 2026-11-05, not started |
 | 048 | BM3 | context retention eval | approved 2026-11-05, not started |
 | 048 | BM4 | tool-count degradation eval | approved 2026-11-05, not started |
@@ -707,11 +707,12 @@ Approved by the operator 2026-11-06, from a conversation that day: 28 chosen bad
 | Slice | Content | Hours | State |
 | :-- | :-- | --: | :-- |
 | S0 | operator approves spec 087 and answers OD-1 and OD-5; tracker entry | 1 | approved 2026-11-06 |
-| S1 | thirteen core roles in `ROLES`: faces, blink frames, light/dark colors | 9 | not built |
-| S2 | the name pool in the theme pack; picker; `pool_slot` on the start event | 9 | not built |
-| S3 | outside: light/dark identity, `badge_mode`, `display` in the one-identity form, handoff and roster lines | 9 | not built |
-| S4 | console: three-frame scout blink; pool agents in panes | 6 | not built |
-| S5 | recognition check with the operator | 3 | not built |
+| S1 | thirteen core roles in `ROLES`: faces, blink frames, light/dark colors | 9 | built (merged, #512) |
+| S2 | the name pool in the theme pack; picker; `pool_slot` on the start event | 9 | built (PR open): pool, loader checks, picker, `spawn_agent_pack` naming, `pool_slot` in the envelope and schema; the daemon stamps `pool_slot` (and a numeral for a name already worn) on a bundle agent's `dag.node.added`, restores it on resume and frees it when the span ends; a core role dispatched as itself gets none; the `DELPHI_ASCII_BADGES` switch is not built |
+| S3 | outside: light/dark identity, `badge_mode`, `display` in the one-identity form, handoff and roster lines | 9 | built (merged, #515) |
+| S4 | console: three-frame scout blink; pool agents in panes | 6 | blink built (merged, #513); pool agents built (PR open) in the Observer's roster, strip and epic threads, names looked up in the theme's pool sent with the start-up info; the chat console's own strip still shows the six roles only |
+| S5 | recognition check with the operator | 3 | materials prepared 2026-11-06 (Council 003); waits on the operator's reading |
+| S6 | one-off agents show their specialization (outside) or bundle agent id (inside) in the role's place (OD-6, spec 087 §10) | 5 | built (PR open): the rule `one_off_label` once in `delphi-core`; `Identity.label`; `spawn_agent_pack` line and pack; the observer node's `label` and `bundle_agent`; the roster, agents pane and epic threads; ASCII; not seen in a live mission |
 
 ## Spec 086: the Council outside Delphi (2026-11-05, approved 2026-11-06)
 
@@ -726,8 +727,23 @@ From the operator's request to refine the outside Council (Claude Code, Copilot,
 | S2 | Panel: server-held barrier, `council_open/brief/submit/choose` | 24 | built (PR open) |
 | S3 | role subagents per host, `[host.models.*]`, Codex agents installer | 14 | built (PR open) |
 | S4 | one foreign-family seat (token ceiling, not a history-based estimate); `venue`/`blind` in the record front matter | 10 | built (PR open) |
-| S5 | pre-registered Panel-vs-Council experiment; decides the default | 12 | pre-registration merged (#505); S2/S3 merged; the run needs the operator's go and token caps |
-| S6 | follow-ups from the Council review: Panel captures at L0, verdict `venue`, brief hash, host-support line, list of `council.verdict` readers | 4 | built (PR open) |
+| S5 | pre-registered Panel-vs-Council experiment; decides the default | 12 | run 2026-11-06 (operator go, 350k per-run cap): verdict INCOMPLETE (4 of 8 questions qualify, 6 needed), notice unchanged; 2.10M of 8M tokens; report in `dev/train/e2/REPORT.md`, data in `dev/train/e2/data/`; fixes planned in spec 089 (draft) |
+| S6 | follow-ups from the Council review: Panel captures at L0, verdict `venue`, brief hash, host-support line, list of `council.verdict` readers | 4 | built (merged, #511) |
+
+## Spec 089: Panel hardening from the E2 run (2026-11-06, approved)
+
+From the E2 report (verdict INCOMPLETE). Approved 2026-11-06 on the operator's instruction to begin the slices; OD-1/2/3/5 take the recommendations; OD-4 (narrowing the `agy` guard) and the E3 run wait for an explicit go (spec 089 §10).
+
+| Slice | Content | Hours | State |
+| :-- | :-- | --: | :-- |
+| P0 | spec 089 approval and tracker entry | 1 | approved 2026-11-06 |
+| P1 | server-side Round 2 shape check at submit (host seats; two rejections, then taken as unreadable); seat-file closing lines; `format_retries` recorded | 5 | built (PR open) |
+| P2 | scorer venue fix; `venue: daemon` on daemon records; useful question-limit message | 3 | built (merged, #524) |
+| P3 | skill wording (verbatim question, confirmation rule), `operator_confirmed`, options source | 4 | approved, not built |
+| P4a | `agy` seat reliability: reproduce the checkout-guard false positive, classify the hangs | 3 | built (PR open); P4b waits for OD-4 |
+| P4b | `agy` fix: one retry after a CLI error, discard message names the paths (guard unchanged by decision; watchdog deferred) | 6-10 | built (PR open): retry and path message; guard unchanged by decision; live capture held |
+| P5 | matcher v2 with a negative control; exploratory `RESCORE.md` of E2 | 5 | built (merged, #523); v2 FAILED validation: agreement 0.15 (needs 0.30), false-match 0.0 |
+| P6 | E3 pre-registration (the run needs the operator's go) | 6 | approved; the run needs an explicit go |
 
 ## Spec 088: a spec compile step (2026-11-06, draft)
 

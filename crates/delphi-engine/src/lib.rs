@@ -2,6 +2,7 @@
 
 //! `delphi-engine`: what runs inside the daemon: tools, approvals and the agent loop.
 
+pub mod agent_pool;
 pub mod agent_registry;
 pub mod approval;
 pub mod shellsafe;

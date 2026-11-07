@@ -91,7 +91,9 @@ impl Packs {
         }
     }
 
-    pub fn theme_resolver(&self) -> delphi_core::theme_names::ThemeResolver {
+    /// The active theme's name (`[theme] name` in the workspace config, `greek` by default) and its pack's text, which is
+    /// empty when it has none of its own.
+    fn theme_pack(&self) -> (String, String) {
         let cfg = std::fs::read_to_string(self.ws.dir.join("config.toml")).unwrap_or_default();
         let theme = toml::from_str::<toml::Value>(&cfg)
             .ok()
@@ -105,11 +107,35 @@ impl Packs {
         } else {
             String::new()
         };
+        (theme, text)
+    }
+
+    pub fn theme_resolver(&self) -> delphi_core::theme_names::ThemeResolver {
+        let text = self.theme_pack().1;
         if text.trim().is_empty() {
             delphi_core::theme_names::ThemeResolver::default()
         } else {
             delphi_core::theme_names::ThemeResolver::from_theme_text(&text)
         }
+    }
+
+    /// The active theme's display names for the roles a one-off agent's label may not pass for (`specs/087` §4.3 item 4):
+    /// what [`delphi_core::research::one_off_label`] compares a label with, besides the role ids themselves.
+    pub fn core_names(&self) -> Vec<String> {
+        let resolver = self.theme_resolver();
+        delphi_core::research::RESERVED_LABEL_IDS.iter().map(|r| resolver.display_name(r)).filter(|n| !n.is_empty()).collect()
+    }
+
+    /// The name pool of the active theme (`specs/087` §4): the pack's own when it has one. The default `greek` theme falls
+    /// back to the built-in pack's pool, because a home created before spec 087 holds a copy of that pack without one. Any
+    /// other theme without a pool has none. Entries that fail [`crate::agent_pool::usable`] are dropped.
+    pub fn pool(&self) -> Vec<crate::agent_pool::PoolEntry> {
+        let (name, text) = self.theme_pack();
+        let mut pool = crate::agent_pool::pool_from_theme_text(&text);
+        if pool.is_empty() && (name == "greek" || text.trim().is_empty()) {
+            pool = crate::agent_pool::default_pool();
+        }
+        pool.into_iter().filter(crate::agent_pool::usable).collect()
     }
 
     /// Resolve an incoming mention or role tag (@athena, @orchestrator, @delphi) to a canonical role ID.
@@ -119,6 +145,7 @@ impl Packs {
 
     pub fn roles(&self) -> Result<Vec<RoleInfo>, String> {
         let resolver = self.theme_resolver();
+        let ascii = crate::research_host::ascii_badges(&self.ws.dir);
         let mut out = Vec::new();
         for id in self.role_ids()? {
             let text = self.role_text(&id)?;
@@ -126,6 +153,7 @@ impl Packs {
             let display_name = resolver.display_name(&id);
             let aliases = resolver.aliases_for(&id);
             let (badge, _, _) = delphi_core::research::role_look(&id);
+            let badge = if ascii { delphi_core::ascii_badge::ascii_cells(badge) } else { badge.to_string() };
             out.push(RoleInfo {
                 title: fm_str(&fm, "title").map(|t| one_line(&t, 80)).unwrap_or_else(|| id.clone()),
                 purpose: fm_str(&fm, "role").map(|t| one_line(&t, 200)).unwrap_or_default(),
@@ -133,7 +161,7 @@ impl Packs {
                 skills: fm.as_ref().and_then(|f| f.get("authorized_skills")).and_then(|v| v.as_sequence()).map(|s| s.iter().filter_map(|x| x.as_str()).filter(|n| valid_name(n)).map(String::from).collect()).unwrap_or_default(),
                 display_name,
                 aliases,
-                badge: badge.to_string(),
+                badge,
                 id,
             });
         }
@@ -181,6 +209,18 @@ impl Packs {
     /// How a role signs: its console badge and its theme name, with the host that adopted it (`specs/066` §7).
     pub fn identity(&self, role: &str, via: Option<&str>) -> delphi_core::research::Identity {
         crate::research_host::identity(&self.ws.dir, &self.ws.home, role, via)
+    }
+
+    /// The line a host prints for `role`, in the operator's form and colour pair (`[mcp] badge_style`, `badge_mode`; plain and
+    /// dark when the file cannot be read): `⟦•_•⟧ Name (role, via delphi)` (`specs/087` §5.3).
+    pub fn display(&self, role: &str, via: Option<&str>) -> String {
+        let (style, light) = crate::host_rpc::gate(&self.ws.dir).map(|c| (c.badge_style.as_str(), c.badge_mode.as_str() == "light")).unwrap_or(("plain", false));
+        self.identity(role, via).display(style, light)
+    }
+
+    /// Whether badges sent to a host are plain ASCII (`[mcp] badge_ascii` or `DELPHI_ASCII_BADGES=1`, `specs/087` §6.2).
+    pub fn ascii_badges(&self) -> bool {
+        crate::research_host::ascii_badges(&self.ws.dir)
     }
 
     pub fn pack(&self, role: &str, include_profile: bool) -> Result<String, String> {

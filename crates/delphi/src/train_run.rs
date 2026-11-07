@@ -332,6 +332,61 @@ pub struct Row {
     /// The run's directory under the work directory (short, so the daemon's socket path fits; see [`sock_fits`]).
     pub dir: String,
     pub error: Option<String>,
+    /// The arm this one is a harness variant of (`specs/048` BM-1); the report compares the two on the same model.
+    pub base: Option<String>,
+    /// What the run did, beside whether it passed (`specs/048` BM-2).
+    pub eff: Efficiency,
+}
+
+/// The effort a run took, read from its mission log: counts only, no text (`specs/048` BM-2).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Efficiency {
+    /// Model calls that completed: one per turn of the loop.
+    pub turns: u32,
+    /// Per tool: `(calls, errors)`, over API spans and subscription seats alike (`toolreport`).
+    pub tool_calls: BTreeMap<String, (u32, u32)>,
+    /// `loop.action` of each kind: the loop nudge, its hard stop, and budget warnings (`specs/045` T1, T2).
+    pub nudges: u32,
+    pub hard_stops: u32,
+    pub budget_warnings: u32,
+    /// Verification turns the gate injected (`specs/045` T3).
+    pub gates: u32,
+    /// Tasks that ended handed to the operator.
+    pub escalations: u32,
+    /// Cache reads and the input side of every call after each span's first (`ctxacct`): their ratio is the hit rate.
+    pub cache_read: u64,
+    pub cache_input: u64,
+}
+
+impl Efficiency {
+    pub fn calls(&self) -> u32 {
+        self.tool_calls.values().map(|c| c.0).sum()
+    }
+}
+
+/// The effort of a run from its events. Reuses the tool and cache accounting the console shows, so the two never disagree.
+pub fn efficiency_of(events: &[EventEnvelope]) -> Efficiency {
+    let mut e = Efficiency::default();
+    for ev in events {
+        match ev.kind.as_str() {
+            "agent.usage" if ev.payload["outcome"].as_str().is_none_or(|o| o == "ok") => e.turns += 1,
+            "loop.action" => match ev.payload["action"].as_str() {
+                Some("nudge") => e.nudges += 1,
+                Some("stop") => e.hard_stops += 1,
+                Some("budget") => e.budget_warnings += 1,
+                _ => {}
+            },
+            "loop.gate" => e.gates += 1,
+            "task.completed" if ev.payload["status"] == "escalated" => e.escalations += 1,
+            _ => {}
+        }
+    }
+    e.tool_calls = delphi_engine::toolreport::report(events).by_tool.into_iter().map(|(t, c)| (t, (c.calls, c.errors))).collect();
+    for s in delphi_engine::ctxacct::report(events) {
+        e.cache_read += s.cache_read;
+        e.cache_input += s.input + s.cache_read + s.cache_write;
+    }
+    e
 }
 
 /// One model's share of a run, summed from its `agent.usage` events.
@@ -379,7 +434,10 @@ impl Row {
     pub fn to_json(&self) -> Value {
         json!({"case": self.case, "arm": self.arm, "seed": self.seed, "exit_code": self.exit_code, "wall_secs": (self.wall_secs * 10.0).round() / 10.0,
                "cost_usd": (self.cost_usd * 10000.0).round() / 10000.0, "passed": self.passed, "failed_checks": self.failed_checks, "notes": self.notes, "error": self.error,
-               "attempts": self.attempts, "promotions": self.promotions, "dir": self.dir,
+               "attempts": self.attempts, "promotions": self.promotions, "dir": self.dir, "base": self.base,
+               "turns": self.eff.turns, "tool_calls": self.eff.calls(), "nudges": self.eff.nudges, "hard_stops": self.eff.hard_stops, "budget_warnings": self.eff.budget_warnings,
+               "gates": self.eff.gates, "escalations": self.eff.escalations, "cache_read_tokens": self.eff.cache_read, "cache_input_tokens": self.eff.cache_input,
+               "by_tool": self.eff.tool_calls.iter().map(|(t, (c, e))| (t.clone(), json!({"calls": c, "errors": e}))).collect::<serde_json::Map<String, Value>>(),
                "tokens_in": self.usage.values().map(ModelUse::tokens_in).sum::<u64>(), "tokens_out": self.usage.values().map(ModelUse::tokens_out).sum::<u64>(),
                "models": self.usage.iter().map(|(m, u)| (m.clone(), json!({"calls": u.calls, "tokens_in": u.tokens_in(), "tokens_out": u.tokens_out(), "cost_usd": (u.cost_usd * 10000.0).round() / 10000.0}))).collect::<serde_json::Map<String, Value>>()})
     }
@@ -403,6 +461,8 @@ impl Row {
             promotions: v["promotions"].as_u64().unwrap_or(0) as u32,
             dir: v["dir"].as_str().unwrap_or("").into(),
             error: v["error"].as_str().map(String::from),
+            base: v["base"].as_str().map(String::from),
+            eff: Efficiency::default(),
         })
     }
 }
@@ -549,16 +609,36 @@ pub struct Arm {
     /// Model ids (or prefixes) this arm may use. A run that used any other model is not graded: the arm was not staffed
     /// as declared (a quota ran out and the pool swapped a model in, say). Empty means no check.
     pub expect_models: Vec<String>,
+    /// A **harness arm** (`specs/048` BM-1): the name of the plain arm it varies. It takes that arm's template home, staffing
+    /// and (unless it names its own) overlay, so the two differ only in `loop_switches` and the overlay.
+    pub base: Option<String>,
+    /// `[loop]` keys this arm sets in its copy of the home's `config.toml` (checked against what the loop reads).
+    pub loop_switches: BTreeMap<String, toml::Value>,
 }
 
 impl Arm {
     pub fn new(name: &str, overlay: Option<PathBuf>) -> Arm {
-        Arm { name: name.into(), overlay, template_home: None, expect_models: Vec::new() }
+        Arm { name: name.into(), overlay, template_home: None, expect_models: Vec::new(), base: None, loop_switches: BTreeMap::new() }
     }
+}
+
+/// Set `switches` in the `[loop]` table of `config`. `[loop]` is not a pinned block, so a throwaway home needs no re-seal.
+pub(crate) fn set_loop_switches(config: &str, switches: &BTreeMap<String, toml::Value>) -> Result<String, String> {
+    let mut v: toml::Value = toml::from_str(config).map_err(|e| format!("config.toml: {}", e))?;
+    let root = v.as_table_mut().ok_or("config.toml is not a table")?;
+    let table = root.entry("loop").or_insert_with(|| toml::Value::Table(Default::default())).as_table_mut().ok_or("[loop] is not a table")?;
+    for (k, val) in switches {
+        table.insert(k.clone(), val.clone());
+    }
+    toml::to_string_pretty(&v).map_err(|e| e.to_string())
 }
 
 /// Read `arms.toml`: `[[arm]]` tables with `name`, `template_home` (relative paths are from the file), optional `overlay`
 /// and `expect_models`. Names are lowercase words so they can name directories and columns.
+///
+/// An arm with `base = "<arm>"` is a harness arm: it names no `template_home` or `expect_models` (it uses its base's, so the
+/// model is the same by construction), may name an `overlay`, and sets `[arm.loop]` switches. Only a harness arm may set
+/// switches: a staffing arm that also changed the loop would confound the two.
 pub fn parse_arms(file: &Path) -> Result<Vec<Arm>, String> {
     let text = fs::read_to_string(file).map_err(|e| format!("{}: {}", file.display(), e))?;
     let t: toml::Table = text.parse().map_err(|e: toml::de::Error| format!("{}: {}", file.display(), e.message()))?;
@@ -575,15 +655,47 @@ pub fn parse_arms(file: &Path) -> Result<Vec<Arm>, String> {
         if arms.iter().any(|x| x.name == name) {
             return Err(format!("{}: two arms are named `{}`", at, name));
         }
-        let home = a.get("template_home").and_then(|v| v.as_str()).map(resolve).ok_or(format!("{}: `{}` needs `template_home`", at, name))?;
-        if !home.join("workspaces").is_dir() {
-            return Err(format!("{}: `{}` template_home {} is not a Delphi home (no workspaces/)", at, name, home.display()));
+        let base = a.get("base").and_then(|v| v.as_str()).map(String::from);
+        let mut loop_switches = BTreeMap::new();
+        if let Some(t) = a.get("loop") {
+            for (k, v) in t.as_table().ok_or(format!("{}: `loop` must be a table", at))? {
+                delphi_engine::loopctl::check_switch(k, v).map_err(|e| format!("{}: `{}`: {}", at, name, e))?;
+                loop_switches.insert(k.clone(), v.clone());
+            }
         }
-        let expect_models = a.get("expect_models").and_then(|v| v.as_array()).map(|v| v.iter().filter_map(|m| m.as_str().map(String::from)).collect()).unwrap_or_default();
-        arms.push(Arm { name: name.into(), overlay: a.get("overlay").and_then(|v| v.as_str()).map(resolve), template_home: Some(home), expect_models });
+        if base.is_none() && !loop_switches.is_empty() {
+            return Err(format!("{}: `{}` sets [loop] switches but names no `base`; only a harness arm (`base = \"<arm>\"`) may, so staffing arms stay comparable", at, name));
+        }
+        let (home, expect_models) = if base.is_some() {
+            if a.contains_key("template_home") || a.contains_key("expect_models") {
+                return Err(format!("{}: `{}` is a harness arm: it uses its base's `template_home` and `expect_models`, so leave them out", at, name));
+            }
+            (None, Vec::new())
+        } else {
+            let home = a.get("template_home").and_then(|v| v.as_str()).map(resolve).ok_or(format!("{}: `{}` needs `template_home`", at, name))?;
+            if !home.join("workspaces").is_dir() {
+                return Err(format!("{}: `{}` template_home {} is not a Delphi home (no workspaces/)", at, name, home.display()));
+            }
+            (Some(home), a.get("expect_models").and_then(|v| v.as_array()).map(|v| v.iter().filter_map(|m| m.as_str().map(String::from)).collect()).unwrap_or_default())
+        };
+        arms.push(Arm { name: name.into(), overlay: a.get("overlay").and_then(|v| v.as_str()).map(resolve), template_home: home, expect_models, base, loop_switches });
     }
     if arms.is_empty() {
         return Err(format!("{}: no [[arm]] tables", file.display()));
+    }
+    // A harness arm takes its base's home, staffing and overlay. The base must be a plain arm, wherever it sits in the file.
+    for i in 0..arms.len() {
+        let Some(base) = arms[i].base.clone() else { continue };
+        let found = arms.iter().find(|x| x.name == base).ok_or(format!("{}: `{}` has base `{}`, which is not an arm in this file", file.display(), arms[i].name, base))?;
+        if found.base.is_some() {
+            return Err(format!("{}: `{}` has base `{}`, which is itself a harness arm; a base is a plain arm", file.display(), arms[i].name, base));
+        }
+        let (home, expect, overlay) = (found.template_home.clone(), found.expect_models.clone(), found.overlay.clone());
+        arms[i].template_home = home;
+        arms[i].expect_models = expect;
+        if arms[i].overlay.is_none() {
+            arms[i].overlay = overlay;
+        }
     }
     Ok(arms)
 }
@@ -690,7 +802,7 @@ fn summary_of(stdout: &str) -> Option<Value> {
 /// One case, one seed, one arm, in its own directory under the working directory.
 pub fn run_one(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize) -> Row {
     let label = format!("{}/{}", case.suite, case.id);
-    let mut row = Row { case: label.clone(), arm: arm.name.clone(), seed, exit_code: None, wall_secs: 0.0, cost_usd: 0.0, passed: None, failed_checks: Vec::new(), notes: Vec::new(), usage: BTreeMap::new(), attempts: 0, promotions: 0, dir: String::new(), error: None };
+    let mut row = Row { case: label.clone(), arm: arm.name.clone(), seed, exit_code: None, wall_secs: 0.0, cost_usd: 0.0, passed: None, failed_checks: Vec::new(), notes: Vec::new(), usage: BTreeMap::new(), attempts: 0, promotions: 0, dir: String::new(), error: None, base: arm.base.clone(), eff: Efficiency::default() };
     if let Err(e) = run_inner(cfg, case, arm, seed, index, &mut row) {
         row.error = Some(e);
         row.passed = None;
@@ -719,7 +831,12 @@ fn run_inner(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize, row:
     let cfg_path = ws_dir.join("config.toml");
     let text = fs::read_to_string(&cfg_path).map_err(|e| format!("template home has no workspace `{}` ({})", cfg.workspace, e))?;
     make_repo(case, &repo, &cfg.source_repo)?;
-    fs::write(&cfg_path, set_projects(&text, &repo)?).map_err(|e| e.to_string())?;
+    let mut text = set_projects(&text, &repo)?;
+    if !arm.loop_switches.is_empty() {
+        text = set_loop_switches(&text, &arm.loop_switches)?;
+        row.notes.push(format!("harness arm over {}: [loop] {}", arm.base.as_deref().unwrap_or("?"), arm.loop_switches.iter().map(|(k, v)| format!("{} = {}", k, v)).collect::<Vec<_>>().join(", ")));
+    }
+    fs::write(&cfg_path, text).map_err(|e| e.to_string())?;
     if let Some(o) = &arm.overlay {
         apply_overlay(&ws_dir, o)?;
     }
@@ -766,6 +883,7 @@ fn run_inner(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize, row:
     row.usage = usage_by_model(&events);
     row.cost_usd = row.usage.values().map(|u| u.cost_usd).sum();
     row.promotions = events.iter().filter(|e| e.kind == "model.promoted").count() as u32;
+    row.eff = efficiency_of(&events);
     // An arm is a staffing decision. If any other model did the work, the run says nothing about the arm.
     let strangers: Vec<&String> = row.usage.keys().filter(|m| !arm.expect_models.is_empty() && !arm.expect_models.iter().any(|x| m.starts_with(x.as_str()))).collect();
     if !strangers.is_empty() {
@@ -1044,6 +1162,9 @@ mod tests {
         if kind.starts_with("agent.") {
             // `agent.*` events carry who and how (`event.rs` validate).
             (e.agent, e.span_id, e.endpoint_id, e.access_path, e.model_tier, e.model_id, e.attempt) = (Some("builder".into()), Some("sp_1".into()), Some("ep".into()), Some("api".into()), Some("standard".into()), Some("m".into()), Some(1));
+        } else if kind == "tool.result" {
+            // The tool accounting files a call under its span.
+            e.span_id = Some("sp_1".into());
         }
         e
     }
@@ -1105,6 +1226,90 @@ mod tests {
         let run_cfg = fs::read_to_string(cfg.work_dir.join("r001").join("home").join("workspaces/train/config.toml")).unwrap();
         assert!(run_cfg.contains("r001/repo"), "{}", run_cfg);
         assert!(cfg.work_dir.join("r001/repo/.git").is_dir() && cfg.work_dir.join("r001/repo/keep.txt").is_file());
+    }
+
+    #[test]
+    fn a_harness_arm_takes_its_bases_home_and_staffing_and_only_it_may_set_loop_switches() {
+        let t = tempfile::tempdir().unwrap();
+        let home = t.path().join("home");
+        fs::create_dir_all(home.join("workspaces")).unwrap();
+        let f = t.path().join("arms.toml");
+        let solo = format!("[[arm]]\nname = \"solo\"\ntemplate_home = \"{}\"\nexpect_models = [\"claude-haiku\"]\noverlay = \"cand\"\n", home.display());
+        // The variant may come first in the file: the base is found by name.
+        fs::write(&f, format!("[[arm]]\nname = \"nudge-off\"\nbase = \"solo\"\n[arm.loop]\nnudge = false\nclear_after_kb = 64\n\n{}", solo)).unwrap();
+        let arms = parse_arms(&f).unwrap();
+        let v = &arms[0];
+        assert_eq!((v.base.as_deref(), v.template_home.clone(), v.expect_models.clone(), v.overlay.clone()), (Some("solo"), Some(home.clone()), vec!["claude-haiku".to_string()], Some(t.path().join("cand"))), "it runs the base's home, staffing and overlay");
+        assert_eq!(v.loop_switches, BTreeMap::from([("clear_after_kb".to_string(), toml::Value::Integer(64)), ("nudge".to_string(), toml::Value::Boolean(false))]));
+        assert!(arms[1].base.is_none() && arms[1].loop_switches.is_empty());
+        // Its own overlay replaces the base's.
+        fs::write(&f, format!("[[arm]]\nname = \"v\"\nbase = \"solo\"\noverlay = \"mine\"\n\n{}", solo)).unwrap();
+        assert_eq!(parse_arms(&f).unwrap()[0].overlay, Some(t.path().join("mine")));
+        for (bad, want) in [
+            (format!("{}[arm.loop]\nnudge = false\n", solo), "names no `base`"),
+            (format!("[[arm]]\nname = \"v\"\nbase = \"solo\"\ntemplate_home = \"{}\"\n\n{}", home.display(), solo), "uses its base's `template_home`"),
+            (format!("[[arm]]\nname = \"v\"\nbase = \"solo\"\nexpect_models = [\"x\"]\n\n{}", solo), "uses its base's `template_home` and `expect_models`"),
+            (format!("[[arm]]\nname = \"v\"\nbase = \"ghost\"\n\n{}", solo), "`ghost`, which is not an arm in this file"),
+            (format!("{}\n[[arm]]\nname = \"a\"\nbase = \"solo\"\n\n[[arm]]\nname = \"b\"\nbase = \"a\"\n", solo), "itself a harness arm"),
+            (format!("[[arm]]\nname = \"v\"\nbase = \"solo\"\n[arm.loop]\nnudges = false\n\n{}", solo), "`nudges` is not a [loop] switch"),
+            (format!("[[arm]]\nname = \"v\"\nbase = \"solo\"\n[arm.loop]\nnudge = 1\n\n{}", solo), "true or false"),
+        ] {
+            fs::write(&f, bad).unwrap();
+            assert!(parse_arms(&f).unwrap_err().contains(want), "{}", want);
+        }
+    }
+
+    #[test]
+    fn loop_switches_are_set_in_the_loop_table_and_the_loop_reads_them() {
+        let sw: BTreeMap<String, toml::Value> = BTreeMap::from([("nudge".to_string(), toml::Value::Boolean(false))]);
+        let out = set_loop_switches("[workspace]\nprojects = [\"/x\"]\n[loop]\nnudge_edits = 7\n", &sw).unwrap();
+        let c = delphi_engine::loopctl::LoopConfig::from_root(&toml::from_str(&out).unwrap());
+        assert!(!c.nudge && c.nudge_edits == 7, "a switch is set and the others are kept: {}", out);
+        assert!(out.contains("projects"), "{}", out);
+        // With no [loop] table yet, one is added.
+        assert!(!delphi_engine::loopctl::LoopConfig::from_root(&toml::from_str(&set_loop_switches("[workspace]\nprojects = []\n", &sw).unwrap()).unwrap()).nudge);
+    }
+
+    #[test]
+    fn a_harness_arm_runs_with_its_switches_and_the_row_and_report_carry_its_effort() {
+        let t = tempfile::tempdir().unwrap();
+        let usage = |i: u64, cache: u64| ("agent.usage", json!({"provider": "p", "input_tokens": i, "cache_read_tokens": cache, "output_tokens": 10, "cost_usd": 0.0, "reserved_usd": 0.0, "usage_source": "reported", "cost_model": "metered", "outcome": "ok"}));
+        let canned = mission(t.path(), &[
+            usage(100, 0), // the span's first call is cold and kept apart
+            ("tool.result", json!({"name": "read_file", "is_error": false})),
+            ("tool.result", json!({"name": "read_file", "is_error": true})),
+            ("loop.action", json!({"action": "nudge", "tool": "read_file"})),
+            ("loop.action", json!({"action": "stop"})),
+            ("loop.action", json!({"action": "budget", "turns": 9, "cap": 10})),
+            ("loop.gate", json!({"turn_index": 3})),
+            usage(20, 80),
+            ("task.completed", json!({"status": "escalated"})),
+        ]);
+        let c = case(t.path(), "[[check]]\nkind = \"file_unchanged\"\npath = \"keep.txt\"\n");
+        let off = Arm { base: Some("baseline".into()), loop_switches: BTreeMap::from([("nudge".to_string(), toml::Value::Boolean(false))]), ..Arm::new("nudge-off", None) };
+        let mut config = cfg(t.path(), &canned, vec![baseline(), off], 10.0);
+        config.rows_path = Some(config.work_dir.join("rows.jsonl"));
+        train::prepare_work_home(&config.work_dir).unwrap();
+        let (rows, _) = run_all(&config, &[&c]);
+        assert_eq!(rows.len(), 2, "{:?}", rows.iter().map(|r| &r.error).collect::<Vec<_>>());
+        let (plain, var) = (rows.iter().find(|r| r.arm == "baseline").unwrap(), rows.iter().find(|r| r.arm == "nudge-off").unwrap());
+        // The variant's copy of the home sets the switch; the base's does not, and neither touches the template.
+        let run_cfg = |r: &Row| fs::read_to_string(config.work_dir.join(&r.dir).join("home/workspaces/train/config.toml")).unwrap();
+        assert!(run_cfg(var).contains("[loop]") && run_cfg(var).contains("nudge = false"), "{}", run_cfg(var));
+        assert!(!run_cfg(plain).contains("[loop]") && !fs::read_to_string(config.template_home.join("workspaces/train/config.toml")).unwrap().contains("[loop]"));
+        assert!(var.notes.iter().any(|n| n.contains("harness arm over baseline") && n.contains("nudge = false")), "{:?}", var.notes);
+        assert_eq!((var.base.as_deref(), plain.base.clone()), (Some("baseline"), None));
+        // The effort is read from the log: counts only.
+        let e = &var.eff;
+        assert_eq!((e.turns, e.calls(), e.tool_calls["read_file"], e.nudges, e.hard_stops, e.budget_warnings, e.gates, e.escalations), (2, 2, (2, 1), 1, 1, 1, 1, 1), "{:?}", e);
+        assert_eq!((e.cache_read, e.cache_input), (80, 100), "the first call is cold and does not count against the hit rate");
+        let j = var.to_json();
+        assert_eq!((j["base"].as_str(), j["turns"].as_u64(), j["tool_calls"].as_u64(), j["by_tool"]["read_file"]["errors"].as_u64()), (Some("baseline"), Some(2), Some(2), Some(1)));
+        // The report reads both arms back from rows.jsonl and sets the variant against its base (one seed: no evidence).
+        let r = crate::train_report::render(&config.work_dir, &BTreeMap::new());
+        for want in ["EFFORT", "HARNESS EFFECT", "model: m", "nudge-off vs baseline", "no evidence (fewest graded seeds 1, below 3)"] {
+            assert!(r.contains(want), "{} in\n{}", want, r);
+        }
     }
 
     /// A research case with a truth pack beside it (verified or a draft).
@@ -1519,7 +1724,7 @@ mod tests {
 
     #[test]
     fn the_report_labels_deltas_as_no_evidence_unless_the_arms_separate() {
-        let row = |arm: &str, seed: u32, pass: bool| Row { case: "s/c1".into(), arm: arm.into(), seed, exit_code: Some(0), wall_secs: 1.0, cost_usd: 0.25, passed: Some(pass), failed_checks: vec![], notes: vec![], usage: BTreeMap::new(), attempts: 0, promotions: 0, dir: String::new(), error: None };
+        let row = |arm: &str, seed: u32, pass: bool| Row { case: "s/c1".into(), arm: arm.into(), seed, exit_code: Some(0), wall_secs: 1.0, cost_usd: 0.25, passed: Some(pass), failed_checks: vec![], notes: vec![], usage: BTreeMap::new(), attempts: 0, promotions: 0, dir: String::new(), error: None, base: None, eff: Efficiency::default() };
         let arms = vec!["baseline".to_string(), "candidate".to_string()];
         let two: Vec<Row> = vec![row("baseline", 1, false), row("baseline", 2, false), row("candidate", 1, true), row("candidate", 2, true)];
         let r = report(&two, &arms, &[]);
@@ -1634,7 +1839,7 @@ mod tests {
         again.work_dir = t.path().join("w3");
         again.rows_path = Some(again.work_dir.join("rows.jsonl"));
         train::prepare_work_home(&again.work_dir).unwrap();
-        append_row(again.rows_path.as_ref().unwrap(), &Row { case: "s/c1".into(), arm: "baseline".into(), seed: 1, exit_code: Some(4), wall_secs: 0.1, cost_usd: 0.0, passed: None, failed_checks: vec![], notes: vec![], usage: BTreeMap::new(), attempts: 0, promotions: 0, dir: "r001".into(), error: Some("infrastructure".into()) });
+        append_row(again.rows_path.as_ref().unwrap(), &Row { case: "s/c1".into(), arm: "baseline".into(), seed: 1, exit_code: Some(4), wall_secs: 0.1, cost_usd: 0.0, passed: None, failed_checks: vec![], notes: vec![], usage: BTreeMap::new(), attempts: 0, promotions: 0, dir: "r001".into(), error: Some("infrastructure".into()), base: None, eff: Efficiency::default() });
         again.resume = true;
         let (rerun, _) = run_all(&again, &[&c]);
         assert_eq!((rerun.len(), rerun[0].dir.as_str()), (1, "r002"), "the ungraded run was tried again");

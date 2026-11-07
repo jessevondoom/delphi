@@ -411,6 +411,7 @@ mod tests {
             span_id: task_id.map(|s| format!("span_{}", s)),
             parent_span_id: None,
             agent: agent.map(|s| s.to_string()),
+            pool_slot: None,
             endpoint_id: None,
             access_path: None,
             model_tier: None,

@@ -35,7 +35,7 @@ import { copyToClipboard, useSelection } from './select.ts';
 import type { Rpc } from './rpc.ts';
 import { anyShellRunning, runBang } from './shell.ts';
 import type { Term } from './terminal.ts';
-import type { Info, Pal, Rgb } from './theme.ts';
+import { blinkSteps, type Info, type Pal, type Rgb } from './theme.ts';
 import { Frame } from './frame.tsx';
 
 type Props = { cmd: Rpc; ev: Rpc; term: Term; info: Info; mission: string; dark: boolean; bg?: Rgb | null; themeForced?: boolean; history: State; onExit?: () => void };
@@ -157,7 +157,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
     const t = setInterval(() => {
       const n = Date.now(), s = stateRef.current;
       const ty = typingOf(s);
-      const key = tickKey(s.agents, STRIP_ROLES.filter((r) => info.roles[r]), n, still, Object.keys(s.running).length > 0 || anyShellRunning(s) || archRef.current.pg.busy !== null, ty ? String(typingFrame(ty.since, ty.id, n, still)) : '');
+      const key = tickKey(s.agents, STRIP_ROLES.filter((r) => info.roles[r]), n, still, Object.keys(s.running).length > 0 || anyShellRunning(s) || archRef.current.pg.busy !== null, ty ? String(typingFrame(ty.since, ty.id, n, still)) : '', (r) => blinkSteps(r, info));
       if (key !== last) { last = key; setNow(n); }
     }, TICK_MS);
     return () => clearInterval(t);

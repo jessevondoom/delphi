@@ -39,6 +39,34 @@ routing is configuration) and may declare `expect_models`, the model ids or pref
 other model made a call is not graded: it no longer measures that arm. See `arms-pilot-example.toml`. Rows record tokens
 in and out, calls and cost per model, attempts and mid-run model swaps.
 
+### Harness arms (`specs/048` BM-1)
+
+A **harness arm** holds the model fixed and varies the loop around it: `base = "<arm>"` names a plain arm in the same file,
+and `[arm.loop]` sets the `[loop]` switches (`specs/045`) in that arm's copy of the home. It takes the base's template home,
+`expect_models` and overlay (leave `template_home` and `expect_models` out; an `overlay` of its own replaces the base's), so
+the two differ only in the switches and the overlay. Only a harness arm may set switches, a switch name the loop does not read
+is refused before any run, and a base is a plain arm (no chains).
+
+```toml
+[[arm]]
+name = "solo-haiku"
+template_home = "../../../delphi-train-homes/solo-haiku"
+expect_models = ["claude-haiku"]
+
+[[arm]]
+name = "haiku-no-nudge"   # same model, same cases, same seeds; only the loop nudge is off
+base = "solo-haiku"
+[arm.loop]
+nudge = false
+```
+
+Each row also records the run's effort: turns, tool calls (by tool, with errors), nudges, hard stops, budget warnings,
+verification turns, escalations and the cache read share. `delphi train report` prints an **EFFORT** table (per run and per
+passing run) and, for each harness arm, a **HARNESS EFFECT** line against its base: pass rate with the noise (one standard
+error of the difference), tokens, turns and calls per pass, and a verdict. Tokens per pass up by over 25 % (`COST_FLAG`,
+OD-2, provisional) with the pass rate inside the noise reads "costlier, not better"; more passes for that cost reads "a
+trade"; under three graded seeds on either side it reads "no evidence".
+
 ## Reviewing a truth pack (your job before any research run)
 
 Each research case has a generated **review sheet** beside its pack: open `truth/review-sheet.md` in

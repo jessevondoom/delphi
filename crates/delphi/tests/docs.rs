@@ -135,9 +135,10 @@ fn every_agent_and_skill_manifest_satisfies_its_schema() {
 fn research_results_follow_their_schema_and_refuse_control_characters_in_identity() {
     let ok = json!({
         "status": "done", "answer": "a", "source_ids": ["s1"], "kb_hits": [], "new_claims": 1, "budget_used": { "steps": 3 },
-        "answered_by": "scout", "signature": "⟦•_•⟧ Name (scout) via delphi",
+        "answered_by": "scout", "signature": "⟦•_•⟧ Name (scout, via delphi)", "display": "⟦•_•⟧ Name (scout, via delphi)",
+        "boundary_line": "── Name (scout) takes over: the research you asked for ──", "return_line": "── Name (scout) hands back ──",
         "claims": [{ "id": "c1", "assertion": "x", "source_ids": ["s1"], "quote": "q", "locator": "p1", "retrieved": "2026-11-01", "licence": "cc-by", "knowledge_status": "noted", "contested": false, "from_trusted_source": true }],
-        "identity": { "role": "scout", "display_name": "Name", "badge": "⟦•_•⟧", "hex": "#123456", "ansi256": 33, "via": "delphi" }
+        "identity": { "role": "scout", "display_name": "Name", "badge": "⟦•_•⟧", "hex": "#123456", "ansi256": 33, "hex_light": "#654321", "ansi256_light": 94, "via": "delphi" }
     });
     must_pass("research-result.schema.json", "a research result", &ok);
     let mut bad = ok.clone();
@@ -160,6 +161,12 @@ fn events_follow_the_envelope_schema() {
         "agent": "builder", "span_id": "s", "task_id": "t1", "endpoint_id": "e", "access_path": "api", "model_tier": "fast", "model_id": "x", "attempt": 1
     });
     must_pass("event-envelope.schema.json", "an agent event", &agent);
+    // specs/087 §4.3: a one-off agent's pool slot is a slot id, never a name.
+    let mut slotted = agent.clone();
+    slotted["pool_slot"] = json!("pool-07");
+    must_pass("event-envelope.schema.json", "an event with a pool slot", &slotted);
+    slotted["pool_slot"] = json!("a-display-name");
+    must_fail("event-envelope.schema.json", "an event whose pool slot is a name", &slotted);
     let mut bad = agent;
     bad.as_object_mut().unwrap().remove("span_id");
     must_fail("event-envelope.schema.json", "an agent event without span_id", &bad);

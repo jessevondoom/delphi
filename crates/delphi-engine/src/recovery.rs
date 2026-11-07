@@ -54,11 +54,13 @@ pub struct SpanState {
     pub interruptions: u32,
     /// Tool-call id → the child span it dispatched.
     pub dispatches: BTreeMap<String, String>,
+    /// The name-pool slot the span's start event recorded (`specs/087` §4.3); none for a core role.
+    pub pool_slot: Option<String>,
 }
 
 impl SpanState {
     fn new(span_id: &str, task_id: &str, role: &str, depth: u32, parent: &str, ceiling: Tier) -> SpanState {
-        SpanState { span_id: span_id.into(), task_id: task_id.into(), role: role.into(), depth, parent_span: parent.into(), handoff: None, status: NodeStatus::Running, ceiling, nonce: None, history: vec![], pending: vec![], known_results: BTreeMap::new(), interruptions: 0, dispatches: BTreeMap::new() }
+        SpanState { span_id: span_id.into(), task_id: task_id.into(), role: role.into(), depth, parent_span: parent.into(), handoff: None, status: NodeStatus::Running, ceiling, nonce: None, history: vec![], pending: vec![], known_results: BTreeMap::new(), interruptions: 0, dispatches: BTreeMap::new(), pool_slot: None }
     }
 
     pub fn is_open(&self) -> bool {
@@ -128,6 +130,7 @@ pub fn rebuild_with(events: &[EventEnvelope], payload: &dyn Fn(&str) -> Option<S
                 let id = p["node_id"].as_str().unwrap_or("").to_string();
                 let mut st = SpanState::new(&id, e.task_id.as_deref().unwrap_or(""), p["role"].as_str().unwrap_or(""), p["depth"].as_u64().unwrap_or(0) as u32, p["parent"].as_str().unwrap_or(""), tier(&p["ceiling"]).unwrap_or(Tier::L5));
                 st.nonce = p["nonce"].as_str().map(String::from);
+                st.pool_slot = e.pool_slot.clone();
                 if st.depth == 0 {
                     if let Some(t) = rec.tasks.get_mut(&st.task_id) {
                         t.root_span = Some(id.clone());

@@ -820,7 +820,7 @@ impl Engine {
 
     /// Run one seat's span under a timeout. A seat that fails, escalates or times out abstains; it never
     /// blocks the others.
-    async fn run_seat(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, h: HandoffEnvelope, slices: Vec<ContextSlice>, schema: Option<String>, timeout: Duration) -> Stance {
+    pub(crate) async fn run_seat(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, h: HandoffEnvelope, slices: Vec<ContextSlice>, schema: Option<String>, timeout: Duration) -> Stance {
         let handoff_id = h.handoff_id.clone();
         if let Some(s) = schema {
             self.schemas.lock().unwrap().insert(handoff_id.clone(), s);
@@ -828,7 +828,9 @@ impl Engine {
         // Always registered, even with no slices (Round 1 has none): a span with an entry here is a Council seat, which the
         // org-context slice is withheld from so that Round 1 stays blind (`specs/026` §3.1).
         self.injected.lock().unwrap().insert(handoff_id.clone(), slices);
+        self.seat_deadlines.lock().unwrap().insert(handoff_id.clone(), std::time::Instant::now() + timeout);
         let out = tokio::time::timeout(timeout, self.run_span(m, task_id, h, None, 1)).await;
+        self.seat_deadlines.lock().unwrap().remove(&handoff_id);
         self.injected.lock().unwrap().remove(&handoff_id);
         self.schemas.lock().unwrap().remove(&handoff_id);
         match out {
@@ -926,7 +928,7 @@ impl Engine {
         let stances = panel.stances().cloned().unwrap_or_default();
         let (round2, round2_text) = panel.parsed_round2();
         for (role, c) in &round2 {
-            let mut e = EventEnvelope::new(&m.id, "council.critique", json!({"round": 2, "role": role, "readable": c.is_some(), "recommendation": c.as_ref().map(|c| c.recommendation.label()), "concur": c.as_ref().and_then(|c| c.concur), "findings": c.as_ref().map(|c| c.findings.iter().map(|(s, t)| json!({"severity": s, "title": t})).collect::<Vec<_>>()).unwrap_or_default(), "text": round2_text.get(role).map(|t| self.secrets.redact(t)), "brief_hash": panel.brief_hash(role, 2)}));
+            let mut e = EventEnvelope::new(&m.id, "council.critique", json!({"round": 2, "role": role, "readable": c.is_some(), "recommendation": c.as_ref().map(|c| c.recommendation.label()), "concur": c.as_ref().and_then(|c| c.concur), "findings": c.as_ref().map(|c| c.findings.iter().map(|(s, t)| json!({"severity": s, "title": t})).collect::<Vec<_>>()).unwrap_or_default(), "text": round2_text.get(role).map(|t| self.secrets.redact(t)), "brief_hash": panel.brief_hash(role, 2), "format_retries": panel.format_retries(role)}));
             e.task_id = Some(task_id.clone());
             m.append(e).await?;
         }
@@ -1098,7 +1100,7 @@ impl Engine {
                 synthesis = t;
             }
         }
-        self.conclude(m, task_id, proposition, &plan, &stances, &round2, &round2_text, &decision, lens_plan.as_ref(), "", synthesis).await
+        self.conclude(m, task_id, proposition, &plan, &stances, &round2, &round2_text, &decision, lens_plan.as_ref(), "venue: daemon\n", synthesis).await
     }
 
     /// From the deterministic decision to the record: the steps that follow, the Council record on disk, the `council.verdict` event
@@ -1401,7 +1403,7 @@ pub(crate) mod tests {
         let head = doc.split("\n---\n").next().unwrap();
         assert!(head.contains("council_format: 1\nvenue: panel\nblind: yes"), "{head}");
         let plain = render_artifact(&ArtifactInput { mission_id: "m", n: 1, slug: "q", proposition: "q", timestamp: "t", plan: &plan, stances: &BTreeMap::new(), round2: &BTreeMap::new(), round2_text: &BTreeMap::new(), decision: &d, synthesis: "s", follow: &follow, lenses: None, front: "" });
-        assert!(!plain.contains("venue:"), "a daemon Council's record is unchanged");
+        assert!(!plain.contains("venue:"), "a record rendered with no front matter says no venue");
     }
 
     fn who(body: &serde_json::Value) -> &'static str {

@@ -1,9 +1,163 @@
 {
+  "ascii_glyphs": {
+    "¬": "~",
+    "°": "'",
+    "·": ".",
+    "×": "x",
+    "ω": "W",
+    "ᴥ": "Y",
+    "•": "0",
+    "…": ".",
+    "‿": "v",
+    "≈": "%",
+    "─": "-",
+    "■": "#",
+    "▪": "#",
+    "◉": "@",
+    "●": "O",
+    "◔": "c",
+    "☆": "*",
+    "✦": "+",
+    "⟦": "[",
+    "⟧": "]"
+  },
   "eye": {
     "dark": "#ffffff",
     "light": "#0f172a"
   },
   "roles": {
+    "administrator": {
+      "ansi": 8,
+      "ansi_light": 8,
+      "badge": {
+        "alarm": {
+          "cells": "●_!",
+          "mouth": 1
+        },
+        "blink": {
+          "cells": "-.-",
+          "mouth": 1
+        },
+        "escalated": {
+          "cells": "x_x",
+          "mouth": 1
+        },
+        "idle": {
+          "cells": "•.•",
+          "mouth": 1
+        },
+        "success": {
+          "cells": "^─^",
+          "mouth": 1
+        },
+        "surprise": {
+          "cells": "●_●",
+          "mouth": 1
+        },
+        "thinking_left": {
+          "cells": "•• ",
+          "mouth": 1
+        },
+        "thinking_right": {
+          "cells": " ••",
+          "mouth": 1
+        },
+        "waiting_approval": {
+          "cells": "x?x",
+          "mouth": null
+        },
+        "working": {
+          "cells": "•─•",
+          "mouth": 1
+        }
+      },
+      "blink_steps": [
+        "-.-"
+      ],
+      "chassis": "#68798f",
+      "chassis_light": "#5b6b82",
+      "crown": "▄ ▄ ▄ ▄",
+      "crown_rgb": "#e2e8f0",
+      "mascot": {
+        "alarm": "  ●_!  ",
+        "blink": "  -.-  ",
+        "escalated": "  x_x  ",
+        "idle": "  •.•  ",
+        "success": "  ^─^  ",
+        "surprise": "  ●_●  ",
+        "thinking_left": "  ••   ",
+        "thinking_right": "   ••  ",
+        "waiting_approval": " x ? x ",
+        "working": "  •─•  "
+      },
+      "mascot_face": "•.•"
+    },
+    "advocate": {
+      "ansi": 1,
+      "ansi_light": 1,
+      "badge": {
+        "alarm": {
+          "cells": "●_!",
+          "mouth": 1
+        },
+        "blink": {
+          "cells": "*^*",
+          "mouth": 1
+        },
+        "escalated": {
+          "cells": "x_x",
+          "mouth": 1
+        },
+        "idle": {
+          "cells": "•^•",
+          "mouth": 1
+        },
+        "success": {
+          "cells": "^─^",
+          "mouth": 1
+        },
+        "surprise": {
+          "cells": "●_●",
+          "mouth": 1
+        },
+        "thinking_left": {
+          "cells": "•• ",
+          "mouth": 1
+        },
+        "thinking_right": {
+          "cells": " ••",
+          "mouth": 1
+        },
+        "waiting_approval": {
+          "cells": "x?x",
+          "mouth": null
+        },
+        "working": {
+          "cells": "•─•",
+          "mouth": 1
+        }
+      },
+      "blink_steps": [
+        "*^*"
+      ],
+      "chassis": "#f43f5e",
+      "chassis_light": "#be123c",
+      "crown": "▄  ▄  ▄",
+      "crown_rgb": "#fde047",
+      "mascot": {
+        "alarm": "  ●_!  ",
+        "blink": "  *^*  ",
+        "escalated": "  x_x  ",
+        "idle": "  •^•  ",
+        "success": "  ^─^  ",
+        "surprise": "  ●_●  ",
+        "thinking_left": "  ••   ",
+        "thinking_right": "   ••  ",
+        "waiting_approval": " x ? x ",
+        "working": "  •─•  "
+      },
+      "mascot_face": "•^•"
+    },
     "architect": {
       "ansi": 14,
       "ansi_light": 4,
@@ -13,7 +167,205 @@
           "mouth": 1
         },
         "blink": {
-          "cells": "-_-",
+          "cells": "-o-",
+          "mouth": 1
+        },
+        "escalated": {
+          "cells": "x_x",
+          "mouth": 1
+        },
+        "idle": {
+          "cells": "•o•",
+          "mouth": 1
+        },
+        "success": {
+          "cells": "^─^",
+          "mouth": 1
+        },
+        "surprise": {
+          "cells": "●_●",
+          "mouth": 1
+        },
+        "thinking_left": {
+          "cells": "•• ",
+          "mouth": 1
+        },
+        "thinking_right": {
+          "cells": " ••",
+          "mouth": 1
+        },
+        "waiting_approval": {
+          "cells": "x?x",
+          "mouth": null
+        },
+        "working": {
+          "cells": "•─•",
+          "mouth": 1
+        }
+      },
+      "blink_steps": [
+        "-o-"
+      ],
+      "chassis": "#38bdf8",
+      "chassis_light": "#0369a1",
+      "crown": "▄▄▄▄▄▄▄",
+      "crown_rgb": "#ffffff",
+      "mascot": {
+        "alarm": "  ●_!  ",
+        "blink": "  -o-  ",
+        "escalated": "  x_x  ",
+        "idle": "  •o•  ",
+        "success": "  ^─^  ",
+        "surprise": "  ●_●  ",
+        "thinking_left": "  ••   ",
+        "thinking_right": "   ••  ",
+        "waiting_approval": " x ? x ",
+        "working": "  •─•  "
+      },
+      "mascot_face": "•o•"
+    },
+    "assistant": {
+      "ansi": 12,
+      "ansi_light": 4,
+      "badge": {
+        "alarm": {
+          "cells": "●_!",
+          "mouth": 1
+        },
+        "blink": {
+          "cells": "-‿-",
+          "mouth": 1
+        },
+        "escalated": {
+          "cells": "x_x",
+          "mouth": 1
+        },
+        "idle": {
+          "cells": "•‿•",
+          "mouth": 1
+        },
+        "success": {
+          "cells": "^─^",
+          "mouth": 1
+        },
+        "surprise": {
+          "cells": "●_●",
+          "mouth": 1
+        },
+        "thinking_left": {
+          "cells": "•• ",
+          "mouth": 1
+        },
+        "thinking_right": {
+          "cells": " ••",
+          "mouth": 1
+        },
+        "waiting_approval": {
+          "cells": "x?x",
+          "mouth": null
+        },
+        "working": {
+          "cells": "•─•",
+          "mouth": 1
+        }
+      },
+      "blink_steps": [
+        "-‿-"
+      ],
+      "chassis": "#3b82f6",
+      "chassis_light": "#1d4ed8",
+      "crown": "  ▄ ▄  ",
+      "crown_rgb": "#93c5fd",
+      "mascot": {
+        "alarm": "  ●_!  ",
+        "blink": "  -‿-  ",
+        "escalated": "  x_x  ",
+        "idle": "  •‿•  ",
+        "success": "  ^─^  ",
+        "surprise": "  ●_●  ",
+        "thinking_left": "  ••   ",
+        "thinking_right": "   ••  ",
+        "waiting_approval": " x ? x ",
+        "working": "  •─•  "
+      },
+      "mascot_face": "•‿•"
+    },
+    "builder": {
+      "ansi": 11,
+      "ansi_light": 3,
+      "badge": {
+        "alarm": {
+          "cells": "●_!",
+          "mouth": 1
+        },
+        "blink": {
+          "cells": ">=<",
+          "mouth": 1
+        },
+        "escalated": {
+          "cells": "x_x",
+          "mouth": 1
+        },
+        "idle": {
+          "cells": "•=•",
+          "mouth": 1
+        },
+        "success": {
+          "cells": "^─^",
+          "mouth": 1
+        },
+        "surprise": {
+          "cells": "●_●",
+          "mouth": 1
+        },
+        "thinking_left": {
+          "cells": "•• ",
+          "mouth": 1
+        },
+        "thinking_right": {
+          "cells": " ••",
+          "mouth": 1
+        },
+        "waiting_approval": {
+          "cells": "x?x",
+          "mouth": null
+        },
+        "working": {
+          "cells": "•─•",
+          "mouth": 1
+        }
+      },
+      "blink_steps": [
+        ">=<"
+      ],
+      "chassis": "#f59e0b",
+      "chassis_light": "#b45309",
+      "crown": "▄▄▄▄▄▄▄",
+      "crown_rgb": "#f43f5e",
+      "mascot": {
+        "alarm": "  ●_!  ",
+        "blink": " >===< ",
+        "escalated": "  x_x  ",
+        "idle": " •===• ",
+        "success": "  ^─^  ",
+        "surprise": "  ●_●  ",
+        "thinking_left": "  ••   ",
+        "thinking_right": "   ••  ",
+        "waiting_approval": " x ? x ",
+        "working": "  •─•  "
+      },
+      "mascot_face": "•===•"
+    },
+    "investigator": {
+      "ansi": 15,
+      "ansi_light": 8,
+      "badge": {
+        "alarm": {
+          "cells": "●_!",
+          "mouth": 1
+        },
+        "blink": {
+          "cells": "-_•",
           "mouth": 1
         },
         "escalated": {
@@ -49,13 +401,16 @@
           "mouth": 1
         }
       },
-      "chassis": "#38bdf8",
-      "chassis_light": "#0369a1",
-      "crown": "▄▄▄▄▄▄▄",
-      "crown_rgb": "#ffffff",
+      "blink_steps": [
+        "-_•"
+      ],
+      "chassis": "#f1f5f9",
+      "chassis_light": "#57534e",
+      "crown": "▄▄ ▄ ▄▄",
+      "crown_rgb": "#94a3b8",
       "mascot": {
         "alarm": "  ●_!  ",
-        "blink": "  -_-  ",
+        "blink": "  -_•  ",
         "escalated": "  x_x  ",
         "idle": "  •_•  ",
         "success": "  ^─^  ",
@@ -67,16 +422,16 @@
       },
       "mascot_face": "•_•"
     },
-    "builder": {
-      "ansi": 11,
-      "ansi_light": 3,
+    "messenger": {
+      "ansi": 4,
+      "ansi_light": 4,
       "badge": {
         "alarm": {
           "cells": "●_!",
           "mouth": 1
         },
         "blink": {
-          "cells": "-─-",
+          "cells": "·w·",
           "mouth": 1
         },
         "escalated": {
@@ -84,7 +439,7 @@
           "mouth": 1
         },
         "idle": {
-          "cells": "•─•",
+          "cells": "•w•",
           "mouth": 1
         },
         "success": {
@@ -112,15 +467,18 @@
           "mouth": 1
         }
       },
-      "chassis": "#f59e0b",
-      "chassis_light": "#b45309",
-      "crown": "▄▄▄▄▄▄▄",
-      "crown_rgb": "#f43f5e",
+      "blink_steps": [
+        "·w·"
+      ],
+      "chassis": "#84cc16",
+      "chassis_light": "#4d7c0f",
+      "crown": "▄▄   ▄▄",
+      "crown_rgb": "#ffffff",
       "mascot": {
         "alarm": "  ●_!  ",
-        "blink": " -───- ",
+        "blink": "  ·w·  ",
         "escalated": "  x_x  ",
-        "idle": " •───• ",
+        "idle": "  •w•  ",
         "success": "  ^─^  ",
         "surprise": "  ●_●  ",
         "thinking_left": "  ••   ",
@@ -128,7 +486,7 @@
         "waiting_approval": " x ? x ",
         "working": "  •─•  "
       },
-      "mascot_face": "•───•"
+      "mascot_face": "•w•"
     },
     "operator": {
       "ansi": 7,
@@ -175,6 +533,9 @@
           "mouth": 1
         }
       },
+      "blink_steps": [
+        "-_-"
+      ],
       "chassis": "#94a3b8",
       "chassis_light": "#475569",
       "crown": "▄▄▄▄▄▄▄",
@@ -238,6 +599,9 @@
           "mouth": 1
         }
       },
+      "blink_steps": [
+        "-─-"
+      ],
       "chassis": "#a855f7",
       "chassis_light": "#7e22ce",
       "crown": "  ▄▄▄  ",
@@ -269,7 +633,7 @@
           "mouth": 1
         },
         "blink": {
-          "cells": "•_•",
+          "cells": "-_-",
           "mouth": 1
         },
         "escalated": {
@@ -277,7 +641,7 @@
           "mouth": 1
         },
         "idle": {
-          "cells": "-_-",
+          "cells": "¬_¬",
           "mouth": 1
         },
         "success": {
@@ -305,15 +669,18 @@
           "mouth": 1
         }
       },
+      "blink_steps": [
+        "-_-"
+      ],
       "chassis": "#ef4444",
       "chassis_light": "#b91c1c",
       "crown": "▄     ▄",
       "crown_rgb": "#facc15",
       "mascot": {
         "alarm": "  ●_!  ",
-        "blink": "  •_•  ",
+        "blink": "  -_-  ",
         "escalated": "  x_x  ",
-        "idle": "  -_-  ",
+        "idle": "  ¬_¬  ",
         "success": "  ^─^  ",
         "surprise": "  ●_●  ",
         "thinking_left": "  ••   ",
@@ -321,7 +688,7 @@
         "waiting_approval": " x ? x ",
         "working": "  •─•  "
       },
-      "mascot_face": "-_-"
+      "mascot_face": "¬_¬"
     },
     "scout": {
       "ansi": 3,
@@ -332,7 +699,7 @@
           "mouth": null
         },
         "blink": {
-          "cells": "---",
+          "cells": "-••",
           "mouth": null
         },
         "escalated": {
@@ -368,6 +735,11 @@
           "mouth": null
         }
       },
+      "blink_steps": [
+        "-••",
+        "•-•",
+        "••-"
+      ],
       "chassis": "#ffff00",
       "chassis_light": "#854d0e",
       "crown": "   ▄   ",
@@ -395,7 +767,139 @@
           "mouth": 1
         },
         "blink": {
+          "cells": "-u-",
+          "mouth": 1
+        },
+        "escalated": {
+          "cells": "x_x",
+          "mouth": 1
+        },
+        "idle": {
+          "cells": "•u•",
+          "mouth": 1
+        },
+        "success": {
+          "cells": "^─^",
+          "mouth": 1
+        },
+        "surprise": {
+          "cells": "●_●",
+          "mouth": 1
+        },
+        "thinking_left": {
+          "cells": "•• ",
+          "mouth": 1
+        },
+        "thinking_right": {
+          "cells": " ••",
+          "mouth": 1
+        },
+        "waiting_approval": {
+          "cells": "x?x",
+          "mouth": null
+        },
+        "working": {
+          "cells": "•─•",
+          "mouth": 1
+        }
+      },
+      "blink_steps": [
+        "-u-"
+      ],
+      "chassis": "#14b8a6",
+      "chassis_light": "#0f766e",
+      "crown": "▄▄ ▄ ▄▄",
+      "crown_rgb": "#f9a8d4",
+      "mascot": {
+        "alarm": "  ●_!  ",
+        "blink": "  -u-  ",
+        "escalated": "  x_x  ",
+        "idle": "  •u•  ",
+        "success": "  ^─^  ",
+        "surprise": "  ●_●  ",
+        "thinking_left": "  ••   ",
+        "thinking_right": "   ••  ",
+        "waiting_approval": " x ? x ",
+        "working": "  •─•  "
+      },
+      "mascot_face": "•u•"
+    },
+    "validator": {
+      "ansi": 5,
+      "ansi_light": 5,
+      "badge": {
+        "alarm": {
+          "cells": "●_!",
+          "mouth": 1
+        },
+        "blink": {
           "cells": "-_-",
+          "mouth": 1
+        },
+        "escalated": {
+          "cells": "x_x",
+          "mouth": 1
+        },
+        "idle": {
+          "cells": "¬_•",
+          "mouth": 1
+        },
+        "success": {
+          "cells": "^─^",
+          "mouth": 1
+        },
+        "surprise": {
+          "cells": "●_●",
+          "mouth": 1
+        },
+        "thinking_left": {
+          "cells": "•• ",
+          "mouth": 1
+        },
+        "thinking_right": {
+          "cells": " ••",
+          "mouth": 1
+        },
+        "waiting_approval": {
+          "cells": "x?x",
+          "mouth": null
+        },
+        "working": {
+          "cells": "•─•",
+          "mouth": 1
+        }
+      },
+      "blink_steps": [
+        "-_-"
+      ],
+      "chassis": "#22c55e",
+      "chassis_light": "#15803d",
+      "crown": " ▄▄▄▄▄ ",
+      "crown_rgb": "#facc15",
+      "mascot": {
+        "alarm": "  ●_!  ",
+        "blink": "  -_-  ",
+        "escalated": "  x_x  ",
+        "idle": "  ¬_•  ",
+        "success": "  ^─^  ",
+        "surprise": "  ●_●  ",
+        "thinking_left": "  ••   ",
+        "thinking_right": "   ••  ",
+        "waiting_approval": " x ? x ",
+        "working": "  •─•  "
+      },
+      "mascot_face": "¬_•"
+    },
+    "writer": {
+      "ansi": 6,
+      "ansi_light": 6,
+      "badge": {
+        "alarm": {
+          "cells": "●_!",
+          "mouth": 1
+        },
+        "blink": {
+          "cells": "•_-",
           "mouth": 1
         },
         "escalated": {
@@ -431,13 +935,16 @@
           "mouth": 1
         }
       },
-      "chassis": "#14b8a6",
-      "chassis_light": "#0f766e",
-      "crown": "▄▄ ▄ ▄▄",
-      "crown_rgb": "#f9a8d4",
+      "blink_steps": [
+        "•_-"
+      ],
+      "chassis": "#fde68a",
+      "chassis_light": "#a16207",
+      "crown": "▄ ▄▄▄ ▄",
+      "crown_rgb": "#ffffff",
       "mascot": {
         "alarm": "  ●_!  ",
-        "blink": "  -_-  ",
+        "blink": "  •_-  ",
         "escalated": "  x_x  ",
         "idle": "  •_•  ",
         "success": "  ^─^  ",
