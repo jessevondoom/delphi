@@ -166,6 +166,7 @@ fn assemble(t: tempfile::TempDir, root: PathBuf, steps: Vec<Step>, budget_usd: f
         xenia_seen: Default::default(),
         org_cache: Default::default(),
         schemas: Default::default(),
+        name_live: Default::default(),
         pool,
         clock_unix: clock,
         degraded: Default::default(),

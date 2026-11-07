@@ -341,6 +341,7 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
         xenia_seen: Default::default(),
         org_cache: Default::default(),
         schemas: Default::default(),
+        name_live: Default::default(),
         connectors,
         pool,
         clock_unix: crate::pool::system_clock(),
