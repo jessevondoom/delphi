@@ -438,8 +438,10 @@ async fn handle(shared: &Shared, req: &Value) -> Option<Value> {
                 }
             };
             let mut text = content.content;
-            if text.chars().count() > MAX_REPLY_CHARS {
-                text = text.chars().take(MAX_REPLY_CHARS).collect::<String>() + "\n[the result was cut at the bridge's size limit]";
+            let total = text.chars().count();
+            if total > MAX_REPLY_CHARS {
+                // Fixed words and two numbers: the note says what was left out and how to ask for less, and repeats nothing of the result.
+                text = text.chars().take(MAX_REPLY_CHARS).collect::<String>() + &format!("\n[cut: the bridge returns at most {} characters of a result and this one had {}; ask for less, such as a smaller `limit`, a narrower query or `detail: concise`]", MAX_REPLY_CHARS, total);
             }
             // The reminder is the last block and is added after the size cut, so a long result cannot push it out.
             let mut blocks = vec![json!({"type": "text", "text": text})];
@@ -720,7 +722,8 @@ mod tests {
         let resp = ask(&mut r, &mut w, json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "timer", "arguments": {}}})).await;
         span.await.unwrap();
         let text = resp["result"]["content"][0]["text"].as_str().unwrap();
-        assert!(text.ends_with("[the result was cut at the bridge's size limit]"), "{}", &text[text.len() - 80..]);
+        let want = format!("[cut: the bridge returns at most {} characters of a result and this one had {}; ask for less, such as a smaller `limit`, a narrower query or `detail: concise`]", MAX_REPLY_CHARS, MAX_REPLY_CHARS + 50);
+        assert!(text.ends_with(&want), "{}", text.chars().rev().take(160).collect::<String>().chars().rev().collect::<String>());
         assert_eq!(text.chars().filter(|c| *c == 'é').count(), MAX_REPLY_CHARS, "cut on a character, never inside one");
     }
 

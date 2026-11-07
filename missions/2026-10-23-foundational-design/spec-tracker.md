@@ -411,6 +411,7 @@ Approved by the operator on 2026-10-31. Same-machine host agents (Claude Code, C
 | S9 | `delphi learn ingest --from claude-code`: per-project opt-in, versioned reader, two fixed rules, L0 role-keyed notes (Codex/Copilot readers later) | built (PR pending) |
 | S10 | `/resume-host` (`handoff.resume`), `/mcp [on\|off]` (`mcp.get`/`mcp.set`, comment-preserving edit of `[mcp] enabled`) | built (PR pending) |
 | S11 | security review of every new write, spend and read path; fence-closing fix (`defuse`) | built (PR pending) |
+| S12 | search results say what they left out (amended 2026-11-07): `search_project` and `search_memory` add `matched`, `returned`, `limit` and a fixed-text `hint` (more matched, nothing matched, no searchable words); `detail` `concise` or `full` (default `full`, scalar enum; concise drops the line preview); the bridge cut notice says the limit, the size and how to ask for less | built 2026-11-07 (PR pending): `mcp_project.rs` (`Detail`, `Ranked`, `envelope`), `mcp_host.rs`, `bridge.rs`. Not built: the same for `kb_retrieve`, `query_memory`, `search_kb`; the effect on calls per task is unmeasured (the 033 log has no field for it yet) |
 
 ## The shell tool, shell modes and the `!` bang (spec 061, approved 2026-10-31)
 
