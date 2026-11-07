@@ -67,6 +67,31 @@ error of the difference), tokens, turns and calls per pass, and a verdict. Token
 OD-2, provisional) with the pass rate inside the noise reads "costlier, not better"; more passes for that cost reads "a
 trade"; under three graded seeds on either side it reads "no evidence".
 
+### Extra endpoints in a throwaway home (Copilot and other carriers)
+
+An arm may bring an endpoint your home does not have, which lives only in that arm's throwaway copy: your ratified access
+block is never edited. The Copilot CLI serves several vendors' models behind one login, so each vendor is an endpoint whose
+`family` is the model's vendor (`claude`, `gemini`, `openai`) and whose `harness` is `copilot`:
+
+```toml
+[[arm]]
+name = "cp-gpt6luna"
+note = "GPT-6 Luna through the Copilot CLI"
+[arm.endpoint.copilot-openai]
+family = "openai"
+harness = "copilot"
+[arm.models.copilot-openai]
+fast = "gpt-6-luna"
+workhorse = "gpt-6-luna"
+frontier = "gpt-6-luna"
+[arm.role_family]
+```
+
+The harness may be `claude`, `agy`, `codex` or `copilot`; the credential is that CLI's own login and the cost a subscription. If
+your home already has an endpoint of that id it must be the same family and harness, or the arm is refused. A Copilot seat
+is read-only and has no Delphi tools (`specs/051`), so run it on text-only cases: the research suite, or an **inline**
+fidelity case (below). The catalogue of model ids is per account (`copilot --acp`, `session/new`); a model that is not in it is refused.
+
 ## Handoff fidelity (`specs/048` BM-5)
 
 What does a relay lose between a seat and the operator? A seat reads an artifact with N exact items (a commit hash, a file
@@ -84,7 +109,8 @@ rounds numbers and drops comments; 0.0) and **handle** (the seat summarises and 
 Orchestrator quotes it: lossy at the seat, 1.0 at the operator, a model of `specs/049` CX-6, which is not built). The seat and
 the Orchestrator are functions, so the run shows what the instrument can tell apart, not what any model does. `gen` writes a
 case for a real model: the model gets `fixture/artifact.md` and a prompt that names no item, and an `exact_items` check reads
-`items.json`, which the model never sees. A new seed is a new case, so a fresh seed is a holdout. `--items` is 5 to 200 (every
+`items.json`, which the model never sees. A new seed is a new case, so a fresh seed is a holdout. `--inline` puts the report in the prompt itself, so a seat with no tools (a
+Copilot seat) can take the case, and every arm of any carrier gets the identical prompt; it measures the last hop only. `--items` is 5 to 200 (every
 kind appears from 5).
 
 ## Context retention (`specs/048` BM-7)
