@@ -774,3 +774,13 @@ From the E2 report (verdict INCOMPLETE). Approved 2026-11-06 on the operator's i
 | P5 | matcher v2 with a negative control; exploratory `RESCORE.md` of E2 | 5 | built (merged, #523); v2 FAILED validation: agreement 0.15 (needs 0.30), false-match 0.0 |
 | P6 | E3 pre-registration and run | 6 | pre-registration merged (#531), Amendment 1 merged (#536); run 2026-11-07 (operator go, 2.0M cap): A1 (headline) verdict NO EVIDENCE (same decision 5/6, readable 18/18, but escalation 1/6 against the Council's 10/12); A2 INCOMPLETE (2 of 6 questions: the headless host stopped before the foreign seat answered in 8 of 10 attempts); section 4.5 notice unchanged; 1.88M of 2.0M Delphi-side, 261k of 400k host-side; report `dev/train/e3/REPORT.md`, data `dev/train/e3/data/`; merged (#543); the foreign-seat wait-flow fix is spec 089 P7 |
 | P7 | a headless host survives the foreign seat: server-side wait (brief round 2/3, status), non-error `waiting_on_delphi_seat` answer, `waiting_on`, skill and tool text now say to wait for it | 4 | built (PR open); operator go 2026-11-07; live A2 check not run |
+
+## Spec 093: authority invariants as tests (2026-11-07, approved)
+
+From Council `t_0001` over two research notes (CAO, Paperclip); the operator chose two batches, each one slice. Approved 2026-11-07 on the operator's instruction to begin; OD-1 to OD-5 take the recommendations. The acceptance criterion from OD-4 belongs in spec 080 W1.2; it is not added here, because editing an approved spec voids its ratified hash, so it waits for an amendment the operator ratifies.
+
+| Slice | Content | Hours | State |
+| :-- | :-- | --: | :-- |
+| B0 | spec 093 approval and tracker entry | 1 | approved 2026-11-07 (PR #552) |
+| B1 | spawn-site ratchet, generalized must-run gate, home isolation, three authority audits, `cargo deny` gate, harness live-text test | 14-20 | in progress |
+| B2 | previous-release resume fixture with a named error, usage data-quality view | 8-12 | not started (waits for B1) |

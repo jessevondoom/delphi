@@ -1047,6 +1047,32 @@ mod tests {
         }
     }
 
+    /// Spec 093 L1: the words of a harness seat reach an attached client as live frames, and its reasoning never does.
+    #[tokio::test]
+    async fn a_harness_seat_streams_its_words_to_clients_and_never_its_reasoning() {
+        let body = format!("{}\necho '{{\"type\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"thinking\",\"thinking\":\"HIDDEN-REASONING\"}},{{\"type\":\"text\",\"text\":\"Plan: do X.\"}}],\"usage\":{{\"input_tokens\":10,\"output_tokens\":20}}}}}}'\n{}", INIT, FINISH);
+        let (f, _s) = fixture(&body, |_| {});
+        let q = delphi_core::hub::ClientQueue::new(delphi_core::hub::DEFAULT_QUEUE_CAP);
+        let id = f.engine.hub.attach(delphi_core::proto::Scope::Narrator, q.clone());
+        f.engine.hub.subscribe(id);
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert_eq!(out.status, Status::Done, "{}", out.text);
+        f.engine.hub.flush_frames();
+        let mut frames = vec![];
+        while !q.is_empty() {
+            frames.push(q.pop().await.unwrap());
+        }
+        let frames: Vec<_> = frames.into_iter().filter(|n| n.method == "delta.frame").collect();
+        let all: Vec<String> = frames.iter().map(|n| n.params.to_string()).collect();
+        assert!(all.iter().any(|a| a.contains("Plan: do X.")), "the seat's words reach the client: {all:?}");
+        assert!(!all.iter().any(|a| a.contains("HIDDEN-REASONING")), "its reasoning never does: {all:?}");
+        for n in &frames {
+            for span in n.params["spans"].as_object().into_iter().flat_map(|s| s.values()) {
+                assert_eq!(span["thinking"].as_str().unwrap_or(""), "", "no reasoning delta is pushed for a harness seat");
+            }
+        }
+    }
+
     #[tokio::test]
     async fn a_non_builder_role_runs_in_the_cli_with_no_tools_and_is_metered_as_a_subscription() {
         let (f, _s) = fixture(&format!("{}\necho '{{\"type\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"Plan: do X.\"}}],\"usage\":{{\"input_tokens\":10,\"output_tokens\":20}}}}}}'\n{}", INIT, FINISH), |_| {});

@@ -1364,6 +1364,42 @@ pub fn cli_env_with(extra: &[String]) -> BTreeMap<String, String> {
 pub(crate) mod tests {
     use super::*;
 
+    /// Spec 093 J3: nothing but the opening exchange and the answer to the seat's own permission request is ever written to a
+    /// seat's input, so no relay, queue or nudge can type into a seat that is waiting on an approval card. The run loop is
+    /// sequential: while a card is open it is waiting on the broker and writes nothing else. Reads the sources, so a new writer
+    /// (or a second caller of `decide`) is a red build that asks for a decision.
+    #[test]
+    fn a_seats_input_is_written_only_to_open_it_and_to_answer_its_own_permission_request() {
+        let fn_re = regex::Regex::new(r"^\s*(?:pub(?:\([a-z]+\))?\s+)?(?:async\s+)?fn\s+([a-z_0-9]+)\s*[<(]").unwrap();
+        let prod = include_str!("harness.rs").split("#[cfg(test)]\npub(crate) mod tests").next().unwrap();
+        assert!(prod.lines().count() > 1000, "the scan reads the production half of harness.rs");
+        let (mut current, mut writers) = (String::new(), std::collections::BTreeSet::new());
+        for line in prod.lines() {
+            if let Some(c) = fn_re.captures(line) {
+                current = c[1].to_string();
+            }
+            if line.contains(".write_all(") && !line.trim_start().starts_with("//") {
+                writers.insert(current.clone());
+            }
+        }
+        let want: std::collections::BTreeSet<String> = ["decide", "settle_connectors", "start"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(writers, want, "a new place writes to a seat's input: decide whether it can run while an approval card is open");
+        let run = include_str!("harness_run.rs").split("#[cfg(test)]\nmod tests").next().unwrap();
+        assert_eq!(run.matches("session.decide(").count(), 1, "the permission answer is sent from one place, inside the sequential event loop");
+    }
+
+    /// Spec 093 L1, spec 005c §3: a harness seat's visible words become events, its reasoning does not, so reasoning can never
+    /// be pushed to a client or written down by anything downstream of the parser.
+    #[test]
+    fn reasoning_never_becomes_an_event() {
+        let asst = parse_line(r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"HIDDEN-REASONING"},{"type":"text","text":"visible"}]}}"#);
+        assert_eq!(asst, vec![Event::Text("visible".into())]);
+        assert!(!format!("{asst:?}").contains("HIDDEN"));
+        assert!(parse_line(r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"HIDDEN-REASONING"}},"parent_tool_use_id":null}"#).is_empty());
+        // A subagent's words carry a parent and are not the seat's answer either.
+        assert!(parse_line(r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"sub"}},"parent_tool_use_id":"tu1"}"#).is_empty());
+    }
+
     #[test]
     fn real_cli_lines_become_events() {
         let init = parse_line(r#"{"type":"system","subtype":"init","session_id":"s1","cwd":"/x","tools":["Bash"]}"#);
