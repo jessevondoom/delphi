@@ -1,0 +1,2 @@
+host-93b55d4903a295d6 {"t_0001": {"cache_read": 339006, "cache_write": 85926, "events": 7, "models": ["gemini-3.8-flash-medium", "sonnet"], "tokens": 98539}} retries 0 fail_lines 0 ['/tmp/e3/home-council/workspaces/delphi/local/sessions/host-93b55d4903a295d6/councils/001-review-draft-spec-071-host-plugin-market.md']
+copied record -> /tmp/e3/records/q6-b1.md

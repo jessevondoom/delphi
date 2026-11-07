@@ -1,0 +1,7 @@
+args {"question": "i'd like to have this system write it's own readme. better to have you do it or use claude?", "model": "claude-sonnet-5-5"}
+started {"council_id": "t_0001", "note": "a Council runs for a few minutes: ask again with council_status, then council_result; its ruling is advice and binds nothing in your project", "state": "convening"}
+0 s ('deliberating', 'convening: choosing the seats')
+30 s ('deliberating', 'round 1 (blind opening): 3 seat(s) have answered')
+140 s ('deliberating', 'round 2 (cross-examination): 3 critique(s) in; the verdict follows')
+150 s ('decided', None)
+done decided

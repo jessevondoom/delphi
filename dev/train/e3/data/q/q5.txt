@@ -1,0 +1,10 @@
+Question: Should draft spec 070 be approved? It keeps No Spec, No Build mandatory for software (building Delphi, writing code, guiding external coding projects), exempts artifacts (docs, decks, images, media) from specs but requires a daemon-written, verbatim operator-prompt-only log, and keeps Markdown/scaffolds/scratch always allowed within permissions. Recommend amendments, and answer D-1 (log location), D-2 (external project spec location), D-3 (log (system) entries).
+Stakes: normal
+Options:
+- Approve as drafted
+- Approve with amendments
+- Revise and resubmit
+- Reject
+Pointers:
+- specs/070-spec-gate-scope-and-artifact-prompt-log.md: The draft under review
+- GOVERNANCE.md: Section 1.3 is the rule being amended

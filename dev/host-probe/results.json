@@ -1,8 +1,8 @@
 [
   {
     "host": "claude-code",
-    "cli_version": null,
-    "date": null,
+    "cli_version": "2.1.319 (Claude Code)",
+    "date": "2026-11-07",
     "cells": {
       "definition": {
         "status": "not run"
@@ -17,13 +17,16 @@
         "status": "not run"
       },
       "parallel": {
-        "status": "not run"
+        "status": "verified",
+        "note": "verified on 1 of 2 live runs: run 1 the seats ran one after the other (failed); run 2 they overlapped by 14 s. Asking for parallel seats in plain words does not reliably get them in `claude -p`"
       },
       "model_pin": {
-        "status": "not run"
+        "status": "verified",
+        "note": "seats ran with model: haiku (accepted, not proof it was used)"
       },
       "mcp": {
-        "status": "not run"
+        "status": "verified",
+        "note": "direct: a seat called list_roles itself"
       },
       "tools": {
         "status": "not run"
@@ -35,14 +38,15 @@
         "status": "not run"
       },
       "discovered": {
-        "status": "not run"
+        "status": "verified",
+        "note": "both canary seats ran"
       }
     }
   },
   {
     "host": "copilot",
-    "cli_version": null,
-    "date": null,
+    "cli_version": "GitHub Copilot CLI 1.0.105.",
+    "date": "2026-11-07",
     "cells": {
       "definition": {
         "status": "not run"
@@ -57,13 +61,16 @@
         "status": "not run"
       },
       "parallel": {
-        "status": "not run"
+        "status": "verified",
+        "note": "seats overlapped by 11s"
       },
       "model_pin": {
-        "status": "not run"
+        "status": "not run",
+        "note": "no pin written; pass --pin HOST=MODEL"
       },
       "mcp": {
-        "status": "not run"
+        "status": "verified",
+        "note": "direct: a seat called list_roles itself"
       },
       "tools": {
         "status": "not run"
@@ -75,14 +82,15 @@
         "status": "not run"
       },
       "discovered": {
-        "status": "not run"
+        "status": "verified",
+        "note": "both canary seats ran"
       }
     }
   },
   {
     "host": "codex",
-    "cli_version": null,
-    "date": null,
+    "cli_version": "codex-cli 0.166.0",
+    "date": "2026-11-07",
     "cells": {
       "definition": {
         "status": "not run"
@@ -97,13 +105,16 @@
         "status": "not run"
       },
       "parallel": {
-        "status": "not run"
+        "status": "verified",
+        "note": "seats overlapped by 10s"
       },
       "model_pin": {
-        "status": "not run"
+        "status": "not run",
+        "note": "no pin written; pass --pin HOST=MODEL"
       },
       "mcp": {
-        "status": "not run"
+        "status": "verified",
+        "note": "relayed: the seat saw no MCP tools"
       },
       "tools": {
         "status": "not run"
@@ -115,14 +126,15 @@
         "status": "not run"
       },
       "discovered": {
-        "status": "not run"
+        "status": "verified",
+        "note": "both canary seats ran"
       }
     }
   },
   {
     "host": "agy",
-    "cli_version": null,
-    "date": null,
+    "cli_version": "agy 1.5.3",
+    "date": "2026-11-07",
     "cells": {
       "definition": {
         "status": "not run"
@@ -137,13 +149,16 @@
         "status": "not run"
       },
       "parallel": {
-        "status": "not run"
+        "status": "failed",
+        "note": "the probe failed 3 of 3 times; one hand-run of the identical prompt and canary files passed (both seats ran, started 2 s apart and overlapped by about 8 s). Seats need a shell tool: a subagent has no tools unless it declares them (`tools: [run_command]`, now in the probe's agy canary), and headless `agy -p` soft-denies a `RunCommand` unless a `command(...)` allow rule in agy's own settings.json matches the command text EXACTLY (`command(date)` matched `date` but not `date +%s`). With exact rules for `date +%s` and `sleep 8` in place (since rolled back) one seat ran `date +%s`, yet the full probe still failed on every run: any rewording of a command is denied and ends the turn (agy log: \"Print mode: soft-denying tool confirmation RunCommand\"). Not reliable without `--dangerously-skip-permissions`, which was not used"
       },
       "model_pin": {
-        "status": "not run"
+        "status": "not run",
+        "note": "the probe's seats did not run to completion"
       },
       "mcp": {
-        "status": "not run"
+        "status": "not run",
+        "note": "`agy mcp list` reports no MCP servers configured on this machine, so there is nothing for a seat to call; the operator's agy MCP config was not touched"
       },
       "tools": {
         "status": "not run"
@@ -155,7 +170,8 @@
         "status": "not run"
       },
       "discovered": {
-        "status": "not run"
+        "status": "verified",
+        "note": "by manual runs, not the probe's own: in a temp dir with `.agents/agents/delphi-canary-*.md`, `agy -p` invoked the custom subagent(s) and they replied. The probe's own runs reported 0 of 2 seats (see parallel)"
       }
     }
   }

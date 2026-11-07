@@ -1,0 +1,1 @@
+host-c82d33c466bf0bd6 {"t_0001": {"cache_read": 245892, "cache_write": 0, "events": 2, "models": ["gemini-3.8-flash-medium"], "tokens": 101776}} retries 0 fail_lines 0 []

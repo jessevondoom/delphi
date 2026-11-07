@@ -112,6 +112,16 @@ Asked for by the operator on 2026-10-27. Built in one slice and approved after t
 | E1 | `$DELPHI_HOME/logs/delphi.log.jsonl`, `delphi logs`, `delphi debug bundle`, `delphi doctor` check 14, console error boundary | merged (#256) |
 | E2 | `tool_failed` records why a call failed (`timeout`, `denied`, `invalid_args`, `tool_error`, from the first line of the result) and the names of its arguments, never a value or a hash of one; the same kind is stored as `failure` on `tool.result` and `harness.bridge_call` and counted per tool as `invalid_args` and `denied` by `observe::ToolCount` and `toolreport` (spec 033 §6). Amended 2026-11-07 at the operator's approval (Council action 2) | built 2026-11-07 (PR pending): `tools::failure_kind`, `tools::arg_keys`, `engine.rs`, `harness_run.rs`, `observe.rs`, `toolreport.rs`. Not built: `repeat_calls` (a hash of arguments can be guessed back; the loop nudge is the signal); a kind for a CLI seat's own native tools (`harness.tool` carries no outcome); a column for the kind in the console or `delphi tools`. Logs written before this carry no kind |
 
+## Operator-authorized tests (spec 092, approved 2026-11-07)
+
+**Approved by the operator on 2026-11-07** ("approve all of the above": the sandboxed-shell-only first slice and the recommended answers to OD-1 to OD-5). **S1 does not start until a red-team re-review of the text in a readable form has passed.** It narrowly amends spec 016's "Red is never allowed" for **headless runs only**: a test the operator authorized may run named Red actions, and an agent may *request* an authorization with its context and risk (the request is inert, staged at L0, and never effective for the run that wrote it). Council `t_0003` (stakes high) chose **approve with changes, narrower first**: a sandboxed shell command only, matched by exact canonical argv with a pinned binary, a mandatory OS sandbox, a disposable project snapshot and a required run binding. Its red-team seat's PATH-shadowing and worktree-poisoning P0s are closed in the text. 
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| S0 | this spec | approved 2026-11-07; the red-team re-review of v2 (readable) is still to run before S1 |
+| S1 | the request tool and its staging rules, `delphi test review`, `delphi test authorize --from-request`, the protected store | not started |
+| S2 | `--on-card authorization:<id>`, sandbox-or-refuse, the snapshot, canonical matching, atomic use, the deny-list; amends `AGENTS.md` and 016 §3 | not started |
+| S3 | the training runner flag and the report mark | not started |
+
 ## Roadmap steps, for cross-reference
 
 | Step | State |
@@ -171,6 +181,19 @@ Asked for and approved by the operator on 2026-10-28. `copilot` 1.0.105 is logge
 | S1b | per-seat nano-AIU ledger, `QuotaProbe`, doctor shows the plan, optional `gh api` reconciliation | built: spec 051 §8. `quota.rs` (readers, `describe`, `exhaustion`), `Event::Meter` and `premium_requests`/`nano_aiu` in `harness.cost` (the log is the ledger), `[harness.copilot] quota_source = "gh"`, doctor lines. Routing does not read it yet (next slice); no live run |
 | S2 | read-only introspection; approval bridge; Builder only after it is proven | built: `CopilotAcp` over stdio via `copilot --acp`, approval bridge mapping `session/request_permission` to Amber cards, answered `allow_once` or `reject` only (spec 051 §6.4 i); setup and doctor detect `copilot` and offer `copilot-sub` Builder seats; Builders route through ACP approval bridge |
 | S3 | `--plan` lane, vision | not started |
+
+## Seats, model families and launching agents on any carrier (spec 091, approved 2026-11-07)
+
+**Approved by the operator on 2026-11-07** ("approve all of the above": option C with a thin receipt first, and the recommended answers to OD-1 to OD-4). Written after Council `t_0002` (architect, strategist, red-team) on the operator's goal of Delphi agents running on the outside across model families, for arms testing, Panels and red-team work. The operator decided on 2026-11-07 that a release-gate sweep labels `homogeneous` and does not fail closed, and that `require_families` is opt-in. Widens no authority; the separate question of Red actions in headless tests is spec 092. Extends 086, 062, 051, 047, 056, 037, 048.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| S0 | this spec | approved 2026-11-07 |
+| S1 | `seat.rs`: the daemon-written `seat.receipt` (requested and served model, resolved family, carrier and its policy, tool grant, prompt hash), the ratified family table with owner and expiry, the schema, a `delphi doctor` expiry warning | not started |
+| S2 | opt-in `require_families` and a count budget on the Panel's `foreign_seat` | not started |
+| S3 | receipts in `train run` rows; a family comparison whose arms differ in prompt hash or carrier policy is labelled confounded | not started |
+| S4 | `ask_family`: one read-only foreign seat answers one question, advice only, returns its receipt | not started |
+| S5 | the served model read from Copilot and `agy` metadata | not started |
 
 ## Knowledge window round 2 (spec 043, approved 2026-10-28)
 
@@ -745,4 +768,4 @@ From the E2 report (verdict INCOMPLETE). Approved 2026-11-06 on the operator's i
 | P4a | `agy` seat reliability: reproduce the checkout-guard false positive, classify the hangs | 3 | built (PR open); P4b waits for OD-4 |
 | P4b | `agy` fix: one retry after a CLI error, discard message names the paths (guard unchanged by decision; watchdog deferred) | 6-10 | built (PR open): retry and path message; guard unchanged by decision; live capture held |
 | P5 | matcher v2 with a negative control; exploratory `RESCORE.md` of E2 | 5 | built (merged, #523); v2 FAILED validation: agreement 0.15 (needs 0.30), false-match 0.0 |
-| P6 | E3 pre-registration (the run needs the operator's go) | 6 | pre-registration merged (#531), Amendment 1 (PR open): questions q1-q6, B2 on six, cap 2.0M; run authorised 2026-11-07 |
+| P6 | E3 pre-registration and run | 6 | pre-registration merged (#531), Amendment 1 merged (#536); run 2026-11-07 (operator go, 2.0M cap): A1 (headline) verdict NO EVIDENCE (same decision 5/6, readable 18/18, but escalation 1/6 against the Council's 10/12); A2 INCOMPLETE (2 of 6 questions: the headless host stopped before the foreign seat answered in 8 of 10 attempts); section 4.5 notice unchanged; 1.88M of 2.0M Delphi-side, 261k of 400k host-side; report in the PR description (the file tool refused `REPORT.md`), data `dev/train/e3/data/`; PR open |
