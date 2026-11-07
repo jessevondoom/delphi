@@ -110,7 +110,7 @@ Orchestrator quotes it: lossy at the seat, 1.0 at the operator, a model of `spec
 the Orchestrator are functions, so the run shows what the instrument can tell apart, not what any model does. `gen` writes a
 case for a real model: the model gets `fixture/artifact.md` and a prompt that names no item, and an `exact_items` check reads
 `items.json`, which the model never sees. A new seed is a new case, so a fresh seed is a holdout. `--inline` puts the report in the prompt itself, so a seat with no tools (a
-Copilot seat) can take the case, and every arm of any carrier gets the identical prompt; it measures the last hop only. `--items` is 5 to 200 (every
+Copilot seat) can take the case, and every arm of any carrier gets the identical prompt; it measures the last hop only. A failed run whose short answer begins by declining ("I can't reproduce ...") is tagged in the row's `notes`: a refusal is a finding about the model, not paraphrase loss, and the check alone cannot tell the two apart. `--items` is 5 to 200 (every
 kind appears from 5).
 
 ## Context retention (`specs/048` BM-7)
