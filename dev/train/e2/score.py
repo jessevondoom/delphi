@@ -253,10 +253,8 @@ def venue_check(rec, arm):
     v = rec["venue"]
     if v is None:
         return "venue_missing"
-    expect = "host" if arm == "panel" else None
-    if expect and v != expect:
-        return "venue_mismatch"
-    if arm != "panel" and v == "host":
+    expect = "panel" if arm == "panel" else "daemon"
+    if v != expect:
         return "venue_mismatch"
     return "ok"
 
