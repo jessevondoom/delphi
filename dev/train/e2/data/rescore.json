@@ -1,0 +1,464 @@
+{
+  "agreement_b1_vs_b2": [
+    {
+      "id": "q1",
+      "matched": 1,
+      "n_a": 7,
+      "n_b": 3,
+      "pairs": [
+        [
+          "Reviewer must be a different model family than the drafter (H-008); label homogeneous if only one family exists",
+          "Critic must be a different model family than the drafter (H-008); label the verdict homogeneous if only one family is configured"
+        ]
+      ]
+    },
+    {
+      "id": "q2",
+      "matched": 1,
+      "n_a": 7,
+      "n_b": 10,
+      "pairs": [
+        [
+          "No seat read specs 062/064/041/003/013/038; every gap claim is unvalidated, so the ruling must be conditional on a goal-by-tool matrix first",
+          "No seat read specs 062/064/041/003, so no gap is verified; a gap matrix (goal, current MCP surface, spec text, gap) must precede any build"
+        ]
+      ]
+    },
+    {
+      "id": "q3",
+      "matched": 0,
+      "n_a": 7,
+      "n_b": 11,
+      "pairs": []
+    },
+    {
+      "id": "q4",
+      "matched": 0,
+      "n_a": 11,
+      "n_b": 9,
+      "pairs": []
+    },
+    {
+      "id": "q5",
+      "matched": 1,
+      "n_a": 11,
+      "n_b": 10,
+      "pairs": [
+        [
+          "Log must be daemon-written, append-only and fail closed, with a daemon check and an entry in invariant-enforcement.md (\u00a75.6)",
+          "Prompt log must be daemon-written under daemon-only local/, append-only, fail-closed: if the entry cannot be written the artifact write is denied"
+        ]
+      ]
+    },
+    {
+      "id": "q6",
+      "matched": 5,
+      "n_a": 11,
+      "n_b": 11,
+      "pairs": [
+        [
+          "Host config mutation creates external state corruption and privilege escalation (D-2)",
+          "TOCTOU and corruption risks in external host config mutation (D-2)"
+        ],
+        [
+          "D-3 launcher script ships executable content run unsandboxed by the host (\u00a75.5); a bare `command: delphi` needs no script, so cost exceeds return",
+          "D-3 launcher script is executable content run unsandboxed by the host; no justification why a plain command entry in MCP config is insufficient; defer"
+        ],
+        [
+          "D-2 installer writes outside workspace (5.4); defer to follow-up spec, ship diff/snippet-only first. If built: operator TTY only, refuse agent/MCP invocation, dry-run default, backup, atomic, idempote",
+          "D-2 installer writes host configs outside workspace: needs dry-run default, diff and confirm, backup, uninstall, owned-keys-only atomic merge, allowlisted paths, no symlinks, operator-console-only inv"
+        ],
+        [
+          "D-2 installer writes outside the workspace (\u00a75.4) for mostly convenience; the snippet-and-paste flow already works. Defer to its own spec with a Red-Team pass. If built: operator-TTY only, dry-run dif",
+          "D-2 installer writes host configs outside workspace (\u00a75.4/\u00a75.5); needs its own spec and Red-Team review, not a rider on a marketplace spec"
+        ],
+        [
+          "No seat could read spec 071, 062 or mcp_hosts.rs; ruling rests on the question summary and must be rechecked against the draft",
+          "No seat could read spec 071, 062 or the code; Q-1..Q-5 unseen, so Round 1 consensus is not validated against the draft"
+        ]
+      ]
+    },
+    {
+      "id": "q7",
+      "matched": 2,
+      "n_a": 10,
+      "n_b": 12,
+      "pairs": [
+        [
+          "No seat has read specs 003/004/013/031/040/041/043/062-065; every 'already covered' and spec mapping is unverified. Before any slice, a spec-by-spec duplication check must be done (read-only, Scout/In",
+          "No seat read the specs; every 'already covered' claim is unverified. Make a grep of specs 003/040/043/062-065 for existing ledger/telemetry/yield items the mandatory step zero, before any build."
+        ],
+        [
+          "Quick Council (3 seats, 1 round) must still span >=2 families (H-001/H-008) and keep mandatory Minority Report; escalate to 5 seats only on round-1 disagreement. Red-Team's 'reject single-family confi",
+          "Red-team's family gate must not hard-reject Councils on single-family installs; H-008 says never block. Label the verdict 'homogeneous' and surface the minority report verbatim instead"
+        ]
+      ]
+    },
+    {
+      "id": "q8",
+      "matched": 1,
+      "n_a": 9,
+      "n_b": 6,
+      "pairs": [
+        [
+          "Action 2 must enforce 'arg-key names and hashes only' in code, not prose; use a per-workspace salt or key names only so low-entropy args cannot be recovered from hashes",
+          "Action 2 must log arg-key names and error classes only, or hash with a per-session salt; unsalted hashes of low-entropy args are reversible. Enforce in code, not prose"
+        ]
+      ]
+    }
+  ],
+  "b2_vs_b1": {
+    "added": 35,
+    "matched": 6,
+    "n_other": 41,
+    "n_ref": 40,
+    "overlap": 0.08,
+    "recall": 0.15
+  },
+  "matcher": {
+    "anchor_jaccard": 0.2,
+    "plain_jaccard": 0.4
+  },
+  "negative_control_b1_vs_b1": [
+    {
+      "a": "q1",
+      "b": "q2",
+      "matched": 0,
+      "n_a": 7,
+      "n_b": 7,
+      "pairs": []
+    },
+    {
+      "a": "q1",
+      "b": "q3",
+      "matched": 0,
+      "n_a": 7,
+      "n_b": 7,
+      "pairs": []
+    },
+    {
+      "a": "q1",
+      "b": "q4",
+      "matched": 0,
+      "n_a": 7,
+      "n_b": 11,
+      "pairs": []
+    },
+    {
+      "a": "q1",
+      "b": "q5",
+      "matched": 0,
+      "n_a": 7,
+      "n_b": 11,
+      "pairs": []
+    },
+    {
+      "a": "q1",
+      "b": "q6",
+      "matched": 0,
+      "n_a": 7,
+      "n_b": 11,
+      "pairs": []
+    },
+    {
+      "a": "q1",
+      "b": "q7",
+      "matched": 0,
+      "n_a": 7,
+      "n_b": 10,
+      "pairs": []
+    },
+    {
+      "a": "q1",
+      "b": "q8",
+      "matched": 0,
+      "n_a": 7,
+      "n_b": 9,
+      "pairs": []
+    },
+    {
+      "a": "q2",
+      "b": "q3",
+      "matched": 0,
+      "n_a": 7,
+      "n_b": 7,
+      "pairs": []
+    },
+    {
+      "a": "q2",
+      "b": "q4",
+      "matched": 0,
+      "n_a": 7,
+      "n_b": 11,
+      "pairs": []
+    },
+    {
+      "a": "q2",
+      "b": "q5",
+      "matched": 0,
+      "n_a": 7,
+      "n_b": 11,
+      "pairs": []
+    },
+    {
+      "a": "q2",
+      "b": "q6",
+      "matched": 0,
+      "n_a": 7,
+      "n_b": 11,
+      "pairs": []
+    },
+    {
+      "a": "q2",
+      "b": "q7",
+      "matched": 0,
+      "n_a": 7,
+      "n_b": 10,
+      "pairs": []
+    },
+    {
+      "a": "q2",
+      "b": "q8",
+      "matched": 0,
+      "n_a": 7,
+      "n_b": 9,
+      "pairs": []
+    },
+    {
+      "a": "q3",
+      "b": "q4",
+      "matched": 0,
+      "n_a": 7,
+      "n_b": 11,
+      "pairs": []
+    },
+    {
+      "a": "q3",
+      "b": "q5",
+      "matched": 0,
+      "n_a": 7,
+      "n_b": 11,
+      "pairs": []
+    },
+    {
+      "a": "q3",
+      "b": "q6",
+      "matched": 0,
+      "n_a": 7,
+      "n_b": 11,
+      "pairs": []
+    },
+    {
+      "a": "q3",
+      "b": "q7",
+      "matched": 0,
+      "n_a": 7,
+      "n_b": 10,
+      "pairs": []
+    },
+    {
+      "a": "q3",
+      "b": "q8",
+      "matched": 0,
+      "n_a": 7,
+      "n_b": 9,
+      "pairs": []
+    },
+    {
+      "a": "q4",
+      "b": "q5",
+      "matched": 0,
+      "n_a": 11,
+      "n_b": 11,
+      "pairs": []
+    },
+    {
+      "a": "q4",
+      "b": "q6",
+      "matched": 0,
+      "n_a": 11,
+      "n_b": 11,
+      "pairs": []
+    },
+    {
+      "a": "q4",
+      "b": "q7",
+      "matched": 0,
+      "n_a": 11,
+      "n_b": 10,
+      "pairs": []
+    },
+    {
+      "a": "q4",
+      "b": "q8",
+      "matched": 0,
+      "n_a": 11,
+      "n_b": 9,
+      "pairs": []
+    },
+    {
+      "a": "q5",
+      "b": "q6",
+      "matched": 0,
+      "n_a": 11,
+      "n_b": 11,
+      "pairs": []
+    },
+    {
+      "a": "q5",
+      "b": "q7",
+      "matched": 0,
+      "n_a": 11,
+      "n_b": 10,
+      "pairs": []
+    },
+    {
+      "a": "q5",
+      "b": "q8",
+      "matched": 0,
+      "n_a": 11,
+      "n_b": 9,
+      "pairs": []
+    },
+    {
+      "a": "q6",
+      "b": "q7",
+      "matched": 0,
+      "n_a": 11,
+      "n_b": 10,
+      "pairs": []
+    },
+    {
+      "a": "q6",
+      "b": "q8",
+      "matched": 0,
+      "n_a": 11,
+      "n_b": 9,
+      "pairs": []
+    },
+    {
+      "a": "q7",
+      "b": "q8",
+      "matched": 0,
+      "n_a": 10,
+      "n_b": 9,
+      "pairs": []
+    }
+  ],
+  "panel_vs_b1": {
+    "added": 52,
+    "matched": 0,
+    "n_other": 52,
+    "n_ref": 40,
+    "overlap": 0.0,
+    "recall": 0.0
+  },
+  "per_question": [
+    {
+      "b2_vs_b1": {
+        "matched": 0,
+        "n_a": 11,
+        "n_b": 7,
+        "pairs": []
+      },
+      "id": "q3",
+      "panel_vs_b1": {
+        "matched": 0,
+        "n_a": 12,
+        "n_b": 7,
+        "pairs": []
+      }
+    },
+    {
+      "b2_vs_b1": {
+        "matched": 0,
+        "n_a": 9,
+        "n_b": 11,
+        "pairs": []
+      },
+      "id": "q4",
+      "panel_vs_b1": {
+        "matched": 0,
+        "n_a": 15,
+        "n_b": 11,
+        "pairs": []
+      }
+    },
+    {
+      "b2_vs_b1": {
+        "matched": 1,
+        "n_a": 10,
+        "n_b": 11,
+        "pairs": [
+          [
+            "Prompt log must be daemon-written under daemon-only local/, append-only, fail-closed: if the entry cannot be written the artifact write is denied",
+            "Log must be daemon-written, append-only and fail closed, with a daemon check and an entry in invariant-enforcement.md (\u00a75.6)"
+          ]
+        ]
+      },
+      "id": "q5",
+      "panel_vs_b1": {
+        "matched": 0,
+        "n_a": 18,
+        "n_b": 11,
+        "pairs": []
+      }
+    },
+    {
+      "b2_vs_b1": {
+        "matched": 5,
+        "n_a": 11,
+        "n_b": 11,
+        "pairs": [
+          [
+            "TOCTOU and corruption risks in external host config mutation (D-2)",
+            "Host config mutation creates external state corruption and privilege escalation (D-2)"
+          ],
+          [
+            "D-3 launcher script is executable content run unsandboxed by the host; no justification why a plain command entry in MCP config is insufficient; defer",
+            "D-3 launcher script ships executable content run unsandboxed by the host (\u00a75.5); a bare `command: delphi` needs no script, so cost exceeds return"
+          ],
+          [
+            "D-2 installer writes host configs outside workspace: needs dry-run default, diff and confirm, backup, uninstall, owned-keys-only atomic merge, allowlisted paths, no symlinks, operator-console-only inv",
+            "D-2 installer writes outside workspace (5.4); defer to follow-up spec, ship diff/snippet-only first. If built: operator TTY only, refuse agent/MCP invocation, dry-run default, backup, atomic, idempote"
+          ],
+          [
+            "D-2 installer writes host configs outside workspace (\u00a75.4/\u00a75.5); needs its own spec and Red-Team review, not a rider on a marketplace spec",
+            "D-2 installer writes outside the workspace (\u00a75.4) for mostly convenience; the snippet-and-paste flow already works. Defer to its own spec with a Red-Team pass. If built: operator-TTY only, dry-run dif"
+          ],
+          [
+            "No seat could read spec 071, 062 or the code; Q-1..Q-5 unseen, so Round 1 consensus is not validated against the draft",
+            "No seat could read spec 071, 062 or mcp_hosts.rs; ruling rests on the question summary and must be rechecked against the draft"
+          ]
+        ]
+      },
+      "id": "q6",
+      "panel_vs_b1": {
+        "matched": 0,
+        "n_a": 7,
+        "n_b": 11,
+        "pairs": []
+      }
+    }
+  ],
+  "qualifying_questions": [
+    "q3",
+    "q4",
+    "q5",
+    "q6"
+  ],
+  "status": "exploratory, post hoc; does not alter the pre-registered verdict",
+  "validation": {
+    "agreement_share": 0.1517,
+    "definition": "share = 2 * matched / (findings in A + findings in B), pooled over the pairs",
+    "failures": [
+      "agreement 0.1517 is under 0.3"
+    ],
+    "false_match_share": 0.0,
+    "passed": false,
+    "thresholds": {
+      "agreement_min": 0.3,
+      "false_match_max": 0.1
+    }
+  }
+}
