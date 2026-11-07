@@ -136,6 +136,7 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
     }
 
     check_event_chains(&ws.dir, &mut r);
+    check_usage_quality(&ws.dir, &mut r);
 
     // 7. Model access: offline, from config only (probing is `--probe`).
     let cfg = fs::read_to_string(ws.dir.join("config.toml")).unwrap_or_default();
@@ -208,6 +209,75 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
 }
 
 /// `14 error-log`: read-only; says what is recorded and where, and warns when records were lost.
+/// `16 usage-quality` (spec 093 §5 I): read-only. Lists `agent.usage` calls whose price, model or token receipt is unknown.
+/// Such calls are EXCLUDED from share-of-limit totals and are never counted as zero. Output is a count and at most 10 examples:
+/// ids, model and the missing field only, never prompt or response text.
+fn check_usage_quality(ws: &Path, r: &mut Report) {
+    const SHOWN: usize = 10;
+    let (mut calls, mut bad, mut unreadable) = (0u64, 0u64, 0u64);
+    let mut examples: Vec<(String, String)> = Vec::new();
+    for (id, path) in delphi_core::sessions::dirs(ws).into_iter().filter(|(_, p)| p.join("events").is_dir()) {
+        let Ok(events) = delphi_core::log::replay(&path) else {
+            unreadable += 1;
+            continue;
+        };
+        for e in events.iter().filter(|e| e.kind == "agent.usage") {
+            calls += 1;
+            let p = &e.payload;
+            let mut missing: Vec<&str> = Vec::new();
+            if e.model_id.as_deref().map(str::trim).unwrap_or("").is_empty() {
+                missing.push("model unknown (no model_id)");
+            }
+            match p["cost_model"].as_str() {
+                Some("metered" | "subscription") => {}
+                _ => missing.push("cost_model missing"),
+            }
+            if !p["cost_usd"].is_number() {
+                missing.push("cost_usd missing");
+            }
+            let tokens: u64 = ["input_tokens", "cache_read_tokens", "cache_write_tokens", "output_tokens", "thinking_tokens"].iter().map(|k| p[*k].as_u64().unwrap_or(0)).sum();
+            let ok = matches!(p["outcome"].as_str(), None | Some("ok"));
+            match p["usage_source"].as_str() {
+                Some("reported") => {}
+                Some("estimated") => missing.push("token receipt estimated, not reported"),
+                _ => missing.push("usage_source missing"),
+            }
+            if ok && tokens == 0 {
+                missing.push("token receipt missing (no tokens)");
+            }
+            if p["cost_model"].as_str() == Some("metered") && ok && tokens > 0 && p["cost_usd"].as_f64().unwrap_or(0.0) == 0.0 {
+                missing.push("price unknown (metered, tokens but cost 0)");
+            }
+            if !missing.is_empty() {
+                bad += 1;
+                if examples.len() < SHOWN {
+                    examples.push((
+                        format!("{id} seq {} task {}", e.seq, e.task_id.as_deref().unwrap_or("?")),
+                        format!("model {}: {}", e.model_id.as_deref().filter(|m| !m.is_empty()).unwrap_or("?"), missing.join(", ")),
+                    ));
+                }
+            }
+        }
+    }
+    if unreadable > 0 {
+        r.push(Level::Skipped, "16 usage-quality", "", format!("{unreadable} mission log(s) could not be read and were not checked"));
+    }
+    if bad == 0 {
+        if calls > 0 {
+            r.push(Level::Ok, "16 usage-quality", "", format!("{calls} usage record(s), none with an unknown price, model or token receipt"));
+        }
+        return;
+    }
+    r.warn(
+        "16 usage-quality",
+        "",
+        format!("{bad} of {calls} usage record(s) have an unknown price, model or token receipt. They are EXCLUDED from share-of-limit totals and never counted as zero; the ledger's token and dollar sums still add them as 0 until it learns to skip them. Showing {}:", examples.len()),
+    );
+    for (loc, msg) in examples {
+        r.warn("16 usage-quality", loc, msg);
+    }
+}
+
 /// The event hash chain of every mission (`specs/040` §21.6): a break or a cut tail is a failure, an unchained log is said so.
 fn check_event_chains(ws: &Path, r: &mut Report) {
     let (mut ok, mut unchained) = (0u64, 0u64);
@@ -1050,6 +1120,49 @@ mod tests {
         fs::write(&seg, fs::read_to_string(&seg).unwrap().replace("\"i\":1", "\"i\":9")).unwrap();
         let r = run(&home, &ws, &Options::default());
         assert!(r.findings.iter().any(|f| f.check == "8 event-chain" && f.level == Level::Fail), "{:?}", r.findings.iter().map(|f| &f.message).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn usage_quality_lists_unknown_price_model_and_receipt_and_is_bounded() {
+        let (_t, home, ws, _p) = setup();
+        let m = ws.dir.join("local/missions/m1");
+        let mut log = delphi_core::log::EventLog::open(&m, Default::default()).unwrap();
+        let mut put = |model: Option<&str>, mut p: serde_json::Value| {
+            // The log validates the payload on append, so these fields are always present in a real log.
+            for (k, v) in [("provider", serde_json::json!("x")), ("input_tokens", 0.into()), ("output_tokens", 0.into()), ("reserved_usd", 0.0.into())] {
+                p.as_object_mut().unwrap().entry(k).or_insert(v);
+            }
+            let mut e = delphi_core::event::EventEnvelope::new("m1", "agent.usage", p);
+            e.task_id = Some("t_1".into());
+            e.model_id = model.map(String::from);
+            (e.agent, e.span_id, e.endpoint_id, e.access_path, e.model_tier, e.attempt) = (Some("builder".into()), Some("s1".into()), Some("ep".into()), Some("api".into()), Some("fast".into()), Some(1));
+            log.append(e).unwrap();
+        };
+        let good = serde_json::json!({"input_tokens": 10, "output_tokens": 5, "cost_usd": 0.01, "usage_source": "reported", "cost_model": "metered", "outcome": "ok"});
+        put(Some("m-a"), good.clone());
+        put(Some(""), good.clone());
+        put(Some("m-b"), serde_json::json!({"input_tokens": 10, "output_tokens": 5, "cost_usd": 0.0, "usage_source": "reported", "cost_model": "metered", "outcome": "ok"}));
+        put(Some("m-c"), serde_json::json!({"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "usage_source": "reported", "cost_model": "subscription", "outcome": "ok"}));
+        for _ in 0..12 {
+            put(Some("m-d"), serde_json::json!({"input_tokens": 1, "cost_usd": 0.1, "usage_source": "estimated", "cost_model": "metered", "outcome": "ok", "prompt": "SECRET TEXT"}));
+        }
+        drop(log);
+        let mut r = Report::default();
+        check_usage_quality(&ws.dir, &mut r);
+        let f: Vec<_> = r.findings.iter().filter(|f| f.check == "16 usage-quality").collect();
+        assert_eq!(f.len(), 11, "one summary and at most 10 examples");
+        assert!(f[0].message.contains("15 of 16") && f[0].message.contains("EXCLUDED") && f[0].message.contains("never counted as zero"), "{}", f[0].message);
+        let all: String = f.iter().map(|x| format!("{} {}", x.location, x.message)).collect();
+        assert!(all.contains("model unknown") && all.contains("price unknown") && all.contains("token receipt missing") && all.contains("estimated") && !all.contains("SECRET"));
+        let _ = home;
+    }
+
+    #[test]
+    fn usage_quality_is_quiet_without_usage() {
+        let (_t, _home, ws, _p) = setup();
+        let mut r = Report::default();
+        check_usage_quality(&ws.dir, &mut r);
+        assert!(r.findings.iter().all(|f| f.check != "16 usage-quality"));
     }
 
     #[test]
