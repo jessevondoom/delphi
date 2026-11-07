@@ -53,3 +53,10 @@ The operator wrote on 2026-11-07: "replace the weak questions. you can raise the
 ### q5 (kind: host-raised design question with options)
 - B1 (host-5ca664ba7253d208): 99,432 Delphi-side tokens, 0 harness.retry, three seats answered and critiqued, escalated (10 unresolved P0).
 - A1 (host-bf180a4da501eb2c): venue panel, blind yes, question verbatim true, 6 Agent calls, 21,267 host tokens, Delphi-side 0.
+
+### q6 (kind: host-raised design question with options)
+- B1 (host-93b55d4903a295d6): 98,539 Delphi-side tokens, 0 harness.retry, three seats answered and critiqued, escalated (2 unresolved P0, conflicting Round 2).
+- A1 (host-bccf4ac1976866fb): venue panel, blind yes, question verbatim true, 6 Agent calls, 20,074 host tokens, Delphi-side 0.
+
+### Phase 1 total (before phase 2)
+Delphi-side about 810k of 2,000,000; host-side about 173k of 400,000. Phase 2 (B2 on all six, in order) starts; the q3 to q6 A2 runs are deferred until after phase 2 (deviation 6).
