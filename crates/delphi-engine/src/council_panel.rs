@@ -114,12 +114,16 @@ pub struct Panel {
     /// Host-reported (spec 089 F2): whether the operator said yes to a foreign seat, and who supplied the options. Raise no trust.
     pub operator_confirmed: Option<bool>,
     pub options_source: Option<String>,
+    /// The host's own family when it is known (host-reported guess; a host seat has no receipt) and the caller's `require_families`
+    /// (`specs/091` SR-3), kept so Round 2 and the ruling can be judged by the receipts.
+    pub host_family: Option<String>,
+    pub require_families: Option<u32>,
 }
 
 impl Panel {
     pub fn new(proposition: &str) -> Panel {
         let seats: Vec<String> = PANEL_SEATS.iter().map(|s| s.to_string()).collect();
-        Panel { proposition: proposition.to_string(), barrier: Barrier::new(&seats), seats, released: None, answered: Vec::new(), round2: BTreeMap::new(), verdict: None, models: BTreeMap::new(), opened: std::time::Instant::now(), foreign: None, rejections: BTreeMap::new(), blind: "unknown".into(), operator_confirmed: None, options_source: None }
+        Panel { proposition: proposition.to_string(), barrier: Barrier::new(&seats), seats, released: None, answered: Vec::new(), round2: BTreeMap::new(), verdict: None, models: BTreeMap::new(), opened: std::time::Instant::now(), foreign: None, rejections: BTreeMap::new(), blind: "unknown".into(), operator_confirmed: None, options_source: None, host_family: None, require_families: None }
     }
 
     /// Give one seat to Delphi: it runs on `family`, the host may neither brief nor answer for it.

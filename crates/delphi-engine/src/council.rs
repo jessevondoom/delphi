@@ -992,6 +992,18 @@ impl Engine {
         available.into_iter().find(ok)
     }
 
+    /// The families that actually sat in a Panel: the host's own (host-reported) plus the SERVED family of each of Delphi's seats that
+    /// ended `ok`, from the receipts (`specs/091` SR-3). `unknown` never counts.
+    pub fn panel_diversity(&self, m: &MissionState, task_id: &str, host_family: Option<&str>) -> crate::seat::Diversity {
+        let (served, _) = m.replay().map(|evs| crate::seat::served_for_task(&evs, task_id)).unwrap_or_default();
+        crate::seat::Diversity::of(host_family, &served)
+    }
+
+    /// Tokens the Panel's foreign seat has used so far, from its receipts.
+    pub fn panel_foreign_tokens(&self, m: &MissionState, task_id: &str) -> u64 {
+        m.replay().map(|evs| crate::seat::served_for_task(&evs, task_id).1).unwrap_or(0)
+    }
+
     /// An upper bound, in tokens, on what Delphi's seat can spend in a Panel: two calls (opening and cross-examination), each limited to
     /// `max_tokens` of output, plus the question and the other stances as input. A ceiling, not a forecast: no Council cost is measured yet.
     pub fn panel_foreign_ceiling_tokens(&self) -> u64 {
@@ -1013,13 +1025,14 @@ impl Engine {
     /// A host Panel's Round 1 has released (`specs/086` §4): the stances join the log as a daemon Council's do, and the plan is recorded
     /// as host-reported (the daemon cannot know the family or prove the isolation of a seat a host ran itself).
     #[allow(clippy::too_many_arguments)]
-    pub async fn panel_released(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, proposition: &str, stances: &BTreeMap<String, Stance>, models: &BTreeMap<String, String>, foreign: Option<(&str, &str)>, blind: &str, claims: (Option<bool>, Option<&str>), brief_hashes: &BTreeMap<String, String>) -> Result<(), EngineError> {
+    pub async fn panel_released(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, proposition: &str, stances: &BTreeMap<String, Stance>, models: &BTreeMap<String, String>, foreign: Option<(&str, &str)>, blind: &str, claims: (Option<bool>, Option<&str>), brief_hashes: &BTreeMap<String, String>, host: (Option<String>, Option<u32>)) -> Result<(), EngineError> {
         let emit = |kind: &str, payload: Value| {
             let mut e = EventEnvelope::new(&m.id, kind, payload);
             e.task_id = Some(task_id.to_string());
             e
         };
-        let mut started = json!({"proposition": proposition, "venue": "panel", "blind": blind, "foreign": foreign.map(|(r, f)| json!({"role": r, "family": f})), "seats": stances.keys().map(|r| json!({"role": r, "family": if foreign.is_some_and(|(fr, _)| fr == r) { foreign.map(|(_, f)| f).unwrap_or("host-reported") } else { "host-reported" }, "model": models.get(r)})).collect::<Vec<_>>(), "homogeneous": foreign.is_none(), "notes": ["a host Panel: isolation and model names are host-reported; Delphi holds the barrier"]});
+        let div = self.panel_diversity(m, task_id, host.0.as_deref());
+        let mut started = json!({"proposition": proposition, "venue": "panel", "blind": blind, "foreign": foreign.map(|(r, f)| json!({"role": r, "family": f})), "seats": stances.keys().map(|r| json!({"role": r, "family": if foreign.is_some_and(|(fr, _)| fr == r) { foreign.map(|(_, f)| f).unwrap_or("host-reported") } else { "host-reported" }, "model": models.get(r)})).collect::<Vec<_>>(), "homogeneous": div.homogeneous(), "families": div.families, "families_unknown": div.unknown, "host_family": host.0, "require_families": host.1, "notes": ["a host Panel: isolation and model names are host-reported; Delphi holds the barrier"]});
         if let Some(c) = claims.0 {
             started["operator_confirmed"] = json!(c);
         }
@@ -1056,7 +1069,7 @@ impl Engine {
         let foreign = panel.foreign();
         let plan = Assignment {
             seats: panel.seats().iter().map(|r| SeatPlan { role: r.clone(), family: match foreign { Some((fr, ff)) if fr == r => ff.to_string(), _ => "host-reported".into() }, avoid: vec![], tier: None }).collect(),
-            homogeneous: foreign.is_none(),
+            homogeneous: self.panel_diversity(m, &task_id, panel.host_family.as_deref()).homogeneous(),
             notes: vec!["a host Panel: isolation and model names are host-reported".into()],
         };
         let synthesis = panel.verdict().unwrap_or("(The moderator wrote no verdict; the structured record above and below is complete.)").to_string();

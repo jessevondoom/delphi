@@ -284,6 +284,85 @@ impl SeatBook {
     }
 }
 
+/// Which families actually sat (`specs/091` SR-3), from the receipts' SERVED family, never the requested one.
+/// `unknown` is counted apart and never makes a family.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Diversity {
+    /// Distinct known families, sorted.
+    pub families: Vec<String>,
+    /// Seats whose served family is `unknown`.
+    pub unknown: usize,
+}
+
+impl Diversity {
+    /// `host` is the host's own family when it is known (a host-reported guess, since a host seat has no receipt); `served` is the
+    /// served family of each receipt that counts.
+    pub fn of(host: Option<&str>, served: &[String]) -> Diversity {
+        let mut families: Vec<String> = Vec::new();
+        let mut unknown = 0;
+        for f in host.into_iter().chain(served.iter().map(String::as_str)) {
+            if f == UNKNOWN || f.is_empty() {
+                unknown += 1;
+            } else if !families.iter().any(|x| x == f) {
+                families.push(f.to_string());
+            }
+        }
+        families.sort();
+        Diversity { families, unknown }
+    }
+
+    /// Fewer than two distinct known families sat: the label `homogeneous` (H-008).
+    pub fn homogeneous(&self) -> bool {
+        self.families.len() < 2
+    }
+
+    /// `None` when `required` is met; else the fixed sentence for a caller who asked for it (SR-3).
+    pub fn unmet(&self, required: u32, when: &str) -> Option<String> {
+        if self.families.len() as u32 >= required {
+            return None;
+        }
+        let sat = if self.families.is_empty() { "none known".to_string() } else { self.families.join(", ") };
+        let unknown = match self.unknown {
+            0 => String::new(),
+            n => format!("; {n} seat(s) had a family the table does not map (`unknown` never counts)"),
+        };
+        Some(format!(
+            "require_families = {required} is not met {when}: known families {sat}{unknown}. Nothing more was spent. To retry, make the other seat's family known (the host's `model`, or a served model in model-families.toml) or lower require_families; leave it unset to run labelled homogeneous."
+        ))
+    }
+}
+
+/// The served family of every receipt of `task_id` that ended `ok`, and the tokens those seats used (in plus out).
+pub fn served_for_task(events: &[delphi_core::event::EventEnvelope], task_id: &str) -> (Vec<String>, u64) {
+    let mut fams = Vec::new();
+    let mut seen: Vec<(Option<String>, String)> = Vec::new();
+    let mut tokens = 0;
+    for e in events.iter().filter(|e| e.kind == RECEIPT_KIND && e.task_id.as_deref() == Some(task_id)) {
+        tokens += e.payload["tokens_in"].as_u64().unwrap_or(0) + e.payload["tokens_out"].as_u64().unwrap_or(0);
+        if e.payload["outcome"] == "ok" {
+            // One entry per seat (role) and family: a seat's two rounds are two receipts but one seat.
+            let entry = (e.agent.clone(), e.payload["served"]["family"].as_str().unwrap_or(UNKNOWN).to_string());
+            if !seen.contains(&entry) {
+                fams.push(entry.1.clone());
+                seen.push(entry);
+            }
+        }
+    }
+    (fams, tokens)
+}
+
+/// The count budget on foreign seats (`specs/091` SR-4), per Council: `None` when the plan fits, else the fixed sentence.
+/// It names the cap and never echoes the question.
+pub fn over_budget(seats: u32, tokens: u64, max_seats: u32, max_tokens: u64) -> Option<String> {
+    if seats > max_seats {
+        return Some(format!("foreign-seat budget: {seats} foreign seat(s) asked, the cap is [seats] max_foreign_seats = {max_seats} per Council. Nothing was spent. Open the Panel without foreign_seat, or raise the cap in config.toml."));
+    }
+    if seats > 0 && tokens > max_tokens {
+        return Some(format!("foreign-seat budget: the foreign seat's ceiling is {tokens} tokens, the cap is [seats] max_foreign_tokens = {max_tokens} per Council. Nothing was spent. Open the Panel without foreign_seat, or raise the cap in config.toml."));
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -425,5 +504,103 @@ mod tests {
         assert_eq!((out[0].1.tokens_in, out[0].1.tokens_out, out[0].1.seat_id.as_str()), (15, 3, "sp.s2"));
         assert_eq!(out[1].1.served.family, "unknown", "an API answer that did not say what served it");
         assert!(b.take_api_receipts("sp", &FamilyTable::shipped(), "ok").is_empty());
+    }
+
+    // specs/091 SR-3: what sat is read from the served family; unknown is not diversity.
+    fn fams(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn one_known_family_is_homogeneous_and_two_are_not() {
+        assert!(Diversity::of(Some("claude"), &fams(&["claude"])).homogeneous());
+        assert!(Diversity::of(None, &fams(&["gemini"])).homogeneous());
+        let d = Diversity::of(Some("claude"), &fams(&["gemini"]));
+        assert_eq!((d.families.clone(), d.homogeneous(), d.unknown), (fams(&["claude", "gemini"]), false, 0));
+    }
+
+    #[test]
+    fn unknown_never_counts_toward_diversity() {
+        let d = Diversity::of(Some("claude"), &fams(&["unknown"]));
+        assert_eq!((d.families.clone(), d.unknown, d.homogeneous()), (fams(&["claude"]), 1, true));
+        let none = Diversity::of(None, &fams(&["unknown", "unknown"]));
+        assert_eq!((none.families.len(), none.unknown), (0, 2));
+        let msg = d.unmet(2, "by the receipts").unwrap();
+        assert!(msg.contains("require_families = 2") && msg.contains("claude") && msg.contains("1 seat(s)") && msg.contains("unknown"), "{msg}");
+    }
+
+    #[test]
+    fn the_same_model_through_two_carriers_counts_once() {
+        let t = FamilyTable::shipped();
+        let served: Vec<String> = ["claude-sonnet-5.5", "claude-sonnet-5-5-thinking"].iter().map(|m| resolve(&t, Some(m)).family).collect();
+        let d = Diversity::of(None, &served);
+        assert_eq!(d.families, fams(&["claude"]));
+        assert!(d.unmet(2, "x").is_some());
+    }
+
+    #[test]
+    fn a_requirement_needs_known_families_and_a_met_one_is_silent() {
+        assert!(Diversity::of(None, &[]).unmet(1, "x").is_some(), "even one known family is needed when asked for");
+        assert!(Diversity::of(Some("claude"), &fams(&["gemini"])).unmet(2, "x").is_none());
+    }
+
+    #[test]
+    fn the_budget_names_its_cap_and_never_echoes_a_question() {
+        assert!(over_budget(1, 40_000, 1, 100_000).is_none());
+        assert!(over_budget(0, 999_999, 0, 1).is_none(), "no foreign seat, nothing to cap");
+        let a = over_budget(1, 10, 0, 100_000).unwrap();
+        assert!(a.contains("max_foreign_seats = 0") && a.contains("Nothing was spent"), "{a}");
+        let b = over_budget(1, 50_000, 1, 40_000).unwrap();
+        assert!(b.contains("max_foreign_tokens = 40000") && b.contains("50000"), "{b}");
+    }
+
+    #[test]
+    fn receipts_of_a_task_count_by_served_family_once_per_seat_and_only_when_ok() {
+        let ev = |task: &str, agent: &str, family: &str, outcome: &str| {
+            let mut e = delphi_core::event::EventEnvelope::new("m", RECEIPT_KIND, json!({"served": {"family": family}, "tokens_in": 10, "tokens_out": 5, "outcome": outcome}));
+            e.task_id = Some(task.into());
+            e.agent = Some(agent.into());
+            e
+        };
+        let log = vec![ev("t", "red-team", "gemini", "ok"), ev("t", "red-team", "gemini", "ok"), ev("t", "architect", "claude", "model_mismatch"), ev("other", "x", "openai", "ok")];
+        let (served, tokens) = served_for_task(&log, "t");
+        assert_eq!((served, tokens), (fams(&["gemini"]), 45), "two rounds of one seat are one seat; a refused seat did not sit; its tokens still count toward the budget");
+    }
+
+    // specs/091 SR-3: the ruling is labelled from the receipts' served family, not from the request.
+    #[test]
+    fn a_panel_ruling_lists_the_families_that_sat_and_says_so_when_a_required_count_was_not_met() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("councils")).unwrap();
+        std::fs::write(dir.path().join("councils/001-x.md"), "## Decision\n\nx\n").unwrap();
+        let ev = |kind: &str, payload: serde_json::Value, agent: Option<&str>| {
+            let mut e = delphi_core::event::EventEnvelope::new("m", kind, payload);
+            e.task_id = Some("t-1".into());
+            e.agent = agent.map(String::from);
+            e
+        };
+        let receipt = |family: &str| json!({"served": {"family": family}, "tokens_in": 1, "tokens_out": 1, "outcome": "ok"});
+        let view = |served: &str, required: Option<u64>| {
+            let log = vec![
+                delphi_core::event::EventEnvelope::new("m", crate::host_rpc::COUNCIL_EVENT, json!({"task_id": "t-1", "venue": "panel"})),
+                ev("council.started", json!({"venue": "panel", "host_family": "claude", "require_families": required, "foreign": {"role": "red-team", "family": "gemini"}}), None),
+                ev(RECEIPT_KIND, receipt(served), Some("red-team")),
+                ev(&format!("council.{}", "verdict"), json!({"decision": "d", "path": "missions/m/councils/001-x.md", "options": [], "steps": [], "homogeneous": false}), None),
+                ev("task.completed", json!({"status": "done", "reason": ""}), None),
+            ];
+            crate::host_rpc::council_view(&log, dir.path(), "t-1").unwrap()
+        };
+        // Requested gemini and served gemini: two families, not homogeneous, requirement met.
+        let v = view("gemini", Some(2));
+        assert_eq!((v["ruling"]["families"].clone(), v["ruling"]["homogeneous"].clone(), v["ruling"]["require_families_met"].clone()), (json!(["claude", "gemini"]), json!(false), json!(true)), "{v}");
+        assert!(v["display"].as_str().unwrap().contains("2 families: claude, gemini"));
+        // The carrier served a model the table does not map: the request does not matter, unknown is not diversity.
+        let v = view("unknown", Some(2));
+        let card = v["display"].as_str().unwrap();
+        assert_eq!((v["ruling"]["families"].clone(), v["ruling"]["homogeneous"].clone(), v["ruling"]["require_families_met"].clone()), (json!(["claude"]), json!(true), json!(false)), "{v}");
+        assert!(card.contains("1 family: claude, 1 unknown (not counted) (homogeneous)") && card.contains("require_families = 2 was NOT met"), "{card}");
+        // The same model through a second carrier is the host's own family again: one family.
+        let v = view("claude", None);
+        assert_eq!((v["ruling"]["families"].clone(), v["ruling"]["homogeneous"].clone(), v["ruling"]["require_families_met"].clone()), (json!(["claude"]), json!(true), json!(null)), "{v}");
     }
 }

@@ -115,16 +115,16 @@ async fn panel_step(engine: Arc<Engine>, panels: Panels, m: Arc<MissionState>, i
     match step {
         Step::Waiting(missing) => Ok(json!({"council_id": id, "accepted": true, "round": round, "waiting_for": missing})),
         Step::Released(stances) => {
-            let (prop, models, foreign, blind, claims) = {
+            let (prop, models, foreign, blind, claims, host) = {
                 let g = panels.lock().unwrap();
                 let panel = g.get(&key).ok_or_else(gone)?;
-                (panel.proposition.clone(), panel.models.clone(), panel.foreign().map(|(r, f)| (r.to_string(), f.to_string())), panel.blind.clone(), (panel.operator_confirmed, panel.options_source.clone()))
+                (panel.proposition.clone(), panel.models.clone(), panel.foreign().map(|(r, f)| (r.to_string(), f.to_string())), panel.blind.clone(), (panel.operator_confirmed, panel.options_source.clone()), (panel.host_family.clone(), panel.require_families))
             };
             let hashes: std::collections::BTreeMap<String, String> = {
                 let g = panels.lock().unwrap();
                 g.get(&key).map(|pn| stances.keys().filter_map(|r| pn.brief_hash(r, 1).map(|h| (r.clone(), h))).collect()).unwrap_or_default()
             };
-            engine.panel_released(&m, &id, &prop, &stances, &models, foreign.as_ref().map(|(r, f)| (r.as_str(), f.as_str())), &blind, (claims.0, claims.1.as_deref()), &hashes).await.map_err(engine_err)?;
+            engine.panel_released(&m, &id, &prop, &stances, &models, foreign.as_ref().map(|(r, f)| (r.as_str(), f.as_str())), &blind, (claims.0, claims.1.as_deref()), &hashes, host).await.map_err(engine_err)?;
             let answered = stances.values().filter(|s| s.text().is_some()).count();
             if answered < 2 {
                 panels.lock().unwrap().remove(&key);
@@ -168,7 +168,18 @@ fn spawn_foreign(engine: Arc<Engine>, panels: Panels, m: Arc<MissionState>, id: 
                 Err(_) => return,
             }
         };
-        let stance = engine.panel_foreign_run(&m, &id, brief, &prop, &role, &family, round, stances.as_ref()).await;
+        // Round 2 is more spend: judge it by the receipts of Round 1, never by the request (`specs/091` SR-3, SR-4). A refusal here only narrows.
+        let stop = if round > 1 {
+            let (host_family, required) = { panels.lock().unwrap().get(&key).map(|p| (p.host_family.clone(), p.require_families)).unwrap_or_default() };
+            let unmet = required.and_then(|n| engine.panel_diversity(&m, &id, host_family.as_deref()).unmet(n, "by the receipts of Round 1"));
+            unmet.or_else(|| (engine.panel_foreign_tokens(&m, &id) >= engine.settings.max_foreign_tokens).then(|| format!("foreign-seat budget: Round 1 used {} tokens, the cap is [seats] max_foreign_tokens = {} per Council; Round 2 was not run", engine.panel_foreign_tokens(&m, &id), engine.settings.max_foreign_tokens)))
+        } else {
+            None
+        };
+        let stance = match stop {
+            Some(why) => crate::council::Stance::Abstained(why),
+            None => engine.panel_foreign_run(&m, &id, brief, &prop, &role, &family, round, stances.as_ref()).await,
+        };
         let (text, abstain) = match stance {
             crate::council::Stance::Said(t) => (t, None),
             crate::council::Stance::Abstained(w) => (String::new(), Some(w)),
@@ -552,6 +563,31 @@ impl EngineService {
         if p["foreign_seat"].as_str().is_some_and(|r| !r.is_empty()) && operator_confirmed != Some(true) {
             return Err(err(code::INVALID_PARAMS, "a foreign seat spends the operator's Delphi tokens: ask the operator, and pass operator_confirmed: true only if they said yes (or open the Panel without foreign_seat)"));
         }
+        // SR-3 and SR-4: judged before anything is recorded or spent. Only the caller's own opt-in can refuse for families.
+        let required = match p.get("require_families") {
+            None | Some(Value::Null) => self.engine.settings.require_families,
+            Some(v) => match v.as_u64() {
+                Some(n @ 1..=8) => Some(n as u32),
+                _ => return Err(err(code::INVALID_PARAMS, "`require_families` is a whole number from 1 to 8 (leave it out to run labelled homogeneous)")),
+            },
+        };
+        let host_family = crate::council_panel::host_family(p["model"].as_str(), &c.tool);
+        let planned_foreign: Option<(String, String)> = match p["foreign_seat"].as_str().filter(|r| !r.is_empty()) {
+            Some(role) => {
+                let family = self.engine.panel_foreign_family(role, host_family).ok_or_else(|| err(code::INVALID_PARAMS, "a seat run by Delphi needs a model family other than your host's, and none is configured: ask without foreign_seat, or add another family (see `delphi setup`)"))?;
+                Some((role.to_string(), family))
+            }
+            None => None,
+        };
+        if let Some(why) = crate::seat::over_budget(planned_foreign.is_some() as u32, self.engine.panel_foreign_ceiling_tokens(), self.engine.settings.max_foreign_seats, self.engine.settings.max_foreign_tokens) {
+            return Err(err(code::INVALID_PARAMS, why));
+        }
+        if let Some(n) = required {
+            let planned: Vec<String> = planned_foreign.iter().map(|(_, f)| f.clone()).collect();
+            if let Some(why) = crate::seat::Diversity::of(Some(host_family.unwrap_or(crate::seat::UNKNOWN)), &planned).unmet(n, "by this Panel's plan (the host's family is host-reported)") {
+                return Err(err(code::INVALID_PARAMS, why));
+            }
+        }
         let has_options = p.get("options").and_then(Value::as_array).is_some_and(|a| !a.is_empty());
         let mut foreign: Option<(String, String)> = None;
         let (task_id, m) = {
@@ -586,10 +622,11 @@ impl EngineService {
                 Some("no") => "no".into(),
                 _ => "unknown".into(),
             };
-            if let Some(role) = p["foreign_seat"].as_str().filter(|r| !r.is_empty()) {
-                let family = self.engine.panel_foreign_family(role, crate::council_panel::host_family(p["model"].as_str(), &c.tool)).ok_or_else(|| err(code::INVALID_PARAMS, "a seat run by Delphi needs a model family other than your host's, and none is configured: ask without foreign_seat, or add another family (see `delphi setup`)"))?;
-                panel.reserve(role, &family).map_err(|e| err(code::INVALID_PARAMS, e.to_string()))?;
-                foreign = Some((role.to_string(), family));
+            panel.host_family = host_family.map(String::from);
+            panel.require_families = required;
+            if let Some((role, family)) = &planned_foreign {
+                panel.reserve(role, family).map_err(|e| err(code::INVALID_PARAMS, e.to_string()))?;
+                foreign = Some((role.clone(), family.clone()));
             }
             self.panels.lock().unwrap().insert((m.id.clone(), task_id.clone()), panel);
             (task_id, m)
@@ -3499,6 +3536,7 @@ mod tests {
         assert!(lines[0].contains("operator_confirmed: true") && lines[1].contains("operator_confirmed: true"), "foreign_seat without operator_confirmed is refused: {one_family}");
         assert!(lines[2].contains("none is configured"), "{one_family}");
         crate::council::tests::two_families(&f);
+        *f.model.served.lock().unwrap() = Some("gemini-4-argon".into()); // the provider reports what served the seat: the receipt's family comes from this
         f.model.respond_with(|body| if body.to_string().contains("COUNCIL, ROUND 2") { Step::text("RECOMMENDATION: PROCEED-WITH-CHANGES\nFINDING P2 naming\nCONCUR: yes\nROUND 2 COMPLETE") } else { Step::text("OPTION: table\nDelphi's seat says table.") });
         blocking(move || {
             let mut c = Client::connect(&hsock).unwrap();
@@ -3548,7 +3586,7 @@ mod tests {
             let got = c.call("host.council_result", p(json!({"council_id": id}))).unwrap();
             assert_eq!((got["state"].as_str(), got["venue"].as_str(), got["blind"].as_str()), (Some("decided"), Some("panel"), Some("yes")), "{got}");
             let card = got["display"].as_str().unwrap();
-            assert!(card.contains("2 families") && card.contains("seat `red-team` run by Delphi") && card.contains("blind: yes (host-reported)") && card.contains("tokens on the seat Delphi ran"), "{card}");
+            assert!(card.contains("2 families: claude, gemini") && !card.contains("homogeneous") && got["ruling"]["homogeneous"] == false && card.contains("run by Delphi") && card.contains("blind: yes (host-reported)") && card.contains("tokens on the seat Delphi ran"), "{card}");
             assert!(card.contains("**Options:** from the operator (host-reported)") && card.contains("**Foreign seat confirmed by the operator:** yes (host-reported)"), "{card}");
             let who: Vec<&str> = got["ruling"]["seat_positions"].as_array().unwrap().iter().filter_map(|p| p["model"].as_str()).collect();
             assert!(who.iter().any(|m| m.contains("run by Delphi")), "the seat Delphi ran is labelled as such: {who:?}");
@@ -5800,5 +5838,70 @@ mod tests {
         let solo_off = svc.session_solo(json!({"solo": false}), ctx).await.unwrap();
         assert_eq!(solo_off["solo"], false);
         assert!(!f.engine.is_solo());
+    }
+
+    // specs/091 SR-3 and SR-4: judged before anything is recorded or spent; a refusal only narrows.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn require_families_refuses_a_panel_before_spending_and_unset_never_refuses() {
+        let f = setup(vec![], 50.0, |_| {});
+        crate::council::tests::two_families(&f);
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            c.hello(&htok).unwrap();
+            let p = |extra: Value| {
+                let mut b = json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cwd});
+                for (k, v) in extra.as_object().unwrap() {
+                    b[k] = v.clone();
+                }
+                b
+            };
+            // No foreign seat: only the host's family sits, so two are impossible. Refused, names the family that would sit.
+            let e = c.call("host.council_open", p(json!({"question": "q?", "model": "claude-opus", "require_families": 2}))).unwrap_err().to_string();
+            assert!(e.contains("require_families = 2 is not met") && e.contains("known families claude") && e.contains("Nothing more was spent"), "{e}");
+            // The host's own family unknown (no model, a tool no one maps) plus a gemini seat: unknown does not count.
+            let e = c.call("host.council_open", p(json!({"question": "q?", "tool": "mystery-host", "foreign_seat": "red-team", "operator_confirmed": true, "require_families": 2}))).unwrap_err().to_string();
+            assert!(e.contains("known families claude") && e.contains("1 seat(s) had a family the table does not map"), "no host family to avoid, so Delphi's seat is the role's usual claude: {e}");
+            // A bad value is refused as a bad value, not read as "unset".
+            assert!(c.call("host.council_open", p(json!({"question": "q?", "require_families": 0}))).is_err());
+            assert!(c.call("host.council_open", p(json!({"question": "q?", "require_families": "two"}))).is_err());
+            // Unset: the same Panel opens and would be labelled homogeneous.
+            let ok = c.call("host.council_open", p(json!({"question": "q?", "model": "claude-opus"}))).unwrap();
+            assert!(ok["council_id"].is_string(), "{ok}");
+            // Met by the plan (claude host, gemini seat): opens.
+            let ok = c.call("host.council_open", p(json!({"question": "q2?", "model": "claude-opus", "foreign_seat": "red-team", "operator_confirmed": true, "require_families": 2}))).unwrap();
+            assert!(ok["council_id"].is_string(), "{ok}");
+        })
+        .await;
+        // The refusals spent nothing: the only model calls are the one foreign seat of the Panel that opened.
+        assert!(f.model.requests().len() <= 1, "refused Panels called no model: {}", f.model.requests().len());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_foreign_seat_budget_refuses_before_spending_and_names_its_cap() {
+        for (seats, tokens, want) in [(0u32, 100_000u64, "max_foreign_seats = 0"), (1, 10, "max_foreign_tokens = 10")] {
+            let f = setup(vec![], 50.0, move |s| {
+                s.max_foreign_seats = seats;
+                s.max_foreign_tokens = tokens;
+            });
+            crate::council::tests::two_families(&f);
+            let cwd = f.root.to_string_lossy().to_string();
+            let s = serve(&f).await;
+            let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+            let e = blocking(move || {
+                let mut c = Client::connect(&hsock).unwrap();
+                c.hello(&htok).unwrap();
+                let secret = "do-not-echo-this-question";
+                let e = c.call("host.council_open", json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cwd, "question": secret, "model": "claude-opus", "foreign_seat": "red-team", "operator_confirmed": true})).unwrap_err().to_string();
+                assert!(!e.contains(secret), "{e}");
+                e
+            })
+            .await;
+            assert!(e.contains(want) && e.contains("Nothing was spent"), "{e}");
+            assert!(f.model.requests().is_empty());
+        }
     }
 }

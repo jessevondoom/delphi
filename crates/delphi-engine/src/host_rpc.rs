@@ -544,9 +544,19 @@ pub fn council_view(events: &[delphi_core::event::EventEnvelope], mission_dir: &
             doc.rsplit_once(marker.as_str()).map(|(_, t)| t.split("\n## ").next().unwrap_or("").trim().to_string())
         });
         let critiques: Vec<Value> = of("council.critique").iter().map(|e| json!({"seat": e.payload["role"], "recommendation": e.payload["recommendation"], "concur": e.payload["concur"], "findings": e.payload["findings"]})).collect();
+        // The families that actually sat, from the receipts' served family (`specs/091` SR-3). A Panel adds the host's own, host-reported.
+        // A log without receipts keeps the plan's label.
+        let (served, _) = crate::seat::served_for_task(events, task_id);
+        let host_fam = started.and_then(|e| e.payload["host_family"].as_str());
+        let div = crate::seat::Diversity::of(if panel { host_fam } else { None }, &served);
+        let have = !served.is_empty() || (panel && host_fam.is_some());
+        let homogeneous = if have && panel { json!(div.homogeneous()) } else if have { json!(ve.payload["homogeneous"].as_bool().unwrap_or(false) || div.homogeneous()) } else { ve.payload["homogeneous"].clone() };
+        let required = started.and_then(|e| e.payload["require_families"].as_u64());
         v["ruling"] = json!({
+            "families": div.families, "families_unknown": div.unknown, "require_families": required,
+            "require_families_met": required.map(|n| div.families.len() as u64 >= n),
             "decision": ve.payload["decision"], "next_steps": ve.payload["steps"], "options_considered": ve.payload["options"], "escalated": ve.payload["escalated"],
-            "unresolved": ve.payload["unresolved"], "homogeneous": ve.payload["homogeneous"], "seat_positions": positions, "critiques": critiques,
+            "unresolved": ve.payload["unresolved"], "homogeneous": homogeneous, "seat_positions": positions, "critiques": critiques,
             "dissent": dissent, "record": ve.payload["path"],
             "note": "advice to you: it binds nothing in your project; the record stays in Delphi for the operator to review"
         });
@@ -578,9 +588,15 @@ pub fn ruling_card(v: &Value, tokens: u64) -> String {
             Some("none") | None => "none given",
             Some(_) => "source not stated",
         };
-        let families = match v["foreign_seat"]["family"].as_str() {
-            Some(f) => format!("2 families: the host's and {f} (seat `{}` run by Delphi)", v["foreign_seat"]["role"].as_str().unwrap_or("?")),
-            None => "1 family reported".to_string(),
+        let families = match (r["families"].as_array(), v["foreign_seat"]["family"].as_str()) {
+            // From the receipts (`specs/091`): the served family of each seat Delphi ran, plus the host's own as the host reported it.
+            (Some(fs), _) if !fs.is_empty() || r["families_unknown"].as_u64().unwrap_or(0) > 0 => {
+                let names: Vec<&str> = fs.iter().filter_map(Value::as_str).collect();
+                let unknown = r["families_unknown"].as_u64().filter(|n| *n > 0).map(|n| format!(", {n} unknown (not counted)")).unwrap_or_default();
+                format!("{} famil{}: {}{unknown}{}", names.len(), if names.len() == 1 { "y" } else { "ies" }, if names.is_empty() { "none known".to_string() } else { names.join(", ") }, if homog { " (homogeneous)" } else { "" })
+            }
+            (_, Some(f)) => format!("2 families: the host's and {f} (seat `{}` run by Delphi)", v["foreign_seat"]["role"].as_str().unwrap_or("?")),
+            _ => "1 family reported".to_string(),
         };
         s.push_str(&format!(
             "**Panel ruling** · host seats · barrier: held by Delphi · isolation: host-reported · {blind} · {families} · {}\n\n",
@@ -590,6 +606,9 @@ pub fn ruling_card(v: &Value, tokens: u64) -> String {
             }
         ));
         s.push_str(&format!("**Options:** {options_line} (host-reported)\n\n"));
+        if let (Some(n), Some(false)) = (r["require_families"].as_u64(), r["require_families_met"].as_bool()) {
+            s.push_str(&format!("**require_families = {n} was NOT met** by the receipts; this ruling is labelled homogeneous.\n\n"));
+        }
         if v["foreign_seat"].is_object() && v["operator_confirmed"] == true {
             s.push_str("**Foreign seat confirmed by the operator:** yes (host-reported)\n\n");
         }
