@@ -433,13 +433,15 @@ merge queued pull requests of this repository, with a recorded approval (spec 09
   delphi merge \-\-all [\-\-operator\-said "<words>"] [\-\-dry\-run]
   delphi merge queue <PR>
   delphi merge status
-  (not built yet: \-\-auto, log, fix, cleanup)
+  delphi merge cleanup [<PR>...] [\-\-merged] [\-\-dry\-run] [\-\-yes]
+  (not built yet: \-\-auto, log, fix)
 .fi
 .PP
 The core\-repo merge flow (specs/094). Agents queue a ready pull request with the `merge\-queue` label (`delphi merge queue <PR>`); a merge is started by the operator.
 For each pull request the command derives, from git and `gh`, the head commit, the changed paths and their hash, the base commit, the checks and the linked spec (the `Implements\-Spec:` trailer); nothing is typed. It refuses unless the pull request is open, not a draft, queued, mergeable, every check passes and the spec is approved on the base branch (or the change is inside the bounded exemption of specs/003). A refusal lists every reason.
 Approval is `tty` (you type the PR number; `all` for \-\-all) or `chat\-quote` (an agent passes your own words with \-\-operator\-said; the quote must name the pull request, or say all/every/each for \-\-all). A chat quote is self\-attested by the caller and is recorded as such. The merge is a merge commit, made only if the head is still the one derived, and the decision is appended to $DELPHI_HOME/merge/ledger.jsonl and posted on the pull request.
 A pull request that touches a path in merge\-gates.toml (read from the BASE branch; the file is on its own list) changes a gate: it is never queued, never merged by \-\-all, refuses a chat quote, and needs you at a terminal, shown the whole diff. \-\-dry\-run changes nothing.
+After a merge the command removes what belonged to the pull request and prints one line per step: the remote branch (kept if another open pull request is based on it, or its tip is not the merged commit), the worktrees that have the branch (kept, and reported, when locked, dirty, the main worktree, or the directory you are in; never \-\-force), then the local branch with `git branch \-d` only. The base, default, main and master branches and any pull request that is not MERGED are never touched. A cleanup failure is printed and never undoes a merge. `delphi merge cleanup <PR>...` does the same for merged pull requests; `\-\-merged` sweeps the backlog of recent merged pull requests whose branch still exists, and only prints the plan until you add \-\-yes.
 Refused inside an agent seat. Needs the GitHub CLI (`gh`) signed in. Exit codes: 0 ok · 1 refused, declined or failed · 2 usage or refusal · 4 `gh` missing or unreachable.
 .SH INSPECT
 .SS delphi debug
