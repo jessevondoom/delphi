@@ -5,7 +5,7 @@ author: architect
 timestamp: 2026-11-05T00:00:00Z
 status: approved   # by the operator, 2026-11-06 ("go"); OD-1 and OD-6 answered, OD-2 to OD-5 take the recommendations
 approved_by: operator (2026-11-06)
-amendments: "2026-11-07, PENDING THE OPERATOR'S APPROVAL (Council t_0004, 2026-11-07): §6.4 allows N foreign seats, counted by family and gated on spec 091 receipts and count budget; §4.2 hub-and-spoke invariant; §4.3 a seat that reads peer text has no tools; §7 `unverified-against-repo` travels into the card; §6.4 carrier choice rule"
+amendments: "2026-11-07, approved by the operator, 2026-11-07 (Council t_0004, 2026-11-07): §6.4 allows N foreign seats, counted by family and gated on spec 091 receipts and count budget; §4.2 hub-and-spoke invariant; §4.3 a seat that reads peer text has no tools; §7 `unverified-against-repo` travels into the card; §6.4 carrier choice rule"
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -116,13 +116,13 @@ The server does what Mode A's daemon does with a different transport: holds Roun
 
 It **cannot** prove a host really ran each seat in an isolated context, or that the stance came from the named model. A host that pastes all four stances itself defeats independence. The record therefore states what was and was not enforced: `barrier: server-held`, `isolation: host-reported`, `models: host-reported`. The ruling card shows these lines. No promotion of a lesson rests on a Panel alone (§9, S5).
 
-**Standing invariant (hub-and-spoke; amendment pending the operator's approval, 2026-11-07).** Delphi coordinates and outside CLIs are carriers. Every seat talks to Delphi and only to Delphi; there is no seat-to-seat channel. A seat sees a peer's words only when Delphi puts them in its Round 2 brief (§4.1), as fenced data (§4.3).
+**Standing invariant (hub-and-spoke; amendment approved by the operator, 2026-11-07).** Delphi coordinates and outside CLIs are carriers. Every seat talks to Delphi and only to Delphi; there is no seat-to-seat channel. A seat sees a peer's words only when Delphi puts them in its Round 2 brief (§4.1), as fenced data (§4.3).
 
 ### 4.3 Inputs are fenced
 
 The question, the file excerpts and every stance are content from outside Delphi: fenced as data, never as instructions (existing 062 §7.1 rule), and a Panel's excerpts are limited to the project scope the caller already has (072 §6 isolation).
 
-**Peer text (amendment pending the operator's approval, 2026-11-07).** A seat that reads peer text in Round 2 is given no tools, and the peer text is fenced untrusted data. A seat that needs tools to verify something does so in Round 1, before it sees any peer.
+**Peer text (amendment approved by the operator, 2026-11-07).** A seat that reads peer text in Round 2 is given no tools, and the peer text is fenced untrusted data. A seat that needs tools to verify something does so in Round 1, before it sees any peer.
 
 ### 4.4 Degraded forms, always labelled
 
@@ -183,11 +183,11 @@ Where the host offers two or more models, the red-team seat takes a different mo
 
 Generated agent files use **aliases and tiers** the host documents (Claude `opus`/`sonnet`/`haiku`/`fable`; agy `pro`/`flash`), never full model ids. For hosts that take free model names (Copilot, Codex) the file sets no model and the plan comes from the operator's mapping, `[host.models.<host>]` (role → model name), shown by `council_frame`; with no mapping, the seat inherits and the card says `1 model`. A hard-coded model name in a generated file fails the drift test.
 
-### 6.4 Foreign seats (S4 built for one; N seats pending the operator's approval, 2026-11-07)
+### 6.4 Foreign seats (S4 built for one; N seats approved by the operator, 2026-11-07, not yet built)
 
 A Panel may add foreign seats run by **Delphi's own harness**, each from a family other than the host's (normally red-team first), via the existing seat machinery. This replaces "exactly one foreign seat" (Council t_0004, 2026-11-07). It spends the operator's tokens on the daemon side, so `council_frame` lists each seat and the estimate includes it; each runs only on the operator's yes.
 
-- **Gated on spec 091.** N seats need the seat receipts (`specs/091` SR-1) and the count budget (SR-4). `specs/091` S1 and S2 must be built first; until then the Panel stays at one foreign seat, as built below.
+- **Gated on spec 091.** N seats need the seat receipts (`specs/091` SR-1) and the count budget (SR-4). `specs/091` S1, S2, S3 and S5 are built (receipts, families, `require_families`, count budget); the N-seat code itself (C3a) is not yet built, so the Panel stays at one foreign seat, as built below.
 - **Count families, not seats.** A family is a training lineage regardless of provider (`GOVERNANCE.md` H-001): the same model through two carriers is one family. The card says `N families` from the receipts' `family`, never from the number of seats; `unknown` does not count.
 - **Label, do not block.** When fewer than two families sat, the result is labelled `homogeneous` (`context/heuristics.md` H-008). It is never refused for that unless the caller set `require_families` (`specs/091` SR-3).
 - **Carrier choice.** Tool-less carriers sit critique and second-opinion seats. A tool seat is used for verification. The `council_frame` yes shows each seat's carrier, tools and budget before the operator answers.
@@ -201,7 +201,7 @@ A Panel may add foreign seats run by **Delphi's own harness**, each from a famil
 
 1. The signature line (badge, name, role, "via delphi") and the **tier and venue** (`Panel · host · blind: yes · barrier: server-held`).
 2. **Decision** and **next steps** by role.
-3. **Who sat**: role, family, model name as reported, `abstained` marked. A tool-less seat's verdict carries the label `unverified-against-repo` into the card (amendment pending the operator's approval, 2026-11-07).
+3. **Who sat**: role, family, model name as reported, `abstained` marked. A tool-less seat's verdict carries the label `unverified-against-repo` into the card (amendment approved by the operator, 2026-11-07).
 4. **Where they split**, one line per disagreement.
 5. **Dissent verbatim** (Minority Report), merged by text.
 6. **Cost** in tokens (a Panel's host tokens are reported by the host if it says; otherwise "host-side, not measured").

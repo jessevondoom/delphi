@@ -24,6 +24,8 @@ pub mod fact_sources;
 pub mod fact_store;
 pub mod fact_tools;
 pub mod scope;
+pub mod refusal;
+pub mod seat;
 pub mod promote;
 pub mod session;
 pub mod settings_run;
@@ -101,6 +103,8 @@ pub mod retrieval;
 pub mod xenia_read;
 #[cfg(test)]
 mod xenia_scope_tests;
+#[cfg(test)]
+mod service_gates_tests;
 pub mod vecext;
 pub mod mission;
 pub mod grades;

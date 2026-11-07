@@ -1,0 +1,7 @@
+args {"question": "Should draft spec 070 be approved? It keeps No Spec, No Build mandatory for software (building Delphi, writing code, guiding external coding projects), exempts artifacts (docs, decks, images, media) from specs but requires a daemon-written, verbatim operator-prompt-only log, and keeps Markdown/scaffolds/scratch always allowed within permissions. Recommend amendments, and answer D-1 (
+started {"council_id": "t_0001", "note": "a Council runs for a few minutes: ask again with council_status, then council_result; its ruling is advice and binds nothing in your project", "state": "convening"}
+0 s ('deliberating', 'convening: choosing the seats')
+50 s ('deliberating', 'round 1 (blind opening): 3 seat(s) have answered')
+200 s ('deliberating', 'round 2 (cross-examination): 3 critique(s) in; the verdict follows')
+210 s ('needs_operator', None)
+done needs_operator

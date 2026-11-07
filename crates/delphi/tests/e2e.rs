@@ -919,9 +919,9 @@ fn ui_launcher(dir: &Path) -> Option<PathBuf> {
     }
     let ui = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui");
     if !ui.join("node_modules/@opentui/core").exists() || !has_node_runtime() {
-        // CI's UI job sets DELPHI_REQUIRE_UI: there a missing UI is a failure, not a silent pass.
-        assert!(std::env::var_os("DELPHI_REQUIRE_UI").is_none(), "DELPHI_REQUIRE_UI is set but ui/node_modules or Node >= 26.4 is missing");
-        eprintln!("skipped: ui/node_modules or Node >= 26.4 is missing (run `npm ci` in ui/ with Node >= 26.4)");
+        // CI's UI job requires the `ui` family (DELPHI_REQUIRE_UI=1 or DELPHI_REQUIRE=ui): there a missing UI is a
+        // failure, not a silent pass (spec 093 K2).
+        common::skip_or_fail("ui", "ui/node_modules or Node >= 26.4 is missing (run `npm ci` in ui/ with Node >= 26.4)");
         return None;
     }
     let wrapper = dir.join("delphi-ui");

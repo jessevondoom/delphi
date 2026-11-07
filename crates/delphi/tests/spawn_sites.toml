@@ -1,0 +1,177 @@
+# Every place non-test Rust starts a process, by file and class (spec 093 K1).
+#
+# `spawn_sites.rs` scans `crates/` and fails when a file starts more processes than listed here, when an unlisted
+# file starts one, or when a listed file starts fewer (a stale entry). Add or change an entry in the same pull request
+# as the code, and choose the class that is true. A site that fits no class is a design question for the reviewer,
+# not a reason to add a class.
+#
+# What counts as a site: `Command::new(`, `Command::from(`, `CommandBuilder::new(`, `openpty(`, `native_pty_system(`
+# and `forkpty(` in code that is not test code. Test code is a `#[cfg(test)] mod` (to the end of the file) or a
+# `#[cfg(test)]` item, and `tests/`, `tests.rs` and `*_tests.rs`. Comment lines are ignored.
+#
+# Classes:
+#   sandbox          the OS-sandbox launcher; the only place that may run arguments an agent chose
+#   seat             starts a model-driven harness CLI seat, built by the sandbox's `plain_command`
+#   self             runs this program's own executable (daemon, bundle, update, capabilities refresh, training runs)
+#   git              git, gh or tar with arguments Delphi builds; no agent-chosen words
+#   probe            runs a CLI with a fixed flag to read its version, help or quota; no model input
+#   opener           hands a URL to the system opener, or a secret to the OS keychain helper
+#   operator-config  argv comes from ratified operator configuration, run with a cleared environment (GOVERNANCE 5.11)
+#   operator-cli     runs only after an explicit operator command in a terminal
+#   train            the training harness (a source checkout; spends the operator's tokens on purpose)
+#   test-support     a helper module used only by tests
+
+[[site]]
+file = "crates/delphi-adapter/src/credential.rs"
+count = 1
+class = "operator-config"
+
+[[site]]
+file = "crates/delphi-adapter/src/oauth2.rs"
+count = 1
+class = "opener"
+
+[[site]]
+file = "crates/delphi-core/src/spawn.rs"
+count = 1
+class = "self"
+
+[[site]]
+file = "crates/delphi-core/src/xenia_store.rs"
+count = 1
+class = "git"
+
+[[site]]
+file = "crates/delphi-core/src/xenia_testkit.rs"
+count = 1
+class = "test-support"
+
+[[site]]
+file = "crates/delphi-engine/src/auth_cli.rs"
+count = 1
+class = "opener"
+
+[[site]]
+file = "crates/delphi-engine/src/capabilities.rs"
+count = 1
+class = "probe"
+
+[[site]]
+file = "crates/delphi-engine/src/emergency.rs"
+count = 1
+class = "git"
+
+[[site]]
+file = "crates/delphi-engine/src/harness.rs"
+count = 1
+class = "seat"
+
+[[site]]
+file = "crates/delphi-engine/src/hooks.rs"
+count = 1
+class = "operator-config"
+
+[[site]]
+file = "crates/delphi-engine/src/probe.rs"
+count = 1
+class = "git"
+
+[[site]]
+file = "crates/delphi-engine/src/quota.rs"
+count = 1
+class = "probe"
+
+[[site]]
+file = "crates/delphi-engine/src/service.rs"
+count = 1
+class = "self"
+
+[[site]]
+file = "crates/delphi-engine/src/worktree.rs"
+count = 3
+class = "git"
+
+[[site]]
+file = "crates/delphi-sandbox/src/lib.rs"
+count = 3
+class = "sandbox"
+
+[[site]]
+file = "crates/delphi/src/bundle_add.rs"
+count = 1
+class = "self"
+
+[[site]]
+file = "crates/delphi/src/bundle_fetch.rs"
+count = 1
+class = "git"
+
+[[site]]
+file = "crates/delphi/src/chat.rs"
+count = 3
+class = "operator-cli"
+
+[[site]]
+file = "crates/delphi/src/connect_run.rs"
+count = 1
+class = "operator-cli"
+
+[[site]]
+file = "crates/delphi/src/doctor.rs"
+count = 2
+class = "probe"
+
+[[site]]
+file = "crates/delphi/src/host_caps.rs"
+count = 1
+class = "probe"
+
+[[site]]
+file = "crates/delphi/src/host_caps.rs"
+count = 1
+class = "self"
+
+[[site]]
+file = "crates/delphi/src/main.rs"
+count = 2
+class = "self"
+
+[[site]]
+file = "crates/delphi/src/selfupdate.rs"
+count = 1
+class = "git"
+
+[[site]]
+file = "crates/delphi/src/selfupdate.rs"
+count = 3
+class = "probe"
+
+[[site]]
+file = "crates/delphi/src/setup.rs"
+count = 1
+class = "probe"
+
+[[site]]
+file = "crates/delphi/src/setup.rs"
+count = 1
+class = "operator-cli"
+
+[[site]]
+file = "crates/delphi/src/setup.rs"
+count = 1
+class = "opener"
+
+[[site]]
+file = "crates/delphi/src/train_hidden.rs"
+count = 4
+class = "train"
+
+[[site]]
+file = "crates/delphi/src/train_judge.rs"
+count = 3
+class = "train"
+
+[[site]]
+file = "crates/delphi/src/train_run.rs"
+count = 4
+class = "train"

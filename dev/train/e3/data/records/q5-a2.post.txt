@@ -1,0 +1,2 @@
+host-e9281a5655759d47 {"t_0001": {"cache_read": 255387, "cache_write": 0, "events": 2, "models": ["gemini-3.8-flash-medium"], "tokens": 89957}} retries 0 fail_lines 0 ['/tmp/e3/home-panel/workspaces/delphi/local/sessions/host-e9281a5655759d47/councils/001-should-draft-spec-070-be-approved-it-kee.md']
+copied record -> /tmp/e3/records/q5-a2.md

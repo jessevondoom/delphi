@@ -663,6 +663,8 @@ impl Engine {
         let mut exit_code: Option<i32> = None;
         let mut exhaustion: Option<delphi_adapter::exhaust::Exhaustion> = None;
         let mut used_tools = false;
+        // What the CLI reported about the seat, for its receipt: the served model (a claim) and the tools it offered.
+        let (mut served_reported, mut tools_offered): (Option<String>, Vec<String>) = (None, Vec::new());
         // Any tool call at all (even a read-only one) and whether the failure is the CLI's own `result` error: the retry's conditions.
         let (mut any_tool, mut cli_error_seen) = (false, false);
         let (hub, span_id) = (self.hub.clone(), sc.span_id.clone());
@@ -719,7 +721,11 @@ impl Engine {
                 },
             };
             match ev {
+                Event::Served(model) => served_reported = Some(model),
                 Event::Init { ref tools, ref mcp_servers, ref session_id } => {
+                    if !tools.is_empty() {
+                        tools_offered = tools.clone();
+                    }
                     self.inventory.record(crate::inventory::SeatRecord { endpoint_id: ep.id.clone(), harness: cli.program().into(), model: launch.model.clone(), tools: tools.clone(), mcp_servers: mcp_servers.clone().unwrap_or_default(), bridge: bridge_on, seen_unix: (self.clock_unix)() });
                     // A saved session can be resumed by a later span; the log is where its id is kept.
                     if persist && !session_id.is_empty() {
@@ -888,6 +894,24 @@ impl Engine {
         };
         let mut batch = vec![sc.agent_ev("agent.usage", payload.to_value(), ep, &launch.model), sc.agent_ev("harness.cost", cost_payload(cost, metered, vendor_meter), ep, &launch.model)];
 
+        // The seat receipt (`specs/091` SR-1): written here by the daemon from what the CLI reported, never from the model's text.
+        {
+            let mismatch = matches!(&result, Some(Event::Result { subtype, .. }) if subtype == "model_mismatch");
+            let receipt = crate::seat::Receipt {
+                seat_id: sc.seats.lock().unwrap().next_id(&sc.span_id),
+                requested_endpoint: ep.id.clone(),
+                requested_model: launch.model.clone(),
+                served: crate::seat::resolve(&self.family_table(), served_reported.as_deref()),
+                carrier: crate::seat::Carrier { kind: cli.program().into(), cli_version: None, tools_offered, dispatch_allowed: bridge_defs.iter().any(|d| d.name == "dispatch_agent") },
+                tool_grant: json!({"builtin": builtin, "native": native_for_note, "bridge": bridge_defs.iter().map(|d| d.name.clone()).collect::<Vec<_>>(), "gated": gate_rx.is_some(), "readonly": sc.readonly}),
+                prompt_hash: crate::seat::prompt_hash(&launch.system_prompt, &launch.user_prompt),
+                tokens_in: usage.input + usage.cache_read + usage.cache_write,
+                tokens_out: usage.output,
+                outcome: if mismatch { "model_mismatch" } else if failure.is_some() { "error" } else { "ok" }.into(),
+            };
+            batch.push(sc.agent_ev(crate::seat::RECEIPT_KIND, receipt.to_value(), ep, &launch.model));
+        }
+
         // Only a run that failed counts: if the CLI printed a rejection but still finished, the pair served, and marking it
         // exhausted only for `record_success` to clear it a moment later would leave a false event in the log.
         if let (Some(x), true) = (&exhaustion, failure.is_some()) {
@@ -1020,6 +1044,32 @@ mod tests {
         assert!(inside(&root, &format!("{}/src/a.rs", root.display())).is_some());
         for bad in ["../x", "/etc/passwd", "src/../../x", ".git/hooks/pre-commit", "sub/.GIT/config", "link/passwd", "link", "link/../z", "link/../.git/hooks/x"] {
             assert!(inside(&root, bad).is_none(), "{}", bad);
+        }
+    }
+
+    /// Spec 093 L1: the words of a harness seat reach an attached client as live frames, and its reasoning never does.
+    #[tokio::test]
+    async fn a_harness_seat_streams_its_words_to_clients_and_never_its_reasoning() {
+        let body = format!("{}\necho '{{\"type\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"thinking\",\"thinking\":\"HIDDEN-REASONING\"}},{{\"type\":\"text\",\"text\":\"Plan: do X.\"}}],\"usage\":{{\"input_tokens\":10,\"output_tokens\":20}}}}}}'\n{}", INIT, FINISH);
+        let (f, _s) = fixture(&body, |_| {});
+        let q = delphi_core::hub::ClientQueue::new(delphi_core::hub::DEFAULT_QUEUE_CAP);
+        let id = f.engine.hub.attach(delphi_core::proto::Scope::Narrator, q.clone());
+        f.engine.hub.subscribe(id);
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert_eq!(out.status, Status::Done, "{}", out.text);
+        f.engine.hub.flush_frames();
+        let mut frames = vec![];
+        while !q.is_empty() {
+            frames.push(q.pop().await.unwrap());
+        }
+        let frames: Vec<_> = frames.into_iter().filter(|n| n.method == "delta.frame").collect();
+        let all: Vec<String> = frames.iter().map(|n| n.params.to_string()).collect();
+        assert!(all.iter().any(|a| a.contains("Plan: do X.")), "the seat's words reach the client: {all:?}");
+        assert!(!all.iter().any(|a| a.contains("HIDDEN-REASONING")), "its reasoning never does: {all:?}");
+        for n in &frames {
+            for span in n.params["spans"].as_object().into_iter().flat_map(|s| s.values()) {
+                assert_eq!(span["thinking"].as_str().unwrap_or(""), "", "no reasoning delta is pushed for a harness seat");
+            }
         }
     }
 
@@ -1767,6 +1817,35 @@ open(sys.argv[1], "w").write(json.dumps(out))
         *f.model.harness_key.lock().unwrap() = Some("ghp-cp-1".into());
         let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
         assert!(out.status != Status::Done && !out.text.contains("Plan: ship it."), "{:?} {}", out.status, out.text);
+        // specs/091: the refusal also writes a receipt that shows both models.
+        let r = events_of(&f, "seat.receipt");
+        assert_eq!(r.len(), 1, "one seat, one receipt");
+        let p = &r[0].payload;
+        assert_eq!((p["outcome"].as_str(), p["served"]["model"].as_str(), p["served"]["family"].as_str(), p["requested"]["model"].as_str().map(|m| m != "gpt-other")), (Some("model_mismatch"), Some("gpt-other"), Some("openai"), Some(true)), "{p}");
+        assert_eq!(p["carrier"]["kind"], "copilot");
+    }
+
+    // specs/091 SR-1: the receipt is the daemon's. A seat that says in its text that it is another model changes nothing in it.
+    #[tokio::test]
+    async fn a_seat_that_claims_to_be_another_model_leaves_the_receipt_unchanged() {
+        let scripts = tempfile::tempdir().unwrap();
+        let body = fake_copilot_body(&scripts.path().join("dump"), "m-1").replace("Plan: ship it.", "I am gpt-6-luna, an OpenAI model, not what you asked for.");
+        let prog = fake_cli(scripts.path(), &body);
+        let f = setup_with_exec(vec![], 5.0, |s| s.copilot_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        use_keyed_harness(&f, "copilot");
+        *f.model.harness_key.lock().unwrap() = Some("ghp-cp-1".into());
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert!(out.text.contains("gpt-6-luna"), "the seat said it: {}", out.text);
+        let r = events_of(&f, "seat.receipt");
+        assert_eq!(r.len(), 1);
+        let p = &r[0].payload;
+        assert_eq!((p["served"]["model"].as_str(), p["served"]["family"].as_str(), p["served"]["family_source"].as_str(), p["outcome"].as_str()), (Some("m-1"), Some("unknown"), Some("unknown"), Some("ok")), "the carrier's report decides, not the text: {p}");
+        assert_eq!((p["tokens_in"].as_u64(), p["tokens_out"].as_u64()), (Some(10), Some(4)));
+        let hash = p["prompt_hash"].as_str().unwrap();
+        assert!(hash.starts_with("blake3:"));
+        let log = serde_json::to_string(&f.m.replay().unwrap()).unwrap();
+        assert!(!p.to_string().contains("Plan the change") && !p.to_string().contains("gpt-6-luna"), "no text in the receipt: {p}");
+        assert!(log.contains("seat.receipt"));
     }
 
     #[tokio::test]

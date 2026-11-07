@@ -31,7 +31,21 @@ pub struct ArmDef {
     pub models: BTreeMap<String, BTreeMap<String, String>>,
     /// Roles' preferred family, replacing the home's own; absent keeps the home's, and an empty table clears it.
     pub role_family: Option<BTreeMap<String, String>>,
+    /// Endpoints this arm brings that the operator's home does not have, by id. They exist only in the arm's throwaway copy: the
+    /// operator's ratified access block is never edited. This is how one Copilot login is run as several vendors' models.
+    pub endpoints: BTreeMap<String, ExtraEndpoint>,
 }
+
+/// An endpoint an arm adds to its own throwaway home: a carrier (`harness`) serving one vendor's models (`family`). The credential
+/// is the CLI's own login and the cost model a subscription, as for the operator's own harness endpoints.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExtraEndpoint {
+    pub family: String,
+    pub harness: String,
+}
+
+/// The carriers an arm may add (`specs/020`, `047`, `051`).
+const HARNESSES: [&str; 4] = ["claude", "agy", "codex", "copilot"];
 
 const TIERS: [&str; 3] = ["fast", "workhorse", "frontier"];
 
@@ -69,8 +83,21 @@ pub fn parse_defs(path: &Path) -> Result<Vec<ArmDef>, String> {
         if models.is_empty() {
             return Err(format!("{}: `{}` needs at least one [arm.models.<endpoint>]", at, name));
         }
+        let mut endpoints = BTreeMap::new();
+        for (id, x) in a.get("endpoint").and_then(|v| v.as_table()).into_iter().flatten() {
+            let x = x.as_table().ok_or(format!("{}: endpoint.{} is not a table", at, id))?;
+            if id.is_empty() || !id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+                return Err(format!("{}: endpoint id `{}` must be lowercase letters, digits and `-`", at, id));
+            }
+            let family = x.get("family").and_then(|v| v.as_str()).filter(|f| !f.is_empty() && f.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')).ok_or(format!("{}: endpoint.{} needs `family` (lowercase letters, digits and `-`)", at, id))?;
+            let harness = x.get("harness").and_then(|v| v.as_str()).filter(|h| HARNESSES.contains(h)).ok_or(format!("{}: endpoint.{} needs `harness` = {}", at, id, HARNESSES.join(", ")))?;
+            if !models.contains_key(id) {
+                return Err(format!("{}: endpoint.{} is defined but the arm gives it no [arm.models.{}]", at, id, id));
+            }
+            endpoints.insert(id.clone(), ExtraEndpoint { family: family.to_string(), harness: harness.to_string() });
+        }
         let role_family = a.get("role_family").and_then(|v| v.as_table()).map(|t| t.iter().filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string()))).collect());
-        out.push(ArmDef { name: name.into(), note: a.get("note").and_then(|v| v.as_str()).unwrap_or("").into(), models, role_family });
+        out.push(ArmDef { name: name.into(), note: a.get("note").and_then(|v| v.as_str()).unwrap_or("").into(), models, role_family, endpoints });
     }
     if out.is_empty() {
         return Err(format!("{}: no [[arm]] tables", path.display()));
@@ -186,6 +213,25 @@ fn rewrite_config(config: &str, def: &ArmDef, exec_env: &BTreeMap<String, String
     let t = v.as_table_mut().ok_or("config.toml is not a table")?;
     let (families, order) = {
         let eps = t.get_mut("endpoints").and_then(|e| e.as_array_mut()).ok_or("config.toml declares no [[endpoints]]")?;
+        // An endpoint the arm brings is added to this copy only. One the home already has must agree, or the arm would measure
+        // something other than what it says.
+        for (id, x) in &def.endpoints {
+            match eps.iter().find(|e| e.get("id").and_then(|i| i.as_str()) == Some(id.as_str())) {
+                Some(have) => {
+                    let (hf, hh) = (have.get("family").and_then(|v| v.as_str()).unwrap_or(""), have.get("harness").and_then(|v| v.as_str()).unwrap_or(""));
+                    if hf != x.family || hh != x.harness {
+                        return Err(format!("the home already has endpoint `{}` as {}/{}, not {}/{}", id, hf, hh, x.family, x.harness));
+                    }
+                }
+                None => {
+                    let mut e = toml::value::Table::new();
+                    for (k, v) in [("id", id.as_str()), ("family", x.family.as_str()), ("path", "harness"), ("harness", x.harness.as_str()), ("credential", "harness-login"), ("cost_model", "subscription")] {
+                        e.insert(k.into(), toml::Value::String(v.into()));
+                    }
+                    eps.push(toml::Value::Table(e));
+                }
+            }
+        }
         for want in def.models.keys() {
             if !eps.iter().any(|e| e.get("id").and_then(|i| i.as_str()) == Some(want.as_str())) {
                 return Err(format!("the home has no endpoint `{}` (it has: {})", want, eps.iter().filter_map(|e| e.get("id").and_then(|i| i.as_str())).collect::<Vec<_>>().join(", ")));
@@ -436,7 +482,7 @@ mod tests {
     }
 
     fn def(name: &str, ep: &str, m: [&str; 3]) -> ArmDef {
-        ArmDef { name: name.into(), note: String::new(), models: [(ep.to_string(), TIERS.iter().zip(m).map(|(t, m)| (t.to_string(), m.to_string())).collect())].into(), role_family: None }
+        ArmDef { name: name.into(), note: String::new(), models: [(ep.to_string(), TIERS.iter().zip(m).map(|(t, m)| (t.to_string(), m.to_string())).collect())].into(), role_family: None, endpoints: BTreeMap::new() }
     }
 
     #[test]
@@ -507,6 +553,59 @@ mod tests {
         let e = build_arm(&src, "w", &def("x", "ollama", ["a", "b", "c"]), &t.path().join("homes/x"), &BTreeMap::new()).unwrap_err();
         assert!(e.contains("no endpoint `ollama`") && e.contains("claude-sub, agy-sub"), "{}", e);
         assert!(build_arm(&src, "nowhere", &def("x", "claude-sub", ["a", "b", "c"]), &t.path().join("homes/y"), &BTreeMap::new()).unwrap_err().contains("no workspace"));
+    }
+
+    #[test]
+    fn an_arm_may_bring_an_endpoint_the_home_lacks_in_its_own_copy_only() {
+        let t = tempfile::tempdir().unwrap();
+        let src = source(t.path());
+        let before = fs::read_to_string(src.join("workspaces/w/config.toml")).unwrap();
+        let mut d = def("copilot-gpt", "copilot-gpt", ["gpt-6-luna", "gpt-6-luna", "gpt-6-luna"]);
+        d.endpoints.insert("copilot-gpt".into(), ExtraEndpoint { family: "openai".into(), harness: "copilot".into() });
+        let out = t.path().join("homes/copilot-gpt");
+        let b = build_arm(&src, "w", &d, &out, &BTreeMap::new()).unwrap();
+        assert!(b.problems.is_empty(), "{:?}", b.problems);
+        assert!(b.pool.iter().all(|p| p == "copilot-gpt/gpt-6-luna") && !b.pool.is_empty(), "{:?}", b.pool);
+        // The copy has the endpoint, the way the operator's own harness endpoints are written, and it is the only one allowed.
+        let cfg: toml::Value = toml::from_str(&fs::read_to_string(out.join("workspaces/w/config.toml")).unwrap()).unwrap();
+        let eps = cfg["endpoints"].as_array().unwrap();
+        assert_eq!(eps.len(), 1, "the other endpoints are removed");
+        let e = &eps[0];
+        assert_eq!((e["id"].as_str(), e["family"].as_str(), e["harness"].as_str(), e["path"].as_str(), e["credential"].as_str(), e["cost_model"].as_str()), (Some("copilot-gpt"), Some("openai"), Some("copilot"), Some("harness"), Some("harness-login"), Some("subscription")));
+        assert_eq!(e["models"]["fast"].as_str(), Some("gpt-6-luna"));
+        assert_eq!(cfg["access"]["allowed_endpoints"].as_array().unwrap().len(), 1);
+        // It loads unprompted, and the operator's own home is untouched.
+        assert!(delphi_engine::boot::effective_config(&out.join("workspaces/w"), &toml::to_string(&cfg).unwrap()).unwrap().1.is_empty());
+        assert_eq!(fs::read_to_string(src.join("workspaces/w/config.toml")).unwrap(), before);
+        assert!(!before.contains("copilot"));
+    }
+
+    #[test]
+    fn an_extra_endpoint_must_agree_with_one_the_home_already_has_and_is_validated() {
+        let t = tempfile::tempdir().unwrap();
+        let src = source(t.path());
+        // `claude-sub` exists as claude/claude: naming it as something else is refused, naming it as itself is fine.
+        let mut d = def("x", "claude-sub", ["haiku", "haiku", "haiku"]);
+        d.endpoints.insert("claude-sub".into(), ExtraEndpoint { family: "openai".into(), harness: "copilot".into() });
+        let e = build_arm(&src, "w", &d, &t.path().join("homes/x"), &BTreeMap::new()).unwrap_err();
+        assert!(e.contains("already has endpoint `claude-sub` as claude/claude, not openai/copilot"), "{}", e);
+        d.endpoints.insert("claude-sub".into(), ExtraEndpoint { family: "claude".into(), harness: "claude".into() });
+        assert!(build_arm(&src, "w", &d, &t.path().join("homes/y"), &BTreeMap::new()).unwrap().problems.is_empty());
+        // The defs file.
+        let f = t.path().join("defs.toml");
+        let ok = "[[arm]]\nname = \"cp\"\n[arm.endpoint.copilot-gpt]\nfamily = \"openai\"\nharness = \"copilot\"\n[arm.models.copilot-gpt]\nfast = \"gpt-6-luna\"\nworkhorse = \"gpt-6-luna\"\nfrontier = \"gpt-6-luna\"\n";
+        fs::write(&f, ok).unwrap();
+        let d = parse_defs(&f).unwrap();
+        assert_eq!(d[0].endpoints["copilot-gpt"], ExtraEndpoint { family: "openai".into(), harness: "copilot".into() });
+        for (bad, want) in [
+            (ok.replace("harness = \"copilot\"", "harness = \"chatgpt\""), "needs `harness` = claude, agy, codex, copilot"),
+            (ok.replace("family = \"openai\"\n", ""), "needs `family`"),
+            (ok.replace("[arm.endpoint.copilot-gpt]", "[arm.endpoint.Copilot_GPT]"), "must be lowercase letters"),
+            (ok.replace("[arm.models.copilot-gpt]", "[arm.models.other]"), "gives it no [arm.models.copilot-gpt]"),
+        ] {
+            fs::write(&f, bad).unwrap();
+            assert!(parse_defs(&f).unwrap_err().contains(want), "{}", want);
+        }
     }
 
     #[test]

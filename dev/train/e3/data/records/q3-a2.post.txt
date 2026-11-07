@@ -1,0 +1,2 @@
+host-119e148bab2f6996 {"t_0001": {"cache_read": 305528, "cache_write": 0, "events": 2, "models": ["gemini-3.8-flash-medium"], "tokens": 89850}} retries 0 fail_lines 0 ['/tmp/e3/home-panel/workspaces/delphi/local/sessions/host-119e148bab2f6996/councils/001-operators-do-research-via-delphi-tui-or.md']
+copied record -> /tmp/e3/records/q3-a2.md

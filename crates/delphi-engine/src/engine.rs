@@ -101,6 +101,12 @@ pub struct Settings {
     pub council_budget_usd: f64,
     /// A Council seat that has not answered by then abstains.
     pub council_seat_timeout: Duration,
+    /// `[seats] require_families` (`specs/091` SR-3): refuse a Panel that cannot show this many known families. `None` (the default)
+    /// never refuses; the result is labelled `homogeneous` instead.
+    pub require_families: Option<u32>,
+    /// `[seats] max_foreign_seats` and `max_foreign_tokens` (SR-4): per Council.
+    pub max_foreign_seats: u32,
+    pub max_foreign_tokens: u64,
     /// While no model is usable, how often a parked task looks again (`specs/002` §4.1).
     pub park_poll: Duration,
     /// The longest a task waits for a model before escalating. `None` waits as long as it takes; `Some(0)` never waits.
@@ -167,6 +173,9 @@ impl Default for Settings {
             connector_settle: Duration::from_secs(10),
             council_budget_usd: 20.0,
             council_seat_timeout: Duration::from_secs(600),
+            require_families: None,
+            max_foreign_seats: 1,
+            max_foreign_tokens: 100_000,
             park_poll: Duration::from_secs(5),
             park_max: None,
             degrade_wait: Duration::from_secs(300),
@@ -419,6 +428,8 @@ pub(crate) struct SpanCtx {
     pub(crate) streak: crate::observe::Streak,
     /// This span's counters for the loop techniques (`specs/045`).
     pub(crate) lp: crate::loopctl::SpanLoop,
+    /// Seat numbering and the API turns waiting for the span's end (`specs/091` SR-1).
+    pub(crate) seats: Mutex<crate::seat::SeatBook>,
 }
 
 impl SpanCtx {
@@ -791,7 +802,7 @@ impl Engine {
             let tier = handoff.routing_directive.model_tier.clone().unwrap_or_else(|| self.default_tier_of(&role, &manifest));
             let family = handoff.routing_directive.model_family.clone().unwrap_or_else(|| self.cfg.get().family_for_role(&role).to_string());
             let thinking = handoff.routing_directive.thinking_budget_tokens.unwrap_or_else(|| manifest.thinking_budget());
-            let mut sc = SpanCtx { served_tier: Mutex::new(None), m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), readonly: self.readonly_tasks.lock().unwrap().contains(task_id), output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), bundle_agent, streak: Default::default(), lp: crate::loopctl::SpanLoop::from_history(&history) };
+            let mut sc = SpanCtx { served_tier: Mutex::new(None), m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), readonly: self.readonly_tasks.lock().unwrap().contains(task_id), output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), bundle_agent, streak: Default::default(), lp: crate::loopctl::SpanLoop::from_history(&history), seats: Default::default() };
 
             // A resumed bundle agent keeps the name its start event recorded.
             if !fresh {
@@ -1087,6 +1098,12 @@ impl Engine {
                 };
                 interruptions = 0;
                 turns += 1;
+                {
+                    let names: Vec<String> = defs.iter().map(|d| d.name.clone()).collect();
+                    let hash = crate::seat::prompt_hash(&ipr.system_sections().join("\n\n"), &ipr.first_user_text());
+                    let u = &done.usage;
+                    sc.seats.lock().unwrap().note_api(&ep.id, &model_id, done.served_model.as_deref(), delphi_adapter::provider_for(&ep), &names, &hash, u.input_tokens + u.cache_read_tokens + u.cache_write_tokens, u.output_tokens + u.thinking_tokens);
+                }
                 history.push(Turn::assistant(turn_index, delphi_adapter::provider_for(&ep), &ep.id, &model_id, done.blocks.clone()));
                 let calls: Vec<Call> = done.blocks.iter().filter_map(|b| if let ContentBlock::ToolCall { id, name, arguments } = b { Some(Call { id: id.clone(), name: name.clone(), args: arguments.clone() }) } else { None }).collect();
                 if done.stop_reason.as_deref() != Some("tool_use") || calls.is_empty() {
@@ -1118,6 +1135,13 @@ impl Engine {
                 Status::Done => json!({"node_id": sc.span_id, "state": "done"}),
                 Status::Escalated(r) => json!({"node_id": sc.span_id, "state": "escalated", "reason": r}),
             };
+            // The seat receipts of the span's API turns (a harness seat wrote its own when it ended).
+            let receipts = sc.seats.lock().unwrap().take_api_receipts(&sc.span_id, &self.family_table(), if matches!(status, Status::Done) { "ok" } else { "error" });
+            for (ep_id, r) in receipts {
+                let mut e = sc.ev(crate::seat::RECEIPT_KIND, r.to_value());
+                e.endpoint_id = Some(ep_id);
+                m.append(e).await?;
+            }
             m.append(sc.ev("dag.node.state", state)).await?;
             self.name_release(&m.id, &sc.span_id);
             Ok(SpanOutcome { status, text, turns, ceiling: sc.span.ceiling() })
@@ -1657,6 +1681,13 @@ impl Engine {
                 (crate::pool::State::Exhausted, None) => false,
             })
         })
+    }
+
+    /// The ratified family table (`specs/091` SR-2): the workspace's file, else the shipped one.
+    ///
+    /// A workspace file that does not parse is reported by `delphi doctor`; receipts then use the shipped table.
+    pub(crate) fn family_table(&self) -> crate::seat::FamilyTable {
+        crate::seat::FamilyTable::load(&self.ws.dir).unwrap_or_else(|_| crate::seat::FamilyTable::shipped())
     }
 
     /// The seats that may serve a role that writes files and runs commands:
@@ -2729,6 +2760,14 @@ mod tests {
         assert!((usage[0].payload["cost_usd"].as_f64().unwrap() - (0.002 + 0.0018)).abs() < 1e-9, "{}", usage[0].payload["cost_usd"]);
         let turns = events_of(&f, "agent.turn.complete");
         assert_eq!(turns[0].payload["provider"], "google");
+        // specs/091 SR-1: one receipt for the span's API seat, written by the daemon when the span ended, before its node closed.
+        let r = events_of(&f, "seat.receipt");
+        assert_eq!(r.len(), 1);
+        let p = &r[0].payload;
+        assert_eq!((p["requested"]["endpoint"].as_str(), p["requested"]["model"].as_str(), p["carrier"]["kind"].as_str(), p["outcome"].as_str()), (Some("gem"), Some("gem-pro"), Some("api"), Some("ok")));
+        assert_eq!((p["served"]["model"].is_null(), p["served"]["family"].as_str()), (true, Some("unknown")), "the provider reported no model: unknown, not a guess");
+        assert!(p["tokens_in"].as_u64().unwrap() >= 1000 && p["prompt_hash"].as_str().unwrap().starts_with("blake3:"));
+        assert!(!p.to_string().contains("What does @project"), "no prompt text in the receipt");
     }
 
     #[tokio::test]

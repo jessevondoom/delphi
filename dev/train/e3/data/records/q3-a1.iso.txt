@@ -1,0 +1,13 @@
+init: plugins [{'name': 'delphi', 'path': '/tmp/e3/plugin-delphi', 'source': 'delphi@inline', 'version': '0.5.5'}, {'name': 'cc-plugin-agents-md', 'path': 'builtin', 'source': 'cc-plugin-agents-md@builtin'}, {'name': 'cc-plugin-telemetry', 'path': 'builtin', 'source': 'cc-plugin-telemetry@builtin'}, {'name': 'cc-plugin-privacy', 'path': 'builtin', 'source': 'cc-plugin-privacy@builtin'}, {'name': 'cc-plugin-plugin-authoring', 'path': 'builtin', 'source': 'cc-plugin-plugin-authoring@builtin'}] mcp [{'name': 'delphi', 'status': 'connected', 'source': 'dynamic'}] model claude-sonnet-5-5
+tools mcp council: ['mcp__delphi__council_brief', 'mcp__delphi__council_choose', 'mcp__delphi__council_frame', 'mcp__delphi__council_open', 'mcp__delphi__council_result', 'mcp__delphi__council_status', 'mcp__delphi__council_submit', 'mcp__delphi__propose_council_record', 'mcp__delphi__request_council']
+sessions {'a3823aab-ae76-4253-8b96-1f4959b0bcf0'}
+tool counts {'Skill': 1, 'ToolSearch': 1, 'mcp__delphi__council_frame': 1, 'mcp__delphi__council_open': 1, 'Agent': 6, 'mcp__delphi__council_brief': 8, 'Grep': 9, 'Read': 4, 'mcp__delphi__council_submit': 8, 'mcp__delphi__council_result': 1}
+agent calls 6
+   ('toolu_01UkHbRXzV2VpwfL9oJBqMt1', None, 'delphi:architect', False, 'msg_011CgohgDu9ymN1gbCaiKnZh')
+   ('toolu_01MkCefYCoeDporSbQYgUvKh', None, 'delphi:red-team', False, 'msg_011CgohgDu9ymN1gbCaiKnZh')
+   ('toolu_01BayUhSxaLUU4RWrNkRU9fm', None, 'delphi:strategist', False, 'msg_011CgohgDu9ymN1gbCaiKnZh')
+   ('toolu_01JJd3P45qYNUU6ymvasfaBe', None, 'delphi:architect', False, 'msg_011CgohiwuouvExienmxDKcH')
+   ('toolu_01MkDK3n1FivtRnkYWjaLun7', None, 'delphi:red-team', False, 'msg_011CgohiwuouvExienmxDKcH')
+   ('toolu_016skZfWxULNa1BAxU3Mix1V', None, 'delphi:strategist', False, 'msg_011CgohiwuouvExienmxDKcH')
+result: is_error False subtype success turns 17 dur_ms 120645 in 80 out 17851 models {'claude-sonnet-5-5': (38, 8948), 'claude-opus-5-5': (30, 5148), 'claude-haiku-5-5': (12, 3755)}
+HOST TOKENS (last result, cumulative modelUsage input+output) 17931

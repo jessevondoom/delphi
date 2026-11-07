@@ -1,0 +1,94 @@
+# The family table (specs/091 SR-2): which training lineage a served model belongs to (GOVERNANCE.md H-001).
+#
+# A family is a property of the model that answered, not of the carrier or the endpoint: the same model through two
+# carriers (a vendor API, Copilot, agy) is one family. A served model no entry maps has family "unknown", and "unknown"
+# never counts as diversity.
+#
+# A workspace may replace this file with <workspace>/model-families.toml (a ratified edit, made by the operator).
+# Each entry names an owner and an expiry date. An expired entry still applies; `delphi doctor` warns until the
+# owner renews it. Entries are matched top to bottom, case-insensitively, `*` matches any run of characters;
+# the first match wins. "unknown" is reserved and cannot be a family name.
+
+version = 1
+
+# Vendor-wide entries: any model a vendor ships maps to its family until a narrower entry above them says otherwise.
+
+# Seen through Copilot (dotted ids) and agy (dashed ids with a variant suffix).
+[[family]]
+pattern = "claude-haiku-4.5"
+family = "claude"
+owner = "operator"
+expires = "2027-02-05"
+
+[[family]]
+pattern = "claude-sonnet-5.5"
+family = "claude"
+owner = "operator"
+expires = "2027-02-05"
+
+[[family]]
+pattern = "claude-sonnet-5-5-*"
+family = "claude"
+owner = "operator"
+expires = "2027-02-05"
+
+[[family]]
+pattern = "claude-opus-5-5-*"
+family = "claude"
+owner = "operator"
+expires = "2027-02-05"
+
+[[family]]
+pattern = "gpt-6-luna"
+family = "openai"
+owner = "operator"
+expires = "2027-02-05"
+
+[[family]]
+pattern = "gpt-6.1-terra"
+family = "openai"
+owner = "operator"
+expires = "2027-02-05"
+
+# An open-weight model served through agy: OpenAI's lineage.
+[[family]]
+pattern = "gpt-oss*"
+family = "openai"
+owner = "operator"
+expires = "2027-02-05"
+
+[[family]]
+pattern = "gemini-4-argon"
+family = "gemini"
+owner = "operator"
+expires = "2027-02-05"
+
+[[family]]
+pattern = "gemini-4-argon-*"
+family = "gemini"
+owner = "operator"
+expires = "2027-02-05"
+
+[[family]]
+pattern = "gemini-3.8-flash-*"
+family = "gemini"
+owner = "operator"
+expires = "2027-02-05"
+
+[[family]]
+pattern = "claude-*"
+family = "claude"
+owner = "operator"
+expires = "2027-02-05"
+
+[[family]]
+pattern = "gemini-*"
+family = "gemini"
+owner = "operator"
+expires = "2027-02-05"
+
+[[family]]
+pattern = "gpt-*"
+family = "openai"
+owner = "operator"
+expires = "2027-02-05"
