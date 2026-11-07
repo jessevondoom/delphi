@@ -276,6 +276,10 @@ fn eval_check(c: &Check, ctx: &Ctx) -> Result<(), String> {
                 Err(format!("{} of {} exact items present ({:.0}%), wanted {:.0}%; first missing: {}", wanted.len() - missing.len(), wanted.len(), share * 100.0, min * 100.0, first.join(", ")))
             }
         }
+        Check::ReviewFindings { file, min_recall, max_false_positives } => {
+            let s = crate::train_defects::grade(&ctx.case.dir, file, &ctx.deliverable)?;
+            crate::train_defects::verdict(&s, *min_recall, *max_false_positives)
+        }
         Check::FileExists(p) => ctx.repo.join(p).is_file().then_some(()).ok_or_else(|| format!("{} does not exist", p)),
         Check::FileContains { path, text } => match fs::read_to_string(ctx.repo.join(path)) {
             Ok(t) if t.contains(text.as_str()) => Ok(()),
@@ -353,6 +357,8 @@ pub struct Row {
     pub eff: Efficiency,
     /// The seats that ran, from the log's `seat.receipt` events (`specs/091` SR-6): served model and family as the carrier reported them.
     pub seats: Vec<SeatNote>,
+    /// For a seeded-defect review case: the run's recall, false positives and unmatched findings (`train_defects`). A diagnostic.
+    pub review: Option<crate::train_defects::Score>,
 }
 
 /// The effort a run took, read from its mission log: counts only, no text (`specs/048` BM-2).
@@ -523,7 +529,7 @@ impl Row {
                "cost_usd": (self.cost_usd * 10000.0).round() / 10000.0, "passed": self.passed, "failed_checks": self.failed_checks, "notes": self.notes, "error": self.error,
                "attempts": self.attempts, "promotions": self.promotions, "dir": self.dir, "base": self.base,
                "turns": self.eff.turns, "tool_calls": self.eff.calls(), "nudges": self.eff.nudges, "hard_stops": self.eff.hard_stops, "budget_warnings": self.eff.budget_warnings,
-               "seats": self.seats.iter().map(SeatNote::to_json).collect::<Vec<_>>(), "gates": self.eff.gates, "escalations": self.eff.escalations, "cache_read_tokens": self.eff.cache_read, "cache_input_tokens": self.eff.cache_input,
+               "seats": self.seats.iter().map(SeatNote::to_json).collect::<Vec<_>>(), "review": self.review.as_ref().map(crate::train_defects::Score::note), "gates": self.eff.gates, "escalations": self.eff.escalations, "cache_read_tokens": self.eff.cache_read, "cache_input_tokens": self.eff.cache_input,
                "by_tool": self.eff.tool_calls.iter().map(|(t, (c, e))| (t.clone(), json!({"calls": c, "errors": e}))).collect::<serde_json::Map<String, Value>>(),
                "tokens_in": self.usage.values().map(ModelUse::tokens_in).sum::<u64>(), "tokens_out": self.usage.values().map(ModelUse::tokens_out).sum::<u64>(),
                "models": self.usage.iter().map(|(m, u)| (m.clone(), json!({"calls": u.calls, "tokens_in": u.tokens_in(), "tokens_out": u.tokens_out(), "cost_usd": (u.cost_usd * 10000.0).round() / 10000.0}))).collect::<serde_json::Map<String, Value>>()})
@@ -551,6 +557,7 @@ impl Row {
             base: v["base"].as_str().map(String::from),
             eff: Efficiency::default(),
             seats: v["seats"].as_array().map(|a| a.iter().filter_map(SeatNote::from_json).collect()).unwrap_or_default(),
+            review: crate::train_defects::Score::from_note(&v["review"]),
         })
     }
 }
@@ -894,7 +901,7 @@ pub(crate) const REPO_DIR: &str = "repo";
 /// One case, one seed, one arm, in its own directory under the working directory.
 pub fn run_one(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize) -> Row {
     let label = format!("{}/{}", case.suite, case.id);
-    let mut row = Row { case: label.clone(), arm: arm.name.clone(), seed, exit_code: None, wall_secs: 0.0, cost_usd: 0.0, passed: None, failed_checks: Vec::new(), notes: Vec::new(), usage: BTreeMap::new(), attempts: 0, promotions: 0, dir: String::new(), error: None, base: arm.base.clone(), eff: Efficiency::default(), seats: Vec::new() };
+    let mut row = Row { case: label.clone(), arm: arm.name.clone(), seed, exit_code: None, wall_secs: 0.0, cost_usd: 0.0, passed: None, failed_checks: Vec::new(), notes: Vec::new(), usage: BTreeMap::new(), attempts: 0, promotions: 0, dir: String::new(), error: None, base: arm.base.clone(), eff: Efficiency::default(), seats: Vec::new(), review: None };
     if let Err(e) = run_inner(cfg, case, arm, seed, index, &mut row) {
         row.error = Some(e);
         row.passed = None;
@@ -1016,6 +1023,10 @@ fn run_inner(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize, row:
     }
     row.failed_checks = case.checks.iter().filter_map(|c| eval_check(c, &ctx).err()).collect();
     row.passed = Some(row.failed_checks.is_empty());
+    row.review = case.checks.iter().find_map(|c| match c {
+        Check::ReviewFindings { file, .. } => crate::train_defects::grade(&case.dir, file, &ctx.deliverable).ok(),
+        _ => None,
+    });
     // A model that declines scores like one that fails, but it is a different finding: say so, so a refusal is never read as a loss.
     if row.passed == Some(false) {
         if let Some(n) = delphi_engine::refusal::declines(&ctx.deliverable) {
@@ -1482,6 +1493,34 @@ mod tests {
         assert!(nine.failed_checks[0].contains("9 of 10") && nine.failed_checks[0].contains(&its[9].text.chars().take(40).collect::<String>()), "{:?}", nine.failed_checks);
     }
 
+    #[test]
+    fn a_review_case_is_graded_on_its_findings_and_its_row_keeps_the_figures_for_the_report() {
+        use crate::train_defects::{generate, write_case, Params, Reviewer};
+        let t0 = tempfile::tempdir().unwrap();
+        let dir = t0.path().join("suites/review/cases/rev-1-5");
+        write_case(&dir, &Params { seed: 1, k: 5, decoys: 4, split: "dev", inline: true, min_recall: 0.8, max_fp: 1 }).unwrap();
+        let c = train::load_case(&dir, "review").unwrap();
+        let key = generate(1, 5, 4).key;
+        let run_with = |text: &str| -> Row {
+            let t = tempfile::tempdir().unwrap();
+            let canned = mission(t.path(), &[("task.output", json!({"status": "done", "text": text})), ("task.completed", json!({"status": "done"}))]);
+            let config = cfg(t.path(), &canned, vec![baseline()], 10.0);
+            train::prepare_work_home(&config.work_dir).unwrap();
+            run_all(&config, &[&c]).0.remove(0)
+        };
+        let good = run_with(&Reviewer::Thorough.answer(&key));
+        assert_eq!((good.passed, good.failed_checks.clone()), (Some(true), vec![]), "{:?}", good);
+        assert_eq!(good.review.as_ref().map(|s| (s.caught.len(), s.false_positives)), Some((5, 0)));
+        let noisy = run_with(&Reviewer::Suspicious.answer(&key));
+        assert_eq!(noisy.passed, Some(false));
+        assert!(noisy.failed_checks[0].contains("4 decoy(s) flagged, at most 1 allowed"), "{:?}", noisy.failed_checks);
+        let silent = run_with("Looks fine.");
+        assert!(silent.failed_checks[0].contains("no `FINDING"), "{:?}", silent.failed_checks);
+        // The figures survive the rows file.
+        let back = Row::from_json(&good.to_json()).unwrap();
+        assert_eq!(back.review, good.review);
+    }
+
     /// A research case with a truth pack beside it (verified or a draft).
     fn research_case(root: &Path, verified: bool, checks: &str) -> Case {
         let dir = root.join("suites/r/cases/q1");
@@ -1591,7 +1630,7 @@ mod tests {
         assert!(!seats[0].mismatch() && !seats[1].mismatch(), "a dated suffix is not a mismatch, and nothing reported is not one");
         assert!(seats_of(&[receipt("m1", Some("other-model"), "unknown", "claude", 1)])[0].mismatch());
         // The row writes them and reads them back.
-        let mut row = Row { case: "s/c".into(), arm: "a".into(), seed: 1, exit_code: Some(0), wall_secs: 0.0, cost_usd: 0.0, passed: Some(true), failed_checks: vec![], notes: vec![], usage: BTreeMap::new(), attempts: 0, promotions: 0, dir: String::new(), error: None, base: None, eff: Efficiency::default(), seats: Vec::new() };
+        let mut row = Row { case: "s/c".into(), arm: "a".into(), seed: 1, exit_code: Some(0), wall_secs: 0.0, cost_usd: 0.0, passed: Some(true), failed_checks: vec![], notes: vec![], usage: BTreeMap::new(), attempts: 0, promotions: 0, dir: String::new(), error: None, base: None, eff: Efficiency::default(), seats: Vec::new(), review: None };
         row.seats = seats.clone();
         assert_eq!(Row::from_json(&row.to_json()).unwrap().seats, seats);
     }
@@ -1914,7 +1953,7 @@ mod tests {
 
     #[test]
     fn the_report_labels_deltas_as_no_evidence_unless_the_arms_separate() {
-        let row = |arm: &str, seed: u32, pass: bool| Row { case: "s/c1".into(), arm: arm.into(), seed, exit_code: Some(0), wall_secs: 1.0, cost_usd: 0.25, passed: Some(pass), failed_checks: vec![], notes: vec![], usage: BTreeMap::new(), attempts: 0, promotions: 0, dir: String::new(), error: None, base: None, eff: Efficiency::default(), seats: Vec::new() };
+        let row = |arm: &str, seed: u32, pass: bool| Row { case: "s/c1".into(), arm: arm.into(), seed, exit_code: Some(0), wall_secs: 1.0, cost_usd: 0.25, passed: Some(pass), failed_checks: vec![], notes: vec![], usage: BTreeMap::new(), attempts: 0, promotions: 0, dir: String::new(), error: None, base: None, eff: Efficiency::default(), seats: Vec::new(), review: None };
         let arms = vec!["baseline".to_string(), "candidate".to_string()];
         let two: Vec<Row> = vec![row("baseline", 1, false), row("baseline", 2, false), row("candidate", 1, true), row("candidate", 2, true)];
         let r = report(&two, &arms, &[]);
@@ -2029,7 +2068,7 @@ mod tests {
         again.work_dir = t.path().join("w3");
         again.rows_path = Some(again.work_dir.join("rows.jsonl"));
         train::prepare_work_home(&again.work_dir).unwrap();
-        append_row(again.rows_path.as_ref().unwrap(), &Row { case: "s/c1".into(), arm: "baseline".into(), seed: 1, exit_code: Some(4), wall_secs: 0.1, cost_usd: 0.0, passed: None, failed_checks: vec![], notes: vec![], usage: BTreeMap::new(), attempts: 0, promotions: 0, dir: "r001".into(), error: Some("infrastructure".into()), base: None, eff: Efficiency::default(), seats: Vec::new() });
+        append_row(again.rows_path.as_ref().unwrap(), &Row { case: "s/c1".into(), arm: "baseline".into(), seed: 1, exit_code: Some(4), wall_secs: 0.1, cost_usd: 0.0, passed: None, failed_checks: vec![], notes: vec![], usage: BTreeMap::new(), attempts: 0, promotions: 0, dir: "r001".into(), error: Some("infrastructure".into()), base: None, eff: Efficiency::default(), seats: Vec::new(), review: None });
         again.resume = true;
         let (rerun, _) = run_all(&again, &[&c]);
         assert_eq!((rerun.len(), rerun[0].dir.as_str()), (1, "r002"), "the ungraded run was tried again");
