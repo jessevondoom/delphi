@@ -41,3 +41,7 @@ The operator wrote on 2026-11-07: "replace the weak questions. you can raise the
 - B1 (host-b1b8d4a8bc5fdf7a): decided, 104,838 Delphi-side tokens, 0 harness.retry; escalated to the operator.
 - A1 (host-418fba824ee4ac58): record venue panel, blind yes, question verbatim true, 6 Agent calls (parallel in two messages of three); 25,732 host tokens; Delphi-side 0; the host did not ask for confirmation (the prompt had given it).
 - A2: attempt 1 (host-bdea0b36e0c57973) 78,891 Delphi-side + 16,564 host tokens, no record; attempt 2 (host-d00145224875394d) 99,832 + 21,148, no record. EXCLUDED. Both: the host stopped while the foreign seat's Round 2 was outstanding.
+
+### q3 (kind: host-raised design question with options)
+- B1 (host-8e5dc086fd98c3a8): 100,497 Delphi-side tokens, 0 harness.retry, three seats answered and critiqued, escalated (5 unresolved P0).
+- A1 (host-60b2b43b08b8952b): venue panel, blind yes, question verbatim true, 6 Agent calls (parallel pairs of three), 17,931 host tokens, Delphi-side 0.

@@ -1,13 +1,15 @@
 question,run,side,tokens,note
-q1,b1,delphi,93253,council t_0001 host-c96a1d1326f412e1
-q1,a1,host,14332,claude -p last-result cumulative modelUsage input+output; panel-home delphi events none (0)
-q1,a2-attempt1,delphi,28280,foreign seat R1 logged; R2 span ran but no agent.usage logged (R2 NOT MEASURED); no record
-q1,a2-attempt1,host,10010,no record: host stopped polling
-q1,a2,delphi,29155,foreign seat; R2 usage not logged; no record
-q1,a2,host,8697,no record: host stopped polling after council_status
-q2,b1,delphi,104838,council t_0001 host-b1b8d4a8bc5fdf7a
-q2,a1,host,25732,claude -p last-result cumulative modelUsage input+output
-q2,a2-attempt1,delphi,78891,foreign seat (2 usage events); no record
-q2,a2-attempt1,host,16564,no record: host stopped polling
-q2,a2,delphi,99832,foreign seat (2 usage events); no record
-q2,a2,host,21148,no record: host stopped polling
+q1,a1,host,14332,
+q1,a2-attempt1,delphi,28280,retries=0
+q1,a2-attempt1,host,10010,
+q1,a2,delphi,29155,retries=0
+q1,a2,host,8697,
+q1,b1,delphi,93253,retries=0
+q2,a1,host,25732,
+q2,a2-attempt1,delphi,78891,retries=0
+q2,a2-attempt1,host,16564,
+q2,a2,delphi,99832,retries=0
+q2,a2,host,21148,
+q2,b1,delphi,104838,retries=0
+q3,a1,host,17931,
+q3,b1,delphi,100497,retries=0

@@ -16,4 +16,4 @@ result: is_error False subtype success turns 4 dur_ms 6871 in 130 out 22103 mode
 result: is_error False subtype success turns 1 dur_ms 3754 in 130 out 22103 models {'claude-sonnet-5-5': (58, 7528), 'claude-opus-5-5': (40, 7582), 'claude-haiku-5-5': (32, 6993)}
 result: is_error False subtype success turns 1 dur_ms 13697 in 130 out 22103 models {'claude-sonnet-5-5': (58, 7528), 'claude-opus-5-5': (40, 7582), 'claude-haiku-5-5': (32, 6993)}
 result: is_error False subtype success turns 4 dur_ms 38452 in 140 out 25592 models {'claude-sonnet-5-5': (68, 11017), 'claude-opus-5-5': (40, 7582), 'claude-haiku-5-5': (32, 6993)}
-HOST TOKENS (input+output over all results) 159130
+HOST TOKENS (last result, cumulative modelUsage input+output) 25732
