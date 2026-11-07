@@ -14,9 +14,9 @@ tags: [spec, compile, requirements, supersession, agents, review, drift]
 
 # Spec 088: A spec compile step
 
-> **Status: draft, 2026-11-06.** Written from a conversation with the operator the same day and a prior-art survey (§9). Decisions OD-1 to OD-7 (§11) are open; each carries a recommendation. Nothing is built.
+> **Status: draft, 2026-11-07.** Written from a conversation with the operator on 2026-11-06 and a prior-art survey (§9). The operator set direction on 2026-11-07: move the sources (OD-1) and commit the markdown views, taking care over merge order (OD-3); both are recorded in §11. The groups (OD-4) await the operator's review, and a Council review of this draft was requested (§12 records it). OD-2 and OD-5 to OD-8 are open with recommendations. Nothing is built, and the draft is not approved.
 > **Extends:** the folding rule in [`CONTRIBUTING.md`](../CONTRIBUTING.md) ("Folding spec amendments") and the reference gate `crates/delphi/tests/spec_refs.rs`. It changes no spec's meaning and no approval rule.
-> **Number:** 087 is the latest merged spec; 042 stays reserved (spec 041 §7); no open pull request claims 088.
+> **Number:** 089 is the latest merged spec and 088 is held by this draft's pull request; 042 stays reserved (spec 041 §7).
 
 ---
 
@@ -108,6 +108,12 @@ A JSON Schema, `schemas/spec-current.schema.json`, is added with the others (and
 
 It fails (not warns) when a source has a duplicate ID, an ID with no text and no tombstone, a `replaces` or `superseded_by` that points at no ID, a supersession declared on one side only, or a tier 1 spec whose frontmatter lacks `group`. These are the checks that, in the tools surveyed, were convention only (§9).
 
+### 4.4 Spec keys: a number is not always an identity
+
+Found when the groups were drawn up (2026-11-07): three numbers are used by two specs each. 014 is both the documents and dataviz spec and the relay and away-mode spec; 037 is both the console change-log deck and the training-experiments spec; 061 is both the encyclopedia search pages spec and the shell-tool spec. The 005a to 005g specs already use a letter suffix as part of their number. A bare number therefore cannot be the identity that requirement IDs, trailers and file names rely on.
+
+A spec's **key** is its number when no other spec has it, and its number plus a one-letter suffix, declared in frontmatter (`key: 014b`), when the number is shared, following the existing 005a to 005g convention. The compiler refuses two specs with one key and refuses a shared number without a `key` on every spec that has it. Requirement IDs (`<key>-R4`), the compiled file name (`data/<key>.json`) and trailer resolution (§10.4) use the key. Nothing is renamed: S1 adds the `key` lines and moves files without changing a file name, and a reference such as `014 §3` keeps resolving as `spec_refs` resolves it today (against any file with that number, which is the ambiguity this section lives with and does not widen). Whether to renumber the six specs instead is OD-8.
+
 ---
 
 ## 5. The human views
@@ -133,7 +139,7 @@ In the source, a requirement is one paragraph or list item that begins with its 
 **[R4]** The relay never raises the trust level of content it forwards.
 ```
 
-The global form is `NNN-R4` (spec number, then the local ID), and a revision is written `NNN-R4@2`. IDs are issued by taking the next unused number in the spec, are never reused, and are never renumbered. A statement is normative if it is tagged; untagged prose is informative. Rationale, history and examples stay untagged in the source.
+The global form is `KEY-R4` (the spec key of §4.4, then the local ID), and a revision is written `NNN-R4@2`. IDs are issued by taking the next unused number in the spec, are never reused, and are never renumbered. A statement is normative if it is tagged; untagged prose is informative. Rationale, history and examples stay untagged in the source.
 
 ### 6.2 Revisions
 
@@ -234,18 +240,18 @@ Extend `spec-authoring`: write atomic tagged requirements; keep rationale untagg
 
 A short new skill, `spec-driven-build`, authorized for those three roles (the `authorized_skills` lists in `agents/` are governed files and change in the same slice). It teaches:
 
-1. read `current/data/NNN.json` first, for what is active and what was replaced;
+1. read `current/data/<key>.json` first, for what is active and what was replaced;
 2. **open the cited source section before building**; the JSON is an index to it, never a replacement. Compare `source.sha256` with the file; if they differ, the JSON is stale, say so and recompile;
 3. cite IDs in tests (`covers 088-R4@2`) and in the pull request, alongside `Implements-Spec`;
 4. if reality contradicts a requirement, set `spec_drift_detected` against that ID, as the Builder already does against the spec (`agents/builder/AGENT.md`), and halt. The compiled file makes drift easier to name, not easier to ignore.
 
 ### 10.3 Surfaces
 
-`delphi specs compile [--check]`, `delphi specs show NNN [--json]`, `delphi specs list [--group G] [--status S]`, and the MCP counterpart (S3). `AGENTS.md` and `llms.txt` point agents at `specs/current/`.
+`delphi specs compile [--check]`, `delphi specs show KEY [--json]`, `delphi specs list [--group G] [--status S]`, and the MCP counterpart (S3). `AGENTS.md` and `llms.txt` point agents at `specs/current/`.
 
 ### 10.4 Commit trailer
 
-`Implements-Spec: specs/NNN-*.md` stays valid. After S1 the lint resolves a trailer by **spec number**, so the old path form (in history and in open pull requests) and the new path both pass and the folder name stops mattering.
+`Implements-Spec: specs/NNN-*.md` stays valid. After S1 the lint resolves a trailer by **spec key** (§4.4), so the old path form (in history and in open pull requests) and the new path both pass and the folder name stops mattering. Where a number is shared, a trailer that gives only the number is ambiguous and the lint asks for the path or the key; trailers already in history are not re-checked.
 
 ---
 
@@ -254,7 +260,7 @@ A short new skill, `spec-driven-build`, authorized for those three roles (the `a
 | Slice | Content | Depends on | Hours (low / likely / high) |
 | :-- | :-- | :-- | --: |
 | S0 | spec approval; tracker entry | operator | 1 |
-| S1 | move the canonical specs to `specs/source/`; rewrite links; lint resolves trailers by number; no content change | S0, OD-1 | 4 / 6 / 10 |
+| S1 | move the canonical specs to `specs/source/`; rewrite links; add `key:` to the six specs that share a number (§4.4); lint resolves trailers by key; no other content change | S0 | 5 / 8 / 12 |
 | S2 | shared parser in `delphi-core`; `spec_refs` moved onto it; tier 0 compile; `schemas/spec-current.schema.json`; frontmatter `group`, `approved_by`, `approved_on`, `supersedes`; `groups.toml`; the corpus passes `--check` | S1 | 10 / 16 / 24 |
 | S3 | index and group views, banner, drift tests, `specs show/list`, MCP surface, CONTRIBUTING, `specs/README.md`; start of the measurement (§8.10) | S2 | 8 / 12 / 18 |
 | S4 | requirement tags, revisions, tombstones, amendment records, registry check against the base branch, two-sided supersession; `spec-authoring` extended | S3 and the measurement | 10 / 16 / 26 |
@@ -265,10 +271,51 @@ Council: this changes how every agent reads specs, so a Council review of this d
 
 ### Decisions for the operator
 
-- **OD-1. Move the sources to `specs/source/`** (S1). *Recommendation:* yes, as its own mechanical pull request, with number-based trailer resolution first. It touches links in specs, docs, code comments, the changelog and `AGENTS.md`, and `spec_refs` will show any it misses. The cheaper alternative is to leave the sources and put only the outputs in `specs/current/`; it loses the clean split and nothing else.
+- **OD-1. Move the sources to `specs/source/`** (S1). **Decided by the operator, 2026-11-07: yes** ("move the sources to keep things organized and consistent"). It is its own mechanical pull request, with key-based trailer resolution in the same change. It touches links in specs, docs, code comments, the changelog and `AGENTS.md`, and `spec_refs` will show any it misses. Because many sessions open pull requests against `specs/` at once, S1 should land in a quiet window: the operator picks the moment, the open pull requests touching `specs/` are rebased onto it, and no other slice merges until it has.
 - **OD-2. Syntax** (§6.1): `**[R4]**` in the source, `NNN-R4@2` globally. *Recommendation:* yes; it reads as plain markdown and is hard to write by accident. The exact form is the S4 reviewer's to adjust, the meaning is fixed here.
-- **OD-3. Commit the markdown views?** *Recommendation:* yes, so a pull request's diff shows what changed in the current set, matching `docs/reference/`. The cost is that two pull requests changing specs in the same group can conflict in `current/<group>.md`; the fix is to rerun `delphi specs compile`, and the drift test is the backstop. The per-spec JSON does not have this problem. The alternative (build views on demand, commit only JSON) removes the conflicts and the diff.
-- **OD-4. Groups.** *Recommendation:* a closed list in `groups.toml`, decided in S2 by the operator from this starting set: `governance`, `runtime` (adapter, engine, harness), `console`, `knowledge-and-memory`, `council-and-learning`, `trust-and-xenia`, `bundles-and-external`, `docs-and-tooling`.
+- **OD-3. Commit the markdown views.** **Decided by the operator, 2026-11-07: yes, "we'll be careful on merge order".** A pull request's diff then shows what changed in the current set, matching `docs/reference/`. The cost is that two pull requests changing specs in the same group can conflict in `current/<group>.md`. The rules that make "careful" concrete: (1) a conflict in a generated file is resolved by rerunning `delphi specs compile`, never by hand; (2) pull requests that change the same group merge one at a time, the second rebasing first; (3) the drift test is the backstop and fails with the command to run; (4) `CONTRIBUTING.md` says so in S3. The per-spec JSON does not have this problem. If the friction proves high, the fallback is to stop committing the views and build them on demand; the JSON and the checks do not change.
+- **OD-4. Groups.** The operator reviews the list proposed on 2026-11-07 (below) before S2; the list lives in `groups.toml`, so changing it is a one-file edit and a recompile. *Proposed (nine groups, 99 files as of 2026-11-07, assignments in Appendix A):* `governance-and-safety`, `runtime-models-and-tools`, `orchestration-and-council`, `console`, `knowledge-and-memory`, `learning-and-evals`, `sharing-and-bundles`, `hosts-and-mcp`, `install-and-lifecycle`. A spec belongs to exactly one group; the contested placements are listed with the proposal.
 - **OD-5. Measurement before S4:** how long, and what counts as use. *Recommendation:* two weeks of normal work after S3, counting agent reads of `current/data/` against reads of `specs/source/`, and reading a sample of the sessions. If agents never open it, stop at S3.
 - **OD-6. Coverage as a gate.** *Recommendation:* report only (S6). A gate on requirements without tests would fail most of the corpus on day one.
 - **OD-7. Strictness on `unapplied`.** *Recommendation:* the compile lists them and `delphi lint` warns; it fails only on the refusals in §4.3. An unapplied amendment is information about the sources, not an error in the compiler.
+- **OD-8. Duplicate spec numbers** (§4.4): keep the six files' names and add a `key` (014a/014b, 037a/037b, 061a/061b), or renumber one spec of each pair to a free number. *Recommendation:* keys. Renumbering rewrites every reference to the moved spec in code comments, docs, the changelog and history, and the old number would still appear in git history and in commit trailers, so it would trade one ambiguity for two. Keys cost six frontmatter lines.
+
+---
+
+## 12. Council review
+
+Requested by the operator on 2026-11-07. The record (seats, verdict, findings, accepted risks, minority report) is added here when the review completes. Until then this section is a placeholder and nothing in the draft depends on it.
+
+---
+
+## Appendix A. Proposed groups (for the operator's review, OD-4)
+
+Keys follow §4.4: the six specs that share a number take `a` and `b` in file-name order (014a documents and dataviz, 014b relay and away mode; 037a console change-log deck, 037b training experiments; 061a encyclopedia search pages, 061b shell tool). 042 is reserved and has no file. Counted on main, 2026-11-07: 99 files, including this spec and the interface blueprints file (`wireframes`).
+
+| Group | Count | Specs |
+| :-- | --: | :-- |
+| `governance-and-safety` | 8 | 001, 008, 014b, 015, 018, 070, 079, 088 |
+| `runtime-models-and-tools` | 16 | 002, 009, 010, 016, 017, 020, 021, 035, 045, 046, 047, 049, 051, 056, 061b, 085 |
+| `orchestration-and-council` | 8 | 003, 041, 063, 067, 082, 084, 086, 089 |
+| `console` | 20 | 005, 005a, 005b, 005c, 005d, 005e, 005f, 005g, 029, 030, 032, 033, 034, 037a, 044, 053, 060, 073, 087, wireframes |
+| `knowledge-and-memory` | 17 | 004, 013, 014a, 028, 040, 043, 050, 052, 055, 057, 058, 061a, 064, 065, 068, 075, 080 |
+| `learning-and-evals` | 6 | 031, 037b, 048, 078, 081, 083 |
+| `sharing-and-bundles` | 9 | 007, 011, 012, 019, 022, 023, 024, 026, 027 |
+| `hosts-and-mcp` | 7 | 025, 062, 066, 071, 072, 074, 077 |
+| `install-and-lifecycle` | 8 | 006, 036, 038, 039, 054, 059, 069, 076 |
+
+**Contested placements** (each could sit in the second group named):
+
+- 014b relay and away mode: `governance-and-safety` or `install-and-lifecycle` (it is an approval path).
+- 015 provisional decisions: `governance-and-safety` or `orchestration-and-council`.
+- 019 skills import and export, 025 plugin and skill compatibility: `sharing-and-bundles` or `hosts-and-mcp`. 025 is part of the 022 to 027 sharing set but is about host compatibility.
+- 040 validator and fact ratification: `knowledge-and-memory` or `governance-and-safety`.
+- 061b shell tool and its permission modes: `runtime-models-and-tools` or `governance-and-safety`.
+- 069 workspace administration: `install-and-lifecycle` or `governance-and-safety`.
+- 084 outcome stub, flip question and recap: `orchestration-and-council` or `learning-and-evals`.
+- 087 agent identity: `console` or `orchestration-and-council`.
+- 038 capabilities map: `install-and-lifecycle` or `hosts-and-mcp`.
+- 078 Council scorecard and 081 evidence conventions: `learning-and-evals`, or `orchestration-and-council` and `knowledge-and-memory` respectively.
+- 010 connectors and tool access: `runtime-models-and-tools` or `hosts-and-mcp`.
+
+`console` is the largest group at 20; if the operator prefers smaller views it splits cleanly into the 005 family (9 files with the wireframes) and the rest. The sizes only matter for reading and for merge conflicts in a group's view (OD-3).
