@@ -67,6 +67,26 @@ error of the difference), tokens, turns and calls per pass, and a verdict. Token
 OD-2, provisional) with the pass rate inside the noise reads "costlier, not better"; more passes for that cost reads "a
 trade"; under three graded seeds on either side it reads "no evidence".
 
+## Handoff fidelity (`specs/048` BM-5)
+
+What does a relay lose between a seat and the operator? A seat reads an artifact with N exact items (a commit hash, a file
+path, a number, a line of code, a quoted sentence); the score is the share present **byte for byte** in the seat's report and
+in the operator's answer.
+
+```sh
+delphi train fidelity run --seed 7 --items 10          # a scripted chain: no model, no cost
+delphi train fidelity gen --seed 7 --items 10 --out dev/train/suites/fidelity/cases/fid-7-10
+delphi train validate --suite fidelity                 # then `delphi train run` on an arm, as for any case
+```
+
+`run` scores three scripted relays: **verbatim** (1.0), **paraphrase** (a summary that shortens hashes, keeps file names,
+rounds numbers and drops comments; 0.0) and **handle** (the seat summarises and hands over a handle to its raw output, and the
+Orchestrator quotes it: lossy at the seat, 1.0 at the operator, a model of `specs/049` CX-6, which is not built). The seat and
+the Orchestrator are functions, so the run shows what the instrument can tell apart, not what any model does. `gen` writes a
+case for a real model: the model gets `fixture/artifact.md` and a prompt that names no item, and an `exact_items` check reads
+`items.json`, which the model never sees. A new seed is a new case, so a fresh seed is a holdout. `--items` is 5 to 200 (every
+kind appears from 5).
+
 ## Reviewing a truth pack (your job before any research run)
 
 Each research case has a generated **review sheet** beside its pack: open `truth/review-sheet.md` in
@@ -237,6 +257,7 @@ extract run `delphi train seal --case <suite>/<id>` to record its hash.
 | `fact_recall` (`min`) | the deliverable states at least that weighted share of `facts.toml` |
 | `no_traps` | no pattern in `traps.toml` matches |
 | `text_matches` (`pattern`, `present`) | the pattern does (or, with `present = false`, does not) appear |
+| `exact_items` (`path`, `min`) | at least `min` of the strings in the JSON array at `path` (a file in the case directory, outside `fixture/`) appear byte for byte in the deliverable |
 
 The deliverable is the task's final answer plus any Markdown the mission wrote. Patterns give a **lower bound** (a correct
 answer worded unexpectedly is missed), so thresholds are modest and a jury reads the rest against `rubric.md`. A pack that
