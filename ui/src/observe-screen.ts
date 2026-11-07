@@ -133,7 +133,8 @@ export function mascot(role: string, state: string, info: T.Info, pal: T.Pal): [
     const pad = 7 - [...face].length;
     row = ' '.repeat(Math.floor(pad / 2)) + face + ' '.repeat(pad - Math.floor(pad / 2));
   }
-  return [crown, T.onChassis(chassis, row), T.chin(chassis)];
+  // `DELPHI_ASCII_BADGES`: the face's glyphs in ASCII (the crown is colour, not a face); unchanged otherwise (spec 087 §6.2).
+  return [crown, T.onChassis(chassis, T.asciiCells(row, info)), T.chin(chassis)];
 }
 
 const name = (m: OModel, role: string) => T.roleName(role, m.info);

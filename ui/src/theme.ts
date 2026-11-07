@@ -25,7 +25,11 @@ export type AvatarRole = {
   /** Eye colour while the role waits on the operator, by terminal background. */
   alert_eye?: { dark: string; light: string };
 };
-export type AvatarSpec = { version: number; eye: { dark: string; light: string }; roles: Record<string, AvatarRole> };
+export type AvatarSpec = {
+  version: number; eye: { dark: string; light: string }; roles: Record<string, AvatarRole>;
+  /** Each non-ASCII glyph a badge or mascot face can use, and its ASCII stand-in (`DELPHI_ASCII_BADGES`, spec 087 §6.2). Absent from an older `delphi`. */
+  ascii_glyphs?: Record<string, string>;
+};
 
 export type Info = {
   console_socket: string; narrator_socket: string; workspace: string; mission: string | null;
@@ -504,6 +508,27 @@ export function mechanicalBlink(cells: string, mouth: number | null = 1): string
   return closed === cells ? null : closed;
 }
 
+/**
+ * Plain-ASCII badges: `DELPHI_ASCII_BADGES=1` (the same convention as `DELPHI_REDUCE_MOTION`), for a terminal or font that
+ * cannot draw `⟦•─•⟧`. The badge keeps its five columns; only the glyphs change (spec 087 §6.2).
+ */
+export const asciiBadgesRequested = (env: Record<string, string | undefined> = process.env): boolean => env.DELPHI_ASCII_BADGES === '1';
+let asciiBadgesOn = asciiBadgesRequested();
+/** Set the switch (a test, or a future setting); returns what it was. */
+export function useAsciiBadges(on: boolean): boolean { const was = asciiBadgesOn; asciiBadgesOn = on; return was; }
+export const currentAsciiBadges = (): boolean => asciiBadgesOn;
+
+/**
+ * `s` with every non-ASCII character replaced through the table the library sends (`ascii_glyphs`): the console keeps no table
+ * of its own, so the Rust side, the outside identity and this agree by construction. A glyph the table lacks becomes `?`.
+ * Unchanged when ASCII is not asked for, and when there is no table (an older `delphi` sends none).
+ */
+export function asciiCells(s: string, info: Info): string {
+  const table = info.avatar?.ascii_glyphs;
+  if (!asciiBadgesOn || !table) return s;
+  return [...s].map((c) => ((c.codePointAt(0) ?? 0) < 128 ? c : table[c] ?? '?')).join('');
+}
+
 /** The three cells and the mouth's index: from the library's data, or the built-in faces for an older `delphi`. */
 function badgeCells(role: string, state: AgentState, info: Info, frame?: string, step = 0): { cells: string[]; mouth: number | null } {
   const spec = info.avatar?.roles[role]?.badge[frame ?? ACTIVITY[state]];
@@ -547,7 +572,8 @@ export function badge(role: string, state: AgentState, info: Info, p: Pal, frame
     : state === 'waiting on you' && info.avatar?.roles[role]?.alert_eye && caps.color !== 'none' ? chalk.bold.yellow : chalk.bold;
   const { cells, mouth } = badgeCells(role, state, info, frame, step);
   // `crossed` (Ctrl+C pressed once): every eye becomes a lightly drawn `x`; the mouth and any blank cell stay.
-  return chassis('⟦') + cells.map((c, i) => (i === mouth ? chassis(c) : crossed && c !== ' ' ? chalk.dim(eye('x')) : eye(c))).join('') + chassis('⟧');
+  const shown = (s: string) => asciiCells(s, info);
+  return chassis(shown('⟦')) + cells.map((c, i) => (i === mouth ? chassis(shown(c)) : crossed && c !== ' ' ? chalk.dim(eye('x')) : eye(shown(c)))).join('') + chassis(shown('⟧'));
 }
 
 /**

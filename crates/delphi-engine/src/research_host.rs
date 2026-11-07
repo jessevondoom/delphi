@@ -186,11 +186,19 @@ pub fn display_name(ws_dir: &std::path::Path, home: &std::path::Path, role: &str
     resolver.display_name(role)
 }
 
+/// Whether the badges Delphi sends a host are plain ASCII (`specs/087` §6.2): `[mcp] badge_ascii = true` in the workspace's
+/// `config.toml`, or `DELPHI_ASCII_BADGES=1` in this process's environment. The config key is the one that always reaches a
+/// server a host started, which does not inherit the operator's shell.
+pub fn ascii_badges(ws_dir: &std::path::Path) -> bool {
+    delphi_core::ascii_badge::requested_by_env() || crate::host_rpc::gate(ws_dir).map(|c| c.badge_ascii).unwrap_or(false)
+}
+
 /// The identity of the Delphi role that answered.
 pub fn identity(ws_dir: &std::path::Path, home: &std::path::Path, role: &str, via: Option<&str>) -> Identity {
     let (badge, hex, ansi) = role_look(role);
     let (hex_light, ansi_light) = role_look_light(role);
-    Identity::new(role, &display_name(ws_dir, home, role), badge, hex, ansi, via).with_light(hex_light, ansi_light)
+    let id = Identity::new(role, &display_name(ws_dir, home, role), badge, hex, ansi, via).with_light(hex_light, ansi_light);
+    if ascii_badges(ws_dir) { id.ascii() } else { id }
 }
 
 /// Add the identity to a result, in every form so the host can choose (`specs/087` §5.2, §5.3). `display` is the one line a host
@@ -266,6 +274,31 @@ mod tests {
         assert_eq!(ruled["signature"], "⟦•••⟧ Hermes (scout, via delphi)", "signature is the identity line alone");
         std::fs::write(ws.path().join("config.toml"), "[theme]\nname = \"../evil\"\n").unwrap();
         assert_eq!(display_name(ws.path(), home.path(), "scout"), "scout");
+    }
+
+    #[test]
+    fn an_ascii_workspace_sends_ascii_badges_in_every_form_and_keeps_the_rest_of_the_line() {
+        // Spec 087 §6.2: `[mcp] badge_ascii = true`. (`DELPHI_ASCII_BADGES` is read the same way; tests do not set process
+        // environment, which other tests share.)
+        let (ws, home) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        std::fs::write(ws.path().join("config.toml"), "[mcp]\nbadge_ascii = true\n").unwrap();
+        assert!(ascii_badges(ws.path()));
+        let id = identity(ws.path(), home.path(), "red-team", Some("claude-code"));
+        assert_eq!(id.badge, "[~_~]");
+        let mut v = json!({});
+        attach_identity(&mut v, &id, "plain", "dark", None);
+        assert!(v["display"].as_str().unwrap().starts_with("[~_~] "), "{v}");
+        assert!(v["display"].as_str().unwrap().ends_with("(red-team, via delphi)"), "{v}");
+        for form in ["plain", "ansi", "markdown"] {
+            let s = v["identity"][form].as_str().unwrap();
+            assert!(!s.contains('⟦') && !s.contains('⟧'), "{form}: {s}");
+        }
+        assert_eq!(v["identity"]["badge"], "[~_~]");
+        // A config that turns it off, or says nothing, leaves the Unicode badge.
+        std::fs::write(ws.path().join("config.toml"), "[mcp]\nbadge_ascii = false\n").unwrap();
+        if !delphi_core::ascii_badge::requested_by_env() {
+            assert_eq!(identity(ws.path(), home.path(), "red-team", None).badge, "⟦¬_¬⟧");
+        }
     }
 
     /// Spec 077 (Theme Isolation & Graceful Fallback): a theme the workspace names that does not exist falls back to the canonical role ID, not to the built-in

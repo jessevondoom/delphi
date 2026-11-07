@@ -39,7 +39,7 @@ roles:
   advocate:      { name: "Prometheus", epithet: "bringer of the spark",           persona: "You are Prometheus: empathetic, perceptive, and forward-looking. You champion human understanding, eradicate cognitive friction, and design for joy." }
 
 # One-off agents Delphi spawns by role take a name from this pool (specs/087 §4). A pool entry is a label with no role, scope or
-# authority; code refers to the slot ids. Faces are three cells; `ascii_glyphs` gives the ASCII stand-in for each non-ASCII glyph.
+# authority; code refers to the slot ids. Faces are three cells; `ascii_glyphs` gives the ASCII stand-in for each non-ASCII glyph (the table behind `DELPHI_ASCII_BADGES`; code keeps the same table in `delphi_core::ascii_badge`, and a test fails if the two differ).
 pool:
   - { slot: "pool-01", name: "Heracles",  keywords: [strong, blunt, labor, finish-the-job],                    face: ">_<" }
   - { slot: "pool-02", name: "Atlas",     keywords: [load-bearing, endurance, scale, holds],                    face: "•─•" }
@@ -77,7 +77,7 @@ pool:
   - { slot: "pool-34", name: "Cadmus",    keywords: [letters, schema, founding, format],                        face: "•_•" }
   - { slot: "pool-35", name: "Pandora",   keywords: [edge-cases, unknowns, opened-jar, hope],                   face: "×‿×" }
   - { slot: "pool-36", name: "Sisyphus",  keywords: [repetition, regression, flaky, endless-maintenance],       face: "×_×" }
-ascii_glyphs: { "•": "o", "─": "-", "·": ".", "¬": "~", "‿": "u", "ᴥ": "w", "ω": "w", "◉": "O", "◔": "c", "■": "#", "▪": "#", "☆": "*", "✦": "*", "×": "x", "≈": "~", "°": "o" }
+ascii_glyphs: { "•": "0", "─": "-", "·": ".", "¬": "~", "‿": "v", "ᴥ": "Y", "ω": "W", "◉": "@", "◔": "c", "■": "#", "▪": "#", "☆": "*", "✦": "+", "×": "x", "≈": "%", "°": "'", "…": ".", "●": "O" }
 ```
 
 ## Why this figure (rationale, not loaded)
