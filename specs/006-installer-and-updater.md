@@ -143,7 +143,7 @@ $DELPHI_HOME/operator/
 
 ### 3.3 Scope Files & Ratified Specs (was 006-A2; Council 004; approved 2026-10-23)
 - **Heuristics by scope** (`specs/004` §2.1): the release heuristics `context/heuristics.md` move to **Zone 1** (`base/context/heuristics.md`, release-ratified). `init` creates an empty team file `team/context/team-heuristics.md` and an empty workspace file `local/heuristics.md`, each with frontmatter and `active_rules: 0`.
-- **`ratified.lock` also pins:** every `memory/agents/*/lessons.md`, both new heuristics files, and **every operator-approved spec** (`team/specs/**` or, for Delphi's own design repo, `specs/**`), keyed by the spec's exact content hash. An approved spec whose hash no longer matches is reported by `doctor` check 3 as needing re-approval.
+- **`ratified.lock` also pins:** every `memory/agents/*/lessons.md`, both new heuristics files, and **every operator-approved spec** (`team/specs/**` or, for Delphi's own design repo, `specs/**`), keyed by the spec's exact content hash. An approved spec whose hash no longer matches is reported by `doctor` check 3 as needing re-approval. (This is for specs inside a workspace's tree. Delphi's own repository, when built outside a daemon, approves its specs by frontmatter and the operator's recorded instruction and needs no pin; see `specs/003` §3.1.2 and `specs/094`.)
 
 ### 3.4 Release Signing Moves to Step 5 (was 006-A3; approved 2026-10-23)
 - Release signing needs release keys and a CI release pipeline, which arrive with Step 5 packaging (roadmap Step 5: "signed release + Homebrew"). Step 1 therefore builds `core-manifest.json` / `base/manifest.lock` with every file hash but **no signature**, and records `signature: "unsigned-dev-build"`.
