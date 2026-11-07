@@ -83,6 +83,15 @@
         "per_watch_max_wakes_per_day": { "type": "integer", "minimum": 0 }
       }
     },
+    "seats": {
+      "type": "object",
+      "description": "Foreign seats and model families (spec 091 SR-3, SR-4).",
+      "properties": {
+        "require_families": { "type": "integer", "minimum": 1, "maximum": 8, "description": "Refuse a Panel that cannot show this many distinct known model families, before anything is spent. Unset (the default) never refuses; the result is labelled homogeneous." },
+        "max_foreign_seats": { "type": "integer", "minimum": 0, "description": "Foreign seats one Council may run (default 1). 0 turns them off." },
+        "max_foreign_tokens": { "type": "integer", "minimum": 0, "description": "Tokens the foreign seats of one Council may use (default 100000)." }
+      }
+    },
     "loop": {
       "type": "object",
       "properties": {

@@ -208,11 +208,13 @@ pub struct ScriptedModel {
     pub seen: Mutex<Vec<Seen>>,
     /// The API key a harness endpoint resolves to in tests.
     pub harness_key: Mutex<Option<String>>,
+    /// The model every reply says it was served by (`specs/091`: what a provider reports, which a seat receipt records). `None`: not reported.
+    pub served: Mutex<Option<String>>,
 }
 
 impl ScriptedModel {
     pub fn new(steps: Vec<Step>) -> Arc<ScriptedModel> {
-        Arc::new(ScriptedModel { script: Mutex::new(steps.into()), responder: Mutex::new(None), seen: Mutex::new(vec![]), harness_key: Mutex::new(None) })
+        Arc::new(ScriptedModel { script: Mutex::new(steps.into()), responder: Mutex::new(None), seen: Mutex::new(vec![]), harness_key: Mutex::new(None), served: Mutex::new(None) })
     }
 
     pub fn respond_with(&self, f: impl Fn(&Value) -> Step + Send + Sync + 'static) {
@@ -245,7 +247,7 @@ impl ModelClient for ScriptedModel {
                             on_event(StreamEvent::TextDelta { index: i, text: text.clone() });
                         }
                     }
-                    Ok(Completed { blocks, usage, stop_reason: Some(stop_reason.into()), served_model: None })
+                    Ok(Completed { blocks, usage, stop_reason: Some(stop_reason.into()), served_model: self.served.lock().unwrap().clone() })
                 }
                 Step::Interrupt => {
                     on_event(StreamEvent::TextDelta { index: 0, text: "partial ".into() });

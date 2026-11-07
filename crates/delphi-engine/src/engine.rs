@@ -101,6 +101,12 @@ pub struct Settings {
     pub council_budget_usd: f64,
     /// A Council seat that has not answered by then abstains.
     pub council_seat_timeout: Duration,
+    /// `[seats] require_families` (`specs/091` SR-3): refuse a Panel that cannot show this many known families. `None` (the default)
+    /// never refuses; the result is labelled `homogeneous` instead.
+    pub require_families: Option<u32>,
+    /// `[seats] max_foreign_seats` and `max_foreign_tokens` (SR-4): per Council.
+    pub max_foreign_seats: u32,
+    pub max_foreign_tokens: u64,
     /// While no model is usable, how often a parked task looks again (`specs/002` §4.1).
     pub park_poll: Duration,
     /// The longest a task waits for a model before escalating. `None` waits as long as it takes; `Some(0)` never waits.
@@ -167,6 +173,9 @@ impl Default for Settings {
             connector_settle: Duration::from_secs(10),
             council_budget_usd: 20.0,
             council_seat_timeout: Duration::from_secs(600),
+            require_families: None,
+            max_foreign_seats: 1,
+            max_foreign_tokens: 100_000,
             park_poll: Duration::from_secs(5),
             park_max: None,
             degrade_wait: Duration::from_secs(300),

@@ -51,6 +51,8 @@ Defaults are those of the template; "—" means no default.
 | `[budget] council_budget_usd` | `20.0` | ceiling for a Council |
 | `[budget] on_budget_exhausted` | `escalate` | halt the node and ask you; never silently downscale |
 | `[budget] per_watch_max_wakes_per_day` | `10` | |
+| `[seats] require_families` | unset | refuse a Panel that cannot show this many distinct known model families (the family of the model that was served, from the seat receipt; `unknown` never counts), before anything is spent. Unset never refuses: a result with fewer than two known families is labelled `homogeneous`. `council_open` also takes it per call ([`specs/091`](../../specs/091-seats-families-and-outside-launch.md) SR-3) |
+| `[seats] max_foreign_seats`, `max_foreign_tokens` | `1`, `100000` | per Council: how many seats Delphi may run on another family for a Panel, and the tokens they may use. Over either, the foreign seat is refused before any spend, and the message names the cap (SR-4) |
 | `[hitl] approval_timeout_sec` | `600` | an unanswered card is denied after this long |
 
 ## Model access ◆
