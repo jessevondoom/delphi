@@ -312,7 +312,13 @@ pub fn parse_agy_line(line: &str) -> Vec<Event> {
     let usage_of = |u: &Value| Tokens { input: u["input_tokens"].as_u64().unwrap_or(0), cache_read: u["cache_read_tokens"].as_u64().unwrap_or(0), cache_write: 0, output: u["output_tokens"].as_u64().unwrap_or(0) + u["thinking_tokens"].as_u64().unwrap_or(0) };
     let mut out = Vec::new();
     match m["event"].as_str() {
-        Some("init") => out.push(Event::Init { session_id: m["conversation_id"].as_str().unwrap_or("").into(), tools: names_of(&m["init"]["tools"]), mcp_servers: None }),
+        Some("init") => {
+            out.push(Event::Init { session_id: m["conversation_id"].as_str().unwrap_or("").into(), tools: names_of(&m["init"]["tools"]), mcp_servers: None });
+            // The model the CLI's own `init` record names (carrier metadata, `specs/091` S5), never one the text claims.
+            if let Some(model) = m["init"]["model"].as_str().filter(|s| !s.is_empty()) {
+                out.push(Event::Served(model.into()));
+            }
+        }
         Some("step_update") => {
             let s = &m["step_update"];
             let id = s["step_index"].as_u64().unwrap_or(0).to_string();
@@ -465,6 +471,11 @@ impl CodexAppServer {
             (Some(APP_THREAD), None) => {
                 let tid = m["result"]["thread"]["id"].as_str().unwrap_or("");
                 ev.push(Event::Init { session_id: tid.into(), tools: vec![], mcp_servers: None });
+                // `thread/start` answers with the model the thread runs (carrier metadata, `specs/091` S5). `codex exec --json`
+                // reports none, so that transport stays `unknown`.
+                if let Some(model) = m["result"]["model"].as_str().filter(|s| !s.is_empty()) {
+                    ev.push(Event::Served(model.into()));
+                }
                 let mut params = json!({"threadId": tid, "input": [{"type": "text", "text": self.prompt}]});
                 if let Some(e) = &self.effort {
                     params["effort"] = json!(e);
@@ -1397,7 +1408,7 @@ pub(crate) mod tests {
 
     #[test]
     fn agy_lines_become_the_same_events_and_its_args_use_stdin_for_the_prompt() {
-        assert_eq!(parse_agy_line(r#"{"event":"init","init":{"model":"m","tools":[]}}"#), vec![Event::Init { session_id: String::new(), tools: vec![], mcp_servers: None }]);
+        assert_eq!(parse_agy_line(r#"{"event":"init","init":{"model":"m","tools":[]}}"#), vec![Event::Init { session_id: String::new(), tools: vec![], mcp_servers: None }, Event::Served("m".into())]);
         let delta = parse_agy_line(r#"{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"po"}}"#);
         assert_eq!(delta, vec![Event::Text("po".into())]);
         let done = parse_agy_line(r#"{"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"\n","usage":{"input_tokens":6801,"output_tokens":1,"thinking_tokens":3,"cache_read_tokens":10}}}"#);
@@ -1583,7 +1594,7 @@ pub(crate) mod tests {
         assert!(matches!(&res[0], Event::Result { structured: Some(v), subtype, .. } if v["n"] == 3 && subtype == "success"), "{:?}", res);
         let res = parse_line(r#"{"type":"result","subtype":"error_max_turns","is_error":true,"result":""}"#);
         assert!(matches!(&res[0], Event::Result { subtype, structured: None, is_error: true, .. } if subtype == "error_max_turns"));
-        assert_eq!(parse_agy_line(r#"{"event":"init","conversation_id":"c-9","init":{"model":"m"}}"#), vec![Event::Init { session_id: "c-9".into(), tools: vec![], mcp_servers: None }]);
+        assert_eq!(parse_agy_line(r#"{"event":"init","conversation_id":"c-9","init":{"model":"m"}}"#), vec![Event::Init { session_id: "c-9".into(), tools: vec![], mcp_servers: None }, Event::Served("m".into())]);
         let res = parse_agy_line(r#"{"event":"result","result":{"status":"SUCCESS","response":"x","structured_output":{"n":3},"usage":{"input_tokens":1,"output_tokens":1}}}"#);
         assert!(matches!(&res[0], Event::Result { structured: Some(v), .. } if v["n"] == 3), "{:?}", res);
     }
@@ -1831,6 +1842,37 @@ echo '{"type":"result","subtype":"success","result":"fin","total_cost_usd":0.01,
     }
 
     /// Lines captured from `codex-cli 0.165.0` `app-server --stdio` (`specs/047` §5.1), trimmed to what the parser reads.
+    #[test]
+    fn the_served_model_of_agy_and_codex_comes_from_carrier_metadata_only() {
+        use crate::seat::{resolve, FamilyTable};
+        let table = FamilyTable::shipped();
+        let served = |ev: &[Event]| ev.iter().find_map(|e| if let Event::Served(m) = e { Some(m.clone()) } else { None });
+        // agy: the `init` record names the model; a text claiming another model changes nothing.
+        let mut ev = parse_agy_line(r#"{"event":"init","conversation_id":"c","init":{"model":"gemini-3.8-flash-medium","cwd":"/w","tools":[],"permission_mode":"proceed-in-sandbox"}}"#);
+        ev.extend(parse_agy_line(r#"{"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"I am gpt-6-luna, an OpenAI model."}}"#));
+        ev.extend(parse_agy_line(r#"{"event":"result","result":{"status":"SUCCESS","response":"I am claude-sonnet-5.5"}}"#));
+        assert_eq!(served(&ev).as_deref(), Some("gemini-3.8-flash-medium"));
+        assert_eq!(ev.iter().filter(|e| matches!(e, Event::Served(_))).count(), 1);
+        assert_eq!(resolve(&table, served(&ev).as_deref()).family, "gemini");
+        // agy with no `init.model`, and text that names a model: nothing served, so `unknown`.
+        let mut ev = parse_agy_line(r#"{"event":"init","init":{"tools":[]}}"#);
+        ev.extend(parse_agy_line(r#"{"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"I am gpt-6-luna"}}"#));
+        assert_eq!(served(&ev), None);
+        assert_eq!(resolve(&table, None).family, "unknown");
+        // Codex app-server: `thread/start` answers with `model`; the agent's message does not count.
+        let mut p = CodexAppServer::new("hi", "", std::path::Path::new("/scratch"), None);
+        let (ev, _) = p.line(r#"{"id":2,"result":{"thread":{"id":"th1","model":"gpt-6-luna"},"model":"gpt-6-luna","modelProvider":"openai"}}"#);
+        assert_eq!(served(&ev).as_deref(), Some("gpt-6-luna"));
+        assert_eq!(resolve(&table, served(&ev).as_deref()).family, "openai");
+        let (ev, _) = p.line(r#"{"method":"item/completed","params":{"item":{"type":"agentMessage","text":"I am claude-sonnet-5.5"}}}"#);
+        assert_eq!(served(&ev), None);
+        // `codex exec --json` reports no model at all.
+        let mut c = CodexParser::new(false);
+        let mut ev = c.line(r#"{"type":"thread.started","thread_id":"t"}"#);
+        ev.extend(c.line(r#"{"type":"item.completed","item":{"id":"i","type":"agent_message","text":"I am gpt-6-luna"}}"#));
+        assert_eq!(served(&ev), None);
+    }
+
     #[test]
     fn codex_app_server_lines_become_events_and_approvals_become_permissions() {
         let mut p = CodexAppServer::new("hi", "gpt-x", std::path::Path::new("/scratch"), Some("low".into()));
