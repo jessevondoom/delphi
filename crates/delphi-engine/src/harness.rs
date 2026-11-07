@@ -1349,6 +1349,18 @@ pub fn cli_env_with(extra: &[String]) -> BTreeMap<String, String> {
 pub(crate) mod tests {
     use super::*;
 
+    /// Spec 093 L1, spec 005c §3: a harness seat's visible words become events, its reasoning does not, so reasoning can never
+    /// be pushed to a client or written down by anything downstream of the parser.
+    #[test]
+    fn reasoning_never_becomes_an_event() {
+        let asst = parse_line(r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"HIDDEN-REASONING"},{"type":"text","text":"visible"}]}}"#);
+        assert_eq!(asst, vec![Event::Text("visible".into())]);
+        assert!(!format!("{asst:?}").contains("HIDDEN"));
+        assert!(parse_line(r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"HIDDEN-REASONING"}},"parent_tool_use_id":null}"#).is_empty());
+        // A subagent's words carry a parent and are not the seat's answer either.
+        assert!(parse_line(r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"sub"}},"parent_tool_use_id":"tu1"}"#).is_empty());
+    }
+
     #[test]
     fn real_cli_lines_become_events() {
         let init = parse_line(r#"{"type":"system","subtype":"init","session_id":"s1","cwd":"/x","tools":["Bash"]}"#);
