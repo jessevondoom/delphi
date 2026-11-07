@@ -100,6 +100,11 @@ family table, `model_families.toml`), the carrier (harness kind), the tools offe
 hash and the outcome. A carrier that reports no model (Copilot and `agy` until 091 S5) gives `unknown`; the report prints
 `unknown` and never guesses a family from the requested model. Rows written before this have no `seats` and add nothing.
 
+The keys of a `seats` entry are `requested`, `served_model`, `family`, `carrier`, `tools`, `dispatch_allowed`, `prompt_hash`,
+`outcome`. `family` **is** the served family (there is no `served_family` key, and no `requested` family: the requested model's
+vendor is never guessed); `unknown` means the carrier reported no model or the table has no entry. `family_source` lives on the
+`seat.receipt` event, not in the row. A script that reads `served_family` gets nothing for every carrier.
+
 `delphi train report` adds two sections when any row has seats:
 
 - **SEATS SERVED**: per arm, the carriers, served models, families and the count of tools offered. A served model that is not
@@ -129,6 +134,34 @@ case for a real model: the model gets `fixture/artifact.md` and a prompt that na
 `items.json`, which the model never sees. A new seed is a new case, so a fresh seed is a holdout. `--inline` puts the report in the prompt itself, so a seat with no tools (a
 Copilot seat) can take the case, and every arm of any carrier gets the identical prompt; it measures the last hop only. A failed run whose short answer begins by declining ("I can't reproduce ...") is tagged in the row's `notes`: a refusal is a finding about the model, not paraphrase loss, and the check alone cannot tell the two apart. `--items` is 5 to 200 (every
 kind appears from 5).
+
+## Seeded-defect review (build plan 2026-11-07, M3)
+
+Does a reviewing seat find **real** defects, or only plausible-sounding ones? A seeded generator writes a small Python module
+with K planted defects (1 to 8, distinct kinds) and N decoys (0 to 8): constructs that look wrong and are correct. Catalogue
+of defect kinds: `off-by-one`, `inverted-condition`, `missing-error-check`, `wrong-operator`, `resource-leak`,
+`swapped-arguments`, `stale-constant`, `injection` (a query built from input). Every function has a docstring stating what it
+should do, so a defect is a departure from stated intent.
+
+```sh
+delphi train defects run --seed 7 --defects 5 --decoys 4       # scripted reviewers: no model, no cost
+delphi train defects gen --seed 7 --defects 5 --decoys 4 --inline --out dev/train/suites/review/cases/rev-7-5i
+delphi train validate --suite review                           # then `delphi train run` on an arm, as for any case
+```
+
+The seat answers with lines `FINDING <line> <kind>: <one sentence>` (the first line of the file is 1). Scoring is a pattern
+and arithmetic, no model judge: a finding **catches** a defect when its line is within one of the planted line and its kind is
+one the key accepts (the defect's own kind, or the one neighbour kind that names the same fault); a finding within one line of
+a decoy is a **false positive**; any other finding is **unmatched**; a repeat for a defect already caught is ignored. The key
+(`review-key.json`) sits beside `case.toml`, outside `fixture/`, and is never in the prompt. `--inline` puts the module in the
+prompt with line numbers, for a seat with no tools; without it the prompt names `@project/repo/review.py`. The case's
+`review_findings` check takes `min_recall` and `max_false_positives` (`gen --min-recall`, `--max-false-positives`; defaults 0.5
+and 2). A new seed is a new case, so a fresh seed is a holdout.
+
+`delphi train report` adds a **SEEDED-DEFECT REVIEW** section: by arm, recall, false positives, unmatched, and **unique
+catches** (planted defects caught by only one arm, over cases two or more arms ran). **These are diagnostics, not a seat score.**
+They are never an input to routing, ranking, staffing or any Council decision (`specs/078`), and the pass bit is a threshold on
+one synthetic case. One case is a few defects: read the table as a size of the gap to look into, not a verdict on a seat.
 
 ## Context retention (`specs/048` BM-7)
 

@@ -44,6 +44,8 @@ pub struct RunRow {
     pub cache_input: u64,
     /// The seats of the run, from its `seat.receipt` events (`specs/091` SR-6); empty in a row written before they were kept.
     pub seats: Vec<SeatNote>,
+    /// A seeded-defect review run's figures (`train_defects`); a diagnostic, never a score.
+    pub review: Option<crate::train_defects::Score>,
 }
 
 pub fn read_rows(work: &Path) -> Vec<RunRow> {
@@ -69,6 +71,7 @@ pub fn read_rows(work: &Path) -> Vec<RunRow> {
             cache_read: v["cache_read_tokens"].as_u64().unwrap_or(0),
             cache_input: v["cache_input_tokens"].as_u64().unwrap_or(0),
             seats: v["seats"].as_array().map(|a| a.iter().filter_map(SeatNote::from_json).collect()).unwrap_or_default(),
+            review: crate::train_defects::Score::from_note(&v["review"]),
         })
     }).collect()
 }
@@ -478,6 +481,7 @@ pub fn render(work: &Path, judge_models: &BTreeMap<String, Vec<String>>) -> Stri
 
     out.push_str(&effort_sections(&stats));
     out.push_str(&seat_sections(&rows));
+    out.push_str(&review_section(&rows));
 
     // Case by arm.
     let cases: BTreeSet<&str> = rows.iter().map(|r| r.case.as_str()).collect();
@@ -542,6 +546,12 @@ pub fn render(work: &Path, judge_models: &BTreeMap<String, Vec<String>>) -> Stri
     out
 }
 
+/// Seeded-defect review figures by arm, from graded runs that carry them (`train_defects`).
+fn review_section(rows: &[RunRow]) -> String {
+    let runs: Vec<crate::train_defects::RunReview> = rows.iter().filter(|r| r.passed.is_some()).filter_map(|r| r.review.as_ref().map(|s| crate::train_defects::RunReview { case: &r.case, arm: &r.arm, score: s })).collect();
+    crate::train_defects::report_section(&runs)
+}
+
 fn flag(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
 }
@@ -565,7 +575,7 @@ mod tests {
     use serde_json::json;
 
     fn run(case: &str, arm: &str, seed: u32, passed: Option<bool>, cost: f64, tin: u64, tout: u64) -> RunRow {
-        RunRow { case: case.into(), arm: arm.into(), seed, passed, cost_usd: cost, tokens_in: tin, tokens_out: tout, attempts: 1, promotions: 0, base: None, models: vec![], turns: 0, tool_calls: 0, tool_errors: 0, nudges: 0, hard_stops: 0, escalations: 0, cache_read: 0, cache_input: 0, seats: vec![] }
+        RunRow { case: case.into(), arm: arm.into(), seed, passed, cost_usd: cost, tokens_in: tin, tokens_out: tout, attempts: 1, promotions: 0, base: None, models: vec![], turns: 0, tool_calls: 0, tool_errors: 0, nudges: 0, hard_stops: 0, escalations: 0, cache_read: 0, cache_input: 0, seats: vec![], review: None }
     }
 
     #[test]
@@ -704,6 +714,27 @@ mod tests {
         fs::write(w.join("rows.jsonl"), old + "\n").unwrap();
         let r = render(&w, &BTreeMap::new());
         assert!(!r.contains("EFFORT") && !r.contains("HARNESS EFFECT"), "{}", r);
+    }
+
+    #[test]
+    fn the_report_carries_a_review_section_only_for_graded_runs_that_have_figures() {
+        let t = tempfile::tempdir().unwrap();
+        let w = t.path().join("w");
+        crate::train::prepare_work_home(&w).unwrap();
+        let line = |arm: &str, passed: Option<bool>, caught: &[&str], fp: u64| json!({"case": "review/rev-1-5", "arm": arm, "seed": 1, "passed": passed, "cost_usd": 0.0, "tokens_in": 1, "tokens_out": 1, "attempts": 1, "promotions": 0,
+            "review": {"defects": 4, "caught": caught, "false_positives": fp, "unmatched": 0, "findings": caught.len() as u64 + fp}}).to_string();
+        let rows = [line("tools", Some(true), &["10:x", "20:y", "30:z"], 0), line("toolless", Some(false), &["10:x"], 2), line("ungraded", None, &["99:q"], 0)];
+        fs::write(w.join("rows.jsonl"), rows.join("\n") + "\n").unwrap();
+        let r = render(&w, &BTreeMap::new());
+        for want in ["SEEDED-DEFECT REVIEW (planted defects found, by arm; diagnostics only)", "tools", "75%", "3/4", "toolless", "25%", "1/4", "unique", "not a seat score", "specs/078"] {
+            assert!(r.contains(want), "{} in\n{}", want, r);
+        }
+        assert!(!r.lines().any(|l| l.starts_with("ungraded") && l.contains("%")), "an ungraded run is not in the section:\n{}", r);
+        let unique = |arm: &str| r.lines().filter(|l| l.starts_with(arm) && l.contains("/4")).map(|l| l.split_whitespace().last().unwrap().to_string()).next();
+        assert_eq!((unique("tools").as_deref(), unique("toolless").as_deref()), (Some("2"), Some("0")), "{}", r);
+        // No review figures, no section.
+        fs::write(w.join("rows.jsonl"), json!({"case": "c0", "arm": "a", "seed": 1, "passed": true, "cost_usd": 0.1, "tokens_in": 10, "tokens_out": 5, "attempts": 1, "promotions": 0}).to_string() + "\n").unwrap();
+        assert!(!render(&w, &BTreeMap::new()).contains("SEEDED-DEFECT"));
     }
 
     fn seat(requested: &str, served: Option<&str>, family: &str, carrier: &str, tools: &[&str], dispatch: bool, hash: &str) -> SeatNote {

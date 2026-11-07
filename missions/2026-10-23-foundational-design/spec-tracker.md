@@ -94,6 +94,7 @@ Asked for by the operator on 2026-10-26; pilot budget **80 engineering hours** (
 | Slice | Delivers | Hours | State |
 | :-- | :-- | --: | :-- |
 | X1 | spec 037; research case format (`truth/`, `fact_recall`, `no_traps`, `text_matches`, draft-pack rule, `train seal`); truth packs R1-R3 (drafts, operator verification pending) | 15 | merged (#215); R5, R6 drafts added (R4 not built) |
+| M3 | seeded-defect review case (build plan 2026-11-07): `delphi train defects gen\|run`, `review_findings` check, report section (recall, false positives, unique catches; diagnostics only, specs/078) | 6 to 8 | built; PR open; no live run |
 | X2 | per-arm template home and staffing check (`--arms-file`); tokens per model in rows | 8 | merged with X3 (#217) |
 | X3 | `delphi train harvest` and `check-hidden`; code cases C1-C3 (validated: fail on base, pass 3x on reference) | 20 | merged (#217) |
 | X4 | blinded bundles, jury runner (`train judge`) | 12 | built (PR open) |
