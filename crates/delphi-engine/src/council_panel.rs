@@ -209,6 +209,61 @@ impl Panel {
         }
     }
 
+    /// P7 (spec 089): the seat Delphi owns, when it is the ONLY thing the Panel waits on for `round` (the round whose answers are awaited:
+    /// 1 for the Round 2 brief, 2 for the verdict brief). True only when every seat the host owns is in for that round and Delphi's seat is not.
+    pub fn pending_on_delphi(&self, round: u8) -> Option<String> {
+        let (seat, _) = self.foreign.as_ref()?;
+        match round {
+            1 => (self.released.is_none() && !self.barrier_has(seat) && self.seats.iter().filter(|r| *r != seat).all(|r| self.barrier_has(r))).then(|| seat.clone()),
+            2 => {
+                let want = self.round2_seats();
+                (self.released.is_some() && want.contains(seat) && !self.round2.contains_key(seat) && want.iter().filter(|r| *r != seat).all(|r| self.round2.contains_key(r))).then(|| seat.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// The round whose answers the Panel is waiting for now: 1 until the barrier releases, then 2; `None` once Round 2 is complete.
+    fn awaited_round(&self) -> Option<u8> {
+        if self.released.is_none() {
+            Some(1)
+        } else if self.round2_seats().iter().any(|s| !self.round2.contains_key(s)) {
+            Some(2)
+        } else {
+            None
+        }
+    }
+
+    /// What `council_status` says a Panel is waiting on: `delphi_seat` (the seat Delphi runs is the only one outstanding), `host_seats`
+    /// (a seat or the moderator the host owns), or `None` when nothing is outstanding.
+    pub fn waiting_on(&self) -> Option<&'static str> {
+        match self.awaited_round() {
+            Some(r) if self.pending_on_delphi(r).is_some() => Some("delphi_seat"),
+            Some(_) => Some("host_seats"),
+            None => self.verdict.is_none().then_some("host_seats"),
+        }
+    }
+
+    /// The state of the seat Delphi runs: `running`, `answered` or `abstained` (a Round 1 abstention shows once the barrier releases).
+    pub fn foreign_state(&self) -> Option<(String, &'static str)> {
+        let (seat, _) = self.foreign.as_ref()?;
+        let state = match &self.released {
+            None => if self.barrier_has(seat) { "answered" } else { "running" },
+            Some(rel) => {
+                if rel.get(seat).and_then(Stance::text).is_none() {
+                    "abstained"
+                } else {
+                    match self.round2.get(seat) {
+                        None => "running",
+                        Some(t) if t.trim().is_empty() => "abstained",
+                        Some(_) => "answered",
+                    }
+                }
+            }
+        };
+        Some((seat.clone(), state))
+    }
+
     /// The brief for the seat Delphi runs itself (its own prompt, built by the daemon), for either round.
     pub fn brief_for_delphi(&self, round: u8) -> Result<String, PanelErr> {
         let seat = self.foreign.as_ref().map(|(r, _)| r.clone()).ok_or_else(|| PanelErr::UnknownSeat("(no foreign seat)".into()))?;
@@ -510,6 +565,46 @@ mod tests {
         assert_eq!(p.submit_by_delphi(2, GOOD, None, None).unwrap(), Step::RoundTwoDone);
         assert_eq!(p.models.get("red-team").map(String::as_str), Some("gem-w"));
         assert!(Panel::new("q").submit_by_delphi(1, "x", None, None).is_err(), "no foreign seat, no Delphi answer");
+    }
+
+    #[test]
+    fn pending_on_delphi_is_true_only_when_delphis_seat_is_the_sole_missing_one() {
+        let mut p = Panel::new("q");
+        p.reserve("red-team", "gemini").unwrap();
+        // Round 1: a host seat is missing -> not Delphi's wait.
+        assert_eq!(p.pending_on_delphi(1), None);
+        assert_eq!(p.waiting_on(), Some("host_seats"));
+        p.submit("architect", 1, "A", None, None).unwrap();
+        assert_eq!(p.pending_on_delphi(1), None, "strategist is still the host's");
+        p.submit("strategist", 1, "S", None, None).unwrap();
+        assert_eq!(p.pending_on_delphi(1).as_deref(), Some("red-team"));
+        assert_eq!((p.waiting_on(), p.foreign_state()), (Some("delphi_seat"), Some(("red-team".to_string(), "running"))));
+        p.submit_by_delphi(1, "R", None, None).unwrap();
+        assert_eq!(p.pending_on_delphi(1), None, "released");
+        // Round 2: a host seat is missing, then only Delphi's.
+        assert_eq!(p.pending_on_delphi(2), None);
+        p.submit("architect", 2, GOOD, None, None).unwrap();
+        assert_eq!(p.pending_on_delphi(2), None, "strategist has not answered Round 2");
+        assert_eq!(p.waiting_on(), Some("host_seats"));
+        p.submit("strategist", 2, GOOD, None, None).unwrap();
+        assert_eq!(p.pending_on_delphi(2).as_deref(), Some("red-team"));
+        assert_eq!(p.waiting_on(), Some("delphi_seat"));
+        assert_eq!(p.pending_on_delphi(3), None);
+        // A seat that times out abstains: the Panel advances and the wait ends.
+        assert_eq!(p.submit_by_delphi(2, "", Some("no answer within 600s"), None).unwrap(), Step::RoundTwoDone);
+        assert_eq!(p.pending_on_delphi(2), None);
+        assert_eq!((p.waiting_on(), p.foreign_state()), (Some("host_seats"), Some(("red-team".to_string(), "abstained"))));
+        assert!(p.brief("orchestrator", 3).is_ok(), "the verdict brief opens after Delphi's seat abstained");
+    }
+
+    #[test]
+    fn a_panel_with_no_foreign_seat_never_waits_on_delphi() {
+        let mut p = Panel::new("q");
+        for s in ["architect", "red-team"] {
+            p.submit(s, 1, "x", None, None).unwrap();
+        }
+        assert_eq!((p.pending_on_delphi(1), p.pending_on_delphi(2), p.foreign_state()), (None, None, None));
+        assert_eq!(p.waiting_on(), Some("host_seats"));
     }
 
     #[test]
