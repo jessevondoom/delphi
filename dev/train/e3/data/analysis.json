@@ -1,0 +1,235 @@
+{
+  "arms": {
+    "a1": {
+      "council_repeat_same_decision_on_repeat_subset": 5,
+      "escalation_rate": 0.1667,
+      "excluded": [],
+      "p0p1_added_vs_b1": 0,
+      "p0p1_missed_vs_b1": 0,
+      "per_question": [
+        {
+          "arm": {
+            "decision_class": "GO",
+            "escalated": false,
+            "p0p1_present": true,
+            "readable_seats": 3,
+            "unreadable_seats": 0
+          },
+          "arm_class": "GO",
+          "b1": {
+            "decision_class": "GO",
+            "escalated": false,
+            "p0p1_present": true,
+            "readable_seats": 3,
+            "unreadable_seats": 0
+          },
+          "b1_class": "GO",
+          "b2_class": "GO",
+          "b2_same_as_b1": true,
+          "id": "q1",
+          "same_as_b1": true
+        },
+        {
+          "arm": {
+            "decision_class": "GO",
+            "escalated": true,
+            "p0p1_present": true,
+            "readable_seats": 3,
+            "unreadable_seats": 0
+          },
+          "arm_class": "GO",
+          "b1": {
+            "decision_class": "GO",
+            "escalated": true,
+            "p0p1_present": true,
+            "readable_seats": 3,
+            "unreadable_seats": 0
+          },
+          "b1_class": "GO",
+          "b2_class": "GO",
+          "b2_same_as_b1": true,
+          "id": "q2",
+          "same_as_b1": true
+        },
+        {
+          "arm": {
+            "decision_class": "GO",
+            "escalated": false,
+            "p0p1_present": true,
+            "readable_seats": 3,
+            "unreadable_seats": 0
+          },
+          "arm_class": "GO",
+          "b1": {
+            "decision_class": "ALT",
+            "escalated": true,
+            "p0p1_present": true,
+            "readable_seats": 3,
+            "unreadable_seats": 0
+          },
+          "b1_class": "ALT",
+          "b2_class": "GO",
+          "b2_same_as_b1": false,
+          "id": "q3",
+          "same_as_b1": false
+        },
+        {
+          "arm": {
+            "decision_class": "GO",
+            "escalated": false,
+            "p0p1_present": true,
+            "readable_seats": 3,
+            "unreadable_seats": 0
+          },
+          "arm_class": "GO",
+          "b1": {
+            "decision_class": "GO",
+            "escalated": true,
+            "p0p1_present": true,
+            "readable_seats": 3,
+            "unreadable_seats": 0
+          },
+          "b1_class": "GO",
+          "b2_class": "GO",
+          "b2_same_as_b1": true,
+          "id": "q4",
+          "same_as_b1": true
+        },
+        {
+          "arm": {
+            "decision_class": "GO",
+            "escalated": false,
+            "p0p1_present": true,
+            "readable_seats": 3,
+            "unreadable_seats": 0
+          },
+          "arm_class": "GO",
+          "b1": {
+            "decision_class": "GO",
+            "escalated": true,
+            "p0p1_present": true,
+            "readable_seats": 3,
+            "unreadable_seats": 0
+          },
+          "b1_class": "GO",
+          "b2_class": "GO",
+          "b2_same_as_b1": true,
+          "id": "q5",
+          "same_as_b1": true
+        },
+        {
+          "arm": {
+            "decision_class": "GO",
+            "escalated": false,
+            "p0p1_present": true,
+            "readable_seats": 3,
+            "unreadable_seats": 0
+          },
+          "arm_class": "GO",
+          "b1": {
+            "decision_class": "GO",
+            "escalated": true,
+            "p0p1_present": true,
+            "readable_seats": 3,
+            "unreadable_seats": 0
+          },
+          "b1_class": "GO",
+          "b2_class": "GO",
+          "b2_same_as_b1": true,
+          "id": "q6",
+          "same_as_b1": true
+        }
+      ],
+      "qualifying": 6,
+      "readable_rate": 1.0,
+      "same_decision": 5,
+      "same_decision_on_repeat_subset": 5,
+      "verdict": "NO EVIDENCE",
+      "why": "rule applied",
+      "with_repeat_council": 6
+    },
+    "a2": {
+      "council_repeat_same_decision_on_repeat_subset": 1,
+      "escalation_rate": 0.5,
+      "excluded": [
+        {
+          "id": "q1",
+          "why": "excluded: no record written on two attempts: the headless host stopped polling while the foreign seat was outstanding"
+        },
+        {
+          "id": "q2",
+          "why": "excluded: no record written on two attempts: the headless host stopped polling while the foreign seat was outstanding"
+        },
+        {
+          "id": "q4",
+          "why": "excluded: no record written on two attempts: the headless host stopped polling while the foreign seat was outstanding"
+        },
+        {
+          "id": "q6",
+          "why": "excluded: first attempt wrote no record; the re-run was not started because the pre-run cap check (1,876,691 + 135,130 > 2,000,000) forbids it"
+        }
+      ],
+      "p0p1_added_vs_b1": 0,
+      "p0p1_missed_vs_b1": 0,
+      "per_question": [
+        {
+          "arm": {
+            "decision_class": "GO",
+            "escalated": false,
+            "p0p1_present": true,
+            "readable_seats": 3,
+            "unreadable_seats": 0
+          },
+          "arm_class": "GO",
+          "b1": {
+            "decision_class": "ALT",
+            "escalated": true,
+            "p0p1_present": true,
+            "readable_seats": 3,
+            "unreadable_seats": 0
+          },
+          "b1_class": "ALT",
+          "b2_class": "GO",
+          "b2_same_as_b1": false,
+          "id": "q3",
+          "same_as_b1": false
+        },
+        {
+          "arm": {
+            "decision_class": "GO",
+            "escalated": true,
+            "p0p1_present": true,
+            "readable_seats": 3,
+            "unreadable_seats": 0
+          },
+          "arm_class": "GO",
+          "b1": {
+            "decision_class": "GO",
+            "escalated": true,
+            "p0p1_present": true,
+            "readable_seats": 3,
+            "unreadable_seats": 0
+          },
+          "b1_class": "GO",
+          "b2_class": "GO",
+          "b2_same_as_b1": true,
+          "id": "q5",
+          "same_as_b1": true
+        }
+      ],
+      "qualifying": 2,
+      "readable_rate": 1.0,
+      "same_decision": 1,
+      "same_decision_on_repeat_subset": 1,
+      "verdict": "INCOMPLETE",
+      "why": "fewer than 5 qualifying questions",
+      "with_repeat_council": 2
+    }
+  },
+  "council_escalation_rate": 0.8333,
+  "council_readable_rate": 1.0,
+  "council_runs": 12,
+  "excluded_runs": [],
+  "headline_arm": "a1",
+  "verdict": "NO EVIDENCE"
+}

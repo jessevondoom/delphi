@@ -33,5 +33,7 @@ q5,a2,host,18750,
 q5,b1,delphi,99432,retries=0
 q5,b2,delphi,116313,retries=0
 q6,a1,host,20074,
+q6,a2-attempt1,delphi,90474,retries=0
+q6,a2-attempt1,host,13301,
 q6,b1,delphi,98539,retries=0
 q6,b2,delphi,81769,retries=0
