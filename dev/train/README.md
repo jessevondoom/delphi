@@ -163,6 +163,52 @@ catches** (planted defects caught by only one arm, over cases two or more arms r
 They are never an input to routing, ranking, staffing or any Council decision (`specs/078`), and the pass bit is a threshold on
 one synthetic case. One case is a few defects: read the table as a size of the gap to look into, not a verdict on a seat.
 
+### Harder cases: `--difficulty easy|medium|hard`
+
+Live runs of the easy case (2026-11-08, 42 runs over 9 arms) hit a ceiling: mean recall 0.95 to 1.0, one false positive, no
+unique catches, and `resource-leak` the only kind that was ever missed. The case could not separate seats, so `gen` and `run`
+take a difficulty. The default is `easy`, the original case byte for byte, so existing cases and tests are unchanged.
+
+| level | defects / decoys (default, cap) | kinds | size |
+| :-- | :-- | :-- | :-- |
+| `easy` | 5 / 4, cap 8 | the original eight | about 60 lines |
+| `medium` | 10 / 8, cap 16 | + `race`, `integer-truncation`, `swallowed-error`, `use-after-close`, `unit-mismatch` | about 140 lines |
+| `hard` | 20 / 20, cap 24 | + `contract-violation`, `invariant-violation`, and `off-by-one` hidden behind a helper | 300+ lines, over 350 at the cap |
+
+The subtler kinds, two templates each:
+
+- `race`: a check and the act that depends on it on two lines (`exists` then `open(..., "w")`; `isdir` then `mkdir`).
+  A finding on either line catches it.
+- `integer-truncation`: `int(a / b)` where a ceiling is meant; a wrap to 16 bits where the docstring says to raise.
+- `swallowed-error`: `except Exception: return {}`; `except sqlite3.Error: pass`.
+- `use-after-close`: a reader used after its `with` block; a generator drained after the `finally` closed the connection.
+- `unit-mismatch`: milliseconds against `time.time()`; milliseconds passed to `Event.wait`.
+- `off-by-one` behind a helper: the helper returns `len(rows)` and the caller indexes with it; the helper is right (the last
+  index) and the loop that uses it as a range end is wrong. The key records both lines.
+- `contract-violation` (cross-function): the planted line is correct alone and wrong given what a function placed far away
+  promises (it returns `None` for an absent key; it lists newest first). The callee sits in the first third of the file, the
+  caller in the last third. The key records the caller line as the defect and the callee line as `also_line`; a finding
+  within one line of **either** catches it.
+- `invariant-violation`: a comment states the invariant (`the oldest value is dropped first`; `stack is ascending`) and the
+  code breaks it.
+
+Every defect has a **decoy twin** in the same shape that is correct, with the reason in the key (`why`): the same race under a
+lock, `-(-a // b)` for a ceiling, a documented fallback, a handler that rolls back and re-raises, a read inside the `with`,
+`/ 1000` before the comparison, a helper used only as a slice end, a caller that handles the `None`. A decoy is flagged
+(false positive) on either of its lines. Neighbour kinds are accepted where two honest names exist (`swallowed-error` also
+accepts `missing-error-check`, `use-after-close` accepts `resource-leak`); the prompt from `medium` up lists the new kinds and
+says the code may be judged against "its docstring or a comment, or what a function it calls promises".
+
+```sh
+delphi train defects run --seed 7 --difficulty hard                   # scripted reviewers, 20 defects, 20 decoys
+delphi train defects gen --seed 7 --difficulty hard --inline --out dev/train/suites/review/cases/rev-7-hard-i
+```
+
+The report adds **recall by defect kind** (caught/planted per arm, lowest recall first) under the arm table, so the kinds
+that separate seats, or that none finds, show. Rows written before this existed print no such table. The case's seed fixes
+everything: the prompt never holds the key, and the same seed and level give the same bytes. Same rule as above: diagnostics
+for a report, never a seat score or a routing input (`specs/078`).
+
 ## Context retention (`specs/048` BM-7)
 
 Do facts survive a compaction? A session tells the assistant N exact facts early (the same seeded items as handoff fidelity),
