@@ -3,7 +3,8 @@ id: spec-090-renumber-the-shared-spec-numbers
 title: "090: A one-time renumbering of the three spec numbers that two specs share"
 author: architect
 timestamp: 2026-11-07T22:00:00Z
-status: draft   # a proposal, not permission to build (AGENTS.md); awaits the operator
+status: approved   # by the operator, 2026-11-07 ("approve both 088 and 090"), after the recommendations for OD-1 to OD-6 were shown; the work waits for a quiet window the operator picks
+approved_by: operator (2026-11-07)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,9 +15,9 @@ tags: [spec, numbering, citations, lint, cleanup]
 
 # Spec 090: Renumber the three shared spec numbers, once
 
-> **Status: draft, 2026-11-07.** Written at the operator's request after a review of draft spec 088 (PR #517) found that three spec numbers are used by two specs each. Decisions OD-1 to OD-6 (§8) are open with recommendations. Nothing is built, and the draft is not approved.
-> **Extends:** the folding rule in [`CONTRIBUTING.md`](../CONTRIBUTING.md) and the reference gate `crates/delphi/tests/spec_refs.rs`. It changes no spec's meaning, no engine behaviour and no approval rule. It is independent of draft spec 088, which does not need it (that spec identifies a spec by its file name) but is easier to extend with it.
-> **Number:** 089 is the latest merged spec and 088 is held by its draft pull request. The three renumbered specs take the next three free numbers when the work starts (expected 091 to 093; 042 stays reserved).
+> **Status: approved by the operator, 2026-11-07.** Written at the operator's request after a review of spec 088 (PR #517) found that three spec numbers are used by two specs each. Decisions OD-1 to OD-6 (§8) take the recommendations, as the operator approved them after seeing them. Nothing is built; the work waits for a quiet window the operator picks (OD-4).
+> **Extends:** the folding rule in [`CONTRIBUTING.md`](../CONTRIBUTING.md) and the reference gate `crates/delphi/tests/spec_refs.rs`. It changes no spec's meaning, no engine behaviour and no approval rule. It is independent of spec 088, which does not need it (that spec identifies a spec by its file name) but is easier to extend with it.
+> **Number:** on 2026-11-07 the latest spec on main is 094; 088 is held by its pull request. The three renumbered specs take the next three free numbers when the work starts: 091 to 094 are taken, so 095 to 097 as of today (042 stays reserved).
 
 ---
 
@@ -37,7 +38,7 @@ Each clash came from two sessions taking the next number at once. The cost is th
 
 - `spec_refs` accepts a citation if *any* file with that number has the section (`crates/delphi/tests/spec_refs.rs`, the `any` checks), so a wrong citation passes silently whenever both specs have a section with that number.
 - A lint rule against duplicate numbers cannot be switched on without an allowlist, and an allowlist is a promise that the clash stays.
-- Requirement IDs of the form `014-R4`, proposed in draft spec 088 for a later stage, would name two specs.
+- Requirement IDs of the form `014-R4`, proposed in spec 088 for a later stage, would name two specs.
 
 This spec renumbers **one spec of each pair, once**, inside `specs/` (no file changes directory), and turns the lint on afterwards so the clash cannot return. It does this in one pull request that can be reviewed commit by commit and reverted as one.
 
@@ -51,7 +52,7 @@ This spec renumbers **one spec of each pair, once**, inside `specs/` (no file ch
 
 ### 1.1 Non-goals
 
-- **No move to a subfolder.** The engine treats `specs/` as a governed path by prefix (draft spec 088 lists the sites), so this change keeps every file directly under `specs/` and touches no engine code.
+- **No move to a subfolder.** The engine treats `specs/` as a governed path by prefix (spec 088 lists the sites), so this change keeps every file directly under `specs/` and touches no engine code.
 - **No change of meaning.** The only edits to a spec's text are its own identifiers and one note line (§3.1). No requirement is reworded.
 - **No constitutional edit under the recommended choice.** GOVERNANCE.md (line 87) and REVIEW.md (line 27) cite the relay spec as 014. The recommendation (OD-1) leaves the relay spec at 014 so neither file changes. If the operator chooses the other member of that pair, those two Red-tier files need their own ratified step (§2.2).
 - **No rewriting of history.** Commit trailers, merged pull-request text and git history keep the old numbers. Mission notes, councils and past changelog entries are historical records and are rewritten only where a gate fails on them (OD-2).
@@ -61,7 +62,7 @@ This spec renumbers **one spec of each pair, once**, inside `specs/` (no file ch
 ### 1.2 Simpler alternatives considered
 
 - **Do nothing and add a lint with an allowlist for the three clashes.** About an hour. The clash and the silent mis-citation stay for good, and the allowlist is the evidence. Rejected as the end state, but it is the fallback if the operator decides the cost below is not worth paying.
-- **Keys or suffixes** (`014a`, `014b`, or a `key:` line in frontmatter). Rejected by the review of draft spec 088: a frontmatter line edits ratified content, and a suffix still leaves "014" in prose ambiguous.
+- **Keys or suffixes** (`014a`, `014b`, or a `key:` line in frontmatter). Rejected by the review of spec 088: a frontmatter line edits ratified content, and a suffix still leaves "014" in prose ambiguous.
 - **Rename only, with no citation work.** Cheapest, and unsafe: every citation of the moved spec keeps its old number and silently points at the other spec.
 
 ---
@@ -89,7 +90,7 @@ Move **documents and dataviz** (014), **training experiments** (037) and **encyc
 
 ### 2.3 The new numbers
 
-The next three free numbers **at the moment the work starts**, in the order of the pairs (014, 037, 061), expected 091, 092 and 093. They are not reserved now because other sessions take numbers; the approval pull request (S0) claims them in the tracker, and if one is taken first the next free one is used. File names keep their slugs: `091-documents-and-dataviz.md`, `092-training-experiments-quality-and-efficiency.md`, `093-encyclopedia-search-pages.md`.
+The next three free numbers **at the moment the work starts**, in the order of the pairs (014, 037, 061), expected 095, 096 and 097 (091 to 094 were taken while this spec was being drafted, which is the problem it describes). The approval pull request (S0) names them in the tracker, but other sessions keep taking numbers, so S1 re-checks `specs/` and the open pull requests when it starts and uses the next three free ones. File names keep their slugs: `095-documents-and-dataviz.md`, `096-training-experiments-quality-and-efficiency.md`, `097-encyclopedia-search-pages.md`.
 
 ---
 
@@ -119,11 +120,11 @@ The map is a table committed with the pull request, one row per citation: file a
 
 ### 3.5 The permanent guard
 
-A `delphi lint` rule: two files directly under `specs/` may not begin with the same number-and-letter (`005a` and `005b` differ; two `014` files do not pass). It runs in CI, so a second session that takes a taken number fails its own pull request and renumbers its **new, unmerged** spec, which is free to do. The rule has no allowlist. It lands in this pull request, after the renames, so main is never red. Draft spec 088 lists the same rule in its first slice; whichever merges first carries it and the other drops it.
+A `delphi lint` rule: two files directly under `specs/` may not begin with the same number-and-letter (`005a` and `005b` differ; two `014` files do not pass). It runs in CI, so a second session that takes a taken number fails its own pull request and renumbers its **new, unmerged** spec, which is free to do. The rule has no allowlist. It lands in this pull request, after the renames, so main is never red. Spec 088 lists the same rule in its first slice; whichever merges first carries it and the other drops it.
 
 ### 3.6 History
 
-Commit trailers, merged pull requests, past changelog entries and the git log keep the old numbers and cannot be changed. `CONTRIBUTING.md` gains one paragraph under "Folding spec amendments": the three renumberings (old number and file name, new number and file name, date) and the sentence "a citation of 014, 037 or 061 dated before 2026-11-DD may mean either spec of that pair; the files named above tell them apart." The generated index of draft spec 088, if built, repeats it.
+Commit trailers, merged pull requests, past changelog entries and the git log keep the old numbers and cannot be changed. `CONTRIBUTING.md` gains one paragraph under "Folding spec amendments": the three renumberings (old number and file name, new number and file name, date) and the sentence "a citation of 014, 037 or 061 dated before 2026-11-DD may mean either spec of that pair; the files named above tell them apart." The generated index of spec 088, if built, repeats it.
 
 ### 3.7 Ratification
 
@@ -157,7 +158,7 @@ The renamed files have a new path and new content. Where a ratification lock app
 
 - **A wrong citation decision that nothing catches.** The main risk. Mitigated by the location rules, the map, the one-time strict check and the sample, not removed. The residual risk is a wrong "stays" or "changed" in a file where both specs share a section number and the surrounding text does not tell them apart.
 - **Parallel sessions.** Open pull requests that cite the three numbers, or that add a spec, collide with the renames. The work starts in a quiet window the operator picks; open pull requests touching the cited files are rebased onto it; the new numbers are claimed in the tracker first.
-- **The new numbers are taken** before the work starts. The next free numbers are used, and the file names and this spec's examples change; nothing else depends on 091 to 093.
+- **The new numbers are taken** before the work starts. The next free numbers are used, and the file names and this spec's examples change; nothing else depends on 095 to 097. (This already happened once while the spec was drafted: 091 to 094 were taken.)
 - **Large diff.** Many files change, almost all by one number in a comment. The commit sequence in §5 test 7 and the map keep it reviewable.
 - **Historical text stays ambiguous.** Accepted and recorded (§3.6).
 - **The operator chooses the other member of 014.** Then two constitutional files change; §2.2 makes that a separate ratified step and this spec's S1 does not start without it.
@@ -177,9 +178,11 @@ Operator time: about one to two hours (the sample, the quiet window, and the ref
 
 ## 8. Decisions for the operator
 
+**All six were taken as recommended by the operator on 2026-11-07** ("approve both 088 and 090"), after the recommendations were shown. Each recommendation below is therefore the decision.
+
 - **OD-1. Which spec of each pair moves** (§2). *Recommendation:* documents and dataviz (014), training experiments (037), encyclopedia search pages (061). It keeps the relay spec at 014 and so keeps GOVERNANCE.md and REVIEW.md untouched. The alternative for 014 (move relay) is possible with a separate ratified constitutional step.
 - **OD-2. Historical records** (mission notes, council records, history files, past changelog entries). *Recommendation:* leave them as they are, explained by the mapping paragraph (§3.6), and rewrite one only where a gate fails on it. Rewriting history for tidiness is large and adds risk for no gate's benefit.
-- **OD-3. The new numbers.** *Recommendation:* the next three free at the start, expected 091 to 093, claimed in the tracker by the approval pull request.
-- **OD-4. When.** *Recommendation:* in a quiet window with no open pull request that touches the cited files, and not while draft spec 088's first slice is mid-flight. The operator picks the day.
+- **OD-3. The new numbers.** *Recommendation:* the next three free at the start, expected 095 to 097 as of 2026-11-07, named in the tracker by the approval pull request and re-checked when S1 starts.
+- **OD-4. When.** *Recommendation:* in a quiet window with no open pull request that touches the cited files, and not while spec 088's first slice is mid-flight. The operator picks the day.
 - **OD-5. The sample** (§5, test 6): thirty rows plus every hand-decided row, zero errors tolerated. *Recommendation:* yes; raise the number if the first sample finds anything.
 - **OD-6. The note line inside each renumbered spec** (§3.1). *Recommendation:* yes, one line, so a reader of the file sees why the number changed. It is the only text added to the three specs.
