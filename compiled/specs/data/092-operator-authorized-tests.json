@@ -72,7 +72,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/092-operator-authorized-tests.md",
-    "sha256": "78d54afdf220025a34eb82016bdb25be0e5729fe5c70afa2c733da4539034c3f"
+    "sha256": "81774dbb9e56eb6a89fd13cb0e70c2c67b87eb517524b9b292aaab065396fb93"
   },
   "source_status_at_hash": {
     "line": {
@@ -85,7 +85,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-07 (\"approve all of the above\"): the sandboxed-shell-only first slice (OD-0) and the recommended answers to OD-1 to OD-5. It amends an invariant of spec 016, so S1 does not start until a red-team re-review of this text in a readable form has passed (§6, S0)."
     },
-    "sha256": "78d54afdf220025a34eb82016bdb25be0e5729fe5c70afa2c733da4539034c3f",
+    "sha256": "81774dbb9e56eb6a89fd13cb0e70c2c67b87eb517524b9b292aaab065396fb93",
     "word": "approved"
   },
   "spec": {

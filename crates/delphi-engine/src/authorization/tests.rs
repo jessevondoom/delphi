@@ -831,6 +831,53 @@ fn uses_item(text: &str, prefix: &str, item: &str) -> bool {
     })
 }
 
+/// Why `text` (the source of `run.rs`) reaches the authorization module in a way S2a does not allow, or `None`. Allowed: the full
+/// path `delphi_engine::authorization::authorize_launch` and `delphi_engine::authorization::Policy`, and nothing else: no `use` line
+/// that names the module, no alias, no brace form, so `check_launch`, `this_machine` and any future consuming function stay out of reach.
+fn run_rs_bypass(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let t = line.trim_start();
+        if t.starts_with("//") {
+            continue;
+        }
+        if t.starts_with("use ") && (t.contains("authorization") || t.contains("delphi_engine::{") || t.contains("delphi_engine::*")) {
+            return Some(format!("imports the engine by `{}`; name the two allowed items by their full path instead", t));
+        }
+        if t.contains("authorization as ") || t.contains("{authorization") || t.contains("authorization::{") || t.contains("authorization::*") {
+            return Some(format!("aliases or brace-imports the authorization module (`{}`)", t));
+        }
+    }
+    for (i, _) in text.match_indices("authorization::") {
+        let line_start = text[..i].rfind('\n').map_or(0, |p| p + 1);
+        if text[line_start..i].trim_start().starts_with("//") {
+            continue;
+        }
+        let item: String = text[i + "authorization::".len()..].chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+        if !text[..i].ends_with("delphi_engine::") || !["authorize_launch", "Policy"].contains(&item.as_str()) {
+            return Some(format!("reaches `authorization::{item}` (only the full path to `authorize_launch` and `Policy` is allowed)"));
+        }
+    }
+    None
+}
+
+#[test]
+fn the_run_rs_guard_catches_every_way_around_it() {
+    assert_eq!(run_rs_bypass("let x = delphi_engine::authorization::authorize_launch(a);\nlet p = delphi_engine::authorization::Policy::system();"), None);
+    for bad in [
+        "use delphi_engine::authorization as a;",
+        "use delphi_engine::authorization::{authorize_launch, check_launch};",
+        "use delphi_engine::authorization::check_launch;",
+        "use delphi_engine::{authorization};",
+        "delphi_engine::authorization::check_launch(r);",
+        "delphi_engine::authorization::this_machine();",
+        "delphi_engine::authorization::load(h);",
+        "use crate::authorization::authorize_launch;",
+        "authorization::authorize_launch(h)",
+    ] {
+        assert!(run_rs_bypass(bad).is_some(), "not caught: {bad}");
+    }
+}
+
 // S1 grants no capability: no code that decides a card, runs a command or starts a run may read the store. Scanned over the whole
 // workspace, with the allowlist of who may import the module at all, and a narrower one of who may touch the store.
 #[test]
@@ -846,8 +893,9 @@ fn nothing_consumes_a_record_in_this_slice() {
         "crates/delphi/src/doctor.rs",          // verifies the pin
         "crates/delphi/tests/docs.rs",          // schemas
         "crates/delphi/src/run.rs",             // S2a: the launch gate only (checked below); it approves nothing
+        "crates/delphi/src/run_authorization_tests.rs", // S2a: test fixtures that build records
     ];
-    const STORE_READERS: &[&str] = &["crates/delphi-engine/src/authorization.rs", "crates/delphi-engine/src/authorization/tests.rs", "crates/delphi/src/test_cmd.rs", "crates/delphi/src/test_cmd_tests.rs", "crates/delphi/src/doctor.rs", "crates/delphi/tests/docs.rs"];
+    const STORE_READERS: &[&str] = &["crates/delphi-engine/src/authorization.rs", "crates/delphi-engine/src/authorization/tests.rs", "crates/delphi/src/test_cmd.rs", "crates/delphi/src/test_cmd_tests.rs", "crates/delphi/src/run_authorization_tests.rs", "crates/delphi/src/doctor.rs", "crates/delphi/tests/docs.rs"];
     const STORE_ITEMS: &[&str] = &["load", "load_or_ignore", "mutate", "add_record", "revoke", "store_path", "Store", "Record", "build_record", "create_audited", "revoke_audited", "refuse_audited", "read_audit", "audit_dir", "open_audit", "append_audit", "AuditHead"];
     let sources = workspace_sources();
     assert!(sources.len() > 200, "the scan must see the whole workspace");
@@ -883,11 +931,10 @@ fn nothing_consumes_a_record_in_this_slice() {
             assert!(!text.to_lowercase().contains("authorization:"), "{rel} must not know about `--on-card authorization:` in S1");
         }
     }
-    // S2a: `run.rs` may call the launch gate and name the runner policy, nothing else of the module (it cannot read a record at use)
+    // S2a: `run.rs` may reach the module only as `delphi_engine::authorization::authorize_launch` and `::Policy`, written out in full.
     let run_rs = &sources.iter().find(|(r, _)| r == "crates/delphi/src/run.rs").unwrap().1;
-    for (i, _) in run_rs.match_indices("authorization::") {
-        let item: String = run_rs[i + "authorization::".len()..].chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
-        assert!(["authorize_launch", "Policy"].contains(&item.as_str()), "run.rs reaches the authorization module through `{item}`: S2a lets the launcher call `authorize_launch` only");
+    if let Some(why) = run_rs_bypass(run_rs) {
+        panic!("run.rs: {why}");
     }
     // the three request-side files import the module by path or one plain alias, never by brace or glob
     for rel in ["crates/delphi-engine/src/engine.rs", "crates/delphi-engine/src/service.rs", "crates/delphi-engine/src/tools.rs"] {
