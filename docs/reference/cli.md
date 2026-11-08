@@ -504,6 +504,28 @@ Reads $DELPHI_HOME/logs/delphi.log.jsonl, written by the CLI, the daemon and the
 DELPHI_LOG=off|error|warn|debug or [logging] level in <home>/operator/config.toml sets what is kept. Read-only and offline. --path prints the file's location.
 Components: cli, daemon, engine, harness, provider, ui, xenia, relay, tool.
 
+## Maintain
+
+### `delphi merge`
+
+Merge this repository's queued pull requests, with a recorded approval.
+
+```
+  delphi merge <PR>... [--operator-said "<the operator's words>"] [--dry-run] [--home <dir>]
+  delphi merge --all [--operator-said "<words>"] [--dry-run]
+  delphi merge queue <PR>
+  delphi merge status
+  (not built yet: --auto, log, fix, cleanup)
+```
+
+The core-repo merge flow (specs/094). Agents queue a ready pull request with the `merge-queue` label (`delphi merge queue <PR>`); a merge is started by the operator.
+For each pull request the command derives, from git and `gh`, the head commit, the changed paths and their hash, the base commit, the checks and the linked spec (the `Implements-Spec:` trailer); nothing is typed. It refuses unless the pull request is open, not a draft, queued, mergeable, every check passes and the spec is approved on the base branch (or the change is inside the bounded exemption of specs/003). A refusal lists every reason.
+Approval is `tty` (you type the PR number; `all` for --all) or `chat-quote` (an agent passes your own words with --operator-said; the quote must name the pull request, or say all/every/each for --all). A chat quote is self-attested by the caller and is recorded as such. The merge is a merge commit, made only if the head is still the one derived, and the decision is appended to $DELPHI_HOME/merge/ledger.jsonl and posted on the pull request.
+A pull request that touches a path in merge-gates.toml (read from the BASE branch; the file is on its own list) changes a gate: it is never queued, never merged by --all, refuses a chat quote, and needs you at a terminal, shown the whole diff. --dry-run changes nothing.
+Refused inside an agent seat. Needs the GitHub CLI (`gh`) signed in. Exit codes: 0 ok · 1 refused, declined or failed · 2 usage or refusal · 4 `gh` missing or unreachable.
+
+## Inspect
+
 ### `delphi debug`
 
 Pack a redacted slice of the log for sharing.

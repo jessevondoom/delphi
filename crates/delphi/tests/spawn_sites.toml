@@ -112,6 +112,11 @@ count = 3
 class = "operator-cli"
 
 [[site]]
+file = "crates/delphi/src/merge/forge.rs"
+count = 1
+class = "git"
+
+[[site]]
 file = "crates/delphi/src/connect_run.rs"
 count = 1
 class = "operator-cli"
