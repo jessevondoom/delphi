@@ -153,6 +153,11 @@ pub fn write_case(dir: &Path, seed: u64, n: usize, split: &str) -> Result<(), St
 /// What an inline case asks: the report is in the prompt, so a seat with no tools (a Copilot seat today) can take it.
 const INLINE_PROMPT: &str = "Below is a report an investigator wrote. Give me every identifier, hash, file path, number, line of code and quoted sentence it contains, character for character, as a list. Do not paraphrase, shorten or round anything.";
 
+/// The inline ask when the report is too long for the envelope and so sits in `fixture/artifact.md`.
+fn pointer_prompt() -> String {
+    format!("Below, as a context slice, is a report an investigator wrote, from @project/{}/artifact.md. {}", crate::train_run::REPO_DIR, INLINE_PROMPT.trim_start_matches("Below is a report an investigator wrote. "))
+}
+
 /// [`write_case`], and with `inline` the artifact is in the prompt itself and not only in `fixture/`. It measures the last hop
 /// only (the Orchestrator's answer to the operator), but it needs no tool, so it runs on a seat that has none.
 pub fn write_case_with(dir: &Path, seed: u64, n: usize, split: &str, inline: bool) -> Result<(), String> {
@@ -166,7 +171,9 @@ pub fn write_case_with(dir: &Path, seed: u64, n: usize, split: &str, inline: boo
         if doc.contains("'''") {
             return Err("the artifact contains three single quotes and cannot be written as a literal TOML string".into());
         }
-        format!("'''\n{}\n\n---\n{}---'''", INLINE_PROMPT, doc)
+        let full = format!("'''\n{}\n\n---\n{}---'''", INLINE_PROMPT, doc);
+        // Too long for the 8,000-byte envelope: the report stays in the project and the prompt points at it (a seat with no tools gets it as a slice).
+        if full.len() > crate::train_run::INLINE_PROMPT_MAX_BYTES { format!("'''\n{}\n'''", pointer_prompt()) } else { full }
     } else {
         format!("\"{}\"", prompt())
     };
@@ -328,6 +335,24 @@ mod tests {
         let out = t.path().join("cmd-case");
         assert_eq!(cli(&a(&["fidelity", "gen", "--inline", "--out", out.to_str().unwrap()]), None), 0);
         assert!(fs::read_to_string(out.join("case.toml")).unwrap().contains("Below is a report an investigator wrote."));
+    }
+
+    #[test]
+    fn a_large_inline_report_goes_to_a_project_file_the_prompt_points_at() {
+        let t = tempfile::tempdir().unwrap();
+        let dir = t.path().join("suites/fidelity/cases/fid-3-60i");
+        write_case_with(&dir, 3, 60, "dev", true).unwrap();
+        let prompt = crate::train::load_case(&dir, "fidelity").unwrap().prompt.unwrap();
+        let doc = fs::read_to_string(dir.join("fixture/artifact.md")).unwrap();
+        assert!(doc.len() + 400 > crate::train_run::INLINE_PROMPT_MAX_BYTES, "60 items is meant to be large: {}", doc.len());
+        assert!(prompt.len() < 6000 && !prompt.contains(doc.lines().nth(2).unwrap_or("zz")) || doc.len() < 6000, "{}", prompt.len());
+        let ptrs = delphi_engine::handoff::pointers_from_prompt(&prompt);
+        assert_eq!(ptrs.iter().map(|p| p.uri.as_str()).collect::<Vec<_>>(), ["@project/repo/artifact.md"]);
+        assert!(doc.lines().count() <= 400, "{}", doc.lines().count());
+        // A small one is unchanged.
+        let small = t.path().join("suites/fidelity/cases/fid-3-10i");
+        write_case_with(&small, 3, 10, "dev", true).unwrap();
+        assert!(crate::train::load_case(&small, "fidelity").unwrap().prompt.unwrap().starts_with("Below is a report an investigator wrote."));
     }
 
     #[test]

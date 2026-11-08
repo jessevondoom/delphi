@@ -105,6 +105,8 @@ Asked for by the operator on 2026-10-26; pilot budget **80 engineering hours** (
 
 R4-R6 truth packs join in the first study phase.
 
+Note 2026-11-08: `train defects gen --difficulty hard --inline` (and `train fidelity gen --inline` above 40 items) overran the 8,000-byte task envelope. Above 6000 bytes `--inline` now writes the artifact to `fixture/` and the prompt points at it (`@project/repo/...`); a seat with no tools gets it as a slice, so tool-less seats can take the hard case. The limit itself is unchanged.
+
 ## Central error log (spec 039, approved, 2026-10-27)
 
 Asked for by the operator on 2026-10-27. Built in one slice and approved after the merge ("committed work counts as ratified").
