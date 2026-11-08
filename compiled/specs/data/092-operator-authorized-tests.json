@@ -4,67 +4,67 @@
   "outline": [
     {
       "level": 1,
-      "line": 31,
+      "line": 33,
       "number": null,
       "title": "Spec 092: Operator-authorized tests"
     },
     {
       "level": 2,
-      "line": 35,
+      "line": 37,
       "number": "1",
       "title": "Why"
     },
     {
       "level": 2,
-      "line": 43,
+      "line": 45,
       "number": "2",
       "title": "What must not change"
     },
     {
       "level": 2,
-      "line": 54,
+      "line": 56,
       "number": "3",
       "title": "The additions"
     },
     {
       "level": 2,
-      "line": 67,
+      "line": 69,
       "number": "4",
       "title": "Why not a policy file, and why not the relay"
     },
     {
       "level": 2,
-      "line": 71,
+      "line": 73,
       "number": "5",
       "title": "Threats this design must survive"
     },
     {
       "level": 2,
-      "line": 104,
+      "line": 106,
       "number": "6",
       "title": "Slices (one per pull request; none starts before approval and a readable red-team re-review)"
     },
     {
       "level": 2,
-      "line": 123,
+      "line": 127,
       "number": "7",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 133,
+      "line": 137,
       "number": "8",
       "title": "Non-goals"
     },
     {
       "level": 2,
-      "line": 137,
+      "line": 141,
       "number": "9",
       "title": "Decisions"
     },
     {
       "level": 2,
-      "line": 148,
+      "line": 152,
       "number": "10",
       "title": "Known limits"
     }
@@ -72,7 +72,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/092-operator-authorized-tests.md",
-    "sha256": "77e8085308005694f0023d99bf9f3e5d32f315d68d107d0200769ff39eb24efd"
+    "sha256": "3076984d3b7a19a8948c12c2f7b6d6df8f59f98399f15734740437d52afa365c"
   },
   "source_status_at_hash": {
     "line": {
@@ -85,7 +85,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-07 (\"approve all of the above\"): the sandboxed-shell-only first slice (OD-0) and the recommended answers to OD-1 to OD-5. It amends an invariant of spec 016, so S1 does not start until a red-team re-review of this text in a readable form has passed (§6, S0)."
     },
-    "sha256": "77e8085308005694f0023d99bf9f3e5d32f315d68d107d0200769ff39eb24efd",
+    "sha256": "3076984d3b7a19a8948c12c2f7b6d6df8f59f98399f15734740437d52afa365c",
     "word": "approved"
   },
   "spec": {

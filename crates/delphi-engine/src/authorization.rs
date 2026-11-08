@@ -835,16 +835,32 @@ pub fn check_launch(r: &Record, now_unix: i64, run: &str, operator_home: &Path, 
 /// pinned store recorded and against the store (`read_audit`; never `load_or_ignore`), the record is found, and [`check_launch`]
 /// decides. Any error refuses the run. Read-only: nothing is written.
 pub fn authorize_launch(home: &Path, id: &str, run: &str, now_unix: i64, policy: &Policy) -> Result<Record, String> {
+    authorize_launch_with_head(home, id, run, now_unix, policy).map(|(r, _)| r)
+}
+
+/// As [`authorize_launch`], also returning the sequence number of the audit head the pinned store vouches for (0 when none). A grant
+/// remembers it, and every use requires the store to be at least that far on: an older store-and-pin pair is refused (S2c).
+/// *S2c:* the `uses` check reads the daemon's use ledger (`operator/uses/<id>`) as well as the record's own count (S2a note c).
+pub fn authorize_launch_with_head(home: &Path, id: &str, run: &str, now_unix: i64, policy: &Policy) -> Result<(Record, u64), String> {
     read_audit(home)?;
     let store = load(home)?;
     let r = store.records.iter().find(|r| r.id == id).ok_or_else(|| format!("no authorization `{}` in the store", clean_text(id, 40)))?;
     check_launch(r, now_unix, run, home, &machine(), policy)?;
-    Ok(r.clone())
+    let used = crate::authorization_grant::ledger_count(home, &r.id)?;
+    if r.uses.saturating_add(used) >= r.max_uses {
+        return Err(format!("authorization {} has no uses left ({} of {} used, by the use ledger)", r.id, r.uses.saturating_add(used), r.max_uses));
+    }
+    Ok((r.clone(), store.audit_head.as_ref().map(|h| h.seq).unwrap_or(0)))
+}
+
+/// The hash of a record as the store holds it: what a grant pins at launch and compares at each use.
+pub fn record_hash(r: &Record) -> String {
+    hash(&serde_json::to_vec(r).unwrap_or_default())
 }
 
 /// Resolve, check and hash one file. `allow_link` is for the daemon's own interpreter list only (a system `python3` is often a
 /// symlink): the path stays as given and the hash is of what it resolves to now. A script is never allowed to be a link.
-fn pin_file(path: &str, allow_link: bool) -> Result<Pinned, String> {
+pub(crate) fn pin_file(path: &str, allow_link: bool) -> Result<Pinned, String> {
     use std::os::unix::fs::PermissionsExt;
     let canon = fs::canonicalize(path).map_err(|e| format!("`{}`: {e}", clean_text(path, 80)))?;
     if !allow_link && canon.to_string_lossy() != path {

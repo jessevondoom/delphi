@@ -342,6 +342,10 @@ pub struct Engine {
     pub unquarantined: Mutex<HashSet<String>>,
     /// Solo mode toggle: when true, SME agents do not spawn sub-consultations (`specs/063` §3.3).
     pub solo_mode: std::sync::atomic::AtomicBool,
+    /// Spec 092 S2c: the operator's advance authorization for this run, held in memory only. Set once at boot from the inherited
+    /// pipe (`core_main`); never serialized, never in an environment variable or a file; a child process, a dispatched agent and a
+    /// harness seat get none. In S2c it is only observed: a matching Red card is logged and still denied.
+    pub grant: std::sync::OnceLock<Arc<crate::authorization_grant::Grant>>,
 }
 
 /// What the operator decided about weaker substitutes for one task, as `(endpoint, model)` pairs.
@@ -1832,7 +1836,13 @@ impl Engine {
     }
 
     pub(crate) async fn span_tool_defs(&self, sc: &SpanCtx) -> Result<Vec<ToolDef>, EngineError> {
-        let mut defs = self.tools.defs(!sc.manifest.write.is_empty());
+        // Spec 092 TA-5: in a run that holds a grant no seat is offered a tool that writes files (composition: a payload written by an
+        // Amber tool and then run by the authorized command).
+        let granted = self.grant.get().is_some();
+        let mut defs = self.tools.defs(!granted && !sc.manifest.write.is_empty());
+        if granted {
+            defs.retain(|d| crate::authorization_grant::tool_stripped(&d.name, false).is_none());
+        }
         if self.validator_off() {
             defs.retain(|d| !crate::fact_tools::NAMES.contains(&d.name.as_str()));
         }
@@ -1857,7 +1867,7 @@ impl Engine {
         if self.offers_alignment(sc) {
             defs.push(crate::align_run::def());
         }
-        if !sc.readonly {
+        if !sc.readonly && !granted {
             defs.extend(self.connector_defs(sc).await?);
         }
         // A bundle agent's `tools` list only removes: what the host role lacks is not in `defs`, and what the list lacks goes.
@@ -1926,6 +1936,13 @@ impl Engine {
         if let Some(allowed) = sc.bundle_agent.as_ref().and_then(|a| a.allowed_tools.as_ref()) {
             if !allowed.contains(name) {
                 return Ok(tool_result_error(format!("`{}` is not among the tools of the bundle agent {}", name, sc.bundle_agent.as_ref().map(|a| a.id.as_str()).unwrap_or(""))));
+            }
+        }
+        // Spec 092 TA-5, at call time and not only by omission: a granted run denies a file-writing or connector tool.
+        if self.grant.get().is_some() {
+            let is_connector = self.connectors.parse_wire(name).is_some();
+            if let Some(why) = crate::authorization_grant::tool_stripped(name, is_connector) {
+                return Ok(tool_result_error(format!("denied: `{}` is not available in a run that holds an operator authorization ({}); it is the only way a payload could be written for the authorized command to run", name, why)));
             }
         }
         // The refusal does not rely on the model only calling what it was offered.
@@ -2394,6 +2411,36 @@ impl Engine {
         })
     }
 
+    /// Spec 092 S2c, DRY: with a grant held, a Red card is run through the grant's matching and use path and the outcome is logged
+    /// (`authorization.would_use`, `.refused`, `.no_match`). **It resolves nothing and approves nothing**: the caller raises the card
+    /// afterwards, and the run's own policy (`delphi run`'s `decide`) denies it. It never calls `exec.run` or any runner. A use the
+    /// ledger records here is really consumed (the counter is the part S2d needs proven).
+    async fn observe_grant(&self, who: &Asker<'_>, tier: ApprovalTier, tool: &str, payload: &Value) -> Result<(), EngineError> {
+        use crate::authorization_grant::{Outcome, NO_MATCH, REFUSED_USE, WOULD_USE};
+        let Some(grant) = self.grant.get().cloned() else { return Ok(()) };
+        if tier != ApprovalTier::Red {
+            return Ok(());
+        }
+        let argv: Vec<String> = match payload["argv"].as_array() {
+            Some(a) if a.iter().all(|x| x.is_string()) => a.iter().filter_map(|x| x.as_str().map(String::from)).collect(),
+            _ => vec![],
+        };
+        let (now, tool_s) = ((self.clock_unix)(), tool.to_string());
+        let g = grant.clone();
+        let outcome = tokio::task::spawn_blocking(move || g.evaluate_card(&tool_s, &argv, now)).await.map_err(|e| EngineError::Invalid(e.to_string()))?;
+        let (kind, body) = match outcome {
+            Outcome::NotMatched(why) => (NO_MATCH, json!({"authorization_id": grant.id(), "tool": tool, "reason": why, "approved": false})),
+            Outcome::Refused { entry, reason } => (REFUSED_USE, json!({"authorization_id": grant.id(), "tool": tool, "entry": entry, "reason": reason, "approved": false})),
+            Outcome::WouldUse { entry, index, uses_left, seq } => (WOULD_USE, json!({"authorization_id": grant.id(), "record_hash": grant.record_hash(), "tool": tool, "entry": entry, "index": index, "uses_left": uses_left, "ledger_seq": seq, "purpose": grant.purpose(), "approved": false, "dry": true})),
+        };
+        let mut e = EventEnvelope::new(&who.m.id, kind, body);
+        e.task_id = Some(who.task_id.to_string());
+        e.span_id = Some(who.span_id.to_string());
+        e.agent = Some(who.role.to_string());
+        who.m.append(e).await?;
+        Ok(())
+    }
+
     /// Raise a card and return how it ended. `timeout` overrides the usual approval timeout for this card.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn ask_resolution(&self, who: &Asker<'_>, tier: ApprovalTier, tool: &str, pattern: &str, summary: &str, payload: &Value, timeout: Option<Duration>) -> Result<Resolution, EngineError> {
@@ -2409,6 +2456,8 @@ impl Engine {
                 return Ok(Resolution::Denied { reason: format!("blocked by the hook `{}`: {}", hook, why) });
             }
         }
+        // Spec 092 S2c: observation only. The card below is raised and answered exactly as without a grant.
+        self.observe_grant(who, tier, tool, payload).await?;
         let base_timeout = timeout.unwrap_or(self.settings.approval_timeout);
         let started = std::time::Instant::now();
         let mut reraised_from: Option<String> = None;

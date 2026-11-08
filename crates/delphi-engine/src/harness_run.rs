@@ -667,7 +667,17 @@ impl Engine {
         let expect_servers: Vec<String> = self.inventory.seats().into_iter().find(|r| r.endpoint_id == ep.id).map(|r| r.mcp_servers.into_iter().filter(|(n, st)| n != crate::bridge::SERVER_NAME && st == "connected").map(|(n, _)| n).collect()).unwrap_or_default();
         // The CLI's own tools the span may use: for the Claude CLI they are given with `--tools`; for `agy` they are what its gate lets through.
         let agy_native = if cli == Cli::Agy && !sc.toolless && profile.bridge { agy_native_tools(&profile.native_tools) } else { vec![] };
-        let mut lp = LaunchProfile { native_tools: if builder || sc.readonly || sc.toolless || cli != Cli::Claude { vec![] } else { profile.native_tools.clone() }, auto_approve: delegate, claudeai_connectors: connectors, mcp_config: None, settle: self.settings.connector_settle, expect_servers };
+        // Spec 092 TA-5: in a run that holds a grant a seat starts only if its own tools can be proven off for this launch. The Claude
+        // seat's native list and account connectors are cleared; a Builder, agy and codex are refused (`seat_native_tools_off`).
+        let granted = self.grant.get().is_some();
+        let connectors = connectors && !granted;
+        let mut lp = LaunchProfile { native_tools: if granted || builder || sc.readonly || sc.toolless || cli != Cli::Claude { vec![] } else { profile.native_tools.clone() }, auto_approve: delegate, claudeai_connectors: connectors, mcp_config: None, settle: self.settings.connector_settle, expect_servers };
+        if granted {
+            if let Err(why) = crate::authorization_grant::seat_native_tools_off(cli.program(), tools == Tools::Standard, lp.native_tools.is_empty(), opts.app_server) {
+                sc.m.append(sc.ev("authorization.refused", json!({"seat": cli.program(), "reason": why, "approved": false}))).await?;
+                return Ok(Err(HarnessErr::retry(format!("a run with an operator authorization cannot use the {} seat: {}", cli.program(), why))));
+            }
+        }
         let (mut _bridge, mut bridge_rx): (Option<Bridge>, Option<tokio::sync::mpsc::Receiver<BridgeCall>>) = (None, None);
         let mut gate_rx: Option<tokio::sync::mpsc::UnboundedReceiver<HookNote>> = None;
         let mut gate_policy: Option<HookPolicy> = None;

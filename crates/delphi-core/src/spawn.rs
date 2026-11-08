@@ -10,7 +10,7 @@ use crate::client::{Client, ClientError};
 use crate::proto::Scope;
 use serde_json::json;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::process::CommandExt;
@@ -138,7 +138,7 @@ fn tail(path: &Path) -> String {
 /// upgrade does not stop it) would run old code under a new client: when it is idle it is stopped and started again;
 /// when it is busy it is left alone and `stale` says so.
 pub fn connect_or_spawn(opts: &SpawnOptions) -> Result<Attached, ClientError> {
-    let mut a = connect_or_spawn_once(opts)?;
+    let mut a = connect_or_spawn_once(opts, None)?;
     let own = opts.own_version.unwrap_or(env!("CARGO_PKG_VERSION"));
     if a.spawned || a.daemon_version == own {
         return Ok(a);
@@ -159,16 +159,27 @@ pub fn connect_or_spawn(opts: &SpawnOptions) -> Result<Attached, ClientError> {
         std::thread::sleep(Duration::from_millis(50));
     }
     drop(a);
-    let mut fresh = connect_or_spawn_once(opts)?;
+    let mut fresh = connect_or_spawn_once(opts, None)?;
     fresh.replaced = Some(if old.is_empty() { "an older release".to_string() } else { old });
     Ok(fresh)
 }
 
-fn connect_or_spawn_once(opts: &SpawnOptions) -> Result<Attached, ClientError> {
+/// Start a NEW daemon that holds `grant` (spec 092 S2c), never attach to a running one: the bytes are written into a pipe whose read
+/// end the daemon inherits (`--grant-fd N`) and reads once. A daemon already running for the workspace is an error, since a grant can
+/// only be handed to a daemon the launcher spawned itself. The payload goes in no environment variable, argument or file.
+pub fn connect_or_spawn_granted(opts: &SpawnOptions, grant: &[u8]) -> Result<Attached, ClientError> {
+    connect_or_spawn_once(opts, Some(grant))
+}
+
+fn connect_or_spawn_once(opts: &SpawnOptions, grant: Option<&[u8]>) -> Result<Attached, ClientError> {
     let l = layout(opts.home, opts.workspace)?;
     ensure_run_dir(&l.run_dir)?;
 
+    let running = || io::Error::new(io::ErrorKind::AlreadyExists, "a daemon is already running for this workspace; an authorized run needs a daemon of its own (stop it with `delphi daemon stop`)");
     if let Some(a) = try_attach(&l)? {
+        if grant.is_some() {
+            return Err(running().into());
+        }
         return Ok(a);
     }
     // No daemon answered. Serialize with every other launcher. A live daemon holds this lock for its
@@ -182,6 +193,9 @@ fn connect_or_spawn_once(opts: &SpawnOptions) -> Result<Attached, ClientError> {
             Ok(()) => break,
             Err(e) if e.raw_os_error() == Some(libc::EWOULDBLOCK) => {
                 if let Some(a) = try_attach(&l)? {
+                    if grant.is_some() {
+                        return Err(running().into());
+                    }
                     return Ok(a);
                 }
                 if Instant::now() >= deadline {
@@ -195,6 +209,9 @@ fn connect_or_spawn_once(opts: &SpawnOptions) -> Result<Attached, ClientError> {
     }
     // A daemon may have started between our first attempt and taking the lock.
     if let Some(a) = try_attach(&l)? {
+        if grant.is_some() {
+            return Err(running().into());
+        }
         return Ok(a);
     }
     // We hold the lock and the connect failed: no live daemon exists. Clear any stale socket.
@@ -206,6 +223,23 @@ fn connect_or_spawn_once(opts: &SpawnOptions) -> Result<Attached, ClientError> {
     }
     let (mut ready_r, ready_w) = unsafe { (File::from_raw_fd(fds[0]), File::from_raw_fd(fds[1])) };
     let (lock_fd, ready_fd) = (lock.as_raw_fd(), ready_w.as_raw_fd());
+    // The grant pipe: the payload is written and the write end closed BEFORE the daemon starts (the payload is small enough for the
+    // pipe buffer, so this never blocks); only the read end is passed on.
+    let mut grant_r: Option<File> = None;
+    if let Some(bytes) = grant {
+        let mut g = [0 as RawFd; 2];
+        if unsafe { libc::pipe(g.as_mut_ptr()) } != 0 {
+            return Err(io::Error::last_os_error().into());
+        }
+        let (r, mut w) = unsafe { (File::from_raw_fd(g[0]), File::from_raw_fd(g[1])) };
+        for fd in [r.as_raw_fd(), w.as_raw_fd()] {
+            unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
+        }
+        w.write_all(bytes)?;
+        drop(w);
+        grant_r = Some(r);
+    }
+    let grant_fd = grant_r.as_ref().map(|f| f.as_raw_fd());
 
     let log = OpenOptions::new().create(true).append(true).open(&l.log)?;
     fs::set_permissions(&l.log, fs::Permissions::from_mode(0o600))?;
@@ -220,6 +254,7 @@ fn connect_or_spawn_once(opts: &SpawnOptions) -> Result<Attached, ClientError> {
         .arg("--lock-fd")
         .arg(lock_fd.to_string())
         .args(&opts.extra_args)
+        .args(grant_fd.iter().flat_map(|fd| ["--grant-fd".to_string(), fd.to_string()]))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(log);
@@ -228,6 +263,9 @@ fn connect_or_spawn_once(opts: &SpawnOptions) -> Result<Attached, ClientError> {
             // Pass the locked descriptor and the readiness pipe across exec; detach from our session.
             clear_cloexec(lock_fd);
             clear_cloexec(ready_fd);
+            if let Some(fd) = grant_fd {
+                clear_cloexec(fd);
+            }
             libc::setsid();
             Ok(())
         });
@@ -237,6 +275,7 @@ fn connect_or_spawn_once(opts: &SpawnOptions) -> Result<Attached, ClientError> {
     // means the daemon died.
     drop(ready_w);
     drop(lock);
+    drop(grant_r);
 
     let reply = match read_ready(&mut ready_r, Instant::now() + READY_TIMEOUT) {
         Ok(r) => r,

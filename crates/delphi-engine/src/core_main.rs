@@ -54,6 +54,18 @@ pub fn run(args: Vec<String>) -> ! {
     let _lock = unsafe { File::from_raw_fd(lock_fd) };
     let mut ready = unsafe { File::from_raw_fd(ready_fd) };
 
+    // Spec 092 S2c: the grant of an operator-authorized run arrives on an inherited pipe, is read once and the descriptor is closed.
+    // No environment variable, no file, no socket path. A daemon started without `--grant-fd` holds no grant. A grant that does not
+    // verify (not from this daemon's parent, an unreadable store, a revoked or expired record) stops the daemon before it is ready.
+    let boot_grant = arg(&args, "--grant-fd").map(|s| {
+        let fd: i32 = s.parse().unwrap_or_else(|_| die("--grant-fd takes a descriptor number"));
+        let bytes = crate::authorization_grant::take_from_fd(fd).unwrap_or_else(|e| die(&e));
+        let now = delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339()).unwrap_or_else(|| die("the clock cannot be read, so a grant's expiry cannot be checked"));
+        // SAFETY: getppid has no preconditions.
+        let parent = unsafe { libc::getppid() } as u32;
+        crate::authorization_grant::Grant::from_boot_system(&bytes, parent, now).unwrap_or_else(|e| die(&format!("the operator authorization is refused: {e}")))
+    });
+
     let l = layout(&home, &workspace).unwrap_or_else(|e| die(&format!("workspace: {}", e)));
     ensure_run_dir(&l.run_dir).unwrap_or_else(|e| die(&format!("run dir: {}", e)));
 
@@ -83,6 +95,9 @@ pub fn run(args: Vec<String>) -> ! {
         let daemon = Daemon::new(cfg).unwrap_or_else(|e| die(&format!("daemon: {}", e)));
         // The engine publishes through the daemon's hub, so attached clients see its events.
         let booted = crate::boot::build(&home, &canon, daemon.hub.clone()).unwrap_or_else(|e| die(&e));
+        if let Some(g) = boot_grant {
+            let _ = booted.engine.grant.set(std::sync::Arc::new(g));
+        }
         daemon.set_extension(booted.service.extension());
         booted.service.start_timers();
         // Ready: the token travels over the pipe only.
