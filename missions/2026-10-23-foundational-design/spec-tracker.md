@@ -743,7 +743,8 @@ From conversations with the operator on 2026-11-06 and 2026-11-07, a prior-art s
 | S1 | lint rejects a new spec taking a taken number; mapping paragraph in CONTRIBUTING (carried by spec 090 S1, PR #584) | 3 | built, merged 2026-11-08 (PR #584) |
 | S2a | shared parser in `delphi-core` (`specdoc`); `spec_refs` and the `delphi lint` spec-number check moved onto it; a gate that fails on a second pattern (own PR, revertible) | 12 | built (PR open) |
 | S2b | tier-0 compile, schema, `compiled/groups.toml`, exclusions of `compiled/` (104 specs compile; 56 have a summary, 48 have none because they have no scope heading) | 22 | built (PR open) |
-| S3 | views, `specs show/list/report`, MCP, `spec-driven-build` skill, read counter; the measurement starts | 16 | approved, not built |
+| S3a | the human views (index and one page per group, rendered from the JSON), the whole `compiled/specs/` tree written and checked as one unit, the merge-order rules in CONTRIBUTING (S3 was split in two to keep each pull request reviewable) | 7 | built (PR open) |
+| S3b | `specs show/list/report`, MCP surface, `spec-driven-build` skill, read counter; the measurement starts | 9 | approved, not built |
 | S4 | (stage 2) requirement tags, revisions, tombstones, amendments, registry, supersession | 16 | not approved; needs a decision after OD-5 |
 | S5 | (stage 2) retrofit tool, tag the specs still being built | 20 | not approved; conditional on OD-5 |
 | S6 | (stage 2) coverage report, warn-only | 10 | not approved; conditional on OD-5 |
