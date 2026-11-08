@@ -551,6 +551,9 @@ pub fn council_view(events: &[delphi_core::event::EventEnvelope], mission_dir: &
     if let Some(f) = started.map(|e| e.payload["foreign"].clone()).filter(|f| f.is_object()) {
         v["foreign_seat"] = f;
     }
+    if let Some(f) = started.map(|e| e.payload["foreign_seats"].clone()).filter(|f| f.is_array()) {
+        v["foreign_seats"] = f;
+    }
     if let Some(b) = started.and_then(|e| e.payload["blind"].as_str()) {
         v["blind"] = json!(b);
     }
@@ -605,7 +608,29 @@ pub fn council_view(events: &[delphi_core::event::EventEnvelope], mission_dir: &
         let have = !served.is_empty() || (panel && host_fam.is_some());
         let homogeneous = if have && panel { json!(div.homogeneous()) } else if have { json!(ve.payload["homogeneous"].as_bool().unwrap_or(false) || div.homogeneous()) } else { ve.payload["homogeneous"].clone() };
         let required = started.and_then(|e| e.payload["require_families"].as_u64());
+        // Each seat Delphi ran, from its receipts (`specs/086` §6.4, §7): served model, family, carrier, tools, and the parse and
+        // refusal diagnostics of its own words (C1c). Diagnostics only; nothing here ranks a seat.
+        let ran: Vec<Value> = if panel {
+            let stances = of("council.stance");
+            let crits = of("council.critique");
+            crate::seat::seat_summaries(events, task_id)
+                .into_iter()
+                .map(|s| {
+                    let st = stances.iter().find(|e| e.payload["role"] == s.role.as_str());
+                    let cr = crits.iter().find(|e| e.payload["role"] == s.role.as_str());
+                    let mut d = s.to_value();
+                    d["round1_parsed"] = st.map(|e| e.payload["parsed"].clone()).unwrap_or(Value::Null);
+                    d["round2_readable"] = cr.map(|e| e.payload["readable"].clone()).unwrap_or(Value::Null);
+                    d["declined"] = json!(st.is_some_and(|e| e.payload["declined"] == true) || cr.is_some_and(|e| e.payload["declined"] == true));
+                    d
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let unverified: Vec<&str> = ran.iter().filter(|d| d["unverified_against_repo"] == true).filter_map(|d| d["seat"].as_str()).collect();
         v["ruling"] = json!({
+            "seats_run_by_delphi": ran, "unverified_against_repo": unverified,
             "families": div.families, "families_unknown": div.unknown, "require_families": required,
             "require_families_met": required.map(|n| div.families.len() as u64 >= n),
             "decision": ve.payload["decision"], "next_steps": ve.payload["steps"], "options_considered": ve.payload["options"], "escalated": ve.payload["escalated"],
@@ -680,12 +705,42 @@ pub fn ruling_card(v: &Value, tokens: u64) -> String {
         }
         s.push('\n');
     }
-    let seats: Vec<String> = r["seat_positions"].as_array().into_iter().flatten().map(|p| match p["model"].as_str() {
-        Some(m) => format!("`{}` ({}, {m})", text(&p["seat"]), text(&p["status"])),
-        None => format!("`{}` ({})", text(&p["seat"]), text(&p["status"])),
+    let unverified: Vec<&str> = r["unverified_against_repo"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+    let seats: Vec<String> = r["seat_positions"].as_array().into_iter().flatten().map(|p| {
+        let label = if unverified.contains(&p["seat"].as_str().unwrap_or("")) { format!(", {}", crate::seat::UNVERIFIED_AGAINST_REPO) } else { String::new() };
+        match p["model"].as_str() {
+            Some(m) => format!("`{}` ({}, {m}{label})", text(&p["seat"]), text(&p["status"])),
+            None => format!("`{}` ({}{label})", text(&p["seat"]), text(&p["status"])),
+        }
     }).collect();
     if !seats.is_empty() {
         s.push_str(&format!("**Who sat:** {}\n\n", seats.join(", ")));
+    }
+    if let Some(ran) = r["seats_run_by_delphi"].as_array().filter(|a| !a.is_empty()) {
+        s.push_str("**Seats Delphi ran** (from the receipts)\n");
+        for d in ran {
+            let yn = |x: &Value| match x.as_bool() {
+                Some(true) => "yes",
+                Some(false) => "no",
+                None => "n/a",
+            };
+            let tools = d["tools_offered"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ")).filter(|t| !t.is_empty()).unwrap_or_else(|| "none".into());
+            let model = d["served_model"].as_str().unwrap_or("not reported");
+            s.push_str(&format!(
+                "- `{}`: model {model}, family {}, carrier {}, tools {tools}; round 1 parsed: {}, round 2 readable: {}, declined: {}{}\n",
+                text(&d["seat"]),
+                text(&d["family"]),
+                if text(&d["carrier"]).is_empty() { "none (did not sit)".to_string() } else { text(&d["carrier"]) },
+                yn(&d["round1_parsed"]),
+                yn(&d["round2_readable"]),
+                yn(&d["declined"]),
+                if d["unverified_against_repo"] == true { format!(" · **{}**", crate::seat::UNVERIFIED_AGAINST_REPO) } else { String::new() }
+            ));
+        }
+        s.push('\n');
+    }
+    if !unverified.is_empty() {
+        s.push_str(&format!("**{}:** {} ran without a tool that could read the repo, so what it says about files or code is unchecked; weigh it as an opinion, not a finding.\n\n", crate::seat::UNVERIFIED_AGAINST_REPO, unverified.iter().map(|u| format!("`{u}`")).collect::<Vec<_>>().join(", ")));
     }
     let split: Vec<String> = r["critiques"]
         .as_array()
