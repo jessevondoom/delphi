@@ -201,7 +201,7 @@ fn a_project_local_or_self_declared_runner_is_not_an_interpreter() {
 
 #[test]
 fn the_strip_list_covers_invisible_and_filler_characters() {
-    for c in ['\u{2060}', '\u{2064}', '\u{206a}', '\u{206f}', '\u{061c}', '\u{00ad}', '\u{034f}', '\u{3164}', '\u{ffa0}', '\u{202e}', '\u{200b}', '\u{feff}', '\u{e0041}'] {
+    for c in ['\u{2800}', '\u{115f}', '\u{1160}', '\u{17b4}', '\u{17b5}', '\u{180e}', '\u{2060}', '\u{2064}', '\u{206a}', '\u{206f}', '\u{061c}', '\u{00ad}', '\u{034f}', '\u{3164}', '\u{ffa0}', '\u{202e}', '\u{200b}', '\u{feff}', '\u{e0041}'] {
         assert_eq!(strip_control(&format!("a{c}b")), "ab", "U+{:04X}", c as u32);
         assert_eq!(clean_text(&format!("a{c}b"), 10), "ab");
     }
@@ -367,7 +367,7 @@ fn a_refused_manifest_is_not_staged_again_for_a_day() {
     assert_eq!(log["blocks_restage"], true);
     let mlog = vec![ev(REFUSED, log, 0)];
     let w2 = who(Kind::Agent, Tier::L4, "t2");
-    assert!(refusal(admit_at(&mlog, &[], &w2, &denied, 3600)).0.contains("deny-list"), "a denied manifest is never staged, however often it comes back");
+    assert!(refusal(admit_at(&mlog, &[], &w2, &denied, 3600)).0.contains("24 hours"), "a denied manifest is never staged, nor recorded again, however often it comes back");
     // a taint refusal does not block a later request from a clean span
     let (_, l) = refusal(admit_at(&[], &[], &who(Kind::Agent, Tier::L1, "t3"), &f.request_json(), 0));
     let tlog = vec![ev(REFUSED, l.unwrap(), 0)];
@@ -800,6 +800,27 @@ fn workspace_sources() -> Vec<(String, String)> {
     out
 }
 
+/// True when `text` names the module `authorization` as a path segment or an import, in any style: `crate::authorization::x`,
+/// `use crate::authorization as a;`, `use delphi_engine::{authorization as a, other}`, `mod authorization;`. Matched on the word, not
+/// on literal substrings.
+fn names_module(text: &str) -> bool {
+    text.match_indices("authorization").any(|(i, w)| {
+        let before = &text[..i];
+        let after = &text[i + w.len()..];
+        if before.chars().next_back().is_some_and(|c| c.is_alphanumeric() || c == '_') || after.chars().next().is_some_and(|c| c.is_alphanumeric() || c == '_') {
+            return false;
+        }
+        let b = before.trim_end();
+        let a = after.trim_start();
+        // inside a `use` statement (everything since the last `;`), a brace or comma lead is an import; elsewhere only a path counts
+        let stmt = &before[before.rfind(';').map_or(0, |p| p + 1)..];
+        let in_use = stmt.contains("use ");
+        let lead = b.ends_with("::") || ((b.ends_with('{') || b.ends_with(',')) && in_use) || b.ends_with("mod") || b.ends_with("use");
+        let trail = a.starts_with("::") || a.starts_with("as ") || a.starts_with('}') || a.starts_with(',') || a.starts_with(';');
+        lead && trail
+    })
+}
+
 /// True when `text` uses `item` through `prefix::` as a whole word.
 fn uses_item(text: &str, prefix: &str, item: &str) -> bool {
     let needle = format!("{prefix}::{item}");
@@ -830,7 +851,7 @@ fn nothing_consumes_a_record_in_this_slice() {
     let sources = workspace_sources();
     assert!(sources.len() > 200, "the scan must see the whole workspace");
     for (rel, text) in &sources {
-        let imports = text.contains("authorization::") || text.contains("::authorization") || text.contains("mod authorization");
+        let imports = names_module(text);
         let raw = text.contains("authorizations.json") || text.contains("authorizations.json.next");
         if !imports && !raw {
             continue;
@@ -861,7 +882,111 @@ fn nothing_consumes_a_record_in_this_slice() {
             assert!(!text.to_lowercase().contains("authorization:"), "{rel} must not know about `--on-card authorization:` in S1");
         }
     }
+    // the three request-side files import the module by path or one plain alias, never by brace or glob
+    for rel in ["crates/delphi-engine/src/engine.rs", "crates/delphi-engine/src/service.rs", "crates/delphi-engine/src/tools.rs"] {
+        let text = &sources.iter().find(|(r, _)| r == rel).unwrap().1;
+        for bad in ["authorization::*", "authorization::{", "{authorization", "authorization as _"] {
+            assert!(!text.contains(bad), "{rel} imports the authorization module by `{bad}`; use a path or a plain `as` alias so the scan can see it");
+        }
+    }
+    // no other program (the console in ui/, a build script) names the store file
+    let root = fs::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")).unwrap();
+    let mut others = vec![];
+    for e in walkdir::WalkDir::new(&root).into_iter().filter_entry(|e| !["node_modules", "target", ".git", ".claude", "dist"].contains(&e.file_name().to_string_lossy().as_ref())).flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        let in_ui = e.path().strip_prefix(&root).is_ok_and(|p| p.starts_with("ui"));
+        if e.file_type().is_file() && (name == "build.rs" || (in_ui && (name.ends_with(".ts") || name.ends_with(".tsx") || name.ends_with(".js")))) {
+            others.push(e.path().to_path_buf());
+        }
+    }
+    for p in others {
+        let text = fs::read_to_string(&p).unwrap_or_default();
+        assert!(!text.contains("authorizations.json"), "{} names the authorization store", p.display());
+        assert!(!(text.contains("operator/") && text.contains("authorization")), "{} reads the operator home and mentions authorization", p.display());
+    }
+    // the scan itself sees every import style
+    assert!(names_module("use delphi_engine::{authorization as a, other};"));
+    assert!(names_module("use crate::authorization as a;"));
+    assert!(names_module("crate::authorization::load(x)"));
+    assert!(names_module("pub mod authorization;"));
+    assert!(!names_module("let authorization = headers.get(\"authorization\");"));
+    assert!(!names_module("request_test_authorization::x"));
     // the scan itself sees the alias style used by service.rs
     assert!(uses_item("use crate::authorization as a;\n a::load(x)", "a", "load"));
     assert!(!uses_item("a::loader()", "a", "load"));
+}
+
+// Second red-team review P1: a deny-listed host request used to skip the host rate limit and the re-stage block, so a fresh session id
+// and a one-argument change per call grew the ledger without bound.
+#[test]
+fn denied_host_requests_are_rate_limited_like_any_other_and_cost_one_row_a_minute() {
+    let f = fix();
+    let denied = |n: usize| {
+        let mut v = f.request_json();
+        v["manifest"][0]["argv"] = json!(["/usr/bin/git", "push", format!("origin{n}")]);
+        v
+    };
+    let ledger_rows = || read_ledger(&f.ws()).unwrap().len();
+    let mut logged = 0;
+    for n in 0..40 {
+        // a fresh session id and a new argument each time, a second apart
+        let o = f.record(&host_who(&format!("flood{n:05}")), &denied(n), n as i64);
+        if matches!(o, Outcome::Refused { log: Some(_), .. }) {
+            logged += 1;
+        }
+    }
+    assert_eq!(logged, 1, "only the first denied call is recorded inside the workspace's host minute");
+    assert_eq!(ledger_rows(), 1);
+    // an invalid request counts the same: it is refused quietly while the minute runs
+    let mut invalid = f.request_json();
+    invalid["manifest"] = json!([]);
+    assert!(refusal(f.record(&host_who("flood99999"), &invalid, 30)).1.is_none());
+    // a minute on, one more row, and no more
+    assert!(matches!(f.record(&host_who("flood00100"), &denied(100), 70), Outcome::Refused { log: Some(_), .. }));
+    assert_eq!(ledger_rows(), 2);
+    // the same denied manifest is not recorded again inside a day, from any session
+    assert!(refusal(f.record(&host_who("flood00200"), &denied(100), 200)).0.contains("24 hours"));
+    assert_eq!(ledger_rows(), 2);
+    // and a pending cap in force stops a host request before it is even looked at
+    let g = fix();
+    for n in 0..MAX_PENDING_HOST_WORKSPACE {
+        assert!(matches!(g.record(&host_who(&format!("fill{n:05}")), &variant(&g, n), n as i64 * 120), Outcome::Staged(_)));
+    }
+    let off = MAX_PENDING_HOST_WORKSPACE as i64 * 120 + 120;
+    let mut bad = g.request_json();
+    bad["manifest"][0]["argv"] = json!(["/usr/bin/git", "push"]);
+    let (msg, log) = refusal(g.record(&host_who("fillfinal"), &bad, off));
+    assert!(msg.contains("host requests are already pending") && log.is_none(), "{msg}");
+}
+
+// Second red-team review P2: an older store-and-pin pair must not quietly take back a record or a revocation.
+#[test]
+fn an_older_store_and_pin_pair_is_seen_against_the_audit_log() {
+    let f = fix();
+    let (r1, p1) = made(&f, 1, Some("ar-0000000001"));
+    create_audited(&f.home, r1.clone(), p1).unwrap();
+    let old_store = fs::read(store_path(&f.home)).unwrap();
+    let old_lock = fs::read(f.home.join("operator/ratified.lock")).unwrap();
+    let (r2, p2) = made(&f, 2, Some("ar-0000000002"));
+    create_audited(&f.home, r2, p2).unwrap();
+    let (r3, p3) = made(&f, 3, Some("ar-0000000003"));
+    create_audited(&f.home, r3, p3).unwrap();
+    revoke_audited(&f.home, &r1.id, &at(60)).unwrap();
+    assert!(read_audit(&f.home).is_ok());
+    // the roll-back: the store and its pin from before the second authorization
+    fs::write(store_path(&f.home), &old_store).unwrap();
+    fs::write(f.home.join("operator/ratified.lock"), &old_lock).unwrap();
+    assert!(load(&f.home).is_ok(), "the old pair is self-consistent: only the audit log can tell");
+    let e = read_audit(&f.home).unwrap_err();
+    assert!(e.contains("disagree") || e.contains("fails verification"), "{e}");
+    // a refusal advances the recorded head, so cutting it is caught as well
+    let g = fix();
+    let (r, p) = made(&g, 1, None);
+    create_audited(&g.home, r, p).unwrap();
+    refuse_audited(&g.home, "ar-0000000009", "x", &at(5)).unwrap();
+    assert_eq!(load(&g.home).unwrap().audit_head.unwrap().seq, 2);
+    let seg = audit_dir(&g.home).join("events/000001.jsonl");
+    let text = fs::read_to_string(&seg).unwrap();
+    fs::write(&seg, format!("{}\n", text.lines().next().unwrap())).unwrap();
+    assert!(read_audit(&g.home).unwrap_err().contains("tail was cut"));
 }

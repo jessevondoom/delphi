@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jessevondoom/delphi/schemas/authorization-record.schema.json",
   "title": "Delphi Authorization Store",
-  "description": "`$DELPHI_HOME/operator/authorizations.json` (spec 092 TA-1): the operator's test authorizations. Written only by `delphi test authorize` and `delphi test revoke` (owner-only, 0600), under the operator scope's advisory lock; its blake3 hash is pinned in `operator/ratified.lock` under the key `authorizations.json`. A file whose hash does not match its pin, or that has no pin, is ignored and logged, whatever it says. In slice S1 no run reads a record: nothing here is consumed or approves anything.",
+  "description": "`$DELPHI_HOME/operator/authorizations.json` (spec 092 TA-1): the operator's test authorizations. Written only by `delphi test authorize` and `delphi test revoke` (owner-only, 0600), under the operator scope's advisory lock; its blake3 hash is pinned in `operator/ratified.lock` under the key `authorizations.json#store` (a `#` key, which the file-by-file checks skip and no ratified path can equal). A file whose hash does not match its pin, or that has no pin, is ignored and logged, whatever it says. In slice S1 no run reads a record: nothing here is consumed or approves anything.",
   "type": "object",
   "required": ["version", "records"],
   "properties": {

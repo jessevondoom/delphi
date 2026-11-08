@@ -792,7 +792,7 @@ fn check_ratified(ws: &Workspace, home: &Path, tree: &Tree, r: &mut Report) {
                     r.fail("3 taint-audit", format!("operator/ratified.lock: {}", req), "required entry missing from the lock");
                 }
             }
-            for (name, h) in &op_lock {
+            for (name, h) in op_lock.iter().filter(|(k, _)| !k.contains('#')) {
                 let live = fs::read(op.join(name)).map(|b| hash(&b)).unwrap_or_default();
                 if live != *h {
                     drift += 1;

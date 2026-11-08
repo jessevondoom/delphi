@@ -67,7 +67,7 @@ pub const CREATE_ROLLED_BACK: &str = "authorization.create.rolled_back";
 pub const REVOKE_ROLLED_BACK: &str = "authorization.revoke.rolled_back";
 
 /// The key under which the store's hash is pinned in `operator/ratified.lock`.
-pub const LOCK_KEY: &str = "authorizations.json";
+pub const LOCK_KEY: &str = "authorizations.json#store";
 pub const SCRATCH_MODE: &str = "noexec";
 pub const CWD: &str = "@snapshot";
 pub const PROVENANCES: [&str; 2] = ["project_snapshot", "daemon_installed"];
@@ -83,7 +83,7 @@ fn is_ctl(c: char) -> bool {
     c.is_control()
         || matches!(
             c,
-            '\u{200b}'..='\u{200f}' | '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{206a}'..='\u{206f}' | '\u{061c}' | '\u{00ad}' | '\u{034f}' | '\u{3164}' | '\u{ffa0}' | '\u{feff}' | '\u{e0000}'..='\u{e007f}'
+            '\u{200b}'..='\u{200f}' | '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{206a}'..='\u{206f}' | '\u{061c}' | '\u{2800}' | '\u{115f}' | '\u{1160}' | '\u{17b4}' | '\u{17b5}' | '\u{180e}' | '\u{00ad}' | '\u{034f}' | '\u{3164}' | '\u{ffa0}' | '\u{feff}' | '\u{e0000}'..='\u{e007f}'
         )
 }
 
@@ -447,6 +447,21 @@ pub fn resolved_ids(operator_log: &[EventEnvelope]) -> HashSet<String> {
 /// buying a fresh budget.
 pub fn admit(ledger: &[EventEnvelope], operator_log: &[EventEnvelope], who: &Who, parsed: Result<Request, ParseError>, c: &Clock) -> Outcome {
     let quiet = |m: String| Outcome::Refused { message: m, log: None };
+    // 0. a host chooses its own session id, so before anything about the request is looked at (whether it parses, is invalid or is
+    // denied), the workspace as a whole takes one host request a minute and holds at most so many host and total pending
+    // requests. A denied request costs the same as any other: one ledger row, and then the clock.
+    if who.kind == Kind::Host {
+        if ledger.iter().any(|e| (e.kind == STAGED || e.kind == REFUSED) && e.payload["kind"].as_str() == Some("host") && c.now_unix - ts(e) < HOST_GLOBAL_RATE_SECS) {
+            return quiet(format!("rate limit: this workspace takes one host authorization request per {} seconds, whichever session sends it", HOST_GLOBAL_RATE_SECS));
+        }
+        let pend = pending(ledger, &resolved_ids(operator_log), c.now_unix);
+        if pend.iter().filter(|e| e.payload["requester"]["kind"].as_str() == Some("host")).count() >= MAX_PENDING_HOST_WORKSPACE {
+            return quiet(format!("{} host requests are already pending in this workspace; the operator has to answer one first", MAX_PENDING_HOST_WORKSPACE));
+        }
+        if pend.len() >= MAX_PENDING_WORKSPACE {
+            return quiet(format!("{} requests are already pending in this workspace; the operator has to answer one first", MAX_PENDING_WORKSPACE));
+        }
+    }
     // 1. one request per five minutes per run, counting what was staged and what was refused with a record
     let recent = ledger.iter().filter(|e| (e.kind == STAGED || e.kind == REFUSED) && e.payload["run"].as_str() == Some(&who.run) && c.now_unix - ts(e) < RATE_SECS).map(ts).max();
     if let Some(t) = recent {
@@ -455,6 +470,9 @@ pub fn admit(ledger: &[EventEnvelope], operator_log: &[EventEnvelope], who: &Who
     let req = match parsed {
         Ok(r) => r,
         Err(ParseError::Invalid(m)) => return quiet(m),
+        Err(ParseError::Denied { reason: _, manifest_hash }) if ledger.iter().chain(operator_log.iter()).any(|e| e.kind == REFUSED && e.payload["blocks_restage"].as_bool() == Some(true) && e.payload["manifest_hash"].as_str() == Some(&manifest_hash) && c.now_unix - ts(e) < RESTAGE_SECS) => {
+            return quiet("this manifest was refused less than 24 hours ago and is not recorded again".into())
+        }
         Err(ParseError::Denied { reason, manifest_hash }) => return refused(format!("refused: denied by the deny-list (spec 092 TA-5): {reason}"), who, c, &manifest_hash, &format!("deny-list: {reason}"), true),
     };
     let mh = manifest_hash(&req.manifest);
@@ -912,7 +930,40 @@ pub fn read_audit(home: &Path) -> Result<Vec<EventEnvelope>, String> {
     if let Some(b) = rep.against_stored_head(head).broken {
         return Err(format!("the authorization audit log fails verification: {b}; no request or authorization is trusted until the operator has looked (`delphi doctor`)"));
     }
-    delphi_core::log::replay(&audit_dir(home)).map_err(|e| format!("the authorization audit log cannot be read: {e}"))
+    let events = delphi_core::log::replay(&audit_dir(home)).map_err(|e| format!("the authorization audit log cannot be read: {e}"))?;
+    let store = load(home)?;
+    reflect_check(&events, &store)?;
+    Ok(events)
+}
+
+/// The audit log and the store must agree: every `created` and `revoked` event is reflected in the store and every record and
+/// revocation in the store has its event, so an older store-and-pin pair (a record or a revocation quietly taken back) is seen.
+/// One event may be ahead of the store, and only the last one and only past the recorded head: the window of a crash between the
+/// audit write and the store change, which a rolled-back event or the next change resolves.
+fn reflect_check(events: &[EventEnvelope], store: &Store) -> Result<(), String> {
+    let bad = |m: String| Err(format!("the authorization audit log and the store disagree: {m}; no request or authorization is trusted until the operator has looked (`delphi doctor`)"));
+    let created_rolled: HashSet<u64> = events.iter().filter(|e| e.kind == CREATE_ROLLED_BACK).filter_map(|e| e.payload["created_seq"].as_u64()).collect();
+    let revoke_rolled: HashSet<u64> = events.iter().filter(|e| e.kind == REVOKE_ROLLED_BACK).filter_map(|e| e.payload["revoked_seq"].as_u64()).collect();
+    let head_seq = store.audit_head.as_ref().map(|h| h.seq).unwrap_or(0);
+    let last_seq = events.last().map(|e| e.seq).unwrap_or(0);
+    let tolerated = |e: &EventEnvelope| e.seq == last_seq && e.seq > head_seq;
+    for e in events {
+        let id = e.payload["id"].as_str().unwrap_or("");
+        match e.kind.as_str() {
+            CREATED if !created_rolled.contains(&e.seq) && !store.records.iter().any(|r| r.id == id) && !tolerated(e) => return bad(format!("{id} was authorized (event {}) but is not in the store", e.seq)),
+            REVOKED if !revoke_rolled.contains(&e.seq) && !store.records.iter().any(|r| r.id == id && r.is_revoked()) && !tolerated(e) => return bad(format!("{id} was revoked (event {}) but the store holds it as live", e.seq)),
+            _ => {}
+        }
+    }
+    for r in &store.records {
+        if !events.iter().any(|e| e.kind == CREATED && e.payload["id"].as_str() == Some(&r.id) && !created_rolled.contains(&e.seq)) {
+            return bad(format!("{} is in the store with no `created` event", r.id));
+        }
+        if r.is_revoked() && !events.iter().any(|e| e.kind == REVOKED && e.payload["id"].as_str() == Some(&r.id) && !revoke_rolled.contains(&e.seq)) {
+            return bad(format!("{} is revoked in the store with no `revoked` event", r.id));
+        }
+    }
+    Ok(())
 }
 
 /// Make a record live **after** its audit event: the `created` event is appended first (so a record is never live unaudited),
@@ -945,10 +996,11 @@ pub fn revoke_audited(home: &Path, id: &str, now_rfc: &str) -> Result<Record, St
         return Err(format!("{} is already revoked", current.id));
     }
     let head = append_audit(home, &mut audit, REVOKED, json!({"id": current.id, "manifest_hash": current.manifest_hash, "run": current.run, "revoked_at": now_rfc, "by": "operator", "source": "operator"}))?;
+    let revoked_seq = head.seq;
     match revoke(home, id, now_rfc, Some(head)) {
         Ok(r) => Ok(r),
         Err(e) => {
-            let _ = append_audit(home, &mut audit, REVOKE_ROLLED_BACK, json!({"id": id, "reason": e}));
+            let _ = append_audit(home, &mut audit, REVOKE_ROLLED_BACK, json!({"id": id, "revoked_seq": revoked_seq, "reason": e}));
             Err(e)
         }
     }
@@ -960,7 +1012,12 @@ pub fn refuse_audited(home: &Path, request_id: &str, manifest_hash: &str, now_rf
     if resolved_ids(&read_audit(home)?).contains(request_id) {
         return Err(format!("{request_id} was already answered"));
     }
-    append_audit(home, &mut audit, REFUSED, json!({"request_id": request_id, "manifest_hash": manifest_hash, "reason": "refused by the operator", "blocks_restage": true, "refused_at": now_rfc, "source": "operator"})).map(|_| ())
+    let head = append_audit(home, &mut audit, REFUSED, json!({"request_id": request_id, "manifest_hash": manifest_hash, "reason": "refused by the operator", "blocks_restage": true, "refused_at": now_rfc, "source": "operator"}))?;
+    // The refusal advances the recorded head too, so a cut that takes it back is caught like any other.
+    mutate(home, |s| {
+        s.audit_head = Some(head);
+        Ok(())
+    })
 }
 
 // ------------------------------------------------------------------------------------------------ the request ledger

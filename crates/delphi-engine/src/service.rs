@@ -396,21 +396,18 @@ impl EngineService {
         let model: String = p["model"].as_str().unwrap_or("").chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | ':')).take(40).collect();
         let who = a::Who { kind: a::Kind::Host, label: c.label(Some(&model)), role: None, model: if model.is_empty() { "unknown".into() } else { model }, span: None, task: None, taint: a::HOST_TAINT, run: c.session.clone(), mission: c.mission() };
         let _gate = self.host_gate.lock().await;
-        let m = self.mission_at(Some(&c.mission()), c.cwd.to_str()).await?;
         let now = delphi_core::time::now_rfc3339();
         let clock = a::Clock { now_unix: (self.engine.clock_unix)(), now_rfc: &now };
+        // Decided and recorded in the workspace ledger first. A refusal writes nothing else: no mission log (and no directory for
+        // one) is created for a refused host call, whatever session id it chose.
         match a::record_request(&ws.dir, &ws.home, &who, parsed, &clock) {
             a::Outcome::Staged(payload) => {
+                let m = self.mission_at(Some(&c.mission()), c.cwd.to_str()).await?;
                 let id = payload["id"].as_str().unwrap_or("").to_string();
                 m.append(EventEnvelope::new(&m.id, a::STAGED, payload)).await.map_err(engine_err)?;
                 Ok(json!({"staged": true, "id": id, "ref": format!("{}/{}", m.id, id), "tier": "L0", "taint": "federated_peer", "usable": false, "next": "the operator reviews it with `delphi test review` and decides with `delphi test authorize --from-request`; it is inert, and a host's request is authorized only by retyping each command at a local terminal"}))
             }
-            a::Outcome::Refused { message, log } => {
-                if let Some(payload) = log {
-                    m.append(EventEnvelope::new(&m.id, a::REFUSED, payload)).await.map_err(engine_err)?;
-                }
-                Err(err(code::INVALID_PARAMS, message))
-            }
+            a::Outcome::Refused { message, .. } => Err(err(code::INVALID_PARAMS, message)),
         }
     }
 
@@ -3374,9 +3371,9 @@ mod tests {
         let p = &staged[0].payload;
         assert_eq!((p["tier"].as_str(), p["taint"]["name"].as_str(), p["requester"]["kind"].as_str(), p["requester"]["label"].as_str()), (Some("L0"), Some("federated_peer"), Some("host"), Some("host:claude-code/opus")));
         assert!(!p["request"]["context"].as_str().unwrap().contains('\u{1b}'), "escape characters are stripped on staging");
-        let other = replay_log(&delphi_core::sessions::dir(&ws_dir, "host-zzzzzzzz01234567"));
-        assert_eq!(other.iter().filter(|e| e.kind == "authorization.request.refused").count(), 1, "the deny-list refusal is recorded");
-        assert!(other.iter().all(|e| e.kind != "authorization.request.staged"));
+        let ledger = crate::authorization::read_ledger(&ws_dir).unwrap();
+        assert_eq!(ledger.iter().filter(|e| e.kind == "authorization.request.refused").count(), 0, "a denied call inside the workspace's host minute is rate-limited and costs no row");
+        assert!(!delphi_core::sessions::dir(&ws_dir, "host-zzzzzzzz01234567").exists(), "and a refused host call creates no mission log");
     }
 
     #[tokio::test(flavor = "multi_thread")]
