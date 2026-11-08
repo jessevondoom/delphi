@@ -18,6 +18,7 @@
 | [`validation-set.schema.json`](../../schemas/validation-set.schema.json) | the operator's labelled claim set and the verdict results file | [`specs/040`](../../specs/040-validator-role-and-fact-ratification.md) §15.4; see [`validation-set.md`](validation-set.md) |
 | [`seat-receipt.schema.json`](../../schemas/seat-receipt.schema.json) | the payload of a `seat.receipt` event: which model a carrier reported serving, its family from `model-families.toml`, what the seat was offered, a prompt hash, tokens, outcome | [`specs/091`](../../specs/091-seats-families-and-outside-launch.md) SR-1; written only by the daemon; no text, no arguments |
 | [`prompt-log.schema.json`](../../schemas/prompt-log.schema.json) | one line of the daemon's artifact prompt log (`local/artifact-log/<mission>/artifact-prompts.jsonl`) | [`specs/070`](../../specs/070-spec-gate-scope-and-artifact-prompt-log.md) §3 |
+| [`spec-current.schema.json`](../../schemas/spec-current.schema.json) | one file of `compiled/specs/data/` (written by `delphi specs compile`): a spec's stem, title, group, a quoted summary and status line with byte spans, a hash of the source, and its outline | [`specs/088`](../../specs/088-spec-compile-and-current-set.md) §4.2; derived and never the authority; refuses any approval field |
 
 Where the program is stricter than a schema can say (cross-references, hashes, signatures, dates relative to today), the program wins. A schema is a contract for what a file *looks like*, not a promise that Delphi will accept it.
 

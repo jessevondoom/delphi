@@ -1,0 +1,158 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 012: Xenia Record Schema (v2)"
+    },
+    {
+      "level": 2,
+      "line": 23,
+      "number": "1",
+      "title": "Scope & Objectives"
+    },
+    {
+      "level": 3,
+      "line": 30,
+      "number": "1.1",
+      "title": "Non-Goals"
+    },
+    {
+      "level": 3,
+      "line": 33,
+      "number": "1.2",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 39,
+      "number": "2",
+      "title": "Record Envelope"
+    },
+    {
+      "level": 3,
+      "line": 81,
+      "number": "2.1",
+      "title": "Field rules that carry trust"
+    },
+    {
+      "level": 2,
+      "line": 89,
+      "number": "3",
+      "title": "Signing and the Sidecar"
+    },
+    {
+      "level": 2,
+      "line": 116,
+      "number": "4",
+      "title": "Pointers (display-only in Phase 1)"
+    },
+    {
+      "level": 2,
+      "line": 146,
+      "number": "5",
+      "title": "Kinds (Phase 1)"
+    },
+    {
+      "level": 3,
+      "line": 151,
+      "number": "5.1",
+      "title": "`memory`: a finding, decision, gotcha or how-to"
+    },
+    {
+      "level": 3,
+      "line": 163,
+      "number": "5.2",
+      "title": "`endorsement`: a steward's attestation (or a member's dispute)"
+    },
+    {
+      "level": 3,
+      "line": 177,
+      "number": "5.3",
+      "title": "`tombstone`: hide or restore a record"
+    },
+    {
+      "level": 2,
+      "line": 196,
+      "number": "6",
+      "title": "Limits & Validation"
+    },
+    {
+      "level": 2,
+      "line": 217,
+      "number": "7",
+      "title": "Store Layout"
+    },
+    {
+      "level": 2,
+      "line": 250,
+      "number": "8",
+      "title": "Mapping to Local Delphi Artifacts"
+    },
+    {
+      "level": 2,
+      "line": 271,
+      "number": "9",
+      "title": "Versioning"
+    },
+    {
+      "level": 2,
+      "line": 278,
+      "number": "10",
+      "title": "Verification Plan"
+    },
+    {
+      "level": 2,
+      "line": 305,
+      "number": "11",
+      "title": "Provisional Kinds (Phase 2–3, not binding)"
+    },
+    {
+      "level": 2,
+      "line": 317,
+      "number": "12",
+      "title": "Open Decisions for the Operator"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/012-xenia-record-schema.md",
+    "sha256": "7c34cb51f2642d0dd4f76bf29dfc8021ea241d790a871e6a1a373170545f5618"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 249,
+        "end_line": 6,
+        "line": 6,
+        "start": 170
+      },
+      "text": "status: approved   # by the operator, 2026-10-24 (\"ratify all\"); whole document"
+    },
+    "sha256": "7c34cb51f2642d0dd4f76bf29dfc8021ea241d790a871e6a1a373170545f5618",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "sharing-and-bundles",
+    "number": "012",
+    "stem": "012-xenia-record-schema",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "012: Xenia Record Schema: Envelope, Phase 1 Kinds, Signing & Store Layout"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 1826,
+      "end_line": 28,
+      "line": 24,
+      "start": 1412
+    },
+    "text": "Defines the on-disk shape of everything Phase 1 shares:\n1. The **record envelope** (§2) and **signing** (§3).\n2. **Pointers** (§4), display-only in Phase 1.\n3. The Phase 1 **kinds** (§5): `memory`, `endorsement`, `tombstone`.\n4. **Limits and validation order** (§6), **store layout** including the roster chain and freshness statement (§7), **local mapping** (§8), **versioning** (§9) and **tests** (§10)."
+  }
+}

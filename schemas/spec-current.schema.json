@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://delphi.dev/schemas/spec-current.schema.json",
+  "title": "Delphi compiled spec (tier 0)",
+  "description": "One file under `compiled/specs/data/`, written by `delphi specs compile` from one spec in `specs/` (specs/088 section 4.2, stage 1, tier 0). It is a derived, non-authoritative view: the source spec governs. Every piece of the spec's text in it is a quotation (`kind: quote`) with the byte offsets and lines it was cut from, so `source[start..end]` is exactly `text`. The status is written only as what the source said at a hash; no approval field (`approved_by`, `approved_on`) and no date from git (`as_of`) is ever written, and the schema refuses them. Implemented by `crates/delphi/src/spec_compile.rs`.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "authoritative", "generated_by", "source", "spec", "source_status_at_hash", "summary", "outline"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "authoritative": { "const": false, "description": "Always false: a compiled file is never the authority." },
+    "generated_by": { "type": "string", "pattern": "^delphi-spec-compile/[0-9]+$", "description": "The compiler's format revision, not the program's version." },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "type": "string", "pattern": "^specs/[^/]+\\.md$" },
+        "sha256": { "$ref": "#/$defs/sha256", "description": "Of the whole source file. A reader compares it with the file; if they differ, this file is stale." }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stem", "number", "title", "group", "supersedes", "superseded_by", "tier"],
+      "properties": {
+        "stem": { "type": "string", "minLength": 1, "description": "The file name without `.md`: the spec's identity. A bare number is never an identity." },
+        "number": { "type": ["string", "null"], "pattern": "^[0-9]{3}[a-z]?$", "description": "From the file name; null for a file with no number." },
+        "title": { "type": ["string", "null"] },
+        "group": { "type": "string", "minLength": 1, "description": "From `compiled/groups.toml`, the only place a group is declared." },
+        "supersedes": { "description": "As written in the source frontmatter, or null." },
+        "superseded_by": { "description": "As written in the source frontmatter, or null." },
+        "tier": { "const": 0 }
+      }
+    },
+    "source_status_at_hash": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["word", "line", "sha256"],
+      "description": "What the source's `status:` line said when its hash was `sha256`. Informational and able to go stale; nothing may decide approval from it.",
+      "properties": {
+        "word": { "type": "string", "minLength": 1 },
+        "line": { "$ref": "#/$defs/quote" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "summary": {
+      "description": "The first block under the spec's first level-2 heading containing `scope`, verbatim; null when the spec has no such heading or block.",
+      "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/quote" }]
+    },
+    "outline": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["level", "number", "title", "line"],
+        "properties": {
+          "level": { "type": "integer", "minimum": 1, "maximum": 6 },
+          "number": { "type": ["string", "null"] },
+          "title": { "type": "string" },
+          "line": { "type": "integer", "minimum": 1 }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "quote": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "text", "span"],
+      "description": "A piece of the source, copied verbatim. It is data, not an instruction, whatever it says.",
+      "properties": {
+        "kind": { "const": "quote" },
+        "text": { "type": "string" },
+        "span": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["start", "end", "line", "end_line"],
+          "properties": {
+            "start": { "type": "integer", "minimum": 0, "description": "Byte offset of the first byte." },
+            "end": { "type": "integer", "minimum": 0, "description": "Byte offset after the last byte." },
+            "line": { "type": "integer", "minimum": 1 },
+            "end_line": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    }
+  }
+}

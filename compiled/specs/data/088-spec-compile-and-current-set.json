@@ -1,0 +1,266 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 088: A spec compile step"
+    },
+    {
+      "level": 2,
+      "line": 25,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 3,
+      "line": 37,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 47,
+      "number": "1.2",
+      "title": "Simpler alternative considered"
+    },
+    {
+      "level": 2,
+      "line": 53,
+      "number": "2",
+      "title": "Invariants"
+    },
+    {
+      "level": 2,
+      "line": 68,
+      "number": "3",
+      "title": "Two tiers and two stages"
+    },
+    {
+      "level": 2,
+      "line": 81,
+      "number": "4",
+      "title": "The machine files"
+    },
+    {
+      "level": 3,
+      "line": 83,
+      "number": "4.1",
+      "title": "Layout"
+    },
+    {
+      "level": 3,
+      "line": 102,
+      "number": "4.2",
+      "title": "Contents of `data/<stem>.json`"
+    },
+    {
+      "level": 3,
+      "line": 118,
+      "number": "4.3",
+      "title": "What the compiler refuses"
+    },
+    {
+      "level": 3,
+      "line": 122,
+      "number": "4.4",
+      "title": "Identity: stems, and the three shared numbers"
+    },
+    {
+      "level": 2,
+      "line": 130,
+      "number": "5",
+      "title": "The human views"
+    },
+    {
+      "level": 2,
+      "line": 143,
+      "number": "6",
+      "title": "Requirement IDs (stage 2)"
+    },
+    {
+      "level": 3,
+      "line": 147,
+      "number": "6.1",
+      "title": "Form"
+    },
+    {
+      "level": 3,
+      "line": 157,
+      "number": "6.2",
+      "title": "Revisions"
+    },
+    {
+      "level": 3,
+      "line": 161,
+      "number": "6.3",
+      "title": "Registry and tombstones"
+    },
+    {
+      "level": 3,
+      "line": 171,
+      "number": "6.4",
+      "title": "Seeding"
+    },
+    {
+      "level": 3,
+      "line": 175,
+      "number": "6.5",
+      "title": "Parallel branches"
+    },
+    {
+      "level": 2,
+      "line": 186,
+      "number": "7",
+      "title": "Amendments and supersession (stage 2)"
+    },
+    {
+      "level": 3,
+      "line": 188,
+      "number": "7.1",
+      "title": "Amendment records"
+    },
+    {
+      "level": 3,
+      "line": 198,
+      "number": "7.2",
+      "title": "Supersession"
+    },
+    {
+      "level": 2,
+      "line": 207,
+      "number": "8",
+      "title": "Verification plan"
+    },
+    {
+      "level": 2,
+      "line": 240,
+      "number": "9",
+      "title": "Prior art (surveyed 2026-11-06)"
+    },
+    {
+      "level": 3,
+      "line": 262,
+      "number": "9.1",
+      "title": "What the repository already has"
+    },
+    {
+      "level": 2,
+      "line": 272,
+      "number": "10",
+      "title": "Skills and surfaces"
+    },
+    {
+      "level": 3,
+      "line": 274,
+      "number": "10.1",
+      "title": "Authors (Architect), stage 2"
+    },
+    {
+      "level": 3,
+      "line": 278,
+      "number": "10.2",
+      "title": "Consumers (Builder, Validator, Red-Team), stage 1"
+    },
+    {
+      "level": 3,
+      "line": 289,
+      "number": "10.3",
+      "title": "Surfaces"
+    },
+    {
+      "level": 3,
+      "line": 293,
+      "number": "10.4",
+      "title": "Commit trailer"
+    },
+    {
+      "level": 2,
+      "line": 299,
+      "number": "11",
+      "title": "Slices (one pull request each) and decisions"
+    },
+    {
+      "level": 3,
+      "line": 301,
+      "number": "11.1",
+      "title": "Hours and review burden"
+    },
+    {
+      "level": 3,
+      "line": 321,
+      "number": "11.2",
+      "title": "Deferred decision: moving the sources and renumbering the shared numbers"
+    },
+    {
+      "level": 3,
+      "line": 335,
+      "number": null,
+      "title": "Decisions for the operator"
+    },
+    {
+      "level": 2,
+      "line": 349,
+      "number": "12",
+      "title": "Reviews (2026-11-07)"
+    },
+    {
+      "level": 3,
+      "line": 351,
+      "number": "12.1",
+      "title": "Council (Delphi daemon)"
+    },
+    {
+      "level": 3,
+      "line": 372,
+      "number": "12.2",
+      "title": "Panel (host subagents)"
+    },
+    {
+      "level": 2,
+      "line": 386,
+      "number": null,
+      "title": "Appendix A. Groups (approved by the operator, 2026-11-07, OD-4)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/088-spec-compile-and-current-set.md",
+    "sha256": "436a254f0fd63df333654807b7fd85c6e5168b88e3e2a03579d07bcddd817b54"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 377,
+        "end_line": 6,
+        "line": 6,
+        "start": 197
+      },
+      "text": "status: approved   # by the operator, 2026-11-07 (\"confirmed ... approved\"): S0 to S3 only; stage 2 (S4 to S6) is NOT approved and needs a fresh decision after the OD-5 measurement"
+    },
+    "sha256": "436a254f0fd63df333654807b7fd85c6e5168b88e3e2a03579d07bcddd817b54",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "governance-and-safety",
+    "number": "088",
+    "stem": "088-spec-compile-and-current-set",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "088: A spec compile step: per-spec machine files and grouped human views of the current set"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 3385,
+      "end_line": 27,
+      "line": 27,
+      "start": 2700
+    },
+    "text": "Development is fast and specs are corrected as it goes. An agent or a validator that asks \"what is currently required?\" has to read the specs themselves, and they do not fit in a context: on 2026-11-07 `specs/` held 99 markdown files (98 specs and the interface blueprints) and about 331,000 words, and 68 of them mention superseding or amending something. Today the current state is kept readable by **folding by hand**: when a spec's amendments are folded into its body, the removed text moves verbatim to `specs/history/` and every section number survives as a stub. That works, but it is manual, it rewrites approved files, it is done spec by spec, and nothing checks across specs."
+  }
+}

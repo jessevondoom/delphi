@@ -1,0 +1,158 @@
+# Which group each spec belongs to, and the closed list of groups (spec 088, OD-4: approved 2026-11-07).
+#
+# Hand-written; the compiler (`delphi specs compile`) never writes this file. It is the only place a spec's group is declared:
+# a `group:` line in a spec's frontmatter is ignored, because editing an approved spec would change its hash. The compile fails
+# when a spec is missing from `[specs]`, when `[specs]` names a spec that has no file, or when a spec names a group that is not
+# listed below. Specs are named by file stem (never by a bare number). A new spec adds one line here in the pull request that
+# creates it. Changing a group is a one-line edit followed by `delphi specs compile`.
+
+[[group]]
+id = "governance-and-safety"
+title = "Governance and safety"
+order = 1
+
+[[group]]
+id = "runtime-models-and-tools"
+title = "Runtime, models and tools"
+order = 2
+
+[[group]]
+id = "orchestration-and-council"
+title = "Orchestration and Council"
+order = 3
+
+[[group]]
+id = "console"
+title = "Console"
+order = 4
+
+[[group]]
+id = "knowledge-and-memory"
+title = "Knowledge and memory"
+order = 5
+
+[[group]]
+id = "learning-and-evals"
+title = "Learning and evals"
+order = 6
+
+[[group]]
+id = "sharing-and-bundles"
+title = "Sharing and bundles"
+order = 7
+
+[[group]]
+id = "hosts-and-mcp"
+title = "Hosts and MCP"
+order = 8
+
+[[group]]
+id = "install-and-lifecycle"
+title = "Install and lifecycle"
+order = 9
+
+[specs]
+"001-governance-and-manifests" = "governance-and-safety"
+"002-adapter-and-routing" = "runtime-models-and-tools"
+"003-collaboration-and-council" = "orchestration-and-council"
+"004-memory-and-coaching" = "knowledge-and-memory"
+"005-console-and-narrator-tui" = "console"
+"005a-terminal-avatar-system" = "console"
+"005b-deck-navigation-and-visual-interface" = "console"
+"005c-inline-console" = "console"
+"005d-full-screen-console" = "console"
+"005e-console-ux-review-and-redesign" = "console"
+"005f-console-redesign-build-plan" = "console"
+"005g-epic-threads" = "console"
+"006-installer-and-updater" = "install-and-lifecycle"
+"007-federated-mesh-and-sync" = "sharing-and-bundles"
+"008-ambient-watch-and-rewind" = "governance-and-safety"
+"009-model-access-and-auth" = "runtime-models-and-tools"
+"010-connectors-and-tool-access" = "runtime-models-and-tools"
+"011-xenia-trust-model" = "sharing-and-bundles"
+"012-xenia-record-schema" = "sharing-and-bundles"
+"013-librarian-and-internal-retrieval" = "knowledge-and-memory"
+"014-relay-and-away-mode" = "governance-and-safety"
+"015-provisional-decisions" = "governance-and-safety"
+"016-headless-run" = "runtime-models-and-tools"
+"017-timers" = "runtime-models-and-tools"
+"018-operator-hooks" = "governance-and-safety"
+"019-skills-import-export" = "sharing-and-bundles"
+"020-harness-tool-bridge" = "runtime-models-and-tools"
+"021-harness-cli-features" = "runtime-models-and-tools"
+"022-xenia-sharing-overview" = "sharing-and-bundles"
+"023-org-bundle-standard" = "sharing-and-bundles"
+"024-bundle-trust-adoption-and-precedence" = "sharing-and-bundles"
+"025-plugin-skill-and-tool-compatibility" = "hosts-and-mcp"
+"026-team-alignment-and-strategist-integration" = "sharing-and-bundles"
+"027-bundle-authoring-distribution-and-evaluation" = "sharing-and-bundles"
+"028-knowledge-window" = "knowledge-and-memory"
+"029-links-and-inline-reader" = "console"
+"030-console-sessions-and-conversation-context" = "console"
+"031-layered-learning-and-training-mode" = "learning-and-evals"
+"032-change-log" = "console"
+"033-live-usage-and-tool-monitoring" = "console"
+"034-narrator-monitoring-panes-spike" = "console"
+"035-failover-without-a-driver" = "runtime-models-and-tools"
+"036-signed-releases-and-start-time-refresh" = "install-and-lifecycle"
+"037-training-experiments-quality-and-efficiency" = "learning-and-evals"
+"038-capabilities-map" = "install-and-lifecycle"
+"039-error-log" = "install-and-lifecycle"
+"040-validator-role-and-fact-ratification" = "knowledge-and-memory"
+"041-agent-registry-routing-and-role-extensions" = "orchestration-and-council"
+"043-knowledge-window-search-page-and-growing-corpus" = "knowledge-and-memory"
+"044-decisions-pane" = "console"
+"045-harness-loop-techniques" = "runtime-models-and-tools"
+"046-harness-and-openai-coverage" = "runtime-models-and-tools"
+"047-codex-harness-and-coverage" = "runtime-models-and-tools"
+"048-harness-benchmarking-and-targeted-evals" = "learning-and-evals"
+"049-context-management-recoverable-compaction-and-handles" = "runtime-models-and-tools"
+"050-memory-lifecycle-types-supersession-and-trace-mining" = "knowledge-and-memory"
+"051-copilot-cli-harness" = "runtime-models-and-tools"
+"052-knowledge-status-capture-on-contact-and-the-digest" = "knowledge-and-memory"
+"053-console-visual-language" = "console"
+"054-first-minute" = "install-and-lifecycle"
+"055-the-central-library-sources-claims-and-pages" = "knowledge-and-memory"
+"056-discovered-model-assignment" = "runtime-models-and-tools"
+"057-search-pages-generated-and-checked" = "knowledge-and-memory"
+"058-project-scopes-scaffolding-and-promotion" = "knowledge-and-memory"
+"059-operator-lifecycle-experience" = "install-and-lifecycle"
+"060-opentui-renderer-and-runtime" = "console"
+"061-shell-tool" = "runtime-models-and-tools"
+"062-delphi-as-host-agent-mcp-server" = "hosts-and-mcp"
+"063-agent-fleet-behaviors-and-dynamic-orchestration" = "orchestration-and-council"
+"064-knowledge-retrieval-for-agents-and-mcp" = "knowledge-and-memory"
+"065-episodic-traces-and-agent-long-term-memory" = "knowledge-and-memory"
+"066-mcp-research-endpoint-and-role-identity" = "hosts-and-mcp"
+"067-fleet-expansion-administrator-assistant-advocate" = "orchestration-and-council"
+"068-research-capture-and-summary-pages" = "knowledge-and-memory"
+"069-workspace-administration-and-operator-assistance" = "install-and-lifecycle"
+"070-spec-gate-scope-and-artifact-prompt-log" = "governance-and-safety"
+"071-host-plugin-marketplace-and-durable-mcp-enablement" = "hosts-and-mcp"
+"072-host-cognitive-parity-and-external-orchestration" = "hosts-and-mcp"
+"073-console-adaptive-contrast-and-dual-mode-palette" = "console"
+"074-stable-launch-path-and-delphi-connect" = "hosts-and-mcp"
+"075-kb-search-operator-presentation-and-summary-filtering" = "knowledge-and-memory"
+"076-private-repo-distribution" = "install-and-lifecycle"
+"077-host-mention-routing-and-themed-alias-resolution" = "hosts-and-mcp"
+"078-council-scorecard" = "learning-and-evals"
+"079-ingress-taint-regression-test" = "governance-and-safety"
+"080-kb-read-count-report" = "knowledge-and-memory"
+"081-evidence-ledger" = "learning-and-evals"
+"082-orchestrator-outside-delegation-contracts" = "orchestration-and-council"
+"083-learning-signals-and-host-diagnostics" = "learning-and-evals"
+"084-outcome-flip-question-resume-recap-learn-history" = "orchestration-and-council"
+"085-fixed-standing-limits-reminder" = "runtime-models-and-tools"
+"086-outside-council-panel-and-host-subagents" = "orchestration-and-council"
+"087-agent-identity-badges-and-name-pool" = "console"
+"088-spec-compile-and-current-set" = "governance-and-safety"
+"089-panel-hardening-from-e2" = "orchestration-and-council"
+"090-renumber-the-shared-spec-numbers" = "governance-and-safety"
+"091-seats-families-and-outside-launch" = "orchestration-and-council"
+"092-operator-authorized-tests" = "governance-and-safety"
+"093-authority-invariants-batch1" = "governance-and-safety"
+"094-core-repo-merge-flow" = "governance-and-safety"
+"095-documents-and-dataviz" = "knowledge-and-memory"
+"096-console-deck-change-log" = "console"
+"097-encyclopedia-search-pages" = "knowledge-and-memory"
+"ui-wireframes-and-blueprints" = "console"

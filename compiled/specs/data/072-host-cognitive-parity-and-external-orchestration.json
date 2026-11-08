@@ -1,0 +1,200 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 072: Host cognitive parity and external orchestration"
+    },
+    {
+      "level": 2,
+      "line": 23,
+      "number": "1",
+      "title": "Scope & Objectives"
+    },
+    {
+      "level": 3,
+      "line": 34,
+      "number": "1.1",
+      "title": "Non-Goals"
+    },
+    {
+      "level": 3,
+      "line": 40,
+      "number": "1.2",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 46,
+      "number": "2",
+      "title": "Principles"
+    },
+    {
+      "level": 2,
+      "line": 56,
+      "number": "3",
+      "title": "Identity and Attribution Surface"
+    },
+    {
+      "level": 3,
+      "line": 60,
+      "number": "3.1",
+      "title": "The Canonical Attribution String"
+    },
+    {
+      "level": 3,
+      "line": 75,
+      "number": "3.2",
+      "title": "The Authority Disclaimer"
+    },
+    {
+      "level": 2,
+      "line": 83,
+      "number": "4",
+      "title": "Orchestrator Guidance & Dynamic Role Spawner"
+    },
+    {
+      "level": 3,
+      "line": 85,
+      "number": "4.1",
+      "title": "Tool: `consult_orchestrator`"
+    },
+    {
+      "level": 3,
+      "line": 115,
+      "number": "4.2",
+      "title": "Tool: `spawn_agent_pack`"
+    },
+    {
+      "level": 2,
+      "line": 146,
+      "number": "5",
+      "title": "Knowledge Retrieval as a RAG Source"
+    },
+    {
+      "level": 3,
+      "line": 150,
+      "number": "5.1",
+      "title": "Tool: `kb_retrieve`"
+    },
+    {
+      "level": 3,
+      "line": 172,
+      "number": "5.2",
+      "title": "Chunk Format & Epistemic Annotations"
+    },
+    {
+      "level": 2,
+      "line": 187,
+      "number": "6",
+      "title": "Full Scoped Memory Access"
+    },
+    {
+      "level": 3,
+      "line": 191,
+      "number": "6.1",
+      "title": "Tool: `query_memory`"
+    },
+    {
+      "level": 3,
+      "line": 213,
+      "number": "6.2",
+      "title": "Tenant and Scope Isolation Rules"
+    },
+    {
+      "level": 2,
+      "line": 221,
+      "number": "7",
+      "title": "Suggested Project Scaffolding"
+    },
+    {
+      "level": 3,
+      "line": 225,
+      "number": "7.1",
+      "title": "Tool: `scaffold_status`"
+    },
+    {
+      "level": 3,
+      "line": 258,
+      "number": "7.2",
+      "title": "Invariant: Zero Automatic Writes"
+    },
+    {
+      "level": 2,
+      "line": 264,
+      "number": "8",
+      "title": "Dual-Mode Councils: Internal vs. Host-Federated"
+    },
+    {
+      "level": 3,
+      "line": 268,
+      "number": "8.1",
+      "title": "Mode A: Daemon-Internal Council (`request_council`)"
+    },
+    {
+      "level": 3,
+      "line": 271,
+      "number": "8.2",
+      "title": "Mode B: Host-Federated Council (Host-Orchestrated)"
+    },
+    {
+      "level": 3,
+      "line": 290,
+      "number": "8.3",
+      "title": "Ingestion: `propose_council_record`"
+    },
+    {
+      "level": 2,
+      "line": 317,
+      "number": "9",
+      "title": "Implementation Slices (One PR per Slice)"
+    },
+    {
+      "level": 2,
+      "line": 342,
+      "number": "10",
+      "title": "Verification Plan"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/072-host-cognitive-parity-and-external-orchestration.md",
+    "sha256": "143590ca73666ea31e56884a54fcff7bcc63d6a25c10b30d1d0dbc759be3dd68"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 351,
+        "end_line": 6,
+        "line": 6,
+        "start": 255
+      },
+      "text": "status: approved   # approved by the operator, 2026-11-03 (\"ratify the spec and begin building\")"
+    },
+    "sha256": "143590ca73666ea31e56884a54fcff7bcc63d6a25c10b30d1d0dbc759be3dd68",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "hosts-and-mcp",
+    "number": "072",
+    "stem": "072-host-cognitive-parity-and-external-orchestration",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "072: Host cognitive parity: orchestrator external guidance, dynamic role specialization, KB RAG retrieval, and full memory access"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 1683,
+      "end_line": 25,
+      "line": 25,
+      "start": 1391
+    },
+    "text": "An operator works inside Delphi's TUI and also across external host harnesses (Claude Code, Antigravity/`agy`, Copilot CLI, Cursor). This specification establishes **functional and cognitive parity** for agents operating in external harnesses via Delphi's Model Context Protocol (MCP) server:"
+  }
+}

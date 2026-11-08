@@ -1,0 +1,125 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 030: Console Sessions and Conversation Context"
+    },
+    {
+      "level": 2,
+      "line": 17,
+      "number": "1",
+      "title": "What this is"
+    },
+    {
+      "level": 2,
+      "line": 22,
+      "number": "2",
+      "title": "Decisions (operator, 2026-10-25)"
+    },
+    {
+      "level": 2,
+      "line": 33,
+      "number": "3",
+      "title": "Events and RPC"
+    },
+    {
+      "level": 2,
+      "line": 39,
+      "number": "4",
+      "title": "The preamble"
+    },
+    {
+      "level": 3,
+      "line": 40,
+      "number": "4.1",
+      "title": "The digest and the central log"
+    },
+    {
+      "level": 3,
+      "line": 43,
+      "number": "4.2",
+      "title": "The preamble"
+    },
+    {
+      "level": 3,
+      "line": 52,
+      "number": "4.3",
+      "title": "The model-written summary (decided by the operator 2026-10-26: \"work on the summary\")"
+    },
+    {
+      "level": 2,
+      "line": 61,
+      "number": "5",
+      "title": "Trust and visibility"
+    },
+    {
+      "level": 2,
+      "line": 66,
+      "number": "6",
+      "title": "Console"
+    },
+    {
+      "level": 3,
+      "line": 72,
+      "number": "6.5",
+      "title": "The narrator's dashboard view"
+    },
+    {
+      "level": 2,
+      "line": 82,
+      "number": "7",
+      "title": "Still open"
+    },
+    {
+      "level": 2,
+      "line": 90,
+      "number": "8",
+      "title": "Implementation plan"
+    },
+    {
+      "level": 2,
+      "line": 110,
+      "number": "9",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 122,
+      "number": "10",
+      "title": "Risks"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/030-console-sessions-and-conversation-context.md",
+    "sha256": "2fa63af51d9f911630f3df754ae7cbd9a7c7afeb2f1fc56a1bbb3dcd5517a731"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 266,
+        "end_line": 6,
+        "line": 6,
+        "start": 165
+      },
+      "text": "status: approved   # decisions taken by the operator 2026-10-25; S1, S2 built, S3 and S5 partly (§8)"
+    },
+    "sha256": "2fa63af51d9f911630f3df754ae7cbd9a7c7afeb2f1fc56a1bbb3dcd5517a731",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "console",
+    "number": "030",
+    "stem": "030-console-sessions-and-conversation-context",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "030: Console Sessions and Conversation Context"
+  },
+  "summary": null
+}

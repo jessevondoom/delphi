@@ -1,0 +1,77 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 21,
+      "number": null,
+      "title": "Spec 079: Ingress taint regression test"
+    },
+    {
+      "level": 2,
+      "line": 26,
+      "number": "1",
+      "title": "Smallest slice"
+    },
+    {
+      "level": 2,
+      "line": 30,
+      "number": "2",
+      "title": "Measurement"
+    },
+    {
+      "level": 2,
+      "line": 33,
+      "number": "3",
+      "title": "Authority risk"
+    },
+    {
+      "level": 2,
+      "line": 36,
+      "number": "4",
+      "title": "What already covers it"
+    },
+    {
+      "level": 2,
+      "line": 43,
+      "number": "5",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 46,
+      "number": "6",
+      "title": "Verification"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/079-ingress-taint-regression-test.md",
+    "sha256": "1ed6cbaa2ab47894b0854e86e80c42669fee9900bcdc736f9b4428010b367360"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 207,
+        "end_line": 6,
+        "line": 6,
+        "start": 191
+      },
+      "text": "status: approved"
+    },
+    "sha256": "1ed6cbaa2ab47894b0854e86e80c42669fee9900bcdc736f9b4428010b367360",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "governance-and-safety",
+    "number": "079",
+    "stem": "079-ingress-taint-regression-test",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "079: Ingress taint regression test: every ingress has a core-assigned origin ceiling"
+  },
+  "summary": null
+}

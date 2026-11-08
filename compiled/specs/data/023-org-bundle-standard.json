@@ -1,0 +1,266 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 023: The Org Bundle Standard"
+    },
+    {
+      "level": 2,
+      "line": 21,
+      "number": "1",
+      "title": "Scope & Objectives"
+    },
+    {
+      "level": 3,
+      "line": 33,
+      "number": "1.1",
+      "title": "Non-Goals"
+    },
+    {
+      "level": 3,
+      "line": 39,
+      "number": "1.2",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 3,
+      "line": 43,
+      "number": "1.3",
+      "title": "Design Principles"
+    },
+    {
+      "level": 3,
+      "line": 51,
+      "number": "1.4",
+      "title": "Taxonomy"
+    },
+    {
+      "level": 2,
+      "line": 56,
+      "number": "2",
+      "title": "Directory Layout"
+    },
+    {
+      "level": 3,
+      "line": 101,
+      "number": "2.1",
+      "title": "The `sources/` section (amendment, 2026-10-29, [`specs/055`](055-the-central-library-sources-claims-and-pages.md))"
+    },
+    {
+      "level": 2,
+      "line": 115,
+      "number": "3",
+      "title": "The Manifest: `bundle.toml`"
+    },
+    {
+      "level": 3,
+      "line": 171,
+      "number": "3.1",
+      "title": "Field rules that carry provenance"
+    },
+    {
+      "level": 3,
+      "line": 177,
+      "number": "3.2",
+      "title": "`audience` is routing, not secrecy"
+    },
+    {
+      "level": 3,
+      "line": 180,
+      "number": "3.3",
+      "title": "`applies_to` keeps retrieval relevant"
+    },
+    {
+      "level": 3,
+      "line": 183,
+      "number": "3.4",
+      "title": "The file manifest `.delphi-bundle/files.json`"
+    },
+    {
+      "level": 2,
+      "line": 201,
+      "number": "4",
+      "title": "The Knowledge Section (`knowledge/`)"
+    },
+    {
+      "level": 3,
+      "line": 202,
+      "number": "4.1",
+      "title": "What goes here"
+    },
+    {
+      "level": 3,
+      "line": 205,
+      "number": "4.2",
+      "title": "File format"
+    },
+    {
+      "level": 3,
+      "line": 231,
+      "number": "4.3",
+      "title": "Decision records (`knowledge/decisions/`)"
+    },
+    {
+      "level": 3,
+      "line": 234,
+      "number": "4.4",
+      "title": "Pointers are display-only"
+    },
+    {
+      "level": 3,
+      "line": 237,
+      "number": "4.5",
+      "title": "`knowledge/index.md`"
+    },
+    {
+      "level": 2,
+      "line": 242,
+      "number": null,
+      "title": "5A. The Skills Section (`skills/`)"
+    },
+    {
+      "level": 2,
+      "line": 251,
+      "number": null,
+      "title": "5B. The Agents Section (`agents/`)"
+    },
+    {
+      "level": 2,
+      "line": 261,
+      "number": "6",
+      "title": "The Behavior Section (`behavior/`)"
+    },
+    {
+      "level": 3,
+      "line": 264,
+      "number": "6.1",
+      "title": "Goals (`behavior/goals.md`)"
+    },
+    {
+      "level": 3,
+      "line": 275,
+      "number": "6.2",
+      "title": "Perspectives (`behavior/perspectives.md`)"
+    },
+    {
+      "level": 3,
+      "line": 284,
+      "number": "6.3",
+      "title": "Role guidance (`behavior/roles/<role>.md`)"
+    },
+    {
+      "level": 3,
+      "line": 287,
+      "number": "6.4",
+      "title": "Rules (`behavior/heuristics.md`)"
+    },
+    {
+      "level": 3,
+      "line": 290,
+      "number": "6.5",
+      "title": "Tighten-only policy (`behavior/policies.toml`)"
+    },
+    {
+      "level": 2,
+      "line": 311,
+      "number": "7",
+      "title": "The Evals Section (`evals/delphi/`)"
+    },
+    {
+      "level": 2,
+      "line": 320,
+      "number": "8",
+      "title": "The Vectors Section (`vectors/`, optional)"
+    },
+    {
+      "level": 2,
+      "line": 338,
+      "number": "9",
+      "title": "Versioning and Compatibility"
+    },
+    {
+      "level": 2,
+      "line": 347,
+      "number": "10",
+      "title": "Validation Order (`delphi bundle validate <dir>`)"
+    },
+    {
+      "level": 2,
+      "line": 371,
+      "number": "11",
+      "title": "Worked Example"
+    },
+    {
+      "level": 2,
+      "line": 462,
+      "number": "12",
+      "title": "Acceptance Criteria"
+    },
+    {
+      "level": 2,
+      "line": 475,
+      "number": "13",
+      "title": "Verification Plan"
+    },
+    {
+      "level": 2,
+      "line": 478,
+      "number": "14",
+      "title": "Build Plan (slice B1 of `specs/022` §6)"
+    },
+    {
+      "level": 3,
+      "line": 485,
+      "number": "14.1",
+      "title": "As built (slice B1)"
+    },
+    {
+      "level": 2,
+      "line": 496,
+      "number": "15",
+      "title": "Open Questions"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/023-org-bundle-standard.md",
+    "sha256": "7ae445581b0a11f3405f9426b7bbc84dda55ddbedb5b7a40f749acb369967801"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 541,
+        "end_line": 6,
+        "line": 6,
+        "start": 190
+      },
+      "text": "status: approved   # by the operator, 2026-10-25: decisions OD-1..OD-9 and the recommendations of the set (relayed by the parent session); the text as written is approved when this pull request merges. Ratified in full by the operator 2026-10-28: every proposed decision and open question of the set (B-1..B-17, D-P1..D-P14) follows its recommendation"
+    },
+    "sha256": "7ae445581b0a11f3405f9426b7bbc84dda55ddbedb5b7a40f749acb369967801",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "sharing-and-bundles",
+    "number": "023",
+    "stem": "023-org-bundle-standard",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "023: The Org Bundle Standard: Manifest, Layout, Knowledge, Skills, Agents, Behavior & Vectors"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 1770,
+      "end_line": 22,
+      "line": 22,
+      "start": 1287
+    },
+    "text": "An **org bundle** is a directory an organization publishes so that every Delphi install in that organization starts from the same knowledge, the same working skills and agents, and the same stated goals and perspective. The operator's intent (2026-10-25): Delphi accelerates humans working in a specific collaborative environment, and the critical chore is a **standard** by which an organization's knowledge and skills are bundled, defined as a plugin, and worked against by a team."
+  }
+}

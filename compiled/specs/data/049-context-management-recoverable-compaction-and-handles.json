@@ -1,0 +1,101 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 049: Context management"
+    },
+    {
+      "level": 2,
+      "line": 19,
+      "number": "1",
+      "title": "Why"
+    },
+    {
+      "level": 2,
+      "line": 27,
+      "number": "2",
+      "title": "Principles"
+    },
+    {
+      "level": 2,
+      "line": 35,
+      "number": "3",
+      "title": "The additions"
+    },
+    {
+      "level": 2,
+      "line": 47,
+      "number": "4",
+      "title": "Where each lives"
+    },
+    {
+      "level": 2,
+      "line": 58,
+      "number": "5",
+      "title": "Invariants and tests"
+    },
+    {
+      "level": 2,
+      "line": 67,
+      "number": "6",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 76,
+      "number": "7",
+      "title": "Build plan"
+    },
+    {
+      "level": 2,
+      "line": 89,
+      "number": "8",
+      "title": "Decisions (answered by the operator 2026-10-28: the provisional answers are accepted; change on request)"
+    },
+    {
+      "level": 2,
+      "line": 96,
+      "number": "9",
+      "title": "Non-goals"
+    },
+    {
+      "level": 2,
+      "line": 100,
+      "number": "10",
+      "title": "Known limits"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/049-context-management-recoverable-compaction-and-handles.md",
+    "sha256": "ad885f36bc49f1e67cc2d050aa7ef0ee289183b6464bca87ecd516650888699d"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 478,
+        "end_line": 6,
+        "line": 6,
+        "start": 260
+      },
+      "text": "status: approved   # by the operator, 2026-10-28 (\"approve 049 and 050, follow your recommendation on the other decisions\"). Amends 045 T5/T6 and 030 §4.3. Slices that measure against spec 048 wait for 048's approval."
+    },
+    "sha256": "ad885f36bc49f1e67cc2d050aa7ef0ee289183b6464bca87ecd516650888699d",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "runtime-models-and-tools",
+    "number": "049",
+    "stem": "049-context-management-recoverable-compaction-and-handles",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "049: Context management: recoverable compaction, argument trimming, offload previews, structured digests and handle relay (draft)"
+  },
+  "summary": null
+}

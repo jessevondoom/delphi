@@ -1,0 +1,140 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 20,
+      "number": null,
+      "title": "Spec 084: Outcome stub, flip question, resume recap, learn history"
+    },
+    {
+      "level": 2,
+      "line": 26,
+      "number": "1",
+      "title": "Scope"
+    },
+    {
+      "level": 3,
+      "line": 37,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 45,
+      "number": "1.2",
+      "title": "Gate from spec 082 (read before approving S1)"
+    },
+    {
+      "level": 2,
+      "line": 49,
+      "number": "2",
+      "title": "What exists today (verified on origin/main, 2026-11-05)"
+    },
+    {
+      "level": 2,
+      "line": 58,
+      "number": "3",
+      "title": "S1: typed `outcome` on `record_session_summary`"
+    },
+    {
+      "level": 2,
+      "line": 68,
+      "number": "4",
+      "title": "S2: the question that would flip the verdict"
+    },
+    {
+      "level": 2,
+      "line": 77,
+      "number": "5",
+      "title": "S3: \"what changed since I left\" recap"
+    },
+    {
+      "level": 2,
+      "line": 86,
+      "number": "6",
+      "title": "S4: `delphi learn history`"
+    },
+    {
+      "level": 3,
+      "line": 90,
+      "number": "6.1",
+      "title": "Prerequisite found in code"
+    },
+    {
+      "level": 3,
+      "line": 94,
+      "number": "6.2",
+      "title": "The join"
+    },
+    {
+      "level": 2,
+      "line": 103,
+      "number": "7",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 111,
+      "number": "8",
+      "title": "Risks and mitigations (red-team seat)"
+    },
+    {
+      "level": 2,
+      "line": 125,
+      "number": "9",
+      "title": "Verification"
+    },
+    {
+      "level": 2,
+      "line": 133,
+      "number": "10",
+      "title": "Open questions"
+    },
+    {
+      "level": 2,
+      "line": 141,
+      "number": "11",
+      "title": "Slices (one pull request each)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/084-outcome-flip-question-resume-recap-learn-history.md",
+    "sha256": "1007d2e0933485c7053e183b9d7539b21bec85da4d0b28e187a2c2fd9e814e82"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 260,
+        "end_line": 6,
+        "line": 6,
+        "start": 244
+      },
+      "text": "status: approved"
+    },
+    "sha256": "1007d2e0933485c7053e183b9d7539b21bec85da4d0b28e187a2c2fd9e814e82",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "orchestration-and-council",
+    "number": "084",
+    "stem": "084-outcome-flip-question-resume-recap-learn-history",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "084: Outcome stub, flip question, resume recap, learn history: four phase-2 slices from the 2026-11-05 Council ranking"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2254,
+      "end_line": 33,
+      "line": 28,
+      "start": 1755
+    },
+    "text": "| Slice | Delivers | Hours |\n| :-- | :-- | --: |\n| S1 | typed `outcome` on `host.record_session_summary`, stored `untrusted/self_reported`, display-only | 7 |\n| S2 | `council_result` returns the one question that would change the verdict, only when a real dissent exists | 9 |\n| S3 | a three-line \"what changed since I left\" recap at console resume, from events only, no model call | 8 |\n| S4 | `delphi learn history`: accepted rules joined to later reverts and denials, labelled \"co-occurred\" | 9 |"
+  }
+}

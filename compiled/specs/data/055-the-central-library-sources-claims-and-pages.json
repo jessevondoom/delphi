@@ -1,0 +1,215 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 055: The central library"
+    },
+    {
+      "level": 2,
+      "line": 19,
+      "number": "1",
+      "title": "Why"
+    },
+    {
+      "level": 3,
+      "line": 24,
+      "number": "1.1",
+      "title": "Non-Goals"
+    },
+    {
+      "level": 3,
+      "line": 30,
+      "number": "1.2",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 33,
+      "number": "2",
+      "title": "Three layers"
+    },
+    {
+      "level": 2,
+      "line": 42,
+      "number": "3",
+      "title": "Sources"
+    },
+    {
+      "level": 3,
+      "line": 44,
+      "number": "3.1",
+      "title": "Capture levels"
+    },
+    {
+      "level": 3,
+      "line": 55,
+      "number": "3.2",
+      "title": "Layout and record"
+    },
+    {
+      "level": 4,
+      "line": 66,
+      "number": "3.2.1",
+      "title": "Metadata (built for bibliographies)"
+    },
+    {
+      "level": 3,
+      "line": 73,
+      "number": "3.3",
+      "title": "Licence classes (engineering policy, configurable)"
+    },
+    {
+      "level": 3,
+      "line": 85,
+      "number": "3.4",
+      "title": "How a source is captured"
+    },
+    {
+      "level": 3,
+      "line": 90,
+      "number": "3.5",
+      "title": "Staying current (operator decision, 2026-10-29)"
+    },
+    {
+      "level": 3,
+      "line": 98,
+      "number": "3.6",
+      "title": "Budgets for full capture"
+    },
+    {
+      "level": 3,
+      "line": 101,
+      "number": "3.7",
+      "title": "Takedown"
+    },
+    {
+      "level": 3,
+      "line": 104,
+      "number": "3.8",
+      "title": "Source reliability"
+    },
+    {
+      "level": 2,
+      "line": 107,
+      "number": "4",
+      "title": "Claims"
+    },
+    {
+      "level": 3,
+      "line": 109,
+      "number": "4.1",
+      "title": "A claim record"
+    },
+    {
+      "level": 3,
+      "line": 114,
+      "number": "4.2",
+      "title": "Attribution stays attribution"
+    },
+    {
+      "level": 3,
+      "line": 117,
+      "number": "4.3",
+      "title": "Anchors survive source updates"
+    },
+    {
+      "level": 2,
+      "line": 120,
+      "number": "5",
+      "title": "One library for every mission"
+    },
+    {
+      "level": 2,
+      "line": 126,
+      "number": "6",
+      "title": "Pages: the readable view"
+    },
+    {
+      "level": 2,
+      "line": 134,
+      "number": "7",
+      "title": "Sharing, bundles and Xenia (front-loaded changes)"
+    },
+    {
+      "level": 2,
+      "line": 141,
+      "number": "8",
+      "title": "Acquisition: building a library worth browsing"
+    },
+    {
+      "level": 2,
+      "line": 148,
+      "number": "9",
+      "title": "Interaction with other specs"
+    },
+    {
+      "level": 2,
+      "line": 155,
+      "number": "10",
+      "title": "Safety and authority"
+    },
+    {
+      "level": 3,
+      "line": 162,
+      "number": "10.1",
+      "title": "`private` is enforced at every outbound path"
+    },
+    {
+      "level": 2,
+      "line": 165,
+      "number": "11",
+      "title": "Slices"
+    },
+    {
+      "level": 3,
+      "line": 180,
+      "number": "11.1",
+      "title": "SK0b checklist (buildable; each item has a test)"
+    },
+    {
+      "level": 2,
+      "line": 189,
+      "number": "12",
+      "title": "Verification"
+    },
+    {
+      "level": 2,
+      "line": 198,
+      "number": "13",
+      "title": "Decisions (operator, 2026-10-29)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/055-the-central-library-sources-claims-and-pages.md",
+    "sha256": "9a14029a0fcb9d290ab8da9ed0fd38d713d969679eca5b8bde43d45d47654fc3"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 441,
+        "end_line": 6,
+        "line": 6,
+        "start": 242
+      },
+      "text": "status: approved   # ratified by the operator, 2026-10-29: \"all your changes are accepted and approved. write the specs and mark them ratified since we built them together\"; the answers in §13 stand"
+    },
+    "sha256": "9a14029a0fcb9d290ab8da9ed0fd38d713d969679eca5b8bde43d45d47654fc3",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "knowledge-and-memory",
+    "number": "055",
+    "stem": "055-the-central-library-sources-claims-and-pages",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "055: The central library: sources kept whole or by excerpt, claims that point into them, and pages generated from claims"
+  },
+  "summary": null
+}

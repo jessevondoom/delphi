@@ -1,0 +1,149 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 059: A smooth operator lifecycle from install through everyday use"
+    },
+    {
+      "level": 2,
+      "line": 20,
+      "number": "1",
+      "title": "Goal and operator promise"
+    },
+    {
+      "level": 2,
+      "line": 28,
+      "number": "2",
+      "title": "Lifecycle states"
+    },
+    {
+      "level": 2,
+      "line": 41,
+      "number": "3",
+      "title": "Install experience"
+    },
+    {
+      "level": 3,
+      "line": 43,
+      "number": "3.1",
+      "title": "Supported paths"
+    },
+    {
+      "level": 3,
+      "line": 49,
+      "number": "3.2",
+      "title": "Verification and authentication"
+    },
+    {
+      "level": 3,
+      "line": 56,
+      "number": "3.3",
+      "title": "Completion message"
+    },
+    {
+      "level": 2,
+      "line": 60,
+      "number": "4",
+      "title": "First-run onboarding"
+    },
+    {
+      "level": 3,
+      "line": 62,
+      "number": "4.1",
+      "title": "One front door"
+    },
+    {
+      "level": 3,
+      "line": 66,
+      "number": "4.2",
+      "title": "Project choice"
+    },
+    {
+      "level": 3,
+      "line": 77,
+      "number": "4.3",
+      "title": "Model setup and first useful interaction"
+    },
+    {
+      "level": 3,
+      "line": 85,
+      "number": "4.4",
+      "title": "Noninteractive behavior"
+    },
+    {
+      "level": 2,
+      "line": 89,
+      "number": "5",
+      "title": "Routine startup"
+    },
+    {
+      "level": 2,
+      "line": 98,
+      "number": "6",
+      "title": "Update experience (excluding rollback/recovery redesign)"
+    },
+    {
+      "level": 2,
+      "line": 106,
+      "number": "7",
+      "title": "Commands and discoverability"
+    },
+    {
+      "level": 2,
+      "line": 121,
+      "number": "8",
+      "title": "Safety and privacy invariants"
+    },
+    {
+      "level": 2,
+      "line": 129,
+      "number": "9",
+      "title": "Slices"
+    },
+    {
+      "level": 2,
+      "line": 142,
+      "number": "10",
+      "title": "Verification"
+    },
+    {
+      "level": 2,
+      "line": 153,
+      "number": "11",
+      "title": "Decisions (operator, 2026-10-30)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/059-operator-lifecycle-experience.md",
+    "sha256": "a9c3bc6d8fb9ae40690461bba357c37b9efef939b6577f6422c26f6aac417bc5"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 332,
+        "end_line": 6,
+        "line": 6,
+        "start": 173
+      },
+      "text": "status: approved   # approved for implementation by the operator's request on 2026-10-30: \"craft the specs, commands, and user flows ... start coding the rest\""
+    },
+    "sha256": "a9c3bc6d8fb9ae40690461bba357c37b9efef939b6577f6422c26f6aac417bc5",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "install-and-lifecycle",
+    "number": "059",
+    "stem": "059-operator-lifecycle-experience",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "059: A smooth operator lifecycle from install through everyday use"
+  },
+  "summary": null
+}

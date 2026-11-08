@@ -1,0 +1,128 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 022: The Sharing Layer"
+    },
+    {
+      "level": 2,
+      "line": 19,
+      "number": "1",
+      "title": "Scope & Objectives"
+    },
+    {
+      "level": 3,
+      "line": 30,
+      "number": "1.1",
+      "title": "Non-Goals"
+    },
+    {
+      "level": 3,
+      "line": 35,
+      "number": "1.2",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 40,
+      "number": "2",
+      "title": "Layer Map"
+    },
+    {
+      "level": 2,
+      "line": 77,
+      "number": "3",
+      "title": "Taxonomy and Concept Model"
+    },
+    {
+      "level": 2,
+      "line": 102,
+      "number": "4",
+      "title": "Decisions"
+    },
+    {
+      "level": 3,
+      "line": 103,
+      "number": "4.1",
+      "title": "Made by the operator (2026-10-25)"
+    },
+    {
+      "level": 3,
+      "line": 116,
+      "number": "4.2",
+      "title": "Proposed in the set, ratified by the operator 2026-10-28 (\"shift all org bundle specs to ratified\"; D-P1..D-P14 as written)"
+    },
+    {
+      "level": 2,
+      "line": 136,
+      "number": "5",
+      "title": "Amendments This Set Needs to Earlier Specs (proposed text, applied when the set is approved)"
+    },
+    {
+      "level": 2,
+      "line": 157,
+      "number": "6",
+      "title": "Phased Plan"
+    },
+    {
+      "level": 2,
+      "line": 182,
+      "number": "7",
+      "title": "Questions: Resolved (all, 2026-10-28)"
+    },
+    {
+      "level": 2,
+      "line": 205,
+      "number": "8",
+      "title": "Verification Plan"
+    },
+    {
+      "level": 2,
+      "line": 208,
+      "number": "9",
+      "title": "What Exists Today, Stated Once More"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/022-xenia-sharing-overview.md",
+    "sha256": "83eafbe7a925151494d06cdd5e419c3b23c3f0a0e51233820835dd37bed4a307"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 541,
+        "end_line": 6,
+        "line": 6,
+        "start": 190
+      },
+      "text": "status: approved   # by the operator, 2026-10-25: decisions OD-1..OD-9 and the recommendations of the set (relayed by the parent session); the text as written is approved when this pull request merges. Ratified in full by the operator 2026-10-28: every proposed decision and open question of the set (B-1..B-17, D-P1..D-P14) follows its recommendation"
+    },
+    "sha256": "83eafbe7a925151494d06cdd5e419c3b23c3f0a0e51233820835dd37bed4a307",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "sharing-and-bundles",
+    "number": "022",
+    "stem": "022-xenia-sharing-overview",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "022: The Sharing Layer: Xenia, Org Bundles & Compatibility (Overview, Phasing & Decisions)"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2976,
+      "end_line": 20,
+      "line": 20,
+      "start": 2120
+    },
+    "text": "The operator's intent (2026-10-24 and 2026-10-25): Delphi is not a replacement for Claude Code. It accelerates humans working in a specific collaborative environment; with knowledge and understanding shared across a team, results get better, and the strategist can help a team cut through with ideas driven by consistent knowledge and goals. The critical chore is a **standard by which an organization's knowledge and skills are bundled for Delphi**, so a bundle can be defined as a plugin carrying one organization's knowledge and expertise, and teams can work against it, aligning on knowledge, perspective and strategy. Alongside it: define **xenia** (cross-install sharing of memory, knowledge, context and skills) more carefully, and make skill, agent and tool plugins **as widely compatible as possible** rather than inventing an incompatible format."
+  }
+}

@@ -727,6 +727,22 @@ mod tests {
         assert_eq!(parsed(&p.search_project("quokka", 10).unwrap()), all);
     }
 
+    // specs/088 section 2: a compiled spec view is never offered to a host as a project file. The tool serves `_index.md` and four
+    // scaffold folders, and the compiled directory is none of them. (Its name is built, not written out; see
+    // crates/delphi/tests/compiled_specs.rs.)
+    #[test]
+    fn the_compiled_spec_directory_is_not_a_project_file() {
+        let (_t, ws, root) = fixture();
+        for name in ["index.md", "console.md", "data/001-a.md"] {
+            let p = root.join("compiled").join("specs").join(name);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, "# a compiled view\n").unwrap();
+        }
+        let listed: Vec<String> = Project::new(&ws, &root).resources().iter().map(|r| r["name"].as_str().unwrap_or("").to_string()).collect();
+        assert!(listed.iter().any(|n| n == "specs/001-a.md"), "the control spec is listed: {:?}", listed);
+        assert!(listed.iter().all(|n| !n.contains("compiled")), "nothing from the compiled directory: {:?}", listed);
+    }
+
     #[test]
     fn an_empty_result_says_why_and_the_hint_never_repeats_the_query() {
         let (_t, ws, root) = fixture();

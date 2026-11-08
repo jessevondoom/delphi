@@ -1,0 +1,134 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 073: Console adaptive contrast and dual-mode palette"
+    },
+    {
+      "level": 2,
+      "line": 23,
+      "number": "1",
+      "title": "Scope & Problem Statement"
+    },
+    {
+      "level": 3,
+      "line": 41,
+      "number": "1.1",
+      "title": "Non-Goals"
+    },
+    {
+      "level": 2,
+      "line": 49,
+      "number": "2",
+      "title": "Contrast Standards & Mathematical Foundation"
+    },
+    {
+      "level": 3,
+      "line": 61,
+      "number": null,
+      "title": "Targets:"
+    },
+    {
+      "level": 2,
+      "line": 68,
+      "number": "3",
+      "title": "The Dual-Mode Semantic Palette (CP-1)"
+    },
+    {
+      "level": 3,
+      "line": 85,
+      "number": "3.1",
+      "title": "Ambient Context Architecture & Caching Discipline"
+    },
+    {
+      "level": 4,
+      "line": 117,
+      "number": null,
+      "title": "Performance Invariant (`[BLD-01]`):"
+    },
+    {
+      "level": 2,
+      "line": 122,
+      "number": "4",
+      "title": "Avatar Role Contrast Adaptation (CP-2)"
+    },
+    {
+      "level": 3,
+      "line": 139,
+      "number": null,
+      "title": "Role Color Pairings"
+    },
+    {
+      "level": 2,
+      "line": 155,
+      "number": "5",
+      "title": "Terminal Detection & Fallback Discipline (CP-3)"
+    },
+    {
+      "level": 3,
+      "line": 164,
+      "number": "5.1",
+      "title": "OSC 11 Security & Sanitization (`[RED-01]`)"
+    },
+    {
+      "level": 2,
+      "line": 174,
+      "number": "6",
+      "title": "Rust Console Parity"
+    },
+    {
+      "level": 2,
+      "line": 183,
+      "number": "7",
+      "title": "Verification Invariants & Automated Tests"
+    },
+    {
+      "level": 2,
+      "line": 206,
+      "number": "8",
+      "title": "Build Plan & Implementation Slices"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/073-console-adaptive-contrast-and-dual-mode-palette.md",
+    "sha256": "499fd00437dc5246bae005a890fcd1a7d00110bfadec99b8c91e00cb32ad786a"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 258,
+        "end_line": 6,
+        "line": 6,
+        "start": 242
+      },
+      "text": "status: approved"
+    },
+    "sha256": "499fd00437dc5246bae005a890fcd1a7d00110bfadec99b8c91e00cb32ad786a",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "console",
+    "number": "073",
+    "stem": "073-console-adaptive-contrast-and-dual-mode-palette",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "073: Console adaptive contrast: dual-mode semantic palette, avatar role contrast adaptation, and WCAG AA verification"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 1541,
+      "end_line": 25,
+      "line": 25,
+      "start": 1138
+    },
+    "text": "Delphi's visual interface relies on the core principle: *\"The terminal's theme is the palette\"* ([`specs/005e`](005e-console-ux-review-and-redesign.md) §4.1). However, the initial semantic vocabulary ([`specs/053`](053-console-visual-language.md)) and avatar role chassis colors ([`crates/delphi/src/avatar.rs`](../crates/delphi/src/avatar.rs)) were chosen exclusively against dark-background consoles."
+  }
+}

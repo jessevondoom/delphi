@@ -1,0 +1,77 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 20,
+      "number": null,
+      "title": "Spec 080: KB read-count report"
+    },
+    {
+      "level": 2,
+      "line": 25,
+      "number": "1",
+      "title": "Slices"
+    },
+    {
+      "level": 2,
+      "line": 39,
+      "number": "2",
+      "title": "Measurement"
+    },
+    {
+      "level": 2,
+      "line": 43,
+      "number": "3",
+      "title": "Authority risk"
+    },
+    {
+      "level": 2,
+      "line": 46,
+      "number": "4",
+      "title": "What already covers it"
+    },
+    {
+      "level": 2,
+      "line": 52,
+      "number": "5",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 55,
+      "number": "6",
+      "title": "Verification"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/080-kb-read-count-report.md",
+    "sha256": "50707aabd2d17e2fa8f87b54030363c72505839e26f90fa287662f3bb80831b7"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 208,
+        "end_line": 6,
+        "line": 6,
+        "start": 192
+      },
+      "text": "status: approved"
+    },
+    "sha256": "50707aabd2d17e2fa8f87b54030363c72505839e26f90fa287662f3bb80831b7",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "knowledge-and-memory",
+    "number": "080",
+    "stem": "080-kb-read-count-report",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "080: KB read-count report: a documented jq recipe, host-read event and security|constraint tag"
+  },
+  "summary": null
+}

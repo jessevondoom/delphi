@@ -1,0 +1,83 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 032: The change log"
+    },
+    {
+      "level": 2,
+      "line": 17,
+      "number": "1",
+      "title": "What this is"
+    },
+    {
+      "level": 2,
+      "line": 20,
+      "number": "2",
+      "title": "Decisions (operator, 2026-10-25)"
+    },
+    {
+      "level": 2,
+      "line": 29,
+      "number": "3",
+      "title": "The tool and the event"
+    },
+    {
+      "level": 2,
+      "line": 34,
+      "number": "4",
+      "title": "Where it is read"
+    },
+    {
+      "level": 2,
+      "line": 39,
+      "number": "5",
+      "title": "Pull request summaries"
+    },
+    {
+      "level": 2,
+      "line": 42,
+      "number": "6",
+      "title": "Built"
+    },
+    {
+      "level": 2,
+      "line": 45,
+      "number": "7",
+      "title": "Open"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/032-change-log.md",
+    "sha256": "2872cfc0082472bba5e59b9072aa5c087dce6cbe6bbf2b04347000d51af4018b"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 260,
+        "end_line": 6,
+        "line": 6,
+        "start": 159
+      },
+      "text": "status: approved   # decided by the operator 2026-10-25, approved 2026-10-26; built and merged (#187)"
+    },
+    "sha256": "2872cfc0082472bba5e59b9072aa5c087dce6cbe6bbf2b04347000d51af4018b",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "console",
+    "number": "032",
+    "stem": "032-change-log",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "032: The change log (results, not reasoning) replaces the thinking pane"
+  },
+  "summary": null
+}

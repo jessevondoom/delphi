@@ -1,0 +1,170 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 090: Renumber the three shared spec numbers, once"
+    },
+    {
+      "level": 2,
+      "line": 25,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 3,
+      "line": 54,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 63,
+      "number": "1.2",
+      "title": "Simpler alternatives considered"
+    },
+    {
+      "level": 2,
+      "line": 71,
+      "number": "2",
+      "title": "Which spec of each pair moves"
+    },
+    {
+      "level": 3,
+      "line": 73,
+      "number": "2.1",
+      "title": "The rule"
+    },
+    {
+      "level": 3,
+      "line": 88,
+      "number": "2.2",
+      "title": "Recommendation"
+    },
+    {
+      "level": 3,
+      "line": 92,
+      "number": "2.3",
+      "title": "The new numbers"
+    },
+    {
+      "level": 2,
+      "line": 98,
+      "number": "3",
+      "title": "The operation"
+    },
+    {
+      "level": 3,
+      "line": 100,
+      "number": "3.1",
+      "title": "Rename and edit the three files"
+    },
+    {
+      "level": 3,
+      "line": 104,
+      "number": "3.2",
+      "title": "Path pointers"
+    },
+    {
+      "level": 3,
+      "line": 108,
+      "number": "3.3",
+      "title": "Bare citations: the map"
+    },
+    {
+      "level": 3,
+      "line": 118,
+      "number": "3.4",
+      "title": "A one-time strict check"
+    },
+    {
+      "level": 3,
+      "line": 122,
+      "number": "3.5",
+      "title": "The permanent guard"
+    },
+    {
+      "level": 3,
+      "line": 126,
+      "number": "3.6",
+      "title": "History"
+    },
+    {
+      "level": 3,
+      "line": 130,
+      "number": "3.7",
+      "title": "Ratification"
+    },
+    {
+      "level": 2,
+      "line": 136,
+      "number": "4",
+      "title": "What does not change"
+    },
+    {
+      "level": 2,
+      "line": 146,
+      "number": "5",
+      "title": "Verification plan"
+    },
+    {
+      "level": 2,
+      "line": 158,
+      "number": "6",
+      "title": "Risks"
+    },
+    {
+      "level": 2,
+      "line": 169,
+      "number": "7",
+      "title": "Slices (one pull request each)"
+    },
+    {
+      "level": 2,
+      "line": 180,
+      "number": "8",
+      "title": "Decisions for the operator"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/090-renumber-the-shared-spec-numbers.md",
+    "sha256": "46eca9c9ba295bf669f13c9ef02f75d8496538bec9daae33eb9c58a40b11a494"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 370,
+        "end_line": 6,
+        "line": 6,
+        "start": 184
+      },
+      "text": "status: approved   # by the operator, 2026-11-07 (\"approve both 088 and 090\"), after the recommendations for OD-1 to OD-6 were shown; the work waits for a quiet window the operator picks"
+    },
+    "sha256": "46eca9c9ba295bf669f13c9ef02f75d8496538bec9daae33eb9c58a40b11a494",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "governance-and-safety",
+    "number": "090",
+    "stem": "090-renumber-the-shared-spec-numbers",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "090: A one-time renumbering of the three spec numbers that two specs share"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2978,
+      "end_line": 27,
+      "line": 27,
+      "start": 2896
+    },
+    "text": "Three numbers are used by two spec files each (first commit dates from `git log`):"
+  }
+}

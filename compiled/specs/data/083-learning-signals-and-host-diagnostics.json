@@ -1,0 +1,116 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 19,
+      "number": null,
+      "title": "Spec 083: Learning signals and host diagnostics"
+    },
+    {
+      "level": 2,
+      "line": 25,
+      "number": "1",
+      "title": "Scope"
+    },
+    {
+      "level": 3,
+      "line": 36,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 2,
+      "line": 44,
+      "number": "2",
+      "title": "What exists today (verified on main, 2026-11-05)"
+    },
+    {
+      "level": 2,
+      "line": 51,
+      "number": "3",
+      "title": "S1: host-chain diagnostic"
+    },
+    {
+      "level": 2,
+      "line": 61,
+      "number": "4",
+      "title": "S2: learning-health line"
+    },
+    {
+      "level": 2,
+      "line": 73,
+      "number": "5",
+      "title": "S3: learning-signal slice"
+    },
+    {
+      "level": 2,
+      "line": 83,
+      "number": "6",
+      "title": "S4: `duplicate_of` on `host.propose_note`"
+    },
+    {
+      "level": 2,
+      "line": 91,
+      "number": "7",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 99,
+      "number": "8",
+      "title": "Risks and mitigations (red-team seat)"
+    },
+    {
+      "level": 2,
+      "line": 113,
+      "number": "9",
+      "title": "Verification"
+    },
+    {
+      "level": 2,
+      "line": 121,
+      "number": "10",
+      "title": "Slices (one pull request each)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/083-learning-signals-and-host-diagnostics.md",
+    "sha256": "6bbacccbfaf885af492f890dcbd3751ab7d226efb2f2a9e538c64d6c5da617bf"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 228,
+        "end_line": 6,
+        "line": 6,
+        "start": 212
+      },
+      "text": "status: approved"
+    },
+    "sha256": "6bbacccbfaf885af492f890dcbd3751ab7d226efb2f2a9e538c64d6c5da617bf",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "learning-and-evals",
+    "number": "083",
+    "stem": "083-learning-signals-and-host-diagnostics",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "083: Learning signals and host diagnostics: four small slices from the 2026-11-05 Council ranking"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 1911,
+      "end_line": 32,
+      "line": 27,
+      "start": 1290
+    },
+    "text": "| Slice | Delivers | Hours (builder-corrected) |\n| :-- | :-- | --: |\n| S1 | `delphi doctor` host-chain section: first failing link and the exact fix, printed, never applied | 7 |\n| S2 | One quiet learning-health line in the console footer: staged count, awaiting-review count, age of the oldest | 7 |\n| S3 | Learning-signal slice: recurrence count on staged notes, dismissed-claim memory for non-contact triggers, seat-keyed Council claims; may split into S3a (dismissal, 4 h) and S3b (recurrence and seat, 10 h) | 14 |\n| S4 | `host.propose_note` returns `duplicate_of` for the same host session's own earlier notes | 5 |"
+  }
+}

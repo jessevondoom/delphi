@@ -1,0 +1,152 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 005f: Console Redesign Build Plan"
+    },
+    {
+      "level": 2,
+      "line": 22,
+      "number": null,
+      "title": "Scope"
+    },
+    {
+      "level": 2,
+      "line": 25,
+      "number": null,
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 28,
+      "number": null,
+      "title": "Verification Plan"
+    },
+    {
+      "level": 2,
+      "line": 31,
+      "number": "0",
+      "title": "Ground rules"
+    },
+    {
+      "level": 2,
+      "line": 40,
+      "number": "1",
+      "title": "Slice 1: first run, the no-model state, attention cards (6 h)"
+    },
+    {
+      "level": 2,
+      "line": 55,
+      "number": "2",
+      "title": "Slice 2: palette and capabilities (4 h)"
+    },
+    {
+      "level": 2,
+      "line": 70,
+      "number": "3",
+      "title": "Slice 3: header, footer, badges, help (8 h)"
+    },
+    {
+      "level": 2,
+      "line": 87,
+      "number": "4",
+      "title": "Slice 4: chat soft-fill blocks (10 h)"
+    },
+    {
+      "level": 2,
+      "line": 103,
+      "number": "5",
+      "title": "Slice 5: the activity ticker with finished history (5 h)"
+    },
+    {
+      "level": 2,
+      "line": 116,
+      "number": "6",
+      "title": "Slice 6: one command set and parity (4 h)"
+    },
+    {
+      "level": 2,
+      "line": 124,
+      "number": "7",
+      "title": "Slice 7: daemon data for the narrator (5 h)"
+    },
+    {
+      "level": 2,
+      "line": 134,
+      "number": "8",
+      "title": "Slice 8: narrator chrome, six views, arrows only (8 h)"
+    },
+    {
+      "level": 2,
+      "line": 149,
+      "number": "9",
+      "title": "Slice 9: the epic rail and the council weave (12 h)"
+    },
+    {
+      "level": 2,
+      "line": 162,
+      "number": "10",
+      "title": "Slice 10: restyle the remaining narrator views (6 h)"
+    },
+    {
+      "level": 2,
+      "line": 166,
+      "number": "11",
+      "title": "Slice 11: real-terminal pass (3 h, a person)"
+    },
+    {
+      "level": 2,
+      "line": 170,
+      "number": "12",
+      "title": "Definition of done (whole plan)"
+    },
+    {
+      "level": 2,
+      "line": 179,
+      "number": "13",
+      "title": "Handoff"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/005f-console-redesign-build-plan.md",
+    "sha256": "1fd6349384590ab2f2d80d03aeda782bc5dc57e6b2efe4fd1d8a70f00b360a58"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 328,
+        "end_line": 6,
+        "line": 6,
+        "start": 182
+      },
+      "text": "status: approved   # by the operator, 2026-10-25, with 005e; the amendments it lists (005a-A1, 005b-A3, 005d-A1, tui-design) ratified the same day"
+    },
+    "sha256": "1fd6349384590ab2f2d80d03aeda782bc5dc57e6b2efe4fd1d8a70f00b360a58",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "console",
+    "number": "005f",
+    "stem": "005f-console-redesign-build-plan",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "005f: Console Redesign Build Plan (ordered slices for an implementing model)"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 1955,
+      "end_line": 23,
+      "line": 23,
+      "start": 1458
+    },
+    "text": "Eleven slices that implement the decided design of `005e` §§5-11: first run and attention cards, palette and capabilities, header/footer/badges/help, chat soft-fill blocks, the activity ticker, one command set, daemon data for the narrator, narrator chrome, the epic rail and council weave, the remaining narrator views, and a real-terminal pass. Not in scope: the daemon protocol beyond slice 7, the approval semantics, the badge and mascot invariants of `005a`, Windows, the chromeless viewer."
+  }
+}

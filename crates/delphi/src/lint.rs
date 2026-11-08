@@ -90,7 +90,25 @@ pub fn run(tree: &Tree) -> Report {
     check_councils(tree, &mut r);
     check_memory_writes(tree, &mut r);
     check_spec_numbers(tree, &mut r);
+    check_spec_group_lines(tree, &mut r);
     r
+}
+
+// ── a group named in a spec (specs/088 section 4.1) ───────────────────────────
+
+/// A spec's group is declared in one place, the hand-written groups file the spec compile reads, and a `group:` line in a spec's
+/// own frontmatter is ignored. The warning stops the line from being believed: a reader would take it for the truth when it is
+/// dead text, and adding it to an approved spec would change that spec's hash. Source repo only.
+fn check_spec_group_lines(tree: &Tree, r: &mut Report) {
+    if tree.mode != Mode::Repo {
+        return;
+    }
+    for path in tree.files.keys().filter(|p| p.strip_prefix("specs/").is_some_and(|n| !n.contains('/') && n.ends_with(".md"))) {
+        let Some(fm) = tree.read(path).as_deref().and_then(frontmatter_of) else { continue };
+        if fm.contains_key("group") {
+            r.warn("spec-group-line", path.clone(), "a `group:` line in a spec's frontmatter is ignored; a spec's group is declared in the groups file (spec 088 section 4.1)");
+        }
+    }
 }
 
 // ── spec numbers (specs/090) ────────────────────────────────────────────────
@@ -943,6 +961,16 @@ mod tests {
             ("specs/006-installer.md", "h"),
         ]);
         assert!(fails(&tree, "spec-number").is_empty(), "{:?}", fails(&tree, "spec-number"));
+    }
+
+    // specs/088: a group named in a spec is ignored, and lint says so (a warning, never a failure).
+    #[test]
+    fn a_group_line_in_a_spec_warns_and_a_spec_without_one_does_not() {
+        let with = "---\nid: spec-001-a\ntitle: A\nstatus: approved\ngroup: console\n---\nbody\n";
+        let without = "---\nid: spec-002-b\ntitle: B\nstatus: approved\n---\nbody\n";
+        let (_t, tree) = tree_of(&[("specs/001-a.md", with), ("specs/002-b.md", without), ("specs/history/003-c.md", with), ("docs/x.md", with)]);
+        let warns: Vec<String> = run(&tree).findings.into_iter().filter(|f| f.check == "spec-group-line").map(|f| format!("{:?} {}", f.level, f.location)).collect();
+        assert_eq!(warns, vec!["Warn specs/001-a.md".to_string()], "only a spec directly under specs/ with the line");
     }
 
     #[test]

@@ -1,0 +1,164 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 063: Agent Fleet Behaviors, Dynamic Orchestration, and Curated Knowledge"
+    },
+    {
+      "level": 2,
+      "line": 22,
+      "number": "1",
+      "title": "Goal"
+    },
+    {
+      "level": 2,
+      "line": 32,
+      "number": "2",
+      "title": "Scope & Boundaries"
+    },
+    {
+      "level": 2,
+      "line": 41,
+      "number": "3",
+      "title": "Fleet Visibility & Session Scoping"
+    },
+    {
+      "level": 3,
+      "line": 43,
+      "number": "3.1",
+      "title": "Workspace Configuration (`config.toml`)"
+    },
+    {
+      "level": 3,
+      "line": 52,
+      "number": "3.2",
+      "title": "In-Session Addressability Lifecycle"
+    },
+    {
+      "level": 3,
+      "line": 59,
+      "number": "3.3",
+      "title": "Active Floor Control & Active Monitoring"
+    },
+    {
+      "level": 2,
+      "line": 67,
+      "number": "4",
+      "title": "Agent Behaviors & Specialized Skills"
+    },
+    {
+      "level": 3,
+      "line": 69,
+      "number": "4.1",
+      "title": "`orchestrator`"
+    },
+    {
+      "level": 3,
+      "line": 79,
+      "number": "4.2",
+      "title": "`architect`"
+    },
+    {
+      "level": 3,
+      "line": 84,
+      "number": "4.3",
+      "title": "`builder`"
+    },
+    {
+      "level": 3,
+      "line": 88,
+      "number": "4.4",
+      "title": "`red-team`"
+    },
+    {
+      "level": 3,
+      "line": 93,
+      "number": "4.5",
+      "title": "`strategist`"
+    },
+    {
+      "level": 3,
+      "line": 98,
+      "number": "4.6",
+      "title": "`investigator`"
+    },
+    {
+      "level": 3,
+      "line": 103,
+      "number": "4.7",
+      "title": "`scout`"
+    },
+    {
+      "level": 3,
+      "line": 109,
+      "number": "4.8",
+      "title": "`writer`"
+    },
+    {
+      "level": 2,
+      "line": 115,
+      "number": "5",
+      "title": "Curated Seed Knowledge Base"
+    },
+    {
+      "level": 2,
+      "line": 127,
+      "number": "6",
+      "title": "Implementation Slices"
+    },
+    {
+      "level": 2,
+      "line": 139,
+      "number": "7",
+      "title": "Acceptance Gates"
+    },
+    {
+      "level": 2,
+      "line": 148,
+      "number": "8",
+      "title": "Candidate, not built: scale effort to the question (added 2026-11-07)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/063-agent-fleet-behaviors-and-dynamic-orchestration.md",
+    "sha256": "754f51675ad680b9e3be0941f47aeb36cbc32d10d3a4b91cccf02c823754dea2"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 213,
+        "end_line": 6,
+        "line": 6,
+        "start": 197
+      },
+      "text": "status: approved"
+    },
+    "sha256": "754f51675ad680b9e3be0941f47aeb36cbc32d10d3a4b91cccf02c823754dea2",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "orchestration-and-council",
+    "number": "063",
+    "stem": "063-agent-fleet-behaviors-and-dynamic-orchestration",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "063: Agent Fleet Behaviors, Dynamic Orchestration, and Curated Knowledge"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 3644,
+      "end_line": 37,
+      "line": 34,
+      "start": 2891
+    },
+    "text": "- **No authority expansion.** Agents operate strictly within their existing manifest permissions (`agents/<role>/AGENT.md`). Internal specialists cannot execute Red actions without the operator's explicit card approval.\n- **Card escalation framing.** When a delegated specialist initiates an action requiring operator approval (Red tier), the approval card displays both the specialist identity and the delegating chain of command: `[orchestrator > <specialist>]`.\n- **Deterministic isolation.** Quarantined agents (`forbidden`) fail dispatch closed at the engine level; no prompt text or model routing can bypass quarantine.\n- **Strict budget enforcement.** The `/solo` toggle strictly bounds multi-agent peer consultations during interactive sessions."
+  }
+}

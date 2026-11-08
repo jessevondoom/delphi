@@ -1,0 +1,116 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 003: Orchestrator DAG Execution & 3-Round Sparse Council State Machine"
+    },
+    {
+      "level": 2,
+      "line": 17,
+      "number": "1",
+      "title": "Scope & Objectives"
+    },
+    {
+      "level": 3,
+      "line": 23,
+      "number": "1.1",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 3,
+      "line": 28,
+      "number": "1.2",
+      "title": "Phase Mapping"
+    },
+    {
+      "level": 2,
+      "line": 36,
+      "number": "2",
+      "title": "Orchestrator's Complexity Escalation Ladder"
+    },
+    {
+      "level": 2,
+      "line": 51,
+      "number": "3",
+      "title": "Orchestrator Mode: Task DAG & Worktree Lifecycle"
+    },
+    {
+      "level": 3,
+      "line": 83,
+      "number": "3.1",
+      "title": "Hard Orchestration Invariants"
+    },
+    {
+      "level": 3,
+      "line": 99,
+      "number": "3.2",
+      "title": "Unified Retry Ladder & Budget (replaces the separate one-strike, two-strike, and PR-loop policies)"
+    },
+    {
+      "level": 2,
+      "line": 113,
+      "number": "4",
+      "title": "Council Mode: 3-Round Sparse Debate Protocol"
+    },
+    {
+      "level": 3,
+      "line": 159,
+      "number": "4.1",
+      "title": "Council Protocol Invariants"
+    },
+    {
+      "level": 3,
+      "line": 171,
+      "number": "4.2",
+      "title": "A verdict that moves the work forward, and a Council raised on demand (2026-10-26)"
+    },
+    {
+      "level": 2,
+      "line": 185,
+      "number": "5",
+      "title": "Verification Plan"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/003-collaboration-and-council.md",
+    "sha256": "e60ef64fa41ed5f91e7394a49f88d13507f7e6f0e3adaa0948a401a7c3866317"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 252,
+        "end_line": 6,
+        "line": 6,
+        "start": 173
+      },
+      "text": "status: approved   # by the operator, 2026-10-24 (\"ratify all\"); whole document"
+    },
+    "sha256": "e60ef64fa41ed5f91e7394a49f88d13507f7e6f0e3adaa0948a401a7c3866317",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "orchestration-and-council",
+    "number": "003",
+    "stem": "003-collaboration-and-council",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "003: Orchestrator DAG Execution & 3-Round Sparse Council State Machine"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 1212,
+      "end_line": 21,
+      "line": 18,
+      "start": 529
+    },
+    "text": "This specification defines how the 9 agent specialists collaborate under **Orchestrator's** orchestration:\n1. **Complexity Escalation & Mode Selection:** Choosing between Single-Specialist Dispatch, Orchestrator DAG Mode, and Council Mode.\n2. **Orchestrator Mode (Directed Acyclic Graph Execution):** Parallel/sequential specialist execution with Git worktree isolation and deterministic verification gates.\n3. **Council Mode (3-Round Sparse Adversarial Deliberation):** State machine enforcing blind parallel Round 1, heterogeneous model routing (seats on ≥2 model families, each chosen for task fit), Round 2 cross-examination, and Round 3 Verdict + verbatim **Minority Report**."
+  }
+}

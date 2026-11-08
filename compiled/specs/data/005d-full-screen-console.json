@@ -1,0 +1,119 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 005d: The Full-Screen Console"
+    },
+    {
+      "level": 2,
+      "line": 20,
+      "number": "1",
+      "title": "Why this shape"
+    },
+    {
+      "level": 2,
+      "line": 24,
+      "number": "2",
+      "title": "Architecture"
+    },
+    {
+      "level": 2,
+      "line": 32,
+      "number": "3",
+      "title": "The screen"
+    },
+    {
+      "level": 2,
+      "line": 43,
+      "number": "4",
+      "title": "Interaction"
+    },
+    {
+      "level": 2,
+      "line": 59,
+      "number": "5",
+      "title": "The Decision Inbox"
+    },
+    {
+      "level": 2,
+      "line": 63,
+      "number": "6",
+      "title": "Research panels"
+    },
+    {
+      "level": 2,
+      "line": 67,
+      "number": "7",
+      "title": "The Observer window"
+    },
+    {
+      "level": 2,
+      "line": 71,
+      "number": "8",
+      "title": "Daemon additions"
+    },
+    {
+      "level": 2,
+      "line": 76,
+      "number": "9",
+      "title": "Hardening and limits"
+    },
+    {
+      "level": 2,
+      "line": 80,
+      "number": "10",
+      "title": "Verification"
+    },
+    {
+      "level": 2,
+      "line": 84,
+      "number": "11",
+      "title": "Open"
+    },
+    {
+      "level": 2,
+      "line": 88,
+      "number": "12",
+      "title": "Amendment 005d-A1: Screen and Narrator Per 005e (approved by the operator 2026-10-25)"
+    },
+    {
+      "level": 2,
+      "line": 91,
+      "number": "13",
+      "title": "Amendment 005d-A2: approval mode keys (council 013 D3 b, S4)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/005d-full-screen-console.md",
+    "sha256": "c19b3b986638db18adfa07322a8ebf61965d0b8c43723648710410aac3815ab1"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 295,
+        "end_line": 6,
+        "line": 6,
+        "start": 157
+      },
+      "text": "status: approved   # footer wording follows Amendment 005b-A2; §3 and §7 amended by 005d-A1 (005e), approved by the operator, 2026-10-25"
+    },
+    "sha256": "c19b3b986638db18adfa07322a8ebf61965d0b8c43723648710410aac3815ab1",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "console",
+    "number": "005d",
+    "stem": "005d-full-screen-console",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "005d: The Full-Screen Console (an Ink client of the daemon)"
+  },
+  "summary": null
+}

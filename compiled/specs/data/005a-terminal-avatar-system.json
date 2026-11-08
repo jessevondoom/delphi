@@ -1,0 +1,122 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 005a: In-Terminal Agent Avatar & Status Badge System"
+    },
+    {
+      "level": 2,
+      "line": 18,
+      "number": "1",
+      "title": "Scope & Objectives"
+    },
+    {
+      "level": 2,
+      "line": 28,
+      "number": "2",
+      "title": "Font-Immunity Invariants (The Invariant Rules)"
+    },
+    {
+      "level": 2,
+      "line": 40,
+      "number": "3",
+      "title": "Visual Specifications"
+    },
+    {
+      "level": 3,
+      "line": 42,
+      "number": "3.1",
+      "title": "The 6 Agent Personalities"
+    },
+    {
+      "level": 3,
+      "line": 63,
+      "number": "3.2",
+      "title": "Role Palette Specifications"
+    },
+    {
+      "level": 2,
+      "line": 79,
+      "number": "4",
+      "title": "State Machine & Action Animations"
+    },
+    {
+      "level": 2,
+      "line": 96,
+      "number": "5",
+      "title": "Integration Architecture (Handoff to Claude)"
+    },
+    {
+      "level": 3,
+      "line": 100,
+      "number": "5.1",
+      "title": "Console Window Integration (`crates/delphi/src/chat.rs`)"
+    },
+    {
+      "level": 3,
+      "line": 109,
+      "number": "5.2",
+      "title": "Approval Cards (`specs/005` §3.1)"
+    },
+    {
+      "level": 3,
+      "line": 118,
+      "number": "5.3",
+      "title": "Narrator Window Integration (`specs/005` §4.1)"
+    },
+    {
+      "level": 2,
+      "line": 123,
+      "number": "6",
+      "title": "Verification Tests"
+    },
+    {
+      "level": 2,
+      "line": 131,
+      "number": "7",
+      "title": "Amendment 005a-A1: Badge Animation Cadence (approved by the operator 2026-10-25)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/005a-terminal-avatar-system.md",
+    "sha256": "dbe89cc5f49a52919a9ef284cce93c8d9574b75fba7ad386f2d24caa8a4f5ada"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 234,
+        "end_line": 6,
+        "line": 6,
+        "start": 153
+      },
+      "text": "status: approved   # by the operator, 2026-10-26 (\"ratify all specs\"); was active"
+    },
+    "sha256": "dbe89cc5f49a52919a9ef284cce93c8d9574b75fba7ad386f2d24caa8a4f5ada",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "console",
+    "number": "005a",
+    "stem": "005a-terminal-avatar-system",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "005a: In-Terminal Agent Avatar & Status Badge System"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 748,
+      "end_line": 19,
+      "line": 19,
+      "start": 547
+    },
+    "text": "This specification defines the dual-scale visual identity and real-time interaction states for Delphi's agents across Window 1 (`Console` / `delphi chat`) and Window 2 (`Narrator` / `delphi narrator`):"
+  }
+}

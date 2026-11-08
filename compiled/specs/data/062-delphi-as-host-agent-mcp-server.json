@@ -1,0 +1,278 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 17,
+      "number": null,
+      "title": "Spec 062: Delphi for host agents"
+    },
+    {
+      "level": 2,
+      "line": 21,
+      "number": "1",
+      "title": "Scope & Objectives"
+    },
+    {
+      "level": 3,
+      "line": 31,
+      "number": "1.1",
+      "title": "Non-Goals"
+    },
+    {
+      "level": 3,
+      "line": 40,
+      "number": "1.2",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 44,
+      "number": "2",
+      "title": "Principles"
+    },
+    {
+      "level": 2,
+      "line": 52,
+      "number": "3",
+      "title": "Server, transport and trust boundary"
+    },
+    {
+      "level": 3,
+      "line": 54,
+      "number": "3.1",
+      "title": "The server"
+    },
+    {
+      "level": 3,
+      "line": 58,
+      "number": "3.2",
+      "title": "Same machine, same user"
+    },
+    {
+      "level": 3,
+      "line": 65,
+      "number": "3.3",
+      "title": "Scope resolution"
+    },
+    {
+      "level": 3,
+      "line": 69,
+      "number": "3.4",
+      "title": "The toggle"
+    },
+    {
+      "level": 2,
+      "line": 73,
+      "number": "4",
+      "title": "Agent packs (act as a role)"
+    },
+    {
+      "level": 3,
+      "line": 75,
+      "number": "4.1",
+      "title": "Tools and prompts"
+    },
+    {
+      "level": 3,
+      "line": 86,
+      "number": "4.2",
+      "title": "What a pack contains"
+    },
+    {
+      "level": 3,
+      "line": 101,
+      "number": "4.3",
+      "title": "Which roles are servable"
+    },
+    {
+      "level": 3,
+      "line": 105,
+      "number": "4.4",
+      "title": "Instructions, not authority"
+    },
+    {
+      "level": 3,
+      "line": 109,
+      "number": "4.5",
+      "title": "Frozen per host session"
+    },
+    {
+      "level": 3,
+      "line": 113,
+      "number": "4.6",
+      "title": "Daemon-free assembly"
+    },
+    {
+      "level": 2,
+      "line": 117,
+      "number": "5",
+      "title": "Project awareness"
+    },
+    {
+      "level": 2,
+      "line": 126,
+      "number": "6",
+      "title": "Asking for help"
+    },
+    {
+      "level": 3,
+      "line": 128,
+      "number": "6.1",
+      "title": "`request_help`"
+    },
+    {
+      "level": 3,
+      "line": 133,
+      "number": "6.2",
+      "title": "The answer"
+    },
+    {
+      "level": 3,
+      "line": 137,
+      "number": "6.3",
+      "title": "Read-only dispatch"
+    },
+    {
+      "level": 2,
+      "line": 145,
+      "number": "7",
+      "title": "Councils"
+    },
+    {
+      "level": 3,
+      "line": 147,
+      "number": "7.1",
+      "title": "`request_council`"
+    },
+    {
+      "level": 3,
+      "line": 151,
+      "number": "7.2",
+      "title": "Asynchronous by default"
+    },
+    {
+      "level": 3,
+      "line": 155,
+      "number": "7.3",
+      "title": "A legible ruling"
+    },
+    {
+      "level": 2,
+      "line": 161,
+      "number": "8",
+      "title": "Learning back"
+    },
+    {
+      "level": 3,
+      "line": 163,
+      "number": "8.1",
+      "title": "Proposals"
+    },
+    {
+      "level": 3,
+      "line": 169,
+      "number": "8.2",
+      "title": "Rules (the daemon enforces; the MCP process cannot)"
+    },
+    {
+      "level": 3,
+      "line": 178,
+      "number": "8.3",
+      "title": "Transcript ingest (optional)"
+    },
+    {
+      "level": 2,
+      "line": 188,
+      "number": "9",
+      "title": "No limits, no quotas (amended 2026-10-31, S6)"
+    },
+    {
+      "level": 2,
+      "line": 202,
+      "number": "10",
+      "title": "Plugin, skill and host configuration"
+    },
+    {
+      "level": 2,
+      "line": 208,
+      "number": "11",
+      "title": "Slices (one per pull request; none starts before approval)"
+    },
+    {
+      "level": 2,
+      "line": 232,
+      "number": "12",
+      "title": "Decisions and open questions"
+    },
+    {
+      "level": 2,
+      "line": 257,
+      "number": "13",
+      "title": "Documentation and generated files"
+    },
+    {
+      "level": 2,
+      "line": 268,
+      "number": "14",
+      "title": "Authority invariants (what the tests prove)"
+    },
+    {
+      "level": 2,
+      "line": 281,
+      "number": "15",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 292,
+      "number": "16",
+      "title": "Verification"
+    },
+    {
+      "level": 2,
+      "line": 296,
+      "number": "17",
+      "title": "Known limits"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/062-delphi-as-host-agent-mcp-server.md",
+    "sha256": "5e90af6705b3944dd4e5975259a30d9247a91ab78e8edc06647273decedc8627"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 515,
+        "end_line": 6,
+        "line": 6,
+        "start": 209
+      },
+      "text": "status: approved   # by the operator, 2026-10-31 (\"approve the spec if it was built on the rules you showed\"): D-1..D-5 ratified; D-6..D-9 follow the architect's recommendations; Q-1..Q-5 stay open and each blocks only the slice named in §12. The text as written is approved when this pull request merges."
+    },
+    "sha256": "5e90af6705b3944dd4e5975259a30d9247a91ab78e8edc06647273decedc8627",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "hosts-and-mcp",
+    "number": "062",
+    "stem": "062-delphi-as-host-agent-mcp-server",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "062: Delphi for host agents: roles, project knowledge, help and Councils over MCP, and learning back"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2424,
+      "end_line": 23,
+      "line": 23,
+      "start": 2229
+    },
+    "text": "An operator uses Delphi and also another coding tool (Claude Code, Copilot CLI, Codex, others): a **host**. This spec lets a host, on the same machine, use Delphi without leaving its own session:"
+  }
+}

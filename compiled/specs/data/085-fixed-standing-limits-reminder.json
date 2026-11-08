@@ -1,0 +1,170 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 085: A fixed standing-limits reminder in the latest turn"
+    },
+    {
+      "level": 2,
+      "line": 25,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 3,
+      "line": 42,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 50,
+      "number": "1.2",
+      "title": "Simpler alternative considered"
+    },
+    {
+      "level": 2,
+      "line": 56,
+      "number": "2",
+      "title": "What is wrong today (verified on main, 2026-11-05)"
+    },
+    {
+      "level": 2,
+      "line": 65,
+      "number": "3",
+      "title": "Slice S1: the fixed text on the API path"
+    },
+    {
+      "level": 3,
+      "line": 67,
+      "number": "3.1",
+      "title": "The constant"
+    },
+    {
+      "level": 3,
+      "line": 79,
+      "number": "3.2",
+      "title": "The text"
+    },
+    {
+      "level": 3,
+      "line": 94,
+      "number": "3.3",
+      "title": "Rules for the text"
+    },
+    {
+      "level": 3,
+      "line": 102,
+      "number": "3.4",
+      "title": "Spans that do not get it"
+    },
+    {
+      "level": 2,
+      "line": 108,
+      "number": "4",
+      "title": "Slice S2: harness seats, through the bridge"
+    },
+    {
+      "level": 3,
+      "line": 110,
+      "number": "4.1",
+      "title": "Where"
+    },
+    {
+      "level": 3,
+      "line": 116,
+      "number": "4.2",
+      "title": "What does not change"
+    },
+    {
+      "level": 3,
+      "line": 123,
+      "number": "4.3",
+      "title": "The gap this leaves"
+    },
+    {
+      "level": 2,
+      "line": 129,
+      "number": "5",
+      "title": "What does not change"
+    },
+    {
+      "level": 2,
+      "line": 139,
+      "number": "6",
+      "title": "Verification plan"
+    },
+    {
+      "level": 2,
+      "line": 150,
+      "number": "7",
+      "title": "What would measure the effect (deferred, not part of any slice here)"
+    },
+    {
+      "level": 2,
+      "line": 156,
+      "number": "8",
+      "title": "Slices (one pull request each)"
+    },
+    {
+      "level": 2,
+      "line": 168,
+      "number": "9",
+      "title": "Council record (2026-11-05)"
+    },
+    {
+      "level": 3,
+      "line": 176,
+      "number": null,
+      "title": "Accepted risks and minority report"
+    },
+    {
+      "level": 2,
+      "line": 185,
+      "number": "10",
+      "title": "Decisions for the operator"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/085-fixed-standing-limits-reminder.md",
+    "sha256": "9a3ec37a70fb563b74994390fd00318bd186cd95fb29bf2500f3d15767a5c908"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 351,
+        "end_line": 6,
+        "line": 6,
+        "start": 191
+      },
+      "text": "status: approved   # by the operator, 2026-11-05 (\"write a spec for 3a (fixed reminder), approve it, and start building\"); OD-1 to OD-3 take the recommendations"
+    },
+    "sha256": "9a3ec37a70fb563b74994390fd00318bd186cd95fb29bf2500f3d15767a5c908",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "runtime-models-and-tools",
+    "number": "085",
+    "stem": "085-fixed-standing-limits-reminder",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "085: A fixed standing-limits reminder in the latest turn, for API and harness spans"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2366,
+      "end_line": 27,
+      "line": 27,
+      "start": 1648
+    },
+    "text": "A model that has started down a route does not reliably turn back. Anthropic's alignment assessment of its September 2026 cybersecurity incidents reports that a reminder of the task's scope stopped the unwanted behaviour in 90% of resamples when it sat in the most recent turn, 55% with one turn after it, 45% with two and 40% with three, and that explicit abort instructions placed in earlier notes had no effect after the third compaction cycle. The same study found the model assumed the systems it reached were simulated until shown otherwise. These are another lab's results, on other models, in an evaluation setting. They are a reason to look at what Delphi puts in the latest turn, not a measurement of Delphi."
+  }
+}

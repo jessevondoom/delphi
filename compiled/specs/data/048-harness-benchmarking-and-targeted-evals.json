@@ -1,0 +1,101 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 048: Harness benchmarking and targeted evals"
+    },
+    {
+      "level": 2,
+      "line": 19,
+      "number": "1",
+      "title": "Why"
+    },
+    {
+      "level": 2,
+      "line": 25,
+      "number": "2",
+      "title": "Principles"
+    },
+    {
+      "level": 2,
+      "line": 33,
+      "number": "3",
+      "title": "The additions"
+    },
+    {
+      "level": 2,
+      "line": 46,
+      "number": "4",
+      "title": "Where each lives"
+    },
+    {
+      "level": 2,
+      "line": 56,
+      "number": "5",
+      "title": "Measuring and reporting"
+    },
+    {
+      "level": 2,
+      "line": 63,
+      "number": "6",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 73,
+      "number": "7",
+      "title": "Build plan"
+    },
+    {
+      "level": 2,
+      "line": 87,
+      "number": "8",
+      "title": "Open decisions (provisional answers, change on request)"
+    },
+    {
+      "level": 2,
+      "line": 94,
+      "number": "9",
+      "title": "Non-goals"
+    },
+    {
+      "level": 2,
+      "line": 98,
+      "number": "10",
+      "title": "Known limits"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/048-harness-benchmarking-and-targeted-evals.md",
+    "sha256": "a36221502b5b2f0ff0dc31c3a8c63c5e9ba71500d3df99408da7f607a70d5824"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 516,
+        "end_line": 6,
+        "line": 6,
+        "start": 249
+      },
+      "text": "status: approved   # by the operator, 2026-11-05 (\"approve 048\"). Provisional answers to OD-1 to OD-4 stand; OD-1 (source check) is waived as for 049 and 050, because the figures are hypotheses this spec tests. BM6 stays gated on OD-3 (the operator picks the subset)."
+    },
+    "sha256": "a36221502b5b2f0ff0dc31c3a8c63c5e9ba71500d3df99408da7f607a70d5824",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "learning-and-evals",
+    "number": "048",
+    "stem": "048-harness-benchmarking-and-targeted-evals",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "048: Harness benchmarking and targeted evals: fixed-model arms, efficiency, handoff fidelity, tool-count and context-retention tests"
+  },
+  "summary": null
+}

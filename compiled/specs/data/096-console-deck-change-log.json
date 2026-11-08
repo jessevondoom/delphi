@@ -1,0 +1,65 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 096: The console's left deck shows work and changes, not thinking"
+    },
+    {
+      "level": 2,
+      "line": 19,
+      "number": "1",
+      "title": "What this is"
+    },
+    {
+      "level": 2,
+      "line": 22,
+      "number": "2",
+      "title": "What the deck shows now"
+    },
+    {
+      "level": 2,
+      "line": 28,
+      "number": "3",
+      "title": "What changed in the code"
+    },
+    {
+      "level": 2,
+      "line": 31,
+      "number": "4",
+      "title": "Open"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/096-console-deck-change-log.md",
+    "sha256": "bf361838a66bc66214b4c47ca6373b19e489d87440f7955d1244a8d3ef998538"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 234,
+        "end_line": 6,
+        "line": 6,
+        "start": 166
+      },
+      "text": "status: approved   # decided and approved by the operator 2026-10-26"
+    },
+    "sha256": "bf361838a66bc66214b4c47ca6373b19e489d87440f7955d1244a8d3ef998538",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "console",
+    "number": "096",
+    "stem": "096-console-deck-change-log",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "096: The console's left deck shows work and changes, not thinking"
+  },
+  "summary": null
+}

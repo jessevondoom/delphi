@@ -1,0 +1,101 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 050: Memory lifecycle"
+    },
+    {
+      "level": 2,
+      "line": 19,
+      "number": "1",
+      "title": "Why"
+    },
+    {
+      "level": 2,
+      "line": 25,
+      "number": "2",
+      "title": "Principles"
+    },
+    {
+      "level": 2,
+      "line": 33,
+      "number": "3",
+      "title": "The additions"
+    },
+    {
+      "level": 2,
+      "line": 45,
+      "number": "4",
+      "title": "Where each lives"
+    },
+    {
+      "level": 2,
+      "line": 55,
+      "number": "5",
+      "title": "Invariants and tests"
+    },
+    {
+      "level": 2,
+      "line": 63,
+      "number": "6",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 72,
+      "number": "7",
+      "title": "Build plan"
+    },
+    {
+      "level": 2,
+      "line": 83,
+      "number": "8",
+      "title": "Decisions (answered by the operator 2026-10-28: the provisional answers are accepted; change on request)"
+    },
+    {
+      "level": 2,
+      "line": 92,
+      "number": "9",
+      "title": "Non-goals"
+    },
+    {
+      "level": 2,
+      "line": 96,
+      "number": "10",
+      "title": "Known limits"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/050-memory-lifecycle-types-supersession-and-trace-mining.md",
+    "sha256": "a3eb53906bd43ef9d6cf980025b1b159535b140d0b6984069444d0a8feb71634"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 455,
+        "end_line": 6,
+        "line": 6,
+        "start": 231
+      },
+      "text": "status: approved   # by the operator, 2026-10-28 (\"approve 049 and 050, follow your recommendation on the other decisions\"). Extends 004 §5, 031 §3 and 045 T11. Slices that measure against spec 048 wait for 048's approval."
+    },
+    "sha256": "a3eb53906bd43ef9d6cf980025b1b159535b140d0b6984069444d0a8feb71634",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "knowledge-and-memory",
+    "number": "050",
+    "stem": "050-memory-lifecycle-types-supersession-and-trace-mining",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "050: Memory lifecycle: entry types, supersession, validity, trace mining and write-path audit (draft)"
+  },
+  "summary": null
+}

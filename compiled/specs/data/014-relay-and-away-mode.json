@@ -1,0 +1,146 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 014: The Relay and Away Mode"
+    },
+    {
+      "level": 2,
+      "line": 17,
+      "number": "1",
+      "title": "Scope & Objectives"
+    },
+    {
+      "level": 3,
+      "line": 22,
+      "number": "1.1",
+      "title": "Non-Goals"
+    },
+    {
+      "level": 3,
+      "line": 27,
+      "number": "1.2",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 30,
+      "number": "2",
+      "title": "The relay scope"
+    },
+    {
+      "level": 2,
+      "line": 43,
+      "number": "3",
+      "title": "Tier policy"
+    },
+    {
+      "level": 2,
+      "line": 52,
+      "number": "4",
+      "title": "The relay process (`delphi relay`)"
+    },
+    {
+      "level": 2,
+      "line": 82,
+      "number": "5",
+      "title": "The email channel"
+    },
+    {
+      "level": 2,
+      "line": 98,
+      "number": "5.1",
+      "title": "The Telegram channel"
+    },
+    {
+      "level": 2,
+      "line": 118,
+      "number": "6",
+      "title": "Parking (away mode)"
+    },
+    {
+      "level": 2,
+      "line": 126,
+      "number": "7",
+      "title": "Not yet built"
+    },
+    {
+      "level": 2,
+      "line": 130,
+      "number": "7.1",
+      "title": "Step-up: approving a Red action by reply (TOTP)"
+    },
+    {
+      "level": 2,
+      "line": 139,
+      "number": "8",
+      "title": "Setting it up"
+    },
+    {
+      "level": 3,
+      "line": 148,
+      "number": "8.1",
+      "title": "Running Delphi on another machine"
+    },
+    {
+      "level": 3,
+      "line": 157,
+      "number": "8.2",
+      "title": "Setting up Telegram instead of email"
+    },
+    {
+      "level": 2,
+      "line": 164,
+      "number": "9",
+      "title": "Verification Plan"
+    },
+    {
+      "level": 2,
+      "line": 179,
+      "number": "10",
+      "title": "Amendment 014-A1: The merge boundary and persistent step-up state (council 013 D12, TI14; `[REV-SEC-09]`)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/014-relay-and-away-mode.md",
+    "sha256": "518fbac5c0d9f70cf1c27d2cd9932800187164465a7553288346087ced444610"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 199,
+        "end_line": 6,
+        "line": 6,
+        "start": 151
+      },
+      "text": "status: approved   # by the operator, 2026-10-25"
+    },
+    "sha256": "518fbac5c0d9f70cf1c27d2cd9932800187164465a7553288346087ced444610",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "governance-and-safety",
+    "number": "014",
+    "stem": "014-relay-and-away-mode",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "014: The Relay and Away Mode (approval cards by email)"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 897,
+      "end_line": 18,
+      "line": 18,
+      "start": 480
+    },
+    "text": "A build that needs a person's decision should be able to wait for them when they are away from the terminal, and they should be able to answer from wherever they are, without any of the properties of an approval card being weakened. This spec adds three things: a **relay scope** on the daemon, a **relay process** that carries cards out and answers back, and **parking** so an unanswered card does not fail the task."
+  }
+}

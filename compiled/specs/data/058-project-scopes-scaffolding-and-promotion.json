@@ -1,0 +1,263 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 058: Project scopes, scaffolding, indexes and promotion to shared memory"
+    },
+    {
+      "level": 2,
+      "line": 20,
+      "number": "1",
+      "title": "Goal"
+    },
+    {
+      "level": 2,
+      "line": 31,
+      "number": "2",
+      "title": "Goals and non-goals"
+    },
+    {
+      "level": 3,
+      "line": 33,
+      "number": "2.1",
+      "title": "Goals"
+    },
+    {
+      "level": 3,
+      "line": 43,
+      "number": "2.2",
+      "title": "Non-goals"
+    },
+    {
+      "level": 2,
+      "line": 51,
+      "number": "3",
+      "title": "Scope model and resolution"
+    },
+    {
+      "level": 3,
+      "line": 53,
+      "number": "3.1",
+      "title": "Project identity and registration"
+    },
+    {
+      "level": 3,
+      "line": 62,
+      "number": "3.2",
+      "title": "Resolution rules"
+    },
+    {
+      "level": 3,
+      "line": 73,
+      "number": "3.3",
+      "title": "Default behavior and subdirectories"
+    },
+    {
+      "level": 2,
+      "line": 80,
+      "number": "4",
+      "title": "Knowledge and memory routing"
+    },
+    {
+      "level": 3,
+      "line": 82,
+      "number": "4.1",
+      "title": "Read path"
+    },
+    {
+      "level": 3,
+      "line": 89,
+      "number": "4.2",
+      "title": "Write path"
+    },
+    {
+      "level": 3,
+      "line": 97,
+      "number": "4.3",
+      "title": "Home and project isolation"
+    },
+    {
+      "level": 2,
+      "line": 101,
+      "number": "5",
+      "title": "Project scaffold"
+    },
+    {
+      "level": 2,
+      "line": 128,
+      "number": "6",
+      "title": "Generated `_index.md`"
+    },
+    {
+      "level": 3,
+      "line": 130,
+      "number": "6.1",
+      "title": "Purpose and content"
+    },
+    {
+      "level": 3,
+      "line": 145,
+      "number": "6.2",
+      "title": "Generation and freshness"
+    },
+    {
+      "level": 3,
+      "line": 154,
+      "number": "6.3",
+      "title": "Protection and conflicts"
+    },
+    {
+      "level": 2,
+      "line": 162,
+      "number": "7",
+      "title": "Project-to-home promotion"
+    },
+    {
+      "level": 3,
+      "line": 164,
+      "number": "7.1",
+      "title": "Surface and proposal"
+    },
+    {
+      "level": 3,
+      "line": 171,
+      "number": "7.2",
+      "title": "Original trusted source references"
+    },
+    {
+      "level": 3,
+      "line": 184,
+      "number": "7.3",
+      "title": "Apply, deduplication and reversal"
+    },
+    {
+      "level": 3,
+      "line": 192,
+      "number": "7.4",
+      "title": "Amendment 058-A2 (council 013, D11: promotion hardening)"
+    },
+    {
+      "level": 2,
+      "line": 199,
+      "number": "8",
+      "title": "Commands and user experience"
+    },
+    {
+      "level": 2,
+      "line": 215,
+      "number": "9",
+      "title": "Migration and compatibility"
+    },
+    {
+      "level": 2,
+      "line": 224,
+      "number": "10",
+      "title": "Slices"
+    },
+    {
+      "level": 2,
+      "line": 238,
+      "number": "11",
+      "title": "Verification"
+    },
+    {
+      "level": 2,
+      "line": 252,
+      "number": "12",
+      "title": "Decisions (operator, 2026-10-30)"
+    },
+    {
+      "level": 2,
+      "line": 263,
+      "number": "13",
+      "title": "Amendment 058-A1: research routing and trust gating (operator, 2026-10-31)"
+    },
+    {
+      "level": 2,
+      "line": 272,
+      "number": "14",
+      "title": "Amendment 058-A2: reviewing held research, `/validate` (operator, 2026-10-31)"
+    },
+    {
+      "level": 2,
+      "line": 280,
+      "number": "15",
+      "title": "Amendment 058-A3: `/projects`, switching project (operator, 2026-10-31)"
+    },
+    {
+      "level": 2,
+      "line": 286,
+      "number": "16",
+      "title": "Amendment 058-A4: live project list, research in the project you are in (operator, 2026-10-31)"
+    },
+    {
+      "level": 2,
+      "line": 291,
+      "number": "17",
+      "title": "Amendment 058-A5: the weekly digest (operator, 2026-10-31)"
+    },
+    {
+      "level": 2,
+      "line": 297,
+      "number": "18",
+      "title": "Amendment 058-A6: the validator pass (operator, 2026-10-31)"
+    },
+    {
+      "level": 2,
+      "line": 303,
+      "number": "19",
+      "title": "Amendment 058-A7: `/research` (operator, 2026-10-31)"
+    },
+    {
+      "level": 2,
+      "line": 308,
+      "number": "20",
+      "title": "Amendment 058-A8: research started by an agent (operator, 2026-10-31)"
+    },
+    {
+      "level": 2,
+      "line": 314,
+      "number": "21",
+      "title": "Amendment 058-A9: sessions are written under `sessions/` from now on (operator, 2026-10-31)"
+    },
+    {
+      "level": 2,
+      "line": 322,
+      "number": "22",
+      "title": "Amendment 058-A10: an agent is told how its research went (operator, 2026-10-31)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/058-project-scopes-scaffolding-and-promotion.md",
+    "sha256": "b9dee4673325f23cb73f385a6aac74e5dbd51b123b94f01d302a5ce7e7b7fae0"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 342,
+        "end_line": 6,
+        "line": 6,
+        "start": 190
+      },
+      "text": "status: approved   # approved and ratified by the operator on 2026-10-30; this spec is the explicit authorization to amend the project-clean rule in 006"
+    },
+    "sha256": "b9dee4673325f23cb73f385a6aac74e5dbd51b123b94f01d302a5ce7e7b7fae0",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "knowledge-and-memory",
+    "number": "058",
+    "stem": "058-project-scopes-scaffolding-and-promotion",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "058: Project scopes, scaffolding, indexes and promotion to shared memory"
+  },
+  "summary": null
+}

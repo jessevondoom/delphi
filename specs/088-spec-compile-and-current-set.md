@@ -117,7 +117,7 @@ A JSON Schema, `schemas/spec-current.schema.json`, is added with the others (and
 
 ### 4.3 What the compiler refuses
 
-It fails (not warns) when: a source is not valid UTF-8; a spec stem is missing from `groups.toml`, appears twice, or `groups.toml` names a stem with no file; two files have one stem (impossible on a filesystem, but the check names the case); an output file has no source (an orphan); and, in stage 2, a source has a duplicate ID, an ID with no text and no tombstone, a `replaces` or `superseded_by` that points at no ID, a supersession declared on one side only, or a supersession cycle. These are the checks that, in the tools surveyed, were convention only (§9).
+It fails (not warns) when: a source is not valid UTF-8; a source has no frontmatter or no `status:` line in it (added when S2b was built: a spec whose status cannot be quoted cannot be compiled, and guessing one would break §2.6); a spec stem is missing from `groups.toml`, appears twice, or `groups.toml` names a stem with no file; two files have one stem (impossible on a filesystem, but the check names the case); an output file has no source (an orphan); and, in stage 2, a source has a duplicate ID, an ID with no text and no tombstone, a `replaces` or `superseded_by` that points at no ID, a supersession declared on one side only, or a supersession cycle. These are the checks that, in the tools surveyed, were convention only (§9).
 
 ### 4.4 Identity: stems, and the three shared numbers
 

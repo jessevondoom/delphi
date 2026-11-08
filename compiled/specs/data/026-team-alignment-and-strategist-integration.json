@@ -1,0 +1,194 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 026: Team Alignment and Strategist Integration"
+    },
+    {
+      "level": 2,
+      "line": 19,
+      "number": "1",
+      "title": "Scope & Objectives"
+    },
+    {
+      "level": 3,
+      "line": 26,
+      "number": "1.1",
+      "title": "Non-Goals"
+    },
+    {
+      "level": 3,
+      "line": 31,
+      "number": "1.2",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 3,
+      "line": 34,
+      "number": "1.3",
+      "title": "Principles"
+    },
+    {
+      "level": 2,
+      "line": 43,
+      "number": "2",
+      "title": "What Is Shared, Restated"
+    },
+    {
+      "level": 2,
+      "line": 56,
+      "number": "3",
+      "title": "The Org-Context Slice (`@runtime/org-context`)"
+    },
+    {
+      "level": 3,
+      "line": 57,
+      "number": "3.1",
+      "title": "Who gets it"
+    },
+    {
+      "level": 3,
+      "line": 60,
+      "number": "3.2",
+      "title": "Assembly (daemon, deterministic)"
+    },
+    {
+      "level": 3,
+      "line": 76,
+      "number": "3.3",
+      "title": "What the roles are told"
+    },
+    {
+      "level": 2,
+      "line": 81,
+      "number": "4",
+      "title": "Council Lenses"
+    },
+    {
+      "level": 2,
+      "line": 86,
+      "number": "5",
+      "title": "The Alignment Check"
+    },
+    {
+      "level": 2,
+      "line": 95,
+      "number": "6",
+      "title": "Retrieval Surfaces"
+    },
+    {
+      "level": 2,
+      "line": 104,
+      "number": "7",
+      "title": "The Console"
+    },
+    {
+      "level": 3,
+      "line": 105,
+      "number": "7.1",
+      "title": "`/org`"
+    },
+    {
+      "level": 3,
+      "line": 108,
+      "number": "7.2",
+      "title": "Where alignment appears"
+    },
+    {
+      "level": 3,
+      "line": 112,
+      "number": "7.3",
+      "title": "Narrator"
+    },
+    {
+      "level": 2,
+      "line": 117,
+      "number": "8",
+      "title": "The Loop Back"
+    },
+    {
+      "level": 2,
+      "line": 127,
+      "number": "9",
+      "title": "Acceptance Criteria"
+    },
+    {
+      "level": 2,
+      "line": 137,
+      "number": "10",
+      "title": "Verification Plan"
+    },
+    {
+      "level": 2,
+      "line": 140,
+      "number": "11",
+      "title": "Build Plan (slices B5 and B9 of `specs/022` §6)"
+    },
+    {
+      "level": 3,
+      "line": 148,
+      "number": "11.1",
+      "title": "As built (slice B5a: the slice; B5b is `/org`)"
+    },
+    {
+      "level": 3,
+      "line": 156,
+      "number": "11.2",
+      "title": "As built (slice B5b: `/org`)"
+    },
+    {
+      "level": 3,
+      "line": 164,
+      "number": "11.3",
+      "title": "As built (slice B9: alignment check and Council lenses)"
+    },
+    {
+      "level": 2,
+      "line": 173,
+      "number": "12",
+      "title": "Open Questions"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/026-team-alignment-and-strategist-integration.md",
+    "sha256": "a613661110b810880c3d426585c88bb1ae158af04798316a37e64c3f25886bb8"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 582,
+        "end_line": 6,
+        "line": 6,
+        "start": 231
+      },
+      "text": "status: approved   # by the operator, 2026-10-25: decisions OD-1..OD-9 and the recommendations of the set (relayed by the parent session); the text as written is approved when this pull request merges. Ratified in full by the operator 2026-10-28: every proposed decision and open question of the set (B-1..B-17, D-P1..D-P14) follows its recommendation"
+    },
+    "sha256": "a613661110b810880c3d426585c88bb1ae158af04798316a37e64c3f25886bb8",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "sharing-and-bundles",
+    "number": "026",
+    "stem": "026-team-alignment-and-strategist-integration",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "026: Team Alignment: How Shared Knowledge, Goals & Perspective Reach the Strategist, the Council and the Console"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2089,
+      "end_line": 24,
+      "line": 20,
+      "start": 1360
+    },
+    "text": "The operator's stated value of the sharing layer: *with extra knowledge and understanding shared across a team, results get better, and Delphi's strategist can help the team cut through with new ideas driven by consistent knowledge and goals.* This spec says how shared knowledge, goals and perspective reach the agents and the operator:\n1. **The org-context slice** (§3): deterministic, bounded text the daemon assembles from added bundles for the roles that plan and design.\n2. **Council lenses** (§4): perspectives as Round 1 framing for seats.\n3. **The alignment check** (§5): the strategist's scope audit extended to goals and decisions.\n4. **Retrieval surfaces** (§6), **the console** (§7) and **the loop back** (§8)."
+  }
+}

@@ -1,0 +1,101 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 070: Scope of No Spec, No Build, and the Artifact Prompt Log"
+    },
+    {
+      "level": 2,
+      "line": 22,
+      "number": "1",
+      "title": "Problem & Intent"
+    },
+    {
+      "level": 2,
+      "line": 28,
+      "number": "2",
+      "title": "The Three Classes"
+    },
+    {
+      "level": 3,
+      "line": 36,
+      "number": "2.1",
+      "title": "Limits that do not move"
+    },
+    {
+      "level": 2,
+      "line": 45,
+      "number": "3",
+      "title": "The Artifact Prompt Log"
+    },
+    {
+      "level": 2,
+      "line": 56,
+      "number": "4",
+      "title": "Changes Required (after approval)"
+    },
+    {
+      "level": 2,
+      "line": 65,
+      "number": "5",
+      "title": "Slices"
+    },
+    {
+      "level": 2,
+      "line": 73,
+      "number": "6",
+      "title": "Acceptance Criteria"
+    },
+    {
+      "level": 2,
+      "line": 85,
+      "number": "7",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 89,
+      "number": null,
+      "title": "7a. Proposed GOVERNANCE §1.3 text (for operator `/ratify`)"
+    },
+    {
+      "level": 2,
+      "line": 93,
+      "number": "8",
+      "title": "Council t_0001 Outcome and Open Decisions"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/070-spec-gate-scope-and-artifact-prompt-log.md",
+    "sha256": "3ec78b5e6c94cdbb70e09e16d5632998c376c4c48a54d2e4ffe629606c45708e"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 369,
+        "end_line": 6,
+        "line": 6,
+        "start": 177
+      },
+      "text": "status: approved   # by the operator, 2026-11-03 (\"approve it and build\"); Council t_0001 unanimous approve-with-amendments, applied below; GOVERNANCE §1.3 ratified by the operator 2026-11-03"
+    },
+    "sha256": "3ec78b5e6c94cdbb70e09e16d5632998c376c4c48a54d2e4ffe629606c45708e",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "governance-and-safety",
+    "number": "070",
+    "stem": "070-spec-gate-scope-and-artifact-prompt-log",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "070: Scope of No Spec, No Build, and the Artifact Prompt Log"
+  },
+  "summary": null
+}

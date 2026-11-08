@@ -1,0 +1,95 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 005c: The Inline Console"
+    },
+    {
+      "level": 2,
+      "line": 19,
+      "number": "1",
+      "title": "Why an interim step"
+    },
+    {
+      "level": 2,
+      "line": 28,
+      "number": "2",
+      "title": "Scope"
+    },
+    {
+      "level": 3,
+      "line": 30,
+      "number": "2.1",
+      "title": "In (the core)"
+    },
+    {
+      "level": 3,
+      "line": 40,
+      "number": "2.2",
+      "title": "Out, with where it goes"
+    },
+    {
+      "level": 2,
+      "line": 50,
+      "number": "3",
+      "title": "Reasoning in the Observer"
+    },
+    {
+      "level": 2,
+      "line": 53,
+      "number": "4",
+      "title": "A native viewer window, no browser (later work)"
+    },
+    {
+      "level": 2,
+      "line": 68,
+      "number": "5",
+      "title": "Build slices"
+    },
+    {
+      "level": 2,
+      "line": 79,
+      "number": "6",
+      "title": "Verification"
+    },
+    {
+      "level": 2,
+      "line": 93,
+      "number": "7",
+      "title": "Risks"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/005c-inline-console.md",
+    "sha256": "f6bcb8fb202cdb3dbb3a4206f7dcc4098f03dda8444833c5cb1cd96feeee6725"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 225,
+        "end_line": 6,
+        "line": 6,
+        "start": 146
+      },
+      "text": "status: approved   # by the operator, 2026-10-24 (\"ratify all\"); whole document"
+    },
+    "sha256": "f6bcb8fb202cdb3dbb3a4206f7dcc4098f03dda8444833c5cb1cd96feeee6725",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "console",
+    "number": "005c",
+    "stem": "005c-inline-console",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "005c: The Inline Console, an interim step toward 005b"
+  },
+  "summary": null
+}

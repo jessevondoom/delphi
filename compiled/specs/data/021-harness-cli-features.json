@@ -1,0 +1,77 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 021: Harness CLI Features and API-Key Mode"
+    },
+    {
+      "level": 2,
+      "line": 19,
+      "number": "1",
+      "title": "Where the options live"
+    },
+    {
+      "level": 2,
+      "line": 25,
+      "number": "2",
+      "title": "Claude (`[harness.claude]`)"
+    },
+    {
+      "level": 2,
+      "line": 44,
+      "number": "3",
+      "title": "Antigravity (`[harness.agy]`)"
+    },
+    {
+      "level": 2,
+      "line": 60,
+      "number": "4",
+      "title": "API-key mode"
+    },
+    {
+      "level": 2,
+      "line": 82,
+      "number": "5",
+      "title": "Structured answers per handoff"
+    },
+    {
+      "level": 2,
+      "line": 88,
+      "number": "6",
+      "title": "Not done, and why"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/021-harness-cli-features.md",
+    "sha256": "fb4ce31791689ca37886d88bfb3f54f30c59f6b5389be50bf96dbe787fee1cdb"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 229,
+        "end_line": 6,
+        "line": 6,
+        "start": 140
+      },
+      "text": "status: approved   # by the operator, 2026-10-26 (\"ratify all specs\"); the code is merged"
+    },
+    "sha256": "fb4ce31791689ca37886d88bfb3f54f30c59f6b5389be50bf96dbe787fee1cdb",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "runtime-models-and-tools",
+    "number": "021",
+    "stem": "021-harness-cli-features",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "021: Harness CLI Features and API-Key Mode"
+  },
+  "summary": null
+}

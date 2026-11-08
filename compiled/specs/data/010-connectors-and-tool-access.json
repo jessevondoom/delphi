@@ -1,0 +1,176 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 010: Native Connectors (MCP) & the Tool Access Layer"
+    },
+    {
+      "level": 2,
+      "line": 21,
+      "number": "1",
+      "title": "Scope and Non-Goals"
+    },
+    {
+      "level": 2,
+      "line": 28,
+      "number": "2",
+      "title": "Architecture"
+    },
+    {
+      "level": 2,
+      "line": 41,
+      "number": "3",
+      "title": "The Ratified Catalog"
+    },
+    {
+      "level": 2,
+      "line": 65,
+      "number": "4",
+      "title": "Login"
+    },
+    {
+      "level": 2,
+      "line": 80,
+      "number": "5",
+      "title": "Trust and Taint"
+    },
+    {
+      "level": 2,
+      "line": 86,
+      "number": "6",
+      "title": "Tool Tiers and Approvals"
+    },
+    {
+      "level": 2,
+      "line": 103,
+      "number": "7",
+      "title": "The Five v1 Connectors"
+    },
+    {
+      "level": 3,
+      "line": 106,
+      "number": "7.1",
+      "title": "Slack"
+    },
+    {
+      "level": 3,
+      "line": 112,
+      "number": "7.2",
+      "title": "Google Drive"
+    },
+    {
+      "level": 3,
+      "line": 117,
+      "number": "7.3",
+      "title": "Google Calendar"
+    },
+    {
+      "level": 3,
+      "line": 122,
+      "number": "7.4",
+      "title": "Gmail"
+    },
+    {
+      "level": 3,
+      "line": 128,
+      "number": "7.5",
+      "title": "Zoom"
+    },
+    {
+      "level": 2,
+      "line": 133,
+      "number": "8",
+      "title": "Results, Persistence and Privacy"
+    },
+    {
+      "level": 2,
+      "line": 139,
+      "number": "9",
+      "title": "Probing and `doctor`"
+    },
+    {
+      "level": 2,
+      "line": 142,
+      "number": "10",
+      "title": "Phasing and Tests"
+    },
+    {
+      "level": 2,
+      "line": 158,
+      "number": "11",
+      "title": "Future Expansion"
+    },
+    {
+      "level": 3,
+      "line": 161,
+      "number": "11.1",
+      "title": "Connector to-dos (official MCP servers confirmed 2026-10-24)"
+    },
+    {
+      "level": 4,
+      "line": 169,
+      "number": "11.1.1",
+      "title": "Atlassian (Jira and Confluence)"
+    },
+    {
+      "level": 4,
+      "line": 176,
+      "number": "11.1.2",
+      "title": "Google BigQuery"
+    },
+    {
+      "level": 2,
+      "line": 184,
+      "number": "12",
+      "title": "(folded into §6 item 4 and the tier table; was 010-A2)"
+    },
+    {
+      "level": 2,
+      "line": 186,
+      "number": "13",
+      "title": "(Council 006 round log; moved to `specs/history/010-connectors-and-tool-access.md`)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/010-connectors-and-tool-access.md",
+    "sha256": "7464e4a37781d5bcb4798050a21cc1544ad6cd55b03d4fda8c88077dbe4cd3d5"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 273,
+        "end_line": 6,
+        "line": 6,
+        "start": 156
+      },
+      "text": "status: approved   # operator, 2026-10-24, after Council 006 (D-23); folds 010-A1 (D-27) and 010-A2 (council 013 D23)"
+    },
+    "sha256": "7464e4a37781d5bcb4798050a21cc1544ad6cd55b03d4fda8c88077dbe4cd3d5",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "runtime-models-and-tools",
+    "number": "010",
+    "stem": "010-connectors-and-tool-access",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "010: Native Connectors (MCP) & the Tool Access Layer"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 1209,
+      "end_line": 22,
+      "line": 22,
+      "start": 942
+    },
+    "text": "Delphi gives agents access to outside services (v1: **Slack, Google Drive, Google Calendar, Gmail, Zoom**) by running the connectors itself, as an MCP client inside the daemon. This replaces the rejected harness-delegated design (Council 005, D-22; `specs/009` §7A)."
+  }
+}

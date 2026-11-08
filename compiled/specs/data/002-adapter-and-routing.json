@@ -1,0 +1,128 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 002: Adapter: Dialect Compiler, Multi-Provider Drivers & Dynamic Model Scaling"
+    },
+    {
+      "level": 2,
+      "line": 19,
+      "number": "1",
+      "title": "Scope & Objectives"
+    },
+    {
+      "level": 3,
+      "line": 26,
+      "number": "1.1",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 3,
+      "line": 31,
+      "number": "1.2",
+      "title": "Phase Mapping"
+    },
+    {
+      "level": 2,
+      "line": 38,
+      "number": "2",
+      "title": "The Intermediate Prompt Representation (IPR) & Sandwich Prompting"
+    },
+    {
+      "level": 3,
+      "line": 78,
+      "number": "2.1",
+      "title": "Provider-Optimal Dialect Compilation Passes"
+    },
+    {
+      "level": 4,
+      "line": 90,
+      "number": "2.1.1",
+      "title": "Claude Platform Envelopes (Step 2; `specs/009` §3)"
+    },
+    {
+      "level": 3,
+      "line": 98,
+      "number": "2.2",
+      "title": "Compat Pass: OpenAI Chat Completions (v1, for `gateway-compat` and `codex`; D-19)"
+    },
+    {
+      "level": 2,
+      "line": 114,
+      "number": "3",
+      "title": "Canonical `ContentBlock` State & Cryptographic Signature Preservation"
+    },
+    {
+      "level": 3,
+      "line": 148,
+      "number": "3.1",
+      "title": "Multi-Turn & Cross-Provider Failover Invariants"
+    },
+    {
+      "level": 2,
+      "line": 158,
+      "number": "4",
+      "title": "Orchestrator's Dynamic Model Scaler (`resolve_model_route`)"
+    },
+    {
+      "level": 3,
+      "line": 197,
+      "number": "4.1",
+      "title": "Amendment 002-A1: Model Pool & Exhaustion Promotion (D-26; ratified by the operator 2026-10-24)"
+    },
+    {
+      "level": 2,
+      "line": 258,
+      "number": "5",
+      "title": "Headless CLI Harness Drivers (`CLIHarnessDriver`)"
+    },
+    {
+      "level": 2,
+      "line": 272,
+      "number": "6",
+      "title": "Verification Plan"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/002-adapter-and-routing.md",
+    "sha256": "7da34480fa15e6feb593f545792b54062895c291e1abd4c2d38303a17273487f"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 254,
+        "end_line": 6,
+        "line": 6,
+        "start": 175
+      },
+      "text": "status: approved   # by the operator, 2026-10-24 (\"ratify all\"); whole document"
+    },
+    "sha256": "7da34480fa15e6feb593f545792b54062895c291e1abd4c2d38303a17273487f",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "runtime-models-and-tools",
+    "number": "002",
+    "stem": "002-adapter-and-routing",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "002: Adapter: Dialect Compiler, Multi-Provider Drivers & Dynamic Model Scaling"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 1474,
+      "end_line": 24,
+      "line": 20,
+      "start": 745
+    },
+    "text": "This specification defines the **Adapter Runtime Layer**:\n1. The **Intermediate Prompt Representation (IPR)** and **Provider-Dialect Compiler** (solving why naive \"universal prompts\" fail across Claude, Gemini, OpenAI, and local models).\n2. The **Canonical `ContentBlock` Turn Store** that preserves cryptographic reasoning signatures (`thinking.signature`, `Part.thoughtSignature`, `encrypted_content`) across multi-turn tool loops.\n3. **Orchestrator's Dynamic Model Scaler** (capability-based routing across every configured model family, thinking-budget control, cross-family builder/critic pairing, and retry upscaling).\n4. **Headless CLI Harness Drivers** (`claude`, `gemini`, `codex`) running inside isolated Git worktrees."
+  }
+}

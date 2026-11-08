@@ -1,0 +1,614 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 040: The Validator Role & Fact Ratification"
+    },
+    {
+      "level": 2,
+      "line": 19,
+      "number": "1",
+      "title": "Scope and Non-Goals"
+    },
+    {
+      "level": 3,
+      "line": 25,
+      "number": "1.1",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 28,
+      "number": "2",
+      "title": "Charter"
+    },
+    {
+      "level": 3,
+      "line": 37,
+      "number": "2.1",
+      "title": "Proposed manifest (draft, for the build)"
+    },
+    {
+      "level": 3,
+      "line": 56,
+      "number": "2.2",
+      "title": "Blind spots and counterweights"
+    },
+    {
+      "level": 2,
+      "line": 66,
+      "number": "3",
+      "title": "Where It Sits"
+    },
+    {
+      "level": 2,
+      "line": 73,
+      "number": "4",
+      "title": "The `fact-validation` Skill"
+    },
+    {
+      "level": 3,
+      "line": 76,
+      "number": "4.1",
+      "title": "Draft frontmatter"
+    },
+    {
+      "level": 3,
+      "line": 103,
+      "number": "4.2",
+      "title": "Draft steps"
+    },
+    {
+      "level": 3,
+      "line": 117,
+      "number": "4.3",
+      "title": "Council output"
+    },
+    {
+      "level": 2,
+      "line": 120,
+      "number": "5",
+      "title": "Significance: When Is a Claim Worth Ratifying?"
+    },
+    {
+      "level": 3,
+      "line": 130,
+      "number": "5.1",
+      "title": "Worked example (also a fixture, §12)"
+    },
+    {
+      "level": 2,
+      "line": 133,
+      "number": "6",
+      "title": "Source Reputation"
+    },
+    {
+      "level": 3,
+      "line": 134,
+      "number": "6.1",
+      "title": "Classes"
+    },
+    {
+      "level": 3,
+      "line": 144,
+      "number": "6.2",
+      "title": "Independence"
+    },
+    {
+      "level": 3,
+      "line": 147,
+      "number": "6.3",
+      "title": "Governments, Schools and Marketing (operator direction 2026-10-27)"
+    },
+    {
+      "level": 2,
+      "line": 160,
+      "number": "7",
+      "title": "Ratification"
+    },
+    {
+      "level": 3,
+      "line": 161,
+      "number": "7.1",
+      "title": "The tension, and the honest resolution"
+    },
+    {
+      "level": 3,
+      "line": 168,
+      "number": "7.2",
+      "title": "The path"
+    },
+    {
+      "level": 3,
+      "line": 175,
+      "number": "7.3",
+      "title": "Where facts live and what they look like"
+    },
+    {
+      "level": 3,
+      "line": 216,
+      "number": "7.4",
+      "title": "Reversal (decay deferred)"
+    },
+    {
+      "level": 2,
+      "line": 220,
+      "number": "8",
+      "title": "The Record (\"keeps a record of its deeds\")"
+    },
+    {
+      "level": 2,
+      "line": 227,
+      "number": "9",
+      "title": "Escalation"
+    },
+    {
+      "level": 3,
+      "line": 228,
+      "number": "9.1",
+      "title": "When"
+    },
+    {
+      "level": 3,
+      "line": 230,
+      "number": "9.2",
+      "title": "Protected classes (never ratified by the validator alone)"
+    },
+    {
+      "level": 3,
+      "line": 232,
+      "number": "9.3",
+      "title": "How"
+    },
+    {
+      "level": 2,
+      "line": 235,
+      "number": "10",
+      "title": "Theme Entry"
+    },
+    {
+      "level": 2,
+      "line": 245,
+      "number": "11",
+      "title": "Build Slices (after approval)"
+    },
+    {
+      "level": 3,
+      "line": 255,
+      "number": "11.1",
+      "title": "Deferred on review"
+    },
+    {
+      "level": 2,
+      "line": 258,
+      "number": "12",
+      "title": "Verification Plan"
+    },
+    {
+      "level": 2,
+      "line": 271,
+      "number": "13",
+      "title": "Questions put to the Council (answers in §14)"
+    },
+    {
+      "level": 2,
+      "line": 280,
+      "number": "14",
+      "title": "Review Record and Decisions Pending"
+    },
+    {
+      "level": 2,
+      "line": 292,
+      "number": null,
+      "title": "Appendix A. Proposed Default Source List (for the operator's review)"
+    },
+    {
+      "level": 3,
+      "line": 295,
+      "number": null,
+      "title": "A.1 Primary (one is enough, for the stated kind of claim only)"
+    },
+    {
+      "level": 3,
+      "line": 306,
+      "number": null,
+      "title": "A.2 Reputable secondary (two independent needed)"
+    },
+    {
+      "level": 3,
+      "line": 309,
+      "number": null,
+      "title": "A.3 Weak: a pointer to sources, never evidence, never one of the \"two\""
+    },
+    {
+      "level": 3,
+      "line": 312,
+      "number": null,
+      "title": "A.4 Excluded and noted in the record"
+    },
+    {
+      "level": 3,
+      "line": 315,
+      "number": null,
+      "title": "A.5 Open questions on the list"
+    },
+    {
+      "level": 2,
+      "line": 320,
+      "number": "15",
+      "title": "Build Plan V1–V2, Metrics and Rollback (final after Council, 2026-10-26; build waits for §15.7)"
+    },
+    {
+      "level": 3,
+      "line": 323,
+      "number": "15.1",
+      "title": "One switch, three modes, one latch"
+    },
+    {
+      "level": 3,
+      "line": 334,
+      "number": "15.2",
+      "title": "Rollback, cheapest first"
+    },
+    {
+      "level": 3,
+      "line": 344,
+      "number": "15.3",
+      "title": "Metrics (the minimum that proves efficacy)"
+    },
+    {
+      "level": 3,
+      "line": 354,
+      "number": "15.4",
+      "title": "Pre-registered numbers and the labelled set"
+    },
+    {
+      "level": 3,
+      "line": 367,
+      "number": "15.5",
+      "title": "Scope split"
+    },
+    {
+      "level": 3,
+      "line": 372,
+      "number": "15.6",
+      "title": "Verification for rollback and metrics"
+    },
+    {
+      "level": 3,
+      "line": 380,
+      "number": "15.7",
+      "title": "Hard preconditions before the first line of V1 code"
+    },
+    {
+      "level": 2,
+      "line": 387,
+      "number": "16",
+      "title": "Council Record: Build Through V2 (2026-10-26)"
+    },
+    {
+      "level": 2,
+      "line": 396,
+      "number": "17",
+      "title": "Growth Over Time and Sharing Inside an Organization (operator direction 2026-10-26)"
+    },
+    {
+      "level": 3,
+      "line": 399,
+      "number": "17.1",
+      "title": "What is stored, and what it is worth"
+    },
+    {
+      "level": 3,
+      "line": 405,
+      "number": "17.2",
+      "title": "Why it gets more efficient, and the honest limit"
+    },
+    {
+      "level": 3,
+      "line": 413,
+      "number": "17.3",
+      "title": "Sharing validated facts through Xenia"
+    },
+    {
+      "level": 3,
+      "line": 422,
+      "number": "17.4",
+      "title": "Decision pending"
+    },
+    {
+      "level": 2,
+      "line": 425,
+      "number": "18",
+      "title": "Untrusted Material in the Knowledge Base, Operator-Facing Labels, and Background Validation (operator direction 2026-10-26)"
+    },
+    {
+      "level": 3,
+      "line": 428,
+      "number": "18.1",
+      "title": "Included, with one distinction the code already makes"
+    },
+    {
+      "level": 3,
+      "line": 434,
+      "number": "18.2",
+      "title": "Operator-facing labels"
+    },
+    {
+      "level": 3,
+      "line": 447,
+      "number": "18.3",
+      "title": "Background validation of frequently used material"
+    },
+    {
+      "level": 3,
+      "line": 459,
+      "number": "18.4",
+      "title": "Decisions pending"
+    },
+    {
+      "level": 2,
+      "line": 464,
+      "number": "19",
+      "title": "Agents Search Everything; Scouting Brings Back Validated Facts Only; Known Sources Validate on Pull (operator direction 2026-10-26)"
+    },
+    {
+      "level": 3,
+      "line": 467,
+      "number": "19.1",
+      "title": "Agent search returns everything, labelled"
+    },
+    {
+      "level": 3,
+      "line": 474,
+      "number": "19.2",
+      "title": "Scouting brings back validated facts only"
+    },
+    {
+      "level": 3,
+      "line": 481,
+      "number": "19.3",
+      "title": "Pulling from a known source validates on arrival"
+    },
+    {
+      "level": 3,
+      "line": 489,
+      "number": "19.4",
+      "title": "What changes in earlier sections"
+    },
+    {
+      "level": 3,
+      "line": 495,
+      "number": "19.5",
+      "title": "Slices"
+    },
+    {
+      "level": 3,
+      "line": 498,
+      "number": "19.6",
+      "title": "For the Council before this ships"
+    },
+    {
+      "level": 2,
+      "line": 501,
+      "number": "20",
+      "title": "Budgets in Tokens, Not Money (operator direction 2026-10-26)"
+    },
+    {
+      "level": 3,
+      "line": 504,
+      "number": "20.1",
+      "title": "The mission cap"
+    },
+    {
+      "level": 3,
+      "line": 510,
+      "number": "20.2",
+      "title": "Background validation"
+    },
+    {
+      "level": 3,
+      "line": 513,
+      "number": "20.3",
+      "title": "Counted limits that are not tokens"
+    },
+    {
+      "level": 3,
+      "line": 516,
+      "number": "20.4",
+      "title": "What replaces the dollar gates"
+    },
+    {
+      "level": 3,
+      "line": 521,
+      "number": "20.5",
+      "title": "Caveats, to settle at build"
+    },
+    {
+      "level": 2,
+      "line": 526,
+      "number": "21",
+      "title": "Demonstrable Data Is Validated by Its Nature (operator direction 2026-10-27)"
+    },
+    {
+      "level": 3,
+      "line": 529,
+      "number": "21.1",
+      "title": "The principle, and what \"validated\" must say"
+    },
+    {
+      "level": 3,
+      "line": 540,
+      "number": "21.2",
+      "title": "What counts, and the limit on each"
+    },
+    {
+      "level": 3,
+      "line": 546,
+      "number": "21.3",
+      "title": "Fit with the provenance rules"
+    },
+    {
+      "level": 3,
+      "line": 552,
+      "number": "21.4",
+      "title": "Build"
+    },
+    {
+      "level": 3,
+      "line": 555,
+      "number": "21.5",
+      "title": "Decision"
+    },
+    {
+      "level": 3,
+      "line": 558,
+      "number": "21.6",
+      "title": "Event hash chain (D-10 decided by the operator, 2026-10-27: yes, computed by Delphi, never by a model)"
+    },
+    {
+      "level": 2,
+      "line": 572,
+      "number": "22",
+      "title": "Decisions Recorded (operator, 2026-10-27) and Open Work"
+    },
+    {
+      "level": 2,
+      "line": 593,
+      "number": "23",
+      "title": "Revision 3: Approval and Alignment (operator, 2026-10-28)"
+    },
+    {
+      "level": 3,
+      "line": 596,
+      "number": "23.1",
+      "title": "One vocabulary with spec 052"
+    },
+    {
+      "level": 3,
+      "line": 609,
+      "number": "23.2",
+      "title": "One tier story"
+    },
+    {
+      "level": 3,
+      "line": 612,
+      "number": "23.3",
+      "title": "Decay and re-validation"
+    },
+    {
+      "level": 3,
+      "line": 615,
+      "number": "23.4",
+      "title": "What V1 may and may not do"
+    },
+    {
+      "level": 3,
+      "line": 620,
+      "number": "23.5",
+      "title": "Open items carried"
+    },
+    {
+      "level": 3,
+      "line": 623,
+      "number": "23.6",
+      "title": "Labelled set reviewed (operator, 2026-10-28)"
+    },
+    {
+      "level": 3,
+      "line": 626,
+      "number": "23.7",
+      "title": "D-11: the labelled set is private; scores are published; per-org scoring is optional (operator, 2026-10-28, \"sounds good. follow your recommendation\")"
+    },
+    {
+      "level": 3,
+      "line": 633,
+      "number": "23.8",
+      "title": "Finishing order (slices, each one PR)"
+    },
+    {
+      "level": 2,
+      "line": 643,
+      "number": "24",
+      "title": "Council Pass on §19.6 (stand-in reviewer, 2026-10-28) and Amendments"
+    },
+    {
+      "level": 2,
+      "line": 653,
+      "number": "25",
+      "title": "Build Amendments (V2d, 2026-10-29)"
+    },
+    {
+      "level": 2,
+      "line": 675,
+      "number": "26",
+      "title": "Amendment 040-A1: source list changes (operator, 2026-10-31)"
+    },
+    {
+      "level": 2,
+      "line": 680,
+      "number": "27",
+      "title": "Amendment 040-A2: Weak sources are labelled, never evidence (operator, 2026-10-31)"
+    },
+    {
+      "level": 2,
+      "line": 699,
+      "number": "28",
+      "title": "Amendment 040-A3: Wikipedia and journal-publisher guards (operator, 2026-10-31)"
+    },
+    {
+      "level": 2,
+      "line": 706,
+      "number": "29",
+      "title": "Amendment 040-A5: the DOI is looked up (operator, 2026-10-31)"
+    },
+    {
+      "level": 2,
+      "line": 714,
+      "number": "30",
+      "title": "Amendment 040-A6: `delphi check fact` looks the DOI up too (operator, 2026-10-31)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/040-validator-role-and-fact-ratification.md",
+    "sha256": "dfdb12eddd1e9ffecb269ed72468999d4423966c949a2932455e995563303382"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 420,
+        "end_line": 6,
+        "line": 6,
+        "start": 157
+      },
+      "text": "status: approved   # approved 2026-10-28 by the operator (\"merge and approve all, follow the rest of your recommendations. approve and improve the validator\"); V1 may be built as scoped in §23; V2 and any scoring claim wait for the operator-labelled set (§23.4)"
+    },
+    "sha256": "dfdb12eddd1e9ffecb269ed72468999d4423966c949a2932455e995563303382",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "knowledge-and-memory",
+    "number": "040",
+    "stem": "040-validator-role-and-fact-ratification",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "040: The Validator Role & Fact Ratification"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 1797,
+      "end_line": 20,
+      "line": 20,
+      "start": 1277
+    },
+    "text": "The operator asked for a role that sits **equally between the strategist and the red-team**, checks every piece of inbound reading and learning, disproves hallucinations, values truth above all, keeps a record of what it did, and has **one special power: ratifying inbound reading into the core knowledge base**, after corroborating it from reputable sources and storing the link and metadata as frontmatter. Verification is a **skill**. If it cannot validate a fact with full confidence, it raises it with the operator."
+  }
+}

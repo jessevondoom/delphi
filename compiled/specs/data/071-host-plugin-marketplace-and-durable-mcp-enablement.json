@@ -1,0 +1,161 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 071: Host plugin marketplace and durable MCP enablement"
+    },
+    {
+      "level": 2,
+      "line": 22,
+      "number": "1",
+      "title": "Problem & Intent"
+    },
+    {
+      "level": 2,
+      "line": 34,
+      "number": "1.1",
+      "title": "Non-Goals"
+    },
+    {
+      "level": 2,
+      "line": 42,
+      "number": "1.2",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 46,
+      "number": "2",
+      "title": "Principles"
+    },
+    {
+      "level": 2,
+      "line": 54,
+      "number": "3",
+      "title": "Repository layout"
+    },
+    {
+      "level": 2,
+      "line": 78,
+      "number": "4",
+      "title": "The marketplace"
+    },
+    {
+      "level": 2,
+      "line": 109,
+      "number": "5",
+      "title": "The plugin contents and the launch command"
+    },
+    {
+      "level": 3,
+      "line": 111,
+      "number": "5.1",
+      "title": "What each plugin carries"
+    },
+    {
+      "level": 3,
+      "line": 115,
+      "number": "5.2",
+      "title": "Launch command and the PATH limit"
+    },
+    {
+      "level": 3,
+      "line": 123,
+      "number": "5.3",
+      "title": "Per-host connect commands (vendor docs, 2026-11-03; research only)"
+    },
+    {
+      "level": 3,
+      "line": 135,
+      "number": "5.4",
+      "title": "Operator experience (read-only, no host writes)"
+    },
+    {
+      "level": 2,
+      "line": 145,
+      "number": "6",
+      "title": "Deferred installer"
+    },
+    {
+      "level": 2,
+      "line": 149,
+      "number": "7",
+      "title": "Status check: `delphi doctor` and `delphi mcp --check`"
+    },
+    {
+      "level": 2,
+      "line": 157,
+      "number": "8",
+      "title": "Generation, versioning and gates"
+    },
+    {
+      "level": 2,
+      "line": 166,
+      "number": "9",
+      "title": "Security and trust"
+    },
+    {
+      "level": 2,
+      "line": 174,
+      "number": "10",
+      "title": "Slices (one per pull request; none starts before approval)"
+    },
+    {
+      "level": 2,
+      "line": 192,
+      "number": "11",
+      "title": "Testing"
+    },
+    {
+      "level": 2,
+      "line": 199,
+      "number": "12",
+      "title": "Decisions for the operator"
+    },
+    {
+      "level": 2,
+      "line": 217,
+      "number": "13",
+      "title": "Open questions"
+    },
+    {
+      "level": 2,
+      "line": 228,
+      "number": "14",
+      "title": "Acceptance criteria"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/071-host-plugin-marketplace-and-durable-mcp-enablement.md",
+    "sha256": "072c621a98ee1f7da86cf955c45a2f5bb0625f2e4845619cbcf7cd6bc9794e9b"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 610,
+        "end_line": 6,
+        "line": 6,
+        "start": 231
+      },
+      "text": "status: approved   # by the operator, 2026-11-04 (\"yeah build as much as possible\"), after three Council reviews: approves E1a, E1, E1b, E2 (Q-8 answered) and, by the amendment of 2026-11-04 (\"build all the rest\", \"don't pin a version update\"), E4a and E4c as documentation and hints only (Q-1 answered: no new host directories). E1s, E3, E4b, E4d and E5 are not approved (§10)."
+    },
+    "sha256": "072c621a98ee1f7da86cf955c45a2f5bb0625f2e4845619cbcf7cd6bc9794e9b",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "hosts-and-mcp",
+    "number": "071",
+    "stem": "071-host-plugin-marketplace-and-durable-mcp-enablement",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "071: Host plugin marketplace and durable MCP enablement for Claude Code, Codex, Antigravity and Copilot"
+  },
+  "summary": null
+}

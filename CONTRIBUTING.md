@@ -68,6 +68,14 @@ Three numbers used to be shared. On 2026-11-08 (spec 090) one spec of each pair 
 
 To tell which a pre-2026-11-08 "spec 014" meant: the documents readers, charts and `delphi-docs` are 095; the relay, away mode and step-up are 014. The console's left deck is 096; training experiments, arms, truth packs and the harness for measuring models are 037. Encyclopedia pages, their cache lifetime and inline media are 097; the `shell` tool and the `!` bang are 061.
 
+## Compiled specs
+
+`delphi specs compile` (spec 088) writes one JSON file per spec to `compiled/specs/data/`: a quotation of the spec's summary and `status:` line with byte spans, a hash of the source, and its outline, for agents to read. It is a derived view and never the authority; the source spec governs, and a builder opens the section it implements.
+
+- **After you edit a spec, run `delphi specs compile` and commit the result.** `cargo test -p delphi --test compiled_specs` fails with the command to run when a compiled file is stale. The files are per spec, so two pull requests conflict only when they edit the same spec; if one does, rerun the command, never edit a compiled file by hand.
+- **A new spec adds one line to `compiled/groups.toml`** (its file name without `.md`, and one of the nine groups). That file is the only place a spec's group is declared; a `group:` line in a spec's frontmatter is ignored and `delphi lint` warns about it. The compile fails when a spec is missing from the file or the file names a spec that does not exist.
+- Do not read a compiled file to decide anything in code. The test above fails if any Rust or console source other than the compiler names the directory.
+
 ## Security
 
 Report a vulnerability privately to the repository owner (a GitHub security advisory, if enabled, or a direct message) rather than in a public issue. Never include credentials, tokens or customer data in an issue, a test fixture or a spec.

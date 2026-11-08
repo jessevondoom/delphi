@@ -1,0 +1,374 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 005e: Console UX Review and Redesign"
+    },
+    {
+      "level": 2,
+      "line": 20,
+      "number": "1",
+      "title": "Scope"
+    },
+    {
+      "level": 3,
+      "line": 28,
+      "number": "1.1",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 32,
+      "number": "2",
+      "title": "Method and evidence"
+    },
+    {
+      "level": 2,
+      "line": 43,
+      "number": "3",
+      "title": "Findings, prioritised"
+    },
+    {
+      "level": 3,
+      "line": 47,
+      "number": null,
+      "title": "P0"
+    },
+    {
+      "level": 3,
+      "line": 53,
+      "number": null,
+      "title": "P1"
+    },
+    {
+      "level": 3,
+      "line": 64,
+      "number": null,
+      "title": "P2"
+    },
+    {
+      "level": 3,
+      "line": 74,
+      "number": null,
+      "title": "What is good and must survive"
+    },
+    {
+      "level": 2,
+      "line": 78,
+      "number": "4",
+      "title": "Design principles for the changes"
+    },
+    {
+      "level": 2,
+      "line": 87,
+      "number": "5",
+      "title": "The palette (every window)"
+    },
+    {
+      "level": 2,
+      "line": 110,
+      "number": "6",
+      "title": "First run and the no-model state"
+    },
+    {
+      "level": 3,
+      "line": 112,
+      "number": "6.1",
+      "title": "Problem"
+    },
+    {
+      "level": 3,
+      "line": 115,
+      "number": "6.2",
+      "title": "Behaviour"
+    },
+    {
+      "level": 3,
+      "line": 121,
+      "number": "6.3",
+      "title": "Layout, 80x24 (no model yet, nothing typed)"
+    },
+    {
+      "level": 3,
+      "line": 152,
+      "number": "6.4",
+      "title": "Layout: an escalation card after a prompt (soft-fill block, §7)"
+    },
+    {
+      "level": 3,
+      "line": 181,
+      "number": "6.5",
+      "title": "Layout: a ready console with nothing said yet (replaces the blank screen)"
+    },
+    {
+      "level": 3,
+      "line": 212,
+      "number": "6.6",
+      "title": "Copy"
+    },
+    {
+      "level": 3,
+      "line": 223,
+      "number": "6.7",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 3,
+      "line": 229,
+      "number": "6.8",
+      "title": "Affected files"
+    },
+    {
+      "level": 2,
+      "line": 232,
+      "number": "7",
+      "title": "The chat deck"
+    },
+    {
+      "level": 3,
+      "line": 234,
+      "number": "7.1",
+      "title": "Problem"
+    },
+    {
+      "level": 3,
+      "line": 237,
+      "number": "7.2",
+      "title": "Decided design: soft-fill bubbles"
+    },
+    {
+      "level": 3,
+      "line": 363,
+      "number": "7.3",
+      "title": "Key bindings (chat deck)"
+    },
+    {
+      "level": 3,
+      "line": 366,
+      "number": "7.4",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 3,
+      "line": 375,
+      "number": "7.5",
+      "title": "Affected files"
+    },
+    {
+      "level": 3,
+      "line": 378,
+      "number": "7.6",
+      "title": "Studies not chosen"
+    },
+    {
+      "level": 3,
+      "line": 384,
+      "number": "7.7",
+      "title": "The typing bubble (amendment, ratified by the operator, 2026-10-28)"
+    },
+    {
+      "level": 2,
+      "line": 387,
+      "number": "8",
+      "title": "The activity deck: a ticker with finished history"
+    },
+    {
+      "level": 3,
+      "line": 389,
+      "number": "8.1",
+      "title": "Problem"
+    },
+    {
+      "level": 3,
+      "line": 392,
+      "number": "8.2",
+      "title": "Decided design"
+    },
+    {
+      "level": 3,
+      "line": 435,
+      "number": "8.3",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 3,
+      "line": 441,
+      "number": "8.4",
+      "title": "Affected files"
+    },
+    {
+      "level": 2,
+      "line": 444,
+      "number": "9",
+      "title": "The narrator window (formerly the Observer)"
+    },
+    {
+      "level": 3,
+      "line": 446,
+      "number": "9.1",
+      "title": "Problem"
+    },
+    {
+      "level": 3,
+      "line": 449,
+      "number": "9.2",
+      "title": "Decided design"
+    },
+    {
+      "level": 3,
+      "line": 601,
+      "number": "9.3",
+      "title": "Data the narrator needs that the daemon does not send yet"
+    },
+    {
+      "level": 3,
+      "line": 604,
+      "number": "9.4",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 3,
+      "line": 614,
+      "number": "9.5",
+      "title": "Affected files"
+    },
+    {
+      "level": 2,
+      "line": 617,
+      "number": "10",
+      "title": "Discoverability and keyboard flow"
+    },
+    {
+      "level": 3,
+      "line": 619,
+      "number": "10.1",
+      "title": "`?` opens help (finding 4)"
+    },
+    {
+      "level": 3,
+      "line": 649,
+      "number": "10.2",
+      "title": "The header: animated badges, one blank row (finding 5)"
+    },
+    {
+      "level": 3,
+      "line": 667,
+      "number": "10.3",
+      "title": "Approval mode (finding 3, decision of 2026-10-25)"
+    },
+    {
+      "level": 3,
+      "line": 672,
+      "number": "10.4",
+      "title": "One command set (finding 7)"
+    },
+    {
+      "level": 3,
+      "line": 675,
+      "number": "10.5",
+      "title": "Consistent leave and stop (findings 7, 18)"
+    },
+    {
+      "level": 3,
+      "line": 678,
+      "number": "10.6",
+      "title": "Notes have marks (finding 15)"
+    },
+    {
+      "level": 3,
+      "line": 681,
+      "number": "10.7",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 689,
+      "number": "11",
+      "title": "Degradation: width, height, colour"
+    },
+    {
+      "level": 2,
+      "line": 705,
+      "number": "12",
+      "title": "Amendments this spec needs elsewhere (ratified by the operator, 2026-10-25)"
+    },
+    {
+      "level": 2,
+      "line": 713,
+      "number": "13",
+      "title": "Implementation plan"
+    },
+    {
+      "level": 2,
+      "line": 733,
+      "number": "14",
+      "title": "Verification Plan"
+    },
+    {
+      "level": 2,
+      "line": 742,
+      "number": "15",
+      "title": "Rendered mockups"
+    },
+    {
+      "level": 2,
+      "line": 762,
+      "number": "16",
+      "title": "Decisions and open questions"
+    },
+    {
+      "level": 3,
+      "line": 781,
+      "number": "16.1",
+      "title": "As built (slices 1-9 merged 2026-10-25; slice 10 in progress, slice 11 a person's)"
+    },
+    {
+      "level": 2,
+      "line": 794,
+      "number": "17",
+      "title": "Notes from the external seat (Gemini 3.8 Flash through `agy`, plan mode, 2026-10-25)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/005e-console-ux-review-and-redesign.md",
+    "sha256": "645d2bd365558bfa988b28bb9e657119e31b8b6f377b6b7f2931b3d3e804ae16"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 427,
+        "end_line": 6,
+        "line": 6,
+        "start": 190
+      },
+      "text": "status: approved   # by the operator, 2026-10-25, after reviewing the rendered mockups; amendments in §12 ratified the same day; the §16.1 change that `/observe` opens one narrator window (no tmux splits, no `tile`) ratified 2026-10-25"
+    },
+    "sha256": "645d2bd365558bfa988b28bb9e657119e31b8b6f377b6b7f2931b3d3e804ae16",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "console",
+    "number": "005e",
+    "stem": "005e-console-ux-review-and-redesign",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "005e: Console UX Review and Redesign (chat, activity ticker, narrator, first run)"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2054,
+      "end_line": 22,
+      "line": 22,
+      "start": 1650
+    },
+    "text": "**Reviewed.** The full-screen console (`ui/src`, originally Ink and now OpenTUI under D-33), the Observer window (`ui/src/observe-screen.ts`, `observer.tsx`), the inline and plain Rust consoles (`crates/delphi/src/console.rs`, `chat.rs`), the classic Rust Observer (`observer.rs`), the first run (`main.rs`, `start.rs`, `setup.rs`) and the CLI surface (`main.rs` usage text, `doctor`, `models`, `needs`)."
+  }
+}

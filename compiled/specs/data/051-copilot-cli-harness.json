@@ -1,0 +1,149 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 051: GitHub Copilot CLI as a Fourth Harness"
+    },
+    {
+      "level": 2,
+      "line": 23,
+      "number": "1",
+      "title": "What is different about this harness"
+    },
+    {
+      "level": 2,
+      "line": 32,
+      "number": "2",
+      "title": "The surface (from `copilot` 1.0.105)"
+    },
+    {
+      "level": 3,
+      "line": 34,
+      "number": "2.1",
+      "title": "The way to drive it"
+    },
+    {
+      "level": 3,
+      "line": 49,
+      "number": "2.2",
+      "title": "Options and their dispositions"
+    },
+    {
+      "level": 3,
+      "line": 82,
+      "number": "2.3",
+      "title": "Other commands"
+    },
+    {
+      "level": 3,
+      "line": 91,
+      "number": "2.4",
+      "title": "Cost and limits"
+    },
+    {
+      "level": 2,
+      "line": 99,
+      "number": "3",
+      "title": "Plan"
+    },
+    {
+      "level": 2,
+      "line": 111,
+      "number": "4",
+      "title": "Open decisions (the operator's)"
+    },
+    {
+      "level": 2,
+      "line": 123,
+      "number": "5",
+      "title": "What this spec does not claim"
+    },
+    {
+      "level": 2,
+      "line": 130,
+      "number": "6",
+      "title": "S0 results (2026-10-28, `copilot` 1.0.105 and `codex-cli 0.165.0`, both logged in on this machine)"
+    },
+    {
+      "level": 3,
+      "line": 132,
+      "number": "6.1",
+      "title": "Quota: what each CLI will tell you without a model call"
+    },
+    {
+      "level": 3,
+      "line": 151,
+      "number": "6.2",
+      "title": "Quota design"
+    },
+    {
+      "level": 3,
+      "line": 158,
+      "number": "6.3",
+      "title": "Manifest and probes"
+    },
+    {
+      "level": 3,
+      "line": 164,
+      "number": "6.4",
+      "title": "Probe results, round 2 (all on `claude-sonnet-5.5` unless named; one prompt each)"
+    },
+    {
+      "level": 3,
+      "line": 177,
+      "number": "6.5",
+      "title": "Probe results, round 3 (2026-10-28): the ACP gaps, the tool bridge, and Codex's approvals"
+    },
+    {
+      "level": 2,
+      "line": 189,
+      "number": "7",
+      "title": "S1 as built (2026-10-28)"
+    },
+    {
+      "level": 2,
+      "line": 204,
+      "number": "8",
+      "title": "S1b as built (2026-10-29)"
+    },
+    {
+      "level": 2,
+      "line": 211,
+      "number": "9",
+      "title": "Council Round 2 on a seat with no structured-output flag (2026-11-08)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/051-copilot-cli-harness.md",
+    "sha256": "8a1cc29c9843adb74116702cbd0cd3ea24d55d0a73a15a313739f460d1bd0465"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 279,
+        "end_line": 6,
+        "line": 6,
+        "start": 163
+      },
+      "text": "status: approved   # by the operator, 2026-10-28 (\"this is approved. start on S0\"); OD-3 answered the same day (§4)"
+    },
+    "sha256": "8a1cc29c9843adb74116702cbd0cd3ea24d55d0a73a15a313739f460d1bd0465",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "runtime-models-and-tools",
+    "number": "051",
+    "stem": "051-copilot-cli-harness",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "051: GitHub Copilot CLI as a Fourth Harness, Sized for a Free Tier"
+  },
+  "summary": null
+}

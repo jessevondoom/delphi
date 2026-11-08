@@ -3395,6 +3395,29 @@ mod tests {
 
     const RUNBOOK: &str = "---\nid: acme/runbook\ntitle: Runbook\nsource_type: external_untrusted\n---\n# Rolling deploy\n\nShip the gizmo service one cluster at a time using the quokka procedure.\n";
 
+    // specs/088 section 2: a compiled spec file is a derived view and never the authority, so no index lists one, even if a copy
+    // of the compiled directory is placed where an index looks. The index reads only the directories it names.
+    #[test]
+    fn the_index_never_lists_the_compiled_spec_directory() {
+        let t = tempfile::tempdir().unwrap();
+        let ws = t.path().join("ws");
+        let put = |p: PathBuf| {
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, "---\nid: x\n---\nA compiled quokka view.\n").unwrap();
+        };
+        // The directory name is built, not written out, so the guard that no code names it (crates/delphi/tests/compiled_specs.rs)
+        // does not need an exception for this test.
+        let compiled = |zone: &str, name: &str| ws.join(zone).join("compiled").join("specs").join(name);
+        put(ws.join("base/context/note.md"));
+        put(compiled("base", "index.md"));
+        put(compiled("team", "console.md"));
+        put(compiled("base", "data/001-a.md"));
+        put(ws.join("compiled").join("specs").join("index.md"));
+        let listed: Vec<String> = sources(&ws).into_iter().map(|f| f.rel_path).collect();
+        assert!(listed.iter().any(|p| p == "context/note.md"), "the control file is indexed: {:?}", listed);
+        assert!(listed.iter().all(|p| !p.contains("compiled")), "nothing from the compiled directory: {:?}", listed);
+    }
+
     #[test]
     fn an_added_bundles_knowledge_is_indexed_at_tier_l2_whatever_its_frontmatter_says() {
         let (_h, ws) = home_with_bundles(&[("acme", "plat", "blake3:aa", "2999-01-01", &[("runbooks/deploy.md", RUNBOOK)])]);

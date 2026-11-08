@@ -1,0 +1,137 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 052: Knowledge status, capture on contact and the daily digest"
+    },
+    {
+      "level": 2,
+      "line": 19,
+      "number": "1",
+      "title": "Why"
+    },
+    {
+      "level": 3,
+      "line": 27,
+      "number": "1.1",
+      "title": "Non-Goals"
+    },
+    {
+      "level": 3,
+      "line": 32,
+      "number": "1.2",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 35,
+      "number": "2",
+      "title": "Principles"
+    },
+    {
+      "level": 2,
+      "line": 42,
+      "number": "3",
+      "title": "The additions"
+    },
+    {
+      "level": 3,
+      "line": 43,
+      "number": "3.1",
+      "title": "One status ladder (KS-1)"
+    },
+    {
+      "level": 3,
+      "line": 57,
+      "number": "3.2",
+      "title": "Capture on contact (KS-2)"
+    },
+    {
+      "level": 3,
+      "line": 66,
+      "number": "3.3",
+      "title": "The daily digest (KS-3)"
+    },
+    {
+      "level": 3,
+      "line": 75,
+      "number": "3.4",
+      "title": "Contradiction and decay (KS-4)"
+    },
+    {
+      "level": 2,
+      "line": 79,
+      "number": "4",
+      "title": "Where each lives"
+    },
+    {
+      "level": 2,
+      "line": 87,
+      "number": "5",
+      "title": "Invariants and tests"
+    },
+    {
+      "level": 2,
+      "line": 96,
+      "number": "6",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 103,
+      "number": "7",
+      "title": "Build plan"
+    },
+    {
+      "level": 2,
+      "line": 113,
+      "number": "8",
+      "title": "Open decisions (provisional answers, change on request)"
+    },
+    {
+      "level": 2,
+      "line": 119,
+      "number": "9",
+      "title": "Non-goals"
+    },
+    {
+      "level": 2,
+      "line": 122,
+      "number": "10",
+      "title": "Known limits"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/052-knowledge-status-capture-on-contact-and-the-digest.md",
+    "sha256": "d2140603ff1244ebe43453906795e9058ac35b25fbfd6416944ec1bd6a61e723"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 459,
+        "end_line": 6,
+        "line": 6,
+        "start": 288
+      },
+      "text": "status: approved   # by the operator, 2026-10-28 (\"merge and approve all, follow the rest of your recommendations\"); the provisional answers in §8 stand; nothing is built"
+    },
+    "sha256": "d2140603ff1244ebe43453906795e9058ac35b25fbfd6416944ec1bd6a61e723",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "knowledge-and-memory",
+    "number": "052",
+    "stem": "052-knowledge-status-capture-on-contact-and-the-digest",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "052: Knowledge status, capture on contact and the daily digest: one vocabulary for how much a claim can be relied on, and growth that costs the operator nothing"
+  },
+  "summary": null
+}

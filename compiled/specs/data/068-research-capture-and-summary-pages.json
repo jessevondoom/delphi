@@ -1,0 +1,155 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 068: Research Capture and Imported Summary Pages"
+    },
+    {
+      "level": 2,
+      "line": 20,
+      "number": "1",
+      "title": "Problem"
+    },
+    {
+      "level": 2,
+      "line": 24,
+      "number": "2",
+      "title": "Operator decisions (2026-11-02)"
+    },
+    {
+      "level": 2,
+      "line": 34,
+      "number": "3",
+      "title": "Doors (one inbox, one schema)"
+    },
+    {
+      "level": 2,
+      "line": 55,
+      "number": "4",
+      "title": "Entry schema"
+    },
+    {
+      "level": 2,
+      "line": 67,
+      "number": "5",
+      "title": "Staged entries from agents (`propose_kb_entry`)"
+    },
+    {
+      "level": 2,
+      "line": 75,
+      "number": "6",
+      "title": "Summary pages"
+    },
+    {
+      "level": 3,
+      "line": 77,
+      "number": "6.1",
+      "title": "Acceptance"
+    },
+    {
+      "level": 3,
+      "line": 80,
+      "number": "6.2",
+      "title": "Conceptual index"
+    },
+    {
+      "level": 3,
+      "line": 87,
+      "number": "6.3",
+      "title": "Search presentation"
+    },
+    {
+      "level": 3,
+      "line": 93,
+      "number": "6.4",
+      "title": "Taint"
+    },
+    {
+      "level": 3,
+      "line": 96,
+      "number": "6.5",
+      "title": "No verification from a summary"
+    },
+    {
+      "level": 3,
+      "line": 105,
+      "number": "6.6",
+      "title": "Validating internal sources"
+    },
+    {
+      "level": 3,
+      "line": 108,
+      "number": "6.7",
+      "title": "The bibliography sidecar (D-7, operator, 2026-11-02)"
+    },
+    {
+      "level": 2,
+      "line": 121,
+      "number": "7",
+      "title": "Staleness and refresh"
+    },
+    {
+      "level": 2,
+      "line": 131,
+      "number": "8",
+      "title": "Authority and safety"
+    },
+    {
+      "level": 2,
+      "line": 138,
+      "number": "9",
+      "title": "Slices (one per pull request)"
+    },
+    {
+      "level": 2,
+      "line": 152,
+      "number": "10",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 168,
+      "number": "11",
+      "title": "Simpler alternative considered"
+    },
+    {
+      "level": 2,
+      "line": 172,
+      "number": "12",
+      "title": "Known limits"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/068-research-capture-and-summary-pages.md",
+    "sha256": "da633bd6e9a3a7413326178dff2ca783e499c47a06a9aee319ce1dc32533c339"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 176,
+        "end_line": 6,
+        "line": 6,
+        "start": 160
+      },
+      "text": "status: approved"
+    },
+    "sha256": "da633bd6e9a3a7413326178dff2ca783e499c47a06a9aee319ce1dc32533c339",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "knowledge-and-memory",
+    "number": "068",
+    "stem": "068-research-capture-and-summary-pages",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "068: Research Capture and Imported Summary Pages"
+  },
+  "summary": null
+}

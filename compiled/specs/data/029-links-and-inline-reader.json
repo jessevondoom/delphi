@@ -1,0 +1,149 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 029: Links and the Inline Reader"
+    },
+    {
+      "level": 2,
+      "line": 17,
+      "number": "1",
+      "title": "What this is"
+    },
+    {
+      "level": 2,
+      "line": 20,
+      "number": "2",
+      "title": "Decisions taken (operator, 2026-10-25)"
+    },
+    {
+      "level": 2,
+      "line": 31,
+      "number": "3",
+      "title": "The link model"
+    },
+    {
+      "level": 2,
+      "line": 46,
+      "number": "4",
+      "title": "Moving through links (the same on every surface)"
+    },
+    {
+      "level": 2,
+      "line": 59,
+      "number": "5",
+      "title": "The reader"
+    },
+    {
+      "level": 2,
+      "line": 76,
+      "number": "6",
+      "title": "The chat as a source of research"
+    },
+    {
+      "level": 2,
+      "line": 82,
+      "number": "7",
+      "title": "Why not `charmed-glow`"
+    },
+    {
+      "level": 2,
+      "line": 89,
+      "number": "8",
+      "title": "Build order and state"
+    },
+    {
+      "level": 2,
+      "line": 98,
+      "number": "9",
+      "title": "Settled questions (operator, 2026-10-25)"
+    },
+    {
+      "level": 2,
+      "line": 104,
+      "number": "10",
+      "title": "Amendment 029-A1: pictures in the reader (operator, 2026-10-28)"
+    },
+    {
+      "level": 3,
+      "line": 108,
+      "number": "10.1",
+      "title": "Decision: an in-tree half-block renderer, not `ink-picture`"
+    },
+    {
+      "level": 3,
+      "line": 114,
+      "number": "10.2",
+      "title": "What the reader draws"
+    },
+    {
+      "level": 3,
+      "line": 119,
+      "number": "10.3",
+      "title": "Safety (this adds no authority)"
+    },
+    {
+      "level": 3,
+      "line": 125,
+      "number": "10.4",
+      "title": "Slices"
+    },
+    {
+      "level": 2,
+      "line": 134,
+      "number": "11",
+      "title": "Amendment 029-A2: quadrant pictures, the default, with half blocks kept (operator, 2026-10-28)"
+    },
+    {
+      "level": 3,
+      "line": 138,
+      "number": "11.1",
+      "title": "What a quadrant picture is"
+    },
+    {
+      "level": 3,
+      "line": 143,
+      "number": "11.2",
+      "title": "The setting"
+    },
+    {
+      "level": 3,
+      "line": 149,
+      "number": "11.3",
+      "title": "Slices"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/029-links-and-inline-reader.md",
+    "sha256": "966add62abbbafac8260bbdf5ee4231a055ae454203511b1f08aadfacc937b94"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 314,
+        "end_line": 6,
+        "line": 6,
+        "start": 141
+      },
+      "text": "status: approved   # by the operator, 2026-10-26 (\"ratify all specs\"); asked for 2026-10-25; slices 1-4 are built (§8); the key bindings have not been tried by the operator"
+    },
+    "sha256": "966add62abbbafac8260bbdf5ee4231a055ae454203511b1f08aadfacc937b94",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "console",
+    "number": "029",
+    "stem": "029-links-and-inline-reader",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "029: Links and the Inline Reader (draft)"
+  },
+  "summary": null
+}

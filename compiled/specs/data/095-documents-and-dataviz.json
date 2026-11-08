@@ -1,0 +1,224 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 095: Document Reading, Document Creation & Data Visualization"
+    },
+    {
+      "level": 2,
+      "line": 19,
+      "number": "1",
+      "title": "Scope and Non-Goals"
+    },
+    {
+      "level": 3,
+      "line": 25,
+      "number": "1.1",
+      "title": "The dependency rule (operator, 2026-10-25)"
+    },
+    {
+      "level": 3,
+      "line": 39,
+      "number": "1.2",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 42,
+      "number": "2",
+      "title": "Principles"
+    },
+    {
+      "level": 2,
+      "line": 50,
+      "number": "3",
+      "title": "The `delphi-docs` crate"
+    },
+    {
+      "level": 3,
+      "line": 74,
+      "number": "3.1",
+      "title": "Limits (all enforced, all tested at the boundary)"
+    },
+    {
+      "level": 2,
+      "line": 86,
+      "number": "4",
+      "title": "Formats (read)"
+    },
+    {
+      "level": 2,
+      "line": 109,
+      "number": "5",
+      "title": "Tool surface"
+    },
+    {
+      "level": 3,
+      "line": 110,
+      "number": "5.1",
+      "title": "`read_file` learns documents"
+    },
+    {
+      "level": 3,
+      "line": 116,
+      "number": "5.2",
+      "title": "`read_doc` for members and queries"
+    },
+    {
+      "level": 2,
+      "line": 126,
+      "number": "6",
+      "title": "Security"
+    },
+    {
+      "level": 3,
+      "line": 142,
+      "number": "6.1",
+      "title": "Caching"
+    },
+    {
+      "level": 2,
+      "line": 145,
+      "number": "7",
+      "title": "Creation (phase 2)"
+    },
+    {
+      "level": 3,
+      "line": 148,
+      "number": "7.1",
+      "title": "Write path changes"
+    },
+    {
+      "level": 3,
+      "line": 155,
+      "number": "7.2",
+      "title": "Tools"
+    },
+    {
+      "level": 3,
+      "line": 167,
+      "number": "7.3",
+      "title": "HTML safety (the generated page is code)"
+    },
+    {
+      "level": 2,
+      "line": 179,
+      "number": "8",
+      "title": "Charts and data visualization"
+    },
+    {
+      "level": 3,
+      "line": 180,
+      "number": "8.1",
+      "title": "Spec, not code"
+    },
+    {
+      "level": 3,
+      "line": 200,
+      "number": "8.2",
+      "title": "Rendering rules (what makes the output good by default)"
+    },
+    {
+      "level": 3,
+      "line": 209,
+      "number": "8.3",
+      "title": "Interactivity (HTML output only)"
+    },
+    {
+      "level": 3,
+      "line": 212,
+      "number": "8.4",
+      "title": "PNG"
+    },
+    {
+      "level": 3,
+      "line": 215,
+      "number": "8.5",
+      "title": "Diagrams"
+    },
+    {
+      "level": 3,
+      "line": 218,
+      "number": "8.6",
+      "title": "Dashboards"
+    },
+    {
+      "level": 2,
+      "line": 221,
+      "number": "9",
+      "title": "Verification"
+    },
+    {
+      "level": 2,
+      "line": 234,
+      "number": "10",
+      "title": "Build plan"
+    },
+    {
+      "level": 3,
+      "line": 237,
+      "number": null,
+      "title": "Phase 1: Read"
+    },
+    {
+      "level": 3,
+      "line": 247,
+      "number": null,
+      "title": "Phase 2: Create"
+    },
+    {
+      "level": 3,
+      "line": 257,
+      "number": null,
+      "title": "Decisions ratified before R0 (operator, 2026-10-25)"
+    },
+    {
+      "level": 2,
+      "line": 264,
+      "number": "11",
+      "title": "Known gaps (decided, not forgotten)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/095-documents-and-dataviz.md",
+    "sha256": "a089843f7ae315e94bb9601331cacd9a2aab0982e8997debbdb4682f67129c42"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 316,
+        "end_line": 6,
+        "line": 6,
+        "start": 178
+      },
+      "text": "status: approved   # by the operator, 2026-10-25 (\"your plan sounds solid. go\"); whole document, the five decisions in §10 as recommended"
+    },
+    "sha256": "a089843f7ae315e94bb9601331cacd9a2aab0982e8997debbdb4682f67129c42",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "knowledge-and-memory",
+    "number": "095",
+    "stem": "095-documents-and-dataviz",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "095: Document Reading, Document Creation & Data Visualization (dependency-free)"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 1206,
+      "end_line": 20,
+      "line": 20,
+      "start": 916
+    },
+    "text": "Agents today read and write plain text only (`read_file`, `write_file`, 256 KB caps, `crates/delphi-engine/src/tools.rs`). This spec gives them the common document formats, in two phases: **read first, create second**, with charting and data visualization as a first-class part of creation."
+  }
+}

@@ -1,0 +1,101 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 047: Codex CLI as a Third Harness"
+    },
+    {
+      "level": 2,
+      "line": 21,
+      "number": "1",
+      "title": "Principles"
+    },
+    {
+      "level": 2,
+      "line": 28,
+      "number": "2",
+      "title": "What the docs say (to be probed)"
+    },
+    {
+      "level": 3,
+      "line": 30,
+      "number": "2.1",
+      "title": "The two ways to drive it"
+    },
+    {
+      "level": 3,
+      "line": 39,
+      "number": "2.2",
+      "title": "`codex exec` options (headless span)"
+    },
+    {
+      "level": 3,
+      "line": 65,
+      "number": "2.3",
+      "title": "Other commands"
+    },
+    {
+      "level": 2,
+      "line": 82,
+      "number": "3",
+      "title": "Plan"
+    },
+    {
+      "level": 2,
+      "line": 93,
+      "number": "4",
+      "title": "Open decisions (the operator's)"
+    },
+    {
+      "level": 2,
+      "line": 101,
+      "number": "5",
+      "title": "S0 results (2026-10-28, `codex-cli 0.165.0`, ChatGPT login)"
+    },
+    {
+      "level": 3,
+      "line": 114,
+      "number": "5.1",
+      "title": "S2b probe results (2026-10-28, `codex-cli 0.165.0`, ChatGPT login)"
+    },
+    {
+      "level": 2,
+      "line": 129,
+      "number": "6",
+      "title": "What this spec does not claim"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/047-codex-harness-and-coverage.md",
+    "sha256": "927efeddd07c41c3840e695f7cd802cb830081ebaa5e1bee744ee6970c0ee599"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 309,
+        "end_line": 6,
+        "line": 6,
+        "start": 165
+      },
+      "text": "status: approved   # by the operator, 2026-10-28 (\"ratify any spec changes\"); undecided points follow the recommendations in the decisions table"
+    },
+    "sha256": "927efeddd07c41c3840e695f7cd802cb830081ebaa5e1bee744ee6970c0ee599",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "runtime-models-and-tools",
+    "number": "047",
+    "stem": "047-codex-harness-and-coverage",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "047: Codex CLI as a Third Harness, with Its Coverage Manifest"
+  },
+  "summary": null
+}

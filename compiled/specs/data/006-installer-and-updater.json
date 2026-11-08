@@ -1,0 +1,152 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 006: Multi-Operator Distribution, Installer & Three-Zone Updater Engine"
+    },
+    {
+      "level": 2,
+      "line": 22,
+      "number": "1",
+      "title": "Scope & Objectives"
+    },
+    {
+      "level": 3,
+      "line": 29,
+      "number": "1.1",
+      "title": "Phase Mapping (what approval of this spec authorizes)"
+    },
+    {
+      "level": 3,
+      "line": 38,
+      "number": "1.2",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 44,
+      "number": "2",
+      "title": "Multi-Operator Packaging & Bootstrap Installer"
+    },
+    {
+      "level": 3,
+      "line": 46,
+      "number": "2.1",
+      "title": "Embedded Core Seed (`core-manifest.json`)"
+    },
+    {
+      "level": 3,
+      "line": 51,
+      "number": "2.2",
+      "title": "Distribution Channels & Cryptographic Verification"
+    },
+    {
+      "level": 2,
+      "line": 67,
+      "number": "3",
+      "title": "The Three-Zone File Ownership Architecture (`[REV-SEC-03]`)"
+    },
+    {
+      "level": 3,
+      "line": 95,
+      "number": "3.1",
+      "title": "Physical Layout: Delphi Is an Installed Tool (D-03, revised 2026-10-23)"
+    },
+    {
+      "level": 3,
+      "line": 126,
+      "number": "3.2",
+      "title": "Operator Home (was 006-A1; D-20; approved 2026-10-23 after Council 003)"
+    },
+    {
+      "level": 3,
+      "line": 144,
+      "number": "3.3",
+      "title": "Scope Files & Ratified Specs (was 006-A2; Council 004; approved 2026-10-23)"
+    },
+    {
+      "level": 3,
+      "line": 148,
+      "number": "3.4",
+      "title": "Release Signing Moves to Step 5 (was 006-A3; approved 2026-10-23)"
+    },
+    {
+      "level": 3,
+      "line": 153,
+      "number": "3.5",
+      "title": "One-Command Onboarding (was 006-A4; approved 2026-10-24)"
+    },
+    {
+      "level": 3,
+      "line": 163,
+      "number": "3.6",
+      "title": "The Development Channel (was 006-A5; approved 2026-10-25)"
+    },
+    {
+      "level": 3,
+      "line": 170,
+      "number": "3.7",
+      "title": "Running an Update Ratifies the Release (was 006-A6; approved 2026-10-25)"
+    },
+    {
+      "level": 2,
+      "line": 180,
+      "number": "4",
+      "title": "`delphi update` State Machine"
+    },
+    {
+      "level": 2,
+      "line": 197,
+      "number": "5",
+      "title": "`delphi doctor`: 8-Point Deterministic Health Check"
+    },
+    {
+      "level": 2,
+      "line": 213,
+      "number": "6",
+      "title": "Verification Plan"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/006-installer-and-updater.md",
+    "sha256": "4e43e7327b237dbb5ce11375030c40b5da40a91cfae8f63708dbe1629755815c"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 332,
+        "end_line": 6,
+        "line": 6,
+        "start": 170
+      },
+      "text": "status: approved   # by the operator, 2026-10-23, after Council 002; amendments 004-A1, 006-A1..A6 approved by the operator 2026-10-23 to 2026-10-25 and folded in"
+    },
+    "sha256": "4e43e7327b237dbb5ce11375030c40b5da40a91cfae8f63708dbe1629755815c",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "install-and-lifecycle",
+    "number": "006",
+    "stem": "006-installer-and-updater",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "006: Multi-Operator Distribution, Installer & Three-Zone Updater Engine"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2150,
+      "end_line": 27,
+      "line": 23,
+      "start": 1213
+    },
+    "text": "This specification defines how Delphi is packaged, distributed to multiple operators, initialized, and updated without ever corrupting operator-private memory or active worktrees:\n1. **Single-Binary Embedded Seed Packaging (`delphi` / `delphi-core`):** Shipping the compiled runtime with an embedded, hash-verified snapshot of built-in `GOVERNANCE.md`, `SPEC.md`, `REVIEW.md`, `agents/`, `skills/`, `themes/`, `templates/`, seed `context/` and `memory/` templates.\n2. **Multi-Operator Distribution Channels:** Signed binary installer (`curl -fsSL ... | sh`), Homebrew Tap, and GitHub Releases with Ed25519 / Minisign signature verification.\n3. **The Three-Zone Ownership Model:** Strict separation between **Zone 1 (Core Upstream)**, **Zone 2 (Team-Shared Context & Specs)**, and **Zone 3 (Operator-Private Memory & Worktrees)**.\n4. **Atomic Updater (`delphi update`), Team Sync (`delphi sync`), and Health Validator (`delphi doctor`).**"
+  }
+}

@@ -1,0 +1,296 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 027: Bundle Authoring, Distribution Transports, the Vector Pipeline & Evaluation"
+    },
+    {
+      "level": 2,
+      "line": 21,
+      "number": "1",
+      "title": "Scope & Objectives"
+    },
+    {
+      "level": 3,
+      "line": 30,
+      "number": "1.1",
+      "title": "Non-Goals"
+    },
+    {
+      "level": 3,
+      "line": 35,
+      "number": "1.2",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 40,
+      "number": "2",
+      "title": "Authoring Workflow"
+    },
+    {
+      "level": 3,
+      "line": 41,
+      "number": "2.1",
+      "title": "`delphi bundle init <dir> --org <org> --name <name>`"
+    },
+    {
+      "level": 3,
+      "line": 44,
+      "number": "2.2",
+      "title": "Writing by hand"
+    },
+    {
+      "level": 3,
+      "line": 47,
+      "number": "2.3",
+      "title": "`delphi bundle distill` (agent-assisted; proposals only; OD-6)"
+    },
+    {
+      "level": 3,
+      "line": 55,
+      "number": null,
+      "title": "2.3a Sources and bibliographies (amendment, 2026-10-29)"
+    },
+    {
+      "level": 3,
+      "line": 58,
+      "number": "2.4",
+      "title": "`delphi bundle validate` with `--report`"
+    },
+    {
+      "level": 3,
+      "line": 61,
+      "number": "2.5",
+      "title": "`delphi bundle sign <dir>` and `package`"
+    },
+    {
+      "level": 3,
+      "line": 64,
+      "number": "2.6",
+      "title": "The `org-bundle-authoring` skill (OD-9)"
+    },
+    {
+      "level": 2,
+      "line": 69,
+      "number": "3",
+      "title": "The Archive: `<name>-<version>.xbundle`"
+    },
+    {
+      "level": 2,
+      "line": 77,
+      "number": "4",
+      "title": "Transports"
+    },
+    {
+      "level": 3,
+      "line": 78,
+      "number": "4.1",
+      "title": "Directory (slice B2; first)"
+    },
+    {
+      "level": 3,
+      "line": 81,
+      "number": "4.2",
+      "title": "Archive (slice B6)"
+    },
+    {
+      "level": 3,
+      "line": 84,
+      "number": "4.3",
+      "title": "The xenia store: kind `bundle` (slice B8; Xenia Phase 2)"
+    },
+    {
+      "level": 3,
+      "line": 103,
+      "number": "4.4",
+      "title": "Static HTTP mirror (later)"
+    },
+    {
+      "level": 3,
+      "line": 106,
+      "number": "4.5",
+      "title": "Claude Code marketplace (slice B7)"
+    },
+    {
+      "level": 3,
+      "line": 109,
+      "number": "4.6",
+      "title": "Peer sync (deferred)"
+    },
+    {
+      "level": 3,
+      "line": 112,
+      "number": "4.7",
+      "title": "Order (B-5, decided 2026-10-28)"
+    },
+    {
+      "level": 2,
+      "line": 117,
+      "number": "5",
+      "title": "The Vector Pipeline (OD-8)"
+    },
+    {
+      "level": 3,
+      "line": 120,
+      "number": "5.1",
+      "title": "Shipping (publisher side)"
+    },
+    {
+      "level": 3,
+      "line": 123,
+      "number": "5.2",
+      "title": "Key match (adopter side)"
+    },
+    {
+      "level": 3,
+      "line": 126,
+      "number": "5.3",
+      "title": "Verification (because unsigned bundles are allowed and vectors are a cache)"
+    },
+    {
+      "level": 3,
+      "line": 131,
+      "number": "5.4",
+      "title": "Loading, progress, incremental update"
+    },
+    {
+      "level": 3,
+      "line": 138,
+      "number": "5.5",
+      "title": "Storage"
+    },
+    {
+      "level": 3,
+      "line": 141,
+      "number": "5.6",
+      "title": "Cost note"
+    },
+    {
+      "level": 2,
+      "line": 146,
+      "number": "6",
+      "title": "Privacy and Redaction When Sharing"
+    },
+    {
+      "level": 2,
+      "line": 157,
+      "number": "7",
+      "title": "Evaluation (OD-7): Three Tiers"
+    },
+    {
+      "level": 3,
+      "line": 158,
+      "number": "7.1",
+      "title": "Retrieval gate (frozen now; advisory)"
+    },
+    {
+      "level": 3,
+      "line": 161,
+      "number": "7.2",
+      "title": "Task outcome: pilot, then pre-registered confirmatory run"
+    },
+    {
+      "level": 3,
+      "line": 170,
+      "number": "7.3",
+      "title": "Usage telemetry (descriptive only, never a gate)"
+    },
+    {
+      "level": 3,
+      "line": 179,
+      "number": "7.4",
+      "title": "Not measured"
+    },
+    {
+      "level": 2,
+      "line": 184,
+      "number": "8",
+      "title": "Acceptance Criteria"
+    },
+    {
+      "level": 2,
+      "line": 201,
+      "number": "9",
+      "title": "Verification Plan"
+    },
+    {
+      "level": 2,
+      "line": 204,
+      "number": "10",
+      "title": "Build Plan (slices B3, B8, B10, B11 of `specs/022` §6)"
+    },
+    {
+      "level": 3,
+      "line": 214,
+      "number": "10.1",
+      "title": "As built (slice B3)"
+    },
+    {
+      "level": 3,
+      "line": 228,
+      "number": "10.2",
+      "title": "As built (slice B10)"
+    },
+    {
+      "level": 3,
+      "line": 241,
+      "number": "10.3",
+      "title": "As built (slice B11)"
+    },
+    {
+      "level": 3,
+      "line": 252,
+      "number": "10.4",
+      "title": "As built (slice B8: the xenia kind `bundle`)"
+    },
+    {
+      "level": 2,
+      "line": 266,
+      "number": "11",
+      "title": "Open Questions"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/027-bundle-authoring-distribution-and-evaluation.md",
+    "sha256": "be33ebc4bde1cf92465edeb05558be1734bb22859789fcac2385e36ca9c4e388"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 553,
+        "end_line": 6,
+        "line": 6,
+        "start": 202
+      },
+      "text": "status: approved   # by the operator, 2026-10-25: decisions OD-1..OD-9 and the recommendations of the set (relayed by the parent session); the text as written is approved when this pull request merges. Ratified in full by the operator 2026-10-28: every proposed decision and open question of the set (B-1..B-17, D-P1..D-P14) follows its recommendation"
+    },
+    "sha256": "be33ebc4bde1cf92465edeb05558be1734bb22859789fcac2385e36ca9c4e388",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "sharing-and-bundles",
+    "number": "027",
+    "stem": "027-bundle-authoring-distribution-and-evaluation",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "027: Bundle Authoring, Distribution Transports, the Vector Pipeline & Evaluation"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2280,
+      "end_line": 28,
+      "line": 22,
+      "start": 1590
+    },
+    "text": "1. **Authoring** (§2): scaffold, write, distill (agent-assisted, OD-6), sanitize with a redaction report, validate, package, sign; the `org-bundle-authoring` skill (OD-9).\n2. **Packing** (§3): the `.xbundle` archive, including air-gapped use.\n3. **Transports** (§4): directory, archive, the xenia `bundle` record, static mirror, marketplace, peer sync; the order.\n4. **The vector pipeline** (§5): shipping, verifying and using precomputed vectors; local embedding; incremental update (OD-8).\n5. **Privacy when sharing** (§6).\n6. **Evaluation** (§7): three tiers with a pilot and a hash-pinned pre-registration (OD-7).\n7. **Acceptance criteria, verification, build plan** (§8–§10)."
+  }
+}

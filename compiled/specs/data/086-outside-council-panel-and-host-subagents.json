@@ -1,0 +1,236 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 17,
+      "number": null,
+      "title": "Spec 086: The Council outside Delphi"
+    },
+    {
+      "level": 2,
+      "line": 26,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 3,
+      "line": 42,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 49,
+      "number": "1.2",
+      "title": "Simpler alternative considered"
+    },
+    {
+      "level": 2,
+      "line": 55,
+      "number": "2",
+      "title": "What is wrong today (evidence)"
+    },
+    {
+      "level": 2,
+      "line": 72,
+      "number": "3",
+      "title": "Host capabilities (read from vendor docs on 2026-11-05; not live-proven)"
+    },
+    {
+      "level": 2,
+      "line": 98,
+      "number": "4",
+      "title": "The Panel protocol (server-held)"
+    },
+    {
+      "level": 3,
+      "line": 100,
+      "number": "4.1",
+      "title": "Tools (all advice; none writes outside Delphi's own log)"
+    },
+    {
+      "level": 3,
+      "line": 113,
+      "number": "4.2",
+      "title": "What the server enforces, and what it cannot"
+    },
+    {
+      "level": 3,
+      "line": 121,
+      "number": "4.3",
+      "title": "Inputs are fenced"
+    },
+    {
+      "level": 3,
+      "line": 127,
+      "number": "4.4",
+      "title": "Degraded forms, always labelled"
+    },
+    {
+      "level": 3,
+      "line": 136,
+      "number": "4.5",
+      "title": "Which tier: the Panel is always allowed (OD-1, 2026-11-06)"
+    },
+    {
+      "level": 2,
+      "line": 144,
+      "number": "5",
+      "title": "The front door"
+    },
+    {
+      "level": 3,
+      "line": 146,
+      "number": "5.1",
+      "title": "The `delphi-council` skill (all hosts)"
+    },
+    {
+      "level": 3,
+      "line": 158,
+      "number": "5.2",
+      "title": "Native role subagents (accelerator)"
+    },
+    {
+      "level": 2,
+      "line": 170,
+      "number": "6",
+      "title": "Model diversity in single-family hosts"
+    },
+    {
+      "level": 3,
+      "line": 174,
+      "number": "6.1",
+      "title": "Three measured quantities, never conflated"
+    },
+    {
+      "level": 3,
+      "line": 178,
+      "number": "6.2",
+      "title": "Assignment rule"
+    },
+    {
+      "level": 3,
+      "line": 182,
+      "number": "6.3",
+      "title": "No stale pins"
+    },
+    {
+      "level": 3,
+      "line": 186,
+      "number": "6.4",
+      "title": "Foreign seats (S4 built for one; N seats approved by the operator, 2026-11-07, built as C3a)"
+    },
+    {
+      "level": 2,
+      "line": 198,
+      "number": "7",
+      "title": "The ruling card"
+    },
+    {
+      "level": 2,
+      "line": 215,
+      "number": "8",
+      "title": "Fixes to the daemon Council that the outside path exposed (S0a)"
+    },
+    {
+      "level": 2,
+      "line": 227,
+      "number": "9",
+      "title": "Slices (one per pull request; S1 first for visible value)"
+    },
+    {
+      "level": 2,
+      "line": 244,
+      "number": "10",
+      "title": "Measurement and the default"
+    },
+    {
+      "level": 2,
+      "line": 250,
+      "number": "11",
+      "title": "Authority and trust"
+    },
+    {
+      "level": 2,
+      "line": 257,
+      "number": "12",
+      "title": "Verification"
+    },
+    {
+      "level": 2,
+      "line": 266,
+      "number": "13",
+      "title": "Decisions for the operator"
+    },
+    {
+      "level": 2,
+      "line": 275,
+      "number": null,
+      "title": "14a. Relation to spec 084 S2 (not a conflict; ordering rules)"
+    },
+    {
+      "level": 2,
+      "line": 284,
+      "number": "14",
+      "title": "Not verified"
+    },
+    {
+      "level": 2,
+      "line": 294,
+      "number": "15",
+      "title": "Council review (OD-6, run 2026-11-06)"
+    },
+    {
+      "level": 3,
+      "line": 323,
+      "number": "15.1",
+      "title": "Author's triage against the built code (not the Council's words)"
+    },
+    {
+      "level": 3,
+      "line": 337,
+      "number": "15.2",
+      "title": "Decision for the operator"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/086-outside-council-panel-and-host-subagents.md",
+    "sha256": "34e77bf81756b1604c4978e50ed44df9d1371c8b12534cce65ac059bb317ee18"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 356,
+        "end_line": 6,
+        "line": 6,
+        "start": 238
+      },
+      "text": "status: approved   # by the operator, 2026-11-06 (\"go\"); OD-1 and OD-6 answered, OD-2 to OD-5 take the recommendations"
+    },
+    "sha256": "34e77bf81756b1604c4978e50ed44df9d1371c8b12534cce65ac059bb317ee18",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "orchestration-and-council",
+    "number": "086",
+    "stem": "086-outside-council-panel-and-host-subagents",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "086: The Council outside Delphi: a Panel run by host subagents, a server-held barrier, one front door, and a ruling card"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2436,
+      "end_line": 28,
+      "line": 28,
+      "start": 2334
+    },
+    "text": "An operator who works in another tool has two ways to get a Council today, and neither feels finished."
+  }
+}
