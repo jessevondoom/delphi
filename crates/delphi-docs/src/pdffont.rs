@@ -1,5 +1,5 @@
 //! PDF fonts, as far as reading text needs them: which character a code stands for, and how wide it is
-//! (`specs/014` §4). A `ToUnicode` map wins; otherwise a simple font's `/Encoding` (a named base plus
+//! (`specs/095` §4). A `ToUnicode` map wins; otherwise a simple font's `/Encoding` (a named base plus
 //! `/Differences`) is used. A composite (CID) font with no `ToUnicode` map cannot be read without parsing the
 //! font program, so its characters are reported as unmapped instead of guessed.
 

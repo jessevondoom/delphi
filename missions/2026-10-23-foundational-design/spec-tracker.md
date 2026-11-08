@@ -14,7 +14,7 @@ tags: [tracker, specs, roadmap]
 
 One row per spec. Three separate questions, because they diverge: **Approved** (the operator ratified the text), **Built** (code exists), **Proven** (a person or a live service has exercised it, not only tests and mocks). Sources: [`roadmap.md`](roadmap.md), [`roadmap-review-2026-10-24.md`](roadmap-review-2026-10-24.md), [`console-ink-handoff.md`](console-ink-handoff.md), [`decisions.md`](decisions.md). Update this file in the same PR that changes a spec's state.
 
-**Number collisions.** Two numbers are used twice and stay as they are, because code comments and docs cite them by number: **014** is both [Documents and data visualization](../../specs/014-documents-and-dataviz.md) (the `delphi-docs` crate cites it) and [Relay and away mode](../../specs/014-relay-and-away-mode.md) (`hub.rs`, `totp.rs`, GOVERNANCE §5.10 and REVIEW REV-SEC-09 cite it); **037** is both [Console deck change log](../../specs/037-console-deck-change-log.md) and [Training experiments](../../specs/037-training-experiments-quality-and-efficiency.md) (the tracker's "spec 037" sections mean the training one). Cite them by file name. New specs take the next free number.
+**Number collisions (fixed 2026-11-08, spec 090).** Three numbers had been used twice. One spec of each pair was renumbered: [Documents and data visualization](../../specs/095-documents-and-dataviz.md) was 014 (the relay spec, [Relay and away mode](../../specs/014-relay-and-away-mode.md), keeps 014; `hub.rs`, `totp.rs`, GOVERNANCE §5.10 and REVIEW REV-SEC-09 cite it); [Console deck change log](../../specs/096-console-deck-change-log.md) was 037 (the training spec, [Training experiments](../../specs/037-training-experiments-quality-and-efficiency.md), keeps 037, because its research truth packs are fingerprinted and cite it); [Encyclopedia search pages](../../specs/097-encyclopedia-search-pages.md) was 061 (the shell-tool spec keeps 061). A citation of 014, 037 or 061 written before this date may mean either spec of its pair. `delphi lint` now refuses two spec files with one number. New specs take the next free number.
 
 | Spec | Approved | Built | Proven | What is left |
 | :-- | :-- | :-- | :-- | :-- |
@@ -474,7 +474,7 @@ Known follow-ups: `docs/reference/config.md` ladder row still says "upscale, res
 
 Specs 004, 006, 007, 010 and 043 were folded to read as current normative text, with no change in behavior. Amendment text and deliberation moved verbatim to `specs/history/NNN-<slug>.md`; section numbers, test ids and `(was NNN-An)` anchors are unchanged. `crates/delphi/tests/spec_refs.rs` now fails when a spec, section or amendment reference stops resolving (21 pre-existing broken references are allowlisted). Reductions were small (2–9%): the remaining text is normative. 006 keeps two contradictions listed in its PR (#399: Red approval for the GOVERNANCE.md release vs 006-A6 tacit ratification; tests 13/14 still say `self-update`). Folded: #399 (006), #400 (007), #401 (010), #402 (043), #403 (004); gate #404.
 
-## Encyclopedia search pages, inline media, and reputable expansion (spec 061, approved 2026-10-31)
+## Encyclopedia search pages, inline media, and reputable expansion (spec 097, approved 2026-10-31)
 
 Approved by the operator on 2026-10-31. Makes the Wikipedia-style Encyclopedia Summary Page the primary knowledge base search result, rendered through `ui/src/markdown.ts` and `ui/src/image.ts`, authored by the `writer` role under `skills/encyclopedia-synthesis/SKILL.md`, cached with YAML frontmatter `valid_until` (`[1, 365]` days at the `writer`'s discretion), synthesized immediately on search from local sources, and expandable (`e`) with reputable external research and licensed images.
 
@@ -779,12 +779,12 @@ From the operator's request to refine the outside Council (Claude Code, Copilot,
 
 ## Spec 090: renumber the three shared spec numbers, once (2026-11-07, approved)
 
-From a review of draft spec 088, which found that 014, 037 and 061 are each used by two specs. Approved by the operator on 2026-11-07, with decisions OD-1 to OD-6 taking the recommendations. Not built. One pull request renames one spec of each pair inside `specs/` (no move), rewrites path pointers, decides every bare citation in a map the operator samples, adds a `delphi lint` rule against duplicate numbers, and leaves a mapping paragraph for history. The specs that move: documents and dataviz (014), training experiments (037), encyclopedia search pages (061); the relay spec keeps 014, so GOVERNANCE.md and REVIEW.md are untouched. The new numbers are the next three free numbers when the work starts: 091 to 094 are taken, so 095 to 097 as of 2026-11-07. The work waits for a quiet window the operator picks. Hours are estimates; no trial rewrite was run.
+From a review of draft spec 088, which found that 014, 037 and 061 are each used by two specs. Approved by the operator on 2026-11-07, with decisions OD-1 to OD-6 taking the recommendations; the operator asked for the build on 2026-11-08 and left the order to the builder. One pull request renames one spec of each pair inside `specs/` (no move), rewrites path pointers, decides every bare citation in a map the operator samples, adds a `delphi lint` rule against duplicate numbers, and leaves a mapping paragraph for history. The specs that moved: documents and dataviz (014 to 095), the console deck change log (037 to 096; **amended 2026-11-08**: the training spec keeps 037 because its research truth packs are fingerprinted and cite it), encyclopedia search pages (061 to 097). The relay spec keeps 014, so GOVERNANCE.md and REVIEW.md are untouched. Hours are estimates.
 
 | Slice | Content | Hours (likely) | State |
 | :-- | :-- | --: | :-- |
 | S0 | spec 090 approval and tracker entry; the three numbers named (095 to 097, re-checked at the start) | 1 | approved 2026-11-07 |
-| S1 | renames, path pointers, citation map and decisions, one-time check, lint rule, CONTRIBUTING mapping | 12 | approved, not built; waits for a quiet window |
+| S1 | renames, path pointers, citation map and decisions, one-time check, lint rule, CONTRIBUTING mapping | 12 | built (PR open) |
 
 ## Spec 089: Panel hardening from the E2 run (2026-11-06, approved)
 

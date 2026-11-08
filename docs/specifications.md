@@ -15,7 +15,6 @@ All in [`specs/`](../specs/); each file's `status` line says whether the operato
 | 009 | [Model access and authentication](../specs/009-model-access-and-auth.md) | built; live Gemini OAuth unverified |
 | 010 | [Connectors (MCP)](../specs/010-connectors-and-tool-access.md) | built; never run live |
 | 011-013 | [Xenia trust model](../specs/011-xenia-trust-model.md), [record schema](../specs/012-xenia-record-schema.md), [Librarian](../specs/013-librarian-and-internal-retrieval.md) | 011-012: library code and member commands built, no live store; 013: not built |
-| 014 | [Documents and data visualization](../specs/014-documents-and-dataviz.md) | built |
 | 014 | [Relay and away mode](../specs/014-relay-and-away-mode.md) | built; no live mailbox trial |
 | 015-019 | [Provisional decisions](../specs/015-provisional-decisions.md), [headless run](../specs/016-headless-run.md), [timers](../specs/017-timers.md), [operator hooks](../specs/018-operator-hooks.md), [skills import/export](../specs/019-skills-import-export.md) | built |
 | 020, 021 | [Harness tool bridge](../specs/020-harness-tool-bridge.md); [harness CLI features](../specs/021-harness-cli-features.md) | built |
@@ -26,7 +25,6 @@ All in [`specs/`](../specs/); each file's `status` line says whether the operato
 | 032-034 | [Change log](../specs/032-change-log.md), [live usage and tool monitoring](../specs/033-live-usage-and-tool-monitoring.md), [narrator monitoring panes](../specs/034-narrator-monitoring-panes-spike.md) | built |
 | 035 | [Failover without a driver](../specs/035-failover-without-a-driver.md) | built |
 | 036 | [Signed releases and the start-time refresh](../specs/036-signed-releases-and-start-time-refresh.md) | built; inert until a release key exists |
-| 037 | [Console deck change log](../specs/037-console-deck-change-log.md) | built |
 | 037 | [Training experiments](../specs/037-training-experiments-quality-and-efficiency.md) | built; proven live on research cases |
 | 038 | [Capabilities map](../specs/038-capabilities-map.md) | built |
 | 039 | [Error log](../specs/039-error-log.md) | built |
@@ -46,5 +44,8 @@ All in [`specs/`](../specs/); each file's `status` line says whether the operato
 | 072 | [Host cognitive parity and external orchestration](../specs/072-host-cognitive-parity-and-external-orchestration.md) | built |
 | 073 | [Console adaptive contrast and dual-mode palette](../specs/073-console-adaptive-contrast-and-dual-mode-palette.md) | built |
 | 074 | [A stable launch path, and `delphi connect`](../specs/074-stable-launch-path-and-delphi-connect.md) | built for Claude Code and Copilot CLI; Codex next |
+| 095 | [Documents and data visualization](../specs/095-documents-and-dataviz.md) | built (renumbered from 014) |
+| 096 | [Console deck change log](../specs/096-console-deck-change-log.md) | built (renumbered from 037) |
+| 097 | [Encyclopedia search pages](../specs/097-encyclopedia-search-pages.md) | built (renumbered from 061) |
 
-Two numbers are used twice (014 and 037); the file names are unique and the specs cite each other by name. Numbers 040 and 042 are reserved for specs not yet written. The machine-readable counterparts of the specs that define a format are in [`schemas/`](../schemas/) (see [`docs/reference/schemas.md`](reference/schemas.md)).
+Three numbers were used twice (014, 037 and 061). On 2026-11-08 the documents, console-deck and encyclopedia specs were renumbered to 095, 096 and 097, so each number now names one spec (spec 090). A citation of 014, 037 or 061 written before then may mean either spec of its pair; `CONTRIBUTING.md` lists which is which. Number 042 is reserved for a spec not yet written. The machine-readable counterparts of the specs that define a format are in [`schemas/`](../schemas/) (see [`docs/reference/schemas.md`](reference/schemas.md)).

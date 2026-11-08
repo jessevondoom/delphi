@@ -1,5 +1,5 @@
 //! Text from PDF pages: a small content-stream interpreter that tracks the text and graphics matrices well
-//! enough to put line breaks and word spaces in the right places (`specs/014` §4).
+//! enough to put line breaks and word spaces in the right places (`specs/095` §4).
 //!
 //! It reads text in the order it is drawn. It does not reorder columns, interpret rotated text specially, run
 //! any action, or read images, annotations and form fields; pages with no text are reported, not guessed at.

@@ -1,4 +1,4 @@
-//! Dependency-free document readers and writers for Delphi agents (`specs/014`).
+//! Dependency-free document readers and writers for Delphi agents (`specs/095`).
 //!
 //! The crate is a leaf: it knows nothing of the engine, the path guard or provenance. A caller hands it bytes
 //! it has already read through the guard and gets text back. Every entry point treats its input as hostile:
@@ -91,7 +91,7 @@ pub struct Extract {
     pub total_units: Option<usize>,
     /// The output hit a limit and more exists.
     pub truncated: bool,
-    /// What this read lost, one line each (`specs/014` §2.5). The agent must not believe it read more than it did.
+    /// What this read lost, one line each (`specs/095` §2.5). The agent must not believe it read more than it did.
     pub loss: Vec<String>,
     /// False when no reader exists for the format yet; `text` then says so.
     pub supported: bool,
@@ -115,7 +115,7 @@ pub fn guarded<T>(what: &str, f: impl FnOnce() -> Result<T, DocError>) -> Result
     }
 }
 
-/// Readers that exist. Grows slice by slice (`specs/014` §10); anything else answers "not built yet".
+/// Readers that exist. Grows slice by slice (`specs/095` §10); anything else answers "not built yet".
 pub fn is_supported(format: Format) -> bool {
     matches!(format, Format::Pdf | Format::Zip | Format::Docx | Format::Xlsx | Format::Pptx | Format::Odt | Format::Ods | Format::Odp | Format::Epub | Format::Sqlite | Format::Tar | Format::Gzip | Format::Png | Format::Jpeg | Format::Gif | Format::Webp) || format.is_text()
 }

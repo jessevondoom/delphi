@@ -1,4 +1,4 @@
-//! Axis arithmetic (`specs/014` §8.2): "nice" ticks, log ticks, date ticks, and number formatting. Pure functions;
+//! Axis arithmetic (`specs/095` §8.2): "nice" ticks, log ticks, date ticks, and number formatting. Pure functions;
 //! the renderer decides what to do with them.
 
 /// A tick step of 1, 2 or 5 times a power of ten that fits about `target` ticks into `span`.

@@ -1,5 +1,5 @@
 //! A zip reader: central directory (including zip64), stored and deflated members, bounded inflation and a
-//! CRC check. It never touches the filesystem. The writer arrives with slice C0 (`specs/014` §10).
+//! CRC check. It never touches the filesystem. The writer arrives with slice C0 (`specs/095` §10).
 
 use crate::archive::{clean_name, Archive, Item, Kind};
 use crate::{DocError, Limits};

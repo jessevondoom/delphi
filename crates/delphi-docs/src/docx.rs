@@ -1,5 +1,5 @@
 //! Word documents to Markdown: headings, lists, tables, links, footnotes, comments and tracked changes
-//! (`specs/014` §4). Images, text boxes and equations are not read, and the result says how many.
+//! (`specs/095` §4). Images, text boxes and equations are not read, and the result says how many.
 
 use crate::ooxml::Pkg;
 use crate::sniff::Format;

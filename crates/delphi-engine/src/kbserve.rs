@@ -268,7 +268,7 @@ impl Reader<'_> {
     /// it in half-block cells. The file must sit inside the document's own directory (no `..`, no absolute path, no
     /// symlink out of it) and be a PNG, JPEG or GIF of at most 8 MiB; the document must be one this view may read.
     fn image(&self, q: &HashMap<String, String>) -> Result<Reply, String> {
-        // A picture of the library, named by the page that shows it (`specs/061` §4.3): `src=lib:<source>/<file>`. Only the
+        // A picture of the library, named by the page that shows it (`specs/097` §4.3): `src=lib:<source>/<file>`. Only the
         // operator's view reads the library; the file must be a plain-named picture in that source's own `assets/`.
         if let Some(r) = q.get("src").and_then(|s| s.strip_prefix("lib:")) {
             let (Some(home), true) = (self.home, self.operator) else { return Ok(fail(403, "the library's pictures are served to the operator's console only")) };

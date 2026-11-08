@@ -1,4 +1,4 @@
-//! Self-contained HTML pages from structured input (`specs/014` §7.2–7.3). The agent describes a page as data
+//! Self-contained HTML pages from structured input (`specs/095` §7.2–7.3). The agent describes a page as data
 //! (markdown, tables, tabs, code, callouts, stats) and this module writes the markup. Agent text always goes
 //! in as text; the only code in a page is the audited runtime, plus a free-form script if one was asked for.
 //! The finished page is re-parsed and checked by [`crate::htmllint`] before it is returned, so a bug in the
@@ -12,7 +12,7 @@ use crate::DocError;
 use serde_json::Value;
 
 const CSS: &str = include_str!("page.css");
-/// The content security policy added to every page (`specs/014` §7.3 rule 4), plus `base-uri` and `form-action`,
+/// The content security policy added to every page (`specs/095` §7.3 rule 4), plus `base-uri` and `form-action`,
 /// which `default-src` does not cover.
 pub const CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'";
 
@@ -71,7 +71,7 @@ pub struct PageSpec {
     pub blocks: Vec<Block>,
     pub theme: Theme,
     pub script: Option<String>,
-    /// Text for the in-file provenance comment (`specs/014` §7.1); sanitised before it is written.
+    /// Text for the in-file provenance comment (`specs/095` §7.1); sanitised before it is written.
     pub comment: Option<String>,
 }
 

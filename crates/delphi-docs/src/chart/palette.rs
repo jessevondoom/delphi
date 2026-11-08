@@ -1,4 +1,4 @@
-//! The chart palette (`specs/014` §8.2). Every value here is the validated reference palette of the dataviz method
+//! The chart palette (`specs/095` §8.2). Every value here is the validated reference palette of the dataviz method
 //! (OKLab-based adjacent-pair CVD separation, normal-vision floor, lightness band, chroma floor), not a taste choice.
 //! Validation on 2026-10-25 with the method's `validate_palette.js`, light surface `#fcfcfb`, dark `#1a1a19`:
 //!

@@ -1,4 +1,4 @@
-//! Email (`.eml`, `.mbox`) and calendar (`.ics`) files as readable text (`specs/014` §4): headers, the text
+//! Email (`.eml`, `.mbox`) and calendar (`.ics`) files as readable text (`specs/095` §4): headers, the text
 //! body (HTML bodies converted), and a list of attachments. Attachments are listed, never opened or run.
 //!
 //! The raw message is handled as Latin-1 (one char per byte) so structure can be parsed without losing the

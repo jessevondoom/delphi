@@ -1,4 +1,4 @@
-//! OpenDocument text, spreadsheets and presentations (`specs/014` §4): the same results as Word, Excel and
+//! OpenDocument text, spreadsheets and presentations (`specs/095` §4): the same results as Word, Excel and
 //! PowerPoint files, from `content.xml`. Macros are never run; tracked-change history and images are not read.
 
 use crate::ooxml::Pkg;

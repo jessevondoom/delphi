@@ -39,7 +39,7 @@ pub(crate) fn samples() -> Vec<(&'static str, Value)> {
                 {"label": "delphi-docs", "children": [{"label": "readers"}, {"label": "chart engine"}, {"label": "diagrams"}]},
                 {"label": "delphi-adapter"}]}})),
         ("timeline-milestones", json!({
-            "type": "timeline", "title": "Documents and dataviz shipped in eleven slices", "subtitle": "spec 014",
+            "type": "timeline", "title": "Documents and dataviz shipped in eleven slices", "subtitle": "spec 095",
             "events": [
                 {"when": "2026-10-25", "label": "Spec ratified", "detail": "five decisions as recommended", "group": "Reading"},
                 {"when": "2026-10-26", "label": "Readers R0 to R5", "detail": "archives, office, PDF, html, data, mail", "group": "Reading"},

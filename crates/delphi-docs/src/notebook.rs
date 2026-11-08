@@ -1,5 +1,5 @@
 //! Jupyter notebooks as a readable transcript: Markdown cells as text, code cells fenced, outputs trimmed,
-//! images counted and not shown (`specs/014` §4).
+//! images counted and not shown (`specs/095` §4).
 
 use crate::sniff::Format;
 use crate::{DocError, Extract, Limits, Unit};

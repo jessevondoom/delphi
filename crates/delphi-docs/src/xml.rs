@@ -1,4 +1,4 @@
-//! A streaming XML tokenizer for reading office documents (`specs/014` §3, §6).
+//! A streaming XML tokenizer for reading office documents (`specs/095` §3, §6).
 //!
 //! Deliberately small and deliberately blind to the parts of XML that are attack surface: a DOCTYPE is
 //! skipped, never interpreted; entities are only the five built-ins and numeric references, so a "billion

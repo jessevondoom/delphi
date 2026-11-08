@@ -59,7 +59,7 @@ export type Arch = {
   pins: boolean;
   /** `search` is the page as it was (local, zero-token); `expand` is the clean research page of spec 028-A1 (`shift+tab` switches). Remembered for the session. */
   mode: 'search' | 'expand' | 'sources' | 'claims' | 'pages';
-  /** The operator pressed `f` to read the raw results of this search, so a page arriving late must not take the view back (specs/061 §4.6). */
+  /** The operator pressed `f` to read the raw results of this search, so a page arriving late must not take the view back (specs/097 §4.6). */
   rawChosen: boolean;
   /** The library's Sources and Claims views (specs/055 SK2, SK3): what the daemon listed, and where the operator is in it. */
   lib: L.Lib;
@@ -326,7 +326,7 @@ function pagesKey(a: Arch, e: Ev, h: number, used: (n: Arch, act?: Action) => Re
   return used({ ...a, pg: r.p }, act.t === 'none' ? none : act);
 }
 
-/** A page for the search on screen becomes the primary result the moment it opens, unless the operator chose the raw list (specs/061 §4.6). */
+/** A page for the search on screen becomes the primary result the moment it opens, unless the operator chose the raw list (specs/097 §4.6). */
 export const gotPages = (a: Arch, f: (p: P.Pages) => P.Pages): Arch => {
   const pg = f(a.pg);
   const arrived = !a.pg.open && !!pg.open && a.mode === 'search' && a.at < 0 && !a.rawChosen && a.searched !== null && !a.browse && a.searched === pg.q.trim();

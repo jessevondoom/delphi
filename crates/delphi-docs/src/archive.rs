@@ -1,5 +1,5 @@
 //! What zip and tar share: a list of members that can each be read, and the listing and member-lookup
-//! rules on top (`specs/014` §4, §6).
+//! rules on top (`specs/095` §4, §6).
 //!
 //! Member names are display-only. A member is found by an exact match against the listing or by its
 //! `#N` position, and a name is never joined to a filesystem path, so a hostile name (`../x`, `/etc/x`,

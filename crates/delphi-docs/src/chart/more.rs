@@ -1,4 +1,4 @@
-//! The other chart forms (`specs/014` §8.1): stacked bars (parts of a total), donut (parts of a whole), heatmap
+//! The other chart forms (`specs/095` §8.1): stacked bars (parts of a total), donut (parts of a whole), heatmap
 //! (a grid shaded in one hue), box plot (the spread within groups) and sparkline (the shape of a trend). They
 //! share the header, footer, palette and mark rules of the main renderer and draw only their own plot area.
 

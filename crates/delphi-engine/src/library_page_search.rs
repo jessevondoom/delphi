@@ -31,7 +31,7 @@ const KEY_LEN: usize = 24;
 /// Pages may hold this fraction of the library budget (`specs/055` D-5): one twentieth.
 pub const CACHE_SHARE: u64 = 20;
 const CHARS_PER_TOKEN: usize = 4;
-/// Bumped when the encyclopedia layout of a page changes, so earlier pages are rebuilt (`specs/061`).
+/// Bumped when the encyclopedia layout of a page changes, so earlier pages are rebuilt (`specs/097`).
 const ENCYCLOPEDIA_VERSION: &str = "061-1";
 const MAX_ASSETS: usize = 12;
 const ASSETS_PER_SOURCE: usize = 4;
@@ -58,7 +58,7 @@ pub struct Gathered {
     pub assets: Vec<GatheredAsset>,
 }
 
-/// One picture the writer may place on a page: a captured asset of a gathered library source (`specs/061` §4.2).
+/// One picture the writer may place on a page: a captured asset of a gathered library source (`specs/097` §4.2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GatheredAsset {
     /// `lib:<source id>/<file>`, the form the page and `/v1/image` use.
@@ -153,7 +153,7 @@ pub struct PageEntry {
     pub failed: bool,
     pub cited: Vec<String>,
     pub bytes: u64,
-    /// The page's own title, its `article` or `disambiguation` kind and its depth (`specs/061`).
+    /// The page's own title, its `article` or `disambiguation` kind and its depth (`specs/097`).
     pub title: String,
     pub kind: String,
     pub depth: String,
@@ -460,7 +460,7 @@ impl Library {
             return None;
         }
         let mut v = self.read_side(key)?;
-        // The writer's lifetime for the page (`specs/061` §4.4): past it, the page is rebuilt rather than served.
+        // The writer's lifetime for the page (`specs/097` §4.4): past it, the page is rebuilt rather than served.
         if v["valid_until"].as_u64().is_some_and(|until| r.now > until) {
             return None;
         }
@@ -602,7 +602,7 @@ pub fn brief(query: &str, g: &Gathered, max_tokens: u64) -> String {
     brief_for(query, g, max_tokens, Depth::Summary)
 }
 
-/// The brief for an encyclopedia page (`specs/061`, skill `encyclopedia-synthesis`): the layout, the citation rules the
+/// The brief for an encyclopedia page (`specs/097`, skill `encyclopedia-synthesis`): the layout, the citation rules the
 /// check enforces, the pictures the writer may place, and the line that proposes the page's lifetime.
 pub fn brief_for(query: &str, g: &Gathered, max_tokens: u64, depth: Depth) -> String {
     let size = match depth {

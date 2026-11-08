@@ -1,5 +1,5 @@
 //! Tabular data as the agent sees it: dimensions, the header row, and a bounded slice of rows
-//! (`specs/014` §4). Spreadsheets and CSV files share this, so a sheet and its CSV export read the same way.
+//! (`specs/095` §4). Spreadsheets and CSV files share this, so a sheet and its CSV export read the same way.
 //!
 //! A [`Collector`] keeps only the header row and the rows inside the requested range, while counting the
 //! whole table, so a million-row sheet costs memory for the slice, not the sheet.

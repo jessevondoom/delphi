@@ -1,4 +1,4 @@
-//! Artifact tools (`specs/014` §7): deliverables that are not Markdown text, such as a zip bundle now and
+//! Artifact tools (`specs/095` §7): deliverables that are not Markdown text, such as a zip bundle now and
 //! decks, pages, charts and spreadsheets later. They share one write path so every artifact gets the same
 //! guarantees:
 //!
@@ -106,7 +106,7 @@ fn members_of(args: &Value) -> Result<Vec<String>, ToolError> {
         .collect()
 }
 
-/// What the call would do, from the arguments alone (`specs/014` §7.2): Green in the mission, Amber in a worktree.
+/// What the call would do, from the arguments alone (`specs/095` §7.2): Green in the mission, Amber in a worktree.
 fn classify(tool: &str, args: &Value) -> Result<Classified, ToolError> {
     if is_page_tool(tool) {
         return classify_page(tool, args);

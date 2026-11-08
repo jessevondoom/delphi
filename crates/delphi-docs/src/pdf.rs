@@ -1,5 +1,5 @@
 //! The PDF document model: a lexer, an object parser, the cross-reference data (tables, streams, object
-//! streams, and a rebuild-by-scan when they are damaged), stream filters, and the page tree (`specs/014` §4, §6).
+//! streams, and a rebuild-by-scan when they are damaged), stream filters, and the page tree (`specs/095` §4, §6).
 //!
 //! Everything is bounded: objects parsed, nesting, decoded bytes, and the number of pages. References are
 //! followed with visited sets, so a cyclic page tree or a stream whose `/Length` points at itself ends cleanly.
