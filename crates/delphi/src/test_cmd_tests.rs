@@ -55,10 +55,10 @@ fn env() -> Env {
     std::fs::create_dir_all(home.join("operator")).unwrap();
     std::fs::create_dir_all(ws.join("local")).unwrap();
     delphi_core::lock::write(&home.join("operator/ratified.lock"), &delphi_core::lock::LockFile::default()).unwrap();
-    let bin = root.join("python3");
+    let bin = root.join("bash");
     std::fs::write(&bin, b"#!fake runner").unwrap();
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let script = root.join("t.py");
+    let script = root.join("t.sh");
     std::fs::write(&script, b"print(1)").unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o644)).unwrap();
     Env { home, ws, bin: bin.to_string_lossy().into(), script: script.to_string_lossy().into(), _t: t }
@@ -70,7 +70,7 @@ fn good_factor(_: &Path) -> Result<Vec<u8>, String> {
 
 impl Env {
     fn entry(&self, n: usize) -> auth::Entry {
-        auth::Entry { tool: "shell".into(), argv: vec![self.bin.clone(), "-I".into(), self.script.clone(), format!("--case={n}")], files: vec![self.script.clone()], runner_provenance: "project_snapshot".into() }
+        auth::Entry { tool: "shell".into(), argv: vec![self.bin.clone(), self.script.clone(), format!("--case={n}")], files: vec![self.script.clone()], runner_provenance: "project_snapshot".into() }
     }
 
     fn request(&self, entries: usize) -> Value {
@@ -92,7 +92,7 @@ impl Env {
 
     /// What the "daemon" knows: the fixture's fake runner is its only interpreter.
     fn policy(&self) -> auth::Policy {
-        auth::Policy { interpreters: vec![self.bin.clone()] }
+        auth::Policy { interpreters: vec![self.bin.clone()], sealed_roots: vec![] }
     }
 
     /// A line in a mission log AND in the daemon's ledger (a payload the daemon wrote, however odd its text).
@@ -233,7 +233,7 @@ fn a_host_request_is_authorized_only_by_retyping_each_argv() {
     let id = e.stage("host-sess0001", auth::Kind::Host, auth::HOST_TAINT, &e.request(2));
     let want = [line(&e.entry(0)), line(&e.entry(1))];
     // CONFIRM is not accepted for a host, nor a near miss, nor a prefilled copy of the wrong entry
-    for wrong in ["CONFIRM", "y", "", &format!("{} ", want[1]), &want[0].replace("-I", "-i")] {
+    for wrong in ["CONFIRM", "y", "", &format!("{} ", want[1]), &want[0].replace("--case=0", "--case=7")] {
         let mut t = Script::new(&[wrong, &want[1], "p", &e.code()]);
         assert_eq!(e.run(&["authorize", "--from-request", &id, "--run", "r1"], &mut t), 2, "{wrong:?}");
         assert!(!auth::store_path(&e.home).exists(), "{wrong:?} authorized something");
@@ -317,7 +317,7 @@ fn the_operator_may_narrow_the_manifest_and_shorten_the_limits_but_not_widen_the
 #[test]
 fn the_deny_list_rejects_an_entry_when_the_record_is_made() {
     let e = env();
-    for argv in [json!(["/usr/bin/git", "push", "origin", "main"]), json!(["/usr/bin/curl", "https://x"]), json!([e.bin, "-I", e.script, "--out=/repo/.git/hooks/pre-commit"]), json!(["/usr/local/bin/delphi", "run", "x"]), json!([e.bin, "-I", e.script, "/srv/u/.delphi/operator/authorizations.json"])] {
+    for argv in [json!(["/usr/bin/git", "push", "origin", "main"]), json!(["/usr/bin/curl", "https://x"]), json!([e.bin, e.script, "--out=/repo/.git/hooks/pre-commit"]), json!(["/usr/local/bin/delphi", "run", "x"]), json!([e.bin, e.script, "/srv/u/.delphi/operator/authorizations.json"])] {
         let entry = json!({"tool": "shell", "argv": argv, "files": [e.script], "runner_provenance": "project_snapshot"}).to_string();
         let mut t = Script::new(&["y", "p", &e.code()]);
         assert_eq!(e.run(&["authorize", "--run", "r1", "--intent", "i", "--entry-json", &entry], &mut t), 2, "{argv}");

@@ -726,7 +726,7 @@ impl ExecEnv {
         let mut cmd = plain_command(limits, &env, Self::shell_program(), ["-c", line]);
         cmd.current_dir(cwd);
         let started = std::time::Instant::now();
-        let opts = RunOptions { timeout: timeout.unwrap_or(self.cfg.timeout).min(self.cfg.timeout), max_output_bytes: self.cfg.max_output_bytes, quota: vec![] };
+        let opts = RunOptions { timeout: timeout.unwrap_or(self.cfg.timeout).min(self.cfg.timeout), max_output_bytes: self.cfg.max_output_bytes, quota: vec![], kill_over_quota: false };
         let outcome = run_bounded(cmd, &opts).map_err(|e| ExecError::Io(format!("could not start the shell: {}", e)))?;
         Ok(CommandReport { outcome, sandboxed: false, tampered: vec![], changed: vec![], elapsed: started.elapsed() })
     }
@@ -753,7 +753,7 @@ impl ExecEnv {
         let guard = sandbox.is_none().then(|| GitGuard::snapshot(&wt.git_internals()));
         let before = snapshot(&wt.path);
         let started = std::time::Instant::now();
-        let opts = RunOptions { timeout: timeout.unwrap_or(self.cfg.timeout).min(self.cfg.timeout), max_output_bytes: self.cfg.max_output_bytes, quota: vec![(scratch.clone(), self.cfg.scratch_quota_bytes)] };
+        let opts = RunOptions { timeout: timeout.unwrap_or(self.cfg.timeout).min(self.cfg.timeout), max_output_bytes: self.cfg.max_output_bytes, quota: vec![(scratch.clone(), self.cfg.scratch_quota_bytes)], kill_over_quota: false };
         let outcome = run_bounded(cmd, &opts).map_err(|e| ExecError::Io(format!("could not start `{}`: {}", argv[0], e)))?;
         let tampered = guard.map(|g| g.restore()).unwrap_or_default();
         let after = snapshot(&wt.path);

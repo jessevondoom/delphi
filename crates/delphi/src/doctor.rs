@@ -199,6 +199,15 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
         (None, "prefer") => r.warn("9 sandbox", "", "`[exec] sandbox = \"prefer\"` but no OS sandbox is available: commands run directly and ask for approval"),
         (None, _) => r.push(Level::Ok, "9 sandbox", "", "off (no OS sandbox is available either): commands ask for approval"),
     }
+    // 9b. The authorized-test sandbox (specs/092 S2b): optional. A canary battery under the profile an operator-authorized test would
+    // use. Nothing calls it from a run yet; an absent or failing profile only means such a test would refuse to start, so it is
+    // never a failure of the doctor.
+    let probe = delphi_sandbox::authorized::probe_authorized();
+    if probe.is_ok() || probe.unavailable.is_some() {
+        r.push(Level::Ok, "9b authorized-test sandbox", "", probe.summary());
+    } else {
+        r.warn("9b authorized-test sandbox", "", probe.summary());
+    }
     // 14. The central error log (specs/039): the effective level and where it came from, the file, its size and the drops.
     check_error_log(home, &mut r);
     check_host_plugin(home, ws, &mut r);
@@ -1540,13 +1549,13 @@ mod tests {
         use delphi_engine::authorization as a;
         let (_t, home, ws, _p) = setup();
         assert_eq!(run(&home, &ws, &Options::default()).exit_code(), 0, "no store is fine");
-        let bin = home.join("python3");
+        let bin = home.join("bash");
         fs::write(&bin, b"x").unwrap();
-        let script = home.join("t.py");
+        let script = home.join("t.sh");
         fs::write(&script, b"print(1)").unwrap();
         let (b, s) = (fs::canonicalize(&bin).unwrap().to_string_lossy().to_string(), fs::canonicalize(&script).unwrap().to_string_lossy().to_string());
-        let entry = a::Entry { tool: "shell".into(), argv: vec![b, "-I".into(), s.clone()], files: vec![s], runner_provenance: "project_snapshot".into() };
-        let rec = a::build_record(&home, &a::NewRecord { purpose: "p".into(), intent: "i".into(), run: "r".into(), expires_in_secs: 3600, max_uses: 3, entries: vec![entry], request: None, policy: a::Policy { interpreters: vec![fs::canonicalize(&bin).unwrap().to_string_lossy().to_string()] } }, 1_700_000_000, "2023-11-14T22:13:20.000Z").unwrap();
+        let entry = a::Entry { tool: "shell".into(), argv: vec![b, s.clone()], files: vec![s], runner_provenance: "project_snapshot".into() };
+        let rec = a::build_record(&home, &a::NewRecord { purpose: "p".into(), intent: "i".into(), run: "r".into(), expires_in_secs: 3600, max_uses: 3, entries: vec![entry], request: None, policy: a::Policy { interpreters: vec![fs::canonicalize(&bin).unwrap().to_string_lossy().to_string()], sealed_roots: vec![] } }, 1_700_000_000, "2023-11-14T22:13:20.000Z").unwrap();
         a::add_record(&home, rec, None).unwrap();
         let ok = run(&home, &ws, &Options::default());
         assert_eq!(ok.exit_code(), 0, "{:#?}", ok.findings);

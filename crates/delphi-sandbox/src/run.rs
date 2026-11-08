@@ -21,11 +21,15 @@ pub struct RunOptions {
     /// After the run, flag any of these directories that has grown past the limit (a quota we can only
     /// check, not enforce).
     pub quota: Vec<(PathBuf, u64)>,
+    /// Spec 092 S2b: enforce `quota` while the command runs (every file counts at least one 4 KiB block, so a
+    /// million empty files is not free) and kill it when a directory passes its limit. Off by default: the
+    /// ordinary caller only flags a directory after the run.
+    pub kill_over_quota: bool,
 }
 
 impl Default for RunOptions {
     fn default() -> RunOptions {
-        RunOptions { timeout: Duration::from_secs(300), max_output_bytes: 1 << 20, quota: vec![] }
+        RunOptions { timeout: Duration::from_secs(300), max_output_bytes: 1 << 20, quota: vec![], kill_over_quota: false }
     }
 }
 
@@ -52,6 +56,40 @@ fn kill_group(pgid: i32, sig: i32) {
     unsafe {
         libc::kill(-pgid, sig);
     }
+    kill_session(pgid, sig);
+}
+
+/// Every process in the session the child started with `setsid` (its id is the child's pid). A command that runs
+/// `set -m`, or calls `setpgid`, puts its children in groups of their own; they stay in the session, and this reaches them.
+#[cfg(target_os = "macos")]
+fn kill_session(sid: i32, sig: i32) {
+    // SAFETY: proc_listallpids fills a buffer we own; getsid and kill are plain syscalls on pids from that list.
+    unsafe {
+        let n = libc::proc_listallpids(std::ptr::null_mut(), 0);
+        if n <= 0 {
+            return;
+        }
+        let mut pids = vec![0 as libc::pid_t; n as usize + 64];
+        let got = libc::proc_listallpids(pids.as_mut_ptr() as *mut libc::c_void, (pids.len() * std::mem::size_of::<libc::pid_t>()) as libc::c_int);
+        for &pid in pids.iter().take(got.max(0) as usize) {
+            if pid > 1 && pid != libc::getpid() && libc::getsid(pid) == sid {
+                libc::kill(pid, sig);
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn kill_session(_sid: i32, _sig: i32) {}
+
+/// Disk use of a tree as the quota sees it: each file counts at least one 4 KiB block; links are not followed.
+fn dir_usage(p: &std::path::Path) -> u64 {
+    let Ok(rd) = std::fs::read_dir(p) else { return 0 };
+    rd.flatten().map(|e| match e.file_type() {
+        Ok(t) if t.is_dir() => 4096 + dir_usage(&e.path()),
+        Ok(t) if t.is_file() => e.metadata().map(|m| m.len().max(4096)).unwrap_or(0),
+        _ => 4096,
+    }).sum()
 }
 
 type Shared = std::sync::Arc<std::sync::Mutex<Vec<u8>>>;
@@ -112,6 +150,8 @@ pub fn run_bounded(mut cmd: Command, opts: &RunOptions) -> std::io::Result<RunOu
     let err_t = drain(child.stderr.take().expect("piped"), opts.max_output_bytes, err_buf.clone(), capped.clone());
     let deadline = Instant::now() + opts.timeout;
     let (mut status, mut timed_out, mut output_capped) = (None, false, false);
+    let mut quota_hit = false;
+    let mut next_quota_check = Instant::now();
     loop {
         if let Some(s) = child.try_wait()? {
             status = Some(s);
@@ -124,6 +164,13 @@ pub fn run_bounded(mut cmd: Command, opts: &RunOptions) -> std::io::Result<RunOu
         if Instant::now() >= deadline {
             timed_out = true;
             break;
+        }
+        if opts.kill_over_quota && Instant::now() >= next_quota_check {
+            next_quota_check = Instant::now() + Duration::from_millis(100);
+            if opts.quota.iter().any(|(p, max)| dir_usage(p) > *max) {
+                quota_hit = true;
+                break;
+            }
         }
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -141,7 +188,7 @@ pub fn run_bounded(mut cmd: Command, opts: &RunOptions) -> std::io::Result<RunOu
         None => child.wait().ok(),
     };
     let (stdout, stderr) = (finish(out_t, &out_buf), finish(err_t, &err_buf));
-    let over_quota = opts.quota.iter().filter(|(p, max)| dir_size(p) > *max).map(|(p, _)| p.clone()).collect();
+    let over_quota = opts.quota.iter().filter(|(p, max)| dir_size(p) > *max || (quota_hit && dir_usage(p) > *max)).map(|(p, _)| p.clone()).collect();
     Ok(RunOutcome { status, timed_out, output_capped, stdout, stderr, over_quota })
 }
 

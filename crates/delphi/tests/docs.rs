@@ -267,12 +267,12 @@ fn an_authorization_request_and_store_satisfy_their_schemas() {
     let home = dir.join("home");
     std::fs::create_dir_all(home.join("operator")).unwrap();
     delphi_core::lock::write(&home.join("operator/ratified.lock"), &delphi_core::lock::LockFile::default()).unwrap();
-    let (bin, script) = (dir.join("python3"), dir.join("t.py"));
+    let (bin, script) = (dir.join("bash"), dir.join("t.sh"));
     std::fs::write(&bin, b"x").unwrap();
     std::fs::write(&script, b"print(1)").unwrap();
     let (b, s) = (bin.to_string_lossy().to_string(), script.to_string_lossy().to_string());
-    let policy = a::Policy { interpreters: vec![b.clone()] };
-    let req = json!({"intent": "i", "purpose": "p", "context": "c", "risk": "r", "run_plan": "once", "manifest": [{"tool": "shell", "argv": [b, "-I", s], "files": [s], "runner_provenance": "project_snapshot"}]});
+    let policy = a::Policy { interpreters: vec![b.clone()], sealed_roots: vec![] };
+    let req = json!({"intent": "i", "purpose": "p", "context": "c", "risk": "r", "run_plan": "once", "manifest": [{"tool": "shell", "argv": [b, s], "files": [s], "runner_provenance": "project_snapshot"}]});
     let who = |kind, taint| a::Who { kind, label: "l".into(), role: Some("red-team".into()), model: "m".into(), span: Some("s".into()), task: Some("t".into()), taint, run: "t".into(), mission: "m".into() };
     let staged = |kind, taint| match a::admit(&[], &[], &who(kind, taint), a::parse_request(&req, &policy), &a::Clock { now_unix: 1_800_000_000, now_rfc: "2027-01-15T08:00:00.000Z" }) {
         a::Outcome::Staged(p) => p,

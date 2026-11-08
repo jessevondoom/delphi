@@ -7,10 +7,10 @@ thread_local! {
 
 /// The policy of this test: the fixture's fake runner is the only interpreter the "daemon" knows.
 fn policy() -> Policy {
-    Policy { interpreters: POLICY.with(|p| p.borrow().clone()) }
+    Policy { interpreters: POLICY.with(|p| p.borrow().clone()), sealed_roots: vec![] }
 }
 
-/// A tempdir with a fake runner named `python3`, a script, and a home with an operator lock, all canonical.
+/// A tempdir with a fake runner named `bash`, a script, and a home with an operator lock, all canonical.
 struct Fix {
     _t: tempfile::TempDir,
     home: PathBuf,
@@ -24,10 +24,10 @@ fn fix() -> Fix {
     let home = root.join("home");
     fs::create_dir_all(home.join("operator")).unwrap();
     lock::write(&home.join("operator/ratified.lock"), &LockFile::default()).unwrap();
-    let bin = root.join("python3");
+    let bin = root.join("bash");
     fs::write(&bin, b"#!fake runner").unwrap();
     fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
-    let script = root.join("t.py");
+    let script = root.join("t.sh");
     fs::write(&script, b"print(1)").unwrap();
     fs::set_permissions(&script, fs::Permissions::from_mode(0o644)).unwrap();
     POLICY.with(|p| *p.borrow_mut() = vec![bin.to_string_lossy().into()]);
@@ -36,7 +36,7 @@ fn fix() -> Fix {
 
 impl Fix {
     fn entry(&self) -> Entry {
-        Entry { tool: "shell".into(), argv: vec![self.bin.clone(), "-I".into(), self.script.clone()], files: vec![self.script.clone()], runner_provenance: "project_snapshot".into() }
+        Entry { tool: "shell".into(), argv: vec![self.bin.clone(), self.script.clone()], files: vec![self.script.clone()], runner_provenance: "project_snapshot".into() }
     }
     fn request_json(&self) -> Value {
         json!({"intent": "run the parser tests", "purpose": "needs a Red shell", "manifest": [self.entry()], "context": "I was reading the parser.", "risk": "runs a script in the sandbox", "run_plan": "once"})
@@ -82,7 +82,7 @@ fn refusal(o: Outcome) -> (String, Option<Value>) {
 /// The request with a different argument, so its manifest hash differs.
 fn variant(f: &Fix, n: usize) -> Value {
     let mut v = f.request_json();
-    v["manifest"][0]["argv"] = json!([f.bin, "-I", f.script, format!("--case={n}")]);
+    v["manifest"][0]["argv"] = json!([f.bin, f.script, format!("--case={n}")]);
     v
 }
 
@@ -108,16 +108,16 @@ fn an_entry_is_exact_or_it_is_refused() {
         check_entry(&e, &policy())
     };
     for (what, r) in [
-        ("relative binary", bad(&|e| e.argv[0] = "python3".into())),
-        ("dot-dot", bad(&|e| e.argv[0] = format!("{}/../python3", e.argv[0]))),
+        ("relative binary", bad(&|e| e.argv[0] = "bash".into())),
+        ("dot-dot", bad(&|e| e.argv[0] = format!("{}/../bash", e.argv[0]))),
         ("glob", bad(&|e| e.argv.push("tests/*.py".into()))),
         ("substitution", bad(&|e| e.argv.push("$(id)".into()))),
         ("chaining", bad(&|e| e.argv.push("&&".into()))),
-        ("inline code", bad(&|e| e.argv.insert(2, "-c".into()))),
+        ("inline code", bad(&|e| e.argv.insert(1, "-c".into()))),
         ("control char", bad(&|e| e.argv.push("a\x1bb".into()))),
         ("unknown provenance", bad(&|e| e.runner_provenance = "built_in_run".into())),
         ("unknown tool", bad(&|e| e.tool = "edit_file".into())),
-        ("no -I", bad(&|e| drop(e.argv.remove(1)))),
+        ("no script", bad(&|e| drop(e.argv.remove(1)))),
         ("script not pinned", bad(&|e| e.files.clear())),
         ("not a runner with assertable isolation", bad(&|e| e.argv[0] = "/usr/bin/awk".into())),
         ("shell wrapper", bad(&|e| e.argv[0] = "/bin/sh".into())),
@@ -142,31 +142,115 @@ fn the_deny_list_stops_merges_credentials_network_dispatch_and_protected_paths()
         assert!(denied(vec![bin, "x"]), "{bin}");
     }
     for arg in ["/repo/.git/hooks/pre-commit", "--out=/repo/.git/config", "/srv/u/.delphi/operator/authorizations.json", "/srv/u/.delphi/operator/ratified.lock", "/repo/.githooks/x", "/repo/config.toml", "/srv/u/.ssh/id_rsa", "https://example.com/x", "git@github.com:a/b.git", "/repo/server.pem"] {
-        assert!(denied(vec![&f.bin, "-I", arg]), "{arg}");
+        assert!(denied(vec![&f.bin, &f.script, arg]), "{arg}");
     }
     assert!(deny_reason(&f.entry()).is_none());
 }
 
-// Red-team P1: `python3 -I -m <anything>` ran code nobody pinned (timeit, pdb, code, trace, cProfile, unittest, pickle, pydoc, ...).
+// Spec 092 S2b: the runner is `/bin/bash <pinned script file>`. No option may make bash run anything but that file: not a string
+// (`-c`), not stdin (`-s`), not an interactive shell (`-i`), not a start-up file (`--rcfile`, `--init-file`), and the environment
+// that would name one (`BASH_ENV`, `ENV`) is not in the scrubbed map.
 #[test]
-fn no_module_is_ever_run_with_dash_m() {
+fn no_bash_option_can_run_code_that_is_not_the_pinned_script() {
     let f = fix();
-    for m in ["timeit", "pdb", "code", "trace", "cProfile", "unittest", "pickle", "pydoc", "antigravity", "http.server", "pip", "this", "runpy", "idlelib"] {
-        for argv in [vec![f.bin.clone(), "-I".into(), "-m".into(), m.into()], vec![f.bin.clone(), "-I".into(), f.script.clone(), "-m".into(), m.into()]] {
-            let mut e = f.entry();
-            e.argv = argv.clone();
-            let r = check_entry(&e, &policy());
-            // `-m` before a script has nothing to run; `-m` after the script is the script's own argument and is harmless to the
-            // runner, but the first form must never pass
-            if argv[2] == "-m" {
-                assert!(matches!(r, Err(EntryError::Invalid(_)) | Err(EntryError::Denied(_))), "-m {m} was admitted: {r:?}");
-            }
-        }
+    for opt in ["-c", "-s", "-i", "-l", "-O", "-o", "-x", "--login", "--rcfile", "--init-file", "--norc", "--noprofile", "--posix", "--rcfile=/tmp/x", "--init-file=/tmp/x", "-ic", "-sc", "-xe", "-lc"] {
+        // before the script: not an absolute script path, so refused
+        let mut e = f.entry();
+        e.argv = vec![f.bin.clone(), opt.into(), f.script.clone()];
+        assert!(check_entry(&e, &policy()).is_err(), "{opt} before the script was admitted");
+        // and after it, where it would be the script's own argument, still refused so no record reads as if it used one
+        let mut e = f.entry();
+        e.argv = vec![f.bin.clone(), f.script.clone(), opt.into()];
+        assert!(check_entry(&e, &policy()).is_err(), "{opt} after the script was admitted");
     }
-    // not even with a script named after it
+    // `-c` with a string, `-s` with args, a script on stdin
+    for argv in [vec![f.bin.clone(), "-c".into(), "echo hi".into()], vec![f.bin.clone(), "-s".into()], vec![f.bin.clone()], vec![f.bin.clone(), "-".into()], vec![f.bin.clone(), "t.sh".into()]] {
+        let mut e = f.entry();
+        e.argv = argv.clone();
+        e.files = vec![];
+        assert!(check_entry(&e, &policy()).is_err(), "{argv:?}");
+    }
+    // the script must be pinned in `files`
     let mut e = f.entry();
-    e.argv = vec![f.bin.clone(), "-I".into(), "-m".into(), "timeit".into(), f.script.clone()];
+    e.files = vec![];
+    assert!(matches!(check_entry(&e, &policy()), Err(EntryError::Invalid(m)) if m.contains("files")));
+    // a long option that is not a start-up file is the script's own argument and passes
+    let mut e = f.entry();
+    e.argv.push("--version".into());
+    assert!(check_entry(&e, &policy()).is_ok());
+    // the environment carries no interpreter hook
+    let env = scrubbed_env();
+    for k in ["BASH_ENV", "ENV", "PERL5OPT", "PERL5LIB", "PYTHONPATH", "HOME", "LD_PRELOAD"] {
+        assert!(!env.contains_key(k), "{k}");
+    }
+    assert!(!env.keys().any(|k| k.starts_with("DYLD_")));
+}
+
+#[test]
+fn python_and_other_interpreters_are_no_longer_admitted_and_bash_is() {
+    let f = fix();
+    let sys = Policy::system();
+    assert_eq!(sys.interpreters, vec!["/bin/bash".to_string()]);
+    for py in ["/usr/bin/python3", "/usr/local/bin/python3", "/opt/homebrew/bin/python3"] {
+        let mut e = f.entry();
+        e.argv = vec![py.into(), "-I".into(), f.script.clone()];
+        assert!(matches!(check_entry(&e, &sys), Err(EntryError::Invalid(m)) if m.contains("not an interpreter")), "{py}");
+    }
+    for other in ["/usr/bin/perl", "/bin/zsh", "/bin/sh", "/bin/dash", "/usr/bin/ruby", "/usr/bin/env"] {
+        let mut e = f.entry();
+        e.argv[0] = other.into();
+        assert!(check_entry(&e, &sys).is_err(), "{other}");
+    }
+    // the real thing: `/bin/bash <script>`, with the script pinned
+    let mut e = f.entry();
+    e.argv[0] = "/bin/bash".into();
+    assert!(check_entry(&e, &sys).is_ok(), "{:?}", check_entry(&e, &sys));
+    // other shells in the wrapper list stay refused even when named as the runner of a fixture
+    let mut e = f.entry();
+    e.argv[0] = "/bin/sh".into();
     assert!(check_entry(&e, &policy()).is_err());
+}
+
+#[test]
+fn the_system_bash_is_pinned_resolved_and_hashed_and_the_hash_is_taken_again() {
+    let f = fix();
+    let sys = Policy::system();
+    let pinned = pin_interpreter("/bin/bash", &sys).unwrap();
+    assert_eq!(pinned.path, "/bin/bash");
+    assert_eq!(pinned.blake3, hash(&fs::read("/bin/bash").unwrap()));
+    // a record made with the system policy stores that hash
+    let mut n = f.new_record(vec![{
+        let mut e = f.entry();
+        e.argv[0] = "/bin/bash".into();
+        e
+    }]);
+    n.policy = sys.clone();
+    let r = build_record(&f.home, &n, 1_800_000_000, &at(0)).unwrap();
+    assert_eq!(r.manifest[0].binary, pinned);
+    assert_eq!(r.manifest[0].env, scrubbed_env());
+    // taken again at use: a different file at the same path is a different hash
+    let again = pin_interpreter("/bin/bash", &sys).unwrap();
+    assert_eq!(again.blake3, r.manifest[0].binary.blake3);
+    let swapped = Policy { interpreters: vec![f.bin.clone()], sealed_roots: vec![] };
+    let other = pin_interpreter(&f.bin, &swapped).unwrap();
+    assert_ne!(other.blake3, r.manifest[0].binary.blake3, "a replaced interpreter must show as another hash");
+    fs::write(&f.bin, b"#!replaced").unwrap();
+    assert_ne!(pin_interpreter(&f.bin, &swapped).unwrap().blake3, other.blake3);
+}
+
+#[test]
+fn an_interpreter_off_the_sealed_volume_is_refused_even_if_it_is_named_bash() {
+    let f = fix();
+    // the fixture's `bash` lives in a temp directory: the system policy's roots do not cover it, and a symlink from a sealed path
+    // to elsewhere would resolve outside them
+    let strict = Policy { interpreters: vec![f.bin.clone()], sealed_roots: vec!["/bin".into(), "/usr/bin".into()] };
+    let e = pin_interpreter(&f.bin, &strict).unwrap_err();
+    assert!(e.contains("sealed system volume"), "{e}");
+    let mut n = f.new_record(vec![f.entry()]);
+    n.policy = strict;
+    assert!(build_record(&f.home, &n, 1_800_000_000, &at(0)).unwrap_err().contains("sealed"));
+    // a directory is not an interpreter
+    assert!(pin_interpreter("/bin", &Policy::system()).is_err());
 }
 
 // Red-team P1: the runner must be an interpreter the daemon knows, whatever the request says about its provenance.
@@ -175,7 +259,7 @@ fn a_project_local_or_self_declared_runner_is_not_an_interpreter() {
     let f = fix();
     let other = fs::canonicalize(f._t.path()).unwrap().join("tools");
     fs::create_dir_all(&other).unwrap();
-    let local = other.join("python3");
+    let local = other.join("bash");
     fs::write(&local, b"#!built in the run").unwrap();
     fs::set_permissions(&local, fs::Permissions::from_mode(0o755)).unwrap();
     for prov in ["project_snapshot", "daemon_installed"] {
@@ -183,12 +267,13 @@ fn a_project_local_or_self_declared_runner_is_not_an_interpreter() {
         e.argv[0] = local.to_string_lossy().into();
         e.runner_provenance = prov.into();
         let r = check_entry(&e, &policy());
-        assert!(matches!(&r, Err(EntryError::Invalid(m)) if m.contains("not an interpreter the daemon knows")), "{prov}: {r:?}");
+        // a `bash` that is not the pinned one is refused whether it is seen as a wrapper or as an unknown interpreter
+        assert!(matches!(&r, Err(EntryError::Invalid(m)) if m.contains("not an interpreter the daemon knows") || m.contains("shell or wrapper")), "{prov}: {r:?}");
     }
     // the shipped policy knows system locations only: the fixture's runner is not one of them
     assert!(check_entry(&f.entry(), &Policy::system()).is_err());
     for p in &Policy::system().interpreters {
-        assert!(p.starts_with("/usr/") || p.starts_with("/opt/homebrew/"), "{p}");
+        assert_eq!(p, "/bin/bash", "the only admitted runner is the system bash");
     }
     // non-ASCII (confusables) is refused in argv and files
     let mut e = f.entry();
@@ -229,7 +314,7 @@ fn a_request_is_parsed_cleaned_and_bounded() {
     }
     // 5 entries at most
     let mut w = f.request_json();
-    w["manifest"] = json!((0..6).map(|n| json!({"tool": "shell", "argv": [f.bin, "-I", f.script, format!("{n}")], "files": [f.script], "runner_provenance": "project_snapshot"})).collect::<Vec<_>>());
+    w["manifest"] = json!((0..6).map(|n| json!({"tool": "shell", "argv": [f.bin, f.script, format!("{n}")], "files": [f.script], "runner_provenance": "project_snapshot"})).collect::<Vec<_>>());
     assert!(matches!(parse_request(&w, &policy()), Err(ParseError::Invalid(m)) if m.contains("1 to 5")));
     w["manifest"].as_array_mut().unwrap().pop();
     assert!(parse_request(&w, &policy()).is_ok());
@@ -379,7 +464,7 @@ fn a_staged_event_that_disagrees_with_its_own_hashes_is_not_shown() {
     let f = fix();
     let mut p = staged(admit_at(&[], &[], &who(Kind::Agent, Tier::L4, "t1"), &f.request_json(), 0));
     assert!(Staged::from_event("m", &ev(STAGED, p.clone(), 0)).is_some());
-    p["request"]["manifest"][0]["argv"] = json!([f.bin, "-I", f.script, "--extra"]);
+    p["request"]["manifest"][0]["argv"] = json!([f.bin, f.script, "--extra"]);
     assert!(Staged::from_event("m", &ev(STAGED, p, 0)).is_none(), "edited after staging");
 }
 
@@ -394,7 +479,7 @@ fn a_record_is_made_hashed_and_pinned() {
     assert_eq!(r.manifest[0].files[0].blake3, hash(b"print(1)"));
     assert_eq!(r.manifest[0].scratch_mode, "noexec");
     assert_eq!(r.manifest[0].cwd, CWD);
-    assert_eq!(r.manifest[0].env.get("PATH").map(String::as_str), Some(""), "no PATH search");
+    assert_eq!(r.manifest[0].env.get("PATH").map(String::as_str), Some("/nonexistent"), "no PATH search");
     assert!(r.manifest[0].env.keys().all(|k| !k.starts_with("DYLD_") && k != "LD_PRELOAD"));
     assert_eq!(r.run, "run-1");
     assert_eq!(r.uses, 0);
@@ -433,30 +518,30 @@ fn a_record_is_refused_outside_its_limits_and_when_the_deny_list_or_the_files_sa
     assert!(make(f.new_record(vec![bad])).unwrap_err().contains("deny-list"));
     // a binary that does not exist, a world-writable script, a symlinked path and a scratch path
     let mut missing = f.entry();
-    missing.argv[2] = format!("{}/none.py", f._t.path().display());
-    missing.files = vec![missing.argv[2].clone()];
+    missing.argv[1] = format!("{}/none.py", f._t.path().display());
+    missing.files = vec![missing.argv[1].clone()];
     assert!(make(f.new_record(vec![missing])).is_err());
     let ww = f._t.path().join("ww.py");
     fs::write(&ww, b"x").unwrap();
     fs::set_permissions(&ww, fs::Permissions::from_mode(0o666)).unwrap();
     let wwp = fs::canonicalize(&ww).unwrap().to_string_lossy().to_string();
     let mut e = f.entry();
-    e.argv[2] = wwp.clone();
+    e.argv[1] = wwp.clone();
     e.files = vec![wwp];
     assert!(make(f.new_record(vec![e])).unwrap_err().contains("world-writable"));
     let link = fs::canonicalize(f._t.path()).unwrap().join("link.py");
     std::os::unix::fs::symlink(&f.script, &link).unwrap();
     let mut e = f.entry();
-    e.argv[2] = link.to_string_lossy().into();
-    e.files = vec![e.argv[2].clone()];
+    e.argv[1] = link.to_string_lossy().into();
+    e.files = vec![e.argv[1].clone()];
     assert!(make(f.new_record(vec![e])).unwrap_err().contains("not canonical"));
     let scratch = fs::canonicalize(f._t.path()).unwrap().join("scratch");
     fs::create_dir_all(&scratch).unwrap();
     let sp = scratch.join("s.py");
     fs::write(&sp, b"x").unwrap();
     let mut e = f.entry();
-    e.argv[2] = sp.to_string_lossy().into();
-    e.files = vec![e.argv[2].clone()];
+    e.argv[1] = sp.to_string_lossy().into();
+    e.files = vec![e.argv[1].clone()];
     assert!(make(f.new_record(vec![e])).unwrap_err().contains("scratch"));
 }
 
@@ -797,8 +882,8 @@ fn a_script_or_runner_another_user_could_replace_is_not_pinned() {
     fs::write(&s, b"print(2)").unwrap();
     fs::set_permissions(&s, fs::Permissions::from_mode(0o644)).unwrap();
     let mut e = f.entry();
-    e.argv[2] = s.to_string_lossy().into();
-    e.files = vec![e.argv[2].clone()];
+    e.argv[1] = s.to_string_lossy().into();
+    e.files = vec![e.argv[1].clone()];
     assert!(make(e.clone()).is_ok());
     fs::set_permissions(&dir, fs::Permissions::from_mode(0o775)).unwrap();
     assert!(make(e).unwrap_err().contains("directory"));
@@ -1182,7 +1267,7 @@ fn check_launch_runs_the_manifest_through_the_deny_list_and_the_runner_check_aga
     rehash(&mut bad);
     assert!(pure(&f, &bad).unwrap_err().contains("deny-list"));
     let mut bad = r.clone();
-    bad.manifest[0].argv[0] = "/tmp/python3".into();
+    bad.manifest[0].argv[0] = "/tmp/bash".into();
     rehash(&mut bad);
     assert!(pure(&f, &bad).unwrap_err().contains("not an interpreter"));
 }

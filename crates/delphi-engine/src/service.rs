@@ -3364,7 +3364,7 @@ mod tests {
             c.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
             c.hello(&htok).unwrap();
             let ask = |n: u32| json!({"session": session, "tool": "claude-code", "cwd": cwd, "model": "opus", "intent": "run the parser tests", "purpose": "needs a Red shell", "context": "c\u{1b}[2K", "risk": "r", "run_plan": "once",
-                "manifest": [{"tool": "shell", "argv": ["/usr/bin/python3", "-I", "/opt/py/t.py", format!("--case={n}")], "files": ["/opt/py/t.py"], "runner_provenance": "project_snapshot"}]});
+                "manifest": [{"tool": "shell", "argv": ["/bin/bash", "/opt/py/t.sh", format!("--case={n}")], "files": ["/opt/py/t.sh"], "runner_provenance": "project_snapshot"}]});
             let ok = c.call("host.request_test_authorization", ask(1)).unwrap();
             assert_eq!((ok["staged"].clone(), ok["tier"].clone(), ok["taint"].clone(), ok["usable"].clone()), (json!(true), json!("L0"), json!("federated_peer"), json!(false)));
             // the rate limit holds for a host session, and nothing else was staged

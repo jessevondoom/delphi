@@ -9,6 +9,7 @@
 //! The profile is passed inline (`sandbox-exec -p`), never through a temp file, so there is nothing to
 //! swap between writing it and applying it. The environment is cleared and rebuilt from an allowlist.
 
+pub mod authorized;
 pub mod egress;
 pub mod run;
 
@@ -45,6 +46,16 @@ pub struct SandboxSpec {
     /// The entire environment of the process. Nothing is inherited.
     pub env: BTreeMap<String, String>,
     pub limits: Limits,
+    /// Spec 092 S2b. A project snapshot the process may read and never write or execute (a disposable copy of the
+    /// tracked files). `None` for every ordinary caller.
+    pub snapshot_ro: Option<PathBuf>,
+    /// Scratch directories are writable but nothing in them can be executed. On macOS the profile simply grants no
+    /// `process-exec` there; bubblewrap has no such mount option, so the combination is refused (`Unsupported`).
+    pub scratch_noexec: bool,
+    /// `Some`: the only files that may be executed, by literal path (the interpreter). The system read-only
+    /// directories stay readable but are no longer executable. `None`: the toolchain directories are executable as ever.
+    /// Needs `worktree` unset. macOS only; bubblewrap cannot restrict exec to a file, so it is refused there.
+    pub exec_only: Option<Vec<PathBuf>>,
 }
 
 /// Resource limits applied with `setrlimit` before the program starts. They bound what a runaway or
@@ -60,17 +71,20 @@ pub struct Limits {
     /// The largest single file the program may write.
     pub max_file_bytes: Option<u64>,
     pub max_open_files: Option<u64>,
+    /// `RLIMIT_NPROC`: on macOS and Linux this counts every process of the user, so it is an absolute number the caller
+    /// computes (the user's current count plus headroom); `None` leaves it alone. A fork loop stops at it.
+    pub max_procs: Option<u64>,
 }
 
 impl Default for Limits {
     fn default() -> Limits {
-        Limits { cpu_secs: Some(900), max_file_bytes: Some(512 << 20), max_open_files: Some(1024) }
+        Limits { cpu_secs: Some(900), max_file_bytes: Some(512 << 20), max_open_files: Some(1024), max_procs: None }
     }
 }
 
 impl SandboxSpec {
     pub fn new() -> SandboxSpec {
-        SandboxSpec { worktree: None, scratch: vec![], read_only: system_read_only(), network: Network::Off, mach_services: vec![], env: BTreeMap::new(), limits: Limits::default() }
+        SandboxSpec { worktree: None, scratch: vec![], read_only: system_read_only(), network: Network::Off, mach_services: vec![], env: BTreeMap::new(), limits: Limits::default(), snapshot_ro: None, scratch_noexec: false, exec_only: None }
     }
 }
 
@@ -216,6 +230,9 @@ fn harden_process(cmd: &mut Command, limits: Limits) {
             if let Some(n) = limits.max_open_files {
                 set(libc::RLIMIT_NOFILE, n, n);
             }
+            if let Some(n) = limits.max_procs {
+                set(libc::RLIMIT_NPROC, n, n);
+            }
             let max = libc::getdtablesize().clamp(0, 65_536);
             for fd in 3..max {
                 let flags = libc::fcntl(fd, libc::F_GETFD);
@@ -277,6 +294,9 @@ struct Resolved {
     read_only: Vec<PathBuf>,
     network: Network,
     mach_services: Vec<String>,
+    snapshot: Option<PathBuf>,
+    scratch_noexec: bool,
+    exec_only: Option<Vec<PathBuf>>,
 }
 
 fn canonical(p: &Path) -> Result<PathBuf, SandboxError> {
@@ -301,11 +321,26 @@ impl Resolved {
         if let Some(bad) = spec.mach_services.iter().find(|n| !ok_service(n)) {
             return Err(SandboxError::BadPath(format!("mach service `{}`", bad)));
         }
-        Ok(Resolved { worktree, scratch, read_only, network: spec.network.clone(), mach_services: spec.mach_services.clone() })
+        let snapshot = spec.snapshot_ro.as_deref().map(canonical).transpose()?;
+        let exec_only = spec.exec_only.as_ref().map(|v| v.iter().map(|p| canonical(p)).collect::<Result<Vec<_>, _>>()).transpose()?;
+        if exec_only.is_some() && worktree.is_some() {
+            return Err(SandboxError::Unsupported("an exec allowlist cannot be combined with a writable worktree".into()));
+        }
+        if let Some(files) = &exec_only {
+            if files.is_empty() || files.iter().any(|f| !f.is_file()) {
+                return Err(SandboxError::BadPath("exec allowlist: each entry must be an existing regular file".into()));
+            }
+        }
+        Ok(Resolved { worktree, scratch, read_only, network: spec.network.clone(), mach_services: spec.mach_services.clone(), snapshot, scratch_noexec: spec.scratch_noexec, exec_only })
     }
 
     fn writable(&self) -> impl Iterator<Item = &PathBuf> {
         self.worktree.iter().chain(self.scratch.iter())
+    }
+
+    /// Everything the process may read: the toolchain, the writable areas and the snapshot.
+    fn readable(&self) -> impl Iterator<Item = &PathBuf> {
+        self.read_only.iter().chain(self.writable()).chain(self.snapshot.iter())
     }
 }
 
@@ -328,18 +363,33 @@ fn sbpl(r: &Resolved) -> String {
     let mut s = String::from("(version 1)\n(deny default)\n(allow process-fork)\n(allow sysctl-read)\n(allow signal (target self))\n");
     // Executing and reading the toolchain.
     for p in &r.read_only {
-        let _ = writeln!(s, "(allow process-exec* (subpath {q}))\n(allow file-read* (subpath {q}))", q = sbpl_str(p));
+        if r.exec_only.is_some() {
+            let _ = writeln!(s, "(allow file-read* (subpath {q}))", q = sbpl_str(p));
+        } else {
+            let _ = writeln!(s, "(allow process-exec* (subpath {q}))\n(allow file-read* (subpath {q}))", q = sbpl_str(p));
+        }
+    }
+    // An exec allowlist: these files by literal path and nothing else (spec 092 S2b).
+    for p in r.exec_only.iter().flatten() {
+        let _ = writeln!(s, "(allow process-exec (literal {}))", sbpl_str(p));
+    }
+    // The snapshot is readable and nothing more: not writable, not executable.
+    if let Some(p) = &r.snapshot {
+        let _ = writeln!(s, "(allow file-read* (subpath {}))", sbpl_str(p));
     }
     // dyld reads the root directory itself when a program starts (the names of top-level directories, nothing below them).
     s.push_str("(allow file-read-data (literal \"/\"))\n");
     let _ = writeln!(s, "(allow file-read* (literal \"/dev/null\") (literal \"/dev/urandom\") (literal \"/dev/random\") (literal \"/private/var/select/sh\"))\n(allow file-write* (literal \"/dev/null\"))");
     // Read-write areas (and the programs inside them, so a build can run what it built).
     for p in r.writable() {
-        let _ = writeln!(s, "(allow file-read* file-write* (subpath {q}))\n(allow process-exec* (subpath {q}))", q = sbpl_str(p));
+        let _ = writeln!(s, "(allow file-read* file-write* (subpath {q}))", q = sbpl_str(p));
+        if !(r.scratch_noexec && r.scratch.contains(p)) {
+            let _ = writeln!(s, "(allow process-exec* (subpath {q}))", q = sbpl_str(p));
+        }
     }
     // Only the ancestors of granted paths can be `stat`ed, so a path outside them cannot even be probed.
     let mut ancestors = std::collections::BTreeSet::new();
-    for p in r.read_only.iter().chain(r.writable()) {
+    for p in r.readable() {
         let mut cur = p.parent();
         while let Some(a) = cur {
             ancestors.insert(a.to_path_buf());
@@ -353,7 +403,7 @@ fn sbpl(r: &Resolved) -> String {
     for a in &ancestors {
         let _ = writeln!(s, "(allow file-read-metadata (literal {}))", sbpl_str(a));
     }
-    for p in r.read_only.iter().chain(r.writable()) {
+    for p in r.readable() {
         let _ = writeln!(s, "(allow file-read-metadata (subpath {}))", sbpl_str(p));
     }
     for n in &r.mach_services {
@@ -364,6 +414,19 @@ fn sbpl(r: &Resolved) -> String {
         Network::ProxyOnly { port } => {
             let _ = writeln!(s, "(allow network-outbound (remote ip \"localhost:{}\"))", port);
         }
+    }
+    // Native code cannot be loaded from anything the process can write or that was not frozen: `dlopen` and `enable -f` map a
+    // file executable, which `process-exec` does not cover (red-team of spec 092 S2b). Denied after the allows so it wins.
+    // Only a deliberately weakened authorized profile (scratch left executable) maps code from scratch; the tests use it to
+    // show the sweep and the probe notice. The real profile never has this line.
+    if r.exec_only.is_some() && !r.scratch_noexec {
+        for p in &r.scratch {
+            let _ = writeln!(s, "(allow file-map-executable (subpath {}))", sbpl_str(p));
+        }
+    }
+    let no_map = r.snapshot.iter().chain(r.scratch.iter().filter(|_| r.scratch_noexec));
+    for p in no_map {
+        let _ = writeln!(s, "(deny file-map-executable (subpath {}))", sbpl_str(p));
     }
     // Last, so it wins: no `.git` segment is ever writable, file or directory, at any depth.
     s.push_str("(deny file-write* (regex #\"(^|/)\\.git(/|$)\"))\n");
@@ -381,7 +444,16 @@ fn bwrap_args(r: &Resolved) -> Result<Vec<String>, SandboxError> {
         Network::ProxyOnly { .. } => return Err(SandboxError::Unsupported("proxy-only networking on Linux needs a socket bridge (roadmap Step 3, harness mode)".into())),
     }
     let s = |p: &Path| p.to_string_lossy().into_owned();
+    if r.scratch_noexec && !r.scratch.is_empty() {
+        return Err(SandboxError::Unsupported("a no-exec scratch directory: bubblewrap has no such mount option, so the authorized profile is refused on this platform".into()));
+    }
+    if r.exec_only.is_some() {
+        return Err(SandboxError::Unsupported("an exec allowlist: bubblewrap cannot restrict execution to one file, so the authorized profile is refused on this platform".into()));
+    }
     for p in &r.read_only {
+        a.extend(["--ro-bind".to_string(), s(p), s(p)]);
+    }
+    if let Some(p) = &r.snapshot {
         a.extend(["--ro-bind".to_string(), s(p), s(p)]);
     }
     // On merged-/usr systems `/bin`, `/lib` and `/lib64` are links into `/usr`. Their targets are bound above

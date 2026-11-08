@@ -4161,7 +4161,7 @@ mod tests {
 
     fn authorization_ask(n: u32) -> Value {
         json!({"intent": "run the parser tests", "purpose": "needs a Red shell", "context": "I was reading the parser.", "risk": "runs a script in the sandbox", "run_plan": "once",
-               "manifest": [{"tool": "shell", "argv": ["/usr/bin/python3", "-I", "/opt/py/t.py", format!("--case={n}")], "files": ["/opt/py/t.py"], "runner_provenance": "project_snapshot"}]})
+               "manifest": [{"tool": "shell", "argv": ["/bin/bash", "/opt/py/t.sh", format!("--case={n}")], "files": ["/opt/py/t.sh"], "runner_provenance": "project_snapshot"}]})
     }
 
     // specs/092 TA-0: the daemon computes the taint from the span; a request from a span at federated_peer or lower cannot exist.
