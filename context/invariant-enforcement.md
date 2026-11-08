@@ -93,6 +93,7 @@ A row moves from ❌ to ✅ when its check ships with the test named in the spec
 | A relay reply counts only with its single-use code, from an authenticated allowlisted sender, on the first line | GOV §5.10, spec 014 §5 | `relay/mod.rs`, `relay/email.rs` (the relay process) | Relay process | ✅ |
 | A deny hook can only refuse: exit 0 changes nothing; any failure to run is a refusal | GOV §5.11, spec 018 §4 | `Engine::hook_denial` | Daemon | ✅ |
 | Hooks come only from the ratified `[hooks]` block and run with a cleared environment | GOV §5.11, spec 018 §2 | `lock::ACCESS_KEYS`; `hooks::run` | Daemon | ✅ |
+| A Red card is approved by an advance operator authorization only in a headless run, for an exactly matching manifest entry, inside a verified sandbox, network off; never a merge, credential, network, dispatch or `.git`/hook/config/store write | GOV §5.12, spec 092 TA-2, TA-3, TA-5 | `Grant::evaluate` and the forced-sandbox `run_authorized` path (S2d2; today the approval is off) | Daemon | ❌ |
 | An imported skill is never loaded until ratified; scripts, links and hidden files are never imported; the operator names the roles | GOV §5.7, spec 019 §3 | `skills_cmd::import`; protected `skills/` path | CLI + daemon | ✅ |
 
 **Reading the table:** every security invariant now has a daemon or CI enforcement point. The prompt-only rows are about the quality of judgment, which no deterministic check can verify. They are where a heterogeneous Council and human review earn their keep.
