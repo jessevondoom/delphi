@@ -845,6 +845,7 @@ fn nothing_consumes_a_record_in_this_slice() {
         "crates/delphi/src/test_cmd_tests.rs",
         "crates/delphi/src/doctor.rs",          // verifies the pin
         "crates/delphi/tests/docs.rs",          // schemas
+        "crates/delphi/src/run.rs",             // S2a: the launch gate only (checked below); it approves nothing
     ];
     const STORE_READERS: &[&str] = &["crates/delphi-engine/src/authorization.rs", "crates/delphi-engine/src/authorization/tests.rs", "crates/delphi/src/test_cmd.rs", "crates/delphi/src/test_cmd_tests.rs", "crates/delphi/src/doctor.rs", "crates/delphi/tests/docs.rs"];
     const STORE_ITEMS: &[&str] = &["load", "load_or_ignore", "mutate", "add_record", "revoke", "store_path", "Store", "Record", "build_record", "create_audited", "revoke_audited", "refuse_audited", "read_audit", "audit_dir", "open_audit", "append_audit", "AuditHead"];
@@ -878,9 +879,15 @@ fn nothing_consumes_a_record_in_this_slice() {
     }
     // the approval path, the executor and the hooks never name an authorization at all
     for (rel, text) in &sources {
-        if ["approval.rs", "exec.rs", "hooks.rs", "broker.rs", "headless", "run.rs"].iter().any(|n| rel.ends_with(n)) && rel != "crates/delphi-engine/src/authorization/tests.rs" {
+        if ["approval.rs", "exec.rs", "hooks.rs", "broker.rs", "headless"].iter().any(|n| rel.ends_with(n)) && rel != "crates/delphi-engine/src/authorization/tests.rs" {
             assert!(!text.to_lowercase().contains("authorization:"), "{rel} must not know about `--on-card authorization:` in S1");
         }
+    }
+    // S2a: `run.rs` may call the launch gate and name the runner policy, nothing else of the module (it cannot read a record at use)
+    let run_rs = &sources.iter().find(|(r, _)| r == "crates/delphi/src/run.rs").unwrap().1;
+    for (i, _) in run_rs.match_indices("authorization::") {
+        let item: String = run_rs[i + "authorization::".len()..].chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+        assert!(["authorize_launch", "Policy"].contains(&item.as_str()), "run.rs reaches the authorization module through `{item}`: S2a lets the launcher call `authorize_launch` only");
     }
     // the three request-side files import the module by path or one plain alias, never by brace or glob
     for rel in ["crates/delphi-engine/src/engine.rs", "crates/delphi-engine/src/service.rs", "crates/delphi-engine/src/tools.rs"] {
@@ -989,4 +996,129 @@ fn an_older_store_and_pin_pair_is_seen_against_the_audit_log() {
     let text = fs::read_to_string(&seg).unwrap();
     fs::write(&seg, format!("{}\n", text.lines().next().unwrap())).unwrap();
     assert!(read_audit(&g.home).unwrap_err().contains("tail was cut"));
+}
+
+// ---------------------------------------------------------------------------------------------- S2a: the launch gate refuses
+
+const LAUNCH_NOW: i64 = 1_800_000_100;
+
+fn live(f: &Fix) -> Record {
+    let (r, p) = made(f, 1, None);
+    create_audited(&f.home, r.clone(), p).unwrap();
+    r
+}
+
+fn launch(f: &Fix, id: &str) -> Result<Record, String> {
+    authorize_launch(&f.home, id, "run-1", LAUNCH_NOW, &policy())
+}
+
+#[test]
+fn launch_accepts_a_valid_record_and_changes_nothing() {
+    let f = fix();
+    let r = live(&f);
+    let before = fs::read(store_path(&f.home)).unwrap();
+    assert_eq!(launch(&f, &r.id).unwrap().id, r.id);
+    assert_eq!(fs::read(store_path(&f.home)).unwrap(), before, "the launch gate writes nothing");
+    assert_eq!(load(&f.home).unwrap().records[0].uses, 0, "and consumes no use");
+}
+
+#[test]
+fn launch_refuses_an_unknown_record() {
+    let f = fix();
+    live(&f);
+    assert!(launch(&f, "ta-nope").unwrap_err().contains("no authorization"));
+}
+
+#[test]
+fn launch_refuses_a_byte_flipped_store() {
+    let f = fix();
+    let r = live(&f);
+    let mut bytes = fs::read(store_path(&f.home)).unwrap();
+    let at = bytes.iter().position(|b| *b == b'1').unwrap();
+    bytes[at] = b'2';
+    fs::write(store_path(&f.home), bytes).unwrap();
+    assert!(launch(&f, &r.id).unwrap_err().contains("pin"));
+}
+
+#[test]
+fn launch_refuses_a_store_whose_lock_entry_was_deleted() {
+    let f = fix();
+    let r = live(&f);
+    lock::write(&f.home.join("operator/ratified.lock"), &LockFile::default()).unwrap();
+    assert!(launch(&f, &r.id).unwrap_err().contains("no entry in operator/ratified.lock"));
+}
+
+#[test]
+fn launch_refuses_an_edited_store_even_with_a_planted_next_file() {
+    let f = fix();
+    let r = live(&f);
+    let mut store = load(&f.home).unwrap();
+    store.records[0].max_uses = 50;
+    let planted = serde_json::to_vec_pretty(&store).unwrap();
+    fs::write(store_path(&f.home), &planted).unwrap();
+    fs::write(f.home.join("operator/authorizations.json.next"), &planted).unwrap();
+    assert!(launch(&f, &r.id).is_err(), "a `.next` that no pin covers is not a way in");
+}
+
+#[test]
+fn launch_refuses_a_cut_audit_log() {
+    let f = fix();
+    let r = live(&f);
+    fs::remove_dir_all(audit_dir(&f.home)).unwrap();
+    assert!(launch(&f, &r.id).unwrap_err().contains("audit"));
+}
+
+#[test]
+fn launch_refuses_a_revoked_record() {
+    let f = fix();
+    let r = live(&f);
+    revoke_audited(&f.home, &r.id, &at(50)).unwrap();
+    assert!(launch(&f, &r.id).unwrap_err().contains("revoked"));
+}
+
+fn pure(f: &Fix, r: &Record) -> Result<(), String> {
+    check_launch(r, LAUNCH_NOW, "run-1", &f.home, &this_machine(), &policy())
+}
+
+fn rehash(r: &mut Record) {
+    let entries: Vec<Entry> = r.manifest.iter().map(|e| Entry { tool: e.tool.clone(), argv: e.argv.clone(), files: e.files.iter().map(|x| x.path.clone()).collect(), runner_provenance: e.runner_provenance.clone() }).collect();
+    r.manifest_hash = manifest_hash(&entries);
+}
+
+#[test]
+fn check_launch_names_each_reason() {
+    let f = fix();
+    let (r, _) = made(&f, 1, None);
+    pure(&f, &r).unwrap();
+    assert!(check_launch(&r, 1_800_000_000 + DEFAULT_EXPIRY_SECS + 1, "run-1", &f.home, &this_machine(), &policy()).unwrap_err().contains("expired"));
+    let mut bad = r.clone();
+    bad.expires = "not a time".into();
+    assert!(pure(&f, &bad).unwrap_err().contains("expiry"));
+    let mut bad = r.clone();
+    bad.revoked = Some(at(5));
+    assert!(pure(&f, &bad).unwrap_err().contains("revoked"));
+    assert!(check_launch(&r, LAUNCH_NOW, "run-2", &f.home, &this_machine(), &policy()).unwrap_err().contains("another run"));
+    let other = tempfile::tempdir().unwrap();
+    assert!(check_launch(&r, LAUNCH_NOW, "run-1", other.path(), &this_machine(), &policy()).unwrap_err().contains("another home"));
+    assert!(check_launch(&r, LAUNCH_NOW, "run-1", &f.home, "some-other-host", &policy()).unwrap_err().contains("another machine"));
+    let mut bad = r.clone();
+    bad.uses = bad.max_uses;
+    assert!(pure(&f, &bad).unwrap_err().contains("no uses left"));
+}
+
+#[test]
+fn check_launch_runs_the_manifest_through_the_deny_list_and_the_runner_check_again() {
+    let f = fix();
+    let (r, _) = made(&f, 1, None);
+    let mut bad = r.clone();
+    bad.manifest[0].argv.push("extra".into());
+    assert!(pure(&f, &bad).unwrap_err().contains("recorded hash"));
+    let mut bad = r.clone();
+    bad.manifest[0].argv[0] = "/usr/bin/curl".into();
+    rehash(&mut bad);
+    assert!(pure(&f, &bad).unwrap_err().contains("deny-list"));
+    let mut bad = r.clone();
+    bad.manifest[0].argv[0] = "/tmp/python3".into();
+    rehash(&mut bad);
+    assert!(pure(&f, &bad).unwrap_err().contains("not an interpreter"));
 }

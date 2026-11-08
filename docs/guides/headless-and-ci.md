@@ -16,6 +16,7 @@ A run has nobody to click `/y`, so every approval card is answered by `--on-card
 | `deny` (default) | every card is denied, with the reason recorded |
 | `policy:<file>` | cards that match an `[[allow]]` rule are allowed; everything else is denied |
 | `relay` | nothing is answered; cards wait for you through [`delphi relay`](away-mode.md) or an attached console, bounded by `--timeout` |
+| `authorization:<id>` with `--auth-run <run>` | spec 092, launch gate only in this build: the run starts only if the operator's record (`delphi test authorize`) verifies, is unexpired, unrevoked, bound to this run, home and machine, and has uses left; otherwise it exits 4 with the reason. Authorized approval is not enabled yet, so every card is still denied, a Red card included. Not combinable with the other values; an agent, or a run nested in an authorized run, may not carry it |
 
 A policy file lists Amber cards only:
 

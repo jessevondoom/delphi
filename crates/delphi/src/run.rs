@@ -44,7 +44,18 @@ pub enum OnCard {
     Policy(Policy),
     /// Answer nothing: leave every card (except the merge card) for the operator.
     Leave,
+    /// `authorization:<id>` with `--auth-run <run>` (spec 092 TA-2). In S2a this is a launch gate and nothing more: after the
+    /// checks pass the run decides exactly as `Deny` does. It cannot approve anything.
+    Authorization { id: String, run: String },
 }
+
+/// Spec 092 S2d flips this; S2a, S2b and S2c leave it `false`. While it is `false` no code path may approve a card because of an
+/// authorization (`decide` denies, nothing is sent to the daemon, nothing reads the store after launch).
+pub const AUTHORIZED_APPROVAL_ENABLED: bool = false;
+
+/// Set by the (future, S2c) launcher in the environment of an authorized run's children. S2a sets it for nothing and refuses
+/// any run that finds it already present: a run nested inside an authorized run may not carry the flag (TA-2).
+pub const AUTHORIZED_RUN_ENV: &str = "DELPHI_AUTHORIZED_RUN";
 
 #[derive(Debug, PartialEq)]
 pub struct Opts {
@@ -59,7 +70,12 @@ pub struct Opts {
     pub keep_daemon: bool,
 }
 
-const VALUE_FLAGS: [&str; 8] = ["--workspace", "--home", "--mission", "--permissions", "--on-card", "--budget", "--timeout", "--task"];
+const VALUE_FLAGS: [&str; 9] = ["--workspace", "--home", "--mission", "--permissions", "--on-card", "--budget", "--timeout", "--task", "--auth-run"];
+
+/// An authorization id or run id: 1 to 64 letters, digits, `-`, `_` or `.` (the charset `delphi test authorize --run` takes).
+fn id_ok(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 64 && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
 
 fn value_of(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
@@ -100,11 +116,28 @@ pub fn parse_args(args: &[String]) -> Result<Opts, String> {
     if input.trim().is_empty() {
         return Err("give the task: delphi run \"/build implement @specs/011-x.md in @project/app\"  (or --task <text>)".into());
     }
+    // The authorization flag is exclusive: a second `--on-card` (relay, policy, deny) beside it is refused, not resolved by order.
+    if args.iter().filter(|a| *a == "--on-card").count() > 1 {
+        return Err("--on-card is given once: authorization:<id> cannot be combined with deny, relay or policy:<file>".into());
+    }
+    let auth_run = value_of(args, "--auth-run");
     let on_card = match value_of(args, "--on-card").as_deref() {
+        Some(a) if a.starts_with("authorization:") => {
+            let id = &a["authorization:".len()..];
+            if !id_ok(id) {
+                return Err("--on-card authorization:<id> takes an id of 1 to 64 letters, digits, `-`, `_` or `.`".into());
+            }
+            let run = auth_run.clone().ok_or("--on-card authorization:<id> needs --auth-run <run>: the run id you gave `delphi test authorize --run`")?;
+            if !id_ok(&run) {
+                return Err("--auth-run takes a run id of 1 to 64 letters, digits, `-`, `_` or `.`".into());
+            }
+            OnCard::Authorization { id: id.to_string(), run }
+        }
+        _ if auth_run.is_some() => return Err("--auth-run goes only with --on-card authorization:<id>".into()),
         None | Some("deny") => OnCard::Deny,
         Some(p) if p.starts_with("policy:") => OnCard::Policy(Policy::load(Path::new(&p["policy:".len()..]))?),
         Some("relay") | Some("park") => OnCard::Leave,
-        Some(other) => return Err(format!("--on-card takes deny, relay or policy:<file>, not `{}`", other)),
+        Some(other) => return Err(format!("--on-card takes deny, relay, policy:<file> or authorization:<id>, not `{}`", other)),
     };
     let permissions = value_of(args, "--permissions");
     if let Some(p) = &permissions {
@@ -212,7 +245,24 @@ pub fn decide(on_card: &OnCard, card: &Value) -> Option<(&'static str, String)> 
         OnCard::Policy(p) if p.matches(tool, pattern) => Some(("allow", "allowed by the run's policy".into())),
         OnCard::Policy(_) => Some(("deny", "headless run: no policy rule allows this".into())),
         OnCard::Deny => Some(("deny", "headless run: --on-card deny".into())),
+        // S2a: the flag only gates the launch. Whatever the record says, nothing is approved while the const is false (S2d).
+        OnCard::Authorization { .. } if !AUTHORIZED_APPROVAL_ENABLED => Some(("deny", "headless run: authorized approval is not enabled in this build".into())),
+        OnCard::Authorization { .. } => Some(("deny", "headless run: authorized approval is decided by the daemon (not built)".into())),
     }
+}
+
+/// Why a run that carries `--on-card authorization:<id>` may not start, or `None` (spec 092 TA-2, S2a). Every refusal is exit 4.
+/// `in_seat` and `marker` are the agent-seat test and the presence of [`AUTHORIZED_RUN_ENV`], passed in so tests do not touch the
+/// process environment. Read-only: it reads the store and the audit log and writes nothing.
+pub fn launch_refusal(home: &Path, on_card: &OnCard, in_seat: bool, marker: bool, now_unix: i64, policy: &delphi_engine::authorization::Policy) -> Option<String> {
+    let OnCard::Authorization { id, run } = on_card else { return None };
+    if in_seat {
+        return Some("refused: this process was started by an agent seat; an authorized run is the operator's act and an agent may not carry --on-card authorization:".into());
+    }
+    if marker {
+        return Some(format!("refused: {AUTHORIZED_RUN_ENV} is set, so this run is nested inside an authorized run; a nested run may not carry --on-card authorization:"));
+    }
+    delphi_engine::authorization::authorize_launch(home, id, run, now_unix, policy).err().map(|e| format!("refused: {e}"))
 }
 
 // ── the summary ─────────────────────────────────────────────────────────────
@@ -347,6 +397,16 @@ fn say_err(m: &str) {
 /// Run one task. Returns the process exit code.
 pub fn run(home: &Path, ws_dir: &Path, opts: Opts) -> i32 {
     let started = Instant::now();
+    if matches!(opts.on_card, OnCard::Authorization { .. }) {
+        let now = delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339()).unwrap_or(0);
+        let seat = crate::xenia_terminal::inside_an_agent_seat();
+        let marker = std::env::var_os(AUTHORIZED_RUN_ENV).is_some();
+        if let Some(why) = launch_refusal(home, &opts.on_card, seat, marker, now, &delphi_engine::authorization::Policy::system()) {
+            say_err(&why);
+            return EXIT_INFRA;
+        }
+        say_err("the authorization checks passed, but authorized approval is not enabled in this build: this run denies every card, as --on-card deny does");
+    }
     let Some(exe) = chat::daemon_exe() else {
         say_err("cannot locate this program to start the daemon");
         return EXIT_INFRA;
@@ -749,5 +809,117 @@ mod tests {
         assert_eq!((j["cards"]["total"].as_u64(), j["cards"]["allowed"].as_u64(), j["cards"]["denied"].as_u64()), (Some(2), Some(1), Some(1)));
         assert_eq!(j["ready_to_merge"]["sha"], "s");
         assert!(human(&j).contains("ready to merge: branch b at s"));
+    }
+
+    // ── spec 092 S2a: the flag is a launch gate that can only refuse ──
+
+    fn auth_args(extra: &[&str]) -> Vec<String> {
+        let mut v = vec!["x"];
+        v.extend_from_slice(extra);
+        args(&v)
+    }
+
+    #[test]
+    fn the_authorization_flag_needs_an_id_and_the_run_and_stands_alone() {
+        let ok = parse_args(&auth_args(&["--on-card", "authorization:ta-0123456789", "--auth-run", "run-1"])).unwrap();
+        assert_eq!(ok.on_card, OnCard::Authorization { id: "ta-0123456789".into(), run: "run-1".into() });
+        assert_eq!(ok.input, "x", "the flag's value is not part of the task text");
+        let err = |a: &[&str]| parse_args(&auth_args(a)).unwrap_err();
+        assert!(err(&["--on-card", "authorization:ta-1"]).contains("--auth-run"), "missing --auth-run");
+        assert!(err(&["--on-card", "authorization:", "--auth-run", "r"]).contains("id of 1 to 64"), "empty id");
+        assert!(err(&["--on-card", "authorization:a/b", "--auth-run", "r"]).contains("id of 1 to 64"), "bad id charset");
+        assert!(err(&["--on-card", "authorization:ta-1", "--auth-run", "r s"]).contains("run id"), "bad run id");
+        assert!(err(&["--on-card", "authorization:ta-1", "--auth-run", &"r".repeat(65)]).contains("run id"));
+        for other in ["relay", "deny", "policy:/tmp/p.toml"] {
+            assert!(err(&["--on-card", "authorization:ta-1", "--auth-run", "r", "--on-card", other]).contains("cannot be combined"), "{other} after");
+            assert!(err(&["--on-card", other, "--on-card", "authorization:ta-1", "--auth-run", "r"]).contains("cannot be combined"), "{other} before");
+        }
+        assert!(err(&["--on-card", "relay", "--auth-run", "r"]).contains("only with"), "--auth-run without the flag");
+        assert!(err(&["--auth-run", "r"]).contains("only with"));
+        assert_eq!(parse_args(&auth_args(&["--on-card", "deny"])).unwrap().on_card, OnCard::Deny, "the other values still parse");
+    }
+
+    /// A tempdir home holding one live record for a fake `python3`, built and stored the way `delphi test authorize` does.
+    fn authorized_home() -> (tempfile::TempDir, std::path::PathBuf, String, delphi_engine::authorization::Policy) {
+        use delphi_engine::authorization as a;
+        use std::os::unix::fs::PermissionsExt;
+        let t = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(t.path()).unwrap();
+        let home = root.join("home");
+        std::fs::create_dir_all(home.join("operator")).unwrap();
+        delphi_core::lock::write(&home.join("operator/ratified.lock"), &Default::default()).unwrap();
+        let (bin, script) = (root.join("python3"), root.join("t.py"));
+        std::fs::write(&bin, b"#!fake").unwrap();
+        std::fs::write(&script, b"print(1)").unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let (b, s) = (bin.to_string_lossy().to_string(), script.to_string_lossy().to_string());
+        let policy = a::Policy { interpreters: vec![b.clone()] };
+        let entry = a::Entry { tool: "shell".into(), argv: vec![b, "-I".into(), s.clone()], files: vec![s], runner_provenance: "project_snapshot".into() };
+        let now = delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339()).unwrap();
+        let n = a::NewRecord { purpose: "p".into(), intent: "i".into(), run: "run-1".into(), expires_in_secs: a::DEFAULT_EXPIRY_SECS, max_uses: 3, entries: vec![entry], request: None, policy: a::Policy { interpreters: policy.interpreters.clone() } };
+        let rec = a::build_record(&home, &n, now, &delphi_core::time::now_rfc3339()).unwrap();
+        let id = rec.id.clone();
+        a::create_audited(&home, rec.clone(), json!({"id": rec.id, "manifest_hash": rec.manifest_hash, "run": rec.run, "by": "operator", "source": "operator"})).unwrap();
+        (t, home, id, policy)
+    }
+
+    fn gate(home: &Path, id: &str, run: &str, seat: bool, marker: bool, policy: &delphi_engine::authorization::Policy) -> Option<String> {
+        let now = delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339()).unwrap();
+        launch_refusal(home, &OnCard::Authorization { id: id.into(), run: run.into() }, seat, marker, now, policy)
+    }
+
+    #[test]
+    fn the_launch_gate_passes_a_valid_record_and_refuses_each_other_case_with_a_reason() {
+        let (_t, home, id, policy) = authorized_home();
+        assert_eq!(gate(&home, &id, "run-1", false, false, &policy), None);
+        assert!(gate(&home, &id, "run-2", false, false, &policy).unwrap().contains("another run"));
+        assert!(gate(&home, "ta-unknown", "run-1", false, false, &policy).unwrap().contains("no authorization"));
+        let other = tempfile::tempdir().unwrap();
+        assert!(gate(other.path(), &id, "run-1", false, false, &policy).is_some(), "another home has no such record");
+        assert_eq!(launch_refusal(&home, &OnCard::Deny, true, true, 0, &policy), None, "only the authorization flag is gated");
+    }
+
+    #[test]
+    fn a_run_started_by_an_agent_seat_or_nested_in_an_authorized_run_may_not_carry_the_flag() {
+        let (_t, home, id, policy) = authorized_home();
+        assert!(gate(&home, &id, "run-1", true, false, &policy).unwrap().contains("agent seat"));
+        let nested = gate(&home, &id, "run-1", false, true, &policy).unwrap();
+        assert!(nested.contains(AUTHORIZED_RUN_ENV) && nested.contains("nested"), "{nested}");
+    }
+
+    #[test]
+    fn a_broken_store_refuses_the_run() {
+        let (_t, home, id, policy) = authorized_home();
+        let path = home.join("operator").join(["authorizations", "json"].join("."));
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes[0] = b' ';
+        std::fs::write(&path, bytes).unwrap();
+        assert!(gate(&home, &id, "run-1", false, false, &policy).unwrap().contains("pin"));
+    }
+
+    // The safety boundary of S2a: a valid record and the flag approve nothing.
+    #[test]
+    fn a_red_card_is_denied_even_with_a_valid_record_and_the_flag() {
+        let (_t, home, id, policy) = authorized_home();
+        let on = OnCard::Authorization { id: id.clone(), run: "run-1".into() };
+        assert_eq!(gate(&home, &id, "run-1", false, false, &policy), None, "the record is valid and the run may start");
+        let red_cmd = json!({"tier": "red", "tool": "run_command", "pattern": "run_command /usr/bin/python3 -I /x/t.py"});
+        let (tier, why) = decide(&on, &red_cmd).unwrap();
+        assert_eq!(tier, "deny");
+        assert!(why.contains("a Red action is never approved without the operator"), "{why}");
+    }
+
+    #[test]
+    fn nothing_is_approved_by_an_authorization_while_the_const_is_false() {
+        assert!(!std::hint::black_box(AUTHORIZED_APPROVAL_ENABLED), "S2d flips this with its own review; until then no card may be approved by an authorization");
+        let on = OnCard::Authorization { id: "ta-1".into(), run: "r".into() };
+        for tier in ["green", "amber", "red"] {
+            for tool in ["run_command", "shell", "harness_bash", "harness_edit", "harness_connector", "dispatch_agent", "connector", "write_file", "merge", "pull_request", "anything"] {
+                let d = decide(&on, &json!({"tier": tier, "tool": tool, "pattern": "p"})).map(|x| x.0);
+                assert_eq!(d, Some("deny"), "{tier} {tool}");
+            }
+        }
+        assert_eq!(decide(&on, &json!({})).map(|x| x.0), Some("deny"));
     }
 }
