@@ -666,7 +666,7 @@ impl Engine {
         // Servers a previous session had connected besides ours: the wait for the account's connectors holds out for them.
         let expect_servers: Vec<String> = self.inventory.seats().into_iter().find(|r| r.endpoint_id == ep.id).map(|r| r.mcp_servers.into_iter().filter(|(n, st)| n != crate::bridge::SERVER_NAME && st == "connected").map(|(n, _)| n).collect()).unwrap_or_default();
         // The CLI's own tools the span may use: for the Claude CLI they are given with `--tools`; for `agy` they are what its gate lets through.
-        let agy_native = if cli == Cli::Agy && !sc.toolless { agy_native_tools(&profile.native_tools) } else { vec![] };
+        let agy_native = if cli == Cli::Agy && !sc.toolless && profile.bridge { agy_native_tools(&profile.native_tools) } else { vec![] };
         let mut lp = LaunchProfile { native_tools: if builder || sc.readonly || sc.toolless || cli != Cli::Claude { vec![] } else { profile.native_tools.clone() }, auto_approve: delegate, claudeai_connectors: connectors, mcp_config: None, settle: self.settings.connector_settle, expect_servers };
         let (mut _bridge, mut bridge_rx): (Option<Bridge>, Option<tokio::sync::mpsc::Receiver<BridgeCall>>) = (None, None);
         let mut gate_rx: Option<tokio::sync::mpsc::UnboundedReceiver<HookNote>> = None;
@@ -679,8 +679,11 @@ impl Engine {
         if cli == Cli::Agy && builder && bridge_defs.is_empty() {
             return Ok(Err(HarnessErr::retry("the agy Builder would have no gate: the bridge offered no tools to carry it")));
         }
-        if !bridge_defs.is_empty() {
-            let mut policy = (cli == Cli::Agy).then(|| HookPolicy::new(vec![AGY_TOOL_PREFIX.to_string()], agy_native.clone()));
+        // An `agy` span ALWAYS has the gate, even when it is offered no Delphi tool (a tool-less seat): its own tools cannot be
+        // switched off, only denied by the hook, so a span with no gate would leave every native tool (shell, file writes) open.
+        if !bridge_defs.is_empty() || cli == Cli::Agy {
+            let prefixes = if bridge_defs.is_empty() { vec![] } else { vec![AGY_TOOL_PREFIX.to_string()] };
+            let mut policy = (cli == Cli::Agy).then(|| HookPolicy::new(prefixes, agy_native.clone()));
             if builder {
                 policy = policy.map(|p| p.for_builder(ask_tx.clone()));
                 ask_rx = Some(ask_rx_init);
@@ -705,13 +708,16 @@ impl Engine {
                         }
                         gate_rx = Some(notes);
                     }
-                    lp.mcp_config = Some(b.config_path().to_path_buf());
+                    if !bridge_defs.is_empty() {
+    lp.mcp_config = Some(b.config_path().to_path_buf());
+                    }
                     (_bridge, bridge_rx) = (Some(b), Some(rx));
                 }
                 Err(e) => return Ok(Err(HarnessErr::retry(format!("could not start the Delphi tool bridge: {}", e)))),
             }
         }
-        let bridge_on = bridge_rx.is_some();
+        // A deny-all gate with no Delphi tool behind it is not a tool bridge: nothing is offered, so the text-only wording stays.
+        let bridge_on = bridge_rx.is_some() && !bridge_defs.is_empty();
         let native_for_note = if cli == Cli::Agy { if bridge_on { agy_native.clone() } else { vec![] } } else if tools == Tools::None { lp.native_tools.clone() } else { vec![] };
         let note = harness_note(builder, &bridge_defs, &native_for_note, cli == Cli::Agy, sc.toolless);
         let launch = Launch { cli, program, model, system_prompt: format!("{}\n\n{}", ipr.system_sections().join("\n\n"), note), user_prompt: ipr.first_user_text(), cwd, tools, env: cli_env_with(&profile.env_allow), profile: lp, opts };
@@ -977,12 +983,16 @@ impl Engine {
         // The seat receipt (`specs/091` SR-1): written here by the daemon from what the CLI reported, never from the model's text.
         {
             let mismatch = matches!(&result, Some(Event::Result { subtype, .. }) if subtype == "model_mismatch");
+            // What the gate ALLOWED, not what the CLI natively has (`specs/091` SR-1). A Builder's own tools are judged by cards,
+            // so its list stays the carrier's; every other span's is its Delphi tools plus the native tools the gate lets through.
+            let native_count = tools_offered.len();
+            let effective_tools: Vec<String> = if builder { tools_offered.clone() } else { bridge_defs.iter().map(|d| d.name.clone()).chain(native_for_note.iter().cloned()).collect() };
             let receipt = crate::seat::Receipt {
                 seat_id: sc.seats.lock().unwrap().next_id(&sc.span_id),
                 requested_endpoint: ep.id.clone(),
                 requested_model: launch.model.clone(),
                 served: crate::seat::resolve(&self.family_table(), served_reported.as_deref()),
-                carrier: crate::seat::Carrier { kind: cli.program().into(), cli_version: None, tools_offered, dispatch_allowed: bridge_defs.iter().any(|d| d.name == "dispatch_agent") },
+                carrier: crate::seat::Carrier { kind: cli.program().into(), cli_version: None, tools_offered: effective_tools, native_tools: Some(native_count), dispatch_allowed: bridge_defs.iter().any(|d| d.name == "dispatch_agent") },
                 tool_grant: json!({"builtin": builtin, "native": native_for_note, "bridge": bridge_defs.iter().map(|d| d.name.clone()).collect::<Vec<_>>(), "gated": gate_rx.is_some(), "readonly": sc.readonly}),
                 prompt_hash: crate::seat::prompt_hash(&launch.system_prompt, &launch.user_prompt),
                 tokens_in: usage.input + usage.cache_read + usage.cache_write,
@@ -1815,7 +1825,7 @@ open(sys.argv[1], "w").write(json.dumps(out))
     }
 
     #[tokio::test]
-    async fn an_agy_profile_with_the_bridge_off_gets_no_workspace_and_the_old_text_only_instruction() {
+    async fn an_agy_profile_with_the_bridge_off_gets_only_the_deny_all_gate_and_the_old_text_only_instruction() {
         let scripts = tempfile::tempdir().unwrap();
         let seen = scripts.path().join("seen");
         fs::create_dir_all(&seen).unwrap();
@@ -1825,9 +1835,9 @@ open(sys.argv[1], "w").write(json.dumps(out))
         f.engine.run_task(&f.m, "architect", "Review the plan").await.unwrap();
         let first = fs::read_to_string(seen.join("first-turn.json")).unwrap();
         assert!(first.contains("Do not call any tools") && first.contains("You have no Delphi tools in this task"), "{}", first);
-        assert!(!fs::read_to_string(seen.join("ls")).unwrap().contains(".agents"), "nothing is written for the CLI to load");
+        assert!(fs::read_to_string(seen.join("ls")).unwrap().contains(".agents"), "the deny-all gate is written: the CLI cannot turn its own tools off");
         let started = &events_of(&f, "harness.started")[0].payload;
-        assert_eq!((started["gated"].clone(), started["bridge"].clone(), started["tools"].as_str()), (json!(false), json!([]), Some("none")));
+        assert_eq!((started["gated"].clone(), started["bridge"].clone(), started["tools"].as_str()), (json!(true), json!([]), Some("none")));
     }
 
     #[test]
@@ -2343,6 +2353,35 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer",
         crate::worktree::tests::init_repo(&f.root.join("proj"), &f.root.join("git-home"));
         use_agy_only(&f);
         f
+    }
+
+    /// P0 (2026-11-08): a tool-less agy span had no Delphi tool, so no bridge and no hook was written and its own shell and file
+    /// tools were open. It now always has the gate, which allows nothing; the receipt shows what the gate allowed.
+    #[tokio::test]
+    async fn a_toolless_agy_seat_has_the_gate_allowing_nothing_and_its_receipt_lists_no_tools() {
+        let scripts = tempfile::tempdir().unwrap();
+        let dump = scripts.path().join("hooks.json");
+        let prog = fake_cli(
+            scripts.path(),
+            &format!(
+                "cp .agents/hooks.json '{d}' 2>/dev/null\necho '{{\"event\":\"init\",\"init\":{{\"model\":\"gemini-3.8-flash-low\",\"tools\":[\"run_command\",\"write_to_file\",\"finish\"]}}}}'\necho '{{\"event\":\"result\",\"result\":{{\"status\":\"SUCCESS\",\"response\":\"ok\",\"usage\":{{}}}}}}'",
+                d = dump.display()
+            ),
+        );
+        let f = retry_fx(prog, Duration::from_secs(600));
+        let tid = f.m.next_task_id();
+        let mut created = delphi_core::event::EventEnvelope::new(&f.m.id, "task.created", json!({"prompt": "q", "target": "council", "flow": "council"}));
+        created.task_id = Some(tid.clone());
+        f.m.append(created).await.unwrap();
+        let s = f.engine.panel_foreign_run_seat(&f.m, &tid, "COUNCIL, ROUND 1 (blind). Proposition: q".into(), "q", "architect", "gemini", 1, None, true).await;
+        assert!(matches!(&s, crate::council::Stance::Said(_)), "{s:?}");
+        assert!(dump.exists(), "the span's working directory had the gate's hooks.json");
+        assert_eq!(events_of(&f, "harness.started")[0].payload["gated"], true);
+        let r = &events_of(&f, crate::seat::RECEIPT_KIND)[0].payload;
+        assert_eq!(r["carrier"]["tools_offered"], json!([]), "{r}");
+        assert_eq!(r["carrier"]["native_tools"], 3, "the carrier's own count is kept apart");
+        assert_eq!(r["tool_grant"]["bridge"], json!([]));
+        assert!(crate::seat::receipt_toolless(r));
     }
 
     #[tokio::test]
