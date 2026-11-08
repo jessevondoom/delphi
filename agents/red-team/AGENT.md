@@ -14,6 +14,7 @@ authorized_skills:
   - adversarial-test-gen
   - assumption-stress-test
   - socratic-interrogation
+  - spec-driven-build
 memory_scope: "memory/agents/red-team/"
 max_turn_budget: 20
 ---

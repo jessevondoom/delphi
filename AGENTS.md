@@ -48,6 +48,7 @@ cargo run -q -p delphi -- docs catalog > docs/reference/catalog.md   # roles and
 ## Machine-readable entry points
 
 - [`llms.txt`](llms.txt): an index of the documentation for language models.
+- [`compiled/specs/`](compiled/specs/index.md): a derived view of every spec. Read specs with `delphi specs show <spec> --for <slice>` (add `--section <n>` for the source text you rely on) or the `specs_show` tool, not by opening files, so the read is counted; the source spec decides. After editing any spec run `delphi specs compile` and commit `compiled/`.
 - [`schemas/`](schemas/): JSON Schemas for the file formats ([guide](docs/reference/schemas.md)).
 - [`docs/reference/cli.md`](docs/reference/cli.md): every command and option; `delphi help <command>` prints one without creating anything.
 - Exit codes of `delphi run` (for scripting): 0 ok, 1 gates failed, 2 card denied, 3 budget, 4 infrastructure, 5 optimistic build awaits review.

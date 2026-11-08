@@ -12,14 +12,14 @@ What a bundle can attach to. A bundle names a **host role** by its id (never a t
 | `advocate` | User Experience Advocate, Behavioral Psychologist & Joy Specialist | workhorse | `persona-simulation`, `user-joy-heuristics`, `cognitive-walkthrough`, `tonal-calibration` |
 | `architect` | Systems Architect, Creative Designer & Spec Author | workhorse | `repo-cartography`, `ast-code-search`, `spec-authoring`, `diagram-generation`, `api-contract-design`, `trade-off-matrix`, `tui-design`, `oblique-strategies` |
 | `assistant` | Executive Assistant, Comms Triage & Operator Leverage Specialist | fast | `executive-briefing-distillation`, `transcript-action-extraction`, `tonal-calibration` |
-| `builder` | Lead Engineer, Builder & Verification Specialist | workhorse | `worktree-isolation`, `tdd-execution`, `safe-refactoring`, `git-pr-packaging`, `git-merge-and-conflict-resolution`, `ci-triage`, `tui-design`, `systems-pattern-catalog` |
+| `builder` | Lead Engineer, Builder & Verification Specialist | workhorse | `worktree-isolation`, `tdd-execution`, `safe-refactoring`, `git-pr-packaging`, `git-merge-and-conflict-resolution`, `ci-triage`, `spec-driven-build`, `tui-design`, `systems-pattern-catalog` |
 | `investigator` | Precision Researcher, Bug Tracker & Benchmark Specialist | fast | `ast-code-search`, `git-bisect-hunt`, `benchmark-profiling`, `primary-source-verification`, `competitive-swot-analysis`, `hypothesis-flipping` |
 | `messenger` | External Integrations, GitHub/API Operations & Protocol Bridge | fast | `github-ops-sync`, `mcp-server-integration`, `external-comms-dispatch`, `protocol-schema-translation` |
 | `orchestrator` | Lead Orchestrator, Coach, Council Arbiter & Model Scaler | workhorse | `task-decomposition`, `dynamic-model-scaling`, `council-moderation`, `handoff-packaging`, `retrospective-facilitation`, `knowledge-compaction`, `review-md-distillation`, `contradiction-pruning`, `lesson-promotion`, `delphi-attribution` |
-| `red-team` | Red Team, Adversarial Critic, Threat Modeler & PR Security Auditor | workhorse | `review-md-audit`, `threat-modeling`, `adversarial-test-gen`, `assumption-stress-test`, `socratic-interrogation` |
+| `red-team` | Red Team, Adversarial Critic, Threat Modeler & PR Security Auditor | workhorse | `review-md-audit`, `threat-modeling`, `adversarial-test-gen`, `assumption-stress-test`, `socratic-interrogation`, `spec-driven-build` |
 | `scout` | Broad Discovery, Repository Cartographer & Literature Scout | fast | `repo-cartography`, `literature-survey`, `multi-source-synthesis`, `dependency-audit`, `dual-horizon-search` |
 | `strategist` | Long-Horizon Strategist, Sequencer & Scope Auditor | workhorse | `roadmap-sequencing`, `pr-alignment-review`, `scope-creep-detection`, `risk-roi-analysis`, `strategic-pattern-matching`, `competitive-swot-analysis` |
-| `validator` | Fact-Checker, Source Assessor & Knowledge Gatekeeper | workhorse | `fact-validation` |
+| `validator` | Fact-Checker, Source Assessor & Knowledge Gatekeeper | workhorse | `fact-validation`, `spec-driven-build` |
 | `writer` | Documentation Architect, Technical Writer & Clarity Synthesizer | workhorse | `documentation-architecture`, `clarity-synthesis`, `narrative-briefing`, `concision-audit`, `encyclopedia-synthesis`, `org-bundle-authoring`, `tonal-calibration` |
 
 ## Skills
@@ -78,6 +78,7 @@ What a bundle can attach to. A bundle names a **host role** by its id (never a t
 | `scope-creep-detection` | Flag changes that go beyond the approved spec: unrequested files, features, dependencies or refactors. Use on every spec and PR before approval. | `strategist` |
 | `socratic-interrogation` | Subject proposals, specs, and council arguments to disciplined Socratic interrogation with minimalist, probing questions. Use when evaluating critical design premises or high-contention claims. | `red-team` |
 | `spec-authoring` | Write a modular spec with scope, acceptance criteria, a Simpler Alternative Considered section and a verification plan. Use before any non-trivial build. | `architect` |
+| `spec-driven-build` | Read a project's specs through their compiled form, open the source section you rely on, and cite it with its path and hash. Use before building, validating or red-teaming against a spec. | `builder`, `validator`, `red-team` |
 | `strategic-pattern-matching` | Map tactical challenges to historical precedents, market campaigns, and strategic doctrine to uncover asymmetric advantages. Use when sequencing initiatives or positioning against competition. | `strategist` |
 | `systems-pattern-catalog` | Select and apply proven systems, protocol, concurrency, and edge architectures to technical implementations. Use when choosing data models, networking protocols, or runtime execution patterns. | `builder` |
 | `task-decomposition` | Turn an approved spec or goal into a task DAG with a cognitive tier and spec link per task. Use before dispatching any multi-step mission. | `orchestrator` |

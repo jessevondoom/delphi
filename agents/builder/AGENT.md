@@ -15,6 +15,7 @@ authorized_skills:
   - git-pr-packaging
   - git-merge-and-conflict-resolution
   - ci-triage
+  - spec-driven-build
   - tui-design
   - systems-pattern-catalog
 memory_scope: "memory/agents/builder/"

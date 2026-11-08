@@ -10,6 +10,7 @@ default_access_scope:
   execute: ["web-search", "daemon-fetch", "kb-search"]
 authorized_skills:
   - fact-validation
+  - spec-driven-build
 memory_scope: "memory/agents/validator/"
 max_turn_budget: 25
 ---
