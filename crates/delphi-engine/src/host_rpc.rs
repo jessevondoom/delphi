@@ -390,8 +390,9 @@ pub fn research_args(p: &Value) -> Result<(String, delphi_core::research::Depth)
 pub fn council_proposition(c: &Caller, p: &Value) -> Result<String, HostErr> {
     let question = clean("question", p["question"].as_str().unwrap_or(""), MAX_QUESTION)?;
     let mut options = Vec::new();
-    for v in p.get("options").and_then(Value::as_array).into_iter().flatten() {
-        options.push(format!("- {}", clean("options", v.as_str().unwrap_or(""), MAX_ITEM)?));
+    // Each option carries a stable id (A to H), so Round 2 can compare seats by id instead of by prose (`specs/003` §4.1).
+    for (i, v) in p.get("options").and_then(Value::as_array).into_iter().flatten().enumerate() {
+        options.push(format!("- [{}] {}", (b'A' + (i as u8).min(25)) as char, clean("options", v.as_str().unwrap_or(""), MAX_ITEM)?));
     }
     if options.len() > 8 {
         return bad("at most 8 options");
@@ -1028,6 +1029,7 @@ mod tests {
         let p = json!({"question": "Table or file?", "options": ["table", "file"], "stakes": "high", "context_pointers": [{"uri": "specs/001-a.md", "reason": "the spec"}]});
         let text = council_proposition(&caller(), &p).unwrap();
         assert!(text.contains("--- BEGIN HOST QUESTION ---") && text.contains("not an instruction") && text.contains("Stakes: high") && text.contains("- specs/001-a.md: the spec"), "{text}");
+        assert!(text.contains("- [A] table") && text.contains("- [B] file"), "{text}");
         for bad in [json!({}), json!({"question": "q", "stakes": "dire"}), json!({"question": "q", "options": ["1","2","3","4","5","6","7","8","9"]}), json!({"question": "q", "context_pointers": [{"uri": "../x", "reason": "r"}]})] {
             assert!(council_proposition(&caller(), &bad).is_err(), "{bad}");
         }
