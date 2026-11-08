@@ -824,12 +824,18 @@ fn check_authorizations(home: &Path, r: &mut Report) -> usize {
             1
         }
         Ok(s) => {
+            // The audit log decides which requests are pending: its hash chain and its pinned head must hold.
+            let mut broken = 0;
+            if let Err(e) = delphi_engine::authorization::read_audit(home) {
+                r.fail("3 taint-audit", "operator/audit", e);
+                broken = 1;
+            }
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
             let expired = s.records.iter().filter(|x| !x.is_revoked() && delphi_core::time::parse_rfc3339(&x.expires).is_some_and(|t| t <= now)).count();
             if expired > 0 {
                 r.warn("3 taint-audit", "operator/authorizations.json", format!("{expired} expired authorization record(s); `delphi test list` shows them"));
             }
-            0
+            broken
         }
     }
 }
@@ -1540,8 +1546,8 @@ mod tests {
         fs::write(&script, b"print(1)").unwrap();
         let (b, s) = (fs::canonicalize(&bin).unwrap().to_string_lossy().to_string(), fs::canonicalize(&script).unwrap().to_string_lossy().to_string());
         let entry = a::Entry { tool: "shell".into(), argv: vec![b, "-I".into(), s.clone()], files: vec![s], runner_provenance: "project_snapshot".into() };
-        let rec = a::build_record(&home, &a::NewRecord { purpose: "p".into(), intent: "i".into(), run: "r".into(), expires_in_secs: 3600, max_uses: 3, entries: vec![entry], request: None }, 1_700_000_000, "2023-11-14T22:13:20.000Z").unwrap();
-        a::add_record(&home, rec).unwrap();
+        let rec = a::build_record(&home, &a::NewRecord { purpose: "p".into(), intent: "i".into(), run: "r".into(), expires_in_secs: 3600, max_uses: 3, entries: vec![entry], request: None, policy: a::Policy { interpreters: vec![fs::canonicalize(&bin).unwrap().to_string_lossy().to_string()] } }, 1_700_000_000, "2023-11-14T22:13:20.000Z").unwrap();
+        a::add_record(&home, rec, None).unwrap();
         let ok = run(&home, &ws, &Options::default());
         assert_eq!(ok.exit_code(), 0, "{:#?}", ok.findings);
         assert!(ok.findings.iter().any(|f| f.message.contains("expired authorization")), "an expired record is reported");

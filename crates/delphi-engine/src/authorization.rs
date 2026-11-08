@@ -30,6 +30,10 @@ pub const MAX_ENTRIES: usize = 5;
 pub const MAX_PENDING_PER_RUN: usize = 3;
 pub const MAX_PENDING_PER_HOST_SESSION: usize = 3;
 pub const MAX_PENDING_PER_MISSION: usize = 5;
+/// Workspace-wide limits, whatever the session or task ids: all pending requests, host-originated ones, and the pace of host ones.
+pub const MAX_PENDING_WORKSPACE: usize = 20;
+pub const MAX_PENDING_HOST_WORKSPACE: usize = 6;
+pub const HOST_GLOBAL_RATE_SECS: i64 = 60;
 /// A refused request is not staged again for 24 hours (`[choice]`, §3 TA-0).
 pub const RESTAGE_SECS: i64 = 24 * 3600;
 /// A run may stage one request per five minutes (`[choice]`).
@@ -58,6 +62,9 @@ pub const STAGED: &str = "authorization.request.staged";
 pub const REFUSED: &str = "authorization.request.refused";
 pub const CREATED: &str = "authorization.created";
 pub const REVOKED: &str = "authorization.revoked";
+/// Written when an audit event was appended but the store change it announced failed: the event answers nothing.
+pub const CREATE_ROLLED_BACK: &str = "authorization.create.rolled_back";
+pub const REVOKE_ROLLED_BACK: &str = "authorization.revoke.rolled_back";
 
 /// The key under which the store's hash is pinned in `operator/ratified.lock`.
 pub const LOCK_KEY: &str = "authorizations.json";
@@ -73,7 +80,11 @@ pub fn scrubbed_env() -> BTreeMap<String, String> {
 // ------------------------------------------------------------------------------------------------ text hygiene
 
 fn is_ctl(c: char) -> bool {
-    c.is_control() || matches!(c, '\u{200b}'..='\u{200f}' | '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}' | '\u{e0000}'..='\u{e007f}')
+    c.is_control()
+        || matches!(
+            c,
+            '\u{200b}'..='\u{200f}' | '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{206a}'..='\u{206f}' | '\u{061c}' | '\u{00ad}' | '\u{034f}' | '\u{3164}' | '\u{ffa0}' | '\u{feff}' | '\u{e0000}'..='\u{e007f}'
+        )
 }
 
 /// Control, escape, bidirectional-override and zero-width characters removed (line breaks and tabs first become spaces).
@@ -173,11 +184,6 @@ const DENY_BINARIES: &[&str] = &[
 const DENY_SEGMENTS: &[&str] = &[
     ".git", ".githooks", "hooks", ".husky", ".delphi", "operator", "authorizations", "authorizations.json", "ratified", "ratified.lock", "config.toml", ".gitconfig", ".gitattributes", ".gitmodules", ".ssh", ".aws", ".gnupg", ".netrc", ".npmrc", ".pypirc", ".env", "credentials", "id_rsa", "id_ed25519", "keychains", "login.keychain-db", ".claude", ".config", ".kube", ".docker", "audit",
 ];
-const DENY_PY_MODULES: &[&str] = &["pip", "ensurepip", "http", "urllib", "ftplib", "smtplib", "socket", "socketserver", "xmlrpc", "ssl", "venv", "webbrowser", "telnetlib", "imaplib"];
-
-fn is_python(bin: &str) -> bool {
-    bin == "python" || bin == "python3" || (bin.starts_with("python3.") && bin[8..].bytes().all(|b| b.is_ascii_digit()))
-}
 
 /// The deny-list, TA-5: why an entry may never be authorized, or `None`.
 pub fn deny_reason(e: &Entry) -> Option<String> {
@@ -201,34 +207,36 @@ pub fn deny_reason(e: &Entry) -> Option<String> {
             }
         }
     }
-    if is_python(&bin) {
-        let mut it = e.argv.iter().skip(1);
-        while let Some(a) = it.next() {
-            if a == "-m" {
-                let module = it.next().map(|m| m.split('.').next().unwrap_or("").to_string()).unwrap_or_default();
-                if DENY_PY_MODULES.contains(&module.as_str()) {
-                    return Some(format!("`python -m {}` reaches the network or installs code", module));
-                }
-            }
-        }
-    }
     None
 }
 
+/// What the daemon knows: the interpreters it will pin. A runner is admitted only if `argv[0]` is one of these exact paths, so
+/// `/<project>/tools/python3` (a "runner built in the run") is never one, whatever `runner_provenance` says.
+#[derive(Debug, Clone)]
+pub struct Policy {
+    pub interpreters: Vec<String>,
+}
+
+impl Policy {
+    /// The fixed set of system locations.
+    pub fn system() -> Policy {
+        Policy { interpreters: ["/usr/bin/python3", "/usr/local/bin/python3", "/opt/homebrew/bin/python3"].iter().map(|s| s.to_string()).collect() }
+    }
+}
+
 /// Why a runner's isolation cannot be asserted, or `None` (TA-5 "Scratch and interpreters"). The first slice admits only a
-/// Python run with `-I` (isolated mode: no user site, no current directory, no `PYTHON*` variables on the import path)
-/// that names its script, or a module, and lists the script among its pinned files.
-pub fn isolation_problem(e: &Entry) -> Option<String> {
-    let bin = basename(e.argv.first().map(String::as_str).unwrap_or(""));
-    if !is_python(&bin) {
-        return Some(format!("`{}` is not a runner whose isolation can be asserted in the first slice (only `python3 -I ...` is admitted); a runner built or fetched in the run is never admitted", bin));
+/// known system `python3` run as `python3 -I /abs/script.py [args]`: `-I` is isolated mode (no user site, no current directory,
+/// no `PYTHON*` variables), the script is pinned in `files`, and there is no `-m` (a module name is code nobody pinned, and
+/// `timeit`, `pdb`, `code`, `trace`, `unittest` and others run arbitrary code).
+pub fn isolation_problem(e: &Entry, policy: &Policy) -> Option<String> {
+    let bin = e.argv.first().map(String::as_str).unwrap_or("");
+    if !policy.interpreters.iter().any(|i| i == bin) {
+        return Some(format!("`{}` is not an interpreter the daemon knows (only a system python3 at a fixed path is admitted in the first slice); a project-local or built runner is never admitted", clean_text(bin, 80)));
     }
     if e.argv.get(1).map(String::as_str) != Some("-I") {
         return Some("a Python runner must put `-I` (isolated mode) first, so no user site or working-directory code is loaded".into());
     }
-    let rest: Vec<&String> = e.argv.iter().skip(2).collect();
-    match rest.first().map(|s| s.as_str()) {
-        Some("-m") if rest.len() >= 2 => None,
+    match e.argv.get(2).map(String::as_str) {
         Some(script) if script.starts_with('/') => {
             if e.files.iter().any(|f| f == script) {
                 None
@@ -236,12 +244,12 @@ pub fn isolation_problem(e: &Entry) -> Option<String> {
                 Some(format!("the script `{}` must be listed in `files` so it is pinned by hash", clean_text(script, 80)))
             }
         }
-        _ => Some("after `-I` give `-m <module>` or the absolute path of a script".into()),
+        _ => Some("after `-I` give the absolute path of a script (`-m` is not admitted: a module is code nobody pinned)".into()),
     }
 }
 
 /// Canonicalise and check one entry: tool name, argument vector, files, provenance, the deny-list and runner isolation.
-pub fn check_entry(e: &Entry) -> Result<Entry, EntryError> {
+pub fn check_entry(e: &Entry, policy: &Policy) -> Result<Entry, EntryError> {
     let Some(tool) = canonical_tool(&e.tool) else { return inv(format!("tool `{}` is not admitted: the first slice admits only a sandboxed `shell` command", clean_text(&e.tool, 40))) };
     if e.argv.is_empty() || e.argv.len() > MAX_ARGV {
         return inv(format!("`argv` takes 1 to {} elements", MAX_ARGV));
@@ -249,6 +257,10 @@ pub fn check_entry(e: &Entry) -> Result<Entry, EntryError> {
     for a in &e.argv {
         if a.chars().count() > MAX_ARG_CHARS || a.chars().any(is_ctl) {
             return inv(format!("an `argv` element is over {} characters or holds a control or escape character", MAX_ARG_CHARS));
+        }
+        // ASCII only in the first slice, so no confusable character can make one command look like another to a quick `y`.
+        if !a.is_ascii() {
+            return inv("an `argv` element holds a non-ASCII character; the first slice admits ASCII commands only");
         }
         if a.contains('*') || a.contains('?') || a.contains('`') || a.contains("$(") || a.contains("${") {
             return inv(format!("`{}`: no globs, no substitution; the canonical argument vector is matched exactly", clean_text(a, 60)));
@@ -264,7 +276,7 @@ pub fn check_entry(e: &Entry) -> Result<Entry, EntryError> {
     if WRAPPERS.contains(&basename(bin).as_str()) {
         return inv(format!("`{}` is a shell or wrapper; name the real binary and its arguments", basename(bin)));
     }
-    if e.files.len() > MAX_FILES || e.files.iter().any(|f| !normal_abs(f) || f.chars().any(is_ctl)) {
+    if e.files.len() > MAX_FILES || e.files.iter().any(|f| !normal_abs(f) || !f.is_ascii() || f.chars().any(is_ctl)) {
         return inv(format!("`files` takes up to {} absolute canonical paths", MAX_FILES));
     }
     let mut seen = HashSet::new();
@@ -278,7 +290,7 @@ pub fn check_entry(e: &Entry) -> Result<Entry, EntryError> {
     if let Some(why) = deny_reason(&c) {
         return Err(EntryError::Denied(why));
     }
-    if let Some(why) = isolation_problem(&c) {
+    if let Some(why) = isolation_problem(&c, policy) {
         return inv(why);
     }
     Ok(c)
@@ -317,7 +329,7 @@ impl std::fmt::Display for ParseError {
 
 /// A request from a tool call's arguments: unknown manifest fields are refused, free text is cleaned and cut, each entry is
 /// checked ([`check_entry`]). Used by the agent tool and by the host socket alike (which adds its own fields, ignored here).
-pub fn parse_request(v: &Value) -> Result<Request, ParseError> {
+pub fn parse_request(v: &Value, policy: &Policy) -> Result<Request, ParseError> {
     let bad = |m: String| ParseError::Invalid(m);
     let o = v.as_object().ok_or_else(|| bad("the request must be an object".into()))?;
     let text = |k: &str, max: usize| -> Result<String, ParseError> {
@@ -337,7 +349,7 @@ pub fn parse_request(v: &Value) -> Result<Request, ParseError> {
     let mut denied: Option<String> = None;
     for (i, r) in raw.iter().enumerate() {
         let e: Entry = serde_json::from_value(r.clone()).map_err(|e| bad(format!("manifest entry {}: {}", i + 1, e)))?;
-        match check_entry(&e) {
+        match check_entry(&e, policy) {
             Ok(c) => manifest.push(c),
             Err(EntryError::Invalid(m)) => return Err(bad(format!("manifest entry {}: {}", i + 1, m))),
             Err(EntryError::Denied(m)) => {
@@ -381,6 +393,8 @@ pub struct Who {
     pub taint: Tier,
     /// The run the per-run limits count against: the task for an agent, the session for a host.
     pub run: String,
+    /// The mission log the request is staged in.
+    pub mission: String,
 }
 
 /// The fixed taint of a request that came over the host socket: it has no span to compute one from.
@@ -407,7 +421,7 @@ fn ts(e: &EventEnvelope) -> i64 {
 fn refused(message: impl Into<String>, who: &Who, c: &Clock, manifest_hash: &str, why: &str, blocks_restage: bool) -> Outcome {
     Outcome::Refused {
         message: message.into(),
-        log: Some(json!({"manifest_hash": manifest_hash, "reason": why, "blocks_restage": blocks_restage, "run": who.run, "requester": who.label, "taint": who.taint.name(), "refused_at": c.now_rfc, "source": "daemon"})),
+        log: Some(json!({"manifest_hash": manifest_hash, "reason": why, "blocks_restage": blocks_restage, "run": who.run, "mission": who.mission, "kind": if who.kind == Kind::Host { "host" } else { "agent" }, "requester": who.label, "taint": who.taint.name(), "refused_at": c.now_rfc, "source": "daemon"})),
     }
 }
 
@@ -418,15 +432,23 @@ fn pending<'a>(log: &'a [EventEnvelope], resolved: &HashSet<String>, now: i64) -
 
 /// Ids the operator has resolved (authorized or refused), from the operator's audit log.
 pub fn resolved_ids(operator_log: &[EventEnvelope]) -> HashSet<String> {
-    operator_log.iter().filter(|e| e.kind == CREATED || e.kind == REFUSED).filter_map(|e| e.payload["request_id"].as_str().map(String::from)).collect()
+    // A `created` event whose record could not be made is rolled back by a later event and answers nothing.
+    let rolled_back: HashSet<u64> = operator_log.iter().filter(|e| e.kind == CREATE_ROLLED_BACK).filter_map(|e| e.payload["created_seq"].as_u64()).collect();
+    operator_log
+        .iter()
+        .filter(|e| e.kind == REFUSED || (e.kind == CREATED && !rolled_back.contains(&e.seq)))
+        .filter_map(|e| e.payload["request_id"].as_str().map(String::from))
+        .collect()
 }
 
-/// Every rule of §3 TA-0, over the logs alone. `mission_log` is the mission the request would be staged in;
-/// `operator_log` is the operator's audit log (their refusals and authorizations).
-pub fn admit(mission_log: &[EventEnvelope], operator_log: &[EventEnvelope], who: &Who, parsed: Result<Request, ParseError>, c: &Clock) -> Outcome {
+/// Every rule of §3 TA-0, over the logs alone. `ledger` is the workspace-wide request ledger (every request staged or
+/// refused in any mission, see [`record_request`]); `operator_log` is the operator's audit log (their refusals and
+/// authorizations). Counting over the whole workspace is what keeps a fresh host session id, or a fresh task, from
+/// buying a fresh budget.
+pub fn admit(ledger: &[EventEnvelope], operator_log: &[EventEnvelope], who: &Who, parsed: Result<Request, ParseError>, c: &Clock) -> Outcome {
     let quiet = |m: String| Outcome::Refused { message: m, log: None };
     // 1. one request per five minutes per run, counting what was staged and what was refused with a record
-    let recent = mission_log.iter().filter(|e| (e.kind == STAGED || e.kind == REFUSED) && e.payload["run"].as_str() == Some(&who.run) && c.now_unix - ts(e) < RATE_SECS).map(ts).max();
+    let recent = ledger.iter().filter(|e| (e.kind == STAGED || e.kind == REFUSED) && e.payload["run"].as_str() == Some(&who.run) && c.now_unix - ts(e) < RATE_SECS).map(ts).max();
     if let Some(t) = recent {
         return quiet(format!("rate limit: a run may stage one authorization request per {} minutes; try again in {} seconds, or say in your report what you need", RATE_SECS / 60, (RATE_SECS - (c.now_unix - t)).max(1)));
     }
@@ -436,6 +458,11 @@ pub fn admit(mission_log: &[EventEnvelope], operator_log: &[EventEnvelope], who:
         Err(ParseError::Denied { reason, manifest_hash }) => return refused(format!("refused: denied by the deny-list (spec 092 TA-5): {reason}"), who, c, &manifest_hash, &format!("deny-list: {reason}"), true),
     };
     let mh = manifest_hash(&req.manifest);
+    // 1b. whatever a host calls itself, the workspace as a whole takes one host request a minute: a fresh session id per call
+    // buys no fresh budget
+    if who.kind == Kind::Host && ledger.iter().any(|e| (e.kind == STAGED || e.kind == REFUSED) && e.payload["kind"].as_str() == Some("host") && c.now_unix - ts(e) < HOST_GLOBAL_RATE_SECS) {
+        return quiet(format!("rate limit: this workspace takes one host authorization request per {} seconds, whichever session sends it", HOST_GLOBAL_RATE_SECS));
+    }
     // 2. a request from an agent span at federated_peer taint or lower cannot exist (a host's is fixed at federated_peer and staged)
     if who.kind == Kind::Agent && who.taint <= Tier::L1 {
         return refused(
@@ -448,13 +475,13 @@ pub fn admit(mission_log: &[EventEnvelope], operator_log: &[EventEnvelope], who:
         );
     }
     // 3. a refused request is not staged again for 24 hours
-    let again = mission_log.iter().chain(operator_log.iter()).any(|e| e.kind == REFUSED && e.payload["blocks_restage"].as_bool() == Some(true) && e.payload["manifest_hash"].as_str() == Some(&mh) && c.now_unix - ts(e) < RESTAGE_SECS);
+    let again = ledger.iter().chain(operator_log.iter()).any(|e| e.kind == REFUSED && e.payload["blocks_restage"].as_bool() == Some(true) && e.payload["manifest_hash"].as_str() == Some(&mh) && c.now_unix - ts(e) < RESTAGE_SECS);
     if again {
         return quiet("this manifest was refused less than 24 hours ago and is not staged again".into());
     }
     // 4. de-duplicated by the hash of the manifest, 5. the caps
     let resolved = resolved_ids(operator_log);
-    let pend = pending(mission_log, &resolved, c.now_unix);
+    let pend = pending(ledger, &resolved, c.now_unix);
     if let Some(d) = pend.iter().find(|e| e.payload["manifest_hash"].as_str() == Some(&mh)) {
         return quiet(format!("the same manifest is already pending as {}", d.payload["id"].as_str().unwrap_or("?")));
     }
@@ -462,8 +489,14 @@ pub fn admit(mission_log: &[EventEnvelope], operator_log: &[EventEnvelope], who:
     if pend.iter().filter(|e| e.payload["run"].as_str() == Some(&who.run)).count() >= cap_run {
         return quiet(format!("{} requests from this {} are already pending; the operator has to answer one first", cap_run, if who.kind == Kind::Host { "host session" } else { "run" }));
     }
-    if pend.len() >= MAX_PENDING_PER_MISSION {
+    if pend.iter().filter(|e| e.payload["mission"].as_str() == Some(&who.mission)).count() >= MAX_PENDING_PER_MISSION {
         return quiet(format!("{} requests are already pending in this mission; the operator has to answer one first", MAX_PENDING_PER_MISSION));
+    }
+    if who.kind == Kind::Host && pend.iter().filter(|e| e.payload["requester"]["kind"].as_str() == Some("host")).count() >= MAX_PENDING_HOST_WORKSPACE {
+        return quiet(format!("{} host requests are already pending in this workspace; the operator has to answer one first", MAX_PENDING_HOST_WORKSPACE));
+    }
+    if pend.len() >= MAX_PENDING_WORKSPACE {
+        return quiet(format!("{} requests are already pending in this workspace; the operator has to answer one first", MAX_PENDING_WORKSPACE));
     }
     let rh = request_hash(&req);
     let id = format!("ar-{}", &hash(format!("{mh}|{rh}|{}|{}", who.run, c.now_rfc).as_bytes())[..10]);
@@ -472,7 +505,7 @@ pub fn admit(mission_log: &[EventEnvelope], operator_log: &[EventEnvelope], who:
         "request": req, "manifest_hash": mh, "request_hash": rh,
         "requester": {"kind": if who.kind == Kind::Host { "host" } else { "agent" }, "label": who.label, "role": who.role, "model": who.model, "span": who.span, "task": who.task},
         "taint": {"tier": who.taint.as_str(), "name": who.taint.name()},
-        "run": who.run, "staged_at": c.now_rfc,
+        "run": who.run, "mission": who.mission, "kind": if who.kind == Kind::Host { "host" } else { "agent" }, "staged_at": c.now_rfc,
     }))
 }
 
@@ -582,11 +615,21 @@ impl Record {
     }
 }
 
+/// The last event of the operator's audit log as of the last change to the store. The store is pinned, so this is pinned too: a
+/// deleted, cut or rewritten audit log (a `created` event removed so a request is pending again) no longer reaches it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AuditHead {
+    pub seq: u64,
+    pub h: String,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Store {
     #[serde(default = "one")]
     pub version: u32,
     pub records: Vec<Record>,
+    #[serde(default)]
+    pub audit_head: Option<AuditHead>,
 }
 
 fn one() -> u32 {
@@ -605,30 +648,44 @@ fn guard_path(home: &Path) -> PathBuf {
     home.join("operator/locks/ratify.lock")
 }
 
-/// Read the store against `lockfile`: the pin must exist and match the file's hash. Nothing is trusted otherwise.
-fn load_with(home: &Path, lockfile: &LockFile) -> Result<Store, String> {
-    let path = store_path(home);
+/// Where the next version of the store waits between being pinned and being moved into place (see [`mutate`]).
+fn next_path(home: &Path) -> PathBuf {
+    home.join("operator/authorizations.json.next")
+}
+
+fn parse_store(bytes: &[u8]) -> Result<Store, String> {
+    let store: Store = serde_json::from_slice(bytes).map_err(|e| format!("the authorization store is pinned but does not parse ({e})"))?;
+    if store.version != 1 {
+        return Err(format!("the authorization store has version {}, this build reads 1", store.version));
+    }
+    Ok(store)
+}
+
+/// Read the store against `lockfile`: the pin must exist and match the file's hash. Nothing is trusted otherwise. The second
+/// value is true when the live file is the previous version and `authorizations.json.next` is the one the pin covers (a crash
+/// between pinning and the final rename): the pinned bytes are used, and [`mutate`] finishes the move.
+fn load_with(home: &Path, lockfile: &LockFile) -> Result<(Store, bool), String> {
     let pin = lockfile.files.get(LOCK_KEY);
-    match (fs::read(&path), pin) {
-        (Err(e), None) if e.kind() == std::io::ErrorKind::NotFound => Ok(Store { version: 1, records: vec![] }),
-        (Err(e), Some(_)) => Err(format!("the authorization store is pinned but cannot be read ({e}); no record is trusted")),
+    let live = fs::read(store_path(home));
+    match (live, pin) {
+        (Err(e), None) if e.kind() == std::io::ErrorKind::NotFound => Ok((Store { version: 1, records: vec![], audit_head: None }, false)),
         (Err(e), None) => Err(format!("the authorization store cannot be read ({e})")),
         (Ok(_), None) => Err("an authorization store exists with no entry in operator/ratified.lock (planted, or its pin was removed); it is ignored".into()),
-        (Ok(bytes), Some(p)) if hash(&bytes) == *p => {
-            let store: Store = serde_json::from_slice(&bytes).map_err(|e| format!("the authorization store is pinned but does not parse ({e})"))?;
-            if store.version != 1 {
-                return Err(format!("the authorization store has version {}, this build reads 1", store.version));
-            }
-            Ok(store)
-        }
-        (Ok(_), Some(_)) => Err("the authorization store does not match its pin in operator/ratified.lock (edited or planted); it is ignored".into()),
+        (Ok(bytes), Some(p)) if hash(&bytes) == *p => Ok((parse_store(&bytes)?, false)),
+        (live, Some(p)) => match fs::read(next_path(home)) {
+            Ok(next) if hash(&next) == *p => Ok((parse_store(&next)?, true)),
+            _ => Err(match live {
+                Ok(_) => "the authorization store does not match its pin in operator/ratified.lock (edited or planted); it is ignored".into(),
+                Err(e) => format!("the authorization store is pinned but cannot be read ({e}); no record is trusted"),
+            }),
+        },
     }
 }
 
 /// The store, verified against the operator's lock; fails closed (an unreadable lock, a missing or mismatched pin, a store with no pin).
 pub fn load(home: &Path) -> Result<Store, String> {
     let lockfile = lock::read(&lock_path(home)).map_err(|e| format!("operator/ratified.lock cannot be read strictly ({e}); no authorization is trusted"))?;
-    load_with(home, &lockfile)
+    load_with(home, &lockfile).map(|(s, _)| s)
 }
 
 /// As [`load`], but a store that fails verification is reported in the error log and read as empty: **ignored and logged**.
@@ -660,18 +717,25 @@ fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 /// Change the store under the operator scope's advisory lock (`operator/locks/ratify.lock`): the lock is read strictly, the
-/// current store must verify against its pin (a tampered store is never written over), `f` edits it, then the store is
-/// written atomically (0600) and its new hash pinned, in that order, so a failure in between leaves only an unpinned file,
-/// which is ignored.
+/// current store must verify against its pin (a tampered store is never written over), `f` edits it, then three steps in an
+/// order that no crash can turn into a store nobody can read: (1) the new bytes are written (0600, fsynced) to
+/// `authorizations.json.next`, (2) their hash is pinned in the lock, (3) the file is renamed over `authorizations.json`.
+/// A crash after (1) leaves the old pin and the old store, which still match; a crash after (2) leaves a live file that no
+/// longer matches the pin and a `.next` that does, which [`load`] reads and the next change finishes moving. A planted
+/// `.next` matches no pin, so it is ignored.
 pub fn mutate<T>(home: &Path, f: impl FnOnce(&mut Store) -> Result<T, String>) -> Result<T, String> {
     lock::with_lock(&guard_path(home), || -> Result<T, String> {
         let mut lockfile = lock::read(&lock_path(home)).map_err(|e| format!("operator/ratified.lock cannot be read strictly ({e}); run `delphi doctor`"))?;
-        let mut store = load_with(home, &lockfile)?;
+        let (mut store, roll_forward) = load_with(home, &lockfile)?;
+        if roll_forward {
+            fs::rename(next_path(home), store_path(home)).map_err(|e| format!("could not finish the previous change to the authorization store: {e}"))?;
+        }
         let out = f(&mut store)?;
         let bytes = serde_json::to_vec_pretty(&store).map_err(|e| e.to_string())?;
-        write_private(&store_path(home), &bytes).map_err(|e| format!("could not write the authorization store: {e}"))?;
+        write_private(&next_path(home), &bytes).map_err(|e| format!("could not write the authorization store: {e}"))?;
         lockfile.files.insert(LOCK_KEY.into(), hash(&bytes));
         lock::write(&lock_path(home), &lockfile).map_err(|e| format!("could not pin the authorization store: {e}"))?;
+        fs::rename(next_path(home), store_path(home)).map_err(|e| format!("could not move the authorization store into place (it is pinned and is read from {}): {e}", next_path(home).display()))?;
         Ok(out)
     })
     .map_err(|e| e.to_string())?
@@ -688,19 +752,24 @@ fn machine() -> String {
     String::from_utf8_lossy(&buf[..end]).into_owned()
 }
 
-fn pin_file(path: &str) -> Result<Pinned, String> {
+/// Resolve, check and hash one file. `allow_link` is for the daemon's own interpreter list only (a system `python3` is often a
+/// symlink): the path stays as given and the hash is of what it resolves to now. A script is never allowed to be a link.
+fn pin_file(path: &str, allow_link: bool) -> Result<Pinned, String> {
+    use std::os::unix::fs::PermissionsExt;
     let canon = fs::canonicalize(path).map_err(|e| format!("`{}`: {e}", clean_text(path, 80)))?;
-    if canon.to_string_lossy() != path {
+    if !allow_link && canon.to_string_lossy() != path {
         return Err(format!("`{}` is not canonical (it resolves to `{}`); name the resolved path", clean_text(path, 80), canon.display()));
     }
     let meta = fs::metadata(&canon).map_err(|e| e.to_string())?;
     if !meta.is_file() {
         return Err(format!("`{}` is not a regular file", clean_text(path, 80)));
     }
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if meta.permissions().mode() & 0o002 != 0 {
-            return Err(format!("`{}` is world-writable, so an agent could replace it", clean_text(path, 80)));
+    if meta.permissions().mode() & 0o022 != 0 {
+        return Err(format!("`{}` is group- or world-writable, so an agent could replace it", clean_text(path, 80)));
+    }
+    if let Some(dir) = canon.parent() {
+        if fs::metadata(dir).map(|m| m.permissions().mode() & 0o022 != 0).unwrap_or(true) {
+            return Err(format!("the directory of `{}` is group- or world-writable (or unreadable), so a file in it could be replaced", clean_text(path, 80)));
         }
     }
     if canon.components().any(|c| c.as_os_str() == "scratch") {
@@ -719,6 +788,7 @@ pub struct NewRecord {
     pub entries: Vec<Entry>,
     /// The request this authorizes: `(id, hash, requester label)`; `None` for a record the operator wrote at the console.
     pub request: Option<(String, String, String)>,
+    pub policy: Policy,
 }
 
 /// Make the record: the deny-list and the runner check run again on every entry, each binary and file is resolved and
@@ -744,9 +814,9 @@ pub fn build_record(home: &Path, n: &NewRecord, now_unix: i64, now_rfc: &str) ->
     let mut manifest = Vec::new();
     let mut checked = Vec::new();
     for (i, e) in n.entries.iter().enumerate() {
-        let c = check_entry(e).map_err(|e| format!("manifest entry {}: {}", i + 1, e))?;
-        let binary = pin_file(&c.argv[0]).map_err(|e| format!("manifest entry {}: binary {}", i + 1, e))?;
-        let files = c.files.iter().map(|f| pin_file(f)).collect::<Result<Vec<_>, _>>().map_err(|e| format!("manifest entry {}: file {}", i + 1, e))?;
+        let c = check_entry(e, &n.policy).map_err(|e| format!("manifest entry {}: {}", i + 1, e))?;
+        let binary = pin_file(&c.argv[0], true).map_err(|e| format!("manifest entry {}: binary {}", i + 1, e))?;
+        let files = c.files.iter().map(|f| pin_file(f, false)).collect::<Result<Vec<_>, _>>().map_err(|e| format!("manifest entry {}: file {}", i + 1, e))?;
         manifest.push(RecordEntry { tool: c.tool.clone(), argv: c.argv.clone(), binary, files, env: scrubbed_env(), cwd: CWD.into(), runner_provenance: c.runner_provenance.clone(), scratch_mode: SCRATCH_MODE.into() });
         checked.push(c);
     }
@@ -773,26 +843,29 @@ pub fn build_record(home: &Path, n: &NewRecord, now_unix: i64, now_rfc: &str) ->
     })
 }
 
-/// Add a record. The store is verified first and the new record is the only change.
-pub fn add_record(home: &Path, r: Record) -> Result<(), String> {
+/// Add a record. The store is verified first and the new record (and the audit head that announced it) are the only changes.
+pub fn add_record(home: &Path, r: Record, head: Option<AuditHead>) -> Result<(), String> {
     mutate(home, |s| {
         if s.records.iter().any(|x| x.id == r.id) {
             return Err("a record with this id exists".into());
         }
         s.records.push(r);
+        s.audit_head = head;
         Ok(())
     })
 }
 
 /// Revoke a record. Irreversible: there is no code that clears `revoked`, and a revoked record is only ever replaced by a new one.
-pub fn revoke(home: &Path, id: &str, now_rfc: &str) -> Result<Record, String> {
+pub fn revoke(home: &Path, id: &str, now_rfc: &str, head: Option<AuditHead>) -> Result<Record, String> {
     mutate(home, |s| {
         let r = s.records.iter_mut().find(|r| r.id == id).ok_or_else(|| format!("no authorization `{}`", clean_text(id, 40)))?;
         if r.revoked.is_some() {
             return Err(format!("{} is already revoked", r.id));
         }
         r.revoked = Some(now_rfc.to_string());
-        Ok(r.clone())
+        let out = r.clone();
+        s.audit_head = head;
+        Ok(out)
     })
 }
 
@@ -802,21 +875,151 @@ pub fn audit_dir(home: &Path) -> PathBuf {
     home.join("operator/audit")
 }
 
-/// Open the audit log for writing. Only the operator-side code that holds the store lock does; no agent has a write path.
+/// Open the audit log for writing. The log's own writer lock is held until it is dropped, which also serializes two `authorize`
+/// calls: the second cannot open it. Only the operator-side code writes it; no agent has a write path (`operator/` is denied to
+/// the path guard).
 pub fn open_audit(home: &Path) -> Result<delphi_core::log::EventLog, String> {
-    delphi_core::log::EventLog::open(&audit_dir(home), Default::default()).map_err(|e| format!("could not open the authorization audit log: {e}"))
+    delphi_core::log::EventLog::open(&audit_dir(home), Default::default()).map_err(|e| match e {
+        delphi_core::log::LogError::Locked(_) => "another `delphi test` command is writing the authorization audit log; try again in a moment".to_string(),
+        e => format!("could not open the authorization audit log: {e}"),
+    })
 }
 
-pub fn append_audit(log: &mut delphi_core::log::EventLog, kind: &str, payload: Value) -> Result<(), String> {
-    log.append(EventEnvelope::new("operator-audit", kind, payload)).map(|_| ()).map_err(|e| format!("could not write the audit event `{kind}`: {e}"))
-}
-
-/// The audit log, read without taking its writer lock; a missing log is empty.
-pub fn read_audit(home: &Path) -> Vec<EventEnvelope> {
-    if !audit_dir(home).join("events").is_dir() {
-        return vec![];
+/// Append one event and return the head it leaves (verified from the chain, not assumed).
+pub fn append_audit(home: &Path, log: &mut delphi_core::log::EventLog, kind: &str, payload: Value) -> Result<AuditHead, String> {
+    log.append(EventEnvelope::new("operator-audit", kind, payload)).map_err(|e| format!("could not write the audit event `{kind}`: {e}"))?;
+    let rep = delphi_core::log::verify_chain(&audit_dir(home)).map_err(|e| e.to_string())?;
+    match (rep.broken, rep.head) {
+        (None, Some((seq, h))) => Ok(AuditHead { seq, h }),
+        (Some(b), _) => Err(format!("the audit log does not verify after the write: {b}")),
+        (None, None) => Err("the audit log has no chained event after the write".into()),
     }
-    delphi_core::log::replay(&audit_dir(home)).unwrap_or_default()
+}
+
+/// The audit log, **verified**: its hash chain must be intact (no event edited, deleted, reordered or inserted), every event must
+/// be chained, and it must reach the head the pinned store recorded (a cut tail is caught). A log that fails is an error, loudly:
+/// what it says decides which requests are still pending and which manifests are barred for a day, so it is never read half-trusted.
+pub fn read_audit(home: &Path) -> Result<Vec<EventEnvelope>, String> {
+    let head = load(home)?.audit_head.map(|h| (h.seq, h.h));
+    if !audit_dir(home).join("events").is_dir() {
+        return match head {
+            None => Ok(vec![]),
+            Some(_) => Err("the authorization audit log is missing but the store says events were written: it was deleted; run `delphi doctor`".into()),
+        };
+    }
+    let rep = delphi_core::log::verify_chain(&audit_dir(home)).map_err(|e| format!("the authorization audit log cannot be read: {e}"))?;
+    let rep = if rep.unchained > 0 && rep.broken.is_none() { delphi_core::log::ChainReport { broken: Some("an event has no chain fields".into()), ..rep } } else { rep };
+    if let Some(b) = rep.against_stored_head(head).broken {
+        return Err(format!("the authorization audit log fails verification: {b}; no request or authorization is trusted until the operator has looked (`delphi doctor`)"));
+    }
+    delphi_core::log::replay(&audit_dir(home)).map_err(|e| format!("the authorization audit log cannot be read: {e}"))
+}
+
+/// Make a record live **after** its audit event: the `created` event is appended first (so a record is never live unaudited),
+/// then the store changes; if the store change fails, a `rolled_back` event says the first one answers nothing. Holding the
+/// audit log's writer lock for the whole of it, and checking again under it that the request is still unanswered, is what stops
+/// two `authorize` calls for one request from both passing.
+pub fn create_audited(home: &Path, rec: Record, payload: Value) -> Result<(), String> {
+    let mut audit = open_audit(home)?;
+    let ops = read_audit(home)?;
+    if let Some(rid) = &rec.request_id {
+        if resolved_ids(&ops).contains(rid) {
+            return Err(format!("{rid} was already answered; a changed or repeated request is a new request"));
+        }
+    }
+    let head = append_audit(home, &mut audit, CREATED, payload)?;
+    let created_seq = head.seq;
+    if let Err(e) = add_record(home, rec.clone(), Some(head)) {
+        let _ = append_audit(home, &mut audit, CREATE_ROLLED_BACK, json!({"id": rec.id, "created_seq": created_seq, "reason": e}));
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// Revoke after the audit event, as [`create_audited`].
+pub fn revoke_audited(home: &Path, id: &str, now_rfc: &str) -> Result<Record, String> {
+    let mut audit = open_audit(home)?;
+    read_audit(home)?;
+    let current = load(home)?.records.into_iter().find(|r| r.id == id).ok_or_else(|| format!("no authorization `{}`", clean_text(id, 40)))?;
+    if current.is_revoked() {
+        return Err(format!("{} is already revoked", current.id));
+    }
+    let head = append_audit(home, &mut audit, REVOKED, json!({"id": current.id, "manifest_hash": current.manifest_hash, "run": current.run, "revoked_at": now_rfc, "by": "operator", "source": "operator"}))?;
+    match revoke(home, id, now_rfc, Some(head)) {
+        Ok(r) => Ok(r),
+        Err(e) => {
+            let _ = append_audit(home, &mut audit, REVOKE_ROLLED_BACK, json!({"id": id, "reason": e}));
+            Err(e)
+        }
+    }
+}
+
+/// The operator closes a request: audited, and the manifest is barred for 24 hours. Under the writer lock, like [`create_audited`].
+pub fn refuse_audited(home: &Path, request_id: &str, manifest_hash: &str, now_rfc: &str) -> Result<(), String> {
+    let mut audit = open_audit(home)?;
+    if resolved_ids(&read_audit(home)?).contains(request_id) {
+        return Err(format!("{request_id} was already answered"));
+    }
+    append_audit(home, &mut audit, REFUSED, json!({"request_id": request_id, "manifest_hash": manifest_hash, "reason": "refused by the operator", "blocks_restage": true, "refused_at": now_rfc, "source": "operator"})).map(|_| ())
+}
+
+// ------------------------------------------------------------------------------------------------ the request ledger
+
+/// The workspace-wide ledger of requests: every `authorization.request.staged` and `.refused` payload, in one hash-chained log, so
+/// the limits count across all missions and host sessions. Written only by the daemon.
+pub fn ledger_dir(ws_dir: &Path) -> PathBuf {
+    ws_dir.join("local/authorization-requests")
+}
+
+static LEDGER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The ledger, chain-verified; a break is an error.
+pub fn read_ledger(ws_dir: &Path) -> Result<Vec<EventEnvelope>, String> {
+    let dir = ledger_dir(ws_dir);
+    if !dir.join("events").is_dir() {
+        return Ok(vec![]);
+    }
+    let rep = delphi_core::log::verify_chain(&dir).map_err(|e| format!("the authorization request ledger cannot be read: {e}"))?;
+    if rep.unchained > 0 || rep.broken.is_some() {
+        return Err(format!("the authorization request ledger fails verification ({}); no request is staged or shown until the operator has looked", rep.broken.unwrap_or_else(|| "an event has no chain fields".into())));
+    }
+    delphi_core::log::replay(&dir).map_err(|e| format!("the authorization request ledger cannot be read: {e}"))
+}
+
+/// Append to the ledger (daemon only; tests plant lines with it). A caller outside `record_request` must hold no other writer.
+pub fn append_ledger(ws_dir: &Path, kind: &str, payload: Value) -> Result<(), String> {
+    let mut log = delphi_core::log::EventLog::open(&ledger_dir(ws_dir), Default::default()).map_err(|e| format!("could not open the authorization request ledger: {e}"))?;
+    log.append(EventEnvelope::new("authorization-requests", kind, payload)).map(|_| ()).map_err(|e| format!("could not write the authorization request ledger: {e}"))
+}
+
+/// Decide a request against the whole workspace and record the decision in the ledger, as one step under a lock. The caller then
+/// writes the same payload to the mission log. An unreadable audit log or ledger refuses the request, loudly.
+pub fn record_request(ws_dir: &Path, home: &Path, who: &Who, parsed: Result<Request, ParseError>, c: &Clock) -> Outcome {
+    let _g = LEDGER_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let loud = |m: String| Outcome::Refused { message: m, log: None };
+    let operator = match read_audit(home) {
+        Ok(o) => o,
+        Err(e) => return loud(e),
+    };
+    let ledger = match read_ledger(ws_dir) {
+        Ok(l) => l,
+        Err(e) => return loud(e),
+    };
+    let out = admit(&ledger, &operator, who, parsed, c);
+    let written = match &out {
+        Outcome::Staged(p) => append_ledger(ws_dir, STAGED, p.clone()),
+        Outcome::Refused { log: Some(p), .. } => append_ledger(ws_dir, REFUSED, p.clone()),
+        Outcome::Refused { log: None, .. } => Ok(()),
+    };
+    match written {
+        Ok(()) => out,
+        Err(e) => loud(e),
+    }
+}
+
+/// Add a payload to the ledger as the daemon would (for tests and for the operator-side checks that read it back).
+pub fn ledger_staged(ledger: &[EventEnvelope]) -> std::collections::HashMap<String, Value> {
+    ledger.iter().filter(|e| e.kind == STAGED).filter_map(|e| e.payload["id"].as_str().map(|i| (i.to_string(), e.payload.clone()))).collect()
 }
 
 // ------------------------------------------------------------------------------------------------ review (TA-0r)

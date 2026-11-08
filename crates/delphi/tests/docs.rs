@@ -224,9 +224,10 @@ fn an_authorization_request_and_store_satisfy_their_schemas() {
     std::fs::write(&bin, b"x").unwrap();
     std::fs::write(&script, b"print(1)").unwrap();
     let (b, s) = (bin.to_string_lossy().to_string(), script.to_string_lossy().to_string());
+    let policy = a::Policy { interpreters: vec![b.clone()] };
     let req = json!({"intent": "i", "purpose": "p", "context": "c", "risk": "r", "run_plan": "once", "manifest": [{"tool": "shell", "argv": [b, "-I", s], "files": [s], "runner_provenance": "project_snapshot"}]});
-    let who = |kind, taint| a::Who { kind, label: "l".into(), role: Some("red-team".into()), model: "m".into(), span: Some("s".into()), task: Some("t".into()), taint, run: "t".into() };
-    let staged = |kind, taint| match a::admit(&[], &[], &who(kind, taint), a::parse_request(&req), &a::Clock { now_unix: 1_800_000_000, now_rfc: "2027-01-15T08:00:00.000Z" }) {
+    let who = |kind, taint| a::Who { kind, label: "l".into(), role: Some("red-team".into()), model: "m".into(), span: Some("s".into()), task: Some("t".into()), taint, run: "t".into(), mission: "m".into() };
+    let staged = |kind, taint| match a::admit(&[], &[], &who(kind, taint), a::parse_request(&req, &policy), &a::Clock { now_unix: 1_800_000_000, now_rfc: "2027-01-15T08:00:00.000Z" }) {
         a::Outcome::Staged(p) => p,
         a::Outcome::Refused { message, .. } => panic!("{message}"),
     };
@@ -236,7 +237,7 @@ fn an_authorization_request_and_store_satisfy_their_schemas() {
     host.role = None;
     host.span = None;
     host.task = None;
-    match a::admit(&[], &[], &host, a::parse_request(&req), &a::Clock { now_unix: 1_800_000_000, now_rfc: "x" }) {
+    match a::admit(&[], &[], &host, a::parse_request(&req, &policy), &a::Clock { now_unix: 1_800_000_000, now_rfc: "x" }) {
         a::Outcome::Staged(p) => must_pass("authorization-request.schema.json", "a host request", &p),
         a::Outcome::Refused { message, .. } => panic!("{message}"),
     }
@@ -250,8 +251,8 @@ fn an_authorization_request_and_store_satisfy_their_schemas() {
     bad["request"]["manifest"][0]["env"] = json!({"PATH": "/tmp"});
     must_fail("authorization-request.schema.json", "an entry carrying its own environment", &bad);
 
-    let rec = a::build_record(&home, &a::NewRecord { purpose: "p".into(), intent: "i".into(), run: "run-1".into(), expires_in_secs: 7200, max_uses: 10, entries: serde_json::from_value(req["manifest"].clone()).unwrap(), request: Some(("ar-0123456789".into(), "0".repeat(64), "host:x/y".into())) }, 1_800_000_000, "2027-01-15T08:00:00.000Z").unwrap();
-    a::add_record(&home, rec).unwrap();
+    let rec = a::build_record(&home, &a::NewRecord { purpose: "p".into(), intent: "i".into(), run: "run-1".into(), expires_in_secs: 7200, max_uses: 10, entries: serde_json::from_value(req["manifest"].clone()).unwrap(), request: Some(("ar-0123456789".into(), "0".repeat(64), "host:x/y".into())), policy: policy.clone() }, 1_800_000_000, "2027-01-15T08:00:00.000Z").unwrap();
+    a::add_record(&home, rec, None).unwrap();
     let store: Value = serde_json::from_slice(&std::fs::read(a::store_path(&home)).unwrap()).unwrap();
     must_pass("authorization-record.schema.json", "the store", &store);
     let mut bad = store.clone();

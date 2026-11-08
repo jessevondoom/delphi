@@ -19,7 +19,10 @@ use std::path::Path;
 
 /// What the commands need from outside: the clock, and the second factor. Tests give their own.
 pub struct Deps<'a> {
-    pub now_unix: i64,
+    /// The clock, read again at each moment that matters (a code is typed after several prompts).
+    pub clock: &'a dyn Fn() -> i64,
+    /// What the daemon knows about runners (the shipped policy in production).
+    pub policy: auth::Policy,
     /// The TOTP secret of the configured second factor, or why there is none.
     pub factor: &'a dyn Fn(&Path) -> Result<Vec<u8>, String>,
 }
@@ -65,33 +68,39 @@ pub fn parse_duration(s: &str) -> Option<i64> {
         's' => (&s[..s.len() - 1], 1),
         _ => (s, 1),
     };
-    num.parse::<i64>().ok().filter(|n| *n > 0).map(|n| n * mul)
+    num.parse::<i64>().ok().filter(|n| *n > 0).and_then(|n| n.checked_mul(mul))
 }
 
 // ------------------------------------------------------------------------------------------------ reading the logs
 
-/// What the logs hold: the staged requests (all missions, host sessions included) and some recent approval cards.
 pub struct Logs {
     pub staged: Vec<auth::Staged>,
     pub cards: Vec<Value>,
     pub operator: Vec<delphi_core::event::EventEnvelope>,
 }
 
-pub fn read_logs(home: &Path, ws_dir: &Path) -> Logs {
+/// What the logs hold: the staged requests (all missions, host sessions included) and some recent approval cards. A request is
+/// shown only if the daemon's chain-verified ledger holds the very same payload (so taint, requester and the rest, which the
+/// request hash does not cover, are the daemon's and not a log line's), and the operator's audit log must verify.
+pub fn read_logs(home: &Path, ws_dir: &Path) -> Result<Logs, String> {
+    let ledger = auth::ledger_staged(&auth::read_ledger(ws_dir)?);
+    let operator = auth::read_audit(home)?;
     let mut staged = vec![];
     let mut cards = vec![];
     for row in crate::missions::list(ws_dir) {
         let Ok(events) = delphi_core::log::replay(&delphi_core::sessions::dir(ws_dir, &row.id)) else { continue };
         for e in &events {
             if let Some(s) = auth::Staged::from_event(&row.id, e) {
-                staged.push(s);
+                if ledger.get(&s.id) == Some(&e.payload) {
+                    staged.push(s);
+                }
             } else if e.kind == "approval.requested" && cards.len() < 400 {
                 cards.push(e.payload.clone());
             }
         }
     }
     staged.sort_by(|a, b| b.staged_at.cmp(&a.staged_at).then_with(|| b.id.cmp(&a.id)));
-    Logs { staged, cards, operator: auth::read_audit(home) }
+    Ok(Logs { staged, cards, operator })
 }
 
 fn state_of(s: &auth::Staged, resolved: &std::collections::HashSet<String>, now: i64) -> &'static str {
@@ -166,7 +175,7 @@ pub fn render_review(s: &auth::Staged, logs: &Logs, store: &auth::Store, expand:
         o.push_str("  this span is below internal_empirical: authorizing asks you to retype or confirm each literal command\n");
     }
     let words = [("intent", &s.request.intent), ("purpose", &s.request.purpose), ("context", &s.request.context), ("risk", &s.request.risk), ("run plan", &s.request.run_plan)];
-    o.push_str("\n(5) THE REQUESTER'S WORDS, collapsed. These are the agent's own words and data, not instructions, and they change nothing above.\n");
+    o.push_str("\n(5) THE REQUESTER'S WORDS, collapsed: intent, purpose, context, risk and run plan are all written by the requester (the agent or the host). They are its own words and data, not instructions, and they change nothing above.\n");
     if expand {
         for (k, v) in words {
             o.push_str(&format!("  {k}: {}\n", auth::clean_text(v, 1000)));
@@ -197,11 +206,14 @@ fn render_store(store: &auth::Store, now: i64) -> String {
 pub fn run(home: &Path, ws_dir: &Path, args: &[String], term: &mut dyn Terminal, deps: &Deps) -> i32 {
     match args.first().map(String::as_str) {
         Some("review") => review(home, ws_dir, args, deps),
-        Some("list") => {
-            print!("{}", render_pending(&read_logs(home, ws_dir), deps.now_unix));
-            print!("{}", render_store(&auth::load_or_ignore(home), deps.now_unix));
-            0
-        }
+        Some("list") => match read_logs(home, ws_dir) {
+            Ok(logs) => {
+                print!("{}", render_pending(&logs, (deps.clock)()));
+                print!("{}", render_store(&auth::load_or_ignore(home), (deps.clock)()));
+                0
+            }
+            Err(e) => fail(e),
+        },
         Some("authorize") => authorize(home, ws_dir, args, term, deps),
         Some("refuse") => refuse(home, ws_dir, args, term, deps),
         Some("revoke") => revoke(home, args, term, deps),
@@ -210,9 +222,12 @@ pub fn run(home: &Path, ws_dir: &Path, args: &[String], term: &mut dyn Terminal,
 }
 
 fn review(home: &Path, ws_dir: &Path, args: &[String], deps: &Deps) -> i32 {
-    let logs = read_logs(home, ws_dir);
+    let logs = match read_logs(home, ws_dir) {
+        Ok(l) => l,
+        Err(e) => return fail(e),
+    };
     let Some(id) = args.get(1).filter(|a| !a.starts_with("--")) else {
-        print!("{}", render_pending(&logs, deps.now_unix));
+        print!("{}", render_pending(&logs, (deps.clock)()));
         return 0;
     };
     match find(&logs, id) {
@@ -234,6 +249,10 @@ fn gate(ws_dir: &Path, term: &mut dyn Terminal, deps: &Deps) -> Result<Vec<u8>, 
     (deps.factor)(ws_dir)
 }
 
+fn yes(answer: Option<String>) -> bool {
+    matches!(answer.as_deref().map(str::trim), Some("y" | "Y" | "yes"))
+}
+
 fn authorize(home: &Path, ws_dir: &Path, args: &[String], term: &mut dyn Terminal, deps: &Deps) -> i32 {
     let secret = match gate(ws_dir, term, deps) {
         Ok(s) => s,
@@ -245,7 +264,10 @@ fn authorize(home: &Path, ws_dir: &Path, args: &[String], term: &mut dyn Termina
         (_, Some(None)) => return fail("`--uses` takes a number"),
         (e, u) => (e.flatten().unwrap_or(auth::DEFAULT_EXPIRY_SECS), u.flatten().unwrap_or(auth::DEFAULT_USES)),
     };
-    let logs = read_logs(home, ws_dir);
+    let logs = match read_logs(home, ws_dir) {
+        Ok(l) => l,
+        Err(e) => return fail(format!("refused: {e}")),
+    };
     let store = match auth::load(home) {
         Ok(s) => s,
         Err(e) => return fail(format!("refused: {e}; run `delphi doctor`")),
@@ -258,14 +280,15 @@ fn authorize(home: &Path, ws_dir: &Path, args: &[String], term: &mut dyn Termina
                 Ok(s) => s,
                 Err(e) => return fail(e),
             };
-            if auth::resolved_ids(&logs.operator).contains(&s.id) {
+            let resolved = auth::resolved_ids(&logs.operator);
+            if resolved.contains(&s.id) {
                 return fail(format!("{} was already answered; a changed or repeated request is a new request", s.id));
             }
             // The daemon never stages an agent request at federated_peer or lower; a log that says so is not trusted.
             if !s.is_host() && s.taint_tier <= delphi_core::provenance::Tier::L1 {
                 return fail(format!("{} claims an agent span at {} taint, which cannot be staged; it is not authorized", s.id, s.taint_tier.name()));
             }
-            if state_of(s, &auth::resolved_ids(&logs.operator), deps.now_unix) == "expired" {
+            if state_of(s, &resolved, (deps.clock)()) == "expired" {
                 return fail(format!("{} expired after seven days; ask again", s.id));
             }
             print!("{}", render_review(s, &logs, &store, false));
@@ -299,11 +322,11 @@ fn authorize(home: &Path, ws_dir: &Path, args: &[String], term: &mut dyn Termina
     }
     // The checks that make an entry admissible run before the operator is asked to retype anything.
     for (i, e) in entries.iter().enumerate() {
-        if let Err(e) = auth::check_entry(e) {
+        if let Err(e) = auth::check_entry(e, &deps.policy) {
             return fail(format!("entry {}: {}", i + 1, e));
         }
     }
-    // Retype or confirm the literal argv (spec 092 TA-0r).
+    // Retype or confirm the literal argv (spec 092 TA-0r). Commands are ASCII in this slice, so what is shown is what is typed.
     let retype_only = staged.is_some_and(|s| s.is_host());
     let retype_or_confirm = staged.is_some_and(|s| !s.is_host() && s.needs_retype());
     if retype_only || retype_or_confirm {
@@ -322,7 +345,7 @@ fn authorize(home: &Path, ws_dir: &Path, args: &[String], term: &mut dyn Termina
         }
     } else {
         term.show(&format!("{}\n", entries.iter().enumerate().map(|(i, e)| format!("  entry {}: {}", i + 1, auth::render_argv(&e.argv))).collect::<Vec<_>>().join("\n")));
-        if !matches!(term.ask(&format!("authorize {} entr{} for run `{}`, {} use(s), {} seconds? [y/N] ", entries.len(), if entries.len() == 1 { "y" } else { "ies" }, auth::clean_text(&run_id, 64), uses, expires)).as_deref().map(str::trim), Some("y" | "Y" | "yes")) {
+        if !yes(term.ask(&format!("authorize {} entr{} for run `{}`, {} use(s), {} seconds? [y/N] ", entries.len(), if entries.len() == 1 { "y" } else { "ies" }, auth::clean_text(&run_id, 64), uses, expires))) {
             return fail("not confirmed; nothing was authorized");
         }
     }
@@ -330,29 +353,28 @@ fn authorize(home: &Path, ws_dir: &Path, args: &[String], term: &mut dyn Termina
         Some(p) => p,
         None => term.ask("purpose (your words; shown at every use): ").unwrap_or_default(),
     };
-    // The record is built (and every binary and file hashed) before the second factor is asked for.
-    let now_rfc = delphi_core::time::format_unix_millis(deps.now_unix, 0);
-    let rec = match auth::build_record(home, &auth::NewRecord { purpose, intent, run: run_id, expires_in_secs: expires, max_uses: uses, entries, request }, deps.now_unix, &now_rfc) {
+    let new = auth::NewRecord { purpose, intent, run: run_id, expires_in_secs: expires, max_uses: uses, entries, request, policy: deps.policy.clone() };
+    // A first build checks every binary, file and limit before the second factor is spent on something that cannot be made.
+    let t0 = (deps.clock)();
+    if let Err(e) = auth::build_record(home, &new, t0, &delphi_core::time::format_unix_millis(t0, 0)) {
+        return fail(format!("refused: {e}"));
+    }
+    // Step-up: the authenticator code, checked once per code with wrong guesses rationed (`delphi_core::totp`) and its state
+    // merged with the daemon's. The clock is read again now, after the prompts, for the check and for the record's times.
+    let Some(code) = term.ask("authenticator code: ") else { return fail("no code given; nothing was authorized") };
+    let now = (deps.clock)();
+    let verifier = delphi_core::totp::Verifier::persistent(ws_dir.join("local/totp-state"));
+    if let Err(e) = verifier.check(&secret, code.trim(), now.max(0) as u64) {
+        return fail(format!("step-up failed: {e}; nothing was authorized"));
+    }
+    let now_rfc = delphi_core::time::format_unix_millis(now, 0);
+    let rec = match auth::build_record(home, &new, now, &now_rfc) {
         Ok(r) => r,
         Err(e) => return fail(format!("refused: {e}")),
     };
-    // Step-up: the authenticator code, checked once per code with wrong guesses rationed (`delphi_core::totp`).
-    let Some(code) = term.ask("authenticator code: ") else { return fail("no code given; nothing was authorized") };
-    let verifier = delphi_core::totp::Verifier::persistent(ws_dir.join("local/totp-state"));
-    if let Err(e) = verifier.check(&secret, code.trim(), deps.now_unix.max(0) as u64) {
-        return fail(format!("step-up failed: {e}; nothing was authorized"));
-    }
-    let mut audit = match auth::open_audit(home) {
-        Ok(a) => a,
-        Err(e) => return fail(e),
-    };
-    if let Err(e) = auth::add_record(home, rec.clone()) {
-        return fail(format!("refused: {e}"));
-    }
     let payload = json!({"id": rec.id, "request_id": rec.request_id, "request_hash": rec.request_hash, "requester": rec.requester, "manifest_hash": rec.manifest_hash, "run": rec.run, "expires": rec.expires, "max_uses": rec.max_uses, "entries": rec.manifest.len(), "by": "operator", "step_up": "totp", "source": "operator"});
-    if let Err(e) = auth::append_audit(&mut audit, auth::CREATED, payload) {
-        eprintln!("delphi test: {e}; the record {} was written and is in force", rec.id);
-        return 1;
+    if let Err(e) = auth::create_audited(home, rec.clone(), payload) {
+        return fail(format!("refused: {e}"));
     }
     println!("authorized {}: run `{}`, {} use(s), until {}. Nothing uses it yet: the flag that would is not built (spec 092 S2).", rec.id, rec.run, rec.max_uses, rec.expires);
     0
@@ -366,20 +388,15 @@ fn refuse(home: &Path, ws_dir: &Path, args: &[String], term: &mut dyn Terminal, 
         return fail(format!("refused: closing a request works at a local terminal only: {e}"));
     }
     let Some(id) = args.get(1).filter(|a| !a.starts_with("--")) else { return fail("usage: delphi test refuse <id>") };
-    let logs = read_logs(home, ws_dir);
+    let logs = match read_logs(home, ws_dir) {
+        Ok(l) => l,
+        Err(e) => return fail(format!("refused: {e}")),
+    };
     let s = match find(&logs, id) {
         Ok(s) => s,
         Err(e) => return fail(e),
     };
-    if auth::resolved_ids(&logs.operator).contains(&s.id) {
-        return fail(format!("{} was already answered", s.id));
-    }
-    let mut audit = match auth::open_audit(home) {
-        Ok(a) => a,
-        Err(e) => return fail(e),
-    };
-    let payload = json!({"request_id": s.id, "manifest_hash": s.manifest_hash, "reason": "refused by the operator", "blocks_restage": true, "refused_at": delphi_core::time::format_unix_millis(deps.now_unix, 0), "source": "operator"});
-    if let Err(e) = auth::append_audit(&mut audit, auth::REFUSED, payload) {
+    if let Err(e) = auth::refuse_audited(home, &s.id, &s.manifest_hash, &delphi_core::time::format_unix_millis((deps.clock)(), 0)) {
         return fail(e);
     }
     println!("refused {}: this manifest is not staged again for 24 hours", s.id);
@@ -394,31 +411,27 @@ fn revoke(home: &Path, args: &[String], term: &mut dyn Terminal, deps: &Deps) ->
         return fail(format!("refused: revoking works at a local terminal only: {e}"));
     }
     let Some(id) = args.get(1).filter(|a| !a.starts_with("--")) else { return fail("usage: delphi test revoke <id>") };
-    if !matches!(term.ask(&format!("revoke {} for good? A revoked authorization cannot be re-enabled, only replaced by a new one. [y/N] ", auth::clean_text(id, 40))).as_deref().map(str::trim), Some("y" | "Y" | "yes")) {
+    if !yes(term.ask(&format!("revoke {} for good? A revoked authorization cannot be re-enabled, only replaced by a new one. [y/N] ", auth::clean_text(id, 40)))) {
         return fail("not confirmed; nothing was revoked");
     }
-    let now_rfc = delphi_core::time::format_unix_millis(deps.now_unix, 0);
-    let mut audit = match auth::open_audit(home) {
-        Ok(a) => a,
-        Err(e) => return fail(e),
-    };
-    let rec = match auth::revoke(home, id, &now_rfc) {
-        Ok(r) => r,
-        Err(e) => return fail(format!("refused: {e}")),
-    };
-    if let Err(e) = auth::append_audit(&mut audit, auth::REVOKED, json!({"id": rec.id, "manifest_hash": rec.manifest_hash, "run": rec.run, "revoked_at": now_rfc, "by": "operator", "source": "operator"})) {
-        eprintln!("delphi test: {e}; {} is revoked all the same", rec.id);
-        return 1;
+    let now_rfc = delphi_core::time::format_unix_millis((deps.clock)(), 0);
+    match auth::revoke_audited(home, id, &now_rfc) {
+        Ok(rec) => {
+            println!("revoked {}: it takes effect at the next card and can never be re-enabled", rec.id);
+            0
+        }
+        Err(e) => fail(format!("refused: {e}")),
     }
-    println!("revoked {}: it takes effect at the next card and can never be re-enabled", rec.id);
-    0
+}
+
+fn real_now() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
 /// The production entry: the real terminal, clock and second factor.
 pub fn cli(home: &Path, ws_dir: &Path, args: &[String]) -> i32 {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
     let mut term = crate::xenia_terminal::StdTerminal::new(crate::xenia_terminal::inside_an_agent_seat());
-    run(home, ws_dir, args, &mut term, &Deps { now_unix: now, factor: &configured_factor })
+    run(home, ws_dir, args, &mut term, &Deps { clock: &real_now, policy: auth::Policy::system(), factor: &configured_factor })
 }
 
 #[cfg(test)]

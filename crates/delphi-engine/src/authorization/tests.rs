@@ -1,6 +1,15 @@
 use super::*;
 use std::os::unix::fs::PermissionsExt;
 
+thread_local! {
+    static POLICY: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The policy of this test: the fixture's fake runner is the only interpreter the "daemon" knows.
+fn policy() -> Policy {
+    Policy { interpreters: POLICY.with(|p| p.borrow().clone()) }
+}
+
 /// A tempdir with a fake runner named `python3`, a script, and a home with an operator lock, all canonical.
 struct Fix {
     _t: tempfile::TempDir,
@@ -21,6 +30,7 @@ fn fix() -> Fix {
     let script = root.join("t.py");
     fs::write(&script, b"print(1)").unwrap();
     fs::set_permissions(&script, fs::Permissions::from_mode(0o644)).unwrap();
+    POLICY.with(|p| *p.borrow_mut() = vec![bin.to_string_lossy().into()]);
     Fix { home, bin: bin.to_string_lossy().into(), script: script.to_string_lossy().into(), _t: t }
 }
 
@@ -32,7 +42,7 @@ impl Fix {
         json!({"intent": "run the parser tests", "purpose": "needs a Red shell", "manifest": [self.entry()], "context": "I was reading the parser.", "risk": "runs a script in the sandbox", "run_plan": "once"})
     }
     fn new_record(&self, entries: Vec<Entry>) -> NewRecord {
-        NewRecord { purpose: "parser tests".into(), intent: "tests".into(), run: "run-1".into(), expires_in_secs: DEFAULT_EXPIRY_SECS, max_uses: DEFAULT_USES, entries, request: None }
+        NewRecord { purpose: "parser tests".into(), intent: "tests".into(), run: "run-1".into(), expires_in_secs: DEFAULT_EXPIRY_SECS, max_uses: DEFAULT_USES, entries, request: None, policy: policy() }
     }
 }
 
@@ -47,12 +57,12 @@ fn ev(kind: &str, payload: Value, secs: i64) -> EventEnvelope {
 }
 
 fn who(kind: Kind, taint: Tier, run: &str) -> Who {
-    Who { kind: kind.clone(), label: "red-team/claude/opus".into(), role: Some("red-team".into()), model: "claude/opus".into(), span: Some("s1".into()), task: Some(run.into()), taint, run: run.into() }
+    Who { kind: kind.clone(), label: "red-team/claude/opus".into(), role: Some("red-team".into()), model: "claude/opus".into(), span: Some("s1".into()), task: Some(run.into()), taint, run: run.into(), mission: "m".into() }
 }
 
 fn admit_at(log: &[EventEnvelope], op: &[EventEnvelope], w: &Who, req: &Value, secs: i64) -> Outcome {
     let now = at(secs);
-    admit(log, op, w, parse_request(req), &Clock { now_unix: 1_800_000_000 + secs, now_rfc: &now })
+    admit(log, op, w, parse_request(req, &policy()), &Clock { now_unix: 1_800_000_000 + secs, now_rfc: &now })
 }
 
 fn staged(o: Outcome) -> Value {
@@ -91,11 +101,11 @@ fn control_and_escape_characters_are_stripped_and_text_is_cut() {
 #[test]
 fn an_entry_is_exact_or_it_is_refused() {
     let f = fix();
-    assert!(check_entry(&f.entry()).is_ok());
+    assert!(check_entry(&f.entry(), &policy()).is_ok());
     let bad = |mutate: &dyn Fn(&mut Entry)| {
         let mut e = f.entry();
         mutate(&mut e);
-        check_entry(&e)
+        check_entry(&e, &policy())
     };
     for (what, r) in [
         ("relative binary", bad(&|e| e.argv[0] = "python3".into())),
@@ -118,7 +128,7 @@ fn an_entry_is_exact_or_it_is_refused() {
     // The canonical tool name is used whatever alias came in.
     let mut alias = f.entry();
     alias.tool = "Run_Command".into();
-    assert_eq!(check_entry(&alias).unwrap().tool, "shell");
+    assert_eq!(check_entry(&alias, &policy()).unwrap().tool, "shell");
 }
 
 #[test]
@@ -126,7 +136,7 @@ fn the_deny_list_stops_merges_credentials_network_dispatch_and_protected_paths()
     let f = fix();
     let denied = |argv: Vec<&str>| {
         let e = Entry { tool: "shell".into(), argv: argv.into_iter().map(String::from).collect(), files: vec![], runner_provenance: "project_snapshot".into() };
-        matches!(check_entry(&e), Err(EntryError::Denied(_)))
+        matches!(check_entry(&e, &policy()), Err(EntryError::Denied(_)))
     };
     for bin in ["/usr/bin/git", "/usr/local/bin/gh", "/usr/bin/curl", "/usr/bin/ssh", "/usr/local/bin/delphi", "/usr/local/bin/claude", "/usr/bin/security", "/bin/rm", "/usr/bin/cargo", "/usr/bin/npm"] {
         assert!(denied(vec![bin, "x"]), "{bin}");
@@ -134,11 +144,67 @@ fn the_deny_list_stops_merges_credentials_network_dispatch_and_protected_paths()
     for arg in ["/repo/.git/hooks/pre-commit", "--out=/repo/.git/config", "/srv/u/.delphi/operator/authorizations.json", "/srv/u/.delphi/operator/ratified.lock", "/repo/.githooks/x", "/repo/config.toml", "/srv/u/.ssh/id_rsa", "https://example.com/x", "git@github.com:a/b.git", "/repo/server.pem"] {
         assert!(denied(vec![&f.bin, "-I", arg]), "{arg}");
     }
-    // python -m pip / http would fetch or serve
-    for m in ["pip", "http.server", "urllib.request", "socket"] {
-        assert!(denied(vec![&f.bin, "-I", "-m", m]), "{m}");
-    }
     assert!(deny_reason(&f.entry()).is_none());
+}
+
+// Red-team P1: `python3 -I -m <anything>` ran code nobody pinned (timeit, pdb, code, trace, cProfile, unittest, pickle, pydoc, ...).
+#[test]
+fn no_module_is_ever_run_with_dash_m() {
+    let f = fix();
+    for m in ["timeit", "pdb", "code", "trace", "cProfile", "unittest", "pickle", "pydoc", "antigravity", "http.server", "pip", "this", "runpy", "idlelib"] {
+        for argv in [vec![f.bin.clone(), "-I".into(), "-m".into(), m.into()], vec![f.bin.clone(), "-I".into(), f.script.clone(), "-m".into(), m.into()]] {
+            let mut e = f.entry();
+            e.argv = argv.clone();
+            let r = check_entry(&e, &policy());
+            // `-m` before a script has nothing to run; `-m` after the script is the script's own argument and is harmless to the
+            // runner, but the first form must never pass
+            if argv[2] == "-m" {
+                assert!(matches!(r, Err(EntryError::Invalid(_)) | Err(EntryError::Denied(_))), "-m {m} was admitted: {r:?}");
+            }
+        }
+    }
+    // not even with a script named after it
+    let mut e = f.entry();
+    e.argv = vec![f.bin.clone(), "-I".into(), "-m".into(), "timeit".into(), f.script.clone()];
+    assert!(check_entry(&e, &policy()).is_err());
+}
+
+// Red-team P1: the runner must be an interpreter the daemon knows, whatever the request says about its provenance.
+#[test]
+fn a_project_local_or_self_declared_runner_is_not_an_interpreter() {
+    let f = fix();
+    let other = fs::canonicalize(f._t.path()).unwrap().join("tools");
+    fs::create_dir_all(&other).unwrap();
+    let local = other.join("python3");
+    fs::write(&local, b"#!built in the run").unwrap();
+    fs::set_permissions(&local, fs::Permissions::from_mode(0o755)).unwrap();
+    for prov in ["project_snapshot", "daemon_installed"] {
+        let mut e = f.entry();
+        e.argv[0] = local.to_string_lossy().into();
+        e.runner_provenance = prov.into();
+        let r = check_entry(&e, &policy());
+        assert!(matches!(&r, Err(EntryError::Invalid(m)) if m.contains("not an interpreter the daemon knows")), "{prov}: {r:?}");
+    }
+    // the shipped policy knows system locations only: the fixture's runner is not one of them
+    assert!(check_entry(&f.entry(), &Policy::system()).is_err());
+    for p in &Policy::system().interpreters {
+        assert!(p.starts_with("/usr/") || p.starts_with("/opt/homebrew/"), "{p}");
+    }
+    // non-ASCII (confusables) is refused in argv and files
+    let mut e = f.entry();
+    e.argv.push("tеst".into());
+    assert!(matches!(check_entry(&e, &policy()), Err(EntryError::Invalid(m)) if m.contains("non-ASCII")));
+    let mut e = f.entry();
+    e.files.push("/tmp/\u{0435}.py".into());
+    assert!(check_entry(&e, &policy()).is_err());
+}
+
+#[test]
+fn the_strip_list_covers_invisible_and_filler_characters() {
+    for c in ['\u{2060}', '\u{2064}', '\u{206a}', '\u{206f}', '\u{061c}', '\u{00ad}', '\u{034f}', '\u{3164}', '\u{ffa0}', '\u{202e}', '\u{200b}', '\u{feff}', '\u{e0041}'] {
+        assert_eq!(strip_control(&format!("a{c}b")), "ab", "U+{:04X}", c as u32);
+        assert_eq!(clean_text(&format!("a{c}b"), 10), "ab");
+    }
 }
 
 #[test]
@@ -153,32 +219,32 @@ fn a_request_is_parsed_cleaned_and_bounded() {
     let f = fix();
     let mut v = f.request_json();
     v["context"] = json!(format!("seen\x1b[31m{}", "x".repeat(5000)));
-    let r = parse_request(&v).unwrap();
+    let r = parse_request(&v, &policy()).unwrap();
     assert_eq!(r.context.chars().count(), MAX_CONTEXT);
     assert!(!r.context.contains('\x1b'));
     for k in ["intent", "purpose", "context", "risk", "run_plan", "manifest"] {
         let mut w = f.request_json();
         w.as_object_mut().unwrap().remove(k);
-        assert!(matches!(parse_request(&w), Err(ParseError::Invalid(_))), "{k} is required");
+        assert!(matches!(parse_request(&w, &policy()), Err(ParseError::Invalid(_))), "{k} is required");
     }
     // 5 entries at most
     let mut w = f.request_json();
     w["manifest"] = json!((0..6).map(|n| json!({"tool": "shell", "argv": [f.bin, "-I", f.script, format!("{n}")], "files": [f.script], "runner_provenance": "project_snapshot"})).collect::<Vec<_>>());
-    assert!(matches!(parse_request(&w), Err(ParseError::Invalid(m)) if m.contains("1 to 5")));
+    assert!(matches!(parse_request(&w, &policy()), Err(ParseError::Invalid(m)) if m.contains("1 to 5")));
     w["manifest"].as_array_mut().unwrap().pop();
-    assert!(parse_request(&w).is_ok());
+    assert!(parse_request(&w, &policy()).is_ok());
     // unknown fields on an entry (an agent cannot hand in a binary hash, an env or a cwd)
     let mut w = f.request_json();
     w["manifest"][0]["env"] = json!({"PATH": "/tmp"});
-    assert!(matches!(parse_request(&w), Err(ParseError::Invalid(_))));
+    assert!(matches!(parse_request(&w, &policy()), Err(ParseError::Invalid(_))));
     // the same action twice
     let mut w = f.request_json();
     w["manifest"] = json!([f.entry(), f.entry()]);
-    assert!(matches!(parse_request(&w), Err(ParseError::Invalid(m)) if m.contains("twice")));
+    assert!(matches!(parse_request(&w, &policy()), Err(ParseError::Invalid(m)) if m.contains("twice")));
     // a denied entry carries the hash of the manifest as asked for
     let mut w = f.request_json();
     w["manifest"][0]["argv"] = json!(["/usr/bin/git", "push"]);
-    assert!(matches!(parse_request(&w), Err(ParseError::Denied { .. })));
+    assert!(matches!(parse_request(&w, &policy()), Err(ParseError::Denied { .. })));
 }
 
 // ---------------------------------------------------------------------------------------------- staging rules
@@ -286,7 +352,7 @@ fn the_same_manifest_is_staged_once() {
 fn a_refused_manifest_is_not_staged_again_for_a_day() {
     let f = fix();
     let w = who(Kind::Agent, Tier::L4, "t1");
-    let mh = manifest_hash(&parse_request(&f.request_json()).unwrap().manifest);
+    let mh = manifest_hash(&parse_request(&f.request_json(), &policy()).unwrap().manifest);
     // refused by the operator (in the audit log)
     let op = vec![ev(REFUSED, json!({"request_id": "ar-x", "source": "operator", "manifest_hash": mh, "blocks_restage": true}), 0)];
     let (msg, _) = refusal(admit_at(&[], &op, &w, &f.request_json(), 3600));
@@ -332,7 +398,7 @@ fn a_record_is_made_hashed_and_pinned() {
     assert!(r.manifest[0].env.keys().all(|k| !k.starts_with("DYLD_") && k != "LD_PRELOAD"));
     assert_eq!(r.run, "run-1");
     assert_eq!(r.uses, 0);
-    add_record(&f.home, r.clone()).unwrap();
+    add_record(&f.home, r.clone(), None).unwrap();
     let s = load(&f.home).unwrap();
     assert_eq!(s.records, vec![r]);
     let mode = fs::metadata(store_path(&f.home)).unwrap().permissions().mode() & 0o777;
@@ -402,7 +468,7 @@ fn assert_ignored(f: &Fix, why: &str) {
 fn forged_store(f: &Fix) -> Vec<u8> {
     let mut r = build_record(&f.home, &f.new_record(vec![f.entry()]), 1_800_000_000, &at(0)).unwrap();
     r.id = "ta-forged0001".into();
-    serde_json::to_vec_pretty(&Store { version: 1, records: vec![r] }).unwrap()
+    serde_json::to_vec_pretty(&Store { version: 1, records: vec![r], audit_head: None }).unwrap()
 }
 
 #[test]
@@ -422,7 +488,7 @@ fn forgery_an_agent_writable_path_cannot_create_a_valid_record() {
     assert!(load(&f.home).unwrap().records.is_empty(), "no store, no records, whatever else is on disk");
     // 3. an honest record, then the store is replaced by an edited one
     let r = build_record(&f.home, &f.new_record(vec![f.entry()]), 1_800_000_000, &at(0)).unwrap();
-    add_record(&f.home, r).unwrap();
+    add_record(&f.home, r, None).unwrap();
     assert_eq!(load(&f.home).unwrap().records.len(), 1);
     fs::write(store_path(&f.home), &forged).unwrap();
     assert_ignored(&f, "edited store");
@@ -447,12 +513,12 @@ fn forgery_an_agent_writable_path_cannot_create_a_valid_record() {
 fn writing_never_goes_over_a_store_that_does_not_verify() {
     let f = fix();
     let r1 = build_record(&f.home, &f.new_record(vec![f.entry()]), 1_800_000_000, &at(0)).unwrap();
-    add_record(&f.home, r1).unwrap();
+    add_record(&f.home, r1, None).unwrap();
     fs::write(store_path(&f.home), forged_store(&f)).unwrap();
     let r2 = build_record(&f.home, &f.new_record(vec![f.entry()]), 1_800_000_001, &at(1)).unwrap();
-    let err = add_record(&f.home, r2).unwrap_err();
+    let err = add_record(&f.home, r2, None).unwrap_err();
     assert!(err.contains("does not match its pin"), "{err}");
-    assert!(revoke(&f.home, "ta-forged0001", &at(2)).is_err(), "nor is revoke a way to re-pin a tampered store");
+    assert!(revoke(&f.home, "ta-forged0001", &at(2), None).is_err(), "nor is revoke a way to re-pin a tampered store");
 }
 
 #[test]
@@ -460,26 +526,26 @@ fn revocation_is_irreversible() {
     let f = fix();
     let r = build_record(&f.home, &f.new_record(vec![f.entry()]), 1_800_000_000, &at(0)).unwrap();
     let id = r.id.clone();
-    add_record(&f.home, r).unwrap();
-    let r = revoke(&f.home, &id, &at(5)).unwrap();
+    add_record(&f.home, r, None).unwrap();
+    let r = revoke(&f.home, &id, &at(5), None).unwrap();
     assert_eq!(r.revoked.as_deref(), Some(at(5).as_str()));
-    assert!(revoke(&f.home, &id, &at(6)).unwrap_err().contains("already revoked"));
+    assert!(revoke(&f.home, &id, &at(6), None).unwrap_err().contains("already revoked"));
     let s = load(&f.home).unwrap();
     assert!(s.records[0].is_revoked());
     // the only way to a live grant is a NEW record
     let r2 = build_record(&f.home, &f.new_record(vec![f.entry()]), 1_800_000_100, &at(100)).unwrap();
     assert_ne!(r2.id, id);
-    add_record(&f.home, r2).unwrap();
+    add_record(&f.home, r2, None).unwrap();
     let s = load(&f.home).unwrap();
     assert!(s.records[0].is_revoked() && !s.records[1].is_revoked());
-    assert!(revoke(&f.home, "ta-nonexistent", &at(7)).is_err());
+    assert!(revoke(&f.home, "ta-nonexistent", &at(7), None).is_err());
 }
 
 #[test]
 fn the_review_diffs_against_earlier_grants_and_replays_recorded_cards_as_data() {
     let f = fix();
     let r = build_record(&f.home, &f.new_record(vec![f.entry()]), 1_800_000_000, &at(0)).unwrap();
-    add_record(&f.home, r.clone()).unwrap();
+    add_record(&f.home, r.clone(), None).unwrap();
     let s = load(&f.home).unwrap();
     let same = grant_diff(&s, &[f.entry()]);
     assert!(same[0].contains("granted before") && same[0].contains(&r.id), "{same:?}");
@@ -499,30 +565,303 @@ fn the_review_diffs_against_earlier_grants_and_replays_recorded_cards_as_data() 
     assert!(dry_run(&[], &[f.entry()])[0].contains("no recorded shell cards"));
 }
 
+
+// ---------------------------------------------------------------------------------------------- workspace-wide limits
+
+fn real_now() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64
+}
+
+fn host_who(session: &str) -> Who {
+    Who { kind: Kind::Host, label: "host:claude-code/opus".into(), role: None, model: "opus".into(), span: None, task: None, taint: HOST_TAINT, run: session.into(), mission: format!("host-{session}") }
+}
+
+impl Fix {
+    /// A workspace directory beside the home, with the `local/` the ledger lives in.
+    fn ws(&self) -> PathBuf {
+        let ws = self.home.join("workspaces/w");
+        fs::create_dir_all(ws.join("local")).unwrap();
+        ws
+    }
+    /// `record_request` as the daemon calls it, at `offset` seconds from now.
+    fn record(&self, who: &Who, req: &Value, offset: i64) -> Outcome {
+        let rfc = delphi_core::time::format_unix_millis(real_now() + offset, 0);
+        record_request(&self.ws(), &self.home, who, parse_request(req, &policy()), &Clock { now_unix: real_now() + offset, now_rfc: &rfc })
+    }
+}
+
+// Red-team P1: a host that sends a fresh session id with every call used to get a fresh budget each time.
+#[test]
+fn fresh_host_session_ids_buy_no_fresh_budget() {
+    let f = fix();
+    assert!(matches!(f.record(&host_who("sess00000"), &variant(&f, 0), 0), Outcome::Staged(_)));
+    // another session id, seconds later: the workspace takes one host request a minute
+    let (msg, log) = refusal(f.record(&host_who("sess00001"), &variant(&f, 1), 5));
+    assert!(msg.contains("this workspace takes one host"), "{msg}");
+    assert!(log.is_none());
+    // spaced out, a new session id each time: the workspace stops at its host cap
+    let mut staged_count = 1;
+    let mut last = String::new();
+    for n in 1..14 {
+        match f.record(&host_who(&format!("sess{n:05}")), &variant(&f, n), n as i64 * 120) {
+            Outcome::Staged(_) => staged_count += 1,
+            Outcome::Refused { message, .. } => last = message,
+        }
+    }
+    assert_eq!(staged_count, MAX_PENDING_HOST_WORKSPACE, "at most {MAX_PENDING_HOST_WORKSPACE} host requests wait in one workspace, whatever the session ids");
+    assert!(last.contains("host requests are already pending in this workspace"), "{last}");
+    assert_eq!(read_ledger(&f.ws()).unwrap().iter().filter(|e| e.kind == STAGED).count(), staged_count);
+}
+
+#[test]
+fn the_workspace_as_a_whole_is_capped_for_agents_too() {
+    let f = fix();
+    let mut staged_count = 0;
+    let mut last = String::new();
+    for n in 0..(MAX_PENDING_WORKSPACE + 6) {
+        // a fresh task and mission each time
+        let mut w = who(Kind::Agent, Tier::L4, &format!("task{n}"));
+        w.mission = format!("mission{n}");
+        match f.record(&w, &variant(&f, n), 0) {
+            Outcome::Staged(_) => staged_count += 1,
+            Outcome::Refused { message, .. } => last = message,
+        }
+    }
+    assert_eq!(staged_count, MAX_PENDING_WORKSPACE);
+    assert!(last.contains("in this workspace"), "{last}");
+}
+
+#[test]
+fn a_refusal_bars_the_manifest_across_every_mission_and_session() {
+    let f = fix();
+    let p = staged(f.record(&host_who("sess00000"), &variant(&f, 7), 0));
+    let id = p["id"].as_str().unwrap().to_string();
+    refuse_audited(&f.home, &id, p["manifest_hash"].as_str().unwrap(), "2026-11-08T00:00:00.000Z").unwrap();
+    // the same manifest from another session, and from an agent in another mission, a few minutes later
+    let (m1, _) = refusal(f.record(&host_who("sess00001"), &variant(&f, 7), 200));
+    assert!(m1.contains("24 hours"), "{m1}");
+    let mut w = who(Kind::Agent, Tier::L4, "t9");
+    w.mission = "other-mission".into();
+    assert!(refusal(f.record(&w, &variant(&f, 7), 200)).0.contains("24 hours"));
+    // a different manifest is not barred
+    assert!(matches!(f.record(&host_who("sess00002"), &variant(&f, 8), 400), Outcome::Staged(_)));
+    // and the operator's answer frees the slot it held
+    assert!(resolved_ids(&read_audit(&f.home).unwrap()).contains(&id));
+}
+
+// ---------------------------------------------------------------------------------------------- the audit log is verified
+
+fn made(f: &Fix, n: usize, request: Option<&str>) -> (Record, Value) {
+    let mut e = f.entry();
+    e.argv.push(format!("--case={n}"));
+    let mut r = build_record(&f.home, &f.new_record(vec![e]), 1_800_000_000 + n as i64, &at(n as i64)).unwrap();
+    r.request_id = request.map(String::from);
+    let payload = json!({"id": r.id, "request_id": r.request_id, "manifest_hash": r.manifest_hash, "run": r.run, "by": "operator", "source": "operator"});
+    (r, payload)
+}
+
+fn audit_segment(f: &Fix) -> PathBuf {
+    audit_dir(&f.home).join("events/000001.jsonl")
+}
+
+// Red-team P1: the audit log was read with `replay` (contiguity only), so a deleted `created` event made a request pending again.
+#[test]
+fn a_tampered_audit_log_is_refused_loudly_not_read_half_trusted() {
+    let f = fix();
+    let (r1, p1) = made(&f, 1, Some("ar-0000000001"));
+    create_audited(&f.home, r1, p1).unwrap();
+    let (r2, p2) = made(&f, 2, Some("ar-0000000002"));
+    create_audited(&f.home, r2, p2).unwrap();
+    let original = fs::read_to_string(audit_segment(&f)).unwrap();
+    assert_eq!(read_audit(&f.home).unwrap().len(), 2);
+    assert_eq!(load(&f.home).unwrap().audit_head.map(|h| h.seq), Some(2), "the pinned store records how far the log reaches");
+    let lines: Vec<&str> = original.lines().collect();
+    let bad = |what: &str, content: String| {
+        fs::write(audit_segment(&f), content).unwrap();
+        let e = read_audit(&f.home).unwrap_err();
+        assert!(e.contains("fails verification") || e.contains("cannot be read"), "{what}: {e}");
+        // and the request-staging path refuses with that message instead of treating the log as empty
+        let (msg, log) = refusal(f.record(&host_who("sess00000"), &variant(&f, 40), 0));
+        assert!(msg.contains("audit log") && log.is_none(), "{what}: {msg}");
+        fs::write(audit_segment(&f), &original).unwrap();
+        assert_eq!(read_audit(&f.home).unwrap().len(), 2, "restored: {what}");
+    };
+    bad("first event deleted (its request would be pending again)", format!("{}\n", lines[1]));
+    bad("last event deleted (the tail was cut)", format!("{}\n", lines[0]));
+    bad("log emptied", String::new());
+    bad("events swapped", format!("{}\n{}\n", lines[1], lines[0]));
+    bad("an event edited", format!("{}\n{}\n", lines[0], lines[1].replace("ar-0000000002", "ar-0000000009")));
+    // a forged event, with no chain fields at all, to hide a pending request
+    let mut forged = EventEnvelope::new("operator-audit", REFUSED, json!({"request_id": "ar-0000000003", "manifest_hash": "x", "blocks_restage": true}));
+    forged.seq = 3;
+    forged.timestamp = at(9);
+    bad("an unchained event appended", format!("{}\n{}\n{}\n", lines[0], lines[1], serde_json::to_string(&forged).unwrap()));
+    // the whole log deleted
+    fs::remove_dir_all(audit_dir(&f.home)).unwrap();
+    assert!(read_audit(&f.home).unwrap_err().contains("deleted"));
+}
+
+#[test]
+fn an_authorization_is_audited_before_it_is_live_and_a_failed_store_change_is_rolled_back() {
+    let f = fix();
+    let (r, p) = made(&f, 1, Some("ar-0000000001"));
+    create_audited(&f.home, r.clone(), p.clone()).unwrap();
+    let audit = read_audit(&f.home).unwrap();
+    assert_eq!(audit.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>(), [CREATED]);
+    assert_eq!(load(&f.home).unwrap().records.len(), 1);
+    // the same request cannot be answered twice
+    let (r2, p2) = made(&f, 2, Some("ar-0000000001"));
+    assert!(create_audited(&f.home, r2, p2).unwrap_err().contains("already answered"));
+    // a store change that fails after the event was written leaves a rollback, and the request stays unanswered
+    let mut dup = made(&f, 3, Some("ar-0000000007")).0;
+    dup.id = r.id.clone();
+    let err = create_audited(&f.home, dup, json!({"id": r.id, "request_id": "ar-0000000007", "by": "operator"})).unwrap_err();
+    assert!(err.contains("exists"), "{err}");
+    let audit = read_audit(&f.home).unwrap();
+    assert_eq!(audit.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>(), [CREATED, CREATED, CREATE_ROLLED_BACK]);
+    let resolved = resolved_ids(&audit);
+    assert!(resolved.contains("ar-0000000001") && !resolved.contains("ar-0000000007"), "a rolled-back event answers nothing: {resolved:?}");
+    // two authorizes at once: the second cannot open the audit log while the first holds it
+    let held = open_audit(&f.home).unwrap();
+    let (r4, p4) = made(&f, 4, Some("ar-0000000004"));
+    assert!(create_audited(&f.home, r4, p4).unwrap_err().contains("another"));
+    drop(held);
+    // revoke is audited first, too
+    let rec = revoke_audited(&f.home, &r.id, &at(50)).unwrap();
+    assert!(rec.is_revoked());
+    assert_eq!(read_audit(&f.home).unwrap().last().unwrap().kind, REVOKED);
+    assert!(revoke_audited(&f.home, &r.id, &at(51)).unwrap_err().contains("already revoked"));
+    assert_eq!(load(&f.home).unwrap().audit_head.unwrap().seq, read_audit(&f.home).unwrap().last().unwrap().seq, "the pin follows the log");
+}
+
+// ---------------------------------------------------------------------------------------------- a crash cannot brick the store
+
+#[test]
+fn a_crash_between_pinning_and_moving_the_store_is_recovered_and_a_planted_next_file_is_ignored() {
+    let f = fix();
+    add_record(&f.home, made(&f, 1, None).0, None).unwrap();
+    assert!(!next_path(&f.home).exists(), "a finished change leaves no .next");
+    // the crash: the new bytes are written and pinned, the rename never happened
+    let mut s = load(&f.home).unwrap();
+    s.records.push(made(&f, 2, None).0);
+    let bytes = serde_json::to_vec_pretty(&s).unwrap();
+    fs::write(next_path(&f.home), &bytes).unwrap();
+    let mut l = lock::read(&f.home.join("operator/ratified.lock")).unwrap();
+    l.files.insert(LOCK_KEY.into(), hash(&bytes));
+    lock::write(&f.home.join("operator/ratified.lock"), &l).unwrap();
+    assert_eq!(load(&f.home).unwrap().records.len(), 2, "the pinned bytes are used even though the live file is the old version");
+    // the next change finishes the move and adds to it
+    add_record(&f.home, made(&f, 3, None).0, None).unwrap();
+    assert_eq!(load(&f.home).unwrap().records.len(), 3);
+    assert!(!next_path(&f.home).exists());
+    assert_eq!(hash(&fs::read(store_path(&f.home)).unwrap()), lock::read(&f.home.join("operator/ratified.lock")).unwrap().files[LOCK_KEY]);
+    // a planted .next matches no pin and changes nothing
+    fs::write(next_path(&f.home), forged_store(&f)).unwrap();
+    assert_eq!(load(&f.home).unwrap().records.len(), 3);
+    // and with no pin at all it is ignored, as a planted store is
+    let mut l = lock::read(&f.home.join("operator/ratified.lock")).unwrap();
+    l.files.remove(LOCK_KEY);
+    lock::write(&f.home.join("operator/ratified.lock"), &l).unwrap();
+    assert_ignored(&f, "pin removed");
+}
+
+#[test]
+fn a_script_or_runner_another_user_could_replace_is_not_pinned() {
+    let f = fix();
+    let make = |e: Entry| build_record(&f.home, &f.new_record(vec![e]), 1_800_000_000, &at(0));
+    fs::set_permissions(&f.script, fs::Permissions::from_mode(0o664)).unwrap();
+    assert!(make(f.entry()).unwrap_err().contains("group- or world-writable"));
+    fs::set_permissions(&f.script, fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(make(f.entry()).is_ok());
+    // a directory anyone in the group can write to
+    let dir = fs::canonicalize(f._t.path()).unwrap().join("shared");
+    fs::create_dir_all(&dir).unwrap();
+    let s = dir.join("s.py");
+    fs::write(&s, b"print(2)").unwrap();
+    fs::set_permissions(&s, fs::Permissions::from_mode(0o644)).unwrap();
+    let mut e = f.entry();
+    e.argv[2] = s.to_string_lossy().into();
+    e.files = vec![e.argv[2].clone()];
+    assert!(make(e.clone()).is_ok());
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o775)).unwrap();
+    assert!(make(e).unwrap_err().contains("directory"));
+}
+
+// ---------------------------------------------------------------------------------------------- no consumer, workspace-wide
+
+/// Every `.rs` file of every crate, with its path relative to the workspace root.
+fn workspace_sources() -> Vec<(String, String)> {
+    let root = fs::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")).unwrap();
+    let mut out = vec![];
+    for e in walkdir::WalkDir::new(root.join("crates")).into_iter().flatten().filter(|e| e.path().extension().is_some_and(|x| x == "rs")) {
+        let rel = e.path().strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
+        out.push((rel, fs::read_to_string(e.path()).unwrap()));
+    }
+    out
+}
+
+/// True when `text` uses `item` through `prefix::` as a whole word.
+fn uses_item(text: &str, prefix: &str, item: &str) -> bool {
+    let needle = format!("{prefix}::{item}");
+    text.match_indices(&needle).any(|(i, _)| {
+        let before_ok = i == 0 || !text[..i].chars().next_back().is_some_and(|c| c.is_alphanumeric() || c == '_');
+        let after = text[i + needle.len()..].chars().next();
+        before_ok && !after.is_some_and(|c| c.is_alphanumeric() || c == '_')
+    })
+}
+
+// S1 grants no capability: no code that decides a card, runs a command or starts a run may read the store. Scanned over the whole
+// workspace, with the allowlist of who may import the module at all, and a narrower one of who may touch the store.
 #[test]
 fn nothing_consumes_a_record_in_this_slice() {
-    // S1 grants no capability: no module that decides a card, runs a command or starts a run may read the store. The store's
-    // readers are this module, and the operator's `delphi test` commands (crates/delphi/src/test_cmd.rs) and `delphi doctor`.
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let needles = ["authorization::load", "authorization::mutate", "authorization::Store", "authorization::Record", "authorization::add_record", "authorization::revoke", "authorization::store_path", "authorization::load_or_ignore"];
-    let mut files = vec![];
-    for e in walkdir::WalkDir::new(&src).into_iter().flatten().filter(|e| e.path().extension().is_some_and(|x| x == "rs")) {
-        files.push(e.path().to_path_buf());
-    }
-    assert!(files.len() > 50);
-    for p in files {
-        if p.starts_with(src.join("authorization")) || p.file_name().is_some_and(|n| n == "authorization.rs") {
+    const IMPORTERS: &[&str] = &[
+        "crates/delphi-engine/src/authorization.rs",
+        "crates/delphi-engine/src/authorization/tests.rs",
+        "crates/delphi-engine/src/engine.rs",   // stages or refuses a request
+        "crates/delphi-engine/src/service.rs",  // the host socket method
+        "crates/delphi-engine/src/tools.rs",    // the agent tool
+        "crates/delphi/src/test_cmd.rs",        // the operator's commands
+        "crates/delphi/src/test_cmd_tests.rs",
+        "crates/delphi/src/doctor.rs",          // verifies the pin
+        "crates/delphi/tests/docs.rs",          // schemas
+    ];
+    const STORE_READERS: &[&str] = &["crates/delphi-engine/src/authorization.rs", "crates/delphi-engine/src/authorization/tests.rs", "crates/delphi/src/test_cmd.rs", "crates/delphi/src/test_cmd_tests.rs", "crates/delphi/src/doctor.rs", "crates/delphi/tests/docs.rs"];
+    const STORE_ITEMS: &[&str] = &["load", "load_or_ignore", "mutate", "add_record", "revoke", "store_path", "Store", "Record", "build_record", "create_audited", "revoke_audited", "refuse_audited", "read_audit", "audit_dir", "open_audit", "append_audit", "AuditHead"];
+    let sources = workspace_sources();
+    assert!(sources.len() > 200, "the scan must see the whole workspace");
+    for (rel, text) in &sources {
+        let imports = text.contains("authorization::") || text.contains("::authorization") || text.contains("mod authorization");
+        let raw = text.contains("authorizations.json") || text.contains("authorizations.json.next");
+        if !imports && !raw {
             continue;
         }
-        let text = fs::read_to_string(&p).unwrap();
-        for n in needles {
-            assert!(!text.contains(n), "{} reads the authorization store ({n}); S1 grants no capability, an authorization cannot be consumed before S2", p.display());
+        let allowed = IMPORTERS.contains(&rel.as_str()) || rel == "crates/delphi-engine/src/lib.rs"; // `pub mod authorization;`
+        assert!(allowed, "{rel} uses the authorization module or the store file; S1 grants no capability, so nothing outside the allowlist may (an authorization cannot be consumed before S2)");
+        if raw {
+            assert!(STORE_READERS.contains(&rel.as_str()), "{rel} names the store file");
+        }
+        if !STORE_READERS.contains(&rel.as_str()) && rel != "crates/delphi-engine/src/lib.rs" {
+            // the request side may use request items only, under the module's own name and under any alias it gives it
+            let mut prefixes = vec!["authorization".to_string()];
+            for l in text.lines().filter(|l| l.contains("authorization as ")) {
+                if let Some(a) = l.split("authorization as ").nth(1) {
+                    prefixes.push(a.trim().trim_end_matches(';').trim().to_string());
+                }
+            }
+            for p in &prefixes {
+                for item in STORE_ITEMS {
+                    assert!(!uses_item(text, p, item), "{rel} reaches the store through {p}::{item}");
+                }
+            }
         }
     }
-    // and the engine's approval path never names an authorization at all
-    for f in ["approval.rs", "exec.rs", "hooks.rs", "broker.rs"] {
-        if let Ok(t) = fs::read_to_string(src.join(f)) {
-            assert!(!t.to_lowercase().contains("authorization"), "{f} must not know about authorizations in S1");
+    // the approval path, the executor and the hooks never name an authorization at all
+    for (rel, text) in &sources {
+        if ["approval.rs", "exec.rs", "hooks.rs", "broker.rs", "headless", "run.rs"].iter().any(|n| rel.ends_with(n)) && rel != "crates/delphi-engine/src/authorization/tests.rs" {
+            assert!(!text.to_lowercase().contains("authorization:"), "{rel} must not know about `--on-card authorization:` in S1");
         }
     }
+    // the scan itself sees the alias style used by service.rs
+    assert!(uses_item("use crate::authorization as a;\n a::load(x)", "a", "load"));
+    assert!(!uses_item("a::loader()", "a", "load"));
 }

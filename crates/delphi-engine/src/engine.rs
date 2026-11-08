@@ -2049,12 +2049,12 @@ impl Engine {
                 task: Some(sc.task_id.clone()),
                 taint,
                 run: sc.task_id.clone(),
+                mission: sc.m.id.clone(),
             };
             let now = self.now();
             let clock = crate::authorization::Clock { now_unix: (self.clock_unix)(), now_rfc: &now };
-            let log = sc.m.replay().unwrap_or_default();
-            let operator = crate::authorization::read_audit(&self.ws.home);
-            match crate::authorization::admit(&log, &operator, &who, crate::authorization::parse_request(&args), &clock) {
+            let parsed = crate::authorization::parse_request(&args, &crate::authorization::Policy::system());
+            match crate::authorization::record_request(&self.ws.dir, &self.ws.home, &who, parsed, &clock) {
                 crate::authorization::Outcome::Staged(payload) => {
                     result = tools::ToolResult::ok(format!("staged as {} (tier L0, inert) for the operator's review; it can never be used by this run", payload["id"].as_str().unwrap_or("?")));
                     asked.insert(i, (crate::authorization::STAGED.into(), payload));
@@ -4146,7 +4146,7 @@ mod tests {
 
     fn authorization_ask(n: u32) -> Value {
         json!({"intent": "run the parser tests", "purpose": "needs a Red shell", "context": "I was reading the parser.", "risk": "runs a script in the sandbox", "run_plan": "once",
-               "manifest": [{"tool": "shell", "argv": ["/opt/py/python3", "-I", "/opt/py/t.py", format!("--case={n}")], "files": ["/opt/py/t.py"], "runner_provenance": "project_snapshot"}]})
+               "manifest": [{"tool": "shell", "argv": ["/usr/bin/python3", "-I", "/opt/py/t.py", format!("--case={n}")], "files": ["/opt/py/t.py"], "runner_provenance": "project_snapshot"}]})
     }
 
     // specs/092 TA-0: the daemon computes the taint from the span; a request from a span at federated_peer or lower cannot exist.

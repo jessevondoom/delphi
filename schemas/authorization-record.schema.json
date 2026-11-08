@@ -7,7 +7,14 @@
   "required": ["version", "records"],
   "properties": {
     "version": { "const": 1 },
-    "records": { "type": "array", "items": { "$ref": "#/$defs/record" } }
+    "records": { "type": "array", "items": { "$ref": "#/$defs/record" } },
+    "audit_head": {
+      "type": ["object", "null"],
+      "required": ["seq", "h"],
+      "properties": { "seq": { "type": "integer", "minimum": 1 }, "h": { "type": "string", "pattern": "^[0-9a-f]{64}$" } },
+      "additionalProperties": false,
+      "description": "The last event of the operator's audit log (operator/audit) as of the last change to this store. The store is pinned, so a deleted, cut or rewritten audit log no longer reaches it and is refused."
+    }
   },
   "additionalProperties": false,
   "$defs": {

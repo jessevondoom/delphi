@@ -392,16 +392,14 @@ impl EngineService {
         let ws = &self.engine.ws;
         h::gate(&ws.dir).map_err(host_err)?;
         let c = h::Caller::parse(&p).map_err(host_err)?;
-        let parsed = a::parse_request(&p);
+        let parsed = a::parse_request(&p, &a::Policy::system());
         let model: String = p["model"].as_str().unwrap_or("").chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | ':')).take(40).collect();
-        let who = a::Who { kind: a::Kind::Host, label: c.label(Some(&model)), role: None, model: if model.is_empty() { "unknown".into() } else { model }, span: None, task: None, taint: a::HOST_TAINT, run: c.session.clone() };
+        let who = a::Who { kind: a::Kind::Host, label: c.label(Some(&model)), role: None, model: if model.is_empty() { "unknown".into() } else { model }, span: None, task: None, taint: a::HOST_TAINT, run: c.session.clone(), mission: c.mission() };
         let _gate = self.host_gate.lock().await;
         let m = self.mission_at(Some(&c.mission()), c.cwd.to_str()).await?;
-        let log = m.replay().map_err(engine_err)?;
-        let operator = a::read_audit(&ws.home);
         let now = delphi_core::time::now_rfc3339();
         let clock = a::Clock { now_unix: (self.engine.clock_unix)(), now_rfc: &now };
-        match a::admit(&log, &operator, &who, parsed, &clock) {
+        match a::record_request(&ws.dir, &ws.home, &who, parsed, &clock) {
             a::Outcome::Staged(payload) => {
                 let id = payload["id"].as_str().unwrap_or("").to_string();
                 m.append(EventEnvelope::new(&m.id, a::STAGED, payload)).await.map_err(engine_err)?;
@@ -3353,7 +3351,7 @@ mod tests {
             c.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
             c.hello(&htok).unwrap();
             let ask = |n: u32| json!({"session": session, "tool": "claude-code", "cwd": cwd, "model": "opus", "intent": "run the parser tests", "purpose": "needs a Red shell", "context": "c\u{1b}[2K", "risk": "r", "run_plan": "once",
-                "manifest": [{"tool": "shell", "argv": ["/opt/py/python3", "-I", "/opt/py/t.py", format!("--case={n}")], "files": ["/opt/py/t.py"], "runner_provenance": "project_snapshot"}]});
+                "manifest": [{"tool": "shell", "argv": ["/usr/bin/python3", "-I", "/opt/py/t.py", format!("--case={n}")], "files": ["/opt/py/t.py"], "runner_provenance": "project_snapshot"}]});
             let ok = c.call("host.request_test_authorization", ask(1)).unwrap();
             assert_eq!((ok["staged"].clone(), ok["tier"].clone(), ok["taint"].clone(), ok["usable"].clone()), (json!(true), json!("L0"), json!("federated_peer"), json!(false)));
             // the rate limit holds for a host session, and nothing else was staged
