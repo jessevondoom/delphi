@@ -487,8 +487,9 @@ enable -f "$scratch/probe-mark.dylib" probemark >/dev/null 2>&1
 echo "dl-attempted"
 "#;
 
-/// A 33 KB arm64 dylib whose constructor creates `<its own path>.loaded` (built from a 15-line C file with
-/// `cc -dynamiclib -arch arm64 -Os -Wl,-dead_strip`). Loading it is the one thing the sixth canary tries.
+/// A 33 KB arm64 dylib built from `authorized/probe_mark.c` (exact command in that file's header, hashes pinned in the tests).
+/// A probe canary only: it is loaded ONLY inside the sandbox under test, to see whether native code can be mapped from scratch, and
+/// the product never loads or executes it anywhere else. Its constructor creates `<its own path>.loaded` and does nothing more.
 pub(crate) const PROBE_DYLIB: &[u8] = include_bytes!("authorized/probe_mark.dylib");
 
 const CANARY_TEXT: &str = "CANARY-SECRET-delphi-092";

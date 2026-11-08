@@ -753,3 +753,81 @@ fn more_credential_names_are_refused_in_the_home() {
     fs::create_dir(h.path().join(".ssh")).unwrap();
     assert!(h.recheck().unwrap_err().contains("credential"));
 }
+
+// ---------------------------------------------------------------------------------------------- the probe library
+
+/// sha256 and blake3 of the committed `probe_mark.dylib`. Change the C file, the binary and these together, on purpose.
+const PROBE_DYLIB_SHA256: &str = "ac7e23c519783e8faa5b1768524811153288e3002bd908ebe0aca4803b39899d";
+const PROBE_DYLIB_BLAKE3: &str = "400d6ac76e19d85d1093fe77303ef628a3cb9471d10e3dc40af0e70ef06480d1";
+
+fn probe_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/authorized")
+}
+
+#[test]
+fn the_committed_probe_library_is_pinned_by_hash() {
+    assert_eq!(blake3::hash(PROBE_DYLIB).to_hex().to_string(), PROBE_DYLIB_BLAKE3, "probe_mark.dylib changed: update the pins deliberately");
+    let on_disk = fs::read(probe_dir().join("probe_mark.dylib")).unwrap();
+    assert_eq!(on_disk, PROBE_DYLIB);
+    // the sha256 too, when a tool for it exists
+    for tool in [("/usr/bin/shasum", vec!["-a", "256"]), ("/usr/bin/sha256sum", vec![])] {
+        if !Path::new(tool.0).exists() {
+            continue;
+        }
+        let out = Command::new(tool.0).args(&tool.1).arg(probe_dir().join("probe_mark.dylib")).output().unwrap();
+        assert!(String::from_utf8_lossy(&out.stdout).starts_with(PROBE_DYLIB_SHA256), "{out:?}");
+        return;
+    }
+    eprintln!("skip: no shasum or sha256sum; the blake3 pin above still holds");
+}
+
+fn otool_l(file: &Path) -> Option<String> {
+    let o = Command::new("/usr/bin/otool").arg("-L").arg(file).output().ok()?;
+    // the first line is the queried file's own path; only the library lines are returned
+    o.status.success().then(|| String::from_utf8_lossy(&o.stdout).lines().skip(1).collect::<Vec<_>>().join("\n"))
+}
+
+#[test]
+fn the_probe_library_has_no_local_path_and_depends_on_libsystem_only() {
+    let Some(text) = otool_l(&probe_dir().join("probe_mark.dylib")) else {
+        eprintln!("skip: otool is not available here");
+        return;
+    };
+    let names: Vec<&str> = text.lines().filter_map(|l| l.split_whitespace().next()).collect();
+    assert_eq!(names, vec!["@rpath/probe_mark.dylib", "/usr/lib/libSystem.B.dylib"], "{text}");
+    assert!(!text.contains("/Users/") && !text.contains("worktree") && !text.contains("/private/"), "a local path is embedded: {text}");
+    // and no symbol is exported
+    if let Ok(o) = Command::new("/usr/bin/nm").arg("-gU").arg(probe_dir().join("probe_mark.dylib")).output() {
+        assert!(String::from_utf8_lossy(&o.stdout).trim().is_empty(), "exports: {o:?}");
+    }
+}
+
+#[test]
+fn rebuilding_the_probe_source_gives_the_same_shape() {
+    let clang = Path::new("/usr/bin/clang");
+    if !clang.exists() || !cfg!(target_os = "macos") {
+        eprintln!("skip: no clang for macOS here");
+        return;
+    }
+    let t = tempfile::tempdir().unwrap();
+    let out = t.path().join("probe_mark.dylib");
+    let st = Command::new(clang).args(["-arch", "arm64", "-dynamiclib", "-O2", "-Wl,-dead_strip", "-install_name", "@rpath/probe_mark.dylib", "-o"]).arg(&out).arg(probe_dir().join("probe_mark.c")).status().unwrap();
+    assert!(st.success());
+    let shape = |f: &Path| {
+        let size = Command::new("/usr/bin/size").arg("-m").arg(f).output().unwrap();
+        let text = String::from_utf8_lossy(&size.stdout).lines().filter(|l| l.starts_with("Segment __TEXT")).map(str::to_string).collect::<Vec<_>>();
+        let nm = Command::new("/usr/bin/nm").arg("-gU").arg(f).output().unwrap();
+        (text, String::from_utf8_lossy(&nm.stdout).into_owned(), otool_l(f))
+    };
+    assert_eq!(shape(&out), shape(&probe_dir().join("probe_mark.dylib")), "the committed library does not match probe_mark.c");
+}
+
+#[test]
+fn the_probe_source_does_nothing_but_create_its_marker() {
+    let c = fs::read_to_string(probe_dir().join("probe_mark.c")).unwrap();
+    // the header comment says "no network, no environment, no exec": look only at code lines
+    let code: String = c.lines().filter(|l| !l.trim_start().starts_with('*') && !l.trim_start().starts_with("/*")).collect::<Vec<_>>().join("\n");
+    for banned in ["socket", "connect", "exec", "system(", "getenv", "popen", "fork", "unlink"] {
+        assert!(!code.contains(banned), "probe_mark.c mentions `{banned}`");
+    }
+}
