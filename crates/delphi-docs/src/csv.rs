@@ -1,4 +1,4 @@
-//! CSV and TSV as tables, read the same way as a spreadsheet sheet (`specs/014` §4): dimensions, header
+//! CSV and TSV as tables, read the same way as a spreadsheet sheet (`specs/095` §4): dimensions, header
 //! row and a bounded slice. The whole file is scanned for the row count; only the slice is kept.
 
 use crate::sniff::Format;

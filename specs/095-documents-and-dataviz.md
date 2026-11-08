@@ -1,6 +1,6 @@
 ---
-id: spec-014-documents-and-dataviz
-title: "014: Document Reading, Document Creation & Data Visualization (dependency-free)"
+id: spec-095-documents-and-dataviz
+title: "095: Document Reading, Document Creation & Data Visualization (dependency-free)"
 author: architect
 timestamp: 2026-10-25T12:00:00Z
 status: approved   # by the operator, 2026-10-25 ("your plan sounds solid. go"); whole document, the five decisions in §10 as recommended
@@ -12,7 +12,9 @@ source_mission: 2026-10-25-documents-and-dataviz
 tags: [spec, tools, documents, pdf, office, archives, html, charts, dataviz]
 ---
 
-# Spec 014: Document Reading, Document Creation & Data Visualization
+# Spec 095: Document Reading, Document Creation & Data Visualization
+
+> **Renumbered from 014 on 2026-11-08** (spec 090). It shared that number with the relay and away-mode spec, which keeps 014. A citation of 014 dated before this may mean either spec.
 
 ## 1. Scope and Non-Goals
 Agents today read and write plain text only (`read_file`, `write_file`, 256 KB caps, `crates/delphi-engine/src/tools.rs`). This spec gives them the common document formats, in two phases: **read first, create second**, with charting and data visualization as a first-class part of creation.

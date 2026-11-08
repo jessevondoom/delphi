@@ -20,7 +20,7 @@ The console is where you work. `/observe` opens the **narrator**, a read-only se
 
 ## Documents and charts, no extra dependencies
 
-Agents can read PDF, Word, Excel, PowerPoint, CSV, HTML, JSON/YAML/TOML, notebooks, mail, calendars, RTF, ODF, epub, images, archives and SQLite queries (`read_doc`), and write HTML pages, reports, decks, spreadsheets, charts, diagrams and archives, each with a provenance sidecar, using code in the repository itself ([`specs/014`](../specs/014-documents-and-dataviz.md)).
+Agents can read PDF, Word, Excel, PowerPoint, CSV, HTML, JSON/YAML/TOML, notebooks, mail, calendars, RTF, ODF, epub, images, archives and SQLite queries (`read_doc`), and write HTML pages, reports, decks, spreadsheets, charts, diagrams and archives, each with a provenance sidecar, using code in the repository itself ([`specs/095`](../specs/095-documents-and-dataviz.md)).
 
 ## Working while you are away
 

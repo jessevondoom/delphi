@@ -1,4 +1,4 @@
-//! JSON, YAML and TOML (`specs/014` §4): small files are shown in full (JSON pretty-printed), large ones as a
+//! JSON, YAML and TOML (`specs/095` §4): small files are shown in full (JSON pretty-printed), large ones as a
 //! size-aware outline. `member` is a path into the data (`users.0.name`) to read just that part.
 
 use crate::sniff::Format;

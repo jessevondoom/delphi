@@ -1,4 +1,4 @@
-//! PNG files we write (`specs/014` §8.4): 8-bit RGBA, one zlib stream, no interlacing. The encoder uses only
+//! PNG files we write (`specs/095` §8.4): 8-bit RGBA, one zlib stream, no interlacing. The encoder uses only
 //! `flate2` and `crc32fast`. The decoder reads any PNG (`specs/029` §9: the reader draws images from the knowledge
 //! base) and our own output back, so tests compare pixels and not bytes.
 

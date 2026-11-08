@@ -1,4 +1,4 @@
-//! Image files, as metadata only (`specs/014` §4): format, size, colour depth, frames and a few text fields.
+//! Image files, as metadata only (`specs/095` §4): format, size, colour depth, frames and a few text fields.
 //! The pixels are not read here; images reach a model through its vision input, not through this tool.
 
 use crate::archive::human;

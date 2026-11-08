@@ -341,7 +341,7 @@ fn refs(text: &str) -> Vec<(bool, String)> {
     out
 }
 
-/// An italic one-line pointer to another page of the encyclopedia, with no quotation marks in it (`specs/061` §3).
+/// An italic one-line pointer to another page of the encyclopedia, with no quotation marks in it (`specs/097` §3).
 fn is_hatnote(q: &str) -> bool {
     q.len() > 2 && q.starts_with('*') && q.ends_with('*') && q.contains("](page:") && !q.contains(['"', '“', '”'])
 }
@@ -650,7 +650,7 @@ impl Library {
     /// The whole page as a file: banner first, body, then the table last (`specs/057` §3.1). This is what `delphi pages
     /// check` runs.
     pub fn check_page_text(&self, text: &str, scope: Scope) -> Checked {
-        // A cached encyclopedia page starts with YAML frontmatter (`specs/061`); the banner is the first line after it.
+        // A cached encyclopedia page starts with YAML frontmatter (`specs/097`); the banner is the first line after it.
         let text = super::page_meta::strip(text);
         let mut found = Vec::new();
         let mut lines = text.lines().skip_while(|l| l.trim().is_empty());

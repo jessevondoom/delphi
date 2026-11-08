@@ -15,7 +15,7 @@ tags: [spec, knowledge, mcp, library, import, summary, encyclopedia, staleness, 
 
 # Spec 068: Research Capture and Imported Summary Pages
 
-> **Status: Approved by the operator on 2026-11-02.** Born from Council t_0001 and t_0002 (2026-11-02) and the operator's rulings of the same day. Builds on [`specs/055`](055-the-central-library-sources-claims-and-pages.md), [`specs/061`](061-encyclopedia-search-pages.md), [`specs/064`](064-knowledge-retrieval-for-agents-and-mcp.md) and [`specs/066`](066-mcp-research-endpoint-and-role-identity.md). Where it overlaps them it reuses their records; it adds no second store.
+> **Status: Approved by the operator on 2026-11-02.** Born from Council t_0001 and t_0002 (2026-11-02) and the operator's rulings of the same day. Builds on [`specs/055`](055-the-central-library-sources-claims-and-pages.md), [`specs/097`](097-encyclopedia-search-pages.md), [`specs/064`](064-knowledge-retrieval-for-agents-and-mcp.md) and [`specs/066`](066-mcp-research-endpoint-and-role-identity.md). Where it overlaps them it reuses their records; it adds no second store.
 
 ## 1. Problem
 
@@ -24,7 +24,7 @@ Research done through Delphi (TUI or a host agent over MCP) is accurate and valu
 ## 2. Operator decisions (2026-11-02)
 
 - **D-1.** Summaries are **searchable by default**, labelled, and kept usable.
-- **D-2.** A summary page is the same object as a spec 061 encyclopedia page (same skill, layout, `valid_until`), and must carry **citations and disambiguation** to be accepted.
+- **D-2.** A summary page is the same object as a spec 097 encyclopedia page (same skill, layout, `valid_until`), and must carry **citations and disambiguation** to be accepted.
 - **D-3.** A summary page **never verifies anything**. Key facts may be *extracted* from it as candidate claims for the operator, or the validator under supervision, to validate.
 - **D-4.** Staleness is a dated flag set at summary time (`valid_until`). A stale page is **refreshed on access, on reference, or on demand, never purged**. Pages are removed only when refuted or found problematic.
 - **D-5.** A summary may be marked `external_unvalidated` and still appear in search, even as a default result, **provided it links to other knowledge-base resources**, making it a conceptual index.
@@ -75,7 +75,7 @@ Entries are content-addressed and deduplicated by source hash (055). Backlinks a
 ## 6. Summary pages
 
 ### 6.1 Acceptance
-Import always succeeds. Citations (each resolvable to a source, path, URL or KB id) and, for a title that collides with an existing page, a disambiguation hatnote are **advisory**: a page lacking them gets a receipt warning, the label "sources not yet linked", a review-queue entry, and the writer adds the hatnote and structure on first refresh (061 §3). A title collision offers merge-as-new-version, disambiguate or rename, defaulting to disambiguate.
+Import always succeeds. Citations (each resolvable to a source, path, URL or KB id) and, for a title that collides with an existing page, a disambiguation hatnote are **advisory**: a page lacking them gets a receipt warning, the label "sources not yet linked", a review-queue entry, and the writer adds the hatnote and structure on first refresh (097 §3). A title collision offers merge-as-new-version, disambiguate or rename, defaulting to disambiguate.
 
 ### 6.2 Conceptual index
 A summary is **index-worthy**, and so a default search result while `external_unvalidated`, when at least one of its `links[]` resolves. One pure daemon function decides:
@@ -120,7 +120,7 @@ Every summary page has a sibling **bibliography file** (`<page-id>.bib.md`, alwa
 
 ## 7. Staleness and refresh
 
-- At summary time the writer sets `valid_until` by content volatility (061 §4). The daemon stores `source_hashes` for every cited source.
+- At summary time the writer sets `valid_until` by content volatility (097 §4). The daemon stores `source_hashes` for every cited source.
 - A page is **stale** when `today > valid_until`, a cited source's hash changed, or a cited claim was superseded.
 - A stale page is served at once, labelled "last checked DATE" (never "expired"). The reader never waits.
 - **Refresh trigger.** Access or reference by a mission only **enqueues** a refresh, and only when source hashes changed or `valid_until` passed. A 24 h per-page cooldown and a per-mission cap apply; MCP access can only enqueue. **The operator set the cap as a time limit: one pass works for at most four minutes** (`delphi kb refresh --stale`), and no model is used, so there is no token spend. A pass renews a stale page only when every library source it cites (linked in the bibliography as `source_id` and `source_hash`) is unchanged; a changed source leaves it stale, marks its key facts for recheck and asks for a rewrite; without it, refresh is on demand only (`delphi kb refresh <id>`, `r` in the console).

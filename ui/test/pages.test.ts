@@ -94,7 +94,7 @@ test('toggle between encyclopedia page and raw file search with f', () => {
   assert.equal(backToPage.a.mode, 'pages');
 });
 
-test('a search shows the encyclopedia page as soon as it arrives, unless the operator chose the raw list or searched again (specs/061 §4.6)', () => {
+test('a search shows the encyclopedia page as soon as it arrives, unless the operator chose the raw list or searched again (specs/097 §4.6)', () => {
   const searched = (q: string, a: A.Arch = A.emptyArch(true)) => {
     for (const c of q) a = walk(a, text(c)).a;
     const r = walk(a, k('enter'));

@@ -1,4 +1,4 @@
-//! Markdown to HTML for generated pages (`specs/014` §7.3 rule 5). Text from an agent goes in as text, never
+//! Markdown to HTML for generated pages (`specs/095` §7.3 rule 5). Text from an agent goes in as text, never
 //! as markup: raw HTML is not recognised, so `<script>` is shown as the characters it is. Links are the one
 //! thing worth saying plainly: a page may not reach out, so only in-page `#anchors` are clickable, and any other
 //! link is printed as its text followed by the address in parentheses. Images are not embedded.

@@ -1,4 +1,4 @@
-//! The safety check for generated pages (`specs/014` §7.3). A page an agent writes is a program the operator
+//! The safety check for generated pages (`specs/095` §7.3). A page an agent writes is a program the operator
 //! opens in a browser, so before it is written it is checked for the three ways a page does harm without being
 //! asked: reaching the network, running code it assembled at run time, and navigating away with data.
 //!

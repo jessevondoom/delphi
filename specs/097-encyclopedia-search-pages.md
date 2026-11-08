@@ -1,6 +1,6 @@
 ---
-id: spec-061-encyclopedia-search-pages
-title: "061: Encyclopedia search pages, inline media, and reputable expansion"
+id: spec-097-encyclopedia-search-pages
+title: "097: Encyclopedia search pages, inline media, and reputable expansion"
 author: architect
 timestamp: 2026-10-31T00:00:00Z
 status: approved   # approved by the operator on 2026-10-31: "commit and approve the spec"
@@ -13,7 +13,9 @@ source_mission: 2026-10-23-foundational-design
 tags: [spec, knowledge, library, search, pages, markdown, images, writer, ui]
 ---
 
-# Spec 061: Encyclopedia search pages, inline media, and reputable expansion
+# Spec 097: Encyclopedia search pages, inline media, and reputable expansion
+
+> **Renumbered from 061 on 2026-11-08** (spec 090). It shared that number with the shell-tool spec, which keeps 061. A citation of 061 dated before this may mean either spec.
 
 **Status.** Approved by the operator on 2026-10-31. Builds on specs [`028`](028-knowledge-window.md), [`029`](029-links-and-inline-reader.md), [`043`](043-knowledge-window-search-page-and-growing-corpus.md), [`050`](050-memory-lifecycle-types-supersession-and-trace-mining.md), [`055`](055-the-central-library-sources-claims-and-pages.md), and [`057`](057-search-pages-generated-and-checked.md).
 

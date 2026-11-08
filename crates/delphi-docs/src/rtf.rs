@@ -1,4 +1,4 @@
-//! RTF to plain text (`specs/014` §4): control words for paragraphs, tabs, quotes and Unicode; hex escapes
+//! RTF to plain text (`specs/095` §4): control words for paragraphs, tabs, quotes and Unicode; hex escapes
 //! through Windows-1252; font tables, style sheets, pictures and other destinations skipped. Formatting is lost.
 
 use crate::pdffont::CP1252_HIGH;

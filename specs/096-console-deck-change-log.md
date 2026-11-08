@@ -1,6 +1,6 @@
 ---
-id: spec-037-console-deck-change-log
-title: "037: The console's left deck shows work and changes, not thinking"
+id: spec-096-console-deck-change-log
+title: "096: The console's left deck shows work and changes, not thinking"
 author: architect
 timestamp: 2026-10-26T09:00:00Z
 status: approved   # decided and approved by the operator 2026-10-26
@@ -12,7 +12,9 @@ source_mission: 2026-10-23-foundational-design
 tags: [spec, console, ui, deck, change-log]
 ---
 
-# Spec 037: The console's left deck shows work and changes, not thinking
+# Spec 096: The console's left deck shows work and changes, not thinking
+
+> **Renumbered from 037 on 2026-11-08** (spec 090). It shared that number with the training-experiments spec, which keeps 037. A citation of 037 dated before this may mean either spec.
 
 ## 1. What this is
 `specs/032` removed the reasoning view from the narrator; the console's left deck (`005e` §8) still streamed each running agent's reasoning (in italics) and its words as they arrived. The operator decided on 2026-10-26 that "the thinking block won't work": it is replaced by the same view the narrator got, **who is working and the changes they record**. The reasoning is no longer kept, even in memory, and not drawn.

@@ -1,4 +1,4 @@
-//! Drawing a checked [`ChartSpec`] as a self-contained SVG (`specs/014` §8.2). The look comes from fixed mark
+//! Drawing a checked [`ChartSpec`] as a self-contained SVG (`specs/095` §8.2). The look comes from fixed mark
 //! specs (thin marks, a 4px rounded data end on a square baseline, 2px lines with an end dot, areas at 10%,
 //! hairline solid grid) and two spacers (a 2px surface gap between touching fills, a 2px surface ring on dots).
 //! Text is always set in the ink tokens, never in a series colour. Light and dark come from CSS variables in the

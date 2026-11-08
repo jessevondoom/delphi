@@ -54,6 +54,20 @@ Words for approvals are fixed: **approve** a spec, **ratify** a proposal (`/rati
 
 When a spec's amendments are folded into its body, move the removed amendment text verbatim to `specs/history/NNN-<slug>.md` (non-normative). Keep every section number: a folded-away section stays as a stub heading, `## N. (folded into §X.Y; was NNN-An)`, and each amendment ID survives as an inline `(was NNN-An)` anchor. `cargo test -p delphi --test spec_refs` fails when a reference (`specs/NNN §X.Y`, `NNN §X`, `NNN-An`) in specs, docs, code comments, the console, schemas, the changelog or mission notes stops resolving. It has a small allowlist of references that were already broken; fix those rather than add to it.
 
+## Spec numbers
+
+A spec number names one spec. Before you create a spec file, run `ls specs` and `gh pr list` and take the next number nobody has; `delphi lint` fails a pull request that adds a second file with a number another spec has, with no allowlist, so if two sessions pick the same number the later pull request gives its new, unmerged spec the next free one.
+
+Three numbers used to be shared. On 2026-11-08 (spec 090) one spec of each pair was renumbered, so a citation of 014, 037 or 061 written before that date may mean either spec of its pair, and commit trailers and merged pull-request text keep the old numbers:
+
+| Number | Was (file name then) | Now | Kept the old number |
+| :-- | :-- | :-- | :-- |
+| 014 | `014-documents-and-dataviz.md` | `095-documents-and-dataviz.md` | `014-relay-and-away-mode.md` |
+| 037 | `037-console-deck-change-log.md` | `096-console-deck-change-log.md` | `037-training-experiments-quality-and-efficiency.md` |
+| 061 | `061-encyclopedia-search-pages.md` | `097-encyclopedia-search-pages.md` | `061-shell-tool.md` |
+
+To tell which a pre-2026-11-08 "spec 014" meant: the documents readers, charts and `delphi-docs` are 095; the relay, away mode and step-up are 014. The console's left deck is 096; training experiments, arms, truth packs and the harness for measuring models are 037. Encyclopedia pages, their cache lifetime and inline media are 097; the `shell` tool and the `!` bang are 061.
+
 ## Security
 
 Report a vulnerability privately to the repository owner (a GitHub security advisory, if enabled, or a direct message) rather than in a public issue. Never include credentials, tokens or customer data in an issue, a test fixture or a spec.

@@ -43,7 +43,7 @@ The mission log holds every `change.recorded` event with its timestamp. `delphi 
 Tool, event, fold, preamble, digest (also for sessions with changes but no questions), `delphi changelog`, `changes` view, the `/observe` and `delphi observe` names (`changes`, with `thinking` and `reasoning` as aliases), and the removal of the reasoning collection from `observer.tsx`. Tests: `tools.rs`, `observe.rs`, `session.rs`, `ui/test/narrator-views.test.ts`, `ui/test/observe.test.ts`, and golden screens.
 
 ## 7. Open
-- The console's left deck no longer streams reasoning: it shows who is working and the recorded changes (`specs/037`).
+- The console's left deck no longer streams reasoning: it shows who is working and the recorded changes (`specs/096`).
 - Whether models call `record_change` as reliably as asked is not measured. If not, add the final-reply fallback (store the last summary message verbatim, never anything else).
 
 **Decided 2026-10-28 (operator: "follow your recommendations").** D-1..D-5 stand. Open items:

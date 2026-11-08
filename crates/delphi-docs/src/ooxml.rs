@@ -1,5 +1,5 @@
 //! Office Open XML packages (docx, xlsx, pptx): a zip of XML parts joined by relationship files
-//! (`specs/014` §4). This module finds parts and follows relationships; the readers are in `docx`, `xlsx`
+//! (`specs/095` §4). This module finds parts and follows relationships; the readers are in `docx`, `xlsx`
 //! and `pptx`.
 
 use crate::archive::Archive;

@@ -1,4 +1,4 @@
-//! Workspace documents as library sources, and the library's pictures (`specs/061` §4.2, §4.3).
+//! Workspace documents as library sources, and the library's pictures (`specs/097` §4.2, §4.3).
 //!
 //! A search page is written from the library, and the checker knows only library records. So a workspace document that
 //! answers a query (a spec, a doc, saved research) is captured into the library first, the way `delphi sources add

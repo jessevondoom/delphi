@@ -24,7 +24,7 @@ use std::sync::Arc;
 pub const PAGE_RESERVE: u64 = 20_000;
 /// Results captured from one external search.
 pub const EXTERNAL_CAPTURES: usize = 3;
-/// Reputable sources captured when expanding an encyclopedia search page (`specs/061` §4.2).
+/// Reputable sources captured when expanding an encyclopedia search page (`specs/097` §4.2).
 pub const EXTERNAL_REPUTABLE_CAPTURES: usize = 5;
 
 pub struct EnginePageWriter {
@@ -141,7 +141,7 @@ impl Engine {
         Ok(ids)
     }
 
-    /// Search the web for `query` and capture what it finds as reputable sources (`specs/061` §4.2). Returns their ids.
+    /// Search the web for `query` and capture what it finds as reputable sources (`specs/097` §4.2). Returns their ids.
     async fn capture_external_reputable(self: &Arc<Self>, lib: &Library, query: &str, notes: &mut Vec<String>) -> Result<Vec<String>, String> {
         if let Some(id) = lib.private_named_in(query) {
             return Err(format!("the query names the private source `{}`; a private source never leaves the install, so the query is not sent", id));
@@ -220,7 +220,7 @@ impl Engine {
         Ok(PageRun { page, notes })
     }
 
-    /// Expand an existing encyclopedia page with deeper research from reputable web sources (`specs/061` §4.2).
+    /// Expand an existing encyclopedia page with deeper research from reputable web sources (`specs/097` §4.2).
     pub async fn page_expand(self: &Arc<Self>, query: &str) -> Result<PageRun, String> {
         let settings = self.cfg.get().library.pages.clone();
         if !settings.enabled {
@@ -252,7 +252,7 @@ impl Engine {
         Ok(PageRun { page, notes })
     }
 
-    /// Refresh a page from local records (or external if enabled) bypassing the cache (`specs/061` §4.1).
+    /// Refresh a page from local records (or external if enabled) bypassing the cache (`specs/097` §4.1).
     pub async fn page_refresh(self: &Arc<Self>, query: &str, external: Option<bool>) -> Result<PageRun, String> {
         let settings = self.cfg.get().library.pages.clone();
         if !settings.enabled {

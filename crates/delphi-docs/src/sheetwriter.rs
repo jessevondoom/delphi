@@ -1,4 +1,4 @@
-//! Spreadsheets we write (`specs/014` §7.4): `.xlsx` (a zip of spec-conformant XML) or `.csv`, from sheets of
+//! Spreadsheets we write (`specs/095` §7.4): `.xlsx` (a zip of spec-conformant XML) or `.csv`, from sheets of
 //! typed rows. The rules that keep a generated file safe to open:
 //!
 //! - **Text is text.** A string is always stored as a string, never as a formula, whatever it starts with. In CSV,

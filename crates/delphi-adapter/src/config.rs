@@ -801,7 +801,7 @@ pub struct PagesConfig {
     pub external_ttl_secs: u64,
     /// Pages the daemon builds in one day; a cache hit is free. They also count against the validator's share (`specs/040` §20).
     pub per_day: u32,
-    /// The bounds, in days, on the cache lifetime the `writer` proposes for a page (`specs/061` §4.4).
+    /// The bounds, in days, on the cache lifetime the `writer` proposes for a page (`specs/097` §4.4).
     pub min_ttl_days: u32,
     pub max_ttl_days: u32,
 }

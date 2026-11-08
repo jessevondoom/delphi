@@ -1,4 +1,4 @@
-//! Office readers against small hand-made packages: one fixture per feature (`specs/014` §9).
+//! Office readers against small hand-made packages: one fixture per feature (`specs/095` §9).
 
 use crate::zipfile::testutil::make_zip;
 use crate::*;

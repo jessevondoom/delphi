@@ -1,4 +1,4 @@
-//! A zip writer (`specs/014` §7, slice C0): stored or deflated members, UTF-8 names, a fixed timestamp so the
+//! A zip writer (`specs/095` §7, slice C0): stored or deflated members, UTF-8 names, a fixed timestamp so the
 //! same input always produces the same bytes. No zip64: an archive is limited to 65,535 members and 4 GB,
 //! far above anything the artifact tools produce (their output is capped at a few MB).
 

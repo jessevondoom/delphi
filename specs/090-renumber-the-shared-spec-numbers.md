@@ -15,7 +15,8 @@ tags: [spec, numbering, citations, lint, cleanup]
 
 # Spec 090: Renumber the three shared spec numbers, once
 
-> **Status: approved by the operator, 2026-11-07.** Written at the operator's request after a review of spec 088 (PR #517) found that three spec numbers are used by two specs each. Decisions OD-1 to OD-6 (§8) take the recommendations, as the operator approved them after seeing them. Nothing is built; the work waits for a quiet window the operator picks (OD-4).
+> **Status: approved by the operator, 2026-11-07.** Written at the operator's request after a review of spec 088 (PR #517) found that three spec numbers are used by two specs each. Decisions OD-1 to OD-6 (§8) take the recommendations, as the operator approved them after seeing them. Nothing was built until 2026-11-08, when the operator asked for the build to start and left the order to the builder; S1 is in a pull request.
+> **Amendment, 2026-11-08 (found while building S1):** the 037 pair moves the **console deck** spec, not training experiments. The citations inside the training truth packs (14 files in 5 packs under `dev/train/suites/research/`) are covered by each pack's `verified_fingerprint`, a hash of the raw bytes of `facts.toml`, `traps.toml`, `insights.toml`, `sources.toml`, `rubric.md` and the extracts (`crates/delphi/src/train_truth.rs`, `fingerprint`). Editing even a header comment there would invalidate the operator's verification of 2026-10-26 and need all five packs verified again. Moving the console deck instead leaves every training citation correct with no edit. This follows the rule in §2.1 (move the member whose citations can be told apart without a sealed or constitutional edit); the choice in OD-1 changes from "training" to "console deck", and the operator may reverse it by asking for the training spec to move and re-verifying the packs. The new numbers are 095 (documents and dataviz), 096 (console deck change log) and 097 (encyclopedia search pages).
 > **Extends:** the folding rule in [`CONTRIBUTING.md`](../CONTRIBUTING.md) and the reference gate `crates/delphi/tests/spec_refs.rs`. It changes no spec's meaning, no engine behaviour and no approval rule. It is independent of spec 088, which does not need it (that spec identifies a spec by its file name) but is easier to extend with it.
 > **Number:** on 2026-11-07 the latest spec on main is 094; 088 is held by its pull request. The three renumbered specs take the next three free numbers when the work starts: 091 to 094 are taken, so 095 to 097 as of today (042 stays reserved).
 
@@ -77,8 +78,8 @@ Move the member of the pair whose citations can be told apart most reliably, and
 | :-- | :-- | :-- | :-- | :-- |
 | 014 | documents and dataviz | 4 files, 4 occurrences | about 45, all in `crates/delphi-docs` | the citations sit in one crate, so one directory-wide rule decides them |
 | 014 | relay and away mode | 7 files, 9 occurrences | about 15 spread over `relay/`, `delphi-core` and the engine, plus GOVERNANCE.md and REVIEW.md | mixed with the documents citations in the engine and core, and it would reach the constitution |
-| 037 | training experiments | 5 files, 5 occurrences | 9, all `train_*.rs` | the file-name prefix decides them |
-| 037 | console deck change log | 3 files, 3 occurrences | `ui/src/fold.ts` and a few notes | few, but `fold.ts` is also cited for other work |
+| 037 | training experiments | 5 files, 5 occurrences | 9 `train_*.rs`, and about 50 files under `dev/train/`, 14 of them in fingerprinted truth packs | the citations are easy to decide, but 14 sit in sealed files that must not be edited (see the amendment above) |
+| 037 | console deck change log | 3 files, 3 occurrences | `ui/src/fold.ts`, `specs/032`, `specs/034` | few, and none in a sealed file |
 | 061 | encyclopedia search pages | 4 files, 4 occurrences | about 10, in `library_*`, `page_run`, `kbserve` | mixed with shell citations in `tools.rs`, `engine.rs`, `service.rs` and three console files |
 | 061 | shell tool | 2 files, 3 occurrences | about 10, in `exec`, `approval`, `shellsafe`, `shell.ts` | mixed in the same files |
 
@@ -86,11 +87,11 @@ Total files citing the three numbers by a crude word search: 90 for 014, 72 for 
 
 ### 2.2 Recommendation
 
-Move **documents and dataviz** (014), **training experiments** (037) and **encyclopedia search pages** (061, the newer of two equal cases). The relay spec keeps 014, so GOVERNANCE.md and REVIEW.md are untouched and no Red-tier edit is needed. The operator may choose otherwise (OD-1). If the relay spec moves, its path and number appear in GOVERNANCE.md and REVIEW.md, those edits are constitutional even though they change only a number (GOVERNANCE.md, "Constitutional Changes Are Red-Tier"), and they become a separate step applied after the operator ratifies exactly those lines.
+Move **documents and dataviz** (014), the **console deck change log** (037) and **encyclopedia search pages** (061, the newer of two equal cases). The relay spec keeps 014, so GOVERNANCE.md and REVIEW.md are untouched and no Red-tier edit is needed; the training spec keeps 037, so no sealed truth pack is touched. The operator may choose otherwise (OD-1). If the relay spec moves, its path and number appear in GOVERNANCE.md and REVIEW.md, those edits are constitutional even though they change only a number (GOVERNANCE.md, "Constitutional Changes Are Red-Tier"), and they become a separate step applied after the operator ratifies exactly those lines.
 
 ### 2.3 The new numbers
 
-The next three free numbers **at the moment the work starts**, in the order of the pairs (014, 037, 061), expected 095, 096 and 097 (091 to 094 were taken while this spec was being drafted, which is the problem it describes). The approval pull request (S0) names them in the tracker, but other sessions keep taking numbers, so S1 re-checks `specs/` and the open pull requests when it starts and uses the next three free ones. File names keep their slugs: `095-documents-and-dataviz.md`, `096-training-experiments-quality-and-efficiency.md`, `097-encyclopedia-search-pages.md`.
+The next three free numbers **at the moment the work starts**, in the order of the pairs (014, 037, 061), expected 095, 096 and 097 (091 to 094 were taken while this spec was being drafted, which is the problem it describes). The approval pull request (S0) names them in the tracker, but other sessions keep taking numbers, so S1 re-checks `specs/` and the open pull requests when it starts and uses the next three free ones. File names keep their slugs: `095-documents-and-dataviz.md`, `096-console-deck-change-log.md`, `097-encyclopedia-search-pages.md`.
 
 ---
 
@@ -180,7 +181,7 @@ Operator time: about one to two hours (the sample, the quiet window, and the ref
 
 **All six were taken as recommended by the operator on 2026-11-07** ("approve both 088 and 090"), after the recommendations were shown. Each recommendation below is therefore the decision.
 
-- **OD-1. Which spec of each pair moves** (§2). *Recommendation:* documents and dataviz (014), training experiments (037), encyclopedia search pages (061). It keeps the relay spec at 014 and so keeps GOVERNANCE.md and REVIEW.md untouched. The alternative for 014 (move relay) is possible with a separate ratified constitutional step.
+- **OD-1. Which spec of each pair moves** (§2). *Recommendation:* documents and dataviz (014), ~~training experiments~~ **the console deck change log** (037, amended 2026-11-08: the training truth packs are fingerprinted), encyclopedia search pages (061). It keeps the relay spec at 014 and so keeps GOVERNANCE.md and REVIEW.md untouched. The alternative for 014 (move relay) is possible with a separate ratified constitutional step.
 - **OD-2. Historical records** (mission notes, council records, history files, past changelog entries). *Recommendation:* leave them as they are, explained by the mapping paragraph (§3.6), and rewrite one only where a gate fails on it. Rewriting history for tidiness is large and adds risk for no gate's benefit.
 - **OD-3. The new numbers.** *Recommendation:* the next three free at the start, expected 095 to 097 as of 2026-11-07, named in the tracker by the approval pull request and re-checked when S1 starts.
 - **OD-4. When.** *Recommendation:* in a quiet window with no open pull request that touches the cited files, and not while spec 088's first slice is mid-flight. The operator picks the day.
