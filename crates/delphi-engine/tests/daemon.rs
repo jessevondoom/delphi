@@ -65,14 +65,20 @@ fn rpc_code(r: Result<Value, ClientError>) -> Option<i64> {
 
 /// Everything the server sends on `s` until it closes it (or `wait` passes).
 fn drain(s: &mut UnixStream, wait: Duration) -> (Vec<u8>, bool) {
-    s.set_read_timeout(Some(wait)).unwrap();
+    // macOS refuses to set a timeout (EINVAL) on a socket whose peer has already closed it, and a server that drops a bad
+    // connection at once is what these tests expect: that is "closed", not a failure of the test.
+    if s.set_read_timeout(Some(wait)).is_err() {
+        return (Vec::new(), true);
+    }
     let mut buf = Vec::new();
     let mut tmp = [0u8; 4096];
     loop {
         match s.read(&mut tmp) {
             Ok(0) => return (buf, true),
             Ok(n) => buf.extend_from_slice(&tmp[..n]),
-            Err(_) => return (buf, false),
+            // Only running out of time means still open; a reset or a broken pipe means the server closed it.
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => return (buf, false),
+            Err(_) => return (buf, true),
         }
     }
 }

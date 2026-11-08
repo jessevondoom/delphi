@@ -20,6 +20,9 @@ use std::path::{Path, PathBuf};
 pub const GENESIS: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
 pub const DEFAULT_MAX_SEGMENT_BYTES: u64 = 64 * 1024 * 1024;
+/// How long `open` waits for a writer lock that looks held: 25 tries, 10 ms apart (see `EventLog::open`).
+const LOCK_RETRIES: u32 = 25;
+const LOCK_RETRY_MS: u64 = 10;
 
 #[derive(Debug)]
 pub enum LogError {
@@ -184,8 +187,16 @@ impl EventLog {
         }
         let lock_path = dir.join(".lock");
         let lock = OpenOptions::new().create(true).read(true).write(true).truncate(false).open(&lock_path)?;
-        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-            return Err(LogError::Locked(lock_path));
+        // The lock is a flock on an open file description. A process that forks (any thread spawning a child) holds a copy of every
+        // open descriptor until the child's exec closes it, so a lock this process has just released can read as held for a few
+        // milliseconds. A short bounded retry rides that out; a real second writer still gets `Locked`, about a quarter second later.
+        let mut tries = 0;
+        while unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            if tries >= LOCK_RETRIES {
+                return Err(LogError::Locked(lock_path));
+            }
+            tries += 1;
+            std::thread::sleep(std::time::Duration::from_millis(LOCK_RETRY_MS));
         }
 
         let mut segments = list_segments(&dir)?;
@@ -529,6 +540,26 @@ mod tests {
                 assert!(matches!(r, Err(LogError::Corrupt { .. })), "{name}: {r:?}");
             }
         }
+    }
+
+    #[test]
+    fn a_lock_released_a_moment_after_open_is_called_is_waited_for_and_a_held_lock_still_errors() {
+        let t = tempfile::tempdir().unwrap();
+        let first = open(t.path(), DEFAULT_MAX_SEGMENT_BYTES);
+        // Released 60 ms from now, as a forked child's copy of the descriptor is when its exec closes it: `open` waits and succeeds.
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            drop(first);
+        });
+        let started = std::time::Instant::now();
+        let second = EventLog::open(t.path(), LogOptions::default()).expect("a lock released within the wait is not an error");
+        assert!(started.elapsed() >= std::time::Duration::from_millis(40), "it waited for the release instead of taking a free lock");
+        releaser.join().unwrap();
+        // A writer that really keeps the lock is still refused, after the bounded wait and not before it.
+        let started = std::time::Instant::now();
+        assert!(matches!(EventLog::open(t.path(), LogOptions::default()), Err(LogError::Locked(_))));
+        assert!(started.elapsed() >= std::time::Duration::from_millis(200), "the wait is about a quarter second");
+        drop(second);
     }
 
     #[test]

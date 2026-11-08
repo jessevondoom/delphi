@@ -1390,6 +1390,8 @@ fn the_full_screen_observer_shows_a_running_mission_through_the_narrator_socket(
     let mut o = PtyConsole::start_env(&e.home, &["observe", "agents", "--workspace", "e2e"], 34, 110, &envs);
     o.wait_for("· agents");
     o.wait_for("sonnet-t"); // the model the orchestrator is on
+    // The observer can open while the task is still finishing (a loaded runner showed it `● running`); wait for the roster to say idle.
+    o.expect_visible("the system is idle");
     let roster = o.visible();
     assert!(roster.contains("delphi v") && roster.contains("orchestrator") && roster.contains("the system is idle"), "{}", roster);
     assert!(roster.contains("← →  ·  ○ ○ ○ ● ○ ○") && !roster.contains('$'), "{}", roster);
