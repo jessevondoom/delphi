@@ -7,11 +7,13 @@
 //! * **Matching** ([`Grant::evaluate`]) looks at one card kind only (`run_command`); the argument vector must equal a manifest entry
 //!   element by element; the interpreter, every pinned file, the store, the audit chain, the revocation state and the sandbox probe
 //!   are all checked again immediately before the answer is returned.
-//! * **The use ledger** ([`take_use`]) is `operator/uses/<id>`: append-only, hash-chained, fsynced before anything else happens, one
+//! * **The use ledger** ([`take_use`]) is `operator/uses/<id>` (written by S2d, not by S2c): append-only, hash-chained, fsynced before anything else happens, one
 //!   writer at a time under the log's own lock. The count is the number of `use` entries. It is the one new write the daemon makes
 //!   under `operator/`. The exposure is the audit log's: a process running as the operator's user can edit the file (a rewrite is
 //!   detected by the chain; a deleted ledger reads as unused, which `authorize_launch` cannot tell from a fresh record, so the
 //!   ledger's presence is also written into the mission log by every `authorization.would_use`).
+//! * **Observation uses a DRY ledger** (`operator/uses/<id>.dry`, [`take_dry_use`]): the real ledger is never written by S2c, so a run that
+//!   approves nothing cannot use up the operator's record. S2d writes the real one.
 //! * **No approval.** The answer is [`Outcome::WouldUse`], which the engine logs as `authorization.would_use`; the card is still
 //!   raised and the run still denies it. S2d turns an outcome into an approval, in a separate, separately reviewed slice.
 
@@ -45,30 +47,47 @@ fn id_ok(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 
-/// `$DELPHI_HOME/operator/uses/<id>`.
+/// `$DELPHI_HOME/operator/uses/<id>`: the REAL ledger. S2c never writes it (S2d's `run_authorized` will); only [`take_use`] does.
 pub fn ledger_dir(home: &Path, id: &str) -> PathBuf {
     home.join("operator/uses").join(id)
 }
 
-/// How many uses the ledger records, its chain verified (a broken, unchained or unreadable ledger is an error: a count taken from a
-/// ledger that does not verify would be a guess). A record that was never used has no ledger and counts 0.
-pub fn ledger_count(home: &Path, id: &str) -> Result<u32, String> {
-    if !id_ok(id) {
-        return Err("an authorization id of 1 to 64 letters, digits, `-`, `_` or `.` is required".into());
-    }
-    let dir = ledger_dir(home, id);
+/// `$DELPHI_HOME/operator/uses/<id>.dry`: what observation writes in S2c, in the same format. It never reduces the record's real uses
+/// and the launch check never reads it. It is bounded by `max_uses` too, so a dry run shows when an enabled run would have been refused.
+pub fn dry_ledger_dir(home: &Path, id: &str) -> PathBuf {
+    home.join("operator/uses").join(format!("{id}.dry"))
+}
+
+fn count_in(dir: &Path, id: &str) -> Result<u32, String> {
     if !dir.join("events").is_dir() {
         return Ok(0);
     }
-    let rep = delphi_core::log::verify_chain(&dir).map_err(|e| format!("the use ledger of {id} cannot be read: {e}"))?;
+    let rep = delphi_core::log::verify_chain(dir).map_err(|e| format!("the use ledger of {id} cannot be read: {e}"))?;
     if let Some(b) = &rep.broken {
         return Err(format!("the use ledger of {id} fails verification: {b}"));
     }
     if rep.unchained > 0 {
         return Err(format!("the use ledger of {id} holds an event with no chain fields"));
     }
-    let events = delphi_core::log::replay(&dir).map_err(|e| format!("the use ledger of {id} cannot be read: {e}"))?;
+    let events = delphi_core::log::replay(dir).map_err(|e| format!("the use ledger of {id} cannot be read: {e}"))?;
     Ok(events.iter().filter(|e| e.kind == USE_ENTRY).count() as u32)
+}
+
+/// How many uses the REAL ledger records, its chain verified (a broken, unchained or unreadable ledger is an error: a count taken from
+/// a ledger that does not verify would be a guess). A record that was never used has no ledger and counts 0.
+pub fn ledger_count(home: &Path, id: &str) -> Result<u32, String> {
+    if !id_ok(id) {
+        return Err("an authorization id of 1 to 64 letters, digits, `-`, `_` or `.` is required".into());
+    }
+    count_in(&ledger_dir(home, id), id)
+}
+
+/// The dry ledger's count (observation only).
+pub fn dry_count(home: &Path, id: &str) -> Result<u32, String> {
+    if !id_ok(id) {
+        return Err("an authorization id of 1 to 64 letters, digits, `-`, `_` or `.` is required".into());
+    }
+    count_in(&dry_ledger_dir(home, id), id)
 }
 
 /// One consumed use: its 1-based index in the ledger and the ledger event's sequence number.
@@ -78,14 +97,13 @@ pub struct Used {
     pub seq: u64,
 }
 
-fn open_ledger(home: &Path, id: &str) -> Result<delphi_core::log::EventLog, String> {
+fn open_ledger(dir: &Path, id: &str) -> Result<delphi_core::log::EventLog, String> {
     // The same approach as `authorization::open_audit`: the lock is a flock on an open file description, so a lock this process has
     // just released can read as held for a few milliseconds while another thread's fork has not yet exec'd. A short bounded retry
     // rides that out (about 250 ms); a real second writer still gets the "busy" error and the use is refused.
-    let dir = ledger_dir(home, id);
     let mut tries = 0;
     loop {
-        match delphi_core::log::EventLog::open(&dir, Default::default()) {
+        match delphi_core::log::EventLog::open(dir, Default::default()) {
             Err(delphi_core::log::LogError::Locked(_)) if tries < 25 => {
                 tries += 1;
                 std::thread::sleep(std::time::Duration::from_millis(10));
@@ -97,21 +115,38 @@ fn open_ledger(home: &Path, id: &str) -> Result<delphi_core::log::EventLog, Stri
     }
 }
 
-/// The atomic decrement. Under the ledger's writer lock: read the count, require `count < max_uses`, append the `use` entry (the log
-/// fsyncs before it returns). Returns only once the entry is on disk, so a crash after this call leaves the use consumed. Two callers
-/// on one record with `max_uses = 1`: exactly one gets `Ok`.
+fn take_in(dir: &Path, id: &str, record_hash: &str, run: &str, max_uses: u32, dry: bool) -> Result<Used, String> {
+    if !id_ok(id) {
+        return Err("an authorization id of 1 to 64 letters, digits, `-`, `_` or `.` is required".into());
+    }
+    let mut log = open_ledger(dir, id)?;
+    let count = count_in(dir, id)?;
+    if count >= max_uses {
+        return Err(format!("authorization {id} has no uses left ({count} of {max_uses} used{})", if dry { ", in the dry ledger" } else { "" }));
+    }
+    let index = count + 1;
+    let seq = log.append(EventEnvelope::new("operator-uses", USE_ENTRY, json!({"id": id, "record_hash": record_hash, "run": run, "index": index, "dry": dry}))).map_err(|e| format!("could not write the use ledger of {id}: {e}"))?;
+    Ok(Used { index, seq })
+}
+
+/// The atomic decrement of the REAL ledger. Under the ledger's writer lock: read the count, require `count < max_uses`, append the `use`
+/// entry (the log fsyncs before it returns). Returns only once the entry is on disk, so a crash after this call leaves the use consumed.
+/// Two callers on one record with `max_uses = 1`: exactly one gets `Ok`. **Nothing in S2c calls this on a run's path**; S2d's
+/// `run_authorized` will, before the action.
 pub fn take_use(home: &Path, id: &str, record_hash: &str, run: &str, max_uses: u32) -> Result<Used, String> {
     if !id_ok(id) {
         return Err("an authorization id of 1 to 64 letters, digits, `-`, `_` or `.` is required".into());
     }
-    let mut log = open_ledger(home, id)?;
-    let count = ledger_count(home, id)?;
-    if count >= max_uses {
-        return Err(format!("authorization {id} has no uses left ({count} of {max_uses} used)"));
+    take_in(&ledger_dir(home, id), id, record_hash, run, max_uses, false)
+}
+
+/// The same operation on the DRY ledger: what observation does in S2c, so the operator's record is never used up by a run that
+/// approves nothing.
+pub fn take_dry_use(home: &Path, id: &str, record_hash: &str, run: &str, max_uses: u32) -> Result<Used, String> {
+    if !id_ok(id) {
+        return Err("an authorization id of 1 to 64 letters, digits, `-`, `_` or `.` is required".into());
     }
-    let index = count + 1;
-    let seq = log.append(EventEnvelope::new("operator-uses", USE_ENTRY, json!({"id": id, "record_hash": record_hash, "run": run, "index": index}))).map_err(|e| format!("could not write the use ledger of {id}: {e}"))?;
-    Ok(Used { index, seq })
+    take_in(&dry_ledger_dir(home, id), id, record_hash, run, max_uses, true)
 }
 
 // ------------------------------------------------------------------------------------------------ the boot payload
@@ -177,7 +212,7 @@ pub enum Outcome {
     NotMatched(String),
     /// It matched an entry (or the grant's own state is wrong) and something failed: nothing was consumed.
     Refused { entry: Option<usize>, reason: String },
-    /// The ledger entry was written. In S2c the card is still denied.
+    /// The DRY ledger entry was written. In S2c the card is still denied and the real ledger is untouched.
     WouldUse { entry: usize, index: u32, uses_left: u32, seq: u64 },
 }
 
@@ -311,7 +346,7 @@ impl Grant {
         if !probe.is_ok() {
             return refuse(format!("the authorized sandbox failed its probe, so nothing runs: {}", probe.summary()));
         }
-        match take_use(&self.operator_home, &self.record.id, &self.record_hash, &self.run, self.record.max_uses) {
+        match take_dry_use(&self.operator_home, &self.record.id, &self.record_hash, &self.run, self.record.max_uses) {
             Ok(u) => Outcome::WouldUse { entry: i, index: u.index, uses_left: self.record.max_uses.saturating_sub(u.index), seq: u.seq },
             Err(why) => refuse(why),
         }
@@ -354,8 +389,8 @@ pub fn tool_stripped(name: &str, is_connector: bool) -> Option<&'static str> {
 /// profile; `app_server` is the Copilot ACP mode used by a Builder.
 ///
 /// * **claude**: `--tools ""` removes every built-in tool (asserted by the argument tests in `harness.rs`), the account's connectors
-///   are left out (`--strict-mcp-config`), and its permission prompts go to Delphi. Provable only for a tool-less, non-Builder seat
-///   with no native tool in the profile.
+///   are left out (`--strict-mcp-config`), and its permission prompts go to Delphi. In a granted run a Builder is launched bridge-only
+///   (empty working directory, `Tools::None`), so `tooled` is false for it; the init tool list and the stream are checked as well.
 /// * **copilot**: `--available-tools delphi-no-tools` (a tool-less span) leaves it nothing; the ACP Builder mode has file and shell
 ///   tools judged through the approval bridge, so it is refused.
 /// * **agy**: its own tools cannot be switched off, only denied by a `PreToolUse` hook that Delphi cannot prove complete. Refused.

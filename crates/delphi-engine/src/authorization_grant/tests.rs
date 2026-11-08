@@ -65,8 +65,14 @@ impl Fx {
         vec![self.bin.clone(), self.script.clone()]
     }
 
+    /// The REAL ledger's count (S2c never writes it from a run's path).
     fn used(&self) -> u32 {
         ledger_count(&self.home, &self.id).unwrap()
+    }
+
+    /// The dry ledger's count (what observation writes).
+    fn dry(&self) -> u32 {
+        dry_count(&self.home, &self.id).unwrap()
     }
 }
 
@@ -88,7 +94,7 @@ fn the_exact_command_of_the_manifest_is_the_one_match() {
         Outcome::WouldUse { entry, index, uses_left, .. } => assert_eq!((entry, index, uses_left), (0, 1, 2)),
         other => panic!("{other:?}"),
     }
-    assert_eq!(f.used(), 1);
+    assert_eq!(f.dry(), 1);
     assert!(matches!(card(&g, "run_command", &f.argv()), Outcome::WouldUse { index: 2, uses_left: 1, .. }));
     assert!(!f.root.join("RAN").exists(), "the match path runs nothing");
 }
@@ -279,7 +285,7 @@ fn a_revocation_between_two_cards_denies_the_second() {
     a::revoke_audited(&f.home, &f.id, &delphi_core::time::now_rfc3339()).unwrap();
     let o = card(&g, "run_command", &f.argv());
     assert!(matches!(&o, Outcome::Refused { reason, .. } if reason.contains("revoked")), "{o:?}");
-    assert_eq!(f.used(), 1, "the refused card consumed nothing");
+    assert_eq!(f.dry(), 1, "the refused card consumed nothing");
 }
 
 #[test]
@@ -298,7 +304,7 @@ fn an_older_store_and_lock_pair_put_back_mid_run_is_refused() {
     fs::write(f.home.join("operator/ratified.lock"), earlier_lock).unwrap();
     let o = card(&g, "run_command", &f.argv());
     assert!(matches!(o, Outcome::Refused { .. }), "{o:?}");
-    assert_eq!(f.used(), 1);
+    assert_eq!(f.dry(), 1);
 }
 
 #[test]
@@ -352,7 +358,7 @@ fn the_sandbox_is_probed_before_every_use_the_first_included_and_a_failed_probe_
     let o = card(&g, "run_command", &f.argv());
     assert!(matches!(&o, Outcome::Refused { reason, .. } if reason.contains("probe")), "{o:?}");
     assert_eq!(calls.load(Ordering::SeqCst), 2, "every use is probed again");
-    assert_eq!(f.used(), 1, "the refused card consumed nothing");
+    assert_eq!(f.dry(), 1, "the refused card consumed nothing");
     assert!(!f.root.join("RAN").exists(), "nothing ran, with the sandbox or without it");
 }
 
@@ -510,6 +516,8 @@ mod engine {
         f.engine.grant.set(Arc::new(g.grant())).unwrap();
         let payload = json!({"tool": "run_command", "argv": g.argv(), "ceiling": "l0"});
         let who = Asker { m: &f.m, task_id: "t1", span_id: "s1", role: "builder" };
+        let matched = f.engine.observe_grant_call(&who, "run_command", &payload).await.unwrap();
+        assert!(matched, "the call matched an entry (the caller denies it)");
         let ask = f.engine.ask_as(&who, ApprovalTier::Red, "run_command", "run_command", "run the pinned script", &payload);
         let answer = async {
             let card = wait_for_card(&f).await;
@@ -525,7 +533,7 @@ mod engine {
         let p = &would[0].payload;
         assert_eq!((p["authorization_id"].as_str(), p["index"].as_u64(), p["uses_left"].as_u64(), p["approved"].as_bool(), p["dry"].as_bool()), (Some(g.id.as_str()), Some(1), Some(2), Some(false), Some(true)));
         assert!(p["purpose"].as_str().unwrap().contains("PURPOSE-MARKER") && p["record_hash"].as_str().unwrap().len() > 20);
-        assert_eq!(g.used(), 1, "the dry use is really consumed");
+        assert_eq!((g.dry(), g.used()), (1, 0), "the dry use is written to the dry ledger and the real one is untouched");
         let resolved = events_of(&f, "approval.resolved");
         assert_eq!(resolved[0].payload["resolution"], "denied");
         assert!(events_of(&f, "action.intent").is_empty() && events_of(&f, "action.result").is_empty(), "exec.run / the runner was never called");
@@ -539,6 +547,8 @@ mod engine {
         f.engine.grant.set(Arc::new(g.grant())).unwrap();
         let payload = json!({"tool": "run_command", "argv": [g.bin.clone(), "/etc/passwd"], "ceiling": "l0"});
         let who = Asker { m: &f.m, task_id: "t1", span_id: "s1", role: "builder" };
+        let matched = f.engine.observe_grant_call(&who, "run_command", &payload).await.unwrap();
+        assert!(!matched);
         let ask = f.engine.ask_as(&who, ApprovalTier::Red, "run_command", "run_command", "other", &payload);
         let answer = async {
             let card = wait_for_card(&f).await;
@@ -558,6 +568,8 @@ mod engine {
         f.engine.grant.set(Arc::new(grant)).unwrap();
         let payload = json!({"tool": "run_command", "argv": g.argv(), "ceiling": "l0"});
         let who = Asker { m: &f.m, task_id: "t1", span_id: "s1", role: "builder" };
+        let matched = f.engine.observe_grant_call(&who, "run_command", &payload).await.unwrap();
+        assert!(matched, "matched, then refused at use");
         let ask = f.engine.ask_as(&who, ApprovalTier::Red, "run_command", "run_command", "run", &payload);
         let answer = async {
             let card = wait_for_card(&f).await;
@@ -577,6 +589,7 @@ mod engine {
         let f = setup(vec![], 5.0, |_| {});
         let payload = json!({"tool": "run_command", "argv": g.argv(), "ceiling": "l0"});
         let who = Asker { m: &f.m, task_id: "t1", span_id: "s1", role: "builder" };
+        assert!(!f.engine.observe_grant_call(&who, "run_command", &payload).await.unwrap());
         let ask = f.engine.ask_as(&who, ApprovalTier::Red, "run_command", "run_command", "run", &payload);
         let answer = async {
             let card = wait_for_card(&f).await;
@@ -620,5 +633,185 @@ mod engine {
         task.await.unwrap().unwrap();
         let offered: Vec<String> = f.model.requests()[0].body["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
         assert!(offered.iter().any(|n| n == "write_file"));
+    }
+}
+
+// ---------------------------------------------------------------------------------------------- observation never burns the real record
+
+#[test]
+fn dry_would_uses_leave_the_real_ledger_and_the_launch_check_unchanged() {
+    let f = fixture(3);
+    let g = f.grant();
+    let before = a::authorize_launch(&f.home, &f.id, "run-1", now(), &f.policy).unwrap();
+    for i in 1..=3u32 {
+        assert!(matches!(card(&g, "run_command", &f.argv()), Outcome::WouldUse { index, .. } if index == i));
+    }
+    // The dry ledger is bounded by max_uses too (it shows when an enabled run would have been refused) ...
+    assert!(matches!(card(&g, "run_command", &f.argv()), Outcome::Refused { reason, .. } if reason.contains("dry ledger")));
+    assert_eq!(f.dry(), 3);
+    // ... and the real ledger does not exist, its count is 0 and the S2a launch check (which reads the real ledger) still passes.
+    assert_eq!(f.used(), 0);
+    assert!(!ledger_dir(&f.home, &f.id).exists(), "the real ledger was never created");
+    let after = a::authorize_launch(&f.home, &f.id, "run-1", now(), &f.policy).unwrap();
+    assert_eq!(before, after);
+    assert!(delphi_core::log::verify_chain(&dry_ledger_dir(&f.home, &f.id)).unwrap().broken.is_none());
+    // A real use (S2d's path) still works and still counts from zero.
+    assert_eq!(take_use(&f.home, &f.id, "h", "run-1", 3).unwrap().index, 1);
+}
+
+#[test]
+fn the_dry_and_the_real_ledger_are_separate_directories() {
+    let f = fixture(3);
+    assert_ne!(ledger_dir(&f.home, &f.id), dry_ledger_dir(&f.home, &f.id));
+    assert!(dry_ledger_dir(&f.home, &f.id).to_string_lossy().ends_with(".dry"));
+    take_dry_use(&f.home, &f.id, "h", "run-1", 3).unwrap();
+    assert_eq!((f.dry(), f.used()), (1, 0));
+}
+
+// ---------------------------------------------------------------------------------------------- a claude seat with bridge tools only
+
+mod claude_seat {
+    use super::*;
+    use crate::harness::tests::fake_cli;
+    use crate::testkit::{events_of, setup_with_exec};
+
+    const FINISH: &str = r#"echo '{"type":"result","subtype":"success","result":"All done.","stop_reason":"end_turn","total_cost_usd":0.03,"usage":{"input_tokens":10,"cache_creation_input_tokens":200,"cache_read_input_tokens":5000,"output_tokens":40}}'"#;
+
+    /// A stand-in `claude` that lists `tools`, writes its arguments to `args`, then calls Delphi's bridge `run_command` over the socket
+    /// the MCP config names (as the real CLI's MCP relay would) and finishes.
+    fn script(dir: &Path, tools: &str, args_file: &Path, call: Option<&[String]>) -> String {
+        let init = format!(r#"echo '{{"type":"system","subtype":"init","session_id":"s1","tools":[{tools}],"mcp_servers":[{{"name":"delphi","status":"connected"}}]}}'"#);
+        let call = call.map(|argv| {
+            let req = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "run_command", "arguments": {"argv": argv}}}).to_string();
+            format!(
+                r#"cfg=""; prev=""; for a in "$@"; do [ "$prev" = "--mcp-config" ] && cfg="$a"; prev="$a"; done
+sock=$(tr ',{{}}' '\n\n\n' < "$cfg" | sed -n 's/.*"DELPHI_BRIDGE_SOCKET":"\([^"]*\)".*/\1/p')
+tok=$(tr ',{{}}' '\n\n\n' < "$cfg" | sed -n 's/.*"DELPHI_BRIDGE_TOKEN":"\([^"]*\)".*/\1/p')
+printf '{{"token":"%s"}}\n%s\n' "$tok" '{req}' | /usr/bin/nc -U -w 3 "$sock" > '{out}'"#,
+                req = req,
+                out = args_file.with_extension("resp").display()
+            )
+        });
+        let body = format!("printf '%s\\n' \"$@\" > '{}'\n{}\n{}\n{}", args_file.display(), init, call.unwrap_or_default(), FINISH);
+        fake_cli(dir, &body)
+    }
+
+    fn fx(prog: String) -> crate::testkit::Fx {
+        let f = setup_with_exec(vec![], 5.0, |s| s.harness_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        crate::worktree::tests::init_repo(&f.root.join("proj"), &f.root.join("git-home"));
+        crate::testkit::ratify_spec(&f);
+        let text = crate::testkit::CONFIG
+            .replace("[access]", "[[endpoints]]\nid = \"claude-sub\"\nfamily = \"claude\"\npath = \"harness\"\nharness = \"claude\"\ncredential = \"harness-login\"\ncost_model = \"subscription\"\n[access]")
+            .replace("order = { claude = [\"direct\", \"backup\"] }", "order = { claude = [\"claude-sub\"] }")
+            .replace("allowed_endpoints = [\"direct\", \"backup\"]", "allowed_endpoints = [\"claude-sub\"]");
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&text).unwrap());
+        f
+    }
+
+    const PROMPT: &str = "Implement @specs/011-retry.md in @project/app/src/lib.rs";
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_claude_builder_seat_with_only_bridge_tools_raises_a_run_command_that_matches_and_is_logged_as_would_use_and_still_denied() {
+        let g = fixture(3);
+        let scripts = tempfile::tempdir().unwrap();
+        let args = scripts.path().join("args");
+        let prog = script(scripts.path(), r#""mcp__delphi__run_command""#, &args, Some(&g.argv()));
+        let f = fx(prog);
+        f.engine.grant.set(Arc::new(g.grant())).unwrap();
+        let out = f.engine.run_task(&f.m, "builder", PROMPT).await.unwrap();
+        let _ = out;
+        // The seat started with none of the CLI's own tools: `--tools ""`, and Delphi's `run_command` is offered over the bridge.
+        let argv: Vec<String> = fs::read_to_string(&args).unwrap().lines().map(String::from).collect();
+        let at = argv.iter().position(|a| a == "--tools").expect("--tools is passed");
+        assert_eq!(argv[at + 1], "", "an empty tool list: no native tool");
+        let started = &events_of(&f, "harness.started")[0].payload;
+        assert!(started["bridge"].as_array().unwrap().iter().any(|v| v == "run_command"), "{started}");
+        assert_eq!(started["native_tools"], json!([]));
+        assert_eq!(started["claudeai_connectors"], false);
+        // The call reached `exec_command` as a run_command that the grant matched: logged, never run.
+        let would = events_of(&f, WOULD_USE);
+        assert_eq!(would.len(), 1, "{:?}", events_of(&f, REFUSED_USE).iter().map(|e| e.payload.to_string()).collect::<Vec<_>>());
+        assert_eq!((would[0].payload["approved"].as_bool(), would[0].payload["index"].as_u64()), (Some(false), Some(1)));
+        let resp = fs::read_to_string(args.with_extension("resp")).unwrap_or_default();
+        assert!(resp.contains("denied") && resp.contains("not enabled"), "the model is told it was denied: {resp}");
+        assert!(!g.root.join("RAN").exists() && events_of(&f, "action.intent").is_empty(), "nothing ran");
+        assert_eq!((g.dry(), g.used()), (1, 0));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_cli_that_lists_a_tool_of_its_own_in_a_granted_run_is_stopped_before_the_model_acts() {
+        let g = fixture(3);
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = script(scripts.path(), r#""Bash","mcp__delphi__run_command""#, &scripts.path().join("args"), Some(&g.argv()));
+        let f = fx(prog);
+        f.engine.grant.set(Arc::new(g.grant())).unwrap();
+        let _ = f.engine.run_task(&f.m, "builder", PROMPT).await;
+        let refused = events_of(&f, REFUSED_USE);
+        assert!(refused.iter().any(|e| e.payload["native_tool"] == "Bash"), "{:?}", refused.iter().map(|e| e.payload.to_string()).collect::<Vec<_>>());
+        assert!(events_of(&f, WOULD_USE).is_empty());
+        assert_eq!(g.dry(), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_native_tool_call_seen_in_the_stream_fails_the_granted_run() {
+        let g = fixture(3);
+        let scripts = tempfile::tempdir().unwrap();
+        let body = format!(
+            "{}\necho '{{\"type\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"tool_use\",\"id\":\"tu1\",\"name\":\"Bash\",\"input\":{{\"command\":\"touch made.txt\"}}}}]}}}}'\nsleep 1\n{}",
+            r#"echo '{"type":"system","subtype":"init","session_id":"s1"}'"#, FINISH
+        );
+        let prog = fake_cli(scripts.path(), &body);
+        let f = fx(prog);
+        f.engine.grant.set(Arc::new(g.grant())).unwrap();
+        let _ = f.engine.run_task(&f.m, "builder", PROMPT).await;
+        let refused = events_of(&f, REFUSED_USE);
+        assert!(refused.iter().any(|e| e.payload["native_tool"] == "Bash" && e.payload["reason"].as_str().unwrap().contains("stream")), "{:?}", refused.iter().map(|e| e.payload.to_string()).collect::<Vec<_>>());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn without_a_grant_a_claude_builder_keeps_its_own_tools_and_no_run_command_over_the_bridge() {
+        let scripts = tempfile::tempdir().unwrap();
+        let args = scripts.path().join("args");
+        let prog = script(scripts.path(), "", &args, None);
+        let f = fx(prog);
+        let _ = f.engine.run_task(&f.m, "builder", PROMPT).await;
+        let started = &events_of(&f, "harness.started")[0].payload;
+        assert_eq!(started["tools"], "standard");
+        assert!(!started["bridge"].as_array().unwrap().iter().any(|v| v == "run_command"));
+        let argv = fs::read_to_string(&args).unwrap();
+        assert!(!argv.lines().any(|l| l == "--tools"), "{argv}");
+    }
+}
+
+mod engine_cards {
+    use super::*;
+    use crate::approval::{Answer, Tier as ApprovalTier};
+    use crate::engine::Asker;
+    use crate::testkit::{events_of, setup};
+
+    // A Red card of any other kind that reaches the card path is shown to the grant too, and is never matched.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_red_card_of_another_kind_is_logged_as_no_match_and_asked_as_before() {
+        let g = fixture(3);
+        let f = setup(vec![], 5.0, |_| {});
+        f.engine.grant.set(Arc::new(g.grant())).unwrap();
+        let payload = json!({"tool": "harness_bash", "command": "x", "argv": g.argv()});
+        let who = Asker { m: &f.m, task_id: "t1", span_id: "s1", role: "builder" };
+        let ask = f.engine.ask_as(&who, ApprovalTier::Red, "harness_bash", "harness_bash", "run x", &payload);
+        let answer = async {
+            for _ in 0..300 {
+                if let Some(c) = f.engine.broker.pending().into_iter().next() {
+                    f.engine.broker.resolve(&c.approval_id, &c.payload_blake3, Answer::Deny { reason: "no".into() }, "headless").unwrap();
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            panic!("no card");
+        };
+        let (denied, _) = tokio::join!(ask, answer);
+        assert!(denied.unwrap().is_some());
+        assert_eq!(events_of(&f, NO_MATCH).len(), 1);
+        assert!(events_of(&f, WOULD_USE).is_empty());
+        assert_eq!((g.dry(), g.used()), (0, 0));
     }
 }

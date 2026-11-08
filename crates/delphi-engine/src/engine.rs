@@ -2214,6 +2214,15 @@ impl Engine {
                 }
             }
         }
+        // Spec 092 S2c (dry): in a run that holds a grant, the call is shown to the grant before the policy decides. A call it recognizes
+        // is logged (`authorization.would_use` or `.refused`) and DENIED here: nothing authorized runs in this slice, and the ordinary
+        // path (which would run an allowed command in the standard sandbox) is not taken for it.
+        if self.grant.get().is_some() {
+            let who = Asker { m: &sc.m, task_id: &sc.task_id, span_id: &sc.span_id, role: &sc.role };
+            if self.observe_grant_call(&who, "run_command", &json!({"tool": "run_command", "argv": argv})).await? {
+                return Ok(tool_result_error("The operator denied this action: authorized approval is not enabled in this build (spec 092 S2c). Do not retry it."));
+            }
+        }
         // The policy: deny rules, the sandbox, allow rules and the read-only list decide what needs a card.
         match self.exec.verdict_at(&argv, Some(&wt.path)) {
             exec::Verdict::Refused(why) => return Ok(tool_result_error(format!("refused by policy: {}", why))),
@@ -2416,11 +2425,18 @@ impl Engine {
     /// afterwards, and the run's own policy (`delphi run`'s `decide`) denies it. It never calls `exec.run` or any runner. A use the
     /// ledger records here is really consumed (the counter is the part S2d needs proven).
     async fn observe_grant(&self, who: &Asker<'_>, tier: ApprovalTier, tool: &str, payload: &Value) -> Result<(), EngineError> {
-        use crate::authorization_grant::{Outcome, NO_MATCH, REFUSED_USE, WOULD_USE};
-        let Some(grant) = self.grant.get().cloned() else { return Ok(()) };
         if tier != ApprovalTier::Red {
             return Ok(());
         }
+        self.observe_grant_call(who, tool, payload).await.map(|_| ())
+    }
+
+    /// The observation itself, for any call (no tier test): what a granted run's `run_command` goes through before the policy decides.
+    /// Returns whether the call matched a manifest entry (used or refused at use). The caller (`exec_command`) ends such a call with a
+    /// denial: in S2c a command the grant recognizes is never run, not even by the ordinary path, and the real ledger is untouched.
+    pub(crate) async fn observe_grant_call(&self, who: &Asker<'_>, tool: &str, payload: &Value) -> Result<bool, EngineError> {
+        use crate::authorization_grant::{Outcome, NO_MATCH, REFUSED_USE, WOULD_USE};
+        let Some(grant) = self.grant.get().cloned() else { return Ok(false) };
         let argv: Vec<String> = match payload["argv"].as_array() {
             Some(a) if a.iter().all(|x| x.is_string()) => a.iter().filter_map(|x| x.as_str().map(String::from)).collect(),
             _ => vec![],
@@ -2428,6 +2444,7 @@ impl Engine {
         let (now, tool_s) = ((self.clock_unix)(), tool.to_string());
         let g = grant.clone();
         let outcome = tokio::task::spawn_blocking(move || g.evaluate_card(&tool_s, &argv, now)).await.map_err(|e| EngineError::Invalid(e.to_string()))?;
+        let matched = !matches!(outcome, Outcome::NotMatched(_));
         let (kind, body) = match outcome {
             Outcome::NotMatched(why) => (NO_MATCH, json!({"authorization_id": grant.id(), "tool": tool, "reason": why, "approved": false})),
             Outcome::Refused { entry, reason } => (REFUSED_USE, json!({"authorization_id": grant.id(), "tool": tool, "entry": entry, "reason": reason, "approved": false})),
@@ -2438,7 +2455,7 @@ impl Engine {
         e.span_id = Some(who.span_id.to_string());
         e.agent = Some(who.role.to_string());
         who.m.append(e).await?;
-        Ok(())
+        Ok(matched)
     }
 
     /// Raise a card and return how it ended. `timeout` overrides the usual approval timeout for this card.
@@ -2456,8 +2473,11 @@ impl Engine {
                 return Ok(Resolution::Denied { reason: format!("blocked by the hook `{}`: {}", hook, why) });
             }
         }
-        // Spec 092 S2c: observation only. The card below is raised and answered exactly as without a grant.
-        self.observe_grant(who, tier, tool, payload).await?;
+        // Spec 092 S2c: observation only. The card below is raised and answered exactly as without a grant. A `run_command` call is
+        // observed where it is made (`exec_command`), whatever its tier, so a Red card for it is not observed a second time here.
+        if tool != "run_command" {
+            self.observe_grant(who, tier, tool, payload).await?;
+        }
         let base_timeout = timeout.unwrap_or(self.settings.approval_timeout);
         let started = std::time::Instant::now();
         let mut reraised_from: Option<String> = None;
