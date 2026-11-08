@@ -898,6 +898,11 @@ fn summary_of(stdout: &str) -> Option<Value> {
 /// A case whose prompt points at a fixture file must give the path with this name (`train_fidelity`).
 pub(crate) const REPO_DIR: &str = "repo";
 
+/// An `--inline` prompt longer than this many bytes would meet the 8,000-byte task envelope (`delphi_engine::handoff`), so the
+/// artifact goes to a file in the project and the prompt points at it (`@project/<name>/<file>`); a seat with no tools gets that
+/// file as a `<slice>` from Delphi, a seat with tools reads it. The envelope limit itself is not touched.
+pub(crate) const INLINE_PROMPT_MAX_BYTES: usize = 6000;
+
 /// One case, one seed, one arm, in its own directory under the working directory.
 pub fn run_one(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize) -> Row {
     let label = format!("{}/{}", case.suite, case.id);

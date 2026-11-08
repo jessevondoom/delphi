@@ -630,8 +630,20 @@ fn prompt(d: Difficulty) -> String {
 
 /// What an inline case asks: the module is in the prompt, with line numbers, so a seat with no tools can take it.
 fn inline_prompt(source: &str, d: Difficulty) -> String {
-    let numbered: String = source.lines().enumerate().map(|(i, l)| format!("{:>3} | {}\n", i + 1, l)).collect();
+    let numbered = numbered(source);
     format!("Below is a small Python module with line numbers. Each function has a docstring stating what it should do. Review it. {}\n\n---\n{}---", format_rules(d), numbered)
+}
+
+/// The numbered module, as a file for the project when the inline prompt would be too long for the task envelope.
+const NUMBERED_FILE: &str = "review.numbered.txt";
+
+fn numbered(source: &str) -> String {
+    source.lines().enumerate().map(|(i, l)| format!("{:>3} | {}\n", i + 1, l)).collect()
+}
+
+/// The same ask when the numbered module sits in a project file: Delphi hands a seat with no tools that file as a slice.
+fn pointer_prompt(d: Difficulty) -> String {
+    format!("Below, as a context slice, is a small Python module with line numbers, from @project/{}/{} (each line is `<number> | <code>`). Each function has a docstring stating what it should do. Review it. {}", crate::train_run::REPO_DIR, NUMBERED_FILE, format_rules(d))
 }
 
 /// What a generated case is made of.
@@ -667,7 +679,12 @@ pub fn write_case_at(dir: &Path, p: &Params, difficulty: Difficulty) -> Result<(
     }
     fs::write(dir.join(KEY_FILE), serde_json::to_string_pretty(&key_json).unwrap_or_default() + "\n").map_err(|e| e.to_string())?;
     let prompt_toml = if inline {
-        let p = inline_prompt(&art.source, difficulty);
+        let mut p = inline_prompt(&art.source, difficulty);
+        if p.len() > crate::train_run::INLINE_PROMPT_MAX_BYTES {
+            // Too long for the 8,000-byte envelope: the module goes to the project, the prompt points at it. The key stays outside.
+            fs::write(dir.join("fixture").join(NUMBERED_FILE), numbered(&art.source)).map_err(|e| e.to_string())?;
+            p = pointer_prompt(difficulty);
+        }
         if p.contains("'''") {
             return Err("the artifact contains three single quotes and cannot be written as a literal TOML string".into());
         }
@@ -686,7 +703,7 @@ fn flag(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
 }
 
-const USAGE: &str = "delphi train defects run [--seed <n>] [--difficulty easy|medium|hard] [--defects <1-8|16|24>] [--decoys <0-8|16|24>] [--json]\n  delphi train defects gen [--seed <n>] [--difficulty easy|medium|hard] [--defects <1-8|16|24>] [--decoys <0-8|16|24>] [--split dev|holdout] [--min-recall <0-1>] [--max-false-positives <n>] [--inline] --out <new case dir>\n  run scores scripted reviewers (no model, no cost). gen writes a case for `delphi train run` (suite `review`); --inline puts the numbered module in the prompt, for a seat with no tools. The figures are diagnostics, not a seat score. --difficulty sets the counts (easy 5/4, the default; medium up to 16 and hard up to 24 of each), the kinds and the size of the module.";
+const USAGE: &str = "delphi train defects run [--seed <n>] [--difficulty easy|medium|hard] [--defects <1-8|16|24>] [--decoys <0-8|16|24>] [--json]\n  delphi train defects gen [--seed <n>] [--difficulty easy|medium|hard] [--defects <1-8|16|24>] [--decoys <0-8|16|24>] [--split dev|holdout] [--min-recall <0-1>] [--max-false-positives <n>] [--inline] --out <new case dir>\n  run scores scripted reviewers (no model, no cost). gen writes a case for `delphi train run` (suite `review`); --inline puts the numbered module in the prompt, for a seat with no tools (above 6000 bytes it goes to a project file the prompt points at). The figures are diagnostics, not a seat score. --difficulty sets the counts (easy 5/4, the default; medium up to 16 and hard up to 24 of each), the kinds and the size of the module.";
 
 /// `delphi train defects run|gen ...` (`args[0]` is `defects`).
 pub fn cli(args: &[String], suites: Option<&Path>) -> i32 {
@@ -1120,8 +1137,10 @@ mod tests {
         let case = crate::train::load_case(&dir, "review").unwrap();
         let prompt = case.prompt.clone().unwrap();
         let art = generate_at(3, 20, 20, Difficulty::Hard);
+        // Hard is too long for the task envelope, so the numbered module is in the project file the prompt points at.
+        let file = fs::read_to_string(dir.join("fixture").join(NUMBERED_FILE)).unwrap();
         for (i, l) in art.source.lines().enumerate() {
-            assert!(prompt.contains(&format!("{:>3} | {}\n", i + 1, l)), "line {}", i + 1);
+            assert!(file.contains(&format!("{:>3} | {}\n", i + 1, l)), "line {}", i + 1);
         }
         for kind in HARD_KINDS {
             assert!(prompt.contains(kind), "{}", kind);
@@ -1144,6 +1163,45 @@ mod tests {
         write_case_at(&easy, &Params { k: 5, decoys: 4, ..p }, Difficulty::Easy).unwrap();
         let ep = crate::train::load_case(&easy, "review").unwrap().prompt.unwrap();
         assert!(!ep.contains("race") && !ep.contains("contract-violation"));
+    }
+
+    #[test]
+    fn a_hard_inline_case_puts_the_module_in_a_project_file_the_prompt_points_at() {
+        let t = tempfile::tempdir().unwrap();
+        for (seed, k, decoys, d, name) in [(3u64, 20usize, 20usize, Difficulty::Hard, "h"), (4, 24, 24, Difficulty::Hard, "hmax")] {
+            let dir = t.path().join(format!("suites/review/cases/{name}"));
+            write_case_at(&dir, &Params { seed, k, decoys, split: "dev", inline: true, min_recall: 0.5, max_fp: 2 }, d).unwrap();
+            let case = crate::train::load_case(&dir, "review").unwrap();
+            let prompt = case.prompt.clone().unwrap();
+            assert!(prompt.len() < 6000, "{}", prompt.len());
+            // The pointer is one the engine reads, and the file it names holds the whole numbered module.
+            let ptrs = delphi_engine::handoff::pointers_from_prompt(&prompt);
+            assert_eq!(ptrs.len(), 1, "{:?}", ptrs);
+            assert_eq!(ptrs[0].uri, format!("@project/{}/{}", crate::train_run::REPO_DIR, NUMBERED_FILE));
+            let file = fs::read_to_string(dir.join("fixture").join(NUMBERED_FILE)).unwrap();
+            let art = generate_at(seed, k, decoys, d);
+            assert_eq!(file, numbered(&art.source));
+            assert!(file.lines().count() <= 400, "the pointer slice reads at most 400 lines");
+            // A tool-less seat scripted to answer from the slice it was handed can be scored.
+            let first = art.key.defects[0].line;
+            let reply = format!("FINDING {} {}: from the slice", first, art.key.defects[0].kind);
+            assert!(file.lines().nth(first - 1).unwrap().starts_with(&format!("{:>3} | ", first)));
+            assert!(score(&art.key, &reply).findings >= 1);
+            // The key is neither in the pointer file nor in the prompt.
+            let key_text = fs::read_to_string(dir.join(KEY_FILE)).unwrap();
+            assert!(key_text.contains("also_line") && !file.contains("also_line") && !prompt.contains(KEY_FILE) && !prompt.contains("planted"));
+            assert!(!dir.join("fixture").join(KEY_FILE).exists());
+            assert!(crate::train::load_case(&dir, "review").is_ok());
+        }
+        // Easy and medium inline stay in the prompt, with no extra file.
+        for (d, k, dd, name) in [(Difficulty::Easy, 5, 4, "e"), (Difficulty::Medium, 10, 8, "m")] {
+            let dir = t.path().join(format!("suites/review/cases/{name}"));
+            write_case_at(&dir, &Params { seed: 3, k, decoys: dd, split: "dev", inline: true, min_recall: 0.5, max_fp: 2 }, d).unwrap();
+            let prompt = crate::train::load_case(&dir, "review").unwrap().prompt.unwrap();
+            let art = generate_at(3, k, dd, d);
+            assert_eq!(prompt, inline_prompt(&art.source, d));
+            assert!(!dir.join("fixture").join(NUMBERED_FILE).exists() && !prompt.contains("@project/"));
+        }
     }
 
     #[test]
