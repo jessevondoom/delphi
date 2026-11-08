@@ -1,0 +1,95 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "045: Harness loop techniques"
+    },
+    {
+      "level": 2,
+      "line": 20,
+      "number": "1",
+      "title": "Why"
+    },
+    {
+      "level": 2,
+      "line": 32,
+      "number": "2",
+      "title": "Principles"
+    },
+    {
+      "level": 2,
+      "line": 48,
+      "number": "3",
+      "title": "The techniques"
+    },
+    {
+      "level": 2,
+      "line": 67,
+      "number": "4",
+      "title": "Where each lives"
+    },
+    {
+      "level": 2,
+      "line": 81,
+      "number": "5",
+      "title": "Configuration"
+    },
+    {
+      "level": 2,
+      "line": 99,
+      "number": "6",
+      "title": "Proving it"
+    },
+    {
+      "level": 2,
+      "line": 111,
+      "number": "7",
+      "title": "Build plan"
+    },
+    {
+      "level": 2,
+      "line": 127,
+      "number": "8",
+      "title": "Open decisions (provisional answers, change on request)"
+    },
+    {
+      "level": 2,
+      "line": 134,
+      "number": "9",
+      "title": "Non-goals"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/045-harness-loop-techniques.md",
+    "sha256": "59274f4502e9ec0dd332be0ba4acc65711723066511c2e013d10d089aeb2f051"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 308,
+        "end_line": 6,
+        "line": 6,
+        "start": 173
+      },
+      "text": "status: approved   # by the operator, 2026-10-28: \"make a plan, write a spec, and let's go\" (build most or all of §3, fast list first)"
+    },
+    "sha256": "59274f4502e9ec0dd332be0ba4acc65711723066511c2e013d10d089aeb2f051",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "runtime-models-and-tools",
+    "number": "045",
+    "stem": "045-harness-loop-techniques",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "045: Harness loop techniques: nudges, gates, budgets and context hygiene"
+  },
+  "summary": null
+}

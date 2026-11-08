@@ -1,0 +1,143 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Delphi Interface Architecture & Visual Blueprints"
+    },
+    {
+      "level": 2,
+      "line": 24,
+      "number": "1",
+      "title": "The Core Interaction Model & Aesthetic Foundations"
+    },
+    {
+      "level": 3,
+      "line": 28,
+      "number": "1.1",
+      "title": "The Operator Deck (Window 1 — `delphi`)"
+    },
+    {
+      "level": 3,
+      "line": 34,
+      "number": "1.2",
+      "title": "Two-Line Stacked Header Architecture"
+    },
+    {
+      "level": 3,
+      "line": 42,
+      "number": "1.3",
+      "title": "Minimal Footer & Typography Rules"
+    },
+    {
+      "level": 2,
+      "line": 49,
+      "number": "2",
+      "title": "Visual Blueprint Suite (Rendered in Native Andale Mono 12)"
+    },
+    {
+      "level": 3,
+      "line": 51,
+      "number": "2.1",
+      "title": "Center Deck: Primary Chat (Active Turn with Stacked Header)"
+    },
+    {
+      "level": 3,
+      "line": 60,
+      "number": "2.2",
+      "title": "Center Deck: Primary Chat (Idle State — Full Badge Strip)"
+    },
+    {
+      "level": 3,
+      "line": 69,
+      "number": "2.3",
+      "title": "Center Deck: Primary Chat (Light Mode Responsive)"
+    },
+    {
+      "level": 3,
+      "line": 78,
+      "number": "2.4",
+      "title": "Right Deck: Decision Inbox (Focus Mode — Priority Alert on Line 1)"
+    },
+    {
+      "level": 3,
+      "line": 87,
+      "number": "2.5",
+      "title": "Right Deck: Plan Progress & Decision Center"
+    },
+    {
+      "level": 3,
+      "line": 96,
+      "number": "2.6",
+      "title": "Left Deck: Live Activity & Thinking Stream"
+    },
+    {
+      "level": 3,
+      "line": 105,
+      "number": "2.7",
+      "title": "Observer: Alternate Agents Panel (3-Line Mascot Cards View)"
+    },
+    {
+      "level": 3,
+      "line": 114,
+      "number": "2.8",
+      "title": "Observer: Live Evolving Council Debate"
+    },
+    {
+      "level": 3,
+      "line": 123,
+      "number": "2.9",
+      "title": "Observer: Token Spend Sparkline Over Time"
+    },
+    {
+      "level": 3,
+      "line": 132,
+      "number": "2.10",
+      "title": "Right Deck: Decision Inbox (List Mode / Triage Table)"
+    },
+    {
+      "level": 3,
+      "line": 141,
+      "number": "2.11",
+      "title": "Primary Console: Slash Command Menu"
+    },
+    {
+      "level": 3,
+      "line": 150,
+      "number": "2.12",
+      "title": "Observer: High-Density Agent Telemetry Matrix"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/ui-wireframes-and-blueprints.md",
+    "sha256": "d0fd637c5c231216f19a0eb2ade7030215e14908c38d7fd5af9546264505c533"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 261,
+        "end_line": 6,
+        "line": 6,
+        "start": 151
+      },
+      "text": "status: approved   # header and footer wording follows Amendment 005b-A2, approved by the operator, 2026-10-25"
+    },
+    "sha256": "d0fd637c5c231216f19a0eb2ade7030215e14908c38d7fd5af9546264505c533",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "console",
+    "number": null,
+    "stem": "ui-wireframes-and-blueprints",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "Delphi Interface Architecture & Visual Blueprints"
+  },
+  "summary": null
+}

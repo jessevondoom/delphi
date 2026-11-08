@@ -52,6 +52,10 @@ fn walk(dir: &Path, exts: &[&str], skip: &dyn Fn(&Path) -> bool, out: &mut Vec<P
     }
 }
 
+/// The directories searched (beside `crates/` and the changelog) for references. The compiled specs repeat the sources' text and are
+/// a derived view, so they are not searched: a reference inside a quotation of a source is checked once, in the source itself.
+const SCANNED_DIRS: [&str; 5] = ["specs", "docs", "schemas", "ui/src", "missions"];
+
 struct Spec {
     text: String,
     sections: BTreeSet<String>,
@@ -87,7 +91,7 @@ fn spec_references_resolve() {
             || s.contains("/missions/") && (s.contains("/councils") || s.contains("/history"))
             || s.ends_with("/specs/history")
     };
-    for d in ["specs", "docs", "schemas", "ui/src", "missions"] {
+    for d in SCANNED_DIRS {
         walk(&root.join(d), &["md", "json", "ts", "tsx", "toml"], &skip, &mut files);
     }
     walk(&root.join("crates"), &["rs"], &skip, &mut files);
@@ -153,6 +157,14 @@ fn second_parser_lines(rel: &str, text: &str) -> Vec<String> {
         }
     }
     out
+}
+
+#[test]
+fn the_compiled_specs_are_not_a_searched_directory() {
+    assert!(SCANNED_DIRS.iter().all(|d| !d.starts_with("compiled")), "the compiled specs quote the sources; they are checked there, once");
+    // Not vacuous: the compiled files do hold quotations of text this gate would read.
+    let any = std::fs::read_dir(root().join("compiled").join("specs").join("data")).map(|rd| rd.flatten().count()).unwrap_or(0);
+    assert!(any > 100, "the compiled directory has {} files", any);
 }
 
 #[test]

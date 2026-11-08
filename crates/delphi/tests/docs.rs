@@ -95,6 +95,53 @@ fn the_golden_sources_satisfy_the_source_meta_schema_and_only_private_is_refused
 }
 
 #[test]
+fn every_compiled_spec_satisfies_its_schema() {
+    let dir = root().join("compiled/specs/data");
+    let mut n = 0;
+    for e in std::fs::read_dir(&dir).unwrap() {
+        let p = e.unwrap().path();
+        let doc: Value = serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+        must_pass("spec-current.schema.json", &p.file_name().unwrap().to_string_lossy(), &doc);
+        n += 1;
+    }
+    let specs = std::fs::read_dir(root().join("specs")).unwrap().flatten().filter(|e| e.path().extension().is_some_and(|x| x == "md")).count();
+    assert_eq!(n, specs, "one compiled file per spec");
+}
+
+#[test]
+fn the_compiled_spec_schema_refuses_an_approval_field_and_any_claim_to_authority() {
+    let ok: Value = serde_json::from_str(&std::fs::read_to_string(root().join("compiled/specs/data/014-relay-and-away-mode.json")).unwrap()).unwrap();
+    must_pass("spec-current.schema.json", "a real compiled file", &ok);
+    let mut cases: Vec<(&str, Value)> = Vec::new();
+    for key in ["approved_by", "approved_on", "as_of", "status"] {
+        let mut bad = ok.clone();
+        bad[key] = json!("x");
+        cases.push((key, bad));
+    }
+    let mut bad = ok.clone();
+    bad["spec"]["approved_by"] = json!("operator");
+    cases.push(("spec.approved_by", bad));
+    let mut bad = ok.clone();
+    bad["authoritative"] = json!(true);
+    cases.push(("authoritative: true", bad));
+    let mut bad = ok.clone();
+    bad["spec"]["tier"] = json!(1);
+    cases.push(("tier 1 in a tier 0 file", bad));
+    let mut bad = ok.clone();
+    bad["source"]["sha256"] = json!("not a hash");
+    cases.push(("a malformed hash", bad));
+    let mut bad = ok.clone();
+    bad["source_status_at_hash"]["line"]["kind"] = json!("field");
+    cases.push(("a status line that is not marked as a quotation", bad));
+    let mut bad = ok.clone();
+    bad["summary"] = json!({"kind": "quote", "text": "t"});
+    cases.push(("a quotation with no span", bad));
+    for (what, doc) in cases {
+        must_fail("spec-current.schema.json", what, &doc);
+    }
+}
+
+#[test]
 fn bundle_schema_refuses_trust_keys_and_unknown_keys() {
     let ok = toml_json(&root().join("dev/bundles/acme-platform/bundle.toml"));
     for (key, val) in [("trust", json!("high")), ("permissions", json!(["all"])), ("hooks", json!({})), ("surprise", json!(1))] {

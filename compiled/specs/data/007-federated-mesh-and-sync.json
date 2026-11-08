@@ -1,0 +1,116 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 007: Federated Multi-Instance Mesh, Capability Pointers & Team Context Sync"
+    },
+    {
+      "level": 2,
+      "line": 23,
+      "number": "1",
+      "title": "Scope & Objectives"
+    },
+    {
+      "level": 3,
+      "line": 32,
+      "number": "1.1",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 38,
+      "number": "2",
+      "title": "Three-Plane Federation Architecture"
+    },
+    {
+      "level": 3,
+      "line": 70,
+      "number": "2.1",
+      "title": "Plane 1: Agent-Team-to-Agent-Team Delegation (A2A Profile)"
+    },
+    {
+      "level": 3,
+      "line": 76,
+      "number": "2.2",
+      "title": "Plane 2: Scoped `xenia://cap/` URI Pointers & Capability Tokens (`DelphiCap`)"
+    },
+    {
+      "level": 4,
+      "line": 85,
+      "number": null,
+      "title": "The `DelphiCap` Object-Capability Token (Ed25519 UCAN/Biscuit Profile)"
+    },
+    {
+      "level": 2,
+      "line": 113,
+      "number": "3",
+      "title": "The 6-Tier Security Taint Lattice & Ingress Firewall"
+    },
+    {
+      "level": 3,
+      "line": 128,
+      "number": "3.1",
+      "title": "Transitive Taint Preservation (Anti-Laundering Rule)"
+    },
+    {
+      "level": 3,
+      "line": 133,
+      "number": "3.2",
+      "title": "Gateway 3-Stage Ingress Sanitizer"
+    },
+    {
+      "level": 2,
+      "line": 146,
+      "number": "4",
+      "title": "Plane 3: Durable Team Context Sync (`delphi sync`)"
+    },
+    {
+      "level": 2,
+      "line": 156,
+      "number": "5",
+      "title": "Verification Plan"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/007-federated-mesh-and-sync.md",
+    "sha256": "81bab84bb9622d4bff438dedfc523fc57618596237e9b73c47ff2204f99f4ed5"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 297,
+        "end_line": 6,
+        "line": 6,
+        "start": 176
+      },
+      "text": "status: approved   # operator, 2026-10-24 (\"ratify all\"); amendments A1-A5 folded in (2026-10-25, 2026-10-29, 2026-10-30)"
+    },
+    "sha256": "81bab84bb9622d4bff438dedfc523fc57618596237e9b73c47ff2204f99f4ed5",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "sharing-and-bundles",
+    "number": "007",
+    "stem": "007-federated-mesh-and-sync",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "007: Federated Multi-Instance Mesh, Capability Pointers & Team Context Sync"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2685,
+      "end_line": 30,
+      "line": 24,
+      "start": 1515
+    },
+    "text": "This specification emerged from our research into multi-operator collaboration and defines how multiple independent Delphi installations interact with each other—allowing agent teams to collaborate with other agent teams and share context directly or via cryptographic pointers to private files:\n1. **Three-Plane Federation Architecture (Mediated by `Gateway`):**\n   - **Plane 1 (Delegation):** Cross-instance task delegation via an **A2A (Agent2Agent) JSON-RPC 2.0 + SSE** profile.\n   - **Plane 2 (Pointer Resolution):** Direct, line-scoped context sharing via **`xenia://cap/` URI Pointers** and **Ed25519 Capability Tokens (`DelphiCap` — UCAN/Biscuit profile)**.\n   - **Plane 3 (Durable Team Sync):** Git-backed team registry synchronization (`delphi sync`) with AST rule merging and ExpeL conflict resolution.\n2. **Zero-Server Peer Transport:** Native support for **Tailscale (`tsnet` / MagicDNS)**, **SSH Multiplexed Unix Socket Forwarding**, and **LAN mDNS**.\n3. **The 6-Tier Security Taint Lattice & Ingress Firewall:** Preventing transitive prompt injection or memory poisoning across federated peers (`source_type: federated_peer` vs. `federated_verified`)."
+  }
+}

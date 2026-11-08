@@ -1,0 +1,122 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 066: Research endpoint and role identity for host agents"
+    },
+    {
+      "level": 2,
+      "line": 20,
+      "number": "1",
+      "title": "Scope & Objectives"
+    },
+    {
+      "level": 3,
+      "line": 25,
+      "number": "1.1",
+      "title": "Non-Goals"
+    },
+    {
+      "level": 2,
+      "line": 32,
+      "number": "2",
+      "title": "Decisions (operator, 2026-11-01)"
+    },
+    {
+      "level": 2,
+      "line": 41,
+      "number": "3",
+      "title": "Tools"
+    },
+    {
+      "level": 2,
+      "line": 53,
+      "number": "4",
+      "title": "Result"
+    },
+    {
+      "level": 2,
+      "line": 70,
+      "number": "5",
+      "title": "Knowledge status and trusted sources"
+    },
+    {
+      "level": 2,
+      "line": 81,
+      "number": "6",
+      "title": "Authority and safety (amends 062)"
+    },
+    {
+      "level": 2,
+      "line": 90,
+      "number": "7",
+      "title": "Role identity"
+    },
+    {
+      "level": 2,
+      "line": 100,
+      "number": "8",
+      "title": "Slices (one per pull request)"
+    },
+    {
+      "level": 2,
+      "line": 114,
+      "number": "9",
+      "title": "Authority invariants (what the tests prove)"
+    },
+    {
+      "level": 2,
+      "line": 126,
+      "number": "10",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 133,
+      "number": "11",
+      "title": "Known limits"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/066-mcp-research-endpoint-and-role-identity.md",
+    "sha256": "7eb11bef36dc6dfe82a755c211e0e4e6e91f2950947df5b9664c347f9bfbe063"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 345,
+        "end_line": 6,
+        "line": 6,
+        "start": 196
+      },
+      "text": "status: approved   # approved by the operator on 2026-11-01 (\"approve the spec and start building\"); D-1..D-6 were given by the operator the same day"
+    },
+    "sha256": "7eb11bef36dc6dfe82a755c211e0e4e6e91f2950947df5b9664c347f9bfbe063",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "hosts-and-mcp",
+    "number": "066",
+    "stem": "066-mcp-research-endpoint-and-role-identity",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "066: MCP research endpoint for host agents, and Delphi role identity in answers"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 1774,
+      "end_line": 23,
+      "line": 22,
+      "start": 1365
+    },
+    "text": "1. **Research for host agents.** A host asks Delphi to research a question. The answer comes back with cited claims, and what was learned is captured so the knowledge base grows and agents improve over time (§3-§6).\n2. **Identity in answers.** Every answer that Delphi produces says which role gave it, with the one-line badge and the coloured name with role in parentheses, as the console shows them (§7)."
+  }
+}

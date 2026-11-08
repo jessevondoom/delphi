@@ -1,0 +1,101 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 061: The shell tool, shell permission modes and the `!` bang"
+    },
+    {
+      "level": 2,
+      "line": 20,
+      "number": "1",
+      "title": "Goal"
+    },
+    {
+      "level": 2,
+      "line": 24,
+      "number": "2",
+      "title": "Non-goals"
+    },
+    {
+      "level": 2,
+      "line": 31,
+      "number": "3",
+      "title": "The `shell` tool"
+    },
+    {
+      "level": 2,
+      "line": 39,
+      "number": "4",
+      "title": "Classification: Safe, Caution, Hard"
+    },
+    {
+      "level": 2,
+      "line": 49,
+      "number": "5",
+      "title": "Permission modes and grants"
+    },
+    {
+      "level": 2,
+      "line": 56,
+      "number": "6",
+      "title": "The `!` bang"
+    },
+    {
+      "level": 2,
+      "line": 64,
+      "number": "7",
+      "title": "The harness bridge"
+    },
+    {
+      "level": 2,
+      "line": 68,
+      "number": "8",
+      "title": "Config, schema and docs"
+    },
+    {
+      "level": 2,
+      "line": 74,
+      "number": "9",
+      "title": "Acceptance"
+    },
+    {
+      "level": 2,
+      "line": 85,
+      "number": "10",
+      "title": "Slices"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/061-shell-tool.md",
+    "sha256": "e8aed5b5102765328a2197ae981c067457fe54acf4b5d0ac51c64352c4d4315e"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 321,
+        "end_line": 6,
+        "line": 6,
+        "start": 148
+      },
+      "text": "status: approved   # approved by the operator on 2026-10-31: \"your decisions are good ... craft the spec changes to these plans and call them approved by me. begin the work\""
+    },
+    "sha256": "e8aed5b5102765328a2197ae981c067457fe54acf4b5d0ac51c64352c4d4315e",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "runtime-models-and-tools",
+    "number": "061",
+    "stem": "061-shell-tool",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "061: The shell tool, shell permission modes and the `!` bang"
+  },
+  "summary": null
+}

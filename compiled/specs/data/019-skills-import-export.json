@@ -1,0 +1,86 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 019: Skills Import and Export"
+    },
+    {
+      "level": 2,
+      "line": 19,
+      "number": "1",
+      "title": "Scope & Objectives"
+    },
+    {
+      "level": 3,
+      "line": 24,
+      "number": "1.1",
+      "title": "Non-Goals"
+    },
+    {
+      "level": 3,
+      "line": 28,
+      "number": "1.2",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 31,
+      "number": "2",
+      "title": "The format difference"
+    },
+    {
+      "level": 2,
+      "line": 34,
+      "number": "3",
+      "title": "`delphi skills`"
+    },
+    {
+      "level": 2,
+      "line": 47,
+      "number": "4",
+      "title": "Verification Plan"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/019-skills-import-export.md",
+    "sha256": "9e965ded2c237b3154ff60fa1809d6983dd9f3d56d856da199a44c94a9280a0f"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 252,
+        "end_line": 6,
+        "line": 6,
+        "start": 144
+      },
+      "text": "status: approved   # by the operator, 2026-10-25, by merging the pull request that added it (commit 91eb352)"
+    },
+    "sha256": "9e965ded2c237b3154ff60fa1809d6983dd9f3d56d856da199a44c94a9280a0f",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "sharing-and-bundles",
+    "number": "019",
+    "stem": "019-skills-import-export",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "019: Skills Import and Export (agentskills.io)"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 947,
+      "end_line": 20,
+      "line": 20,
+      "start": 672
+    },
+    "text": "A skill written for another tool should be usable in Delphi, and a Delphi skill usable elsewhere, without Delphi giving up the rule that a skill is code-like text an agent will follow and so loads only after the operator has ratified it (`specs/001` §2.3, GOVERNANCE §5.7)."
+  }
+}

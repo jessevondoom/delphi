@@ -1,0 +1,89 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 005g: The epic pane as threads"
+    },
+    {
+      "level": 2,
+      "line": 18,
+      "number": "1",
+      "title": "Why"
+    },
+    {
+      "level": 2,
+      "line": 24,
+      "number": "2",
+      "title": "Decided design"
+    },
+    {
+      "level": 2,
+      "line": 77,
+      "number": "3",
+      "title": "How threads are formed when nobody has named them"
+    },
+    {
+      "level": 2,
+      "line": 83,
+      "number": "4",
+      "title": "The orchestrator names each thread (built)"
+    },
+    {
+      "level": 2,
+      "line": 93,
+      "number": "5",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 100,
+      "number": "6",
+      "title": "The forge view is removed (done)"
+    },
+    {
+      "level": 2,
+      "line": 103,
+      "number": "7",
+      "title": "Decisions (operator, 2026-10-25)"
+    },
+    {
+      "level": 2,
+      "line": 109,
+      "number": "8",
+      "title": "Open"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/005g-epic-threads.md",
+    "sha256": "7518a12494602d5e3d78dd4734c880052f49fb3e9de7d2d896562a10ccc8e8c6"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 331,
+        "end_line": 6,
+        "line": 6,
+        "start": 185
+      },
+      "text": "status: approved   # by the operator, 2026-10-26; the open questions of the first draft were decided on 2026-10-25 (§7); built and merged in #168"
+    },
+    "sha256": "7518a12494602d5e3d78dd4734c880052f49fb3e9de7d2d896562a10ccc8e8c6",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "console",
+    "number": "005g",
+    "stem": "005g-epic-threads",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "005g: The epic pane as threads (supersedes the rail in 005e §9.2 and replaces the forge view)"
+  },
+  "summary": null
+}

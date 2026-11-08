@@ -1,0 +1,77 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 034: Narrator monitoring panes (a spike)"
+    },
+    {
+      "level": 2,
+      "line": 19,
+      "number": "1",
+      "title": "What this is"
+    },
+    {
+      "level": 2,
+      "line": 24,
+      "number": "2",
+      "title": "What people watch"
+    },
+    {
+      "level": 2,
+      "line": 39,
+      "number": "3",
+      "title": "Built in this spike"
+    },
+    {
+      "level": 2,
+      "line": 54,
+      "number": "4",
+      "title": "Decisions to make after trying them"
+    },
+    {
+      "level": 2,
+      "line": 61,
+      "number": "5",
+      "title": "The sketches, rounded out (2026-10-26)"
+    },
+    {
+      "level": 2,
+      "line": 89,
+      "number": "6",
+      "title": "Risks"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/034-narrator-monitoring-panes-spike.md",
+    "sha256": "ae108e865aeb39d45162585784b605dd273603eef9fb7ad4ff027f9bd5e71311"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 262,
+        "end_line": 6,
+        "line": 6,
+        "start": 149
+      },
+      "text": "status: approved   # approved by the operator 2026-10-26; the three panes (#195) and the sketches (§5) are built"
+    },
+    "sha256": "ae108e865aeb39d45162585784b605dd273603eef9fb7ad4ff027f9bd5e71311",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "console",
+    "number": "034",
+    "stem": "034-narrator-monitoring-panes-spike",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "034: Narrator monitoring panes (a spike)"
+  },
+  "summary": null
+}

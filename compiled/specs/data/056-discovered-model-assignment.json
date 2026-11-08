@@ -1,0 +1,155 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 056: Discovered Model Assignment"
+    },
+    {
+      "level": 2,
+      "line": 23,
+      "number": "1",
+      "title": "Principles"
+    },
+    {
+      "level": 2,
+      "line": 34,
+      "number": "2",
+      "title": "Discovery and classification"
+    },
+    {
+      "level": 3,
+      "line": 36,
+      "number": "2.1",
+      "title": "Candidates"
+    },
+    {
+      "level": 3,
+      "line": 42,
+      "number": "2.2",
+      "title": "Classes"
+    },
+    {
+      "level": 3,
+      "line": 48,
+      "number": "2.3",
+      "title": "Evidence"
+    },
+    {
+      "level": 2,
+      "line": 52,
+      "number": "3",
+      "title": "Assignment"
+    },
+    {
+      "level": 3,
+      "line": 54,
+      "number": "3.1",
+      "title": "The procedure"
+    },
+    {
+      "level": 3,
+      "line": 64,
+      "number": "3.2",
+      "title": "Planning is bought; following a plan is rationed"
+    },
+    {
+      "level": 3,
+      "line": 71,
+      "number": "3.3",
+      "title": "Quota is a live input"
+    },
+    {
+      "level": 3,
+      "line": 80,
+      "number": "3.4",
+      "title": "Councils prefer diversity, and never fail for lack of it"
+    },
+    {
+      "level": 3,
+      "line": 86,
+      "number": "3.5",
+      "title": "The emergency stop-gap: a local model that saves state"
+    },
+    {
+      "level": 3,
+      "line": 98,
+      "number": "3.6",
+      "title": "A provider array"
+    },
+    {
+      "level": 2,
+      "line": 102,
+      "number": "4",
+      "title": "Promote and nerf"
+    },
+    {
+      "level": 2,
+      "line": 112,
+      "number": "5",
+      "title": "Calibration"
+    },
+    {
+      "level": 2,
+      "line": 116,
+      "number": "6",
+      "title": "Slices"
+    },
+    {
+      "level": 2,
+      "line": 130,
+      "number": "7",
+      "title": "Decisions (ratified by the operator, 2026-10-29: \"ratify and build it\", all recommendations accepted)"
+    },
+    {
+      "level": 2,
+      "line": 143,
+      "number": "8",
+      "title": "Tests"
+    },
+    {
+      "level": 2,
+      "line": 159,
+      "number": "9",
+      "title": "What this spec does not claim"
+    },
+    {
+      "level": 2,
+      "line": 165,
+      "number": "10",
+      "title": "Amendments"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/056-discovered-model-assignment.md",
+    "sha256": "611f0326ad1d1b636b86aafd70997af6e415535a34fd67569ea2e5b6c83324ca"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 324,
+        "end_line": 6,
+        "line": 6,
+        "start": 199
+      },
+      "text": "status: approved   # by the operator, 2026-10-29: \"ratify and build it\", accepting every recommendation in §7 (OD-1 to OD-8)"
+    },
+    "sha256": "611f0326ad1d1b636b86aafd70997af6e415535a34fd67569ea2e5b6c83324ca",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "runtime-models-and-tools",
+    "number": "056",
+    "stem": "056-discovered-model-assignment",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "056: Discovered Model Assignment: Capability Classes, Plan and Execute Split, Promote and Nerf"
+  },
+  "summary": null
+}

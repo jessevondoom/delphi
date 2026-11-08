@@ -1,0 +1,83 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 067: Fleet Expansion: Administrator, Assistant, and Advocate"
+    },
+    {
+      "level": 2,
+      "line": 22,
+      "number": "1",
+      "title": "Goal & Objectives"
+    },
+    {
+      "level": 2,
+      "line": 42,
+      "number": "2",
+      "title": "Invariants & Governance Boundaries"
+    },
+    {
+      "level": 2,
+      "line": 51,
+      "number": "3",
+      "title": "Thematic Mapping (`themes/greek/theme.md`)"
+    },
+    {
+      "level": 2,
+      "line": 60,
+      "number": "4",
+      "title": "Curated Core Knowledge Base Compendiums"
+    },
+    {
+      "level": 2,
+      "line": 69,
+      "number": "5",
+      "title": "Modular Cognitive Skills"
+    },
+    {
+      "level": 2,
+      "line": 82,
+      "number": "6",
+      "title": "Implementation Slices"
+    },
+    {
+      "level": 2,
+      "line": 94,
+      "number": "7",
+      "title": "Acceptance Gates"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/067-fleet-expansion-administrator-assistant-advocate.md",
+    "sha256": "334fb7456ad55ff74024a062775103a27402df39fcdc87ec06018c788c249332"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 202,
+        "end_line": 6,
+        "line": 6,
+        "start": 186
+      },
+      "text": "status: approved"
+    },
+    "sha256": "334fb7456ad55ff74024a062775103a27402df39fcdc87ec06018c788c249332",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "orchestration-and-council",
+    "number": "067",
+    "stem": "067-fleet-expansion-administrator-assistant-advocate",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "067: Fleet Expansion: Administrator, Assistant, and Advocate"
+  },
+  "summary": null
+}

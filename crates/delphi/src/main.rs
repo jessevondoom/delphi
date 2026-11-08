@@ -63,6 +63,7 @@ mod observer;
 mod ratify_console;
 mod relay;
 mod release;
+mod spec_compile;
 mod report;
 mod run;
 mod seed;
@@ -146,6 +147,7 @@ const CMDS: &[Cmd] = &[
     Cmd { group: "Inspect", name: "models", about: "the model pool: usable, out of quota, cooling down", synopsis: "  delphi models [--probe] [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Inspect", name: "daemon", about: "the background process: status, stop, restart", synopsis: "  delphi daemon status|stop|restart [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Inspect", name: "lint", about: "check a repository's Delphi files", synopsis: "  delphi lint --repo <path>", detail: "" },
+    Cmd { group: "Inspect", name: "specs", about: "compile the specs into one JSON file each, for agents", synopsis: "  delphi specs compile [--check] [--repo <path>]", detail: "Reads specs/*.md and compiled/groups.toml and writes compiled/specs/data/<spec>.json, each a quotation of its source with a hash (spec 088). It never edits a spec and never decides anything: the source spec stays the authority. --check compares instead of writing and fails when a file is stale, missing or has no source. A failed compile writes nothing. Run it from the repository root or pass --repo." },
     Cmd { group: "Inspect", name: "check", about: "the deterministic checks behind the built-in skills", synopsis: "  delphi check <dag|handoff|provenance|rules|review-md|spec|brief|kb|tui|skill> <path> [--repo <path>]\n  delphi check fact <claim.json> [--home <dir>] [--offline]\n  delphi check record <mission-dir> --event <seq> [--hash <h>]", detail: "`record` verifies one event in a mission log: its hash chain against the daemon's stored head (no model,\nno network). An agent-authored event only warns \"an agent wrote this\". `fact` reads {claim, needed_for, kind,\nsnapshots: [ids]} and checks the claim against snapshots the daemon stored: origins, independence, classes.\nIt runs no model; the judge and the contradiction search are the daemon's. It looks a stored publisher\npage's DOI up at doi.org, as the daemon does; `--offline` skips that." },
     Cmd { group: "Maintain", name: "update", about: "the program, the built-in files, then the daemons", synopsis: "  delphi update [--check] [--version vX.Y.Z | --dev] [--rollback] [--review] [--no-restart] [--allow-downgrade]\n    [--workspace <name>] [--home <dir>]", detail: "--dev installs the latest build of main. --rollback undoes all three steps. --review leaves the release's\nchanges pending for /ratify instead of ratifying them." },
     Cmd { group: "Maintain", name: "train", about: "training mode: check, price and run cases that test Delphi itself", synopsis: "  delphi train validate [--suite <name>] [--repo <path>]\n  delphi train plan --budget-usd <n> [--suite <name>] [--split dev|holdout|all] [--seeds <n>] [--home <new dir>] [--repo <path>]\n  delphi train run --budget-usd <n> --template-home <dir> --work-dir <new dir> [--overlay <dir> | --arms-file <f>] [--case <id>] [--seeds <n>] [--resume] [--pace-window <0-1>] [--allow-sleep] [--dry-run]", detail: "For a source checkout (it needs dev/train/suites). validate reads every case and names what is wrong; plan lists the cases a run\nwould use and the most it could cost, and refuses a budget below that. Neither runs anything or calls a model.\nrun SPENDS MONEY: each case runs `delphi run` in a copy of the template home, baseline and (with --overlay) candidate, and prints pass rates.\nExit codes: 0 ok · 1 problems · 2 usage · 3 over budget." },
@@ -290,6 +292,7 @@ fn main() {
         // The Antigravity CLI's `PreToolUse` gate hook: asks the span's server whether a tool call may run.
         Some("__agy-hook") if ci == Some(0) => delphi_engine::bridge::run_agy_hook(),
         Some("lint") => cmd_lint(&args),
+        Some("specs") => spec_compile::cli(&args),
         Some("check") => cmd_check(&args),
         Some("setup") => cmd_setup(&args),
         Some("update") => cmd_update(&args),
@@ -361,10 +364,10 @@ fn main() {
 }
 
 /// Start the central error log (`specs/039`) for this process and install the panic hook. The commands that never touch
-/// the Delphi home (`lint`, `check`, `docs`, `completions`, `version`, `release`) log nothing; so do the daemon and its
+/// the Delphi home (`lint`, `specs`, `check`, `docs`, `completions`, `version`, `release`) log nothing; so do the daemon and its
 /// relays, which start their own (the daemon names its home itself).
 fn start_error_log(cmd: Option<&str>, args: &[String]) {
-    if matches!(cmd, Some("__core" | "__mcp-bridge" | "__agy-hook" | "lint" | "check" | "docs" | "completions" | "version" | "release" | "help")) || (cmd.is_none() && args.iter().any(|a| a == "--version")) {
+    if matches!(cmd, Some("__core" | "__mcp-bridge" | "__agy-hook" | "lint" | "specs" | "check" | "docs" | "completions" | "version" | "release" | "help"))|| (cmd.is_none() && args.iter().any(|a| a == "--version")) {
         delphi_core::elog::install_panic_hook("cli");
         return;
     }
@@ -385,7 +388,7 @@ fn log_exit(cmd: Option<&str>, args: &[String], code: i32) {
     let shape = format!("{} word(s) {}", words, flags.join(" "));
     let ctx = serde_json::json!({"command": name, "exit_code": code, "args_shape": shape});
     let msg = format!("delphi {} exited with code {}", name, code);
-    let finding = code == 1 && matches!(name, "doctor" | "lint" | "check" | "status" | "train" | "bundle" | "update" | "learn" | "retro" | "decisions" | "xenia");
+    let finding = code == 1 && matches!(name, "doctor" | "lint" | "specs" | "check" | "status" | "train" | "bundle" | "update" | "learn" | "retro" | "decisions" | "xenia");
     if code == 2 || finding {
         delphi_core::elog::warn("cli", "cli_exit", &msg, ctx);
     } else {

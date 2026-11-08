@@ -1,0 +1,140 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 065: Agent Episodic Memory, Trace Distillation, and Tool-Conditioned Retrieval"
+    },
+    {
+      "level": 2,
+      "line": 22,
+      "number": "1",
+      "title": "Scope & Objectives"
+    },
+    {
+      "level": 3,
+      "line": 31,
+      "number": "1.1",
+      "title": "Simpler Alternatives Considered & Rejected"
+    },
+    {
+      "level": 2,
+      "line": 39,
+      "number": "2",
+      "title": "Architectural Blueprint & Memory Lifecycle"
+    },
+    {
+      "level": 2,
+      "line": 77,
+      "number": "3",
+      "title": "Data Model: The `Episode` Record"
+    },
+    {
+      "level": 3,
+      "line": 81,
+      "number": "3.1",
+      "title": "YAML Frontmatter Schema (`schemas/episode.schema.json`)"
+    },
+    {
+      "level": 3,
+      "line": 113,
+      "number": "3.2",
+      "title": "Structured Markdown Sections"
+    },
+    {
+      "level": 2,
+      "line": 133,
+      "number": "4",
+      "title": "Ingestion Engine & Taint Governance"
+    },
+    {
+      "level": 3,
+      "line": 135,
+      "number": "4.1",
+      "title": "Deterministic Trace Miner (Default, 0 Model Tokens)"
+    },
+    {
+      "level": 2,
+      "line": 155,
+      "number": "5",
+      "title": "Storage & Hybrid Search Engine Integration"
+    },
+    {
+      "level": 3,
+      "line": 159,
+      "number": "5.1",
+      "title": "Schema Invariants in `state.db`"
+    },
+    {
+      "level": 3,
+      "line": 169,
+      "number": "5.2",
+      "title": "Role Visibility & Isolation"
+    },
+    {
+      "level": 3,
+      "line": 174,
+      "number": "5.3",
+      "title": "Proactive Retry-Ladder Bridge"
+    },
+    {
+      "level": 2,
+      "line": 179,
+      "number": "6",
+      "title": "Defensive Safeguards & Council Findings"
+    },
+    {
+      "level": 2,
+      "line": 192,
+      "number": "7",
+      "title": "Accepted Risks & Minority Report"
+    },
+    {
+      "level": 2,
+      "line": 217,
+      "number": "8",
+      "title": "Build Plan & Implementation Slices"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/065-episodic-traces-and-agent-long-term-memory.md",
+    "sha256": "a4eed006d50443f777d3faf447faba15b58ba75d71a6f925faaf0835f285f1f2"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 338,
+        "end_line": 6,
+        "line": 6,
+        "start": 198
+      },
+      "text": "status: approved   # approved by the operator on 2026-11-01 after a four-seat council review (architect, red-team, strategist, orchestrator)"
+    },
+    "sha256": "a4eed006d50443f777d3faf447faba15b58ba75d71a6f925faaf0835f285f1f2",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "knowledge-and-memory",
+    "number": "065",
+    "stem": "065-episodic-traces-and-agent-long-term-memory",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "065: Agent Episodic Memory, Trace Distillation, and Tool-Conditioned Retrieval"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 3024,
+      "end_line": 29,
+      "line": 24,
+      "start": 1341
+    },
+    "text": "This specification defines Delphi's **Long-Term Episodic and Tool-Conditioned Memory Subsystem**:\n1. **The Core Objective:** Enable specialized agents (e.g. `builder`, `investigator`, `architect`) to accumulate persistent episodic memory across sessions and missions—recalling past tool usage patterns, compiler/environment resolutions, debugging bisects, and research discoveries—without suffering from prompt-cache churn, token bloat, taint laundering, or cognitive rutting.\n2. **Dual-Tier Boundary Preservation:** Guarantee that the **Frozen Boot Snapshot** ([`specs/004`](004-memory-and-coaching.md) §2.1) remains 100% static and pinned in the model provider's KV cache. Episodic memory operates strictly in **Gear 2 (Archival SQLite Hybrid RAG)** and is accessed **on-demand**.\n3. **Deterministic Zero-Token Ingestion:** Eliminate raw transcript bloat and negative token ROI by extracting structured, bounded Markdown episode records (`missions/<id>/traces/<role>-<task>.md`) with daemon-enforced frontmatter directly from execution event streams (`events.jsonl`) at **zero model token cost**.\n4. **Tool- and Skill-Conditioned Hybrid Retrieval:** Index episodes into `.delphi/state.db` under `zone: episodes` using Delphi's dual FTS5 tokenizers (`kb_fts_ident` for exact tools, error codes, and symbols; `kb_fts_prose` for stemmed natural language), local `sqlite-vec` embeddings, and reciprocal rank fusion.\n5. **Defensive Safeguards:** Enforce the 6-tier taint lattice (`[H-004]`) with immutable daemon taint stamping, symmetric negative-example retrieval (anti-rutting), proactive retry-ladder bridge hints, and deterministic supersession/expiry (`specs/050` ML-2/ML-3)."
+  }
+}

@@ -1,0 +1,248 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 044: The Decisions Pane"
+    },
+    {
+      "level": 2,
+      "line": 19,
+      "number": "1",
+      "title": "Scope & Objectives"
+    },
+    {
+      "level": 3,
+      "line": 29,
+      "number": "1.1",
+      "title": "Non-Goals"
+    },
+    {
+      "level": 3,
+      "line": 35,
+      "number": "1.2",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 3,
+      "line": 38,
+      "number": "1.3",
+      "title": "Principles"
+    },
+    {
+      "level": 2,
+      "line": 46,
+      "number": "2",
+      "title": "Decisions (operator, 2026-10-28)"
+    },
+    {
+      "level": 2,
+      "line": 60,
+      "number": "3",
+      "title": "What exists today (verified 2026-10-28)"
+    },
+    {
+      "level": 2,
+      "line": 66,
+      "number": "4",
+      "title": "The decision record"
+    },
+    {
+      "level": 3,
+      "line": 67,
+      "number": "4.1",
+      "title": "One shape for the pane"
+    },
+    {
+      "level": 3,
+      "line": 84,
+      "number": "4.2",
+      "title": "Sources"
+    },
+    {
+      "level": 3,
+      "line": 89,
+      "number": "4.3",
+      "title": "Kinds, tiers and fixed effects"
+    },
+    {
+      "level": 3,
+      "line": 103,
+      "number": "4.4",
+      "title": "Raised decisions: `raise_decision`"
+    },
+    {
+      "level": 3,
+      "line": 122,
+      "number": "4.5",
+      "title": "The brief"
+    },
+    {
+      "level": 2,
+      "line": 128,
+      "number": "5",
+      "title": "The list"
+    },
+    {
+      "level": 3,
+      "line": 129,
+      "number": "5.1",
+      "title": "What it shows (`dec-1-queue`)"
+    },
+    {
+      "level": 3,
+      "line": 140,
+      "number": "5.2",
+      "title": "The filter (`dec-2-filtered`)"
+    },
+    {
+      "level": 3,
+      "line": 143,
+      "number": "5.3",
+      "title": "Colour"
+    },
+    {
+      "level": 3,
+      "line": 146,
+      "number": "5.4",
+      "title": "When a decision is tickable"
+    },
+    {
+      "level": 3,
+      "line": 155,
+      "number": "5.5",
+      "title": "Accepting several at once (`dec-3-confirm`)"
+    },
+    {
+      "level": 2,
+      "line": 161,
+      "number": "6",
+      "title": "The detail view and the prompt"
+    },
+    {
+      "level": 3,
+      "line": 162,
+      "number": "6.1",
+      "title": "Resolution is the operator's"
+    },
+    {
+      "level": 3,
+      "line": 165,
+      "number": "6.2",
+      "title": "What the view shows (`dec-4-detail`, `dec-5-norec`)"
+    },
+    {
+      "level": 3,
+      "line": 171,
+      "number": "6.3",
+      "title": "Typing instead of choosing (`dec-7-typed`)"
+    },
+    {
+      "level": 2,
+      "line": 181,
+      "number": "7",
+      "title": "Spend once (the cache)"
+    },
+    {
+      "level": 3,
+      "line": 182,
+      "number": "7.1",
+      "title": "What costs tokens, and when"
+    },
+    {
+      "level": 3,
+      "line": 191,
+      "number": "7.2",
+      "title": "The brief cache"
+    },
+    {
+      "level": 3,
+      "line": 197,
+      "number": "7.3",
+      "title": "The thread"
+    },
+    {
+      "level": 3,
+      "line": 200,
+      "number": "7.4",
+      "title": "Visibility"
+    },
+    {
+      "level": 2,
+      "line": 203,
+      "number": "8",
+      "title": "Layout rules"
+    },
+    {
+      "level": 2,
+      "line": 212,
+      "number": "9",
+      "title": "Keys"
+    },
+    {
+      "level": 2,
+      "line": 217,
+      "number": "10",
+      "title": "Safety and authority"
+    },
+    {
+      "level": 2,
+      "line": 226,
+      "number": "11",
+      "title": "Build plan (slices; each one pull request, each with `Implements-Spec: specs/044-decisions-pane.md`)"
+    },
+    {
+      "level": 3,
+      "line": 237,
+      "number": "11.1",
+      "title": "Acceptance tests (automated; fake model; no live network)"
+    },
+    {
+      "level": 2,
+      "line": 251,
+      "number": "12",
+      "title": "Decisions that remain for the operator"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/044-decisions-pane.md",
+    "sha256": "b7998356ad9e7dd365666d6b98de2ff8a19f3bd4009745f9fac68a8f6c2c23b0"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 431,
+        "end_line": 6,
+        "line": 6,
+        "start": 199
+      },
+      "text": "status: approved   # by the operator, 2026-10-28 (\"create and ratify the full spec. approve things so we can get building\"); the mockups (\"the decision pages are perfect\") and decisions D-1..D-10 are the operator's; nothing is built"
+    },
+    "sha256": "b7998356ad9e7dd365666d6b98de2ff8a19f3bd4009745f9fac68a8f6c2c23b0",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "console",
+    "number": "044",
+    "stem": "044-decisions-pane",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "044: The Decisions Pane: Every Outstanding Decision, One by One, With a Brief, a Recommendation and a Cache"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2481,
+      "end_line": 25,
+      "line": 20,
+      "start": 1515
+    },
+    "text": "Decisions reach the operator in several shapes today: an approval card in the inbox, a provisional decision from an optimistic build (`/decisions`), a spec waiting for ratification, a question an agent has left open in a spec, a deadlocked council. The operator wants **one place that lists all of them, one at a time**, each with:\n- a **brief**: two or three sentences saying what it is, and what it adds or changes;\n- a **recommendation** where one can honestly be made (and the plain words \"no recommendation: your call\" where not);\n- a **tick box to accept the default**, for the decisions where a default is safe, so several can be accepted together;\n- a **detail view** with the same brief and recommendation, an accept button, the other choices, and the **normal prompt** so the operator can answer in their own words, with nuance;\n- **no model spend after the first time**: a decision's brief and any conversation about it are produced once and stored (§7)."
+  }
+}

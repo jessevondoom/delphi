@@ -1,0 +1,110 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 013: The Librarian Role & Internal Retrieval"
+    },
+    {
+      "level": 2,
+      "line": 19,
+      "number": "1",
+      "title": "Scope and Non-Goals"
+    },
+    {
+      "level": 3,
+      "line": 25,
+      "number": "1.1",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 28,
+      "number": "2",
+      "title": "Charter"
+    },
+    {
+      "level": 2,
+      "line": 41,
+      "number": "3",
+      "title": "Boundary with the Scout"
+    },
+    {
+      "level": 2,
+      "line": 50,
+      "number": "4",
+      "title": "Muses (subagents)"
+    },
+    {
+      "level": 2,
+      "line": 57,
+      "number": "5",
+      "title": "Do Now: Frontmatter and Taxonomy (no new role needed)"
+    },
+    {
+      "level": 2,
+      "line": 65,
+      "number": "6",
+      "title": "Build Trigger"
+    },
+    {
+      "level": 2,
+      "line": 75,
+      "number": "7",
+      "title": "The Retrieval Index: What Exists, What the Librarian Takes Over"
+    },
+    {
+      "level": 2,
+      "line": 85,
+      "number": "8",
+      "title": "Naming (decided: operator, 2026-10-24)"
+    },
+    {
+      "level": 2,
+      "line": 92,
+      "number": "9",
+      "title": "Verification Plan (applies when built)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/013-librarian-and-internal-retrieval.md",
+    "sha256": "3f5dedef44f3f7989002721e15024debc4cbf0eb98d09aaa9323c4e3240c9708"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 325,
+        "end_line": 6,
+        "line": 6,
+        "start": 178
+      },
+      "text": "status: approved   # by the operator, 2026-10-24 (\"ratify all\"); whole document. §7 step 3 (Amendment 004-A1) approved by the operator, 2026-10-25"
+    },
+    "sha256": "3f5dedef44f3f7989002721e15024debc4cbf0eb98d09aaa9323c4e3240c9708",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "knowledge-and-memory",
+    "number": "013",
+    "stem": "013-librarian-and-internal-retrieval",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "013: The Librarian Role & Internal Retrieval (scoped, not yet built)"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 1040,
+      "end_line": 20,
+      "line": 20,
+      "start": 862
+    },
+    "text": "This spec reserves a tenth role, `librarian`, and fixes its charter, its boundary with `scout`, and the conditions under which it should be built. It deliberately builds nothing."
+  }
+}

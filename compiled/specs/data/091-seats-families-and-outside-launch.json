@@ -1,0 +1,101 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 091: Seats, model families and launching agents on any carrier"
+    },
+    {
+      "level": 2,
+      "line": 20,
+      "number": "1",
+      "title": "Why"
+    },
+    {
+      "level": 2,
+      "line": 33,
+      "number": "2",
+      "title": "Principles"
+    },
+    {
+      "level": 2,
+      "line": 43,
+      "number": "3",
+      "title": "The additions"
+    },
+    {
+      "level": 2,
+      "line": 54,
+      "number": "4",
+      "title": "Where each lives"
+    },
+    {
+      "level": 2,
+      "line": 63,
+      "number": "5",
+      "title": "Invariants and tests"
+    },
+    {
+      "level": 2,
+      "line": 73,
+      "number": "6",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 80,
+      "number": "7",
+      "title": "Slices (one per pull request)"
+    },
+    {
+      "level": 2,
+      "line": 93,
+      "number": "8",
+      "title": "Cut for now"
+    },
+    {
+      "level": 2,
+      "line": 97,
+      "number": "9",
+      "title": "Decisions"
+    },
+    {
+      "level": 2,
+      "line": 106,
+      "number": "10",
+      "title": "Known limits"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/091-seats-families-and-outside-launch.md",
+    "sha256": "6174fff50295a2f8de196d1e526bd792c48ae67514acd6365e1a1954135f6f23"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 462,
+        "end_line": 6,
+        "line": 6,
+        "start": 264
+      },
+      "text": "status: approved   # by the operator, 2026-11-07 (\"approve all of the above\"): the Council's option C with a thin receipt first, the two decisions of §9 and the recommended answers to OD-1 to OD-4."
+    },
+    "sha256": "6174fff50295a2f8de196d1e526bd792c48ae67514acd6365e1a1954135f6f23",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "orchestration-and-council",
+    "number": "091",
+    "stem": "091-seats-families-and-outside-launch",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "091: Seats, model families and launching agents on any carrier: receipts, a family table, an opt-in diversity requirement, and an ask-another-family tool"
+  },
+  "summary": null
+}

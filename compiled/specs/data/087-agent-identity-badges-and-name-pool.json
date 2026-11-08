@@ -1,0 +1,218 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 087: Agent identity"
+    },
+    {
+      "level": 2,
+      "line": 24,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 3,
+      "line": 36,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 45,
+      "number": "1.2",
+      "title": "Simpler alternative considered"
+    },
+    {
+      "level": 2,
+      "line": 51,
+      "number": "2",
+      "title": "What is true today (verified on main, 2026-11-06)"
+    },
+    {
+      "level": 2,
+      "line": 63,
+      "number": "3",
+      "title": "The core roles"
+    },
+    {
+      "level": 3,
+      "line": 65,
+      "number": "3.1",
+      "title": "Faces"
+    },
+    {
+      "level": 3,
+      "line": 89,
+      "number": "3.2",
+      "title": "Blink frames"
+    },
+    {
+      "level": 3,
+      "line": 96,
+      "number": "3.3",
+      "title": "Colors"
+    },
+    {
+      "level": 2,
+      "line": 105,
+      "number": "4",
+      "title": "The name pool"
+    },
+    {
+      "level": 3,
+      "line": 109,
+      "number": "4.1",
+      "title": "The 36 names"
+    },
+    {
+      "level": 3,
+      "line": 156,
+      "number": "4.2",
+      "title": "Color of a pool agent"
+    },
+    {
+      "level": 3,
+      "line": 160,
+      "number": "4.3",
+      "title": "Choosing and keeping a name"
+    },
+    {
+      "level": 3,
+      "line": 170,
+      "number": "4.4",
+      "title": "Safety"
+    },
+    {
+      "level": 2,
+      "line": 176,
+      "number": "5",
+      "title": "Outside the console"
+    },
+    {
+      "level": 3,
+      "line": 180,
+      "number": "5.1",
+      "title": "Light and dark on the identity"
+    },
+    {
+      "level": 3,
+      "line": 186,
+      "number": "5.2",
+      "title": "A pre-rendered `display` line"
+    },
+    {
+      "level": 3,
+      "line": 190,
+      "number": "5.3",
+      "title": "One identity, inside and outside"
+    },
+    {
+      "level": 3,
+      "line": 200,
+      "number": "5.4",
+      "title": "Hand-offs and the roster"
+    },
+    {
+      "level": 3,
+      "line": 205,
+      "number": "5.5",
+      "title": "What a host can still defeat"
+    },
+    {
+      "level": 2,
+      "line": 211,
+      "number": "6",
+      "title": "Rules the lint and tests hold"
+    },
+    {
+      "level": 3,
+      "line": 213,
+      "number": "6.1",
+      "title": "Lint"
+    },
+    {
+      "level": 3,
+      "line": 221,
+      "number": "6.2",
+      "title": "Allowed characters"
+    },
+    {
+      "level": 3,
+      "line": 225,
+      "number": "6.3",
+      "title": "Tests"
+    },
+    {
+      "level": 2,
+      "line": 235,
+      "number": "7",
+      "title": "What is not measured"
+    },
+    {
+      "level": 2,
+      "line": 241,
+      "number": "8",
+      "title": "Known weaknesses"
+    },
+    {
+      "level": 2,
+      "line": 254,
+      "number": "9",
+      "title": "Slices"
+    },
+    {
+      "level": 2,
+      "line": 270,
+      "number": "10",
+      "title": "Decisions"
+    },
+    {
+      "level": 2,
+      "line": 285,
+      "number": "11",
+      "title": "Review checklist"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/087-agent-identity-badges-and-name-pool.md",
+    "sha256": "0a329d0bbe673792e2dfb366635b9435423b5626d5115791ce14780690b4e84b"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 386,
+        "end_line": 6,
+        "line": 6,
+        "start": 260
+      },
+      "text": "status: approved   # by the operator, 2026-11-06 (answers to OD-1 and OD-5 given; OD-2 to OD-4 take the recommendations, §10)"
+    },
+    "sha256": "0a329d0bbe673792e2dfb366635b9435423b5626d5115791ce14780690b4e84b",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "console",
+    "number": "087",
+    "stem": "087-agent-identity-badges-and-name-pool",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "087: Agent identity: a distinct badge and light/dark color for every role, a name pool for dynamic agents, and a visible signal outside the console"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2063,
+      "end_line": 26,
+      "line": 26,
+      "start": 1671
+    },
+    "text": "Several agents answering one question improves quality and puts a specialist on each issue. It also does something else: the operator reads *who* is speaking to learn that the framing has changed, which concern is being raised, and how the agents are interacting. When names and badges stay visible, that context carries through a long exchange. When they do not, the operator sees one voice."
+  }
+}

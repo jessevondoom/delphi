@@ -1,0 +1,83 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 20,
+      "number": null,
+      "title": "Spec 078: Council scorecard"
+    },
+    {
+      "level": 2,
+      "line": 25,
+      "number": "1",
+      "title": "Smallest slice"
+    },
+    {
+      "level": 2,
+      "line": 34,
+      "number": null,
+      "title": "1b. Wave-2 companion slices"
+    },
+    {
+      "level": 2,
+      "line": 38,
+      "number": "2",
+      "title": "Measurement"
+    },
+    {
+      "level": 2,
+      "line": 43,
+      "number": "3",
+      "title": "Authority risk"
+    },
+    {
+      "level": 2,
+      "line": 46,
+      "number": "4",
+      "title": "What already covers it"
+    },
+    {
+      "level": 2,
+      "line": 52,
+      "number": "5",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 55,
+      "number": "6",
+      "title": "Verification"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/078-council-scorecard.md",
+    "sha256": "2f325b0af5b1d1225bb9bd5e9bdfbb585f364c868baae9f22834783e851bbb05"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 192,
+        "end_line": 6,
+        "line": 6,
+        "start": 179
+      },
+      "text": "status: draft"
+    },
+    "sha256": "2f325b0af5b1d1225bb9bd5e9bdfbb585f364c868baae9f22834783e851bbb05",
+    "word": "draft"
+  },
+  "spec": {
+    "group": "learning-and-evals",
+    "number": "078",
+    "stem": "078-council-scorecard",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "078: Council scorecard: cost and operator choice joined from existing events (draft)"
+  },
+  "summary": null
+}

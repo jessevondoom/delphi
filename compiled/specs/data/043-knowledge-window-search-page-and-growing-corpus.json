@@ -1,0 +1,290 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 043: The Knowledge Window, Round 2"
+    },
+    {
+      "level": 2,
+      "line": 21,
+      "number": "1",
+      "title": "Scope & Objectives"
+    },
+    {
+      "level": 3,
+      "line": 28,
+      "number": "1.1",
+      "title": "Non-Goals"
+    },
+    {
+      "level": 3,
+      "line": 35,
+      "number": "1.2",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 3,
+      "line": 38,
+      "number": "1.3",
+      "title": "Principles"
+    },
+    {
+      "level": 2,
+      "line": 46,
+      "number": "2",
+      "title": "Decisions (operator, 2026-10-28)"
+    },
+    {
+      "level": 2,
+      "line": 59,
+      "number": "3",
+      "title": "The screens"
+    },
+    {
+      "level": 3,
+      "line": 62,
+      "number": "3.1",
+      "title": "Search mode, resting (`kb-1-resting`)"
+    },
+    {
+      "level": 3,
+      "line": 67,
+      "number": "3.2",
+      "title": "Results (`kb-2-results`)"
+    },
+    {
+      "level": 3,
+      "line": 77,
+      "number": "3.3",
+      "title": "Summarize for me (`kb-3-summary`)"
+    },
+    {
+      "level": 3,
+      "line": 80,
+      "number": "3.4",
+      "title": "The reader (`kb-4-reader`)"
+    },
+    {
+      "level": 3,
+      "line": 83,
+      "number": "3.5",
+      "title": "Media and PDFs (`kb-5-pdf`)"
+    },
+    {
+      "level": 3,
+      "line": 86,
+      "number": "3.6",
+      "title": "Nothing found (`kb-6-empty`)"
+    },
+    {
+      "level": 3,
+      "line": 89,
+      "number": "3.7",
+      "title": "Expand mode (`kb-7-expand`, `kb-8-researching`, `kb-9-expanded`)"
+    },
+    {
+      "level": 2,
+      "line": 92,
+      "number": "4",
+      "title": "Kinds"
+    },
+    {
+      "level": 3,
+      "line": 93,
+      "number": "4.1",
+      "title": "Definition"
+    },
+    {
+      "level": 3,
+      "line": 108,
+      "number": "4.2",
+      "title": "Why `research` and `docs`"
+    },
+    {
+      "level": 3,
+      "line": 111,
+      "number": "4.3",
+      "title": "Trust vocabulary"
+    },
+    {
+      "level": 2,
+      "line": 114,
+      "number": "5",
+      "title": "The result list"
+    },
+    {
+      "level": 3,
+      "line": 115,
+      "number": "5.1",
+      "title": "Row shape"
+    },
+    {
+      "level": 3,
+      "line": 132,
+      "number": "5.2",
+      "title": "Rules"
+    },
+    {
+      "level": 2,
+      "line": 138,
+      "number": "6",
+      "title": "Reading, documents and media"
+    },
+    {
+      "level": 3,
+      "line": 139,
+      "number": "6.1",
+      "title": "What the index must hold"
+    },
+    {
+      "level": 3,
+      "line": 145,
+      "number": "6.2",
+      "title": "The reader and links"
+    },
+    {
+      "level": 3,
+      "line": 148,
+      "number": "6.3",
+      "title": "Opening in the browser (the media handoff)"
+    },
+    {
+      "level": 2,
+      "line": 156,
+      "number": "7",
+      "title": "Summarize for me"
+    },
+    {
+      "level": 3,
+      "line": 157,
+      "number": "7.1",
+      "title": "What it does"
+    },
+    {
+      "level": 3,
+      "line": 160,
+      "number": "7.2",
+      "title": "The call"
+    },
+    {
+      "level": 3,
+      "line": 171,
+      "number": "7.3",
+      "title": "Cost shown before it is spent"
+    },
+    {
+      "level": 3,
+      "line": 174,
+      "number": "7.4",
+      "title": "The cache (spend once)"
+    },
+    {
+      "level": 3,
+      "line": 181,
+      "number": "7.5",
+      "title": "Failure"
+    },
+    {
+      "level": 2,
+      "line": 184,
+      "number": "8",
+      "title": "A corpus that grows"
+    },
+    {
+      "level": 3,
+      "line": 185,
+      "number": "8.1",
+      "title": "What the operator sees"
+    },
+    {
+      "level": 3,
+      "line": 190,
+      "number": "8.2",
+      "title": "From a gap to a research job in one key"
+    },
+    {
+      "level": 3,
+      "line": 193,
+      "number": "8.3",
+      "title": "Why the summaries get better"
+    },
+    {
+      "level": 3,
+      "line": 196,
+      "number": "8.4",
+      "title": "Limits"
+    },
+    {
+      "level": 2,
+      "line": 199,
+      "number": "9",
+      "title": "Layout rules"
+    },
+    {
+      "level": 2,
+      "line": 208,
+      "number": "10",
+      "title": "Keys"
+    },
+    {
+      "level": 2,
+      "line": 213,
+      "number": "11",
+      "title": "Build plan (slices; each one pull request, each with `Implements-Spec: specs/043-…`)"
+    },
+    {
+      "level": 3,
+      "line": 223,
+      "number": "11.1",
+      "title": "Acceptance tests (automated, no live network, no real model)"
+    },
+    {
+      "level": 2,
+      "line": 235,
+      "number": "12",
+      "title": "Decisions that remain for the operator"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/043-knowledge-window-search-page-and-growing-corpus.md",
+    "sha256": "befd6211504f1bbc3f581e80653f63ae5344308813296659404d58fa3c2c1724"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 345,
+        "end_line": 6,
+        "line": 6,
+        "start": 219
+      },
+      "text": "status: approved   # operator, 2026-10-28; decisions D-1..D-9 are the operator's; folded 2026-10-30 (no amendments of its own)"
+    },
+    "sha256": "befd6211504f1bbc3f581e80653f63ae5344308813296659404d58fa3c2c1724",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "knowledge-and-memory",
+    "number": "043",
+    "stem": "043-knowledge-window-search-page-and-growing-corpus",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "043: The Knowledge Window, Round 2: a Plain Search Page, a Best Match, and a Corpus That Grows"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2354,
+      "end_line": 26,
+      "line": 22,
+      "start": 1396
+    },
+    "text": "The archives pane is how the operator reads what Delphi knows. Round 2 does four things:\n1. **A plain page.** A search box in the middle and nothing else, as the early search engines did. No chat prompt on this pane; the footer stays.\n2. **A results page that is easy to scan.** One **best match** with a short summary of itself, then a uniform list. Everything that costs tokens is a separate, labelled, opt-in action.\n3. **Two new first-class kinds, `research` and `docs`,** so the corpus that expand mode pulls down (028-A1) and the operator's own reference documents are found, filtered and read like the specs and lessons.\n4. **A corpus that gets better with use.** Expand mode stores human-readable markdown; the more of it there is, the better both the search and the model summary (§8) become. This spec makes that growth visible (counts per kind, a one-key path from \"nothing here\" to \"research this\") but does not change how the job runs (028-A1)."
+  }
+}

@@ -1,0 +1,92 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 008: Zero-Token Ambient Watch, Time-Travel Rewind & HITL Permission Tiers"
+    },
+    {
+      "level": 2,
+      "line": 17,
+      "number": "1",
+      "title": "Scope & Objectives"
+    },
+    {
+      "level": 3,
+      "line": 23,
+      "number": "1.1",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 29,
+      "number": "2",
+      "title": "Zero-Token Ambient Watch (\"No-Agent Mode\" Scheduler)"
+    },
+    {
+      "level": 3,
+      "line": 48,
+      "number": "2.1",
+      "title": "Watch Engine Invariants"
+    },
+    {
+      "level": 2,
+      "line": 57,
+      "number": "3",
+      "title": "Coupled Time-Travel Rewind (`/rewind`)"
+    },
+    {
+      "level": 2,
+      "line": 80,
+      "number": "4",
+      "title": "Three-Tier HITL Permission Model (Anti-Fatigue)"
+    },
+    {
+      "level": 2,
+      "line": 112,
+      "number": "5",
+      "title": "Verification Plan"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/008-ambient-watch-and-rewind.md",
+    "sha256": "d3941b88273f4bae6d4abad90d84e9be1bd7ae5d250795e7f9f7145056b8908f"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 254,
+        "end_line": 6,
+        "line": 6,
+        "start": 175
+      },
+      "text": "status: approved   # by the operator, 2026-10-24 (\"ratify all\"); whole document"
+    },
+    "sha256": "d3941b88273f4bae6d4abad90d84e9be1bd7ae5d250795e7f9f7145056b8908f",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "governance-and-safety",
+    "number": "008",
+    "stem": "008-ambient-watch-and-rewind",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "008: Zero-Token Ambient Watch, Time-Travel Rewind & HITL Permission Tiers"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 1438,
+      "end_line": 21,
+      "line": 18,
+      "start": 534
+    },
+    "text": "This module emerged directly from benchmarking Delphi against Nous Research's `hermes-agent`, LangGraph, and 2025–2026 practitioner field reports:\n1. **Zero-Token Ambient Watch (\"No-Agent Mode\" Triggers):** Allowing `delphi-core` to run scheduled or event-driven deterministic check scripts (`skills/*/scripts/`) at **zero LLM token cost**, waking **Orchestrator** or **Messenger** *only* when an anomaly, CI failure, or new PR comment is detected.\n2. **Coupled Time-Travel Rewind (`/rewind <seq>`):** Synchronizing `events.jsonl` sequence checkpoints with Git worktree refs so the **operator** can rewind both agent cognitive state and filesystem state in a single command.\n3. **3-Tier HITL Approval Batching:** Eliminating operator \"Approval Blindness\" by separating Green (auto-approved worktree actions), Amber (Spec-ratified capability envelopes), and Red (synchronous outbound/destructive gates)."
+  }
+}

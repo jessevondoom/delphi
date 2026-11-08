@@ -1,0 +1,149 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 037: Training Experiments, Quality and Efficiency Across Models and Teams"
+    },
+    {
+      "level": 2,
+      "line": 19,
+      "number": "1",
+      "title": "Goal"
+    },
+    {
+      "level": 2,
+      "line": 32,
+      "number": "2",
+      "title": "Arms"
+    },
+    {
+      "level": 2,
+      "line": 49,
+      "number": "3",
+      "title": "The suite: nine tasks"
+    },
+    {
+      "level": 2,
+      "line": 76,
+      "number": "4",
+      "title": "Truth packs"
+    },
+    {
+      "level": 2,
+      "line": 88,
+      "number": "5",
+      "title": "Scoring"
+    },
+    {
+      "level": 3,
+      "line": 90,
+      "number": "5.1",
+      "title": "Deterministic"
+    },
+    {
+      "level": 3,
+      "line": 97,
+      "number": "5.2",
+      "title": "Validation before any model is called"
+    },
+    {
+      "level": 3,
+      "line": 100,
+      "number": "5.3",
+      "title": "Efficiency"
+    },
+    {
+      "level": 2,
+      "line": 103,
+      "number": "6",
+      "title": "Judging and disagreement"
+    },
+    {
+      "level": 3,
+      "line": 105,
+      "number": "6.1",
+      "title": "The jury"
+    },
+    {
+      "level": 3,
+      "line": 112,
+      "number": "6.2",
+      "title": "The operator"
+    },
+    {
+      "level": 3,
+      "line": 115,
+      "number": "6.3",
+      "title": "Disagreement"
+    },
+    {
+      "level": 2,
+      "line": 120,
+      "number": "7",
+      "title": "Phases"
+    },
+    {
+      "level": 2,
+      "line": 129,
+      "number": "8",
+      "title": "Safety and cost rules"
+    },
+    {
+      "level": 2,
+      "line": 136,
+      "number": "9",
+      "title": "Pilot budget: 80 engineering hours"
+    },
+    {
+      "level": 2,
+      "line": 153,
+      "number": "10",
+      "title": "Decisions for the operator"
+    },
+    {
+      "level": 2,
+      "line": 160,
+      "number": "11",
+      "title": "Known limits"
+    },
+    {
+      "level": 2,
+      "line": 168,
+      "number": "12",
+      "title": "As built"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/037-training-experiments-quality-and-efficiency.md",
+    "sha256": "f0dba791f6f1fb9802dc402c5abb301bb3d2da94cd242dcba949ba7842805771"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 358,
+        "end_line": 6,
+        "line": 6,
+        "start": 202
+      },
+      "text": "status: approved   # by the operator, 2026-10-26 (\"ratify all specs\"); pilot budget (80 engineering hours) and the nine-task suite as agreed in conversation"
+    },
+    "sha256": "f0dba791f6f1fb9802dc402c5abb301bb3d2da94cd242dcba949ba7842805771",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "learning-and-evals",
+    "number": "037",
+    "stem": "037-training-experiments-quality-and-efficiency",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "037: Training Experiments: Quality and Efficiency Across Models and Teams (draft)"
+  },
+  "summary": null
+}

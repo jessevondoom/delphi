@@ -1,0 +1,260 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 005b: Console Decks, Operator Inbox, Multi-Narrator & Chromeless Viewer"
+    },
+    {
+      "level": 2,
+      "line": 18,
+      "number": "1",
+      "title": "Scope & Objectives"
+    },
+    {
+      "level": 2,
+      "line": 43,
+      "number": "2",
+      "title": "Console 3-Deck Architecture"
+    },
+    {
+      "level": 3,
+      "line": 69,
+      "number": "2.1",
+      "title": "Keyboard Navigation Map"
+    },
+    {
+      "level": 3,
+      "line": 77,
+      "number": "2.2",
+      "title": "Amendment 005b-A1: Arrow Keys on an Empty Prompt (approved by the operator 2026-10-24)"
+    },
+    {
+      "level": 3,
+      "line": 92,
+      "number": "2.3",
+      "title": "Amendment 005b-A2: Header and Footer Tidy (approved by the operator 2026-10-25)"
+    },
+    {
+      "level": 3,
+      "line": 100,
+      "number": "2.4",
+      "title": "Amendment 005b-A3: Badge Strip, Soft-Fill Chat, Activity Ticker, Narrator (approved by the operator 2026-10-25)"
+    },
+    {
+      "level": 2,
+      "line": 111,
+      "number": "3",
+      "title": "High-Fidelity Text Wireframes"
+    },
+    {
+      "level": 3,
+      "line": 113,
+      "number": "3.1",
+      "title": "Two-Line Stacked Header Architecture"
+    },
+    {
+      "level": 4,
+      "line": 117,
+      "number": null,
+      "title": "Line 1 (Top Priority Line):"
+    },
+    {
+      "level": 4,
+      "line": 131,
+      "number": null,
+      "title": "Line 2 (Sub-Header Branding), after one blank row (005b-A2):"
+    },
+    {
+      "level": 4,
+      "line": 137,
+      "number": null,
+      "title": "Avatar Badge Eye Contrast Rule:"
+    },
+    {
+      "level": 4,
+      "line": 142,
+      "number": null,
+      "title": "Inline Agent Badges in Chat:"
+    },
+    {
+      "level": 4,
+      "line": 151,
+      "number": null,
+      "title": "Footer Global Anatomy"
+    },
+    {
+      "level": 3,
+      "line": 162,
+      "number": "3.2",
+      "title": "Center Deck: Main Chat (`less`-Style Viewport Stabilization)"
+    },
+    {
+      "level": 4,
+      "line": 164,
+      "number": null,
+      "title": "Visual Mockups (Dark & Light Mode Responsiveness):"
+    },
+    {
+      "level": 4,
+      "line": 197,
+      "number": null,
+      "title": "`less`-Style Mechanics:"
+    },
+    {
+      "level": 3,
+      "line": 204,
+      "number": "3.3",
+      "title": "Left Deck: Thinking Stream (Unfiltered 60Hz Telemetry)"
+    },
+    {
+      "level": 4,
+      "line": 206,
+      "number": null,
+      "title": "Visual Mockup:"
+    },
+    {
+      "level": 4,
+      "line": 233,
+      "number": null,
+      "title": "Thinking Stream Mechanics:"
+    },
+    {
+      "level": 3,
+      "line": 240,
+      "number": "3.4",
+      "title": "Right Deck: Decision Inbox (Focus Mode & List Mode)"
+    },
+    {
+      "level": 4,
+      "line": 242,
+      "number": null,
+      "title": "Visual Mockups (Rendered Artifacts):"
+    },
+    {
+      "level": 4,
+      "line": 249,
+      "number": null,
+      "title": "Focus Mode (1-by-1 Review):"
+    },
+    {
+      "level": 4,
+      "line": 278,
+      "number": null,
+      "title": "List Mode (Bird's-Eye Triage View):"
+    },
+    {
+      "level": 2,
+      "line": 302,
+      "number": "4",
+      "title": "Observer / Narrator Architecture (`/observe` or `/visualize`)"
+    },
+    {
+      "level": 3,
+      "line": 308,
+      "number": "4.1",
+      "title": "Launch Commands & Hot-Targeting"
+    },
+    {
+      "level": 3,
+      "line": 313,
+      "number": "4.2",
+      "title": "Window Navigation & Footer Map"
+    },
+    {
+      "level": 3,
+      "line": 319,
+      "number": "4.3",
+      "title": "Full-Window View Wireframe (Council Chamber Example)"
+    },
+    {
+      "level": 4,
+      "line": 321,
+      "number": null,
+      "title": "Visual Mockup (Observer Council Chamber):"
+    },
+    {
+      "level": 3,
+      "line": 350,
+      "number": "4.5",
+      "title": "Alternate Agents Panel (3-Line Mascot Cards View)"
+    },
+    {
+      "level": 4,
+      "line": 354,
+      "number": null,
+      "title": "Visual Mockup:"
+    },
+    {
+      "level": 2,
+      "line": 407,
+      "number": "5",
+      "title": "Chromeless Minimalist Artifact Viewer & OSC 8 Bridge"
+    },
+    {
+      "level": 3,
+      "line": 409,
+      "number": "5.1",
+      "title": "Local HTTP Daemon & App-Mode Window Launch"
+    },
+    {
+      "level": 3,
+      "line": 426,
+      "number": "5.2",
+      "title": "Terminal OSC 8 Hyperlink Format"
+    },
+    {
+      "level": 3,
+      "line": 434,
+      "number": "5.3",
+      "title": "Live WebSocket Hot-Reload"
+    },
+    {
+      "level": 2,
+      "line": 442,
+      "number": "6",
+      "title": "Verification & Test Plan"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/005b-deck-navigation-and-visual-interface.md",
+    "sha256": "789e9397c45ba7eb252008b18a2d6f0309167306502d380d51c857eaa2d0a5a5"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 356,
+        "end_line": 6,
+        "line": 6,
+        "start": 186
+      },
+      "text": "status: approved   # Amendments 005b-A2 (header and footer tidy) and 005b-A3 (animated badge strip, soft-fill chat, ticker, narrator) approved by the operator, 2026-10-25"
+    },
+    "sha256": "789e9397c45ba7eb252008b18a2d6f0309167306502d380d51c857eaa2d0a5a5",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "console",
+    "number": "005b",
+    "stem": "005b-deck-navigation-and-visual-interface",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "005b: Console Decks, Operator Inbox, Multi-Narrator & Chromeless Viewer"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 904,
+      "end_line": 19,
+      "line": 19,
+      "start": 690
+    },
+    "text": "This specification builds upon [Spec 005](005-console-and-narrator-tui.md) and [Spec 005a](005a-terminal-avatar-system.md), formalizing the high-craftsmanship user interface and interaction architecture for Delphi:"
+  }
+}

@@ -1,0 +1,194 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 17,
+      "number": null,
+      "title": "Spec 082: Orchestrator outside delegation contracts"
+    },
+    {
+      "level": 2,
+      "line": 26,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 3,
+      "line": 36,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 44,
+      "number": "1.2",
+      "title": "Simpler alternative considered"
+    },
+    {
+      "level": 2,
+      "line": 50,
+      "number": "2",
+      "title": "What is wrong today (verified on main, 2026-11-05)"
+    },
+    {
+      "level": 2,
+      "line": 62,
+      "number": "3",
+      "title": "Slice S1a: a done contract derived from the task"
+    },
+    {
+      "level": 3,
+      "line": 66,
+      "number": "3.1",
+      "title": "Input"
+    },
+    {
+      "level": 3,
+      "line": 83,
+      "number": "3.2",
+      "title": "Output"
+    },
+    {
+      "level": 3,
+      "line": 91,
+      "number": "3.3",
+      "title": "Predicates are data, and Delphi checks them"
+    },
+    {
+      "level": 3,
+      "line": 97,
+      "number": "3.4",
+      "title": "Tests"
+    },
+    {
+      "level": 2,
+      "line": 107,
+      "number": "4",
+      "title": "Slice S1b: venue limits in orchestrator §6"
+    },
+    {
+      "level": 3,
+      "line": 117,
+      "number": "4.1",
+      "title": "Amendment (2026-11-07, approved by the operator): when a delegation is refused"
+    },
+    {
+      "level": 2,
+      "line": 129,
+      "number": "5",
+      "title": "Slice S1c: `done_when` and `stop_when` in the envelope"
+    },
+    {
+      "level": 2,
+      "line": 138,
+      "number": "6",
+      "title": "Slice S2: shape check for outside briefs"
+    },
+    {
+      "level": 3,
+      "line": 140,
+      "number": "6.1",
+      "title": "What is checked"
+    },
+    {
+      "level": 3,
+      "line": 152,
+      "number": "6.2",
+      "title": "What it is not"
+    },
+    {
+      "level": 3,
+      "line": 159,
+      "number": "6.3",
+      "title": "`handoff-packaging`"
+    },
+    {
+      "level": 3,
+      "line": 163,
+      "number": "6.4",
+      "title": "Tests"
+    },
+    {
+      "level": 2,
+      "line": 169,
+      "number": "7",
+      "title": "The experiment that gates everything after S2"
+    },
+    {
+      "level": 2,
+      "line": 184,
+      "number": "8",
+      "title": "Deferred (S3 and later; each needs the §7 result and its own approval)"
+    },
+    {
+      "level": 2,
+      "line": 193,
+      "number": "9",
+      "title": "Slices (one pull request each)"
+    },
+    {
+      "level": 2,
+      "line": 208,
+      "number": "10",
+      "title": "Verification plan"
+    },
+    {
+      "level": 2,
+      "line": 219,
+      "number": "11",
+      "title": "Council record (host-federated, spec 072 §8.2, 2026-11-05)"
+    },
+    {
+      "level": 3,
+      "line": 229,
+      "number": null,
+      "title": "Accepted risks and minority report"
+    },
+    {
+      "level": 2,
+      "line": 236,
+      "number": "12",
+      "title": "Decisions for the operator"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/082-orchestrator-outside-delegation-contracts.md",
+    "sha256": "c3ed6fb3b70acd74089770b9c58c4b8b4913c4a8fa388be98da2134482510bfe"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 347,
+        "end_line": 6,
+        "line": 6,
+        "start": 222
+      },
+      "text": "status: approved   # by the operator, 2026-11-05 (\"approve when ready and build away\"); OD-1 to OD-4 take the recommendations"
+    },
+    "sha256": "c3ed6fb3b70acd74089770b9c58c4b8b4913c4a8fa388be98da2134482510bfe",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "orchestration-and-council",
+    "number": "082",
+    "stem": "082-orchestrator-outside-delegation-contracts",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "082: Orchestrator outside delegation: task-derived done contracts, venue limits, and brief shape checks"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2126,
+      "end_line": 28,
+      "line": 28,
+      "start": 1712
+    },
+    "text": "The orchestrator briefs models outside Delphi in two ways: it dispatches to external CLI seats, and it advises host models through `consult_orchestrator` and `spawn_agent_pack`. Inside Delphi, a handoff is checked and a gate decides the outcome. Outside, neither holds. This spec makes outside briefs carry what the orchestrator needs in order to tell whether the work is done, without widening anyone's authority."
+  }
+}

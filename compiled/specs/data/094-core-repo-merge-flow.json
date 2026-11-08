@@ -1,0 +1,155 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 094: The core-repo merge flow"
+    },
+    {
+      "level": 2,
+      "line": 24,
+      "number": "1",
+      "title": "Why"
+    },
+    {
+      "level": 2,
+      "line": 30,
+      "number": "2",
+      "title": "What must not change"
+    },
+    {
+      "level": 2,
+      "line": 37,
+      "number": "3",
+      "title": "The additions"
+    },
+    {
+      "level": 3,
+      "line": 39,
+      "number": "3.1",
+      "title": "The queue"
+    },
+    {
+      "level": 3,
+      "line": 43,
+      "number": "3.2",
+      "title": "`delphi merge`"
+    },
+    {
+      "level": 3,
+      "line": 61,
+      "number": "3.3",
+      "title": "Cleanup after merge"
+    },
+    {
+      "level": 3,
+      "line": 71,
+      "number": "3.4",
+      "title": "The gate-changing class"
+    },
+    {
+      "level": 3,
+      "line": 79,
+      "number": "3.5",
+      "title": "`--auto`: a bounded session"
+    },
+    {
+      "level": 3,
+      "line": 85,
+      "number": "3.6",
+      "title": "Errors, the log and the builder"
+    },
+    {
+      "level": 3,
+      "line": 91,
+      "number": "3.7",
+      "title": "The builder's git skill"
+    },
+    {
+      "level": 3,
+      "line": 104,
+      "number": "3.8",
+      "title": "Agent rules"
+    },
+    {
+      "level": 3,
+      "line": 108,
+      "number": "3.9",
+      "title": "Vocabulary"
+    },
+    {
+      "level": 2,
+      "line": 112,
+      "number": "4",
+      "title": "Simpler alternative considered"
+    },
+    {
+      "level": 2,
+      "line": 118,
+      "number": "5",
+      "title": "Threats, and what is deliberately deferred"
+    },
+    {
+      "level": 2,
+      "line": 128,
+      "number": "6",
+      "title": "Slices (one per pull request; none starts before approval)"
+    },
+    {
+      "level": 2,
+      "line": 144,
+      "number": "7",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 156,
+      "number": "8",
+      "title": "Non-goals"
+    },
+    {
+      "level": 2,
+      "line": 160,
+      "number": "9",
+      "title": "Decisions"
+    },
+    {
+      "level": 2,
+      "line": 169,
+      "number": "10",
+      "title": "Known limits"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/094-core-repo-merge-flow.md",
+    "sha256": "717ed06ddbdde36ed9ceabac9b2a49516b98d27dfc396917107ca7c0fcee1352"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 443,
+        "end_line": 6,
+        "line": 6,
+        "start": 257
+      },
+      "text": "status: approved   # by the operator, 2026-11-07 (\"approve the outstanding draft specs in this workstream\"); OD-1 to OD-5 take the recommendations, as when the operator approved the plan"
+    },
+    "sha256": "717ed06ddbdde36ed9ceabac9b2a49516b98d27dfc396917107ca7c0fcee1352",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "governance-and-safety",
+    "number": "094",
+    "stem": "094-core-repo-merge-flow",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "094: The core-repo merge flow: a queue, `delphi merge`, a session-scoped `--auto`, cleanup after merge, a merge error log and a builder that can fix what fails"
+  },
+  "summary": null
+}

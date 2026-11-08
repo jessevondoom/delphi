@@ -1,0 +1,182 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 089: Panel hardening from the E2 run"
+    },
+    {
+      "level": 2,
+      "line": 24,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 3,
+      "line": 30,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 36,
+      "number": "1.2",
+      "title": "Simpler alternative considered"
+    },
+    {
+      "level": 2,
+      "line": 42,
+      "number": "2",
+      "title": "Evidence (from `dev/train/e2/REPORT.md` and `data/`)"
+    },
+    {
+      "level": 2,
+      "line": 58,
+      "number": "3",
+      "title": "F1: the server checks a Round 2 reply's shape when it arrives (E-1, E-8)"
+    },
+    {
+      "level": 2,
+      "line": 80,
+      "number": "4",
+      "title": "F2: the skill stops the moderator rewording the question and fixes the confirmation rule (E-2, E-3)"
+    },
+    {
+      "level": 2,
+      "line": 99,
+      "number": "5",
+      "title": "F3: scorer and record consistency, and a useful limit message (E-4, E-5)"
+    },
+    {
+      "level": 2,
+      "line": 112,
+      "number": "6",
+      "title": "F4: `agy` seat reliability (E-6)"
+    },
+    {
+      "level": 2,
+      "line": 137,
+      "number": "7",
+      "title": "F5: a finding matcher that can tell findings apart (E-7)"
+    },
+    {
+      "level": 2,
+      "line": 152,
+      "number": "8",
+      "title": "F6: an E3, only if the evidence supports it"
+    },
+    {
+      "level": 2,
+      "line": 162,
+      "number": "9",
+      "title": "Slices (one per pull request)"
+    },
+    {
+      "level": 2,
+      "line": 179,
+      "number": "10",
+      "title": "Decisions for the operator"
+    },
+    {
+      "level": 2,
+      "line": 192,
+      "number": "11",
+      "title": "Authority and trust"
+    },
+    {
+      "level": 2,
+      "line": 199,
+      "number": "12",
+      "title": "Not verified"
+    },
+    {
+      "level": 2,
+      "line": 208,
+      "number": "13",
+      "title": "P4a result (diagnosis only; no behaviour changed)"
+    },
+    {
+      "level": 3,
+      "line": 212,
+      "number": "13.1",
+      "title": "Facts read in the code"
+    },
+    {
+      "level": 3,
+      "line": 224,
+      "number": "13.2",
+      "title": "H-1: reproduced"
+    },
+    {
+      "level": 3,
+      "line": 228,
+      "number": "13.3",
+      "title": "What the logs must show to classify H-2, and how to capture it"
+    },
+    {
+      "level": 3,
+      "line": 252,
+      "number": "13.4",
+      "title": "Recommended fix design for P4b (a PROPOSAL; awaiting OD-4 and OD-2; nothing here is built)"
+    },
+    {
+      "level": 2,
+      "line": 262,
+      "number": "14",
+      "title": "P4b result (retry and a clearer message; the guard is unchanged by decision)"
+    },
+    {
+      "level": 2,
+      "line": 275,
+      "number": "15",
+      "title": "P3 result (skill wording, confirmation rule, host-reported claims)"
+    },
+    {
+      "level": 2,
+      "line": 286,
+      "number": "16",
+      "title": "P7 result (a headless host can survive the foreign seat's wait)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/089-panel-hardening-from-e2.md",
+    "sha256": "8bc8c668386580100009903f5756bcfa2e443b37dab21bfb20be551d643842bd"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 524,
+        "end_line": 6,
+        "line": 6,
+        "start": 306
+      },
+      "text": "status: approved   # by the operator's instruction of 2026-11-06 (\"begin work on the remaining slices\"); OD-1, OD-2, OD-3 and OD-5 take the recommendations; P4b and the E3 run wait for the operator's explicit go (§10)"
+    },
+    "sha256": "8bc8c668386580100009903f5756bcfa2e443b37dab21bfb20be551d643842bd",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "orchestration-and-council",
+    "number": "089",
+    "stem": "089-panel-hardening-from-e2",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "089: Panel hardening from the E2 run: a server-side Round 2 shape check, honest question handling and confirmation, scorer and record fixes, agy seat reliability, and a matcher that can tell findings apart"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2488,
+      "end_line": 26,
+      "line": 26,
+      "start": 2005
+    },
+    "text": "E2 asked whether a Panel run by a host's subagents is as good as a daemon Council. It could not say: only 4 of 8 questions qualified (6 needed), and the finding matcher matched nothing even between two runs of the same Council. What it did show, at a cost of 2.10M tokens, is a short list of defects that make both arms less reliable than they should be. This spec plans their fixes, in an order that spends as few model tokens as possible and measures each fix without rerunning E2."
+  }
+}

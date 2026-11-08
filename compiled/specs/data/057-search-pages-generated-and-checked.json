@@ -1,0 +1,143 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 057: Search pages"
+    },
+    {
+      "level": 2,
+      "line": 19,
+      "number": "1",
+      "title": "Why"
+    },
+    {
+      "level": 2,
+      "line": 22,
+      "number": "2",
+      "title": "The flow"
+    },
+    {
+      "level": 2,
+      "line": 29,
+      "number": "3",
+      "title": "The check"
+    },
+    {
+      "level": 3,
+      "line": 31,
+      "number": "3.1",
+      "title": "Required shape (mechanical, no model)"
+    },
+    {
+      "level": 3,
+      "line": 39,
+      "number": "3.2",
+      "title": "The validator pass"
+    },
+    {
+      "level": 3,
+      "line": 46,
+      "number": "3.3",
+      "title": "Outcomes"
+    },
+    {
+      "level": 3,
+      "line": 55,
+      "number": "3.4",
+      "title": "On failure"
+    },
+    {
+      "level": 3,
+      "line": 58,
+      "number": "3.5",
+      "title": "Page status and promotion"
+    },
+    {
+      "level": 2,
+      "line": 61,
+      "number": "4",
+      "title": "Content"
+    },
+    {
+      "level": 2,
+      "line": 67,
+      "number": "5",
+      "title": "Cache and freshness"
+    },
+    {
+      "level": 3,
+      "line": 73,
+      "number": "5.1",
+      "title": "Gather efficiency (amendment 057-A1, council 012, 2026-10-30)"
+    },
+    {
+      "level": 2,
+      "line": 80,
+      "number": "6",
+      "title": "Cost and limits"
+    },
+    {
+      "level": 2,
+      "line": 85,
+      "number": "7",
+      "title": "Console and CLI"
+    },
+    {
+      "level": 2,
+      "line": 91,
+      "number": "8",
+      "title": "Safety and authority"
+    },
+    {
+      "level": 2,
+      "line": 98,
+      "number": "9",
+      "title": "Slices"
+    },
+    {
+      "level": 2,
+      "line": 108,
+      "number": "10",
+      "title": "Verification"
+    },
+    {
+      "level": 2,
+      "line": 120,
+      "number": "11",
+      "title": "Decisions (operator, 2026-10-29)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/057-search-pages-generated-and-checked.md",
+    "sha256": "9fc9bfa6dc950a77bc0386726a0157c1fbad26d34e30127b3d8a366a326b77be"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 529,
+        "end_line": 6,
+        "line": 6,
+        "start": 198
+      },
+      "text": "status: approved   # ratified by the operator, 2026-10-29, after building the design together: \"let's clearly label each document as generated, not authoritative. include a bibliography/citations table in all docs ... not every sentence needs a citation ... nothing can contradict known citable truths ... pass it to the validator\""
+    },
+    "sha256": "9fc9bfa6dc950a77bc0386726a0157c1fbad26d34e30127b3d8a366a326b77be",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "knowledge-and-memory",
+    "number": "057",
+    "stem": "057-search-pages-generated-and-checked",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "057: Search pages: written by the writer, checked by the validator, labelled generated"
+  },
+  "summary": null
+}

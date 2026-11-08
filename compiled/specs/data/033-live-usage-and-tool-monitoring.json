@@ -1,0 +1,77 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 033: Live usage and tool monitoring"
+    },
+    {
+      "level": 2,
+      "line": 18,
+      "number": "1",
+      "title": "What this is"
+    },
+    {
+      "level": 2,
+      "line": 21,
+      "number": "2",
+      "title": "Findings (read from the code, 2026-10-26)"
+    },
+    {
+      "level": 2,
+      "line": 27,
+      "number": "3",
+      "title": "Built"
+    },
+    {
+      "level": 2,
+      "line": 34,
+      "number": "4",
+      "title": "Decisions"
+    },
+    {
+      "level": 2,
+      "line": 41,
+      "number": "5",
+      "title": "Open (considered, not built)"
+    },
+    {
+      "level": 2,
+      "line": 46,
+      "number": "6",
+      "title": "Added after approval (2026-10-26)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/033-live-usage-and-tool-monitoring.md",
+    "sha256": "aa45da997d02cc87167228dbcc14bb429e9a3a770dbfc71c27916337dfc52a74"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 299,
+        "end_line": 6,
+        "line": 6,
+        "start": 143
+      },
+      "text": "status: approved   # decided and approved by the operator 2026-10-26; §3 is built and merged (#192); §5 is open; the panes that show it are in `specs/034`"
+    },
+    "sha256": "aa45da997d02cc87167228dbcc14bb429e9a3a770dbfc71c27916337dfc52a74",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "console",
+    "number": "033",
+    "stem": "033-live-usage-and-tool-monitoring",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "033: Live usage and tool monitoring"
+  },
+  "summary": null
+}

@@ -596,6 +596,16 @@ Check a repository's Delphi files.
   delphi lint --repo <path>
 ```
 
+### `delphi specs`
+
+Compile the specs into one JSON file each, for agents.
+
+```
+  delphi specs compile [--check] [--repo <path>]
+```
+
+Reads specs/*.md and compiled/groups.toml and writes compiled/specs/data/<spec>.json, each a quotation of its source with a hash (spec 088). It never edits a spec and never decides anything: the source spec stays the authority. --check compares instead of writing and fails when a file is stale, missing or has no source. A failed compile writes nothing. Run it from the repository root or pass --repo.
+
 ### `delphi check`
 
 The deterministic checks behind the built-in skills.

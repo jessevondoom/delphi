@@ -1,0 +1,101 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 064: Knowledge retrieval for agents and MCP hosts, markdown and scratch tiering, and release self-knowledge"
+    },
+    {
+      "level": 2,
+      "line": 20,
+      "number": "1",
+      "title": "Goal"
+    },
+    {
+      "level": 2,
+      "line": 24,
+      "number": "2",
+      "title": "Principles (nothing here widens authority)"
+    },
+    {
+      "level": 2,
+      "line": 32,
+      "number": "3",
+      "title": "One retrieval service"
+    },
+    {
+      "level": 2,
+      "line": 43,
+      "number": "4",
+      "title": "Agent retrieval"
+    },
+    {
+      "level": 2,
+      "line": 49,
+      "number": "5",
+      "title": "MCP `search_kb`"
+    },
+    {
+      "level": 2,
+      "line": 57,
+      "number": "6",
+      "title": "Markdown and scratch tiering"
+    },
+    {
+      "level": 2,
+      "line": 65,
+      "number": "7",
+      "title": "Release self-knowledge (`about/`)"
+    },
+    {
+      "level": 2,
+      "line": 71,
+      "number": "8",
+      "title": "Search page (specs 043, 057, 097 amended)"
+    },
+    {
+      "level": 2,
+      "line": 76,
+      "number": "9",
+      "title": "Acceptance"
+    },
+    {
+      "level": 2,
+      "line": 89,
+      "number": "10",
+      "title": "Implementation slices"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/064-knowledge-retrieval-for-agents-and-mcp.md",
+    "sha256": "02fa5ecc078d0b53055243894a07a42b4b100237ea12ef601920c0327077306e"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 358,
+        "end_line": 6,
+        "line": 6,
+        "start": 223
+      },
+      "text": "status: approved   # approved by the operator on 2026-11-01: \"draft the specs — they're approved as discussed — and begin building\""
+    },
+    "sha256": "02fa5ecc078d0b53055243894a07a42b4b100237ea12ef601920c0327077306e",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "knowledge-and-memory",
+    "number": "064",
+    "stem": "064-knowledge-retrieval-for-agents-and-mcp",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "064: Knowledge retrieval for agents and MCP hosts, markdown and scratch tiering, and release self-knowledge"
+  },
+  "summary": null
+}

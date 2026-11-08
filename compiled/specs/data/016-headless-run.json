@@ -1,0 +1,98 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 016: Headless Run"
+    },
+    {
+      "level": 2,
+      "line": 17,
+      "number": "1",
+      "title": "Scope & Objectives"
+    },
+    {
+      "level": 3,
+      "line": 22,
+      "number": "1.1",
+      "title": "Non-Goals"
+    },
+    {
+      "level": 3,
+      "line": 27,
+      "number": "1.2",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 30,
+      "number": "2",
+      "title": "The daemon rule"
+    },
+    {
+      "level": 2,
+      "line": 39,
+      "number": "3",
+      "title": "Cards"
+    },
+    {
+      "level": 2,
+      "line": 54,
+      "number": "4",
+      "title": "Output and exit codes"
+    },
+    {
+      "level": 2,
+      "line": 72,
+      "number": "5",
+      "title": "Other flags"
+    },
+    {
+      "level": 2,
+      "line": 75,
+      "number": "6",
+      "title": "Verification Plan"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/016-headless-run.md",
+    "sha256": "713c96a4fa2f6a990123fc101b93bcb09968abca8d2ba55b76d481ab0ffee79a"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 170,
+        "end_line": 6,
+        "line": 6,
+        "start": 122
+      },
+      "text": "status: approved   # by the operator, 2026-10-25"
+    },
+    "sha256": "713c96a4fa2f6a990123fc101b93bcb09968abca8d2ba55b76d481ab0ffee79a",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "runtime-models-and-tools",
+    "number": "016",
+    "stem": "016-headless-run",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "016: Headless Run (`delphi run`)"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 770,
+      "end_line": 18,
+      "line": 18,
+      "start": 420
+    },
+    "text": "`delphi run \"<task>\"` runs one task with no terminal and ends with a summary and an exit code, so a script, a CI job or the benchmark runner can use Delphi without a person at the console. It drives the same daemon through the same input grammar as the console (`/build …`, `/council …`, `@role …`, or a plain prompt). It adds no new authority."
+  }
+}

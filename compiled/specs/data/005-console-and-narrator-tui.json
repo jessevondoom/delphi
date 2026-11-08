@@ -1,0 +1,146 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 005: Console, Narrator Window & UDS Event-Bus Daemon"
+    },
+    {
+      "level": 2,
+      "line": 17,
+      "number": "1",
+      "title": "Scope & Objectives"
+    },
+    {
+      "level": 3,
+      "line": 24,
+      "number": "1.1",
+      "title": "Phase Mapping"
+    },
+    {
+      "level": 3,
+      "line": 32,
+      "number": "1.2",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 39,
+      "number": "2",
+      "title": "Client-Daemon Architecture (`delphi-core` over UDS)"
+    },
+    {
+      "level": 3,
+      "line": 67,
+      "number": "2.1",
+      "title": "Daemon Auto-Spawn & Socket Security Invariants"
+    },
+    {
+      "level": 3,
+      "line": 90,
+      "number": "2.2",
+      "title": "Canonical `EventEnvelope` Wire Schema"
+    },
+    {
+      "level": 3,
+      "line": 124,
+      "number": "2.3",
+      "title": "Durability & Single Source of Truth"
+    },
+    {
+      "level": 3,
+      "line": 136,
+      "number": "2.4",
+      "title": "Usage Ledger (D-18)"
+    },
+    {
+      "level": 3,
+      "line": 178,
+      "number": "2.5",
+      "title": "Crash Recovery & Mission Resumption"
+    },
+    {
+      "level": 2,
+      "line": 224,
+      "number": "3",
+      "title": "Window 1: `Console` (`delphi` / `delphi chat`) — The Operator Deck"
+    },
+    {
+      "level": 3,
+      "line": 228,
+      "number": "3.1",
+      "title": "Core Operator Capabilities"
+    },
+    {
+      "level": 2,
+      "line": 255,
+      "number": "4",
+      "title": "Window 2: `Narrator` (`delphi narrator`) — Live Narration & Telemetry Window"
+    },
+    {
+      "level": 3,
+      "line": 259,
+      "number": "4.1",
+      "title": "Agents Pane (always visible; D-18)"
+    },
+    {
+      "level": 3,
+      "line": 274,
+      "number": "4.2",
+      "title": "Views"
+    },
+    {
+      "level": 2,
+      "line": 295,
+      "number": "5",
+      "title": "Dual-Window Spawning & Single-Screen Fallback"
+    },
+    {
+      "level": 2,
+      "line": 305,
+      "number": "6",
+      "title": "Verification Plan"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/005-console-and-narrator-tui.md",
+    "sha256": "24f1cb904d075b373a6dabbf9c357a1c20c25a15fc87b6fc195f7aee92ca1ce3"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 233,
+        "end_line": 6,
+        "line": 6,
+        "start": 154
+      },
+      "text": "status: approved   # by the operator, 2026-10-24 (\"ratify all\"); whole document"
+    },
+    "sha256": "24f1cb904d075b373a6dabbf9c357a1c20c25a15fc87b6fc195f7aee92ca1ce3",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "console",
+    "number": "005",
+    "stem": "005-console-and-narrator-tui",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "005: Console, Narrator Window & UDS Event-Bus Daemon"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 1523,
+      "end_line": 22,
+      "line": 18,
+      "start": 492
+    },
+    "text": "This specification defines the dual-window terminal interface and local client-daemon architecture of Delphi (implemented in **Rust** using `Tokio`, `Ratatui`, and `Crossterm`):\n1. **`delphi-core` Local Daemon & Unix Domain Socket (UDS) Bus:** Event-sourced runtime engine with 60Hz frame coalescing, append-only `events.jsonl` replay, and SQLite WAL state indexing.\n2. **Window 1 — `Console` (`delphi` / `delphi chat`):** The sovereign operator interface, prompt input, slash-command palette, and synchronous Human-in-the-Loop (HITL) permission modals.\n3. **Window 2 — `Narrator` (`delphi narrator`):** Attach-anywhere secondary live narrative and telemetry window—the epic storyteller chronicling the team's actions in real time (agents pane with models and token spend, the Epic task graph, the Council chamber, and Builder's Forge diffs).\n4. **Multiplexer & OS Window Auto-Spawning:** Seamless dual-window launching across `tmux`, `zellij`, `WezTerm`, `Kitty`, and macOS windows, plus single-screen `Tab` toggle fallback."
+  }
+}

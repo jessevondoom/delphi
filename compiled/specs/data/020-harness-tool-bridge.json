@@ -1,0 +1,158 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 020: The Harness Tool Bridge, Seat Profiles & the Tool Inventory"
+    },
+    {
+      "level": 2,
+      "line": 17,
+      "number": "1",
+      "title": "Scope & Objectives"
+    },
+    {
+      "level": 3,
+      "line": 26,
+      "number": "1.1",
+      "title": "Non-Goals"
+    },
+    {
+      "level": 2,
+      "line": 31,
+      "number": "2",
+      "title": "The Bridge"
+    },
+    {
+      "level": 2,
+      "line": 44,
+      "number": "3",
+      "title": "Seat Profiles: `[harness.<cli>]` (optional; defaults apply without it)"
+    },
+    {
+      "level": 2,
+      "line": 59,
+      "number": "4",
+      "title": "The Tool Inventory"
+    },
+    {
+      "level": 2,
+      "line": 66,
+      "number": "5",
+      "title": "Approvals: `approvals = \"delegate\"` (default) | `\"delphi\"`"
+    },
+    {
+      "level": 2,
+      "line": 72,
+      "number": "6",
+      "title": "The CLI's Own MCP Servers: the Account's Connectors (amends D-22, `specs/009` §7A)"
+    },
+    {
+      "level": 2,
+      "line": 82,
+      "number": "7",
+      "title": "SSO and Enterprise"
+    },
+    {
+      "level": 2,
+      "line": 94,
+      "number": "8",
+      "title": "agy (Gemini subscription)"
+    },
+    {
+      "level": 3,
+      "line": 95,
+      "number": "8.1",
+      "title": "First look, 2026-10-25: the global route is closed"
+    },
+    {
+      "level": 3,
+      "line": 101,
+      "number": "8.2",
+      "title": "Second look, same day: the workspace route is open"
+    },
+    {
+      "level": 3,
+      "line": 109,
+      "number": "8.3",
+      "title": "How it works (built)"
+    },
+    {
+      "level": 3,
+      "line": 121,
+      "number": "8.4",
+      "title": "What it unlocks"
+    },
+    {
+      "level": 3,
+      "line": 127,
+      "number": "8.6",
+      "title": "Conformance probe and the trust lift (built)"
+    },
+    {
+      "level": 3,
+      "line": 134,
+      "number": "8.7",
+      "title": "agy as a Builder (built)"
+    },
+    {
+      "level": 3,
+      "line": 144,
+      "number": "8.5",
+      "title": "Risks"
+    },
+    {
+      "level": 2,
+      "line": 150,
+      "number": "9",
+      "title": "Verification"
+    },
+    {
+      "level": 2,
+      "line": 163,
+      "number": "10",
+      "title": "Slices"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/020-harness-tool-bridge.md",
+    "sha256": "8249ec2f7b76ea2b91ad125c5a6820713cc73b64d8a09516b21a1a8104b3f80e"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 407,
+        "end_line": 6,
+        "line": 6,
+        "start": 161
+      },
+      "text": "status: approved   # by the operator, 2026-10-25: the bridge, delegated approvals as the default, the account's own connectors on by default (the amendment to D-22 in §6), and the tool inventory. Nothing here needs to be ratified by an end user."
+    },
+    "sha256": "8249ec2f7b76ea2b91ad125c5a6820713cc73b64d8a09516b21a1a8104b3f80e",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "runtime-models-and-tools",
+    "number": "020",
+    "stem": "020-harness-tool-bridge",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "020: The Harness Tool Bridge, Seat Profiles & the Tool Inventory"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 1225,
+      "end_line": 18,
+      "line": 18,
+      "start": 710
+    },
+    "text": "A subscription CLI (`specs/009` §7) runs its own loop, so a harness span for a role without a worktree used to be **text-only**: the Delphi chat's orchestrator, served by `claude` on a subscription, could not set a timer, dispatch an agent or read a scoped file, and its harness note said so. That is the normal setup for an operator with no API access, including an organization that signs in to Claude Enterprise through SSO (Okta): an SSO seat is a `claude.ai` login, which is the harness path and nothing else."
+  }
+}

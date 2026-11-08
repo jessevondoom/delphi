@@ -1,0 +1,218 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 031: Layered Learning, Cheap Capture, and Training Mode"
+    },
+    {
+      "level": 2,
+      "line": 19,
+      "number": "1",
+      "title": "Scope & Objectives"
+    },
+    {
+      "level": 3,
+      "line": 29,
+      "number": "1.1",
+      "title": "Non-Goals"
+    },
+    {
+      "level": 3,
+      "line": 35,
+      "number": "1.2",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 38,
+      "number": "2",
+      "title": "Two Layers, Two Authorities"
+    },
+    {
+      "level": 2,
+      "line": 54,
+      "number": "3",
+      "title": "The Operator Layer: Room to Grow"
+    },
+    {
+      "level": 3,
+      "line": 56,
+      "number": "3.1",
+      "title": "Four stores, increasing trust"
+    },
+    {
+      "level": 3,
+      "line": 67,
+      "number": "3.2",
+      "title": "Capture triggers (deterministic; no model call to decide)"
+    },
+    {
+      "level": 3,
+      "line": 78,
+      "number": "3.3",
+      "title": "Skill candidates"
+    },
+    {
+      "level": 3,
+      "line": 83,
+      "number": "3.4",
+      "title": "Evidence: exposure, scores, decay"
+    },
+    {
+      "level": 3,
+      "line": 90,
+      "number": "3.5",
+      "title": "Customization surface"
+    },
+    {
+      "level": 3,
+      "line": 93,
+      "number": "3.6",
+      "title": "Operator-tunable loop parameters (bounded)"
+    },
+    {
+      "level": 2,
+      "line": 96,
+      "number": "4",
+      "title": "Training Mode: Evolving the Core Layer"
+    },
+    {
+      "level": 3,
+      "line": 98,
+      "number": "4.1",
+      "title": "What it is"
+    },
+    {
+      "level": 3,
+      "line": 101,
+      "number": "4.2",
+      "title": "Safety rules (enforced, not advised)"
+    },
+    {
+      "level": 3,
+      "line": 108,
+      "number": "4.3",
+      "title": "Case format (`dev/train/suites/<suite>/cases/<id>/`)"
+    },
+    {
+      "level": 3,
+      "line": 114,
+      "number": "4.4",
+      "title": "Three run kinds"
+    },
+    {
+      "level": 3,
+      "line": 119,
+      "number": "4.5",
+      "title": "Guards against fooling ourselves"
+    },
+    {
+      "level": 3,
+      "line": 126,
+      "number": "4.6",
+      "title": "Seed suites"
+    },
+    {
+      "level": 3,
+      "line": 135,
+      "number": "4.7",
+      "title": "Harvest from the field"
+    },
+    {
+      "level": 3,
+      "line": 138,
+      "number": "4.8",
+      "title": "From finding to shipped change"
+    },
+    {
+      "level": 2,
+      "line": 145,
+      "number": "5",
+      "title": "Interactions and Invariants"
+    },
+    {
+      "level": 2,
+      "line": 153,
+      "number": "6",
+      "title": "Acceptance Criteria"
+    },
+    {
+      "level": 2,
+      "line": 165,
+      "number": "7",
+      "title": "Build Plan"
+    },
+    {
+      "level": 3,
+      "line": 186,
+      "number": "7.1",
+      "title": "As built"
+    },
+    {
+      "level": 2,
+      "line": 261,
+      "number": "8",
+      "title": "Decisions for the Operator"
+    },
+    {
+      "level": 2,
+      "line": 272,
+      "number": "9",
+      "title": "Known Limits (stated plainly)"
+    },
+    {
+      "level": 2,
+      "line": 279,
+      "number": "10",
+      "title": "Verification Plan"
+    },
+    {
+      "level": 2,
+      "line": 293,
+      "number": "11",
+      "title": "Open Questions"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/031-layered-learning-and-training-mode.md",
+    "sha256": "5e2a5573d81f9ced0a6e0f5d296bc1bf8c58588fe60d0df69b2d95c5896e651a"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 345,
+        "end_line": 6,
+        "line": 6,
+        "start": 175
+      },
+      "text": "status: approved   # by the operator, 2026-10-26 (\"ratify all specs\"); text merged on the operator's \"go\" 2026-10-26; OD-1..OD-6 follow the recommendations being built to"
+    },
+    "sha256": "5e2a5573d81f9ced0a6e0f5d296bc1bf8c58588fe60d0df69b2d95c5896e651a",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "learning-and-evals",
+    "number": "031",
+    "stem": "031-layered-learning-and-training-mode",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "031: Layered Learning, Cheap Capture, and Training Mode (draft)"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 1739,
+      "end_line": 21,
+      "line": 21,
+      "start": 1460
+    },
+    "text": "Delphi's learning loop is specified in `specs/004` but not built, and the seeded `lessons.md` files hold one rule between nine roles. A loop that is gated on \"10 finished tasks\" and then on a full model-proposal-and-ratification pass will stay empty. This spec does three things:"
+  }
+}

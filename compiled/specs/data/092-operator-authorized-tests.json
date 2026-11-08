@@ -1,0 +1,101 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 23,
+      "number": null,
+      "title": "Spec 092: Operator-authorized tests"
+    },
+    {
+      "level": 2,
+      "line": 27,
+      "number": "1",
+      "title": "Why"
+    },
+    {
+      "level": 2,
+      "line": 35,
+      "number": "2",
+      "title": "What must not change"
+    },
+    {
+      "level": 2,
+      "line": 46,
+      "number": "3",
+      "title": "The additions"
+    },
+    {
+      "level": 2,
+      "line": 59,
+      "number": "4",
+      "title": "Why not a policy file, and why not the relay"
+    },
+    {
+      "level": 2,
+      "line": 63,
+      "number": "5",
+      "title": "Threats this design must survive"
+    },
+    {
+      "level": 2,
+      "line": 96,
+      "number": "6",
+      "title": "Slices (one per pull request; none starts before approval and a readable red-team re-review)"
+    },
+    {
+      "level": 2,
+      "line": 109,
+      "number": "7",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 119,
+      "number": "8",
+      "title": "Non-goals"
+    },
+    {
+      "level": 2,
+      "line": 123,
+      "number": "9",
+      "title": "Decisions"
+    },
+    {
+      "level": 2,
+      "line": 134,
+      "number": "10",
+      "title": "Known limits"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/092-operator-authorized-tests.md",
+    "sha256": "e3473db6aea330eafb24121263cf866cff1705dc28e896aa567e922c56cd7af2"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 521,
+        "end_line": 6,
+        "line": 6,
+        "start": 216
+      },
+      "text": "status: approved   # by the operator, 2026-11-07 (\"approve all of the above\"): the sandboxed-shell-only first slice (OD-0) and the recommended answers to OD-1 to OD-5. It amends an invariant of spec 016, so S1 does not start until a red-team re-review of this text in a readable form has passed (§6, S0)."
+    },
+    "sha256": "e3473db6aea330eafb24121263cf866cff1705dc28e896aa567e922c56cd7af2",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "governance-and-safety",
+    "number": "092",
+    "stem": "092-operator-authorized-tests",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "092: Operator-authorized tests: an advance, scoped, recorded approval of named Red actions in a headless test run"
+  },
+  "summary": null
+}

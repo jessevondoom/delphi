@@ -1,0 +1,134 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 015: Provisional Decisions"
+    },
+    {
+      "level": 2,
+      "line": 17,
+      "number": "1",
+      "title": "Scope & Objectives"
+    },
+    {
+      "level": 3,
+      "line": 24,
+      "number": "1.1",
+      "title": "Non-Goals"
+    },
+    {
+      "level": 3,
+      "line": 28,
+      "number": "1.2",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 31,
+      "number": "2",
+      "title": "What may be decided: an allow-list"
+    },
+    {
+      "level": 2,
+      "line": 45,
+      "number": "3",
+      "title": "The approver"
+    },
+    {
+      "level": 2,
+      "line": 54,
+      "number": "4",
+      "title": "The ledger"
+    },
+    {
+      "level": 2,
+      "line": 65,
+      "number": "5",
+      "title": "Gate 6 and the flow"
+    },
+    {
+      "level": 2,
+      "line": 78,
+      "number": "6",
+      "title": "Operator surfaces"
+    },
+    {
+      "level": 2,
+      "line": 85,
+      "number": "6.1",
+      "title": "Settings"
+    },
+    {
+      "level": 2,
+      "line": 97,
+      "number": "7",
+      "title": "Guard rails"
+    },
+    {
+      "level": 2,
+      "line": 105,
+      "number": "8",
+      "title": "Charter amendments (approved and applied 2026-10-25, D-30)"
+    },
+    {
+      "level": 2,
+      "line": 113,
+      "number": "9",
+      "title": "Verification Plan"
+    },
+    {
+      "level": 2,
+      "line": 126,
+      "number": "10",
+      "title": "Amendment 015-A1: optimistic is a per-build flag, not a permission mode (council 013 D3 b)"
+    },
+    {
+      "level": 2,
+      "line": 129,
+      "number": "11",
+      "title": "Amendment 015-A2: a rejection never buys a stronger model (council 013 D10 a)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/015-provisional-decisions.md",
+    "sha256": "f8bbb4c0e8abc0758e9aef43c951e96fe8610073c167a20f767207289c761b95"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 258,
+        "end_line": 6,
+        "line": 6,
+        "start": 151
+      },
+      "text": "status: approved   # by the operator, 2026-10-25, with the charter amendments in §8 (applied the same day)"
+    },
+    "sha256": "f8bbb4c0e8abc0758e9aef43c951e96fe8610073c167a20f767207289c761b95",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "governance-and-safety",
+    "number": "015",
+    "stem": "015-provisional-decisions",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "015: Provisional Decisions (the optimistic workflow)"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 842,
+      "end_line": 18,
+      "line": 18,
+      "start": 556
+    },
+    "text": "When the operator asks for it, a build may carry on past approval cards whose every effect stays inside the task's branch. An approver decides each such card, every decision is written to the log, and **the merge is blocked until the operator has reviewed and ratified every decision**."
+  }
+}

@@ -1,0 +1,137 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 046: Harness and OpenAI Coverage"
+    },
+    {
+      "level": 2,
+      "line": 23,
+      "number": "1",
+      "title": "Principles"
+    },
+    {
+      "level": 2,
+      "line": 31,
+      "number": "2",
+      "title": "The abstraction"
+    },
+    {
+      "level": 2,
+      "line": 47,
+      "number": "3",
+      "title": "Claude CLI (`claude` 2.1.312)"
+    },
+    {
+      "level": 3,
+      "line": 49,
+      "number": "3.1",
+      "title": "Options (headless span)"
+    },
+    {
+      "level": 3,
+      "line": 79,
+      "number": "3.2",
+      "title": "Subcommands"
+    },
+    {
+      "level": 3,
+      "line": 99,
+      "number": "3.3",
+      "title": "The stream-json control channel"
+    },
+    {
+      "level": 2,
+      "line": 103,
+      "number": "4",
+      "title": "Antigravity CLI (`agy` 1.4.8)"
+    },
+    {
+      "level": 3,
+      "line": 105,
+      "number": "4.1",
+      "title": "Options"
+    },
+    {
+      "level": 3,
+      "line": 117,
+      "number": "4.2",
+      "title": "Subcommands"
+    },
+    {
+      "level": 2,
+      "line": 129,
+      "number": "5",
+      "title": "OpenAI-spec APIs"
+    },
+    {
+      "level": 2,
+      "line": 162,
+      "number": "6",
+      "title": "How coverage stays complete"
+    },
+    {
+      "level": 2,
+      "line": 170,
+      "number": "7",
+      "title": "Slices"
+    },
+    {
+      "level": 2,
+      "line": 185,
+      "number": "8",
+      "title": "Safety"
+    },
+    {
+      "level": 2,
+      "line": 192,
+      "number": "9",
+      "title": "Open decisions (the operator's)"
+    },
+    {
+      "level": 2,
+      "line": 203,
+      "number": "10",
+      "title": "S0 results (2026-10-28)"
+    },
+    {
+      "level": 2,
+      "line": 218,
+      "number": "11",
+      "title": "What this spec does not claim"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/046-harness-and-openai-coverage.md",
+    "sha256": "8197476789c9a0ea26c9aded73ddb014d1bc61d3c15f440cf5f01dd9aaf0955a"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 363,
+        "end_line": 6,
+        "line": 6,
+        "start": 219
+      },
+      "text": "status: approved   # by the operator, 2026-10-28 (\"ratify any spec changes\"); undecided points follow the recommendations in the decisions table"
+    },
+    "sha256": "8197476789c9a0ea26c9aded73ddb014d1bc61d3c15f440cf5f01dd9aaf0955a",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "runtime-models-and-tools",
+    "number": "046",
+    "stem": "046-harness-and-openai-coverage",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "046: Harness and OpenAI Coverage: Every Claude and agy Capability, and the OpenAI-Spec APIs, Classified and Closed"
+  },
+  "summary": null
+}

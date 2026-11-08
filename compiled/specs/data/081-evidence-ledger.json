@@ -1,0 +1,83 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 20,
+      "number": null,
+      "title": "Spec 081: Evidence conventions note"
+    },
+    {
+      "level": 2,
+      "line": 24,
+      "number": "1",
+      "title": "Invariants every recipe and report must keep"
+    },
+    {
+      "level": 2,
+      "line": 33,
+      "number": "2",
+      "title": "Row shape (when a recipe prints rows)"
+    },
+    {
+      "level": 2,
+      "line": 36,
+      "number": "3",
+      "title": "Relation to 078-080"
+    },
+    {
+      "level": 2,
+      "line": 44,
+      "number": "4",
+      "title": "Missing events, in order"
+    },
+    {
+      "level": 2,
+      "line": 50,
+      "number": "5",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 53,
+      "number": "6",
+      "title": "Verification"
+    },
+    {
+      "level": 2,
+      "line": 56,
+      "number": "7",
+      "title": "Not verified"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/081-evidence-ledger.md",
+    "sha256": "4589dd19eabfed57c49bdc0348350f7ad898f83b0bfa52129b307ae8ba7a794b"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 203,
+        "end_line": 6,
+        "line": 6,
+        "start": 190
+      },
+      "text": "status: draft"
+    },
+    "sha256": "4589dd19eabfed57c49bdc0348350f7ad898f83b0bfa52129b307ae8ba7a794b",
+    "word": "draft"
+  },
+  "spec": {
+    "group": "learning-and-evals",
+    "number": "081",
+    "stem": "081-evidence-ledger",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "081: Evidence conventions note: invariants and row shape for recipes over verified events (draft)"
+  },
+  "summary": null
+}

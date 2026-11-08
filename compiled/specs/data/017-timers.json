@@ -1,0 +1,104 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 017: Timers"
+    },
+    {
+      "level": 2,
+      "line": 17,
+      "number": "1",
+      "title": "Scope & Objectives"
+    },
+    {
+      "level": 3,
+      "line": 24,
+      "number": "1.1",
+      "title": "Not in scope (and why)"
+    },
+    {
+      "level": 2,
+      "line": 29,
+      "number": "2",
+      "title": "The Store"
+    },
+    {
+      "level": 3,
+      "line": 34,
+      "number": "2.1",
+      "title": "Limits (all checked in one place, so the tool, the RPC and the CLI agree)"
+    },
+    {
+      "level": 2,
+      "line": 44,
+      "number": "3",
+      "title": "The `timer` Tool"
+    },
+    {
+      "level": 2,
+      "line": 55,
+      "number": "4",
+      "title": "Firing"
+    },
+    {
+      "level": 3,
+      "line": 67,
+      "number": "4.1",
+      "title": "Trust"
+    },
+    {
+      "level": 2,
+      "line": 72,
+      "number": "5",
+      "title": "Surfaces"
+    },
+    {
+      "level": 2,
+      "line": 79,
+      "number": "6",
+      "title": "Verification Plan"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/017-timers.md",
+    "sha256": "9c7cd6206189b75724a466a11edfb21e54b34b4794a1f6def2bfc1dee7d55b4a"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 222,
+        "end_line": 6,
+        "line": 6,
+        "start": 121
+      },
+      "text": "status: approved   # by the operator, 2026-10-25, including the new `timers` execute capability (§3)"
+    },
+    "sha256": "9c7cd6206189b75724a466a11edfb21e54b34b4794a1f6def2bfc1dee7d55b4a",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "runtime-models-and-tools",
+    "number": "017",
+    "stem": "017-timers",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "017: Timers (durable wakes for roles)"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 773,
+      "end_line": 18,
+      "line": 18,
+      "start": 475
+    },
+    "text": "A role that writes \"I'll check back in 20 minutes\" has no clock and no way to wake. Nothing happens unless something outside the model makes it happen. This spec adds that something: a **timer** is a wake the daemon keeps. It is stored on disk, shown to the operator, and fires as an ordinary task."
+  }
+}

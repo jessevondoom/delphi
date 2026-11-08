@@ -1,0 +1,143 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 069: Workspace Administration, Diagnostic Inspection, and Governed Operator Assistance"
+    },
+    {
+      "level": 2,
+      "line": 22,
+      "number": "1",
+      "title": "Problem & Intent"
+    },
+    {
+      "level": 2,
+      "line": 41,
+      "number": "2",
+      "title": "Invariants & Governance Boundaries"
+    },
+    {
+      "level": 2,
+      "line": 54,
+      "number": "3",
+      "title": "Division of Responsibilities: Orchestrator vs. Administrator"
+    },
+    {
+      "level": 3,
+      "line": 80,
+      "number": "3.1",
+      "title": "The Role of Orchestrator"
+    },
+    {
+      "level": 3,
+      "line": 86,
+      "number": "3.2",
+      "title": "The Expanded Scope of Administrator"
+    },
+    {
+      "level": 2,
+      "line": 96,
+      "number": "4",
+      "title": "The 3-Tier Governed Assistance Model"
+    },
+    {
+      "level": 3,
+      "line": 117,
+      "number": "4.1",
+      "title": "Tier 1: Read-Only System Diagnostics (Autonomous / Green)"
+    },
+    {
+      "level": 3,
+      "line": 123,
+      "number": "4.2",
+      "title": "Tier 2: Mutating Operations via Governed Action Cards (Amber / Gated)"
+    },
+    {
+      "level": 3,
+      "line": 135,
+      "number": "4.3",
+      "title": "Tier 3: Sovereign, Cryptographic & Interactive Actions (Red / Consultative Only)"
+    },
+    {
+      "level": 2,
+      "line": 146,
+      "number": "5",
+      "title": "Engine Tool Definitions & Schemas"
+    },
+    {
+      "level": 3,
+      "line": 148,
+      "number": "5.1",
+      "title": "`inspect_system` (Tier 1: Read-Only Diagnostic)"
+    },
+    {
+      "level": 3,
+      "line": 174,
+      "number": "5.2",
+      "title": "`propose_admin_action` (Tier 2: Gated Operational Proposal)"
+    },
+    {
+      "level": 2,
+      "line": 205,
+      "number": "6",
+      "title": "Console UX & Action Card Workflow"
+    },
+    {
+      "level": 2,
+      "line": 231,
+      "number": "7",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 246,
+      "number": "8",
+      "title": "Implementation Slices"
+    },
+    {
+      "level": 2,
+      "line": 258,
+      "number": "9",
+      "title": "Council 014 Ratified Decisions"
+    },
+    {
+      "level": 2,
+      "line": 266,
+      "number": "10",
+      "title": "Acceptance Gates"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/069-workspace-administration-and-operator-assistance.md",
+    "sha256": "aed7e2629dfff79ee3f81710d2ff6dff782cd74e4aebb046e5af65db5d92983d"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 228,
+        "end_line": 6,
+        "line": 6,
+        "start": 212
+      },
+      "text": "status: approved"
+    },
+    "sha256": "aed7e2629dfff79ee3f81710d2ff6dff782cd74e4aebb046e5af65db5d92983d",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "install-and-lifecycle",
+    "number": "069",
+    "stem": "069-workspace-administration-and-operator-assistance",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "069: Workspace Administration, Diagnostic Inspection, and Governed Operator Assistance"
+  },
+  "summary": null
+}

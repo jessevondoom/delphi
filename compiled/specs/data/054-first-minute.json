@@ -1,0 +1,83 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 054: The first minute"
+    },
+    {
+      "level": 2,
+      "line": 17,
+      "number": "1",
+      "title": "Why"
+    },
+    {
+      "level": 3,
+      "line": 20,
+      "number": "1.1",
+      "title": "Non-Goals"
+    },
+    {
+      "level": 3,
+      "line": 25,
+      "number": "1.2",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 28,
+      "number": "2",
+      "title": "Design"
+    },
+    {
+      "level": 2,
+      "line": 33,
+      "number": "3",
+      "title": "Slices"
+    },
+    {
+      "level": 2,
+      "line": 39,
+      "number": "4",
+      "title": "Verification"
+    },
+    {
+      "level": 2,
+      "line": 42,
+      "number": "5",
+      "title": "Open decisions"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/054-first-minute.md",
+    "sha256": "80879c0ebf4eb61db00a4982fd059e4b2fc4e0adc9ae15cc63a1cf22001b50ee"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 357,
+        "end_line": 6,
+        "line": 6,
+        "start": 184
+      },
+      "text": "status: approved   # by the operator, 2026-10-28 (\"merge and approve all, follow the rest of your recommendations\"); FR1 is small and buildable; FR2 waits for a human timing"
+    },
+    "sha256": "80879c0ebf4eb61db00a4982fd059e4b2fc4e0adc9ae15cc63a1cf22001b50ee",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "install-and-lifecycle",
+    "number": "054",
+    "stem": "054-first-minute",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "054: The first minute: init continues into setup, and the first answer is research, not a tour"
+  },
+  "summary": null
+}

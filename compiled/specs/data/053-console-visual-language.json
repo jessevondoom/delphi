@@ -1,0 +1,107 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 053: Console visual language"
+    },
+    {
+      "level": 2,
+      "line": 19,
+      "number": "1",
+      "title": "Why"
+    },
+    {
+      "level": 3,
+      "line": 22,
+      "number": "1.1",
+      "title": "Non-Goals"
+    },
+    {
+      "level": 3,
+      "line": 27,
+      "number": "1.2",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 30,
+      "number": "2",
+      "title": "Principles"
+    },
+    {
+      "level": 2,
+      "line": 38,
+      "number": "3",
+      "title": "The vocabulary (VL-1)"
+    },
+    {
+      "level": 2,
+      "line": 56,
+      "number": "4",
+      "title": "The gutter (VL-2)"
+    },
+    {
+      "level": 2,
+      "line": 63,
+      "number": "5",
+      "title": "The composer as home base (VL-3)"
+    },
+    {
+      "level": 2,
+      "line": 66,
+      "number": "6",
+      "title": "Where each lives"
+    },
+    {
+      "level": 2,
+      "line": 73,
+      "number": "7",
+      "title": "Invariants and tests"
+    },
+    {
+      "level": 2,
+      "line": 80,
+      "number": "8",
+      "title": "Build plan and open decisions"
+    },
+    {
+      "level": 2,
+      "line": 93,
+      "number": "9",
+      "title": "Known limits"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/053-console-visual-language.md",
+    "sha256": "47854a953bb9199df05545b073c85b572b37b196678f32a6fa6d10330d810534"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 413,
+        "end_line": 6,
+        "line": 6,
+        "start": 242
+      },
+      "text": "status: approved   # by the operator, 2026-10-28 (\"merge and approve all, follow the rest of your recommendations\"); the provisional answers in §8 stand; nothing is built"
+    },
+    "sha256": "47854a953bb9199df05545b073c85b572b37b196678f32a6fa6d10330d810534",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "console",
+    "number": "053",
+    "stem": "053-console-visual-language",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "053: Console visual language: one vocabulary of colour, glyph and weight, status bullets in a gutter, and a composer that shows where you are"
+  },
+  "summary": null
+}

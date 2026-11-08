@@ -1,0 +1,89 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 035: Failover without a driver's seat"
+    },
+    {
+      "level": 2,
+      "line": 17,
+      "number": "1",
+      "title": "What this is"
+    },
+    {
+      "level": 2,
+      "line": 22,
+      "number": "2",
+      "title": "Findings (read from the code, 2026-10-26)"
+    },
+    {
+      "level": 2,
+      "line": 36,
+      "number": "3",
+      "title": "Decisions (proposed)"
+    },
+    {
+      "level": 2,
+      "line": 62,
+      "number": "4",
+      "title": "How it fits together"
+    },
+    {
+      "level": 2,
+      "line": 81,
+      "number": "5",
+      "title": "Built (2026-10-26)"
+    },
+    {
+      "level": 2,
+      "line": 98,
+      "number": "6",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 121,
+      "number": "7",
+      "title": "Open"
+    },
+    {
+      "level": 2,
+      "line": 126,
+      "number": "8",
+      "title": "Amendment 035-A1: D-4 and D-13 follow the per-build flag (council 013 D3 b)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/035-failover-without-a-driver.md",
+    "sha256": "1b4d4ae0dc906f2a32829fef8cd40b0ceecf028df89c057869a0e5a1f9c4b196"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 278,
+        "end_line": 6,
+        "line": 6,
+        "start": 140
+      },
+      "text": "status: approved   # by the operator, 2026-10-26 (\"ratify all specs\"); D-1..D-8 as proposed, the code follows them; §5 says what is built"
+    },
+    "sha256": "1b4d4ae0dc906f2a32829fef8cd40b0ceecf028df89c057869a0e5a1f9c4b196",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "runtime-models-and-tools",
+    "number": "035",
+    "stem": "035-failover-without-a-driver",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "035: Failover without a driver's seat"
+  },
+  "summary": null
+}

@@ -1,0 +1,212 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 004: Dual-Tier Memory, Zero-Server Hybrid RAG & Coaching Loop"
+    },
+    {
+      "level": 2,
+      "line": 21,
+      "number": "1",
+      "title": "Scope & Objectives"
+    },
+    {
+      "level": 3,
+      "line": 28,
+      "number": "1.1",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 34,
+      "number": "2",
+      "title": "Dual-Tier Memory & Frozen Prefix Cache Hygiene"
+    },
+    {
+      "level": 3,
+      "line": 63,
+      "number": "2.0",
+      "title": "Phase Mapping (§§2–4)"
+    },
+    {
+      "level": 3,
+      "line": 76,
+      "number": "2.1",
+      "title": "The Frozen Boot-Snapshot Invariant (Prompt Cache Hygiene)"
+    },
+    {
+      "level": 3,
+      "line": 96,
+      "number": "2.2",
+      "title": "Hard Dual-Cap Invariant: The Rule of 25 + 6 KB Byte Ceiling"
+    },
+    {
+      "level": 2,
+      "line": 105,
+      "number": "3",
+      "title": "The Two-Gear Retrieval Protocol & Zero-Server Hybrid RAG"
+    },
+    {
+      "level": 3,
+      "line": 107,
+      "number": "3.1",
+      "title": "The Golden Routing Rule (Gear 1 vs. Gear 2)"
+    },
+    {
+      "level": 3,
+      "line": 116,
+      "number": "3.2",
+      "title": "Deterministic AST Breadcrumb Chunking"
+    },
+    {
+      "level": 3,
+      "line": 122,
+      "number": "3.3",
+      "title": "Concrete SQLite Hybrid Schema (`.delphi/state.db`)"
+    },
+    {
+      "level": 3,
+      "line": 203,
+      "number": "3.4",
+      "title": "Reciprocal Rank Fusion (RRF) & Pointer Output Contract"
+    },
+    {
+      "level": 3,
+      "line": 209,
+      "number": "3.5",
+      "title": "Local Embeddings (Amendment 004-A1)"
+    },
+    {
+      "level": 3,
+      "line": 228,
+      "number": "3.6",
+      "title": "Preloaded Vectors and Agent Skills in the Index (Amendment 004-A2)"
+    },
+    {
+      "level": 3,
+      "line": 239,
+      "number": "3.7",
+      "title": "A Fresh Index, Reranking and Query-Aware Fusion (Amendment 004-A3)"
+    },
+    {
+      "level": 2,
+      "line": 256,
+      "number": "4",
+      "title": "Orchestrator's Coaching, Two-Strike Circuit Breaker & 4-Channel Learning Loop"
+    },
+    {
+      "level": 3,
+      "line": 258,
+      "number": "4.1",
+      "title": "The Two-Strike Context Circuit Breaker (Mid-Mission Coaching)"
+    },
+    {
+      "level": 3,
+      "line": 266,
+      "number": "4.2",
+      "title": "Post-Mission ExpeL Contrastive Distillation"
+    },
+    {
+      "level": 2,
+      "line": 272,
+      "number": "5",
+      "title": "Memory Scopes, Operator Customization & Evolution (D-20)"
+    },
+    {
+      "level": 3,
+      "line": 276,
+      "number": "5.1",
+      "title": "Four Scopes"
+    },
+    {
+      "level": 3,
+      "line": 286,
+      "number": "5.2",
+      "title": "Assembly into the Frozen Snapshot"
+    },
+    {
+      "level": 3,
+      "line": 306,
+      "number": "5.3",
+      "title": "Operator Customization"
+    },
+    {
+      "level": 3,
+      "line": 314,
+      "number": "5.4",
+      "title": "Learning Routing at `/retro`"
+    },
+    {
+      "level": 3,
+      "line": 324,
+      "number": "5.5",
+      "title": "Evolving Delphi's Central Processes (upstream contribution)"
+    },
+    {
+      "level": 3,
+      "line": 339,
+      "number": "5.6",
+      "title": "Evidence: Is a Rule Actually Helping?"
+    },
+    {
+      "level": 3,
+      "line": 360,
+      "number": "5.7",
+      "title": "Privacy & Portability"
+    },
+    {
+      "level": 3,
+      "line": 364,
+      "number": "5.8",
+      "title": "Phase Mapping"
+    },
+    {
+      "level": 2,
+      "line": 374,
+      "number": "6",
+      "title": "Verification Plan"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/004-memory-and-coaching.md",
+    "sha256": "c75491b412700bdf495ce16fdedbc0813a687f266729e711a606c5b19c756e9e"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 306,
+        "end_line": 6,
+        "line": 6,
+        "start": 158
+      },
+      "text": "status: approved   # operator, 2026-10-24 (\"ratify all\"); amendments A1-A3 folded in, approved 2026-10-25; A4 approved 2026-10-30 (council 013 D15b)"
+    },
+    "sha256": "c75491b412700bdf495ce16fdedbc0813a687f266729e711a606c5b19c756e9e",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "knowledge-and-memory",
+    "number": "004",
+    "stem": "004-memory-and-coaching",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "004: Dual-Tier Memory, Zero-Server Hybrid RAG & Coaching Loop"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2048,
+      "end_line": 26,
+      "line": 22,
+      "start": 902
+    },
+    "text": "This specification defines Delphi's memory, local retrieval (Hybrid RAG), and self-improvement engine:\n1. **Dual-Tier Memory Architecture:** Isolated **Agent-Private Episodic Memory** (`memory/agents/<role>/lessons.md`) vs. the **Central Knowledge Base** (`context/` & `missions/`).\n2. **Frozen Boot-Snapshot Cache Hygiene:** Preventing mid-session prompt-cache invalidation when memory files are updated.\n3. **The Two-Gear Retrieval Protocol & Zero-Server Hybrid RAG (`.delphi/state.db`):** Combining **Agentic Progressive Disclosure (`context/index.md` + `ripgrep`/`ast-grep`)** for live code and curated docs with **Deterministic Breadcrumb AST Chunking**, **SQLite FTS5 (BM25 with identifier tokenization)**, **`sqlite-vec` (local embeddings)**, **Reciprocal Rank Fusion (RRF)** and a local **cross-encoder reranker** for deep archival recall, with vectors for the shipped documents made at release time (Amendments 004-A1 to 004-A3).\n4. **Orchestrator's Coaching, Two-Strike Circuit Breaker & 4-Channel `REVIEW.md` Loop:** Governed by the **ExpeL Rule of 25**, a **6 KB hard byte cap**, and the **6-Tier Security Taint Lattice (`[H-004]`)**."
+  }
+}

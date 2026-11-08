@@ -1,0 +1,110 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 093: Authority invariants as tests"
+    },
+    {
+      "level": 2,
+      "line": 24,
+      "number": "1",
+      "title": "Scope and what was verified"
+    },
+    {
+      "level": 2,
+      "line": 41,
+      "number": "2",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 47,
+      "number": "3",
+      "title": "Authority statement"
+    },
+    {
+      "level": 2,
+      "line": 51,
+      "number": "4",
+      "title": "Batch 1 (slice B1)"
+    },
+    {
+      "level": 2,
+      "line": 74,
+      "number": "5",
+      "title": "Batch 2 (slice B2), drafted after B1 merges"
+    },
+    {
+      "level": 2,
+      "line": 79,
+      "number": "6",
+      "title": "Slices"
+    },
+    {
+      "level": 2,
+      "line": 89,
+      "number": "7",
+      "title": "Out of scope, and where it goes"
+    },
+    {
+      "level": 2,
+      "line": 96,
+      "number": "8",
+      "title": "Open decisions (recommendations first)"
+    },
+    {
+      "level": 2,
+      "line": 104,
+      "number": "9",
+      "title": "Differences from the design (slice B1, built 2026-11-07)"
+    },
+    {
+      "level": 2,
+      "line": 119,
+      "number": "10",
+      "title": "Tests that pin this spec"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/093-authority-invariants-batch1.md",
+    "sha256": "3ec8f144dfd0e6b1274df51126ecb023c568fc7e2db46c72d1cf498358739dc6"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 391,
+        "end_line": 6,
+        "line": 6,
+        "start": 253
+      },
+      "text": "status: approved   # by the operator, 2026-11-07 (\"the spec is approved. start building batch one\"); OD-1 to OD-5 take the recommendations"
+    },
+    "sha256": "3ec8f144dfd0e6b1274df51126ecb023c568fc7e2db46c72d1cf498358739dc6",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "governance-and-safety",
+    "number": "093",
+    "stem": "093-authority-invariants-batch1",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "093: Authority invariants as tests: spawn-site ratchet, must-run gate, home isolation, dependency gate (batch 1), resume and usage honesty (batch 2)"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 1933,
+      "end_line": 26,
+      "line": 26,
+      "start": 1657
+    },
+    "text": "GOVERNANCE §5.6 says an invariant is enforced only when a daemon check or CI script implements it. This spec turns a handful of invariants that are today held by review habit into failing tests, and adds one supply-chain gate. It adds no feature and gives no actor new power."
+  }
+}

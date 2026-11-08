@@ -1,0 +1,89 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 036: Signed releases and the start-time refresh"
+    },
+    {
+      "level": 2,
+      "line": 17,
+      "number": "1",
+      "title": "What this is"
+    },
+    {
+      "level": 2,
+      "line": 22,
+      "number": "2",
+      "title": "The rules (who ratifies what)"
+    },
+    {
+      "level": 2,
+      "line": 33,
+      "number": "3",
+      "title": "What is signed"
+    },
+    {
+      "level": 2,
+      "line": 39,
+      "number": "4",
+      "title": "The maintainers' procedure (once)"
+    },
+    {
+      "level": 2,
+      "line": 48,
+      "number": "5",
+      "title": "Admin-side controls"
+    },
+    {
+      "level": 2,
+      "line": 53,
+      "number": "6",
+      "title": "Built"
+    },
+    {
+      "level": 2,
+      "line": 60,
+      "number": "7",
+      "title": "The self-updater, and what is not built"
+    },
+    {
+      "level": 2,
+      "line": 70,
+      "number": "8",
+      "title": "Two questions, decided (operator, 2026-10-26: go with the recommendations)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/036-signed-releases-and-start-time-refresh.md",
+    "sha256": "769812251b74090143b86351934f6b5421b52851af6a00462c64441301d9a551"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 415,
+        "end_line": 6,
+        "line": 6,
+        "start": 195
+      },
+      "text": "status: approved   # by the operator 2026-10-26 (merge instruction after review); it changes nothing for anyone until the maintainers make a release key (section 4). Two questions remain, with recommendations (section 8)"
+    },
+    "sha256": "769812251b74090143b86351934f6b5421b52851af6a00462c64441301d9a551",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "install-and-lifecycle",
+    "number": "036",
+    "stem": "036-signed-releases-and-start-time-refresh",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "036: Signed releases and the start-time refresh (amends 006 section 3.1 and A6)"
+  },
+  "summary": null
+}

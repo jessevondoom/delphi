@@ -1,0 +1,140 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 077: Host Mention Routing, Themed Alias Resolution, and Front-Door Problem Solving"
+    },
+    {
+      "level": 2,
+      "line": 24,
+      "number": "1",
+      "title": "Scope & Objectives"
+    },
+    {
+      "level": 2,
+      "line": 39,
+      "number": "2",
+      "title": "Core Invariants & Security Boundaries"
+    },
+    {
+      "level": 2,
+      "line": 52,
+      "number": "3",
+      "title": "Design Specification"
+    },
+    {
+      "level": 3,
+      "line": 54,
+      "number": "3.1",
+      "title": "The Front-Door Dispatcher (`@delphi`)"
+    },
+    {
+      "level": 3,
+      "line": 67,
+      "number": "3.2",
+      "title": "Dual-Key Themed Alias Resolution"
+    },
+    {
+      "level": 4,
+      "line": 84,
+      "number": null,
+      "title": "Mapping Table:"
+    },
+    {
+      "level": 3,
+      "line": 99,
+      "number": "3.3",
+      "title": "Engine MCP Enhancements (`mcp_host.rs` & `mcp_packs.rs`)"
+    },
+    {
+      "level": 3,
+      "line": 121,
+      "number": "3.4",
+      "title": "Host Integration: Claude Code Plugin & Project Directives"
+    },
+    {
+      "level": 4,
+      "line": 123,
+      "number": "3.4.1",
+      "title": "Skill Definition (`ecosystem/claude-code/delphi/skills/delphi/SKILL.md`)"
+    },
+    {
+      "level": 4,
+      "line": 133,
+      "number": "3.4.2",
+      "title": "Project Instructions Template (`CLAUDE.md`)"
+    },
+    {
+      "level": 2,
+      "line": 140,
+      "number": "4",
+      "title": "Simpler Alternatives Considered & Rejected"
+    },
+    {
+      "level": 3,
+      "line": 142,
+      "number": null,
+      "title": "Alternative 1: Hardcoding Themed Names Directly in MCP Schemas"
+    },
+    {
+      "level": 3,
+      "line": 146,
+      "number": null,
+      "title": "Alternative 2: Treating `@delphi` as an Autonomous Background Subagent"
+    },
+    {
+      "level": 2,
+      "line": 152,
+      "number": "5",
+      "title": "Verification Plan"
+    },
+    {
+      "level": 2,
+      "line": 169,
+      "number": "6",
+      "title": "Implementation Slices (One PR per Slice)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/077-host-mention-routing-and-themed-alias-resolution.md",
+    "sha256": "e6638b3e0bb3506b5936665411bddc921b30c8c1368eab3c0c991c3499479e23"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 224,
+        "end_line": 6,
+        "line": 6,
+        "start": 208
+      },
+      "text": "status: approved"
+    },
+    "sha256": "e6638b3e0bb3506b5936665411bddc921b30c8c1368eab3c0c991c3499479e23",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "hosts-and-mcp",
+    "number": "077",
+    "stem": "077-host-mention-routing-and-themed-alias-resolution",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "077: Host Mention Routing, Themed Alias Resolution, and Front-Door Problem Solving"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 1499,
+      "end_line": 26,
+      "line": 26,
+      "start": 1267
+    },
+    "text": "When developers work outside the native Delphi terminal TUI—in external harnesses such as Claude Code, Cursor, Copilot CLI, or Codex—they require a natural, cohesive conversational interface to interact with Delphi's agent team."
+  }
+}

@@ -1,0 +1,122 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 097: Encyclopedia search pages, inline media, and reputable expansion"
+    },
+    {
+      "level": 2,
+      "line": 22,
+      "number": "1",
+      "title": "Goal"
+    },
+    {
+      "level": 2,
+      "line": 26,
+      "number": "2",
+      "title": "Scope and boundaries"
+    },
+    {
+      "level": 2,
+      "line": 33,
+      "number": "3",
+      "title": "Wikipedia layout and Markdown composition"
+    },
+    {
+      "level": 2,
+      "line": 61,
+      "number": "4",
+      "title": "Requirements"
+    },
+    {
+      "level": 3,
+      "line": 63,
+      "number": "4.1",
+      "title": "New `writer` skill: `encyclopedia-synthesis`"
+    },
+    {
+      "level": 3,
+      "line": 68,
+      "number": "4.2",
+      "title": "Unified local gather and immediate synthesis on search"
+    },
+    {
+      "level": 3,
+      "line": 78,
+      "number": "4.3",
+      "title": "Deterministic check and `/v1/image` support for library assets"
+    },
+    {
+      "level": 3,
+      "line": 89,
+      "number": "4.4",
+      "title": "Frontmatter caching and `writer`-discretion expiration (`valid_until`)"
+    },
+    {
+      "level": 3,
+      "line": 102,
+      "number": "4.5",
+      "title": "Reputable \"Expand\" workflow (`pages.expand` / `delphi pages expand`)"
+    },
+    {
+      "level": 3,
+      "line": 111,
+      "number": "4.6",
+      "title": "Console primary search result UX (`ui/src/archives.ts` and `ui/src/markdown.ts`)"
+    },
+    {
+      "level": 2,
+      "line": 120,
+      "number": "5",
+      "title": "Implementation slices"
+    },
+    {
+      "level": 2,
+      "line": 129,
+      "number": "6",
+      "title": "Acceptance gates"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/097-encyclopedia-search-pages.md",
+    "sha256": "f8696e219e8dd5a453ec903b67b870e6c0670e2a4424c637eff17e19c940aaa6"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 262,
+        "end_line": 6,
+        "line": 6,
+        "start": 172
+      },
+      "text": "status: approved   # approved by the operator on 2026-10-31: \"commit and approve the spec\""
+    },
+    "sha256": "f8696e219e8dd5a453ec903b67b870e6c0670e2a4424c637eff17e19c940aaa6",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "knowledge-and-memory",
+    "number": "097",
+    "stem": "097-encyclopedia-search-pages",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "097: Encyclopedia search pages, inline media, and reputable expansion"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2609,
+      "end_line": 31,
+      "line": 28,
+      "start": 1808
+    },
+    "text": "- **No silent authority elevation.** Generated encyclopedia pages remain `internal_generated` synthesis (`status: active`, or `unverified` on claims-only fallback). A generated page is never ingested as a source for another generated page.\n- **No arbitrary remote image hotlinking.** `/v1/image` renders only local bytes already captured under library source assets (`$DELPHI_HOME/library/sources/<sid>/assets/`) or indexed workspace directories (`local/knowledge/web/<host>/images/` and workspace document paths).\n- **Role IDs only.** All manifests, frontmatter, prompts, and code use the role ID `writer`, never theme display names.\n- **Every animation obeys reduce motion.** Any progress indicator during initial synthesis or page expansion takes its state from `stillMotion` in `ui/src/motion.ts`."
+  }
+}

@@ -1,0 +1,101 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 14,
+      "number": null,
+      "title": "Spec 074: A stable launch path for host plugins, and `delphi connect`"
+    },
+    {
+      "level": 2,
+      "line": 18,
+      "number": "1",
+      "title": "Problem & Intent"
+    },
+    {
+      "level": 2,
+      "line": 27,
+      "number": "1.1",
+      "title": "Non-Goals"
+    },
+    {
+      "level": 2,
+      "line": 34,
+      "number": "2",
+      "title": "Part A: stable launch path (071 E1s, amends spec 006)"
+    },
+    {
+      "level": 2,
+      "line": 43,
+      "number": "3",
+      "title": "Part B: `delphi connect <host>` (071 E3)"
+    },
+    {
+      "level": 2,
+      "line": 70,
+      "number": "4",
+      "title": "Slices (one per pull request; none starts before approval)"
+    },
+    {
+      "level": 2,
+      "line": 80,
+      "number": "5",
+      "title": "Testing"
+    },
+    {
+      "level": 2,
+      "line": 84,
+      "number": "6",
+      "title": "Council record and questions"
+    },
+    {
+      "level": 2,
+      "line": 88,
+      "number": "7",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 92,
+      "number": "8",
+      "title": "Recorded proof and build notes (C2, 2026-11-04)"
+    },
+    {
+      "level": 2,
+      "line": 105,
+      "number": "9",
+      "title": "C3 template table, proof and Council re-review (Copilot, 2026-11-04)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/074-stable-launch-path-and-delphi-connect.md",
+    "sha256": "c5caaa85e056cce8d85d3345947571aa6fe5bd4a5c2dcbb437cb47b280e14506"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 524,
+        "end_line": 6,
+        "line": 6,
+        "start": 179
+      },
+      "text": "status: approved   # by the operator, 2026-11-04 (\"approve 074\"), after a Council (3 seats, 2 rounds, all APPROVE-WITH-AMENDMENTS, amendments folded in): approves L0, L1 and C1. C2 was gated on the recorded GitHub-source proof (requirement 7), recorded in §8 on 2026-11-04, and is built; C3 stays gated on its own proof and a Council re-review."
+    },
+    "sha256": "c5caaa85e056cce8d85d3345947571aa6fe5bd4a5c2dcbb437cb47b280e14506",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "hosts-and-mcp",
+    "number": "074",
+    "stem": "074-stable-launch-path-and-delphi-connect",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "074: A stable launch path for host plugins, and `delphi connect`"
+  },
+  "summary": null
+}

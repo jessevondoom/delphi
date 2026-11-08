@@ -1,0 +1,152 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 009: Model Access Paths, Endpoints & Authentication"
+    },
+    {
+      "level": 2,
+      "line": 17,
+      "number": "1",
+      "title": "Scope & Objectives"
+    },
+    {
+      "level": 3,
+      "line": 26,
+      "number": "1.1",
+      "title": "Non-Goals"
+    },
+    {
+      "level": 3,
+      "line": 30,
+      "number": "1.2",
+      "title": "Phase Mapping"
+    },
+    {
+      "level": 3,
+      "line": 39,
+      "number": "1.3",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 45,
+      "number": "2",
+      "title": "Model: Family → Endpoint → Credential"
+    },
+    {
+      "level": 2,
+      "line": 52,
+      "number": "3",
+      "title": "Access Paths"
+    },
+    {
+      "level": 3,
+      "line": 62,
+      "number": "3.1",
+      "title": "v1 Support Matrix"
+    },
+    {
+      "level": 2,
+      "line": 73,
+      "number": "4",
+      "title": "Credential Sources"
+    },
+    {
+      "level": 3,
+      "line": 86,
+      "number": "4.1",
+      "title": "`[auth.<name>]` Schema (OAuth2)"
+    },
+    {
+      "level": 3,
+      "line": 101,
+      "number": "4.2",
+      "title": "Credential Invariants"
+    },
+    {
+      "level": 2,
+      "line": 110,
+      "number": "5",
+      "title": "Endpoint Configuration, Selection & Policy"
+    },
+    {
+      "level": 2,
+      "line": 152,
+      "number": "6",
+      "title": "Capability Probing"
+    },
+    {
+      "level": 2,
+      "line": 166,
+      "number": "7",
+      "title": "Harness Mode (Subscription CLIs)"
+    },
+    {
+      "level": 3,
+      "line": 190,
+      "number": null,
+      "title": "7B. Default Profile: the Operator's CLI with an Approval Bridge (D-24)"
+    },
+    {
+      "level": 3,
+      "line": 206,
+      "number": null,
+      "title": "7A. Amendment 009-A2 (REJECTED): Harness Connectors"
+    },
+    {
+      "level": 2,
+      "line": 247,
+      "number": "8",
+      "title": "Usage Ledger & Budget"
+    },
+    {
+      "level": 2,
+      "line": 255,
+      "number": "9",
+      "title": "Verification Plan"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/009-model-access-and-auth.md",
+    "sha256": "5e42174f6ff826d6e59c83880b4202da613f045b4033992b15d4ee18664cd03b"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 217,
+        "end_line": 6,
+        "line": 6,
+        "start": 150
+      },
+      "text": "status: approved   # by the operator, 2026-10-23, after Council 003"
+    },
+    "sha256": "5e42174f6ff826d6e59c83880b4202da613f045b4033992b15d4ee18664cd03b",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "runtime-models-and-tools",
+    "number": "009",
+    "stem": "009-model-access-and-auth",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "009: Model Access Paths, Endpoints & Authentication"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 682,
+      "end_line": 18,
+      "line": 18,
+      "start": 485
+    },
+    "text": "How Delphi reaches a model and proves it is allowed to. Decision **D-19**: every setup below is required in v1, and direct API keys are treated as the *least* common configuration, not the default."
+  }
+}

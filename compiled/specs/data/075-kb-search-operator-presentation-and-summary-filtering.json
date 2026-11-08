@@ -1,0 +1,134 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 075: Knowledge Base Search Operator Presentation and Summary Filtering"
+    },
+    {
+      "level": 2,
+      "line": 23,
+      "number": "1",
+      "title": "Scope & Problem Statement"
+    },
+    {
+      "level": 2,
+      "line": 40,
+      "number": "2",
+      "title": "Background & Taint Invariants"
+    },
+    {
+      "level": 3,
+      "line": 42,
+      "number": "2.1",
+      "title": "The Agent Taint Boundary (Spec 068 §6.3, GOVERNANCE §4.3)"
+    },
+    {
+      "level": 3,
+      "line": 47,
+      "number": "2.2",
+      "title": "Human Operator Exception"
+    },
+    {
+      "level": 2,
+      "line": 57,
+      "number": "3",
+      "title": "Design Specification"
+    },
+    {
+      "level": 3,
+      "line": 59,
+      "number": "3.1",
+      "title": "Search Options Extension (`SearchOpts`)"
+    },
+    {
+      "level": 3,
+      "line": 86,
+      "number": "3.2",
+      "title": "CLI Flags (`delphi kb search`)"
+    },
+    {
+      "level": 3,
+      "line": 92,
+      "number": "3.3",
+      "title": "TUI & Daemon Configuration"
+    },
+    {
+      "level": 3,
+      "line": 110,
+      "number": "3.4",
+      "title": "Autonomous Agent Preservation"
+    },
+    {
+      "level": 2,
+      "line": 115,
+      "number": "4",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 3,
+      "line": 117,
+      "number": "4.1",
+      "title": "Banning `.bib.md` Sidecars Entirely"
+    },
+    {
+      "level": 3,
+      "line": 122,
+      "number": "4.2",
+      "title": "Requiring CLI Users to Run Separate Subcommands"
+    },
+    {
+      "level": 2,
+      "line": 129,
+      "number": "5",
+      "title": "Verification Plan"
+    },
+    {
+      "level": 2,
+      "line": 151,
+      "number": "6",
+      "title": "Implementation Slices & Time Estimates"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/075-kb-search-operator-presentation-and-summary-filtering.md",
+    "sha256": "9090d0ec4d2629141c4ea60bb110c555d7c8dc7c2d05854f53c3fc3b064695ae"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 217,
+        "end_line": 6,
+        "line": 6,
+        "start": 201
+      },
+      "text": "status: approved"
+    },
+    "sha256": "9090d0ec4d2629141c4ea60bb110c555d7c8dc7c2d05854f53c3fc3b064695ae",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "knowledge-and-memory",
+    "number": "075",
+    "stem": "075-kb-search-operator-presentation-and-summary-filtering",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "075: Knowledge Base Search Operator Presentation and Summary Filtering"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 1335,
+      "end_line": 25,
+      "line": 25,
+      "start": 1051
+    },
+    "text": "Spec 068 established the bibliography sidecar pattern (§6.7, Decision D-7): every imported summary page (`summaries/<id>.md`) has a daemon-generated sibling bibliography file (`summaries/<id>.bib.md`) containing factual metadata only (URLs, authors, publication dates, and link IDs)."
+  }
+}

@@ -1,0 +1,98 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 018: Operator Hooks"
+    },
+    {
+      "level": 2,
+      "line": 17,
+      "number": "1",
+      "title": "Scope & Objectives"
+    },
+    {
+      "level": 3,
+      "line": 22,
+      "number": "1.1",
+      "title": "Non-Goals"
+    },
+    {
+      "level": 3,
+      "line": 28,
+      "number": "1.2",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 2,
+      "line": 31,
+      "number": "2",
+      "title": "Where they live"
+    },
+    {
+      "level": 2,
+      "line": 47,
+      "number": "3",
+      "title": "Observe hooks"
+    },
+    {
+      "level": 2,
+      "line": 50,
+      "number": "4",
+      "title": "Deny hooks"
+    },
+    {
+      "level": 2,
+      "line": 58,
+      "number": "5",
+      "title": "Verification Plan"
+    },
+    {
+      "level": 2,
+      "line": 67,
+      "number": "6",
+      "title": "Amendment 018-A1: Harness-native allow-capable hooks (Council 013 D13; approved by the operator 2026-10-30)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/018-operator-hooks.md",
+    "sha256": "77518e302fbd967a17c3414535ef45a3281831d39e3925459cdaef4d0dcdf80d"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 276,
+        "end_line": 6,
+        "line": 6,
+        "start": 130
+      },
+      "text": "status: approved   # by the operator, 2026-10-25, by merging the pull request that added it (commit 91eb352) with GOVERNANCE §5.11 and REV-SEC-10"
+    },
+    "sha256": "77518e302fbd967a17c3414535ef45a3281831d39e3925459cdaef4d0dcdf80d",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "governance-and-safety",
+    "number": "018",
+    "stem": "018-operator-hooks",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "018: Operator Hooks (observe and deny)"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 815,
+      "end_line": 18,
+      "line": 18,
+      "start": 534
+    },
+    "text": "Claude Code and `agy` let the user attach commands to events. Delphi's enforcement lives in the daemon, and a command that could return \"allow\" would be a way around it. So Delphi offers hooks that **cannot loosen anything**: commands that watch, and commands that can only say no."
+  }
+}

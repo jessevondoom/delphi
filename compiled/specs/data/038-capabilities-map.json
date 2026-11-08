@@ -1,0 +1,113 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "038: Operator capabilities map"
+    },
+    {
+      "level": 2,
+      "line": 21,
+      "number": "1",
+      "title": "Why"
+    },
+    {
+      "level": 2,
+      "line": 31,
+      "number": "2",
+      "title": "Commands"
+    },
+    {
+      "level": 2,
+      "line": 46,
+      "number": "3",
+      "title": "What is asked, and where it is read"
+    },
+    {
+      "level": 2,
+      "line": 64,
+      "number": "4",
+      "title": "Trust: where each fact came from"
+    },
+    {
+      "level": 2,
+      "line": 73,
+      "number": "5",
+      "title": "Snapshot schema (`schema: 1`)"
+    },
+    {
+      "level": 2,
+      "line": 90,
+      "number": "6",
+      "title": "Privacy"
+    },
+    {
+      "level": 2,
+      "line": 98,
+      "number": "7",
+      "title": "Failure behavior"
+    },
+    {
+      "level": 2,
+      "line": 109,
+      "number": "8",
+      "title": "Background refresh"
+    },
+    {
+      "level": 2,
+      "line": 117,
+      "number": "9",
+      "title": "Tests"
+    },
+    {
+      "level": 2,
+      "line": 136,
+      "number": "10",
+      "title": "Known limits"
+    },
+    {
+      "level": 2,
+      "line": 145,
+      "number": "11",
+      "title": "The orchestrator can ask (`external_available`)"
+    },
+    {
+      "level": 2,
+      "line": 171,
+      "number": "12",
+      "title": "Decisions for the operator"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/038-capabilities-map.md",
+    "sha256": "1d7898471ea3ac2e32faa4dab5f512d0f69ca0a048a1d01b0b85b3b6067b5d17"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 210,
+        "end_line": 6,
+        "line": 6,
+        "start": 124
+      },
+      "text": "status: approved   # by the operator, 2026-10-26 (\"ratify all specs\"); built (PR #232)"
+    },
+    "sha256": "1d7898471ea3ac2e32faa4dab5f512d0f69ca0a048a1d01b0b85b3b6067b5d17",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "install-and-lifecycle",
+    "number": "038",
+    "stem": "038-capabilities-map",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "038: Operator capabilities map"
+  },
+  "summary": null
+}

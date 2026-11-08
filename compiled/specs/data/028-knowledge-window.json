@@ -1,0 +1,221 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 028: The Knowledge Window"
+    },
+    {
+      "level": 2,
+      "line": 19,
+      "number": "1",
+      "title": "What this is"
+    },
+    {
+      "level": 2,
+      "line": 22,
+      "number": "2",
+      "title": "Decisions taken (operator, 2026-10-25)"
+    },
+    {
+      "level": 2,
+      "line": 31,
+      "number": "3",
+      "title": "Resting state: a search box, and the shape of the store beneath it"
+    },
+    {
+      "level": 2,
+      "line": 62,
+      "number": "4",
+      "title": "Results: relevance order, one source per row"
+    },
+    {
+      "level": 2,
+      "line": 84,
+      "number": "5",
+      "title": "States"
+    },
+    {
+      "level": 2,
+      "line": 93,
+      "number": "6",
+      "title": "Online search: one API, no tokens"
+    },
+    {
+      "level": 3,
+      "line": 100,
+      "number": null,
+      "title": "6a. The self-hosted API (built, 2026-10-25)"
+    },
+    {
+      "level": 2,
+      "line": 120,
+      "number": "7",
+      "title": "Keys"
+    },
+    {
+      "level": 2,
+      "line": 123,
+      "number": "8",
+      "title": "Rendering notes (Ink and the narrator)"
+    },
+    {
+      "level": 2,
+      "line": 129,
+      "number": "9",
+      "title": "Open questions"
+    },
+    {
+      "level": 2,
+      "line": 135,
+      "number": "10",
+      "title": "Amendment 028-A1: two modes, and \"expand the archive\" (proposed 2026-10-28)"
+    },
+    {
+      "level": 3,
+      "line": 139,
+      "number": "10.1",
+      "title": "What changes"
+    },
+    {
+      "level": 3,
+      "line": 152,
+      "number": "10.2",
+      "title": "What expand mode does"
+    },
+    {
+      "level": 3,
+      "line": 162,
+      "number": "10.3",
+      "title": "The trusted-source lists: two allow lists, both the operator's choice"
+    },
+    {
+      "level": 3,
+      "line": 176,
+      "number": "10.4",
+      "title": "Why validation is not invoked (and what still holds)"
+    },
+    {
+      "level": 3,
+      "line": 183,
+      "number": "10.5",
+      "title": "Licensing"
+    },
+    {
+      "level": 3,
+      "line": 189,
+      "number": "10.6",
+      "title": "Progress and the results page"
+    },
+    {
+      "level": 3,
+      "line": 206,
+      "number": "10.7",
+      "title": "Failure and risk"
+    },
+    {
+      "level": 3,
+      "line": 216,
+      "number": "10.8",
+      "title": "Open questions (recommended answers)"
+    },
+    {
+      "level": 3,
+      "line": 228,
+      "number": "10.9",
+      "title": "Slices and tests"
+    },
+    {
+      "level": 2,
+      "line": 239,
+      "number": "11",
+      "title": "Amendment 028-A2: pictures saved with full-text research (operator, 2026-10-28)"
+    },
+    {
+      "level": 3,
+      "line": 243,
+      "number": "11.1",
+      "title": "The rule"
+    },
+    {
+      "level": 3,
+      "line": 253,
+      "number": "11.2",
+      "title": "What is saved, and where"
+    },
+    {
+      "level": 3,
+      "line": 260,
+      "number": "11.3",
+      "title": "Fetching, deterministically (no model tokens)"
+    },
+    {
+      "level": 3,
+      "line": 266,
+      "number": "11.4",
+      "title": "Tests (no live network)"
+    },
+    {
+      "level": 3,
+      "line": 269,
+      "number": "11.5",
+      "title": "Slice"
+    },
+    {
+      "level": 2,
+      "line": 274,
+      "number": "12",
+      "title": "Amendment 028-A3: Parallel as a keyless search engine, and the default (operator, 2026-10-31)"
+    },
+    {
+      "level": 3,
+      "line": 278,
+      "number": "12.1",
+      "title": "What changes"
+    },
+    {
+      "level": 3,
+      "line": 286,
+      "number": "12.2",
+      "title": "Tests (no live network)"
+    },
+    {
+      "level": 3,
+      "line": 289,
+      "number": "12.3",
+      "title": "Slice"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/028-knowledge-window.md",
+    "sha256": "8b48f9f095fc300eba9c8c3d91758d5e3d92695967cb1739f96de32057502ead"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 301,
+        "end_line": 6,
+        "line": 6,
+        "start": 151
+      },
+      "text": "status: approved   # by the operator, 2026-10-26 (\"ratify all specs\"); decisions 1-3 given 2026-10-25; the layout is a sketch and nothing is built yet"
+    },
+    "sha256": "8b48f9f095fc300eba9c8c3d91758d5e3d92695967cb1739f96de32057502ead",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "knowledge-and-memory",
+    "number": "028",
+    "stem": "028-knowledge-window",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "028: The Knowledge Window (explorer in the archives pane)"
+  },
+  "summary": null
+}

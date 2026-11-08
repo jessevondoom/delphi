@@ -1,0 +1,119 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 14,
+      "number": null,
+      "title": "Spec 076: Installing and updating Delphi from a private repository"
+    },
+    {
+      "level": 2,
+      "line": 18,
+      "number": "1",
+      "title": "Problem & Intent"
+    },
+    {
+      "level": 2,
+      "line": 24,
+      "number": "1.1",
+      "title": "Non-Goals"
+    },
+    {
+      "level": 2,
+      "line": 31,
+      "number": "2",
+      "title": "Credentials"
+    },
+    {
+      "level": 2,
+      "line": 41,
+      "number": "3",
+      "title": "Changes"
+    },
+    {
+      "level": 3,
+      "line": 43,
+      "number": "3.1",
+      "title": "`install.sh`"
+    },
+    {
+      "level": 3,
+      "line": 50,
+      "number": "3.2",
+      "title": "`delphi update` (`selfupdate.rs`)"
+    },
+    {
+      "level": 3,
+      "line": 57,
+      "number": "3.3",
+      "title": "Verification is tiered, and never weaker than today"
+    },
+    {
+      "level": 3,
+      "line": 67,
+      "number": "3.4",
+      "title": "Release workflows"
+    },
+    {
+      "level": 2,
+      "line": 71,
+      "number": "4",
+      "title": "Plugin marketplaces"
+    },
+    {
+      "level": 2,
+      "line": 75,
+      "number": "5",
+      "title": "Failure messages"
+    },
+    {
+      "level": 2,
+      "line": 79,
+      "number": "6",
+      "title": "Security considerations"
+    },
+    {
+      "level": 2,
+      "line": 85,
+      "number": "7",
+      "title": "Slices"
+    },
+    {
+      "level": 2,
+      "line": 93,
+      "number": "8",
+      "title": "Open questions"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/076-private-repo-distribution.md",
+    "sha256": "30a07c689a8c9358c63ce28fa148bef6e737c1340ca8c444a7821f67effd5a7a"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 267,
+        "end_line": 6,
+        "line": 6,
+        "start": 164
+      },
+      "text": "status: approved   # by the operator, 2026-11-04 (\"start writing code. build all slices on one branch\")"
+    },
+    "sha256": "30a07c689a8c9358c63ce28fa148bef6e737c1340ca8c444a7821f67effd5a7a",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "install-and-lifecycle",
+    "number": "076",
+    "stem": "076-private-repo-distribution",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "076: Installing and updating Delphi from a private repository"
+  },
+  "summary": null
+}
