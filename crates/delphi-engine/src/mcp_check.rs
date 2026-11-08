@@ -136,10 +136,17 @@ pub fn check_claude_code(home: &Path, binary_release: &str) -> Check {
 /// Spec 074 L1: whether a stable install location holds this binary, from `stat` alone (nothing is executed). The directories are
 /// `install_dir` (`$DELPHI_INSTALL_DIR`, if set), `~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin`. It says nothing about a host's own `PATH`.
 pub fn launch_path(home: &Path, install_dir: Option<&Path>, exe: &Path) -> String {
+    launch_path_in(home, install_dir, &["/opt/homebrew/bin".into(), "/usr/local/bin".into()], exe)
+}
+
+/// [`launch_path`] with the machine-wide install directories given, so a test can look only where it says: the real
+/// `/usr/local/bin` and `/opt/homebrew/bin` hold a `delphi` on any machine that installed one with Homebrew.
+fn launch_path_in(home: &Path, install_dir: Option<&Path>, machine_dirs: &[std::path::PathBuf], exe: &Path) -> String {
     use std::os::unix::fs::MetadataExt;
     let Ok(me) = std::fs::metadata(exe) else { return "unknown (this binary cannot be inspected)".into() };
     let mut dirs: Vec<std::path::PathBuf> = install_dir.filter(|d| d.is_absolute()).map(Path::to_path_buf).into_iter().collect();
-    dirs.extend([home.join(".local/bin"), "/opt/homebrew/bin".into(), "/usr/local/bin".into()]);
+    dirs.push(home.join(".local/bin"));
+    dirs.extend(machine_dirs.iter().cloned());
     let mut other = false;
     for d in dirs {
         let cand = d.join("delphi");
@@ -328,19 +335,47 @@ mod tests {
         let exe = t.path().join("elsewhere/delphi");
         std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
         std::fs::write(&exe, "x").unwrap();
-        assert!(launch_path(t.path(), None, &exe).starts_with("no stable path holds this binary (it is not"));
+        // The machine-wide directories are given as none: the real /usr/local/bin and /opt/homebrew/bin hold a `delphi` on any
+        // machine that installed one with Homebrew, and this test must say the same thing there as on a clean runner.
+        let look = |install: Option<&Path>, exe: &Path| launch_path_in(t.path(), install, &[], exe);
+        assert!(look(None, &exe).starts_with("no stable path holds this binary (it is not"));
         let bin = t.path().join(".local/bin");
         std::fs::create_dir_all(&bin).unwrap();
         std::fs::write(bin.join("delphi"), "y").unwrap();
-        assert!(launch_path(t.path(), None, &exe).contains("a different `delphi`"));
+        assert!(look(None, &exe).contains("a different `delphi`"));
         std::fs::remove_file(bin.join("delphi")).unwrap();
         std::os::unix::fs::symlink(&exe, bin.join("delphi")).unwrap();
-        assert!(launch_path(t.path(), None, &exe).starts_with(&format!("stable path {}", bin.join("delphi").display())));
+        assert!(look(None, &exe).starts_with(&format!("stable path {}", bin.join("delphi").display())));
         let custom = t.path().join("custom");
         std::fs::create_dir_all(&custom).unwrap();
         std::fs::hard_link(&exe, custom.join("delphi")).unwrap();
-        assert!(launch_path(t.path(), Some(&custom), &exe).contains(&custom.join("delphi").display().to_string()));
-        assert!(launch_path(t.path(), None, &t.path().join("missing")).starts_with("unknown"));
+        assert!(look(Some(&custom), &exe).contains(&custom.join("delphi").display().to_string()));
+        assert!(look(None, &t.path().join("missing")).starts_with("unknown"));
+    }
+
+    #[test]
+    fn launch_path_looks_in_the_machine_wide_directories_it_is_given() {
+        let t = tempfile::tempdir().unwrap();
+        let exe = t.path().join("elsewhere/delphi");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, "x").unwrap();
+        let (first, second) = (t.path().join("brew"), t.path().join("usr-local"));
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        let dirs = [first.clone(), second.clone()];
+        assert!(launch_path_in(t.path(), None, &dirs, &exe).contains("it is not in a standard install location"));
+        // A different binary in a machine-wide directory is reported as such, not as this one.
+        std::fs::write(second.join("delphi"), "other").unwrap();
+        assert!(launch_path_in(t.path(), None, &dirs, &exe).contains("a different `delphi`"));
+        // A link to this binary in the second directory is found by identity.
+        std::fs::remove_file(second.join("delphi")).unwrap();
+        std::os::unix::fs::symlink(&exe, second.join("delphi")).unwrap();
+        assert!(launch_path_in(t.path(), None, &dirs, &exe).starts_with(&format!("stable path {}", second.join("delphi").display())));
+        // The home directory is searched before the machine-wide ones.
+        let bin = t.path().join(".local/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::os::unix::fs::symlink(&exe, bin.join("delphi")).unwrap();
+        assert!(launch_path_in(t.path(), None, &dirs, &exe).starts_with(&format!("stable path {}", bin.join("delphi").display())));
     }
 
     #[test]
