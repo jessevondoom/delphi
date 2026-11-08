@@ -146,11 +146,16 @@ impl HarnessErr {
     }
 }
 
-/// The paths whose `git status --porcelain -z` entries appear or disappear between two snapshots of the registered projects
-/// (the first five, then "and N more"). With several projects each path is prefixed by the project's name.
-pub(crate) fn changed_paths(names: &[&str], before: &[String], after: &[String]) -> String {
+/// Claude Code's own worktree directory: sessions create and remove it, and a seat has no tool that touches it (`specs/020`).
+const IGNORED_PREFIX: &str = ".claude/worktrees/";
+
+/// Every path whose `git status --porcelain -z` entry appears or disappears between two snapshots of the registered
+/// projects, and the number of such paths ignored for lying under `.claude/worktrees/`. With several projects each kept
+/// path is prefixed by the project's name. Names only, never contents.
+pub(crate) fn changed_path_list(names: &[&str], before: &[String], after: &[String]) -> (Vec<String>, usize) {
     let entries = |s: &str| -> Vec<String> { s.split('\0').filter(|e| !e.is_empty()).map(String::from).collect() };
     let mut all: Vec<String> = Vec::new();
+    let mut ignored: Vec<String> = Vec::new();
     for (i, (b, a)) in before.iter().zip(after.iter()).enumerate() {
         let (b, a) = (entries(b), entries(a));
         let prefix = if names.len() > 1 { format!("{}/", names.get(i).copied().unwrap_or("?")) } else { String::new() };
@@ -158,18 +163,26 @@ pub(crate) fn changed_paths(names: &[&str], before: &[String], after: &[String])
             // An entry is "XY path"; the status letters are not part of the path.
             let path = e.get(3..).filter(|_| e.len() > 3 && e.as_bytes()[2] == b' ').unwrap_or(e.as_str());
             let p = format!("{}{}", prefix, path);
-            if !all.contains(&p) {
+            if path.starts_with(IGNORED_PREFIX) {
+                if !ignored.contains(&p) {
+                    ignored.push(p);
+                }
+            } else if !all.contains(&p) {
                 all.push(p);
             }
         }
     }
+    (all, ignored.len())
+}
+
+/// The first five of `all`, then "+N more" (for the note; the event keeps every name).
+pub(crate) fn paths_note(all: &[String]) -> String {
     if all.is_empty() {
         return "(status text only)".into();
     }
-    let more = all.len().saturating_sub(5);
     let mut s = all.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
-    if more > 0 {
-        s.push_str(&format!(" and {} more", more));
+    if all.len() > 5 {
+        s.push_str(&format!(" +{} more", all.len() - 5));
     }
     s
 }
@@ -1010,8 +1023,15 @@ impl Engine {
                 let after = project_state(self);
                 if after != before {
                     let names: Vec<&str> = self.projects.iter().map(|(n, _)| n.as_str()).collect();
-                    let paths = changed_paths(&names, &before, &after);
-                    failure = Some((self.secrets.redact(&format!("the agy run changed a project checkout; its output is discarded (`git status` differs from before): {}", paths)).chars().take(600).collect(), false));
+                    let (paths, ignored) = changed_path_list(&names, &before, &after);
+                    // Only paths under `.claude/worktrees/` differ: another session's worktree, not the seat. The run is kept.
+                    let only_ignored = paths.is_empty() && ignored > 0;
+                    let redacted: Vec<String> = paths.iter().map(|p| self.secrets.redact(p)).collect();
+                    let note = if ignored > 0 { format!("ignored {} paths under {}", ignored, IGNORED_PREFIX) } else { String::new() };
+                    batch.push(sc.ev("harness.checkout_guard", json!({"task_id": sc.task_id, "discarded": !only_ignored, "changed_paths": redacted, "ignored_count": ignored, "note": note})));
+                    if !only_ignored {
+                        failure = Some((self.secrets.redact(&format!("the agy run changed a project checkout; its output is discarded (`git status` differs from before): {}", paths_note(&paths))).chars().take(600).collect(), false));
+                    }
                 }
             }
         }
@@ -2364,13 +2384,61 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer",
     #[test]
     fn the_discard_message_names_the_changed_paths_up_to_five() {
         let before = vec![String::new()];
+        let note = |names: &[&str], b: &[String], a: &[String]| paths_note(&changed_path_list(names, b, a).0);
         let two = vec!["?? a.txt\0?? b.txt\0".to_string()];
-        assert_eq!(changed_paths(&["proj"], &before, &two), "a.txt, b.txt");
+        assert_eq!(note(&["proj"], &before, &two), "a.txt, b.txt");
         let seven = vec![(1..=7).map(|i| format!("?? f{}.txt\0", i)).collect::<String>()];
-        assert_eq!(changed_paths(&["proj"], &before, &seven), "f1.txt, f2.txt, f3.txt, f4.txt, f5.txt and 2 more");
+        assert_eq!(note(&["proj"], &before, &seven), "f1.txt, f2.txt, f3.txt, f4.txt, f5.txt +2 more");
+        assert_eq!(changed_path_list(&["proj"], &before, &seven).0.len(), 7, "the list keeps every name");
         // A path that disappears is named too, and two projects are told apart.
         let (b2, a2) = (vec!["?? x\0".to_string(), String::new()], vec![String::new(), " M y\0".to_string()]);
-        assert_eq!(changed_paths(&["one", "two"], &b2, &a2), "one/x, two/y");
+        assert_eq!(note(&["one", "two"], &b2, &a2), "one/x, two/y");
+    }
+
+    #[test]
+    fn only_the_claude_worktrees_prefix_is_ignored() {
+        let before = vec![String::new()];
+        let after = vec!["?? .claude/worktrees/w1/a.rs\0?? .claude/worktrees/w1/b.rs\0?? .claude/settings.json\0?? .claude/worktreesx/c\0 M src/lib.rs\0".to_string()];
+        let (kept, ignored) = changed_path_list(&["proj"], &before, &after);
+        assert_eq!(ignored, 2);
+        assert_eq!(kept, vec![".claude/settings.json", ".claude/worktreesx/c", "src/lib.rs"]);
+    }
+
+    /// A project with a stand-in `agy` that runs `script` between init and the answer.
+    async fn guard_run(script: &str) -> (crate::engine::TaskOutcome, Fx) {
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = fake_cli(scripts.path(), &format!("echo '{{\"event\":\"init\",\"init\":{{}}}}'\n{}\necho '{{\"event\":\"result\",\"result\":{{\"status\":\"SUCCESS\",\"response\":\"a good answer\",\"usage\":{{}}}}}}'", script));
+        let f = setup_with_exec(vec![], 5.0, |s| s.agy_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        crate::worktree::tests::init_repo(&f.root.join("proj"), &f.root.join("git-home"));
+        use_agy(&f);
+        let out = f.engine.run_task(&f.m, "architect", "Review the plan").await.unwrap();
+        (out, f)
+    }
+
+    #[tokio::test]
+    async fn a_new_directory_under_claude_worktrees_during_an_agy_run_does_not_discard_it() {
+        let (out, f) = guard_run(r#"d="$(pwd)/../../../../../proj/.claude/worktrees/other"; mkdir -p "$d"; echo x > "$d/file.txt""#).await;
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "a good answer"), "{}", out.text);
+        let ev = events_of(&f, "harness.checkout_guard");
+        assert_eq!(ev.len(), 1);
+        assert_eq!((ev[0].payload["discarded"].as_bool(), ev[0].payload["ignored_count"].as_u64()), (Some(false), Some(1)));
+        assert_eq!(ev[0].payload["note"], "ignored 1 paths under .claude/worktrees/");
+    }
+
+    #[tokio::test]
+    async fn another_untracked_file_beside_a_claude_worktree_still_discards_and_the_event_names_every_path() {
+        let (out, f) = guard_run(r#"p="$(pwd)/../../../../../proj"; mkdir -p "$p/.claude/worktrees/other"; echo x > "$p/.claude/worktrees/other/f"; for i in 1 2 3 4 5 6 7; do echo x > "$p/new$i.txt"; done; echo changed >> "$p/README.md""#).await;
+        match &out.status {
+            Status::Escalated(r) => assert!(r.contains("+") && r.contains("more") && !r.contains(".claude"), "{}", r),
+            other => panic!("{:?}", other),
+        }
+        assert!(!out.text.contains("a good answer"));
+        let ev = events_of(&f, "harness.checkout_guard");
+        assert_eq!(ev.len(), 1);
+        assert_eq!((ev[0].payload["discarded"].as_bool(), ev[0].payload["ignored_count"].as_u64()), (Some(true), Some(1)));
+        let names = ev[0].payload["changed_paths"].as_array().unwrap();
+        assert!(names.len() >= 7, "every name, not five: {:?}", names);
+        assert!(names.iter().any(|n| n == "new7.txt"));
     }
 
     #[tokio::test]
