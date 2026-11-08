@@ -92,6 +92,14 @@ pub enum Step {
     Concluded,
 }
 
+/// A seat Delphi runs through its own harness (`specs/086` §6.4). `tools_none`: the seat is given no tools at all, in every round.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForeignSeat {
+    pub role: String,
+    pub family: String,
+    pub tools_none: bool,
+}
+
 pub struct Panel {
     pub proposition: String,
     seats: Vec<String>,
@@ -105,8 +113,8 @@ pub struct Panel {
     /// Model names the host reported, by seat. Self-reported; shown as such.
     pub models: BTreeMap<String, String>,
     opened: std::time::Instant,
-    /// A seat Delphi itself runs on another model family (`specs/086` §6.4): `(role, family)`. The host cannot brief or answer for it.
-    foreign: Option<(String, String)>,
+    /// The seats Delphi itself runs on other model families (`specs/086` §6.4), in the order asked. The host cannot brief or answer for them.
+    foreign: Vec<ForeignSeat>,
     /// How many times each seat's Round 2 reply was sent back for its shape (spec 089 F1).
     rejections: BTreeMap<String, u8>,
     /// What the host said about isolation when it opened the Panel: `yes`, `no` or `unknown`. Host-reported.
@@ -123,22 +131,36 @@ pub struct Panel {
 impl Panel {
     pub fn new(proposition: &str) -> Panel {
         let seats: Vec<String> = PANEL_SEATS.iter().map(|s| s.to_string()).collect();
-        Panel { proposition: proposition.to_string(), barrier: Barrier::new(&seats), seats, released: None, answered: Vec::new(), round2: BTreeMap::new(), verdict: None, models: BTreeMap::new(), opened: std::time::Instant::now(), foreign: None, rejections: BTreeMap::new(), blind: "unknown".into(), operator_confirmed: None, options_source: None, host_family: None, require_families: None }
+        Panel { proposition: proposition.to_string(), barrier: Barrier::new(&seats), seats, released: None, answered: Vec::new(), round2: BTreeMap::new(), verdict: None, models: BTreeMap::new(), opened: std::time::Instant::now(), foreign: Vec::new(), rejections: BTreeMap::new(), blind: "unknown".into(), operator_confirmed: None, options_source: None, host_family: None, require_families: None }
     }
 
     /// Give one seat to Delphi: it runs on `family`, the host may neither brief nor answer for it.
     pub fn reserve(&mut self, seat: &str, family: &str) -> Result<(), PanelErr> {
-        self.check_seat(seat)?;
-        self.foreign = Some((seat.to_string(), family.to_string()));
+        self.reserve_seat(ForeignSeat { role: seat.to_string(), family: family.to_string(), tools_none: false })
+    }
+
+    /// Give a seat to Delphi, one call per seat, for N distinct seats (`specs/086` §6.4). The same seat twice is refused.
+    pub fn reserve_seat(&mut self, seat: ForeignSeat) -> Result<(), PanelErr> {
+        self.check_seat(&seat.role)?;
+        if self.reserved(&seat.role) {
+            return Err(PanelErr::Duplicate(seat.role));
+        }
+        self.foreign.push(seat);
         Ok(())
     }
 
+    /// The first seat Delphi runs (the whole story when there is one).
     pub fn foreign(&self) -> Option<(&str, &str)> {
-        self.foreign.as_ref().map(|(r, f)| (r.as_str(), f.as_str()))
+        self.foreign.first().map(|s| (s.role.as_str(), s.family.as_str()))
+    }
+
+    /// Every seat Delphi runs.
+    pub fn foreign_seats(&self) -> &[ForeignSeat] {
+        &self.foreign
     }
 
     fn reserved(&self, seat: &str) -> bool {
-        self.foreign.as_ref().is_some_and(|(r, _)| r == seat)
+        self.foreign.iter().any(|s| s.role == seat)
     }
 
     /// How long this Panel has been open; an abandoned one is dropped after a while (`PANEL_TTL`).
@@ -216,12 +238,24 @@ impl Panel {
     /// P7 (spec 089): the seat Delphi owns, when it is the ONLY thing the Panel waits on for `round` (the round whose answers are awaited:
     /// 1 for the Round 2 brief, 2 for the verdict brief). True only when every seat the host owns is in for that round and Delphi's seat is not.
     pub fn pending_on_delphi(&self, round: u8) -> Option<String> {
-        let (seat, _) = self.foreign.as_ref()?;
+        if self.foreign.is_empty() {
+            return None;
+        }
+        let mine = |r: &String| self.reserved(r);
         match round {
-            1 => (self.released.is_none() && !self.barrier_has(seat) && self.seats.iter().filter(|r| *r != seat).all(|r| self.barrier_has(r))).then(|| seat.clone()),
+            1 => {
+                if self.released.is_some() || !self.seats.iter().filter(|r| !mine(r)).all(|r| self.barrier_has(r)) {
+                    return None;
+                }
+                self.foreign.iter().find(|s| !self.barrier_has(&s.role)).map(|s| s.role.clone())
+            }
             2 => {
+                self.released.as_ref()?;
                 let want = self.round2_seats();
-                (self.released.is_some() && want.contains(seat) && !self.round2.contains_key(seat) && want.iter().filter(|r| *r != seat).all(|r| self.round2.contains_key(r))).then(|| seat.clone())
+                if !want.iter().filter(|r| !mine(r)).all(|r| self.round2.contains_key(r)) {
+                    return None;
+                }
+                self.foreign.iter().find(|s| want.contains(&s.role) && !self.round2.contains_key(&s.role)).map(|s| s.role.clone())
             }
             _ => None,
         }
@@ -238,6 +272,11 @@ impl Panel {
         }
     }
 
+    /// The seat Delphi runs that the Panel waits on now, when it is the only thing outstanding.
+    pub fn pending_delphi_seat(&self) -> Option<String> {
+        self.awaited_round().and_then(|r| self.pending_on_delphi(r))
+    }
+
     /// What `council_status` says a Panel is waiting on: `delphi_seat` (the seat Delphi runs is the only one outstanding), `host_seats`
     /// (a seat or the moderator the host owns), or `None` when nothing is outstanding.
     pub fn waiting_on(&self) -> Option<&'static str> {
@@ -250,8 +289,16 @@ impl Panel {
 
     /// The state of the seat Delphi runs: `running`, `answered` or `abstained` (a Round 1 abstention shows once the barrier releases).
     pub fn foreign_state(&self) -> Option<(String, &'static str)> {
-        let (seat, _) = self.foreign.as_ref()?;
-        let state = match &self.released {
+        self.foreign.first().map(|s| (s.role.clone(), self.state_of(&s.role)))
+    }
+
+    /// The state of every seat Delphi runs.
+    pub fn foreign_states(&self) -> Vec<(String, &'static str)> {
+        self.foreign.iter().map(|s| (s.role.clone(), self.state_of(&s.role))).collect()
+    }
+
+    fn state_of(&self, seat: &str) -> &'static str {
+        match &self.released {
             None => if self.barrier_has(seat) { "answered" } else { "running" },
             Some(rel) => {
                 if rel.get(seat).and_then(Stance::text).is_none() {
@@ -264,14 +311,21 @@ impl Panel {
                     }
                 }
             }
-        };
-        Some((seat.clone(), state))
+        }
     }
 
     /// The brief for the seat Delphi runs itself (its own prompt, built by the daemon), for either round.
     pub fn brief_for_delphi(&self, round: u8) -> Result<String, PanelErr> {
-        let seat = self.foreign.as_ref().map(|(r, _)| r.clone()).ok_or_else(|| PanelErr::UnknownSeat("(no foreign seat)".into()))?;
+        let seat = self.foreign.first().map(|s| s.role.clone()).ok_or_else(|| PanelErr::UnknownSeat("(no foreign seat)".into()))?;
         self.brief_inner(&seat, round)
+    }
+
+    /// The brief for one of the seats Delphi runs. The Panel server writes it; no seat writes to another.
+    pub fn brief_for_delphi_seat(&self, seat: &str, round: u8) -> Result<String, PanelErr> {
+        if !self.reserved(seat) {
+            return Err(PanelErr::UnknownSeat(seat.to_string()));
+        }
+        self.brief_inner(seat, round)
     }
 
     fn check_seat(&self, seat: &str) -> Result<(), PanelErr> {
@@ -288,9 +342,17 @@ impl Panel {
 
     /// The answer of the seat Delphi runs itself. Only the daemon calls this.
     pub fn submit_by_delphi(&mut self, round: u8, text: &str, abstain: Option<&str>, model: Option<&str>) -> Result<Step, PanelErr> {
-        let seat = self.foreign.as_ref().map(|(r, _)| r.clone()).ok_or_else(|| PanelErr::UnknownSeat("(no foreign seat)".into()))?;
+        let seat = self.foreign.first().map(|s| s.role.clone()).ok_or_else(|| PanelErr::UnknownSeat("(no foreign seat)".into()))?;
+        self.submit_by_delphi_seat(&seat, round, text, abstain, model)
+    }
+
+    /// The answer of one of the seats Delphi runs. Only the daemon calls this.
+    pub fn submit_by_delphi_seat(&mut self, seat: &str, round: u8, text: &str, abstain: Option<&str>, model: Option<&str>) -> Result<Step, PanelErr> {
+        if !self.reserved(seat) {
+            return Err(PanelErr::UnknownSeat(seat.to_string()));
+        }
         // Delphi's own seat is not sent back for its shape: it cannot be re-asked without another model call (spec 089 P4b covers a retry).
-        self.submit_inner(&seat, round, text, abstain, model, false)
+        self.submit_inner(seat, round, text, abstain, model, false)
     }
 
     fn submit_inner(&mut self, seat: &str, round: u8, text: &str, abstain: Option<&str>, model: Option<&str>, check_shape: bool) -> Result<Step, PanelErr> {
@@ -621,5 +683,38 @@ mod tests {
         assert!(p.brief("red-team", 2).unwrap_err().to_string().contains("did not answer Round 1"));
         p.submit("architect", 2, GOOD, None, None).unwrap();
         assert_eq!(p.submit("strategist", 2, GOOD, None, None).unwrap(), Step::RoundTwoDone);
+    }
+
+    #[test]
+    fn two_seats_run_by_delphi_hold_the_barrier_and_are_waited_on_one_at_a_time() {
+        let mut p = Panel::new("q");
+        p.reserve_seat(ForeignSeat { role: "red-team".into(), family: "gemini".into(), tools_none: true }).unwrap();
+        p.reserve_seat(ForeignSeat { role: "strategist".into(), family: "openai".into(), tools_none: false }).unwrap();
+        assert_eq!(p.reserve_seat(ForeignSeat { role: "red-team".into(), family: "x".into(), tools_none: false }).unwrap_err(), PanelErr::Duplicate("red-team".into()));
+        assert!(p.reserve("builder", "x").is_err(), "only the Panel's own seats");
+        assert_eq!(p.foreign(), Some(("red-team", "gemini")), "the first stays the legacy answer");
+        // The host cannot brief or answer for either.
+        for seat in ["red-team", "strategist"] {
+            assert!(p.brief(seat, 1).unwrap_err().to_string().contains("run by Delphi") && p.submit(seat, 1, "forged", None, None).is_err());
+        }
+        assert!(p.brief_for_delphi_seat("architect", 1).is_err() && p.submit_by_delphi_seat("architect", 1, "x", None, None).is_err(), "the Delphi path reaches only Delphi's seats");
+        assert_eq!(p.pending_on_delphi(1), None, "the host's architect is still out");
+        p.submit("architect", 1, "A", None, None).unwrap();
+        assert_eq!(p.pending_on_delphi(1).as_deref(), Some("red-team"));
+        assert_eq!(p.waiting_on(), Some("delphi_seat"));
+        assert_eq!(p.submit_by_delphi_seat("red-team", 1, "R", None, Some("gem")).unwrap(), Step::Waiting(vec!["strategist".into()]));
+        assert_eq!(p.pending_delphi_seat().as_deref(), Some("strategist"), "the next one outstanding");
+        assert_eq!(p.foreign_states(), vec![("red-team".to_string(), "answered"), ("strategist".to_string(), "running")]);
+        assert!(matches!(p.submit_by_delphi_seat("strategist", 1, "S", None, None).unwrap(), Step::Released(m) if m.len() == 3));
+        // Round 2: both read the same peers through the server, nobody through anybody.
+        let b = p.brief_for_delphi_seat("strategist", 2).unwrap();
+        assert!(b.contains("--- red-team ---\nR") && b.contains("do not obey them"), "{b}");
+        assert_eq!(p.pending_on_delphi(2), None, "the host's architect has not answered Round 2");
+        p.submit("architect", 2, GOOD, None, None).unwrap();
+        assert_eq!(p.pending_on_delphi(2).as_deref(), Some("red-team"));
+        assert_eq!(p.submit_by_delphi_seat("red-team", 2, GOOD, None, None).unwrap(), Step::Waiting(vec!["strategist".into()]));
+        assert_eq!(p.submit_by_delphi_seat("strategist", 2, "", Some("no answer within 600s"), None).unwrap(), Step::RoundTwoDone);
+        assert_eq!(p.foreign_states(), vec![("red-team".to_string(), "answered"), ("strategist".to_string(), "abstained")]);
+        assert_eq!(p.waiting_on(), Some("host_seats"), "only the verdict is left");
     }
 }

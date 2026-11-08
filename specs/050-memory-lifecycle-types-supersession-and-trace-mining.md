@@ -87,6 +87,7 @@ Memory that only grows, or only decays by age, accumulates contradictions and st
 - **OD-3** The review window for `last_confirmed`. Provisional: 90 days, flagged only.
 - **OD-4** Verifying the LangMem / Deep Agents description before approval: waived by the operator. Approved with the claims unchecked; every addition proposes only or ships `off`, and spec 048 measures it, so an unverified source cannot change a default.
 - **OD-5** Whether the agent may set `valid_until` through the `note` tool. Provisional: yes for notes (they stay staged); never for rules.
+- **OD-6** (2026-11-07, operator-approved) Whether a "tried and failed" entry, recording what was attempted and why it failed so that the next session does not try it again, is a fourth `kind` or an `episode`. Provisional: an `episode` whose body states the approach and the reason, surfaced at session start by ML3's type-aware selection; no schema change. The case that prompted it: a pressure-language lint and a "pressured" experiment arm were designed for `specs/082`, tried in the draft and removed on purpose by the operator (2026-11-05; `specs/082` §11), and nothing records that outside that spec. Not built; it is a convention for what an agent is asked to write, to be tried before any code is added.
 
 ## 9. Non-goals
 
