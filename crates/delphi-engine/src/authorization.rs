@@ -73,8 +73,9 @@ pub const CWD: &str = "@snapshot";
 pub const PROVENANCES: [&str; 2] = ["project_snapshot", "daemon_installed"];
 
 /// The fixed, scrubbed environment every authorized command would get: no `PATH` search, no `LD_PRELOAD`, no `DYLD_*`.
+/// No `BASH_ENV`, `ENV`, `PERL5OPT` or `PERL5LIB`, no `HOME`. The sandbox crate owns the map so the probe runs with the same one.
 pub fn scrubbed_env() -> BTreeMap<String, String> {
-    [("LC_ALL", "C"), ("PATH", ""), ("PYTHONDONTWRITEBYTECODE", "1"), ("PYTHONNOUSERSITE", "1")].iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    delphi_sandbox::authorized::authorized_env()
 }
 
 // ------------------------------------------------------------------------------------------------ text hygiene
@@ -211,32 +212,45 @@ pub fn deny_reason(e: &Entry) -> Option<String> {
 }
 
 /// What the daemon knows: the interpreters it will pin. A runner is admitted only if `argv[0]` is one of these exact paths, so
-/// `/<project>/tools/python3` (a "runner built in the run") is never one, whatever `runner_provenance` says.
+/// `/<project>/tools/bash` (a "runner built in the run") is never one, whatever `runner_provenance` says.
 #[derive(Debug, Clone)]
 pub struct Policy {
     pub interpreters: Vec<String>,
+    /// The directories whose files are the sealed system volume: an interpreter must resolve (links followed) to a regular file
+    /// under one of them. Empty means no such check (tests that use a fake runner in a temporary directory).
+    pub sealed_roots: Vec<String>,
 }
 
 impl Policy {
-    /// The fixed set of system locations.
+    /// The confirmed first runner (spec 092, operator 2026-11-08): `/bin/bash` on a pinned script file.
+    /// Deferred: `python3 -I -S` (Apple's `/usr/bin/python3` is a stub that does not start under the profile) and
+    /// `/usr/bin/perl` (it ran in the probe but is not admitted until its isolation flags are written and tested).
     pub fn system() -> Policy {
-        Policy { interpreters: ["/usr/bin/python3", "/usr/local/bin/python3", "/opt/homebrew/bin/python3"].iter().map(|s| s.to_string()).collect() }
+        Policy { interpreters: vec![delphi_sandbox::authorized::INTERPRETER.to_string()], sealed_roots: ["/bin", "/usr/bin"].iter().map(|s| s.to_string()).collect() }
     }
 }
 
-/// Why a runner's isolation cannot be asserted, or `None` (TA-5 "Scratch and interpreters"). The first slice admits only a
-/// known system `python3` run as `python3 -I /abs/script.py [args]`: `-I` is isolated mode (no user site, no current directory,
-/// no `PYTHON*` variables), the script is pinned in `files`, and there is no `-m` (a module name is code nobody pinned, and
-/// `timeit`, `pdb`, `code`, `trace`, `unittest` and others run arbitrary code).
+/// Bash options that run code that is not the pinned script, or change what is read at start. None may appear anywhere in the
+/// argument vector (before the script they would not be an absolute path anyway; after it they are the script's own arguments,
+/// refused so no record reads as if it used them).
+const BASH_FORBIDDEN: &[&str] = &["-c", "-s", "-i", "-l", "-r", "-p", "-O", "-o", "-x", "-v", "--login", "--rcfile", "--init-file", "--noprofile", "--norc", "--posix", "--restricted", "--debugger", "--dump-strings", "--dump-po-strings"];
+
+/// Why a runner's isolation cannot be asserted, or `None` (TA-5 "Scratch and interpreters"). The first slice admits only the
+/// system `/bin/bash` run as `/bin/bash <absolute script> [fixed args]`: the script is pinned in `files`, there is no `-c`, `-s`,
+/// `-i`, `--rcfile` or `--init-file`, no script on stdin, and the environment (no `BASH_ENV`, no `ENV`) is scrubbed. Anything
+/// else is refused.
 pub fn isolation_problem(e: &Entry, policy: &Policy) -> Option<String> {
     let bin = e.argv.first().map(String::as_str).unwrap_or("");
     if !policy.interpreters.iter().any(|i| i == bin) {
-        return Some(format!("`{}` is not an interpreter the daemon knows (only a system python3 at a fixed path is admitted in the first slice); a project-local or built runner is never admitted", clean_text(bin, 80)));
+        return Some(format!("`{}` is not an interpreter the daemon knows (only the system /bin/bash is admitted in the first slice; python3 and perl are deferred); a project-local or built runner is never admitted", clean_text(bin, 80)));
     }
-    if e.argv.get(1).map(String::as_str) != Some("-I") {
-        return Some("a Python runner must put `-I` (isolated mode) first, so no user site or working-directory code is loaded".into());
+    if basename(bin) != "bash" {
+        return Some(format!("`{}` has no isolation rules written for it; only bash is admitted in the first slice", clean_text(bin, 80)));
     }
-    match e.argv.get(2).map(String::as_str) {
+    if let Some(a) = e.argv.iter().skip(1).find(|a| BASH_FORBIDDEN.contains(&a.as_str()) || a.starts_with("--rcfile=") || a.starts_with("--init-file=") || (a.starts_with('-') && !a.starts_with("--") && a.len() > 1 && a.chars().skip(1).any(|c| "cislrpOoxv".contains(c)))) {
+        return Some(format!("`{}`: bash runs a pinned script file only, with no `-c`, `-s`, `-i`, `--rcfile`, `--init-file` or other option", clean_text(a, 40)));
+    }
+    match e.argv.get(1).map(String::as_str) {
         Some(script) if script.starts_with('/') => {
             if e.files.iter().any(|f| f == script) {
                 None
@@ -244,7 +258,7 @@ pub fn isolation_problem(e: &Entry, policy: &Policy) -> Option<String> {
                 Some(format!("the script `{}` must be listed in `files` so it is pinned by hash", clean_text(script, 80)))
             }
         }
-        _ => Some("after `-I` give the absolute path of a script (`-m` is not admitted: a module is code nobody pinned)".into()),
+        _ => Some("after the interpreter give the absolute path of the script, and no option: bash reads a pinned file, never a string or stdin".into()),
     }
 }
 
@@ -273,7 +287,8 @@ pub fn check_entry(e: &Entry, policy: &Policy) -> Result<Entry, EntryError> {
     if !normal_abs(bin) {
         return inv("`argv[0]` must be the absolute canonical path of the binary (no `.`, `..`, `//` or trailing `/`); a name found on `PATH` is never matched");
     }
-    if WRAPPERS.contains(&basename(bin).as_str()) {
+    // A shell is a wrapper, except the one interpreter the daemon pins as the runner (checked below by `isolation_problem`).
+    if WRAPPERS.contains(&basename(bin).as_str()) && !policy.interpreters.iter().any(|i| i == bin) {
         return inv(format!("`{}` is a shell or wrapper; name the real binary and its arguments", basename(bin)));
     }
     if e.files.len() > MAX_FILES || e.files.iter().any(|f| !normal_abs(f) || !f.is_ascii() || f.chars().any(is_ctl)) {
@@ -853,6 +868,17 @@ fn pin_file(path: &str, allow_link: bool) -> Result<Pinned, String> {
     Ok(Pinned { path: path.into(), blake3: hash(&fs::read(&canon).map_err(|e| e.to_string())?) })
 }
 
+/// Resolve, check and hash the interpreter: a regular file whose resolved path is on the sealed system volume (when the policy
+/// names one), the path kept as given and the hash taken of what it resolves to now. Called when a record is made and again, to
+/// compare against the recorded hash, at each use (a symlink swapped in a writable directory is caught only by hashing again).
+pub fn pin_interpreter(path: &str, policy: &Policy) -> Result<Pinned, String> {
+    let canon = fs::canonicalize(path).map_err(|e| format!("`{}`: {e}", clean_text(path, 80)))?;
+    if !policy.sealed_roots.is_empty() && !policy.sealed_roots.iter().any(|r| canon.starts_with(r)) {
+        return Err(format!("`{}` resolves to `{}`, which is not on the sealed system volume ({})", clean_text(path, 80), canon.display(), policy.sealed_roots.join(", ")));
+    }
+    pin_file(path, true)
+}
+
 /// What the operator chose.
 pub struct NewRecord {
     pub purpose: String,
@@ -890,7 +916,7 @@ pub fn build_record(home: &Path, n: &NewRecord, now_unix: i64, now_rfc: &str) ->
     let mut checked = Vec::new();
     for (i, e) in n.entries.iter().enumerate() {
         let c = check_entry(e, &n.policy).map_err(|e| format!("manifest entry {}: {}", i + 1, e))?;
-        let binary = pin_file(&c.argv[0], true).map_err(|e| format!("manifest entry {}: binary {}", i + 1, e))?;
+        let binary = pin_interpreter(&c.argv[0], &n.policy).map_err(|e| format!("manifest entry {}: binary {}", i + 1, e))?;
         let files = c.files.iter().map(|f| pin_file(f, false)).collect::<Result<Vec<_>, _>>().map_err(|e| format!("manifest entry {}: file {}", i + 1, e))?;
         manifest.push(RecordEntry { tool: c.tool.clone(), argv: c.argv.clone(), binary, files, env: scrubbed_env(), cwd: CWD.into(), runner_provenance: c.runner_provenance.clone(), scratch_mode: SCRATCH_MODE.into() });
         checked.push(c);

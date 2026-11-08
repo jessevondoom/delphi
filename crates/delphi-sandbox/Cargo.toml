@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 libc = "0.2"
+blake3 = "1.5"
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "net", "io-util", "sync", "time", "macros"] }
 
 [dev-dependencies]

@@ -92,6 +92,11 @@ count = 3
 class = "git"
 
 [[site]]
+file = "crates/delphi-sandbox/src/authorized.rs"
+count = 1
+class = "git"
+
+[[site]]
 file = "crates/delphi-sandbox/src/lib.rs"
 count = 3
 class = "sandbox"

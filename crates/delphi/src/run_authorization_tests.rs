@@ -5,7 +5,7 @@ use crate::run::*;
 use serde_json::json;
 use std::path::Path;
 
-/// A tempdir home holding one live record for a fake `python3`, built and stored the way `delphi test authorize` does.
+/// A tempdir home holding one live record for a fake `bash`, built and stored the way `delphi test authorize` does.
 fn authorized_home() -> (tempfile::TempDir, std::path::PathBuf, String, delphi_engine::authorization::Policy) {
     use delphi_engine::authorization as a;
     use std::os::unix::fs::PermissionsExt;
@@ -14,16 +14,16 @@ fn authorized_home() -> (tempfile::TempDir, std::path::PathBuf, String, delphi_e
     let home = root.join("home");
     std::fs::create_dir_all(home.join("operator")).unwrap();
     delphi_core::lock::write(&home.join("operator/ratified.lock"), &Default::default()).unwrap();
-    let (bin, script) = (root.join("python3"), root.join("t.py"));
+    let (bin, script) = (root.join("bash"), root.join("t.sh"));
     std::fs::write(&bin, b"#!fake").unwrap();
     std::fs::write(&script, b"print(1)").unwrap();
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o644)).unwrap();
     let (b, s) = (bin.to_string_lossy().to_string(), script.to_string_lossy().to_string());
-    let policy = a::Policy { interpreters: vec![b.clone()] };
-    let entry = a::Entry { tool: "shell".into(), argv: vec![b, "-I".into(), s.clone()], files: vec![s], runner_provenance: "project_snapshot".into() };
+    let policy = a::Policy { interpreters: vec![b.clone()], sealed_roots: vec![] };
+    let entry = a::Entry { tool: "shell".into(), argv: vec![b, s.clone()], files: vec![s], runner_provenance: "project_snapshot".into() };
     let now = delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339()).unwrap();
-    let n = a::NewRecord { purpose: "p".into(), intent: "i".into(), run: "run-1".into(), expires_in_secs: a::DEFAULT_EXPIRY_SECS, max_uses: 3, entries: vec![entry], request: None, policy: a::Policy { interpreters: policy.interpreters.clone() } };
+    let n = a::NewRecord { purpose: "p".into(), intent: "i".into(), run: "run-1".into(), expires_in_secs: a::DEFAULT_EXPIRY_SECS, max_uses: 3, entries: vec![entry], request: None, policy: policy.clone() };
     let rec = a::build_record(&home, &n, now, &delphi_core::time::now_rfc3339()).unwrap();
     let id = rec.id.clone();
     a::create_audited(&home, rec.clone(), json!({"id": rec.id, "manifest_hash": rec.manifest_hash, "run": rec.run, "by": "operator", "source": "operator"})).unwrap();
@@ -70,7 +70,7 @@ fn a_red_card_is_denied_even_with_a_valid_record_and_the_flag() {
     let (_t, home, id, policy) = authorized_home();
     let on = OnCard::Authorization { id: id.clone(), run: "run-1".into() };
     assert_eq!(gate(&home, &id, "run-1", false, false, &policy), None, "the record is valid and the run may start");
-    let red_cmd = json!({"tier": "red", "tool": "run_command", "pattern": "run_command /usr/bin/python3 -I /x/t.py"});
+    let red_cmd = json!({"tier": "red", "tool": "run_command", "pattern": "run_command /bin/bash /x/t.sh"});
     let (tier, why) = decide(&on, &red_cmd).unwrap();
     assert_eq!(tier, "deny");
     assert!(why.contains("a Red action is never approved without the operator"), "{why}");

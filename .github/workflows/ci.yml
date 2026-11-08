@@ -107,4 +107,4 @@ jobs:
         env:
           DELPHI_REQUIRE_SANDBOX: "1"
         run: |
-          cargo test --locked -p delphi-sandbox -p delphi-engine -- sandbox 'exec::' harness_run 'build::' 'finalize::'
+          cargo test --locked -p delphi-sandbox -p delphi-engine -- sandbox 'authorized::' 'exec::' harness_run 'build::' 'finalize::'
