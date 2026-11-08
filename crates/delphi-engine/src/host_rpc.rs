@@ -361,7 +361,7 @@ fn projects_line(projects: &[(String, PathBuf)]) -> String {
     if names.is_empty() {
         String::new()
     } else {
-        format!("\nProjects here: {} (read a file with @project/<name>/<path>)", names.join(", "))
+        format!("\nProjects here: {} (read a file by writing an at-sign, project, the name and the path, joined by slashes)", names.join(", "))
     }
 }
 
@@ -1206,7 +1206,9 @@ mod tests {
         let p = json!({"question": "Table or file?", "context_pointers": [{"uri": "specs/092-x.md", "reason": "the spec"}, {"uri": "specs/none.md", "reason": "gone"}]});
         let text = council_proposition(&c, &p).unwrap();
         assert!(text.contains("- @project/delphi/specs/092-x.md: the spec") && text.contains("- specs/none.md (not found in a registered project): gone"), "{text}");
-        assert!(text.contains("\nProjects here: delphi (read a file with @project/<name>/<path>)"), "{text}");
+        assert!(!text.contains("@project/<"), "no placeholder token in the brief: {text}");
+        assert!(crate::handoff::pointers_from_prompt(&text).iter().all(|p| p.uri != "@project/<name>/<path>"), "{text}");
+        assert!(text.contains("\nProjects here: delphi (read a file by writing an at-sign, project, the name and the path, joined by slashes)"), "{text}");
         let (_t, w) = ws();
         let (help, _) = help_prompt(&c, &w, &json!({"need": "n", "context_pointers": [{"uri": "specs/092-x.md", "reason": "r"}]})).unwrap();
         assert!(help.contains("- @project/delphi/specs/092-x.md: r") && help.contains("Projects here: delphi"), "{help}");
