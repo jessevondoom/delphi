@@ -7,6 +7,7 @@
 //! This module is on the gate list (`merge-gates.toml`): a pull request that changes it needs a human at a terminal.
 
 pub mod approve;
+pub mod auto;
 pub mod check;
 pub mod cleanup;
 pub mod errors;
@@ -15,6 +16,8 @@ pub mod forge;
 pub mod gates;
 pub mod record;
 
+#[cfg(test)]
+mod auto_tests;
 #[cfg(test)]
 mod cleanup_tests;
 #[cfg(test)]
@@ -288,6 +291,10 @@ struct Parsed {
     merged: bool,
     /// `cleanup --merged`: the one explicit yes a mass delete needs.
     yes: bool,
+    /// `--auto`: the session's limits (the defaults of spec 094 unless a flag changes them, within the ceilings).
+    caps: auto::Caps,
+    /// Any of the `--auto` limit flags was given.
+    caps_given: bool,
 }
 
 fn pr_number(s: &str) -> Option<u64> {
@@ -298,6 +305,8 @@ fn pr_number(s: &str) -> Option<u64> {
 fn parse(args: &[String]) -> Result<Parsed, String> {
     let (mut home, mut quote, mut dry_run, mut all, mut auto, mut merged, mut yes) = (None, None, false, false, false, false, false);
     let (mut open, mut json, mut pr, mut done, mut needs_human) = (false, false, None, false, None);
+    let mut caps = auto::Caps::default();
+    let mut caps_given = false;
     let mut words: Vec<&str> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -312,6 +321,26 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
             "--needs-human" => needs_human = Some(it.next().cloned().ok_or("--needs-human needs the reason, in words")?),
             "--all" => all = true,
             "--auto" => auto = true,
+            "--max-prs" => {
+                caps.max_prs = it.next().and_then(|n| n.parse().ok()).ok_or("--max-prs needs a number")?;
+                caps_given = true;
+            }
+            "--for" => {
+                caps.run_for = auto::parse_duration(it.next().ok_or("--for needs a duration (90s, 45m, 4h)")?)?;
+                caps_given = true;
+            }
+            "--pause-after-errors" => {
+                caps.pause_after_errors = it.next().and_then(|n| n.parse().ok()).ok_or("--pause-after-errors needs a number")?;
+                caps_given = true;
+            }
+            "--idle" => {
+                caps.idle = auto::parse_duration(it.next().ok_or("--idle needs a duration (90s, 45m, 4h)")?)?;
+                caps_given = true;
+            }
+            "--poll" => {
+                caps.poll = auto::parse_duration(it.next().ok_or("--poll needs a duration (90s, 45m, 4h)")?)?;
+                caps_given = true;
+            }
             "--merged" => merged = true,
             "--yes" => yes = true,
             f if f.starts_with("--") => return Err(format!("unknown option `{f}` (see `delphi help merge`)")),
@@ -336,7 +365,13 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
     if (merged || yes) && !matches!(sub, Sub::Cleanup(_)) {
         return Err("--merged and --yes belong to `delphi merge cleanup`".into());
     }
-    Ok(Parsed { sub, home, quote, dry_run, open, json, pr, done, needs_human, merged, yes })
+    if caps_given && sub != Sub::Auto {
+        return Err("--max-prs, --for, --pause-after-errors, --idle and --poll belong to `delphi merge --auto`".into());
+    }
+    if sub == Sub::Auto {
+        caps.validate()?;
+    }
+    Ok(Parsed { sub, home, quote, dry_run, open, json, pr, done, needs_human, merged, yes, caps, caps_given })
 }
 
 pub fn cli(args: &[String]) -> i32 {
@@ -372,7 +407,7 @@ pub fn cli(args: &[String]) -> i32 {
         Sub::Log => log_cmd(&p),
         Sub::Fix(n) => fix_cmd(&p, &forge, n),
         Sub::Cleanup(ref numbers) => cleanup::run(&forge, numbers, p.merged, p.dry_run, p.yes),
-        Sub::Auto => stub("--auto", "S6"),
+        Sub::Auto => auto_cmd(&p, &forge),
         Sub::Merge(ref numbers) => run_merges(&p, &forge, numbers.clone(), false),
         Sub::All => match forge.queued(QUEUE_LABEL) {
             Ok(list) if list.is_empty() => {
@@ -462,9 +497,54 @@ fn fix_cmd(p: &Parsed, forge: &Gh, n: u64) -> i32 {
     }
 }
 
-fn stub(what: &str, slice: &str) -> i32 {
-    eprintln!("delphi merge {what}: arrives with slice {slice} of spec 094 and is not built yet");
-    2
+/// Set by Ctrl-C (SIGINT) or SIGTERM; read by the session loop.
+static INTERRUPTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+extern "C" fn on_signal(_: libc::c_int) {
+    INTERRUPTED.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn auto_cmd(p: &Parsed, forge: &Gh) -> i32 {
+    if crate::xenia_terminal::inside_an_agent_seat() {
+        eprintln!("delphi merge --auto: refused; a session is started by the operator, and this process was started by an agent seat");
+        return 2;
+    }
+    let home = crate::home::delphi_home(p.home.as_deref());
+    let stop_file = home.join("merge").join("STOP");
+    // A leftover STOP file from an earlier session would end this one at once; the operator asked for this session now.
+    let _ = std::fs::remove_file(&stop_file);
+    let ledger = Ledger::at(&home);
+    let error_log = Errors::at(&home);
+    let mut term = StdTerminal;
+    term.show(&format!(
+        "--auto session: up to {} pull request(s), at most {} minute(s), pausing after {} error(s) in a row. It never merges a pull request that changes a gate.",
+        p.caps.max_prs,
+        p.caps.run_for.as_secs() / 60,
+        p.caps.pause_after_errors
+    ));
+    let att = match attest(&mut term, p.quote.as_deref(), Target::Auto, false) {
+        Ok(a) => a,
+        Err(why) => {
+            eprintln!("delphi merge --auto: {why}");
+            return 1;
+        }
+    };
+    // SAFETY: the handler only stores to an atomic, which is async-signal-safe.
+    unsafe {
+        let handler = on_signal as extern "C" fn(libc::c_int) as libc::sighandler_t;
+        libc::signal(libc::SIGINT, handler);
+        libc::signal(libc::SIGTERM, handler);
+    }
+    let git = cleanup::Git::here();
+    let mut ctx = Ctx { forge, ledger: &ledger, errors: &error_log, term: &mut term, quote: None, dry_run: false, git: Some(&git), session: None, settle: Duration::from_secs(3), now: delphi_core::time::now_rfc3339 };
+    let stop = || INTERRUPTED.load(std::sync::atomic::Ordering::SeqCst) || stop_file.exists();
+    let summary = auto::run(&mut ctx, &p.caps, &att, &auto::SystemClock, &stop, &mut |l| println!("{l}"));
+    summary.lines().iter().for_each(|l| println!("{l}"));
+    if summary.errors > 0 {
+        1
+    } else {
+        0
+    }
 }
 
 fn run_merges(p: &Parsed, forge: &Gh, numbers: Vec<u64>, batch: bool) -> i32 {
@@ -519,6 +599,8 @@ mod parse_tests {
         assert!(parse(&a("merge --all --dry-run")).unwrap().dry_run);
         assert_eq!(parse(&a("merge --all")).unwrap().sub, Sub::All);
         assert_eq!(parse(&a("merge --auto")).unwrap().sub, Sub::Auto);
+        let p = parse(&a("merge --auto --max-prs 3 --for 2h --idle 10m --poll 30s --pause-after-errors 1")).unwrap();
+        assert_eq!((p.caps.max_prs, p.caps.run_for.as_secs(), p.caps.idle.as_secs(), p.caps.poll.as_secs(), p.caps.pause_after_errors), (3, 7200, 600, 30, 1));
         assert_eq!(parse(&a("merge queue 7")).unwrap().sub, Sub::Queue(7));
         assert_eq!(parse(&a("merge status")).unwrap().sub, Sub::Status);
         assert_eq!(parse(&a("--home /x merge 5")).unwrap().home.as_deref(), Some("/x"));
@@ -528,7 +610,7 @@ mod parse_tests {
 
     #[test]
     fn nonsense_is_a_usage_error() {
-        for bad in ["merge", "merge --all --auto", "merge --all 5", "merge abc", "merge 0", "merge --bogus 5", "merge queue", "merge queue x"] {
+        for bad in ["merge", "merge --all --auto", "merge --auto --max-prs 0", "merge --auto --for 48h", "merge --auto --poll 1s", "merge --max-prs 3 5", "merge --auto --for soon", "merge --all 5", "merge abc", "merge 0", "merge --bogus 5", "merge queue", "merge queue x"] {
             assert!(parse(&a(bad)).is_err(), "{bad}");
         }
         assert!(parse(&["5".to_string(), "--operator-said".to_string()]).is_err());

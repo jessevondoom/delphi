@@ -789,7 +789,7 @@ From the operator's plan of 2026-11-07, after Council `t_0005` on the `approve` 
 | S3 | `delphi merge` core: queue, preconditions, ledger, `<PR>` and `--all`, gate-changing class | 14-18 | built (PR open, stacked on #561): `merge/{forge,gates,record,check,approve,mod}.rs`, `merge-gates.toml`; run against real PRs read-only; `log`, `fix`, `cleanup`, `--auto` print that they are not built |
 | S4 | cleanup after merge and the backlog sweep | 6-8 | built (PR open, stacked on S3): `merge/cleanup.rs`, `delphi merge cleanup [<PR>...] [--merged] [--dry-run] [--yes]`; real-git tests for every safe-delete rule |
 | S5 | merge error log, `merge fix`, builder hand-off | 8-10 | built (PR open, stacked on S4): `merge/errors.rs`, `merge/fix.rs`, `merge log`, `merge fix`; a cleanup problem stays open in the log; `fix` prepares the worktree and brief, the builder does the work |
-| S6 | `--auto` session mode | 8-10 | not started |
+| S6 | `--auto` session mode | 8-10 | built (PR open, stacked on S5): `merge/auto.rs`; bounded session, STOP file, Ctrl-C, never merges gate-changing; run live only by the operator |
 | S7 | agent rules, deny rule, operator guide, vocabulary | 3-4 | not started |
 | S8 | hardening pass | | deferred (own spec) |
 
