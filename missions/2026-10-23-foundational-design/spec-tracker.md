@@ -762,6 +762,15 @@ From the operator's request to refine the outside Council (Claude Code, Copilot,
 | S7 | Round 2 reader (C1a): first complete critique wins, identical repeats tolerated, a conflicting later block or object refuses the reply, `trailer` counts and bytes on `council.critique` (daemon and Panel share one reader; reply to the 2026-11-07 Councils 002/003) | 3 | built (PR open) |
 | S8 | seat diagnostics (C1c): `parsed` (R1 `OPTION:` line, R2 critique) and `declined` (the shared refusal tagger, moved to `delphi_engine::refusal`) in the Council record's Seats table and on `council.stance`/`council.critique`; diagnostics only, never a score or input to ranking or routing (spec 078); receipt untouched | 3 | built (PR open) |
 
+## Spec 090: renumber the three shared spec numbers, once (2026-11-07, approved)
+
+From a review of draft spec 088, which found that 014, 037 and 061 are each used by two specs. Approved by the operator on 2026-11-07, with decisions OD-1 to OD-6 taking the recommendations. Not built. One pull request renames one spec of each pair inside `specs/` (no move), rewrites path pointers, decides every bare citation in a map the operator samples, adds a `delphi lint` rule against duplicate numbers, and leaves a mapping paragraph for history. The specs that move: documents and dataviz (014), training experiments (037), encyclopedia search pages (061); the relay spec keeps 014, so GOVERNANCE.md and REVIEW.md are untouched. The new numbers are the next three free numbers when the work starts: 091 to 094 are taken, so 095 to 097 as of 2026-11-07. The work waits for a quiet window the operator picks. Hours are estimates; no trial rewrite was run.
+
+| Slice | Content | Hours (likely) | State |
+| :-- | :-- | --: | :-- |
+| S0 | spec 090 approval and tracker entry; the three numbers named (095 to 097, re-checked at the start) | 1 | approved 2026-11-07 |
+| S1 | renames, path pointers, citation map and decisions, one-time check, lint rule, CONTRIBUTING mapping | 12 | approved, not built; waits for a quiet window |
+
 ## Spec 089: Panel hardening from the E2 run (2026-11-06, approved)
 
 From the E2 report (verdict INCOMPLETE). Approved 2026-11-06 on the operator's instruction to begin the slices; OD-1/2/3/5 take the recommendations; OD-4 (narrowing the `agy` guard) and the E3 run wait for an explicit go (spec 089 §10).
