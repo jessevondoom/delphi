@@ -292,17 +292,14 @@ pub fn check(repo: &Path, groups: &Groups, out: &Output) -> Vec<String> {
     diffs
 }
 
-fn usage() -> &'static str {
-    "usage: delphi specs compile [--check] [--repo <path>]"
-}
-
-/// `delphi specs ...` (only `compile` exists in stage 1). Exit 0 current or written, 1 a spec or the groups failed or the files
-/// are stale, 2 the command was misused or a file could not be read.
+/// `delphi specs ...`: `compile` is here; `show`, `list` and `report` are in `specs_cmd.rs`. Exit 0 current or written, 1 a spec or
+/// the groups failed or the files are stale or a lookup was refused, 2 the command was misused or a file could not be read.
 pub fn cli(args: &[String]) -> i32 {
     match args.first().map(String::as_str) {
         Some("compile") => compile_cmd(&args[1..]),
+        Some("show" | "list" | "report") => crate::specs_cmd::run(args),
         _ => {
-            eprintln!("{}", usage());
+            eprintln!("{}", crate::specs_cmd::usage());
             2
         }
     }
