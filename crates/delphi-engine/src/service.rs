@@ -692,6 +692,17 @@ impl EngineService {
         Ok(out)
     }
 
+    /// `host.council_frame`: the frame plus the carrier plan (`specs/086` §6.4, C3b). Reads configuration and the pool; records nothing,
+    /// spends nothing, starts nothing.
+    async fn host_council_frame(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        use crate::host_rpc as h;
+        need_host(&ctx)?;
+        h::gate(&self.engine.ws.dir).map_err(host_err)?;
+        let required = p["require_families"].as_u64().filter(|n| (1..=8).contains(n)).map(|n| n as u32);
+        let env = self.engine.panel_carrier_env(required);
+        h::council_frame_with(&p, &env).map_err(host_err)
+    }
+
     /// `host.council_brief`: what a seat is given for a round. Round 2 is refused until Round 1 has released.
     async fn host_council_brief(&self, p: Value, ctx: CallContext) -> RpcOutcome {
         use crate::host_rpc as h;
@@ -3057,6 +3068,7 @@ impl Extension for ServiceExt {
                 "host.help_result" => svc.host_help_result(params, ctx).await,
                 "host.request_council" => svc.host_request_council(params, ctx).await,
                 "host.council_open" => svc.host_council_open(params, ctx).await,
+                "host.council_frame" => svc.host_council_frame(params, ctx).await,
                 "host.council_brief" => svc.host_council_brief(params, ctx).await,
                 "host.council_submit" => svc.host_council_submit(params, ctx).await,
                 "host.council_choose" => svc.host_council_choose(params, ctx).await,
@@ -6032,6 +6044,33 @@ mod tests {
     fn roomy(s: &mut crate::engine::Settings) {
         s.max_foreign_seats = 3;
         s.max_foreign_tokens = 1_000_000;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn council_frame_proposes_seats_from_the_configured_endpoints_and_starts_nothing() {
+        let f = setup(vec![], 50.0, roomy);
+        crate::council::tests::two_families(&f);
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let (plain, repo, ids) = blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+            c.hello(&htok).unwrap();
+            let plain = c.call("host.council_frame", pbody(&cwd, json!({"question": "Table or file?", "model": "claude-opus"}))).unwrap();
+            let repo = c.call("host.council_frame", pbody(&cwd, json!({"question": "Is it right?", "model": "claude-opus", "stakes": "high", "context_pointers": [{"uri": "specs/091.md", "reason": "the spec"}]}))).unwrap();
+            // Nothing was opened: a status call for any id finds no Panel, and the frame left no council id behind.
+            let ids = c.call("host.council_status", pbody(&cwd, json!({"council_id": "t_0001"}))).is_err();
+            (plain, repo, ids)
+        })
+        .await;
+        let seats = plain["proposed_seats"].as_array().unwrap();
+        assert!(!seats.is_empty(), "{plain}");
+        assert!(seats.iter().all(|x| x["family"] != "claude" && x["tools"] == "none" && x["label"] == "unverified-against-repo"), "no host family, no tools for a plain question: {plain}");
+        assert_eq!(plain["plan_budget"]["cap"]["max_foreign_seats"], 3, "{plain}");
+        assert_eq!(repo["proposed_seats"][0]["tools"], "readonly", "a pointer to repo files gets a tool seat: {repo}");
+        assert!(ids, "a frame opens no Panel");
+        assert!(plain["advice_only"] == true && plain["panel"]["seats"].is_array(), "the existing fields stay: {plain}");
     }
 
     #[tokio::test(flavor = "multi_thread")]
