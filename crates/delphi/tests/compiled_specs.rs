@@ -18,9 +18,10 @@ fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap()
 }
 
-/// Files that may name the compiled directory: the compiler itself, the command table (its help text), and the tests that read
-/// the files to check them. Anything else naming it fails guard 1.
-const MAY_NAME_IT: [&str; 4] = ["crates/delphi/src/spec_compile.rs", "crates/delphi/src/main.rs", "crates/delphi/tests/compiled_specs.rs", "crates/delphi/tests/docs.rs"];
+/// Files that may name the compiled directory: the compiler, the lookup that serves it (`delphi specs show`, and the MCP tools
+/// that will share it), the command table (its help text), and the tests that read the files to check them. Anything else naming
+/// it fails guard 1.
+const MAY_NAME_IT: [&str; 5] = ["crates/delphi/src/spec_compile.rs", "crates/delphi-engine/src/spec_lookup.rs", "crates/delphi/src/main.rs", "crates/delphi/tests/compiled_specs.rs", "crates/delphi/tests/docs.rs"];
 
 /// The two spellings that name the directory or its groups file.
 fn names_the_compiled_directory(text: &str) -> bool {

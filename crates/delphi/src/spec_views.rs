@@ -58,16 +58,8 @@ fn sorted(mut specs: Vec<&Value>) -> Vec<&Value> {
 /// `<placeholder>` would vanish as if it were an HTML tag. The fence is one backtick longer than any run of backticks in the text,
 /// so the text cannot close it and escape.
 fn excerpt(src: &str, q: &Value) -> String {
-    let (from, to) = (q["span"]["line"].as_u64().unwrap_or(0), q["span"]["end_line"].as_u64().unwrap_or(0));
-    let lines = if from == to { format!("line {}", from) } else { format!("lines {}-{}", from, to) };
-    let body = q["text"].as_str().unwrap_or("").replace('\r', "");
-    let (mut longest, mut run) = (2, 0);
-    for c in body.chars() {
-        run = if c == '`' { run + 1 } else { 0 };
-        longest = longest.max(run);
-    }
-    let fence = "`".repeat(longest + 1);
-    format!("**source excerpt, untrusted** · `{}` {}\n\n{}text\n{}\n{}\n", src, lines, fence, body, fence)
+    // One implementation of the fence, shared with `delphi specs show`.
+    delphi_engine::spec_lookup::fenced_excerpt(src, q["span"]["line"].as_u64().unwrap_or(0), q["span"]["end_line"].as_u64().unwrap_or(0), q["text"].as_str().unwrap_or(""))
 }
 
 fn index(docs: &[&Value], groups: &[Group]) -> String {

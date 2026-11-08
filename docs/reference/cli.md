@@ -598,13 +598,16 @@ Check a repository's Delphi files.
 
 ### `delphi specs`
 
-Compile the specs into one JSON file each, for agents.
+Compile the specs into one JSON file each, and read them.
 
 ```
   delphi specs compile [--check] [--repo <path>]
+  delphi specs show <spec> [--section <n>] [--json] [--for <label>]
+  delphi specs list [--group <g>] [--status <s>] [--json]
+  delphi specs report [--json]
 ```
 
-Reads specs/*.md and compiled/groups.toml and writes compiled/specs/data/<spec>.json, each a quotation of its source with a hash (spec 088), then an index and one page per group beside them, rendered from those files for people to review. It never edits a spec and never decides anything: the source spec stays the authority. --check compares instead of writing and fails when a file is stale, missing or has no source, or when a page differs from a fresh render of the JSON beside it. A failed compile writes nothing. Run it from the repository root or pass --repo.
+show prints a compiled spec and refuses one whose source has changed since; --section prints that section of the source spec itself, with its hash; --for labels the read (a slice or a branch) for the counter. list shows every spec and whether its compiled file is current. report prints the read counter: reads made through these commands and the Delphi tools, never a host that opens the files directly. A lookup never creates the Delphi home; --home names it. compile: Reads specs/*.md and compiled/groups.toml and writes compiled/specs/data/<spec>.json, each a quotation of its source with a hash (spec 088), then an index and one page per group beside them, rendered from those files for people to review. It never edits a spec and never decides anything: the source spec stays the authority. --check compares instead of writing and fails when a file is stale, missing or has no source, or when a page differs from a fresh render of the JSON beside it. A failed compile writes nothing. Run it from the repository root or pass --repo.
 
 ### `delphi check`
 
