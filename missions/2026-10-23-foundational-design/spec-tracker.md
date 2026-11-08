@@ -94,6 +94,7 @@ Asked for by the operator on 2026-10-26; pilot budget **80 engineering hours** (
 | Slice | Delivers | Hours | State |
 | :-- | :-- | --: | :-- |
 | X1 | spec 037; research case format (`truth/`, `fact_recall`, `no_traps`, `text_matches`, draft-pack rule, `train seal`); truth packs R1-R3 (drafts, operator verification pending) | 15 | merged (#215); R5, R6 drafts added (R4 not built) |
+| M3 | seeded-defect review case (build plan 2026-11-07): `delphi train defects gen\|run`, `review_findings` check, report section (recall, false positives, unique catches; diagnostics only, specs/078) | 6 to 8 | built; PR open; no live run |
 | X2 | per-arm template home and staffing check (`--arms-file`); tokens per model in rows | 8 | merged with X3 (#217) |
 | X3 | `delphi train harvest` and `check-hidden`; code cases C1-C3 (validated: fail on base, pass 3x on reference) | 20 | merged (#217) |
 | X4 | blinded bundles, jury runner (`train judge`) | 12 | built (PR open) |
@@ -118,7 +119,7 @@ Asked for by the operator on 2026-10-27. Built in one slice and approved after t
 **Approved by the operator on 2026-11-07** ("approve all of the above": the sandboxed-shell-only first slice and the recommended answers to OD-1 to OD-5). **S1 does not start until a red-team re-review of the text in a readable form has passed.** It narrowly amends spec 016's "Red is never allowed" for **headless runs only**: a test the operator authorized may run named Red actions, and an agent may *request* an authorization with its context and risk (the request is inert, staged at L0, and never effective for the run that wrote it). Council `t_0003` (stakes high) chose **approve with changes, narrower first**: a sandboxed shell command only, matched by exact canonical argv with a pinned binary, a mandatory OS sandbox, a disposable project snapshot and a required run binding. Its red-team seat's PATH-shadowing and worktree-poisoning P0s are closed in the text. 
 | Slice | Content | State |
 | :-- | :-- | :-- |
-| S0 | this spec | approved 2026-11-07; the red-team re-review of v2 (readable) is still to run before S1. Amended 2026-11-07 (gaps from Council `t_0005`, whose seats could not read the file and red-team abstained, so its re-review was inconclusive): sandbox re-probe at each use, pinned scripts, daemon-side grant, daemon-computed taint with retyped argv, request caps, no carry-over between slices, and ratification of the 016 invariant-1 amendment under GOVERNANCE §5.7 required before S2 merges; operator to confirm |
+| S0 | this spec | approved 2026-11-07; the red-team re-review of v2 (readable) is still to run before S1. Amended 2026-11-07 (gaps from Council `t_0005`, whose seats could not read the file and red-team abstained, so its re-review was inconclusive): sandbox re-probe at each use, pinned scripts, daemon-side grant, daemon-computed taint with retyped argv, request caps, no carry-over between slices, and ratification of the 016 invariant-1 amendment under GOVERNANCE §5.7 required before S2 merges; operator to confirm. Council `t_0006` re-review: red-team closed attacks 1-7 on the quoted text and found two P1 gaps, closed in this amendment (OD-1 provenance reworded; scratch and interpreter isolation, `runner_provenance`, `scratch_mode`; explicit `delphi test revoke`, daemon-only audit, TA-6 limit; proposed 2 h / 10 uses default, operator to confirm); a final readable pass of the amended text remains required before S1 |
 | S1 | the request tool and its staging rules, `delphi test review`, `delphi test authorize --from-request`, the protected store | not started |
 | S2 | `--on-card authorization:<id>`, sandbox-or-refuse, the snapshot, canonical matching, atomic use, the deny-list; amends `AGENTS.md` and 016 §3 | not started |
 | S3 | the training runner flag and the report mark | not started |
@@ -776,6 +777,22 @@ From the E2 report (verdict INCOMPLETE). Approved 2026-11-06 on the operator's i
 | P6 | E3 pre-registration and run | 6 | pre-registration merged (#531), Amendment 1 merged (#536); run 2026-11-07 (operator go, 2.0M cap): A1 (headline) verdict NO EVIDENCE (same decision 5/6, readable 18/18, but escalation 1/6 against the Council's 10/12); A2 INCOMPLETE (2 of 6 questions: the headless host stopped before the foreign seat answered in 8 of 10 attempts); section 4.5 notice unchanged; 1.88M of 2.0M Delphi-side, 261k of 400k host-side; report `dev/train/e3/REPORT.md`, data `dev/train/e3/data/`; merged (#543); the foreign-seat wait-flow fix is spec 089 P7 |
 | P7 | a headless host survives the foreign seat: server-side wait (brief round 2/3, status), non-error `waiting_on_delphi_seat` answer, `waiting_on`, skill and tool text now say to wait for it | 4 | built (PR open); operator go 2026-11-07; live A2 check not run |
 
+## Spec 094: the core-repo merge flow (2026-11-07, approved)
+
+From the operator's plan of 2026-11-07, after Council `t_0005` on the `approve` / `ratify` / `merge` proposal. Approved 2026-11-07 on the operator's instruction ("approve the outstanding draft specs in this workstream"); OD-1 to OD-5 take the recommendations. The agent identity, branch protection and a terminal or authenticator approval are deliberately deferred to a hardening pass (S8) due before repository access is widened.
+
+| Slice | Content | Hours | State |
+| :-- | :-- | --: | :-- |
+| S1 | spec 094, its approval, and the `003`/`006`/`GOVERNANCE` text | 3-4 | merged (#561) |
+| S2a | the builder's git skill, trigger-routing evals, authorization (no executable code) | 4-5 | merged (#562) |
+| S2b | behavior evals: fixture repos in conflicted states, a harness, checks that the builder resolved correctly | 6-8 | merged (#571); `selftest` proves the checks discriminate; `live` never run |
+| S3 | `delphi merge` core: queue, preconditions, ledger, `<PR>` and `--all`, gate-changing class | 14-18 | merged (#567) |
+| S4 | cleanup after merge and the backlog sweep | 6-8 | merged (#568); not yet run against real `gh` output |
+| S5 | merge error log, `merge fix`, builder hand-off | 8-10 | merged (#569); `fix` prepares the worktree and brief, the builder does the work |
+| S6 | `--auto` session mode | 8-10 | merged (#572); never run live (STOP file, Ctrl-C, real GitHub) |
+| S7 | agent rules, deny rule, operator guide, vocabulary | 3-4 | merged (#570) |
+| S8 | hardening pass | | deferred (own spec) |
+
 ## Spec 093: authority invariants as tests (2026-11-07, approved)
 
 From Council `t_0001` over two research notes (CAO, Paperclip); the operator chose two batches, each one slice. Approved 2026-11-07 on the operator's instruction to begin; OD-1 to OD-5 take the recommendations. The acceptance criterion from OD-4 belongs in spec 080 W1.2; it is not added here, because editing an approved spec voids its ratified hash, so it waits for an amendment the operator ratifies.
@@ -783,5 +800,5 @@ From Council `t_0001` over two research notes (CAO, Paperclip); the operator cho
 | Slice | Content | Hours | State |
 | :-- | :-- | --: | :-- |
 | B0 | spec 093 approval and tracker entry | 1 | approved 2026-11-07 (PR #552) |
-| B1 | spawn-site ratchet, generalized must-run gate, home isolation, three authority audits, `cargo deny` gate, harness live-text test | 14-20 | in progress |
-| B2 | previous-release resume fixture with a named error, usage data-quality view | 8-12 | not started (waits for B1) |
+| B1 | spawn-site ratchet, generalized must-run gate, home isolation, three authority audits, `cargo deny` gate, harness live-text test | 14-20 | built (merged, #552) |
+| B2 | newer-schema log error and a v0.5.5 log fixture, typed harness result failures, usage-quality doctor check | 8-12 | built (PR open); findings: totals add an unknown price as 0 (own slice); the in-band error list is unverified guesses |

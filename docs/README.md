@@ -23,6 +23,7 @@ Delphi is a team of AI agents in your terminal that plans, builds and reviews so
 | learn what the console's colours and glyphs mean | [The console's visual language](console-visual-language.md) |
 | find out why something does not work | [Troubleshooting](troubleshooting.md) |
 | read the error log, or share a session for debugging | [Debugging with the error log](guides/debugging.md) |
+| merge a core pull request, queue it, or clean up after it | [Merging core changes](guides/merging-core-changes.md) |
 
 ## Reference
 

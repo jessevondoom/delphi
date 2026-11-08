@@ -1,4 +1,4 @@
-.TH DELPHI 1 "" "delphi 0.5.5" "User Commands"
+.TH DELPHI 1 "" "delphi 0.5.6" "User Commands"
 .SH NAME
 delphi \- a terminal-first multi-agent working environment
 .SH SYNOPSIS
@@ -389,7 +389,7 @@ promote or nerf a role: the class of model it is assigned.
 .fi
 .PP
 A grade (\-2 to 2) is kept in the ratified [grades] table. promote and nerf edit config.toml and show the diff; nothing changes until you /ratify it.
-grades lists them with the measured results beside each. Delphi may suggest a grade and never applies one. Refused inside an agent seat.
+grades lists them with the measured results beside each. Delphi may suggest a grade and never applies one. `\-\-auto` runs one bounded session for as long as the command runs: it merges queued pull requests oldest first, one at a time, each re\-checked just before it merges, and stops at the first of: the cap on merged pull requests (default 10), the time cap (4h), a STOP file at $DELPHI_HOME/merge/STOP, Ctrl\-C, 2 errors in a row, or 30 idle minutes. It never merges a pull request that changes a gate (those are left for a person at a terminal) and cannot change its own limits while it runs. A chat quote must ask for automatic merging; the number of one pull request or `all` does not. Refused inside an agent seat.
 .SS delphi learn
 notes staged from denials, corrections, retries and escalations.
 .PP
@@ -424,6 +424,30 @@ the error log: what went wrong, with context.
 Reads $DELPHI_HOME/logs/delphi.log.jsonl, written by the CLI, the daemon and the console: errors and panics by default, redacted, 10 MB x 3 files.
 DELPHI_LOG=off|error|warn|debug or [logging] level in <home>/operator/config.toml sets what is kept. Read\-only and offline. \-\-path prints the file's location.
 Components: cli, daemon, engine, harness, provider, ui, xenia, relay, tool.
+.SH MAINTAIN
+.SS delphi merge
+merge this repository's queued pull requests, with a recorded approval.
+.PP
+.nf
+  delphi merge <PR>... [\-\-operator\-said "<the operator's words>"] [\-\-dry\-run] [\-\-home <dir>]
+  delphi merge \-\-auto [\-\-operator\-said "<words>"] [\-\-max\-prs <n>] [\-\-for 4h] [\-\-idle 30m] [\-\-pause\-after\-errors <n>] [\-\-poll 60s] [\-\-home <dir>]
+  delphi merge \-\-all [\-\-operator\-said "<words>"] [\-\-dry\-run]
+  delphi merge queue <PR>
+  delphi merge status
+  delphi merge log [\-\-open] [\-\-pr <n>] [\-\-json] [\-\-home <dir>]
+  delphi merge fix <PR> [\-\-done | \-\-needs\-human "<why>"] [\-\-home <dir>]
+  delphi merge cleanup [<PR>...] [\-\-merged] [\-\-dry\-run] [\-\-yes]
+.fi
+.PP
+The core\-repo merge flow (specs/094). Agents queue a ready pull request with the `merge\-queue` label (`delphi merge queue <PR>`); a merge is started by the operator.
+For each pull request the command derives, from git and `gh`, the head commit, the changed paths and their hash, the base commit, the checks and the linked spec (the `Implements\-Spec:` trailer); nothing is typed. It refuses unless the pull request is open, not a draft, queued, mergeable, every check passes and the spec is approved on the base branch (or the change is inside the bounded exemption of specs/003). A refusal lists every reason.
+Approval is `tty` (you type the PR number; `all` for \-\-all) or `chat\-quote` (an agent passes your own words with \-\-operator\-said; the quote must name the pull request, or say all/every/each for \-\-all). A chat quote is self\-attested by the caller and is recorded as such. The merge is a merge commit, made only if the head is still the one derived, and the decision is appended to $DELPHI_HOME/merge/ledger.jsonl and posted on the pull request.
+A pull request that touches a path in merge\-gates.toml (read from the BASE branch; the file is on its own list) changes a gate: it is never queued, never merged by \-\-all, refuses a chat quote, and needs you at a terminal, shown the whole diff. \-\-dry\-run changes nothing.
+After a merge the command removes what belonged to the pull request and prints one line per step: the remote branch (kept if another open pull request is based on it, or its tip is not the merged commit), the worktrees that have the branch (kept, and reported, when locked, dirty, the main worktree, or the directory you are in; never \-\-force), then the local branch with `git branch \-d` only. The base, default, main and master branches and any pull request that is not MERGED are never touched. A cleanup failure is printed and never undoes a merge. `delphi merge cleanup <PR>...` does the same for merged pull requests; `\-\-merged` sweeps the backlog of recent merged pull requests whose branch still exists, and only prints the plan until you add \-\-yes.
+
+When a pull request cannot merge for a reason somebody must act on (a conflict, a red check, no checks, an unapproved spec, a head that moved, a `gh` failure), an entry is written to $DELPHI_HOME/merge/errors.jsonl and the central log (`delphi logs`); waiting (a draft, running checks) is not an error. The same problem on the same head is one more attempt, not a new entry, and a merge resolves the entries open for it. `log` shows them and the latest ledger rows. `fix <PR>` prepares a worktree on the pull request's branch (or points at the one where it is already checked out), writes a brief for the builder (the git\-merge\-and\-conflict\-resolution skill; never a rebase or force\-push; stop on a gate file, more than 10 conflicting files or red tests) and moves the entry to `fixing`; the builder reports `\-\-done` once it has pushed (the head must have moved; the earlier approval no longer applies) or `\-\-needs\-human` with the reason.
+Refused inside an agent seat. Needs the GitHub CLI (`gh`) signed in. Exit codes: 0 ok · 1 refused, declined or failed · 2 usage or refusal · 4 `gh` missing or unreachable.
+.SH INSPECT
 .SS delphi debug
 pack a redacted slice of the log for sharing.
 .PP

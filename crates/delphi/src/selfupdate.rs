@@ -56,6 +56,17 @@ fn takes_token(url: &str) -> bool {
     url.starts_with("https://api.github.com/")
 }
 
+/// The `Accept` header for a request. An asset fetched from GitHub's API must ask for `application/octet-stream` ALONE: with
+/// `application/vnd.github+json` beside it, GitHub answers with the asset's JSON description instead of redirecting to the file, and
+/// the description was then hashed as if it were the download ("the download does not match its checksum", seen on 0.5.6).
+fn accept_for(url: &str) -> &'static str {
+    if url.starts_with(ORIGIN_ASSET_API) {
+        "application/octet-stream"
+    } else {
+        "application/octet-stream, application/vnd.github+json"
+    }
+}
+
 /// What to tell the operator when GitHub's API refuses a request (`specs/076` section 5). Never includes the token.
 fn refusal_hint(url: &str, status: u16, had_token: bool) -> &'static str {
     if !takes_token(url) {
@@ -342,7 +353,7 @@ impl Net for RealNet {
             return Err("refusing a download that is not over https".into());
         }
         rt.block_on(async {
-            let mut req = client.get(url).header("accept", "application/octet-stream, application/vnd.github+json");
+            let mut req = client.get(url).header("accept", accept_for(url));
             let token = if takes_token(url) { github_token() } else { None };
             if let Some(t) = &token {
                 // reqwest drops sensitive headers when a redirect leaves the host, so the storage host never sees it.
@@ -479,6 +490,14 @@ mod tests {
         assert_eq!(rel.asset("a.tar.gz"), Some(own.as_str()));
         assert_eq!(rel.asset("b.tar.gz"), Some(format!("{ORIGIN_DOWNLOADS}v9.9.9/b.tar.gz").as_str()), "a foreign api url is ignored, the browser url is used");
         assert_eq!(rel.asset("c.tar.gz"), None, "an asset with no url from the project is dropped");
+    }
+
+    #[test]
+    fn an_asset_is_requested_as_octet_stream_alone_so_github_sends_the_file_and_not_its_description() {
+        assert_eq!(accept_for(&format!("{ORIGIN_ASSET_API}722573355")), "application/octet-stream");
+        // The release listing and anything else keep the JSON type beside it.
+        assert!(accept_for(DEFAULT_API).contains("vnd.github+json"));
+        assert!(accept_for(&format!("{ORIGIN_DOWNLOADS}v1.2.3/a.tar.gz")).contains("octet-stream"));
     }
 
     #[test]
