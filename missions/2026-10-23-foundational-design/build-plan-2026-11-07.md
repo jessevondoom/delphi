@@ -105,4 +105,56 @@ Hours are estimates from calibration (a typical slice took 3 to 4 wall-clock hou
 
 ## 6. Progress log
 
-- 2026-11-07: plan written after Council `t_0004`. Specs 091 and 092 approved (#540, #541, unmerged). Open PRs: #538, #539, #544. Nothing in Phases 1 to 4 started.
+Measurements below are diagnostics only (spec 078) and come from small samples: hypotheses, not defaults.
+
+### 2026-11-07
+
+- Plan written after Council `t_0004`.
+
+### 2026-11-07 to 2026-11-08: merged
+
+- **Phase 0.** Specs 091 and 092 approved (#540, #541). Open PRs merged: #538, #539, #544. Plan: #545.
+- **Phase 1.** C1a #550 (Round 2 reader). C1b #547 (orchestrator fallback rule, with 082 section 4.1). C1c #553 (parsed and declined diagnostics).
+- **Phase 2 (spec 091).** S1 #549, S2 #555, S3 #557, S5 #558.
+- **Phase 3.** 086 N-seat amendment #548. C3a #566. C3b #583 (static carrier plan in `council_frame`; new read-only `host.council_frame` socket method, operator approved).
+- **Follow-ups from live scratch-daemon tests.**
+  - #585: Copilot seats answer Round 2 in line format.
+  - #586: tidy-ups (`foreign_seats` in the tool schema, no bogus pointer entry, Panel phase).
+  - #579: `context_pointers` resolve to `@project/<name>/<path>`.
+  - #581: option ids are compared in Round 2.
+  - #580: the agy checkout guard ignores `.claude/worktrees`.
+  - #591 (P0 fix): an agy span with no Delphi tool ran with no gate (tools none or bridge=false). It is now always gated, and receipts show effective tools.
+  - #575: updater fix (Accept header).
+  - #589: hard defect case via a pointer file.
+  - #564 and #582: train defects and `--difficulty`.
+  - #577: Council action 6 docs.
+  - #563: refusal tagger.
+  - #554: elog test lock.
+- **Spec 092.** Amendments #556, #559, #578. S1 #587 (request tool; `delphi test review/authorize/refuse/list/revoke`; protected store; grants nothing; two red-team reviews).
+- **Release.** v0.5.6 tagged 2026-11-08.
+
+### Measured
+
+- **M1.** 14 of 16 recorded Councils escalated on an unreadable Round 2 before the reader fix. Councils `t_0007` and `t_0008` on 0.5.6 had readable Round 2s.
+- **M2 and M4.** Luna refusal is a model effect (5/26 against Terra 8/8). Tool-less Copilot seats use about 10-17K input tokens against 31-48K for Claude CLI seats.
+- **M3.** The easy defect case is at ceiling. On the hard case (20 defects, 20 decoys), tool-less seats given the module as a pointer slice did not do worse than tool seats; contract-violation defects were the hardest; unique catches: 1.
+- **Fallback rule.** 12 of 12 passed with the rule against 3 of 12 without, on read-only delegation (agy Sonnet 5.5). The write-safety half is not yet measured (quota stops).
+
+### Decisions (2026-11-08)
+
+- All spec 092 `[choice]` items confirmed: host requests are staged at a fixed `federated_peer`, retype-only.
+- macOS is a primary target.
+- The first runner is `/bin/bash` on a pinned script (Apple's `/usr/bin/python3` stub does not start under `sandbox-exec`).
+- The first test is an offline bash red-team sweep that passes only if every hostile attempt is blocked.
+
+### What is left
+
+- **092 S2a** (in progress): `--on-card authorization:<id> --auth-run`, refuse-to-start checks, always deny.
+- **092 S2b**: sandbox (read-only snapshot, noexec scratch, fresh home, bash runner policy, macOS profile).
+- **092 S2c**: grant in daemon memory, matching, use ledger, re-probe, mid-run revoke; wired dry.
+- **092 S2d**: the approval switch, plus spec 016 and AGENTS.md amendments. Needs operator sign-off.
+- **092 S3**: `train run --authorization` and a report mark. Open design question: the launcher that mints per-run records.
+- The fallback write-safety probe.
+- Release 0.5.7: the operator wants it after this workstream; it carries #591 and another session's spec 094 work.
+- Deferred until data: `ask_family` (091 S4) and a quota-aware roster planner.
+- Known S2 notes: Python pin gaps (now moot with bash), TOTP stale failures, rollback of exactly the last change.
