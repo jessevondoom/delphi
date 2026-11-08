@@ -69,6 +69,7 @@ The seven kinds that judge one document (`dag`, `handoff`, `provenance`, `rules`
 | `git-pr-packaging` | Formats atomic commits and prepares PRs with `Implements-Spec:` linkage. | instructions |
 | `git-merge-and-conflict-resolution` | Brings a PR branch up to date by merging the base in and resolves conflicts safely, with hard stops for gate files. | instructions |
 | `ci-triage` | Diagnoses CI/test failures, separating flakes from regressions. | instructions |
+| `spec-driven-build` | Reads a project's specs through their compiled form (`delphi specs show`/`list`, `specs_show`/`specs_list`), opens the source section relied on, and cites it with path and hash. Also usable by the validator and red-team. | `delphi specs show`, `delphi specs list` |
 | `systems-pattern-catalog` | Applies proven systems, concurrency, protocol, and edge patterns. | instructions |
 
 ### 3. **Architect** (Systems Architect, Creative Designer & Spec Author)

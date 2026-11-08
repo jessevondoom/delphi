@@ -80,6 +80,7 @@ A row moves from ❌ to ✅ when its check ships with the test named in the spec
 | Scout outputs < 300-line pointer maps | `[H-002]` | Output length check | Daemon | ❌ |
 | Writer never documents unbuilt features as working | GOV §2.8 | — | **Prompt-only** | — |
 | Strategist scope audit (scope audit) | GOV §2.6 | — | **Prompt-only** | — |
+| An agent reads specs through `delphi specs show`/`specs_show`, opens the source section it relies on, and cites path and hash (the compiled form is never the authority) | spec 088 §10 | The `spec-driven-build` skill. Mechanical only as far as: `show` refuses a stale compiled file, and the read counter records reads that go through Delphi (`delphi specs report` says it cannot see direct file reads) | **Prompt-only** (that agents use it, and open the source) | — |
 | Mythological blind-spot counterweights in general | GOV §2 | — | **Prompt-only** | — |
 | A provisional decision applies only to an Amber worktree edit (allow-list, default no) | GOV §5.9, spec 015 §2 | `provisional::eligible` | Daemon | ✅ |
 | Provisional decisions are written by the daemon from the classified card, never by an agent | GOV §5.9, spec 015 §4 | `Engine::ask_classified` | Daemon | ✅ |
