@@ -13,6 +13,7 @@ authorized_skills:
   - tdd-execution
   - safe-refactoring
   - git-pr-packaging
+  - git-merge-and-conflict-resolution
   - ci-triage
   - tui-design
   - systems-pattern-catalog
