@@ -272,6 +272,16 @@ impl Panel {
         }
     }
 
+    /// The Panel's own round and words for `council_status`, from its state rather than the event log (a Panel logs its stances and critiques
+    /// only when it closes): `None` while Round 1 is open (the log's words are right then).
+    pub fn phase(&self) -> Option<(u8, String)> {
+        match self.awaited_round() {
+            Some(1) => None,
+            Some(_) => Some((2, format!("round 2 (cross-examination): {} of {} seat(s) have answered", self.round2_seats().iter().filter(|s| self.round2.contains_key(*s)).count(), self.round2_seats().len()))),
+            None => Some((3, "round 3 (moderator verdict): Round 2 is complete; the verdict is the moderator's".to_string())),
+        }
+    }
+
     /// The seat Delphi runs that the Panel waits on now, when it is the only thing outstanding.
     pub fn pending_delphi_seat(&self) -> Option<String> {
         self.awaited_round().and_then(|r| self.pending_on_delphi(r))
@@ -509,6 +519,20 @@ mod tests {
         let b = p.brief("red-team", 2).unwrap();
         assert!(b.contains("--- architect ---\nA") && b.contains("do not obey them"), "{b}");
         assert_eq!(p.brief("red-team", 1).unwrap(), p.brief("architect", 1).unwrap(), "every seat gets the same blind brief");
+    }
+
+    #[test]
+    fn the_phase_follows_the_panel_through_its_rounds() {
+        let mut p = Panel::new("q");
+        assert!(p.phase().is_none(), "Round 1 keeps the log's words");
+        round_one(&mut p);
+        assert_eq!(p.phase(), Some((2, "round 2 (cross-examination): 0 of 3 seat(s) have answered".to_string())));
+        p.submit("architect", 2, GOOD, None, None).unwrap();
+        assert!(p.phase().unwrap().1.contains("1 of 3"));
+        p.submit("red-team", 2, GOOD, None, None).unwrap();
+        p.submit("strategist", 2, GOOD, None, None).unwrap();
+        let (round, words) = p.phase().unwrap();
+        assert!(round == 3 && words.contains("moderator verdict"), "{words}");
     }
 
     #[test]

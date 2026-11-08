@@ -825,6 +825,10 @@ impl EngineService {
         if view["state"] != "deliberating" {
             return;
         }
+        if let Some((round, words)) = panel.phase() {
+            view["round"] = json!(round);
+            view["phase"] = json!(words);
+        }
         let waiting = panel.waiting_on();
         view["waiting_on"] = json!(waiting);
         if let Some((seat, state)) = panel.foreign_state() {
