@@ -31,6 +31,7 @@
         "kind": { "enum": ["claude", "agy", "codex", "copilot", "api"] },
         "cli_version": { "type": ["string", "null"] },
         "tools_offered": { "type": "array", "items": { "type": "string" } },
+        "native_tools": { "type": "integer", "minimum": 0, "description": "How many tools the carrier itself reported having; a count only. `tools_offered` is what Delphi's gate allowed." },
         "dispatch_allowed": { "type": "boolean" }
       },
       "additionalProperties": false

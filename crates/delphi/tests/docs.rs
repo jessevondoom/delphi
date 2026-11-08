@@ -188,7 +188,7 @@ fn a_seat_receipt_satisfies_its_schema() {
         requested_endpoint: "ep".into(),
         requested_model: "claude-sonnet-5.5".into(),
         served: resolve(&FamilyTable::shipped(), Some("gpt-6-luna")),
-        carrier: Carrier { kind: "copilot".into(), cli_version: None, tools_offered: vec!["view".into()], dispatch_allowed: false },
+        carrier: Carrier { kind: "copilot".into(), cli_version: None, tools_offered: vec!["view".into()], native_tools: None, dispatch_allowed: false },
         tool_grant: json!({ "builtin": "none" }),
         prompt_hash: prompt_hash("system", "user"),
         tokens_in: 10,

@@ -184,8 +184,10 @@ pub struct Carrier {
     pub kind: String,
     /// The CLI's version when it is known; `None` otherwise (no carrier reports it to a span today).
     pub cli_version: Option<String>,
-    /// The tool names the carrier said it offered the model.
+    /// The tools the span's gate ALLOWED (empty for a tool-less seat), not what the carrier natively has.
     pub tools_offered: Vec<String>,
+    /// How many tools the carrier itself reported having (a count only; it does not decide any label).
+    pub native_tools: Option<usize>,
     pub dispatch_allowed: bool,
 }
 
@@ -207,11 +209,15 @@ pub struct Receipt {
 
 impl Receipt {
     pub fn to_value(&self) -> Value {
+        let mut carrier = json!({"kind": self.carrier.kind, "cli_version": self.carrier.cli_version, "tools_offered": self.carrier.tools_offered, "dispatch_allowed": self.carrier.dispatch_allowed});
+        if let Some(n) = self.carrier.native_tools {
+            carrier["native_tools"] = json!(n);
+        }
         json!({
             "seat_id": self.seat_id,
             "requested": {"endpoint": self.requested_endpoint, "model": self.requested_model},
             "served": {"model": self.served.model, "carrier_claimed": true, "family": self.served.family, "family_source": self.served.family_source},
-            "carrier": {"kind": self.carrier.kind, "cli_version": self.carrier.cli_version, "tools_offered": self.carrier.tools_offered, "dispatch_allowed": self.carrier.dispatch_allowed},
+            "carrier": carrier,
             "tool_grant": self.tool_grant,
             "prompt_hash": self.prompt_hash,
             "tokens_in": self.tokens_in,
@@ -271,7 +277,7 @@ impl SeatBook {
                 requested_endpoint: s.endpoint.clone(),
                 requested_model: s.model,
                 served: resolve(table, s.served.as_deref()),
-                carrier: Carrier { kind: "api".into(), cli_version: None, tools_offered: s.tools.clone(), dispatch_allowed: dispatch },
+                carrier: Carrier { kind: "api".into(), cli_version: None, tools_offered: s.tools.clone(), native_tools: None, dispatch_allowed: dispatch },
                 tool_grant: json!({"builtin": "none", "native": [], "bridge": s.tools, "provider": s.provider}),
                 prompt_hash: s.prompt_hash,
                 tokens_in: s.tokens_in,
@@ -373,6 +379,8 @@ pub struct SeatSummary {
     pub family: String,
     pub carrier: String,
     pub tools_offered: Vec<String>,
+    /// The most tools the carrier itself reported having across its receipts (a count only; it never decides the label).
+    pub native_tools: Option<u64>,
     /// At least one receipt ended `ok`.
     pub sat: bool,
     /// It sat, and none of its `ok` receipts shows a tool that could read the repo.
@@ -382,7 +390,7 @@ pub struct SeatSummary {
 
 impl SeatSummary {
     pub fn to_value(&self) -> Value {
-        json!({"seat": self.role, "served_model": self.served_model, "family": self.family, "carrier": self.carrier, "tools_offered": self.tools_offered, "sat": self.sat, "unverified_against_repo": self.unverified_against_repo, "tokens": self.tokens})
+        json!({"seat": self.role, "served_model": self.served_model, "family": self.family, "carrier": self.carrier, "tools_offered": self.tools_offered, "native_tools": self.native_tools, "sat": self.sat, "unverified_against_repo": self.unverified_against_repo, "tokens": self.tokens})
     }
 }
 
@@ -397,7 +405,7 @@ pub fn seat_summaries(events: &[delphi_core::event::EventEnvelope], task_id: &st
         let at = match out.iter().position(|s| s.role == role) {
             Some(i) => i,
             None => {
-                out.push(SeatSummary { role: role.clone(), served_model: None, family: UNKNOWN.into(), carrier: String::new(), tools_offered: Vec::new(), sat: false, unverified_against_repo: false, tokens: 0 });
+                out.push(SeatSummary { role: role.clone(), served_model: None, family: UNKNOWN.into(), carrier: String::new(), tools_offered: Vec::new(), native_tools: None, sat: false, unverified_against_repo: false, tokens: 0 });
                 out.len() - 1
             }
         };
@@ -412,6 +420,9 @@ pub fn seat_summaries(events: &[delphi_core::event::EventEnvelope], task_id: &st
             s.unverified_against_repo = true;
         }
         if ok {
+            if let Some(n) = e.payload["carrier"]["native_tools"].as_u64() {
+                s.native_tools = Some(s.native_tools.map_or(n, |m| m.max(n)));
+            }
             for t in tools {
                 if !s.tools_offered.contains(&t) {
                     s.tools_offered.push(t);
@@ -542,7 +553,7 @@ mod tests {
             requested_endpoint: "ep".into(),
             requested_model: "claude-sonnet-5.5".into(),
             served: resolve(&FamilyTable::shipped(), Some("gpt-6-luna")),
-            carrier: Carrier { kind: "copilot".into(), cli_version: None, tools_offered: vec!["view".into()], dispatch_allowed: false },
+            carrier: Carrier { kind: "copilot".into(), cli_version: None, tools_offered: vec!["view".into()], native_tools: None, dispatch_allowed: false },
             tool_grant: json!({"builtin": "none"}),
             prompt_hash: prompt_hash("sys", secret),
             tokens_in: 10,
@@ -708,5 +719,25 @@ mod tests {
         // A receipt that says nothing of tools counts as tool-less.
         assert!(receipt_toolless(&json!({"served": {}})));
         assert!(!receipt_toolless(&json!({"tool_grant": {"builtin": "none", "native": ["Read"], "bridge": []}})));
+    }
+
+    // specs/091 SR-1: the receipt's tools are what the gate allowed; the carrier's own count is apart and never moves the label.
+    #[test]
+    fn the_native_tool_count_is_kept_apart_and_does_not_change_the_label() {
+        let rcpt = |agent: &str, tools: Value, native: u64| {
+            let mut e = delphi_core::event::EventEnvelope::new("m", RECEIPT_KIND, json!({"served": {"model": "m-1", "family": "gemini"}, "carrier": {"kind": "agy", "tools_offered": tools, "native_tools": native}, "tool_grant": {"builtin": "none", "native": [], "bridge": tools}, "tokens_in": 1, "tokens_out": 1, "outcome": "ok"}));
+            e.task_id = Some("t".into());
+            e.agent = Some(agent.into());
+            e
+        };
+        let s = seat_summaries(&[rcpt("none", json!([]), 60), rcpt("ro", json!(["read_file", "list_dir"]), 60), rcpt("denied", json!([]), 0)], "t");
+        let g = |r: &str| s.iter().find(|x| x.role == r).unwrap();
+        assert_eq!((g("none").tools_offered.len(), g("none").native_tools, g("none").unverified_against_repo), (0, Some(60), true));
+        assert_eq!((g("ro").tools_offered.clone(), g("ro").unverified_against_repo), (vec!["read_file".to_string(), "list_dir".to_string()], false));
+        assert_eq!((g("denied").tools_offered.len(), g("denied").unverified_against_repo, g("none").to_value()["native_tools"].clone()), (0, true, json!(60)));
+        // A receipt written before the field existed is still read.
+        let mut old = rcpt("old", json!([]), 0);
+        old.payload["carrier"].as_object_mut().unwrap().remove("native_tools");
+        assert_eq!(seat_summaries(&[old], "t")[0].native_tools, None);
     }
 }

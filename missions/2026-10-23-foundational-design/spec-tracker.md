@@ -196,6 +196,7 @@ Asked for and approved by the operator on 2026-10-28. `copilot` 1.0.105 is logge
 | S3 | receipts in `train run` rows; a family comparison whose arms differ in prompt hash or carrier policy is labelled confounded | built (PR open): a row keeps each seat's served model and family, carrier, tools offered and prompt hash from the `seat.receipt` events; the report adds SEATS SERVED (a mismatch is a FINDING, `unknown` stays unknown) and FAMILY COMPARISONS (CONFOUNDED when prompt, tools offered or carrier policy differ) |
 | S4 | `ask_family`: one read-only foreign seat answers one question, advice only, returns its receipt | not started |
 | S5 | the served model read from Copilot and `agy` metadata | built (PR open): probed live 2026-11-07. `agy`'s stream-json `init` record carries `init.model`, now emitted as `Event::Served`; Codex's `app-server` `thread/start` answer carries `result.model`, likewise. `codex exec --json` reports no model, so that transport stays `unknown`. Both fields are carrier metadata and may echo the requested model (as Copilot's does); the parsers never read the model's text. No new family entries were needed. |
+| S1a | receipt reports the gate's effective tools, not the carrier's native list (`native_tools` count apart); P0: a tool-less `agy` span now always gets the deny-all gate | built (PR open, 2026-11-08): found in a live scratch Panel where a tools=none agy seat ran `run_command` ungated |
 
 ## Knowledge window round 2 (spec 043, approved 2026-10-28)
 
