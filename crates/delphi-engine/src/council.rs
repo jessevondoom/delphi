@@ -992,6 +992,11 @@ impl Engine {
         available.into_iter().find(ok)
     }
 
+    /// Whether `family` is configured and usable right now, for a foreign seat that names its family.
+    pub fn panel_family_usable(&self, family: &str) -> bool {
+        self.available_families().iter().any(|f| f == family)
+    }
+
     /// The families that actually sat in a Panel: the host's own (host-reported) plus the SERVED family of each of Delphi's seats that
     /// ended `ok`, from the receipts (`specs/091` SR-3). `unknown` never counts.
     pub fn panel_diversity(&self, m: &MissionState, task_id: &str, host_family: Option<&str>) -> crate::seat::Diversity {
@@ -1014,30 +1019,50 @@ impl Engine {
     /// the seat's own words on the family chosen for it; a seat that fails or times out abstains and the Panel goes on.
     #[allow(clippy::too_many_arguments)]
     pub async fn panel_foreign_run(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, panel_brief: String, proposition: &str, role: &str, family: &str, round: u8, stances: Option<&BTreeMap<String, Stance>>) -> Stance {
+        self.panel_foreign_run_seat(m, task_id, panel_brief, proposition, role, family, round, stances, false).await
+    }
+
+    /// [`Self::panel_foreign_run`] for a seat that may be given no tools at all (`tools_none`). Whatever is asked, a seat that is handed
+    /// peer stances (any Round 2 seat) runs with NO tools: peer text is untrusted data, and a seat that reads it must not be able to act
+    /// on it (`specs/086` §4.3). The engine enforces this at the span (`toolless`), not the prompt.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn panel_foreign_run_seat(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, panel_brief: String, proposition: &str, role: &str, family: &str, round: u8, stances: Option<&BTreeMap<String, Stance>>, tools_none: bool) -> Stance {
         let plan = SeatPlan { role: role.to_string(), family: family.to_string(), avoid: vec![], tier: Some(self.role_default_tier(role)) };
         let pointers = pointers_from_prompt(proposition);
         let h = self.council_handoff(m, task_id, role, if round == 1 { "r1" } else { "r2" }, &plan, panel_brief, pointers);
         let slices: Vec<ContextSlice> = stances.map(|st| st.iter().filter_map(|(r, s)| s.text().map(|t| ContextSlice { label: format!("council/round1/{}", r), tier: "L3".into(), text: t.chars().take(6000).collect() })).collect()).unwrap_or_default();
         let schema = if round == 2 { Some(critique_schema()) } else { None };
-        self.run_seat(m, task_id, h, slices, schema, self.settings.council_seat_timeout).await
+        let toolless = tools_none || stances.is_some();
+        if toolless {
+            self.toolless.lock().unwrap().insert(h.handoff_id.clone());
+        }
+        let handoff_id = h.handoff_id.clone();
+        let out = self.run_seat(m, task_id, h, slices, schema, self.settings.council_seat_timeout).await;
+        if toolless {
+            self.toolless.lock().unwrap().remove(&handoff_id);
+        }
+        out
     }
 
     /// A host Panel's Round 1 has released (`specs/086` §4): the stances join the log as a daemon Council's do, and the plan is recorded
     /// as host-reported (the daemon cannot know the family or prove the isolation of a seat a host ran itself).
     #[allow(clippy::too_many_arguments)]
-    pub async fn panel_released(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, proposition: &str, stances: &BTreeMap<String, Stance>, models: &BTreeMap<String, String>, foreign: Option<(&str, &str)>, blind: &str, claims: (Option<bool>, Option<&str>), brief_hashes: &BTreeMap<String, String>, host: (Option<String>, Option<u32>)) -> Result<(), EngineError> {
+    pub async fn panel_released(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, proposition: &str, stances: &BTreeMap<String, Stance>, models: &BTreeMap<String, String>, foreign: &[(String, String)], blind: &str, claims: (Option<bool>, Option<&str>), brief_hashes: &BTreeMap<String, String>, host: (Option<String>, Option<u32>)) -> Result<(), EngineError> {
         let emit = |kind: &str, payload: Value| {
             let mut e = EventEnvelope::new(&m.id, kind, payload);
             e.task_id = Some(task_id.to_string());
             e
         };
         let div = self.panel_diversity(m, task_id, host.0.as_deref());
-        let mut started = json!({"proposition": proposition, "venue": "panel", "blind": blind, "foreign": foreign.map(|(r, f)| json!({"role": r, "family": f})), "seats": stances.keys().map(|r| json!({"role": r, "family": if foreign.is_some_and(|(fr, _)| fr == r) { foreign.map(|(_, f)| f).unwrap_or("host-reported") } else { "host-reported" }, "model": models.get(r)})).collect::<Vec<_>>(), "homogeneous": div.homogeneous(), "families": div.families, "families_unknown": div.unknown, "host_family": host.0, "require_families": host.1, "notes": ["a host Panel: isolation and model names are host-reported; Delphi holds the barrier"]});
+        let mut started = json!({"proposition": proposition, "venue": "panel", "blind": blind, "foreign": foreign.first().map(|(r, f)| json!({"role": r, "family": f})), "seats": stances.keys().map(|r| json!({"role": r, "family": foreign.iter().find(|(fr, _)| fr == r).map(|(_, f)| f.as_str()).unwrap_or("host-reported"), "model": models.get(r)})).collect::<Vec<_>>(), "homogeneous": div.homogeneous(), "families": div.families, "families_unknown": div.unknown, "host_family": host.0, "require_families": host.1, "notes": ["a host Panel: isolation and model names are host-reported; Delphi holds the barrier"]});
         if let Some(c) = claims.0 {
             started["operator_confirmed"] = json!(c);
         }
         if let Some(o) = claims.1 {
             started["options_source"] = json!(o);
+        }
+        if foreign.len() > 1 {
+            started["foreign_seats"] = json!(foreign.iter().map(|(r, f)| json!({"role": r, "family": f})).collect::<Vec<_>>());
         }
         m.append(emit("council.started", started)).await?;
         for (role, st) in stances {
@@ -1045,7 +1070,7 @@ impl Engine {
                 Stance::Said(t) => ("answered", t.clone()),
                 Stance::Abstained(w) => ("abstained", w.clone()),
             };
-            m.append(emit("council.stance", json!({"round": 1, "role": role, "status": status, "text": self.secrets.redact(&text), "model": models.get(role), "brief_hash": brief_hashes.get(role)}))).await?;
+            m.append(emit("council.stance", json!({"round": 1, "role": role, "status": status, "text": self.secrets.redact(&text), "model": models.get(role), "brief_hash": brief_hashes.get(role), "parsed": st.text().map(crate::refusal::round1_parsed), "declined": st.text().is_some_and(|t| crate::refusal::declines(t).is_some())}))).await?;
         }
         Ok(())
     }
@@ -1068,12 +1093,20 @@ impl Engine {
         let decision = decide(&round2);
         let foreign = panel.foreign();
         let plan = Assignment {
-            seats: panel.seats().iter().map(|r| SeatPlan { role: r.clone(), family: match foreign { Some((fr, ff)) if fr == r => ff.to_string(), _ => "host-reported".into() }, avoid: vec![], tier: None }).collect(),
+            seats: panel.seats().iter().map(|r| SeatPlan { role: r.clone(), family: panel.foreign_seats().iter().find(|s| &s.role == r).map(|s| s.family.clone()).unwrap_or_else(|| "host-reported".into()), avoid: vec![], tier: None }).collect(),
             homogeneous: self.panel_diversity(m, &task_id, panel.host_family.as_deref()).homogeneous(),
             notes: vec!["a host Panel: isolation and model names are host-reported".into()],
         };
         let synthesis = panel.verdict().unwrap_or("(The moderator wrote no verdict; the structured record above and below is complete.)").to_string();
-        let front = format!("venue: panel\nblind: {}\n{}", panel.blind, foreign.map(|(r, f)| format!("foreign_seat: {r}\nforeign_family: {f}\n")).unwrap_or_default());
+        let mut front = format!("venue: panel\nblind: {}\n{}", panel.blind, foreign.map(|(r, f)| format!("foreign_seat: {r}\nforeign_family: {f}\n")).unwrap_or_default());
+        if panel.foreign_seats().len() > 1 {
+            front.push_str(&format!("foreign_seats: {}\n", panel.foreign_seats().iter().map(|s| format!("{}={}", s.role, s.family)).collect::<Vec<_>>().join(", ")));
+        }
+        // The label travels with the verdict (`specs/086` §7): seats whose receipts show no tool that could read the repo.
+        let unverified: Vec<String> = m.replay().map(|evs| crate::seat::seat_summaries(&evs, &task_id)).unwrap_or_default().into_iter().filter(|s| s.unverified_against_repo).map(|s| s.role).collect();
+        if !unverified.is_empty() {
+            front.push_str(&format!("{}: {}\n", crate::seat::UNVERIFIED_AGAINST_REPO.replace('-', "_"), unverified.join(", ")));
+        }
         let (status, text) = self.conclude(m, &task_id, &panel.proposition, &plan, &stances, &round2, &round2_text, &decision, None, &front, synthesis).await?;
         m.release_blocks(&task_id).await?;
         self.finish_task(m, task_id, crate::engine::SpanOutcome { status, text, turns: 0, ceiling: delphi_core::provenance::Tier::L5 }).await

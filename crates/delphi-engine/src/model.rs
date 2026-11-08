@@ -198,6 +198,7 @@ pub struct Seen {
 }
 
 type Responder = Box<dyn Fn(&Value) -> Step + Send + Sync>;
+type ServedFn = Box<dyn Fn(&Value) -> Option<String> + Send + Sync>;
 
 /// A deterministic stand-in for the provider: replies from a script and records every request.
 pub struct ScriptedModel {
@@ -210,15 +211,21 @@ pub struct ScriptedModel {
     pub harness_key: Mutex<Option<String>>,
     /// The model every reply says it was served by (`specs/091`: what a provider reports, which a seat receipt records). `None`: not reported.
     pub served: Mutex<Option<String>>,
+    /// When set, the served model is this function of the request body (several seats on different families at once); `served` is the fallback.
+    served_by: Mutex<Option<ServedFn>>,
 }
 
 impl ScriptedModel {
     pub fn new(steps: Vec<Step>) -> Arc<ScriptedModel> {
-        Arc::new(ScriptedModel { script: Mutex::new(steps.into()), responder: Mutex::new(None), seen: Mutex::new(vec![]), harness_key: Mutex::new(None), served: Mutex::new(None) })
+        Arc::new(ScriptedModel { script: Mutex::new(steps.into()), responder: Mutex::new(None), seen: Mutex::new(vec![]), harness_key: Mutex::new(None), served: Mutex::new(None), served_by: Mutex::new(None) })
     }
 
     pub fn respond_with(&self, f: impl Fn(&Value) -> Step + Send + Sync + 'static) {
         *self.responder.lock().unwrap() = Some(Box::new(f));
+    }
+
+    pub fn served_with(&self, f: impl Fn(&Value) -> Option<String> + Send + Sync + 'static) {
+        *self.served_by.lock().unwrap() = Some(Box::new(f));
     }
 
     pub fn remaining(&self) -> usize {
@@ -247,7 +254,7 @@ impl ModelClient for ScriptedModel {
                             on_event(StreamEvent::TextDelta { index: i, text: text.clone() });
                         }
                     }
-                    Ok(Completed { blocks, usage, stop_reason: Some(stop_reason.into()), served_model: self.served.lock().unwrap().clone() })
+                    Ok(Completed { blocks, usage, stop_reason: Some(stop_reason.into()), served_model: self.served_by.lock().unwrap().as_ref().and_then(|f| f(&compiled.body)).or_else(|| self.served.lock().unwrap().clone()) })
                 }
                 Step::Interrupt => {
                     on_event(StreamEvent::TextDelta { index: 0, text: "partial ".into() });
