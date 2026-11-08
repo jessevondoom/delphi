@@ -71,11 +71,14 @@ pub struct Limits {
     /// The largest single file the program may write.
     pub max_file_bytes: Option<u64>,
     pub max_open_files: Option<u64>,
+    /// `RLIMIT_NPROC`: on macOS and Linux this counts every process of the user, so it is an absolute number the caller
+    /// computes (the user's current count plus headroom); `None` leaves it alone. A fork loop stops at it.
+    pub max_procs: Option<u64>,
 }
 
 impl Default for Limits {
     fn default() -> Limits {
-        Limits { cpu_secs: Some(900), max_file_bytes: Some(512 << 20), max_open_files: Some(1024) }
+        Limits { cpu_secs: Some(900), max_file_bytes: Some(512 << 20), max_open_files: Some(1024), max_procs: None }
     }
 }
 
@@ -226,6 +229,9 @@ fn harden_process(cmd: &mut Command, limits: Limits) {
             }
             if let Some(n) = limits.max_open_files {
                 set(libc::RLIMIT_NOFILE, n, n);
+            }
+            if let Some(n) = limits.max_procs {
+                set(libc::RLIMIT_NPROC, n, n);
             }
             let max = libc::getdtablesize().clamp(0, 65_536);
             for fd in 3..max {
@@ -408,6 +414,19 @@ fn sbpl(r: &Resolved) -> String {
         Network::ProxyOnly { port } => {
             let _ = writeln!(s, "(allow network-outbound (remote ip \"localhost:{}\"))", port);
         }
+    }
+    // Native code cannot be loaded from anything the process can write or that was not frozen: `dlopen` and `enable -f` map a
+    // file executable, which `process-exec` does not cover (red-team of spec 092 S2b). Denied after the allows so it wins.
+    // Only a deliberately weakened authorized profile (scratch left executable) maps code from scratch; the tests use it to
+    // show the sweep and the probe notice. The real profile never has this line.
+    if r.exec_only.is_some() && !r.scratch_noexec {
+        for p in &r.scratch {
+            let _ = writeln!(s, "(allow file-map-executable (subpath {}))", sbpl_str(p));
+        }
+    }
+    let no_map = r.snapshot.iter().chain(r.scratch.iter().filter(|_| r.scratch_noexec));
+    for p in no_map {
+        let _ = writeln!(s, "(deny file-map-executable (subpath {}))", sbpl_str(p));
     }
     // Last, so it wins: no `.git` segment is ever writable, file or directory, at any depth.
     s.push_str("(deny file-write* (regex #\"(^|/)\\.git(/|$)\"))\n");

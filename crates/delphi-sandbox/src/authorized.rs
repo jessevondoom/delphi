@@ -16,7 +16,7 @@ use std::ffi::CString;
 use std::fs;
 use std::io::{self, Write as _};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
@@ -51,7 +51,23 @@ pub fn authorized_spec(snapshot: &Path, scratch: &Path, interpreter: &str) -> Sa
     s.limits.cpu_secs = Some(60);
     s.limits.max_file_bytes = Some(8 << 20);
     s.limits.max_open_files = Some(256);
+    // A fork loop stops here: the user's current process count plus headroom (the limit counts every process of the user).
+    s.limits.max_procs = process_count().map(|n| n + 512);
     s
+}
+
+/// How many processes exist now (macOS; `None` elsewhere, where the profile is refused anyway).
+fn process_count() -> Option<u64> {
+    #[cfg(target_os = "macos")]
+    {
+        // SAFETY: a null buffer asks proc_listallpids only for the size.
+        let n = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+        (n > 0).then_some(n as u64)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
 }
 
 // ------------------------------------------------------------------------------------------------ small helpers
@@ -114,9 +130,14 @@ impl Snapshot {
         let out = std::process::Command::new("git")
             .arg("-C")
             .arg(project)
-            .args(["ls-files", "-z", "--cached"])
+            // No fsmonitor program and no hooks path from the project's own configuration, and no user or system
+            // configuration: the project is not trusted, and `-z` keeps newlines, spaces, dashes and unicode in a name intact.
+            .args(["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "ls-files", "-z", "--cached"])
             .env_clear()
             .env("PATH", "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_OPTIONAL_LOCKS", "0")
             .output()
             .map_err(|e| format!("git ls-files: {e}"))?;
         if !out.status.success() {
@@ -154,7 +175,7 @@ impl Snapshot {
                     check_link_inside(rel, &target)?;
                     std::os::unix::fs::symlink(&target, &dst).map_err(|e| e.to_string())?;
                 } else if meta.is_file() {
-                    let bytes = fs::read(&src).map_err(|e| format!("`{}`: {e}", rel.display()))?;
+                    let bytes = read_regular(&src).map_err(|e| format!("`{}`: {e}", rel.display()))?;
                     let mut f = fs::OpenOptions::new().write(true).create_new(true).open(&dst).map_err(|e| e.to_string())?;
                     f.write_all(&bytes).map_err(|e| e.to_string())?;
                     drop(f);
@@ -211,6 +232,20 @@ impl Drop for Snapshot {
     fn drop(&mut self) {
         remove_tree(&self.root);
     }
+}
+
+/// Read a regular file without following a link or blocking on a pipe: opened `O_NOFOLLOW | O_NONBLOCK`, then `fstat`ed, so a
+/// file swapped for a symlink or a FIFO between the `lstat` and the read is refused rather than read.
+fn read_regular(path: &Path) -> Result<Vec<u8>, String> {
+    use std::io::Read as _;
+    let mut f = fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC).open(path).map_err(|e| e.to_string())?;
+    let meta = f.metadata().map_err(|e| e.to_string())?;
+    if !meta.is_file() {
+        return Err("not a regular file any more (swapped for a link or a pipe)".into());
+    }
+    let mut v = Vec::with_capacity(meta.len() as usize);
+    f.read_to_end(&mut v).map_err(|e| e.to_string())?;
+    Ok(v)
 }
 
 /// A symlink is kept only if its relative target stays inside the tree (checked lexically, from the link's own directory).
@@ -366,7 +401,8 @@ pub fn judge_home_entry(name: &str, is_symlink: bool, regular_or_dir: bool, dev:
         return Some("a socket, device or pipe in the throwaway home".into());
     }
     let n = name.to_ascii_lowercase();
-    if n == "auth.json" || n == ".netrc" || n == "_netrc" || n.starts_with("credentials") || n.ends_with(".pem") || n.starts_with("id_") {
+    let named = [".ssh", ".aws", ".gnupg", ".env", ".npmrc", ".pypirc", "auth.json", ".netrc", "_netrc"].contains(&n.as_str());
+    if named || n.starts_with("credentials") || n.starts_with("token") || n.starts_with("id_") || n.ends_with(".pem") || n.ends_with(".key") || n.ends_with(".p12") {
         return Some("a credential-named file in the throwaway home".into());
     }
     None
@@ -391,13 +427,16 @@ pub struct AuthorizedProbe {
     pub scratch_noexec: bool,
     /// (e) the interpreter started and ran a trivial pinned script.
     pub interpreter_runs: bool,
+    /// (f) a native library written into scratch could not be loaded (`enable -f` maps it executable; `process-exec` does not
+    /// cover that). Proven with a tiny arm64 dylib, so on another architecture this canary cannot pass and the probe fails closed.
+    pub scratch_no_map_exec: bool,
     /// What the probe saw, for a human (never trusted for a decision).
     pub detail: String,
 }
 
 impl AuthorizedProbe {
     pub fn is_ok(&self) -> bool {
-        self.unavailable.is_none() && self.network_blocked && self.outside_unreadable && self.snapshot_readonly && self.scratch_noexec && self.interpreter_runs
+        self.unavailable.is_none() && self.network_blocked && self.outside_unreadable && self.snapshot_readonly && self.scratch_noexec && self.scratch_no_map_exec && self.interpreter_runs
     }
 
     /// Names of the canaries that failed (or `unavailable`).
@@ -406,7 +445,7 @@ impl AuthorizedProbe {
             return vec!["unavailable"];
         }
         let mut v = vec![];
-        for (ok, name) in [(self.network_blocked, "network_blocked"), (self.outside_unreadable, "outside_unreadable"), (self.snapshot_readonly, "snapshot_readonly"), (self.scratch_noexec, "scratch_noexec"), (self.interpreter_runs, "interpreter_runs")] {
+        for (ok, name) in [(self.network_blocked, "network_blocked"), (self.outside_unreadable, "outside_unreadable"), (self.snapshot_readonly, "snapshot_readonly"), (self.scratch_noexec, "scratch_noexec"), (self.scratch_no_map_exec, "scratch_no_map_exec"), (self.interpreter_runs, "interpreter_runs")] {
             if !ok {
                 v.push(name);
             }
@@ -420,7 +459,7 @@ impl AuthorizedProbe {
             return format!("unavailable on this machine: {u}");
         }
         if self.is_ok() {
-            return format!("{} holds all five canaries (no network, no read outside the grant, read-only snapshot, no-exec scratch, interpreter runs)", self.mode.unwrap_or("sandbox"));
+            return format!("{} holds all six canaries (no network, no read outside the grant, read-only snapshot, no-exec scratch, no native code loaded from scratch, interpreter runs)", self.mode.unwrap_or("sandbox"));
         }
         format!("{} fails: {}; an authorized test would refuse to start", self.mode.unwrap_or("sandbox"), self.failed().join(", "))
     }
@@ -444,7 +483,13 @@ if ( echo w > "$scratch/w.txt" ) 2>/dev/null; then echo "scratch-write=ok"; else
 if ( "$scratch/pre-exec" ) >/dev/null 2>&1; then echo "scratch-exec=RAN"; else echo "scratch-exec=blocked"; fi
 if ( IFS= read -r x < "$canary" && echo "read-outside=$x" ) 2>/dev/null; then :; else echo "read-outside=denied"; fi
 if ( exec 3<> "/dev/tcp/127.0.0.1/$port" ) 2>/dev/null; then echo "net=OPEN"; else echo "net=denied"; fi
+enable -f "$scratch/probe-mark.dylib" probemark >/dev/null 2>&1
+echo "dl-attempted"
 "#;
+
+/// A 33 KB arm64 dylib whose constructor creates `<its own path>.loaded` (built from a 15-line C file with
+/// `cc -dynamiclib -arch arm64 -Os -Wl,-dead_strip`). Loading it is the one thing the sixth canary tries.
+pub(crate) const PROBE_DYLIB: &[u8] = include_bytes!("authorized/probe_mark.dylib");
 
 const CANARY_TEXT: &str = "CANARY-SECRET-delphi-092";
 const SNAPSHOT_DATA: &str = "snapshot data\n";
@@ -488,6 +533,7 @@ pub(crate) fn probe_with(interpreter: &str, weaken: impl FnOnce(&mut SandboxSpec
         out.snapshot_readonly = false;
         out.scratch_noexec = false;
         out.interpreter_runs = false;
+        out.scratch_no_map_exec = false;
     }
     out
 }
@@ -508,6 +554,8 @@ fn probe_in(sb: &Sandbox, tmp: &Path, interpreter: &str, weaken: impl FnOnce(&mu
     let pre = scratch.join("pre-exec");
     fs::write(&pre, format!("#!/bin/bash\necho ran > '{}'\nexit 0\n", marker.display())).map_err(io)?;
     fs::set_permissions(&pre, fs::Permissions::from_mode(0o755)).map_err(io)?;
+    fs::write(scratch.join("probe-mark.dylib"), PROBE_DYLIB).map_err(io)?;
+    let dl_marker = scratch.join("probe-mark.dylib.loaded");
     let listener = std::net::TcpListener::bind("127.0.0.1:0").map_err(io)?;
     listener.set_nonblocking(true).map_err(io)?;
     let port = listener.local_addr().map_err(io)?.port();
@@ -520,7 +568,7 @@ fn probe_in(sb: &Sandbox, tmp: &Path, interpreter: &str, weaken: impl FnOnce(&mu
         other => other.to_string(),
     })?;
     cmd.current_dir(&snap);
-    let run = run_bounded(cmd, &RunOptions { timeout: Duration::from_secs(30), max_output_bytes: 64 << 10, quota: vec![] }).map_err(io)?;
+    let run = run_bounded(cmd, &RunOptions { timeout: Duration::from_secs(30), max_output_bytes: 64 << 10, quota: vec![], kill_over_quota: false }).map_err(io)?;
     let text = run.stdout.clone();
     let has = |s: &str| text.lines().any(|l| l == s);
     out.interpreter_runs = run.success() && has(&format!("interp-ok {nonce}"));
@@ -531,6 +579,7 @@ fn probe_in(sb: &Sandbox, tmp: &Path, interpreter: &str, weaken: impl FnOnce(&mu
     let snap_unchanged = fs::read_to_string(snap.join("data.txt")).map(|d| d == SNAPSHOT_DATA).unwrap_or(false) && !snap.join("new-file").exists();
     out.snapshot_readonly = out.interpreter_runs && has("snapshot-read=ok") && snap_unchanged;
     out.scratch_noexec = out.interpreter_runs && has("scratch-write=ok") && !marker.exists() && !has("scratch-exec=RAN");
+    out.scratch_no_map_exec = out.interpreter_runs && cfg!(target_arch = "aarch64") && has("dl-attempted") && !dl_marker.exists();
     out.detail = format!("exit {:?}; stdout {:?}; stderr {:?}", run.status.and_then(|s| s.code()), text.trim(), run.stderr.trim());
     Ok(())
 }

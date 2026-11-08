@@ -9,6 +9,9 @@ use std::sync::Mutex;
 /// `probe_authorized()` reads a process-wide environment hook, so the tests that call it take turns.
 static PROBE: Mutex<()> = Mutex::new(());
 
+/// The sweep floods forks on purpose and the process limit counts every process of the user, so sweeps take turns.
+static FLOOD: Mutex<()> = Mutex::new(());
+
 const SWEEP: &str = include_str!("../../tests/fixtures/red_team_sweep.sh");
 
 fn canon(p: &Path) -> PathBuf {
@@ -41,6 +44,14 @@ struct Layout {
     fakedelphi: PathBuf,
     port: u16,
     listener: std::net::TcpListener,
+    victim: std::process::Child,
+}
+
+impl Drop for Layout {
+    fn drop(&mut self) {
+        let _ = self.victim.kill();
+        let _ = self.victim.wait();
+    }
 }
 
 fn layout() -> Layout {
@@ -66,9 +77,14 @@ fn layout() -> Layout {
     let fakedelphi = tools.join("delphi");
     fs::write(&fakedelphi, "#!/bin/bash\nexit 0\n").unwrap();
     fs::set_permissions(&fakedelphi, fs::Permissions::from_mode(0o755)).unwrap();
+    // fixtures the sweep's controls look for: a native library whose constructor leaves a marker, and a named pipe
+    fs::write(scratch.join("mark.dylib"), PROBE_DYLIB).unwrap();
+    let fifo = std::ffi::CString::new(scratch.join("fifo").as_os_str().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
-    Layout { _t: t, snap, scratch, canary, opshome, fakedelphi, port, listener }
+    let victim = Command::new("/bin/sleep").arg("120").spawn().unwrap();
+    Layout { _t: t, snap, scratch, canary, opshome, fakedelphi, port, listener, victim }
 }
 
 impl Layout {
@@ -78,6 +94,11 @@ impl Layout {
 
     /// Run the sweep under `spec`; returns (exit code, stdout).
     fn sweep(&self, sb: &Sandbox, spec: &SandboxSpec) -> (Option<i32>, String) {
+        let _turn = FLOOD.lock().unwrap_or_else(|e| e.into_inner());
+        self.sweep_unlocked(sb, spec)
+    }
+
+    fn sweep_unlocked(&self, sb: &Sandbox, spec: &SandboxSpec) -> (Option<i32>, String) {
         let args: Vec<std::ffi::OsString> = vec![
             self.snap.path().join("sweep.sh").into(),
             self.snap.path().into(),
@@ -86,10 +107,11 @@ impl Layout {
             self.opshome.clone().into(),
             self.port.to_string().into(),
             self.fakedelphi.clone().into(),
+            self.victim.id().to_string().into(),
         ];
         let mut cmd = sb.command(spec, INTERPRETER, args).unwrap();
         cmd.current_dir(self.snap.path());
-        let out = run_bounded(cmd, &RunOptions { timeout: Duration::from_secs(60), max_output_bytes: 1 << 20, quota: vec![] }).unwrap();
+        let out = run_bounded(cmd, &RunOptions { timeout: Duration::from_secs(60), max_output_bytes: 1 << 20, quota: vec![], kill_over_quota: false }).unwrap();
         assert!(!out.timed_out, "{out:?}");
         (out.status.and_then(|s| s.code()), out.stdout)
     }
@@ -101,12 +123,16 @@ fn the_sweep_passes_only_when_every_attempt_is_blocked() {
     let l = layout();
     let (code, out) = l.sweep(&sb, &l.spec());
     assert_eq!(code, Some(0), "{out}");
-    assert!(out.contains("SWEEP PASSED: 15 attempts, every one blocked"), "{out}");
-    assert_eq!(out.lines().filter(|x| x.starts_with("blocked ")).count(), 15, "{out}");
+    assert!(out.contains("SWEEP PASSED: 22 attempts, every one blocked"), "{out}");
+    assert_eq!(out.lines().filter(|x| x.starts_with("blocked ")).count(), 22, "{out}");
     assert!(!out.contains("SUCCEEDED"), "{out}");
     // Nothing happened on disk either, and the listener never saw a connection.
+    // The script's own report is not trusted: the effects are checked on disk and in the process table.
     l.snap.verify().unwrap();
-    assert!(!l.snap.root().join("sweep-outside").exists());
+    assert!(!l.snap.root().join("sweep-outside").exists() && !l.snap.root().join("sweep-new-file").exists());
+    assert!(!l.scratch.join("mark.dylib.loaded").exists(), "a native library was loaded from scratch");
+    assert!(!std::path::Path::new(&format!("/tmp/delphi-sweep-{}", std::process::id())).exists());
+    assert_eq!(unsafe { libc::kill(l.victim.id() as i32, 0) }, 0, "the victim process was signalled");
     assert!(!l.opshome.join("delphi-sweep-hole").exists());
     assert!(l.listener.set_nonblocking(true).is_ok());
     assert!(l.listener.accept().is_err(), "the sandboxed script reached the host's listener");
@@ -239,7 +265,9 @@ fn the_spec_validation_refuses_what_would_widen_the_profile() {
 fn the_profile_grants_exec_by_literal_and_never_on_scratch_or_the_snapshot() {
     let l = layout();
     let p = sbpl(&Resolved::new(&l.spec()).unwrap());
-    assert!(p.contains("(allow process-exec (literal \"/bin/bash\"))"), "{p}");
+    // the literal is the canonical path: /bin/bash on macOS, /usr/bin/bash where /bin links into /usr
+    let bash = sbpl_str(&canon(Path::new("/bin/bash")));
+    assert!(p.contains(&format!("(allow process-exec (literal {bash}))")), "{p}");
     assert!(!p.contains("process-exec* (subpath"), "no subpath may be executable: {p}");
     let scratch = sbpl_str(&canon(&l.scratch));
     let snap = sbpl_str(&canon(l.snap.path()));
@@ -285,8 +313,8 @@ fn the_probe_holds_all_five_canaries_under_the_real_profile() {
     let p = probe_authorized();
     assert!(p.is_ok(), "{p:?}");
     assert!(p.failed().is_empty() && p.unavailable.is_none());
-    assert!(p.network_blocked && p.outside_unreadable && p.snapshot_readonly && p.scratch_noexec && p.interpreter_runs);
-    assert!(p.summary().contains("all five canaries"), "{}", p.summary());
+    assert!(p.network_blocked && p.outside_unreadable && p.snapshot_readonly && p.scratch_noexec && p.scratch_no_map_exec && p.interpreter_runs);
+    assert!(p.summary().contains("all six canaries"), "{}", p.summary());
 }
 
 #[test]
@@ -298,7 +326,7 @@ fn the_probe_fails_closed_when_the_sandbox_is_forced_off() {
     unsafe { std::env::remove_var("DELPHI_TEST_FORCE_NO_SANDBOX") };
     assert!(!p.is_ok());
     assert_eq!(p.failed(), vec!["unavailable"]);
-    assert!(!p.network_blocked && !p.outside_unreadable && !p.snapshot_readonly && !p.scratch_noexec && !p.interpreter_runs);
+    assert!(!p.network_blocked && !p.outside_unreadable && !p.snapshot_readonly && !p.scratch_noexec && !p.scratch_no_map_exec && !p.interpreter_runs);
     assert!(p.summary().contains("unavailable"), "{}", p.summary());
 }
 
@@ -322,13 +350,14 @@ fn each_canary_notices_its_own_hole() {
     });
     assert_eq!(writable.failed(), vec!["snapshot_readonly"], "{writable:?}");
 
+    // with scratch executable, the exec canary and the native-library canary both notice
     let exec = probe_with(INTERPRETER, |s, _| s.scratch_noexec = false);
-    assert_eq!(exec.failed(), vec!["scratch_noexec"], "{exec:?}");
+    assert_eq!(exec.failed(), vec!["scratch_noexec", "scratch_no_map_exec"], "{exec:?}");
 
     // the interpreter is not executable: nothing ran, so nothing is proven
     let none = probe_with(INTERPRETER, |s, _| s.exec_only = Some(vec![PathBuf::from("/bin/zsh")]));
     assert!(!none.interpreter_runs && !none.is_ok(), "{none:?}");
-    assert_eq!(none.failed().len(), 5, "no canary may pass when the script never ran: {none:?}");
+    assert_eq!(none.failed().len(), 6, "no canary may pass when the script never ran: {none:?}");
 }
 
 #[test]
@@ -535,4 +564,192 @@ fn the_environment_is_fixed_and_has_no_interpreter_hooks() {
         assert!(!e.contains_key(k), "{k}");
     }
     assert!(!e.keys().any(|k| k.starts_with("DYLD_")));
+}
+
+
+// ---------------------------------------------------------------------------------------------- red-team of S2b (PR #599)
+
+#[test]
+fn the_profile_denies_mapping_native_code_from_scratch_and_the_snapshot() {
+    let l = layout();
+    let p = sbpl(&Resolved::new(&l.spec()).unwrap());
+    let (scratch, snap) = (sbpl_str(&canon(&l.scratch)), sbpl_str(&canon(l.snap.path())));
+    assert!(p.contains(&format!("(deny file-map-executable (subpath {scratch}))")), "{p}");
+    assert!(p.contains(&format!("(deny file-map-executable (subpath {snap}))")), "{p}");
+    // the denial comes after every allow, so it wins (last match wins)
+    let at = p.find("deny file-map-executable").unwrap();
+    assert!(!p[at..].contains("(allow"), "an allow follows the map-executable denial");
+    let mut spec = l.spec();
+    spec.scratch_noexec = false;
+    assert!(!sbpl(&Resolved::new(&spec).unwrap()).contains(&format!("(deny file-map-executable (subpath {scratch}))")));
+}
+
+#[test]
+fn the_sweep_fails_when_a_native_library_can_be_loaded_from_scratch() {
+    if cfg!(not(target_arch = "aarch64")) {
+        eprintln!("skip: the embedded probe library is arm64");
+        return;
+    }
+    weakened("scratch exec", "dlopen_from_scratch", |_, spec| spec.scratch_noexec = false);
+}
+
+#[test]
+fn the_sweep_fails_when_the_system_files_are_readable() {
+    weakened("etc readable", "read_system_file", |_, spec| spec.read_only.push(PathBuf::from("/etc")));
+}
+
+#[test]
+fn the_sweep_fails_when_tmp_users_and_the_home_are_writable_or_listable() {
+    weakened("tmp writable", "write_tmp", |_, spec| spec.scratch.push(PathBuf::from("/tmp")));
+    weakened("users listable", "list_users_directory", |_, spec| spec.read_only.push(PathBuf::from("/Users")));
+    weakened("home writable", "write_operator_home", |l, spec| spec.scratch.push(l.opshome.clone()));
+    weakened("beside the snapshot", "write_beside_the_snapshot", |l, spec| spec.scratch.push(l.snap.root().to_path_buf()));
+    weakened("traversal", "traverse_out_of_snapshot", |l, spec| spec.read_only.push(l.snap.root().to_path_buf()));
+}
+
+#[test]
+fn the_sweep_fails_when_a_fork_flood_is_not_limited() {
+    // the process limit removed: the 900 forks all succeed, and the sweep says so
+    weakened("no nproc", "fork_flood", |_, spec| spec.limits.max_procs = None);
+}
+
+#[test]
+fn a_fork_flood_is_contained_by_the_process_limit_and_leaves_nothing_behind() {
+    let Some(sb) = mac_sandbox() else { return };
+    let l = layout();
+    let _turn = FLOOD.lock().unwrap_or_else(|e| e.into_inner());
+    let (code, out) = l.sweep_unlocked(&sb, &l.spec());
+    assert_eq!(code, Some(0), "{out}");
+    assert!(out.contains("blocked   fork_flood"), "{out}");
+    // the session kill after the run reaps the parked subshells (the first uses `read -t 40`)
+    std::thread::sleep(Duration::from_millis(500));
+    // every flood child runs the sweep script from this layout's snapshot, so its command line names the snapshot path
+    let ps = Command::new("/bin/ps").args(["-A", "-o", "command="]).output().unwrap();
+    let left = String::from_utf8_lossy(&ps.stdout).lines().filter(|c| c.contains(l.snap.path().to_str().unwrap())).count();
+    assert_eq!(left, 0, "a sandboxed session outlived the run");
+}
+
+#[test]
+fn a_set_m_child_in_its_own_process_group_is_killed_with_the_session() {
+    let Some(sb) = mac_sandbox() else { return };
+    let l = layout();
+    let marker = l.scratch.join("alive");
+    // `set -m` gives the background job a process group of its own; it would survive a group kill. It writes a file
+    // every 100 ms for 6 seconds unless killed.
+    let script = l.snap.root().join("job.sh");
+    let _ = &script;
+    let body = format!("set -m\n( for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60; do echo $i >> '{m}'; read -t 0.1 -u 9 x; done ) &\nexec 9<> '{f}'\nread -t 0.3 -u 9 x\nread -t 20 -u 9 x\n", m = marker.display(), f = l.scratch.join("fifo").display());
+    // the snapshot is read-only, so the script is passed as the interpreter's first argument through a scratch file
+    let sh = l.scratch.join("job.sh");
+    fs::write(&sh, body).unwrap();
+    let spec = l.spec();
+    let mut cmd = sb.command(&spec, INTERPRETER, [sh.as_os_str()]).unwrap();
+    cmd.current_dir(l.snap.path());
+    // bash reads a script file from scratch (not exec, in-process): inherent, see the spec
+    let out = run_bounded(cmd, &RunOptions { timeout: Duration::from_millis(1500), max_output_bytes: 1 << 16, quota: vec![], kill_over_quota: false }).unwrap();
+    assert!(out.timed_out, "{out:?}");
+    std::thread::sleep(Duration::from_millis(400));
+    let size_then = fs::metadata(&marker).map(|m| m.len()).unwrap_or(0);
+    std::thread::sleep(Duration::from_millis(700));
+    let size_now = fs::metadata(&marker).map(|m| m.len()).unwrap_or(0);
+    assert_eq!(size_then, size_now, "the job in its own process group kept running after the timeout");
+}
+
+#[test]
+fn a_scratch_quota_kills_a_command_that_fills_the_disk_with_files_or_bytes() {
+    let Some(sb) = mac_sandbox() else { return };
+    for (name, body) in [
+        ("many empty files", "i=0; while :; do : > \"$1/f$i\"; i=$((i+1)); done"),
+        ("a few big files", "big=x; for j in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do big=\"$big$big\"; done; i=0; while :; do printf '%s' \"$big\" > \"$1/b$i\"; i=$((i+1)); done"),
+    ] {
+        let l = layout();
+        let sh = l.scratch.join("fill.sh");
+        fs::write(&sh, body).unwrap();
+        let fill = l.scratch.join("fill");
+        fs::create_dir(&fill).unwrap();
+        let spec = l.spec();
+        let mut cmd = sb.command(&spec, INTERPRETER, [sh.as_os_str(), fill.as_os_str()]).unwrap();
+        cmd.current_dir(l.snap.path());
+        let out = run_bounded(cmd, &RunOptions { timeout: Duration::from_secs(20), max_output_bytes: 1 << 16, quota: vec![(l.scratch.clone(), 4 << 20)], kill_over_quota: true }).unwrap();
+        assert!(!out.timed_out, "{name}: the quota did not stop it: {out:?}");
+        assert_eq!(out.over_quota, vec![l.scratch.clone()], "{name}: {out:?}");
+        assert!(!out.success(), "{name}");
+    }
+    // without enforcement the same command is only flagged after it ends, as before
+    let o = RunOptions::default();
+    assert!(!o.kill_over_quota);
+}
+
+#[test]
+fn a_file_swapped_for_a_symlink_or_a_pipe_after_it_was_listed_is_refused_not_read() {
+    let t = tempfile::tempdir().unwrap();
+    let root = canon(t.path());
+    let secret = root.join("secret.txt");
+    fs::write(&secret, "SECRET").unwrap();
+    let f = root.join("f.txt");
+    std::os::unix::fs::symlink(&secret, &f).unwrap();
+    let e = read_regular(&f).unwrap_err();
+    assert!(!e.is_empty());
+    fs::remove_file(&f).unwrap();
+    let fifo = std::ffi::CString::new(f.as_os_str().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+    // returns at once (O_NONBLOCK) with a refusal instead of waiting for a writer
+    let started = std::time::Instant::now();
+    assert!(read_regular(&f).unwrap_err().contains("regular"));
+    assert!(started.elapsed() < Duration::from_secs(5));
+    fs::remove_file(&f).unwrap();
+    fs::write(&f, "ok").unwrap();
+    assert_eq!(read_regular(&f).unwrap(), b"ok");
+    // and the whole builder refuses a tracked name that is a pipe at copy time, leaving nothing behind
+    fs::remove_file(&f).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+    // (a fifo is neither a symlink nor a regular file in `from_files`: it is skipped as "not a file", never opened)
+    let proj = root.join("proj");
+    fs::create_dir(&proj).unwrap();
+    let pf = std::ffi::CString::new(proj.join("pipe").as_os_str().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(pf.as_ptr(), 0o600) }, 0);
+    let s = Snapshot::from_files(&proj, &[PathBuf::from("pipe")], &root).unwrap();
+    assert_eq!(s.file_count(), 0);
+    assert!(!s.path().join("pipe").exists());
+}
+
+#[test]
+fn odd_file_names_survive_the_git_listing_and_a_repo_hook_config_is_not_run() {
+    let t = tempfile::tempdir().unwrap();
+    let root = canon(t.path());
+    let project = root.join("proj");
+    fs::create_dir_all(&project).unwrap();
+    git(&project, &["init", "-q"]);
+    let names = ["with space.txt", "-dash-first.txt", "new\nline.txt", "unicod\u{e9}-\u{4e2d}.txt", "--help"];
+    for n in names {
+        fs::write(project.join(n), n).unwrap();
+        git(&project, &["add", "--", n]);
+    }
+    // a project that names its own fsmonitor program and hooks path must not get them run
+    let ran = root.join("ran");
+    let hook = root.join("fsmon.sh");
+    fs::write(&hook, format!("#!/bin/sh\ntouch '{}'\n", ran.display())).unwrap();
+    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    git(&project, &["config", "core.fsmonitor", hook.to_str().unwrap()]);
+    git(&project, &["config", "core.hooksPath", root.join("nohooks").to_str().unwrap()]);
+    let s = Snapshot::build(&project, &root).unwrap();
+    assert_eq!(s.file_count(), names.len());
+    for n in names {
+        assert_eq!(fs::read_to_string(s.path().join(n)).unwrap(), n, "{n:?}");
+    }
+    assert!(!ran.exists(), "the project's fsmonitor program ran");
+}
+
+#[test]
+fn more_credential_names_are_refused_in_the_home() {
+    for n in [".ssh", ".aws", ".gnupg", ".env", ".npmrc", ".pypirc", "server.key", "cert.p12", "token", "token.json", "Tokens.txt"] {
+        assert!(judge_home_entry(n, false, true, 1, 1).is_some(), "{n}");
+    }
+    for n in ["notes.txt", "keyboard.txt", "monkey", "stoken-not"] {
+        assert!(judge_home_entry(n, false, true, 1, 1).is_none(), "{n}");
+    }
+    let t = tempfile::tempdir().unwrap();
+    let h = FreshHome::create(&canon(t.path())).unwrap();
+    fs::create_dir(h.path().join(".ssh")).unwrap();
+    assert!(h.recheck().unwrap_err().contains("credential"));
 }
