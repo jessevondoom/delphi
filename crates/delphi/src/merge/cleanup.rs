@@ -4,7 +4,8 @@
 //! Rules, each with a test:
 //! - never the base branch of the pull request, the repository's default branch, `main` or `master`;
 //! - never a branch whose pull request is not `MERGED` (read from the forge, not assumed);
-//! - the local branch only with `git branch -d` (never `-D`), and only when it is merged into `origin/<base>`;
+//! - the local branch only when `git merge-base --is-ancestor` proves it is in the fetched `origin/<base>`, and then with
+//!   `git branch -D` (see `local_step` for why `-d` cannot be used); an unproven branch is never touched;
 //! - a worktree is removed only without `--force`, and is kept and reported when it is locked, has uncommitted changes, is the
 //!   main worktree, or is (or contains) this process's own directory;
 //! - the remote branch is kept and reported when another OPEN pull request uses it as its base, or when its tip is not the
@@ -266,18 +267,13 @@ fn local_step(git: &Git, branch: &str, base: &str, held: bool, pr: u64, dry: boo
     if dry {
         return r.say(format!("#{pr}: would remove local branch `{branch}`"));
     }
-    // `-d`, never `-D`: git itself refuses a branch it does not consider merged, and that refusal is reported, not overridden.
-    match git.ok(&["branch", "-d", "--", branch]) {
+    // `-D`, but only here, after the ancestry check above has proved every commit of the branch is in the fetched `origin/<base>`.
+    // `-d` is not the safer verb: it judges against the local base or the branch's upstream, and a pull request merged on the
+    // forge leaves both behind (the local base is stale until pulled, the upstream was just deleted), so it refuses a branch
+    // whose commits are all safe. Nothing can be lost: they are reachable from `origin/<base>`.
+    match git.ok(&["branch", "-D", "--", branch]) {
         Ok(_) => r.say(format!("#{pr}: removed local branch `{branch}`")),
-        Err(e) => {
-            // We already proved the branch is in `origin/<base>`; `-d` judges against the local base, which is stale until pulled.
-            let hint = if e.to_string().contains("not fully merged") {
-                format!(" (it is in {target}, but your local `{base}` is behind it: run `git pull` on `{base}`, then `delphi merge cleanup {pr}`)")
-            } else {
-                String::new()
-            };
-            r.fail(format!("#{pr}: kept local branch `{branch}`: {e}{hint}"))
-        }
+        Err(e) => r.fail(format!("#{pr}: kept local branch `{branch}`: {e}")),
     }
 }
 

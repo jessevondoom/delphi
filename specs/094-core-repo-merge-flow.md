@@ -63,7 +63,7 @@ The record, appended to `$DELPHI_HOME/merge/ledger.jsonl` and posted as a PR com
 After a PR merges, the command removes what belonged to it, and logs each step:
 
 1. the remote branch (`git push origin --delete <branch>`);
-2. the local branch, with `git branch -d` only when it is merged into the base;
+2. the local branch, only when `git merge-base --is-ancestor` proves it is in the fetched `origin/<base>`, and then with `git branch -D` (`-d` cannot be used: after a merge on the forge the local base is stale and the upstream is gone, so it refuses a branch whose commits are all safe);
 3. every worktree whose checked-out branch is that branch, then `git worktree prune`.
 
 Safe-delete rules: never a branch whose PR is not merged; never the base or the default branch; skip, and report, a worktree that is locked, has uncommitted changes or is the current process's own directory (it is removed on the next run); never touch a branch another open PR uses as its base without retargeting it first. `--dry-run` prints the plan. `delphi merge cleanup --merged` sweeps the backlog of already-merged PRs, dry-run first.
@@ -164,6 +164,7 @@ S2a does not depend on code and can run beside S1 (it is drafted on a branch; no
 - **OD-3. Backlog sweep.** Recommend `cleanup --merged` deletes remote branches only of PRs already merged, dry-run first.
 - **OD-4. Merge method.** Recommend a merge commit, as the repository does today.
 - **OD-5. Gate list.** Recommend the list in §3.4 as the starting `merge-gates.toml`.
+- **OD-6. Local branch delete verb (decided by the operator 2026-11-08).** The first live `--auto` session (#573) kept its local branch because `git branch -d` judged it against a stale local `main`. The operator ruled: use `-D` once the branch is proved to be in the fetched `origin/<base>`. Proof still comes first; an unproven branch is never touched.
 
 ## 10. Known limits
 

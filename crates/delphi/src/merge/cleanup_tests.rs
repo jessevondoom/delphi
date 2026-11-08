@@ -102,9 +102,34 @@ fn an_unmerged_local_branch_is_kept_and_reported() {
     g(&r.work, &["commit", "-m", "later work"]);
     g(&r.work, &["checkout", "main"]);
     let rep = cleanup_pr(&r.git(), &forge(7, "feat", &tip, "MERGED"), 7, false);
-    assert!(r.local("feat"), "-d must refuse, and -D is never used");
+    assert!(r.local("feat"), "a branch with commits that are not in origin/main is never deleted, even though -D would force it");
     assert!(said(&rep, "not in origin/main"), "{:?}", rep.lines);
     assert!(!r.remote("feat"), "the remote branch was merged and is removed");
+}
+
+#[test]
+fn a_branch_merged_on_the_forge_is_removed_even_though_the_local_main_is_stale() {
+    // What happened to the first live `--auto` session: the merge happened on GitHub, so the local `main` has not seen it and
+    // `git branch -d` calls the branch unmerged. The ancestry check against the fetched `origin/main` is what proves it.
+    let r = repo();
+    g(&r.work, &["checkout", "-b", "feat"]);
+    std::fs::write(r.work.join("feat.txt"), "f").unwrap();
+    g(&r.work, &["add", "."]);
+    g(&r.work, &["commit", "-m", "feat"]);
+    g(&r.work, &["push", "-u", "origin", "feat"]);
+    let tip = g(&r.work, &["rev-parse", "HEAD"]);
+    g(&r.work, &["checkout", "main"]);
+    let origin = r.root.join("origin.git");
+    let other = r.root.join("other");
+    g(&r.root, &["clone", origin.to_str().unwrap(), "other"]);
+    g(&other, &["merge", "--no-ff", "-m", "merge feat", "origin/feat"]);
+    g(&other, &["push", "origin", "main"]);
+    // The working clone's `main` is still the first commit; plain `-d` would refuse here.
+    let stale = g(&r.work, &["rev-parse", "main"]);
+    let rep = cleanup_pr(&r.git(), &forge(7, "feat", &tip, "MERGED"), 7, false);
+    assert!(!r.local("feat") && !r.remote("feat"), "{:?}", rep.lines);
+    assert_eq!(g(&r.work, &["rev-parse", "main"]), stale, "cleanup does not move the local main");
+    assert!(rep.problems.is_empty(), "{:?}", rep.problems);
 }
 
 #[test]
