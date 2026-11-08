@@ -29,6 +29,23 @@ pub fn authorized_env() -> BTreeMap<String, String> {
     [("LC_ALL", "C"), ("PATH", "/nonexistent")].iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
 }
 
+/// The real limits of an authorized command, defined here so S2d uses these numbers and no others (S2b's probe ran with none).
+/// Wall clock for one command, the cap on each of stdout and stderr, and the scratch directory's quota (every file counts at least
+/// one 4 KiB block, so a flood of tiny files is not free). The quota is enforced while the command runs and a pass kills it.
+pub const RUN_TIMEOUT_SECS: u64 = 120;
+pub const RUN_MAX_OUTPUT_BYTES: usize = 256 << 10;
+pub const SCRATCH_QUOTA_BYTES: u64 = 16 << 20;
+/// How many processes beyond the user's current count the profile lets a command start. `RLIMIT_NPROC` counts EVERY process of the
+/// operator's user, not only the sandbox's, so the limit is the count at launch plus this headroom; a flat small number would stop
+/// the sandbox's own `fork`. A fork bomb is therefore bounded by this headroom, not by a per-command count, and a busy machine that
+/// starts more than this many unrelated processes during one command can make the command's `fork` fail (it fails closed).
+pub const PROC_HEADROOM: u64 = 256;
+
+/// The options for running one authorized command in `scratch`: the timeout, the output cap and the scratch quota, enforced.
+pub fn authorized_run_options(scratch: &Path) -> RunOptions {
+    RunOptions { timeout: Duration::from_secs(RUN_TIMEOUT_SECS), max_output_bytes: RUN_MAX_OUTPUT_BYTES, quota: vec![(scratch.to_path_buf(), SCRATCH_QUOTA_BYTES)], kill_over_quota: true }
+}
+
 /// The files that may be executed when `interpreter` is the runner: itself, and bash too when it is `/bin/sh` (which re-executes bash).
 pub fn exec_literals(interpreter: &str) -> Vec<PathBuf> {
     let mut v = vec![PathBuf::from(interpreter)];
@@ -52,7 +69,7 @@ pub fn authorized_spec(snapshot: &Path, scratch: &Path, interpreter: &str) -> Sa
     s.limits.max_file_bytes = Some(8 << 20);
     s.limits.max_open_files = Some(256);
     // A fork loop stops here: the user's current process count plus headroom (the limit counts every process of the user).
-    s.limits.max_procs = process_count().map(|n| n + 512);
+    s.limits.max_procs = process_count().map(|n| n + PROC_HEADROOM);
     s
 }
 
@@ -127,14 +144,15 @@ pub struct Snapshot {
 impl Snapshot {
     /// Copy the tracked files of the git project at `project` into a fresh directory under `parent`.
     pub fn build(project: &Path, parent: &Path) -> Result<Snapshot, String> {
-        let out = std::process::Command::new("git")
+        // The absolute path, never a name found on `PATH` (which holds user-writable directories); `PATH` below is for git's own helpers.
+        let out = std::process::Command::new("/usr/bin/git")
             .arg("-C")
             .arg(project)
             // No fsmonitor program and no hooks path from the project's own configuration, and no user or system
             // configuration: the project is not trusted, and `-z` keeps newlines, spaces, dashes and unicode in a name intact.
             .args(["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "ls-files", "-z", "--cached"])
             .env_clear()
-            .env("PATH", "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin")
+            .env("PATH", "/usr/bin:/bin")
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_OPTIONAL_LOCKS", "0")
@@ -569,7 +587,8 @@ fn probe_in(sb: &Sandbox, tmp: &Path, interpreter: &str, weaken: impl FnOnce(&mu
         other => other.to_string(),
     })?;
     cmd.current_dir(&snap);
-    let run = run_bounded(cmd, &RunOptions { timeout: Duration::from_secs(30), max_output_bytes: 64 << 10, quota: vec![], kill_over_quota: false }).map_err(io)?;
+    // The probe runs under the same quota, output cap and kill-over-quota as a real command (shorter wall clock: it is six canaries).
+    let run = run_bounded(cmd, &RunOptions { timeout: Duration::from_secs(30), ..authorized_run_options(&scratch) }).map_err(io)?;
     let text = run.stdout.clone();
     let has = |s: &str| text.lines().any(|l| l == s);
     out.interpreter_runs = run.success() && has(&format!("interp-ok {nonce}"));

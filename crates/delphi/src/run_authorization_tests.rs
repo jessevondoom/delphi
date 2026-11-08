@@ -85,3 +85,47 @@ fn a_clock_that_cannot_be_read_refuses_the_launch_instead_of_passing_every_expir
     assert!(why.contains("clock"), "{why}");
 }
 
+
+// S2c: the launcher builds the pipe payload only for a record the strict launch check passes, and only from a terminal.
+#[test]
+fn the_launcher_writes_a_payload_for_a_valid_record_and_nothing_for_any_other() {
+    let (_t, home, id, policy) = authorized_home();
+    let now = delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339()).unwrap();
+    let bytes = delphi_engine::authorization_grant::launch_payload(&home, &id, "run-1", now, &policy).unwrap();
+    assert!(!bytes.is_empty() && bytes.len() <= delphi_engine::authorization_grant::MAX_BOOT_BYTES);
+    assert!(delphi_engine::authorization_grant::launch_payload(&home, &id, "run-2", now, &policy).is_err());
+    assert!(delphi_engine::authorization_grant::launch_payload(&home, "ta-nope", "run-1", now, &policy).is_err());
+    // the use ledger is what counts uses now (S2a note c): a record whose ledger is full does not launch
+    for _ in 0..3 {
+        delphi_engine::authorization_grant::take_use(&home, &id, "h", "run-1", 3).unwrap();
+    }
+    assert!(delphi_engine::authorization_grant::launch_payload(&home, &id, "run-1", now, &policy).unwrap_err().contains("no uses left"));
+}
+
+#[test]
+fn a_launch_with_no_controlling_terminal_is_refused() {
+    assert!(controlling_terminal_refusal(false).unwrap().contains("controlling terminal"));
+    assert_eq!(controlling_terminal_refusal(true), None);
+}
+
+// The safety boundary again, at S2c: with a grant held by the daemon, the run itself still denies every Red card.
+#[test]
+fn the_run_still_denies_a_red_card_and_the_approval_switch_is_off() {
+    const { assert!(!AUTHORIZED_APPROVAL_ENABLED) };
+    let on = OnCard::Authorization { id: "ta-x".into(), run: "run-1".into() };
+    for tool in ["run_command", "shell", "harness_bash", "harness_edit", "dispatch_agent"] {
+        let (d, why) = decide(&on, &json!({"tier": "red", "tool": tool, "pattern": tool})).unwrap();
+        assert_eq!(d, "deny", "{tool}");
+        assert!(why.contains("never approved without the operator"));
+    }
+}
+
+// Review P1 (#601): the granted daemon lives and dies with the run, so --keep-daemon is refused with the flag.
+#[test]
+fn keep_daemon_is_refused_with_an_authorization() {
+    let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let e = parse_args(&a(&["do it", "--on-card", "authorization:ta-0123456789", "--auth-run", "run-1", "--keep-daemon"])).unwrap_err();
+    assert!(e.contains("--keep-daemon") && e.contains("authorization"), "{e}");
+    assert!(parse_args(&a(&["do it", "--on-card", "authorization:ta-0123456789", "--auth-run", "run-1"])).is_ok());
+    assert!(parse_args(&a(&["do it", "--keep-daemon"])).is_ok(), "other runs may keep their daemon");
+}

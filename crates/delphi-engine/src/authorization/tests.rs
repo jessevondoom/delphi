@@ -996,8 +996,25 @@ fn nothing_consumes_a_record_in_this_slice() {
         "crates/delphi/tests/docs.rs",          // schemas
         "crates/delphi/src/run.rs",             // S2a: the launch gate only (checked below); it approves nothing
         "crates/delphi/src/run_authorization_tests.rs", // S2a: test fixtures that build records
+        "crates/delphi-engine/src/authorization_grant.rs", // S2c: the daemon-side reader (grant, matching, use ledger); the one new importer
+        "crates/delphi-engine/src/authorization_grant/tests.rs",
+        "crates/delphi-engine/tests/daemon.rs", // S2c: boots a real daemon from a grant pipe
     ];
-    const STORE_READERS: &[&str] = &["crates/delphi-engine/src/authorization.rs", "crates/delphi-engine/src/authorization/tests.rs", "crates/delphi/src/test_cmd.rs", "crates/delphi/src/test_cmd_tests.rs", "crates/delphi/src/run_authorization_tests.rs", "crates/delphi/src/doctor.rs", "crates/delphi/tests/docs.rs"];
+    // S2c: who may name the grant module at all. The module approves nothing; this list is the exact set of its callers.
+    const GRANT_USERS: &[&str] = &[
+        "crates/delphi-engine/src/lib.rs",                  // `pub mod authorization_grant;`
+        "crates/delphi-engine/src/authorization.rs",        // `authorize_launch` reads the use ledger
+        "crates/delphi-engine/src/authorization_grant.rs",
+        "crates/delphi-engine/src/authorization_grant/tests.rs",
+        "crates/delphi-engine/src/authorization/tests.rs",  // this scan
+        "crates/delphi-engine/tests/daemon.rs",             // boots a real daemon from a grant pipe
+        "crates/delphi-engine/src/engine.rs",               // holds the grant; observes a Red card; strips the write tools
+        "crates/delphi-engine/src/harness_run.rs",          // refuses a seat whose own tools are not proven off
+        "crates/delphi-engine/src/core_main.rs",            // reads the grant pipe once, at boot
+        "crates/delphi/src/run.rs",                         // the launcher writes the pipe (`launch_payload`)
+        "crates/delphi/src/run_authorization_tests.rs",    // its tests
+    ];
+    const STORE_READERS: &[&str] = &["crates/delphi-engine/src/authorization.rs", "crates/delphi-engine/src/authorization/tests.rs", "crates/delphi-engine/src/authorization_grant.rs", "crates/delphi-engine/src/authorization_grant/tests.rs", "crates/delphi-engine/tests/daemon.rs", "crates/delphi/src/test_cmd.rs", "crates/delphi/src/test_cmd_tests.rs", "crates/delphi/src/run_authorization_tests.rs", "crates/delphi/src/doctor.rs", "crates/delphi/tests/docs.rs"];
     const STORE_ITEMS: &[&str] = &["load", "load_or_ignore", "mutate", "add_record", "revoke", "store_path", "Store", "Record", "build_record", "create_audited", "revoke_audited", "refuse_audited", "read_audit", "audit_dir", "open_audit", "append_audit", "AuditHead"];
     let sources = workspace_sources();
     assert!(sources.len() > 200, "the scan must see the whole workspace");
@@ -1025,6 +1042,15 @@ fn nothing_consumes_a_record_in_this_slice() {
                     assert!(!uses_item(text, p, item), "{rel} reaches the store through {p}::{item}");
                 }
             }
+        }
+    }
+    // S2c: only the files above name the grant module; the approval path, the executor, the hooks and the broker never do.
+    for (rel, text) in &sources {
+        if text.contains("authorization_grant") {
+            assert!(GRANT_USERS.contains(&rel.as_str()), "{rel} names authorization_grant; S2c lists its callers exactly (an addition is a deliberate, reviewed change)");
+        }
+        if ["approval.rs", "exec.rs", "hooks.rs", "broker.rs"].iter().any(|n| rel.ends_with(n)) {
+            assert!(!text.contains("authorization_grant") && !text.contains("grant.get()"), "{rel} must not know the grant");
         }
     }
     // the approval path, the executor and the hooks never name an authorization at all

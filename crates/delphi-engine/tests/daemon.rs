@@ -480,3 +480,108 @@ async fn the_host_socket_offers_its_own_methods_only_and_takes_only_its_own_toke
     .await
     .unwrap();
 }
+
+// Spec 092 S2c: the grant reaches the daemon only through the inherited pipe, and only a daemon the launcher spawned gets one.
+#[test]
+fn a_granted_daemon_boots_from_the_pipe_and_a_bad_or_second_grant_is_refused() {
+    use delphi_core::spawn::connect_or_spawn_granted;
+    use delphi_engine::{authorization as a, authorization_grant as g};
+    let dir = tempfile::Builder::new().prefix("dg").tempdir_in("/tmp").unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    let (home, ws) = (root.join("h"), root.join("w"));
+    std::fs::create_dir_all(home.join("operator")).unwrap();
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::write(ws.join("config.toml"), "").unwrap();
+    delphi_core::lock::write(&home.join("operator/ratified.lock"), &Default::default()).unwrap();
+    let script = root.join("sweep.sh");
+    std::fs::write(&script, b"#!/bin/bash\nexit 0\n").unwrap();
+    let s = script.to_string_lossy().to_string();
+    let policy = a::Policy::system();
+    let entry = a::Entry { tool: "shell".into(), argv: vec!["/bin/bash".into(), s.clone()], files: vec![s], runner_provenance: "project_snapshot".into() };
+    let now = delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339()).unwrap();
+    let n = a::NewRecord { purpose: "p".into(), intent: "i".into(), run: "run-1".into(), expires_in_secs: a::DEFAULT_EXPIRY_SECS, max_uses: 2, entries: vec![entry], request: None, policy: policy.clone() };
+    let rec = a::build_record(&home, &n, now, &delphi_core::time::now_rfc3339()).unwrap();
+    a::create_audited(&home, rec.clone(), json!({"id": rec.id, "manifest_hash": rec.manifest_hash, "run": rec.run, "by": "operator", "source": "operator"})).unwrap();
+    let opts = SpawnOptions { home: &home, workspace: &ws, daemon_exe: Path::new(DAEMON_EXE), extra_args: vec![], prefix_args: vec![], own_version: None };
+    // garbage on the pipe: the daemon dies before it is ready
+    assert!(connect_or_spawn_granted(&opts, b"not a grant").is_err());
+    // a payload that names another launcher: refused
+    let mut forged: Value = serde_json::from_slice(&g::launch_payload(&home, &rec.id, "run-1", now, &policy).unwrap()).unwrap();
+    forged["launcher_pid"] = json!(std::process::id() + 1);
+    assert!(connect_or_spawn_granted(&opts, forged.to_string().as_bytes()).is_err(), "a grant from a process that is not the daemon's parent");
+    // the real payload: the daemon boots and answers
+    let bytes = g::launch_payload(&home, &rec.id, "run-1", now, &policy).unwrap();
+    let mut attached = connect_or_spawn_granted(&opts, &bytes).expect("a valid grant boots");
+    assert!(attached.spawned);
+    assert_eq!(attached.client.call("session.ping", json!({})).unwrap(), json!("pong"));
+    // nothing of the grant is in the daemon's command line
+    let ps = std::process::Command::new("/bin/ps").args(["-ww", "-p", &attached.daemon_pid.to_string(), "-o", "command="]).output().unwrap();
+    let cmdline = String::from_utf8_lossy(&ps.stdout).to_string();
+    assert!(cmdline.contains("--grant-fd") && !cmdline.contains(&rec.id) && !cmdline.contains("record_hash"), "{cmdline}");
+    // a second authorized run finds the daemon and is refused: a grant is handed only to a daemon its launcher spawned
+    assert!(connect_or_spawn_granted(&opts, &bytes).is_err());
+    let _ = attached.client.call("daemon.shutdown", json!({}));
+}
+
+fn granted_fixture() -> (tempfile::TempDir, PathBuf, PathBuf, String) {
+    use delphi_engine::authorization as a;
+    let dir = tempfile::Builder::new().prefix("dk").tempdir_in("/tmp").unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    let (home, ws) = (root.join("h"), root.join("w"));
+    std::fs::create_dir_all(home.join("operator")).unwrap();
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::write(ws.join("config.toml"), "").unwrap();
+    delphi_core::lock::write(&home.join("operator/ratified.lock"), &Default::default()).unwrap();
+    let script = root.join("sweep.sh");
+    std::fs::write(&script, b"#!/bin/bash\nexit 0\n").unwrap();
+    let s = script.to_string_lossy().to_string();
+    let entry = a::Entry { tool: "shell".into(), argv: vec!["/bin/bash".into(), s.clone()], files: vec![s], runner_provenance: "project_snapshot".into() };
+    let now = delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339()).unwrap();
+    let n = a::NewRecord { purpose: "p".into(), intent: "i".into(), run: "run-1".into(), expires_in_secs: a::DEFAULT_EXPIRY_SECS, max_uses: 2, entries: vec![entry], request: None, policy: a::Policy::system() };
+    let rec = a::build_record(&home, &n, now, &delphi_core::time::now_rfc3339()).unwrap();
+    a::create_audited(&home, rec.clone(), json!({"id": rec.id, "manifest_hash": rec.manifest_hash, "run": rec.run, "by": "operator", "source": "operator"})).unwrap();
+    (dir, home, ws, rec.id)
+}
+
+/// Child half of the next test: launch a granted daemon, write its pid, then die by SIGKILL without shutting it down.
+#[test]
+fn granted_launcher_child() {
+    let Ok(out) = std::env::var("S2C_LAUNCH_OUT") else { return };
+    use delphi_engine::{authorization as a, authorization_grant as g};
+    let (home, ws) = (PathBuf::from(std::env::var("S2C_HOME").unwrap()), PathBuf::from(std::env::var("S2C_WS").unwrap()));
+    let id = std::env::var("S2C_ID").unwrap();
+    let now = delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339()).unwrap();
+    let bytes = g::launch_payload(&home, &id, "run-1", now, &a::Policy::system()).unwrap();
+    let opts = SpawnOptions { home: &home, workspace: &ws, daemon_exe: Path::new(DAEMON_EXE), extra_args: vec![], prefix_args: vec![], own_version: None };
+    let at = delphi_core::spawn::connect_or_spawn_granted(&opts, &bytes).unwrap();
+    std::fs::write(out, at.daemon_pid.to_string()).unwrap();
+    unsafe { libc::raise(libc::SIGKILL) };
+}
+
+// Review of #601: a daemon that holds a grant exits when the launcher that handed it over is gone (here: killed outright).
+#[test]
+fn a_granted_daemon_exits_when_its_launcher_dies() {
+    let (_d, home, ws, id) = granted_fixture();
+    let out = home.parent().unwrap().join("pid");
+    let st = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "granted_launcher_child", "--nocapture", "--test-threads=1"])
+        .env("S2C_LAUNCH_OUT", &out)
+        .env("S2C_HOME", &home)
+        .env("S2C_WS", &ws)
+        .env("S2C_ID", &id)
+        .status()
+        .unwrap();
+    use std::os::unix::process::ExitStatusExt;
+    assert_eq!(st.signal(), Some(9), "{st:?}");
+    let pid: i32 = std::fs::read_to_string(&out).unwrap().trim().parse().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    // the daemon is not our child (it called setsid and was reparented), so it is gone when kill(pid, 0) fails
+    while unsafe { libc::kill(pid, 0) } == 0 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let gone = unsafe { libc::kill(pid, 0) } != 0;
+    if !gone {
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+    }
+    assert!(gone, "the granted daemon outlived its launcher");
+}

@@ -162,7 +162,11 @@ pub fn parse_args(args: &[String]) -> Result<Opts, String> {
     if jsonl && json {
         return Err("--json and --jsonl are alternatives: --jsonl streams events then the summary, --json prints only the summary".into());
     }
-    Ok(Opts { input, permissions, on_card, budget, timeout, mission: value_of(args, "--mission"), jsonl, json, keep_daemon: args.iter().any(|a| a == "--keep-daemon") })
+    let keep_daemon = args.iter().any(|a| a == "--keep-daemon");
+    if keep_daemon && matches!(on_card, OnCard::Authorization { .. }) {
+        return Err("--keep-daemon cannot be used with --on-card authorization:<id>: the daemon holds the grant and exits with the run, so a later session never attaches to it".into());
+    }
+    Ok(Opts { input, permissions, on_card, budget, timeout, mission: value_of(args, "--mission"), jsonl, json, keep_daemon })
 }
 
 // ── the card policy ─────────────────────────────────────────────────────────
@@ -256,6 +260,17 @@ pub fn decide(on_card: &OnCard, card: &Value) -> Option<(&'static str, String)> 
         OnCard::Authorization { .. } if !AUTHORIZED_APPROVAL_ENABLED => Some(("deny", "headless run: authorized approval is not enabled in this build".into())),
         OnCard::Authorization { .. } => Some(("deny", "headless run: authorized approval is decided by the daemon (not built)".into())),
     }
+}
+
+/// A non-environment check that the launcher is the operator at a terminal (spec 092 S2a note b, S2c): the process must have a
+/// controlling terminal. An agent seat is a descendant of the daemon, which is detached from its terminal (`setsid`), so it has none
+/// unless it makes a pseudo-terminal for itself. This is a second line behind the environment test, not a proof of a human.
+pub fn controlling_terminal_refusal(has_tty: bool) -> Option<String> {
+    (!has_tty).then(|| "refused: this process has no controlling terminal; an authorized run is started by the operator from a terminal (an agent seat, a daemon child or a detached job has none)".to_string())
+}
+
+fn has_controlling_terminal() -> bool {
+    std::fs::OpenOptions::new().read(true).write(true).open("/dev/tty").is_ok()
 }
 
 /// Why a run that carries `--on-card authorization:<id>` may not start, or `None` (spec 092 TA-2, S2a). Every refusal is exit 4.
@@ -414,13 +429,35 @@ pub fn run(home: &Path, ws_dir: &Path, opts: Opts) -> i32 {
             say_err(&why);
             return EXIT_INFRA;
         }
-        say_err("the authorization checks passed, but authorized approval is not enabled in this build: this run denies every card, as --on-card deny does");
+        if let Some(why) = controlling_terminal_refusal(has_controlling_terminal()) {
+            say_err(&why);
+            return EXIT_INFRA;
+        }
+        say_err("the authorization checks passed. The daemon will hold the grant and log what it WOULD use (authorization.would_use), but authorized approval is not enabled in this build: this run denies every card, as --on-card deny does");
     }
     let Some(exe) = chat::daemon_exe() else {
         say_err("cannot locate this program to start the daemon");
         return EXIT_INFRA;
     };
-    let mut attached = match connect_or_spawn(&SpawnOptions { home, workspace: ws_dir, daemon_exe: &exe, extra_args: vec![], prefix_args: vec!["__core".into()], own_version: Some(env!("CARGO_PKG_VERSION")) }) {
+    let spawn_opts = SpawnOptions { home, workspace: ws_dir, daemon_exe: &exe, extra_args: vec![], prefix_args: vec!["__core".into()], own_version: Some(env!("CARGO_PKG_VERSION")) };
+    // An authorized run gets a daemon of its own that holds the grant (an inherited pipe, read once); every other run is as before.
+    let spawned = if let OnCard::Authorization { id, run } = &opts.on_card {
+        // A clock that cannot be read must never read as time zero (every expiry would look in the future): refuse.
+        let Some(now) = delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339()) else {
+            say_err("refused: the clock could not be read, so expiry cannot be checked");
+            return EXIT_INFRA;
+        };
+        match delphi_engine::authorization_grant::launch_payload(home, id, run, now, &delphi_engine::authorization::Policy::system()) {
+            Ok(bytes) => delphi_core::spawn::connect_or_spawn_granted(&spawn_opts, &bytes),
+            Err(e) => {
+                say_err(&format!("refused: {e}"));
+                return EXIT_INFRA;
+            }
+        }
+    } else {
+        connect_or_spawn(&spawn_opts)
+    };
+    let mut attached = match spawned {
         Ok(a) => a,
         Err(ClientError::Rpc { code, message, .. }) if code == delphi_core::proto::code::FORBIDDEN => {
             say_err(&format!("a daemon is already running for this workspace and this process has no terminal, so it cannot be attached to ({}). Stop it with `delphi daemon stop`, or run in another workspace or --home.", message));

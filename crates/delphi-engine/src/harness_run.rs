@@ -300,6 +300,10 @@ impl Engine {
         let deny = |why: &str| Ok(Decision::Deny(why.to_string()));
         let name = p.tool_name.as_str();
         let target = path_of(&p.input);
+        if self.grant.get().is_some() && !name.starts_with(TOOL_PREFIX) {
+            sc.m.append(sc.ev("authorization.refused", json!({"seat_native_tool": name, "reason": "a native tool of the CLI is not available in a run that holds an operator authorization", "approved": false}))).await?;
+            return deny("the CLI's own tools are not available in a run that holds an operator authorization");
+        }
         match name {
             // Delphi's own tool: its classification, taint gate and approval run when the call reaches the bridge
             // (`bridge_call`), which is the only place that holds the result. Here the CLI only asks to proceed.
@@ -589,8 +593,12 @@ impl Engine {
         let project_state = |engine: &Engine| -> Vec<String> { engine.projects.iter().map(|(_, p)| engine.exec.worktrees.project_status(p)).collect() };
         let projects_before = (cli == Cli::Agy).then(|| project_state(self));
         // A role without a worktree gets an empty directory and no tools: it sees only its prompt.
+        // Spec 092 TA-5: in a run that holds a grant, a Claude Builder runs with NONE of the CLI's own tools (`--tools ""`, an empty working
+        // directory) and keeps only Delphi's bridge tools, `run_command` among them: its commands are then Delphi's `run_command` calls,
+        // which the grant can see, never the CLI's own Bash (a `harness_bash` card is never matched).
+        let granted = self.grant.get().is_some();
         let (cwd, tools) = match (&wt, builder) {
-            (Some(w), true) => (w.path.clone(), Tools::Standard),
+            (Some(w), true) if !(granted && cli == Cli::Claude) => (w.path.clone(), Tools::Standard),
             _ => {
                 let d = self.exec.scratch_for(&sc.task_id).join("harness-empty");
                 std::fs::create_dir_all(&d).map_err(|e| EngineError::Invalid(e.to_string()))?;
@@ -652,7 +660,8 @@ impl Engine {
         let persist = opts.session != SessionMode::Ephemeral;
         // `[harness.<cli>]` (ratified): how this CLI is equipped and who answers its permission questions (`specs/020`).
         let profile: HarnessProfile = self.cfg.get().harness.get(cli.program()).cloned().unwrap_or_default();
-        let delegate = cli == Cli::Claude && !builder && !sc.readonly && !sc.toolless && profile.approvals == ApprovalSource::Delegate;
+        // A granted run never auto-approves: a CLI that ignored `--tools ""` could otherwise run a native Bash before the stream monitor sees it.
+        let delegate = cli == Cli::Claude && !builder && !sc.readonly && !sc.toolless && profile.approvals == ApprovalSource::Delegate && self.grant.get().is_none();
         // Delphi's tools for this role, offered over the bridge: to the Claude CLI as an MCP config, to the Antigravity CLI
         // as a plugin in the span's own `.agents/` with a hook that gates its other tools (`specs/020` §8). A Builder keeps
         // the Claude CLI's own file and shell tools (every request still answered here), so those Delphi tools are not duplicated.
@@ -660,14 +669,23 @@ impl Engine {
         let mut bridge_defs: Vec<ToolDef> = if profile.bridge && cli != Cli::Codex { self.span_tool_defs(sc).await? } else { vec![] };
         if builder {
             // An agy Builder keeps Delphi's `run_command`: its own shell cannot be approved when it runs headless.
-            bridge_defs.retain(|d| !DUPLICATED_FOR_BUILDERS.contains(&d.name.as_str()) || (cli == Cli::Agy && (d.name == "run_command" || d.name == "shell")));
+            bridge_defs.retain(|d| !DUPLICATED_FOR_BUILDERS.contains(&d.name.as_str()) || (cli == Cli::Agy && (d.name == "run_command" || d.name == "shell")) || (granted && cli == Cli::Claude && d.name == "run_command"));
         }
         let connectors = cli == Cli::Claude && !builder && !sc.readonly && !sc.toolless && profile.claudeai_connectors;
         // Servers a previous session had connected besides ours: the wait for the account's connectors holds out for them.
         let expect_servers: Vec<String> = self.inventory.seats().into_iter().find(|r| r.endpoint_id == ep.id).map(|r| r.mcp_servers.into_iter().filter(|(n, st)| n != crate::bridge::SERVER_NAME && st == "connected").map(|(n, _)| n).collect()).unwrap_or_default();
         // The CLI's own tools the span may use: for the Claude CLI they are given with `--tools`; for `agy` they are what its gate lets through.
         let agy_native = if cli == Cli::Agy && !sc.toolless && profile.bridge { agy_native_tools(&profile.native_tools) } else { vec![] };
-        let mut lp = LaunchProfile { native_tools: if builder || sc.readonly || sc.toolless || cli != Cli::Claude { vec![] } else { profile.native_tools.clone() }, auto_approve: delegate, claudeai_connectors: connectors, mcp_config: None, settle: self.settings.connector_settle, expect_servers };
+        // Spec 092 TA-5: in a run that holds a grant a seat starts only if its own tools can be proven off for this launch. The Claude
+        // seat's native list and account connectors are cleared; a Builder, agy and codex are refused (`seat_native_tools_off`).
+        let connectors = connectors && !granted;
+        let mut lp = LaunchProfile { native_tools: if granted || builder || sc.readonly || sc.toolless || cli != Cli::Claude { vec![] } else { profile.native_tools.clone() }, auto_approve: delegate, claudeai_connectors: connectors, mcp_config: None, settle: self.settings.connector_settle, expect_servers };
+        if granted {
+            if let Err(why) = crate::authorization_grant::seat_native_tools_off(cli.program(), tools == Tools::Standard, lp.native_tools.is_empty(), opts.app_server) {
+                sc.m.append(sc.ev("authorization.refused", json!({"seat": cli.program(), "reason": why, "approved": false}))).await?;
+                return Ok(Err(HarnessErr::retry(format!("a run with an operator authorization cannot use the {} seat: {}", cli.program(), why))));
+            }
+        }
         let (mut _bridge, mut bridge_rx): (Option<Bridge>, Option<tokio::sync::mpsc::Receiver<BridgeCall>>) = (None, None);
         let mut gate_rx: Option<tokio::sync::mpsc::UnboundedReceiver<HookNote>> = None;
         let mut gate_policy: Option<HookPolicy> = None;
@@ -803,6 +821,19 @@ impl Engine {
                     if !tools.is_empty() {
                         tools_offered = tools.clone();
                     }
+                    // Native tools "provably off": `--tools ""` is a flag, and a CLI version that ignores it would still list its own tools
+                    // here. In a granted run any tool that is not Delphi's bridge tool ends the span before the model acts.
+                    // Exactly one known pseudo-tool is let through, and only when a schema was asked for (`StructuredOutput`). A CLI that
+                    // reports NO tools at all is not trusted either: the flag cannot be shown to have held.
+                    if granted && cli == Cli::Claude {
+                        let bad = crate::authorization_grant::native_tool_problem(tools, launch.opts.json_schema.is_some(), TOOL_PREFIX);
+                        if let Some(bad) = bad.as_ref() {
+                            session.kill().await;
+                            sc.m.append(sc.ev("authorization.refused", json!({"seat": cli.program(), "native_tool": bad, "reason": "the CLI loaded a tool of its own although it was started with none", "approved": false}))).await?;
+                            failure = Some((format!("the Claude CLI reports a tool of its own ({}) although it was started with none; a run with an operator authorization stops", bad), false));
+                            break;
+                        }
+                    }
                     self.inventory.record(crate::inventory::SeatRecord { endpoint_id: ep.id.clone(), harness: cli.program().into(), model: launch.model.clone(), tools: tools.clone(), mcp_servers: mcp_servers.clone().unwrap_or_default(), bridge: bridge_on, seen_unix: (self.clock_unix)() });
                     // A saved session can be resumed by a later span; the log is where its id is kept.
                     if persist && !session_id.is_empty() {
@@ -836,6 +867,12 @@ impl Engine {
                     text_parts.push(t);
                 }
                 Event::ToolUse { name, input, .. } => {
+                    if granted && !crate::authorization_grant::stream_tool_ok(&name, launch.opts.json_schema.is_some(), TOOL_PREFIX) {
+                        session.kill().await;
+                        sc.m.append(sc.ev("authorization.refused", json!({"seat": cli.program(), "native_tool": name, "reason": "a native tool call was seen in the stream", "approved": false}))).await?;
+                        failure = Some((format!("the {} CLI called a tool of its own ({}) in a run with an operator authorization; the span is stopped", cli.program(), name), false));
+                        break;
+                    }
                     // A Delphi tool counts as acting when its call runs (above), by its own kind.
                     any_tool = true;
                     used_tools |= !name.starts_with(TOOL_PREFIX);

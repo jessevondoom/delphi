@@ -342,6 +342,10 @@ pub struct Engine {
     pub unquarantined: Mutex<HashSet<String>>,
     /// Solo mode toggle: when true, SME agents do not spawn sub-consultations (`specs/063` §3.3).
     pub solo_mode: std::sync::atomic::AtomicBool,
+    /// Spec 092 S2c: the operator's advance authorization for this run, held in memory only. Set once at boot from the inherited
+    /// pipe (`core_main`); never serialized, never in an environment variable or a file; a child process, a dispatched agent and a
+    /// harness seat get none. In S2c it is only observed: a matching Red card is logged and still denied.
+    pub grant: std::sync::OnceLock<Arc<crate::authorization_grant::Grant>>,
 }
 
 /// What the operator decided about weaker substitutes for one task, as `(endpoint, model)` pairs.
@@ -1832,7 +1836,13 @@ impl Engine {
     }
 
     pub(crate) async fn span_tool_defs(&self, sc: &SpanCtx) -> Result<Vec<ToolDef>, EngineError> {
-        let mut defs = self.tools.defs(!sc.manifest.write.is_empty());
+        // Spec 092 TA-5: in a run that holds a grant no seat is offered a tool that writes files (composition: a payload written by an
+        // Amber tool and then run by the authorized command).
+        let granted = self.grant.get().is_some();
+        let mut defs = self.tools.defs(!granted && !sc.manifest.write.is_empty());
+        if granted {
+            defs.retain(|d| crate::authorization_grant::tool_stripped(&d.name, false).is_none());
+        }
         if self.validator_off() {
             defs.retain(|d| !crate::fact_tools::NAMES.contains(&d.name.as_str()));
         }
@@ -1857,12 +1867,15 @@ impl Engine {
         if self.offers_alignment(sc) {
             defs.push(crate::align_run::def());
         }
-        if !sc.readonly {
+        if !sc.readonly && !granted {
             defs.extend(self.connector_defs(sc).await?);
         }
         // A bundle agent's `tools` list only removes: what the host role lacks is not in `defs`, and what the list lacks goes.
         if let Some(allowed) = sc.bundle_agent.as_ref().and_then(|a| a.allowed_tools.as_ref()) {
             defs.retain(|d| allowed.contains(&d.name));
+        }
+        if granted {
+            defs.retain(|d| crate::authorization_grant::tool_allowed(&d.name));
         }
         if sc.toolless {
             defs.clear();
@@ -1926,6 +1939,14 @@ impl Engine {
         if let Some(allowed) = sc.bundle_agent.as_ref().and_then(|a| a.allowed_tools.as_ref()) {
             if !allowed.contains(name) {
                 return Ok(tool_result_error(format!("`{}` is not among the tools of the bundle agent {}", name, sc.bundle_agent.as_ref().map(|a| a.id.as_str()).unwrap_or(""))));
+            }
+        }
+        // Spec 092 TA-5, at call time and not only by omission: a granted run may call only the short allowlist
+        // (`authorization_grant::GRANTED_TOOLS`); everything else, a tool added later included, is denied.
+        if self.grant.get().is_some() {
+            let is_connector = self.connectors.parse_wire(name).is_some();
+            if let Some(why) = crate::authorization_grant::tool_stripped(name, is_connector) {
+                return Ok(tool_result_error(format!("denied: `{}` is not available in a run that holds an operator authorization ({}); it is the only way a payload could be written for the authorized command to run", name, why)));
             }
         }
         // The refusal does not rely on the model only calling what it was offered.
@@ -2163,7 +2184,27 @@ impl Engine {
     }
 
     /// `run_command`: gate on the span's taint, run in the sandbox, stamp what changed.
+    /// Spec 092 S2c (dry): in a run that holds a grant EVERY `run_command` and `shell` call is shown to the grant and then denied with
+    /// one fixed message, whether it matched an entry or not. Nothing a model asks for runs in this slice (not by the standard sandbox,
+    /// not by an allow rule, not as a read-only command), and the reply tells the model nothing about the manifest: the distinction
+    /// is logged only in the `authorization.would_use` / `.refused` / `.no_match` events, which a model cannot read.
+    async fn granted_exec_denial(&self, sc: &SpanCtx, tool: &str, args: &Value) -> Result<Option<tools::ToolResult>, EngineError> {
+        if self.grant.get().is_none() {
+            return Ok(None);
+        }
+        let argv: Vec<String> = match args["argv"].as_array() {
+            Some(a) if a.iter().all(|x| x.is_string()) => a.iter().filter_map(|x| x.as_str().map(String::from)).collect(),
+            _ => vec![],
+        };
+        let who = Asker { m: &sc.m, task_id: &sc.task_id, span_id: &sc.span_id, role: &sc.role };
+        self.observe_grant_call(&who, tool, &json!({"tool": tool, "argv": argv})).await?;
+        Ok(Some(tool_result_error(crate::authorization_grant::GRANTED_DENIAL)))
+    }
+
     async fn exec_command(self: &Arc<Self>, sc: &mut SpanCtx, call_id: &str, args: &Value) -> Result<tools::ToolResult, EngineError> {
+        if let Some(denied) = self.granted_exec_denial(sc, "run_command", args).await? {
+            return Ok(denied);
+        }
         if !sc.manifest.execute.iter().any(|e| e == "shell-worktree-scoped") {
             return Ok(tool_result_error("this role's manifest does not authorize shell-worktree-scoped"));
         }
@@ -2233,6 +2274,9 @@ impl Engine {
     /// `shell` (`specs/061`): a command line through `bash -c`, judged as a whole. The gates are `run_command`'s; the
     /// verdict adds Hard (a Red card that no mode or grant covers) and Safe (which `shell-auto` runs without a card).
     async fn exec_shell(self: &Arc<Self>, sc: &mut SpanCtx, call_id: &str, args: &Value) -> Result<tools::ToolResult, EngineError> {
+        if let Some(denied) = self.granted_exec_denial(sc, "shell", args).await? {
+            return Ok(denied);
+        }
         if !sc.manifest.execute.iter().any(|e| e == "shell-worktree-scoped") || !self.exec.cfg.shell {
             return Ok(tool_result_error("this role's manifest does not authorize shell-worktree-scoped, or the shell tool is switched off"));
         }
@@ -2394,6 +2438,44 @@ impl Engine {
         })
     }
 
+    /// Spec 092 S2c, DRY: with a grant held, a Red card is run through the grant's matching and use path and the outcome is logged
+    /// (`authorization.would_use`, `.refused`, `.no_match`). **It resolves nothing and approves nothing**: the caller raises the card
+    /// afterwards, and the run's own policy (`delphi run`'s `decide`) denies it. It never calls `exec.run` or any runner. A use the
+    /// ledger records here is really consumed (the counter is the part S2d needs proven).
+    async fn observe_grant(&self, who: &Asker<'_>, tier: ApprovalTier, tool: &str, payload: &Value) -> Result<(), EngineError> {
+        if tier != ApprovalTier::Red {
+            return Ok(());
+        }
+        self.observe_grant_call(who, tool, payload).await.map(|_| ())
+    }
+
+    /// The observation itself, for any call (no tier test): what a granted run's `run_command` goes through before the policy decides.
+    /// Returns whether the call matched a manifest entry (used or refused at use). The caller (`exec_command`) ends such a call with a
+    /// denial: in S2c a command the grant recognizes is never run, not even by the ordinary path, and the real ledger is untouched.
+    pub(crate) async fn observe_grant_call(&self, who: &Asker<'_>, tool: &str, payload: &Value) -> Result<bool, EngineError> {
+        use crate::authorization_grant::{Outcome, NO_MATCH, REFUSED_USE, WOULD_USE};
+        let Some(grant) = self.grant.get().cloned() else { return Ok(false) };
+        let argv: Vec<String> = match payload["argv"].as_array() {
+            Some(a) if a.iter().all(|x| x.is_string()) => a.iter().filter_map(|x| x.as_str().map(String::from)).collect(),
+            _ => vec![],
+        };
+        let (now, tool_s) = ((self.clock_unix)(), tool.to_string());
+        let g = grant.clone();
+        let outcome = tokio::task::spawn_blocking(move || g.evaluate_card(&tool_s, &argv, now)).await.map_err(|e| EngineError::Invalid(e.to_string()))?;
+        let matched = !matches!(outcome, Outcome::NotMatched(_));
+        let (kind, body) = match outcome {
+            Outcome::NotMatched(why) => (NO_MATCH, json!({"authorization_id": grant.id(), "tool": tool, "reason": why, "approved": false})),
+            Outcome::Refused { entry, reason } => (REFUSED_USE, json!({"authorization_id": grant.id(), "tool": tool, "entry": entry, "reason": reason, "approved": false})),
+            Outcome::WouldUse { entry, index, uses_left, seq } => (WOULD_USE, json!({"authorization_id": grant.id(), "record_hash": grant.record_hash(), "tool": tool, "entry": entry, "index": index, "uses_left": uses_left, "ledger_seq": seq, "purpose": grant.purpose(), "approved": false, "dry": true, "verified": crate::authorization_grant::VERIFIED_IN_S2C})),
+        };
+        let mut e = EventEnvelope::new(&who.m.id, kind, body);
+        e.task_id = Some(who.task_id.to_string());
+        e.span_id = Some(who.span_id.to_string());
+        e.agent = Some(who.role.to_string());
+        who.m.append(e).await?;
+        Ok(matched)
+    }
+
     /// Raise a card and return how it ended. `timeout` overrides the usual approval timeout for this card.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn ask_resolution(&self, who: &Asker<'_>, tier: ApprovalTier, tool: &str, pattern: &str, summary: &str, payload: &Value, timeout: Option<Duration>) -> Result<Resolution, EngineError> {
@@ -2408,6 +2490,11 @@ impl Engine {
             if let Some((hook, why)) = self.hook_denial(who, tool, pattern, summary, tier.as_str(), payload).await? {
                 return Ok(Resolution::Denied { reason: format!("blocked by the hook `{}`: {}", hook, why) });
             }
+        }
+        // Spec 092 S2c: observation only. The card below is raised and answered exactly as without a grant. A `run_command` call is
+        // observed where it is made (`exec_command`), whatever its tier, so a Red card for it is not observed a second time here.
+        if tool != "run_command" {
+            self.observe_grant(who, tier, tool, payload).await?;
         }
         let base_timeout = timeout.unwrap_or(self.settings.approval_timeout);
         let started = std::time::Instant::now();

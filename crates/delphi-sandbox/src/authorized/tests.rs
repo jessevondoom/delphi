@@ -305,7 +305,7 @@ fn linux_refuses_the_authorized_profile_rather_than_run_it_loosely() {
 // ---------------------------------------------------------------------------------------------- the probe
 
 #[test]
-fn the_probe_holds_all_five_canaries_under_the_real_profile() {
+fn the_probe_holds_all_six_canaries_under_the_real_profile() {
     let _g = PROBE.lock().unwrap_or_else(|e| e.into_inner());
     if mac_sandbox().is_none() {
         return;
@@ -832,4 +832,20 @@ fn the_probe_source_does_nothing_but_create_its_marker() {
     for banned in ["socket", "connect", "exec", "system(", "getenv", "popen", "fork", "unlink"] {
         assert!(!code.contains(banned), "probe_mark.c mentions `{banned}`");
     }
+}
+
+// S2c carry-over: the real limits are constants, the scratch quota is enforced for real commands, and git is run by absolute path.
+#[test]
+fn the_authorized_run_options_carry_the_real_quota_and_enforce_it() {
+    let o = authorized_run_options(Path::new("/some/scratch"));
+    assert_eq!((o.timeout.as_secs(), o.max_output_bytes, o.kill_over_quota), (RUN_TIMEOUT_SECS, RUN_MAX_OUTPUT_BYTES, true));
+    assert_eq!(o.quota, vec![(PathBuf::from("/some/scratch"), SCRATCH_QUOTA_BYTES)]);
+    const { assert!(SCRATCH_QUOTA_BYTES > 0 && PROC_HEADROOM > 0 && PROC_HEADROOM <= 512) };
+}
+
+#[test]
+fn the_snapshot_builder_runs_git_by_absolute_path_and_ignores_a_git_on_path() {
+    let src = include_str!("../authorized.rs");
+    assert!(src.contains("Command::new(\"/usr/bin/git\")") && !src.contains("Command::new(\"git\")"), "git must be resolved by absolute path");
+    assert!(!src.contains("/opt/homebrew/bin") && !src.contains("/usr/local/bin"), "no user-writable directory on the snapshot builder's PATH");
 }
