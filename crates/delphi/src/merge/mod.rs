@@ -8,10 +8,13 @@
 
 pub mod approve;
 pub mod check;
+pub mod cleanup;
 pub mod forge;
 pub mod gates;
 pub mod record;
 
+#[cfg(test)]
+mod cleanup_tests;
 #[cfg(test)]
 mod fake;
 #[cfg(test)]
@@ -65,6 +68,8 @@ pub struct Ctx<'a> {
     pub term: &'a mut dyn Terminal,
     pub quote: Option<String>,
     pub dry_run: bool,
+    /// The repository to clean up after a merge; `None` leaves cleanup out (tests that have no repository).
+    pub git: Option<&'a cleanup::Git>,
     pub session: Option<String>,
     /// How long to wait before asking again when GitHub has not finished working out mergeability.
     pub settle: Duration,
@@ -143,7 +148,8 @@ fn finish(ctx: &mut Ctx, v: &Verdict, rec: Record) -> Outcome {
             if let Err(e) = ctx.forge.comment(n, &rec.comment()) {
                 eprintln!("delphi merge: #{n} merged, but the comment could not be posted: {e}");
             }
-            after_merge(ctx, v);
+            // Cleanup never changes the outcome of a merge; its failures are printed, and kept for the error log (S5).
+            let _cleanup_problems = after_merge(ctx, v);
             Outcome::Merged { pr: n, head: v.pr.head_sha.clone() }
         }
         Err(e) => {
@@ -155,8 +161,13 @@ fn finish(ctx: &mut Ctx, v: &Verdict, rec: Record) -> Outcome {
     }
 }
 
-/// Hook for slice S4: remove the remote branch, the local branch and the worktrees of a merged pull request.
-fn after_merge(_ctx: &mut Ctx, _v: &Verdict) {}
+/// Remove the remote branch, the local branch and the worktrees of the merged pull request. Returns the failures.
+fn after_merge(ctx: &mut Ctx, v: &Verdict) -> Vec<String> {
+    match ctx.git {
+        Some(git) => cleanup::cleanup_pr(git, ctx.forge, v.pr.number, false).problems,
+        None => Vec::new(),
+    }
+}
 
 /// Merge several queued pull requests, each re-evaluated just before it merges (the base moved after the last one).
 pub fn merge_many(ctx: &mut Ctx, numbers: &[u64], batch: Option<&Attestation>) -> Vec<Outcome> {
@@ -208,7 +219,7 @@ enum Sub {
     Status,
     Log,
     Fix,
-    Cleanup,
+    Cleanup(Vec<u64>),
 }
 
 #[derive(Debug, PartialEq)]
@@ -217,6 +228,8 @@ struct Parsed {
     home: Option<String>,
     quote: Option<String>,
     dry_run: bool,
+    merged: bool,
+    yes: bool,
 }
 
 fn pr_number(s: &str) -> Option<u64> {
@@ -225,7 +238,7 @@ fn pr_number(s: &str) -> Option<u64> {
 
 /// `args` is what `main` hands every command: the command line with the command word itself already removed.
 fn parse(args: &[String]) -> Result<Parsed, String> {
-    let (mut home, mut quote, mut dry_run, mut all, mut auto) = (None, None, false, false, false);
+    let (mut home, mut quote, mut dry_run, mut all, mut auto, mut merged, mut yes) = (None, None, false, false, false, false, false);
     let mut words: Vec<&str> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -235,6 +248,8 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
             "--dry-run" => dry_run = true,
             "--all" => all = true,
             "--auto" => auto = true,
+            "--merged" => merged = true,
+            "--yes" => yes = true,
             f if f.starts_with("--") => return Err(format!("unknown option `{f}` (see `delphi help merge`)")),
             w => words.push(w),
         }
@@ -246,7 +261,7 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
             "status" => Sub::Status,
             "log" => Sub::Log,
             "fix" => Sub::Fix,
-            _ => Sub::Cleanup,
+            _ => Sub::Cleanup(words[1..].iter().map(|w| pr_number(w).ok_or(format!("`{w}` is not a pull request number"))).collect::<Result<Vec<_>, _>>()?),
         },
         (_, true, false) if words.is_empty() => Sub::All,
         (_, false, true) if words.is_empty() => Sub::Auto,
@@ -254,7 +269,10 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
         (Some(_), false, false) => Sub::Merge(words.iter().map(|w| pr_number(w).ok_or(format!("`{w}` is not a pull request number"))).collect::<Result<Vec<_>, _>>()?),
         (None, false, false) => return Err("usage: delphi merge <PR>... | --all | --auto | queue <PR> | status (see `delphi help merge`)".into()),
     };
-    Ok(Parsed { sub, home, quote, dry_run })
+    if (merged || yes) && !matches!(sub, Sub::Cleanup(_)) {
+        return Err("--merged and --yes belong to `delphi merge cleanup`".into());
+    }
+    Ok(Parsed { sub, home, quote, dry_run, merged, yes })
 }
 
 pub fn cli(args: &[String]) -> i32 {
@@ -289,7 +307,7 @@ pub fn cli(args: &[String]) -> i32 {
         },
         Sub::Log => stub("log", "S5"),
         Sub::Fix => stub("fix", "S5"),
-        Sub::Cleanup => stub("cleanup", "S4"),
+        Sub::Cleanup(ref numbers) => cleanup::run(&forge, numbers, p.merged, p.dry_run, p.yes),
         Sub::Auto => stub("--auto", "S6"),
         Sub::Merge(ref numbers) => run_merges(&p, &forge, numbers.clone(), false),
         Sub::All => match forge.queued(QUEUE_LABEL) {
@@ -333,7 +351,8 @@ fn run_merges(p: &Parsed, forge: &Gh, numbers: Vec<u64>, batch: bool) -> i32 {
     } else {
         None
     };
-    let mut ctx = Ctx { forge, ledger: &ledger, term: &mut term, quote: p.quote.clone(), dry_run: p.dry_run, session: None, settle: Duration::from_secs(3), now: delphi_core::time::now_rfc3339 };
+    let git = cleanup::Git::here();
+    let mut ctx = Ctx { forge, ledger: &ledger, term: &mut term, quote: p.quote.clone(), dry_run: p.dry_run, git: Some(&git), session: None, settle: Duration::from_secs(3), now: delphi_core::time::now_rfc3339 };
     let outcomes = if batch { merge_many(&mut ctx, &numbers, batch_att.as_ref()) } else { numbers.iter().map(|n| merge_one(&mut ctx, *n, None)).collect() };
     outcomes.iter().for_each(|o| println!("{}", o.line()));
     if outcomes.iter().any(|o| matches!(o, Outcome::Failed { detail, .. } if detail.contains("cannot run `gh`"))) {

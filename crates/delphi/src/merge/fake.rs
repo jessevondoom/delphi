@@ -142,4 +142,10 @@ impl Forge for FakeForge {
         }
         Ok(())
     }
+    fn open_bases(&self) -> Result<Vec<String>, ForgeError> {
+        Ok(self.st.borrow().prs.values().filter(|p| p.state == "OPEN").map(|p| p.base_ref.clone()).collect())
+    }
+    fn merged_branches(&self, limit: usize) -> Result<Vec<(u64, String)>, ForgeError> {
+        Ok(self.st.borrow().prs.values().filter(|p| p.state == "MERGED").map(|p| (p.number, p.head_ref.clone())).take(limit).collect())
+    }
 }

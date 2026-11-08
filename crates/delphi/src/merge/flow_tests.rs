@@ -20,7 +20,7 @@ fn world() -> World {
 
 fn with_ctx<R>(w: &World, term: &mut FakeTerminal, quote: Option<&str>, dry_run: bool, f: impl FnOnce(&mut Ctx) -> R) -> R {
     let ledger = Ledger::at(w.home.path());
-    let mut ctx = Ctx { forge: &w.forge, ledger: &ledger, term, quote: quote.map(String::from), dry_run, session: None, settle: Duration::ZERO, now: || "2026-11-07T00:00:00Z".to_string() };
+    let mut ctx = Ctx { forge: &w.forge, ledger: &ledger, term, quote: quote.map(String::from), dry_run, session: None, git: None, settle: Duration::ZERO, now: || "2026-11-07T00:00:00Z".to_string() };
     f(&mut ctx)
 }
 
