@@ -208,7 +208,9 @@ pub const MAX_AGENTS_MD: usize = 3;
 /// `@path` references in a console prompt become pointers (`@project/app/src/lib.rs`, `@specs/009.md`).
 pub fn pointers_from_prompt(prompt: &str) -> Vec<ContextPointer> {
     let mut out: Vec<ContextPointer> = Vec::new();
-    for word in prompt.split_whitespace() {
+    // A brief's "Projects here:" line is a hint to the reader, never a pointer.
+    let mentions = prompt.lines().filter(|l| !l.trim_start().starts_with("Projects here:")).flat_map(|l| l.split_whitespace());
+    for word in mentions {
         let Some(path) = word.strip_prefix('@') else { continue };
         let path = path.trim_end_matches([',', '.', ';', ':', ')', '?']);
         let looks_like_path = path.contains('/') && !path.starts_with('/') && !path.contains("..");
@@ -239,6 +241,13 @@ pub fn pointers_from_prompt(prompt: &str) -> Vec<ContextPointer> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_projects_hint_is_not_a_pointer_but_a_real_one_round_trips() {
+        let hint = "Q?\nProjects here: delphi (read a file with @project/<name>/<path>)\nsee @project/delphi/specs/062.md.";
+        let uris: Vec<String> = pointers_from_prompt(hint).into_iter().map(|p| p.uri).collect();
+        assert_eq!(uris, vec!["@project/delphi/specs/062.md".to_string()]);
+    }
 
     #[test]
     fn a_root_handoff_is_valid_and_names_the_operator_as_caller() {

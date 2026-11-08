@@ -89,7 +89,33 @@ pub fn run(tree: &Tree) -> Report {
     check_abs_paths(tree, &mut r);
     check_councils(tree, &mut r);
     check_memory_writes(tree, &mut r);
+    check_spec_numbers(tree, &mut r);
     r
+}
+
+// ── spec numbers (specs/090) ────────────────────────────────────────────────
+
+/// A spec number (three digits and an optional letter, as in `005a`) names exactly one file directly under `specs/`. Two
+/// sessions taking the next number at once produced the clashes that spec 090 removed, so this check has no allowlist: the
+/// pull request that adds a second file with a taken number fails, and its author gives the new, unmerged spec the next free
+/// number. Source repo only (a workspace's own `specs/` is the operator's).
+fn check_spec_numbers(tree: &Tree, r: &mut Report) {
+    if tree.mode != Mode::Repo {
+        return;
+    }
+    let mut by_number: BTreeMap<String, Vec<&String>> = BTreeMap::new();
+    for path in tree.files.keys() {
+        // Directly under `specs/` only: a path below it has a `/` in the name and is not a spec file name.
+        if let Some(number) = path.strip_prefix("specs/").and_then(delphi_core::specdoc::spec_number) {
+            by_number.entry(number).or_default().push(path);
+        }
+    }
+    for (number, paths) in by_number.into_iter().filter(|(_, p)| p.len() > 1) {
+        let list = paths.iter().map(|p| p.as_str()).collect::<Vec<_>>().join(", ");
+        for p in &paths {
+            r.fail("spec-number", p.to_string(), format!("spec number {} is used by {} files ({}); a number names one spec, so give the newer one the next free number", number, paths.len(), list));
+        }
+    }
 }
 
 // ── memory write paths (specs/050 ML-6) ─────────────────────────────────────
@@ -893,6 +919,38 @@ mod tests {
 
     fn fails(tree: &Tree, check: &str) -> Vec<String> {
         run(tree).findings.into_iter().filter(|f| f.level == Level::Fail && f.check == check).map(|f| format!("{} {}", f.location, f.message)).collect()
+    }
+
+    // specs/090: a number names one spec. Letters make distinct numbers (005a, 005b), and files below `specs/` do not count.
+    #[test]
+    fn two_spec_files_may_not_share_a_number() {
+        let (_t, tree) = tree_of(&[("specs/014-documents.md", "x"), ("specs/014-relay.md", "y"), ("specs/015-other.md", "z")]);
+        let f = fails(&tree, "spec-number");
+        assert_eq!(f.len(), 2, "both files are named: {:?}", f);
+        assert!(f.iter().all(|m| m.contains("spec number 014") && m.contains("specs/014-documents.md") && m.contains("specs/014-relay.md")), "{:?}", f);
+    }
+
+    #[test]
+    fn letters_distinct_numbers_and_files_below_specs_are_not_clashes() {
+        let (_t, tree) = tree_of(&[
+            ("specs/005-console.md", "a"),
+            ("specs/005a-avatars.md", "b"),
+            ("specs/005b-decks.md", "c"),
+            ("specs/history/005-console.md", "d"),
+            ("specs/external/app/005-plan.md", "e"),
+            ("specs/ui-wireframes-and-blueprints.md", "f"),
+            ("specs/006-notes.txt", "g"),
+            ("specs/006-installer.md", "h"),
+        ]);
+        assert!(fails(&tree, "spec-number").is_empty(), "{:?}", fails(&tree, "spec-number"));
+    }
+
+    #[test]
+    fn the_spec_number_rule_has_no_allowlist_and_the_repo_passes_it() {
+        // The real specs/ directory of this repository: every number is used once.
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let tree = Tree::from_repo(&root).unwrap();
+        assert!(fails(&tree, "spec-number").is_empty(), "{:?}", fails(&tree, "spec-number"));
     }
 
     // specs/035 D-14: a manifest says its default tier in a word we know, and no built-in role starts on the top one.

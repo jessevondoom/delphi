@@ -28,6 +28,7 @@ pub mod research;
 pub mod server;
 pub mod sessions;
 pub mod spawn;
+pub mod specdoc;
 pub mod theme_names;
 pub mod time;
 pub mod totp;

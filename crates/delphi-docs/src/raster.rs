@@ -1,4 +1,4 @@
-//! A scanline rasterizer for the small SVG subset Delphi's own writers produce (`specs/014` §8.4): rectangles
+//! A scanline rasterizer for the small SVG subset Delphi's own writers produce (`specs/095` §8.4): rectangles
 //! (rounded or not), lines, circles, paths of `M L Q A Z`, translated groups, and text. It exists so a chart or
 //! diagram has one scene (the SVG) and PNG is that scene drawn again, not a second drawing routine to keep in step.
 //!

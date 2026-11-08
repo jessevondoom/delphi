@@ -1,4 +1,4 @@
-//! SQLite databases, read-only (`specs/014` §4, §6): the schema and row counts by default, and `query` for a
+//! SQLite databases, read-only (`specs/095` §4, §6): the schema and row counts by default, and `query` for a
 //! `SELECT`. The file is opened from memory, never written to disk, in defensive mode with an untrusted schema
 //! (so a hostile view or trigger cannot call risky functions), only read-only statements are accepted, and a
 //! query is interrupted after two seconds and shows at most 200 rows.

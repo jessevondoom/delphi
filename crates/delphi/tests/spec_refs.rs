@@ -1,7 +1,7 @@
 //! Cross-reference gate: a spec reference (`specs/NNN §X.Y`, `spec NNN §X`, `NNN §X`, `NNN-An`) must resolve.
 //! Folding a spec (amendment text moved to `specs/history/`) may not silently break one.
 
-use regex::Regex;
+use delphi_core::specdoc;
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
@@ -52,14 +52,6 @@ fn walk(dir: &Path, exts: &[&str], skip: &dyn Fn(&Path) -> bool, out: &mut Vec<P
     }
 }
 
-/// `§3.3.2` names item 2 of the numbered list under heading `3.3`; deeper refs resolve to their heading.
-fn heading_of(num: &str) -> &str {
-    match num.matches('.').count() {
-        0 | 1 => num,
-        _ => num.rsplit_once('.').unwrap().0,
-    }
-}
-
 struct Spec {
     text: String,
     sections: BTreeSet<String>,
@@ -68,7 +60,6 @@ struct Spec {
 #[test]
 fn spec_references_resolve() {
     let root = root();
-    let heading = Regex::new(r"(?m)^#{2,5}\s+§?([0-9]+(?:\.[0-9]+)*)\.?(?:\s|$)").unwrap();
 
     // spec id ("004", "005a") -> normative files and history files
     let mut specs: HashMap<String, Vec<Spec>> = HashMap::new();
@@ -77,16 +68,13 @@ fn spec_references_resolve() {
         let Ok(rd) = std::fs::read_dir(root.join(dir)) else { continue };
         for e in rd.flatten() {
             let name = e.file_name().to_string_lossy().to_string();
-            let Some((id, _)) = name.split_once('-') else { continue };
-            if !name.ends_with(".md") || !id.starts_with(|c: char| c.is_ascii_digit()) {
-                continue;
-            }
+            let Some(id) = specdoc::spec_number(&name) else { continue };
             let text = std::fs::read_to_string(e.path()).unwrap();
             if is_history {
-                history.entry(id.to_string()).or_default().push_str(&text);
+                history.entry(id).or_default().push_str(&text);
             } else {
-                let sections = heading.captures_iter(&text).map(|c| c[1].to_string()).collect();
-                specs.entry(id.to_string()).or_default().push(Spec { text, sections });
+                let sections = specdoc::heading_numbers(&text);
+                specs.entry(id).or_default().push(Spec { text, sections });
             }
         }
     }
@@ -95,6 +83,7 @@ fn spec_references_resolve() {
     let skip = |p: &Path| {
         let s = p.to_string_lossy();
         s.ends_with("/tests/spec_refs.rs")
+            || s.ends_with("/delphi-core/src/specdoc.rs") // the parser's own tests cite sample numbers
             || s.contains("/missions/") && (s.contains("/councils") || s.contains("/history"))
             || s.ends_with("/specs/history")
     };
@@ -104,33 +93,30 @@ fn spec_references_resolve() {
     walk(&root.join("crates"), &["rs"], &skip, &mut files);
     files.push(root.join("CHANGELOG.md"));
 
-    let sect = Regex::new(r"(?-u:\b)([0-9]{3}[a-z]?)(?:-[a-z0-9][a-z0-9-]*(?:\.md)?)?\s+§§?\s*([0-9]+(?:\.[0-9]+)*)").unwrap();
-    let amend = Regex::new(r"(?-u:\b)([0-9]{3}[a-z]?)-A([0-9]+)(?-u:\b)").unwrap();
-
+    // The patterns live in `delphi_core::specdoc`, the one parser of spec text (`one_parser_for_spec_text` below keeps it that way).
     let mut broken = BTreeSet::new();
     let mut checked = 0;
     for f in files {
         let Ok(text) = std::fs::read_to_string(&f) else { continue };
         let rel = f.strip_prefix(&root).unwrap().to_string_lossy().to_string();
-        let (has_sect, has_amend) = (text.contains('§'), text.contains("-A"));
-        for c in sect.captures_iter(if has_sect { &text } else { "" }) {
+        for r in specdoc::section_refs(&text) {
             checked += 1;
-            let (id, num) = (&c[1], &c[2]);
+            let (id, num) = (r.spec.as_str(), r.section.as_str());
             match specs.get(id) {
                 None => {
                     broken.insert(format!("{}: {} §{} (no specs/{}-*.md)", rel, id, num, id));
                 }
-                Some(v) if !v.iter().any(|s| s.sections.contains(heading_of(num))) => {
+                Some(v) if !v.iter().any(|s| s.sections.contains(specdoc::heading_of(num))) => {
                     broken.insert(format!("{}: {} §{} (no such heading)", rel, id, num));
                 }
                 _ => {}
             }
         }
-        for c in amend.captures_iter(if has_amend { &text } else { "" }) {
+        for t in specdoc::amendment_tags(&text) {
             checked += 1;
-            let (id, tag) = (&c[1], c[0].to_string());
-            let found = specs.get(id).is_some_and(|v| v.iter().any(|s| s.text.contains(&tag)))
-                || history.get(id).is_some_and(|h| h.contains(&tag));
+            let (id, tag) = (t.spec.as_str(), t.tag.as_str());
+            let found = specs.get(id).is_some_and(|v| v.iter().any(|s| s.text.contains(tag)))
+                || history.get(id).is_some_and(|h| h.contains(tag));
             if !found {
                 broken.insert(format!("{}: {} (not in specs/{}-*.md or specs/history/)", rel, tag, id));
             }
@@ -143,4 +129,60 @@ fn spec_references_resolve() {
     let stale: Vec<_> = allowed.difference(&broken).collect();
     assert!(new.is_empty(), "broken spec references:\n{}", new.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n"));
     assert!(stale.is_empty(), "allowlist entries that now resolve (delete them):\n{}", stale.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n"));
+}
+
+/// The lines of one Rust file that build a regular expression for spec text outside the parser: a section reference (the `§`
+/// mark), an amendment tag (`-A` and a number group), a numbered heading (a `#{` repeat) or a spec file name (three digits and an
+/// optional letter). The parser module and this gate are exempt. It is a search for the shape of the pattern, so it cannot prove
+/// there is no other parser, but a copy of one of the four patterns fails it.
+fn second_parser_lines(rel: &str, text: &str) -> Vec<String> {
+    if rel == "crates/delphi-core/src/specdoc.rs" || rel == "crates/delphi/tests/spec_refs.rs" {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        if line.trim_start().starts_with("//") || !(line.contains("Regex") || line.contains("regex!")) {
+            continue;
+        }
+        let section = line.contains('§');
+        let amendment = line.contains("-A(") || line.contains("-A[0-9") || line.contains("-A\\d");
+        let heading = line.contains("#{");
+        let file_name = line.contains("{3}[a-z]");
+        if section || amendment || heading || file_name {
+            out.push(format!("{}:{}", rel, i + 1));
+        }
+    }
+    out
+}
+
+#[test]
+fn one_parser_for_spec_text() {
+    let root = root();
+    let mut files = Vec::new();
+    walk(&root.join("crates"), &["rs"], &|_| false, &mut files);
+    assert!(files.len() > 100, "the walk found only {} Rust files; the path is broken", files.len());
+    let mut second = Vec::new();
+    for f in files {
+        let Ok(text) = std::fs::read_to_string(&f) else { continue };
+        let rel = f.strip_prefix(&root).unwrap().to_string_lossy().to_string();
+        second.extend(second_parser_lines(&rel, &text));
+    }
+    assert!(second.is_empty(), "a pattern for spec text outside delphi_core::specdoc (use the parser, spec 088 section 2):\n{}", second.join("\n"));
+}
+
+#[test]
+fn the_one_parser_gate_catches_a_copy_of_each_pattern() {
+    let a = "let re = Regex::new(r\"([0-9]{3}[a-z]?) §§?([0-9.]+)\").unwrap();";
+    let b = "static R: LazyLock<Regex> = LazyLock::new(|| Regex::new(r\"(\\d{3})-A(\\d+)\").unwrap());";
+    let c = "let h = Regex::new(r\"(?m)^#{2,5}\\s+([0-9.]+)\").unwrap();";
+    let d = "let n = Regex::new(r\"^specs/(\\d{3}[a-z]?)-[^/]+\\.md$\").unwrap();";
+    for (name, line) in [("section reference", a), ("amendment tag", b), ("numbered heading", c), ("spec file name", d)] {
+        assert_eq!(second_parser_lines("crates/x/src/a.rs", line).len(), 1, "{} was not caught", name);
+    }
+    // Not flagged: a comment, a line that builds no regex, an unrelated regex, the parser itself and this gate.
+    for line in ["// Regex::new(r\"(\\d{3})-A(\\d+)\") in a comment", "let x = 12; // § only", "let r = Regex::new(r\"^[a-z]+$\").unwrap();"] {
+        assert!(second_parser_lines("crates/x/src/a.rs", line).is_empty(), "{}", line);
+    }
+    assert!(second_parser_lines("crates/delphi-core/src/specdoc.rs", a).is_empty());
+    assert!(second_parser_lines("crates/delphi/tests/spec_refs.rs", a).is_empty());
 }

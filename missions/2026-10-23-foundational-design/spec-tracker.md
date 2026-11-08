@@ -14,7 +14,7 @@ tags: [tracker, specs, roadmap]
 
 One row per spec. Three separate questions, because they diverge: **Approved** (the operator ratified the text), **Built** (code exists), **Proven** (a person or a live service has exercised it, not only tests and mocks). Sources: [`roadmap.md`](roadmap.md), [`roadmap-review-2026-10-24.md`](roadmap-review-2026-10-24.md), [`console-ink-handoff.md`](console-ink-handoff.md), [`decisions.md`](decisions.md). Update this file in the same PR that changes a spec's state.
 
-**Number collisions.** Two numbers are used twice and stay as they are, because code comments and docs cite them by number: **014** is both [Documents and data visualization](../../specs/014-documents-and-dataviz.md) (the `delphi-docs` crate cites it) and [Relay and away mode](../../specs/014-relay-and-away-mode.md) (`hub.rs`, `totp.rs`, GOVERNANCE §5.10 and REVIEW REV-SEC-09 cite it); **037** is both [Console deck change log](../../specs/037-console-deck-change-log.md) and [Training experiments](../../specs/037-training-experiments-quality-and-efficiency.md) (the tracker's "spec 037" sections mean the training one). Cite them by file name. New specs take the next free number.
+**Number collisions (fixed 2026-11-08, spec 090).** Three numbers had been used twice. One spec of each pair was renumbered: [Documents and data visualization](../../specs/095-documents-and-dataviz.md) was 014 (the relay spec, [Relay and away mode](../../specs/014-relay-and-away-mode.md), keeps 014; `hub.rs`, `totp.rs`, GOVERNANCE §5.10 and REVIEW REV-SEC-09 cite it); [Console deck change log](../../specs/096-console-deck-change-log.md) was 037 (the training spec, [Training experiments](../../specs/037-training-experiments-quality-and-efficiency.md), keeps 037, because its research truth packs are fingerprinted and cite it); [Encyclopedia search pages](../../specs/097-encyclopedia-search-pages.md) was 061 (the shell-tool spec keeps 061). A citation of 014, 037 or 061 written before this date may mean either spec of its pair. `delphi lint` now refuses two spec files with one number. New specs take the next free number.
 
 | Spec | Approved | Built | Proven | What is left |
 | :-- | :-- | :-- | :-- | :-- |
@@ -104,6 +104,8 @@ Asked for by the operator on 2026-10-26; pilot budget **80 engineering hours** (
 | X8 | an arm may bring an endpoint the home lacks (`[arm.endpoint.<id>]`: family and harness), throwaway copy only, so one Copilot login runs as several vendors' models; `delphi train fidelity gen --inline` puts the report in the prompt for tool-less seats | 3 | built 2026-11-07 (PR pending): `train_arms.rs` (`ExtraEndpoint`), `train_fidelity.rs`. Live: Copilot catalogue read over ACP (24 models); see the PR for the first results |
 
 R4-R6 truth packs join in the first study phase.
+
+Note 2026-11-08: `train defects gen --difficulty hard --inline` (and `train fidelity gen --inline` above 40 items) overran the 8,000-byte task envelope. Above 6000 bytes `--inline` now writes the artifact to `fixture/` and the prompt points at it (`@project/repo/...`); a seat with no tools gets it as a slice, so tool-less seats can take the hard case. The limit itself is unchanged.
 
 ## Central error log (spec 039, approved, 2026-10-27)
 
@@ -474,7 +476,7 @@ Known follow-ups: `docs/reference/config.md` ladder row still says "upscale, res
 
 Specs 004, 006, 007, 010 and 043 were folded to read as current normative text, with no change in behavior. Amendment text and deliberation moved verbatim to `specs/history/NNN-<slug>.md`; section numbers, test ids and `(was NNN-An)` anchors are unchanged. `crates/delphi/tests/spec_refs.rs` now fails when a spec, section or amendment reference stops resolving (21 pre-existing broken references are allowlisted). Reductions were small (2–9%): the remaining text is normative. 006 keeps two contradictions listed in its PR (#399: Red approval for the GOVERNANCE.md release vs 006-A6 tacit ratification; tests 13/14 still say `self-update`). Folded: #399 (006), #400 (007), #401 (010), #402 (043), #403 (004); gate #404.
 
-## Encyclopedia search pages, inline media, and reputable expansion (spec 061, approved 2026-10-31)
+## Encyclopedia search pages, inline media, and reputable expansion (spec 097, approved 2026-10-31)
 
 Approved by the operator on 2026-10-31. Makes the Wikipedia-style Encyclopedia Summary Page the primary knowledge base search result, rendered through `ui/src/markdown.ts` and `ui/src/image.ts`, authored by the `writer` role under `skills/encyclopedia-synthesis/SKILL.md`, cached with YAML frontmatter `valid_until` (`[1, 365]` days at the `writer`'s discretion), synthesized immediately on search from local sources, and expandable (`e`) with reputable external research and licensed images.
 
@@ -676,6 +678,7 @@ Approved by the operator on 2026-11-05. Extends specs 072, 038 and 062. Task-der
 | S0 | spec 082 approval and tracker entry | 1 h | approved (this branch) |
 | S1a | `consult_orchestrator` `done_when` input, typed `definition_of_done`, `unspecified` default | 4 h | built (this branch) |
 | S1b | orchestrator §6 amendment; venue-not-settable test | 1 h | built (this branch) |
+| S1c | a Council Round 2 node runs on a Copilot seat in the line format; unreadable stays unreadable; no-tools note names `finish` and `run_command` | built: spec 051 §9 (`harness_run.rs`); no live run |
 | S1c | `done_when`/`stop_when` in envelope schema and template; `check handoff` requires them | 3 h | built (this branch) |
 | S2 | `check brief` shape check; `handoff-packaging` section | 4 h | built (this branch) |
 | E1 | pre-registered two-arm experiment on the 037 pack | 4 h | run 2026-11-05: no evidence of an effect (6 of 15 vs 7 of 15); `dev/train/e1/REPORT.md`; section 8 stays unbuilt |
@@ -729,6 +732,21 @@ From a Council of three Claude seats (one family, so homogeneous) that ranked ei
 | S1 | fixed `STANDING_LIMITS` constant on the API path; the objective echo removed | 5 | built (PR open) |
 | S2 | the same reminder as a second content block on bridged tool replies (harness seats) | 5 | built (PR open) |
 
+## Spec 088: a spec compile step (2026-11-07, approved for S0 to S3)
+
+From conversations with the operator on 2026-11-06 and 2026-11-07, a prior-art survey (spec 088 §9, part unverified), a Council and a Panel (spec 088 §12). Approved by the operator on 2026-11-07 for S0 to S3 only; stage 2 is not approved. Nothing is built. Re-sequenced after review: stage 1 is a tier-0 compile that runs in place (no move, no renumbering, no edit to an approved spec) and writes to `compiled/specs/`; requirement IDs, the registry and supersession are stage 2 and wait on a measurement (OD-5, "ambiguous means stop"). The operator approved the nine groups and decided to commit the markdown views. The operator's direction to move the sources and renumber specs 014, 037 and 061 is kept as a **deferred decision** (spec 088 §11.2; owner: the operator; trigger: the OD-5 verdict or ninety days after S3, whichever is first), because the engine treats `specs/` as governed by path prefix; the renumbering alone is spec 090. Hours are estimates.
+
+| Slice | Content | Hours (likely) | State |
+| :-- | :-- | --: | :-- |
+| S0 | spec 088 approval and tracker entry | 1 | approved 2026-11-07 (S0 to S3) |
+| S1 | lint rejects a new spec taking a taken number; mapping paragraph in CONTRIBUTING (carried by spec 090 S1, PR #584) | 3 | built, merged 2026-11-08 (PR #584) |
+| S2a | shared parser in `delphi-core` (`specdoc`); `spec_refs` and the `delphi lint` spec-number check moved onto it; a gate that fails on a second pattern (own PR, revertible) | 12 | built (PR open) |
+| S2b | tier-0 compile, schema, `compiled/groups.toml`, exclusions of `compiled/` | 22 | approved, not built |
+| S3 | views, `specs show/list/report`, MCP, `spec-driven-build` skill, read counter; the measurement starts | 16 | approved, not built |
+| S4 | (stage 2) requirement tags, revisions, tombstones, amendments, registry, supersession | 16 | not approved; needs a decision after OD-5 |
+| S5 | (stage 2) retrofit tool, tag the specs still being built | 20 | not approved; conditional on OD-5 |
+| S6 | (stage 2) coverage report, warn-only | 10 | not approved; conditional on OD-5 |
+
 ## Spec 087: agent identity, badges and a name pool (2026-11-06)
 
 Approved by the operator 2026-11-06, from a conversation that day: 28 chosen badge faces, 36 Greek names kept, the writer and investigator as twins, a revised 13-role core set. OD-1 (mascots follow the badge) and OD-5 (no host-acting label; the name is the same inside and outside, plus ", via delphi" inside the role parentheses) are decided; OD-2 to OD-4 take the recommendations. Whether it helps the operator follow a multi-agent exchange is not measured (spec 087 §7).
@@ -758,18 +776,19 @@ From the operator's request to refine the outside Council (Claude Code, Copilot,
 | S4 | one foreign-family seat (token ceiling, not a history-based estimate); `venue`/`blind` in the record front matter | 10 | built (PR open) |
 | S5 | pre-registered Panel-vs-Council experiment; decides the default | 12 | run 2026-11-06 (operator go, 350k per-run cap): verdict INCOMPLETE (4 of 8 questions qualify, 6 needed), notice unchanged; 2.10M of 8M tokens; report in `dev/train/e2/REPORT.md`, data in `dev/train/e2/data/`; fixes planned in spec 089 (draft) |
 | S6 | follow-ups from the Council review: Panel captures at L0, verdict `venue`, brief hash, host-support line, list of `council.verdict` readers | 4 | built (merged, #511) |
-| A086-N | amendment (Council t_0004, 2026-11-07): N foreign seats counted by family and gated on spec 091 S1 and S2; `unverified-against-repo` in the card; no tools for a seat that reads peer text; hub-and-spoke invariant; carrier choice rule | 2 | approved by the operator 2026-11-07; C3a built (PR open: `foreign_seats` on `council_open`, each seat its own receipt, families counted from receipts, `unverified-against-repo` in the card, no tools in Round 2); C3b (carrier choice in `council_frame`) not built |
+| A086-N | amendment (Council t_0004, 2026-11-07): N foreign seats counted by family and gated on spec 091 S1 and S2; `unverified-against-repo` in the card; no tools for a seat that reads peer text; hub-and-spoke invariant; carrier choice rule | 2 | approved by the operator 2026-11-07; C3a built (PR open: `foreign_seats` on `council_open`, each seat its own receipt, families counted from receipts, `unverified-against-repo` in the card, no tools in Round 2); C3b built (PR open): `council_frame` adds `proposed_seats`, `plan_budget`, `plan_note` from a static carrier rule (`carrier_plan.rs`); the estimates are measured 2026-11-07, small samples; no quota-aware planner, no ask_family |
 | S7 | Round 2 reader (C1a): first complete critique wins, identical repeats tolerated, a conflicting later block or object refuses the reply, `trailer` counts and bytes on `council.critique` (daemon and Panel share one reader; reply to the 2026-11-07 Councils 002/003) | 3 | built (PR open) |
 | S8 | seat diagnostics (C1c): `parsed` (R1 `OPTION:` line, R2 critique) and `declined` (the shared refusal tagger, moved to `delphi_engine::refusal`) in the Council record's Seats table and on `council.stance`/`council.critique`; diagnostics only, never a score or input to ranking or routing (spec 078); receipt untouched | 3 | built (PR open) |
+| S9 | tidy-ups (2026-11-08): the `Projects here:` hint can no longer be read as a pointer (no `@project/<` token in it, and the parser skips that line); `council_open` lists `foreign_seats` and the `[seats]` budget keys in its schema; a Panel's `council_status` phase follows its own rounds (round 2, then the moderator's verdict) | 1 | built (PR open) |
 
 ## Spec 090: renumber the three shared spec numbers, once (2026-11-07, approved)
 
-From a review of draft spec 088, which found that 014, 037 and 061 are each used by two specs. Approved by the operator on 2026-11-07, with decisions OD-1 to OD-6 taking the recommendations. Not built. One pull request renames one spec of each pair inside `specs/` (no move), rewrites path pointers, decides every bare citation in a map the operator samples, adds a `delphi lint` rule against duplicate numbers, and leaves a mapping paragraph for history. The specs that move: documents and dataviz (014), training experiments (037), encyclopedia search pages (061); the relay spec keeps 014, so GOVERNANCE.md and REVIEW.md are untouched. The new numbers are the next three free numbers when the work starts: 091 to 094 are taken, so 095 to 097 as of 2026-11-07. The work waits for a quiet window the operator picks. Hours are estimates; no trial rewrite was run.
+From a review of draft spec 088, which found that 014, 037 and 061 are each used by two specs. Approved by the operator on 2026-11-07, with decisions OD-1 to OD-6 taking the recommendations; the operator asked for the build on 2026-11-08 and left the order to the builder. One pull request renames one spec of each pair inside `specs/` (no move), rewrites path pointers, decides every bare citation in a map the operator samples, adds a `delphi lint` rule against duplicate numbers, and leaves a mapping paragraph for history. The specs that moved: documents and dataviz (014 to 095), the console deck change log (037 to 096; **amended 2026-11-08**: the training spec keeps 037 because its research truth packs are fingerprinted and cite it), encyclopedia search pages (061 to 097). The relay spec keeps 014, so GOVERNANCE.md and REVIEW.md are untouched. Hours are estimates.
 
 | Slice | Content | Hours (likely) | State |
 | :-- | :-- | --: | :-- |
 | S0 | spec 090 approval and tracker entry; the three numbers named (095 to 097, re-checked at the start) | 1 | approved 2026-11-07 |
-| S1 | renames, path pointers, citation map and decisions, one-time check, lint rule, CONTRIBUTING mapping | 12 | approved, not built; waits for a quiet window |
+| S1 | renames, path pointers, citation map and decisions, one-time check, lint rule, CONTRIBUTING mapping | 12 | built (PR open) |
 
 ## Spec 089: Panel hardening from the E2 run (2026-11-06, approved)
 

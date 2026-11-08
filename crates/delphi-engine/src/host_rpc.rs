@@ -361,7 +361,7 @@ fn projects_line(projects: &[(String, PathBuf)]) -> String {
     if names.is_empty() {
         String::new()
     } else {
-        format!("\nProjects here: {} (read a file with @project/<name>/<path>)", names.join(", "))
+        format!("\nProjects here: {} (read a file by writing an at-sign, project, the name and the path, joined by slashes)", names.join(", "))
     }
 }
 
@@ -442,6 +442,12 @@ pub fn options_source_of(p: &Value) -> Result<Option<&'static str>, HostErr> {
 /// `council_frame`: reads nothing, spends nothing, dispatches nothing. It restates the question as Delphi will fence it, names
 /// the Panel's seats and what the operator must say yes to, and adds a notice when a daemon Council fits better.
 pub fn council_frame(p: &Value) -> Result<Value, HostErr> {
+    council_frame_with(p, &crate::carrier_plan::CarrierEnv::default())
+}
+
+/// [`council_frame`] with what the daemon knows of the machine (`specs/086` §6.4, C3b): adds `proposed_seats`, `plan_budget` and
+/// `plan_note` from the static carrier choice rule. Still reads, spends and starts nothing; with no environment it says availability is unknown.
+pub fn council_frame_with(p: &Value, env: &crate::carrier_plan::CarrierEnv) -> Result<Value, HostErr> {
     let proposition = {
         let question = clean("question", p["question"].as_str().unwrap_or(""), MAX_QUESTION)?;
         let stakes = match p["stakes"].as_str() {
@@ -522,8 +528,17 @@ pub fn council_frame(p: &Value) -> Result<Value, HostErr> {
         ask.push_str("Say yes to go ahead.");
         json!({"needed": true, "why": reasons.join("; "), "ask": ask})
     };
+    let host_family = crate::council_panel::host_family(p["model"].as_str(), p["tool"].as_str().unwrap_or(""));
+    let required = match p["require_families"].as_u64() {
+        Some(n @ 1..=8) => Some(n as u32),
+        _ => None,
+    };
+    let plan = crate::carrier_plan::plan(&question, stakes, &pointers, host_family, env, required);
     Ok(json!({
         "framed": {"question": question, "stakes": stakes, "options": options, "options_source": options_source, "requested_by": requested_by, "pointers": pointers},
+        "proposed_seats": plan["proposed_seats"],
+        "plan_budget": plan["plan_budget"],
+        "plan_note": plan["plan_note"],
         "confirmation": confirmation,
         "default_tier": "panel",
         "foreign_seat": foreign,
@@ -1206,7 +1221,9 @@ mod tests {
         let p = json!({"question": "Table or file?", "context_pointers": [{"uri": "specs/092-x.md", "reason": "the spec"}, {"uri": "specs/none.md", "reason": "gone"}]});
         let text = council_proposition(&c, &p).unwrap();
         assert!(text.contains("- @project/delphi/specs/092-x.md: the spec") && text.contains("- specs/none.md (not found in a registered project): gone"), "{text}");
-        assert!(text.contains("\nProjects here: delphi (read a file with @project/<name>/<path>)"), "{text}");
+        assert!(!text.contains("@project/<"), "no placeholder token in the brief: {text}");
+        assert!(crate::handoff::pointers_from_prompt(&text).iter().all(|p| p.uri != "@project/<name>/<path>"), "{text}");
+        assert!(text.contains("\nProjects here: delphi (read a file by writing an at-sign, project, the name and the path, joined by slashes)"), "{text}");
         let (_t, w) = ws();
         let (help, _) = help_prompt(&c, &w, &json!({"need": "n", "context_pointers": [{"uri": "specs/092-x.md", "reason": "r"}]})).unwrap();
         assert!(help.contains("- @project/delphi/specs/092-x.md: r") && help.contains("Projects here: delphi"), "{help}");

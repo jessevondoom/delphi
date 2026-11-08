@@ -126,7 +126,7 @@ The seven kinds that judge one document (`dag`, `handoff`, `provenance`, `rules`
 | `clarity-synthesis` | Translates dense research or specs into lucid human reports and briefs. | `templates/executive-brief.md` |
 | `narrative-briefing` | Structures plans, proposals, and release announcements with zero filler. | instructions |
 | `concision-audit` | Audits docs and KB articles for bloat, redundancy, and unverified claims. | instructions |
-| `encyclopedia-synthesis` | Writes an encyclopedia-style search page (lead, infobox, contents, figures, citations, hatnotes) and proposes its cache lifetime (`specs/061`). | instructions |
+| `encyclopedia-synthesis` | Writes an encyclopedia-style search page (lead, infobox, contents, figures, citations, hatnotes) and proposes its cache lifetime (`specs/097`). | instructions |
 | `org-bundle-authoring` | Creates, sanitizes and packages an org knowledge bundle (`specs/023`) from allow-listed sources, with a human-approved redaction report before packaging. *`specs/027` §2.6; its `delphi bundle init|distill|validate --report|package --vectors` commands are built (slice B10).* | `templates/redaction-report.md`, `delphi check provenance` |
 | `tonal-calibration` | Dynamically code-switches prose across technical, executive, and pedagogical registers. | instructions |
 

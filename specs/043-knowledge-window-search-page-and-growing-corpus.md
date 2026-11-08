@@ -81,7 +81,7 @@ Replaces the best-match card with a **SUMMARY** card labelled `written by the mo
 The reader of `specs/029`, with three additions: (a) a **provenance banner** under the path for `research` entries and any `listed` or `untrusted` document (publisher, licence, retrieved date, share-alike flag, and the words `listed source, not curated by you`); (b) links to hosts not on the operator's allow lists render dim with `seen, not read: not on your list` and cannot be followed; (c) a position indicator (`lines a–b of N · p %`). No prompt bar. Keys as 029 §7: `tab` link · `enter` follow · `[` `]` back and forward · `y` copy path · `esc` back to the results.
 
 ### 3.5 Media and PDFs (`kb-5-pdf`)
-A result that opens in the browser is marked `↗` after its kind, and the result line says `↗ opens in your browser, everything else opens here`. For a PDF the best-match card shows the first lines of its extracted text (zero tokens, `specs/014`), its size and page count. `enter` hands the file to the operator's browser and the card then reads `✔ opened in your browser · read-only, Delphi never runs it`; `enter` again re-opens; `o` shows the file in Finder (or the platform's file manager); `c` copies the path. §6.3 defines what may be opened.
+A result that opens in the browser is marked `↗` after its kind, and the result line says `↗ opens in your browser, everything else opens here`. For a PDF the best-match card shows the first lines of its extracted text (zero tokens, `specs/095`), its size and page count. `enter` hands the file to the operator's browser and the card then reads `✔ opened in your browser · read-only, Delphi never runs it`; `enter` again re-opens; `o` shows the file in Finder (or the platform's file manager); `c` copies the path. §6.3 defines what may be opened.
 
 ### 3.6 Nothing found (`kb-6-empty`)
 `Nothing in the archives matches "<query>".` then three suggestions with real numbers: fewer words (the count the shorter query would return), `ctrl+t` (how many untrusted documents would match), and **`shift+tab` expand the archive: research this topic from trusted sources**. A dim line says expand needs a `[search]` provider when none is configured (028 §6). **`shift+tab` carries the current query into the expand box** (§8.2).
@@ -138,7 +138,7 @@ Every result is two lines and a blank line, in the same columns, so the eye can 
 ## 6. Reading, documents and media
 ### 6.1 What the index must hold
 The index (`crates/delphi-engine/src/kb.rs`) is Markdown only today. To make `docs` real, it also indexes:
-- **PDF, DOCX and EPUB** files under `docs/**` and operator-added documents: the text is extracted by the in-tree readers of `specs/014` (`crates/delphi-docs`), chunked as Markdown is, and indexed under the same path with its extension; a file over 20 MB, or one whose extraction fails, is listed by name and size and not searched by content (and says so).
+- **PDF, DOCX and EPUB** files under `docs/**` and operator-added documents: the text is extracted by the in-tree readers of `specs/095` (`crates/delphi-docs`), chunked as Markdown is, and indexed under the same path with its extension; a file over 20 MB, or one whose extraction fails, is listed by name and size and not searched by content (and says so).
 - **Images, audio and video** under the same roots: **listed by file name, path, size and type only**. There is no OCR and no transcription; the file is found by its name and by any sidecar `<name>.md` beside it, which is indexed as an ordinary document.
 - Extraction is pure code (no process is spawned, no macro or script runs), as in 014.
 
@@ -214,7 +214,7 @@ Reader: as 029. Expand mode: type a topic · `enter` research · `esc` cancel / 
 | Slice | Content | Depends on |
 | :-- | :-- | :-- |
 | K1 | Page chrome and results: title and box, no mode indicators, filter row with per-kind counts, uniform rows, best-match card with the extractive summary; kind derivation; `facets` (counts by kind over up to 200 candidates) in `/v1/search` and `kb.get`; golden screens at 100×34 and 80×24 | 028-A1 E1 (the mode toggle) |
-| K2 | Index PDF, DOCX and EPUB text and list media by name (§6.1); `docs` kind complete | spec 014 readers |
+| K2 | Index PDF, DOCX and EPUB text and list media by name (§6.1); `docs` kind complete | spec 095 readers |
 | K3 | Reader provenance banner, dim un-listed links, `↗` rows, the browser handoff with its allow-list and event (§6.3) | K1, 029 |
 | K4 | Summarize for me with the cache (§7) | K1 |
 | K5 | The thin-reference hint and query carry-over into expand mode; the expand pages' visuals (§3.7) | K1, 028-A1 E3, E4 |

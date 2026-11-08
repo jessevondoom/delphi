@@ -1,4 +1,4 @@
-//! HTML to readable Markdown (`specs/014` §4). A tolerant tokenizer (HTML is not XML: void elements,
+//! HTML to readable Markdown (`specs/095` §4). A tolerant tokenizer (HTML is not XML: void elements,
 //! unclosed `p` and `li`, unquoted attributes) and a renderer for headings, lists, links, tables, code and
 //! quotes. Scripts, styles, hidden elements, frames and embedded objects are dropped and counted, never run.
 

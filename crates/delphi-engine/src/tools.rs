@@ -1382,7 +1382,7 @@ fn is_document(head: &[u8], path: &str) -> bool {
     !f.is_text() && f != delphi_docs::Format::Unknown
 }
 
-/// A document is read whole (up to the document input cap, `specs/014` §5.1) so its tier is the tier of
+/// A document is read whole (up to the document input cap, `specs/095` §5.1) so its tier is the tier of
 /// exactly these bytes; only the text handed back is capped. The guard's checks apply unchanged: the
 /// converters receive bytes, never a path.
 fn read_document(ctx: &mut ToolCtx, path: &str, req: &delphi_docs::Request) -> ToolResult {
@@ -1417,7 +1417,7 @@ fn read_document(ctx: &mut ToolCtx, path: &str, req: &delphi_docs::Request) -> T
     }
 }
 
-/// `read_doc`: archives and other multi-part documents. Lists the members, or reads one (`specs/014` §5.2).
+/// `read_doc`: archives and other multi-part documents. Lists the members, or reads one (`specs/095` §5.2).
 /// Nothing is written to disk; a member name is looked up in the listing and never joined to a path.
 fn read_doc(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
     let path = match str_arg(args, "path") {

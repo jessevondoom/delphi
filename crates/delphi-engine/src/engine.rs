@@ -1684,6 +1684,21 @@ impl Engine {
         })
     }
 
+    /// [`Self::family_usable`] for one endpoint: not in cooldown, not out of quota.
+    pub(crate) fn endpoint_usable(&self, endpoint_id: &str) -> bool {
+        let cfg = self.cfg.get();
+        let now = (self.clock_unix)();
+        let state = self.pool.snapshot();
+        cfg.pool_entries().into_iter().filter(|k| k.endpoint_id == endpoint_id).any(|k| {
+            state.iter().find(|e| e.endpoint_id == k.endpoint_id && e.model_id == k.model_id).is_none_or(|e| match (e.state, e.until) {
+                (crate::pool::State::Available, _) => true,
+                (crate::pool::State::CoolingDown | crate::pool::State::Exhausted, Some(t)) => t <= now,
+                (crate::pool::State::CoolingDown, None) => true,
+                (crate::pool::State::Exhausted, None) => false,
+            })
+        })
+    }
+
     /// The ratified family table (`specs/091` SR-2): the workspace's file, else the shipped one.
     ///
     /// A workspace file that does not parse is reported by `delphi doctor`; receipts then use the shipped table.

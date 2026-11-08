@@ -1,4 +1,4 @@
-//! Diagrams from a description (`specs/014` §8.5): flows, trees, sequences, timelines and matrices. The agent says
+//! Diagrams from a description (`specs/095` §8.5): flows, trees, sequences, timelines and matrices. The agent says
 //! what the things are and how they connect; the layout is computed, never drawn by hand, and it is deterministic
 //! (layered ordering with fixed tie-breaks, no simulation), so the same description always gives the same picture.
 //!

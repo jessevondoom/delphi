@@ -1055,6 +1055,19 @@ impl Engine {
         available.into_iter().find(ok)
     }
 
+    /// What `council_frame` may propose (`specs/086` §6.4, C3b): every allowed endpoint that could serve a seat right now, with the
+    /// caps `council_open` will apply. Reads configuration and the pool's state; starts nothing.
+    pub fn panel_carrier_env(&self, require_families: Option<u32>) -> crate::carrier_plan::CarrierEnv {
+        let cfg = self.cfg.get();
+        let options = cfg
+            .endpoints
+            .iter()
+            .filter(|e| cfg.is_allowed(&e.id) && self.endpoint_usable(&e.id))
+            .map(|e| crate::carrier_plan::CarrierOpt { endpoint: e.id.clone(), family: e.family.clone(), kind: crate::carrier_plan::kind_of(e.path == delphi_adapter::config::AccessPath::Harness, e.harness.as_deref()) })
+            .collect();
+        crate::carrier_plan::CarrierEnv { known: true, options, max_seats: self.settings.max_foreign_seats, max_tokens: self.settings.max_foreign_tokens, ceiling_per_seat: self.panel_foreign_ceiling_tokens(), require_families: require_families.or(self.settings.require_families) }
+    }
+
     /// Whether `family` is configured and usable right now, for a foreign seat that names its family.
     pub fn panel_family_usable(&self, family: &str) -> bool {
         self.available_families().iter().any(|f| f == family)

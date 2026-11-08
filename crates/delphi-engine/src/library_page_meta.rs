@@ -1,4 +1,4 @@
-//! Encyclopedia page metadata (`specs/061` §4.4): the lifetime the `writer` proposes, the daemon's clamp, and the YAML
+//! Encyclopedia page metadata (`specs/097` §4.4): the lifetime the `writer` proposes, the daemon's clamp, and the YAML
 //! frontmatter a cached page starts with.
 //!
 //! The writer ends its page with one comment line, `<!-- page: kind=article; volatility=low; days=90; reason=... -->`.
@@ -66,7 +66,7 @@ impl Kind {
     }
 }
 
-/// How deep a page goes: the quick search result, or the one rebuilt with outside research (`specs/061` §4.5).
+/// How deep a page goes: the quick search result, or the one rebuilt with outside research (`specs/097` §4.5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Depth {
     #[default]

@@ -1,5 +1,5 @@
 //! PowerPoint decks as text: per slide, the title, body text, tables, picture alt text and speaker notes
-//! (`specs/014` §4). Layouts, animations and the pictures themselves are not read.
+//! (`specs/095` §4). Layouts, animations and the pictures themselves are not read.
 
 use crate::ooxml::Pkg;
 use crate::sniff::Format;

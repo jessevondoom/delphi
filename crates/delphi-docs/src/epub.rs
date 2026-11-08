@@ -1,4 +1,4 @@
-//! EPUB books (`specs/014` §4): the spine's chapters, in reading order, converted from XHTML to Markdown.
+//! EPUB books (`specs/095` §4): the spine's chapters, in reading order, converted from XHTML to Markdown.
 //! Styles, images and fonts are not read. A chapter is a page of the result: `start`/`end` are chapter numbers.
 
 use crate::ooxml::{resolve, Pkg};

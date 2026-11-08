@@ -1,4 +1,4 @@
-//! Charts from a description (`specs/014` §8). The agent says what the data is and what question the chart
+//! Charts from a description (`specs/095` §8). The agent says what the data is and what question the chart
 //! answers; this module checks that the chosen form fits, and draws it. The agent never writes SVG.
 //!
 //! "Form follows the question" is enforced here: a chart type the data does not suit is refused with the

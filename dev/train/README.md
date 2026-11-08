@@ -132,7 +132,7 @@ Orchestrator quotes it: lossy at the seat, 1.0 at the operator, a model of `spec
 the Orchestrator are functions, so the run shows what the instrument can tell apart, not what any model does. `gen` writes a
 case for a real model: the model gets `fixture/artifact.md` and a prompt that names no item, and an `exact_items` check reads
 `items.json`, which the model never sees. A new seed is a new case, so a fresh seed is a holdout. `--inline` puts the report in the prompt itself, so a seat with no tools (a
-Copilot seat) can take the case, and every arm of any carrier gets the identical prompt; it measures the last hop only. A failed run whose short answer begins by declining ("I can't reproduce ...") is tagged in the row's `notes`: a refusal is a finding about the model, not paraphrase loss, and the check alone cannot tell the two apart. `--items` is 5 to 200 (every
+Copilot seat) can take the case, and every arm of any carrier gets the identical prompt; it measures the last hop only (above 6000 bytes of prompt, roughly more than 40 items, the report stays in `fixture/artifact.md` and the prompt points at it, as for defects). A failed run whose short answer begins by declining ("I can't reproduce ...") is tagged in the row's `notes`: a refusal is a finding about the model, not paraphrase loss, and the check alone cannot tell the two apart. `--items` is 5 to 200 (every
 kind appears from 5).
 
 ## Seeded-defect review (build plan 2026-11-07, M3)
@@ -154,7 +154,7 @@ and arithmetic, no model judge: a finding **catches** a defect when its line is 
 one the key accepts (the defect's own kind, or the one neighbour kind that names the same fault); a finding within one line of
 a decoy is a **false positive**; any other finding is **unmatched**; a repeat for a defect already caught is ignored. The key
 (`review-key.json`) sits beside `case.toml`, outside `fixture/`, and is never in the prompt. `--inline` puts the module in the
-prompt with line numbers, for a seat with no tools; without it the prompt names `@project/repo/review.py`. The case's
+prompt with line numbers, for a seat with no tools (when that prompt would pass 6000 bytes, as `--difficulty hard` does, the numbered module is written to `fixture/review.numbered.txt` and the prompt points at `@project/repo/review.numbered.txt` instead: Delphi hands a seat with no tools that file as a slice, a seat with tools reads it, and the 8,000-byte task limit is untouched; the key stays out of both); without it the prompt names `@project/repo/review.py`. The case's
 `review_findings` check takes `min_recall` and `max_false_positives` (`gen --min-recall`, `--max-false-positives`; defaults 0.5
 and 2). A new seed is a new case, so a fresh seed is a holdout.
 

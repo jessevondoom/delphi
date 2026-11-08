@@ -3,12 +3,12 @@ name = "delphi-docs"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-description = "Dependency-free document readers and writers for Delphi agents (specs/014)"
+description = "Dependency-free document readers and writers for Delphi agents (specs/095)"
 license = "MIT"
 publish = false
 
 [dependencies]
-# Both are already in the workspace's dependency tree (specs/014 §1.1): inflate for zip members, gzip and
+# Both are already in the workspace's dependency tree (specs/095 §1.1): inflate for zip members, gzip and
 # PDF streams; CRC-32 to catch a corrupt zip member.
 flate2 = "1"
 crc32fast = "1.5"

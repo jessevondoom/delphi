@@ -57,7 +57,7 @@ Published harness work found that most of a coding agent's gain comes from the l
 
 - Every report repeats the 031 §4.5 guards: per-case pass rates over seeds, deltas inside the noise shown as "no evidence".
 - A new section, **Harness effect (fixed model)**, lists each harness arm against its base, with the BM-2 columns.
-- BM-5, BM-6, BM-7 each produce one chart-ready table (survival share, curve, recovery share) that `delphi docs` charts can draw later (spec 014).
+- BM-5, BM-6, BM-7 each produce one chart-ready table (survival share, curve, recovery share) that `delphi docs` charts can draw later (spec 095).
 - Results are recorded in the spec tracker with the date, model, seed count and the bar applied. A technique that fails the bar stays `off` (045 §6).
 
 ## 6. Acceptance criteria

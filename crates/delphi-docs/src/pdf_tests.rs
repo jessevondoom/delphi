@@ -1,4 +1,4 @@
-//! PDF reading against small hand-built files: one fixture per feature (`specs/014` §9).
+//! PDF reading against small hand-built files: one fixture per feature (`specs/095` §9).
 
 use crate::*;
 use std::io::Write;

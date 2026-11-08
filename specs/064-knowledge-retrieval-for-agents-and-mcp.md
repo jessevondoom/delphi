@@ -15,7 +15,7 @@ tags: [spec, knowledge, retrieval, rag, mcp, scope, scratch, markdown, about, se
 
 # Spec 064: Knowledge retrieval for agents and MCP hosts, markdown and scratch tiering, and release self-knowledge
 
-**Status.** Approved by the operator on 2026-11-01 after a three-seat council review (red-team, strategist, architect). Builds on [`004`](004-memory-and-coaching.md), [`005`](005-console-and-narrator-tui.md), [`006`](006-installer-and-updater.md), [`043`](043-knowledge-window-search-page-and-growing-corpus.md), [`055`](055-the-central-library-sources-claims-and-pages.md), [`057`](057-search-pages-generated-and-checked.md), [`058`](058-project-scopes-scaffolding-and-promotion.md), [`061`](061-encyclopedia-search-pages.md) and [`062`](062-delphi-as-host-agent-mcp-server.md). Where it differs, this spec wins for the topics it names; the five specs carry a one-line pointer here.
+**Status.** Approved by the operator on 2026-11-01 after a three-seat council review (red-team, strategist, architect). Builds on [`004`](004-memory-and-coaching.md), [`005`](005-console-and-narrator-tui.md), [`006`](006-installer-and-updater.md), [`043`](043-knowledge-window-search-page-and-growing-corpus.md), [`055`](055-the-central-library-sources-claims-and-pages.md), [`057`](057-search-pages-generated-and-checked.md), [`058`](058-project-scopes-scaffolding-and-promotion.md), [`097`](097-encyclopedia-search-pages.md) and [`062`](062-delphi-as-host-agent-mcp-server.md). Where it differs, this spec wins for the topics it names; the five specs carry a one-line pointer here.
 
 ## 1. Goal
 
@@ -68,7 +68,7 @@ Knowledge retrieval is critical for the operator and for agents. Today an agent'
 2. Every role may read `about/**` (read-only, never writable). The index includes it, but default agent search, `search_kb` and the operator's search exclude it unless asked (`about: true`, or the operator's `/about` filter), so it does not drown the user's own corpus. The orchestrator carries a duty to consult it when asked about Delphi itself.
 3. `finalize::spec_link` and spec-pointer parsing accept only `specs/<id>.md` entries whose current hash is in `ratified.lock`; an `about/` path or byte-identical copy never satisfies `Implements-Spec`, and its frontmatter `status` is not read as approval.
 
-## 8. Search page (specs 043, 057, 061 amended)
+## 8. Search page (specs 043, 057, 097 amended)
 
 1. A search starts the page job and shows the raw results immediately with a "building a page" state (`stillMotion`); the page becomes the primary view when it is ready, unless the operator chose the raw list (`f`). A late page for an older query is dropped. This supersedes the "zero tokens until asked" promise of 043 §1 and the "raw first, page on request" order of 057 §7: a bounded generated-page job may start on submit (`[library.pages] per_day` and the budget still gate a new page, never a cached one), with a visible state and a cancel.
 2. Generated pages are views, not evidence: they are never indexed into the ranking corpus and never cited as support. An agent-facing summary of a page is a labelled convenience result that carries its source and claim ids.

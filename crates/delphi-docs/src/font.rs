@@ -1,4 +1,4 @@
-//! A 5x7 bitmap font for PNG output (`specs/014` §8.4): the classic public-domain 5x7 glyph table, one byte per
+//! A 5x7 bitmap font for PNG output (`specs/095` §8.4): the classic public-domain 5x7 glyph table, one byte per
 //! column with the top row in bit 0 and descenders in bit 7. No font files; text in a PNG is deliberately plain and
 //! SVG is the quality output.
 

@@ -1,6 +1,6 @@
 //! Documents that are not Markdown, in the index (`specs/043` §6.1).
 //!
-//! PDF, DOCX and EPUB files under `context/` are read by the in-tree readers of `specs/014` (pure code: nothing is
+//! PDF, DOCX and EPUB files under `context/` are read by the in-tree readers of `specs/095` (pure code: nothing is
 //! spawned, no macro or script runs) and indexed as Markdown-shaped text under the same path with its extension.
 //! Pictures, audio and video are listed by name, path, size and type only. A file over 20 MB, or one whose
 //! extraction fails, is listed by name and size and says why it is not searched by content.

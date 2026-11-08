@@ -1,4 +1,4 @@
-//! A process-wide cache of extractions (`specs/014` §6.1), so reading page 3 of a large PDF and then page 4
+//! A process-wide cache of extractions (`specs/095` §6.1), so reading page 3 of a large PDF and then page 4
 //! does not parse the file twice. It holds only derived text; it is never an input to provenance. The caller
 //! has already hashed and tiered the *current* bytes before asking, so a hit changes nothing about trust.
 

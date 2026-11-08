@@ -1,5 +1,5 @@
 //! Excel workbooks as tables: per-sheet dimensions, header row and a bounded slice, with cached formula
-//! values next to the formula text (`specs/014` §4). Charts, pivot tables and macros are not read.
+//! values next to the formula text (`specs/095` §4). Charts, pivot tables and macros are not read.
 
 use crate::ooxml::Pkg;
 use crate::sniff::Format;

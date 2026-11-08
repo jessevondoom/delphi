@@ -1,4 +1,4 @@
-//! A real-world check for the readers (`specs/014` §9, "Real-world"): run every file in a corpus through
+//! A real-world check for the readers (`specs/095` §9, "Real-world"): run every file in a corpus through
 //! `extract` and report what came back, without asserting on content. Ignored by default because the corpus is
 //! the operator's own files.
 //!

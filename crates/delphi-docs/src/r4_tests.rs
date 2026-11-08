@@ -1,5 +1,5 @@
 //! The R4 readers (OpenDocument, EPUB, HTML, data files, mail, notebooks, RTF, images) through the public
-//! `extract`, one fixture per feature (`specs/014` §9).
+//! `extract`, one fixture per feature (`specs/095` §9).
 
 use crate::zipfile::testutil::make_zip;
 use crate::*;

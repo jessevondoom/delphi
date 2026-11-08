@@ -1,4 +1,4 @@
-//! Reports and slide decks (`specs/014` §7.2, §7.3, §8.6): two arrangements of the same blocks as a page, with
+//! Reports and slide decks (`specs/095` §7.2, §7.3, §8.6): two arrangements of the same blocks as a page, with
 //! the same escaping, the same safety check on the finished file and the same audited runtime. Neither takes a
 //! script; a person who needs one writes a page with `write_html`, where the operator is asked.
 //!

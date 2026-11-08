@@ -1,4 +1,4 @@
-//! The bounds every reader works inside (`specs/014` §3.1). A reader that reaches one stops, returns
+//! The bounds every reader works inside (`specs/095` §3.1). A reader that reaches one stops, returns
 //! what it has, and says so; it never allocates past a limit on the word of the input.
 
 #[derive(Debug, Clone, PartialEq, Eq)]
