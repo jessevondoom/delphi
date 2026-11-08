@@ -2,7 +2,8 @@
 
 use super::approve::FakeTerminal;
 use super::check::{evaluate, QUEUE_LABEL, REVIEW_LABEL};
-use super::fake::{FakeForge, DRAFT_SPEC, SPEC_PATH};
+use super::errors::Errors;
+use super::fake::{FakeForge, APPROVED_SPEC, DRAFT_SPEC, SPEC_PATH};
 use super::forge::{Check, Forge};
 use super::gates::Source;
 use super::record::{Attestation, Ledger, SpecState};
@@ -20,7 +21,8 @@ fn world() -> World {
 
 fn with_ctx<R>(w: &World, term: &mut FakeTerminal, quote: Option<&str>, dry_run: bool, f: impl FnOnce(&mut Ctx) -> R) -> R {
     let ledger = Ledger::at(w.home.path());
-    let mut ctx = Ctx { forge: &w.forge, ledger: &ledger, term, quote: quote.map(String::from), dry_run, session: None, git: None, settle: Duration::ZERO, now: || "2026-11-07T00:00:00Z".to_string() };
+    let errors = Errors::at(w.home.path());
+    let mut ctx = Ctx { forge: &w.forge, ledger: &ledger, errors: &errors, term, quote: quote.map(String::from), dry_run, session: None, git: None, settle: Duration::ZERO, now: || "2026-11-07T00:00:00Z".to_string() };
     f(&mut ctx)
 }
 
@@ -332,4 +334,81 @@ fn status_says_what_each_queued_pull_request_would_do() {
     w.forge.edit(3, |p| p.is_draft = true);
     let lines = status_lines(&w.forge).unwrap();
     assert!(lines[0].starts_with("#1: ready") && lines[1].contains("changes a gate") && lines[2].contains("not ready: it is a draft"), "{lines:?}");
+}
+
+// ---- the error log through the real flow (spec 094 AC-6) -----------------------------------------------------------------
+
+fn error_classes(w: &World) -> Vec<(u64, String, String, u32)> {
+    Errors::at(w.home.path()).entries().into_iter().map(|e| (e.pr, e.class, e.state, e.attempts)).collect()
+}
+
+#[test]
+fn a_refusal_that_is_a_problem_is_logged_with_its_class_and_one_that_is_just_waiting_is_not() {
+    let w = world();
+    w.forge.with_ready_pr(7, "head7", &["a.rs"]);
+    w.forge.edit(7, |p| p.mergeable = "CONFLICTING".into());
+    w.forge.st.borrow_mut().checks.insert(7, vec![Check { name: "ui".into(), bucket: "fail".into() }]);
+    let out = with_ctx(&w, &mut FakeTerminal::new(false, &[]), Some("merge #7"), false, |c| merge_one(c, 7, None));
+    assert!(matches!(out, Outcome::Refused { .. }));
+    assert_eq!(error_classes(&w), vec![(7, "conflict".to_string(), "open".to_string(), 1), (7, "ci-red".to_string(), "open".to_string(), 1)]);
+    // Waiting is not a problem: a draft, an unqueued pull request and running checks log nothing.
+    let w2 = world();
+    w2.forge.with_ready_pr(8, "h8", &["a.rs"]);
+    w2.forge.edit(8, |p| {
+        p.is_draft = true;
+        p.labels.clear();
+    });
+    w2.forge.st.borrow_mut().checks.insert(8, vec![Check { name: "t".into(), bucket: "pending".into() }]);
+    with_ctx(&w2, &mut FakeTerminal::new(false, &[]), Some("merge #8"), false, |c| merge_one(c, 8, None));
+    assert!(error_classes(&w2).is_empty(), "{:?}", error_classes(&w2));
+}
+
+#[test]
+fn the_same_problem_on_the_same_head_is_counted_not_duplicated_and_a_merge_resolves_it() {
+    let w = world();
+    w.forge.with_ready_pr(7, "head7", &["a.rs"]);
+    w.forge.edit(7, |p| p.mergeable = "CONFLICTING".into());
+    for _ in 0..3 {
+        with_ctx(&w, &mut FakeTerminal::new(false, &[]), Some("merge #7"), false, |c| merge_one(c, 7, None));
+    }
+    assert_eq!(error_classes(&w), vec![(7, "conflict".to_string(), "open".to_string(), 3)]);
+    // The builder fixes it (the head moves, the conflict is gone), and the merge closes the entry.
+    w.forge.edit(7, |p| {
+        p.mergeable = "MERGEABLE".into();
+        p.head_sha = "head7-fixed".into();
+    });
+    w.forge.st.borrow_mut().files.insert(("head7-fixed".into(), SPEC_PATH.into()), APPROVED_SPEC.into());
+    let out = with_ctx(&w, &mut FakeTerminal::new(false, &[]), Some("merge #7"), false, |c| merge_one(c, 7, None));
+    assert!(matches!(out, Outcome::Merged { .. }), "{out:?}");
+    assert_eq!(error_classes(&w), vec![(7, "conflict".to_string(), "resolved".to_string(), 3)]);
+}
+
+#[test]
+fn a_failed_merge_is_logged_as_what_it_was_and_a_dry_run_logs_nothing() {
+    let w = world();
+    w.forge.with_ready_pr(7, "head7", &["a.rs"]);
+    w.forge.st.borrow_mut().push_after_read = Some("head7-moved".into());
+    with_ctx(&w, &mut FakeTerminal::new(false, &[]), Some("merge #7"), false, |c| merge_one(c, 7, None));
+    assert_eq!(error_classes(&w), vec![(7, "stale-record".to_string(), "open".to_string(), 1)]);
+    let w2 = world();
+    w2.forge.with_ready_pr(7, "head7", &["a.rs"]);
+    w2.forge.edit(7, |p| p.mergeable = "CONFLICTING".into());
+    with_ctx(&w2, &mut FakeTerminal::new(false, &[]), None, true, |c| merge_one(c, 7, None));
+    assert!(error_classes(&w2).is_empty(), "a dry run changes nothing");
+}
+
+#[test]
+fn the_log_view_filters_by_open_and_by_pull_request() {
+    use super::errors::Class;
+    use super::log_view;
+    let w = world();
+    let log = Errors::at(w.home.path());
+    log.record(7, "h", Class::Conflict, "c", "t1").unwrap();
+    log.record(8, "h", Class::CiRed, "r", "t2").unwrap();
+    log.resolve_pr(8, "t3");
+    let (all, _) = log_view(w.home.path(), false, None);
+    let (open, _) = log_view(w.home.path(), true, None);
+    let (seven, _) = log_view(w.home.path(), false, Some(7));
+    assert_eq!((all.len(), open.len(), seven.len()), (2, 1, 1));
+    assert_eq!(open[0].pr, 7);
 }

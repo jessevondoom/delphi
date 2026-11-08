@@ -117,6 +117,11 @@ count = 1
 class = "git"
 
 [[site]]
+file = "crates/delphi/src/merge/fix.rs"
+count = 1
+class = "git"
+
+[[site]]
 file = "crates/delphi/src/merge/forge.rs"
 count = 1
 class = "git"

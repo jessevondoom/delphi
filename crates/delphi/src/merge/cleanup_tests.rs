@@ -226,9 +226,15 @@ fn a_cleanup_failure_does_not_change_the_merge_outcome() {
     f.with_ready_pr(7, "head7", &["docs/x.md"]);
     let home = tempfile::tempdir().unwrap();
     let ledger = Ledger::at(home.path());
+    let errors = crate::merge::errors::Errors::at(home.path());
     let mut term = FakeTerminal::new(false, &[]);
-    let mut ctx = Ctx { forge: &f, ledger: &ledger, term: &mut term, quote: Some("please merge #7".into()), dry_run: false, git: Some(&broken), session: None, settle: std::time::Duration::ZERO, now: || "2026-11-07T00:00:00Z".to_string() };
+    // An earlier conflict entry for the same pull request: the merge resolves it, and the cleanup problem is a new, open one.
+    errors.record(7, "head6", crate::merge::errors::Class::Conflict, "it conflicts with `main`", "t0").unwrap();
+    let mut ctx = Ctx { forge: &f, ledger: &ledger, errors: &errors, term: &mut term, quote: Some("please merge #7".into()), dry_run: false, git: Some(&broken), session: None, settle: std::time::Duration::ZERO, now: || "2026-11-07T00:00:00Z".to_string() };
     assert_eq!(merge_one(&mut ctx, 7, None), Outcome::Merged { pr: 7, head: "head7".into() });
+    let by_class = |class: &str| errors.entries().into_iter().find(|e| e.class == class).map(|e| e.state);
+    assert_eq!(by_class("conflict").as_deref(), Some("resolved"), "the merge settled the earlier problem");
+    assert_eq!(by_class("cleanup").as_deref(), Some("open"), "a cleanup that could not finish stays open for a person");
     let v = evaluate(&f, 7).unwrap();
     assert!(!after_merge(&mut ctx, &v).is_empty(), "the failure is returned, not raised");
 }
