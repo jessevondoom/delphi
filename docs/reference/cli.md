@@ -508,7 +508,7 @@ Components: cli, daemon, engine, harness, provider, ui, xenia, relay, tool.
 
 ### `delphi merge`
 
-Merge queued pull requests of this repository, with a recorded approval (spec 094).
+Merge this repository's queued pull requests, with a recorded approval.
 
 ```
   delphi merge <PR>... [--operator-said "<the operator's words>"] [--dry-run] [--home <dir>]
