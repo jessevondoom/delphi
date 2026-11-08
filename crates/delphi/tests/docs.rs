@@ -211,6 +211,61 @@ fn a_seat_receipt_satisfies_its_schema() {
     must_fail("seat-receipt.schema.json", "a served model not marked carrier-claimed", &bad);
 }
 
+// specs/092 TA-0 and TA-1: what the program stages and stores satisfies the schemas, and the schemas refuse what must not be there.
+#[test]
+fn an_authorization_request_and_store_satisfy_their_schemas() {
+    use delphi_engine::authorization as a;
+    let t = tempfile::tempdir().unwrap();
+    let dir = std::fs::canonicalize(t.path()).unwrap();
+    let home = dir.join("home");
+    std::fs::create_dir_all(home.join("operator")).unwrap();
+    delphi_core::lock::write(&home.join("operator/ratified.lock"), &delphi_core::lock::LockFile::default()).unwrap();
+    let (bin, script) = (dir.join("python3"), dir.join("t.py"));
+    std::fs::write(&bin, b"x").unwrap();
+    std::fs::write(&script, b"print(1)").unwrap();
+    let (b, s) = (bin.to_string_lossy().to_string(), script.to_string_lossy().to_string());
+    let policy = a::Policy { interpreters: vec![b.clone()] };
+    let req = json!({"intent": "i", "purpose": "p", "context": "c", "risk": "r", "run_plan": "once", "manifest": [{"tool": "shell", "argv": [b, "-I", s], "files": [s], "runner_provenance": "project_snapshot"}]});
+    let who = |kind, taint| a::Who { kind, label: "l".into(), role: Some("red-team".into()), model: "m".into(), span: Some("s".into()), task: Some("t".into()), taint, run: "t".into(), mission: "m".into() };
+    let staged = |kind, taint| match a::admit(&[], &[], &who(kind, taint), a::parse_request(&req, &policy), &a::Clock { now_unix: 1_800_000_000, now_rfc: "2027-01-15T08:00:00.000Z" }) {
+        a::Outcome::Staged(p) => p,
+        a::Outcome::Refused { message, .. } => panic!("{message}"),
+    };
+    let agent = staged(a::Kind::Agent, delphi_core::provenance::Tier::L4);
+    must_pass("authorization-request.schema.json", "an agent request", &agent);
+    let mut host = who(a::Kind::Host, a::HOST_TAINT);
+    host.role = None;
+    host.span = None;
+    host.task = None;
+    match a::admit(&[], &[], &host, a::parse_request(&req, &policy), &a::Clock { now_unix: 1_800_000_000, now_rfc: "x" }) {
+        a::Outcome::Staged(p) => must_pass("authorization-request.schema.json", "a host request", &p),
+        a::Outcome::Refused { message, .. } => panic!("{message}"),
+    }
+    let mut bad = agent.clone();
+    bad["tier"] = json!("L3");
+    must_fail("authorization-request.schema.json", "a request staged above L0", &bad);
+    let mut bad = agent.clone();
+    bad["taint"] = json!({"tier": "L0", "name": "external_untrusted"});
+    must_fail("authorization-request.schema.json", "a request staged at external_untrusted", &bad);
+    let mut bad = agent.clone();
+    bad["request"]["manifest"][0]["env"] = json!({"PATH": "/tmp"});
+    must_fail("authorization-request.schema.json", "an entry carrying its own environment", &bad);
+
+    let rec = a::build_record(&home, &a::NewRecord { purpose: "p".into(), intent: "i".into(), run: "run-1".into(), expires_in_secs: 7200, max_uses: 10, entries: serde_json::from_value(req["manifest"].clone()).unwrap(), request: Some(("ar-0123456789".into(), "0".repeat(64), "host:x/y".into())), policy: policy.clone() }, 1_800_000_000, "2027-01-15T08:00:00.000Z").unwrap();
+    a::add_record(&home, rec, None).unwrap();
+    let store: Value = serde_json::from_slice(&std::fs::read(a::store_path(&home)).unwrap()).unwrap();
+    must_pass("authorization-record.schema.json", "the store", &store);
+    let mut bad = store.clone();
+    bad["records"][0].as_object_mut().unwrap().remove("run");
+    must_fail("authorization-record.schema.json", "a record with no run binding", &bad);
+    let mut bad = store.clone();
+    bad["records"][0]["max_uses"] = json!(51);
+    must_fail("authorization-record.schema.json", "more than the maximum uses", &bad);
+    let mut bad = store;
+    bad["records"][0]["manifest"][0]["scratch_mode"] = json!("exec");
+    must_fail("authorization-record.schema.json", "a scratch mode that is not noexec", &bad);
+}
+
 #[test]
 fn handoffs_follow_the_envelope_schema() {
     let ok = json!({

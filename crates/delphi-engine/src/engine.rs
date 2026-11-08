@@ -2049,6 +2049,39 @@ impl Engine {
                 Err(e) => result = tools::ToolResult::err(e),
             }
         }
+        // A test-authorization request is staged or refused here, against the log, with the taint of this span (spec 092 TA-0).
+        if let Some(i) = asked.iter().position(|(k, _)| k == crate::authorization::ASK) {
+            let (_, args) = asked.remove(i);
+            let model = sc.last_key.lock().unwrap().as_ref().map(|k| k.1.clone()).unwrap_or_else(|| sc.tier.clone());
+            // A span that works for a host (read-only) is never trusted above what the host is.
+            let taint = if sc.readonly { sc.span.ceiling().min(crate::authorization::HOST_TAINT) } else { sc.span.ceiling() };
+            let who = crate::authorization::Who {
+                kind: crate::authorization::Kind::Agent,
+                label: format!("{}/{}/{}", sc.role, sc.family, model),
+                role: Some(sc.role.clone()),
+                model: format!("{}/{}", sc.family, model),
+                span: Some(sc.span_id.clone()),
+                task: Some(sc.task_id.clone()),
+                taint,
+                run: sc.task_id.clone(),
+                mission: sc.m.id.clone(),
+            };
+            let now = self.now();
+            let clock = crate::authorization::Clock { now_unix: (self.clock_unix)(), now_rfc: &now };
+            let parsed = crate::authorization::parse_request(&args, &crate::authorization::Policy::system());
+            match crate::authorization::record_request(&self.ws.dir, &self.ws.home, &who, parsed, &clock) {
+                crate::authorization::Outcome::Staged(payload) => {
+                    result = tools::ToolResult::ok(format!("staged as {} (tier L0, inert) for the operator's review; it can never be used by this run", payload["id"].as_str().unwrap_or("?")));
+                    asked.insert(i, (crate::authorization::STAGED.into(), payload));
+                }
+                crate::authorization::Outcome::Refused { message, log } => {
+                    result = tools::ToolResult::err(message);
+                    if let Some(payload) = log {
+                        asked.insert(i, (crate::authorization::REFUSED.into(), payload));
+                    }
+                }
+            }
+        }
         self.log_artifact_prompts(sc, name, &stamps, &result.content);
         let mut events: Vec<EventEnvelope> = stamps.iter().map(|s| sc.ev("provenance.stamp", delphi_core::provenance::Index::stamp_payload(s.zone, &s.path, &s.blake3, s.tier))).collect();
         events.extend(asked.into_iter().map(|(kind, payload)| sc.ev(&kind, payload)));
@@ -4124,6 +4157,42 @@ mod tests {
         let results: Vec<String> = events_of(&f, "tool.result").iter().map(|e| e.payload["content"].as_str().unwrap().to_string()).collect();
         assert!(results[0].contains("denied") && results[1].contains("outside your role") && results[2].contains("never readable"), "{:?}", results);
         assert!(events_of(&f, "approval.requested").is_empty(), "denials don't reach the operator");
+    }
+
+    fn authorization_ask(n: u32) -> Value {
+        json!({"intent": "run the parser tests", "purpose": "needs a Red shell", "context": "I was reading the parser.", "risk": "runs a script in the sandbox", "run_plan": "once",
+               "manifest": [{"tool": "shell", "argv": ["/usr/bin/python3", "-I", "/opt/py/t.py", format!("--case={n}")], "files": ["/opt/py/t.py"], "runner_provenance": "project_snapshot"}]})
+    }
+
+    // specs/092 TA-0: the daemon computes the taint from the span; a request from a span at federated_peer or lower cannot exist.
+    #[tokio::test]
+    async fn a_tainted_span_cannot_stage_an_authorization_request_and_a_clean_one_stages_it_inert() {
+        let f = setup(vec![Step::tool("a", "read_file", json!({"path": "@project/app/vendor/x.js"})), Step::tool("b", "request_test_authorization", authorization_ask(1)), Step::text("done")], 5.0, |_| {});
+        assert_eq!(f.engine.run_task(&f.m, "red-team", "Look at vendor, then ask").await.unwrap().status, Status::Done);
+        assert!(events_of(&f, "authorization.request.staged").is_empty(), "a request staged below the gate cannot exist");
+        let refused = events_of(&f, "authorization.request.refused");
+        assert_eq!((refused.len(), refused[0].payload["taint"].as_str(), refused[0].payload["blocks_restage"].clone()), (1, Some("external_untrusted"), json!(false)));
+        assert!(events_of(&f, "authorization.request").is_empty(), "the raw ask is never logged");
+        let results: Vec<String> = events_of(&f, "tool.result").iter().map(|e| e.payload["content"].as_str().unwrap_or("").to_string()).collect();
+        assert!(results.iter().any(|r| r.contains("cannot exist")), "{results:?}");
+
+        // A clean span stages it: tier L0, labelled with its role, span and the taint the daemon computed, usable by nothing.
+        let f = setup(vec![Step::tool("b", "request_test_authorization", authorization_ask(1)), Step::tool("c", "request_test_authorization", authorization_ask(2)), Step::text("done")], 5.0, |_| {});
+        assert_eq!(f.engine.run_task(&f.m, "red-team", "Ask for a test").await.unwrap().status, Status::Done);
+        let staged = events_of(&f, "authorization.request.staged");
+        assert_eq!(staged.len(), 1, "a second request inside five minutes is not staged");
+        let p = &staged[0].payload;
+        assert_eq!((p["tier"].as_str(), p["state"].as_str(), p["taint"]["name"].as_str(), p["requester"]["role"].as_str(), p["requester"]["kind"].as_str()), (Some("L0"), Some("pending"), Some("user_ratified"), Some("red-team"), Some("agent")));
+        assert!(p["requester"]["span"].as_str().is_some() && p["requester"]["task"].as_str().is_some());
+        assert!(events_of(&f, "authorization.request.refused").is_empty(), "a rate refusal is quiet");
+        let results: Vec<String> = events_of(&f, "tool.result").iter().map(|e| e.payload["content"].as_str().unwrap_or("").to_string()).collect();
+        assert!(results[0].contains("staged as ar-") && results[0].contains("never be used by this run") && results[1].contains("rate limit"), "{results:?}");
+        assert!(events_of(&f, "approval.requested").is_empty(), "staging asks nobody and approves nothing");
+
+        // A role that does not ask has no effect.
+        let f = setup(vec![Step::tool("b", "request_test_authorization", authorization_ask(1)), Step::text("done")], 5.0, |_| {});
+        f.engine.run_task(&f.m, "architect", "Ask for a test").await.unwrap();
+        assert!(events_of(&f, "authorization.request.staged").is_empty() && events_of(&f, "authorization.request.refused").is_empty());
     }
 
     #[tokio::test]

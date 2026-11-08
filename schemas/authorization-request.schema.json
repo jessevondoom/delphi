@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jessevondoom/delphi/schemas/authorization-request.schema.json",
+  "title": "Delphi Test-Authorization Request",
+  "description": "The payload of an `authorization.request.staged` event (spec 092 TA-0): a request for the operator to authorize a few exact commands for a future headless test. Written only by the daemon, in a mission log. It is inert (tier L0), grants nothing, and is usable by no run. `taint` is computed by the daemon from the span (agent) or fixed at federated_peer (host); never taken from the request's text. The `request` text fields are the requester's words and data, stripped of control and escape characters and cut to fixed lengths.",
+  "type": "object",
+  "required": ["id", "tier", "state", "request", "manifest_hash", "request_hash", "requester", "taint", "run", "mission", "kind", "staged_at"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^ar-[0-9a-f]{10}$" },
+    "tier": { "const": "L0" },
+    "state": { "const": "pending" },
+    "request": {
+      "type": "object",
+      "required": ["intent", "purpose", "manifest", "context", "risk", "run_plan"],
+      "properties": {
+        "intent": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "purpose": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "manifest": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 5,
+          "items": {
+            "type": "object",
+            "required": ["tool", "argv", "files", "runner_provenance"],
+            "properties": {
+              "tool": { "const": "shell" },
+              "argv": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "type": "string", "maxLength": 256 }, "description": "The canonical argument vector; argv[0] is the absolute canonical path of the binary. No shell string, glob, wrapper, chaining or inline code." },
+              "files": { "type": "array", "maxItems": 16, "items": { "type": "string" }, "description": "Absolute paths of every script or file the command reads and executes; hashed when the operator authorizes." },
+              "runner_provenance": { "enum": ["project_snapshot", "daemon_installed"] }
+            },
+            "additionalProperties": false
+          }
+        },
+        "context": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "risk": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "run_plan": { "type": "string", "minLength": 1, "maxLength": 600 }
+      },
+      "additionalProperties": false
+    },
+    "manifest_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "blake3 of the canonical manifest." },
+    "request_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "blake3 of the whole request; stored in the record the operator makes from it." },
+    "requester": {
+      "type": "object",
+      "required": ["kind", "label", "model"],
+      "properties": {
+        "kind": { "enum": ["agent", "host"] },
+        "label": { "type": "string", "description": "`<role>/<family>/<model>` for an agent, `host:<tool>/<model>` for a host." },
+        "role": { "type": ["string", "null"] },
+        "model": { "type": "string" },
+        "span": { "type": ["string", "null"] },
+        "task": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "taint": {
+      "type": "object",
+      "required": ["tier", "name"],
+      "properties": {
+        "tier": { "enum": ["L1", "L2", "L3", "L4", "L5"], "description": "An agent span at federated_peer (L1) or lower is refused at staging; L1 appears only on a host's request, which has no span." },
+        "name": { "enum": ["federated_peer", "federated_verified", "internal_generated", "internal_empirical", "user_ratified"] }
+      },
+      "additionalProperties": false
+    },
+    "run": { "type": "string", "description": "The run the per-run limits count against: the task for an agent, the host session for a host." },
+    "mission": { "type": "string", "description": "The mission log the request is staged in; the same payload is held in the workspace ledger, which is what the operator's commands check it against." },
+    "kind": { "enum": ["agent", "host"] },
+    "staged_at": { "type": "string" }
+  },
+  "additionalProperties": false
+}

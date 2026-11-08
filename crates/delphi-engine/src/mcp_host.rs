@@ -293,6 +293,31 @@ pub fn tools() -> Value {
             "annotations": writes("Propose a lesson to Delphi")
         },
         {
+            "name": "request_test_authorization",
+            "title": "Ask the operator to authorize a test's commands in advance",
+            "description": "Ask Delphi's operator to authorize, ahead of time, a few exact commands for a future headless test run (spec 092). You only ask: the request is staged at tier L0 with your name on it and a fixed taint of federated_peer, grants nothing and is usable by no run. The operator reads the manifest Delphi renders from your structured fields, then retypes each command at a local terminal before anything is authorized. The first slice admits only a sandboxed shell command run as `<system python3> -I <absolute script>` (argv[0] is one of /usr/bin/python3, /usr/local/bin/python3, /opt/homebrew/bin/python3; no -m, no module), no globs, shell strings, wrappers, chaining or inline code; merges, pull requests, credentials, network tools, dispatch and writes to .git, hooks, configuration or the authorization store are always refused. At most 5 manifest entries, 3 pending requests per session, 5 per mission, one request per 5 minutes; a refused manifest is not staged again for 24 hours. Stages content only: it changes no file in your project.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "intent": {"type": "string", "minLength": 1, "maxLength": 200, "description": "What the test is for, in one sentence."},
+                    "purpose": {"type": "string", "minLength": 1, "maxLength": 300, "description": "Why a Red action is needed for it."},
+                    "manifest": {"type": "array", "minItems": 1, "maxItems": 5, "items": {"type": "object", "properties": {
+                        "tool": {"type": "string", "enum": ["shell"]},
+                        "argv": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 32, "description": "The exact argument vector; argv[0] is the absolute canonical path of the binary."},
+                        "files": {"type": "array", "items": {"type": "string"}, "maxItems": 16, "description": "Absolute paths of every script or file the command reads and executes."},
+                        "runner_provenance": {"type": "string", "enum": ["project_snapshot", "daemon_installed"]}
+                    }, "required": ["tool", "argv", "runner_provenance"], "additionalProperties": false}},
+                    "context": {"type": "string", "minLength": 1, "maxLength": 1000, "description": "What you were doing and what you saw. Shown to the operator as your words, collapsed."},
+                    "risk": {"type": "string", "minLength": 1, "maxLength": 1000, "description": "What could go wrong and what contains it."},
+                    "run_plan": {"type": "string", "minLength": 1, "maxLength": 600, "description": "How the run would use it."},
+                    "model": {"type": "string", "maxLength": 64, "description": "Your model name, self-reported."}
+                },
+                "required": ["intent", "purpose", "manifest", "context", "risk", "run_plan"],
+                "additionalProperties": false
+            },
+            "annotations": writes("Ask the operator to authorize a test in advance")
+        },
+        {
             "name": "propose_kb_entry",
             "title": "Propose a research entry for Delphi's knowledge base",
             "description": "Hand Delphi research you gathered (a finding, a summary of internal sources) so the operator can keep it in the knowledge base. Give a title, the body in markdown, and the sources (URLs, paths or document names) it rests on. It is staged at tier L0 with your name on it, is not searchable and is never loaded into any agent's memory until the operator keeps it with `delphi kb review`; keeping it never marks it validated. Stages content only: it changes no file in your project.",
@@ -702,6 +727,7 @@ impl Server {
             "search_kb" => query().and_then(|q| self.daemon("host.search_kb", &json!({"query": q, "limit": limit(5, 10)}))),
             "propose_note" => self.daemon("host.propose_note", args),
             "propose_kb_entry" => self.daemon("host.propose_kb_entry", args),
+            "request_test_authorization" => self.daemon("host.request_test_authorization", args),
             "propose_council_record" => self.propose_council_record(args),
             "record_session_summary" => self.daemon("host.record_session_summary", args),
             "handoff_put" => self.daemon("host.handoff_put", args),
@@ -1286,9 +1312,9 @@ mod tests {
         let r = call(&mut s, json!({"jsonrpc": "2.0", "id": 3, "method": "tools/list"}));
         let tools = r["result"]["tools"].as_array().unwrap();
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["search_kb", "list_roles", "delphi_roster", "get_agent", "list_skills", "get_skill", "specs_status", "scaffold_status", "search_project", "search_memory", "query_memory", "kb_retrieve", "consult_orchestrator", "spawn_agent_pack", "route", "propose_note", "propose_kb_entry", "propose_council_record", "record_session_summary", "handoff_put", "handoff_get", "request_help", "help_result", "council_frame", "council_open", "council_brief", "council_submit", "council_choose", "request_council", "council_status", "council_result", "request_research", "research_status", "research_result"]);
+        assert_eq!(names, ["search_kb", "list_roles", "delphi_roster", "get_agent", "list_skills", "get_skill", "specs_status", "scaffold_status", "search_project", "search_memory", "query_memory", "kb_retrieve", "consult_orchestrator", "spawn_agent_pack", "route", "propose_note", "request_test_authorization", "propose_kb_entry", "propose_council_record", "record_session_summary", "handoff_put", "handoff_get", "request_help", "help_result", "council_frame", "council_open", "council_brief", "council_submit", "council_choose", "request_council", "council_status", "council_result", "request_research", "research_status", "research_result"]);
         for t in tools {
-            let writes = ["propose_note", "propose_kb_entry", "propose_council_record", "record_session_summary", "handoff_put", "request_help", "request_council", "request_research", "council_open", "council_submit", "council_choose"].contains(&t["name"].as_str().unwrap());
+            let writes = ["propose_note", "request_test_authorization", "propose_kb_entry", "propose_council_record", "record_session_summary", "handoff_put", "request_help", "request_council", "request_research", "council_open", "council_submit", "council_choose"].contains(&t["name"].as_str().unwrap());
             assert_eq!(t["annotations"]["readOnlyHint"], !writes, "{}", t["name"]);
             assert_eq!(t["annotations"]["destructiveHint"], false, "{}", t["name"]);
             assert_eq!(t["annotations"]["openWorldHint"], t["name"] == "request_research", "{}", t["name"]);
@@ -1479,7 +1505,7 @@ mod tests {
             assert_eq!(r["result"]["isError"], true);
             assert!(r["result"]["content"][0]["text"].as_str().unwrap().starts_with("disabled_by_operator"));
         }
-        assert!(call(&mut s, json!({"jsonrpc": "2.0", "id": 9, "method": "tools/list"}))["result"]["tools"].as_array().unwrap().len() == 34);
+        assert!(call(&mut s, json!({"jsonrpc": "2.0", "id": 9, "method": "tools/list"}))["result"]["tools"].as_array().unwrap().len() == 35);
         std::fs::write(d.path().join("config.toml"), "[mcp]\nenabled = true\n").unwrap();
         assert_eq!(tool(&mut s, "no_such_tool")["error"]["code"], -32602);
         std::fs::write(d.path().join("config.toml"), "[mcp]\nenabled = false\n").unwrap();

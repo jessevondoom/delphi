@@ -167,13 +167,45 @@ impl Verifier {
         v
     }
 
+    /// Check a code. With a state file, the check runs under an advisory lock beside the file and first **merges** what the
+    /// file holds (spent steps and failures written by any other process that shares it, such as the daemon and `delphi test
+    /// authorize`) into memory, so a code spent anywhere is spent everywhere and one process's save cannot erase another's.
     pub fn check(&self, secret: &[u8], code: &str, now_secs: u64) -> Result<(), StepUpError> {
+        let _guard = match &self.path {
+            Some(p) => Some(lock_beside(p).map_err(|_| StepUpError::Unavailable)?),
+            None => None,
+        };
         let mut failures = self.failures.lock().unwrap();
         let mut used = self.used.lock().unwrap();
+        if let Some(p) = &self.path {
+            match read_state(p) {
+                Ok(Some((u, f))) => {
+                    used.extend(u);
+                    // A multiset union: the same second can hold several failures, and none seen by either side is lost.
+                    let mut from_file: std::collections::BTreeMap<u64, usize> = Default::default();
+                    for t in f {
+                        *from_file.entry(t).or_default() += 1;
+                    }
+                    for (t, n) in from_file {
+                        let have = failures.iter().filter(|x| **x == t).count();
+                        for _ in have..n {
+                            failures.push_back(t);
+                        }
+                    }
+                    failures.make_contiguous().sort_unstable();
+                }
+                Ok(None) => {}
+                Err(()) => *self.distrust.lock().unwrap() = true,
+            }
+        }
+        self.check_merged(secret, code, now_secs, &mut failures, &mut used)
+    }
+
+    fn check_merged(&self, secret: &[u8], code: &str, now_secs: u64, failures: &mut VecDeque<u64>, used: &mut HashSet<u64>) -> Result<(), StepUpError> {
         if std::mem::take(&mut *self.distrust.lock().unwrap()) {
             failures.clear();
             failures.extend(std::iter::repeat_n(now_secs, MAX_FAILURES));
-            let _ = self.save(&used, &failures);
+            let _ = self.save(used, failures);
         }
         while failures.front().is_some_and(|t| now_secs.saturating_sub(*t) >= LOCKOUT_SECS) {
             failures.pop_front();
@@ -184,7 +216,7 @@ impl Verifier {
         }
         let Some(step) = matching_step(secret, code, now_secs) else {
             failures.push_back(now_secs);
-            self.save(&used, &failures).map_err(|_| StepUpError::Unavailable)?;
+            self.save(used, failures).map_err(|_| StepUpError::Unavailable)?;
             return Err(StepUpError::Wrong);
         };
         used.retain(|s| *s + 2 * WINDOW + 1 >= now_secs / STEP_SECS);
@@ -192,7 +224,7 @@ impl Verifier {
             return Err(StepUpError::Replayed);
         }
         failures.clear();
-        self.save(&used, &failures).map_err(|_| StepUpError::Unavailable)
+        self.save(used, failures).map_err(|_| StepUpError::Unavailable)
     }
 
     fn save(&self, used: &HashSet<u64>, failures: &VecDeque<u64>) -> std::io::Result<()> {
@@ -227,6 +259,18 @@ impl Verifier {
         }
         done
     }
+}
+
+/// An exclusive advisory lock on `<state file>.lock`, released when the returned file is dropped.
+fn lock_beside(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::io::AsRawFd;
+    let mut n = path.file_name().unwrap_or_default().to_os_string();
+    n.push(".lock");
+    let f = std::fs::OpenOptions::new().create(true).truncate(false).read(true).write(true).open(path.with_file_name(n))?;
+    if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(f)
 }
 
 fn marker_of(path: &Path) -> PathBuf {
@@ -409,6 +453,27 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
         let leftovers = std::fs::read_dir(dir.path()).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().contains(".tmp.")).count();
         assert_eq!(leftovers, 0, "no temp file is left behind");
+    }
+
+    // Two processes (the daemon and `delphi test authorize`) share one state file: a code spent in either is spent in both, and
+    // neither one's save erases the other's spent steps or failures.
+    #[test]
+    fn two_verifiers_on_one_file_share_spent_codes_and_failures() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("totp-state");
+        let t = 1_800_000_000u64;
+        let (a, b) = (Verifier::persistent(path.clone()), Verifier::persistent(path.clone()));
+        let code = code_at(RFC_SECRET, t);
+        assert_eq!(a.check(RFC_SECRET, &code, t), Ok(()));
+        assert_eq!(b.check(RFC_SECRET, &code, t), Err(StepUpError::Replayed), "spent in one, spent in the other");
+        // b records failures; a (stale in memory) must still see them, and its next save must not erase them
+        let next = code_at(RFC_SECRET, t + 30);
+        for _ in 0..MAX_FAILURES {
+            assert_eq!(b.check(RFC_SECRET, "000000", t), Err(StepUpError::Wrong));
+        }
+        assert!(matches!(a.check(RFC_SECRET, &next, t + 30), Err(StepUpError::Locked { .. })), "the lockout is shared");
+        let c = Verifier::persistent(path);
+        assert_eq!(c.check(RFC_SECRET, &code, t), Err(StepUpError::Locked { retry_in_secs: LOCKOUT_SECS }), "and survives a save by the stale one");
     }
 
     #[test]

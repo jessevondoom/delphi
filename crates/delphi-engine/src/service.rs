@@ -382,6 +382,35 @@ impl EngineService {
         Ok(out)
     }
 
+    /// `host.request_test_authorization` (`specs/092` TA-0): stage a request for the operator, inert, at tier L0. A host has no
+    /// span to compute a taint from, so it is staged at a fixed `federated_peer`, and the operator authorizes it only by retyping
+    /// each literal argv at a local terminal. The same limits as an agent's apply, counted per host session.
+    async fn host_request_authorization(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        use crate::authorization as a;
+        use crate::host_rpc as h;
+        need_host(&ctx)?;
+        let ws = &self.engine.ws;
+        h::gate(&ws.dir).map_err(host_err)?;
+        let c = h::Caller::parse(&p).map_err(host_err)?;
+        let parsed = a::parse_request(&p, &a::Policy::system());
+        let model: String = p["model"].as_str().unwrap_or("").chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | ':')).take(40).collect();
+        let who = a::Who { kind: a::Kind::Host, label: c.label(Some(&model)), role: None, model: if model.is_empty() { "unknown".into() } else { model }, span: None, task: None, taint: a::HOST_TAINT, run: c.session.clone(), mission: c.mission() };
+        let _gate = self.host_gate.lock().await;
+        let now = delphi_core::time::now_rfc3339();
+        let clock = a::Clock { now_unix: (self.engine.clock_unix)(), now_rfc: &now };
+        // Decided and recorded in the workspace ledger first. A refusal writes nothing else: no mission log (and no directory for
+        // one) is created for a refused host call, whatever session id it chose.
+        match a::record_request(&ws.dir, &ws.home, &who, parsed, &clock) {
+            a::Outcome::Staged(payload) => {
+                let m = self.mission_at(Some(&c.mission()), c.cwd.to_str()).await?;
+                let id = payload["id"].as_str().unwrap_or("").to_string();
+                m.append(EventEnvelope::new(&m.id, a::STAGED, payload)).await.map_err(engine_err)?;
+                Ok(json!({"staged": true, "id": id, "ref": format!("{}/{}", m.id, id), "tier": "L0", "taint": "federated_peer", "usable": false, "next": "the operator reviews it with `delphi test review` and decides with `delphi test authorize --from-request`; it is inert, and a host's request is authorized only by retyping each command at a local terminal"}))
+            }
+            a::Outcome::Refused { message, .. } => Err(err(code::INVALID_PARAMS, message)),
+        }
+    }
+
     /// `host.propose_kb_entry` (`specs/068` §5): stage one research entry for the operator's keep-or-discard review. It is never
     /// searchable until the operator keeps it, and the secret scrubber has already seen the body.
     async fn host_kb_entry(&self, p: Value, ctx: CallContext) -> RpcOutcome {
@@ -3067,6 +3096,7 @@ impl Extension for ServiceExt {
                 },
                 "host.propose_note" => svc.host_stage(params, ctx, false).await,
                 "host.propose_kb_entry" => svc.host_kb_entry(params, ctx).await,
+                "host.request_test_authorization" => svc.host_request_authorization(params, ctx).await,
                 "host.record_session_summary" => svc.host_stage(params, ctx, true).await,
                 "host.handoff_put" => svc.host_handoff_put(params, ctx).await,
                 "host.handoff_get" => svc.host_handoff_get(params, ctx).await,
@@ -3318,6 +3348,48 @@ mod tests {
         assert_eq!(live.len(), 26,"{live:?}");
         assert!(live.iter().all(|n| n.tier == "L0" && n.summary.starts_with("[host:claude-code/")), "{live:?}");
         assert_eq!(live[0].role.as_deref(), Some(role.as_str()));
+    }
+
+    // specs/092 TA-0: a host's request is staged inert at a fixed federated_peer taint, under the same limits, and only on the host socket.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_host_request_for_a_test_authorization_is_staged_inert_at_federated_peer_under_the_limits() {
+        let f = setup(vec![], 5.0, |_| {});
+        let ws_dir = f.engine.ws.dir.clone();
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok, csock, ctok) = (s.host_sock.clone(), s.host.clone(), s.sock.clone(), s.console.clone());
+        let session = "abcdef0123456789";
+        blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+            c.hello(&htok).unwrap();
+            let ask = |n: u32| json!({"session": session, "tool": "claude-code", "cwd": cwd, "model": "opus", "intent": "run the parser tests", "purpose": "needs a Red shell", "context": "c\u{1b}[2K", "risk": "r", "run_plan": "once",
+                "manifest": [{"tool": "shell", "argv": ["/usr/bin/python3", "-I", "/opt/py/t.py", format!("--case={n}")], "files": ["/opt/py/t.py"], "runner_provenance": "project_snapshot"}]});
+            let ok = c.call("host.request_test_authorization", ask(1)).unwrap();
+            assert_eq!((ok["staged"].clone(), ok["tier"].clone(), ok["taint"].clone(), ok["usable"].clone()), (json!(true), json!("L0"), json!("federated_peer"), json!(false)));
+            // the rate limit holds for a host session, and nothing else was staged
+            assert_eq!(rpc_code(c.call("host.request_test_authorization", ask(2))), Some(code::INVALID_PARAMS));
+            // a deny-listed manifest is refused at staging
+            let mut bad = ask(3);
+            bad["session"] = json!("zzzzzzzz01234567");
+            bad["manifest"][0]["argv"] = json!(["/usr/bin/git", "push"]);
+            assert_eq!(rpc_code(c.call("host.request_test_authorization", bad)), Some(code::INVALID_PARAMS));
+            // a console cannot use the host method
+            let mut k = Client::connect(&csock).unwrap();
+            k.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+            k.hello(&ctok).unwrap();
+            assert_eq!(rpc_code(k.call("host.request_test_authorization", ask(4))), Some(code::FORBIDDEN));
+        })
+        .await;
+        let events = replay_log(&delphi_core::sessions::dir(&ws_dir, "host-abcdef0123456789"));
+        let staged: Vec<_> = events.iter().filter(|e| e.kind == "authorization.request.staged").collect();
+        assert_eq!(staged.len(), 1);
+        let p = &staged[0].payload;
+        assert_eq!((p["tier"].as_str(), p["taint"]["name"].as_str(), p["requester"]["kind"].as_str(), p["requester"]["label"].as_str()), (Some("L0"), Some("federated_peer"), Some("host"), Some("host:claude-code/opus")));
+        assert!(!p["request"]["context"].as_str().unwrap().contains('\u{1b}'), "escape characters are stripped on staging");
+        let ledger = crate::authorization::read_ledger(&ws_dir).unwrap();
+        assert_eq!(ledger.iter().filter(|e| e.kind == "authorization.request.refused").count(), 0, "a denied call inside the workspace's host minute is rate-limited and costs no row");
+        assert!(!delphi_core::sessions::dir(&ws_dir, "host-zzzzzzzz01234567").exists(), "and a refused host call creates no mission log");
     }
 
     #[tokio::test(flavor = "multi_thread")]

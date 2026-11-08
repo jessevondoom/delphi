@@ -792,7 +792,7 @@ fn check_ratified(ws: &Workspace, home: &Path, tree: &Tree, r: &mut Report) {
                     r.fail("3 taint-audit", format!("operator/ratified.lock: {}", req), "required entry missing from the lock");
                 }
             }
-            for (name, h) in &op_lock {
+            for (name, h) in op_lock.iter().filter(|(k, _)| !k.contains('#')) {
                 let live = fs::read(op.join(name)).map(|b| hash(&b)).unwrap_or_default();
                 if live != *h {
                     drift += 1;
@@ -807,10 +807,36 @@ fn check_ratified(ws: &Workspace, home: &Path, tree: &Tree, r: &mut Report) {
                 }
             }
             broken += verify_copies(&op_lock, &op.join("ratified"), "operator/ratified", r);
+            broken += check_authorizations(home, r);
         }
     }
     if drift == 0 && unratified == 0 && broken == 0 {
         r.push(Level::Ok, "3 taint-audit", "", "every protected file and ratified copy matches its lock");
+    }
+}
+
+/// The authorization store (`specs/092` TA-1) must match its pin; a store that does not is ignored by everything and is a failure
+/// here. Expired records are reported (they are never used: no run consumes a record before slice S2).
+fn check_authorizations(home: &Path, r: &mut Report) -> usize {
+    match delphi_engine::authorization::load(home) {
+        Err(e) => {
+            r.fail("3 taint-audit", "operator/authorizations.json", e);
+            1
+        }
+        Ok(s) => {
+            // The audit log decides which requests are pending: its hash chain and its pinned head must hold.
+            let mut broken = 0;
+            if let Err(e) = delphi_engine::authorization::read_audit(home) {
+                r.fail("3 taint-audit", "operator/audit", e);
+                broken = 1;
+            }
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+            let expired = s.records.iter().filter(|x| !x.is_revoked() && delphi_core::time::parse_rfc3339(&x.expires).is_some_and(|t| t <= now)).count();
+            if expired > 0 {
+                r.warn("3 taint-audit", "operator/authorizations.json", format!("{expired} expired authorization record(s); `delphi test list` shows them"));
+            }
+            broken
+        }
     }
 }
 
@@ -838,7 +864,8 @@ fn verify_copies(lock: &BTreeMap<String, String>, dir: &Path, label: &str, r: &m
             r.fail("3 taint-audit", format!("{}/{}", label, rel), "file in the ratified directory has no lock entry (planted)");
         }
     }
-    for (logical, h) in lock.iter().filter(|(k, _)| !k.contains('#')) {
+    // The authorization store (spec 092) is pinned by its own hash and has no ratified copy; `check_authorizations` verifies it.
+    for (logical, h) in lock.iter().filter(|(k, _)| !k.contains('#') && k.as_str() != delphi_engine::authorization::LOCK_KEY) {
         match fs::read(dir.join(logical)) {
             Ok(b) if hash(&b) == *h => {}
             Ok(_) => {
@@ -1505,6 +1532,29 @@ mod tests {
         let (_t, home, ws, _p) = setup();
         fs::remove_file(home.join("operator/ratified.lock")).unwrap();
         assert_eq!(run(&home, &ws, &Options::default()).exit_code(), 1);
+    }
+
+    // specs/092 TA-1: a pinned authorization store is healthy; a planted or edited one is a failure and is read as nothing.
+    #[test]
+    fn the_authorization_store_must_match_its_pin() {
+        use delphi_engine::authorization as a;
+        let (_t, home, ws, _p) = setup();
+        assert_eq!(run(&home, &ws, &Options::default()).exit_code(), 0, "no store is fine");
+        let bin = home.join("python3");
+        fs::write(&bin, b"x").unwrap();
+        let script = home.join("t.py");
+        fs::write(&script, b"print(1)").unwrap();
+        let (b, s) = (fs::canonicalize(&bin).unwrap().to_string_lossy().to_string(), fs::canonicalize(&script).unwrap().to_string_lossy().to_string());
+        let entry = a::Entry { tool: "shell".into(), argv: vec![b, "-I".into(), s.clone()], files: vec![s], runner_provenance: "project_snapshot".into() };
+        let rec = a::build_record(&home, &a::NewRecord { purpose: "p".into(), intent: "i".into(), run: "r".into(), expires_in_secs: 3600, max_uses: 3, entries: vec![entry], request: None, policy: a::Policy { interpreters: vec![fs::canonicalize(&bin).unwrap().to_string_lossy().to_string()] } }, 1_700_000_000, "2023-11-14T22:13:20.000Z").unwrap();
+        a::add_record(&home, rec, None).unwrap();
+        let ok = run(&home, &ws, &Options::default());
+        assert_eq!(ok.exit_code(), 0, "{:#?}", ok.findings);
+        assert!(ok.findings.iter().any(|f| f.message.contains("expired authorization")), "an expired record is reported");
+        fs::write(a::store_path(&home), "{\"version\":1,\"records\":[]}").unwrap();
+        let bad = run(&home, &ws, &Options::default());
+        assert_eq!(bad.exit_code(), 1);
+        assert!(bad.findings.iter().any(|f| f.level == Level::Fail && f.message.contains("does not match its pin")), "{:#?}", bad.findings);
     }
 
     #[test]

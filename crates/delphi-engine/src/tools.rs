@@ -287,6 +287,12 @@ impl Registry {
             classify: classify_propose_admin_action,
             exec: ToolExec::Local(propose_admin_action),
         });
+        r.register(ToolSpec {
+            def: read_def("request_test_authorization", "Ask the operator to authorize, in advance, a few exact commands for a future headless test run (spec 092). You only ask: the request is staged, inert, at tier L0 with your role, model and span on it, and it can never be used by the run that wrote it. The operator reads the manifest Delphi renders from your structured fields, a replay against recent cards, and your `context` and `risk` as your own words, then decides and may narrow it. Refused when this span has read content from outside (external or federated input in its context): say in your report what you need instead. Limits: 5 manifest entries, 3 pending requests per run, 5 per mission, one request per 5 minutes, and a refused manifest is not staged again for 24 hours. The first slice admits only a sandboxed `shell` command run as `<system python3> -I <absolute script>` (argv[0] is one of /usr/bin/python3, /usr/local/bin/python3, /opt/homebrew/bin/python3; no -m, no module), there are no globs, shell strings, wrappers, chaining or inline code, and merges, pull requests, credentials, network tools, dispatch and writes to .git, hooks, configuration or the authorization store are always refused. List every script the command executes in `files`.", json!({"type": "object", "required": ["intent", "purpose", "manifest", "context", "risk", "run_plan"], "properties": {"intent": {"type": "string", "maxLength": 200, "description": "What the test is for, in one sentence."}, "purpose": {"type": "string", "maxLength": 300, "description": "Why a Red action is needed for it."}, "manifest": {"type": "array", "minItems": 1, "maxItems": 5, "items": {"type": "object", "required": ["tool", "argv", "runner_provenance"], "properties": {"tool": {"type": "string", "enum": ["shell"]}, "argv": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 32, "description": "The exact argument vector; argv[0] is the absolute canonical path of the binary."}, "files": {"type": "array", "items": {"type": "string"}, "maxItems": 16, "description": "Absolute paths of every script or file the command reads and executes."}, "runner_provenance": {"type": "string", "enum": ["project_snapshot", "daemon_installed"]}}, "additionalProperties": false}}, "context": {"type": "string", "maxLength": 1000, "description": "What you were doing and what you saw. Shown to the operator as your words, collapsed."}, "risk": {"type": "string", "maxLength": 1000, "description": "What could go wrong and what contains it."}, "run_plan": {"type": "string", "maxLength": 600, "description": "How the run would use it."}}, "additionalProperties": false})),
+            requires_write_scope: false,
+            classify: classify_request_test_authorization,
+            exec: ToolExec::Local(request_test_authorization),
+        });
         for spec in crate::artifacts::specs() {
             r.register(spec);
         }
@@ -1102,6 +1108,32 @@ fn classify_propose_admin_action(tool: &str, args: &Value) -> Result<Classified,
     })
 }
 
+/// Roles that may ask for an authorization (spec 092 TA-0). Asking is staging text for the operator; it grants nothing.
+const AUTHORIZATION_ASKERS: [&str; 3] = ["red-team", "investigator", "orchestrator"];
+
+fn classify_request_test_authorization(tool: &str, args: &Value) -> Result<Classified, ToolError> {
+    if !args.is_object() {
+        return Err(ToolError("the request must be an object".into()));
+    }
+    // Staging is inert: Green, like `note`. The engine admits or refuses it against the log (`authorization::admit`).
+    Ok(Classified { tool: tool.into(), tier: ToolTier::Green, kind: ActionKind::Read, summary: tool.into(), payload: args.clone(), pattern: tool.into() })
+}
+
+/// `request_test_authorization` (spec 092 TA-0). The tool checks the role and the shape and hands the request to the engine
+/// as an `authorization.request` event; the engine, which knows the task, the log and the span's taint, stages or refuses it.
+/// Nothing here grants anything, and the request is never usable by the run that wrote it.
+fn request_test_authorization(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
+    if !AUTHORIZATION_ASKERS.contains(&ctx.role) {
+        return ToolResult::err("this role does not request test authorizations; say in your report what you would need the operator to authorize");
+    }
+    match crate::authorization::parse_request(args, &crate::authorization::Policy::system()) {
+        Ok(_) | Err(crate::authorization::ParseError::Denied { .. }) => {}
+        Err(crate::authorization::ParseError::Invalid(m)) => return ToolResult::err(m),
+    }
+    ctx.events.push((crate::authorization::ASK.into(), args.clone()));
+    ToolResult::ok("sent for staging; the operator decides, and the run that asked can never use the answer".to_string())
+}
+
 /// Propose an administrative action that modifies workspace configuration, project scaffolding, or connectors (spec 069 §4.2).
 /// Emits an Administrative Action Card for synchronous operator approval. Exclusive to Administrator.
 fn propose_admin_action(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
@@ -1645,8 +1677,8 @@ mod tests {
     fn the_registry_offers_write_tools_only_to_roles_with_a_write_scope_and_accepts_new_tools() {
         let mut r = Registry::builtin();
         let names = |d: Vec<ToolDef>| d.into_iter().map(|t| t.name).collect::<Vec<_>>();
-        assert_eq!(names(r.defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "recall_memory", "xenia_search", "xenia_help", "external_available", "request_research", "inspect_system", "propose_admin_action"]);
-        assert_eq!(names(r.defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "recall_memory", "xenia_search", "xenia_help", "external_available", "request_research", "inspect_system", "propose_admin_action", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"]);
+        assert_eq!(names(r.defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "recall_memory", "xenia_search", "xenia_help", "external_available", "request_research", "inspect_system", "propose_admin_action", "request_test_authorization"]);
+        assert_eq!(names(r.defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "recall_memory", "xenia_search", "xenia_help", "external_available", "request_research", "inspect_system", "propose_admin_action", "request_test_authorization", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"]);
         assert!(r.classify("nope", &json!({})).is_err());
         fn ping(_: &mut ToolCtx, _: &Value) -> ToolResult {
             ToolResult::ok("pong".to_string())
@@ -2393,8 +2425,8 @@ mod tests {
     #[test]
     fn tool_definitions_depend_on_the_role_having_write_scope() {
         let names = |d: Vec<ToolDef>| d.into_iter().map(|t| t.name).collect::<Vec<_>>();
-        assert_eq!(names(tool_defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "recall_memory", "xenia_search", "xenia_help", "external_available", "request_research", "inspect_system", "propose_admin_action"]);
-        assert_eq!(names(tool_defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "recall_memory", "xenia_search", "xenia_help", "external_available", "request_research", "inspect_system", "propose_admin_action", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"]);
+        assert_eq!(names(tool_defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "recall_memory", "xenia_search", "xenia_help", "external_available", "request_research", "inspect_system", "propose_admin_action", "request_test_authorization"]);
+        assert_eq!(names(tool_defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "recall_memory", "xenia_search", "xenia_help", "external_available", "request_research", "inspect_system", "propose_admin_action", "request_test_authorization", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"]);
     }
 
     #[test]

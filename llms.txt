@@ -42,6 +42,8 @@ Start with the README, then the guides. The specs are the design and say, in a `
 - [research-result.schema.json](schemas/research-result.schema.json): what a host agent gets back from research
 - [prompt-log.schema.json](schemas/prompt-log.schema.json): one entry of the artifact prompt log (spec 070)
 - [seat-receipt.schema.json](schemas/seat-receipt.schema.json): payload of a `seat.receipt` event (spec 091)
+- [authorization-request.schema.json](schemas/authorization-request.schema.json): a staged request for the operator to authorize a test (spec 092)
+- [authorization-record.schema.json](schemas/authorization-record.schema.json): `operator/authorizations.json`, the operator's test authorizations (spec 092)
 - [xenia-record.schema.json](schemas/xenia-record.schema.json) and [xenia-sidecar.schema.json](schemas/xenia-sidecar.schema.json): signed org memory records
 - [agent-manifest.schema.json](schemas/agent-manifest.schema.json) and [skill-manifest.schema.json](schemas/skill-manifest.schema.json): `AGENT.md` and `SKILL.md` frontmatter
 
