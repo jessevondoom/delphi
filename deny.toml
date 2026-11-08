@@ -1,0 +1,78 @@
+# Dependency policy (spec 093 P), checked by `cargo deny check` in CI.
+#
+# The aim is that nothing enters the build unnoticed: a known-vulnerable or yanked crate, a licence we have not read,
+# a crate from somewhere other than crates.io, or a second copy of a crate we already depend on. Every exception below
+# carries a reason and a date to look at it again; an exception without both is a defect.
+
+[graph]
+# The platforms the releases are built for (.github/workflows/release.yml); a crate only another platform needs is not checked.
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+]
+
+[advisories]
+version = 2
+yanked = "deny"
+# RUSTSEC ids we have read and decided to live with. Every entry is { id, reason }, and the reason ends with
+# `revisit by YYYY-MM-DD`; `crates/delphi/tests/deny_policy.rs` fails when a date has passed or is missing, so an exception
+# cannot quietly become permanent.
+ignore = [
+    # The mailbox channel. imap 3.0.0-alpha.15 (the relay's IMAP client, crates/delphi/src/relay/net.rs) pulls rustls 0.22.4
+    # and rustls-webpki 0.102.8; the fixed releases are rustls >= 0.23.46 and rustls-webpki >= 0.103.16, already in the tree for
+    # the other TLS clients. The fix is a newer imap (or its TLS connector), which is a dependency decision for the operator.
+    # A relay reply is still bound to a single-use code for its card from an allowlisted sender (GOVERNANCE 5.10), so a
+    # man-in-the-middle can read or drop a reply, not forge one. Short fuse on purpose.
+    { id = "RUSTSEC-2026-0346", reason = "imap's rustls 0.22.4: Debug of client sessions could log TLS secrets; the relay does not log sessions. Needs an imap upgrade; revisit by 2026-11-21" },
+    { id = "RUSTSEC-2026-0349", reason = "imap's rustls 0.22.4: ServerHello can downgrade to classical key exchange; needs an imap upgrade; revisit by 2026-11-21" },
+    { id = "RUSTSEC-2026-0049", reason = "imap's rustls-webpki 0.102.8: CRL matching; the relay does not use CRLs; needs an imap upgrade; revisit by 2026-11-21" },
+    { id = "RUSTSEC-2026-0098", reason = "imap's rustls-webpki 0.102.8: URI name constraints; needs an imap upgrade; revisit by 2026-11-21" },
+    { id = "RUSTSEC-2026-0099", reason = "imap's rustls-webpki 0.102.8: wildcard name constraints; needs an imap upgrade; revisit by 2026-11-21" },
+    { id = "RUSTSEC-2026-0104", reason = "imap's rustls-webpki 0.102.8: reachable panic parsing a CRL; the relay does not use CRLs; needs an imap upgrade; revisit by 2026-11-21" },
+    { id = "RUSTSEC-2026-0382", reason = "imap's rustls-webpki 0.102.8: may accept distrusted intermediates; needs an imap upgrade; revisit by 2026-11-21" },
+    # zip 8.6.0 comes only from candle-core, which reads .npz and pickle entries by name (candle-core npy.rs, pickle.rs) and
+    # never calls ZipArchive::extract or ZipStreamReader::extract, the functions these four advisories are about. Delphi's own
+    # code does not use zip at all.
+    { id = "RUSTSEC-2026-0367", reason = "zip: SUID/SGID on extract(); candle-core never calls extract(); revisit by 2027-02-07" },
+    { id = "RUSTSEC-2026-0368", reason = "zip: extract() symlink targets; candle-core never calls extract(); revisit by 2027-02-07" },
+    { id = "RUSTSEC-2026-0369", reason = "zip: extract() permissions through symlinks; candle-core never calls extract(); revisit by 2027-02-07" },
+    { id = "RUSTSEC-2026-0429", reason = "zip: extract() aborts on a large symlink entry; candle-core never calls extract(); revisit by 2027-02-07" },
+    # Unmaintained crates with no safe upgrade, each pulled in by something we do not control.
+    { id = "RUSTSEC-2024-0436", reason = "paste: unmaintained proc-macro, build-time only, via candle-core's gemm; revisit by 2027-02-07" },
+    { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile: unmaintained, via the TLS stacks of lettre and imap; revisit by 2027-02-07" },
+    { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml: unmaintained, via serde_yaml; revisit by 2027-02-07" },
+]
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+# Permissive licences only. A copyleft or unknown licence fails until someone reads it and adds it here with a reason.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "CC0-1.0",
+    # Read on 2026-11-07: 0BSD is a public-domain-equivalent permissive licence (quoted_printable, via lettre);
+    # CDLA-Permissive-2.0 is the permissive licence of the Mozilla CA root data (webpki-roots, via lettre).
+    "0BSD",
+    "CDLA-Permissive-2.0",
+]
+
+[bans]
+# A second copy of a crate is a warning, not a failure: it costs build time and size, and some are unavoidable.
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

@@ -179,6 +179,38 @@ fn events_follow_the_envelope_schema() {
     must_fail("event-envelope.schema.json", "a non-object payload", &json!({ "v": 1, "seq": 1, "timestamp": "t", "mission_id": "m", "type": "x", "payload": [] }));
 }
 
+// specs/091 SR-1: the program's own receipt satisfies the schema, and the schema refuses text and a made-up family source.
+#[test]
+fn a_seat_receipt_satisfies_its_schema() {
+    use delphi_engine::seat::{prompt_hash, resolve, Carrier, FamilyTable, Receipt};
+    let r = Receipt {
+        seat_id: "sp1.s1".into(),
+        requested_endpoint: "ep".into(),
+        requested_model: "claude-sonnet-5.5".into(),
+        served: resolve(&FamilyTable::shipped(), Some("gpt-6-luna")),
+        carrier: Carrier { kind: "copilot".into(), cli_version: None, tools_offered: vec!["view".into()], dispatch_allowed: false },
+        tool_grant: json!({ "builtin": "none" }),
+        prompt_hash: prompt_hash("system", "user"),
+        tokens_in: 10,
+        tokens_out: 4,
+        outcome: "model_mismatch".into(),
+    };
+    let ok = r.to_value();
+    must_pass("seat-receipt.schema.json", "a receipt", &ok);
+    let mut unmapped = r.clone();
+    unmapped.served = resolve(&FamilyTable::shipped(), None);
+    must_pass("seat-receipt.schema.json", "a receipt with no served model", &unmapped.to_value());
+    let mut bad = ok.clone();
+    bad["prompt"] = json!("the prompt text");
+    must_fail("seat-receipt.schema.json", "a receipt carrying prompt text", &bad);
+    let mut bad = ok.clone();
+    bad["served"]["family_source"] = json!("model_said_so");
+    must_fail("seat-receipt.schema.json", "a family source that is not the table", &bad);
+    let mut bad = ok;
+    bad["served"]["carrier_claimed"] = json!(false);
+    must_fail("seat-receipt.schema.json", "a served model not marked carrier-claimed", &bad);
+}
+
 #[test]
 fn handoffs_follow_the_envelope_schema() {
     let ok = json!({

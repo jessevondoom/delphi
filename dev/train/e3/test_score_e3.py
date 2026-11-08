@@ -140,39 +140,81 @@ class Measures(Base):
 class Constants(unittest.TestCase):
     def test_constants_match_prereg(self):
         text = (HERE / "PREREG.md").read_text()
-        block = re.search(r"### Constants.*?```\n(.*?)```", text, re.S).group(1)
-        found = {}
-        for line in block.strip().splitlines():
-            k, v = (x.strip() for x in line.split("=", 1))
-            found[k] = Fraction(v) if "/" in v else int(v)
-        self.assertEqual(set(found), {
+        names = {
             "MIN_QUALIFYING", "MIN_NOISE_QUESTIONS", "SD_ABSOLUTE_SLACK", "SD_RELATIVE_OK", "SD_RELATIVE_WORSE", "READABLE_WORSE",
-            "ESCALATION_OK", "ESCALATION_WORSE", "MISSED_OK", "MISSED_WORSE", "CAP_PER_RUN", "CAP_DELPHI_TOTAL", "CAP_HOST_TOTAL"})
-        for k, v in found.items():
+            "ESCALATION_OK", "ESCALATION_WORSE", "MISSED_OK", "MISSED_WORSE", "CAP_PER_RUN", "CAP_DELPHI_TOTAL", "CAP_HOST_TOTAL"}
+
+        def parse(block):
+            found = {}
+            for line in block.strip().splitlines():
+                k, v = (x.strip() for x in line.split("=", 1))
+                found[k] = Fraction(v) if "/" in v else int(v)
+            return found
+
+        # the original block (kept readable) and the amended block (Amendment 1, the last one in the file)
+        blocks = re.findall(r"### (?:Amended c|C)onstants.*?```\n(.*?)```", text, re.S)
+        self.assertEqual(len(blocks), 2)
+        original, amended = parse(blocks[0]), parse(blocks[1])
+        self.assertEqual(set(original), names)
+        self.assertEqual(set(amended), names)
+        self.assertEqual(original["CAP_DELPHI_TOTAL"], 1_500_000)
+        self.assertEqual({k for k in names if original[k] != amended[k]}, {"CAP_DELPHI_TOTAL"})
+        for k, v in amended.items():
             self.assertEqual(getattr(s3, k), v, k)
+        self.assertEqual((s3.CAP_PER_RUN, s3.CAP_DELPHI_TOTAL, s3.CAP_HOST_TOTAL), (350_000, 2_000_000, 400_000))
 
     def test_budget_arithmetic_in_prereg_fits_the_caps(self):
-        planned = 6 * 91_600 + 4 * 91_600 + 6 * 30_000
-        self.assertEqual(planned, 1_096_000)
-        self.assertLessEqual(planned + s3.CAP_DELPHI_TOTAL // 4, s3.CAP_DELPHI_TOTAL)
+        # Amendment 1: B1 and B2 on all six questions, a foreign seat in each of six A2 runs
+        councils = 6 * 91_600 + 6 * 91_600
+        self.assertEqual(councils, 1_099_200)
+        planned = councils + 6 * 30_000
+        self.assertEqual(planned, 1_279_200)
+        reserve = s3.CAP_DELPHI_TOTAL // 4
+        self.assertEqual(reserve, 500_000)
+        self.assertEqual(planned + reserve, 1_779_200)
+        self.assertEqual(s3.CAP_DELPHI_TOTAL - (planned + reserve), 220_800)
+        self.assertEqual(s3.CAP_DELPHI_TOTAL - reserve, 1_500_000)   # the phase 2 drop trigger
         self.assertLessEqual(12 * 19_500, s3.CAP_HOST_TOTAL)
+        self.assertEqual(12 * 19_500, 234_000)
         self.assertLessEqual(12 * 30_024, s3.CAP_HOST_TOTAL)
+        self.assertLess(planned + 135_130, s3.CAP_DELPHI_TOTAL)
         text = (HERE / "PREREG.md").read_text()
-        for needle in ("1,096,000", "1,471,000", "1,705,600", "2,080,600", "234,000"):
+        for needle in ("1,279,200", "1,779,200", "220,800", "1,099,200", "500,000", "234,000", "2,000,000"):
             self.assertIn(needle, text)
+        # the original figures stay readable, marked superseded
+        for needle in ("1,096,000", "1,471,000", "1,705,600", "2,080,600"):
+            self.assertIn(needle, text)
+        self.assertIn("superseded by Amendment 1", text)
+        self.assertIn("replace the weak questions. you can raise the max budget to 2M tokens. then run e3", text)
 
     def test_question_files_match_prereg_hashes(self):
         text = (HERE / "PREREG.md").read_text()
-        m = ROOT / "missions/2026-10-23-foundational-design/councils"
-        for name, src in (("n1", "015-spec-073-console-adaptive-contrast.md"), ("n2", "014-spec-069-workspace-administration.md")):
-            body = s3.make_question(str(m / src))
-            h = hashlib.sha256(body.encode()).hexdigest()
-            self.assertIn(h, text, name)
-            self.assertEqual((HERE / "questions" / (name + ".txt")).read_text(), body)
-            self.assertLessEqual(len(s3.proposition(str(m / src))), 2000)
+        amended = text[text.index("## Amendment 1"):]
+        expected = {
+            "q1": "c3434e2655c7138f185a1152178714812621715ff17737b13ef61266652b5eb1",
+            "q2": "70debdea02ebdd8c2df1c3285b07c2c9627c59f5538e3bac0a83d43b91dbbd1b",
+            "q3": "72ccc85220b78c754a51931a720c6ca8c975bed80228dd060c4d48aab5fd49cb",
+            "q4": "4bb43686cf4c82ffed15e7e79c43aa968283400b2650bd67c0f1fbd70c070771",
+            "q5": "5e12a2f3e3c254ed55f7ab03ad8ed851524e4020dea27c8f1f40dd6c3e5a8a29",
+            "q6": "c50c3050208bc1b47a3ac6b3e3a75535d6bad71864d59543650a4698f298e404",
+        }
         e2 = ROOT / "dev/train/e2/data/records"
-        for q in ("q3", "q4", "q5", "q6"):
-            self.assertIn(hashlib.sha256((e2 / (q + ".txt")).read_bytes()).hexdigest(), text, q)
+        for q, h in expected.items():
+            self.assertEqual(hashlib.sha256((e2 / (q + ".txt")).read_bytes()).hexdigest(), h, q)
+            self.assertIn(h, amended, q)
+            self.assertLessEqual(len((e2 / (q + ".txt")).read_text()), 2000, q)
+        # the six rows of the amended table, in order
+        rows = re.findall(r"^\| (q\d) \|", amended, re.M)
+        self.assertEqual(rows, list(expected))
+        # E2's own table carries the same source-record hashes for q1 and q2
+        e2prereg = (ROOT / "dev/train/e2/PREREG.md").read_text()
+        for src in ("dfb0683cc88ef2c9c85e18b0c5772ef16787fabe68c98e6b6f97f70fdd381cfa",
+                    "eeb9312a77f835c80527c9a906f541ab75369c727a268d92ae7b62b460266d71"):
+            self.assertIn(src, e2prereg)
+            self.assertIn(src, amended)
+        # n1 and n2 are gone from the repository
+        self.assertFalse((HERE / "questions" / "n1.txt").exists())
+        self.assertFalse((HERE / "questions" / "n2.txt").exists())
 
     def test_e2_baseline_matches_prereg(self):
         b = s3.baseline_e2()
@@ -202,13 +244,13 @@ def mk(d, spec):
 
 
 def six(a1_text, b2_text=None, a2_text=None, a1_esc=False, b_esc=False):
-    ids = ["q3", "q4", "q5", "q6", "n1", "n2"]
+    ids = ["q1", "q2", "q3", "q4", "q5", "q6"]
     rows = []
     for k, i in enumerate(ids):
         rows.append({
             "id": i,
             "b1": record(GO, escalated=b_esc, ),
-            "b2": record(b2_text or GO, escalated=b_esc) if k < 4 else None,
+            "b2": record(b2_text or GO, escalated=b_esc),   # Amendment 1: B2 on all six
             "a1": a1_text(k) if callable(a1_text) else a1_text,
             "a2": a2_text if a2_text is not None else record(GO, blind="yes"),
         })
@@ -224,7 +266,7 @@ class Analyze(Base):
         self.assertEqual(out["arms"]["a1"]["verdict"], "SUPPORTED", out["arms"]["a1"])
         self.assertEqual(out["verdict"], "SUPPORTED")
         self.assertEqual(out["arms"]["a1"]["same_decision"], 6)
-        self.assertEqual(out["arms"]["a1"]["with_repeat_council"], 4)
+        self.assertEqual(out["arms"]["a1"]["with_repeat_council"], 6)
 
     def test_worse_when_unreadable_rate_collapses(self):
         out = self.run_rule(six(record(UNREADABLE, blind="yes")))
@@ -237,10 +279,10 @@ class Analyze(Base):
         self.assertEqual(out["arms"]["a1"]["verdict"], "WORSE")
 
     def test_worse_when_decisions_split_from_a_stable_council(self):
-        # B2 equals B1 on all four repeat questions; the Panel differs on two of them
+        # B2 equals B1 on all six repeat questions; the Panel differs on two of them
         out = self.run_rule(six(lambda k: record(STOP if k in (0, 1) else GO, blind="yes")))
         a1 = out["arms"]["a1"]
-        self.assertEqual((a1["same_decision_on_repeat_subset"], a1["council_repeat_same_decision_on_repeat_subset"]), (2, 4))
+        self.assertEqual((a1["same_decision_on_repeat_subset"], a1["council_repeat_same_decision_on_repeat_subset"]), (4, 6))
         self.assertEqual(a1["verdict"], "WORSE")
 
     def test_no_evidence_in_between(self):
@@ -251,7 +293,7 @@ class Analyze(Base):
         self.assertEqual(a1["verdict"], "NO EVIDENCE", a1)
 
     def test_noise_floor_forgives_a_noisy_council(self):
-        # B2 disagrees with B1 on all four repeat questions; the Panel differs on two: within 1? no: sd_s 2 vs sd_b2_s 0 is not worse
+        # B2 disagrees with B1 on all six repeat questions; the Panel differs on two: sd_s 4 vs sd_b2_s 0 is not worse
         out = self.run_rule(six(lambda k: record(STOP if k in (0, 1) else GO, blind="yes"), b2_text=STOP))
         a1 = out["arms"]["a1"]
         self.assertEqual(a1["council_repeat_same_decision_on_repeat_subset"], 0)
@@ -276,16 +318,20 @@ class Analyze(Base):
 
     def test_incomplete_without_enough_repeats(self):
         rows = six(record(GO, blind="yes"))
-        for r in rows[1:4]:
-            r["b2"] = None
+        for r in rows[2:]:
+            r["b2"] = None           # only two questions keep a repeat Council: |S| = 2 < 3
         self.assertEqual(self.run_rule(rows)["arms"]["a1"]["verdict"], "INCOMPLETE")
+        rows = six(record(GO, blind="yes"))
+        for r in rows[3:]:
+            r["b2"] = None           # three keep one: |S| = 3 is enough
+        self.assertEqual(self.run_rule(rows)["arms"]["a1"]["verdict"], "SUPPORTED")
 
     def test_reference_with_no_decision_drops_the_question(self):
         rows = six(record(GO, blind="yes"))
-        rows[4]["b1"] = record("- red-team | unreadable | none\n")
+        rows[4]["b1"] = record("- red-team | unreadable | none\n")   # q5
         out = self.run_rule(rows)
         self.assertEqual(out["arms"]["a1"]["qualifying"], 5)
-        self.assertTrue(any(e["id"] == "n1" for e in out["arms"]["a1"]["excluded"]))
+        self.assertTrue(any(e["id"] == "q5" for e in out["arms"]["a1"]["excluded"]))
         self.assertEqual(out["arms"]["a1"]["verdict"], "SUPPORTED")
 
     def test_json_output(self):

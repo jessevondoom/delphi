@@ -101,9 +101,16 @@ description: Use when the user asks for a Council, a Panel, a second opinion fro
 
 Two depths. A **Panel** (the default, allowed for every question) runs the seats as your own isolated subagents, on your host's tokens. A **Council** is run by Delphi's daemon with seats from more than one model family, on the operator's Delphi tokens. Never refuse a Panel; at most suggest a Council.
 
-## 1. Frame, then ask
+## 1. Frame, then confirm only when the rule says so
 
-Call `council_frame` with the question (and options, stakes and project-relative `context_pointers` if you have them). Show the operator its `notice` if it has one (a suggestion to run a formal Council, never a block), then ask its `ask_the_operator` question and **wait for a yes** before any seat runs. Say plainly which depth you will run.
+**The question is the operator's words.** Pass them as `question` exactly as given. Add no options, stakes or framing sentence the operator did not give. If options would help, ask the operator for them; do not make them up. Pass `options` only when the operator gave them, and say who gave them in `options_source` (`operator`, `host` or `none`).
+
+Call `council_frame` with the question (and the options and project-relative `context_pointers` the operator gave). Say in `requested_by` whether the operator asked for a Panel or Council by name (`operator`) or you are proposing one they did not ask for (`host`). Show the operator its `notice` if it has one (a suggestion to run a formal Council, never a block). Then read its `confirmation`:
+
+- `needed: true`: ask its `ask` question and **wait for a yes** before any seat runs. That is when you are proposing a Panel the operator did not ask for, when the Panel includes a foreign seat, or when the stakes are `high`.
+- `needed: false`: the operator asked for it by name. State the plan in one line (which depth, which seats) and proceed without a second ask.
+
+Say plainly which depth you will run.
 
 ## 2. A formal Council (when the operator asks for it)
 
@@ -113,7 +120,7 @@ Call `request_council` with the same arguments, relay each `phase` line from `co
 
 Delphi holds the barrier and the rules; you run the seats.
 
-1. Call `council_open` with the question, options, stakes and pointers, your own model name in `model`, and `blind` set to `yes` if you will run each seat in its own isolated context or `no` if you cannot. You get a `council_id`. **Optionally**, when the operator wants the Panel to span two model families, `council_frame` with `foreign_seat` (normally `red-team`) tells you what to ask: it spends the operator's Delphi tokens, so ask first and pass `foreign_seat` to `council_open` only on a yes. Delphi then runs that one seat itself on another family; do not brief, answer for or wait on it, only run the others.
+1. Call `council_open` with the question (the operator's words, unchanged), the options the operator gave (with `options_source`), stakes and pointers, your own model name in `model`, and `blind` set to `yes` if you will run each seat in its own isolated context or `no` if you cannot. You get a `council_id`. **Optionally**, when the operator wants the Panel to span two model families, `council_frame` with `foreign_seat` (normally `red-team`) tells you what to ask: it spends the operator's Delphi tokens, so ask first, and pass `foreign_seat` to `council_open` only on a yes, together with `operator_confirmed: true` (`council_open` refuses a foreign seat without it). `operator_confirmed` and `options_source` are your word; Delphi cannot see what the operator typed, and the ruling card says they are host-reported. Delphi then runs that one seat itself on another family, in the background, for both rounds. Do not brief or answer FOR it, but you MUST wait for it: run the other seats, and before the verdict keep calling `council_status` (wait) while it says `waiting_on: delphi_seat`, or a brief answers `waiting_on_delphi_seat`. That takes minutes. Never end your turn while it is outstanding, never write the verdict early. Only a `decided`, `needs_operator`, `not_decided` or `failed` state ends the wait.
 2. **Round 1, blind.** Start one isolated subagent per seat (`architect`, `red-team`, `strategist`; not the one Delphi runs), all at once. Tell each: call `council_brief` with its seat and round 1, answer in the shape the brief gives, call `council_submit` (round 1, with `model` set to the model it ran on), and return only the word \"submitted\". If your seats cannot call tools, do those two calls yourself and put the brief in the seat's prompt. In Codex, say it in so many words: spawn three agents, one per seat, wait for all of them. Where your host offers two or more models, run the red-team seat on a different one from the architect's. If a seat cannot answer, submit it with `abstain` and the reason.
 3. Delphi releases Round 1 only when every seat is in. When a submit answers `round_1: complete`, do the same for round 2 (`council_brief` round 2 shows the other seats' stances).
 4. **Verdict.** When a submit answers `round_2: complete`, call `council_brief` with seat `orchestrator` and round 3, write the verdict in the shape it gives, and submit it as seat `orchestrator`, round 3. Delphi parses the critiques, copies every P0 and P1 finding verbatim into the Minority Report, applies the escalation rule, and writes the record. You cannot soften the dissent or decide an escalation.
@@ -475,6 +482,37 @@ mod tests {
         assert!(config_snippet("vim").is_err());
         let j: serde_json::Value = serde_json::from_str(&config_snippet("claude-code").unwrap().lines().skip(1).collect::<Vec<_>>().join("\n")).unwrap();
         assert_eq!(j["mcpServers"]["delphi"]["args"][0], "mcp");
+    }
+
+    #[test]
+    fn the_council_skill_tells_a_host_to_wait_for_the_foreign_seat_and_never_not_to() {
+        let t = COUNCIL_SKILL_MD;
+        assert!(!t.contains("wait on it") && !t.contains("do not brief, answer for or wait"), "the old 'do not wait' wording is gone");
+        for must in ["you MUST wait for it", "keep calling `council_status` (wait)", "waiting_on_delphi_seat", "Never end your turn", "never write the verdict early", "Do not brief or answer FOR it"] {
+            assert!(t.contains(must), "the skill says: {must}");
+        }
+    }
+
+    #[test]
+    fn the_council_skill_keeps_the_question_verbatim_and_states_the_confirmation_rule() {
+        let t = COUNCIL_SKILL_MD;
+        for must in [
+            "exactly as given",
+            "Add no options, stakes or framing sentence the operator did not give",
+            "ask the operator for them",
+            "`confirmation`",
+            "`needed: true`",
+            "proposing a Panel the operator did not ask for",
+            "foreign seat",
+            "`high`",
+            "State the plan in one line",
+            "without a second ask",
+            "operator_confirmed: true",
+            "your word",
+        ] {
+            assert!(t.contains(must), "the council skill lost: {must}");
+        }
+        assert!(!t.contains("ask_the_operator"), "the old always-ask field is gone");
     }
 
     #[test]

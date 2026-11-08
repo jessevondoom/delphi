@@ -90,11 +90,59 @@ pub(crate) struct HarnessErr {
     /// An `agy` run that ended because the CLI reported an error (not quota, not a guard, not a timeout) before it used any
     /// tool: the one failure a Council or Panel seat may try again (`specs/089` P4b).
     pub cli_error: bool,
+    pub kind: FailKind,
+}
+
+/// What kind of failure a harness run was, beyond its reason text (`specs/093` section 5 E): an answer the CLI never produced
+/// is not the same as one it produced and the schema refused, and an error printed as the answer is neither.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FailKind {
+    Other,
+    /// A schema-validated answer was expected and the CLI returned none (retryable).
+    AnswerNotFound,
+    /// The CLI found an answer and refused it: its own schema validation gave up.
+    AnswerRefused,
+    /// The CLI reported success but its answer is one of its own error messages.
+    InBandError,
+}
+
+/// The CLI's own error line sent as a successful answer (a "cannot load model" style message). Deliberately narrow: only the
+/// first non-empty line, at most 80 characters, matched whole against a short per-CLI list. It can only turn a success into a
+/// failure; a miss changes nothing.
+///
+/// **The strings below are plausible guesses, not text captured from the real CLIs**, so today this catches little: the mechanism
+/// is what is proven (tests use a fake CLI). When a real CLI is seen exiting 0 with an error as its answer, add that exact line
+/// here with a test, and say which CLI version printed it.
+pub(crate) fn in_band_error(cli: Cli, text: &str) -> bool {
+    let line = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+    let known: &[&str] = match cli {
+        Cli::Agy => &["error: failed to load model", "error: cannot load model", "error: model unavailable"],
+        Cli::Claude => &["error: cannot load model", "error: model not found"],
+        Cli::Codex => &["error: failed to load model", "error: model not found"],
+        Cli::Copilot => &["error: model not available", "error: cannot load model"],
+    };
+    line.chars().count() <= 80 && known.iter().any(|k| line.eq_ignore_ascii_case(k))
+}
+
+/// The kind of a CLI's final `result`. An error result whose subtype names structured output is a refusal (the answer was found
+/// and failed validation); a success with a schema asked for and no answer or words is "not found"; a success whose text is the
+/// CLI's own error line is in-band. Anything else is `Other`, so a miss behaves as before.
+fn classify_result(cli: Cli, wants_schema: bool, cli_error: bool, subtype: &str, text: &str, has_structured: bool, no_words: bool) -> FailKind {
+    if cli_error {
+        return if subtype.contains("structured") { FailKind::AnswerRefused } else { FailKind::Other };
+    }
+    if !has_structured && in_band_error(cli, text) {
+        FailKind::InBandError
+    } else if wants_schema && !has_structured && no_words {
+        FailKind::AnswerNotFound
+    } else {
+        FailKind::Other
+    }
 }
 
 impl HarnessErr {
     fn retry(reason: impl Into<String>) -> HarnessErr {
-        HarnessErr { reason: reason.into(), retryable: true, cli_error: false }
+        HarnessErr { reason: reason.into(), retryable: true, cli_error: false, kind: FailKind::Other }
     }
 }
 
@@ -429,6 +477,7 @@ impl Engine {
         let id = if call.call_id.is_empty() { format!("bridge-{}", call.name) } else { call.call_id.clone() };
         let started = std::time::Instant::now();
         let mut r = self.exec_tool(sc, &id, &call.name, &call.args, &None).await?;
+        let failure = r.is_error.then(|| crate::tools::failure_kind(&r.content));
         // From the call arriving to its answer, so a call held for an approval card counts the operator's time too.
         let duration_ms = started.elapsed().as_millis() as u64;
         match self.note_tool_call(sc, &call.name, &call.args, r.is_error).await? {
@@ -440,11 +489,14 @@ impl Engine {
             let text = call.args.to_string();
             if text.chars().count() > 4000 { Value::String(text.chars().take(4000).collect()) } else { call.args.clone() }
         };
-        let payload = match sc.content_ref.take() {
+        let mut payload = match sc.content_ref.take() {
             // A connector result: the log holds a pointer to the payload store, never the text.
             Some(h) => json!({"tool_call_id": id, "name": call.name, "arguments": arguments, "content": format!("[connector result stored as @payload/{}, {} characters]", h, r.content.chars().count()), "content_ref": h, "is_error": r.is_error, "duration_ms": duration_ms}),
             None => json!({"tool_call_id": id, "name": call.name, "arguments": arguments, "content": r.content.chars().take(32_000).collect::<String>(), "truncated_in_log": r.content.chars().count() > 32_000, "is_error": r.is_error, "duration_ms": duration_ms}),
         };
+        if let (Some(kind), Some(o)) = (failure, payload.as_object_mut()) {
+            o.insert("failure".into(), json!(kind));
+        }
         sc.m.append(sc.agent_ev("harness.bridge_call", payload, ep, model)).await?;
         // The CLI may have gone while the call waited for the operator; nobody is left to answer, which is fine.
         let _ = call.reply.send(r);
@@ -579,7 +631,7 @@ impl Engine {
         let persist = opts.session != SessionMode::Ephemeral;
         // `[harness.<cli>]` (ratified): how this CLI is equipped and who answers its permission questions (`specs/020`).
         let profile: HarnessProfile = self.cfg.get().harness.get(cli.program()).cloned().unwrap_or_default();
-        let delegate = cli == Cli::Claude && !builder && !sc.readonly && profile.approvals == ApprovalSource::Delegate;
+        let delegate = cli == Cli::Claude && !builder && !sc.readonly && !sc.toolless && profile.approvals == ApprovalSource::Delegate;
         // Delphi's tools for this role, offered over the bridge: to the Claude CLI as an MCP config, to the Antigravity CLI
         // as a plugin in the span's own `.agents/` with a hook that gates its other tools (`specs/020` §8). A Builder keeps
         // the Claude CLI's own file and shell tools (every request still answered here), so those Delphi tools are not duplicated.
@@ -589,12 +641,12 @@ impl Engine {
             // An agy Builder keeps Delphi's `run_command`: its own shell cannot be approved when it runs headless.
             bridge_defs.retain(|d| !DUPLICATED_FOR_BUILDERS.contains(&d.name.as_str()) || (cli == Cli::Agy && (d.name == "run_command" || d.name == "shell")));
         }
-        let connectors = cli == Cli::Claude && !builder && !sc.readonly && profile.claudeai_connectors;
+        let connectors = cli == Cli::Claude && !builder && !sc.readonly && !sc.toolless && profile.claudeai_connectors;
         // Servers a previous session had connected besides ours: the wait for the account's connectors holds out for them.
         let expect_servers: Vec<String> = self.inventory.seats().into_iter().find(|r| r.endpoint_id == ep.id).map(|r| r.mcp_servers.into_iter().filter(|(n, st)| n != crate::bridge::SERVER_NAME && st == "connected").map(|(n, _)| n).collect()).unwrap_or_default();
         // The CLI's own tools the span may use: for the Claude CLI they are given with `--tools`; for `agy` they are what its gate lets through.
-        let agy_native = if cli == Cli::Agy { agy_native_tools(&profile.native_tools) } else { vec![] };
-        let mut lp = LaunchProfile { native_tools: if builder || sc.readonly || cli != Cli::Claude { vec![] } else { profile.native_tools.clone() }, auto_approve: delegate, claudeai_connectors: connectors, mcp_config: None, settle: self.settings.connector_settle, expect_servers };
+        let agy_native = if cli == Cli::Agy && !sc.toolless { agy_native_tools(&profile.native_tools) } else { vec![] };
+        let mut lp = LaunchProfile { native_tools: if builder || sc.readonly || sc.toolless || cli != Cli::Claude { vec![] } else { profile.native_tools.clone() }, auto_approve: delegate, claudeai_connectors: connectors, mcp_config: None, settle: self.settings.connector_settle, expect_servers };
         let (mut _bridge, mut bridge_rx): (Option<Bridge>, Option<tokio::sync::mpsc::Receiver<BridgeCall>>) = (None, None);
         let mut gate_rx: Option<tokio::sync::mpsc::UnboundedReceiver<HookNote>> = None;
         let mut gate_policy: Option<HookPolicy> = None;
@@ -656,9 +708,13 @@ impl Engine {
         let mut vendor_meter: Option<(u64, u64)> = None;
         let mut cap_alerted: Vec<u64> = Vec::new();
         let mut failure: Option<(String, bool)> = None;
+        let mut fail_kind = FailKind::Other;
+        let wants_schema = launch.opts.json_schema.is_some();
         let mut exit_code: Option<i32> = None;
         let mut exhaustion: Option<delphi_adapter::exhaust::Exhaustion> = None;
         let mut used_tools = false;
+        // What the CLI reported about the seat, for its receipt: the served model (a claim) and the tools it offered.
+        let (mut served_reported, mut tools_offered): (Option<String>, Vec<String>) = (None, Vec::new());
         // Any tool call at all (even a read-only one) and whether the failure is the CLI's own `result` error: the retry's conditions.
         let (mut any_tool, mut cli_error_seen) = (false, false);
         let (hub, span_id) = (self.hub.clone(), sc.span_id.clone());
@@ -715,7 +771,11 @@ impl Engine {
                 },
             };
             match ev {
+                Event::Served(model) => served_reported = Some(model),
                 Event::Init { ref tools, ref mcp_servers, ref session_id } => {
+                    if !tools.is_empty() {
+                        tools_offered = tools.clone();
+                    }
                     self.inventory.record(crate::inventory::SeatRecord { endpoint_id: ep.id.clone(), harness: cli.program().into(), model: launch.model.clone(), tools: tools.clone(), mcp_servers: mcp_servers.clone().unwrap_or_default(), bridge: bridge_on, seen_unix: (self.clock_unix)() });
                     // A saved session can be resumed by a later span; the log is where its id is kept.
                     if persist && !session_id.is_empty() {
@@ -811,6 +871,15 @@ impl Engine {
                             None => format!("the CLI reported an error: {}", Some(text.as_str()).filter(|t| !t.is_empty()).unwrap_or(subtype.as_str()).chars().take(200).collect::<String>()),
                         }, !used_tools));
                     }
+                    let no_words = text.trim().is_empty() && text_parts.iter().all(|t| t.trim().is_empty());
+                    fail_kind = classify_result(cli, wants_schema, is_error && exhaustion.is_none(), subtype, text, structured.is_some(), no_words);
+                    if !is_error {
+                        match fail_kind {
+                            FailKind::InBandError => failure = Some((format!("the CLI reported success but its answer is an error: {}", text.trim().chars().take(100).collect::<String>()), !used_tools)),
+                            FailKind::AnswerNotFound => failure = Some(("the CLI finished without the schema-validated answer that was asked for".into(), !used_tools)),
+                            _ => {}
+                        }
+                    }
                     metered = metered.max(usage.metered());
                     if metered > self.settings.harness_token_cap && failure.is_none() {
                         failure = Some((format!("the CLI used {} tokens, over the {} cap for a span", metered, self.settings.harness_token_cap), false));
@@ -884,6 +953,24 @@ impl Engine {
         };
         let mut batch = vec![sc.agent_ev("agent.usage", payload.to_value(), ep, &launch.model), sc.agent_ev("harness.cost", cost_payload(cost, metered, vendor_meter), ep, &launch.model)];
 
+        // The seat receipt (`specs/091` SR-1): written here by the daemon from what the CLI reported, never from the model's text.
+        {
+            let mismatch = matches!(&result, Some(Event::Result { subtype, .. }) if subtype == "model_mismatch");
+            let receipt = crate::seat::Receipt {
+                seat_id: sc.seats.lock().unwrap().next_id(&sc.span_id),
+                requested_endpoint: ep.id.clone(),
+                requested_model: launch.model.clone(),
+                served: crate::seat::resolve(&self.family_table(), served_reported.as_deref()),
+                carrier: crate::seat::Carrier { kind: cli.program().into(), cli_version: None, tools_offered, dispatch_allowed: bridge_defs.iter().any(|d| d.name == "dispatch_agent") },
+                tool_grant: json!({"builtin": builtin, "native": native_for_note, "bridge": bridge_defs.iter().map(|d| d.name.clone()).collect::<Vec<_>>(), "gated": gate_rx.is_some(), "readonly": sc.readonly}),
+                prompt_hash: crate::seat::prompt_hash(&launch.system_prompt, &launch.user_prompt),
+                tokens_in: usage.input + usage.cache_read + usage.cache_write,
+                tokens_out: usage.output,
+                outcome: if mismatch { "model_mismatch" } else if failure.is_some() { "error" } else { "ok" }.into(),
+            };
+            batch.push(sc.agent_ev(crate::seat::RECEIPT_KIND, receipt.to_value(), ep, &launch.model));
+        }
+
         // Only a run that failed counts: if the CLI printed a rejection but still finished, the pair served, and marking it
         // exhausted only for `record_success` to clear it a moment later would leave a false event in the log.
         if let (Some(x), true) = (&exhaustion, failure.is_some()) {
@@ -932,7 +1019,7 @@ impl Engine {
             // A failed harness run in the central error log (`specs/039`): the reason, the exit code and the redacted tail of stderr.
             // A spent quota is a decision (warn), anything else an error.
             if delphi_core::elog::enabled(delphi_core::elog::Level::Warn) {
-                let ctx = json!({"mission": sc.m.id, "task": sc.task_id, "span": sc.span_id, "harness": launch.program, "model": launch.model, "exit_code": exit_code, "stderr_tail": session.stderr_tail().await, "reason": if retryable { "retryable" } else { "final" }});
+                let ctx = json!({"mission": sc.m.id, "task": sc.task_id, "span": sc.span_id, "harness": launch.program, "model": launch.model, "exit_code": exit_code, "stderr_tail": session.stderr_tail().await, "reason": if retryable { "retryable" } else { "final" }, "kind": format!("{:?}", fail_kind)});
                 if exhaustion.is_some() {
                     delphi_core::elog::warn("harness", "harness_exhausted", &reason, ctx);
                 } else {
@@ -940,7 +1027,7 @@ impl Engine {
                 }
             }
             sc.m.append_batch(batch).await?;
-            return Ok(Err(HarnessErr { reason, retryable, cli_error: cli == Cli::Agy && cli_error_seen && !any_tool && exhaustion.is_none() }));
+            return Ok(Err(HarnessErr { reason, retryable, cli_error: cli == Cli::Agy && cli_error_seen && !any_tool && exhaustion.is_none(), kind: fail_kind }));
         }
         let text = final_text.filter(|t| !t.trim().is_empty()).unwrap_or_else(|| text_parts.join("\n"));
         let block = delphi_adapter::blocks::ContentBlock::Text { text: text.clone() };
@@ -1016,6 +1103,32 @@ mod tests {
         assert!(inside(&root, &format!("{}/src/a.rs", root.display())).is_some());
         for bad in ["../x", "/etc/passwd", "src/../../x", ".git/hooks/pre-commit", "sub/.GIT/config", "link/passwd", "link", "link/../z", "link/../.git/hooks/x"] {
             assert!(inside(&root, bad).is_none(), "{}", bad);
+        }
+    }
+
+    /// Spec 093 L1: the words of a harness seat reach an attached client as live frames, and its reasoning never does.
+    #[tokio::test]
+    async fn a_harness_seat_streams_its_words_to_clients_and_never_its_reasoning() {
+        let body = format!("{}\necho '{{\"type\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"thinking\",\"thinking\":\"HIDDEN-REASONING\"}},{{\"type\":\"text\",\"text\":\"Plan: do X.\"}}],\"usage\":{{\"input_tokens\":10,\"output_tokens\":20}}}}}}'\n{}", INIT, FINISH);
+        let (f, _s) = fixture(&body, |_| {});
+        let q = delphi_core::hub::ClientQueue::new(delphi_core::hub::DEFAULT_QUEUE_CAP);
+        let id = f.engine.hub.attach(delphi_core::proto::Scope::Narrator, q.clone());
+        f.engine.hub.subscribe(id);
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert_eq!(out.status, Status::Done, "{}", out.text);
+        f.engine.hub.flush_frames();
+        let mut frames = vec![];
+        while !q.is_empty() {
+            frames.push(q.pop().await.unwrap());
+        }
+        let frames: Vec<_> = frames.into_iter().filter(|n| n.method == "delta.frame").collect();
+        let all: Vec<String> = frames.iter().map(|n| n.params.to_string()).collect();
+        assert!(all.iter().any(|a| a.contains("Plan: do X.")), "the seat's words reach the client: {all:?}");
+        assert!(!all.iter().any(|a| a.contains("HIDDEN-REASONING")), "its reasoning never does: {all:?}");
+        for n in &frames {
+            for span in n.params["spans"].as_object().into_iter().flat_map(|s| s.values()) {
+                assert_eq!(span["thinking"].as_str().unwrap_or(""), "", "no reasoning delta is pushed for a harness seat");
+            }
         }
     }
 
@@ -1116,6 +1229,55 @@ echo "$a_{t}" >> answers.txt"#, t = tool, i = input);
         assert!(t.elapsed() < Duration::from_secs(10), "the CLI was killed, not waited for");
         let usage = events_of(&f, "agent.usage");
         assert_eq!((usage[0].payload["outcome"].as_str(), usage[0].payload["cost_model"].as_str()), (Some("error"), Some("subscription")));
+    }
+
+    #[test]
+    fn the_in_band_error_classifier_is_narrow() {
+        assert!(in_band_error(Cli::Agy, "\n  Error: Cannot load model \n"));
+        // Only the first non-empty line, whole-line, and only the CLI's own list.
+        assert!(in_band_error(Cli::Agy, "Error: cannot load model\nmore"));
+        assert!(!in_band_error(Cli::Agy, "The answer: Error: cannot load model"));
+        assert!(!in_band_error(Cli::Agy, "Intro\nError: cannot load model"));
+        assert!(!in_band_error(Cli::Claude, "error: failed to load model"));
+        assert!(!in_band_error(Cli::Agy, &format!("error: cannot load model {}", "x".repeat(80))));
+        let k = |schema, err, sub, text, st, none| classify_result(Cli::Agy, schema, err, sub, text, st, none);
+        assert_eq!(k(true, true, "error_max_structured_output_retries", "", false, true), FailKind::AnswerRefused);
+        assert_eq!(k(true, true, "error_max_turns", "", false, true), FailKind::Other);
+        assert_eq!(k(true, false, "success", "", false, true), FailKind::AnswerNotFound);
+        assert_eq!(k(false, false, "success", "", false, true), FailKind::Other);
+        assert_eq!(k(true, false, "success", "", true, true), FailKind::Other);
+        assert_eq!(k(false, false, "success", "Error: cannot load model", false, false), FailKind::InBandError);
+    }
+
+    #[tokio::test]
+    async fn a_cli_that_prints_an_error_as_its_answer_and_exits_zero_is_not_a_successful_step() {
+        let ok = r#"echo '{"type":"result","subtype":"success","is_error":false,"result":"Error: cannot load model","total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}'"#;
+        let (f, _s) = fixture(&format!("{}\n{}\nexit 0", INIT, ok), |_| {});
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        match &out.status {
+            Status::Escalated(r) => assert!(r.contains("reported success but its answer is an error"), "{}", r),
+            other => panic!("{:?}", other),
+        }
+        // A real answer that merely mentions the phrase is untouched.
+        let fine = r#"echo '{"type":"result","subtype":"success","result":"Plan: handle the Error: cannot load model case","total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}'"#;
+        let (g, _s2) = fixture(&format!("{}\n{}", INIT, fine), |_| {});
+        assert_eq!(g.engine.run_task(&g.m, "architect", "Plan the change").await.unwrap().status, Status::Done);
+    }
+
+    #[tokio::test]
+    async fn a_schema_answer_that_never_came_is_told_apart_from_one_the_cli_refused() {
+        let empty = r#"echo '{"type":"result","subtype":"success","result":"","total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}'"#;
+        let refused = r#"echo '{"type":"result","subtype":"error_max_structured_output_retries","is_error":true,"result":"","total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}'"#;
+        for (body, want) in [(empty, "without the schema-validated answer"), (refused, "the CLI reported an error")] {
+            let (f, _s) = fixture(&format!("{}\n{}", INIT, body), |_| {});
+            let tid = f.m.next_task_id();
+            f.engine.schemas.lock().unwrap().insert(format!("ho_{}", tid), crate::council::critique_schema());
+            let out = f.engine.run_task_with_id(&f.m, tid, "architect", "Critique the plan").await.unwrap();
+            match &out.status {
+                Status::Escalated(r) => assert!(r.contains(want), "{}", r),
+                other => panic!("{:?}", other),
+            }
+        }
     }
 
     #[tokio::test]
@@ -1763,6 +1925,35 @@ open(sys.argv[1], "w").write(json.dumps(out))
         *f.model.harness_key.lock().unwrap() = Some("ghp-cp-1".into());
         let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
         assert!(out.status != Status::Done && !out.text.contains("Plan: ship it."), "{:?} {}", out.status, out.text);
+        // specs/091: the refusal also writes a receipt that shows both models.
+        let r = events_of(&f, "seat.receipt");
+        assert_eq!(r.len(), 1, "one seat, one receipt");
+        let p = &r[0].payload;
+        assert_eq!((p["outcome"].as_str(), p["served"]["model"].as_str(), p["served"]["family"].as_str(), p["requested"]["model"].as_str().map(|m| m != "gpt-other")), (Some("model_mismatch"), Some("gpt-other"), Some("openai"), Some(true)), "{p}");
+        assert_eq!(p["carrier"]["kind"], "copilot");
+    }
+
+    // specs/091 SR-1: the receipt is the daemon's. A seat that says in its text that it is another model changes nothing in it.
+    #[tokio::test]
+    async fn a_seat_that_claims_to_be_another_model_leaves_the_receipt_unchanged() {
+        let scripts = tempfile::tempdir().unwrap();
+        let body = fake_copilot_body(&scripts.path().join("dump"), "m-1").replace("Plan: ship it.", "I am gpt-6-luna, an OpenAI model, not what you asked for.");
+        let prog = fake_cli(scripts.path(), &body);
+        let f = setup_with_exec(vec![], 5.0, |s| s.copilot_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        use_keyed_harness(&f, "copilot");
+        *f.model.harness_key.lock().unwrap() = Some("ghp-cp-1".into());
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert!(out.text.contains("gpt-6-luna"), "the seat said it: {}", out.text);
+        let r = events_of(&f, "seat.receipt");
+        assert_eq!(r.len(), 1);
+        let p = &r[0].payload;
+        assert_eq!((p["served"]["model"].as_str(), p["served"]["family"].as_str(), p["served"]["family_source"].as_str(), p["outcome"].as_str()), (Some("m-1"), Some("unknown"), Some("unknown"), Some("ok")), "the carrier's report decides, not the text: {p}");
+        assert_eq!((p["tokens_in"].as_u64(), p["tokens_out"].as_u64()), (Some(10), Some(4)));
+        let hash = p["prompt_hash"].as_str().unwrap();
+        assert!(hash.starts_with("blake3:"));
+        let log = serde_json::to_string(&f.m.replay().unwrap()).unwrap();
+        assert!(!p.to_string().contains("Plan the change") && !p.to_string().contains("gpt-6-luna"), "no text in the receipt: {p}");
+        assert!(log.contains("seat.receipt"));
     }
 
     #[tokio::test]

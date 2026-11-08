@@ -91,6 +91,35 @@ impl ToolResult {
     }
 }
 
+/// Why a tool call failed, as one of a closed set (`specs/039` §3, `specs/033` §2): `timeout`, `denied` (policy refused it),
+/// `invalid_args` (the call could not be attempted: a missing or malformed argument, an unknown tool) or `tool_error` (it ran and
+/// failed). Read from the **first line** of the result, because that is where Delphi's own refusals put their words and a
+/// command's output, which may contain any phrase, begins with `$ <command>`; the timeout marker of a command is on its second
+/// line. A lower bound, not a proof: a refusal worded some other way is a `tool_error`, never the reverse for output.
+pub fn failure_kind(content: &str) -> &'static str {
+    let c = content.trim_start();
+    let first = c.lines().next().unwrap_or("");
+    let head: String = c.lines().take(2).collect::<Vec<_>>().join("\n");
+    if first.starts_with("The approval timed out") || head.contains("[timed out and was killed") {
+        "timeout"
+    } else if first.starts_with("denied:") || first.starts_with("The operator denied this action") || first.contains("was denied") || first.contains("does not authorize") || first.starts_with("this task was raised by a host agent") || first.starts_with("this span answers in text only") || first.contains("is not among the tools of") {
+        "denied"
+    } else if first.starts_with("missing ") || first.starts_with("unknown ") || first.contains(" must be ") || first.contains("invalid arguments") || first.starts_with("the only argument is") {
+        "invalid_args"
+    } else {
+        "tool_error"
+    }
+}
+
+/// The names of a call's top-level arguments, sorted, for the error log: names only, never a value or a hash of one (a low-entropy
+/// value can be guessed back from its hash). A name that is not a short identifier is left out, since a model chooses these.
+pub fn arg_keys(args: &Value) -> Vec<String> {
+    let mut keys: Vec<String> = args.as_object().map(|o| o.keys().filter(|k| !k.is_empty() && k.len() <= 32 && k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')).cloned().collect()).unwrap_or_default();
+    keys.sort();
+    keys.truncate(12);
+    keys
+}
+
 /// A provenance stamp the engine must record as a `provenance.stamp` event.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Stamp {
@@ -1213,6 +1242,28 @@ pub(crate) fn gate_tainted_write(logical: &str, ceiling: Tier) -> Result<(), Too
     Ok(())
 }
 
+/// A path that is in no zone. It says what a valid path looks like: a model that was only told "no readable zone" guessed
+/// `@project/`, `@project/artifact.md` and a bare `artifact.md` again and again, because the name of the project, which is part
+/// of the path, was never given (the first live runs of `specs/048` BM-5: 0 of 4).
+const NO_ZONE: &str = "denied: this path does not belong to any readable zone. A path names its zone: `@project/<name>/…` (a project is named by its folder, and `@project/` alone is not a path), `@worktree/…`, `missions/…` or `specs/…`.";
+
+/// [`denied`], and for a path in no zone also the projects this task can read, since a missing or wrong project name is the usual
+/// cause. The names are the operator's own folder names, reduced to letters, digits, `-`, `_` and `.`.
+pub(crate) fn denied_in(ctx: &ToolCtx, d: Denied) -> ToolResult {
+    match d {
+        Denied::NoZone => ToolResult::err(format!("{} {}", NO_ZONE, projects_note(ctx.guard.zones.projects.iter().map(|(n, _)| n.as_str())))),
+        other => denied(other),
+    }
+}
+
+fn projects_note<'a>(names: impl Iterator<Item = &'a str>) -> String {
+    let names: Vec<String> = names.map(|n| n.chars().filter(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.')).take(64).collect::<String>()).filter(|n| !n.is_empty()).take(8).collect();
+    match names.first() {
+        None => "No project is registered for this task.".to_string(),
+        Some(first) => format!("Projects here: {}; read a file as `@project/{}/<path>`.", names.iter().map(|n| format!("`{}`", n)).collect::<Vec<_>>().join(", "), first),
+    }
+}
+
 pub(crate) fn denied(d: Denied) -> ToolResult {
     ToolResult::err(match d {
         Denied::NotInScope => "denied: this path is outside your role's access scope".to_string(),
@@ -1222,7 +1273,7 @@ pub(crate) fn denied(d: Denied) -> ToolResult {
         Denied::Escapes => "denied: path escapes its zone".to_string(),
         Denied::NotLogical(p) => format!("denied: `{}` is not a logical path (use `@project/<name>/…`, `missions/…`, `specs/…`)", p),
         Denied::NotFound => "not found".to_string(),
-        Denied::NoZone => "denied: this path does not belong to any readable zone".to_string(),
+        Denied::NoZone => NO_ZONE.to_string(),
         Denied::Symlink | Denied::NotRegular | Denied::HardLink | Denied::ProtectedInode => "denied: not a plain file".to_string(),
         Denied::Io(e) => format!("I/O error: {}", e),
     })
@@ -1266,7 +1317,7 @@ pub fn read_pointer(ctx: &mut ToolCtx, uri: &str) -> Result<(String, Tier), Stri
         Some((p, r)) => (p, Some(r)),
         None => (uri, None),
     };
-    let (bytes, _) = ctx.guard.read_file(path, MAX_READ_BYTES).map_err(|d| denied(d).content)?;
+    let (bytes, _) = ctx.guard.read_file(path, MAX_READ_BYTES).map_err(|d| denied_in(ctx, d).content)?;
     if bytes.contains(&0) {
         return Err("binary file".into());
     }
@@ -1306,7 +1357,7 @@ fn read_document(ctx: &mut ToolCtx, path: &str, req: &delphi_docs::Request) -> T
     let limits = delphi_docs::Limits::default();
     let (bytes, truncated) = match ctx.guard.read_file(path, limits.max_input) {
         Ok(r) => r,
-        Err(d) => return denied(d),
+        Err(d) => return denied_in(ctx, d),
     };
     let tier = observe(ctx, path, &bytes);
     if truncated {
@@ -1354,7 +1405,7 @@ fn read_file(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
     };
     let (bytes, truncated) = match ctx.guard.read_file(path, MAX_READ_BYTES) {
         Ok(r) => r,
-        Err(d) => return denied(d),
+        Err(d) => return denied_in(ctx, d),
     };
     if bytes.contains(&0) || is_document(&bytes, path) {
         return read_document(ctx, path, &delphi_docs::Request::default());
@@ -1394,7 +1445,7 @@ fn list_dir(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
             }
             ToolResult::ok(out)
         }
-        Err(d) => denied(d),
+        Err(d) => denied_in(ctx, d),
     }
 }
 
@@ -1410,7 +1461,7 @@ fn check(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
     }
     let (bytes, truncated) = match ctx.guard.read_file(path, MAX_READ_BYTES) {
         Ok(r) => r,
-        Err(d) => return denied(d),
+        Err(d) => return denied_in(ctx, d),
     };
     if bytes.contains(&0) {
         return ToolResult::err("binary file; not checked");
@@ -1446,7 +1497,7 @@ fn search(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
             Ok(e) => e,
             Err(d) => {
                 if dir == root.trim_end_matches('/') {
-                    return denied(d);
+                    return denied_in(ctx, d);
                 }
                 continue;
             }
@@ -1584,7 +1635,7 @@ fn write_file(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
             ctx.stamps.push(Stamp { zone, path: rel, blake3: hash, tier });
             ToolResult::ok(format!("{} {} ({} bytes, tier {})", if created { "created" } else { "replaced" }, path, final_content.len(), tier))
         }
-        Err(d) => denied(d),
+        Err(d) => denied_in(ctx, d),
     }
 }
 
@@ -1608,6 +1659,86 @@ mod tests {
         assert!(r.register_external("slack", ext("slack.search")).is_err());
         assert!(r.register_external("slack", ext("gmail.search")).is_err());
         assert!(r.register_external("slack", ext("slack.")).is_err());
+    }
+
+    #[test]
+    fn a_path_in_no_zone_says_what_a_path_looks_like_and_which_projects_there_are() {
+        let mut f = fx(&[]);
+        // `@project/` alone, a project name that is not one, and a path with the name missing: the guesses the first live runs made.
+        for (tool, path) in [("read_file", "@project/artifact.md"), ("read_file", "@project/ghost/src/lib.rs"), ("list_dir", "@project/"), ("search", "@project/")] {
+            let args = if tool == "search" { json!({"pattern": "needle", "path": path}) } else { json!({"path": path}) };
+            let r = run_tool(&mut f, tool, args);
+            assert!(r.is_error, "{} {}: {}", tool, path, r.content);
+            for want in ["does not belong to any readable zone", "`@project/<name>/…`", "`@project/` alone is not a path", "Projects here: `app`; read a file as `@project/app/<path>`."] {
+                assert!(r.content.contains(want), "{} {}: {} not in {}", tool, path, want, r.content);
+            }
+            assert!(r.content.starts_with("denied:"), "it is still a refusal: {}", r.content);
+        }
+        // The right form works, and the other refusals say what they said.
+        assert!(!run_tool(&mut f, "read_file", json!({"path": "@project/app/src/lib.rs"})).is_error);
+        assert_eq!(run_tool(&mut f, "read_file", json!({"path": "@project/app/.git/config"})).content, "denied: `.git` is never accessible");
+        // Without a context the message still says what a path looks like.
+        assert!(denied(Denied::NoZone).content.contains("`@project/<name>/…`") && !denied(Denied::NoZone).content.contains("Projects here"));
+    }
+
+    #[test]
+    fn project_names_in_a_denial_are_reduced_to_plain_characters_and_capped() {
+        assert_eq!(projects_note(["app", "we ird\n`name`\u{1b}[2J", "ok-1.x_y"].into_iter()), "Projects here: `app`, `weirdname2J`, `ok-1.x_y`; read a file as `@project/app/<path>`.");
+        assert_eq!(projects_note(std::iter::empty()), "No project is registered for this task.");
+        assert_eq!(projects_note(["\n\n", ""].into_iter()), "No project is registered for this task.", "a name with nothing plain in it is left out");
+        let many: Vec<String> = (0..12).map(|i| format!("p{}", i)).collect();
+        assert_eq!(projects_note(many.iter().map(String::as_str)).matches('`').count(), 2 * 8 + 2, "eight names and the example path");
+        let long = projects_note(["x".repeat(200).as_str()].into_iter());
+        assert!(long.contains(&"x".repeat(64)) && !long.contains(&"x".repeat(65)), "a name is cut at 64 characters");
+    }
+
+    #[test]
+    fn a_failure_is_classified_from_the_first_line_by_the_words_delphi_itself_uses() {
+        for (text, want) in [
+            // Refused by policy.
+            ("denied: this path does not belong to any readable zone", "denied"),
+            ("denied: `.git` is never accessible", "denied"),
+            // The operator, or a headless run that has no operator, refused a card: the commonest denial in a training run.
+            ("The operator denied this action: headless run: a Red action is never approved without the operator. Do not retry it; propose an alternative or ask.", "denied"),
+            ("The operator denied this action. Do not retry it; propose an alternative or ask.", "denied"),
+            ("this role's manifest does not authorize timers", "denied"),
+            ("`xenia_help` is not among the tools of the bundle agent a/b", "denied"),
+            ("this span answers in text only; it has no tools", "denied"),
+            ("this task was raised by a host agent and runs read-only: it can read and advise", "denied"),
+            // Timed out: the operator's approval, and a command's own header on its second line.
+            ("The approval timed out and was denied. Do not retry it; propose an alternative.", "timeout"),
+            ("$ cargo test\n[timed out and was killed, 30.0s, sandboxed, no network]\n", "timeout"),
+            // The call could not be attempted.
+            ("missing string argument `path`", "invalid_args"),
+            ("missing array argument `tasks`", "invalid_args"),
+            ("`query` must be 1 to 500 characters", "invalid_args"),
+            ("unknown tool `no_such_tool`", "invalid_args"),
+            ("unknown subsystem `x`; expected doctor, endpoints", "invalid_args"),
+            ("the only argument is `query`", "invalid_args"),
+            // It ran and failed, or the text says nothing we know.
+            ("$ cargo build\n[exit 101, 2.0s, sandboxed, no network]\nerror: could not compile `x`", "tool_error"),
+            ("content is 900000 bytes; the limit is 262144", "tool_error"),
+            ("", "tool_error"),
+        ] {
+            assert_eq!(failure_kind(text), want, "{}", text);
+        }
+        // A command's output is never read for these words, whatever it says: only its first line and its status line count.
+        assert_eq!(failure_kind("$ ./check\n[exit 1, 0.1s, sandboxed, no network]\nthe value must be positive\naccess was denied\nconnection timed out"), "tool_error");
+        assert_eq!(failure_kind("  \n denied: padded"), "denied", "leading blank space hides nothing: the first line is the first non-blank one");
+    }
+
+    #[test]
+    fn the_error_log_gets_argument_names_and_never_a_value() {
+        let mut args = json!({"path": "/secret/token.txt", "content": "hunter2", "a name with spaces": 1, "": 2, "ok-name_1": 4});
+        args.as_object_mut().unwrap().insert("x".repeat(33), json!(3));
+        assert_eq!(arg_keys(&args), ["content", "ok-name_1", "path"], "sorted, and only short identifiers");
+        let all = format!("{:?}", arg_keys(&args));
+        assert!(!all.contains("hunter2") && !all.contains("secret"), "{}", all);
+        let many: serde_json::Map<String, Value> = (0..30).map(|i| (format!("k{:02}", i), json!(i))).collect();
+        assert_eq!(arg_keys(&Value::Object(many)).len(), 12);
+        for not_an_object in [json!(null), json!("path"), json!(["path"]), json!(3)] {
+            assert!(arg_keys(&not_an_object).is_empty());
+        }
     }
 
     use super::*;

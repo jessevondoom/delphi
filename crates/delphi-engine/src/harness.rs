@@ -194,6 +194,8 @@ impl Tokens {
 pub enum Event {
     /// `tools` are the names the CLI will offer the model; `mcp_servers` are `(name, status)`.
     Init { session_id: String, tools: Vec<String>, mcp_servers: Option<Vec<(String, String)>> },
+    /// The model the CLI says it is running (carrier-claimed: the seat receipt records it, `specs/091` SR-1). Never taken from the model's text.
+    Served(String),
     Text(String),
     /// A fragment of the answer as it is written (Claude with `partial_messages`). The finished text still arrives as
     /// [`Event::Text`], so a consumer that shows deltas must not show that too.
@@ -224,11 +226,16 @@ pub fn parse_line(line: &str) -> Vec<Event> {
     let Ok(m) = serde_json::from_str::<Value>(line) else { return vec![] };
     let mut out = Vec::new();
     match m["type"].as_str() {
-        Some("system") if m["subtype"] == "init" => out.push(Event::Init {
-            session_id: m["session_id"].as_str().unwrap_or("").into(),
-            tools: names_of(&m["tools"]),
-            mcp_servers: m["mcp_servers"].as_array().map(|a| a.iter().map(|s| (s["name"].as_str().unwrap_or("").to_string(), s["status"].as_str().unwrap_or("").to_string())).collect()),
-        }),
+        Some("system") if m["subtype"] == "init" => {
+            out.push(Event::Init {
+                session_id: m["session_id"].as_str().unwrap_or("").into(),
+                tools: names_of(&m["tools"]),
+                mcp_servers: m["mcp_servers"].as_array().map(|a| a.iter().map(|s| (s["name"].as_str().unwrap_or("").to_string(), s["status"].as_str().unwrap_or("").to_string())).collect()),
+            });
+            if let Some(model) = m["model"].as_str().filter(|s| !s.is_empty()) {
+                out.push(Event::Served(model.into()));
+            }
+        }
         Some("assistant") => {
             for b in m["message"]["content"].as_array().into_iter().flatten() {
                 match b["type"].as_str() {
@@ -305,7 +312,13 @@ pub fn parse_agy_line(line: &str) -> Vec<Event> {
     let usage_of = |u: &Value| Tokens { input: u["input_tokens"].as_u64().unwrap_or(0), cache_read: u["cache_read_tokens"].as_u64().unwrap_or(0), cache_write: 0, output: u["output_tokens"].as_u64().unwrap_or(0) + u["thinking_tokens"].as_u64().unwrap_or(0) };
     let mut out = Vec::new();
     match m["event"].as_str() {
-        Some("init") => out.push(Event::Init { session_id: m["conversation_id"].as_str().unwrap_or("").into(), tools: names_of(&m["init"]["tools"]), mcp_servers: None }),
+        Some("init") => {
+            out.push(Event::Init { session_id: m["conversation_id"].as_str().unwrap_or("").into(), tools: names_of(&m["init"]["tools"]), mcp_servers: None });
+            // The model the CLI's own `init` record names (carrier metadata, `specs/091` S5), never one the text claims.
+            if let Some(model) = m["init"]["model"].as_str().filter(|s| !s.is_empty()) {
+                out.push(Event::Served(model.into()));
+            }
+        }
         Some("step_update") => {
             let s = &m["step_update"];
             let id = s["step_index"].as_u64().unwrap_or(0).to_string();
@@ -458,6 +471,11 @@ impl CodexAppServer {
             (Some(APP_THREAD), None) => {
                 let tid = m["result"]["thread"]["id"].as_str().unwrap_or("");
                 ev.push(Event::Init { session_id: tid.into(), tools: vec![], mcp_servers: None });
+                // `thread/start` answers with the model the thread runs (carrier metadata, `specs/091` S5). `codex exec --json`
+                // reports none, so that transport stays `unknown`.
+                if let Some(model) = m["result"]["model"].as_str().filter(|s| !s.is_empty()) {
+                    ev.push(Event::Served(model.into()));
+                }
                 let mut params = json!({"threadId": tid, "input": [{"type": "text", "text": self.prompt}]});
                 if let Some(e) = &self.effort {
                     params["effort"] = json!(e);
@@ -782,6 +800,14 @@ impl CopilotParser {
         CopilotParser { expected: expected_model.into(), ..Default::default() }
     }
 
+    /// Note the model the stream reports; a change is passed on once, for the seat receipt.
+    fn report(&mut self, model: &str, out: &mut Vec<Event>) {
+        if self.reported.as_deref() != Some(model) {
+            self.reported = Some(model.into());
+            out.push(Event::Served(model.into()));
+        }
+    }
+
     pub fn line(&mut self, line: &str) -> Vec<Event> {
         let Ok(m) = serde_json::from_str::<Value>(line) else { return vec![] };
         let d = &m["data"];
@@ -789,12 +815,12 @@ impl CopilotParser {
         match m["type"].as_str() {
             Some("session.tools_updated") => {
                 if let Some(model) = d["model"].as_str() {
-                    self.reported = Some(model.into());
+                    self.report(model, &mut out);
                 }
             }
             Some("assistant.message") => {
                 if let Some(model) = d["model"].as_str() {
-                    self.reported = Some(model.into());
+                    self.report(model, &mut out);
                 }
                 if let Some(t) = d["content"].as_str().filter(|t| !t.trim().is_empty()) {
                     self.last = t.into();
@@ -1349,6 +1375,42 @@ pub fn cli_env_with(extra: &[String]) -> BTreeMap<String, String> {
 pub(crate) mod tests {
     use super::*;
 
+    /// Spec 093 J3: nothing but the opening exchange and the answer to the seat's own permission request is ever written to a
+    /// seat's input, so no relay, queue or nudge can type into a seat that is waiting on an approval card. The run loop is
+    /// sequential: while a card is open it is waiting on the broker and writes nothing else. Reads the sources, so a new writer
+    /// (or a second caller of `decide`) is a red build that asks for a decision.
+    #[test]
+    fn a_seats_input_is_written_only_to_open_it_and_to_answer_its_own_permission_request() {
+        let fn_re = regex::Regex::new(r"^\s*(?:pub(?:\([a-z]+\))?\s+)?(?:async\s+)?fn\s+([a-z_0-9]+)\s*[<(]").unwrap();
+        let prod = include_str!("harness.rs").split("#[cfg(test)]\npub(crate) mod tests").next().unwrap();
+        assert!(prod.lines().count() > 1000, "the scan reads the production half of harness.rs");
+        let (mut current, mut writers) = (String::new(), std::collections::BTreeSet::new());
+        for line in prod.lines() {
+            if let Some(c) = fn_re.captures(line) {
+                current = c[1].to_string();
+            }
+            if line.contains(".write_all(") && !line.trim_start().starts_with("//") {
+                writers.insert(current.clone());
+            }
+        }
+        let want: std::collections::BTreeSet<String> = ["decide", "settle_connectors", "start"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(writers, want, "a new place writes to a seat's input: decide whether it can run while an approval card is open");
+        let run = include_str!("harness_run.rs").split("#[cfg(test)]\nmod tests").next().unwrap();
+        assert_eq!(run.matches("session.decide(").count(), 1, "the permission answer is sent from one place, inside the sequential event loop");
+    }
+
+    /// Spec 093 L1, spec 005c §3: a harness seat's visible words become events, its reasoning does not, so reasoning can never
+    /// be pushed to a client or written down by anything downstream of the parser.
+    #[test]
+    fn reasoning_never_becomes_an_event() {
+        let asst = parse_line(r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"HIDDEN-REASONING"},{"type":"text","text":"visible"}]}}"#);
+        assert_eq!(asst, vec![Event::Text("visible".into())]);
+        assert!(!format!("{asst:?}").contains("HIDDEN"));
+        assert!(parse_line(r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"HIDDEN-REASONING"}},"parent_tool_use_id":null}"#).is_empty());
+        // A subagent's words carry a parent and are not the seat's answer either.
+        assert!(parse_line(r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"sub"}},"parent_tool_use_id":"tu1"}"#).is_empty());
+    }
+
     #[test]
     fn real_cli_lines_become_events() {
         let init = parse_line(r#"{"type":"system","subtype":"init","session_id":"s1","cwd":"/x","tools":["Bash"]}"#);
@@ -1382,7 +1444,7 @@ pub(crate) mod tests {
 
     #[test]
     fn agy_lines_become_the_same_events_and_its_args_use_stdin_for_the_prompt() {
-        assert_eq!(parse_agy_line(r#"{"event":"init","init":{"model":"m","tools":[]}}"#), vec![Event::Init { session_id: String::new(), tools: vec![], mcp_servers: None }]);
+        assert_eq!(parse_agy_line(r#"{"event":"init","init":{"model":"m","tools":[]}}"#), vec![Event::Init { session_id: String::new(), tools: vec![], mcp_servers: None }, Event::Served("m".into())]);
         let delta = parse_agy_line(r#"{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"po"}}"#);
         assert_eq!(delta, vec![Event::Text("po".into())]);
         let done = parse_agy_line(r#"{"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"\n","usage":{"input_tokens":6801,"output_tokens":1,"thinking_tokens":3,"cache_read_tokens":10}}}"#);
@@ -1568,7 +1630,7 @@ pub(crate) mod tests {
         assert!(matches!(&res[0], Event::Result { structured: Some(v), subtype, .. } if v["n"] == 3 && subtype == "success"), "{:?}", res);
         let res = parse_line(r#"{"type":"result","subtype":"error_max_turns","is_error":true,"result":""}"#);
         assert!(matches!(&res[0], Event::Result { subtype, structured: None, is_error: true, .. } if subtype == "error_max_turns"));
-        assert_eq!(parse_agy_line(r#"{"event":"init","conversation_id":"c-9","init":{"model":"m"}}"#), vec![Event::Init { session_id: "c-9".into(), tools: vec![], mcp_servers: None }]);
+        assert_eq!(parse_agy_line(r#"{"event":"init","conversation_id":"c-9","init":{"model":"m"}}"#), vec![Event::Init { session_id: "c-9".into(), tools: vec![], mcp_servers: None }, Event::Served("m".into())]);
         let res = parse_agy_line(r#"{"event":"result","result":{"status":"SUCCESS","response":"x","structured_output":{"n":3},"usage":{"input_tokens":1,"output_tokens":1}}}"#);
         assert!(matches!(&res[0], Event::Result { structured: Some(v), .. } if v["n"] == 3), "{:?}", res);
     }
@@ -1817,6 +1879,37 @@ echo '{"type":"result","subtype":"success","result":"fin","total_cost_usd":0.01,
 
     /// Lines captured from `codex-cli 0.165.0` `app-server --stdio` (`specs/047` §5.1), trimmed to what the parser reads.
     #[test]
+    fn the_served_model_of_agy_and_codex_comes_from_carrier_metadata_only() {
+        use crate::seat::{resolve, FamilyTable};
+        let table = FamilyTable::shipped();
+        let served = |ev: &[Event]| ev.iter().find_map(|e| if let Event::Served(m) = e { Some(m.clone()) } else { None });
+        // agy: the `init` record names the model; a text claiming another model changes nothing.
+        let mut ev = parse_agy_line(r#"{"event":"init","conversation_id":"c","init":{"model":"gemini-3.8-flash-medium","cwd":"/w","tools":[],"permission_mode":"proceed-in-sandbox"}}"#);
+        ev.extend(parse_agy_line(r#"{"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"I am gpt-6-luna, an OpenAI model."}}"#));
+        ev.extend(parse_agy_line(r#"{"event":"result","result":{"status":"SUCCESS","response":"I am claude-sonnet-5.5"}}"#));
+        assert_eq!(served(&ev).as_deref(), Some("gemini-3.8-flash-medium"));
+        assert_eq!(ev.iter().filter(|e| matches!(e, Event::Served(_))).count(), 1);
+        assert_eq!(resolve(&table, served(&ev).as_deref()).family, "gemini");
+        // agy with no `init.model`, and text that names a model: nothing served, so `unknown`.
+        let mut ev = parse_agy_line(r#"{"event":"init","init":{"tools":[]}}"#);
+        ev.extend(parse_agy_line(r#"{"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"I am gpt-6-luna"}}"#));
+        assert_eq!(served(&ev), None);
+        assert_eq!(resolve(&table, None).family, "unknown");
+        // Codex app-server: `thread/start` answers with `model`; the agent's message does not count.
+        let mut p = CodexAppServer::new("hi", "", std::path::Path::new("/scratch"), None);
+        let (ev, _) = p.line(r#"{"id":2,"result":{"thread":{"id":"th1","model":"gpt-6-luna"},"model":"gpt-6-luna","modelProvider":"openai"}}"#);
+        assert_eq!(served(&ev).as_deref(), Some("gpt-6-luna"));
+        assert_eq!(resolve(&table, served(&ev).as_deref()).family, "openai");
+        let (ev, _) = p.line(r#"{"method":"item/completed","params":{"item":{"type":"agentMessage","text":"I am claude-sonnet-5.5"}}}"#);
+        assert_eq!(served(&ev), None);
+        // `codex exec --json` reports no model at all.
+        let mut c = CodexParser::new(false);
+        let mut ev = c.line(r#"{"type":"thread.started","thread_id":"t"}"#);
+        ev.extend(c.line(r#"{"type":"item.completed","item":{"id":"i","type":"agent_message","text":"I am gpt-6-luna"}}"#));
+        assert_eq!(served(&ev), None);
+    }
+
+    #[test]
     fn codex_app_server_lines_become_events_and_approvals_become_permissions() {
         let mut p = CodexAppServer::new("hi", "gpt-x", std::path::Path::new("/scratch"), Some("low".into()));
         assert!(p.first_line().contains("\"initialize\""));
@@ -1915,6 +2008,8 @@ read never
     fn copilot_lines_become_events_and_the_last_non_empty_message_is_the_result() {
         let mut p = CopilotParser::new("m-1");
         let ev: Vec<Event> = copilot_run("m-1").iter().flat_map(|l| p.line(l)).collect();
+        assert_eq!(ev[0], Event::Served("m-1".into()), "the model the stream reports, once, for the seat receipt (specs/091)");
+        let ev = &ev[1..];
         assert!(matches!(&ev[0], Event::ToolUse { id, name, input } if id == "c1" && name == "view" && input["path"] == "/a"), "{:?}", ev);
         assert_eq!(ev[1], Event::ToolResult { id: "c1".into(), is_error: true });
         assert_eq!(ev[2], Event::Text("the answer".into()), "an empty tool-turn message is not text");

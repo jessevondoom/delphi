@@ -116,6 +116,12 @@ council_budget_usd = 20.0            # D-10: Council Mode
 on_budget_exhausted = "escalate"     # halt node and ask the operator; never silently downscale
 per_watch_max_wakes_per_day = 10
 
+# Foreign seats and model families (specs/091 SR-3, SR-4). A Panel's foreign seat is one Delphi runs itself on another model family.
+# [seats]
+# require_families = 2               # unset (default): never refuse; a result with fewer than two known families is labelled homogeneous
+# max_foreign_seats = 1              # per Council; 0 turns the foreign seat off
+# max_foreign_tokens = 100000        # per Council: the foreign seat's token ceiling must fit under this, and Round 2 is skipped once Round 1 used it
+
 # What the engine adds around a role's model calls (specs/045). Not an access table: it adds notes and one verification turn,
 # never a tool or a permission. Every key shown is the default.
 # [loop]

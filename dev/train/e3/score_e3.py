@@ -4,7 +4,7 @@
   python3 -I score_e3.py analyze MANIFEST.json        the pre-registered decision rule, JSON (run once, after every run)
   python3 -I score_e3.py budget TOKENS.csv            token totals against the caps, JSON
   python3 -I score_e3.py proposition RECORD           the proposition paragraph of a source record (stdout)
-  python3 -I score_e3.py make-question RECORD         the question file built from a source record (stdout)
+  python3 -I score_e3.py make-question RECORD         a question file from a source record (stdout; unused since Amendment 1)
   python3 -I score_e3.py baseline-e2                  E2's mechanical numbers on the same measures, JSON
   python3 -I score_e3.py tokens EVENTS_DIR... [--task-id T]   sums agent.usage tokens (same code as E2)
 
@@ -23,7 +23,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "e2"))
 import score  # noqa: E402  (E2's scorer; its constants are pinned by E2's own test)
 
-# Pinned by PREREG.md ("Constants"); test_score_e3.py checks they are the same.
+# Pinned by PREREG.md (Amendment 1, "Amended constants"); test_score_e3.py checks they are the same.
 MIN_QUALIFYING = 5           # questions per arm that must qualify
 MIN_NOISE_QUESTIONS = 3      # questions with a usable B2 that must qualify per arm
 SD_ABSOLUTE_SLACK = 2        # SUPPORTED: sd_arm >= q - 2
@@ -35,7 +35,7 @@ ESCALATION_WORSE = Fraction(1, 2)  # WORSE: esc_arm - esc_council >= 1/2
 MISSED_OK = 1                # SUPPORTED: questions where B1 raised a P0/P1 and the arm did not <= 1
 MISSED_WORSE = 3             # WORSE: >= 3
 CAP_PER_RUN = 350_000        # tokens, each run's own side
-CAP_DELPHI_TOTAL = 1_500_000  # daemon Councils + the foreign seat
+CAP_DELPHI_TOTAL = 2_000_000  # daemon Councils + the foreign seat (Amendment 1; was 1,500,000)
 CAP_HOST_TOTAL = 400_000     # Panel host tokens (host account)
 ARMS = ("a1", "a2")
 

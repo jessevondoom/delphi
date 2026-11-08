@@ -1,0 +1,2 @@
+host-8e5dc086fd98c3a8 {"t_0001": {"cache_read": 282931, "cache_write": 83149, "events": 7, "models": ["gemini-3.8-flash-medium", "sonnet"], "tokens": 100497}} retries 0 fail_lines 0 ['/tmp/e3/home-council/workspaces/delphi/local/sessions/host-8e5dc086fd98c3a8/councils/001-operators-do-research-via-delphi-tui-or.md']
+copied record -> /tmp/e3/records/q3-b1.md

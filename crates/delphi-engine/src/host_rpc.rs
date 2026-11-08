@@ -374,6 +374,17 @@ const FORMAL_HINTS: [(&str, &str); 9] = [
     ("cannot be undone", "it may be irreversible"),
 ];
 
+/// `options_source`, the host's word on who supplied the options: `operator`, `host`, `none`, or absent.
+pub fn options_source_of(p: &Value) -> Result<Option<&'static str>, HostErr> {
+    match p["options_source"].as_str() {
+        None | Some("") => Ok(None),
+        Some("operator") => Ok(Some("operator")),
+        Some("host") => Ok(Some("host")),
+        Some("none") => Ok(Some("none")),
+        Some(_) => bad("`options_source` is one of operator, host, none"),
+    }
+}
+
 /// `council_frame`: reads nothing, spends nothing, dispatches nothing. It restates the question as Delphi will fence it, names
 /// the Panel's seats and what the operator must say yes to, and adds a notice when a daemon Council fits better.
 pub fn council_frame(p: &Value) -> Result<Value, HostErr> {
@@ -394,6 +405,12 @@ pub fn council_frame(p: &Value) -> Result<Value, HostErr> {
         (question, stakes, options, pointer_lines(p)?)
     };
     let (question, stakes, options, pointers) = proposition;
+    let requested_by = match p["requested_by"].as_str() {
+        None | Some("") => "host",
+        Some(r @ ("operator" | "host")) => r,
+        Some(_) => return bad("`requested_by` is one of operator, host"),
+    };
+    let options_source = options_source_of(p)?;
     let hay = format!("{} {}", question.to_lowercase(), options.join(" ").to_lowercase());
     let mut because: Vec<&str> = FORMAL_HINTS.iter().filter(|(k, _)| hay.contains(k)).map(|(_, why)| *why).collect();
     if stakes == "high" {
@@ -422,8 +439,38 @@ pub fn council_frame(p: &Value) -> Result<Value, HostErr> {
         }),
         Some(_) => return bad("`foreign_seat` is one of architect, red-team, strategist"),
     };
+    // The confirmation rule (spec 089 F2, OD-1): a yes is needed only when the host proposes a Panel the operator did not ask for,
+    // the Panel includes a foreign seat, or the stakes are high. `requested_by` is the host's word; nothing here sees what the operator typed.
+    let mut reasons: Vec<&str> = Vec::new();
+    if requested_by == "host" {
+        reasons.push("you are proposing a Panel the operator did not ask for");
+    }
+    if foreign.is_object() {
+        reasons.push("the Panel includes a seat Delphi runs on another model family, which spends the operator's Delphi tokens");
+    }
+    if stakes == "high" {
+        reasons.push("the stakes are high");
+    }
+    let confirmation = if reasons.is_empty() {
+        json!({"needed": false, "why": "the operator asked for a Panel or Council by name, no foreign seat is included and the stakes are not high; state the plan in one line and proceed", "ask": Value::Null})
+    } else {
+        let mut ask = String::new();
+        if requested_by == "host" {
+            ask.push_str("Run a Panel of architect, red-team and strategist on this question? It uses your host's tokens (about three seats twice). ");
+        }
+        if let Some(a) = foreign["ask_the_operator"].as_str() {
+            ask.push_str(a);
+            ask.push(' ');
+        }
+        if ask.is_empty() {
+            ask.push_str("The stakes are marked high. Run the Panel on this question? It uses your host's tokens (about three seats twice). ");
+        }
+        ask.push_str("Say yes to go ahead.");
+        json!({"needed": true, "why": reasons.join("; "), "ask": ask})
+    };
     Ok(json!({
-        "framed": {"question": question, "stakes": stakes, "options": options, "pointers": pointers},
+        "framed": {"question": question, "stakes": stakes, "options": options, "options_source": options_source, "requested_by": requested_by, "pointers": pointers},
+        "confirmation": confirmation,
         "default_tier": "panel",
         "foreign_seat": foreign,
         "notice": notice,
@@ -433,7 +480,6 @@ pub fn council_frame(p: &Value) -> Result<Value, HostErr> {
             "isolation": "run each seat as its own subagent, in parallel, each given only the question and the pointers, not the other seats' words; if your host cannot, say 'blind: no' in the first line",
             "spends": "your host's tokens, not Delphi's"
         },
-        "ask_the_operator": "Run a Panel of architect, red-team and strategist on this question? It uses your host's tokens (about three seats twice). Say yes to go ahead.",
         "advice_only": true
     }))
 }
@@ -452,8 +498,18 @@ pub fn council_view(events: &[delphi_core::event::EventEnvelope], mission_dir: &
     if let Some(f) = started.map(|e| e.payload["foreign"].clone()).filter(|f| f.is_object()) {
         v["foreign_seat"] = f;
     }
+    if let Some(f) = started.map(|e| e.payload["foreign_seats"].clone()).filter(|f| f.is_array()) {
+        v["foreign_seats"] = f;
+    }
     if let Some(b) = started.and_then(|e| e.payload["blind"].as_str()) {
         v["blind"] = json!(b);
+    }
+    // Host-reported claims, shown as such on the card; they raise no trust and satisfy no gate (spec 089 F2).
+    if let Some(o) = started.map(|e| e.payload["operator_confirmed"].clone()).filter(|o| o.is_boolean()) {
+        v["operator_confirmed"] = o;
+    }
+    if let Some(o) = started.and_then(|e| e.payload["options_source"].as_str()) {
+        v["options_source"] = json!(o);
     }
     let positions: Vec<Value> = of("council.stance").iter().map(|e| json!({"seat": e.payload["role"], "status": e.payload["status"], "position": e.payload["text"], "model": e.payload["model"]})).collect();
     let state = match (done, &verdict) {
@@ -491,9 +547,41 @@ pub fn council_view(events: &[delphi_core::event::EventEnvelope], mission_dir: &
             doc.rsplit_once(marker.as_str()).map(|(_, t)| t.split("\n## ").next().unwrap_or("").trim().to_string())
         });
         let critiques: Vec<Value> = of("council.critique").iter().map(|e| json!({"seat": e.payload["role"], "recommendation": e.payload["recommendation"], "concur": e.payload["concur"], "findings": e.payload["findings"]})).collect();
+        // The families that actually sat, from the receipts' served family (`specs/091` SR-3). A Panel adds the host's own, host-reported.
+        // A log without receipts keeps the plan's label.
+        let (served, _) = crate::seat::served_for_task(events, task_id);
+        let host_fam = started.and_then(|e| e.payload["host_family"].as_str());
+        let div = crate::seat::Diversity::of(if panel { host_fam } else { None }, &served);
+        let have = !served.is_empty() || (panel && host_fam.is_some());
+        let homogeneous = if have && panel { json!(div.homogeneous()) } else if have { json!(ve.payload["homogeneous"].as_bool().unwrap_or(false) || div.homogeneous()) } else { ve.payload["homogeneous"].clone() };
+        let required = started.and_then(|e| e.payload["require_families"].as_u64());
+        // Each seat Delphi ran, from its receipts (`specs/086` §6.4, §7): served model, family, carrier, tools, and the parse and
+        // refusal diagnostics of its own words (C1c). Diagnostics only; nothing here ranks a seat.
+        let ran: Vec<Value> = if panel {
+            let stances = of("council.stance");
+            let crits = of("council.critique");
+            crate::seat::seat_summaries(events, task_id)
+                .into_iter()
+                .map(|s| {
+                    let st = stances.iter().find(|e| e.payload["role"] == s.role.as_str());
+                    let cr = crits.iter().find(|e| e.payload["role"] == s.role.as_str());
+                    let mut d = s.to_value();
+                    d["round1_parsed"] = st.map(|e| e.payload["parsed"].clone()).unwrap_or(Value::Null);
+                    d["round2_readable"] = cr.map(|e| e.payload["readable"].clone()).unwrap_or(Value::Null);
+                    d["declined"] = json!(st.is_some_and(|e| e.payload["declined"] == true) || cr.is_some_and(|e| e.payload["declined"] == true));
+                    d
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let unverified: Vec<&str> = ran.iter().filter(|d| d["unverified_against_repo"] == true).filter_map(|d| d["seat"].as_str()).collect();
         v["ruling"] = json!({
+            "seats_run_by_delphi": ran, "unverified_against_repo": unverified,
+            "families": div.families, "families_unknown": div.unknown, "require_families": required,
+            "require_families_met": required.map(|n| div.families.len() as u64 >= n),
             "decision": ve.payload["decision"], "next_steps": ve.payload["steps"], "options_considered": ve.payload["options"], "escalated": ve.payload["escalated"],
-            "unresolved": ve.payload["unresolved"], "homogeneous": ve.payload["homogeneous"], "seat_positions": positions, "critiques": critiques,
+            "unresolved": ve.payload["unresolved"], "homogeneous": homogeneous, "seat_positions": positions, "critiques": critiques,
             "dissent": dissent, "record": ve.payload["path"],
             "note": "advice to you: it binds nothing in your project; the record stays in Delphi for the operator to review"
         });
@@ -519,9 +607,21 @@ pub fn ruling_card(v: &Value, tokens: u64) -> String {
             Some("no") => "blind: NO (the host could not isolate its seats)",
             _ => "blind: not reported",
         };
-        let families = match v["foreign_seat"]["family"].as_str() {
-            Some(f) => format!("2 families: the host's and {f} (seat `{}` run by Delphi)", v["foreign_seat"]["role"].as_str().unwrap_or("?")),
-            None => "1 family reported".to_string(),
+        let options_line = match v["options_source"].as_str() {
+            Some("operator") => "from the operator",
+            Some("host") => "added by the host",
+            Some("none") | None => "none given",
+            Some(_) => "source not stated",
+        };
+        let families = match (r["families"].as_array(), v["foreign_seat"]["family"].as_str()) {
+            // From the receipts (`specs/091`): the served family of each seat Delphi ran, plus the host's own as the host reported it.
+            (Some(fs), _) if !fs.is_empty() || r["families_unknown"].as_u64().unwrap_or(0) > 0 => {
+                let names: Vec<&str> = fs.iter().filter_map(Value::as_str).collect();
+                let unknown = r["families_unknown"].as_u64().filter(|n| *n > 0).map(|n| format!(", {n} unknown (not counted)")).unwrap_or_default();
+                format!("{} famil{}: {}{unknown}{}", names.len(), if names.len() == 1 { "y" } else { "ies" }, if names.is_empty() { "none known".to_string() } else { names.join(", ") }, if homog { " (homogeneous)" } else { "" })
+            }
+            (_, Some(f)) => format!("2 families: the host's and {f} (seat `{}` run by Delphi)", v["foreign_seat"]["role"].as_str().unwrap_or("?")),
+            _ => "1 family reported".to_string(),
         };
         s.push_str(&format!(
             "**Panel ruling** · host seats · barrier: held by Delphi · isolation: host-reported · {blind} · {families} · {}\n\n",
@@ -530,6 +630,13 @@ pub fn ruling_card(v: &Value, tokens: u64) -> String {
                 n => format!("{n} model(s): {}", models.into_iter().collect::<Vec<_>>().join(", ")),
             }
         ));
+        s.push_str(&format!("**Options:** {options_line} (host-reported)\n\n"));
+        if let (Some(n), Some(false)) = (r["require_families"].as_u64(), r["require_families_met"].as_bool()) {
+            s.push_str(&format!("**require_families = {n} was NOT met** by the receipts; this ruling is labelled homogeneous.\n\n"));
+        }
+        if v["foreign_seat"].is_object() && v["operator_confirmed"] == true {
+            s.push_str("**Foreign seat confirmed by the operator:** yes (host-reported)\n\n");
+        }
     } else {
         s.push_str(&format!(
             "**Council ruling** · daemon Council · blind barrier held by Delphi · {}\n\n",
@@ -545,12 +652,42 @@ pub fn ruling_card(v: &Value, tokens: u64) -> String {
         }
         s.push('\n');
     }
-    let seats: Vec<String> = r["seat_positions"].as_array().into_iter().flatten().map(|p| match p["model"].as_str() {
-        Some(m) => format!("`{}` ({}, {m})", text(&p["seat"]), text(&p["status"])),
-        None => format!("`{}` ({})", text(&p["seat"]), text(&p["status"])),
+    let unverified: Vec<&str> = r["unverified_against_repo"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+    let seats: Vec<String> = r["seat_positions"].as_array().into_iter().flatten().map(|p| {
+        let label = if unverified.contains(&p["seat"].as_str().unwrap_or("")) { format!(", {}", crate::seat::UNVERIFIED_AGAINST_REPO) } else { String::new() };
+        match p["model"].as_str() {
+            Some(m) => format!("`{}` ({}, {m}{label})", text(&p["seat"]), text(&p["status"])),
+            None => format!("`{}` ({}{label})", text(&p["seat"]), text(&p["status"])),
+        }
     }).collect();
     if !seats.is_empty() {
         s.push_str(&format!("**Who sat:** {}\n\n", seats.join(", ")));
+    }
+    if let Some(ran) = r["seats_run_by_delphi"].as_array().filter(|a| !a.is_empty()) {
+        s.push_str("**Seats Delphi ran** (from the receipts)\n");
+        for d in ran {
+            let yn = |x: &Value| match x.as_bool() {
+                Some(true) => "yes",
+                Some(false) => "no",
+                None => "n/a",
+            };
+            let tools = d["tools_offered"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ")).filter(|t| !t.is_empty()).unwrap_or_else(|| "none".into());
+            let model = d["served_model"].as_str().unwrap_or("not reported");
+            s.push_str(&format!(
+                "- `{}`: model {model}, family {}, carrier {}, tools {tools}; round 1 parsed: {}, round 2 readable: {}, declined: {}{}\n",
+                text(&d["seat"]),
+                text(&d["family"]),
+                if text(&d["carrier"]).is_empty() { "none (did not sit)".to_string() } else { text(&d["carrier"]) },
+                yn(&d["round1_parsed"]),
+                yn(&d["round2_readable"]),
+                yn(&d["declined"]),
+                if d["unverified_against_repo"] == true { format!(" · **{}**", crate::seat::UNVERIFIED_AGAINST_REPO) } else { String::new() }
+            ));
+        }
+        s.push('\n');
+    }
+    if !unverified.is_empty() {
+        s.push_str(&format!("**{}:** {} ran without a tool that could read the repo, so what it says about files or code is unchecked; weigh it as an opinion, not a finding.\n\n", crate::seat::UNVERIFIED_AGAINST_REPO, unverified.iter().map(|u| format!("`{u}`")).collect::<Vec<_>>().join(", ")));
     }
     let split: Vec<String> = r["critiques"]
         .as_array()
@@ -908,13 +1045,45 @@ mod tests {
     fn a_frame_always_allows_the_panel_and_only_suggests_a_formal_council() {
         let plain = council_frame(&json!({"question": "Table or file for the cache?", "options": ["table", "file"]})).unwrap();
         assert_eq!((plain["default_tier"].as_str(), plain["notice"].is_null(), plain["advice_only"].as_bool()), (Some("panel"), true, Some(true)));
-        assert!(plain["ask_the_operator"].as_str().unwrap().contains("host's tokens"));
+        assert!(plain.get("ask_the_operator").is_none(), "replaced by `confirmation`");
+        assert_eq!((plain["confirmation"]["needed"].as_bool(), plain["framed"]["requested_by"].as_str()), (Some(true), Some("host")), "requested_by defaults to host");
+        assert!(plain["confirmation"]["ask"].as_str().unwrap().contains("host's tokens"));
         let risky = council_frame(&json!({"question": "Should we approve the spec that changes sandbox authority? It is irreversible.", "stakes": "high"})).unwrap();
         let why: Vec<&str> = risky["notice"]["because"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
         assert!(why.contains(&"it touches the sandbox") && why.contains(&"it may be irreversible") && why.contains(&"you marked the stakes high"), "{why:?}");
         assert_eq!(risky["default_tier"], "panel", "a risky question still gets a Panel: the notice suggests, it never blocks");
         assert!(risky["notice"]["text"].as_str().unwrap().contains("not a block"));
         for bad in [json!({}), json!({"question": "q", "stakes": "dire"}), json!({"question": "q", "context_pointers": [{"uri": "/etc/passwd", "reason": "r"}]})] {
+            assert!(council_frame(&bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_confirmation_matrix_asks_only_for_a_host_proposal_a_foreign_seat_or_high_stakes() {
+        let c = |extra: Value| {
+            let mut b = json!({"question": "Table or file?"});
+            for (k, v) in extra.as_object().unwrap() {
+                b[k] = v.clone();
+            }
+            council_frame(&b).unwrap()["confirmation"].clone()
+        };
+        let asked = c(json!({"requested_by": "operator"}));
+        assert_eq!((asked["needed"].as_bool(), asked["ask"].is_null()), (Some(false), true), "{asked}");
+        assert!(asked["why"].as_str().unwrap().contains("proceed"));
+        let normal = c(json!({"requested_by": "operator", "stakes": "normal"}));
+        assert_eq!(normal["needed"], false);
+        let proposed = c(json!({"requested_by": "host"}));
+        assert_eq!(proposed["needed"], true);
+        assert!(proposed["why"].as_str().unwrap().contains("did not ask for") && proposed["ask"].as_str().unwrap().ends_with("Say yes to go ahead."), "{proposed}");
+        let foreign = c(json!({"requested_by": "operator", "foreign_seat": "red-team"}));
+        assert_eq!(foreign["needed"], true);
+        assert!(foreign["ask"].as_str().unwrap().contains("red-team seat on another model family") && !foreign["ask"].as_str().unwrap().contains("Run a Panel"), "{foreign}");
+        let high = c(json!({"requested_by": "operator", "stakes": "high"}));
+        assert_eq!(high["needed"], true);
+        assert!(high["why"].as_str().unwrap().contains("high") && high["ask"].as_str().unwrap().contains("high"), "{high}");
+        let all = council_frame(&json!({"question": "q", "options": ["a"], "options_source": "host", "requested_by": "operator"})).unwrap();
+        assert_eq!((all["framed"]["options_source"].as_str(), all["framed"]["question"].as_str()), (Some("host"), Some("q")));
+        for bad in [json!({"question": "q", "requested_by": "someone"}), json!({"question": "q", "options_source": "model"})] {
             assert!(council_frame(&bad).is_err(), "{bad}");
         }
     }

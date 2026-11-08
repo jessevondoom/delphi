@@ -35,7 +35,7 @@ One row per spec. Three separate questions, because they diverge: **Approved** (
 | 011 Xenia trust model | yes (text, by "ratify all") | yes (X0-X10) | tests, fuzz, scratch-store drill | Phase 1 build: X0-X10 merged (plan: xenia-phase-1-plan.md; gates in xenia-x10-verification.md). Gates 1-7 of 011 §1.4 met by automated tests; gate 8 (3-human, 2-week dogfood, X11), the independent red-team sweep and a live store with real admin identities are the operator's |
 | 012 Xenia record schema | yes (text, by "ratify all") | yes (kinds `memory`, `endorsement`, `tombstone`, and `bundle` from B8) | tests, fuzz | same; not exercised on a live store. 2026-10-29 (D-32): pointer scheme is `xenia://<kind>/<id>[@rev]` (bare form refused), `delphi://` refused, `xenia://cap/` reserved |
 | 013 Librarian and internal retrieval | yes | no ("scoped, not yet built") | n/a | after 011/012 |
-| 020 Harness tool bridge, seat profiles & tool inventory | yes | yes (§8.7 Antigravity Builder activation and diagnostic parity) | tests, agy live probe | none |
+| 020 Harness tool bridge, seat profiles & tool inventory | yes | yes (§8.7 Antigravity Builder activation and diagnostic parity; 2026-11-07 a refused path says what a path looks like and which projects there are, §4) | tests, agy live probe; 2026-11-07 live before/after on a Haiku seat, one case, 3 seeds each: 0 of 3 (0 of 4 with an earlier run) became 3 of 3 once the refusal named the project | none |
 | 022 The sharing layer (overview, plan, decisions) | yes (decisions OD-1..OD-9, 2026-10-25; text on merge of PR #155; ratified in full 2026-10-28) | yes (code in `delphi-bundle`, `bundle_*.rs`, `org_context.rs`; per-slice state below) | n/a | B0: apply the 022 §5 amendments; then the slices below |
 | 023 Org bundle standard (manifest, layout, knowledge, skills, agents, behavior, vectors) | yes (2026-10-25; ratified in full 2026-10-28) | yes (code in `delphi-bundle`, `bundle_*.rs`, `org_context.rs`; per-slice state below) | n/a | B1 |
 | 024 Bundle provenance, adding, precedence, lifecycle | yes (2026-10-25; ratified in full 2026-10-28) | yes (code in `delphi-bundle`, `bundle_*.rs`, `org_context.rs`; per-slice state below) | n/a | B2, B4, B6 |
@@ -94,12 +94,14 @@ Asked for by the operator on 2026-10-26; pilot budget **80 engineering hours** (
 | Slice | Delivers | Hours | State |
 | :-- | :-- | --: | :-- |
 | X1 | spec 037; research case format (`truth/`, `fact_recall`, `no_traps`, `text_matches`, draft-pack rule, `train seal`); truth packs R1-R3 (drafts, operator verification pending) | 15 | merged (#215); R5, R6 drafts added (R4 not built) |
+| M3 | seeded-defect review case (build plan 2026-11-07): `delphi train defects gen\|run`, `review_findings` check, report section (recall, false positives, unique catches; diagnostics only, specs/078) | 6 to 8 | built; PR open; no live run |
 | X2 | per-arm template home and staffing check (`--arms-file`); tokens per model in rows | 8 | merged with X3 (#217) |
 | X3 | `delphi train harvest` and `check-hidden`; code cases C1-C3 (validated: fail on base, pass 3x on reference) | 20 | merged (#217) |
 | X4 | blinded bundles, jury runner (`train judge`) | 12 | built (PR open) |
 | X5 | operator review CLI, disagreement ledger (`train review|disputes|resolve`) | 8 | built (PR open) |
 | X6 | report (`train report`): pass rate, cost per pass, frontier, judge breakdown | 6 | built (PR open) |
 | X7 | pilot supervision and debugging | 11 | not started |
+| X8 | an arm may bring an endpoint the home lacks (`[arm.endpoint.<id>]`: family and harness), throwaway copy only, so one Copilot login runs as several vendors' models; `delphi train fidelity gen --inline` puts the report in the prompt for tool-less seats | 3 | built 2026-11-07 (PR pending): `train_arms.rs` (`ExtraEndpoint`), `train_fidelity.rs`. Live: Copilot catalogue read over ACP (24 models); see the PR for the first results |
 
 R4-R6 truth packs join in the first study phase.
 
@@ -110,6 +112,17 @@ Asked for by the operator on 2026-10-27. Built in one slice and approved after t
 | Slice | Delivers | State |
 | :-- | :-- | :-- |
 | E1 | `$DELPHI_HOME/logs/delphi.log.jsonl`, `delphi logs`, `delphi debug bundle`, `delphi doctor` check 14, console error boundary | merged (#256) |
+| E2 | `tool_failed` records why a call failed (`timeout`, `denied`, `invalid_args`, `tool_error`, from the first line of the result) and the names of its arguments, never a value or a hash of one; the same kind is stored as `failure` on `tool.result` and `harness.bridge_call` and counted per tool as `invalid_args` and `denied` by `observe::ToolCount` and `toolreport` (spec 033 §6). Amended 2026-11-07 at the operator's approval (Council action 2) | built 2026-11-07 (PR pending): `tools::failure_kind`, `tools::arg_keys`, `engine.rs`, `harness_run.rs`, `observe.rs`, `toolreport.rs`. Not built: `repeat_calls` (a hash of arguments can be guessed back; the loop nudge is the signal); a kind for a CLI seat's own native tools (`harness.tool` carries no outcome); a column for the kind in the console or `delphi tools`. Logs written before this carry no kind |
+
+## Operator-authorized tests (spec 092, approved 2026-11-07)
+
+**Approved by the operator on 2026-11-07** ("approve all of the above": the sandboxed-shell-only first slice and the recommended answers to OD-1 to OD-5). **S1 does not start until a red-team re-review of the text in a readable form has passed.** It narrowly amends spec 016's "Red is never allowed" for **headless runs only**: a test the operator authorized may run named Red actions, and an agent may *request* an authorization with its context and risk (the request is inert, staged at L0, and never effective for the run that wrote it). Council `t_0003` (stakes high) chose **approve with changes, narrower first**: a sandboxed shell command only, matched by exact canonical argv with a pinned binary, a mandatory OS sandbox, a disposable project snapshot and a required run binding. Its red-team seat's PATH-shadowing and worktree-poisoning P0s are closed in the text. 
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| S0 | this spec | approved 2026-11-07; the red-team re-review of v2 (readable) is still to run before S1. Amended 2026-11-07 (gaps from Council `t_0005`, whose seats could not read the file and red-team abstained, so its re-review was inconclusive): sandbox re-probe at each use, pinned scripts, daemon-side grant, daemon-computed taint with retyped argv, request caps, no carry-over between slices, and ratification of the 016 invariant-1 amendment under GOVERNANCE §5.7 required before S2 merges; operator to confirm. Council `t_0006` re-review: red-team closed attacks 1-7 on the quoted text and found two P1 gaps, closed in this amendment (OD-1 provenance reworded; scratch and interpreter isolation, `runner_provenance`, `scratch_mode`; explicit `delphi test revoke`, daemon-only audit, TA-6 limit; proposed 2 h / 10 uses default, operator to confirm); a final readable pass of the amended text remains required before S1 |
+| S1 | the request tool and its staging rules, `delphi test review`, `delphi test authorize --from-request`, the protected store | not started |
+| S2 | `--on-card authorization:<id>`, sandbox-or-refuse, the snapshot, canonical matching, atomic use, the deny-list; amends `AGENTS.md` and 016 §3 | not started |
+| S3 | the training runner flag and the report mark | not started |
 
 ## Roadmap steps, for cross-reference
 
@@ -171,6 +184,19 @@ Asked for and approved by the operator on 2026-10-28. `copilot` 1.0.105 is logge
 | S2 | read-only introspection; approval bridge; Builder only after it is proven | built: `CopilotAcp` over stdio via `copilot --acp`, approval bridge mapping `session/request_permission` to Amber cards, answered `allow_once` or `reject` only (spec 051 §6.4 i); setup and doctor detect `copilot` and offer `copilot-sub` Builder seats; Builders route through ACP approval bridge |
 | S3 | `--plan` lane, vision | not started |
 
+## Seats, model families and launching agents on any carrier (spec 091, approved 2026-11-07)
+
+**Approved by the operator on 2026-11-07** ("approve all of the above": option C with a thin receipt first, and the recommended answers to OD-1 to OD-4). Written after Council `t_0002` (architect, strategist, red-team) on the operator's goal of Delphi agents running on the outside across model families, for arms testing, Panels and red-team work. The operator decided on 2026-11-07 that a release-gate sweep labels `homogeneous` and does not fail closed, and that `require_families` is opt-in. Widens no authority; the separate question of Red actions in headless tests is spec 092. Extends 086, 062, 051, 047, 056, 037, 048.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| S0 | this spec | approved 2026-11-07 |
+| S1 | `seat.rs`: the daemon-written `seat.receipt` (requested and served model, resolved family, carrier and its policy, tool grant, prompt hash), the ratified family table with owner and expiry, the schema, a `delphi doctor` expiry warning | built: `seat.rs`, `model_families.toml` (shipped, with a workspace `model-families.toml` override), `Event::Served`, `served_model` on the API `Completed`, one receipt per harness seat and per API seat, doctor check `11 model families`. The served model is read for Claude (init), Copilot and the three API providers; `agy` and Codex report none yet (S5), so their receipts say `unknown`. No live run |
+| S2 | opt-in `require_families` and a count budget on the Panel's `foreign_seat` | built (PR open): the ruling lists the families that sat from the receipts' served family (`unknown` never counts) and labels `homogeneous` below two; `require_families` (per call on `council_open`, or `[seats] require_families`; unset never refuses) refuses a Panel before any spend and skips Round 2 when Round 1's receipts fall short; `[seats] max_foreign_seats` (default 1) and `max_foreign_tokens` (default 100000), per Council, refuse before spend. Panel only: a daemon Council gets the label, not the refusal; the N-seat amendment (#548) and per-mission budgets are not built |
+| S3 | receipts in `train run` rows; a family comparison whose arms differ in prompt hash or carrier policy is labelled confounded | built (PR open): a row keeps each seat's served model and family, carrier, tools offered and prompt hash from the `seat.receipt` events; the report adds SEATS SERVED (a mismatch is a FINDING, `unknown` stays unknown) and FAMILY COMPARISONS (CONFOUNDED when prompt, tools offered or carrier policy differ) |
+| S4 | `ask_family`: one read-only foreign seat answers one question, advice only, returns its receipt | not started |
+| S5 | the served model read from Copilot and `agy` metadata | built (PR open): probed live 2026-11-07. `agy`'s stream-json `init` record carries `init.model`, now emitted as `Event::Served`; Codex's `app-server` `thread/start` answer carries `result.model`, likewise. `codex exec --json` reports no model, so that transport stays `unknown`. Both fields are carrier metadata and may echo the requested model (as Copilot's does); the parsers never read the model's text. No new family entries were needed. |
+
 ## Knowledge window round 2 (spec 043, approved 2026-10-28)
 
 Approved by the operator 2026-10-28 with the mockups in `specs/assets/kb-decisions-options/`. It builds on 028 and on amendment 028-A1 (PR #263: the `shift+tab` expand mode, which replaces the offline/online indicators); K1 waits for 028-A1's E1. Adds the `research` and `docs` kinds. Nothing is built.
@@ -212,11 +238,11 @@ Approved by the operator 2026-10-28, with two allow lists (the default `context/
 
 ## Harness loop techniques (spec 045, approved 2026-10-28)
 
-Approved by the operator 2026-10-28 ("make a plan, write a spec, and let's go"). From a research pass over published harness work; every slice is measured on the spec 037 suites before its default moves (H9). Only H1 is built.
+Approved by the operator 2026-10-28 ("make a plan, write a spec, and let's go"). From a research pass over published harness work; every slice is measured on the spec 037 suites before its default moves (H9). H1 and H2 are built.
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
-| H1 | loop nudge and hard stop, budget warnings, verification gate (API spans), workspace bootstrap, `[loop]` | built (draft PR); tests only, no live run; not yet measured (H9) |
+| H1 | loop nudge and hard stop, budget warnings, verification gate (API spans), workspace bootstrap, `[loop]` | built and merged (#272, #281); tests only, no live run; not yet measured (H9) |
 | H2 | tool-result offload and clearing, cache accounting (folds in 049 CX1) | built 2026-10-29 (`ctxhist.rs`: offload with a 400-byte fenced preview at tool time, argument trimming and batched clearing as a pure `view` of the history at request time, so the log and a resumed span are untouched; `ctxacct.rs`: per-span cache and prefix-change report in `observe.state`; `[loop] tool_result_limit_kb`, `clear_after_kb`, `trim_arguments_kb`, `keep_recent_turns`, all off; events `loop.offload`, `loop.prefix`). Not built: a console display of the report; not measured (H9) |
 | H3 | compaction with flush and its check | not started |
 | H4 | phase reasoning (037 arm first) | not started |
@@ -411,6 +437,7 @@ Approved by the operator on 2026-10-31. Same-machine host agents (Claude Code, C
 | S9 | `delphi learn ingest --from claude-code`: per-project opt-in, versioned reader, two fixed rules, L0 role-keyed notes (Codex/Copilot readers later) | built (PR pending) |
 | S10 | `/resume-host` (`handoff.resume`), `/mcp [on\|off]` (`mcp.get`/`mcp.set`, comment-preserving edit of `[mcp] enabled`) | built (PR pending) |
 | S11 | security review of every new write, spend and read path; fence-closing fix (`defuse`) | built (PR pending) |
+| S12 | search results say what they left out (amended 2026-11-07): `search_project` and `search_memory` add `matched`, `returned`, `limit` and a fixed-text `hint` (more matched, nothing matched, no searchable words); `detail` `concise` or `full` (default `full`, scalar enum; concise drops the line preview); the bridge cut notice says the limit, the size and how to ask for less | built 2026-11-07 (PR pending): `mcp_project.rs` (`Detail`, `Ranked`, `envelope`), `mcp_host.rs`, `bridge.rs`. Not built: the same for `kb_retrieve`, `query_memory`, `search_kb`; the effect on calls per task is unmeasured (the 033 log has no field for it yet) |
 
 ## The shell tool, shell modes and the `!` bang (spec 061, approved 2026-10-31)
 
@@ -651,6 +678,7 @@ Approved by the operator on 2026-11-05. Extends specs 072, 038 and 062. Task-der
 | S1c | `done_when`/`stop_when` in envelope schema and template; `check handoff` requires them | 3 h | built (this branch) |
 | S2 | `check brief` shape check; `handoff-packaging` section | 4 h | built (this branch) |
 | E1 | pre-registered two-arm experiment on the 037 pack | 4 h | run 2026-11-05: no evidence of an effect (6 of 15 vs 7 of 15); `dev/train/e1/REPORT.md`; section 8 stays unbuilt |
+| C1b | orchestrator item 10: read for itself when a read-only delegation is refused (§4.1); approved by the operator 2026-11-07; 3 of 3 genuine runs against 0 of 4 without the rule | 1 h | built (this branch) |
 
 
 
@@ -729,6 +757,9 @@ From the operator's request to refine the outside Council (Claude Code, Copilot,
 | S4 | one foreign-family seat (token ceiling, not a history-based estimate); `venue`/`blind` in the record front matter | 10 | built (PR open) |
 | S5 | pre-registered Panel-vs-Council experiment; decides the default | 12 | run 2026-11-06 (operator go, 350k per-run cap): verdict INCOMPLETE (4 of 8 questions qualify, 6 needed), notice unchanged; 2.10M of 8M tokens; report in `dev/train/e2/REPORT.md`, data in `dev/train/e2/data/`; fixes planned in spec 089 (draft) |
 | S6 | follow-ups from the Council review: Panel captures at L0, verdict `venue`, brief hash, host-support line, list of `council.verdict` readers | 4 | built (merged, #511) |
+| A086-N | amendment (Council t_0004, 2026-11-07): N foreign seats counted by family and gated on spec 091 S1 and S2; `unverified-against-repo` in the card; no tools for a seat that reads peer text; hub-and-spoke invariant; carrier choice rule | 2 | approved by the operator 2026-11-07; C3a built (PR open: `foreign_seats` on `council_open`, each seat its own receipt, families counted from receipts, `unverified-against-repo` in the card, no tools in Round 2); C3b (carrier choice in `council_frame`) not built |
+| S7 | Round 2 reader (C1a): first complete critique wins, identical repeats tolerated, a conflicting later block or object refuses the reply, `trailer` counts and bytes on `council.critique` (daemon and Panel share one reader; reply to the 2026-11-07 Councils 002/003) | 3 | built (PR open) |
+| S8 | seat diagnostics (C1c): `parsed` (R1 `OPTION:` line, R2 critique) and `declined` (the shared refusal tagger, moved to `delphi_engine::refusal`) in the Council record's Seats table and on `council.stance`/`council.critique`; diagnostics only, never a score or input to ranking or routing (spec 078); receipt untouched | 3 | built (PR open) |
 
 ## Spec 089: Panel hardening from the E2 run (2026-11-06, approved)
 
@@ -739,17 +770,44 @@ From the E2 report (verdict INCOMPLETE). Approved 2026-11-06 on the operator's i
 | P0 | spec 089 approval and tracker entry | 1 | approved 2026-11-06 |
 | P1 | server-side Round 2 shape check at submit (host seats; two rejections, then taken as unreadable); seat-file closing lines; `format_retries` recorded | 5 | built (PR open) |
 | P2 | scorer venue fix; `venue: daemon` on daemon records; useful question-limit message | 3 | built (merged, #524) |
-| P3 | skill wording (verbatim question, confirmation rule), `operator_confirmed`, options source | 4 | approved, not built |
+| P3 | skill wording (verbatim question, confirmation rule), `operator_confirmed`, options source | 4 | built (PR open) |
 | P4a | `agy` seat reliability: reproduce the checkout-guard false positive, classify the hangs | 3 | built (PR open); P4b waits for OD-4 |
 | P4b | `agy` fix: one retry after a CLI error, discard message names the paths (guard unchanged by decision; watchdog deferred) | 6-10 | built (PR open): retry and path message; guard unchanged by decision; live capture held |
 | P5 | matcher v2 with a negative control; exploratory `RESCORE.md` of E2 | 5 | built (merged, #523); v2 FAILED validation: agreement 0.15 (needs 0.30), false-match 0.0 |
-| P6 | E3 pre-registration (the run needs the operator's go) | 6 | pre-registration written (PR open); the run needs P3 merged and the operator's explicit go |
+| P6 | E3 pre-registration and run | 6 | pre-registration merged (#531), Amendment 1 merged (#536); run 2026-11-07 (operator go, 2.0M cap): A1 (headline) verdict NO EVIDENCE (same decision 5/6, readable 18/18, but escalation 1/6 against the Council's 10/12); A2 INCOMPLETE (2 of 6 questions: the headless host stopped before the foreign seat answered in 8 of 10 attempts); section 4.5 notice unchanged; 1.88M of 2.0M Delphi-side, 261k of 400k host-side; report `dev/train/e3/REPORT.md`, data `dev/train/e3/data/`; merged (#543); the foreign-seat wait-flow fix is spec 089 P7 |
+| P7 | a headless host survives the foreign seat: server-side wait (brief round 2/3, status), non-error `waiting_on_delphi_seat` answer, `waiting_on`, skill and tool text now say to wait for it | 4 | built (PR open); operator go 2026-11-07; live A2 check not run |
 
-## Spec 090: renumber the three shared spec numbers, once (2026-11-07, draft)
+## Spec 094: the core-repo merge flow (2026-11-07, approved)
 
-From a review of draft spec 088, which found that 014, 037 and 061 are each used by two specs. A draft: not approved, nothing built. One pull request renames one spec of each pair inside `specs/` (no move), rewrites path pointers, decides every bare citation in a map the operator samples, adds a `delphi lint` rule against duplicate numbers, and leaves a mapping paragraph for history. Recommended choice (OD-1): documents and dataviz, training experiments, encyclopedia search pages move; the relay spec keeps 014, so GOVERNANCE.md and REVIEW.md are untouched. New numbers are the next three free when the work starts (expected 091 to 093). Hours are estimates; no trial rewrite was run.
+From the operator's plan of 2026-11-07, after Council `t_0005` on the `approve` / `ratify` / `merge` proposal. Approved 2026-11-07 on the operator's instruction ("approve the outstanding draft specs in this workstream"); OD-1 to OD-5 take the recommendations. The agent identity, branch protection and a terminal or authenticator approval are deliberately deferred to a hardening pass (S8) due before repository access is widened.
+
+| Slice | Content | Hours | State |
+| :-- | :-- | --: | :-- |
+| S1 | spec 094, its approval, and the `003`/`006`/`GOVERNANCE` text | 3-4 | merged (#561) |
+| S2a | the builder's git skill, trigger-routing evals, authorization (no executable code) | 4-5 | merged (#562) |
+| S2b | behavior evals: fixture repos in conflicted states, a harness, checks that the builder resolved correctly | 6-8 | merged (#571); `selftest` proves the checks discriminate; `live` never run |
+| S3 | `delphi merge` core: queue, preconditions, ledger, `<PR>` and `--all`, gate-changing class | 14-18 | merged (#567) |
+| S4 | cleanup after merge and the backlog sweep | 6-8 | merged (#568); not yet run against real `gh` output |
+| S5 | merge error log, `merge fix`, builder hand-off | 8-10 | merged (#569); `fix` prepares the worktree and brief, the builder does the work |
+| S6 | `--auto` session mode | 8-10 | merged (#572); never run live (STOP file, Ctrl-C, real GitHub) |
+| S7 | agent rules, deny rule, operator guide, vocabulary | 3-4 | merged (#570) |
+| S8 | hardening pass | | deferred (own spec) |
+
+## Spec 093: authority invariants as tests (2026-11-07, approved)
+
+From Council `t_0001` over two research notes (CAO, Paperclip); the operator chose two batches, each one slice. Approved 2026-11-07 on the operator's instruction to begin; OD-1 to OD-5 take the recommendations. The acceptance criterion from OD-4 belongs in spec 080 W1.2; it is not added here, because editing an approved spec voids its ratified hash, so it waits for an amendment the operator ratifies.
+
+| Slice | Content | Hours | State |
+| :-- | :-- | --: | :-- |
+| B0 | spec 093 approval and tracker entry | 1 | approved 2026-11-07 (PR #552) |
+| B1 | spawn-site ratchet, generalized must-run gate, home isolation, three authority audits, `cargo deny` gate, harness live-text test | 14-20 | built (merged, #552) |
+| B2 | newer-schema log error and a v0.5.5 log fixture, typed harness result failures, usage-quality doctor check | 8-12 | built (PR open); findings: totals add an unknown price as 0 (own slice); the in-band error list is unverified guesses |
+
+## Spec 090: renumber the three shared spec numbers, once (2026-11-07, approved)
+
+From a review of draft spec 088, which found that 014, 037 and 061 are each used by two specs. Approved by the operator on 2026-11-07, with decisions OD-1 to OD-6 taking the recommendations. Not built. One pull request renames one spec of each pair inside `specs/` (no move), rewrites path pointers, decides every bare citation in a map the operator samples, adds a `delphi lint` rule against duplicate numbers, and leaves a mapping paragraph for history. The specs that move: documents and dataviz (014), training experiments (037), encyclopedia search pages (061); the relay spec keeps 014, so GOVERNANCE.md and REVIEW.md are untouched. The new numbers are the next three free numbers when the work starts: 091 to 094 are taken, so 095 to 097 as of 2026-11-07. The work waits for a quiet window the operator picks. Hours are estimates; no trial rewrite was run.
 
 | Slice | Content | Hours (likely) | State |
 | :-- | :-- | --: | :-- |
-| S0 | spec 090 approval and tracker entry; the three numbers claimed | 1 | draft, awaits the operator |
-| S1 | renames, path pointers, citation map and decisions, one-time check, lint rule, CONTRIBUTING mapping | 12 | not built |
+| S0 | spec 090 approval and tracker entry; the three numbers claimed (095 to 097, re-checked at the start) | 1 | approved 2026-11-07 |
+| S1 | renames, path pointers, citation map and decisions, one-time check, lint rule, CONTRIBUTING mapping | 12 | approved, not built; waits for a quiet window |

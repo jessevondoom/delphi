@@ -266,11 +266,14 @@ fn the_filter_and_the_human_form() {
     assert!(!human(&tampered).contains('\u{1b}'));
 }
 
+// The process-wide logger and the panic hook are shared by every test in this binary, so the tests that install or remove them take ONE lock
+// (two function-local statics were two locks and let one test's `uninstall` empty the other's log).
+static GLOBAL_LOGGER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn the_global_functions_log_only_after_init_and_off_means_off() {
     // One test owns the process-wide logger; the others use instances.
-    static ONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _g = ONE.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = GLOBAL_LOGGER.lock().unwrap_or_else(|e| e.into_inner());
     let d = tempfile::tempdir().unwrap();
     uninstall();
     error("cli", "before_init", "nothing installed", json!({}));
@@ -288,8 +291,7 @@ fn the_global_functions_log_only_after_init_and_off_means_off() {
 
 #[test]
 fn the_panic_hook_logs_then_runs_the_previous_hook() {
-    static ONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _g = ONE.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = GLOBAL_LOGGER.lock().unwrap_or_else(|e| e.into_inner());
     let d = tempfile::tempdir().unwrap();
     install(logger(d.path(), Level::Error, DEFAULT_MAX_BYTES, 3));
     let saw_prev = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));

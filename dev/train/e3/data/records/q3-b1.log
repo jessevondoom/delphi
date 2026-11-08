@@ -1,0 +1,7 @@
+args {"question": "Operators do research via Delphi (TUI or MCP, e.g. from Claude Code agents) using internal sources; the material is accurate and valuable but nothing is saved to the knowledge base, so the operator must save it externally as markdown. What is the best path so that research always fills the KB with minimal operator friction (most may remain pending validation)? Consider authority limi
+started {"council_id": "t_0001", "note": "a Council runs for a few minutes: ask again with council_status, then council_result; its ruling is advice and binds nothing in your project", "state": "convening"}
+0 s ('deliberating', 'convening: choosing the seats')
+30 s ('deliberating', 'round 1 (blind opening): 3 seat(s) have answered')
+130 s ('deliberating', 'round 2 (cross-examination): 3 critique(s) in; the verdict follows')
+150 s ('needs_operator', None)
+done needs_operator
