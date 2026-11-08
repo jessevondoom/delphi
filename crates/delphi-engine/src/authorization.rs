@@ -954,10 +954,21 @@ pub fn audit_dir(home: &Path) -> PathBuf {
 /// calls: the second cannot open it. Only the operator-side code writes it; no agent has a write path (`operator/` is denied to
 /// the path guard).
 pub fn open_audit(home: &Path) -> Result<delphi_core::log::EventLog, String> {
-    delphi_core::log::EventLog::open(&audit_dir(home), Default::default()).map_err(|e| match e {
-        delphi_core::log::LogError::Locked(_) => "another `delphi test` command is writing the authorization audit log; try again in a moment".to_string(),
-        e => format!("could not open the authorization audit log: {e}"),
-    })
+    // The lock is a flock on an open file description. A process that forks (another thread spawning a child) holds a copy of every
+    // open descriptor until its exec closes it, so a lock this process has just released can read as held for a few milliseconds.
+    // A short bounded retry rides that out; a real second writer still gets the "another" error after about a quarter second.
+    let mut tries = 0;
+    loop {
+        match delphi_core::log::EventLog::open(&audit_dir(home), Default::default()) {
+            Err(delphi_core::log::LogError::Locked(_)) if tries < 25 => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(delphi_core::log::LogError::Locked(_)) => return Err("another `delphi test` command is writing the authorization audit log; try again in a moment".to_string()),
+            Err(e) => return Err(format!("could not open the authorization audit log: {e}")),
+            Ok(l) => return Ok(l),
+        }
+    }
 }
 
 /// Append one event and return the head it leaves (verified from the chain, not assumed).
