@@ -442,6 +442,12 @@ pub fn options_source_of(p: &Value) -> Result<Option<&'static str>, HostErr> {
 /// `council_frame`: reads nothing, spends nothing, dispatches nothing. It restates the question as Delphi will fence it, names
 /// the Panel's seats and what the operator must say yes to, and adds a notice when a daemon Council fits better.
 pub fn council_frame(p: &Value) -> Result<Value, HostErr> {
+    council_frame_with(p, &crate::carrier_plan::CarrierEnv::default())
+}
+
+/// [`council_frame`] with what the daemon knows of the machine (`specs/086` §6.4, C3b): adds `proposed_seats`, `plan_budget` and
+/// `plan_note` from the static carrier choice rule. Still reads, spends and starts nothing; with no environment it says availability is unknown.
+pub fn council_frame_with(p: &Value, env: &crate::carrier_plan::CarrierEnv) -> Result<Value, HostErr> {
     let proposition = {
         let question = clean("question", p["question"].as_str().unwrap_or(""), MAX_QUESTION)?;
         let stakes = match p["stakes"].as_str() {
@@ -522,8 +528,17 @@ pub fn council_frame(p: &Value) -> Result<Value, HostErr> {
         ask.push_str("Say yes to go ahead.");
         json!({"needed": true, "why": reasons.join("; "), "ask": ask})
     };
+    let host_family = crate::council_panel::host_family(p["model"].as_str(), p["tool"].as_str().unwrap_or(""));
+    let required = match p["require_families"].as_u64() {
+        Some(n @ 1..=8) => Some(n as u32),
+        _ => None,
+    };
+    let plan = crate::carrier_plan::plan(&question, stakes, &pointers, host_family, env, required);
     Ok(json!({
         "framed": {"question": question, "stakes": stakes, "options": options, "options_source": options_source, "requested_by": requested_by, "pointers": pointers},
+        "proposed_seats": plan["proposed_seats"],
+        "plan_budget": plan["plan_budget"],
+        "plan_note": plan["plan_note"],
         "confirmation": confirmation,
         "default_tier": "panel",
         "foreign_seat": foreign,
