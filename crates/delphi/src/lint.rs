@@ -103,11 +103,11 @@ fn check_spec_numbers(tree: &Tree, r: &mut Report) {
     if tree.mode != Mode::Repo {
         return;
     }
-    let re = Regex::new(r"^specs/(\d{3}[a-z]?)-[^/]+\.md$").unwrap();
     let mut by_number: BTreeMap<String, Vec<&String>> = BTreeMap::new();
     for path in tree.files.keys() {
-        if let Some(c) = re.captures(path) {
-            by_number.entry(c[1].to_string()).or_default().push(path);
+        // Directly under `specs/` only: a path below it has a `/` in the name and is not a spec file name.
+        if let Some(number) = path.strip_prefix("specs/").and_then(delphi_core::specdoc::spec_number) {
+            by_number.entry(number).or_default().push(path);
         }
     }
     for (number, paths) in by_number.into_iter().filter(|(_, p)| p.len() > 1) {
