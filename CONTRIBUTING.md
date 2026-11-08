@@ -48,6 +48,8 @@ Tests that start daemons hold pseudo-terminals until the process ends; if `openp
 
 Describe what changed and why, name the spec, and say how you checked it. If a step was skipped or a test is flaky, say so plainly. Releases are cut by the maintainers: bump the version in `crates/delphi/Cargo.toml` in its own PR, then tag `vX.Y.Z` on `main`; the release workflow builds, attests and publishes (running it by hand is a dry run).
 
+Words for approvals are fixed: **approve** a spec, **ratify** a proposal (`/ratify`, `/retro`; an end user's workspace), **accept** an update (`delphi update`), **answer** a decision (the decisions pane), **merge** a PR (`delphi merge`). The flow for merging core changes, and what is built so far, is in [Merging core changes](docs/guides/merging-core-changes.md) (spec 094).
+
 ## Folding spec amendments
 
 When a spec's amendments are folded into its body, move the removed amendment text verbatim to `specs/history/NNN-<slug>.md` (non-normative). Keep every section number: a folded-away section stays as a stub heading, `## N. (folded into §X.Y; was NNN-An)`, and each amendment ID survives as an inline `(was NNN-An)` anchor. `cargo test -p delphi --test spec_refs` fails when a reference (`specs/NNN §X.Y`, `NNN §X`, `NNN-An`) in specs, docs, code comments, the console, schemas, the changelog or mission notes stops resolving. It has a small allowlist of references that were already broken; fix those rather than add to it.

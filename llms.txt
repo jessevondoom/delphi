@@ -18,6 +18,7 @@ Start with the README, then the guides. The specs are the design and say, in a `
 - [Org bundles](docs/guides/org-bundles.md): share knowledge, skills and goals; Claude Code plugin interchange
 - [Building a bundle with an operator](docs/guides/building-a-bundle.md): START HERE to build a bundle interactively: what to read, the interview, where each answer goes, where to stop
 - [Xenia operator guide](docs/guides/xenia-operator.md): join, run and recover the org's signed memory store
+- [Merging core changes](docs/guides/merging-core-changes.md): the merge queue, `delphi merge`, approval records, gate-changing paths, cleanup (design; slices S3-S6 not all built)
 - [Troubleshooting](docs/troubleshooting.md)
 
 ## Reference
