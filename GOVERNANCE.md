@@ -17,6 +17,7 @@ Delphi is a multi-agent working environment in which a team of specialized agent
 1. **Operator Sovereignty:**
    - The operator (the human) acts through the **console** window and the deterministic runtime (`delphi-core`). Neither has a persona; both are instruments of the operator's authority.
    - Agents advise, debate, design and execute. Strategic authority, constitutional amendments and final merges belong strictly to the operator.
+   - **Delphi's own repository (`specs/094`).** Its operators also work in host-agent sessions outside any Delphi daemon, and approving a change to the core repository must not depend on any one operator's running instance. There, the operator's instruction in a live session is the operator's act, and the merge command records it; an agent may open pull requests, draft specs and queue a ready pull request, and never merges on its own authority. A native merge by the operator is always valid. Nothing here changes how an end user's workspace ratifies lessons, configuration or imports.
 2. **The Hierarchy of Truth:**
    - **Tier 1: [GOVERNANCE.md](GOVERNANCE.md):** behavioral invariants, safety boundaries and collaboration protocols.
    - **Tier 2: [SPEC.md](SPEC.md), sub-specs (`specs/*.md`) and [REVIEW.md](REVIEW.md):** architectural, functional and adversarial verification requirements.
