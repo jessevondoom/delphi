@@ -783,14 +783,14 @@ From the operator's plan of 2026-11-07, after Council `t_0005` on the `approve` 
 
 | Slice | Content | Hours | State |
 | :-- | :-- | --: | :-- |
-| S1 | spec 094, its approval, and the `003`/`006`/`GOVERNANCE` text | 3-4 | approved 2026-11-07 (PR #561 open) |
-| S2a | the builder's git skill, trigger-routing evals, authorization (no executable code) | 4-5 | built (PR #562 open; merges after #561) |
-| S2b | behavior evals: fixture repos in conflicted states, a harness, checks that the builder resolved correctly | 6-8 | not started (needs executable code) |
-| S3 | `delphi merge` core: queue, preconditions, ledger, `<PR>` and `--all`, gate-changing class | 14-18 | built (PR open, stacked on #561): `merge/{forge,gates,record,check,approve,mod}.rs`, `merge-gates.toml`; run against real PRs read-only; `log`, `fix`, `cleanup`, `--auto` print that they are not built |
-| S4 | cleanup after merge and the backlog sweep | 6-8 | built (PR open, stacked on S3): `merge/cleanup.rs`, `delphi merge cleanup [<PR>...] [--merged] [--dry-run] [--yes]`; real-git tests for every safe-delete rule |
-| S5 | merge error log, `merge fix`, builder hand-off | 8-10 | built (PR open, stacked on S4): `merge/errors.rs`, `merge/fix.rs`, `merge log`, `merge fix`; a cleanup problem stays open in the log; `fix` prepares the worktree and brief, the builder does the work |
-| S6 | `--auto` session mode | 8-10 | built (PR open, stacked on S5): `merge/auto.rs`; bounded session, STOP file, Ctrl-C, never merges gate-changing; run live only by the operator |
-| S7 | agent rules, deny rule, operator guide, vocabulary | 3-4 | not started |
+| S1 | spec 094, its approval, and the `003`/`006`/`GOVERNANCE` text | 3-4 | merged (#561) |
+| S2a | the builder's git skill, trigger-routing evals, authorization (no executable code) | 4-5 | merged (#562) |
+| S2b | behavior evals: fixture repos in conflicted states, a harness, checks that the builder resolved correctly | 6-8 | merged (#571); `selftest` proves the checks discriminate; `live` never run |
+| S3 | `delphi merge` core: queue, preconditions, ledger, `<PR>` and `--all`, gate-changing class | 14-18 | merged (#567) |
+| S4 | cleanup after merge and the backlog sweep | 6-8 | merged (#568); not yet run against real `gh` output |
+| S5 | merge error log, `merge fix`, builder hand-off | 8-10 | merged (#569); `fix` prepares the worktree and brief, the builder does the work |
+| S6 | `--auto` session mode | 8-10 | merged (#572); never run live (STOP file, Ctrl-C, real GitHub) |
+| S7 | agent rules, deny rule, operator guide, vocabulary | 3-4 | merged (#570) |
 | S8 | hardening pass | | deferred (own spec) |
 
 ## Spec 093: authority invariants as tests (2026-11-07, approved)
