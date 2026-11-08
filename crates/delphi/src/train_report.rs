@@ -13,6 +13,7 @@ use std::path::Path;
 use serde_json::Value;
 
 use crate::train_judge::{read_judgements, read_key, resolve, JudgeRow, KeyRow, Resolved};
+use crate::train_run::SeatNote;
 use crate::train_review::{consistency, disputes, ledger, pairs, read_operator, OpRow};
 
 /// Seeds per arm needed before the report ranks anything.
@@ -41,6 +42,10 @@ pub struct RunRow {
     pub escalations: u32,
     pub cache_read: u64,
     pub cache_input: u64,
+    /// The seats of the run, from its `seat.receipt` events (`specs/091` SR-6); empty in a row written before they were kept.
+    pub seats: Vec<SeatNote>,
+    /// A seeded-defect review run's figures (`train_defects`); a diagnostic, never a score.
+    pub review: Option<crate::train_defects::Score>,
 }
 
 pub fn read_rows(work: &Path) -> Vec<RunRow> {
@@ -65,6 +70,8 @@ pub fn read_rows(work: &Path) -> Vec<RunRow> {
             escalations: v["escalations"].as_u64().unwrap_or(0) as u32,
             cache_read: v["cache_read_tokens"].as_u64().unwrap_or(0),
             cache_input: v["cache_input_tokens"].as_u64().unwrap_or(0),
+            seats: v["seats"].as_array().map(|a| a.iter().filter_map(SeatNote::from_json).collect()).unwrap_or_default(),
+            review: crate::train_defects::Score::from_note(&v["review"]),
         })
     }).collect()
 }
@@ -299,6 +306,109 @@ fn ratio(v: Option<f64>) -> String {
     v.map_or("—".into(), |v| format!("{:.0}%", v * 100.0))
 }
 
+/// What one arm's seats were, pooled over its runs (`specs/091` SR-6).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ArmSeats {
+    pub carriers: BTreeSet<String>,
+    pub served: BTreeSet<String>,
+    /// Served families that are known, and whether any seat's was `unknown`.
+    pub families: BTreeSet<String>,
+    pub unknown_family: bool,
+    pub tools: BTreeSet<String>,
+    /// `(carrier, dispatch allowed)`: the carrier's policy on what the seat could do.
+    pub policy: BTreeSet<(String, bool)>,
+    pub prompts: BTreeSet<String>,
+    pub mismatches: BTreeSet<String>,
+    pub seats: usize,
+}
+
+pub fn arm_seats(rows: &[RunRow]) -> BTreeMap<String, ArmSeats> {
+    let mut out: BTreeMap<String, ArmSeats> = BTreeMap::new();
+    for r in rows.iter().filter(|r| !r.seats.is_empty()) {
+        let a = out.entry(r.arm.clone()).or_default();
+        for s in &r.seats {
+            a.seats += 1;
+            a.carriers.insert(s.carrier.clone());
+            a.served.insert(s.served_model.clone().unwrap_or_else(|| "unknown".into()));
+            if s.family == delphi_engine::seat::UNKNOWN {
+                a.unknown_family = true;
+            } else {
+                a.families.insert(s.family.clone());
+            }
+            a.tools.extend(s.tools.iter().cloned());
+            a.policy.insert((s.carrier.clone(), s.dispatch_allowed));
+            a.prompts.insert(s.prompt_hash.clone());
+            if s.mismatch() {
+                a.mismatches.insert(format!("asked {}, served {}", s.requested, s.served_model.as_deref().unwrap_or("unknown")));
+            }
+        }
+    }
+    out
+}
+
+/// Why two arms whose served families differ cannot be compared as families: the prompt, the tools offered or the carrier's policy
+/// differ too. Empty when the comparison is clean.
+pub fn confounds(a: &ArmSeats, b: &ArmSeats) -> Vec<&'static str> {
+    let mut why = Vec::new();
+    if a.prompts != b.prompts {
+        why.push("prompt differs");
+    }
+    if a.tools != b.tools {
+        why.push("tools offered differ");
+    }
+    if a.policy != b.policy {
+        why.push("carrier policy differs");
+    }
+    why
+}
+
+/// The served model and family of each arm, the findings among them, and the family comparisons (`specs/091` SR-6). Nothing when no
+/// row kept receipts. A family is the carrier's claim mapped by the family table; `unknown` is shown as unknown.
+fn seat_sections(rows: &[RunRow]) -> String {
+    let arms = arm_seats(rows);
+    if arms.is_empty() {
+        return String::new();
+    }
+    let fam_label = |a: &ArmSeats| if a.unknown_family { if a.families.is_empty() { "unknown".to_string() } else { format!("{},unknown", a.families.iter().cloned().collect::<Vec<_>>().join(",")) } } else { a.families.iter().cloned().collect::<Vec<_>>().join(",") };
+    let join = |s: &BTreeSet<String>| if s.is_empty() { "none".to_string() } else { s.iter().cloned().collect::<Vec<_>>().join(",") };
+    let mut out = String::from("\nSEATS SERVED (from seat receipts: what the carrier reported, not what was asked)\n");
+    out.push_str(&format!("{:<22}{:<12}{:<30}{:<18}{}\n", "arm", "carrier", "served model", "family", "tools offered"));
+    for (arm, a) in &arms {
+        let fam = fam_label(a);
+        out.push_str(&format!("{:<22}{:<12}{:<30}{:<18}{}\n", arm, join(&a.carriers), join(&a.served), fam, a.tools.len()));
+    }
+    for (arm, a) in &arms {
+        for m in &a.mismatches {
+            out.push_str(&format!("  FINDING: {arm}: the served model differs from the requested one ({m})\n"));
+        }
+    }
+    let names: Vec<&String> = arms.keys().collect();
+    let mut lines = Vec::new();
+    for (i, x) in names.iter().enumerate() {
+        for y in &names[i + 1..] {
+            let (a, b) = (&arms[*x], &arms[*y]);
+            if a.families == b.families && !(a.unknown_family || b.unknown_family) {
+                continue;
+            }
+            let unknown: Vec<&str> = [(x.as_str(), a), (y.as_str(), b)].iter().filter(|(_, s)| s.unknown_family).map(|(n, _)| *n).collect();
+            let why = confounds(a, b);
+            let verdict = if !unknown.is_empty() {
+                format!("served family unknown for {}: the comparison cannot be called clean{}", unknown.join(", "), if why.is_empty() { String::new() } else { format!(" ({})", why.join("; ")) })
+            } else if why.is_empty() {
+                "clean (same prompt, tools offered and carrier policy)".to_string()
+            } else {
+                format!("CONFOUNDED ({})", why.join("; "))
+            };
+            lines.push(format!("  {} vs {}: {} vs {}: {}\n", x, y, fam_label(a), fam_label(b), verdict));
+        }
+    }
+    if !lines.is_empty() {
+        out.push_str("FAMILY COMPARISONS (a comparison across families is clean only when prompt, tools offered and carrier policy are the same)\n");
+        lines.iter().for_each(|l| out.push_str(l));
+    }
+    out
+}
+
 /// The efficiency table and, when any arm varies another, the fixed-model comparison (`specs/048` BM-1, BM-2).
 fn effort_sections(stats: &[ArmStats]) -> String {
     let mut out = String::new();
@@ -370,6 +480,8 @@ pub fn render(work: &Path, judge_models: &BTreeMap<String, Vec<String>>) -> Stri
     }
 
     out.push_str(&effort_sections(&stats));
+    out.push_str(&seat_sections(&rows));
+    out.push_str(&review_section(&rows));
 
     // Case by arm.
     let cases: BTreeSet<&str> = rows.iter().map(|r| r.case.as_str()).collect();
@@ -434,6 +546,12 @@ pub fn render(work: &Path, judge_models: &BTreeMap<String, Vec<String>>) -> Stri
     out
 }
 
+/// Seeded-defect review figures by arm, from graded runs that carry them (`train_defects`).
+fn review_section(rows: &[RunRow]) -> String {
+    let runs: Vec<crate::train_defects::RunReview> = rows.iter().filter(|r| r.passed.is_some()).filter_map(|r| r.review.as_ref().map(|s| crate::train_defects::RunReview { case: &r.case, arm: &r.arm, score: s })).collect();
+    crate::train_defects::report_section(&runs)
+}
+
 fn flag(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
 }
@@ -457,7 +575,7 @@ mod tests {
     use serde_json::json;
 
     fn run(case: &str, arm: &str, seed: u32, passed: Option<bool>, cost: f64, tin: u64, tout: u64) -> RunRow {
-        RunRow { case: case.into(), arm: arm.into(), seed, passed, cost_usd: cost, tokens_in: tin, tokens_out: tout, attempts: 1, promotions: 0, base: None, models: vec![], turns: 0, tool_calls: 0, tool_errors: 0, nudges: 0, hard_stops: 0, escalations: 0, cache_read: 0, cache_input: 0 }
+        RunRow { case: case.into(), arm: arm.into(), seed, passed, cost_usd: cost, tokens_in: tin, tokens_out: tout, attempts: 1, promotions: 0, base: None, models: vec![], turns: 0, tool_calls: 0, tool_errors: 0, nudges: 0, hard_stops: 0, escalations: 0, cache_read: 0, cache_input: 0, seats: vec![], review: None }
     }
 
     #[test]
@@ -596,6 +714,79 @@ mod tests {
         fs::write(w.join("rows.jsonl"), old + "\n").unwrap();
         let r = render(&w, &BTreeMap::new());
         assert!(!r.contains("EFFORT") && !r.contains("HARNESS EFFECT"), "{}", r);
+    }
+
+    #[test]
+    fn the_report_carries_a_review_section_only_for_graded_runs_that_have_figures() {
+        let t = tempfile::tempdir().unwrap();
+        let w = t.path().join("w");
+        crate::train::prepare_work_home(&w).unwrap();
+        let line = |arm: &str, passed: Option<bool>, caught: &[&str], fp: u64| json!({"case": "review/rev-1-5", "arm": arm, "seed": 1, "passed": passed, "cost_usd": 0.0, "tokens_in": 1, "tokens_out": 1, "attempts": 1, "promotions": 0,
+            "review": {"defects": 4, "caught": caught, "false_positives": fp, "unmatched": 0, "findings": caught.len() as u64 + fp}}).to_string();
+        let rows = [line("tools", Some(true), &["10:x", "20:y", "30:z"], 0), line("toolless", Some(false), &["10:x"], 2), line("ungraded", None, &["99:q"], 0)];
+        fs::write(w.join("rows.jsonl"), rows.join("\n") + "\n").unwrap();
+        let r = render(&w, &BTreeMap::new());
+        for want in ["SEEDED-DEFECT REVIEW (planted defects found, by arm; diagnostics only)", "tools", "75%", "3/4", "toolless", "25%", "1/4", "unique", "not a seat score", "specs/078"] {
+            assert!(r.contains(want), "{} in\n{}", want, r);
+        }
+        assert!(!r.lines().any(|l| l.starts_with("ungraded") && l.contains("%")), "an ungraded run is not in the section:\n{}", r);
+        let unique = |arm: &str| r.lines().filter(|l| l.starts_with(arm) && l.contains("/4")).map(|l| l.split_whitespace().last().unwrap().to_string()).next();
+        assert_eq!((unique("tools").as_deref(), unique("toolless").as_deref()), (Some("2"), Some("0")), "{}", r);
+        // No review figures, no section.
+        fs::write(w.join("rows.jsonl"), json!({"case": "c0", "arm": "a", "seed": 1, "passed": true, "cost_usd": 0.1, "tokens_in": 10, "tokens_out": 5, "attempts": 1, "promotions": 0}).to_string() + "\n").unwrap();
+        assert!(!render(&w, &BTreeMap::new()).contains("SEEDED-DEFECT"));
+    }
+
+    fn seat(requested: &str, served: Option<&str>, family: &str, carrier: &str, tools: &[&str], dispatch: bool, hash: &str) -> SeatNote {
+        SeatNote { requested: requested.into(), served_model: served.map(String::from), family: family.into(), carrier: carrier.into(), tools: tools.iter().map(|t| t.to_string()).collect(), dispatch_allowed: dispatch, prompt_hash: hash.into(), outcome: "ok".into() }
+    }
+
+    fn with_seats(arm: &str, seats: Vec<SeatNote>) -> RunRow {
+        let mut r = run("c", arm, 1, Some(true), 0.0, 10, 5);
+        r.seats = seats;
+        r
+    }
+
+    #[test]
+    fn the_report_shows_what_was_served_flags_a_mismatch_and_labels_a_confounded_family_comparison() {
+        let t = tempfile::tempdir().unwrap();
+        let w = t.path().join("w");
+        crate::train::prepare_work_home(&w).unwrap();
+        let rows = [
+            with_seats("on-claude", vec![seat("claude-haiku-4.5", Some("claude-haiku-4-5-20251001"), "claude", "claude", &["read_file", "dispatch_agent"], true, "blake3:a")]),
+            // Another family on another carrier that refused the dispatch tool: carrier policy and tools differ.
+            with_seats("on-agy", vec![seat("gemini-4-argon", Some("gemini-4-argon"), "gemini", "agy", &["read_file"], false, "blake3:a")]),
+            // Same prompt, tools and policy as on-claude, a different family: clean.
+            with_seats("on-api", vec![seat("gpt-6-luna", Some("gpt-6-luna"), "openai", "claude", &["read_file", "dispatch_agent"], true, "blake3:a")]),
+            // A carrier that reports nothing: unknown stays unknown. Its request was for a different model than any served.
+            with_seats("on-copilot", vec![seat("gpt-6.1-terra", None, "unknown", "copilot", &[], false, "blake3:a")]),
+            with_seats("swapped", vec![seat("claude-sonnet-5.5", Some("gemini-4-argon"), "gemini", "claude", &["read_file", "dispatch_agent"], true, "blake3:a")]),
+        ];
+        let to_line = |r: &RunRow| json!({"case": r.case, "arm": r.arm, "seed": 1, "passed": true, "cost_usd": 0.0, "tokens_in": 10, "tokens_out": 5, "attempts": 1, "promotions": 0,
+            "seats": r.seats.iter().map(SeatNote::to_json).collect::<Vec<_>>()}).to_string();
+        fs::write(w.join("rows.jsonl"), rows.iter().map(to_line).collect::<Vec<_>>().join("\n") + "\n").unwrap();
+        let r = render(&w, &BTreeMap::new());
+        for want in [
+            "SEATS SERVED",
+            "FINDING: swapped: the served model differs from the requested one (asked claude-sonnet-5.5, served gemini-4-argon)",
+            "on-agy vs on-claude: gemini vs claude: CONFOUNDED (tools offered differ; carrier policy differs)",
+            "on-api vs on-claude: openai vs claude: clean (same prompt, tools offered and carrier policy)",
+            "on-claude vs on-copilot: claude vs unknown: served family unknown for on-copilot: the comparison cannot be called clean",
+        ] {
+            assert!(r.contains(want), "{} in\n{}", want, r);
+        }
+        // A dated suffix is the same model, not a finding.
+        assert!(!r.contains("asked claude-haiku-4.5"), "{}", r);
+        // Two arms in one family are not a family comparison.
+        let same = arm_seats(&[with_seats("a", vec![seat("m", Some("m"), "claude", "claude", &[], false, "x")]), with_seats("b", vec![seat("m", Some("m"), "claude", "agy", &[], false, "y")])]);
+        assert_eq!(same["a"].families, same["b"].families);
+        // A different prompt alone confounds.
+        let (a, b) = (&arm_seats(&[with_seats("a", vec![seat("m", Some("m"), "claude", "claude", &[], false, "x")])])["a"].clone(), &arm_seats(&[with_seats("b", vec![seat("n", Some("n"), "gemini", "claude", &[], false, "y")])])["b"].clone());
+        assert_eq!(confounds(a, b), vec!["prompt differs"]);
+        // Old rows without receipts add no section.
+        let old = json!({"case": "c0", "arm": "x", "seed": 1, "passed": true, "cost_usd": 0.1, "tokens_in": 10, "tokens_out": 5, "attempts": 1, "promotions": 0}).to_string();
+        fs::write(w.join("rows.jsonl"), old + "\n").unwrap();
+        assert!(!render(&w, &BTreeMap::new()).contains("SEATS SERVED"));
     }
 
     #[test]

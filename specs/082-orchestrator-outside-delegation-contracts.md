@@ -5,6 +5,7 @@ author: architect
 timestamp: 2026-11-05T12:00:00Z
 status: approved   # by the operator, 2026-11-05 ("approve when ready and build away"); OD-1 to OD-4 take the recommendations
 approved_by: operator (2026-11-05)
+amendments: "2026-11-07, approved by the operator: the orchestrator reads for itself when a read-only delegation is refused (§4.1, orchestrator item 10)"
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -112,6 +113,16 @@ A short addition to `agents/orchestrator/AGENT.md` §6, written as **limits on w
 - It adds no capability and no tool.
 - `agents/` is a governed path: this change waits for approval of this spec and carries `Implements-Spec: specs/082-*.md`.
 - Test: the venue is never read from an input field. No tool argument can set, override or hint at it (a negative test over the MCP tool table).
+
+### 4.1 Amendment (2026-11-07, approved by the operator): when a delegation is refused
+
+Added as item 10 of orchestrator §2 (`agents/orchestrator/AGENT.md`):
+
+> **When a delegation is refused:** if the refused step was only reading or advising (a `dispatch_agent` that the operator, or a headless run, denied) and your own tools can do the same read-only work, do it yourself, say which step was refused and that you did it yourself, and mark anything you did not have the specialist check as yours alone. Never work around the refusal of a write, a command, an approval, a merge or any action that changes something: stop and ask, as the denial says.
+
+- **Scope.** A read-only fallback only. It never applies to a refused write, command, approval or merge, or to any action that changes something. It is consistent with the denial text ("Do not retry it; propose an alternative or ask"): reading with the orchestrator's own read tools is the proposed alternative, stated openly, and it adds no capability and no tool.
+- **Evidence.** In a headless run a Sonnet 5.5 orchestrator dispatched an investigator, the dispatch was refused (a Red action with no operator), and in 3 of 3 runs it stopped to ask ("I didn't read the file myself, since you asked for the investigator to do it"). Across 4 genuine runs without the rule, 0 passed. With the rule in the manifest, 3 of 3 genuine runs refused, then read the file itself, said so, and used only read tools.
+- **Caveats.** The samples are small (0 of 4, then 3 of 3). It was tested on the orchestrator's delegation only, not on Council seat briefs; a seat-brief version is a hypothesis. Two further runs were quota stops and are not results.
 
 ---
 

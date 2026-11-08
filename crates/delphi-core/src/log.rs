@@ -8,7 +8,7 @@
 //! SQLite, dispatch a tool) only after `append` returns. On open, a torn final line (a crash
 //! mid-write) is truncated.
 
-use crate::event::{parse_line, EventEnvelope, ParseError};
+use crate::event::{parse_line, EventEnvelope, ParseError, SCHEMA_MAJOR};
 use crate::redact::Redactor;
 use crate::time::now_rfc3339;
 use std::fs::{self, File, OpenOptions};
@@ -30,6 +30,9 @@ pub enum LogError {
     Invalid(String),
     /// A line that terminates with `\n` but isn't a valid event: corruption, never auto-repaired.
     Corrupt { segment: PathBuf, line: usize, reason: String },
+    /// A well-formed line from a newer Delphi (an event schema major above this build's). Not corruption: the log is intact
+    /// and this build cannot read it, and it must not be repaired or appended to. The remedy is to update Delphi (spec 093 B2-E).
+    NewerSchema { segment: PathBuf, line: usize, found: u64 },
     /// `seq` was not contiguous.
     Gap { segment: PathBuf, expected: u64, found: u64 },
     /// A previous write failed; the log refuses further appends until reopened.
@@ -43,6 +46,14 @@ impl std::fmt::Display for LogError {
             LogError::Locked(p) => write!(f, "another daemon holds the event-log lock ({})", p.display()),
             LogError::Invalid(m) => write!(f, "invalid event: {}", m),
             LogError::Corrupt { segment, line, reason } => write!(f, "corrupt log {} line {}: {}", segment.display(), line, reason),
+            LogError::NewerSchema { segment, line, found } => write!(
+                f,
+                "the log {} was written by a newer Delphi (line {} uses event schema {}; this build understands {}). Nothing is damaged and nothing was changed: update Delphi (`delphi update`) to read it",
+                segment.display(),
+                line,
+                found,
+                SCHEMA_MAJOR
+            ),
             LogError::Gap { segment, expected, found } => write!(f, "seq gap in {}: expected {}, found {}", segment.display(), expected, found),
             LogError::Poisoned => write!(f, "event log is poisoned by an earlier write failure; reopen it"),
         }
@@ -142,11 +153,19 @@ fn truncate_torn_tail(path: &Path) -> Result<u64, LogError> {
     Ok(len - keep)
 }
 
+/// What a line that does not parse means: a schema major above ours is a newer Delphi's log, anything else is corruption.
+fn parse_failure(segment: &Path, line: usize, e: ParseError) -> LogError {
+    match e {
+        ParseError::UnknownMajor(Some(found)) if found > u64::from(SCHEMA_MAJOR) => LogError::NewerSchema { segment: segment.to_path_buf(), line, found },
+        other => LogError::Corrupt { segment: segment.to_path_buf(), line, reason: other.to_string() },
+    }
+}
+
 fn last_seq_in(path: &Path) -> Result<Option<(u64, Option<String>)>, LogError> {
     let mut last = None;
     for (i, line) in BufReader::new(File::open(path)?).lines().enumerate() {
         let line = line?;
-        let e = parse_line(&line).map_err(|e| LogError::Corrupt { segment: path.to_path_buf(), line: i + 1, reason: e.to_string() })?;
+        let e = parse_line(&line).map_err(|e| parse_failure(path, i + 1, e))?;
         last = Some((e.seq, e.h));
     }
     Ok(last)
@@ -311,7 +330,7 @@ pub fn replay(mission_dir: &Path) -> Result<Vec<EventEnvelope>, LogError> {
                 }
                 return Err(LogError::Corrupt { segment: path, line: line_no, reason: "unterminated line in a closed segment".into() });
             }
-            let e = parse_line(raw.trim_end_matches('\n')).map_err(|e: ParseError| LogError::Corrupt { segment: path.clone(), line: line_no, reason: e.to_string() })?;
+            let e = parse_line(raw.trim_end_matches('\n')).map_err(|e: ParseError| parse_failure(&path, line_no, e))?;
             if e.seq != expected {
                 return Err(LogError::Gap { segment: path, expected, found: e.seq });
             }
@@ -417,11 +436,11 @@ mod tests {
         let mut log = open(t.path(), 300);
         assert_eq!(log.append(ev(21)).unwrap(), 21);
         drop(log);
-        // A future schema major is refused on replay.
+        // A future schema major is refused on replay, as a newer Delphi's log and not as corruption (spec 093 B2-E).
         let last = t.path().join("events").join(segment_name(*list_segments(&t.path().join("events")).unwrap().last().unwrap()));
         let mut f = OpenOptions::new().append(true).open(last).unwrap();
         writeln!(f, r#"{{"v":2,"seq":22,"timestamp":"t","mission_id":"m","type":"x","payload":{{}}}}"#).unwrap();
-        assert!(matches!(replay(t.path()), Err(LogError::Corrupt { .. })));
+        assert!(matches!(replay(t.path()), Err(LogError::NewerSchema { found: 2, .. })));
     }
 
     #[test]
@@ -463,6 +482,53 @@ mod tests {
         let seg = t.path().join("events").join(segment_name(1));
         OpenOptions::new().append(true).open(&seg).unwrap().write_all(b"garbage\n").unwrap();
         assert!(matches!(EventLog::open(t.path(), LogOptions::default()), Err(LogError::Corrupt { .. })));
+    }
+
+    /// Spec 093 B2-E: a log written by a newer Delphi is named as such, not reported as corrupt, and is left exactly as it was.
+    #[test]
+    fn a_log_from_a_newer_delphi_is_named_as_such_and_left_untouched() {
+        let t = tempfile::tempdir().unwrap();
+        let mut log = open(t.path(), DEFAULT_MAX_SEGMENT_BYTES);
+        log.append(ev(1)).unwrap();
+        drop(log);
+        let seg = t.path().join("events").join(segment_name(1));
+        let newer = "{\"v\":2,\"seq\":2,\"timestamp\":\"t\",\"mission_id\":\"m\",\"type\":\"x\",\"payload\":{},\"added_by_a_newer_delphi\":true}\n";
+        OpenOptions::new().append(true).open(&seg).unwrap().write_all(newer.as_bytes()).unwrap();
+        let before = fs::read(&seg).unwrap();
+        // Opening for append refuses with the named error, on the right line.
+        assert!(matches!(EventLog::open(t.path(), LogOptions::default()), Err(LogError::NewerSchema { line: 2, found: 2, .. })));
+        // So does a read-only replay.
+        let err = replay(t.path()).unwrap_err();
+        assert!(matches!(err, LogError::NewerSchema { found: 2, .. }), "{err}");
+        // The message says what to do and never calls the log corrupt.
+        let msg = err.to_string();
+        assert!(msg.contains("newer Delphi") && msg.contains("update Delphi") && !msg.contains("corrupt"), "{msg}");
+        // Nothing was truncated, repaired or appended.
+        assert_eq!(fs::read(&seg).unwrap(), before);
+    }
+
+    #[test]
+    fn a_line_nobody_can_read_is_still_corruption_not_a_newer_schema() {
+        for (name, line) in [
+            ("a schema below ours", "{\"v\":0,\"seq\":2,\"timestamp\":\"t\",\"mission_id\":\"m\",\"type\":\"x\",\"payload\":{}}\n"),
+            ("no schema at all", "{\"seq\":2,\"timestamp\":\"t\",\"mission_id\":\"m\",\"type\":\"x\",\"payload\":{}}\n"),
+            ("not an event", "{\"v\":2}\n"),
+            ("not JSON", "garbage\n"),
+        ] {
+            let t = tempfile::tempdir().unwrap();
+            let mut log = open(t.path(), DEFAULT_MAX_SEGMENT_BYTES);
+            log.append(ev(1)).unwrap();
+            drop(log);
+            let seg = t.path().join("events").join(segment_name(1));
+            OpenOptions::new().append(true).open(&seg).unwrap().write_all(line.as_bytes()).unwrap();
+            let r = replay(t.path());
+            // `{"v":2}` is an unreadable envelope from a newer major: it is a newer schema's line, so the remedy is the same.
+            if name == "not an event" {
+                assert!(matches!(r, Err(LogError::NewerSchema { found: 2, .. })), "{name}: {r:?}");
+            } else {
+                assert!(matches!(r, Err(LogError::Corrupt { .. })), "{name}: {r:?}");
+            }
+        }
     }
 
     #[test]

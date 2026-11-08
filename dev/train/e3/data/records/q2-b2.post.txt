@@ -1,0 +1,2 @@
+host-79c58b1f3272015b {"t_0001": {"cache_read": 379187, "cache_write": 85300, "events": 7, "models": ["gemini-3.8-flash-medium", "sonnet"], "tokens": 92973}} retries 0 fail_lines 0 ['/tmp/e3/home-council/workspaces/delphi/local/sessions/host-79c58b1f3272015b/councils/001-is-delphi-falling-short-of-letting-an-op.md']
+copied record -> /tmp/e3/records/q2-b2.md

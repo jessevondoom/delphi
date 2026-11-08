@@ -37,7 +37,7 @@ a cost cap, a time cap and at least one deterministic `[[check]]`:
 `delphi train run --arms-file arms.toml` runs every arm on every case and seed; each arm has its own template home (its
 routing is configuration) and may declare `expect_models`, the model ids or prefixes it may use. A run in which any
 other model made a call is not graded: it no longer measures that arm. See `arms-pilot-example.toml`. Rows record tokens
-in and out, calls and cost per model, attempts and mid-run model swaps.
+in and out, calls and cost per model, attempts and mid-run model swaps. A run whose model reports its quota reached and answers nothing is **not graded** (its row has an `error` beginning `infrastructure:` and the reset time); `--resume` runs it again. It is not a failed case.
 
 ### Harness arms (`specs/048` BM-1)
 
@@ -66,6 +66,118 @@ passing run) and, for each harness arm, a **HARNESS EFFECT** line against its ba
 error of the difference), tokens, turns and calls per pass, and a verdict. Tokens per pass up by over 25 % (`COST_FLAG`,
 OD-2, provisional) with the pass rate inside the noise reads "costlier, not better"; more passes for that cost reads "a
 trade"; under three graded seeds on either side it reads "no evidence".
+
+### Extra endpoints in a throwaway home (Copilot and other carriers)
+
+An arm may bring an endpoint your home does not have, which lives only in that arm's throwaway copy: your ratified access
+block is never edited. The Copilot CLI serves several vendors' models behind one login, so each vendor is an endpoint whose
+`family` is the model's vendor (`claude`, `gemini`, `openai`) and whose `harness` is `copilot`:
+
+```toml
+[[arm]]
+name = "cp-gpt6luna"
+note = "GPT-6 Luna through the Copilot CLI"
+[arm.endpoint.copilot-openai]
+family = "openai"
+harness = "copilot"
+[arm.models.copilot-openai]
+fast = "gpt-6-luna"
+workhorse = "gpt-6-luna"
+frontier = "gpt-6-luna"
+[arm.role_family]
+```
+
+The harness may be `claude`, `agy`, `codex` or `copilot`; the credential is that CLI's own login and the cost a subscription. If
+your home already has an endpoint of that id it must be the same family and harness, or the arm is refused. A Copilot seat
+is read-only and has no Delphi tools (`specs/051`), so run it on text-only cases: the research suite, or an **inline**
+fidelity case (below). The catalogue of model ids is per account (`copilot --acp`, `session/new`); a model that is not in it is refused.
+
+## Which model really ran (`specs/091` SR-6)
+
+Each row in `rows.jsonl` carries `seats`: one entry per distinct seat of the run, read from the mission log's `seat.receipt`
+events. An entry has the requested model, the **served** model as the carrier reported it, the served family (mapped by the
+family table, `model_families.toml`), the carrier (harness kind), the tools offered, whether dispatch was allowed, the prompt
+hash and the outcome. A carrier that reports no model (Copilot and `agy` until 091 S5) gives `unknown`; the report prints
+`unknown` and never guesses a family from the requested model. Rows written before this have no `seats` and add nothing.
+
+The keys of a `seats` entry are `requested`, `served_model`, `family`, `carrier`, `tools`, `dispatch_allowed`, `prompt_hash`,
+`outcome`. `family` **is** the served family (there is no `served_family` key, and no `requested` family: the requested model's
+vendor is never guessed); `unknown` means the carrier reported no model or the table has no entry. `family_source` lives on the
+`seat.receipt` event, not in the row. A script that reads `served_family` gets nothing for every carrier.
+
+`delphi train report` adds two sections when any row has seats:
+
+- **SEATS SERVED**: per arm, the carriers, served models, families and the count of tools offered. A served model that is not
+  the requested one (a different model, not a dated suffix of it) is printed as a **FINDING**: the arm did not test what it named.
+- **FAMILY COMPARISONS**: for every two arms whose served families differ, **clean** when their prompt hashes, tools offered and
+  carrier policy (carrier, dispatch allowed) are all the same, and **CONFOUNDED** with the reasons otherwise. If either arm's family is
+  unknown the line says so and is never called clean. A confounded comparison measures the carrier or the prompt as much as the
+  family; do not read a family effect from it.
+
+## Handoff fidelity (`specs/048` BM-5)
+
+What does a relay lose between a seat and the operator? A seat reads an artifact with N exact items (a commit hash, a file
+path, a number, a line of code, a quoted sentence); the score is the share present **byte for byte** in the seat's report and
+in the operator's answer.
+
+```sh
+delphi train fidelity run --seed 7 --items 10          # a scripted chain: no model, no cost
+delphi train fidelity gen --seed 7 --items 10 --out dev/train/suites/fidelity/cases/fid-7-10
+delphi train validate --suite fidelity                 # then `delphi train run` on an arm, as for any case
+```
+
+`run` scores three scripted relays: **verbatim** (1.0), **paraphrase** (a summary that shortens hashes, keeps file names,
+rounds numbers and drops comments; 0.0) and **handle** (the seat summarises and hands over a handle to its raw output, and the
+Orchestrator quotes it: lossy at the seat, 1.0 at the operator, a model of `specs/049` CX-6, which is not built). The seat and
+the Orchestrator are functions, so the run shows what the instrument can tell apart, not what any model does. `gen` writes a
+case for a real model: the model gets `fixture/artifact.md` and a prompt that names no item, and an `exact_items` check reads
+`items.json`, which the model never sees. A new seed is a new case, so a fresh seed is a holdout. `--inline` puts the report in the prompt itself, so a seat with no tools (a
+Copilot seat) can take the case, and every arm of any carrier gets the identical prompt; it measures the last hop only. A failed run whose short answer begins by declining ("I can't reproduce ...") is tagged in the row's `notes`: a refusal is a finding about the model, not paraphrase loss, and the check alone cannot tell the two apart. `--items` is 5 to 200 (every
+kind appears from 5).
+
+## Seeded-defect review (build plan 2026-11-07, M3)
+
+Does a reviewing seat find **real** defects, or only plausible-sounding ones? A seeded generator writes a small Python module
+with K planted defects (1 to 8, distinct kinds) and N decoys (0 to 8): constructs that look wrong and are correct. Catalogue
+of defect kinds: `off-by-one`, `inverted-condition`, `missing-error-check`, `wrong-operator`, `resource-leak`,
+`swapped-arguments`, `stale-constant`, `injection` (a query built from input). Every function has a docstring stating what it
+should do, so a defect is a departure from stated intent.
+
+```sh
+delphi train defects run --seed 7 --defects 5 --decoys 4       # scripted reviewers: no model, no cost
+delphi train defects gen --seed 7 --defects 5 --decoys 4 --inline --out dev/train/suites/review/cases/rev-7-5i
+delphi train validate --suite review                           # then `delphi train run` on an arm, as for any case
+```
+
+The seat answers with lines `FINDING <line> <kind>: <one sentence>` (the first line of the file is 1). Scoring is a pattern
+and arithmetic, no model judge: a finding **catches** a defect when its line is within one of the planted line and its kind is
+one the key accepts (the defect's own kind, or the one neighbour kind that names the same fault); a finding within one line of
+a decoy is a **false positive**; any other finding is **unmatched**; a repeat for a defect already caught is ignored. The key
+(`review-key.json`) sits beside `case.toml`, outside `fixture/`, and is never in the prompt. `--inline` puts the module in the
+prompt with line numbers, for a seat with no tools; without it the prompt names `@project/repo/review.py`. The case's
+`review_findings` check takes `min_recall` and `max_false_positives` (`gen --min-recall`, `--max-false-positives`; defaults 0.5
+and 2). A new seed is a new case, so a fresh seed is a holdout.
+
+`delphi train report` adds a **SEEDED-DEFECT REVIEW** section: by arm, recall, false positives, unmatched, and **unique
+catches** (planted defects caught by only one arm, over cases two or more arms ran). **These are diagnostics, not a seat score.**
+They are never an input to routing, ranking, staffing or any Council decision (`specs/078`), and the pass bit is a threshold on
+one synthetic case. One case is a few defects: read the table as a size of the gap to look into, not a verdict on a seat.
+
+## Context retention (`specs/048` BM-7)
+
+Do facts survive a compaction? A session tells the assistant N exact facts early (the same seeded items as handoff fidelity),
+runs a stretch of routine work, then compacts or starts fresh; a probe asks for each fact by name.
+
+```sh
+delphi train retention run --seed 7 --facts 10 --filler 40 --keep 4     # scripted: no model, no cost
+```
+
+It scores five conditions: **no compaction** (the upper bound), a **summary** that states no value, a **summary with a handle**
+to the dropped turns kept whole (`specs/049` CX-3, modelled here and not built) when the model follows the handle and when it
+ignores it, and a **new session**. The scripted model answers only from what it can see, so the table shows what the instrument
+can tell apart (a summary alone loses every fact; a handle recovers them only if followed; the handle costs a few dozen
+characters, not the history), not what any real model does. A live run waits on the compaction itself (`specs/045` H3); its
+probe answers will be scored by the same `exact_items` check, over the same items (`train_items`).
 
 ## Reviewing a truth pack (your job before any research run)
 
@@ -237,6 +349,7 @@ extract run `delphi train seal --case <suite>/<id>` to record its hash.
 | `fact_recall` (`min`) | the deliverable states at least that weighted share of `facts.toml` |
 | `no_traps` | no pattern in `traps.toml` matches |
 | `text_matches` (`pattern`, `present`) | the pattern does (or, with `present = false`, does not) appear |
+| `exact_items` (`path`, `min`) | at least `min` of the strings in the JSON array at `path` (a file in the case directory, outside `fixture/`) appear byte for byte in the deliverable |
 
 The deliverable is the task's final answer plus any Markdown the mission wrote. Patterns give a **lower bound** (a correct
 answer worded unexpectedly is missed), so thresholds are modest and a jury reads the rest against `rubric.md`. A pack that

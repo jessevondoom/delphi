@@ -4,6 +4,7 @@ title: "033: Live usage and tool monitoring"
 author: architect
 timestamp: 2026-10-26T04:00:00Z
 status: approved   # decided and approved by the operator 2026-10-26; §3 is built and merged (#192); §5 is open; the panes that show it are in `specs/034`
+amendments: "2026-11-07, approved by the operator ('approve the items in 3', after a Council review of Anthropic's context-engineering posts): a failed tool call records why, as one of four kinds, and the names of its arguments (never a value or a hash of one)"
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -44,3 +45,5 @@ Two gaps in the narrator's agents pane, and one question about `specs/032`. (a) 
 
 ## 6. Added after approval (2026-10-26)
 `delphi tools --prom` (Prometheus text), `monitor.alert` events (a loop, the cap at 80 % and 95 %), and a live estimate for API seats: see `specs/034` §5. The engine now has an integration test that a scripted model calling `record_change` gets the event logged with its role, task and span, and is told to use the tool.
+
+**Failures by kind (amended 2026-11-07).** Per tool, `observe::ToolCount` and `toolreport` also count `invalid_args` (the call could not be attempted: a missing or malformed argument, an unknown tool) and `denied` (policy refused it), beside `calls` and `errors`. They are read from a `failure` field that the engine now writes on the `tool.result` event of an API span and the `harness.bridge_call` event of a subscription seat's call to a Delphi tool, whenever the call was an error (`specs/039` §3 defines the four kinds and how one is chosen). Still names and counts only. A log written before this change has no kind, so those errors count in `errors` and in neither new column: the columns say what the log recorded, no more. **Blind spot, stated:** `harness.tool`, the event for a CLI seat's own native tools (Edit, Bash, Read), carries no outcome (§2), so a failed native call is invisible here and in every number built on this; a rate that leaves them out is a rate over Delphi's tools only. A repeated call is not counted by hashing its arguments (`specs/039` §3 says why); the loop nudge (`specs/045` T1) is the signal for a repeat. The per-tool invalid-parameter rate is the figure `specs/048` BM-2 and BM-6 need to say whether a tool description helps.

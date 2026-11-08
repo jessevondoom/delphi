@@ -519,9 +519,11 @@ mod tests {
         if cfg!(target_os = "macos") {
             assert_eq!(detect(), Some(Mode::SandboxExec), "sandbox-exec must work here, or the other tests prove nothing");
         }
-        // CI sets this on a machine where bubblewrap is installed: there the tests below must run, not skip.
-        if std::env::var("DELPHI_REQUIRE_SANDBOX").as_deref() == Ok("1") {
-            assert!(detect().is_some(), "DELPHI_REQUIRE_SANDBOX=1 but no sandbox works on this machine");
+        // CI requires the `sandbox` family on a machine where bubblewrap is installed (DELPHI_REQUIRE_SANDBOX=1 or
+        // DELPHI_REQUIRE=sandbox): there the tests below must run, not skip (spec 093 K2).
+        let listed = std::env::var("DELPHI_REQUIRE").is_ok_and(|l| l.split(',').any(|f| f.trim() == "sandbox"));
+        if listed || std::env::var("DELPHI_REQUIRE_SANDBOX").as_deref() == Ok("1") {
+            assert!(detect().is_some(), "the `sandbox` tests are required to run here but no sandbox works on this machine");
         }
     }
 

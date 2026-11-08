@@ -293,7 +293,8 @@ async fn a_call_that_ran_carries_the_reminder_as_a_second_block_and_a_refusal_do
     assert_eq!(blocks(&got[1]).len(), 1, "a refused call has no reminder: {:?}", blocks(&got[1]));
     let cut = blocks(&got[2]);
     assert_eq!(cut.len(), 2);
-    assert!(cut[0].ends_with("[the result was cut at the bridge's size limit]") && cut[1] == reminder, "the reminder survives the size cut");
+    // The note says the limit and the size (400,000 of 400,050) and how to ask for less; the reminder is still the last block.
+    assert!(cut[0].ends_with("[cut: the bridge returns at most 400000 characters of a result and this one had 400050; ask for less, such as a smaller `limit`, a narrower query or `detail: concise`]") && cut[1] == reminder, "the reminder survives the size cut");
 }
 
 #[tokio::test(flavor = "multi_thread")]

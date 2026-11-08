@@ -40,5 +40,11 @@
 ["messenger", "Pull the logs of the failing job on PR 12 and tell me what it says.", "github-ops-sync"],
 ["messenger", "What tools does this third-party server expose, and which of them can change things?", "mcp-server-integration"],
 ["messenger", "The partner sends us JSON events. Make them safe to use inside the system.", "protocol-schema-translation"],
-["messenger", "Tell the team channel that the release is out.", "external-comms-dispatch"]
+["messenger", "Tell the team channel that the release is out.", "external-comms-dispatch"],
+["builder", "Both my branch and main added a row at the bottom of the spec tracker and git shows markers there. Sort it out.", "git-merge-and-conflict-resolution"],
+["builder", "Merging main into my branch conflicts in the engine's lib.rs where we each added a mod line.", "git-merge-and-conflict-resolution"],
+["builder", "The merge conflicts in docs/reference/cli.md after main changed a command.", "git-merge-and-conflict-resolution"],
+["builder", "Cargo.lock has conflict markers after I pulled the base branch in.", "git-merge-and-conflict-resolution"],
+["builder", "My PR says it is behind main and its checks never ran. Bring it up to date without rewriting history.", "git-merge-and-conflict-resolution"],
+["builder", "The merge was clean but the build is red afterwards, and the other branch changed what the same function means.", "git-merge-and-conflict-resolution"]
 ]

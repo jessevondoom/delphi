@@ -180,7 +180,7 @@ pub fn ingest_claude_code(ws: &WorkspacePaths, cwd: &Path, role: &str, text: &st
     let role = servable_role(ws, role).map_err(|e| e.to_string())?;
     let mined = read_claude_code(text)?;
     let hash = mined.session.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3));
-    let caller = Caller { session: format!("ts{hash:016x}"), tool: "claude-code-transcript".into(), cwd: cwd.to_path_buf() };
+    let caller = Caller { session: format!("ts{hash:016x}"), tool: "claude-code-transcript".into(), cwd: cwd.to_path_buf(), projects: Vec::new() };
     let dir = delphi_core::sessions::dir(&ws.dir, &caller.mission());
     let have = replay(&dir).unwrap_or_default();
     let known: Vec<String> = have.iter().filter(|e| e.kind == "learn.staged").filter_map(|e| e.payload["evidence"].as_str().map(String::from)).collect();

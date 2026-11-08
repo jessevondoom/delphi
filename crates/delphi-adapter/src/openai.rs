@@ -113,6 +113,7 @@ pub struct Assembler {
     stop_reason: Option<String>,
     finished: bool,
     done_marker: bool,
+    served_model: Option<String>,
 }
 
 impl Assembler {
@@ -127,6 +128,9 @@ impl Assembler {
             return Ok(Vec::new());
         }
         let v: Value = serde_json::from_str(data).map_err(|e| StreamError::Malformed(e.to_string()))?;
+        if let Some(m) = v["model"].as_str().filter(|s| !s.is_empty()) {
+            self.served_model = Some(m.into());
+        }
         if v["error"].is_object() {
             let e = &v["error"];
             let kind = e["type"].as_str().or_else(|| e["code"].as_str()).map(String::from).or_else(|| e["code"].as_u64().map(|c| c.to_string())).unwrap_or_else(|| "error".into());
@@ -196,7 +200,7 @@ impl Assembler {
             blocks.push(ContentBlock::ToolCall { id, name: c.name, arguments });
         }
         let _ = self.done_marker;
-        Ok(Completed { blocks, usage: self.usage, stop_reason: self.stop_reason })
+        Ok(Completed { blocks, usage: self.usage, stop_reason: self.stop_reason, served_model: self.served_model })
     }
 }
 

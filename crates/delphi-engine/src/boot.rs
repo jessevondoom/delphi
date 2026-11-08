@@ -67,6 +67,15 @@ pub fn settings_from(root: &toml::Value) -> Settings {
     if let Some(v) = root.get("optimistic").and_then(|b| b.get("review_wait_sec")).and_then(|v| v.as_integer()).filter(|v| *v > 0) {
         s.decision_review_wait = Duration::from_secs(v as u64);
     }
+    if let Some(sc) = root.get("seats") {
+        s.require_families = sc.get("require_families").and_then(|v| v.as_integer()).filter(|v| *v >= 1).map(|v| v.min(8) as u32);
+        if let Some(n) = sc.get("max_foreign_seats").and_then(|v| v.as_integer()).filter(|v| *v >= 0) {
+            s.max_foreign_seats = n.min(64) as u32;
+        }
+        if let Some(n) = sc.get("max_foreign_tokens").and_then(|v| v.as_integer()).filter(|v| *v >= 0) {
+            s.max_foreign_tokens = n as u64;
+        }
+    }
     s.hooks = crate::hooks::parse(root).0;
     if let Some(r) = root.get("relay") {
         if r.get("step_up").and_then(|v| v.as_str()) == Some("totp") {
@@ -385,6 +394,15 @@ mod tests {
         assert!(bad.len() == 1 && bad[0].contains("[harness.agy] mode"), "{:?}", bad);
     }
 
+
+    #[test]
+    fn the_seats_block_defaults_to_never_refusing_for_families_and_one_foreign_seat() {
+        let d = settings_from(&toml::from_str("").unwrap());
+        assert_eq!((d.require_families, d.max_foreign_seats, d.max_foreign_tokens), (None, 1, 100_000), "unset never refuses");
+        let s = settings_from(&toml::from_str("[seats]\nrequire_families = 2\nmax_foreign_seats = 0\nmax_foreign_tokens = 5000\n").unwrap());
+        assert_eq!((s.require_families, s.max_foreign_seats, s.max_foreign_tokens), (Some(2), 0, 5000));
+        assert_eq!(settings_from(&toml::from_str("[seats]\nrequire_families = 0\n").unwrap()).require_families, None, "0 is not a requirement");
+    }
     fn workspace_with_config(extra: &str) -> (tempfile::TempDir, WorkspacePaths) {
         let t = tempfile::tempdir().unwrap();
         let ws = make_workspace(t.path());

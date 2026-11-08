@@ -1,0 +1,2 @@
+host-bf180a4da501eb2c {} retries 0 fail_lines 0 ['/tmp/e3/home-panel/workspaces/delphi/local/sessions/host-bf180a4da501eb2c/councils/001-should-draft-spec-070-be-approved-it-kee.md']
+copied record -> /tmp/e3/records/q5-a1.md
