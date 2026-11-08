@@ -85,6 +85,20 @@ fn url_safe(s: &str) -> bool {
     !s.is_empty() && s.len() <= 300 && !s.contains("..") && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '-'))
 }
 
+/// `gh pr edit --add-label x` on a repository without that label says `'x' not found`.
+fn label_missing(detail: &str) -> bool {
+    detail.contains("not found")
+}
+
+/// The colour and description a label created by this command gets.
+fn label_look(label: &str) -> (&'static str, &'static str) {
+    match label {
+        "merge-queue" => ("0E8A16", "Ready to merge; `delphi merge --all` and `--auto` take these (spec 094)"),
+        "needs-human-review" => ("D93F0B", "Changes a gate: a person merges it at a terminal (spec 094)"),
+        _ => ("EDEDED", "Created by delphi merge"),
+    }
+}
+
 pub struct Gh;
 
 impl Gh {
@@ -187,7 +201,18 @@ impl Forge for Gh {
 
     fn set_label(&self, n: u64, label: &str, on: bool) -> Result<(), ForgeError> {
         let flag = if on { "--add-label" } else { "--remove-label" };
-        self.run("change a label", &["pr", "edit", &n.to_string(), flag, label], &[]).map(|_| ())
+        let args = ["pr", "edit", &n.to_string(), flag, label];
+        match self.run("change a label", &args, &[]) {
+            // A repository that has never used the label does not have it yet: create it once and try again. Only when adding;
+            // removing a label that does not exist is already the wanted state, but `gh` calls it an error, so say nothing.
+            Err(ForgeError::Failed { detail, .. }) if on && label_missing(&detail) => {
+                let (color, about) = label_look(label);
+                self.run("create a label", &["label", "create", label, "--color", color, "--description", about], &[])?;
+                self.run("change a label", &args, &[]).map(|_| ())
+            }
+            Err(ForgeError::Failed { detail, .. }) if !on && label_missing(&detail) => Ok(()),
+            other => other.map(|_| ()),
+        }
     }
 
     fn open_bases(&self) -> Result<Vec<String>, ForgeError> {
@@ -205,6 +230,15 @@ impl Forge for Gh {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_missing_label_is_recognised_and_the_two_labels_get_their_own_look() {
+        assert!(label_missing("could not add label: 'merge-queue' not found"));
+        assert!(!label_missing("HTTP 401: Bad credentials"));
+        assert_eq!(label_look("merge-queue").0, "0E8A16");
+        assert_eq!(label_look("needs-human-review").0, "D93F0B");
+        assert_eq!(label_look("anything-else").0, "EDEDED");
+    }
 
     #[test]
     fn only_plain_refs_and_paths_reach_a_url() {
