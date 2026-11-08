@@ -72,7 +72,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/091-seats-families-and-outside-launch.md",
-    "sha256": "6174fff50295a2f8de196d1e526bd792c48ae67514acd6365e1a1954135f6f23"
+    "sha256": "b0a015c54c9ae8649bec0a6f824a85f96aef5b4ee3c257600fe6d317a819450b"
   },
   "source_status_at_hash": {
     "line": {
@@ -85,7 +85,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-07 (\"approve all of the above\"): the Council's option C with a thin receipt first, the two decisions of §9 and the recommended answers to OD-1 to OD-4."
     },
-    "sha256": "6174fff50295a2f8de196d1e526bd792c48ae67514acd6365e1a1954135f6f23",
+    "sha256": "b0a015c54c9ae8649bec0a6f824a85f96aef5b4ee3c257600fe6d317a819450b",
     "word": "approved"
   },
   "spec": {

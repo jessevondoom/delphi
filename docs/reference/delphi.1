@@ -507,7 +507,7 @@ compile the specs into one JSON file each, for agents.
   delphi specs compile [\-\-check] [\-\-repo <path>]
 .fi
 .PP
-Reads specs/*.md and compiled/groups.toml and writes compiled/specs/data/<spec>.json, each a quotation of its source with a hash (spec 088). It never edits a spec and never decides anything: the source spec stays the authority. \-\-check compares instead of writing and fails when a file is stale, missing or has no source. A failed compile writes nothing. Run it from the repository root or pass \-\-repo.
+Reads specs/*.md and compiled/groups.toml and writes compiled/specs/data/<spec>.json, each a quotation of its source with a hash (spec 088), then an index and one page per group beside them, rendered from those files for people to review. It never edits a spec and never decides anything: the source spec stays the authority. \-\-check compares instead of writing and fails when a file is stale, missing or has no source, or when a page differs from a fresh render of the JSON beside it. A failed compile writes nothing. Run it from the repository root or pass \-\-repo.
 .SS delphi check
 the deterministic checks behind the built\-in skills.
 .PP
