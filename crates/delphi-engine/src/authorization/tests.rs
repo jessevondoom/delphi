@@ -711,7 +711,8 @@ fn an_authorization_is_audited_before_it_is_live_and_a_failed_store_change_is_ro
     assert_eq!(load(&f.home).unwrap().records.len(), 1);
     // the same request cannot be answered twice
     let (r2, p2) = made(&f, 2, Some("ar-0000000001"));
-    assert!(create_audited(&f.home, r2, p2).unwrap_err().contains("already answered"));
+    let e = create_audited(&f.home, r2, p2).unwrap_err();
+    assert!(e.contains("already answered"), "{e}");
     // a store change that fails after the event was written leaves a rollback, and the request stays unanswered
     let mut dup = made(&f, 3, Some("ar-0000000007")).0;
     dup.id = r.id.clone();
@@ -724,14 +725,30 @@ fn an_authorization_is_audited_before_it_is_live_and_a_failed_store_change_is_ro
     // two authorizes at once: the second cannot open the audit log while the first holds it
     let held = open_audit(&f.home).unwrap();
     let (r4, p4) = made(&f, 4, Some("ar-0000000004"));
-    assert!(create_audited(&f.home, r4, p4).unwrap_err().contains("another"));
+    let e = create_audited(&f.home, r4, p4).unwrap_err();
+    assert!(e.contains("another"), "{e}");
     drop(held);
     // revoke is audited first, too
     let rec = revoke_audited(&f.home, &r.id, &at(50)).unwrap();
     assert!(rec.is_revoked());
     assert_eq!(read_audit(&f.home).unwrap().last().unwrap().kind, REVOKED);
-    assert!(revoke_audited(&f.home, &r.id, &at(51)).unwrap_err().contains("already revoked"));
+    let e = revoke_audited(&f.home, &r.id, &at(51)).unwrap_err();
+    assert!(e.contains("already revoked"), "{e}");
     assert_eq!(load(&f.home).unwrap().audit_head.unwrap().seq, read_audit(&f.home).unwrap().last().unwrap().seq, "the pin follows the log");
+}
+
+#[test]
+fn a_lock_released_a_moment_late_does_not_fail_the_next_writer() {
+    // A forked child can hold a copy of a just-released lock until it execs; the writer waits a moment instead of failing.
+    let f = fix();
+    let held = open_audit(&f.home).unwrap();
+    let t = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        drop(held);
+    });
+    let again = open_audit(&f.home);
+    t.join().unwrap();
+    assert!(again.is_ok(), "{:?}", again.err());
 }
 
 // ---------------------------------------------------------------------------------------------- a crash cannot brick the store
