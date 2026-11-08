@@ -1662,6 +1662,18 @@ mod tests {
     }
 
     #[test]
+    fn a_host_pointer_rewritten_to_a_project_path_is_readable_as_a_seat() {
+        let mut f = fx(&[]);
+        let projects = f.guard.zones.projects.iter().map(|(n, p)| (n.clone(), std::fs::canonicalize(p).unwrap())).collect::<Vec<_>>();
+        assert!(run_tool(&mut f, "read_file", json!({"path": "src/lib.rs"})).is_error, "the bare form is the blind one");
+        let uri = crate::host_rpc::resolve_pointer("src/lib.rs#L2-L2", &projects);
+        assert_eq!(uri, "@project/app/src/lib.rs#L2-L2");
+        let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "architect", mission_id: "m1", now_rfc3339: "2026-10-24T00:00:00.000Z", stamps: vec![], events: vec![] };
+        let (text, _) = read_pointer(&mut ctx, &uri).unwrap();
+        assert!(text.contains("fn needle() {}"), "{text}");
+    }
+
+    #[test]
     fn a_path_in_no_zone_says_what_a_path_looks_like_and_which_projects_there_are() {
         let mut f = fx(&[]);
         // `@project/` alone, a project name that is not one, and a path with the name missing: the guesses the first live runs made.
