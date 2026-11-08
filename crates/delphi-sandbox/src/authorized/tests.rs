@@ -817,7 +817,9 @@ fn rebuilding_the_probe_source_gives_the_same_shape() {
         let size = Command::new("/usr/bin/size").arg("-m").arg(f).output().unwrap();
         let text = String::from_utf8_lossy(&size.stdout).lines().filter(|l| l.starts_with("Segment __TEXT")).map(str::to_string).collect::<Vec<_>>();
         let nm = Command::new("/usr/bin/nm").arg("-gU").arg(f).output().unwrap();
-        (text, String::from_utf8_lossy(&nm.stdout).into_owned(), otool_l(f))
+        // library names only: the libSystem version is the build machine's
+        let deps: Vec<String> = otool_l(f).unwrap_or_default().lines().filter_map(|l| l.split_whitespace().next().map(str::to_string)).collect();
+        (text, String::from_utf8_lossy(&nm.stdout).into_owned(), deps)
     };
     assert_eq!(shape(&out), shape(&probe_dir().join("probe_mark.dylib")), "the committed library does not match probe_mark.c");
 }
