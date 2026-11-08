@@ -413,7 +413,8 @@ impl EngineService {
         need_host(&ctx)?;
         let ws = &self.engine.ws;
         h::gate(&ws.dir).map_err(host_err)?;
-        let c = h::Caller::parse(&p).map_err(host_err)?;
+        let mut c = h::Caller::parse(&p).map_err(host_err)?;
+        c.projects = self.engine.projects.clone();
         let (prompt, kind) = h::help_prompt(&c, ws, &p).map_err(host_err)?;
         if !self.engine.settings.enabled_agents.iter().any(|a| a == "orchestrator") {
             return Err(err(code::INVALID_PARAMS, "the orchestrator is not an enabled role, so there is no one to route a request: carry on with the role pack alone"));
@@ -532,7 +533,8 @@ impl EngineService {
         need_host(&ctx)?;
         let ws = &self.engine.ws;
         h::gate(&ws.dir).map_err(host_err)?;
-        let c = h::Caller::parse(&p).map_err(host_err)?;
+        let mut c = h::Caller::parse(&p).map_err(host_err)?;
+        c.projects = self.engine.projects.clone();
         let proposition = h::council_proposition(&c, &p).map_err(host_err)?;
         let (task_id, m) = {
             let _gate = self.host_gate.lock().await;
@@ -559,7 +561,8 @@ impl EngineService {
         need_host(&ctx)?;
         let ws = &self.engine.ws;
         h::gate(&ws.dir).map_err(host_err)?;
-        let c = h::Caller::parse(&p).map_err(host_err)?;
+        let mut c = h::Caller::parse(&p).map_err(host_err)?;
+        c.projects = self.engine.projects.clone();
         let proposition = h::council_proposition(&c, &p).map_err(host_err)?;
         let options_source = h::options_source_of(&p).map_err(host_err)?;
         let operator_confirmed = match p.get("operator_confirmed") {
