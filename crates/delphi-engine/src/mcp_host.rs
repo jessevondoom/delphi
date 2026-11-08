@@ -409,7 +409,7 @@ pub fn tools() -> Value {
         {
             "name": "council_frame",
             "title": "Frame a question for a Council or Panel",
-            "description": "Before you convene anything: restates the question as Delphi will fence it, names the Panel's seats (architect, red-team, strategist) and a `confirmation` (whether the operator must say yes before tokens are spent, and the question to put to them), and adds a notice when a formal Council would fit better (a spec approval, authority or trust, anything irreversible, high stakes). Pass the operator's words as `question` exactly as given: add no options, stakes or framing they did not give, and if options would help, ask the operator for them. Ask for a yes only when `confirmation.needed` is true (you are proposing a Panel the operator did not ask for, a foreign seat is included, or stakes are high); when the operator asked for a Panel or Council by name, state the plan in one line and proceed. It reads nothing, spends nothing and dispatches nothing. A Panel is allowed for every question; the notice is a suggestion, never a block.",
+            "description": "Before you convene anything: restates the question as Delphi will fence it, names the Panel's seats (architect, red-team, strategist) and a `confirmation` (whether the operator must say yes before tokens are spent, and the question to put to them), and adds a notice when a formal Council would fit better (a spec approval, authority or trust, anything irreversible, high stakes). Pass the operator's words as `question` exactly as given: add no options, stakes or framing they did not give, and if options would help, ask the operator for them. Ask for a yes only when `confirmation.needed` is true (you are proposing a Panel the operator did not ask for, a foreign seat is included, or stakes are high); when the operator asked for a Panel or Council by name, state the plan in one line and proceed. It also returns `proposed_seats`, `plan_budget` and `plan_note`: the foreign seats Delphi could run (role, family, carrier, tools, token estimate and ceiling, the caps, whether require_families would be met), chosen by a static rule (a tool-less seat for critique or a second opinion, labelled unverified-against-repo; a tool seat to verify a claim against repo files); show the plan and its budget with your question to the operator, and start nothing until they say yes. It reads nothing, spends nothing and dispatches nothing. A Panel is allowed for every question; the notice is a suggestion, never a block.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -417,6 +417,8 @@ pub fn tools() -> Value {
                     "options": {"type": "array", "maxItems": 8, "items": {"type": "string", "maxLength": 200}, "description": "The choices the operator gave, if any. Never add your own."},
                     "stakes": {"type": "string", "enum": ["low", "normal", "high"], "default": "normal"},
                     "foreign_seat": {"type": "string", "enum": ["architect", "red-team", "strategist"], "description": "Optional: have Delphi run this one seat on a model family other than your host's. Spends the operator's Delphi tokens; ask first (council_frame says how)."},
+                    "model": {"type": "string", "maxLength": 80, "description": "Optional, host-reported: your own model name, so the plan can pick families other than yours."},
+                    "require_families": {"type": "integer", "minimum": 1, "maximum": 8, "description": "Optional: the plan says whether this many distinct families would sit."},
                     "requested_by": {"type": "string", "enum": ["operator", "host"], "default": "host", "description": "Host-reported: `operator` if the operator asked for a Panel or Council by name, `host` if you are proposing one they did not ask for."},
                     "options_source": {"type": "string", "enum": ["operator", "host", "none"], "description": "Host-reported: who supplied `options`. Do not add options the operator did not give."},
                     "context_pointers": {"type": "array", "maxItems": 10, "items": {"type": "object", "properties": {"uri": {"type": "string", "maxLength": 200}, "reason": {"type": "string", "maxLength": 200}}, "required": ["uri", "reason"], "additionalProperties": false}, "description": "Project-relative files the seats should look at."}
@@ -706,7 +708,11 @@ impl Server {
             "handoff_get" => self.daemon("host.handoff_get", args),
             "request_help" => self.daemon_slow("host.request_help", args),
             "help_result" => self.daemon_slow("host.help_result", args),
-            "council_frame" => crate::host_rpc::council_frame(args).map(|v| v.to_string()).map_err(|e| e.to_string()),
+            // The daemon knows which endpoints are usable; without it the static frame says availability is unknown.
+            "council_frame" => match self.daemon("host.council_frame", args) {
+                Ok(v) => Ok(v),
+                Err(_) => crate::host_rpc::council_frame(args).map(|v| v.to_string()).map_err(|e| e.to_string()),
+            },
             "council_open" => self.daemon("host.council_open", args),
             "council_brief" => self.daemon("host.council_brief", args),
             "council_submit" => self.daemon("host.council_submit", args),
