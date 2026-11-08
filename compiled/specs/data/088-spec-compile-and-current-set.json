@@ -228,7 +228,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/088-spec-compile-and-current-set.md",
-    "sha256": "436a254f0fd63df333654807b7fd85c6e5168b88e3e2a03579d07bcddd817b54"
+    "sha256": "56c21e2f7919744223cfb754c2263abc1ddd6bcdf6428a78cfbbb9d23b204ce6"
   },
   "source_status_at_hash": {
     "line": {
@@ -241,7 +241,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-07 (\"confirmed ... approved\"): S0 to S3 only; stage 2 (S4 to S6) is NOT approved and needs a fresh decision after the OD-5 measurement"
     },
-    "sha256": "436a254f0fd63df333654807b7fd85c6e5168b88e3e2a03579d07bcddd817b54",
+    "sha256": "56c21e2f7919744223cfb754c2263abc1ddd6bcdf6428a78cfbbb9d23b204ce6",
     "word": "approved"
   },
   "spec": {
