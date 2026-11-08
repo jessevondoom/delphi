@@ -286,7 +286,7 @@ pub fn install(net: &dyn Net, rel: &Release, target: &str, dest: &Path) -> Resul
             std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?;
         }
         // It must run and be the version it claims to be, before it replaces anything.
-        let out = std::process::Command::new(&tmp).arg("--version").stdin(std::process::Stdio::null()).output().context("the new binary does not run on this machine")?;
+        let out = retry_if_busy(|| std::process::Command::new(&tmp).arg("--version").stdin(std::process::Stdio::null()).output()).context("the new binary does not run on this machine")?;
         let said = String::from_utf8_lossy(&out.stdout).trim().to_string();
         let tag_version = rel.tag.trim_start_matches('v');
         if !out.status.success() || tag_version.is_empty() || said.split_whitespace().last() != Some(tag_version) {
@@ -295,7 +295,7 @@ pub fn install(net: &dyn Net, rel: &Release, target: &str, dest: &Path) -> Resul
         let backup = dir.join("delphi.prev");
         // Keep the old version for rollback, unless it is the same version (that would replace the real fallback),
         // and never leave a half-written backup behind.
-        let same = std::process::Command::new(dest).arg("--version").stdin(std::process::Stdio::null()).output().is_ok_and(|o| o.status.success() && o.stdout.trim_ascii() == out.stdout.trim_ascii());
+        let same = retry_if_busy(|| std::process::Command::new(dest).arg("--version").stdin(std::process::Stdio::null()).output()).is_ok_and(|o| o.status.success() && o.stdout.trim_ascii() == out.stdout.trim_ascii());
         if dest.exists() && !same {
             let part = dir.join(format!(".delphi-prev-{}", std::process::id()));
             std::fs::copy(dest, &part).context("could not keep the old version for rollback")?;
@@ -313,6 +313,24 @@ pub fn install(net: &dyn Net, rel: &Release, target: &str, dest: &Path) -> Resul
     result
 }
 
+/// Run `start` (which starts a program), trying again while it fails with "Text file busy" (ETXTBSY). A file written a moment ago
+/// can fail to start that way while another thread of this process has forked a child that still holds a copy of the descriptor we
+/// wrote it through, until that child's exec closes it. That passes in a few milliseconds, so this retries on that error alone,
+/// about a quarter second at most; any other failure is returned at once. (The process starts stay at their call sites, where
+/// `tests/spawn_sites.toml` lists them.)
+fn retry_if_busy<T>(mut start: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+    let mut tries = 0;
+    loop {
+        match start() {
+            Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) && tries < 25 => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            other => return other,
+        }
+    }
+}
+
 /// Put `delphi.prev` back.
 pub fn rollback(dest: &Path) -> Result<()> {
     let backup = dest.with_file_name("delphi.prev");
@@ -322,7 +340,7 @@ pub fn rollback(dest: &Path) -> Result<()> {
     let tmp = dest.with_file_name(format!(".delphi-rollback-{}", std::process::id()));
     let result = (|| -> Result<()> {
         std::fs::copy(&backup, &tmp)?;
-        let ok = std::process::Command::new(&tmp).arg("--version").stdin(std::process::Stdio::null()).output().is_ok_and(|o| o.status.success());
+        let ok = retry_if_busy(|| std::process::Command::new(&tmp).arg("--version").stdin(std::process::Stdio::null()).output()).is_ok_and(|o| o.status.success());
         if !ok {
             bail!("the saved previous version does not run; leaving the current one in place");
         }
@@ -776,6 +794,33 @@ mod tests {
         assert_eq!(run(&["--check".into()], &net, &dest, &api), 0);
         assert!(!dest.exists(), "--check never installs");
         assert_eq!(run(&["--version".into(), "v7.7.7".into()], &net, &dest, &api), 1, "an unknown version is an error, not a silent success");
+    }
+
+    #[test]
+    fn a_file_still_open_for_writing_is_waited_for_instead_of_reported_as_not_running() {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let exe = d.path().join("delphi");
+        let mut f = std::fs::File::create(&exe).unwrap();
+        f.write_all(b"#!/bin/sh\necho 'delphi 1.2.3'\n").unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // While a write descriptor is open, Linux refuses to run the file (ETXTBSY): what a forked child's copy of ours causes.
+        // macOS does not, so there the test only shows that the wait changes nothing.
+        #[cfg(target_os = "linux")]
+        assert_eq!(std::process::Command::new(&exe).output().unwrap_err().raw_os_error(), Some(libc::ETXTBSY), "the fixture must reproduce the condition");
+        let closer = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            drop(f);
+        });
+        let run = |p: &Path| retry_if_busy(|| std::process::Command::new(p).arg("--version").output());
+        let out = run(&exe).expect("a file that stops being busy within the wait runs");
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "delphi 1.2.3");
+        closer.join().unwrap();
+        // Any other failure is returned at once, not retried.
+        let started = std::time::Instant::now();
+        assert!(run(&d.path().join("missing")).is_err());
+        assert!(started.elapsed() < std::time::Duration::from_millis(100));
     }
 
     #[test]
