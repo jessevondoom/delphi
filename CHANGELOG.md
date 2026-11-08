@@ -8,6 +8,7 @@ This file starts with the work after v0.2.7. For earlier releases, the history i
 
 ## Unreleased
 
+- The README introduction is rewritten around four ideas: agents that work together, memory and context that carry over, one team in many environments, and a knowledge base that grows into expertise. It adds a "Why it exists" section, host examples (`@delphi`, a Panel), and a status section that says what has been measured. The one-line summaries in `docs/README.md` and `llms.txt` follow it. No behavior change.
 - Agent identity outside the console (spec 087 S3): a Delphi answer's identity now reads `⟦badge⟧ Name (role, via delphi)` (it was `Name (role) via delphi`) and arrives as one ready-to-print `display` line. A role a host adopts with `get_agent` shows the same identity and notice; the old "acting as" wording is gone. New `[mcp] badge_mode = "dark" | "light"` picks the colour pair for the ANSI form. Results may carry advisory `boundary_line` and `return_line`, and `delphi_roster` opens with a roster line (it takes an optional `speaking` list). Hosts may drop all of these.
 
 ## 0.5.5 — 2026-11-05

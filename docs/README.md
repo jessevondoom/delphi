@@ -1,6 +1,6 @@
 # Delphi documentation
 
-Delphi is a team of AI agents in your terminal that plans, builds and reviews software with you and asks before anything leaves the sandbox. The [README](../README.md) is the tour; these pages are for doing things.
+Delphi is a team of AI agents for research, strategy and product work. The agents work together, keep memory and context between sessions, run in the console and inside other agent tools, grow a knowledge base with its sources, and ask before they act. The [README](../README.md) is the tour; these pages are for doing things.
 
 ## Start here
 
