@@ -1,10 +1,10 @@
 # Merging core changes
 
-How a pull request to Delphi's own repository goes from "ready" to "merged and cleaned up". The design is [specs/094](../../specs/094-core-repo-merge-flow.md). Each part below says which slice builds it. Until a slice has merged, that part is the design, not a feature: do not rely on it, and use the native route at the end.
+How a pull request to Delphi's own repository goes from "ready" to "merged and cleaned up". The design is [specs/094](../../specs/094-core-repo-merge-flow.md). Each part below says which slice built it. Slices S2 to S7 are merged; only the hardening of S8 (see "Deliberately deferred") is not built. You need a `delphi` built from `main` after those merges (release 0.5.6 predates them), the GitHub CLI (`gh`) signed in, and to run the commands inside the repository. If Delphi is unavailable, use the native route at the end.
 
-| Slice | Arrives with |
+| Slice | Built |
 | :-- | :-- |
-| S3 | `delphi merge <PR>`, `--all`, `merge queue`, the ledger, the gate-changing class, both attestations |
+| S3 | `delphi merge <PR>`, `--all`, `merge queue`, `merge status`, the ledger, the gate-changing class, both attestations |
 | S4 | cleanup after merge, `merge cleanup` |
 | S5 | the error log entries, `merge log`, `merge fix` |
 | S6 | `merge --auto` |
@@ -42,7 +42,7 @@ Such a PR is never queueable and never merged by `--all` or `--auto`. `delphi me
 
 ## `--auto` (S6)
 
-`delphi merge --auto` is one bounded session. It lasts as long as the command, is never a setting, and a second run is a second session. It prints and records its grant first. Defaults: 10 PRs, 4 hours, non-gate paths only, all checks green, pause after 2 consecutive errors, stop after 30 idle minutes. It re-derives each PR's record just before merging it, merges serially, and cleans up after each. It stops on a cap, a `STOP` file under `$DELPHI_HOME/merge/`, Ctrl-C, two errors in a row, or an idle queue. `delphi merge log --session <id>` shows what it did. Agents never start it; you do.
+`delphi merge --auto` is one bounded session. It lasts as long as the command, is never a setting, and a second run is a second session. It prints and records its grant first (the first ledger row, `session_start`, then a `session_end` row). Defaults: 10 PRs, 4 hours, non-gate paths only, all checks green, pause after 2 consecutive errors, stop after 30 idle minutes. Flags lower or raise them within fixed ceilings: `--max-prs`, `--for`, `--idle`, `--pause-after-errors`, `--poll`. It re-derives each PR's record just before merging it, merges serially, and cleans up after each. A PR that changes a gate is left for you and listed in the summary. It stops on a cap, a `STOP` file under `$DELPHI_HOME/merge/` (`touch "$DELPHI_HOME/merge/STOP"`), Ctrl-C, two errors in a row, or an idle queue. Every merge it makes carries the session id in the ledger. At a terminal you confirm by typing `auto`; an agent's chat quote must ask for automatic merging, and a PR number or "all" does not count. Agents never start it; you do.
 
 ## Cleanup after merge (S4)
 
