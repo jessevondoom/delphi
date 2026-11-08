@@ -269,7 +269,15 @@ fn local_step(git: &Git, branch: &str, base: &str, held: bool, pr: u64, dry: boo
     // `-d`, never `-D`: git itself refuses a branch it does not consider merged, and that refusal is reported, not overridden.
     match git.ok(&["branch", "-d", "--", branch]) {
         Ok(_) => r.say(format!("#{pr}: removed local branch `{branch}`")),
-        Err(e) => r.fail(format!("#{pr}: kept local branch `{branch}`: {e}")),
+        Err(e) => {
+            // We already proved the branch is in `origin/<base>`; `-d` judges against the local base, which is stale until pulled.
+            let hint = if e.to_string().contains("not fully merged") {
+                format!(" (it is in {target}, but your local `{base}` is behind it: run `git pull` on `{base}`, then `delphi merge cleanup {pr}`)")
+            } else {
+                String::new()
+            };
+            r.fail(format!("#{pr}: kept local branch `{branch}`: {e}{hint}"))
+        }
     }
 }
 

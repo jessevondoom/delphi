@@ -109,7 +109,8 @@ pub fn attest(term: &mut dyn Terminal, quote: Option<&str>, target: Target, gate
 }
 
 fn typed(term: &mut dyn Terminal, what: &str, word: &str) -> Result<Attestation, String> {
-    match term.ask(&format!("To merge {what}, type {word}; anything else cancels: ")) {
+    let verb = if word == "auto" { "start" } else { "merge" };
+    match term.ask(&format!("To {verb} {what}, type {word}; anything else cancels: ")) {
         Some(a) if a == word => Ok(Attestation::Tty),
         Some(_) => Err("cancelled: that was not the confirmation word".into()),
         None => Err("cancelled: no answer".into()),
