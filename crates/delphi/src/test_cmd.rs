@@ -197,7 +197,7 @@ fn render_store(store: &auth::Store, now: i64) -> String {
         let state = if r.is_revoked() { "revoked" } else if expired { "expired" } else { "active" };
         o.push_str(&format!("{:<14} {:<8} run {:<12} uses {}/{}  expires {}  {} entr{}  {}\n", r.id, state, r.run, r.uses, r.max_uses, r.expires, r.manifest.len(), if r.manifest.len() == 1 { "y" } else { "ies" }, auth::clean_text(&r.purpose, 60)));
     }
-    o.push_str("An authorization is not used by any run yet: S2 (`--on-card authorization:<id>`) is not built.\n");
+    o.push_str("`delphi run --on-card authorization:<id> --auth-run <run>` exists, but authorized approval is not enabled yet: a run that carries it still denies every card, so an authorization approves nothing in this build.\n");
     auth::safe_lines(&o)
 }
 

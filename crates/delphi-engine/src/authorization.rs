@@ -770,6 +770,63 @@ fn machine() -> String {
     String::from_utf8_lossy(&buf[..end]).into_owned()
 }
 
+/// This machine's name, as stored in a record's `machine`.
+pub fn this_machine() -> String {
+    machine()
+}
+
+/// Spec 092 S2a, TA-2: may a run that names this record start? A PURE function: every reason it cannot is an `Err` naming it.
+/// It can only refuse. Passing it grants nothing: in S2a the run still denies every Red card (`run::AUTHORIZED_APPROVAL_ENABLED`).
+/// `operator_home` is the home the record was read from (the record's `home` is that home, canonical); `run` is the id the
+/// operator gave at authorize time. The second factor is not needed at launch: it was given when the record was made.
+pub fn check_launch(r: &Record, now_unix: i64, run: &str, operator_home: &Path, machine: &str, policy: &Policy) -> Result<(), String> {
+    if r.revoked.is_some() {
+        return Err(format!("authorization {} is revoked; a revoked record is never re-enabled (authorize a new one)", r.id));
+    }
+    match delphi_core::time::parse_rfc3339(&r.expires) {
+        Some(t) if now_unix < t => {}
+        Some(_) => return Err(format!("authorization {} expired at {}", r.id, r.expires)),
+        None => return Err(format!("authorization {} has no readable expiry; it is not trusted", r.id)),
+    }
+    if r.run != run {
+        return Err(format!("authorization {} is bound to another run (`{}`), not `{}`", r.id, clean_text(&r.run, 64), clean_text(run, 64)));
+    }
+    let home_now = fs::canonicalize(operator_home).unwrap_or_else(|_| operator_home.to_path_buf()).to_string_lossy().into_owned();
+    if r.home != home_now {
+        return Err(format!("authorization {} is bound to another home ({})", r.id, clean_text(&r.home, 80)));
+    }
+    if r.machine != machine {
+        return Err(format!("authorization {} is bound to another machine ({})", r.id, clean_text(&r.machine, 60)));
+    }
+    if r.uses >= r.max_uses {
+        return Err(format!("authorization {} has no uses left ({} of {} used)", r.id, r.uses, r.max_uses));
+    }
+    if r.manifest.is_empty() || r.manifest.len() > MAX_ENTRIES {
+        return Err(format!("authorization {} has a manifest of {} entries (1 to {} are valid)", r.id, r.manifest.len(), MAX_ENTRIES));
+    }
+    let entries: Vec<Entry> = r.manifest.iter().map(|e| Entry { tool: e.tool.clone(), argv: e.argv.clone(), files: e.files.iter().map(|f| f.path.clone()).collect(), runner_provenance: e.runner_provenance.clone() }).collect();
+    if manifest_hash(&entries) != r.manifest_hash {
+        return Err(format!("authorization {}: the manifest does not match its recorded hash", r.id));
+    }
+    for (i, e) in entries.iter().enumerate() {
+        if let Some(why) = deny_reason(e).or_else(|| isolation_problem(e, policy)) {
+            return Err(format!("authorization {}: manifest entry {} fails the deny-list again at launch: {}", r.id, i + 1, why));
+        }
+    }
+    Ok(())
+}
+
+/// The launcher step: the store is read strictly and verified against its pin, the audit chain is verified against the head the
+/// pinned store recorded and against the store (`read_audit`; never `load_or_ignore`), the record is found, and [`check_launch`]
+/// decides. Any error refuses the run. Read-only: nothing is written.
+pub fn authorize_launch(home: &Path, id: &str, run: &str, now_unix: i64, policy: &Policy) -> Result<Record, String> {
+    read_audit(home)?;
+    let store = load(home)?;
+    let r = store.records.iter().find(|r| r.id == id).ok_or_else(|| format!("no authorization `{}` in the store", clean_text(id, 40)))?;
+    check_launch(r, now_unix, run, home, &machine(), policy)?;
+    Ok(r.clone())
+}
+
 /// Resolve, check and hash one file. `allow_link` is for the daemon's own interpreter list only (a system `python3` is often a
 /// symlink): the path stays as given and the hash is of what it resolves to now. A script is never allowed to be a link.
 fn pin_file(path: &str, allow_link: bool) -> Result<Pinned, String> {

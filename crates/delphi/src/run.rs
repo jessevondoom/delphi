@@ -44,7 +44,20 @@ pub enum OnCard {
     Policy(Policy),
     /// Answer nothing: leave every card (except the merge card) for the operator.
     Leave,
+    /// `authorization:<id>` with `--auth-run <run>` (spec 092 TA-2). In S2a this is a launch gate and nothing more: after the
+    /// checks pass the run decides exactly as `Deny` does. It cannot approve anything.
+    Authorization { id: String, run: String },
 }
+
+/// Documents the state of the build: `false` in S2a to S2c. It gates nothing by itself. S2d must CHANGE THE APPROVAL CODE (a grant
+/// held by the daemon, `run_authorized`, and a new decision path), not flip this constant; the test that nothing is approved
+/// by an authorization while it is `false` is what keeps this honest. Today `decide` denies, nothing is sent to the daemon and
+/// nothing reads the store after launch.
+pub const AUTHORIZED_APPROVAL_ENABLED: bool = false;
+
+/// Set by the (future, S2c) launcher in the environment of an authorized run's children. S2a sets it for nothing and refuses
+/// any run that finds it already present: a run nested inside an authorized run may not carry the flag (TA-2).
+pub const AUTHORIZED_RUN_ENV: &str = "DELPHI_AUTHORIZED_RUN";
 
 #[derive(Debug, PartialEq)]
 pub struct Opts {
@@ -59,7 +72,12 @@ pub struct Opts {
     pub keep_daemon: bool,
 }
 
-const VALUE_FLAGS: [&str; 8] = ["--workspace", "--home", "--mission", "--permissions", "--on-card", "--budget", "--timeout", "--task"];
+const VALUE_FLAGS: [&str; 9] = ["--workspace", "--home", "--mission", "--permissions", "--on-card", "--budget", "--timeout", "--task", "--auth-run"];
+
+/// An authorization id or run id: 1 to 64 letters, digits, `-`, `_` or `.` (the charset `delphi test authorize --run` takes).
+fn id_ok(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 64 && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
 
 fn value_of(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
@@ -100,11 +118,33 @@ pub fn parse_args(args: &[String]) -> Result<Opts, String> {
     if input.trim().is_empty() {
         return Err("give the task: delphi run \"/build implement @specs/011-x.md in @project/app\"  (or --task <text>)".into());
     }
+    // The authorization flag is exclusive: a second `--on-card` beside an `authorization:` value is refused, not resolved by order.
+    // Other repeated values behave as before (the first wins). The `--on-card=authorization:x` form is refused, never ignored.
+    let on_card_values: Vec<&str> = args.iter().enumerate().filter(|(_, a)| *a == "--on-card").filter_map(|(i, _)| args.get(i + 1).map(String::as_str)).collect();
+    if args.iter().any(|a| a.starts_with("--on-card=") && a["--on-card=".len()..].starts_with("authorization:")) {
+        return Err("write `--on-card authorization:<id>` with a space: the `--on-card=` form is not accepted for an authorization".into());
+    }
+    if on_card_values.len() > 1 && on_card_values.iter().any(|v| v.starts_with("authorization:")) {
+        return Err("--on-card is given once: authorization:<id> cannot be combined with deny, relay or policy:<file>".into());
+    }
+    let auth_run = value_of(args, "--auth-run");
     let on_card = match value_of(args, "--on-card").as_deref() {
+        Some(a) if a.starts_with("authorization:") => {
+            let id = &a["authorization:".len()..];
+            if !id_ok(id) {
+                return Err("--on-card authorization:<id> takes an id of 1 to 64 letters, digits, `-`, `_` or `.`".into());
+            }
+            let run = auth_run.clone().ok_or("--on-card authorization:<id> needs --auth-run <run>: the run id you gave `delphi test authorize --run`")?;
+            if !id_ok(&run) {
+                return Err("--auth-run takes a run id of 1 to 64 letters, digits, `-`, `_` or `.`".into());
+            }
+            OnCard::Authorization { id: id.to_string(), run }
+        }
+        _ if auth_run.is_some() => return Err("--auth-run goes only with --on-card authorization:<id>".into()),
         None | Some("deny") => OnCard::Deny,
         Some(p) if p.starts_with("policy:") => OnCard::Policy(Policy::load(Path::new(&p["policy:".len()..]))?),
         Some("relay") | Some("park") => OnCard::Leave,
-        Some(other) => return Err(format!("--on-card takes deny, relay or policy:<file>, not `{}`", other)),
+        Some(other) => return Err(format!("--on-card takes deny, relay, policy:<file> or authorization:<id>, not `{}`", other)),
     };
     let permissions = value_of(args, "--permissions");
     if let Some(p) = &permissions {
@@ -212,7 +252,26 @@ pub fn decide(on_card: &OnCard, card: &Value) -> Option<(&'static str, String)> 
         OnCard::Policy(p) if p.matches(tool, pattern) => Some(("allow", "allowed by the run's policy".into())),
         OnCard::Policy(_) => Some(("deny", "headless run: no policy rule allows this".into())),
         OnCard::Deny => Some(("deny", "headless run: --on-card deny".into())),
+        // S2a: the flag only gates the launch. Whatever the record says, nothing is approved while the const is false (S2d).
+        OnCard::Authorization { .. } if !AUTHORIZED_APPROVAL_ENABLED => Some(("deny", "headless run: authorized approval is not enabled in this build".into())),
+        OnCard::Authorization { .. } => Some(("deny", "headless run: authorized approval is decided by the daemon (not built)".into())),
     }
+}
+
+/// Why a run that carries `--on-card authorization:<id>` may not start, or `None` (spec 092 TA-2, S2a). Every refusal is exit 4.
+/// `in_seat` and `marker` are the agent-seat test and the presence of [`AUTHORIZED_RUN_ENV`], passed in so tests do not touch the
+/// process environment. Read-only: it reads the store and the audit log and writes nothing.
+pub fn launch_refusal(home: &Path, on_card: &OnCard, in_seat: bool, marker: bool, now_unix: Option<i64>, policy: &delphi_engine::authorization::Policy) -> Option<String> {
+    let OnCard::Authorization { id, run } = on_card else { return None };
+    if in_seat {
+        return Some("refused: this process was started by an agent seat; an authorized run is the operator's act and an agent may not carry --on-card authorization:".into());
+    }
+    if marker {
+        return Some(format!("refused: {AUTHORIZED_RUN_ENV} is set, so this run is nested inside an authorized run; a nested run may not carry --on-card authorization:"));
+    }
+    // A clock that cannot be read must never make `now < expiry` true: refuse.
+    let Some(now) = now_unix else { return Some("refused: the clock could not be read, so expiry cannot be checked".into()) };
+    delphi_engine::authorization::authorize_launch(home, id, run, now, policy).err().map(|e| format!("refused: {e}"))
 }
 
 // ── the summary ─────────────────────────────────────────────────────────────
@@ -347,6 +406,16 @@ fn say_err(m: &str) {
 /// Run one task. Returns the process exit code.
 pub fn run(home: &Path, ws_dir: &Path, opts: Opts) -> i32 {
     let started = Instant::now();
+    if matches!(opts.on_card, OnCard::Authorization { .. }) {
+        let now = delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339());
+        let seat = crate::xenia_terminal::inside_an_agent_seat();
+        let marker = std::env::var_os(AUTHORIZED_RUN_ENV).is_some();
+        if let Some(why) = launch_refusal(home, &opts.on_card, seat, marker, now, &delphi_engine::authorization::Policy::system()) {
+            say_err(&why);
+            return EXIT_INFRA;
+        }
+        say_err("the authorization checks passed, but authorized approval is not enabled in this build: this run denies every card, as --on-card deny does");
+    }
     let Some(exe) = chat::daemon_exe() else {
         say_err("cannot locate this program to start the daemon");
         return EXIT_INFRA;
@@ -750,4 +819,60 @@ mod tests {
         assert_eq!(j["ready_to_merge"]["sha"], "s");
         assert!(human(&j).contains("ready to merge: branch b at s"));
     }
+
+    // ── spec 092 S2a: the flag is a launch gate that can only refuse ──
+
+    fn auth_args(extra: &[&str]) -> Vec<String> {
+        let mut v = vec!["x"];
+        v.extend_from_slice(extra);
+        args(&v)
+    }
+
+    #[test]
+    fn the_authorization_flag_needs_an_id_and_the_run_and_stands_alone() {
+        let ok = parse_args(&auth_args(&["--on-card", "authorization:ta-0123456789", "--auth-run", "run-1"])).unwrap();
+        assert_eq!(ok.on_card, OnCard::Authorization { id: "ta-0123456789".into(), run: "run-1".into() });
+        assert_eq!(ok.input, "x", "the flag's value is not part of the task text");
+        let err = |a: &[&str]| parse_args(&auth_args(a)).unwrap_err();
+        assert!(err(&["--on-card", "authorization:ta-1"]).contains("--auth-run"), "missing --auth-run");
+        assert!(err(&["--on-card", "authorization:", "--auth-run", "r"]).contains("id of 1 to 64"), "empty id");
+        assert!(err(&["--on-card", "authorization:a/b", "--auth-run", "r"]).contains("id of 1 to 64"), "bad id charset");
+        assert!(err(&["--on-card", "authorization:ta-1", "--auth-run", "r s"]).contains("run id"), "bad run id");
+        assert!(err(&["--on-card", "authorization:ta-1", "--auth-run", &"r".repeat(65)]).contains("run id"));
+        for other in ["relay", "deny", "policy:/tmp/p.toml"] {
+            assert!(err(&["--on-card", "authorization:ta-1", "--auth-run", "r", "--on-card", other]).contains("cannot be combined"), "{other} after");
+            assert!(err(&["--on-card", other, "--on-card", "authorization:ta-1", "--auth-run", "r"]).contains("cannot be combined"), "{other} before");
+        }
+        assert!(err(&["--on-card", "relay", "--auth-run", "r"]).contains("only with"), "--auth-run without the flag");
+        assert!(err(&["--auth-run", "r"]).contains("only with"));
+        assert_eq!(parse_args(&auth_args(&["--on-card", "deny"])).unwrap().on_card, OnCard::Deny, "the other values still parse");
+    }
+
+    #[test]
+    fn repeated_on_card_values_behave_as_before_and_the_equals_form_of_an_authorization_is_refused() {
+        // Without an authorization value, a repeated --on-card is resolved as it always was (the first wins).
+        assert_eq!(parse_args(&auth_args(&["--on-card", "relay", "--on-card", "deny"])).unwrap().on_card, OnCard::Leave);
+        assert_eq!(parse_args(&auth_args(&["--on-card", "deny", "--on-card", "relay"])).unwrap().on_card, OnCard::Deny);
+        // The equals form of an authorization is refused, never silently ignored (which would run as plain deny with no gate).
+        for a in [&["--on-card=authorization:ta-1", "--auth-run", "r"][..], &["--on-card=authorization:ta-1"][..], &["--on-card", "deny", "--on-card=authorization:ta-1", "--auth-run", "r"][..]] {
+            assert!(parse_args(&auth_args(a)).unwrap_err().contains("with a space"), "{a:?}");
+        }
+    }
+
+    #[test]
+    fn nothing_is_approved_by_an_authorization_while_the_const_is_false() {
+        assert!(!std::hint::black_box(AUTHORIZED_APPROVAL_ENABLED), "S2d flips this with its own review; until then no card may be approved by an authorization");
+        let on = OnCard::Authorization { id: "ta-1".into(), run: "r".into() };
+        for tier in ["green", "amber", "red"] {
+            for tool in ["run_command", "shell", "harness_bash", "harness_edit", "harness_connector", "dispatch_agent", "connector", "write_file", "merge", "pull_request", "anything"] {
+                let d = decide(&on, &json!({"tier": tier, "tool": tool, "pattern": "p"})).map(|x| x.0);
+                assert_eq!(d, Some("deny"), "{tier} {tool}");
+            }
+        }
+        assert_eq!(decide(&on, &json!({})).map(|x| x.0), Some("deny"));
+    }
 }
+
+#[cfg(test)]
+#[path = "run_authorization_tests.rs"]
+mod run_authorization_tests;

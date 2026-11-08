@@ -96,7 +96,7 @@ Three numbers are used by two spec files each (first commit dates from `git log`
 
 ## 092-operator-authorized-tests
 
-**092: Operator-authorized tests: an advance, scoped, recorded approval of named Red actions in a headless test run** · approved (per source at `4b1a2499f08c`) · tier 0 · [source](../../specs/092-operator-authorized-tests.md)
+**092: Operator-authorized tests: an advance, scoped, recorded approval of named Red actions in a headless test run** · approved (per source at `81774dbb9e56`) · tier 0 · [source](../../specs/092-operator-authorized-tests.md)
 
 _No standard scope section; open the spec._
 

@@ -29,12 +29,16 @@ The console, on today's mission or one you name.
 One task without a terminal, then a summary.
 
 ```
-  delphi run "<task>" [--on-card deny|policy:<file>] [--permissions <mode>] [--budget <usd>] [--timeout <dur>]
+  delphi run "<task>" [--on-card deny|policy:<file>|authorization:<id> --auth-run <run>]
+    [--permissions <mode>] [--budget <usd>] [--timeout <dur>]
     [--json|--jsonl] [--mission <id>] [--keep-daemon] [--workspace <name>] [--home <dir>]
 ```
 
 Exit codes: 0 ok · 1 gates failed · 2 a card was denied · 3 budget · 4 infrastructure ·
 5 an optimistic build awaits decision review.
+--on-card authorization:<id> --auth-run <run> (spec 092 S2a): a launch gate only; every card is still denied.
+The gate applies the S1 runner policy unchanged (bash replaces it in S2b); passing says nothing about runnability.
+The agent-seat check reads the environment: best-effort in S2a.
 
 ## Set up
 
