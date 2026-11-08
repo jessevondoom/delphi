@@ -68,6 +68,7 @@ mod spec_views;
 mod specs_cmd;
 mod report;
 mod run;
+mod run_granted;
 mod seed;
 mod selfupdate;
 mod setup;

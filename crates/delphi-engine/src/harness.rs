@@ -84,7 +84,17 @@ pub struct LaunchProfile {
     pub settle: Duration,
     /// MCP servers a previous session of this CLI had connected, which the wait holds out for until its cap.
     pub expect_servers: Vec<String>,
+    /// A run that holds an operator authorization (spec 092 S2d1): defence in depth on top of `--tools ""`. The launch adds
+    /// `--disable-slash-commands`, `--disallowedTools` naming the CLI's native tools, and a `--max-turns` cap (a model that keeps
+    /// calling a tool the CLI refuses ends at the cap). All three exist in claude 2.1.319; a CLI that does not know one fails to start
+    /// (a refused option), so a flag the guard relies on is never silently dropped.
+    pub lock_down: bool,
 }
+
+/// The CLI's own tools named in `--disallowedTools` of a locked-down launch. `--tools ""` is the guard; this list only repeats it.
+pub const NATIVE_TOOL_NAMES: &[&str] = &["Bash", "Read", "Write", "Edit", "MultiEdit", "Glob", "Grep", "LS", "WebFetch", "WebSearch", "Task", "Agent", "Skill", "NotebookEdit", "NotebookRead", "TodoWrite", "BashOutput", "KillShell", "SlashCommand", "ExitPlanMode"];
+/// The turn cap of a locked-down launch when the profile sets none.
+pub const LOCKED_MAX_TURNS: u32 = 12;
 
 #[derive(Debug, Clone)]
 pub struct Launch {
@@ -203,6 +213,10 @@ pub enum Event {
     /// The CLI's own tool use, for the log.
     ToolUse { id: String, name: String, input: Value },
     ToolResult { id: String, is_error: bool },
+    /// The CLI answered a tool call with "No such tool available": it refused the call and ran nothing (emitted just before the `ToolResult`).
+    ToolRefused { id: String },
+    /// What the CLI listed at init besides tools (spec 092 S2d1): slash commands, skills, agents and plugins, by name. Recorded, never a reason to stop.
+    InitExtras { slash_commands: Vec<String>, skills: Vec<String>, agents: Vec<String>, plugins: Vec<String> },
     Permission(Permission),
     /// One assistant message's usage (the sum of these is the live meter).
     Usage(Tokens),
@@ -232,6 +246,10 @@ pub fn parse_line(line: &str) -> Vec<Event> {
                 tools: names_of(&m["tools"]),
                 mcp_servers: m["mcp_servers"].as_array().map(|a| a.iter().map(|s| (s["name"].as_str().unwrap_or("").to_string(), s["status"].as_str().unwrap_or("").to_string())).collect()),
             });
+            let extras = (names_of(&m["slash_commands"]), names_of(&m["skills"]), names_of(&m["agents"]), names_of(&m["plugins"]));
+            if !(extras.0.is_empty() && extras.1.is_empty() && extras.2.is_empty() && extras.3.is_empty()) {
+                out.push(Event::InitExtras { slash_commands: extras.0, skills: extras.1, agents: extras.2, plugins: extras.3 });
+            }
             if let Some(model) = m["model"].as_str().filter(|s| !s.is_empty()) {
                 out.push(Event::Served(model.into()));
             }
@@ -251,7 +269,17 @@ pub fn parse_line(line: &str) -> Vec<Event> {
         Some("user") => {
             for b in m["message"]["content"].as_array().into_iter().flatten() {
                 if b["type"] == "tool_result" {
-                    out.push(Event::ToolResult { id: b["tool_use_id"].as_str().unwrap_or("").into(), is_error: b["is_error"].as_bool().unwrap_or(false) });
+                    let is_error = b["is_error"].as_bool().unwrap_or(false);
+                    let id: String = b["tool_use_id"].as_str().unwrap_or("").into();
+                    let text = match &b["content"] {
+                        Value::String(s) => s.clone(),
+                        Value::Array(a) => a.iter().filter_map(|x| x["text"].as_str()).collect::<Vec<_>>().join(" "),
+                        _ => String::new(),
+                    };
+                    if is_error && text.contains("No such tool available") {
+                        out.push(Event::ToolRefused { id: id.clone() });
+                    }
+                    out.push(Event::ToolResult { id, is_error });
                 }
             }
         }
@@ -1033,7 +1061,11 @@ fn args(l: &Launch) -> Vec<String> {
         a.extend(["--tools".into(), p.native_tools.join(",")]);
     }
     push_flag(&mut a, "--effort", o.effort.clone());
-    push_flag(&mut a, "--max-turns", o.max_turns.map(|n| n.to_string()));
+    if p.lock_down {
+        a.push("--disable-slash-commands".into());
+        a.extend(["--disallowedTools".into(), NATIVE_TOOL_NAMES.join(",")]);
+    }
+    push_flag(&mut a, "--max-turns", o.max_turns.or(p.lock_down.then_some(LOCKED_MAX_TURNS)).map(|n| n.to_string()));
     push_flag(&mut a, "--max-budget-usd", o.max_budget_usd.map(|x| x.to_string()));
     push_flag(&mut a, "--json-schema", o.json_schema.clone());
     push_flag(&mut a, "--fallback-model", Some(o.fallback_models.join(",")).filter(|m| !m.is_empty()));
@@ -2419,5 +2451,39 @@ read never
         assert!(result, "session must complete: text={}", text);
         assert!(asked >= 1, "must have asked for permission");
         assert_eq!(std::fs::read_to_string(d.path().join("live-acp.txt")).unwrap().trim(), "ok");
+    }
+
+    #[test]
+    fn a_locked_down_launch_repeats_the_guard_and_caps_the_turns_and_an_ordinary_one_is_unchanged() {
+        let mut l = Launch { cli: Cli::Claude, program: "claude".into(), model: "sonnet".into(), system_prompt: "SYS".into(), user_prompt: "hi".into(), cwd: PathBuf::from("."), tools: Tools::None, env: BTreeMap::new(), profile: Default::default(), opts: Opts::default() };
+        let plain = args(&l);
+        for f in ["--disable-slash-commands", "--disallowedTools", "--max-turns"] {
+            assert!(!plain.contains(&f.to_string()), "{f} on an ordinary launch");
+        }
+        l.profile.lock_down = true;
+        let a = args(&l);
+        let value = |f: &str| a.iter().position(|x| x == f).map(|i| a[i + 1].clone());
+        assert!(a.contains(&"--disable-slash-commands".to_string()));
+        let denied = value("--disallowedTools").unwrap();
+        for t in ["Bash", "Read", "Write", "Edit", "WebFetch", "WebSearch", "Task", "Skill", "NotebookEdit"] {
+            assert!(denied.split(',').any(|x| x == t), "{t} missing from {denied}");
+        }
+        assert_eq!(value("--max-turns").as_deref(), Some("12"));
+        assert_eq!(value("--tools").as_deref(), Some(""), "the guard itself is unchanged");
+        // a turn cap the profile sets wins
+        l.opts.max_turns = Some(3);
+        assert_eq!(args(&l).iter().position(|x| x == "--max-turns").map(|i| args(&l)[i + 1].clone()).as_deref(), Some("3"));
+    }
+
+    #[test]
+    fn a_refused_tool_call_is_told_apart_from_one_that_ran_and_init_lists_are_recorded() {
+        let refused = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu1","is_error":true,"content":"No such tool available: Task"}]}}"#;
+        assert_eq!(parse_line(refused), vec![Event::ToolRefused { id: "tu1".into() }, Event::ToolResult { id: "tu1".into(), is_error: true }]);
+        let blocks = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu2","is_error":true,"content":[{"type":"text","text":"No such tool available: Bash"}]}]}}"#;
+        assert_eq!(parse_line(blocks)[0], Event::ToolRefused { id: "tu2".into() });
+        let ran = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu3","is_error":false,"content":"No such tool available"}]}}"#;
+        assert_eq!(parse_line(ran), vec![Event::ToolResult { id: "tu3".into(), is_error: false }], "only an error result is a refusal");
+        let init = parse_line(r#"{"type":"system","subtype":"init","session_id":"s","tools":[],"slash_commands":["a"],"skills":["b"],"agents":[],"plugins":[{"name":"p"}]}"#);
+        assert!(init.contains(&Event::InitExtras { slash_commands: vec!["a".into()], skills: vec!["b".into()], agents: vec![], plugins: vec!["p".into()] }));
     }
 }

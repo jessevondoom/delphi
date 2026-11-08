@@ -13,7 +13,8 @@ flag | . | --permission-prompt-tool | used | | hidden: absent from `claude --hel
 flag | . | --max-turns | used | | hidden: absent from `claude --help` 2.1.312; S0 probes whether it still ends a span with error_max_turns
 
 # ── Planned: narrowing and hygiene (spec 046 S1) ──
-flag | . | --allowedTools, --allowed-tools, --disallowedTools, --disallowed-tools | planned | S1 | narrowing only: a profile names tools it denies, never ones beyond the span's own set
+flag | . | --allowedTools, --allowed-tools, --disallowed-tools | planned | S1 | narrowing only: a profile names tools it denies, never ones beyond the span's own set
+flag | . | --disallowedTools | used | | spec 092 S2d1: a launch that holds an operator authorization repeats `--tools ""` by naming the CLI's native tools; a profile's own use stays planned (S1)
 flag | . | --restricted | planned | S1 | removes code-running tools and WebFetch and confines file tools; verify on the installed version first
 flag | . | --permission-prompts | planned | S1 | `none` for a span with no bridge, so an unanswerable request is denied instead of hanging
 flag | . | --exclude-dynamic-system-prompt-sections | planned | S1 | moves cwd/env/git status out of the system prompt so spans share a prompt cache; measure before default-on
@@ -26,7 +27,7 @@ flag | . | --autocompact | planned | S1 | [harness.claude] autocompact; changes 
 flag | . | --betas | planned | S1 | ratified block only, and only on an API key (the CLI says so)
 flag | . | --agent | planned | S1 | select a CLI-native agent from --agents for the span
 flag | . | --no-chrome | planned | S1 | always passed, so no span reaches a browser extension
-flag | . | --disable-slash-commands | planned | S1 | agy always passes it (spec 021); a prompt that begins with / must not expand a skill on Claude either; S0 probes whether stream-json input expands it
+flag | . | --disable-slash-commands | used | | agy always passes it (spec 021); Claude passes it in a launch that holds an operator authorization (spec 092 S2d1); other Claude launches do not yet (S1)
 flag | . | --system-prompt-snapshot | planned | S1 | with `on`, a resumed span keeps its old prompt; S0 probes, resumed spans likely need `off`
 flag | . | --plugin-dir | planned | S4 | the skills of added, hash-verified bundles, on by default (spec 046 OD-3); hooks/ and bin/ never included
 
