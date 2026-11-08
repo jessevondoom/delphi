@@ -46,7 +46,7 @@ Such a PR is never queueable and never merged by `--all` or `--auto`. `delphi me
 
 ## Cleanup after merge (S4)
 
-After a merge the command removes the remote branch, the local branch (`git branch -d`, only if merged) and every worktree on that branch, then prunes. It never deletes an unmerged PR's branch or the base, and skips and reports a worktree that is locked, dirty or its own directory. `delphi merge cleanup --dry-run` prints the plan; `--merged` sweeps the backlog of already-merged PRs (dry-run first).
+After a merge the command removes the remote branch, the local branch (`git branch -D`, but only after it proves the branch is in the fetched `origin/<base>`, so a stale local `main` does not block it) and every worktree on that branch, then prunes. It never deletes an unmerged PR's branch or the base, and skips and reports a worktree that is locked, dirty or its own directory. `delphi merge cleanup --dry-run` prints the plan; `--merged` sweeps the backlog of already-merged PRs (dry-run first).
 
 ## Errors and `merge fix` (S5)
 
