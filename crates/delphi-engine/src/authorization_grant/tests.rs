@@ -469,9 +469,19 @@ fn file_writing_and_connector_tools_are_stripped_in_a_granted_run() {
         assert!(tool_stripped(t, false).is_some(), "{t}");
     }
     assert!(tool_stripped("slack.search", true).is_some(), "any connector tool");
-    for t in ["read_file", "list_dir", "search", "note", "name_thread", "request_test_authorization", "run_command", "kb_search"] {
+    for t in ["read_file", "list_dir", "search", "run_command", "kb_search"] {
         assert_eq!(tool_stripped(t, false), None, "{t}");
     }
+    // An ALLOWLIST: what is not named is denied, the log-writing and advisory tools and any tool added later included.
+    for t in ["note", "name_thread", "record_change", "raise_decision", "suggest_rule", "request_test_authorization", "request_research", "ratify_fact", "settings", "timer", "dispatch_agent", "shell", "a_tool_added_next_year"] {
+        assert!(tool_stripped(t, false).is_some(), "{t}");
+    }
+    // Every tool the registry offers today is either on the list or denied: nothing is allowed by default.
+    for d in crate::tools::Registry::builtin().defs(true) {
+        assert_eq!(tool_allowed(&d.name), GRANTED_TOOLS.contains(&d.name.as_str()), "{}", d.name);
+        assert_eq!(tool_stripped(&d.name, false).is_none(), tool_allowed(&d.name));
+    }
+    assert!(GRANTED_TOOLS.iter().all(|t| !t.starts_with("write_") && !t.starts_with("propose_") && !t.starts_with("request_")));
 }
 
 #[test]
@@ -679,10 +689,10 @@ mod claude_seat {
 
     /// A stand-in `claude` that lists `tools`, writes its arguments to `args`, then calls Delphi's bridge `run_command` over the socket
     /// the MCP config names (as the real CLI's MCP relay would) and finishes.
-    fn script(dir: &Path, tools: &str, args_file: &Path, call: Option<&[String]>) -> String {
+    pub(super) fn script(dir: &Path, tools: &str, args_file: &Path, call: Option<(&str, serde_json::Value)>) -> String {
         let init = format!(r#"echo '{{"type":"system","subtype":"init","session_id":"s1","tools":[{tools}],"mcp_servers":[{{"name":"delphi","status":"connected"}}]}}'"#);
-        let call = call.map(|argv| {
-            let req = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "run_command", "arguments": {"argv": argv}}}).to_string();
+        let call = call.map(|(name, arguments)| {
+            let req = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}}).to_string();
             format!(
                 r#"cfg=""; prev=""; for a in "$@"; do [ "$prev" = "--mcp-config" ] && cfg="$a"; prev="$a"; done
 sock=$(tr ',{{}}' '\n\n\n' < "$cfg" | sed -n 's/.*"DELPHI_BRIDGE_SOCKET":"\([^"]*\)".*/\1/p')
@@ -696,8 +706,16 @@ printf '{{"token":"%s"}}\n%s\n' "$tok" '{req}' | /usr/bin/nc -U -w 3 "$sock" > '
         fake_cli(dir, &body)
     }
 
-    fn fx(prog: String) -> crate::testkit::Fx {
-        let f = setup_with_exec(vec![], 5.0, |s| s.harness_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+    pub(super) fn fx(prog: String) -> crate::testkit::Fx {
+        fx_with(prog, crate::exec::SandboxMode::Off, vec![])
+    }
+
+    pub(super) fn fx_with(prog: String, sandbox: crate::exec::SandboxMode, allow: Vec<String>) -> crate::testkit::Fx {
+        let f = setup_with_exec(vec![], 5.0, |s| s.harness_program = prog, move |c| {
+            c.sandbox = sandbox;
+            c.allow = allow;
+            c.shell = true;
+        });
         crate::worktree::tests::init_repo(&f.root.join("proj"), &f.root.join("git-home"));
         crate::testkit::ratify_spec(&f);
         let text = crate::testkit::CONFIG
@@ -708,14 +726,14 @@ printf '{{"token":"%s"}}\n%s\n' "$tok" '{req}' | /usr/bin/nc -U -w 3 "$sock" > '
         f
     }
 
-    const PROMPT: &str = "Implement @specs/011-retry.md in @project/app/src/lib.rs";
+    pub(super) const PROMPT: &str = "Implement @specs/011-retry.md in @project/app/src/lib.rs";
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_claude_builder_seat_with_only_bridge_tools_raises_a_run_command_that_matches_and_is_logged_as_would_use_and_still_denied() {
         let g = fixture(3);
         let scripts = tempfile::tempdir().unwrap();
         let args = scripts.path().join("args");
-        let prog = script(scripts.path(), r#""mcp__delphi__run_command""#, &args, Some(&g.argv()));
+        let prog = script(scripts.path(), r#""mcp__delphi__run_command""#, &args, Some(("run_command", json!({"argv": g.argv()}))));
         let f = fx(prog);
         f.engine.grant.set(Arc::new(g.grant())).unwrap();
         let out = f.engine.run_task(&f.m, "builder", PROMPT).await.unwrap();
@@ -742,7 +760,7 @@ printf '{{"token":"%s"}}\n%s\n' "$tok" '{req}' | /usr/bin/nc -U -w 3 "$sock" > '
     async fn a_cli_that_lists_a_tool_of_its_own_in_a_granted_run_is_stopped_before_the_model_acts() {
         let g = fixture(3);
         let scripts = tempfile::tempdir().unwrap();
-        let prog = script(scripts.path(), r#""Bash","mcp__delphi__run_command""#, &scripts.path().join("args"), Some(&g.argv()));
+        let prog = script(scripts.path(), r#""Bash","mcp__delphi__run_command""#, &scripts.path().join("args"), Some(("run_command", json!({"argv": g.argv()}))));
         let f = fx(prog);
         f.engine.grant.set(Arc::new(g.grant())).unwrap();
         let _ = f.engine.run_task(&f.m, "builder", PROMPT).await;
@@ -758,7 +776,7 @@ printf '{{"token":"%s"}}\n%s\n' "$tok" '{req}' | /usr/bin/nc -U -w 3 "$sock" > '
         let scripts = tempfile::tempdir().unwrap();
         let body = format!(
             "{}\necho '{{\"type\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"tool_use\",\"id\":\"tu1\",\"name\":\"Bash\",\"input\":{{\"command\":\"touch made.txt\"}}}}]}}}}'\nsleep 1\n{}",
-            r#"echo '{"type":"system","subtype":"init","session_id":"s1"}'"#, FINISH
+            r#"echo '{"type":"system","subtype":"init","session_id":"s1","tools":["mcp__delphi__run_command"]}'"#, FINISH
         );
         let prog = fake_cli(scripts.path(), &body);
         let f = fx(prog);
@@ -814,4 +832,158 @@ mod engine_cards {
         assert!(events_of(&f, WOULD_USE).is_empty());
         assert_eq!((g.dry(), g.used()), (0, 0));
     }
+}
+
+mod granted_runs_run_nothing {
+    use super::claude_seat::*;
+    use super::*;
+    use crate::exec::SandboxMode;
+    use crate::testkit::events_of;
+
+    // The independent review's regression (PR #601, P1): in a granted run a command that does NOT match the manifest used to run by the
+    // ordinary path. Now every run_command and shell call is denied with one message, matching or not, and nothing runs.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn no_command_a_model_asks_for_runs_in_a_granted_run_and_every_denial_reads_the_same() {
+        let g = fixture(5);
+        let mut near = g.argv();
+        near.push("extra".into());
+        #[allow(clippy::type_complexity)]
+        let cases: Vec<(&str, &str, Vec<String>, SandboxMode, Vec<String>)> = vec![
+            ("touch, sandbox prefer", "run_command", vec!["/usr/bin/touch".into(), "RT_RAN".into()], SandboxMode::Prefer, vec![]),
+            ("touch, sandbox off", "run_command", vec!["/usr/bin/touch".into(), "RT_RAN".into()], SandboxMode::Off, vec![]),
+            ("pinned script plus an extra argument, prefer", "run_command", near.clone(), SandboxMode::Prefer, vec![]),
+            ("pinned script plus an extra argument, off", "run_command", near, SandboxMode::Off, vec![]),
+            ("a read-only command", "run_command", vec!["/bin/ls".into()], SandboxMode::Prefer, vec![]),
+            ("a command an allow rule covers", "run_command", vec!["/usr/bin/touch".into(), "RT_RAN".into()], SandboxMode::Off, vec!["/usr/bin/touch *".into()]),
+            ("the matching command itself", "run_command", g.argv(), SandboxMode::Prefer, vec![]),
+        ];
+        let mut replies = vec![];
+        for (label, tool, argv, sandbox, allow) in cases {
+            let scripts = tempfile::tempdir().unwrap();
+            let args = scripts.path().join("args");
+            let f = fx_with(script(scripts.path(), r#""mcp__delphi__run_command""#, &args, Some((tool, json!({"argv": argv})))), sandbox, allow);
+            f.engine.grant.set(Arc::new(g.grant())).unwrap();
+            let _ = f.engine.run_task(&f.m, "builder", PROMPT).await;
+            let resp = fs::read_to_string(args.with_extension("resp")).unwrap_or_default();
+            assert!(resp.contains("not enabled in this build"), "{label}: {resp}");
+            assert!(events_of(&f, "action.intent").is_empty() && events_of(&f, "action.result").is_empty(), "{label}: exec.run was called");
+            let found = std::process::Command::new("/usr/bin/find").arg(&f.root).args(["-name", "RT_RAN"]).output().unwrap();
+            assert!(found.stdout.is_empty(), "{label}: the command ran: {}", String::from_utf8_lossy(&found.stdout));
+            assert!(events_of(&f, "approval.requested").is_empty(), "{label}: no card either");
+            // the match / no-match distinction is in the log only
+            assert_eq!(events_of(&f, WOULD_USE).len() + events_of(&f, NO_MATCH).len() + events_of(&f, REFUSED_USE).len(), 1, "{label}");
+            // the reminder carries a per-span nonce; nothing else may differ
+            let nonce = resp.split("nonce=\\\"").nth(1).and_then(|r| r.split("\\").next()).unwrap_or("").to_string();
+            replies.push((label, resp.replace(&nonce, "N")));
+        }
+        let first = &replies[0].1;
+        for (label, r) in &replies {
+            assert_eq!(r, first, "the reply to `{label}` differs: a model could learn what the manifest holds");
+        }
+        assert!(!g.root.join("RAN").exists());
+        assert_eq!(g.used(), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_shell_tool_is_not_offered_and_nothing_it_would_run_runs_in_a_granted_run() {
+        let g = fixture(3);
+        let scripts = tempfile::tempdir().unwrap();
+        let args = scripts.path().join("args");
+        let f = fx_with(script(scripts.path(), r#""mcp__delphi__run_command""#, &args, Some(("shell", json!({"command": "touch RT_RAN"})))), SandboxMode::Off, vec![]);
+        f.engine.grant.set(Arc::new(g.grant())).unwrap();
+        let _ = f.engine.run_task(&f.m, "builder", PROMPT).await;
+        let started = &events_of(&f, "harness.started")[0].payload;
+        assert!(!started["bridge"].as_array().unwrap().iter().any(|v| v == "shell"), "{started}");
+        let found = std::process::Command::new("/usr/bin/find").arg(&f.root).args(["-name", "RT_RAN"]).output().unwrap();
+        assert!(found.stdout.is_empty() && events_of(&f, "action.intent").is_empty());
+    }
+
+    // A granted claude seat that is not a Builder used to launch with `--permission-mode auto` (approvals = Delegate).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_granted_claude_seat_is_never_launched_in_auto_permission_mode() {
+        let mode = |granted: bool| {
+            let g = fixture(3);
+            let scripts = tempfile::tempdir().unwrap();
+            let args = scripts.path().join("args");
+            let f = fx(script(scripts.path(), r#""mcp__delphi__read_file""#, &args, None));
+            if granted {
+                f.engine.grant.set(Arc::new(g.grant())).unwrap();
+            }
+            (f, args, scripts, g)
+        };
+        for (granted, expected) in [(false, "auto"), (true, "manual")] {
+            let (f, args, _s, _g) = mode(granted);
+            let _ = f.engine.run_task(&f.m, "orchestrator", "hello").await;
+            let a: Vec<String> = fs::read_to_string(&args).unwrap().lines().map(String::from).collect();
+            let at = a.iter().position(|x| x == "--permission-mode").unwrap();
+            assert_eq!(a[at + 1], expected, "granted={granted}");
+        }
+    }
+
+    #[test]
+    fn the_cli_tool_list_check_allows_only_bridge_tools_and_a_schema_pseudo_tool() {
+        let v = |x: &[&str]| x.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let p = "mcp__delphi__";
+        assert_eq!(native_tool_problem(&v(&["mcp__delphi__run_command"]), false, p), None);
+        assert_eq!(native_tool_problem(&v(&["Bash", "mcp__delphi__x"]), false, p).as_deref(), Some("Bash"));
+        assert!(native_tool_problem(&v(&["StructuredOutput", "mcp__delphi__x"]), false, p).is_some(), "not without a schema");
+        assert_eq!(native_tool_problem(&v(&["StructuredOutput", "mcp__delphi__x"]), true, p), None);
+        assert!(native_tool_problem(&v(&["Write", "StructuredOutput"]), true, p).is_some());
+        assert!(native_tool_problem(&[], true, p).is_some() && native_tool_problem(&[], false, p).is_some(), "no tool list at all fails closed");
+        assert!(stream_tool_ok("mcp__delphi__run_command", false, p) && !stream_tool_ok("Bash", true, p));
+        assert!(stream_tool_ok("StructuredOutput", true, p) && !stream_tool_ok("StructuredOutput", false, p));
+    }
+}
+
+#[test]
+fn an_id_that_is_not_the_generated_shape_never_names_a_ledger_directory() {
+    let f = fixture(3);
+    for bad in [".", "..", "ta-", "ta-../x", "../ta-0123456789", "ta-0123456789a", "TA-0123456789", "ta-012345678g", "ta-0123456789/..", "a/b", ""] {
+        assert!(take_use(&f.home, bad, "h", "r", 3).is_err(), "{bad:?}");
+        assert!(take_dry_use(&f.home, bad, "h", "r", 3).is_err(), "{bad:?}");
+        assert!(ledger_count(&f.home, bad).is_err() && dry_count(&f.home, bad).is_err(), "{bad:?}");
+    }
+    assert!(!f.home.join("operator/uses").exists(), "nothing was created by a refused id");
+    assert!(ledger_count(&f.home, &f.id).is_ok());
+}
+
+#[test]
+fn a_grant_that_does_not_parse_does_not_echo_what_it_held() {
+    let f = fixture(3);
+    for bad in [&br#"{"record":"SECRET-LEAK-42"}"#[..], br#"{"record": 5, "x": "SECRET-LEAK-42"}"#, b"SECRET-LEAK-42"] {
+        let e = Grant::from_boot(bad, std::process::id(), now(), f.policy.clone()).unwrap_err();
+        assert!(!e.contains("SECRET-LEAK-42"), "{e}");
+    }
+}
+
+#[test]
+fn once_the_dry_budget_is_gone_a_looping_call_costs_no_probe_and_probes_are_capped_per_run() {
+    let f = fixture(1);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let c = calls.clone();
+    let g = Grant::for_test(f.record(), "run-1", &f.home, f.seq(), f.policy.clone()).with_probe(move || {
+        c.fetch_add(1, Ordering::SeqCst);
+        ok_probe()
+    });
+    assert!(is_would_use(&card(&g, "run_command", &f.argv())));
+    for _ in 0..20 {
+        assert!(matches!(card(&g, "run_command", &f.argv()), Outcome::Refused { .. }));
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "the 20 refused calls ran no probe");
+    // A probe that keeps failing consumes no use, so the per-run cap is what stops the loop.
+    let f = fixture(50);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let c = calls.clone();
+    let g = Grant::for_test(f.record(), "run-1", &f.home, f.seq(), f.policy.clone()).with_probe(move || {
+        c.fetch_add(1, Ordering::SeqCst);
+        AuthorizedProbe { unavailable: Some("down".into()), ..AuthorizedProbe::default() }
+    });
+    let mut last = String::new();
+    for _ in 0..(MAX_PROBES_PER_RUN + 10) {
+        if let Outcome::Refused { reason, .. } = card(&g, "run_command", &f.argv()) {
+            last = reason;
+        }
+    }
+    assert_eq!(calls.load(Ordering::SeqCst) as u32, MAX_PROBES_PER_RUN);
+    assert!(last.contains("sandbox probes"), "{last}");
 }

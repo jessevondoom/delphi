@@ -162,7 +162,11 @@ pub fn parse_args(args: &[String]) -> Result<Opts, String> {
     if jsonl && json {
         return Err("--json and --jsonl are alternatives: --jsonl streams events then the summary, --json prints only the summary".into());
     }
-    Ok(Opts { input, permissions, on_card, budget, timeout, mission: value_of(args, "--mission"), jsonl, json, keep_daemon: args.iter().any(|a| a == "--keep-daemon") })
+    let keep_daemon = args.iter().any(|a| a == "--keep-daemon");
+    if keep_daemon && matches!(on_card, OnCard::Authorization { .. }) {
+        return Err("--keep-daemon cannot be used with --on-card authorization:<id>: the daemon holds the grant and exits with the run, so a later session never attaches to it".into());
+    }
+    Ok(Opts { input, permissions, on_card, budget, timeout, mission: value_of(args, "--mission"), jsonl, json, keep_daemon })
 }
 
 // ── the card policy ─────────────────────────────────────────────────────────

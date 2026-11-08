@@ -9,9 +9,8 @@
 //!   are all checked again immediately before the answer is returned.
 //! * **The use ledger** ([`take_use`]) is `operator/uses/<id>` (written by S2d, not by S2c): append-only, hash-chained, fsynced before anything else happens, one
 //!   writer at a time under the log's own lock. The count is the number of `use` entries. It is the one new write the daemon makes
-//!   under `operator/`. The exposure is the audit log's: a process running as the operator's user can edit the file (a rewrite is
-//!   detected by the chain; a deleted ledger reads as unused, which `authorize_launch` cannot tell from a fresh record, so the
-//!   ledger's presence is also written into the mission log by every `authorization.would_use`).
+//!   under `operator/`. It has NO external anchor: its chain is verified without a stored head, so an edit in the middle is seen but a cut
+//!   tail or a deleted directory restores uses undetected. S2d must record each real use in the pinned audit chain (or pin the head).
 //! * **Observation uses a DRY ledger** (`operator/uses/<id>.dry`, [`take_dry_use`]): the real ledger is never written by S2c, so a run that
 //!   approves nothing cannot use up the operator's record. S2d writes the real one.
 //! * **No approval.** The answer is [`Outcome::WouldUse`], which the engine logs as `authorization.would_use`; the card is still
@@ -38,13 +37,22 @@ pub const REFUSED_USE: &str = "authorization.refused";
 pub const NO_MATCH: &str = "authorization.no_match";
 /// The ledger entry kind.
 pub const USE_ENTRY: &str = "authorization.use";
+/// The one reply a model gets for any `run_command` or `shell` call in a granted run in S2c, matching or not.
+pub const GRANTED_DENIAL: &str = "The operator denied this action: authorized approval is not enabled in this build (spec 092 S2c). Do not retry it.";
+/// What a `would_use` event does and does not vouch for. The working directory and environment of the call are NOT read from the call
+/// (the card carries neither; the engine supplies the constants the entry is compared with), so those comparisons are not a check.
+pub const VERIFIED_IN_S2C: &str = "argv and pinned file hashes only; cwd and environment are not verified in S2c";
+/// The most sandbox probes one run starts (the maximum `max_uses` of a record is 50; a probe that fails consumes no use, so this bounds those).
+pub const MAX_PROBES_PER_RUN: u32 = 100;
 /// The largest boot payload (a pipe holds at least 16 KiB without a reader, even on macOS, so the launcher never blocks writing it).
 pub const MAX_BOOT_BYTES: usize = 15 * 1024;
 
 // ------------------------------------------------------------------------------------------------ the use ledger
 
+/// The shape `build_record` generates: `ta-` and ten lowercase hex digits. Anything else (`.`, `..`, a path, a longer name) is refused
+/// before it can name a directory under `operator/uses/`.
 fn id_ok(id: &str) -> bool {
-    !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    id.strip_prefix("ta-").is_some_and(|h| h.len() == 10 && h.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)))
 }
 
 /// `$DELPHI_HOME/operator/uses/<id>`: the REAL ledger. S2c never writes it (S2d's `run_authorized` will); only [`take_use`] does.
@@ -77,7 +85,7 @@ fn count_in(dir: &Path, id: &str) -> Result<u32, String> {
 /// a ledger that does not verify would be a guess). A record that was never used has no ledger and counts 0.
 pub fn ledger_count(home: &Path, id: &str) -> Result<u32, String> {
     if !id_ok(id) {
-        return Err("an authorization id of 1 to 64 letters, digits, `-`, `_` or `.` is required".into());
+        return Err("an authorization id of the form ta-<10 hex digits> is required".into());
     }
     count_in(&ledger_dir(home, id), id)
 }
@@ -85,7 +93,7 @@ pub fn ledger_count(home: &Path, id: &str) -> Result<u32, String> {
 /// The dry ledger's count (observation only).
 pub fn dry_count(home: &Path, id: &str) -> Result<u32, String> {
     if !id_ok(id) {
-        return Err("an authorization id of 1 to 64 letters, digits, `-`, `_` or `.` is required".into());
+        return Err("an authorization id of the form ta-<10 hex digits> is required".into());
     }
     count_in(&dry_ledger_dir(home, id), id)
 }
@@ -117,7 +125,7 @@ fn open_ledger(dir: &Path, id: &str) -> Result<delphi_core::log::EventLog, Strin
 
 fn take_in(dir: &Path, id: &str, record_hash: &str, run: &str, max_uses: u32, dry: bool) -> Result<Used, String> {
     if !id_ok(id) {
-        return Err("an authorization id of 1 to 64 letters, digits, `-`, `_` or `.` is required".into());
+        return Err("an authorization id of the form ta-<10 hex digits> is required".into());
     }
     let mut log = open_ledger(dir, id)?;
     let count = count_in(dir, id)?;
@@ -135,7 +143,7 @@ fn take_in(dir: &Path, id: &str, record_hash: &str, run: &str, max_uses: u32, dr
 /// `run_authorized` will, before the action.
 pub fn take_use(home: &Path, id: &str, record_hash: &str, run: &str, max_uses: u32) -> Result<Used, String> {
     if !id_ok(id) {
-        return Err("an authorization id of 1 to 64 letters, digits, `-`, `_` or `.` is required".into());
+        return Err("an authorization id of the form ta-<10 hex digits> is required".into());
     }
     take_in(&ledger_dir(home, id), id, record_hash, run, max_uses, false)
 }
@@ -144,7 +152,7 @@ pub fn take_use(home: &Path, id: &str, record_hash: &str, run: &str, max_uses: u
 /// approves nothing.
 pub fn take_dry_use(home: &Path, id: &str, record_hash: &str, run: &str, max_uses: u32) -> Result<Used, String> {
     if !id_ok(id) {
-        return Err("an authorization id of 1 to 64 letters, digits, `-`, `_` or `.` is required".into());
+        return Err("an authorization id of the form ta-<10 hex digits> is required".into());
     }
     take_in(&dry_ledger_dir(home, id), id, record_hash, run, max_uses, true)
 }
@@ -226,6 +234,9 @@ pub struct Grant {
     launch_seq: u64,
     policy: a::Policy,
     probe: ProbeFn,
+    /// Probes started so far. The dry budget is checked first, so this only bounds a model that loops on a call that matches but
+    /// fails after the probe was due (a probe that keeps failing consumes no use).
+    probes: std::sync::atomic::AtomicU32,
 }
 
 impl std::fmt::Debug for Grant {
@@ -239,14 +250,15 @@ impl Grant {
     /// From the boot payload. `parent_pid` is this daemon's parent; the payload names the launcher and they must agree. The store is
     /// then read strictly and checked as at a use ([`Grant::reverify`]), so a grant that is already wrong never takes hold.
     pub fn from_boot(bytes: &[u8], parent_pid: u32, now_unix: i64, policy: a::Policy) -> Result<Grant, String> {
-        let b: Boot = serde_json::from_slice(bytes).map_err(|e| format!("the grant does not parse: {e}"))?;
+        // The parser's own message can quote the offending value; the grant is never echoed into a log, so the error says nothing of it.
+        let b: Boot = serde_json::from_slice(bytes).map_err(|_| "the grant does not parse".to_string())?;
         if b.launcher_pid != parent_pid {
             return Err("the grant names another launcher than this daemon's parent; refused".into());
         }
         if a::record_hash(&b.record) != b.record_hash {
             return Err("the grant's record does not match its hash".into());
         }
-        let g = Grant { record: b.record, record_hash: b.record_hash, run: b.run, operator_home: PathBuf::from(b.operator_home), launch_seq: b.launch_seq, policy, probe: Arc::new(delphi_sandbox::authorized::probe_authorized) };
+        let g = Grant { record: b.record, record_hash: b.record_hash, run: b.run, operator_home: PathBuf::from(b.operator_home), launch_seq: b.launch_seq, policy, probe: Arc::new(delphi_sandbox::authorized::probe_authorized), probes: Default::default() };
         g.reverify(now_unix)?;
         Ok(g)
     }
@@ -260,7 +272,7 @@ impl Grant {
     #[cfg(test)]
     pub(crate) fn for_test(record: a::Record, run: &str, operator_home: &Path, launch_seq: u64, policy: a::Policy) -> Grant {
         let record_hash = a::record_hash(&record);
-        Grant { record, record_hash, run: run.into(), operator_home: operator_home.to_path_buf(), launch_seq, policy, probe: Arc::new(delphi_sandbox::authorized::probe_authorized) }
+        Grant { record, record_hash, run: run.into(), operator_home: operator_home.to_path_buf(), launch_seq, policy, probe: Arc::new(delphi_sandbox::authorized::probe_authorized), probes: Default::default() }
     }
 
     #[cfg(test)]
@@ -322,6 +334,12 @@ impl Grant {
         }
         let Some(i) = self.match_entry(c) else { return Outcome::NotMatched("no manifest entry equals this command".into()) };
         let refuse = |why: String| Outcome::Refused { entry: Some(i), reason: why };
+        // The budget first: once the (dry) uses are gone a looping model costs a ledger read, not a store read, five hashes and a probe.
+        match dry_count(&self.operator_home, &self.record.id) {
+            Ok(n) if n >= self.record.max_uses => return refuse(format!("authorization {} has no uses left ({} of {} used, in the dry ledger)", self.record.id, n, self.record.max_uses)),
+            Ok(_) => {}
+            Err(why) => return refuse(why),
+        }
         if let Err(why) = self.reverify(now_unix) {
             return refuse(why);
         }
@@ -341,6 +359,9 @@ impl Grant {
                 Ok(_) => return refuse(format!("`{}` is not the file that was pinned (its hash changed)", a::clean_text(&f.path, 60))),
                 Err(why) => return refuse(format!("a pinned file cannot be pinned again: {why}")),
             }
+        }
+        if self.probes.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= MAX_PROBES_PER_RUN {
+            return refuse(format!("this run has already started {MAX_PROBES_PER_RUN} sandbox probes; no more are run"));
         }
         let probe = (self.probe)();
         if !probe.is_ok() {
@@ -370,18 +391,47 @@ impl Grant {
 
 // ------------------------------------------------------------------------------------------------ tools in a granted run (TA-5)
 
-/// Why a tool may not be offered or called in a run that holds a grant, or `None`. Composition (TA-5): a Red entry never runs beside a
-/// tool that can write a payload for it to execute. `is_connector` says whether the name is an external (connector) tool.
+/// The tools a run that holds a grant may be offered or may call: a short ALLOWLIST of reading and advisory tools, and `run_command`,
+/// which is offered so that the call reaches the grant (it is denied there, uniformly). Everything else is denied at call time and
+/// left out of the offer, so a tool added to the registry later is denied until it is named here on purpose. Writers (`write_file`
+/// and the artifact tools), `note`, `record_change`, `raise_decision`, `suggest_rule`, `name_thread`, every `request_*` and
+/// `propose_*`, dispatch, timers, settings, the fact tools and every connector tool are not on it.
+pub const GRANTED_TOOLS: &[&str] = &["read_file", "read_doc", "list_dir", "search", "check", "kb_search", "recall_memory", "xenia_search", "xenia_help", "external_available", "inspect_system", MATCHED_TOOL];
+
+pub fn tool_allowed(name: &str) -> bool {
+    GRANTED_TOOLS.contains(&name)
+}
+
+/// Why a tool may not be offered or called in a run that holds a grant (TA-5), or `None`. `is_connector` says whether the name is an
+/// external (connector) tool.
 pub fn tool_stripped(name: &str, is_connector: bool) -> Option<&'static str> {
     if is_connector {
         return Some("a connector tool may write outside the sandbox");
+    }
+    if tool_allowed(name) {
+        return None;
     }
     let bare = name.rsplit('.').next().unwrap_or(name);
     match bare {
         "write_file" | "edit_file" | "harness_edit" | "apply_patch" | "multi_edit" | "create_file" | "delete_file" | "move_file" => Some("it writes files"),
         n if n.starts_with("write_") || n.starts_with("edit_") || n.starts_with("propose_") => Some("it writes files or proposes a write"),
-        _ => None,
+        _ => Some("it is not on the short list of reading tools a run with an operator authorization may use"),
     }
+}
+
+/// Why the tool list a Claude CLI reported at init shows its own tools were not switched off, or `None`. Only Delphi's bridge tools are
+/// expected. `StructuredOutput` (the CLI's pseudo-tool for a schema-bound answer) is let through when, and only when, a schema was asked
+/// for. A list with NO tools is not trusted: the flag cannot be shown to have held.
+pub fn native_tool_problem(tools: &[String], schema_requested: bool, bridge_prefix: &str) -> Option<String> {
+    if tools.is_empty() {
+        return Some("(no tool list reported)".into());
+    }
+    tools.iter().find(|t| !t.starts_with(bridge_prefix) && !(schema_requested && t.as_str() == "StructuredOutput")).cloned()
+}
+
+/// Whether a tool call seen in the stream is one a granted seat may make: a Delphi bridge tool, or `StructuredOutput` with a schema.
+pub fn stream_tool_ok(name: &str, schema_requested: bool, bridge_prefix: &str) -> bool {
+    name.starts_with(bridge_prefix) || (schema_requested && name == "StructuredOutput")
 }
 
 /// Whether a harness seat's own tools can be proven off for a granted run (per CLI), or why not. A seat that fails is not started.

@@ -1874,6 +1874,9 @@ impl Engine {
         if let Some(allowed) = sc.bundle_agent.as_ref().and_then(|a| a.allowed_tools.as_ref()) {
             defs.retain(|d| allowed.contains(&d.name));
         }
+        if granted {
+            defs.retain(|d| crate::authorization_grant::tool_allowed(&d.name));
+        }
         if sc.toolless {
             defs.clear();
         }
@@ -1938,7 +1941,8 @@ impl Engine {
                 return Ok(tool_result_error(format!("`{}` is not among the tools of the bundle agent {}", name, sc.bundle_agent.as_ref().map(|a| a.id.as_str()).unwrap_or(""))));
             }
         }
-        // Spec 092 TA-5, at call time and not only by omission: a granted run denies a file-writing or connector tool.
+        // Spec 092 TA-5, at call time and not only by omission: a granted run may call only the short allowlist
+        // (`authorization_grant::GRANTED_TOOLS`); everything else, a tool added later included, is denied.
         if self.grant.get().is_some() {
             let is_connector = self.connectors.parse_wire(name).is_some();
             if let Some(why) = crate::authorization_grant::tool_stripped(name, is_connector) {
@@ -2180,7 +2184,27 @@ impl Engine {
     }
 
     /// `run_command`: gate on the span's taint, run in the sandbox, stamp what changed.
+    /// Spec 092 S2c (dry): in a run that holds a grant EVERY `run_command` and `shell` call is shown to the grant and then denied with
+    /// one fixed message, whether it matched an entry or not. Nothing a model asks for runs in this slice (not by the standard sandbox,
+    /// not by an allow rule, not as a read-only command), and the reply tells the model nothing about the manifest: the distinction
+    /// is logged only in the `authorization.would_use` / `.refused` / `.no_match` events, which a model cannot read.
+    async fn granted_exec_denial(&self, sc: &SpanCtx, tool: &str, args: &Value) -> Result<Option<tools::ToolResult>, EngineError> {
+        if self.grant.get().is_none() {
+            return Ok(None);
+        }
+        let argv: Vec<String> = match args["argv"].as_array() {
+            Some(a) if a.iter().all(|x| x.is_string()) => a.iter().filter_map(|x| x.as_str().map(String::from)).collect(),
+            _ => vec![],
+        };
+        let who = Asker { m: &sc.m, task_id: &sc.task_id, span_id: &sc.span_id, role: &sc.role };
+        self.observe_grant_call(&who, tool, &json!({"tool": tool, "argv": argv})).await?;
+        Ok(Some(tool_result_error(crate::authorization_grant::GRANTED_DENIAL)))
+    }
+
     async fn exec_command(self: &Arc<Self>, sc: &mut SpanCtx, call_id: &str, args: &Value) -> Result<tools::ToolResult, EngineError> {
+        if let Some(denied) = self.granted_exec_denial(sc, "run_command", args).await? {
+            return Ok(denied);
+        }
         if !sc.manifest.execute.iter().any(|e| e == "shell-worktree-scoped") {
             return Ok(tool_result_error("this role's manifest does not authorize shell-worktree-scoped"));
         }
@@ -2212,15 +2236,6 @@ impl Engine {
                 if let Some(denied) = self.ask(sc, ApprovalTier::Red, "run_command", "run_command", &summary, &payload).await? {
                     return Ok(denied);
                 }
-            }
-        }
-        // Spec 092 S2c (dry): in a run that holds a grant, the call is shown to the grant before the policy decides. A call it recognizes
-        // is logged (`authorization.would_use` or `.refused`) and DENIED here: nothing authorized runs in this slice, and the ordinary
-        // path (which would run an allowed command in the standard sandbox) is not taken for it.
-        if self.grant.get().is_some() {
-            let who = Asker { m: &sc.m, task_id: &sc.task_id, span_id: &sc.span_id, role: &sc.role };
-            if self.observe_grant_call(&who, "run_command", &json!({"tool": "run_command", "argv": argv})).await? {
-                return Ok(tool_result_error("The operator denied this action: authorized approval is not enabled in this build (spec 092 S2c). Do not retry it."));
             }
         }
         // The policy: deny rules, the sandbox, allow rules and the read-only list decide what needs a card.
@@ -2259,6 +2274,9 @@ impl Engine {
     /// `shell` (`specs/061`): a command line through `bash -c`, judged as a whole. The gates are `run_command`'s; the
     /// verdict adds Hard (a Red card that no mode or grant covers) and Safe (which `shell-auto` runs without a card).
     async fn exec_shell(self: &Arc<Self>, sc: &mut SpanCtx, call_id: &str, args: &Value) -> Result<tools::ToolResult, EngineError> {
+        if let Some(denied) = self.granted_exec_denial(sc, "shell", args).await? {
+            return Ok(denied);
+        }
         if !sc.manifest.execute.iter().any(|e| e == "shell-worktree-scoped") || !self.exec.cfg.shell {
             return Ok(tool_result_error("this role's manifest does not authorize shell-worktree-scoped, or the shell tool is switched off"));
         }
@@ -2448,7 +2466,7 @@ impl Engine {
         let (kind, body) = match outcome {
             Outcome::NotMatched(why) => (NO_MATCH, json!({"authorization_id": grant.id(), "tool": tool, "reason": why, "approved": false})),
             Outcome::Refused { entry, reason } => (REFUSED_USE, json!({"authorization_id": grant.id(), "tool": tool, "entry": entry, "reason": reason, "approved": false})),
-            Outcome::WouldUse { entry, index, uses_left, seq } => (WOULD_USE, json!({"authorization_id": grant.id(), "record_hash": grant.record_hash(), "tool": tool, "entry": entry, "index": index, "uses_left": uses_left, "ledger_seq": seq, "purpose": grant.purpose(), "approved": false, "dry": true})),
+            Outcome::WouldUse { entry, index, uses_left, seq } => (WOULD_USE, json!({"authorization_id": grant.id(), "record_hash": grant.record_hash(), "tool": tool, "entry": entry, "index": index, "uses_left": uses_left, "ledger_seq": seq, "purpose": grant.purpose(), "approved": false, "dry": true, "verified": crate::authorization_grant::VERIFIED_IN_S2C})),
         };
         let mut e = EventEnvelope::new(&who.m.id, kind, body);
         e.task_id = Some(who.task_id.to_string());

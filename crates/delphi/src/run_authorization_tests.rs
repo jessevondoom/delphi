@@ -119,3 +119,13 @@ fn the_run_still_denies_a_red_card_and_the_approval_switch_is_off() {
         assert!(why.contains("never approved without the operator"));
     }
 }
+
+// Review P1 (#601): the granted daemon lives and dies with the run, so --keep-daemon is refused with the flag.
+#[test]
+fn keep_daemon_is_refused_with_an_authorization() {
+    let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let e = parse_args(&a(&["do it", "--on-card", "authorization:ta-0123456789", "--auth-run", "run-1", "--keep-daemon"])).unwrap_err();
+    assert!(e.contains("--keep-daemon") && e.contains("authorization"), "{e}");
+    assert!(parse_args(&a(&["do it", "--on-card", "authorization:ta-0123456789", "--auth-run", "run-1"])).is_ok());
+    assert!(parse_args(&a(&["do it", "--keep-daemon"])).is_ok(), "other runs may keep their daemon");
+}

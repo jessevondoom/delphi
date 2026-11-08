@@ -66,6 +66,19 @@ pub fn run(args: Vec<String>) -> ! {
         crate::authorization_grant::Grant::from_boot_system(&bytes, parent, now).unwrap_or_else(|e| die(&format!("the operator authorization is refused: {e}")))
     });
 
+    // A daemon that holds a grant lives and dies with the launcher that handed it over: if the launcher is gone (killed, crashed), the
+    // grant goes with the daemon, and no later session can attach to a daemon that still holds it.
+    if boot_grant.is_some() {
+        // SAFETY: getppid has no preconditions.
+        let parent = unsafe { libc::getppid() };
+        std::thread::spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            if unsafe { libc::getppid() } != parent {
+                std::process::exit(0);
+            }
+        });
+    }
+
     let l = layout(&home, &workspace).unwrap_or_else(|e| die(&format!("workspace: {}", e)));
     ensure_run_dir(&l.run_dir).unwrap_or_else(|e| die(&format!("run dir: {}", e)));
 

@@ -660,7 +660,8 @@ impl Engine {
         let persist = opts.session != SessionMode::Ephemeral;
         // `[harness.<cli>]` (ratified): how this CLI is equipped and who answers its permission questions (`specs/020`).
         let profile: HarnessProfile = self.cfg.get().harness.get(cli.program()).cloned().unwrap_or_default();
-        let delegate = cli == Cli::Claude && !builder && !sc.readonly && !sc.toolless && profile.approvals == ApprovalSource::Delegate;
+        // A granted run never auto-approves: a CLI that ignored `--tools ""` could otherwise run a native Bash before the stream monitor sees it.
+        let delegate = cli == Cli::Claude && !builder && !sc.readonly && !sc.toolless && profile.approvals == ApprovalSource::Delegate && self.grant.get().is_none();
         // Delphi's tools for this role, offered over the bridge: to the Claude CLI as an MCP config, to the Antigravity CLI
         // as a plugin in the span's own `.agents/` with a hook that gates its other tools (`specs/020` §8). A Builder keeps
         // the Claude CLI's own file and shell tools (every request still answered here), so those Delphi tools are not duplicated.
@@ -822,8 +823,11 @@ impl Engine {
                     }
                     // Native tools "provably off": `--tools ""` is a flag, and a CLI version that ignores it would still list its own tools
                     // here. In a granted run any tool that is not Delphi's bridge tool ends the span before the model acts.
+                    // Exactly one known pseudo-tool is let through, and only when a schema was asked for (`StructuredOutput`). A CLI that
+                    // reports NO tools at all is not trusted either: the flag cannot be shown to have held.
                     if granted && cli == Cli::Claude {
-                        if let Some(bad) = tools.iter().find(|t| !t.starts_with(TOOL_PREFIX)) {
+                        let bad = crate::authorization_grant::native_tool_problem(tools, launch.opts.json_schema.is_some(), TOOL_PREFIX);
+                        if let Some(bad) = bad.as_ref() {
                             session.kill().await;
                             sc.m.append(sc.ev("authorization.refused", json!({"seat": cli.program(), "native_tool": bad, "reason": "the CLI loaded a tool of its own although it was started with none", "approved": false}))).await?;
                             failure = Some((format!("the Claude CLI reports a tool of its own ({}) although it was started with none; a run with an operator authorization stops", bad), false));
@@ -863,7 +867,7 @@ impl Engine {
                     text_parts.push(t);
                 }
                 Event::ToolUse { name, input, .. } => {
-                    if granted && !name.starts_with(TOOL_PREFIX) {
+                    if granted && !crate::authorization_grant::stream_tool_ok(&name, launch.opts.json_schema.is_some(), TOOL_PREFIX) {
                         session.kill().await;
                         sc.m.append(sc.ev("authorization.refused", json!({"seat": cli.program(), "native_tool": name, "reason": "a native tool call was seen in the stream", "approved": false}))).await?;
                         failure = Some((format!("the {} CLI called a tool of its own ({}) in a run with an operator authorization; the span is stopped", cli.program(), name), false));
