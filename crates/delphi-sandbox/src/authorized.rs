@@ -38,8 +38,10 @@ pub const SCRATCH_QUOTA_BYTES: u64 = 16 << 20;
 /// How many processes beyond the user's current count the profile lets a command start. `RLIMIT_NPROC` counts EVERY process of the
 /// operator's user, not only the sandbox's, so the limit is the count at launch plus this headroom; a flat small number would stop
 /// the sandbox's own `fork`. A fork bomb is therefore bounded by this headroom, not by a per-command count, and a busy machine that
-/// starts more than this many unrelated processes during one command can make the command's `fork` fail (it fails closed).
-pub const PROC_HEADROOM: u64 = 256;
+/// starts more than this many unrelated processes during one command can make the command's `fork` fail (it fails closed). The sweep
+/// floods 900, so the cap still holds if the user's count falls by up to 770 after the launch; a legitimate pinned script (one bash,
+/// a few subshells) needs well under 128.
+pub const PROC_HEADROOM: u64 = 128;
 
 /// The options for running one authorized command in `scratch`: the timeout, the output cap and the scratch quota, enforced.
 pub fn authorized_run_options(scratch: &Path) -> RunOptions {
@@ -68,23 +70,10 @@ pub fn authorized_spec(snapshot: &Path, scratch: &Path, interpreter: &str) -> Sa
     s.limits.cpu_secs = Some(60);
     s.limits.max_file_bytes = Some(8 << 20);
     s.limits.max_open_files = Some(256);
-    // A fork loop stops here: the user's current process count plus headroom (the limit counts every process of the user).
-    s.limits.max_procs = process_count().map(|n| n + PROC_HEADROOM);
+    // A fork loop stops here: the user's process count plus headroom, read in the child just before exec (the limit counts every
+    // process of the user, and the count moves; if it cannot be read the launch fails rather than run without the limit).
+    s.limits.proc_headroom = Some(PROC_HEADROOM);
     s
-}
-
-/// How many processes exist now (macOS; `None` elsewhere, where the profile is refused anyway).
-fn process_count() -> Option<u64> {
-    #[cfg(target_os = "macos")]
-    {
-        // SAFETY: a null buffer asks proc_listallpids only for the size.
-        let n = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
-        (n > 0).then_some(n as u64)
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        None
-    }
 }
 
 // ------------------------------------------------------------------------------------------------ small helpers

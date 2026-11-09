@@ -2,7 +2,7 @@
 //! machine with no sandbox they print why and skip. The Linux tests (bubblewrap) assert that the profile is REFUSED there.
 
 use super::*;
-use crate::{bwrap_args, sbpl, sbpl_str, Resolved};
+use crate::{bwrap_args, sbpl, sbpl_str, Limits, Resolved};
 use std::process::Command;
 use std::sync::Mutex;
 
@@ -61,6 +61,25 @@ fn layout() -> Layout {
     Layout { _t: t, snap, minted, scratch, canary, opshome, fakedelphi }
 }
 
+/// Wait (bounded) until the user's process count has stopped falling.
+fn settle_process_count() {
+    let mut last = u64::MAX;
+    let mut calm = 0;
+    for _ in 0..100 {
+        let n = crate::live_process_count().unwrap_or(0);
+        if n >= last.saturating_sub(5) {
+            calm += 1;
+            if calm >= 4 {
+                return;
+            }
+        } else {
+            calm = 0;
+        }
+        last = n;
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
 impl Layout {
     fn spec(&self) -> SandboxSpec {
         authorized_spec(self.snap.path(), &self.scratch, INTERPRETER)
@@ -73,6 +92,9 @@ impl Layout {
     }
 
     fn sweep_unlocked(&self, sb: &Sandbox, spec: &SandboxSpec) -> (Option<i32>, String) {
+        // A previous flood's killed subshells are still being reaped; the cap is measured at launch, so let the count settle first
+        // (the headroom also covers a fall of several hundred, but a 900-process fall is not something a profile should rely on).
+        settle_process_count();
         let args: Vec<std::ffi::OsString> = vec![
             self.snap.path().join("sweep.sh").into(),
             self.snap.path().into(),
@@ -592,7 +614,128 @@ fn the_sweep_fails_when_tmp_users_and_the_home_are_writable_or_listable() {
 #[test]
 fn the_sweep_fails_when_a_fork_flood_is_not_limited() {
     // the process limit removed: the 900 forks all succeed, and the sweep says so
-    weakened("no nproc", "fork_flood", |_, spec| spec.limits.max_procs = None);
+    weakened("no nproc", "fork_flood", |_, spec| spec.limits.proc_headroom = None);
+}
+
+#[test]
+fn an_unreadable_process_count_means_no_limit_value_and_so_no_launch() {
+    assert_eq!(crate::resolve_nproc(128, None), None);
+    assert_eq!(crate::resolve_nproc(128, Some(0)), None);
+    assert_eq!(crate::resolve_nproc(128, Some(1000)), Some(1128));
+}
+
+/// Run `/bin/sh -c 'touch <marker>'` under `limits` with the production hardening; returns (spawn failed, marker exists).
+fn launch_marker(limits: Limits) -> (bool, bool) {
+    let dir = mkdtemp(&std::env::temp_dir(), "delphi-nproc-").unwrap();
+    let marker = dir.join("ran");
+    let mut cmd = Command::new("/bin/sh");
+    cmd.arg("-c").arg(format!("echo x > '{}'", marker.display()));
+    crate::harden_process(&mut cmd, limits);
+    let spawned = cmd.status();
+    let ran = marker.exists();
+    let _ = fs::remove_dir_all(&dir);
+    (spawned.is_err(), ran)
+}
+
+#[test]
+fn an_unreadable_process_count_fails_the_launch_and_the_command_does_not_run() {
+    let mut limits = Limits { proc_headroom: Some(PROC_HEADROOM), test_count: Some(None), ..Limits::default() };
+    assert_eq!(launch_marker(limits), (true, false));
+    limits.test_count = Some(Some(0)); // a zero count is as unusable as none
+    assert_eq!(launch_marker(limits), (true, false));
+    // control: with a readable count the same command runs, so the failures above are the count's doing
+    // (macOS only: elsewhere the live count is deliberately unavailable, so a launch with a headroom fails closed, always)
+    limits.test_count = None;
+    if cfg!(target_os = "macos") {
+        assert_eq!(launch_marker(limits), (false, true));
+    } else {
+        eprintln!("skip: no live process count off macOS; the launch fails closed");
+        assert_eq!(launch_marker(limits), (true, false));
+    }
+}
+
+#[test]
+fn a_refused_setrlimit_fails_the_launch_and_the_command_does_not_run() {
+    // A cap above the hard limit cannot be set by an unprivileged process: the launch must fail, not run without the cap.
+    let mut hard = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+    // SAFETY: plain getrlimit on this process with a valid pointer.
+    assert_eq!(unsafe { libc::getrlimit(libc::RLIMIT_NPROC, &mut hard) }, 0);
+    if hard.rlim_max == libc::RLIM_INFINITY || unsafe { libc::geteuid() } == 0 {
+        return; // every value is settable; nothing to refuse
+    }
+    let limits = Limits { proc_headroom: Some(PROC_HEADROOM), test_count: Some(Some(hard.rlim_max)), ..Limits::default() };
+    assert_eq!(launch_marker(limits), (true, false));
+}
+
+/// Run a flood of `n` parked subshells under the production profile; how many started before a fork was refused.
+fn flood_started(sb: &Sandbox, l: &Layout, n: u32) -> u64 {
+    settle_process_count();
+    let script = "trap 'echo started=$i' EXIT; exec 9<> \"$1\"; i=0; last=''; while [ $i -lt $2 ]; do ( read -t 20 -u 9 x ) & if [ \"$!\" = \"$last\" ]; then break; fi; last=$!; i=$((i + 1)); done";
+    let args = [std::ffi::OsString::from("-c"), script.into(), "sh".into(), l.scratch.join("fifo").into(), n.to_string().into()];
+    let mut cmd = sb.command(&l.spec(), INTERPRETER, args).unwrap();
+    cmd.current_dir(l.snap.path());
+    let out = run_bounded(cmd, &RunOptions { timeout: Duration::from_secs(60), max_output_bytes: 1 << 16, quota: vec![], kill_over_quota: false }).unwrap();
+    out.stdout.lines().find_map(|x| x.strip_prefix("started=")).and_then(|x| x.trim().parse().ok()).unwrap_or(u64::MAX)
+}
+
+#[test]
+fn the_production_headroom_is_pinned_by_floods_and_by_the_limit_the_child_gets() {
+    let Some(sb) = mac_sandbox() else { return };
+    let l = layout();
+    let _turn = FLOOD.lock().unwrap_or_else(|e| e.into_inner());
+    // The cap is the user's own count plus 128 (the child bash is already in the count): 100 forks fit, 200 and 250 do not.
+    // 200 sits well under the old headroom of 256 (which would let it through) and leaves a margin of ~70 for the user's own
+    // processes coming and going between the launch and the flood (130 was tried: a drift of a dozen processes flips it).
+    assert_eq!(flood_started(&sb, &l, 100), 100);
+    assert!(flood_started(&sb, &l, 200) < 200);
+    assert!(flood_started(&sb, &l, 250) < 250);
+    // second assertion: the limit itself, reported by the child, is the user's count at launch plus the literal 128
+    settle_process_count();
+    let before = crate::live_process_count().unwrap();
+    let mut cmd = sb.command(&l.spec(), INTERPRETER, ["-c", "echo nproc=$(ulimit -u)"]).unwrap();
+    cmd.current_dir(l.snap.path());
+    let out = run_bounded(cmd, &RunOptions { timeout: Duration::from_secs(30), max_output_bytes: 1 << 16, quota: vec![], kill_over_quota: false }).unwrap();
+    let after = crate::live_process_count().unwrap();
+    let got: u64 = out.stdout.lines().find_map(|x| x.strip_prefix("nproc=")).and_then(|x| x.trim().parse().ok()).unwrap_or(0);
+    let (lo, hi) = (before.min(after) + 128, before.max(after) + 128); // the literal, on purpose: the pin
+    assert!(got + 20 >= lo && got <= hi + 20, "limit {got} not within [{lo}, {hi}] (headroom 128): {out:?}");
+}
+
+#[test]
+fn the_count_is_the_users_processes_not_the_systems() {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    settle_process_count();
+    let ours = crate::live_process_count().unwrap() as i64;
+    // SAFETY: plain getuid.
+    let uid = unsafe { libc::getuid() };
+    let ps = Command::new("/bin/ps").args(["-ax", "-o", "uid="]).output().unwrap();
+    let text = String::from_utf8_lossy(&ps.stdout);
+    let mine = text.lines().filter(|x| x.trim() == uid.to_string()).count() as i64;
+    let all = text.lines().count() as i64;
+    assert!((ours - mine).abs() <= 25, "counted {ours}, ps shows {mine} processes of uid {uid}");
+    if uid != 0 {
+        assert!(all - mine > 25 && (all - ours).abs() > 25, "this machine cannot tell the user's count from the system's ({all} vs {mine})");
+    }
+}
+
+#[test]
+fn the_cap_is_taken_at_launch_so_a_drop_in_the_users_process_count_after_the_spec_is_built_cannot_lift_it() {
+    // Regression: the count used to be read when the spec was built, so processes that exited between then and the launch (a
+    // sibling test's 900-subshell flood ending, on a busy runner) left the cap out of the flood's reach and the sweep "failed".
+    let Some(sb) = mac_sandbox() else { return };
+    let l = layout();
+    let mut idle: Vec<std::process::Child> = (0..500).filter_map(|_| Command::new("/bin/sleep").arg("120").spawn().ok()).collect();
+    assert!(idle.len() >= 400, "could not start the idle processes");
+    let spec = l.spec(); // built while the extra processes exist
+    for c in &mut idle {
+        let _ = c.kill();
+        let _ = c.wait();
+    }
+    let (code, out) = l.sweep(&sb, &spec);
+    assert_eq!(code, Some(0), "{out}");
+    assert!(out.contains("blocked   fork_flood"), "{out}");
 }
 
 #[test]
