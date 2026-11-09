@@ -164,6 +164,16 @@ pub fn connect_or_spawn(opts: &SpawnOptions) -> Result<Attached, ClientError> {
     Ok(fresh)
 }
 
+/// The variables a daemon that holds a grant may inherit, and nothing else. `HOME` stays the launcher's real one because the harness CLIs
+/// (claude) find their own login through it and have no other way to; the seat's own environment is narrowed again by `cli_env`.
+/// The daemon reaches its Delphi home through `--home`, so `DELPHI_HOME` and every other `DELPHI_*` variable except the release
+/// stamp are left out, as is everything that looks like a key: provider API keys are therefore NOT available to a granted run, which
+/// serves only through harness logins.
+pub fn granted_env(vars: impl Iterator<Item = (String, String)>) -> Vec<(String, String)> {
+    const KEEP: [&str; 11] = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "TERM", "TMPDIR", "XDG_CONFIG_HOME", "DELPHI_RELEASE_VERSION"];
+    vars.filter(|(k, _)| KEEP.contains(&k.as_str())).collect()
+}
+
 /// Start a NEW daemon that holds `grant` (spec 092 S2c), never attach to a running one: the bytes are written into a pipe whose read
 /// end the daemon inherits (`--grant-fd N`) and reads once. A daemon already running for the workspace is an error, since a grant can
 /// only be handed to a daemon the launcher spawned itself. The payload goes in no environment variable, argument or file.
@@ -244,6 +254,14 @@ fn connect_or_spawn_once(opts: &SpawnOptions, grant: Option<&[u8]>) -> Result<At
     let log = OpenOptions::new().create(true).append(true).open(&l.log)?;
     fs::set_permissions(&l.log, fs::Permissions::from_mode(0o600))?;
     let mut cmd = Command::new(opts.daemon_exe);
+    // A daemon that holds an operator authorization starts with an ALLOWLISTED environment (spec 092 S2d1), never the launcher's whole one:
+    // no API key, token or cloud credential the operator's shell happens to export reaches it, and so none reaches a seat it starts.
+    if grant.is_some() {
+        cmd.env_clear();
+        for (k, v) in granted_env(std::env::vars()) {
+            cmd.env(k, v);
+        }
+    }
     cmd.args(&opts.prefix_args).arg("--daemon")
         .arg("--workspace")
         .arg(opts.workspace)
@@ -306,4 +324,18 @@ fn try_attach(l: &Layout) -> Result<Option<Attached>, ClientError> {
     let token = client.issue_token(Scope::Console)?;
     let hello = client.hello(&token)?;
     Ok(Some(Attached { client, scope: Scope::Console, spawned: false, daemon_pid: hello["pid"].as_u64().unwrap_or(0), daemon_version: hello["binary_version"].as_str().unwrap_or("").to_string(), replaced: None, stale: false, token, sock: l.sock.clone() }))
+}
+
+#[cfg(test)]
+mod granted_env_tests {
+    use super::granted_env;
+
+    #[test]
+    fn a_granted_daemon_inherits_the_allowlist_and_no_secret() {
+        let vars = [("PATH", "/usr/bin"), ("HOME", "/Users/x"), ("LANG", "C"), ("ANTHROPIC_API_KEY", "sk-secret"), ("OPENAI_API_KEY", "sk-secret2"), ("GITHUB_TOKEN", "ghp_secret"), ("AWS_SECRET_ACCESS_KEY", "aws"), ("DELPHI_HOME", "/x"), ("DELPHI_BRIDGE_TOKEN", "t"), ("DELPHI_RELEASE_VERSION", "1.2.3"), ("SSH_AUTH_SOCK", "/sock")];
+        let kept = granted_env(vars.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+        let names: Vec<&str> = kept.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(names, ["PATH", "HOME", "LANG", "DELPHI_RELEASE_VERSION"]);
+        assert!(!kept.iter().any(|(_, v)| v.contains("secret")));
+    }
 }

@@ -39,13 +39,22 @@ pub fn prepare(operator_ws_dir: &Path, project: &Path) -> Result<GrantedArea, St
     let name = operator_ws_dir.file_name().ok_or("the workspace has no name")?;
     let ws_dir = home.path().join("workspaces").join(name);
     crate::train_arms::copy_filtered(operator_ws_dir, &ws_dir, Path::new(""))?;
-    // The workspace's project is the SNAPSHOT here, not the operator's real tree: a read tool that resolves `@project` reads the
-    // disposable copy. The line is not a pinned block. If the configuration does not have exactly one `projects = [...]` line the run
-    // is refused rather than left pointing at the real project.
+    // The configuration of a granted run is REWRITTEN, not copied (see `granted_config`): the project is the snapshot, the tables that reach
+    // outside or hold secrets are dropped, and the pinned access blocks are sealed again over what is left, as `delphi train` does.
     let cfg_path = ws_dir.join("config.toml");
     let cfg = std::fs::read_to_string(&cfg_path).map_err(|e| format!("config.toml: {e}"))?;
-    let cfg = crate::train_run::set_projects(&cfg, snapshot.path()).map_err(|e| format!("the throwaway home cannot point at the snapshot: {e}"))?;
-    std::fs::write(&cfg_path, cfg).map_err(|e| e.to_string())?;
+    let cfg = granted_config(&cfg, snapshot.path())?;
+    std::fs::write(&cfg_path, &cfg).map_err(|e| e.to_string())?;
+    let blocks = delphi_core::lock::access_blocks(&cfg);
+    let ratified = ws_dir.join("local/ratified");
+    std::fs::create_dir_all(&ratified).map_err(|e| e.to_string())?;
+    delphi_core::lock::write_atomic(&ratified.join("config.access.toml"), blocks.as_bytes()).map_err(|e| e.to_string())?;
+    let lock_path = ws_dir.join("local/ratified.lock");
+    let mut lk = delphi_core::lock::read(&lock_path).map_err(|e| format!("the workspace has no usable ratified.lock: {e}"))?;
+    lk.files.insert("config.toml#access".into(), delphi_core::lock::hash(blocks.as_bytes()));
+    delphi_core::lock::write(&lock_path, &lk).map_err(|e| e.to_string())?;
+    // The knowledge base is not carried into a granted run.
+    let _ = std::fs::remove_dir_all(ws_dir.join("local/kb"));
     // A clean operator layer: a valid, empty lock and nothing ratified in it (the daemon here has no store and no ledger).
     let op = home.path().join("operator");
     std::fs::create_dir_all(op.join("ratified")).map_err(|e| e.to_string())?;
@@ -54,6 +63,47 @@ pub fn prepare(operator_ws_dir: &Path, project: &Path) -> Result<GrantedArea, St
     home.recheck().map_err(|e| format!("the throwaway home does not pass its walk: {e}"))?;
     crate::train_run::sock_fits(home.path())?;
     Ok(GrantedArea { home, ws_dir, snapshot })
+}
+
+/// Tables a granted run's configuration does not carry: whatever reaches outside (federation, search, the web, MCP servers, connectors,
+/// the relay, scheduled library acquisition, self-update), whatever signs in (`auth`), operator hooks (they run commands), and the
+/// retrieval store. What stays is what routing, the sandbox and the roles need: `workspace`, `endpoints`, `access`, `harness`, `exec`,
+/// `models`, `agents`, `routing`, `budget`, `hitl`, `events`, `loop`, `grades`, `privacy`, `theme`, `tui`.
+const DROPPED_TABLES: &[&str] = &["auth", "connectors", "relay", "search", "library", "hooks", "update", "federation", "mcp", "web", "rag", "kb"];
+
+fn secret_key(k: &str) -> bool {
+    let l = k.to_ascii_lowercase();
+    ["api_key", "apikey", "token", "secret", "password", "passphrase", "private_key", "bearer", "authorization"].iter().any(|n| l.contains(n))
+}
+
+fn scrub(v: &mut toml::Value) {
+    match v {
+        toml::Value::Table(t) => {
+            t.retain(|k, _| !secret_key(k));
+            for (_, x) in t.iter_mut() {
+                scrub(x);
+            }
+        }
+        toml::Value::Array(a) => a.iter_mut().for_each(scrub),
+        _ => {}
+    }
+}
+
+/// The configuration of a granted run's throwaway workspace: the operator's, with the dropped tables and every key that names a secret
+/// removed, and `[workspace] projects` pointing at the snapshot only. A configuration that does not parse, or has no `[workspace]`, refuses
+/// the run. An endpoint's `credential` is a reference (`harness-login`, a variable name), not a secret, and stays; the variable it names
+/// is not in the daemon's environment, so an API endpoint cannot serve a granted run (only harness logins do).
+pub fn granted_config(text: &str, snapshot: &Path) -> Result<String, String> {
+    let mut v: toml::Value = toml::from_str(text).map_err(|e| format!("config.toml does not parse, so a granted run cannot be set up from it: {e}"))?;
+    let t = v.as_table_mut().ok_or("config.toml is not a table")?;
+    for k in DROPPED_TABLES {
+        t.remove(*k);
+    }
+    scrub(&mut v);
+    let t = v.as_table_mut().ok_or("config.toml is not a table")?;
+    let ws = t.get_mut("workspace").and_then(|w| w.as_table_mut()).ok_or("config.toml has no [workspace] table, so the project cannot be pointed at the snapshot")?;
+    ws.insert("projects".into(), toml::Value::Array(vec![toml::Value::String(snapshot.to_string_lossy().into_owned())]));
+    toml::to_string_pretty(&v).map_err(|e| e.to_string())
 }
 
 /// Wait (bounded) for the daemon with `pid` to be gone, so the ledger is quiet when the end of the run is recorded.
@@ -158,17 +208,19 @@ mod tests {
     fn the_throwaway_home_holds_the_workspace_and_an_empty_operator_layer_and_nothing_else_of_the_operators() {
         let t = tempfile::tempdir().unwrap();
         let src = std::fs::canonicalize(t.path()).unwrap().join("workspaces/w");
-        for (p, body) in [("config.toml", "[workspace]\nprojects = []\n"), ("local/ratified.lock", ""), ("local/missions/m1/log", "secret mission"), ("local/state.db", "x"), ("team/specs/s.md", "x"), ("agents/a.md", "role")] {
+        for (p, body) in [("config.toml", RICH_CONFIG), ("local/kb/index.db", "kb"), ("local/missions/m1/log", "secret mission"), ("local/state.db", "x"), ("team/specs/s.md", "x"), ("agents/a.md", "role")] {
             let f = src.join(p);
             std::fs::create_dir_all(f.parent().unwrap()).unwrap();
             std::fs::write(f, body).unwrap();
         }
+        delphi_core::lock::write(&src.join("local/ratified.lock"), &Default::default()).unwrap();
         // a symlink out of the home is not copied
         std::os::unix::fs::symlink("/etc/hosts", src.join("link")).unwrap();
         let project = t.path().join("project");
         std::fs::create_dir_all(&project).unwrap();
         let git = |args: &[&str]| assert!(std::process::Command::new("/usr/bin/git").args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]).args(args).current_dir(&project).output().unwrap().status.success());
         git(&["init", "-q"]);
+        git(&["remote", "add", "origin", "https://x:ghp_PLANTED_REMOTE_TOKEN@example.com/r.git"]);
         std::fs::write(project.join("a.txt"), "a").unwrap();
         git(&["add", "a.txt"]);
         let area = prepare(&src, &project).unwrap();
@@ -177,6 +229,18 @@ mod tests {
         let cfg = std::fs::read_to_string(ws.join("config.toml")).unwrap();
         assert!(cfg.contains(&format!("projects = [\"{}\"]", area.snapshot.path().display())), "the project is the snapshot, not the real tree: {cfg}");
         assert!(!cfg.contains(project.to_str().unwrap()));
+        for gone in ["federation", "connectors", "relay", "[mcp", "search", "auth", "hooks", "library", "SECRET-IN-ENDPOINT", "SECRET-NESTED", "SECRET-WEB"] {
+            assert!(!cfg.contains(gone), "{gone} survived in the copied config: {cfg}");
+        }
+        assert!(cfg.contains("claude-sub") && cfg.contains("harness-login") && cfg.contains("allowed_endpoints"), "what a granted run needs is kept: {cfg}");
+        assert!(!ws.join("local/kb").exists(), "the knowledge base is not carried");
+        // the pinned access blocks are sealed over what is left, so the daemon loads the copy without a prompt
+        let lock = delphi_core::lock::read(&ws.join("local/ratified.lock")).unwrap();
+        assert_eq!(lock.files.get("config.toml#access"), Some(&delphi_core::lock::hash(delphi_core::lock::access_blocks(&cfg).as_bytes())));
+        // the snapshot carries no git internals and none of the project's remote credentials
+        assert!(!area.snapshot.path().join(".git").exists());
+        let leaked = walkdir_contains(area.snapshot.path(), "ghp_PLANTED_REMOTE_TOKEN");
+        assert!(!leaked, "a token from .git/config reached the snapshot");
         assert!(!ws.join("local/missions").exists() && !ws.join("local/state.db").exists() && !ws.join("team/specs").exists() && !ws.join("link").exists());
         assert!(area.home.path().join("operator/ratified.lock").is_file());
         assert!(!area.home.path().join(concat!("operator/authoriza", "tions.json")).exists() && !area.home.path().join("operator/uses").exists() && !area.home.path().join("operator/audit").exists());
@@ -186,12 +250,38 @@ mod tests {
         assert!(!home.exists() && !snap.exists(), "discarded with the run");
     }
 
+    const RICH_CONFIG: &str = "[workspace]\nprojects = [\"/real/project\"]\n\n[[endpoints]]\nid = \"claude-sub\"\nfamily = \"claude\"\npath = \"harness\"\nharness = \"claude\"\ncredential = \"harness-login\"\napi_key = \"SECRET-IN-ENDPOINT\"\n\n[access]\nallowed_endpoints = [\"claude-sub\"]\n\n[federation]\npeers = [\"x\"]\n\n[connectors.slack]\ntoken = \"SECRET-NESTED\"\n\n[relay]\nurl = \"https://r\"\n\n[mcp.srv]\ncommand = \"x\"\n\n[search]\nprovider = \"brave\"\n\n[auth.github]\nclient = \"c\"\n\n[hooks]\nx = \"y\"\n\n[library]\nschedule = \"daily\"\n\n[web]\nbearer = \"SECRET-WEB\"\n\n[exec]\nsandbox = \"required\"\n";
+
+    fn walkdir_contains(root: &Path, needle: &str) -> bool {
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else if std::fs::read_to_string(&p).is_ok_and(|t| t.contains(needle)) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn a_configuration_that_does_not_parse_or_has_no_workspace_refuses_the_run() {
+        assert!(granted_config("this is [not toml", Path::new("/s")).unwrap_err().contains("does not parse"));
+        assert!(granted_config("[access]\nx = 1\n", Path::new("/s")).unwrap_err().contains("no [workspace]"));
+        let ok = granted_config(RICH_CONFIG, Path::new("/snap")).unwrap();
+        assert!(ok.contains("/snap") && !ok.contains("/real/project"));
+    }
+
     #[test]
     fn a_credential_named_file_in_the_workspace_refuses_the_run() {
         let t = tempfile::tempdir().unwrap();
         let src = std::fs::canonicalize(t.path()).unwrap().join("workspaces/w");
         std::fs::create_dir_all(src.join("local")).unwrap();
-        std::fs::write(src.join("config.toml"), "[workspace]\nprojects = []\n").unwrap();
+        std::fs::write(src.join("config.toml"), RICH_CONFIG).unwrap();
+        delphi_core::lock::write(&src.join("local/ratified.lock"), &Default::default()).unwrap();
         std::fs::write(src.join("local/auth.json"), "token").unwrap();
         let project = t.path().join("project");
         std::fs::create_dir_all(&project).unwrap();

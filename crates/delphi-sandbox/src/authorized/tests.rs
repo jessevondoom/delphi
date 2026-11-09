@@ -120,7 +120,7 @@ impl Layout {
 #[test]
 fn every_credential_shaped_name_is_refused_in_a_throwaway_home() {
     for bad in [
-        ".env", ".env.local", ".env.production", ".git-credentials", ".pgpass", "secret", "secrets.yaml", "secret_key_base", "cert.pfx", "AuthKey_AB12.p8", "release.jks", "key.gpg", "id_rsa", "id_ed25519", "credentials.json", "tokens.txt", "server.pem", "tls.key", "bundle.p12", "auth.json", ".netrc", "_netrc", ".npmrc", ".pypirc", ".ssh", ".aws", ".gnupg", "VAULT.KDBX",
+        ".env", ".env.local", ".env.production", ".git-credentials", ".pgpass", "secret", "secrets.yaml", "secret_key_base", "cert.pfx", "AuthKey_AB12.p8", "release.jks", "key.gpg", "id_rsa", "id_ed25519", "credentials.json", ".docker", ".kube", ".git", ".gitconfig", "hosts.yml", "kubeconfig", "kubeconfig-prod", "login.keychain", "login.keychain-db", "application_default_credentials.json", "aws_credentials", "gh-hosts.yml.keychain", "tokens.txt", "server.pem", "tls.key", "bundle.p12", "auth.json", ".netrc", "_netrc", ".npmrc", ".pypirc", ".ssh", ".aws", ".gnupg", "VAULT.KDBX",
     ] {
         assert!(judge_home_entry(bad, false, true, 1, 1).is_some_and(|w| w.contains("credential")), "{bad} was not refused");
     }

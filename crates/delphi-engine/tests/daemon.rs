@@ -511,7 +511,17 @@ fn a_granted_daemon_boots_from_the_pipe_and_a_bad_or_second_grant_is_refused() {
     assert!(connect_or_spawn_granted(&opts, forged.to_string().as_bytes()).is_err(), "a grant from a process that is not the daemon's parent");
     // the real payload: the daemon boots and answers
     let bytes = g::launch_payload(&home, &rec.id, "run-1", now, &policy).unwrap();
+    // A secret in the launcher's environment must not reach the daemon (S2d1): planted here, looked for in the daemon's own environment.
+    unsafe { std::env::set_var("S2D1_PLANTED_API_KEY", "planted-secret-value-9f3a") };
     let mut attached = connect_or_spawn_granted(&opts, &bytes).expect("a valid grant boots");
+    let env_view = std::process::Command::new("/bin/ps").args(["eww", "-ww", "-p", &attached.daemon_pid.to_string()]).output().unwrap();
+    let env_view = String::from_utf8_lossy(&env_view.stdout).to_string();
+    if env_view.contains("PATH=") {
+        assert!(!env_view.contains("planted-secret-value-9f3a") && !env_view.contains("S2D1_PLANTED_API_KEY"), "the launcher's secret reached the granted daemon: {env_view}");
+    } else {
+        eprintln!("skip: this ps does not show a process environment");
+    }
+    unsafe { std::env::remove_var("S2D1_PLANTED_API_KEY") };
     assert!(attached.spawned);
     assert_eq!(attached.client.call("session.ping", json!({})).unwrap(), json!("pong"));
     // nothing of the grant is in the daemon's command line

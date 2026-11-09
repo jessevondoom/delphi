@@ -761,8 +761,6 @@ impl Engine {
         // What the CLI reported about the seat, for its receipt: the served model (a claim) and the tools it offered.
         let (mut served_reported, mut tools_offered): (Option<String>, Vec<String>) = (None, Vec::new());
         // Any tool call at all (even a read-only one) and whether the failure is the CLI's own `result` error: the retry's conditions.
-        let mut native_attempts: std::collections::HashMap<String, String> = Default::default();
-        let mut refused_ids: std::collections::HashMap<String, String> = Default::default();
         let (mut any_tool, mut cli_error_seen) = (false, false);
         let (hub, span_id) = (self.hub.clone(), sc.span_id.clone());
         let mut live = LiveRedactor::new(sc.m.secrets());
@@ -812,9 +810,7 @@ impl Engine {
                     }
                     continue;
                 }
-                // A pending attempt at a native tool the CLI has switched off is refused by the CLI at once, in the same burst of output. If
-                // nothing arrives within a short window, the tool is not being refused (it may be running): the span is stopped.
-                ev = session.next(if native_attempts.is_empty() { self.settings.harness_idle } else { self.settings.harness_idle.min(std::time::Duration::from_millis(250)) }) => match ev {
+                ev = session.next(self.settings.harness_idle) => match ev {
                     Some(ev) => ev,
                     None => break,
                 },
@@ -863,9 +859,6 @@ impl Engine {
                         sc.m.append(sc.ev("authorization.launch_note", json!({"seat": cli.program(), "slash_commands": slash_commands, "skills": skills, "agents": agents, "plugins": plugins, "note": "listed by the CLI at init; no tool of its own is reachable through them (--tools \"\", --disallowedTools, --disable-slash-commands)", "approved": false}))).await?;
                     }
                 }
-                Event::ToolRefused { ref id, ref tool } => {
-                    refused_ids.insert(id.clone(), tool.clone());
-                }
                 Event::Delta(t) => hub.push_delta(&span_id, DeltaKind::Text, &live.push(&t)),
                 Event::RateLimit { ref status, resets_at, ref window, .. } => {
                     if let Some(x) = delphi_adapter::exhaust::classify_rate_limit_event(status, resets_at, window) {
@@ -879,14 +872,11 @@ impl Engine {
                     }
                     text_parts.push(t);
                 }
-                Event::ToolUse { id: tool_id, name, input } => {
-                    // A model that merely ATTEMPTS a native tool that was switched off emits a tool_use the CLI refuses ("No such tool
-                    // available") and runs nothing. That is logged and waits for its result: refused is a note, executed ends the span.
-                    if granted && cli == Cli::Claude && crate::harness::NATIVE_TOOL_NAMES.contains(&name.as_str()) && !crate::authorization_grant::stream_tool_ok(&name, launch.opts.json_schema.is_some(), TOOL_PREFIX) {
-                        native_attempts.insert(tool_id.clone(), name.clone());
-                        sc.m.append(sc.ev("authorization.refused", json!({"seat": cli.program(), "native_tool": name, "reason": "the model attempted a tool of its own; the CLI has none loaded, and the span goes on only if it refuses the call", "approved": false, "outcome": "attempt"}))).await?;
-                        continue;
-                    }
+                Event::ToolUse { name, input, .. } => {
+                    // In a run that holds a grant EVERY tool_use that is not Delphi's bridge tool (or the schema's StructuredOutput) ends the span
+                    // at the call: a native tool, a connector, a plugin tool, an unknown name. Nothing is tolerated as an "attempt" and nothing waits
+                    // for a result: the CLI has no tool of its own loaded (`--tools ""`, checked at init), so a call to one can only cost a false
+                    // positive, and a wrong guess would let the tool run first. (Case differences are different names, and are stopped too.)
                     if granted && !crate::authorization_grant::stream_tool_ok(&name, launch.opts.json_schema.is_some(), TOOL_PREFIX) {
                         session.kill().await;
                         sc.m.append(sc.ev("authorization.refused", json!({"seat": cli.program(), "native_tool": name, "reason": "a native tool call was seen in the stream", "approved": false}))).await?;
@@ -904,17 +894,7 @@ impl Engine {
                         sc.m.append(sc.ev("span.taint", json!({"ceiling": sc.span.ceiling().as_str(), "cause": name}))).await?;
                     }
                 }
-                Event::ToolResult { ref id, .. } => {
-                    if let Some(native) = native_attempts.remove(id) {
-                        if refused_ids.remove(id).as_deref() == Some(native.as_str()) {
-                            sc.m.append(sc.ev("authorization.refused", json!({"seat": cli.program(), "native_tool": native, "reason": "the CLI refused the call (no such tool); nothing ran", "approved": false, "outcome": "refused_by_cli"}))).await?;
-                        } else {
-                            session.kill().await;
-                            sc.m.append(sc.ev("authorization.refused", json!({"seat": cli.program(), "native_tool": native, "reason": "a tool of the CLI's own returned a result that was not a refusal: it may have run", "approved": false, "outcome": "executed"}))).await?;
-                            failure = Some((format!("the Claude CLI ran a tool of its own ({native}) in a run with an operator authorization; the span is stopped"), false));
-                            break;
-                        }
-                    }
+                Event::ToolResult { .. } => {
                     if let Some(g) = &guard {
                         let touched = g.restore();
                         if !touched.is_empty() {
@@ -997,9 +977,6 @@ impl Engine {
                     break;
                 }
             }
-        }
-        if failure.is_none() && !native_attempts.is_empty() {
-            failure = Some(("a tool call of the CLI's own was never answered with a refusal; the span is stopped".into(), false));
         }
         if result.is_none() && failure.is_none() {
             failure = Some((format!("the {} CLI stopped without a result", launch.program), !used_tools));
@@ -3174,55 +3151,50 @@ echo "$answer" > '{answer_file}'
         assert!(!reqs[1].body.to_string().contains("@runtime/tool-inventory"), "a role that cannot dispatch is not given it");
     }
 
-    // ---- spec 092 S2d1: a granted claude seat that is merely ASKED for a native tool vs one that runs it ----
+    // ---- spec 092 S2d1: a granted claude seat that calls ANY tool but Delphi's own is stopped at the call ----
 
     fn hold_a_grant(f: &Fx) {
         assert!(f.engine.grant.set(std::sync::Arc::new(crate::authorization_grant::Grant::bare_for_test(&f.root))).is_ok());
     }
 
     const G_INIT: &str = r#"echo '{"type":"system","subtype":"init","session_id":"s1","tools":["mcp__delphi__search"],"slash_commands":["compact","review"],"skills":["pdf"],"agents":["general-purpose"],"plugins":[{"name":"p1"}]}'"#;
-    const TRY_BASH: &str = r#"echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu1","name":"Bash","input":{"command":"id"}}]}}'"#;
 
-    async fn granted_run(extra: &str) -> (crate::engine::TaskOutcome, Fx, tempfile::TempDir) {
-        let (f, s) = fixture(&format!("{}\n{}\n{}\n{}", G_INIT, TRY_BASH, extra, FINISH), |_| {});
+    /// A fake CLI that calls `tool` and then, a third of a second later, would leave a marker (what the tool would have done).
+    /// The span must be over, and the CLI killed, before that: the kill is issued on the tool_use event itself, without waiting for a result.
+    async fn call_run(tool: &str) -> (bool, crate::engine::TaskOutcome, Fx) {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("marker");
+        let use_line = format!(r#"echo '{{"type":"assistant","message":{{"content":[{{"type":"tool_use","id":"tu1","name":"{tool}","input":{{}}}}]}}}}'"#);
+        let body = format!("{}\n{}\nsleep 0.3\ntouch '{}'\n{}", G_INIT, use_line, marker.display(), FINISH);
+        let (f, _s) = fixture(&body, |_| {});
         hold_a_grant(&f);
         let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
-        (out, f, s)
-    }
-
-    fn outcomes(f: &Fx) -> Vec<String> {
-        events_of(f, "authorization.refused").iter().filter_map(|e| e.payload["outcome"].as_str().map(String::from)).collect()
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        (marker.exists(), out, f)
     }
 
     #[tokio::test]
-    async fn a_native_tool_the_cli_refuses_is_a_logged_note_and_the_span_goes_on() {
-        let refused = r#"echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu1","is_error":true,"content":"No such tool available: Bash"}]}}'"#;
-        let (out, f, _s) = granted_run(refused).await;
+    async fn every_tool_but_delphis_own_is_stopped_at_the_call_before_it_can_run() {
+        for tool in ["Bash", "Write", "WebFetch", "bash", "BASH", "Read", "Task", "mcp__claude_ai_Slack__slack_send_message", "mcp__someplugin__do", "mcp__delphi_lookalike__x", "NotARealTool"] {
+            let (ran, out, f) = call_run(tool).await;
+            assert!(!ran, "{tool}: its effect happened before the span was stopped");
+            assert_ne!(out.status, Status::Done, "{tool}");
+            let refused = events_of(&f, "authorization.refused");
+            assert!(refused.iter().any(|e| e.payload["native_tool"] == tool && e.payload["reason"].as_str().unwrap().contains("stream")), "{tool}: {:?}", refused.iter().map(|e| e.payload.to_string()).collect::<Vec<_>>());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_delphi_bridge_tool_call_is_not_stopped_and_the_init_lists_are_recorded() {
+        let use_line = r#"echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu1","name":"mcp__delphi__search","input":{"query":"x"}}]}}'"#;
+        let (f, _s) = fixture(&format!("{}\n{}\n{}", G_INIT, use_line, FINISH), |_| {});
+        hold_a_grant(&f);
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
         assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "All done."), "{}", out.text);
-        assert_eq!(outcomes(&f), ["attempt", "refused_by_cli"]);
-        // the init lists are recorded as a launch note, not a reason to stop
+        assert!(events_of(&f, "authorization.refused").is_empty());
+        // slash commands, skills, agents and plugins listed at init are a launch note, not a reason to stop
         let note = &events_of(&f, "authorization.launch_note")[0].payload;
         assert_eq!((note["slash_commands"].clone(), note["skills"].clone(), note["plugins"].clone()), (json!(["compact", "review"]), json!(["pdf"]), json!(["p1"])));
-    }
-
-    #[tokio::test]
-    async fn a_native_tool_whose_result_is_not_a_refusal_ends_the_span() {
-        let ran = r#"echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu1","is_error":false,"content":"uid=501"}]}}'"#;
-        let (out, f, _s) = granted_run(ran).await;
-        assert_ne!(out.status, Status::Done, "{}", out.text);
-        assert_eq!(outcomes(&f), ["attempt", "executed"]);
-        // an error result that is not the CLI's "no such tool" is not a refusal either
-        let other = r#"echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu1","is_error":true,"content":"exit status 1"}]}}'"#;
-        let (out, f, _s) = granted_run(other).await;
-        assert_ne!(out.status, Status::Done);
-        assert_eq!(outcomes(&f), ["attempt", "executed"]);
-    }
-
-    #[tokio::test]
-    async fn a_native_tool_call_that_is_never_answered_ends_the_span() {
-        let (out, f, _s) = granted_run("true").await;
-        assert_ne!(out.status, Status::Done, "{}", out.text);
-        assert_eq!(outcomes(&f), ["attempt"]);
     }
 
     #[tokio::test]
@@ -3232,55 +3204,5 @@ echo "$answer" > '{answer_file}'
         let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
         assert_ne!(out.status, Status::Done);
         assert!(events_of(&f, "authorization.refused").iter().any(|e| e.payload["native_tool"] == "Bash" && e.payload["reason"].as_str().unwrap().contains("started with none")));
-    }
-
-    // ---- red-team of #605: a tool of the CLI's own must never be allowed to run before the span is stopped ----
-
-    async fn marker_run(tool: &str, result: &str, result_first: bool) -> (bool, crate::engine::TaskOutcome, Fx) {
-        let dir = tempfile::tempdir().unwrap();
-        let marker = dir.path().join("marker");
-        let use_line = format!(r#"echo '{{"type":"assistant","message":{{"content":[{{"type":"tool_use","id":"tu1","name":"{tool}","input":{{}}}}]}}}}'"#);
-        let tail = format!("sleep 1\ntouch '{}'", marker.display());
-        let body = if result_first { format!("{}\n{}\n{}\n{}\n{}", G_INIT, use_line, result, tail, FINISH) } else { format!("{}\n{}\n{}\n{}\n{}", G_INIT, use_line, tail, result, FINISH) };
-        let (f, _s) = fixture(&body, |_| {});
-        hold_a_grant(&f);
-        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
-        // the fake CLI would touch the marker a second after the call; give it the time it would need
-        tokio::time::sleep(Duration::from_millis(1500)).await;
-        (marker.exists(), out, f)
-    }
-
-    const NOT_REFUSAL: &str = r#"echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu1","is_error":false,"content":"done"}]}}'"#;
-
-    #[tokio::test]
-    async fn a_native_tool_that_would_run_is_stopped_before_it_does() {
-        for tool in ["Bash", "Write", "WebFetch"] {
-            let (ran, out, f) = marker_run(tool, NOT_REFUSAL, false).await;
-            assert!(!ran, "{tool}: the command ran before the span was stopped");
-            assert_ne!(out.status, Status::Done, "{tool}");
-            assert!(!outcomes(&f).is_empty());
-        }
-    }
-
-    #[tokio::test]
-    async fn a_connector_or_plugin_tool_is_stopped_at_the_call_not_at_the_result() {
-        for tool in ["mcp__claude_ai_Slack__slack_send_message", "mcp__someplugin__do", "NotARealNativeTool"] {
-            let (ran, out, f) = marker_run(tool, NOT_REFUSAL, false).await;
-            assert!(!ran, "{tool} ran");
-            assert_ne!(out.status, Status::Done, "{tool}");
-            assert!(events_of(&f, "authorization.refused").iter().any(|e| e.payload["native_tool"] == tool), "{tool}");
-            assert!(!outcomes(&f).contains(&"attempt".to_string()), "{tool} was tolerated as an attempt");
-        }
-    }
-
-    #[tokio::test]
-    async fn a_result_that_only_contains_the_refusal_phrase_or_names_another_tool_is_not_a_refusal() {
-        for content in ["exit 1: No such tool available: Bash. Bash is disabled", "No such tool available: Read. Read is disabled for this session", "no such tool available: Bash"] {
-            let result = format!(r#"echo '{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id":"tu1","is_error":true,"content":"{content}"}}]}}}}'"#);
-            let (ran, out, f) = marker_run("Bash", &result, true).await;
-            assert!(!ran, "{content}");
-            assert_ne!(out.status, Status::Done, "{content}");
-            assert!(outcomes(&f).contains(&"executed".to_string()), "{content}: {:?}", outcomes(&f));
-        }
     }
 }

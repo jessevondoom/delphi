@@ -783,7 +783,7 @@ printf '{{"token":"%s"}}\n%s\n' "$tok" '{req}' | /usr/bin/nc -U -w 3 "$sock" > '
         f.engine.grant.set(Arc::new(g.grant())).unwrap();
         let _ = f.engine.run_task(&f.m, "builder", PROMPT).await;
         let refused = events_of(&f, REFUSED_USE);
-        assert!(refused.iter().any(|e| e.payload["native_tool"] == "Bash" && e.payload["outcome"] == "attempt"), "{:?}", refused.iter().map(|e| e.payload.to_string()).collect::<Vec<_>>());
+        assert!(refused.iter().any(|e| e.payload["native_tool"] == "Bash" && e.payload["reason"].as_str().unwrap().contains("stream")), "{:?}", refused.iter().map(|e| e.payload.to_string()).collect::<Vec<_>>());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
