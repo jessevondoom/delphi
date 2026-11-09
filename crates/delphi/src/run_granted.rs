@@ -222,17 +222,111 @@ pub fn launch_step_up(ws_dir: &Path, now_unix: i64, factor: &dyn Fn(&Path) -> Re
     verifier.check(&secret, code.trim(), now_unix.max(0) as u64).map_err(|e| format!("refused: step-up failed: {e}; nothing was launched"))
 }
 
-/// One line typed at the controlling terminal: `/dev/tty` is opened for the prompt and the answer, never stdin, an argument or the environment.
-pub fn tty_ask(prompt: &str) -> Option<String> {
+/// The launch step-up, or why the launch is refused. An unreadable clock refuses up front (fail closed): a code is checked against the time,
+/// and a launch with no time is not a launch. The caller makes nothing before this returns `Ok`.
+pub fn require_step_up(ws_dir: &Path, now_unix: Option<i64>, factor: &dyn Fn(&Path) -> Result<Vec<u8>, String>, ask: &mut dyn FnMut(&str) -> Option<String>) -> Result<(), String> {
+    let Some(now) = now_unix else { return Err("refused: the clock could not be read, so the launch code cannot be checked; nothing was launched".into()) };
+    launch_step_up(ws_dir, now, factor, ask)
+}
+
+/// What a signal handler needs to put the terminal back: the descriptor and the settings it had. Written before the handlers are installed
+/// and read only by them; `tcsetattr`, `signal` and `raise` are async-signal-safe.
+static SAVED_FD: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+static mut SAVED_TERMIOS: std::mem::MaybeUninit<libc::termios> = std::mem::MaybeUninit::uninit();
+
+extern "C" fn restore_and_die(sig: libc::c_int) {
+    let fd = SAVED_FD.load(std::sync::atomic::Ordering::SeqCst);
+    if fd >= 0 {
+        // SAFETY: SAVED_TERMIOS was fully written before SAVED_FD was set; the calls are async-signal-safe.
+        unsafe { libc::tcsetattr(fd, libc::TCSANOW, std::ptr::addr_of!(SAVED_TERMIOS).cast::<libc::termios>()) };
+    }
+    // SAFETY: back to the default action, then the same signal again, so the process ends as it would have.
+    unsafe {
+        libc::signal(sig, libc::SIG_DFL);
+        libc::raise(sig);
+    }
+}
+
+/// Terminal echo off for the length of the value, back on in `Drop` (every return path, a panic unwinding included), and by a signal handler
+/// for SIGINT, SIGTERM, SIGHUP and SIGQUIT (the process then dies as it would have, with the terminal restored). SIGKILL cannot be caught.
+struct NoEcho {
+    fd: i32,
+    old: libc::termios,
+    handlers: Vec<(libc::c_int, libc::sigaction)>,
+}
+
+impl NoEcho {
+    fn on(fd: i32) -> Option<NoEcho> {
+        // SAFETY: tcgetattr fills a termios; nothing is read from it unless it returned 0.
+        let mut old: libc::termios = unsafe { std::mem::zeroed() };
+        if unsafe { libc::tcgetattr(fd, &mut old) } != 0 {
+            return None;
+        }
+        let mut quiet = old;
+        quiet.c_lflag &= !(libc::ECHO | libc::ECHONL);
+        quiet.c_lflag |= libc::ICANON;
+        // SAFETY: published before the descriptor, so the handler never sees a half-written value.
+        unsafe { std::ptr::addr_of_mut!(SAVED_TERMIOS).write(std::mem::MaybeUninit::new(old)) };
+        SAVED_FD.store(fd, std::sync::atomic::Ordering::SeqCst);
+        let mut handlers = vec![];
+        for sig in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP, libc::SIGQUIT] {
+            // SAFETY: a plain handler that only calls async-signal-safe functions.
+            unsafe {
+                let mut act: libc::sigaction = std::mem::zeroed();
+                act.sa_sigaction = restore_and_die as *const () as usize;
+                libc::sigemptyset(&mut act.sa_mask);
+                let mut prev: libc::sigaction = std::mem::zeroed();
+                if libc::sigaction(sig, &act, &mut prev) == 0 {
+                    handlers.push((sig, prev));
+                }
+            }
+        }
+        // FLUSH: anything typed before the prompt (a paste) is discarded, not taken as the code.
+        // SAFETY: a valid descriptor and termios.
+        if unsafe { libc::tcsetattr(fd, libc::TCSAFLUSH, &quiet) } != 0 {
+            let g = NoEcho { fd, old, handlers };
+            drop(g);
+            return None;
+        }
+        Some(NoEcho { fd, old, handlers })
+    }
+}
+
+impl Drop for NoEcho {
+    fn drop(&mut self) {
+        // SAFETY: restoring what was read; the descriptor is still open while the guard lives.
+        unsafe {
+            libc::tcsetattr(self.fd, libc::TCSANOW, &self.old);
+            for (sig, prev) in &self.handlers {
+                libc::sigaction(*sig, prev, std::ptr::null_mut());
+            }
+        }
+        SAVED_FD.store(-1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// The prompt and one line read from `tty`, with echo off while it is typed (a code on a shared screen or in a recording is not wanted) and a
+/// newline written after it. If echo cannot be turned off the code is NOT asked for: a launch that cannot hide its code is refused.
+pub fn ask_on(tty: std::fs::File, prompt: &str) -> Option<String> {
     use std::io::{BufRead, Write};
-    let mut tty = std::fs::OpenOptions::new().read(true).write(true).open("/dev/tty").ok()?;
-    tty.write_all(prompt.as_bytes()).ok()?;
-    tty.flush().ok()?;
+    use std::os::fd::AsRawFd;
+    let guard = NoEcho::on(tty.as_raw_fd())?;
+    let mut out = tty.try_clone().ok()?;
+    out.write_all(prompt.as_bytes()).ok()?;
+    out.flush().ok()?;
     let mut line = String::new();
-    match std::io::BufReader::new(tty).read_line(&mut line) {
+    let got = std::io::BufReader::new(&tty).read_line(&mut line);
+    let _ = out.write_all(b"\n");
+    drop(guard);
+    match got {
         Ok(0) | Err(_) => None,
         Ok(_) => Some(line.trim().to_string()),
     }
+}
+
+/// One line typed at the controlling terminal: `/dev/tty` is opened for the prompt and the answer, never stdin, an argument or the environment.
+pub fn tty_ask(prompt: &str) -> Option<String> {
+    ask_on(std::fs::OpenOptions::new().read(true).write(true).open("/dev/tty").ok()?, prompt)
 }
 
 #[cfg(test)]
@@ -309,6 +403,71 @@ mod tests {
         }
         let code = delphi_core::totp::code_at(SECRET, now() as u64);
         assert!(launch_step_up(t.path(), now(), &good_factor, &mut |_| Some(code.clone())).is_err(), "locked out after repeated wrong codes");
+    }
+
+    #[test]
+    fn an_unreadable_clock_refuses_the_launch_before_the_code_is_asked() {
+        let t = ws();
+        let mut asked = false;
+        let e = require_step_up(t.path(), None, &good_factor, &mut |_| { asked = true; Some("123456".into()) }).unwrap_err();
+        assert!(e.starts_with("refused:") && e.contains("clock"), "{e}");
+        assert!(!asked);
+        let code = delphi_core::totp::code_at(SECRET, now() as u64);
+        assert_eq!(require_step_up(t.path(), Some(now()), &good_factor, &mut |_| Some(code.clone())), Ok(()));
+    }
+
+    // The code is typed without echo and the terminal is put back, on the normal path and when the line cannot be read.
+    #[test]
+    fn the_code_is_typed_without_echo_and_the_terminal_is_restored_on_every_path() {
+        use std::io::{Read, Write};
+        use std::os::fd::{AsRawFd, FromRawFd};
+        let (mut master, mut slave) = (0, 0);
+        // SAFETY: openpty fills two descriptors.
+        assert_eq!(unsafe { libc::openpty(&mut master, &mut slave, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) }, 0);
+        // SAFETY: both descriptors are ours and each File owns one.
+        let (mut master, slave) = unsafe { (std::fs::File::from_raw_fd(master), std::fs::File::from_raw_fd(slave)) };
+        let echo = |fd: i32| {
+            // SAFETY: tcgetattr on a valid descriptor.
+            let mut t: libc::termios = unsafe { std::mem::zeroed() };
+            assert_eq!(unsafe { libc::tcgetattr(fd, &mut t) }, 0);
+            t.c_lflag & libc::ECHO != 0
+        };
+        let fd = slave.as_raw_fd();
+        assert!(echo(fd), "a fresh terminal echoes");
+        let keep = slave.try_clone().unwrap();
+        let worker = std::thread::spawn(move || ask_on(slave, "code: "));
+        // wait for the prompt, which is written after echo is off
+        let mut seen = String::new();
+        let mut buf = [0u8; 64];
+        while !seen.contains("code: ") {
+            let n = master.read(&mut buf).unwrap();
+            seen.push_str(&String::from_utf8_lossy(&buf[..n]));
+        }
+        assert!(!echo(keep.as_raw_fd()), "echo is off while the code is typed");
+        master.write_all(b"424242\n").unwrap();
+        assert_eq!(worker.join().unwrap().as_deref(), Some("424242"));
+        assert!(echo(keep.as_raw_fd()), "echo is back after the line");
+        // what the screen showed: the prompt and a newline, never the digits
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let mut rest = [0u8; 256];
+        // SAFETY: the master is non-blocking for this one read.
+        unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) };
+        let n = master.read(&mut rest).unwrap_or(0);
+        // SAFETY: blocking again for the next prompt.
+        unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, 0) };
+        let shown = format!("{seen}{}", String::from_utf8_lossy(&rest[..n]));
+        assert!(!shown.contains("424242"), "the code was echoed: {shown:?}");
+        // an end of input (the other side hung up) is no code, and the terminal is restored all the same
+        let again = keep.try_clone().unwrap();
+        let w2 = std::thread::spawn(move || ask_on(again, "code: "));
+        let mut seen2 = String::new();
+        while !seen2.contains("code: ") {
+            let n = master.read(&mut buf).unwrap();
+            seen2.push_str(&String::from_utf8_lossy(&buf[..n]));
+        }
+        master.write_all(&[0x04]).unwrap();
+        assert_eq!(w2.join().unwrap(), None);
+        assert!(echo(keep.as_raw_fd()), "echo is back after an end of input");
     }
 
     #[test]

@@ -2763,6 +2763,8 @@ fn a_detached_launch_with_no_code_a_wrong_code_or_a_spent_code_is_refused_and_bu
         // with no code the launcher waits at the prompt (and is stopped); with a bad one it refuses
         assert!(label == "no code" || out.contains("refused"), "{label}: {out}");
         assert!(!out.contains("authorization.used") && !out.contains("the authorization checks passed"), "{label}: {out}");
+        // typed without echo: what was typed is not on the screen
+        assert!(!out.contains("000000") && !out.contains("not-a-code"), "{label}: the code was echoed: {out}");
         assert_eq!(used(), 0, "{label}: no use burned");
     }
     assert!(delphi_engine::authorization::read_audit(&s.home).unwrap().iter().all(|e| e.kind != "authorization.launch.step_up" && e.kind != "authorization.run.launch"), "nothing was recorded: the launch never began");

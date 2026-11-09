@@ -29,6 +29,8 @@ tool = "run_command"
 pattern = "cargo test*"      # optional; * matches anything
 ```
 
+An authorized run (`--on-card authorization:<id> --auth-run <run>`) asks for a fresh authenticator code at launch, typed at your terminal with echo off. That code stops a launch by something that lacks it. **The authenticator secret is only as private as the place it is kept.** The `security add-generic-password` command stores it in your macOS login keychain, and any process running as you can read it back with `security find-generic-password -w` without a prompt. An agent with a shell that runs as you can therefore compute valid codes. The code protects against an agent, a script or a launch that cannot read your keychain; it does not protect against one that can. The same holds for `delphi test authorize` and the relay's step-up (`GOVERNANCE.md` §5.10), which use the same secret. A keychain item that requires your presence (an access-control list with user presence) is the planned hardening. So the launch code does not stop a process that can read your keychain.
+
 Three rules hold under any policy, and a policy that breaks them does not load: **Red cards are never allowed by a policy (only an operator authorization, `specs/092`, can approve one)**, **merges are never allowed** (a policy naming `merge` or `pull_request` is refused), and unknown keys are errors. A build that reaches the merge card is the normal end: the run records the branch, commit and gate report, denies the card and reports `ready_to_merge`. You merge later from the console.
 
 ## Output

@@ -127,6 +127,14 @@ impl std::fmt::Display for StepUpError {
 /// both survive a restart; the file is written atomically (0600) and holds only what the code window still needs.
 /// A state file that exists but cannot be read or parsed fails closed: step-up is locked for [`LOCKOUT_SECS`] from the
 /// first check, never started empty. The same holds when the file has been deleted after its first creation (a marker beside it records that it existed) (`specs/014` amendment 014-A1, REV-SEC-09).
+///
+/// Three records say the state was armed: the state file, the marker beside it, and (when the state lives in a Delphi workspace,
+/// `<home>/workspaces/<name>/local/totp-state`) an ANCHOR under `<home>/operator/`, a place nothing else here writes. The state is trusted
+/// only when the file and the marker are both present. Any other combination fails closed (locked from the first check, then re-armed): the
+/// file without the marker, the marker without the file, and, with the anchor, both deleted. **Accepted limit:** a process running as the
+/// same user that deletes all three (the file, the marker and the anchor) gets a clean start and resets the five-per-300-seconds rationing;
+/// it can also read the authenticator secret from the login keychain (see `specs/092`, known limits), so this closes the accidental and the
+/// partial deletion, not that process.
 #[derive(Default)]
 pub struct Verifier {
     used: Mutex<HashSet<u64>>,
@@ -142,26 +150,36 @@ impl Verifier {
     pub fn persistent(path: PathBuf) -> Verifier {
         remove_stale_temps(&path);
         let v = Verifier { path: Some(path.clone()), ..Default::default() };
+        // Serialized with every other opener and checker, so a first run in one process is never seen half made by another.
+        let _arming = lock_beside(&path).ok();
+        let (marker, anchor) = (marker_of(&path), anchor_of(&path));
+        let marker_there = marker.exists();
+        let anchor_there = anchor.as_ref().is_some_and(|a| a.exists());
         match read_state(&path) {
             Ok(Some((used, failures))) => {
                 *v.used.lock().unwrap() = used;
                 *v.failures.lock().unwrap() = failures;
+                // A state file with no marker beside it is not how this code leaves things (the marker is written first): fail closed.
+                if !marker_there {
+                    *v.distrust.lock().unwrap() = true;
+                }
             }
             Ok(None) => {
-                // No file: a first run creates it, with a marker beside it. A marker without the file means the
-                // state was deleted, which is treated like corruption, not like a clean start.
-                let marker = marker_of(&path);
-                if marker.exists() || v.save(&HashSet::new(), &VecDeque::new()).is_err() || std::fs::write(&marker, b"armed\n").is_err() {
+                // No file. A first run (no marker, no anchor) creates all three. A marker or an anchor without the file means the state
+                // was deleted, which is treated like corruption, not like a clean start.
+                let first_run = !marker_there && !anchor_there;
+                if !first_run || arm(&marker, anchor.as_deref()).is_err() || v.save(&HashSet::new(), &VecDeque::new()).is_err() {
                     *v.distrust.lock().unwrap() = true;
                 }
             }
             Err(()) => *v.distrust.lock().unwrap() = true,
         }
-        let trusted = !*v.distrust.lock().unwrap();
-        if trusted {
-            let marker = marker_of(&path);
-            if !marker.exists() {
-                let _ = std::fs::write(&marker, b"armed\n");
+        // The anchor lost alone is made again (it is a copy of "armed", not a reset); the other combinations were handled above.
+        if !*v.distrust.lock().unwrap() {
+            if let Some(a) = anchor.as_deref() {
+                if !a.exists() {
+                    let _ = write_anchor(a);
+                }
             }
         }
         v
@@ -206,6 +224,10 @@ impl Verifier {
             failures.clear();
             failures.extend(std::iter::repeat_n(now_secs, MAX_FAILURES));
             let _ = self.save(used, failures);
+            // Locked from this check on; armed again, so the next opener finds a complete, trusted set and the lockout runs its course.
+            if let Some(p) = &self.path {
+                let _ = arm(&marker_of(p), anchor_of(p).as_deref());
+            }
         }
         while failures.front().is_some_and(|t| now_secs.saturating_sub(*t) >= LOCKOUT_SECS) {
             failures.pop_front();
@@ -271,6 +293,33 @@ fn lock_beside(path: &Path) -> std::io::Result<std::fs::File> {
         return Err(std::io::Error::last_os_error());
     }
     Ok(f)
+}
+
+/// The anchor of a state file inside a Delphi home: `<home>/operator/totp-armed`, for a state at `<home>/workspaces/<name>/local/totp-state`.
+/// `None` for any other place (a test directory, a state kept elsewhere), which then has the file and the marker only.
+fn anchor_of(path: &Path) -> Option<PathBuf> {
+    let local = path.parent()?;
+    let ws = local.parent()?;
+    let workspaces = ws.parent()?;
+    if local.file_name()? != "local" || workspaces.file_name()? != "workspaces" {
+        return None;
+    }
+    let home = workspaces.parent()?;
+    let operator = home.join("operator");
+    operator.is_dir().then(|| operator.join("totp-armed"))
+}
+
+fn write_anchor(a: &Path) -> std::io::Result<()> {
+    std::fs::write(a, b"armed\n")
+}
+
+/// Write the marker, then the anchor (the marker first, so a state file never exists without one).
+fn arm(marker: &Path, anchor: Option<&Path>) -> std::io::Result<()> {
+    std::fs::write(marker, b"armed\n")?;
+    if let Some(a) = anchor {
+        write_anchor(a)?;
+    }
+    Ok(())
 }
 
 fn marker_of(path: &Path) -> PathBuf {
@@ -453,6 +502,96 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
         let leftovers = std::fs::read_dir(dir.path()).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().contains(".tmp.")).count();
         assert_eq!(leftovers, 0, "no temp file is left behind");
+    }
+
+    /// A state in a Delphi-shaped home: `<home>/workspaces/w/local/totp-state` with `<home>/operator/` beside it.
+    fn homed() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("workspaces/w/local")).unwrap();
+        std::fs::create_dir_all(dir.path().join("operator")).unwrap();
+        let path = dir.path().join("workspaces/w/local/totp-state");
+        (dir, path)
+    }
+
+    /// Arm a state (one wrong guess), then let `tamper` delete things; is the next verifier locked out for a VALID code?
+    fn locked_after(path: &Path, tamper: impl Fn(&Path)) -> bool {
+        let t = 1_700_000_000u64;
+        let _ = Verifier::persistent(path.to_path_buf()).check(RFC_SECRET, "000000", t);
+        tamper(path);
+        let v = Verifier::persistent(path.to_path_buf());
+        matches!(v.check(RFC_SECRET, &code_at(RFC_SECRET, t + 90), t + 90), Err(StepUpError::Locked { .. }))
+    }
+
+    #[test]
+    fn every_partial_deletion_of_the_armed_state_fails_closed() {
+        let rm = |p: &Path| {
+            let _ = std::fs::remove_file(p);
+        };
+        let (_d, path) = homed();
+        let anchor = anchor_of(&path).expect("a home-shaped path has an anchor");
+        assert!(anchor.ends_with("operator/totp-armed"));
+        // the file alone
+        assert!(locked_after(&path, |p| rm(p)), "the file deleted");
+        // the marker alone (the file remains)
+        let (_d, path) = homed();
+        assert!(locked_after(&path, |p| rm(&marker_of(p))), "the marker deleted");
+        // the file and the marker, with the anchor left: the pair deleted is not a clean start
+        let (_d, path) = homed();
+        assert!(locked_after(&path, |p| {
+            rm(p);
+            rm(&marker_of(p));
+        }), "the file and the marker deleted, the anchor remains");
+        // the file and the anchor, with the marker left
+        let (_d, path) = homed();
+        assert!(locked_after(&path, |p| {
+            rm(p);
+            rm(&anchor_of(p).unwrap());
+        }), "the file and the anchor deleted, the marker remains");
+        // the anchor alone is only made again: the state keeps its history (a replayed code is still a replay)
+        let (_d, path) = homed();
+        let t = 1_700_000_000u64;
+        let code = code_at(RFC_SECRET, t);
+        assert_eq!(Verifier::persistent(path.clone()).check(RFC_SECRET, &code, t), Ok(()));
+        rm(&anchor_of(&path).unwrap());
+        let v = Verifier::persistent(path.clone());
+        assert!(anchor_of(&path).unwrap().exists(), "an anchor lost alone is written again");
+        assert_eq!(v.check(RFC_SECRET, &code, t), Err(StepUpError::Replayed));
+    }
+
+    #[test]
+    fn a_state_that_failed_closed_runs_its_lockout_and_is_trusted_again_not_locked_forever() {
+        let (_d, path) = homed();
+        let t = 1_700_000_000u64;
+        let _ = Verifier::persistent(path.clone()).check(RFC_SECRET, "000000", t);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(marker_of(&path));
+        let v = Verifier::persistent(path.clone());
+        assert!(matches!(v.check(RFC_SECRET, &code_at(RFC_SECRET, t + 1), t + 1), Err(StepUpError::Locked { .. })));
+        // re-armed: after the lockout, a fresh opener finds a complete set and accepts a valid code
+        let later = t + LOCKOUT_SECS + 60;
+        assert_eq!(Verifier::persistent(path.clone()).check(RFC_SECRET, &code_at(RFC_SECRET, later), later), Ok(()));
+    }
+
+    // ACCEPTED LIMIT, asserted so that it is stated and not forgotten: a process of the same user that deletes the file, the marker AND the
+    // anchor gets a clean start. The same process can read the authenticator secret from the login keychain (specs/092, known limits).
+    #[test]
+    fn deleting_the_file_the_marker_and_the_anchor_together_is_the_accepted_limit_and_resets_the_rationing() {
+        let (_d, path) = homed();
+        assert!(!locked_after(&path, |p| {
+            let _ = std::fs::remove_file(p);
+            let _ = std::fs::remove_file(marker_of(p));
+            let _ = std::fs::remove_file(anchor_of(p).unwrap());
+        }));
+    }
+
+    #[test]
+    fn a_state_outside_a_home_has_the_file_and_the_marker_and_no_anchor() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("totp-state");
+        assert_eq!(anchor_of(&path), None);
+        assert!(locked_after(&path, |p| {
+            let _ = std::fs::remove_file(p);
+        }));
     }
 
     // Two processes (the daemon and `delphi test authorize`) share one state file: a code spent in either is spent in both, and
