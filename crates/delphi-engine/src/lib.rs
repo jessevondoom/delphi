@@ -127,6 +127,12 @@ pub mod decision_run;
 pub mod decision_raised;
 pub mod authorization;
 pub mod authorization_grant;
+pub mod authorization_tokens;
+pub mod authorization_anchor;
+// Spec 092 S2d2b: `run_authorized` is reachable from the engine's granted-run check (`authorization_use`) and from nothing else; the scan
+// in `authorization/tests.rs` holds that.
+mod authorization_run;
+mod authorization_use;
 pub mod research_report;
 pub mod provisional_run;
 pub mod hostmap;

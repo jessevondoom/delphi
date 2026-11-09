@@ -20,7 +20,7 @@ tags: [spec, headless, ci, automation]
 Origin: [`gap-closure-plan-2026-10-25.md`](../missions/2026-10-23-foundational-design/gap-closure-plan-2026-10-25.md) §4.
 
 ### 1.1 Non-Goals
-- Answering Red cards. A headless run can never merge, open a pull request or approve any Red action (§3).
+- Answering Red cards. A headless run can never merge, open a pull request or approve a Red action except under a `specs/092` authorization (§3, invariant 1).
 - Attaching to a daemon someone else started (§2).
 - A separate SDK. The JSON-RPC surface and the event stream are the interface; schemas follow when a second consumer needs them.
 
@@ -44,9 +44,10 @@ Every approval card for the run's task is answered by `--on-card`:
 | `deny` (default) | Every card is denied with a recorded reason. |
 | `policy:<file>` | Cards matching an `[[allow]]` rule are allowed (tool name, optional `*` pattern on the card's pattern). Everything else is denied. |
 | `relay` (alias `park`) | Answers nothing. The cards wait for a person, through `delphi relay` (`specs/014`) or an attached console, and the run waits with them, bounded by `--timeout`. A line on stderr says what it is waiting for. The merge card is still denied by the run. |
+| `authorization:<id>` + `--auth-run <run>` | Only a matching Red `run_command` is approved (invariant 1); every other card is denied. |
 
 Invariants, tested:
-1. **Red is never allowed.** A card of the Red tier is denied whatever the policy says.
+1. **Red is never allowed by a policy, and in a headless run only by an operator authorization.** A card of the Red tier is denied whatever `policy:<file>` or `relay` says. The one exception is `--on-card authorization:<id> --auth-run <run>` (`specs/092`): a `run_command` card that exactly matches an entry in a record the operator created, with step-up, for this run, home and machine (unexpired, unrevoked, use-counted), and that runs as `/bin/bash <pinned script>` inside the verified OS sandbox, network off, over a read-only snapshot, where such a sandbox exists (macOS today; elsewhere the run refuses). This exception covers that one action kind only; any other kind needs a new amendment. Merges, pull requests, credentials, network, dispatch, and writes to `.git`, hooks, configuration or the authorization store are never covered. An agent may request an authorization, never create or approve one, and a request is never effective in the run that wrote it. A timeout or a missing answer is never an approval. Every use is logged as `authorization.used`.
 2. **Merge tools are never allowed.** A card whose tool is `merge` or `pull_request` is denied even if it claims to be Amber, and a policy file that names either tool, or any tier other than Amber, does not load.
 3. **Stopping at the merge card is the design.** When a build reaches the merge card, the run records the branch, commit and gate report from the card, denies the card, and reports `ready_to_merge`. The operator merges later from the console. Denying the card keeps the branch and worktree, which is what the engine already does for a declined merge.
 4. With `--on-card relay` a Red card that is not a merge card is left for the operator, who can deny it by reply and, if step-up is set up, approve it with an authenticator code (`specs/014` §7.1). A merge or pull-request card is approved only at the console, whatever the code (`specs/014` amendment 014-A1). How each left card ended (approved, denied, timed out, and by whom) is filled into the summary from the log.
@@ -73,7 +74,7 @@ A budget stop outranks a denied card, and an outright task failure outranks ever
 `--permissions <mode>` sets the daemon's permission mode for the run and restores the previous mode afterwards. `--budget <usd>` sets the mission ceiling. `--timeout <dur>` cancels the task and exits 4 after the given time. `--mission <id>` continues an existing mission.
 
 ## 6. Verification Plan
-Unit tests (in `run.rs`): argument parsing and refusals; durations; policy loading refuses Red tiers, merge tools and unknown keys; glob matching; **Red and merge cards are never allowed under any policy**; outcome and exit-code ordering; the summary's card counts (allowed, denied, left) and ready-to-merge capture; relay mode leaves every card but the merge card, and records how each ended.
+Unit tests (in `run.rs`): argument parsing and refusals; durations; policy loading refuses Red tiers, merge tools and unknown keys; glob matching; **Red and merge cards are never allowed under any policy**; a Red card is allowed only through a matching authorization; outcome and exit-code ordering; the summary's card counts (allowed, denied, left) and ready-to-merge capture; relay mode leaves every card but the merge card, and records how each ended.
 
 End-to-end tests (`tests/e2e.rs`, mock model, real daemon, no terminal): a read-only task completes with a summary and cost; a card is denied by default and nothing is written; a policy allows exactly the tool it names; a policy naming `merge` is refused before the daemon is touched.
 

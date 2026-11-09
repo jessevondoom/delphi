@@ -31,7 +31,7 @@ Every command takes `--workspace <name>` and `--home <dir>`; `delphi help <comma
 
 | Group | Commands |
 | :-- | :-- |
-| Start | `delphi` · `delphi chat [--inline] [--mission <id>]` · `delphi run "<task>" [--on-card deny\|policy:<file>] [--budget <usd>] [--timeout <dur>] [--json\|--jsonl]` |
+| Start | `delphi` · `delphi chat [--inline] [--mission <id>]` · `delphi run "<task>" [--on-card deny\|policy:<file>\|authorization:<id> --auth-run <run>] [--budget <usd>] [--timeout <dur>] [--json\|--jsonl]` |
 | Set up | `setup` · `init` · `auth login\|status\|logout <endpoint>` · `endpoints test [--probe]` · `connectors status\|test\|pin <name>` · `relay [check\|totp-enroll\|totp-check]` · `skills check\|export\|import` · `bundle …` · `hooks` · `capabilities` |
 | Work | `decisions` · `timers` · `needs` · `kb index\|reindex\|stats\|search\|serve\|miss\|eval\|model info` · `observe [view] [--once]` (alias `narrator`) |
 | Inspect | `status` · `missions` · `sessions` · `tools` · `changelog` · `learn` · `release` · `doctor [--fix]` · `models [--probe]` · `daemon status\|stop\|restart` · `lint --repo <path>` · `check <kind> <path>` · `logs` · `debug bundle` |

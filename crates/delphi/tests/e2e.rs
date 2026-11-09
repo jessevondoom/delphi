@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{channel, Receiver};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const DELPHI: &str = env!("CARGO_BIN_EXE_delphi");
 const KEY: &str = "sk-e2e-key-0123456789abcdef";
@@ -2391,4 +2391,408 @@ fn live_a_prompt_changes_a_setting_and_the_reply_says_what_changed() {
     let changed = std::fs::read_to_string(&settings).unwrap_or_default().contains("fast");
     println!("=== RESULT: the model {} the setting ===", if changed { "changed" } else { "did NOT change" });
     assert_eq!(c.ctrl_c_out(), 0);
+}
+
+// ── spec 092 S2d2b: the acceptance run with a real daemon and a scripted bridge seat ───────────────────────────────────────────────
+
+const SWEEP_SH: &str = include_str!("../../delphi-sandbox/tests/fixtures/red_team_sweep.sh");
+
+/// The configuration of a workspace whose only endpoint is a harness login (what a granted run serves from).
+fn harness_config(project: &Path) -> String {
+    config_for(project, 1)
+        .replace(
+            "[[endpoints]]\nid = \"mock\"\nfamily = \"claude\"\npath = \"api\"\nbase_url = \"http://127.0.0.1:1\"\ncredential = \"env:DELPHI_E2E_KEY\"",
+            "[[endpoints]]\nid = \"claude-sub\"\nfamily = \"claude\"\npath = \"harness\"\nharness = \"claude\"\ncredential = \"harness-login\"\ncost_model = \"subscription\"",
+        )
+        .replace("order = { claude = [\"mock\"] }", "order = { claude = [\"claude-sub\"] }")
+        .replace("allowed_endpoints = [\"mock\"]", "allowed_endpoints = [\"claude-sub\"]")
+}
+
+/// A stand-in `claude` (answers `--version`; lists only Delphi's `run_command`; calls it over the bridge socket its MCP config names with
+/// `argv`; writes the reply to `resp`; finishes). The directory holding it goes on `PATH`.
+fn fake_claude(dir: &Path, argv: &[String], resp: &Path) -> PathBuf {
+    std::fs::create_dir_all(dir).unwrap();
+    let req = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "run_command", "arguments": {"argv": argv}}}).to_string();
+    let body = format!(
+        r#"#!/bin/sh
+case "${{1-}}" in --version) echo '2.1.319 (Claude Code)'; exit 0;; esac
+read first
+echo '{{"type":"system","subtype":"init","session_id":"s1","tools":["mcp__delphi__run_command"],"mcp_servers":[{{"name":"delphi","status":"connected"}}]}}'
+cfg=""; prev=""; for a in "$@"; do [ "$prev" = "--mcp-config" ] && cfg="$a"; prev="$a"; done
+sock=$(tr ',{{}}' '\n\n\n' < "$cfg" | sed -n 's/.*"DELPHI_BRIDGE_SOCKET":"\([^"]*\)".*/\1/p')
+tok=$(tr ',{{}}' '\n\n\n' < "$cfg" | sed -n 's/.*"DELPHI_BRIDGE_TOKEN":"\([^"]*\)".*/\1/p')
+printf '{{"token":"%s"}}\n%s\n' "$tok" '{req}' | /usr/bin/nc -U -w 120 "$sock" > '{resp}'
+echo '{{"type":"result","subtype":"success","result":"All done.","stop_reason":"end_turn","total_cost_usd":0.01,"usage":{{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":4}}}}'
+"#,
+        req = req,
+        resp = resp.display()
+    );
+    let p = dir.join("claude");
+    std::fs::write(&p, body).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    p
+}
+
+/// The operator side of an acceptance run: a home with a workspace and one record for the sweep (SYMBOLIC text, tree pinned), a project
+/// that holds the sweep script and a data file, and a stand-in `claude` that asks for exactly the record's command.
+struct Sweep {
+    _t: tempfile::TempDir,
+    root: PathBuf,
+    home: PathBuf,
+    proj: PathBuf,
+    id: String,
+    resp: PathBuf,
+    bin: PathBuf,
+}
+
+fn sweep_setup() -> Sweep {
+    sweep_setup_with(true)
+}
+
+/// A known TOTP secret (RFC 6238's test key, base32), enrolled in the operator's workspace through the same ratified `[relay]` block the real
+/// second factor uses; the test types the code it computes. Production code has no bypass: this is configuration.
+const TOTP_B32: &str = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+const TOTP_SECRET: &[u8] = b"12345678901234567890";
+
+fn sweep_setup_with(totp: bool) -> Sweep {
+    use delphi_engine::authorization as a;
+    let t = tempfile::Builder::new().prefix("dg").tempdir_in("/tmp").unwrap();
+    let root = std::fs::canonicalize(t.path()).unwrap();
+    let (home, proj) = (root.join("h"), root.join("proj"));
+    std::fs::create_dir_all(&proj).unwrap();
+    std::fs::write(proj.join("job.sh"), SWEEP_SH).unwrap();
+    std::fs::write(proj.join("data.txt"), "snapshot data\n").unwrap();
+    let vcs = |args: &[&str]| assert!(Command::new("git").arg("-C").arg(&proj).args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]).args(args).stdout(Stdio::null()).status().unwrap().success(), "{args:?}");
+    vcs(&["init", "-q"]);
+    vcs(&["add", "job.sh", "data.txt"]);
+    vcs(&["commit", "-qm", "sweep"]);
+    run(&["init", "--non-interactive", "--home", home.to_str().unwrap(), "--workspace", "e2e", "--project", proj.to_str().unwrap()]);
+    let mut cfg = harness_config(&proj);
+    if totp {
+        cfg.push_str("\n[relay]\nstep_up = \"totp\"\ntotp_credential = \"env:DELPHI_E2E_TOTP\"\n");
+    }
+    let wsd = home.join("workspaces/e2e");
+    std::fs::write(wsd.join("config.toml"), &cfg).unwrap();
+    // ratified, as `/ratify` would: the access blocks (the `[relay]` block among them) copied and pinned in the workspace lock
+    let blocks = delphi_core::lock::access_blocks(&cfg);
+    std::fs::create_dir_all(wsd.join("local/ratified")).unwrap();
+    delphi_core::lock::write_atomic(&wsd.join("local/ratified/config.access.toml"), blocks.as_bytes()).unwrap();
+    let mut lk = delphi_core::lock::read(&wsd.join("local/ratified.lock")).unwrap();
+    lk.files.insert("config.toml#access".into(), delphi_core::lock::hash(blocks.as_bytes()));
+    delphi_core::lock::write(&wsd.join("local/ratified.lock"), &lk).unwrap();
+    let argv: Vec<String> = ["/bin/bash", "@snapshot/job.sh", "@snapshot", "@scratch", "@canary", "@operator_home"].iter().map(|s| s.to_string()).collect();
+    let entry = a::Entry { tool: "shell".into(), argv: argv.clone(), files: vec!["@snapshot/job.sh".into()], runner_provenance: "project_snapshot".into() };
+    let n = a::NewRecord { purpose: "the red-team sweep".into(), intent: "e2e".into(), run: "run-1".into(), expires_in_secs: a::DEFAULT_EXPIRY_SECS, max_uses: 2, entries: vec![entry], request: None, policy: a::Policy::system() };
+    let ctx = a::TokenCtx { project: Some(proj.clone()), pin_tree: true, expect: Default::default(), expect_tree: None };
+    let now = delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339()).unwrap();
+    let rec = a::build_record_with(&home, &n, &ctx, now, &delphi_core::time::now_rfc3339()).unwrap();
+    a::create_audited(&home, rec.clone(), json!({"id": rec.id, "manifest_hash": rec.manifest_hash, "run": rec.run, "by": "operator", "source": "operator"})).unwrap();
+    let resp = root.join("resp.txt");
+    let bin = root.join("fakebin");
+    fake_claude(&bin, &argv, &resp);
+    Sweep { _t: t, root, home, proj, id: rec.id, resp, bin }
+}
+
+fn macos_sandbox_or_skip() -> bool {
+    if !cfg!(target_os = "macos") || !Path::new("/usr/bin/nc").exists() || !Path::new("/usr/bin/sandbox-exec").exists() {
+        eprintln!("skip: needs macOS (sandbox-exec, nc)");
+        return false;
+    }
+    true
+}
+
+// The launcher's half done by the test (the CLI's own guards are not under test here; they are in the next test): the throwaway home and
+// snapshot, the grant over the inherited pipe, a REAL daemon process, and a bridge-only Builder seat that asks for the record's command.
+// Everything past the pipe is the product: the daemon attaches its places, the seat's call reaches the daemon check, the sweep runs
+// in the forced sandbox and the real ledger and the log say so.
+#[test]
+fn a_real_granted_daemon_runs_the_sweep_for_a_bridge_only_seat_with_all_22_attempts_blocked_and_one_use() {
+    if !macos_sandbox_or_skip() {
+        return;
+    }
+    use delphi_core::client::Client;
+    use delphi_core::spawn::{connect_or_spawn_granted, SpawnOptions};
+    use delphi_engine::{authorization as a, authorization_anchor::launch_granted_for, authorization_grant as g};
+    use delphi_sandbox::authorized::{FreshHome, Snapshot};
+    let s = sweep_setup();
+    let snap = Snapshot::build(&s.proj, &s.root).unwrap();
+    let thome = FreshHome::create(&s.root).unwrap();
+    // the throwaway workspace: the way `delphi init` makes one, then the configuration rewritten for the snapshot and its access blocks sealed
+    run(&["init", "--non-interactive", "--home", thome.path().to_str().unwrap(), "--workspace", "e2e", "--project", snap.path().to_str().unwrap()]);
+    let ws = thome.path().join("workspaces/e2e");
+    let cfg = harness_config(snap.path());
+    std::fs::write(ws.join("config.toml"), &cfg).unwrap();
+    let blocks = delphi_core::lock::access_blocks(&cfg);
+    std::fs::create_dir_all(ws.join("local/ratified")).unwrap();
+    delphi_core::lock::write_atomic(&ws.join("local/ratified/config.access.toml"), blocks.as_bytes()).unwrap();
+    let mut lk = delphi_core::lock::read(&ws.join("local/ratified.lock")).unwrap();
+    lk.files.insert("config.toml#access".into(), delphi_core::lock::hash(blocks.as_bytes()));
+    delphi_core::lock::write(&ws.join("local/ratified.lock"), &lk).unwrap();
+    thome.recheck().expect("the throwaway home passes its walk before the daemon starts");
+    let now = delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339()).unwrap();
+    let (bytes, anchor) = launch_granted_for(&s.home, &s.id, "run-1", now, &a::Policy::system(), Some((snap.path(), snap.tree_hash()))).unwrap();
+    // the stand-in claude is found through PATH, which the granted daemon keeps (its environment is an allowlist)
+    let path = format!("{}:{}", s.bin.display(), std::env::var("PATH").unwrap_or_default());
+    unsafe { std::env::set_var("PATH", path) };
+    let opts = SpawnOptions { home: thome.path(), workspace: &ws, daemon_exe: Path::new(DELPHI), extra_args: vec![], prefix_args: vec!["__core".into()], own_version: Some(env!("CARGO_PKG_VERSION")) };
+    let mut at = connect_or_spawn_granted(&opts, &bytes).expect("a valid grant boots a daemon");
+    let pid = at.daemon_pid;
+    let opened = at.client.call("mission.open", json!({"mission_id": Value::Null, "cwd": snap.path().display().to_string()})).unwrap();
+    let mission = opened["mission_id"].as_str().unwrap().to_string();
+    let mut ev = Client::connect(&at.sock).unwrap();
+    ev.hello(&at.token).unwrap();
+    ev.call("events.subscribe", json!({})).unwrap();
+    ev.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let task = at.client.call("task.submit", json!({"mission_id": mission, "prompt": "Run the pinned job.", "target": "builder"})).unwrap();
+    let task_id = task["task_id"].as_str().unwrap().to_string();
+    let mut seen: Vec<Value> = vec![];
+    let deadline = Instant::now() + Duration::from_secs(240);
+    let mut ended = false;
+    while Instant::now() < deadline && !ended {
+        let Ok(n) = ev.next_notification() else { continue };
+        if n["method"] != "event" {
+            continue;
+        }
+        let e = n["params"].clone();
+        if e["type"] == "approval.requested" {
+            // a card here is a failure of the design; answer it so the run ends and the assertions below say so
+            let c = &e["payload"];
+            let _ = at.client.call("approval.resolve", json!({"approval_id": c["approval_id"], "payload_blake3": c["payload_blake3"], "decision": "deny", "reason": "test"}));
+        }
+        ended = e["task_id"].as_str() == Some(task_id.as_str()) && (e["type"] == "task.completed" || e["type"] == "task.failed");
+        seen.push(e);
+    }
+    let kinds = |k: &str| seen.iter().filter(|e| e["type"] == k).cloned().collect::<Vec<_>>();
+    let diag = || seen.iter().filter(|e| e["type"].as_str().is_some_and(|t| t.starts_with("authorization.") || t.starts_with("task.") || t == "approval.requested")).map(|e| format!("{} {}", e["type"], e["payload"])).collect::<Vec<_>>().join("\n");
+    let reply = std::fs::read_to_string(&s.resp).unwrap_or_default();
+    assert!(ended, "the task did not end:\n{}", diag());
+    assert!(reply.contains("SWEEP PASSED: 22 attempts, every one blocked"), "reply:\n{reply}\nevents:\n{}", diag());
+    assert_eq!(kinds("authorization.used").len(), 1, "{}", diag());
+    assert_eq!(kinds("authorization.ran").len(), 1);
+    assert_eq!(kinds("authorization.used")[0]["payload"]["approved"], true);
+    assert!(kinds("approval.requested").is_empty(), "no card: {}", diag());
+    assert_eq!((g::ledger_count(&s.home, &s.id).unwrap(), g::dry_count(&s.home, &s.id).unwrap()), (1, 0), "real ledger 1, dry ledger 0");
+    snap.verify().expect("the snapshot is unchanged");
+    // the run ends: the daemon goes, the end is recorded, the places are discarded
+    let _ = at.client.call("daemon.shutdown", json!({}));
+    let until = Instant::now() + Duration::from_secs(10);
+    while unsafe { libc::kill(pid as i32, 0) } == 0 && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(anchor.end().unwrap().count, 1);
+    let (home_path, snap_root) = (thome.path().to_path_buf(), snap.root().to_path_buf());
+    drop(thome);
+    drop(snap);
+    assert!(!home_path.exists() && !snap_root.exists(), "discarded with the run");
+}
+
+// ── the real CLI from a pseudo-terminal: the launch code ────────────────────────────────────────────────────────────────────────
+
+/// What the test types at the launch prompt.
+enum Code {
+    /// The valid code for this moment, computed when the prompt appears.
+    Valid,
+    /// This text.
+    Text(&'static str),
+    /// Nothing: the input stays silent until the run gives up or is killed.
+    Nothing,
+}
+
+/// Run `delphi run ...` with the pseudo-terminal as its controlling terminal (a session of its own). `detach` starts it from a shell that
+/// exits at once, so its parent is launchd and its ancestry stops at pid 1 with a scrubbed environment: the trick that defeats every
+/// ancestry, environment and terminal check, and that only the launch code stops. Returns (exit code if it was our child, everything printed).
+fn pty_run(s: &Sweep, extra: &[&str], code: Code, detach: bool) -> (Option<i32>, String, Option<String>) {
+    use std::io::Write as _;
+    use std::os::fd::FromRawFd;
+    use std::os::unix::process::CommandExt;
+    let (mut master, mut slave) = (0, 0);
+    // SAFETY: openpty fills two descriptors; nothing else is passed.
+    assert_eq!(unsafe { libc::openpty(&mut master, &mut slave, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) }, 0);
+    let path = format!("{}:{}", s.bin.display(), std::env::var("PATH").unwrap_or_default());
+    let mut args: Vec<String> = ["run", "@builder Run the pinned job.", "--workspace", "e2e", "--home", s.home.to_str().unwrap(), "--timeout", "240s", "--jsonl"].iter().map(|x| x.to_string()).collect();
+    args.extend(extra.iter().map(|x| x.to_string()));
+    let mut c = if detach {
+        let mut c = Command::new("/bin/sh");
+        c.arg("-c").arg("( /bin/sh -c '\"$@\"; true' sh \"$@\" & ); sleep 400").arg("sh").arg(DELPHI).args(&args).env_clear().env("PATH", &path).env("DELPHI_E2E_TOTP", TOTP_B32);
+        c
+    } else {
+        let mut c = Command::new(DELPHI);
+        c.args(&args).env("PATH", &path).env("DELPHI_E2E_TOTP", TOTP_B32);
+        c
+    };
+    // SAFETY: dup of a descriptor this function owns; each Stdio takes ownership of its own copy.
+    let dup = |fd: i32| unsafe { Stdio::from_raw_fd(libc::dup(fd)) };
+    c.current_dir(&s.proj).stdin(dup(slave)).stdout(dup(slave)).stderr(dup(slave));
+    // SAFETY: setsid and TIOCSCTTY in the child between fork and exec make the slave its controlling terminal.
+    unsafe {
+        c.pre_exec(|| {
+            libc::setsid();
+            libc::ioctl(0, libc::TIOCSCTTY as _, 0);
+            Ok(())
+        });
+    }
+    let mut child = c.spawn().unwrap();
+    // SAFETY: closing our copy of the slave so the master sees the end when the children are gone.
+    unsafe { libc::close(slave) };
+    let out = Arc::new(Mutex::new(String::new()));
+    let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        // SAFETY: a duplicate of the master for the reading thread.
+        let mut r = unsafe { std::fs::File::from_raw_fd(libc::dup(master)) };
+        let (out, done) = (out.clone(), done.clone());
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            while let Ok(n) = r.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                out.lock().unwrap().push_str(&String::from_utf8_lossy(&buf[..n]));
+            }
+            done.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+    }
+    // SAFETY: the master is ours; the File owns it from here.
+    let mut tty = unsafe { std::fs::File::from_raw_fd(master) };
+    let seen = |needle: &str| out.lock().unwrap().contains(needle);
+    let t0 = Instant::now();
+    while !seen("authenticator code") && !seen("refused") && !seen("descends from") && !done.load(std::sync::atomic::Ordering::SeqCst) && t0.elapsed() < Duration::from_secs(120) {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let mut typed = None;
+    if seen("authenticator code") {
+        let line = match code {
+            Code::Valid => Some(delphi_core::totp::code_at(TOTP_SECRET, SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs())),
+            Code::Text(t) => Some(t.to_string()),
+            Code::Nothing => None,
+        };
+        if let Some(l) = line {
+            typed = Some(l.clone());
+            tty.write_all(format!("{l}\n").as_bytes()).unwrap();
+            tty.flush().unwrap();
+        }
+    }
+    let status = if detach {
+        // not our child: wait for the terminal to go quiet, or for the run to say it refused
+        let t1 = Instant::now();
+        while !done.load(std::sync::atomic::Ordering::SeqCst) && t1.elapsed() < Duration::from_secs(if matches!(code, Code::Valid) { 300 } else { 40 }) {
+            if seen("refused:") || seen("\"run.summary\"") {
+                std::thread::sleep(Duration::from_secs(1));
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        // the shell that holds the session open (its child, ours to stop) goes; the launcher it left behind has already ended or is stopped by the hang-up
+        let _ = child.kill();
+        let _ = child.wait();
+        None
+    } else {
+        let t1 = Instant::now();
+        loop {
+            if let Some(st) = child.try_wait().unwrap() {
+                break st.code();
+            }
+            if t1.elapsed() > Duration::from_secs(if matches!(code, Code::Valid) { 300 } else { 40 }) {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+    std::thread::sleep(Duration::from_millis(300));
+    let text = out.lock().unwrap().clone();
+    (status, text, typed)
+}
+
+fn descends_from_a_seat(out: &str) -> bool {
+    out.contains("descends from")
+}
+
+// The real CLI from a pseudo-terminal, with the launch code typed. `delphi test authorize` is replaced by the record the library makes (its
+// second factor has its own tests). The launcher refuses a run that descends from an agent seat, by design, so this test prints `skip:` when
+// an agent drives it; the operator's terminal and the macOS runner run it.
+#[test]
+fn delphi_run_with_an_authorization_executes_the_sweep_by_the_real_binary_and_the_same_run_without_the_flag_denies_it() {
+    if !macos_sandbox_or_skip() || !Path::new("/usr/bin/script").exists() {
+        return;
+    }
+    let s = sweep_setup();
+    let on_card = format!("authorization:{}", s.id);
+    let (code, out, _) = pty_run(&s, &["--on-card", &on_card, "--auth-run", "run-1"], Code::Valid, false);
+    if descends_from_a_seat(&out) {
+        eprintln!("skip: this test run descends from an agent seat, so the launcher refuses it by design: {out}");
+        return;
+    }
+    let reply = std::fs::read_to_string(&s.resp).unwrap_or_default();
+    assert!(out.contains("the authorization checks passed"), "{out}");
+    assert!(reply.contains("SWEEP PASSED: 22 attempts, every one blocked"), "reply:\n{reply}\n{out}");
+    assert!(out.matches("authorization.used").count() >= 1, "{out}");
+    assert_eq!(delphi_engine::authorization_grant::ledger_count(&s.home, &s.id).unwrap(), 1, "exit {code:?}: {out}");
+    assert_eq!(delphi_engine::authorization_grant::dry_count(&s.home, &s.id).unwrap(), 0);
+    // the launch step-up is in the audit chain, with no code and no secret in it
+    let audit = delphi_engine::authorization::read_audit(&s.home).unwrap();
+    let ev: Vec<_> = audit.iter().filter(|e| e.kind == "authorization.launch.step_up").collect();
+    assert_eq!(ev.len(), 1, "one step-up event");
+    let shown = ev[0].payload.to_string();
+    assert!(shown.contains("totp") && !shown.contains(TOTP_B32) && !shown.contains("12345678901234567890"), "{shown}");
+    // the same run without the flag: no grant, no approval, nothing used
+    let _ = std::fs::remove_file(&s.resp);
+    let (_c, out2, _) = pty_run(&s, &[], Code::Nothing, false);
+    assert!(!out2.contains("authorization.used"), "{out2}");
+    assert_eq!(delphi_engine::authorization_grant::ledger_count(&s.home, &s.id).unwrap(), 1, "the second run took no use");
+}
+
+// GOVERNANCE §5.12: the launch is the operator's own act. The detach trick (a shell that exits at once, so the parent is launchd; a session
+// and a pseudo-terminal of its own; a scrubbed environment) defeats every check that looks at ancestry, environment or terminal. Only the code
+// is left: with none, a wrong one, or one already spent, nothing starts and no use is burned.
+#[test]
+fn a_detached_launch_with_no_code_a_wrong_code_or_a_spent_code_is_refused_and_burns_no_use() {
+    if !macos_sandbox_or_skip() {
+        return;
+    }
+    let s = sweep_setup();
+    let on_card = format!("authorization:{}", s.id);
+    let flags = ["--on-card", on_card.as_str(), "--auth-run", "run-1"];
+    let used = || delphi_engine::authorization_grant::ledger_count(&s.home, &s.id).unwrap();
+    // the ancestry check alone already refuses a parent that is init, so the trick is tried by the real launcher exactly as the red-team did;
+    // both lines are asserted: a refusal by ancestry or by the code, never a run
+    for (label, code) in [("no code", Code::Nothing), ("a wrong code", Code::Text("000000")), ("garbage", Code::Text("not-a-code"))] {
+        let (_c, out, _) = pty_run(&s, &flags, code, true);
+        assert!(out.contains("authenticator code"), "{label}: the trick passes every ancestry, environment and terminal check, so the launcher gets as far as asking for the code: {out}");
+        // with no code the launcher waits at the prompt (and is stopped); with a bad one it refuses
+        assert!(label == "no code" || out.contains("refused"), "{label}: {out}");
+        assert!(!out.contains("authorization.used") && !out.contains("the authorization checks passed"), "{label}: {out}");
+        // typed without echo: what was typed is not on the screen
+        assert!(!out.contains("000000") && !out.contains("not-a-code"), "{label}: the code was echoed: {out}");
+        assert_eq!(used(), 0, "{label}: no use burned");
+    }
+    assert!(delphi_engine::authorization::read_audit(&s.home).unwrap().iter().all(|e| e.kind != "authorization.launch.step_up" && e.kind != "authorization.run.launch"), "nothing was recorded: the launch never began");
+}
+
+#[test]
+fn a_launch_with_no_second_factor_configured_refuses_and_a_spent_code_is_refused_on_the_second_launch() {
+    if !macos_sandbox_or_skip() {
+        return;
+    }
+    // no second factor in the workspace: the launch refuses with the reason, even for someone holding a code
+    let s = sweep_setup_with(false);
+    let on_card = format!("authorization:{}", s.id);
+    let flags = ["--on-card", on_card.as_str(), "--auth-run", "run-1"];
+    let (_c, out, _) = pty_run(&s, &flags, Code::Valid, true);
+    assert!(out.contains("refused") && out.contains("second factor"), "{out}");
+    assert!(!out.contains("the authorization checks passed"), "{out}");
+    assert_eq!(delphi_engine::authorization_grant::ledger_count(&s.home, &s.id).unwrap(), 0);
+    // with the factor: a launch uses the code; the same code again is refused (a replay), and the second launch burns no use
+    let s = sweep_setup();
+    let on_card = format!("authorization:{}", s.id);
+    let flags = ["--on-card", on_card.as_str(), "--auth-run", "run-1"];
+    let (_c, first, spent) = pty_run(&s, &flags, Code::Valid, true);
+    assert!(first.contains("the authorization checks passed"), "{first}");
+    let uses = delphi_engine::authorization_grant::ledger_count(&s.home, &s.id).unwrap();
+    // the very code the first launch typed, typed again: spent, so refused, and nothing is burned
+    let spent: &'static str = Box::leak(spent.expect("the first launch asked for a code").into_boxed_str());
+    let (_c, second, _) = pty_run(&s, &flags, Code::Text(spent), true);
+    assert!(second.contains("step-up failed") && !second.contains("the authorization checks passed"), "{second}");
+    assert_eq!(delphi_engine::authorization_grant::ledger_count(&s.home, &s.id).unwrap(), uses, "a refused code burned no use");
 }

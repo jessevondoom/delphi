@@ -57,23 +57,24 @@ pub fn run(args: Vec<String>) -> ! {
     // Spec 092 S2c: the grant of an operator-authorized run arrives on an inherited pipe, is read once and the descriptor is closed.
     // No environment variable, no file, no socket path. A daemon started without `--grant-fd` holds no grant. A grant that does not
     // verify (not from this daemon's parent, an unreadable store, a revoked or expired record) stops the daemon before it is ready.
+    // The parent is captured ONCE, here: the grant check and the watcher below use this one value. Reading it again later would let a
+    // launcher that died in between leave the daemon with pid 1 as its parent, holding a grant and never exiting.
+    // SAFETY: getppid has no preconditions.
+    let boot_parent = unsafe { libc::getppid() } as u32;
     let boot_grant = arg(&args, "--grant-fd").map(|s| {
         let fd: i32 = s.parse().unwrap_or_else(|_| die("--grant-fd takes a descriptor number"));
         let bytes = crate::authorization_grant::take_from_fd(fd).unwrap_or_else(|e| die(&e));
         let now = delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339()).unwrap_or_else(|| die("the clock cannot be read, so a grant's expiry cannot be checked"));
-        // SAFETY: getppid has no preconditions.
-        let parent = unsafe { libc::getppid() } as u32;
-        crate::authorization_grant::Grant::from_boot_system(&bytes, parent, now).unwrap_or_else(|e| die(&format!("the operator authorization is refused: {e}")))
+        crate::authorization_grant::Grant::from_boot_system(&bytes, boot_parent, now).unwrap_or_else(|e| die(&format!("the operator authorization is refused: {e}")))
     });
 
     // A daemon that holds a grant lives and dies with the launcher that handed it over: if the launcher is gone (killed, crashed), the
     // grant goes with the daemon, and no later session can attach to a daemon that still holds it.
     if boot_grant.is_some() {
-        // SAFETY: getppid has no preconditions.
-        let parent = unsafe { libc::getppid() };
         std::thread::spawn(move || loop {
             std::thread::sleep(std::time::Duration::from_millis(250));
-            if unsafe { libc::getppid() } != parent {
+            // SAFETY: getppid has no preconditions.
+            if crate::authorization_grant::launcher_gone(boot_parent, unsafe { libc::getppid() } as u32) {
                 std::process::exit(0);
             }
         });
@@ -109,6 +110,15 @@ pub fn run(args: Vec<String>) -> ! {
         // The engine publishes through the daemon's hub, so attached clients see its events.
         let booted = crate::boot::build(&home, &canon, daemon.hub.clone()).unwrap_or_else(|e| die(&e));
         if let Some(g) = boot_grant {
+            // Spec 092 S2d2b: the places the authorized command runs in. A grant without a snapshot, or one that does not attach, leaves the
+            // daemon with no places, and a daemon with a grant and no places denies every command: it never runs one anywhere else.
+            match g.snapshot_boot().map(|(dir, tree)| crate::authorization_run::RunPlaces::attach(dir, tree, &home)) {
+                Some(Ok(p)) => {
+                    let _ = booted.engine.places.set(std::sync::Arc::new(p));
+                }
+                Some(Err(e)) => eprintln!("delphi-core: the authorized-command places could not be attached ({e}); every command will be denied"),
+                None => eprintln!("delphi-core: the grant carries no snapshot; every command will be denied"),
+            }
             let _ = booted.engine.grant.set(std::sync::Arc::new(g));
         }
         daemon.set_extension(booted.service.extension());

@@ -992,15 +992,22 @@ fn nothing_consumes_a_record_in_this_slice() {
         "crates/delphi-engine/src/tools.rs",    // the agent tool
         "crates/delphi/src/test_cmd.rs",        // the operator's commands
         "crates/delphi/src/test_cmd_tests.rs",
+        "crates/delphi/tests/e2e.rs", // S2d2a: builds a record for the real-binary launcher test (a test, not product code)
         "crates/delphi/src/doctor.rs",          // verifies the pin
         "crates/delphi/tests/docs.rs",          // schemas
-        "crates/delphi/src/run.rs",             // S2a: the launch gate only (checked below); it approves nothing
+        "crates/delphi/src/run.rs",             // the launcher: the launch gate and, since S2d2b, the step-up record (checked below); it approves nothing itself
         "crates/delphi/src/run_authorization_tests.rs", // S2a: test fixtures that build records
         "crates/delphi-engine/src/authorization_grant.rs", // S2c: the daemon-side reader (grant, matching, use ledger); the one new importer
         "crates/delphi-engine/src/authorization_grant/tests.rs",
         "crates/delphi-engine/tests/daemon.rs", // S2c: boots a real daemon from a grant pipe
+        // S2d1: the ledger anchor (launcher side) and the forced-sandbox runner. Neither is reachable from a run (see `run_authorized_has_no_caller_but_its_tests`).
+        "crates/delphi-engine/src/authorization_anchor.rs",
+        "crates/delphi-engine/src/authorization_anchor/tests.rs",
+        "crates/delphi-engine/src/authorization_run.rs",
+        "crates/delphi-engine/src/authorization_run/tests.rs",
+        "crates/delphi-engine/src/authorization_use/tests.rs", // S2d2b: tests of the daemon check build records
     ];
-    // S2c: who may name the grant module at all. The module approves nothing; this list is the exact set of its callers.
+    // S2c: who may name the grant module at all. The module is the daemon's reader; the approval is `authorization_use`; this list is the exact set of the module's callers.
     const GRANT_USERS: &[&str] = &[
         "crates/delphi-engine/src/lib.rs",                  // `pub mod authorization_grant;`
         "crates/delphi-engine/src/authorization.rs",        // `authorize_launch` reads the use ledger
@@ -1013,8 +1020,16 @@ fn nothing_consumes_a_record_in_this_slice() {
         "crates/delphi-engine/src/core_main.rs",            // reads the grant pipe once, at boot
         "crates/delphi/src/run.rs",                         // the launcher writes the pipe (`launch_payload`)
         "crates/delphi/src/run_authorization_tests.rs",    // its tests
+        "crates/delphi/src/test_cmd_tests.rs",             // S2d2a: the console-flow test reads the ledger count
+        "crates/delphi/tests/e2e.rs",                      // S2d2a: asserts no real use was taken
+        "crates/delphi-engine/src/authorization_anchor.rs", // S2d1: writes the launch/end events and builds the boot payload
+        "crates/delphi-engine/src/authorization_anchor/tests.rs",
+        "crates/delphi-engine/src/authorization_run.rs",    // S2d1: `run_authorized`, a method of the grant
+        "crates/delphi-engine/src/authorization_run/tests.rs",
+        "crates/delphi-engine/src/authorization_use.rs",   // S2d2b: the daemon check that approves under the grant
+        "crates/delphi-engine/src/authorization_use/tests.rs",
     ];
-    const STORE_READERS: &[&str] = &["crates/delphi-engine/src/authorization.rs", "crates/delphi-engine/src/authorization/tests.rs", "crates/delphi-engine/src/authorization_grant.rs", "crates/delphi-engine/src/authorization_grant/tests.rs", "crates/delphi-engine/tests/daemon.rs", "crates/delphi/src/test_cmd.rs", "crates/delphi/src/test_cmd_tests.rs", "crates/delphi/src/run_authorization_tests.rs", "crates/delphi/src/doctor.rs", "crates/delphi/tests/docs.rs"];
+    const STORE_READERS: &[&str] = &["crates/delphi-engine/src/authorization_use/tests.rs", "crates/delphi-engine/src/authorization_anchor.rs", "crates/delphi-engine/src/authorization_anchor/tests.rs", "crates/delphi-engine/src/authorization_run/tests.rs", "crates/delphi-engine/src/authorization.rs", "crates/delphi-engine/src/authorization/tests.rs", "crates/delphi-engine/src/authorization_grant.rs", "crates/delphi-engine/src/authorization_grant/tests.rs", "crates/delphi-engine/tests/daemon.rs", "crates/delphi/src/test_cmd.rs", "crates/delphi/src/test_cmd_tests.rs", "crates/delphi/src/run_authorization_tests.rs", "crates/delphi/src/doctor.rs", "crates/delphi/tests/docs.rs", "crates/delphi/tests/e2e.rs"];
     const STORE_ITEMS: &[&str] = &["load", "load_or_ignore", "mutate", "add_record", "revoke", "store_path", "Store", "Record", "build_record", "create_audited", "revoke_audited", "refuse_audited", "read_audit", "audit_dir", "open_audit", "append_audit", "AuditHead"];
     let sources = workspace_sources();
     assert!(sources.len() > 200, "the scan must see the whole workspace");
@@ -1096,6 +1111,85 @@ fn nothing_consumes_a_record_in_this_slice() {
     // the scan itself sees the alias style used by service.rs
     assert!(uses_item("use crate::authorization as a;\n a::load(x)", "a", "load"));
     assert!(!uses_item("a::loader()", "a", "load"));
+}
+
+// Spec 092 S2d2b connected `run_authorized` to ONE place: `RunPlaces::run` (authorization_run.rs), which only `Engine::granted_run_command`
+// (authorization_use.rs) calls. Nothing else may call it: not the executor, the approval path, the launcher or any other crate, and the
+// switch the earlier slices kept (`AUTHORIZED_APPROVAL_ENABLED`) no longer exists. Changing this list is a reviewed change of the approval.
+#[test]
+fn run_authorized_has_no_caller_but_the_daemon_check_and_its_tests() {
+    const ALLOWED: &[&str] = &[
+        "crates/delphi-engine/src/authorization_run.rs",       // the definition
+        "crates/delphi-engine/src/authorization_run/tests.rs", // its tests
+        "crates/delphi-engine/src/authorization/tests.rs",     // this scan
+    ];
+    const MODULE_USERS: &[&str] = &[
+        "crates/delphi-engine/src/lib.rs",
+        "crates/delphi-engine/src/authorization_run.rs",
+        "crates/delphi-engine/src/authorization_run/tests.rs",
+        "crates/delphi-engine/src/authorization/tests.rs",
+        "crates/delphi-engine/src/authorization_use.rs", // the daemon check
+        "crates/delphi-engine/src/authorization_use/tests.rs",
+        "crates/delphi-engine/src/engine.rs", // the field that holds the places
+        "crates/delphi-engine/src/core_main.rs", // attaches them at boot
+    ];
+    const ANCHOR_USERS: &[&str] = &["crates/delphi-engine/src/authorization_use/tests.rs", "crates/delphi/tests/e2e.rs", "crates/delphi-engine/src/lib.rs", "crates/delphi-engine/src/authorization_anchor.rs", "crates/delphi-engine/src/authorization_anchor/tests.rs", "crates/delphi-engine/src/authorization_run/tests.rs", "crates/delphi/src/run.rs", "crates/delphi-engine/src/authorization/tests.rs", "crates/delphi/src/test_cmd_tests.rs"];
+    let sources = workspace_sources();
+    assert!(sources.len() > 200, "the scan must see the whole workspace");
+    for (rel, text) in &sources {
+        // code only: a comment may talk about the function, a call may not hide in one
+        let code: Vec<&str> = text.lines().filter(|l| !l.trim_start().starts_with("//")).collect();
+        let calls = code.iter().any(|l| l.contains("run_authorized"));
+        assert!(!calls || ALLOWED.contains(&rel.as_str()), "{rel} names `run_authorized`; only RunPlaces::run (and its tests) may");
+        let uses_module = code.iter().any(|l| l.contains("authorization_run"));
+        assert!(!uses_module || MODULE_USERS.contains(&rel.as_str()), "{rel} names the module that holds `run_authorized`");
+        let uses_anchor = code.iter().any(|l| l.contains("authorization_anchor"));
+        assert!(!uses_anchor || ANCHOR_USERS.contains(&rel.as_str()), "{rel} names the ledger anchor module");
+    }
+    // by construction too: the module is private to the crate (no other crate can name it), and the anchored decrement has one caller
+    let lib = &sources.iter().find(|(r, _)| r == "crates/delphi-engine/src/lib.rs").unwrap().1;
+    assert!(lib.contains("\nmod authorization_run;") && !lib.contains("pub mod authorization_run"), "authorization_run is a private module");
+    assert!(lib.contains("\nmod authorization_use;") && !lib.contains("pub mod authorization_use"), "authorization_use is a private module");
+    for (rel, text) in &sources {
+        let code: Vec<&str> = text.lines().filter(|l| !l.trim_start().starts_with("//")).collect();
+        let takes = code.iter().any(|l| l.contains("take_use_anchored"));
+        let ok = ["crates/delphi-engine/src/authorization_grant.rs", "crates/delphi-engine/src/authorization_grant/tests.rs", "crates/delphi-engine/src/authorization_run.rs", "crates/delphi-engine/src/authorization/tests.rs", "crates/delphi-engine/src/authorization_anchor/tests.rs", "crates/delphi-engine/src/authorization_run/tests.rs"];
+        assert!(!takes || ok.contains(&rel.as_str()), "{rel} takes a real use");
+        // the places' runner is called by the daemon check only
+        let runs = code.iter().any(|l| l.contains("places.run(") || l.contains("RunPlaces"));
+        let ok = ["crates/delphi-engine/src/authorization_run.rs", "crates/delphi-engine/src/authorization_use.rs", "crates/delphi-engine/src/authorization_use/tests.rs", "crates/delphi-engine/src/authorization_run/tests.rs", "crates/delphi-engine/src/engine.rs", "crates/delphi-engine/src/core_main.rs", "crates/delphi-engine/src/authorization/tests.rs"];
+        assert!(!runs || ok.contains(&rel.as_str()), "{rel} names the places a granted command runs in");
+        // no switch: the constant the earlier slices kept is gone, and nothing outside this scan names it
+        assert!(!(code.iter().any(|l| l.contains("AUTHORIZED_APPROVAL_ENABLED")) && rel != "crates/delphi-engine/src/authorization/tests.rs"), "{rel} still names the removed approval switch");
+    }
+    // text forms that could hide a call from the plain-substring scan: an include! of the module, or a macro that builds the name
+    for (rel, text) in &sources {
+        if ALLOWED.contains(&rel.as_str()) || MODULE_USERS.contains(&rel.as_str()) {
+            continue;
+        }
+        for l in text.lines().filter(|l| !l.trim_start().starts_with("//")) {
+            assert!(!(l.contains("include!") && l.contains("authorization")), "{rel}: {l}");
+            assert!(!(l.contains("run_auth") && (l.contains("concat!") || l.contains("stringify!") || l.contains("paste!") || l.contains("macro_rules!"))), "{rel}: {l}");
+            assert!(!(l.contains("macro_rules!") && l.contains("authorization")), "{rel}: {l}");
+        }
+    }
+    // the definition is a method of the grant and is the only `fn run_authorized`
+    let defs: Vec<&str> = sources.iter().filter(|(r, t)| r != "crates/delphi-engine/src/authorization/tests.rs" && t.lines().any(|l| l.contains("fn run_authorized("))).map(|(r, _)| r.as_str()).collect();
+    assert_eq!(defs, ["crates/delphi-engine/src/authorization_run.rs"]);
+    // the engine reaches the approval through the one function, before anything else in `exec_command`; the file holding `exec_command`
+    // names neither the runner nor a ledger write
+    let engine = &sources.iter().find(|(r, _)| r == "crates/delphi-engine/src/engine.rs").unwrap().1;
+    assert!(engine.contains("GRANTED_DENIAL") && !engine.contains("run_authorized") && !engine.contains("take_use_anchored") && !engine.contains("take_use("), "the engine reaches the approval only through granted_run_command");
+    let at_exec = engine.find("async fn exec_command").unwrap();
+    let hook = engine[at_exec..].find("self.granted_run_command(sc, args)").expect("exec_command asks the daemon check");
+    let first_other = engine[at_exec..].find("sc.manifest.execute").unwrap();
+    assert!(hook < first_other, "the daemon check is the first thing exec_command does");
+    // `delphi run` (the client) has no way to approve: no constant, and `decide` has no arm that answers allow to a Red card
+    let run_rs = &sources.iter().find(|(r, _)| r == "crates/delphi/src/run.rs").unwrap().1;
+    assert!(!run_rs.contains("pub const AUTHORIZED_APPROVAL_ENABLED"), "the approval switch is removed");
+    let grant_rs = &sources.iter().find(|(r, _)| r == "crates/delphi-engine/src/authorization_grant.rs").unwrap().1;
+    assert!(grant_rs.contains("pub const GRANTED_TOOLS: &[&str] = &["), "the allowlist is a constant");
+    assert!(!grant_rs.contains("\"inspect_system\""), "inspect_system is not on the allowlist of a granted run (S2d1 carry-over)");
 }
 
 // Second red-team review P1: a deny-listed host request used to skip the host rate limit and the re-stage block, so a fresh session id
@@ -1256,8 +1350,7 @@ fn pure(f: &Fix, r: &Record) -> Result<(), String> {
 }
 
 fn rehash(r: &mut Record) {
-    let entries: Vec<Entry> = r.manifest.iter().map(|e| Entry { tool: e.tool.clone(), argv: e.argv.clone(), files: e.files.iter().map(|x| x.path.clone()).collect(), runner_provenance: e.runner_provenance.clone() }).collect();
-    r.manifest_hash = manifest_hash(&entries);
+    r.manifest_hash = r.computed_manifest_hash();
 }
 
 #[test]
@@ -1296,4 +1389,77 @@ fn check_launch_runs_the_manifest_through_the_deny_list_and_the_runner_check_aga
     bad.manifest[0].argv[0] = "/tmp/bash".into();
     rehash(&mut bad);
     assert!(pure(&f, &bad).unwrap_err().contains("not an interpreter"));
+}
+
+// ---------------------------------------------------------------------------------------------- S2d2a: path tokens in an entry
+
+#[test]
+fn an_entry_with_a_malformed_or_misplaced_token_is_refused_when_the_record_is_made() {
+    let p = Policy::system();
+    let e = |argv: &[&str], files: &[&str]| Entry { tool: "shell".into(), argv: argv.iter().map(|s| s.to_string()).collect(), files: files.iter().map(|s| s.to_string()).collect(), runner_provenance: "project_snapshot".into() };
+    assert!(check_entry(&e(&["/bin/bash", "@snapshot/job.sh", "@snapshot", "@scratch", "@canary", "@operator_home"], &["@snapshot/job.sh"]), &p).is_ok());
+    for (argv, files) in [
+        (vec!["/bin/bash", "@snapshot/job.sh", "@unknown"], vec!["@snapshot/job.sh"]),
+        (vec!["/bin/bash", "@snapshot/job.sh", "x@snapshot"], vec!["@snapshot/job.sh"]),
+        (vec!["@snapshot", "@snapshot/job.sh"], vec!["@snapshot/job.sh"]),
+        (vec!["/bin/bash", "@snapshot/../x"], vec!["@snapshot/../x"]),
+        (vec!["/bin/bash", "@snapshot//job.sh"], vec!["@snapshot//job.sh"]),
+        (vec!["/bin/bash", "@snapshot/./job.sh"], vec!["@snapshot/./job.sh"]),
+        (vec!["/bin/bash", "@Snapshot/job.sh"], vec!["@Snapshot/job.sh"]),
+        (vec!["/bin/bash", "@snapshot/job.sh "], vec!["@snapshot/job.sh "]),
+        (vec!["/bin/bash", "@snapshot/job.sh", "@snapshot "], vec!["@snapshot/job.sh"]),
+        (vec!["/bin/bash", "@snapshot/job.sh"], vec!["@scratch/x"]),
+        (vec!["/bin/bash", "@snapshot/job.sh"], vec!["@snapshot"]),
+        (vec!["/bin/bash", "@scratch/job.sh"], vec!["@scratch/job.sh"]),
+    ] {
+        assert!(check_entry(&e(&argv, &files), &p).is_err(), "{argv:?} {files:?} was accepted");
+    }
+}
+
+#[test]
+fn a_symbolic_record_is_hashed_with_its_scheme_and_a_scheme_change_is_seen() {
+    let f = fix();
+    let (r, _) = made(&f, 1, None);
+    assert_eq!(r.token_scheme, 1);
+    let mut old = r.clone();
+    old.token_scheme = 0;
+    assert!(pure(&f, &old).unwrap_err().contains("recorded hash"), "the scheme is covered by the manifest hash");
+    let mut future = r.clone();
+    future.token_scheme = 9;
+    rehash(&mut future);
+    assert!(pure(&f, &future).unwrap_err().contains("token scheme"));
+}
+
+// ---------------------------------------------------------------------------------------------- red-team of #607: the hash covers what was signed
+
+#[test]
+#[allow(clippy::type_complexity)]
+fn the_manifest_hash_covers_the_tree_pin_its_absence_and_every_pinned_files_path_and_hash() {
+    let f = fix();
+    let (r, _) = made(&f, 1, None);
+    assert_eq!(r.computed_manifest_hash(), r.manifest_hash);
+    let each: Vec<(&str, Box<dyn Fn(&mut Record)>)> = vec![
+        ("a tree pin added", Box::new(|r| r.snapshot = Some(SnapshotPin { source: "tracked_files".into(), tree_blake3: Some("a".repeat(64)) }))),
+        ("the snapshot pin removed", Box::new(|r| r.snapshot = None)),
+        ("the source changed", Box::new(|r| r.snapshot.as_mut().unwrap().source = "other".into())),
+        ("a pinned file's hash", Box::new(|r| r.manifest[0].files[0].blake3 = "b".repeat(64))),
+        ("a pinned file's path", Box::new(|r| r.manifest[0].files[0].path.push('x'))),
+        ("a pinned file dropped", Box::new(|r| {
+            r.manifest[0].files.pop();
+        })),
+    ];
+    for (what, edit) in each {
+        let mut bad = r.clone();
+        edit(&mut bad);
+        assert_ne!(bad.computed_manifest_hash(), r.manifest_hash, "{what} does not change the manifest hash");
+        assert!(pure(&f, &bad).unwrap_err().contains("recorded hash") || pure(&f, &bad).is_err(), "{what}");
+    }
+    // a tree pin that is present, then removed (the --no-pin-tree look), is a different hash too
+    let mut pinned = r.clone();
+    pinned.snapshot = Some(SnapshotPin { source: "tracked_files".into(), tree_blake3: Some("c".repeat(64)) });
+    rehash(&mut pinned);
+    let mut stripped = pinned.clone();
+    stripped.snapshot.as_mut().unwrap().tree_blake3 = None;
+    assert_ne!(stripped.computed_manifest_hash(), pinned.manifest_hash);
+    assert!(pure(&f, &stripped).unwrap_err().contains("recorded hash"));
 }

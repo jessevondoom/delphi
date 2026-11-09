@@ -14,6 +14,7 @@
 
 use crate::xenia_terminal::Terminal;
 use delphi_engine::authorization as auth;
+use delphi_engine::authorization_tokens as tokens;
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -25,6 +26,8 @@ pub struct Deps<'a> {
     pub policy: auth::Policy,
     /// The TOTP secret of the configured second factor, or why there is none.
     pub factor: &'a dyn Fn(&Path) -> Result<Vec<u8>, String>,
+    /// The project whose tracked files `@snapshot/<rel>` paths name: the directory `authorize` runs in (a test gives its own).
+    pub project: &'a dyn Fn() -> Option<std::path::PathBuf>,
 }
 
 /// The second factor: `[relay] step_up = "totp"` with a `totp_credential`, in the **ratified** configuration (`GOVERNANCE.md` §5.10).
@@ -187,6 +190,42 @@ pub fn render_review(s: &auth::Staged, logs: &Logs, store: &auth::Store, expand:
     auth::safe_lines(&o)
 }
 
+/// What the operator is shown when an entry holds symbolic paths (spec 092 S2d2a): the fixed token table (what each token will mean in
+/// a run; no entry or card can add to it), each pinned file's size and hash, the tree pin, and with `show` the pinned files' content.
+/// The most of one pinned file `--show` prints.
+const SHOW_CAP: usize = 64 * 1024;
+
+fn render_tokens(entries: &[auth::Entry], pins: &[auth::PinPreview], tree: &str, pin_tree: bool, show: bool) -> String {
+    let mut o = String::from("\nSYMBOLIC PATHS. The record stores the text below, not a path: a run's snapshot, scratch directory and canary do not exist yet. The daemon makes them for the run and replaces each token with its own path only after a card equals this text exactly; a card never supplies a value.\n");
+    o.push_str("  token resolution (fixed; nothing else resolves):\n");
+    for (t, what) in tokens::TABLE {
+        o.push_str(&format!("    {t:<16} {what}\n"));
+    }
+    for (i, e) in entries.iter().enumerate() {
+        o.push_str(&format!("  entry {} (the text that will be matched): {}\n", i + 1, auth::render_argv(&e.argv)));
+    }
+    for p in pins {
+        o.push_str(&format!("  pinned file {}  {} bytes  blake3 {}\n", p.path, p.size, p.blake3));
+    }
+    if pin_tree {
+        o.push_str(&format!("  snapshot tree hash pinned: {tree} (a run whose project differs from this is refused; --no-pin-tree opts out)\n"));
+    } else {
+        o.push_str("  snapshot tree hash NOT pinned (--no-pin-tree): only the files above are checked, any other file of the project may differ at run time\n");
+    }
+    if show {
+        for p in pins {
+            let shown = &p.content[..p.content.len().min(SHOW_CAP)];
+            o.push_str(&format!("\n----- {} -----\n{}\n----- end of {} -----\n", p.path, String::from_utf8_lossy(shown), p.path));
+            if p.content.len() > SHOW_CAP {
+                o.push_str(&format!("  [truncated: the first {} of {} bytes are shown; the hash above covers the WHOLE file]\n", SHOW_CAP, p.content.len()));
+            }
+        }
+    } else if !pins.is_empty() {
+        o.push_str("  (`--show` prints the pinned files' content)\n");
+    }
+    o
+}
+
 fn render_store(store: &auth::Store, now: i64) -> String {
     if store.records.is_empty() {
         return "no authorizations\n".into();
@@ -197,7 +236,7 @@ fn render_store(store: &auth::Store, now: i64) -> String {
         let state = if r.is_revoked() { "revoked" } else if expired { "expired" } else { "active" };
         o.push_str(&format!("{:<14} {:<8} run {:<12} uses {}/{}  expires {}  {} entr{}  {}\n", r.id, state, r.run, r.uses, r.max_uses, r.expires, r.manifest.len(), if r.manifest.len() == 1 { "y" } else { "ies" }, auth::clean_text(&r.purpose, 60)));
     }
-    o.push_str("`delphi run --on-card authorization:<id> --auth-run <run>` exists, but authorized approval is not enabled yet: a run that carries it still denies every card, so an authorization approves nothing in this build.\n");
+    o.push_str("`delphi run --on-card authorization:<id> --auth-run <run>` (spec 092) approves only a Red `run_command` that exactly matches an entry of the record, as `/bin/bash <pinned script>` in the sandbox, network off (macOS); every other card is denied.\n");
     auth::safe_lines(&o)
 }
 
@@ -326,9 +365,28 @@ fn authorize(home: &Path, ws_dir: &Path, args: &[String], term: &mut dyn Termina
             return fail(format!("entry {}: {}", i + 1, e));
         }
     }
-    // Retype or confirm the literal argv (spec 092 TA-0r). Commands are ASCII in this slice, so what is shown is what is typed.
-    let retype_only = staged.is_some_and(|s| s.is_host());
-    let retype_or_confirm = staged.is_some_and(|s| !s.is_host() && s.needs_retype());
+    // Symbolic paths: the project is resolved NOW, in a dry snapshot, exactly as a run will resolve it; the operator is shown the fixed
+    // token table and each pinned file's size and hash, and a pinned file that is untracked, modified or not a regular file is refused.
+    let symbolic = entries.iter().any(|e| tokens::has_tokens(&e.argv, &e.files));
+    let pin_tree = !has(args, "--no-pin-tree") && symbolic;
+    let mut ctx = auth::TokenCtx { project: None, pin_tree, expect: Default::default(), expect_tree: None };
+    if symbolic {
+        let Some(project) = (deps.project)() else { return fail("refused: the project directory cannot be read; run this from the project whose files the paths name") };
+        match auth::preview_pins(&project, &entries) {
+            Ok((pins, tree)) => {
+                term.show(&auth::safe_lines(&render_tokens(&entries, &pins, &tree, pin_tree, has(args, "--show"))));
+                ctx.expect = pins.iter().map(|p| (p.path.clone(), p.blake3.clone())).collect();
+                // The tree hash shown is the one that is stored: a tracked file edited while the operator reads refuses the write.
+                ctx.expect_tree = pin_tree.then_some(tree);
+            }
+            Err(e) => return fail(format!("refused: {e}")),
+        }
+        ctx.project = Some(project);
+    }
+    // Retype or confirm the literal argv (spec 092 TA-0r). Commands are ASCII in this slice, so what is shown is what is typed. An
+    // entry with symbolic paths is always RETYPED (nothing to confirm): the text typed is the text that will be matched.
+    let retype_only = staged.is_some_and(|s| s.is_host()) || symbolic;
+    let retype_or_confirm = staged.is_some_and(|s| !s.is_host() && s.needs_retype()) && !symbolic;
     if retype_only || retype_or_confirm {
         for (i, e) in entries.iter().enumerate() {
             let want = auth::render_argv(&e.argv);
@@ -356,7 +414,7 @@ fn authorize(home: &Path, ws_dir: &Path, args: &[String], term: &mut dyn Termina
     let new = auth::NewRecord { purpose, intent, run: run_id, expires_in_secs: expires, max_uses: uses, entries, request, policy: deps.policy.clone() };
     // A first build checks every binary, file and limit before the second factor is spent on something that cannot be made.
     let t0 = (deps.clock)();
-    if let Err(e) = auth::build_record(home, &new, t0, &delphi_core::time::format_unix_millis(t0, 0)) {
+    if let Err(e) = auth::build_record_with(home, &new, &ctx, t0, &delphi_core::time::format_unix_millis(t0, 0)) {
         return fail(format!("refused: {e}"));
     }
     // Step-up: the authenticator code, checked once per code with wrong guesses rationed (`delphi_core::totp`) and its state
@@ -368,7 +426,8 @@ fn authorize(home: &Path, ws_dir: &Path, args: &[String], term: &mut dyn Termina
         return fail(format!("step-up failed: {e}; nothing was authorized"));
     }
     let now_rfc = delphi_core::time::format_unix_millis(now, 0);
-    let rec = match auth::build_record(home, &new, now, &now_rfc) {
+    // Built again after the prompts: a pinned file whose hash is not the one shown refuses the write (`ctx.expect`).
+    let rec = match auth::build_record_with(home, &new, &ctx, now, &now_rfc) {
         Ok(r) => r,
         Err(e) => return fail(format!("refused: {e}")),
     };
@@ -376,7 +435,7 @@ fn authorize(home: &Path, ws_dir: &Path, args: &[String], term: &mut dyn Termina
     if let Err(e) = auth::create_audited(home, rec.clone(), payload) {
         return fail(format!("refused: {e}"));
     }
-    println!("authorized {}: run `{}`, {} use(s), until {}. Nothing uses it yet: the flag that would is not built (spec 092 S2).", rec.id, rec.run, rec.max_uses, rec.expires);
+    println!("authorized {}: run `{}`, {} use(s), until {}. A run that carries it (`delphi run --on-card authorization:{} --auth-run {}`) approves only a Red `run_command` that exactly matches an entry, as a pinned `/bin/bash` script in the sandbox; every other card is denied (spec 092).", rec.id, rec.run, rec.max_uses, rec.expires, rec.id, rec.run);
     0
 }
 
@@ -431,7 +490,7 @@ fn real_now() -> i64 {
 /// The production entry: the real terminal, clock and second factor.
 pub fn cli(home: &Path, ws_dir: &Path, args: &[String]) -> i32 {
     let mut term = crate::xenia_terminal::StdTerminal::new(crate::xenia_terminal::inside_an_agent_seat());
-    run(home, ws_dir, args, &mut term, &Deps { clock: &real_now, policy: auth::Policy::system(), factor: &configured_factor })
+    run(home, ws_dir, args, &mut term, &Deps { clock: &real_now, policy: auth::Policy::system(), factor: &configured_factor, project: &|| std::env::current_dir().ok() })
 }
 
 #[cfg(test)]

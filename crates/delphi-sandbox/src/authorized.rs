@@ -16,7 +16,7 @@ use std::ffi::CString;
 use std::fs;
 use std::io::{self, Write as _};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
@@ -38,8 +38,10 @@ pub const SCRATCH_QUOTA_BYTES: u64 = 16 << 20;
 /// How many processes beyond the user's current count the profile lets a command start. `RLIMIT_NPROC` counts EVERY process of the
 /// operator's user, not only the sandbox's, so the limit is the count at launch plus this headroom; a flat small number would stop
 /// the sandbox's own `fork`. A fork bomb is therefore bounded by this headroom, not by a per-command count, and a busy machine that
-/// starts more than this many unrelated processes during one command can make the command's `fork` fail (it fails closed).
-pub const PROC_HEADROOM: u64 = 256;
+/// starts more than this many unrelated processes during one command can make the command's `fork` fail (it fails closed). The sweep
+/// floods 900, so the cap still holds if the user's count falls by up to 770 after the launch; a legitimate pinned script (one bash,
+/// a few subshells) needs well under 128.
+pub const PROC_HEADROOM: u64 = 128;
 
 /// The options for running one authorized command in `scratch`: the timeout, the output cap and the scratch quota, enforced.
 pub fn authorized_run_options(scratch: &Path) -> RunOptions {
@@ -68,23 +70,10 @@ pub fn authorized_spec(snapshot: &Path, scratch: &Path, interpreter: &str) -> Sa
     s.limits.cpu_secs = Some(60);
     s.limits.max_file_bytes = Some(8 << 20);
     s.limits.max_open_files = Some(256);
-    // A fork loop stops here: the user's current process count plus headroom (the limit counts every process of the user).
-    s.limits.max_procs = process_count().map(|n| n + PROC_HEADROOM);
+    // A fork loop stops here: the user's process count plus headroom, read in the child just before exec (the limit counts every
+    // process of the user, and the count moves; if it cannot be read the launch fails rather than run without the limit).
+    s.limits.proc_headroom = Some(PROC_HEADROOM);
     s
-}
-
-/// How many processes exist now (macOS; `None` elsewhere, where the profile is refused anyway).
-fn process_count() -> Option<u64> {
-    #[cfg(target_os = "macos")]
-    {
-        // SAFETY: a null buffer asks proc_listallpids only for the size.
-        let n = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
-        (n > 0).then_some(n as u64)
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        None
-    }
 }
 
 // ------------------------------------------------------------------------------------------------ small helpers
@@ -139,6 +128,12 @@ pub struct Snapshot {
     dir: PathBuf,
     tree_hash: String,
     files: usize,
+    /// The tracked regular files, by project-relative path (never a symlink, never a directory): the table `@snapshot/<rel>` resolves
+    /// against (spec 092 S2d2a). A name not in it does not resolve, whatever the disk holds.
+    table: std::collections::BTreeSet<String>,
+    /// Whether dropping this value removes the tree. The launcher's snapshot owns it; the daemon's view of that same snapshot
+    /// ([`Snapshot::attach`]) does not, so a daemon that exits never deletes the launcher's tree and the launcher discards it once.
+    owned: bool,
 }
 
 impl Snapshot {
@@ -171,6 +166,7 @@ impl Snapshot {
     pub fn from_files(project: &Path, names: &[PathBuf], parent: &Path) -> Result<Snapshot, String> {
         let root = mkdtemp(parent, "delphi-snapshot-").map_err(|e| format!("snapshot directory: {e}"))?;
         let dir = root.join("snapshot");
+        let mut table = std::collections::BTreeSet::new();
         let result = (|| -> Result<usize, String> {
             fs::create_dir(&dir).map_err(|e| e.to_string())?;
             let mut count = 0;
@@ -198,6 +194,7 @@ impl Snapshot {
                     f.write_all(&bytes).map_err(|e| e.to_string())?;
                     drop(f);
                     fs::set_permissions(&dst, fs::Permissions::from_mode(0o444)).map_err(|e| e.to_string())?;
+                    table.insert(rel.to_string_lossy().into_owned());
                     count += 1;
                 } // a directory here is a submodule: left out
             }
@@ -207,13 +204,54 @@ impl Snapshot {
         match result {
             Ok(files) => {
                 let tree_hash = tree_hash_of(&dir)?;
-                Ok(Snapshot { root, dir, tree_hash, files })
+                Ok(Snapshot { root, dir, tree_hash, files, table, owned: true })
             }
             Err(e) => {
                 remove_tree(&root);
                 Err(e)
             }
         }
+    }
+
+    /// A NON-OWNING view of a snapshot the launcher built, for the daemon that runs the authorized command (spec 092 S2d2b). `dir` must be
+    /// the `snapshot` directory directly under a private directory of this user, and its tree hash must equal `expect_tree` (the launcher's
+    /// report): a directory that is not exactly what the launcher hashed is refused. The table of tracked regular files is read from the
+    /// tree, which holds tracked files only. Dropping the view removes nothing.
+    pub fn attach(dir: &Path, expect_tree: &str) -> Result<Snapshot, String> {
+        let meta = fs::symlink_metadata(dir).map_err(|e| format!("snapshot: {e}"))?;
+        if meta.is_symlink() || !meta.is_dir() {
+            return Err("the snapshot is a symlink or not a directory".into());
+        }
+        let root = dir.parent().ok_or("the snapshot has no parent")?.to_path_buf();
+        if dir.file_name().and_then(|n| n.to_str()) != Some("snapshot") {
+            return Err("the snapshot directory is not named `snapshot`".into());
+        }
+        let rmeta = fs::symlink_metadata(&root).map_err(|e| format!("snapshot parent: {e}"))?;
+        // SAFETY: geteuid has no preconditions.
+        let me = unsafe { libc::geteuid() };
+        if rmeta.is_symlink() || !rmeta.is_dir() || rmeta.uid() != me || rmeta.permissions().mode() & 0o077 != 0 {
+            return Err("the snapshot's parent is not a private directory of this user".into());
+        }
+        let tree_hash = tree_hash_of(dir)?;
+        if tree_hash != expect_tree {
+            return Err("the snapshot is not the tree the launcher hashed".into());
+        }
+        let mut table = std::collections::BTreeSet::new();
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(d) = stack.pop() {
+            for e in fs::read_dir(&d).map_err(|e| e.to_string())?.flatten() {
+                let m = fs::symlink_metadata(e.path()).map_err(|e| e.to_string())?;
+                if m.is_dir() {
+                    stack.push(e.path());
+                } else if m.is_file() {
+                    if let Ok(rel) = e.path().strip_prefix(dir) {
+                        table.insert(rel.to_string_lossy().into_owned());
+                    }
+                }
+            }
+        }
+        let files = table.len();
+        Ok(Snapshot { root, dir: dir.to_path_buf(), tree_hash, files, table, owned: false })
     }
 
     /// The read-only directory a sandboxed command sees.
@@ -228,6 +266,15 @@ impl Snapshot {
 
     pub fn file_count(&self) -> usize {
         self.files
+    }
+
+    /// Resolve `@snapshot/<rel>`: `rel` must be in the table of tracked regular files and, on disk, still a regular file reached
+    /// through no symlink. This is a lookup, not a walk of the disk by name: a file the disk holds that is not in the table does not resolve.
+    pub fn lookup(&self, rel: &str) -> Result<PathBuf, String> {
+        if !self.table.contains(rel) {
+            return Err(format!("`{}` is not a tracked file of the snapshot", rel_for_message(rel)));
+        }
+        snapshot_lookup(&self.dir, rel)
     }
 
     /// The directory that holds the snapshot and is removed with it (a sibling place for scratch and canaries).
@@ -248,8 +295,74 @@ impl Snapshot {
 
 impl Drop for Snapshot {
     fn drop(&mut self) {
-        remove_tree(&self.root);
+        if self.owned {
+            remove_tree(&self.root);
+        }
     }
+}
+
+/// Whether each of `rels` (project-relative) is tracked by git and unmodified in the working tree and index: `git status
+/// --porcelain` names a file that is untracked (`??`), modified, added, deleted or ignored, and any such file is an error. Used when the
+/// operator pins a file by hash: what is pinned is what the repository holds. The same sealed `git` invocation as [`Snapshot::build`].
+pub fn tracked_clean(project: &Path, rels: &[String]) -> Result<(), String> {
+    if rels.is_empty() {
+        return Ok(());
+    }
+    let mut cmd = std::process::Command::new("/usr/bin/git");
+    cmd.arg("-C").arg(project).args(["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "status", "--porcelain=v1", "-z", "--ignored", "--"]);
+    cmd.args(rels).env_clear().env("PATH", "/usr/bin:/bin").env("GIT_CONFIG_NOSYSTEM", "1").env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_OPTIONAL_LOCKS", "0");
+    let out = cmd.output().map_err(|e| format!("git status: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("git status failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    let listed: Vec<String> = out.stdout.split(|b| *b == 0).filter(|n| !n.is_empty()).map(|n| String::from_utf8_lossy(n).into_owned()).collect();
+    if let Some(first) = listed.first() {
+        let (code, name) = first.split_at(first.len().min(3));
+        let why = match code.trim() {
+            "??" => "untracked",
+            "!!" => "ignored (not tracked)",
+            _ => "modified or staged",
+        };
+        return Err(format!("`{}` is {why}; commit it first, a pinned file is the one the repository holds", rel_for_message(name)));
+    }
+    // tracked at all? `git ls-files --error-unmatch` fails for a path git does not know
+    let mut ls = std::process::Command::new("/usr/bin/git");
+    ls.arg("-C").arg(project).args(["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "ls-files", "--error-unmatch", "--"]);
+    ls.args(rels).env_clear().env("PATH", "/usr/bin:/bin").env("GIT_CONFIG_NOSYSTEM", "1").env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_OPTIONAL_LOCKS", "0");
+    let o = ls.output().map_err(|e| format!("git ls-files: {e}"))?;
+    if !o.status.success() {
+        return Err(format!("a pinned file is not tracked by git: {}", String::from_utf8_lossy(&o.stderr).trim().chars().filter(|c| !c.is_control()).take(160).collect::<String>()));
+    }
+    Ok(())
+}
+
+fn rel_for_message(rel: &str) -> String {
+    rel.chars().filter(|c| c.is_ascii_graphic()).take(80).collect()
+}
+
+/// A project-relative path's components checked each with `lstat` under `dir`: every component exists, none is a symlink, the last is
+/// a regular file. Does not need the table (the daemon's dry path has only the snapshot's directory); the result is the joined path.
+pub fn snapshot_lookup(dir: &Path, rel: &str) -> Result<PathBuf, String> {
+    let mut cur = dir.to_path_buf();
+    let comps: Vec<&str> = rel.split('/').collect();
+    for (i, c) in comps.iter().enumerate() {
+        if c.is_empty() || *c == "." || *c == ".." {
+            return Err(format!("`{}` is not a plain relative path", rel_for_message(rel)));
+        }
+        cur.push(c);
+        let m = fs::symlink_metadata(&cur).map_err(|e| format!("`{}`: {e}", rel_for_message(rel)))?;
+        if m.is_symlink() {
+            return Err(format!("`{}` goes through a symlink; a snapshot path never resolves through one", rel_for_message(rel)));
+        }
+        let last = i + 1 == comps.len();
+        if last && !m.is_file() {
+            return Err(format!("`{}` is not a regular file", rel_for_message(rel)));
+        }
+        if !last && !m.is_dir() {
+            return Err(format!("`{}` has a component that is not a directory", rel_for_message(rel)));
+        }
+    }
+    Ok(cur)
 }
 
 /// Read a regular file without following a link or blocking on a pipe: opened `O_NOFOLLOW | O_NONBLOCK`, then `fstat`ed, so a
@@ -343,6 +456,61 @@ pub fn tree_hash_of(root: &Path) -> Result<String, String> {
     Ok(h.finalize().to_hex().to_string())
 }
 
+// ------------------------------------------------------------------------------------------------ what the daemon mints
+
+/// The places `@scratch`, `@canary` and `@operator_home` stand for in a granted run, made by the daemon after the record, beside the
+/// snapshot and discarded with it (spec 092 S2d2a). A record never holds a path to any of them and a card never supplies one.
+/// `scratch` is a writable no-exec directory seeded with the fixed fixtures of the escape canaries (an executable file, a native
+/// library whose constructor leaves a marker, a named pipe); `canary` is a file holding a fresh nonce, in the snapshot's 0700
+/// parent, outside every grant; `operator_home` is a DECOY of the operator's home (a visible file and a stand-in `bin/delphi`),
+/// also outside every grant. None of them is the operator's real home or anything in it.
+#[derive(Debug)]
+pub struct Minted {
+    pub scratch: PathBuf,
+    pub canary: PathBuf,
+    pub operator_home: PathBuf,
+    pub nonce: String,
+}
+
+impl Minted {
+    pub fn mint(snapshot: &Snapshot) -> Result<Minted, String> {
+        let io = |e: io::Error| e.to_string();
+        let root = snapshot.root();
+        let mut nonce_bytes = [0u8; 16];
+        // The kernel's generator through /dev/urandom (portable; arc4random_buf is BSD-only). A failed read refuses the mint.
+        {
+            use std::io::Read as _;
+            fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut nonce_bytes)).map_err(|e| format!("no randomness for the canary nonce: {e}"))?;
+        }
+        let nonce: String = nonce_bytes.iter().map(|b| format!("{b:02x}")).collect();
+        let scratch = root.join("scratch");
+        fs::create_dir(&scratch).map_err(io)?;
+        fs::set_permissions(&scratch, fs::Permissions::from_mode(0o700)).map_err(io)?;
+        let pre = scratch.join("preplaced-exec");
+        fs::write(&pre, "#!/bin/bash\nexit 0\n").map_err(io)?;
+        fs::set_permissions(&pre, fs::Permissions::from_mode(0o755)).map_err(io)?;
+        fs::write(scratch.join("mark.dylib"), PROBE_DYLIB).map_err(io)?;
+        let fifo = CString::new(scratch.join("fifo").as_os_str().as_bytes()).map_err(|_| "NUL in path".to_string())?;
+        // SAFETY: a valid NUL-terminated path.
+        if unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) } != 0 {
+            return Err(format!("mkfifo: {}", io::Error::last_os_error()));
+        }
+        let canary = root.join(format!("canary-{nonce}.txt"));
+        {
+            let mut f = fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&canary).map_err(io)?;
+            f.write_all(format!("CANARY {nonce}\n").as_bytes()).map_err(io)?;
+        }
+        let operator_home = root.join("operator-home-decoy");
+        fs::create_dir_all(operator_home.join("bin")).map_err(io)?;
+        fs::set_permissions(&operator_home, fs::Permissions::from_mode(0o700)).map_err(io)?;
+        fs::write(operator_home.join("visible.txt"), "decoy\n").map_err(io)?;
+        let fake = operator_home.join("bin/delphi");
+        fs::write(&fake, "#!/bin/bash\nexit 0\n").map_err(io)?;
+        fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).map_err(io)?;
+        Ok(Minted { scratch, canary, operator_home, nonce })
+    }
+}
+
 // ------------------------------------------------------------------------------------------------ the fresh home
 
 /// A throwaway home the daemon made: `mkdtemp`, mode 0700, owned by this user. [`FreshHome::recheck`] walks it with `lstat` and
@@ -351,6 +519,11 @@ pub fn tree_hash_of(root: &Path) -> Result<String, String> {
 pub struct FreshHome {
     path: PathBuf,
     dev: u64,
+    /// The launcher's home removes itself when dropped; the daemon's view of it ([`FreshHome::attach_live`]) does not.
+    owned: bool,
+    /// The home the daemon is RUNNING in holds its own listening sockets; a live view tolerates those and nothing else that
+    /// [`judge_home_entry`] refuses (a symlink, a mount, a device or pipe, a credential-named file are refused as ever).
+    live: bool,
 }
 
 impl FreshHome {
@@ -361,13 +534,22 @@ impl FreshHome {
         }
         let path = mkdtemp(root, "delphi-home-").map_err(|e| format!("home: {e}"))?;
         let meta = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
-        let h = FreshHome { path, dev: meta.dev() };
+        let h = FreshHome { path, dev: meta.dev(), owned: true, live: false };
         h.recheck()?;
         Ok(h)
     }
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// A NON-OWNING view of the throwaway home the daemon runs in (spec 092 S2d2b), walked once now: it must be a private directory of
+    /// this user that passes the walk. Its own listening sockets are tolerated; dropping the view removes nothing.
+    pub fn attach_live(path: &Path) -> Result<FreshHome, String> {
+        let meta = fs::symlink_metadata(path).map_err(|e| format!("home: {e}"))?;
+        let h = FreshHome { path: path.to_path_buf(), dev: meta.dev(), owned: false, live: true };
+        h.recheck()?;
+        Ok(h)
     }
 
     /// Walk the home now. `Err` names the first problem.
@@ -389,7 +571,8 @@ impl FreshHome {
                 let path = e.path();
                 let m = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
                 let name = e.file_name().to_string_lossy().into_owned();
-                if let Some(why) = judge_home_entry(&name, m.is_symlink(), m.is_dir() || m.is_file(), m.dev(), self.dev) {
+                let own_socket = self.live && m.file_type().is_socket();
+                if let Some(why) = judge_home_entry(&name, m.is_symlink(), m.is_dir() || m.is_file() || own_socket, m.dev(), self.dev) {
                     return Err(format!("{}: {why}", path.display()));
                 }
                 if m.is_dir() {
@@ -403,7 +586,9 @@ impl FreshHome {
 
 impl Drop for FreshHome {
     fn drop(&mut self) {
-        remove_tree(&self.path);
+        if self.owned {
+            remove_tree(&self.path);
+        }
     }
 }
 
@@ -419,8 +604,11 @@ pub fn judge_home_entry(name: &str, is_symlink: bool, regular_or_dir: bool, dev:
         return Some("a socket, device or pipe in the throwaway home".into());
     }
     let n = name.to_ascii_lowercase();
-    let named = [".ssh", ".aws", ".gnupg", ".env", ".npmrc", ".pypirc", "auth.json", ".netrc", "_netrc"].contains(&n.as_str());
-    if named || n.starts_with("credentials") || n.starts_with("token") || n.starts_with("id_") || n.ends_with(".pem") || n.ends_with(".key") || n.ends_with(".p12") {
+    let named = [".ssh", ".aws", ".gnupg", ".npmrc", ".pypirc", "auth.json", ".netrc", "_netrc", ".git-credentials", ".pgpass", ".dockercfg", ".htpasswd", ".docker", ".kube", ".git", ".gitconfig", "hosts.yml", "hosts.yaml", "kubeconfig"].contains(&n.as_str());
+    let prefixed = ["credentials", "token", "id_", ".env", "secret", ".secret", "kubeconfig"].iter().any(|p| n.starts_with(p));
+    let suffixed = [".pem", ".key", ".p12", ".pfx", ".p8", ".jks", ".gpg", ".asc", ".kdbx", ".keystore", ".keychain", ".keychain-db"].iter().any(|s| n.ends_with(s));
+    // `application_default_credentials.json`, `.git-credentials`, `aws_credentials`: the word anywhere in the name
+    if named || prefixed || suffixed || n.contains("credentials") {
         return Some("a credential-named file in the throwaway home".into());
     }
     None

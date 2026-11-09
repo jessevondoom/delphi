@@ -177,7 +177,7 @@ const SKIP: [&str; 15] = [
     "local/memory", "local/staged", "local/ratified/memory", "local/ratified/heuristics.md", "local/ratified/specs", "worktrees", "scratch",
 ];
 
-fn copy_filtered(src: &Path, dst: &Path, rel: &Path) -> Result<(), String> {
+pub(crate) fn copy_filtered(src: &Path, dst: &Path, rel: &Path) -> Result<(), String> {
     fs::create_dir_all(dst).map_err(|e| format!("{}: {}", dst.display(), e))?;
     for e in fs::read_dir(src).map_err(|e| format!("{}: {}", src.display(), e))?.flatten() {
         let r = rel.join(e.file_name());

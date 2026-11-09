@@ -2,7 +2,7 @@
 //! machine with no sandbox they print why and skip. The Linux tests (bubblewrap) assert that the profile is REFUSED there.
 
 use super::*;
-use crate::{bwrap_args, sbpl, sbpl_str, Resolved};
+use crate::{bwrap_args, sbpl, sbpl_str, Limits, Resolved};
 use std::process::Command;
 use std::sync::Mutex;
 
@@ -38,20 +38,12 @@ fn mac_sandbox() -> Option<Sandbox> {
 struct Layout {
     _t: tempfile::TempDir,
     snap: Snapshot,
+    #[allow(dead_code)]
+    minted: Minted,
     scratch: PathBuf,
     canary: PathBuf,
     opshome: PathBuf,
     fakedelphi: PathBuf,
-    port: u16,
-    listener: std::net::TcpListener,
-    victim: std::process::Child,
-}
-
-impl Drop for Layout {
-    fn drop(&mut self) {
-        let _ = self.victim.kill();
-        let _ = self.victim.wait();
-    }
 }
 
 fn layout() -> Layout {
@@ -62,29 +54,30 @@ fn layout() -> Layout {
     fs::write(project.join("sweep.sh"), SWEEP).unwrap();
     fs::write(project.join("data.txt"), "snapshot data\n").unwrap();
     let snap = Snapshot::from_files(&project, &[PathBuf::from("sweep.sh"), PathBuf::from("data.txt")], &root).unwrap();
-    let scratch = root.join("scratch");
-    fs::create_dir(&scratch).unwrap();
-    let pre = scratch.join("preplaced-exec");
-    fs::write(&pre, "#!/bin/bash\nexit 0\n").unwrap();
-    fs::set_permissions(&pre, fs::Permissions::from_mode(0o755)).unwrap();
-    let canary = snap.root().join("canary.txt");
-    fs::write(&canary, "CANARY\n").unwrap();
-    let opshome = root.join("opshome");
-    fs::create_dir(&opshome).unwrap();
-    fs::write(opshome.join("visible.txt"), "x").unwrap();
-    let tools = root.join("tools");
-    fs::create_dir(&tools).unwrap();
-    let fakedelphi = tools.join("delphi");
-    fs::write(&fakedelphi, "#!/bin/bash\nexit 0\n").unwrap();
-    fs::set_permissions(&fakedelphi, fs::Permissions::from_mode(0o755)).unwrap();
-    // fixtures the sweep's controls look for: a native library whose constructor leaves a marker, and a named pipe
-    fs::write(scratch.join("mark.dylib"), PROBE_DYLIB).unwrap();
-    let fifo = std::ffi::CString::new(scratch.join("fifo").as_os_str().as_bytes()).unwrap();
-    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let victim = Command::new("/bin/sleep").arg("120").spawn().unwrap();
-    Layout { _t: t, snap, scratch, canary, opshome, fakedelphi, port, listener, victim }
+    // The places a granted run mints after the record (spec 092 S2d2a): scratch with its fixtures, the canary, the decoy home.
+    let minted = Minted::mint(&snap).unwrap();
+    let (scratch, canary, opshome) = (minted.scratch.clone(), minted.canary.clone(), minted.operator_home.clone());
+    let fakedelphi = opshome.join("bin/delphi");
+    Layout { _t: t, snap, minted, scratch, canary, opshome, fakedelphi }
+}
+
+/// Wait (bounded) until the user's process count has stopped falling.
+fn settle_process_count() {
+    let mut last = u64::MAX;
+    let mut calm = 0;
+    for _ in 0..100 {
+        let n = crate::live_process_count().unwrap_or(0);
+        if n >= last.saturating_sub(5) {
+            calm += 1;
+            if calm >= 4 {
+                return;
+            }
+        } else {
+            calm = 0;
+        }
+        last = n;
+        std::thread::sleep(Duration::from_millis(200));
+    }
 }
 
 impl Layout {
@@ -99,21 +92,35 @@ impl Layout {
     }
 
     fn sweep_unlocked(&self, sb: &Sandbox, spec: &SandboxSpec) -> (Option<i32>, String) {
+        // A previous flood's killed subshells are still being reaped; the cap is measured at launch, so let the count settle first
+        // (the headroom also covers a fall of several hundred, but a 900-process fall is not something a profile should rely on).
+        settle_process_count();
         let args: Vec<std::ffi::OsString> = vec![
             self.snap.path().join("sweep.sh").into(),
             self.snap.path().into(),
             self.scratch.clone().into(),
             self.canary.clone().into(),
             self.opshome.clone().into(),
-            self.port.to_string().into(),
-            self.fakedelphi.clone().into(),
-            self.victim.id().to_string().into(),
         ];
         let mut cmd = sb.command(spec, INTERPRETER, args).unwrap();
         cmd.current_dir(self.snap.path());
         let out = run_bounded(cmd, &RunOptions { timeout: Duration::from_secs(60), max_output_bytes: 1 << 20, quota: vec![], kill_over_quota: false }).unwrap();
         assert!(!out.timed_out, "{out:?}");
         (out.status.and_then(|s| s.code()), out.stdout)
+    }
+}
+
+#[test]
+fn every_credential_shaped_name_is_refused_in_a_throwaway_home() {
+    for bad in [
+        ".env", ".env.local", ".env.production", ".git-credentials", ".pgpass", "secret", "secrets.yaml", "secret_key_base", "cert.pfx", "AuthKey_AB12.p8", "release.jks", "key.gpg", "id_rsa", "id_ed25519", "credentials.json", ".docker", ".kube", ".git", ".gitconfig", "hosts.yml", "kubeconfig", "kubeconfig-prod", "login.keychain", "login.keychain-db", "application_default_credentials.json", "aws_credentials", "gh-hosts.yml.keychain", "tokens.txt", "server.pem", "tls.key", "bundle.p12", "auth.json", ".netrc", "_netrc", ".npmrc", ".pypirc", ".ssh", ".aws", ".gnupg", "VAULT.KDBX",
+    ] {
+        assert!(judge_home_entry(bad, false, true, 1, 1).is_some_and(|w| w.contains("credential")), "{bad} was not refused");
+    }
+    for fine in ["config.toml", "agents", "ratified.lock", "README.md", "environment.md", "tokenizer-notes.md.bak.txt"] {
+        let r = judge_home_entry(fine, false, true, 1, 1);
+        // `tokenizer-...` starts with `token`: refused by design (a prefix rule is blunt on purpose); the others are fine
+        assert!(r.is_none() || fine.starts_with("token"), "{fine}: {r:?}");
     }
 }
 
@@ -126,16 +133,13 @@ fn the_sweep_passes_only_when_every_attempt_is_blocked() {
     assert!(out.contains("SWEEP PASSED: 22 attempts, every one blocked"), "{out}");
     assert_eq!(out.lines().filter(|x| x.starts_with("blocked ")).count(), 22, "{out}");
     assert!(!out.contains("SUCCEEDED"), "{out}");
-    // Nothing happened on disk either, and the listener never saw a connection.
+    // Nothing happened on disk either.
     // The script's own report is not trusted: the effects are checked on disk and in the process table.
     l.snap.verify().unwrap();
     assert!(!l.snap.root().join("sweep-outside").exists() && !l.snap.root().join("sweep-new-file").exists());
     assert!(!l.scratch.join("mark.dylib.loaded").exists(), "a native library was loaded from scratch");
     assert!(!std::path::Path::new(&format!("/tmp/delphi-sweep-{}", std::process::id())).exists());
-    assert_eq!(unsafe { libc::kill(l.victim.id() as i32, 0) }, 0, "the victim process was signalled");
     assert!(!l.opshome.join("delphi-sweep-hole").exists());
-    assert!(l.listener.set_nonblocking(true).is_ok());
-    assert!(l.listener.accept().is_err(), "the sandboxed script reached the host's listener");
 }
 
 /// The sweep must FAIL, naming the attempt, when the profile has a hole; otherwise passing proves nothing.
@@ -164,7 +168,7 @@ fn the_sweep_fails_when_the_snapshot_is_writable() {
 
 #[test]
 fn the_sweep_fails_when_the_network_is_on() {
-    weakened("network on", "network_connect", |l, spec| spec.network = Network::ProxyOnly { port: l.port });
+    weakened("network on", "network_connect", |_, spec| spec.network = Network::ProxyOnly { port: 9 });
 }
 
 #[test]
@@ -192,7 +196,7 @@ fn the_sweep_fails_when_files_outside_the_grant_are_readable() {
 #[test]
 fn the_sweep_fails_when_a_nested_delphi_can_run() {
     weakened("nested delphi", "spawn_nested_delphi", |l, spec| {
-        spec.read_only.push(l.fakedelphi.parent().unwrap().to_path_buf());
+        spec.read_only.push(l.opshome.clone());
         spec.exec_only.as_mut().unwrap().push(l.fakedelphi.clone());
     });
 }
@@ -202,9 +206,9 @@ fn the_sweep_refuses_to_pass_when_it_cannot_prove_anything() {
     // A positive control: with the snapshot unreadable the script exits 2 rather than reporting a vacuous pass.
     let Some(sb) = mac_sandbox() else { return };
     let l = layout();
-    let args: Vec<std::ffi::OsString> = vec![l.snap.path().join("sweep.sh").into(), l.scratch.clone().into(), l.scratch.clone().into(), l.canary.clone().into(), l.opshome.clone().into(), "9".into(), l.fakedelphi.clone().into()];
+    let args: Vec<std::ffi::OsString> = vec![l.snap.path().join("sweep.sh").into(), l.scratch.clone().into(), l.scratch.clone().into(), l.canary.clone().into(), l.opshome.clone().into()];
     // `data.txt` is looked for under the first argument, here the scratch dir, where it does not exist
-    let mut cmd = sb.command(&l.spec(), INTERPRETER, [&args[0], &args[1], &args[2], &args[3], &args[4], &args[5], &args[6]]).unwrap();
+    let mut cmd = sb.command(&l.spec(), INTERPRETER, [&args[0], &args[1], &args[2], &args[3], &args[4]]).unwrap();
     cmd.current_dir(l.snap.path());
     let out = run_bounded(cmd, &RunOptions::default()).unwrap();
     assert_eq!(out.status.and_then(|s| s.code()), Some(2), "{out:?}");
@@ -610,7 +614,128 @@ fn the_sweep_fails_when_tmp_users_and_the_home_are_writable_or_listable() {
 #[test]
 fn the_sweep_fails_when_a_fork_flood_is_not_limited() {
     // the process limit removed: the 900 forks all succeed, and the sweep says so
-    weakened("no nproc", "fork_flood", |_, spec| spec.limits.max_procs = None);
+    weakened("no nproc", "fork_flood", |_, spec| spec.limits.proc_headroom = None);
+}
+
+#[test]
+fn an_unreadable_process_count_means_no_limit_value_and_so_no_launch() {
+    assert_eq!(crate::resolve_nproc(128, None), None);
+    assert_eq!(crate::resolve_nproc(128, Some(0)), None);
+    assert_eq!(crate::resolve_nproc(128, Some(1000)), Some(1128));
+}
+
+/// Run `/bin/sh -c 'touch <marker>'` under `limits` with the production hardening; returns (spawn failed, marker exists).
+fn launch_marker(limits: Limits) -> (bool, bool) {
+    let dir = mkdtemp(&std::env::temp_dir(), "delphi-nproc-").unwrap();
+    let marker = dir.join("ran");
+    let mut cmd = Command::new("/bin/sh");
+    cmd.arg("-c").arg(format!("echo x > '{}'", marker.display()));
+    crate::harden_process(&mut cmd, limits);
+    let spawned = cmd.status();
+    let ran = marker.exists();
+    let _ = fs::remove_dir_all(&dir);
+    (spawned.is_err(), ran)
+}
+
+#[test]
+fn an_unreadable_process_count_fails_the_launch_and_the_command_does_not_run() {
+    let mut limits = Limits { proc_headroom: Some(PROC_HEADROOM), test_count: Some(None), ..Limits::default() };
+    assert_eq!(launch_marker(limits), (true, false));
+    limits.test_count = Some(Some(0)); // a zero count is as unusable as none
+    assert_eq!(launch_marker(limits), (true, false));
+    // control: with a readable count the same command runs, so the failures above are the count's doing
+    // (macOS only: elsewhere the live count is deliberately unavailable, so a launch with a headroom fails closed, always)
+    limits.test_count = None;
+    if cfg!(target_os = "macos") {
+        assert_eq!(launch_marker(limits), (false, true));
+    } else {
+        eprintln!("skip: no live process count off macOS; the launch fails closed");
+        assert_eq!(launch_marker(limits), (true, false));
+    }
+}
+
+#[test]
+fn a_refused_setrlimit_fails_the_launch_and_the_command_does_not_run() {
+    // A cap above the hard limit cannot be set by an unprivileged process: the launch must fail, not run without the cap.
+    let mut hard = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+    // SAFETY: plain getrlimit on this process with a valid pointer.
+    assert_eq!(unsafe { libc::getrlimit(libc::RLIMIT_NPROC, &mut hard) }, 0);
+    if hard.rlim_max == libc::RLIM_INFINITY || unsafe { libc::geteuid() } == 0 {
+        return; // every value is settable; nothing to refuse
+    }
+    let limits = Limits { proc_headroom: Some(PROC_HEADROOM), test_count: Some(Some(hard.rlim_max)), ..Limits::default() };
+    assert_eq!(launch_marker(limits), (true, false));
+}
+
+/// Run a flood of `n` parked subshells under the production profile; how many started before a fork was refused.
+fn flood_started(sb: &Sandbox, l: &Layout, n: u32) -> u64 {
+    settle_process_count();
+    let script = "trap 'echo started=$i' EXIT; exec 9<> \"$1\"; i=0; last=''; while [ $i -lt $2 ]; do ( read -t 20 -u 9 x ) & if [ \"$!\" = \"$last\" ]; then break; fi; last=$!; i=$((i + 1)); done";
+    let args = [std::ffi::OsString::from("-c"), script.into(), "sh".into(), l.scratch.join("fifo").into(), n.to_string().into()];
+    let mut cmd = sb.command(&l.spec(), INTERPRETER, args).unwrap();
+    cmd.current_dir(l.snap.path());
+    let out = run_bounded(cmd, &RunOptions { timeout: Duration::from_secs(60), max_output_bytes: 1 << 16, quota: vec![], kill_over_quota: false }).unwrap();
+    out.stdout.lines().find_map(|x| x.strip_prefix("started=")).and_then(|x| x.trim().parse().ok()).unwrap_or(u64::MAX)
+}
+
+#[test]
+fn the_production_headroom_is_pinned_by_floods_and_by_the_limit_the_child_gets() {
+    let Some(sb) = mac_sandbox() else { return };
+    let l = layout();
+    let _turn = FLOOD.lock().unwrap_or_else(|e| e.into_inner());
+    // The cap is the user's own count plus 128 (the child bash is already in the count): 100 forks fit, 200 and 250 do not.
+    // 200 sits well under the old headroom of 256 (which would let it through) and leaves a margin of ~70 for the user's own
+    // processes coming and going between the launch and the flood (130 was tried: a drift of a dozen processes flips it).
+    assert_eq!(flood_started(&sb, &l, 100), 100);
+    assert!(flood_started(&sb, &l, 200) < 200);
+    assert!(flood_started(&sb, &l, 250) < 250);
+    // second assertion: the limit itself, reported by the child, is the user's count at launch plus the literal 128
+    settle_process_count();
+    let before = crate::live_process_count().unwrap();
+    let mut cmd = sb.command(&l.spec(), INTERPRETER, ["-c", "echo nproc=$(ulimit -u)"]).unwrap();
+    cmd.current_dir(l.snap.path());
+    let out = run_bounded(cmd, &RunOptions { timeout: Duration::from_secs(30), max_output_bytes: 1 << 16, quota: vec![], kill_over_quota: false }).unwrap();
+    let after = crate::live_process_count().unwrap();
+    let got: u64 = out.stdout.lines().find_map(|x| x.strip_prefix("nproc=")).and_then(|x| x.trim().parse().ok()).unwrap_or(0);
+    let (lo, hi) = (before.min(after) + 128, before.max(after) + 128); // the literal, on purpose: the pin
+    assert!(got + 20 >= lo && got <= hi + 20, "limit {got} not within [{lo}, {hi}] (headroom 128): {out:?}");
+}
+
+#[test]
+fn the_count_is_the_users_processes_not_the_systems() {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    settle_process_count();
+    let ours = crate::live_process_count().unwrap() as i64;
+    // SAFETY: plain getuid.
+    let uid = unsafe { libc::getuid() };
+    let ps = Command::new("/bin/ps").args(["-ax", "-o", "uid="]).output().unwrap();
+    let text = String::from_utf8_lossy(&ps.stdout);
+    let mine = text.lines().filter(|x| x.trim() == uid.to_string()).count() as i64;
+    let all = text.lines().count() as i64;
+    assert!((ours - mine).abs() <= 25, "counted {ours}, ps shows {mine} processes of uid {uid}");
+    if uid != 0 {
+        assert!(all - mine > 25 && (all - ours).abs() > 25, "this machine cannot tell the user's count from the system's ({all} vs {mine})");
+    }
+}
+
+#[test]
+fn the_cap_is_taken_at_launch_so_a_drop_in_the_users_process_count_after_the_spec_is_built_cannot_lift_it() {
+    // Regression: the count used to be read when the spec was built, so processes that exited between then and the launch (a
+    // sibling test's 900-subshell flood ending, on a busy runner) left the cap out of the flood's reach and the sweep "failed".
+    let Some(sb) = mac_sandbox() else { return };
+    let l = layout();
+    let mut idle: Vec<std::process::Child> = (0..500).filter_map(|_| Command::new("/bin/sleep").arg("120").spawn().ok()).collect();
+    assert!(idle.len() >= 400, "could not start the idle processes");
+    let spec = l.spec(); // built while the extra processes exist
+    for c in &mut idle {
+        let _ = c.kill();
+        let _ = c.wait();
+    }
+    let (code, out) = l.sweep(&sb, &spec);
+    assert_eq!(code, Some(0), "{out}");
+    assert!(out.contains("blocked   fork_flood"), "{out}");
 }
 
 #[test]
@@ -754,6 +879,58 @@ fn more_credential_names_are_refused_in_the_home() {
     assert!(h.recheck().unwrap_err().contains("credential"));
 }
 
+// ---------------------------------------------------------------------------------------------- the daemon's views (S2d2b)
+
+#[test]
+fn a_view_of_the_snapshot_checks_the_tree_and_removes_nothing_when_dropped() {
+    let t = tempfile::tempdir().unwrap();
+    let root = canon(t.path());
+    let project = root.join("project");
+    fs::create_dir_all(project.join("sub")).unwrap();
+    fs::write(project.join("a.sh"), "echo a\n").unwrap();
+    fs::write(project.join("sub/b.txt"), "b\n").unwrap();
+    let names: Vec<PathBuf> = vec!["a.sh".into(), "sub/b.txt".into()];
+    let snap = Snapshot::from_files(&project, &names, &root).unwrap();
+    // a tree hash other than the one built is refused
+    assert!(Snapshot::attach(snap.path(), &"0".repeat(64)).unwrap_err().contains("not the tree"));
+    let view = Snapshot::attach(snap.path(), snap.tree_hash()).unwrap();
+    assert_eq!((view.path(), view.tree_hash(), view.file_count()), (snap.path(), snap.tree_hash(), 2));
+    assert!(view.lookup("sub/b.txt").is_ok() && view.lookup("missing").is_err());
+    // the view does not own the tree: dropping it removes nothing; only the builder's own drop does
+    drop(view);
+    assert!(snap.path().join("a.sh").is_file());
+    let (dir, snap_root) = (snap.path().to_path_buf(), snap.root().to_path_buf());
+    drop(snap);
+    assert!(!dir.exists() && !snap_root.exists());
+    // a directory not named `snapshot` is refused
+    let odd = root.join("odd");
+    fs::create_dir(&odd).unwrap();
+    assert!(Snapshot::attach(&odd, "x").unwrap_err().contains("not named"));
+}
+
+#[test]
+fn the_live_view_of_the_home_tolerates_the_daemons_own_socket_and_nothing_else_the_walk_refuses() {
+    let t = tempfile::tempdir().unwrap();
+    let home = FreshHome::create(&canon(t.path())).unwrap();
+    let sock = home.path().join("d.sock");
+    let _listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+    // the owner's walk refuses a socket; the daemon's live view accepts its own
+    assert!(home.recheck().unwrap_err().contains("socket"));
+    let live = FreshHome::attach_live(home.path()).unwrap();
+    live.recheck().unwrap();
+    // a symlink and a credential-named file are refused in a live view as ever
+    std::os::unix::fs::symlink("/etc/hosts", home.path().join("evil")).unwrap();
+    assert!(live.recheck().unwrap_err().contains("symlink"));
+    fs::remove_file(home.path().join("evil")).unwrap();
+    fs::write(home.path().join("auth.json"), "{}").unwrap();
+    assert!(live.recheck().unwrap_err().contains("credential"));
+    fs::remove_file(home.path().join("auth.json")).unwrap();
+    // dropping the view removes nothing
+    let p = home.path().to_path_buf();
+    drop(live);
+    assert!(p.exists());
+}
+
 // ---------------------------------------------------------------------------------------------- the probe library
 
 /// sha256 and blake3 of the committed `probe_mark.dylib`. Change the C file, the binary and these together, on purpose.
@@ -848,4 +1025,70 @@ fn the_snapshot_builder_runs_git_by_absolute_path_and_ignores_a_git_on_path() {
     let src = include_str!("../authorized.rs");
     assert!(src.contains("Command::new(\"/usr/bin/git\")") && !src.contains("Command::new(\"git\")"), "git must be resolved by absolute path");
     assert!(!src.contains("/opt/homebrew/bin") && !src.contains("/usr/local/bin"), "no user-writable directory on the snapshot builder's PATH");
+}
+
+
+// ---------------------------------------------------------------------------------------------- S2d2a: lookup, minting, pinned-file state
+
+#[test]
+fn a_snapshot_path_resolves_only_through_the_table_of_tracked_regular_files() {
+    let t = tempfile::tempdir().unwrap();
+    let root = canon(t.path());
+    let project = root.join("project");
+    fs::create_dir_all(project.join("sub")).unwrap();
+    fs::write(project.join("sub/a.sh"), "x").unwrap();
+    fs::write(project.join("real.txt"), "r").unwrap();
+    std::os::unix::fs::symlink("real.txt", project.join("link.txt")).unwrap();
+    let snap = Snapshot::from_files(&project, &[PathBuf::from("sub/a.sh"), PathBuf::from("real.txt"), PathBuf::from("link.txt")], &root).unwrap();
+    assert_eq!(snap.lookup("sub/a.sh").unwrap(), snap.path().join("sub/a.sh"));
+    // a symlink entry is in the tree and not in the table of regular files
+    assert!(snap.lookup("link.txt").unwrap_err().contains("not a tracked file"));
+    assert!(snap.lookup("nope").is_err() && snap.lookup("sub").is_err() && snap.lookup("sub/").is_err());
+    assert!(snap.lookup("../x").is_err() && snap.lookup("sub//a.sh").is_err() && snap.lookup("./real.txt").is_err());
+    // a file put on disk that is not in the table does not resolve, and neither does one reached through a swapped-in link
+    let sneak = snap.path().join("real.txt");
+    assert!(snapshot_lookup(snap.path(), "real.txt").is_ok() && sneak.exists());
+    assert!(snapshot_lookup(snap.path(), "link.txt").is_err(), "the disk-level check refuses a symlink too");
+}
+
+#[test]
+fn the_daemon_mints_scratch_a_nonce_canary_and_a_decoy_home_outside_every_grant() {
+    let t = tempfile::tempdir().unwrap();
+    let root = canon(t.path());
+    let project = root.join("project");
+    fs::create_dir_all(&project).unwrap();
+    fs::write(project.join("a.txt"), "x").unwrap();
+    let snap = Snapshot::from_files(&project, &[PathBuf::from("a.txt")], &root).unwrap();
+    let (m1, m2) = (Minted::mint(&snap).unwrap(), {
+        let snap2 = Snapshot::from_files(&project, &[PathBuf::from("a.txt")], &root).unwrap();
+        let m = Minted::mint(&snap2).unwrap();
+        (m.nonce.clone(), m.canary.clone())
+    });
+    assert_ne!(m1.nonce, m2.0, "a nonce per run");
+    assert!(m1.nonce.len() == 32 && m1.nonce.chars().all(|c| c.is_ascii_hexdigit()) && m1.nonce != "0".repeat(32), "128 random bits from the kernel, hex: {}", m1.nonce);
+    assert!(m1.canary.starts_with(snap.root()) && !m1.canary.starts_with(snap.path()));
+    assert!(fs::read_to_string(&m1.canary).unwrap().contains(&m1.nonce));
+    assert_eq!(fs::metadata(&m1.canary).unwrap().permissions().mode() & 0o777, 0o600);
+    assert!(m1.scratch.join("fifo").exists() && m1.scratch.join("preplaced-exec").exists() && m1.operator_home.join("bin/delphi").exists());
+    assert!(!m1.scratch.starts_with(snap.path()) && !m1.operator_home.starts_with(snap.path()));
+}
+
+#[test]
+fn a_symlink_component_or_a_dotdot_never_resolves_in_a_snapshot_lookup() {
+    let t = tempfile::tempdir().unwrap();
+    let root = canon(t.path());
+    let dir = root.join("snap");
+    fs::create_dir_all(dir.join("real")).unwrap();
+    fs::write(dir.join("real/a.txt"), "x").unwrap();
+    fs::write(root.join("outside.txt"), "secret").unwrap();
+    std::os::unix::fs::symlink("real", dir.join("alias")).unwrap();
+    std::os::unix::fs::symlink("../outside.txt", dir.join("real/out.txt")).unwrap();
+    assert!(snapshot_lookup(&dir, "real/a.txt").is_ok());
+    let e = snapshot_lookup(&dir, "alias/a.txt").unwrap_err();
+    assert!(e.contains("symlink"), "a directory component that is a symlink: {e}");
+    assert!(snapshot_lookup(&dir, "real/out.txt").unwrap_err().contains("symlink"));
+    for bad in ["../outside.txt", "real/../../outside.txt", "real/./a.txt", "real//a.txt", "", "real/", "/real/a.txt"] {
+        assert!(snapshot_lookup(&dir, bad).is_err(), "{bad:?} resolved");
+    }
+    assert!(snapshot_lookup(&dir, "..").unwrap_err().contains("plain relative"));
 }

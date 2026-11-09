@@ -100,7 +100,7 @@ In `config.toml` `[learning]`: which triggers are on, staging cap (default 200 n
 
 ### 4.2 Safety rules (enforced, not advised)
 1. It runs only against a **fresh `--home` in a temp directory** and fixture workspaces under `dev/train/`. It refuses when `$DELPHI_HOME` resolves to a directory containing an operator profile, unless `--home` points elsewhere.
-2. It uses `delphi run` (headless; spec 016) so it has the same authority as any run: no Red approvals, no merges, no outbound sends. Fixture repos have no remotes.
+2. It uses `delphi run` (headless; spec 016) so it has the same authority as any run: no Red approvals (except under a `specs/092` authorization: training runs may pass `--authorization`, 092 TA-4), no merges, no outbound sends. Fixture repos have no remotes.
 3. Candidate patches apply to a copy of `base/` inside the temp home. The real repo is never modified by a run.
 4. Budget: `--budget-usd` is required and enforced by the ledger across the whole session, not per case. Dry run (`--dry-run`) prints the plan and a cost estimate and spends nothing.
 5. The grader's rubric files live outside every agent-readable path (the path guard already denies them). The grader runs on a different model family than the model under test (`[H-007]`) and is itself checked against human-labelled cases (§4.5).

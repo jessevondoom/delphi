@@ -8,7 +8,7 @@ Delphi is built mostly by its own agents under one operator, and human contribut
 - **One slice per pull request**, and update the spec tracker (`missions/2026-10-23-foundational-design/spec-tracker.md`) in the same PR that changes a spec's state.
 - **A format is a spec.** If you change a file format, change its schema in [`schemas/`](schemas/) and its spec together.
 - **Agents are data.** Role behavior lives in `agents/<role>/AGENT.md`, `skills/*/SKILL.md` and the charter, never in a theme. Use role IDs in specs, config and manifests; display names appear only under `themes/` (the repo lint refuses them elsewhere).
-- **Nothing consequential without a card.** Do not add a code path that acts outside the sandbox, reads outside its scope, or approves its own action. Red actions always ask.
+- **Nothing consequential without a card.** Do not add a code path that acts outside the sandbox, reads outside its scope, or approves its own action. Red actions always ask the operator, live or, in a headless run only, through an authorization the operator ratified for that run (`specs/092`: one sandboxed `/bin/bash <pinned script>` kind only; an agent may request one, never grant one).
 
 ## Build and test
 

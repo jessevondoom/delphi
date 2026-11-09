@@ -53,7 +53,7 @@ class = "opener"
 
 [[site]]
 file = "crates/delphi-engine/src/capabilities.rs"
-count = 1
+count = 2
 class = "probe"
 
 [[site]]
@@ -93,7 +93,7 @@ class = "git"
 
 [[site]]
 file = "crates/delphi-sandbox/src/authorized.rs"
-count = 1
+count = 3
 class = "git"
 
 [[site]]
@@ -195,3 +195,8 @@ class = "train"
 file = "crates/delphi/src/train_run.rs"
 count = 4
 class = "train"
+
+[[site]]
+file = "crates/delphi/src/run_granted.rs"
+count = 1
+class = "probe"

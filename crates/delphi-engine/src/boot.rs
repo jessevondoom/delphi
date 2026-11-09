@@ -371,6 +371,7 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
         unquarantined: Default::default(),
         solo_mode: Default::default(),
         grant: Default::default(),
+        places: Default::default(),
     });
     let day = &now_rfc3339()[..10];
     let default_mission = format!("{}-session", day);

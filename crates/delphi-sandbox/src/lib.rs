@@ -61,8 +61,8 @@ pub struct SandboxSpec {
 /// Resource limits applied with `setrlimit` before the program starts. They bound what a runaway or
 /// hostile program can consume; they are not a substitute for the wall-clock timeout in [`run_bounded`].
 ///
-/// Deliberately absent: a process-count limit (`RLIMIT_NPROC` counts every process of the user, so a low
-/// value breaks the sandbox's own `fork` and a high one stops nothing) and an address-space limit (not
+/// Deliberately absent by default: a process-count limit (`RLIMIT_NPROC` counts every process, so it can only be headroom over the
+/// count at launch, see `proc_headroom`) and an address-space limit (not
 /// enforced on macOS). A fork bomb is stopped by the timeout killing the whole process group.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
@@ -71,14 +71,19 @@ pub struct Limits {
     /// The largest single file the program may write.
     pub max_file_bytes: Option<u64>,
     pub max_open_files: Option<u64>,
-    /// `RLIMIT_NPROC`: on macOS and Linux this counts every process of the user, so it is an absolute number the caller
-    /// computes (the user's current count plus headroom); `None` leaves it alone. A fork loop stops at it.
-    pub max_procs: Option<u64>,
+    /// `RLIMIT_NPROC` as headroom over the user's process count, measured in the child between `fork` and `exec` (the last moment
+    /// before the program runs), so processes that exit between building the spec and the launch cannot lift the cap. If the count
+    /// cannot be read, or the limit cannot be set, the launch FAILS (closed); it never runs without the limit. The count is the user's own
+    /// processes (what the kernel limit counts), so the cap is exactly that count plus `headroom`.
+    pub proc_headroom: Option<u64>,
+    /// Test hook (absent from production builds): `Some(count)` replaces the live process count; `Some(None)` is an unreadable one.
+    #[cfg(test)]
+    pub test_count: Option<Option<u64>>,
 }
 
 impl Default for Limits {
     fn default() -> Limits {
-        Limits { cpu_secs: Some(900), max_file_bytes: Some(512 << 20), max_open_files: Some(1024), max_procs: None }
+        Limits { cpu_secs: Some(900), max_file_bytes: Some(512 << 20), max_open_files: Some(1024), proc_headroom: None, #[cfg(test)] test_count: None }
     }
 }
 
@@ -230,8 +235,23 @@ fn harden_process(cmd: &mut Command, limits: Limits) {
             if let Some(n) = limits.max_open_files {
                 set(libc::RLIMIT_NOFILE, n, n);
             }
-            if let Some(n) = limits.max_procs {
-                set(libc::RLIMIT_NPROC, n, n);
+            if let Some(h) = limits.proc_headroom {
+                // Fail closed: no count, or a refused setrlimit, means the program does not start. Between fork and exec nothing
+                // here may allocate or take a lock, so errors are raw OS codes (`from_raw_os_error` and `last_os_error` do not allocate).
+                #[cfg(test)]
+                let count = match limits.test_count {
+                    Some(c) => c,
+                    None => live_process_count(),
+                };
+                #[cfg(not(test))]
+                let count = live_process_count();
+                let Some(n) = resolve_nproc(h, count) else {
+                    return Err(io::Error::from_raw_os_error(libc::EAGAIN));
+                };
+                let rl = libc::rlimit { rlim_cur: n as libc::rlim_t, rlim_max: n as libc::rlim_t };
+                if libc::setrlimit(libc::RLIMIT_NPROC, &rl) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
             }
             let max = libc::getdtablesize().clamp(0, 65_536);
             for fd in 3..max {
@@ -243,6 +263,34 @@ fn harden_process(cmd: &mut Command, limits: Limits) {
             }
             Ok(())
         });
+    }
+}
+
+/// The `RLIMIT_NPROC` value for `headroom` over `count`; `None` (no usable count) means "do not start".
+pub fn resolve_nproc(headroom: u64, count: Option<u64>) -> Option<u64> {
+    count.filter(|n| *n > 0).map(|n| n.saturating_add(headroom))
+}
+
+/// How many processes the calling user owns now (macOS; `None` elsewhere, or when the answer cannot be trusted).
+///
+/// `RLIMIT_NPROC` counts the user's processes only, and `proc_listallpids` counts every user's (a hundred or more extra, varying
+/// by machine), so the cap would drift above the headroom by that amount. `proc_listpids(PROC_UID_ONLY, uid, ..)` with a real
+/// buffer returns just this user's pids (a null-buffer size query ignores the uid filter, so it cannot be used). It is a thin
+/// wrapper over one `proc_info` system call: the buffer is on the stack, nothing is allocated and no lock is taken, so it is safe
+/// between `fork` and `exec`. A buffer that comes back full is "unknown" (fail closed), never a truncated count.
+pub fn live_process_count() -> Option<u64> {
+    #[cfg(target_os = "macos")]
+    {
+        const SLOTS: usize = 8192; // 32 KiB; kern.maxproc is 4000 or so on current macOS
+        let mut pids = [0 as libc::pid_t; SLOTS];
+        // SAFETY: the buffer is valid for the size passed; proc_listpids only writes pids into it.
+        let bytes = unsafe { libc::proc_listpids(4 /* PROC_UID_ONLY */, libc::getuid(), pids.as_mut_ptr().cast(), std::mem::size_of_val(&pids) as libc::c_int) };
+        let n = usize::try_from(bytes).ok()? / std::mem::size_of::<libc::pid_t>();
+        (n > 0 && n < SLOTS).then_some(n as u64)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
     }
 }
 

@@ -46,6 +46,8 @@ delphi relay totp-check <code>
 delphi relay                  # run it
 ```
 
+**The authenticator secret is only as private as the place it is kept.** The `security add-generic-password` command stores it in your macOS login keychain, and any process running as you can read it back with `security find-generic-password -w` without a prompt. An agent with a shell that runs as you can therefore compute valid codes. The code protects against an agent, a script or a launch that cannot read your keychain; it does not protect against one that can. The same holds for `delphi test authorize` and the relay's step-up (`GOVERNANCE.md` §5.10), which use the same secret. A keychain item that requires your presence (an access-control list with user presence) is the planned hardening.
+
 `delphi relay` is long-running and must run in a terminal or a tmux pane: the daemon issues the relay's token only to a process with a controlling terminal. It keeps running until you stop it.
 
 Combine it with a headless run so a script can ask you:
