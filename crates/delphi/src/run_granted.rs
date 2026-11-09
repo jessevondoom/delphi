@@ -26,6 +26,19 @@ pub struct GrantedArea {
     pub snapshot: Snapshot,
 }
 
+/// Why a granted run may not start on this machine, from a probe of the authorized sandbox profile, or `None` (spec 092 TA-2,
+/// GOVERNANCE §5.12: "where no such sandbox exists the run does not start"). The launcher probes once before it makes anything; the
+/// daemon probes again before every authorized action, the first included. Pure over the probe so each case is tested.
+pub fn sandbox_refusal(p: &delphi_sandbox::authorized::AuthorizedProbe) -> Option<String> {
+    if p.is_ok() {
+        return None;
+    }
+    Some(format!(
+        "refused: no verified OS sandbox with the network off is available here ({}); an authorized run starts only where one exists (macOS today; on Linux and elsewhere the run refuses)",
+        p.summary()
+    ))
+}
+
 /// The fixed root of throwaway homes: the canonical `/tmp` (short enough for a daemon's Unix sockets, and not under the operator's home).
 pub fn fixed_root() -> Result<PathBuf, String> {
     std::fs::canonicalize("/tmp").map_err(|e| format!("/tmp: {e}"))
@@ -196,6 +209,26 @@ mod tests {
         }
         // `delphi run` itself and a console are not seats
         assert_eq!(seat_in_chain(&["/usr/local/bin/delphi run --on-card deny".to_string()]), None);
+    }
+
+    #[test]
+    fn a_run_without_a_verified_sandbox_refuses_to_start_and_linux_always_refuses() {
+        use delphi_sandbox::authorized::AuthorizedProbe;
+        // nothing proven: refuse, say why, name where a sandbox exists
+        let none = sandbox_refusal(&AuthorizedProbe::default()).unwrap();
+        assert!(none.starts_with("refused:") && none.contains("macOS today") && none.contains("Linux"), "{none}");
+        let off = sandbox_refusal(&AuthorizedProbe { unavailable: Some("forced off (test)".into()), ..AuthorizedProbe::default() }).unwrap();
+        assert!(off.contains("forced off (test)"), "{off}");
+        // one canary short of ok is still a refusal
+        let partly = AuthorizedProbe { mode: Some("test"), network_blocked: true, outside_unreadable: true, snapshot_readonly: true, scratch_noexec: true, interpreter_runs: true, ..AuthorizedProbe::default() };
+        assert!(sandbox_refusal(&partly).is_some());
+        let ok = AuthorizedProbe { scratch_no_map_exec: true, ..partly };
+        assert_eq!(sandbox_refusal(&ok), None);
+        // on this machine: a Mac with the sandbox passes the real probe; anything else (Linux included) refuses
+        let real = sandbox_refusal(&delphi_sandbox::authorized::probe_authorized());
+        if !cfg!(target_os = "macos") {
+            assert!(real.is_some(), "Linux and every other platform refuse an authorized run");
+        }
     }
 
     #[test]

@@ -1005,6 +1005,7 @@ fn nothing_consumes_a_record_in_this_slice() {
         "crates/delphi-engine/src/authorization_anchor/tests.rs",
         "crates/delphi-engine/src/authorization_run.rs",
         "crates/delphi-engine/src/authorization_run/tests.rs",
+        "crates/delphi-engine/src/authorization_use/tests.rs", // S2d2b: tests of the daemon check build records
     ];
     // S2c: who may name the grant module at all. The module approves nothing; this list is the exact set of its callers.
     const GRANT_USERS: &[&str] = &[
@@ -1025,8 +1026,10 @@ fn nothing_consumes_a_record_in_this_slice() {
         "crates/delphi-engine/src/authorization_anchor/tests.rs",
         "crates/delphi-engine/src/authorization_run.rs",    // S2d1: `run_authorized`, a method of the grant
         "crates/delphi-engine/src/authorization_run/tests.rs",
+        "crates/delphi-engine/src/authorization_use.rs",   // S2d2b: the daemon check that approves under the grant
+        "crates/delphi-engine/src/authorization_use/tests.rs",
     ];
-    const STORE_READERS: &[&str] = &["crates/delphi-engine/src/authorization_anchor.rs", "crates/delphi-engine/src/authorization_anchor/tests.rs", "crates/delphi-engine/src/authorization_run/tests.rs", "crates/delphi-engine/src/authorization.rs", "crates/delphi-engine/src/authorization/tests.rs", "crates/delphi-engine/src/authorization_grant.rs", "crates/delphi-engine/src/authorization_grant/tests.rs", "crates/delphi-engine/tests/daemon.rs", "crates/delphi/src/test_cmd.rs", "crates/delphi/src/test_cmd_tests.rs", "crates/delphi/src/run_authorization_tests.rs", "crates/delphi/src/doctor.rs", "crates/delphi/tests/docs.rs", "crates/delphi/tests/e2e.rs"];
+    const STORE_READERS: &[&str] = &["crates/delphi-engine/src/authorization_use/tests.rs", "crates/delphi-engine/src/authorization_anchor.rs", "crates/delphi-engine/src/authorization_anchor/tests.rs", "crates/delphi-engine/src/authorization_run/tests.rs", "crates/delphi-engine/src/authorization.rs", "crates/delphi-engine/src/authorization/tests.rs", "crates/delphi-engine/src/authorization_grant.rs", "crates/delphi-engine/src/authorization_grant/tests.rs", "crates/delphi-engine/tests/daemon.rs", "crates/delphi/src/test_cmd.rs", "crates/delphi/src/test_cmd_tests.rs", "crates/delphi/src/run_authorization_tests.rs", "crates/delphi/src/doctor.rs", "crates/delphi/tests/docs.rs", "crates/delphi/tests/e2e.rs"];
     const STORE_ITEMS: &[&str] = &["load", "load_or_ignore", "mutate", "add_record", "revoke", "store_path", "Store", "Record", "build_record", "create_audited", "revoke_audited", "refuse_audited", "read_audit", "audit_dir", "open_audit", "append_audit", "AuditHead"];
     let sources = workspace_sources();
     assert!(sources.len() > 200, "the scan must see the whole workspace");
@@ -1110,36 +1113,55 @@ fn nothing_consumes_a_record_in_this_slice() {
     assert!(!uses_item("a::loader()", "a", "load"));
 }
 
-// S2d1 builds `run_authorized` and proves it in isolation. Nothing may call it: not the engine, the executor, the approval path, the
-// daemon, the launcher or any other crate. The ONLY callers are its own tests (and this scan's text). S2d2 connects it, in a separate
-// slice with the operator's ratification, by changing this list on purpose. The same holds for the module that holds it, the anchor, and
-// for the constants that keep a run from approving anything.
+// Spec 092 S2d2b connected `run_authorized` to ONE place: `RunPlaces::run` (authorization_run.rs), which only `Engine::granted_run_command`
+// (authorization_use.rs) calls. Nothing else may call it: not the executor, the approval path, the launcher or any other crate, and the
+// switch the earlier slices kept (`AUTHORIZED_APPROVAL_ENABLED`) no longer exists. Changing this list is a reviewed change of the approval.
 #[test]
-fn run_authorized_has_no_caller_but_its_tests() {
+fn run_authorized_has_no_caller_but_the_daemon_check_and_its_tests() {
     const ALLOWED: &[&str] = &[
         "crates/delphi-engine/src/authorization_run.rs",       // the definition
         "crates/delphi-engine/src/authorization_run/tests.rs", // its tests
         "crates/delphi-engine/src/authorization/tests.rs",     // this scan
     ];
-    const MODULE_USERS: &[&str] = &["crates/delphi-engine/src/lib.rs", "crates/delphi-engine/src/authorization_run.rs", "crates/delphi-engine/src/authorization_run/tests.rs", "crates/delphi-engine/src/authorization/tests.rs"];
-    const ANCHOR_USERS: &[&str] = &["crates/delphi-engine/src/lib.rs", "crates/delphi-engine/src/authorization_anchor.rs", "crates/delphi-engine/src/authorization_anchor/tests.rs", "crates/delphi-engine/src/authorization_run/tests.rs", "crates/delphi/src/run.rs", "crates/delphi-engine/src/authorization/tests.rs", "crates/delphi/src/test_cmd_tests.rs"];
+    const MODULE_USERS: &[&str] = &[
+        "crates/delphi-engine/src/lib.rs",
+        "crates/delphi-engine/src/authorization_run.rs",
+        "crates/delphi-engine/src/authorization_run/tests.rs",
+        "crates/delphi-engine/src/authorization/tests.rs",
+        "crates/delphi-engine/src/authorization_use.rs", // the daemon check
+        "crates/delphi-engine/src/authorization_use/tests.rs",
+        "crates/delphi-engine/src/engine.rs", // the field that holds the places
+        "crates/delphi-engine/src/core_main.rs", // attaches them at boot
+    ];
+    const ANCHOR_USERS: &[&str] = &["crates/delphi-engine/src/authorization_use/tests.rs", "crates/delphi/tests/e2e.rs", "crates/delphi-engine/src/lib.rs", "crates/delphi-engine/src/authorization_anchor.rs", "crates/delphi-engine/src/authorization_anchor/tests.rs", "crates/delphi-engine/src/authorization_run/tests.rs", "crates/delphi/src/run.rs", "crates/delphi-engine/src/authorization/tests.rs", "crates/delphi/src/test_cmd_tests.rs"];
     let sources = workspace_sources();
     assert!(sources.len() > 200, "the scan must see the whole workspace");
     for (rel, text) in &sources {
         // code only: a comment may talk about the function, a call may not hide in one
         let code: Vec<&str> = text.lines().filter(|l| !l.trim_start().starts_with("//")).collect();
         let calls = code.iter().any(|l| l.contains("run_authorized"));
-        assert!(!calls || ALLOWED.contains(&rel.as_str()), "{rel} names `run_authorized`; in S2d1 only its own tests may (connecting it is S2d2's reviewed change)");
+        assert!(!calls || ALLOWED.contains(&rel.as_str()), "{rel} names `run_authorized`; only RunPlaces::run (and its tests) may");
         let uses_module = code.iter().any(|l| l.contains("authorization_run"));
         assert!(!uses_module || MODULE_USERS.contains(&rel.as_str()), "{rel} names the module that holds `run_authorized`");
         let uses_anchor = code.iter().any(|l| l.contains("authorization_anchor"));
         assert!(!uses_anchor || ANCHOR_USERS.contains(&rel.as_str()), "{rel} names the ledger anchor module");
     }
-    // by construction, not only by scan: the module is compiled in test builds only, so no product code can call it
+    // by construction too: the module is private to the crate (no other crate can name it), and the anchored decrement has one caller
     let lib = &sources.iter().find(|(r, _)| r == "crates/delphi-engine/src/lib.rs").unwrap().1;
-    assert!(lib.contains("#[cfg(test)]\nmod authorization_run;"), "authorization_run must be `#[cfg(test)] mod` until S2d2");
-    let grant_src = &sources.iter().find(|(r, _)| r == "crates/delphi-engine/src/authorization_grant.rs").unwrap().1;
-    assert!(grant_src.contains("#[cfg(test)]\n/// [`take_use`] under the anchor"), "take_use_anchored is test-only until S2d2");
+    assert!(lib.contains("\nmod authorization_run;") && !lib.contains("pub mod authorization_run"), "authorization_run is a private module");
+    assert!(lib.contains("\nmod authorization_use;") && !lib.contains("pub mod authorization_use"), "authorization_use is a private module");
+    for (rel, text) in &sources {
+        let code: Vec<&str> = text.lines().filter(|l| !l.trim_start().starts_with("//")).collect();
+        let takes = code.iter().any(|l| l.contains("take_use_anchored"));
+        let ok = ["crates/delphi-engine/src/authorization_grant.rs", "crates/delphi-engine/src/authorization_grant/tests.rs", "crates/delphi-engine/src/authorization_run.rs", "crates/delphi-engine/src/authorization/tests.rs", "crates/delphi-engine/src/authorization_anchor/tests.rs", "crates/delphi-engine/src/authorization_run/tests.rs"];
+        assert!(!takes || ok.contains(&rel.as_str()), "{rel} takes a real use");
+        // the places' runner is called by the daemon check only
+        let runs = code.iter().any(|l| l.contains("places.run(") || l.contains("RunPlaces"));
+        let ok = ["crates/delphi-engine/src/authorization_run.rs", "crates/delphi-engine/src/authorization_use.rs", "crates/delphi-engine/src/authorization_use/tests.rs", "crates/delphi-engine/src/authorization_run/tests.rs", "crates/delphi-engine/src/engine.rs", "crates/delphi-engine/src/core_main.rs", "crates/delphi-engine/src/authorization/tests.rs"];
+        assert!(!runs || ok.contains(&rel.as_str()), "{rel} names the places a granted command runs in");
+        // no switch: the constant the earlier slices kept is gone, and nothing outside this scan names it
+        assert!(!(code.iter().any(|l| l.contains("AUTHORIZED_APPROVAL_ENABLED")) && rel != "crates/delphi-engine/src/authorization/tests.rs"), "{rel} still names the removed approval switch");
+    }
     // text forms that could hide a call from the plain-substring scan: an include! of the module, or a macro that builds the name
     for (rel, text) in &sources {
         if ALLOWED.contains(&rel.as_str()) || MODULE_USERS.contains(&rel.as_str()) {
@@ -1154,11 +1176,17 @@ fn run_authorized_has_no_caller_but_its_tests() {
     // the definition is a method of the grant and is the only `fn run_authorized`
     let defs: Vec<&str> = sources.iter().filter(|(r, t)| r != "crates/delphi-engine/src/authorization/tests.rs" && t.lines().any(|l| l.contains("fn run_authorized("))).map(|(r, _)| r.as_str()).collect();
     assert_eq!(defs, ["crates/delphi-engine/src/authorization_run.rs"]);
-    // nothing approves: the launcher's constant, the decision function and the engine's use of the grant are as S2c left them
-    let run_rs = &sources.iter().find(|(r, _)| r == "crates/delphi/src/run.rs").unwrap().1;
-    assert!(run_rs.contains("pub const AUTHORIZED_APPROVAL_ENABLED: bool = false;"), "S2d2 flips this, not S2d1");
+    // the engine reaches the approval through the one function, before anything else in `exec_command`; the file holding `exec_command`
+    // names neither the runner nor a ledger write
     let engine = &sources.iter().find(|(r, _)| r == "crates/delphi-engine/src/engine.rs").unwrap().1;
-    assert!(engine.contains("GRANTED_DENIAL") && !engine.contains("run_authorized") && !engine.contains("take_use_anchored") && !engine.contains("take_use("), "the engine still only observes (dry) and denies");
+    assert!(engine.contains("GRANTED_DENIAL") && !engine.contains("run_authorized") && !engine.contains("take_use_anchored") && !engine.contains("take_use("), "the engine reaches the approval only through granted_run_command");
+    let at_exec = engine.find("async fn exec_command").unwrap();
+    let hook = engine[at_exec..].find("self.granted_run_command(sc, args)").expect("exec_command asks the daemon check");
+    let first_other = engine[at_exec..].find("sc.manifest.execute").unwrap();
+    assert!(hook < first_other, "the daemon check is the first thing exec_command does");
+    // `delphi run` (the client) has no way to approve: no constant, and `decide` has no arm that answers allow to a Red card
+    let run_rs = &sources.iter().find(|(r, _)| r == "crates/delphi/src/run.rs").unwrap().1;
+    assert!(!run_rs.contains("pub const AUTHORIZED_APPROVAL_ENABLED"), "the approval switch is removed");
     let grant_rs = &sources.iter().find(|(r, _)| r == "crates/delphi-engine/src/authorization_grant.rs").unwrap().1;
     assert!(grant_rs.contains("pub const GRANTED_TOOLS: &[&str] = &["), "the allowlist is a constant");
     assert!(!grant_rs.contains("\"inspect_system\""), "inspect_system is not on the allowlist of a granted run (S2d1 carry-over)");

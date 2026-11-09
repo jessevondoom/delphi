@@ -9,8 +9,10 @@
 //! * **Cards are answered by a written policy, never by guessing.** `--on-card deny` (the default) denies every
 //!   card. `--on-card policy:<file>` allows the Amber cards the file lists. `--on-card relay` answers nothing:
 //!   the cards wait for a person, through a relay (`delphi relay`) or a console, and the run waits with them.
-//!   A Red card is never allowed by the run, whatever the file says, and a merge card is always denied by the
-//!   run, so a headless build ends at "ready to merge" on its branch.
+//!   A Red card is never allowed by a policy, whatever the file says, and a merge card is always denied by the
+//!   run, so a headless build ends at "ready to merge" on its branch. The one exception is an operator authorization
+//!   (`--on-card authorization:<id> --auth-run <run>`, `specs/092`): a matching Red `run_command` is approved by the
+//!   daemon, never by this file's `decide()`, and runs as a pinned `/bin/bash` script in the sandbox.
 //! * **The result is a summary object and an exit code**, so a caller can act on it.
 //!
 //! Exit codes: 0 completed or ready to merge · 1 gates failed or the task escalated · 2 stopped because a card
@@ -44,16 +46,11 @@ pub enum OnCard {
     Policy(Policy),
     /// Answer nothing: leave every card (except the merge card) for the operator.
     Leave,
-    /// `authorization:<id>` with `--auth-run <run>` (spec 092 TA-2). In S2a this is a launch gate and nothing more: after the
-    /// checks pass the run decides exactly as `Deny` does. It cannot approve anything.
+    /// `authorization:<id>` with `--auth-run <run>` (spec 092 TA-2). The launcher checks the record and hands the daemon a grant; the
+    /// APPROVAL belongs to the daemon (`Engine::granted_run_command`, the check `GOVERNANCE.md` §5.12 maps it to), not to this client:
+    /// `decide` below denies every Red card and every card of any other kind, as `Deny` does. There is no switch to flip here.
     Authorization { id: String, run: String },
 }
-
-/// Documents the state of the build: `false` in S2a to S2c. It gates nothing by itself. S2d must CHANGE THE APPROVAL CODE (a grant
-/// held by the daemon, `run_authorized`, and a new decision path), not flip this constant; the test that nothing is approved
-/// by an authorization while it is `false` is what keeps this honest. Today `decide` denies, nothing is sent to the daemon and
-/// nothing reads the store after launch.
-pub const AUTHORIZED_APPROVAL_ENABLED: bool = false;
 
 /// Set by the (future, S2c) launcher in the environment of an authorized run's children. S2a sets it for nothing and refuses
 /// any run that finds it already present: a run nested inside an authorized run may not carry the flag (TA-2).
@@ -256,9 +253,9 @@ pub fn decide(on_card: &OnCard, card: &Value) -> Option<(&'static str, String)> 
         OnCard::Policy(p) if p.matches(tool, pattern) => Some(("allow", "allowed by the run's policy".into())),
         OnCard::Policy(_) => Some(("deny", "headless run: no policy rule allows this".into())),
         OnCard::Deny => Some(("deny", "headless run: --on-card deny".into())),
-        // S2a: the flag only gates the launch. Whatever the record says, nothing is approved while the const is false (S2d).
-        OnCard::Authorization { .. } if !AUTHORIZED_APPROVAL_ENABLED => Some(("deny", "headless run: authorized approval is not enabled in this build".into())),
-        OnCard::Authorization { .. } => Some(("deny", "headless run: authorized approval is decided by the daemon (not built)".into())),
+        // The approval under an authorization is the daemon's (a matching `run_command` never becomes a card at all); every card that
+        // does reach this function is denied. This function is pure and cannot approve a Red card in any arm.
+        OnCard::Authorization { .. } => Some(("deny", "headless run: authorized approval is not enabled in this build".into())),
     }
 }
 
@@ -307,6 +304,9 @@ pub struct Summary {
     pub reason: String,
     pub text: String,
     pub failed: Option<String>,
+    /// Every command run under an operator authorization (`authorization.used`, spec 092): the summary lists them so a run that
+    /// used one is never read as an unauthorized run.
+    pub authorized: Vec<Value>,
 }
 
 impl Summary {
@@ -339,6 +339,7 @@ impl Summary {
                 }
             }
             "decisions.review_requested" => self.review_pending = Some(p.clone()),
+            "authorization.used" => self.authorized.push(json!({"authorization_id": p["authorization_id"], "index": p["index"], "uses_left": p["uses_left"], "argv": p["argv"], "purpose": p["purpose"]})),
             "task.output" => self.text = p["text"].as_str().unwrap_or("").to_string(),
             "task.completed" => {
                 self.status = p["status"].as_str().map(String::from);
@@ -403,7 +404,7 @@ impl Summary {
             "gates": self.gates, "reason": self.reason, "error": self.failed,
             "text": self.text.chars().take(4000).collect::<String>(),
             "cards": {"total": self.cards.len(), "allowed": allowed, "denied": denied, "left": self.cards.len() - allowed - denied, "list": self.cards},
-            "usage": usage, "wall_secs": wall.as_secs_f64(),
+            "authorizations_used": self.authorized, "usage": usage, "wall_secs": wall.as_secs_f64(),
         })
     }
 }
@@ -444,7 +445,13 @@ pub fn run(home: &Path, ws_dir: &Path, opts: Opts) -> i32 {
             say_err(&why);
             return EXIT_INFRA;
         }
-        say_err("the authorization checks passed. The daemon will hold the grant, in a throwaway home, and log what it WOULD use (authorization.would_use), but authorized approval is not enabled in this build: this run denies every card, as --on-card deny does");
+        // GOVERNANCE §5.12: where no verified sandbox exists the run does not start. Probed here once before anything is made, and again by
+        // the daemon before every authorized action.
+        if let Some(why) = crate::run_granted::sandbox_refusal(&delphi_sandbox::authorized::probe_authorized()) {
+            say_err(&why);
+            return EXIT_INFRA;
+        }
+        say_err("the authorization checks passed. The daemon will hold the grant, in a throwaway home: a run_command that exactly matches an entry of the record is run as a pinned /bin/bash script in the sandbox (authorization.used); every other card is denied");
     }
     let Some(exe) = chat::daemon_exe() else {
         say_err("cannot locate this program to start the daemon");
@@ -711,6 +718,9 @@ fn human(s: &Value) -> String {
     if let Some(e) = s["error"].as_str() {
         out.push_str(&format!("error: {}\n", e));
     }
+    if let Some(a) = s["authorizations_used"].as_array().filter(|a| !a.is_empty()) {
+        out.push_str(&format!("{} command(s) ran under operator authorization {} (spec 092)\n", a.len(), a[0]["authorization_id"].as_str().unwrap_or("?")));
+    }
     out.push_str(&format!("cards: {} ({} allowed, {} denied) · {:.1}s\n", s["cards"]["total"], s["cards"]["allowed"], s["cards"]["denied"], s["wall_secs"].as_f64().unwrap_or(0.0)));
     let text = s["text"].as_str().unwrap_or("");
     let attention = crate::escalation::classify(if text.contains("[escalated to the operator:") { text } else { s["reason"].as_str().unwrap_or("") });
@@ -953,8 +963,7 @@ mod tests {
     }
 
     #[test]
-    fn nothing_is_approved_by_an_authorization_while_the_const_is_false() {
-        assert!(!std::hint::black_box(AUTHORIZED_APPROVAL_ENABLED), "S2d flips this with its own review; until then no card may be approved by an authorization");
+    fn decide_denies_every_card_under_an_authorization_the_approval_is_the_daemons_and_not_this_functions() {
         let on = OnCard::Authorization { id: "ta-1".into(), run: "r".into() };
         for tier in ["green", "amber", "red"] {
             for tool in ["run_command", "shell", "harness_bash", "harness_edit", "harness_connector", "dispatch_agent", "connector", "write_file", "merge", "pull_request", "anything"] {
@@ -963,6 +972,28 @@ mod tests {
             }
         }
         assert_eq!(decide(&on, &json!({})).map(|x| x.0), Some("deny"));
+    }
+
+    // Spec 092 S2d2b: `decide` is pure and has no grant, so it can never answer "allow" to a Red card, whatever the on-card value is.
+    // The only approval of a Red card under an authorization is the daemon's (`Engine::granted_run_command`).
+    #[test]
+    fn decide_can_never_return_allow_for_a_red_card_whatever_the_on_card_value() {
+        let policy = Policy::parse("[[allow]]\ntool = \"run_command\"\n\n[[allow]]\ntool = \"shell\"\n").unwrap();
+        let values = [OnCard::Deny, OnCard::Policy(policy), OnCard::Leave, OnCard::Authorization { id: "ta-0123456789".into(), run: "run-1".into() }];
+        for on in &values {
+            for tool in ["run_command", "shell", "harness_bash", "harness_edit", "harness_connector", "dispatch_agent", "connector", "write_file", "merge", "pull_request", "anything", ""] {
+                for pattern in ["run_command /bin/bash @snapshot/job.sh", "", "*"] {
+                    let d = decide(on, &json!({"tier": "red", "tool": tool, "pattern": pattern}));
+                    assert_ne!(d.as_ref().map(|x| x.0), Some("allow"), "{on:?} {tool} {pattern}");
+                }
+            }
+        }
+        // a card with no tier is Amber for this function; a Red tier spelled any other way is not a tier at all and is not allowed by the
+        // authorization arm either
+        let on = OnCard::Authorization { id: "ta-0123456789".into(), run: "run-1".into() };
+        for tier in ["RED", "Red", " red", "red "] {
+            assert_ne!(decide(&on, &json!({"tier": tier, "tool": "run_command", "pattern": "p"})).map(|x| x.0), Some("allow"), "{tier:?}");
+        }
     }
 }
 

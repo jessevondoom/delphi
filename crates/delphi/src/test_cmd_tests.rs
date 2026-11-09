@@ -680,7 +680,7 @@ fn a_pinned_file_that_is_untracked_modified_or_changes_while_the_operator_reads_
 // The real flow, end to end up to the line the flag still draws: authorize by the console path (second factor through the test seam),
 // then the launcher and the daemon's grant read what the console wrote. The run still denies every card.
 #[test]
-fn a_record_authorized_at_the_console_is_launched_resolved_in_the_dry_path_and_the_run_still_denies() {
+fn a_record_authorized_at_the_console_is_launched_resolved_in_the_dry_path_and_the_client_still_denies() {
     if !cfg!(target_os = "macos") || delphi_sandbox::Sandbox::detect().is_err() {
         eprintln!("skip: the authorized profile needs sandbox-exec (macOS)");
         return;
@@ -710,12 +710,11 @@ fn a_record_authorized_at_the_console_is_launched_resolved_in_the_dry_path_and_t
     let mut resolved = card.clone();
     resolved[1] = shown[1].clone();
     assert!(matches!(grant.evaluate_card("run_command", &resolved, now()), Outcome::NotMatched(_)));
-    // and the run denies the Red card whatever the record says: the approval switch is off
+    // and the run's own answer to a Red card is a denial whatever the record says: the approval is the daemon's
     let on = crate::run::OnCard::Authorization { id: rec.id.clone(), run: "run-1".into() };
     let (verdict, why) = crate::run::decide(&on, &json!({"tier": "red", "tool": "run_command", "pattern": "run_command"})).unwrap();
     assert_eq!(verdict, "deny");
     assert!(why.contains("never approved without the operator"), "{why}");
-    const { assert!(!crate::run::AUTHORIZED_APPROVAL_ENABLED) };
     // the real ledger is untouched by observation
     assert_eq!(delphi_engine::authorization_grant::ledger_count(&e.home, &rec.id).unwrap(), 0);
 }

@@ -16,7 +16,7 @@ A run has nobody to click `/y`, so every approval card is answered by `--on-card
 | `deny` (default) | every card is denied, with the reason recorded |
 | `policy:<file>` | cards that match an `[[allow]]` rule are allowed; everything else is denied |
 | `relay` | nothing is answered; cards wait for you through [`delphi relay`](away-mode.md) or an attached console, bounded by `--timeout` |
-| `authorization:<id>` with `--auth-run <run>` | spec 092, launch gate only in this build: the run starts only if the operator's record (`delphi test authorize`) verifies, is unexpired, unrevoked, bound to this run, home and machine, and has uses left; otherwise it exits 4 with the reason. Authorized approval is not enabled yet, so every card is still denied, a Red card included. The launch check applies the S1 runner policy unchanged (the pinned `/bin/bash` script runner replaces it in S2b), so a passing check says nothing about whether a command could run in this build. The agent-seat check reads the environment and is best-effort in S2a (`env -i` clears it); S2d needs a check that does not depend on it. Not combinable with the other values; an agent, or a run nested in an authorized run, may not carry it |
+| `authorization:<id>` with `--auth-run <run>` | Only a Red `run_command` that matches the record is approved, as a pinned `/bin/bash` script in the sandbox; every other card, a merge included, is denied. |
 
 A policy file lists Amber cards only:
 
@@ -29,7 +29,7 @@ tool = "run_command"
 pattern = "cargo test*"      # optional; * matches anything
 ```
 
-Three rules hold under any policy, and a policy that breaks them does not load: **Red cards are never allowed**, **merges are never allowed** (a policy naming `merge` or `pull_request` is refused), and unknown keys are errors. A build that reaches the merge card is the normal end: the run records the branch, commit and gate report, denies the card and reports `ready_to_merge`. You merge later from the console.
+Three rules hold under any policy, and a policy that breaks them does not load: **Red cards are never allowed by a policy (only an operator authorization, `specs/092`, can approve one)**, **merges are never allowed** (a policy naming `merge` or `pull_request` is refused), and unknown keys are errors. A build that reaches the merge card is the normal end: the run records the branch, commit and gate report, denies the card and reports `ready_to_merge`. You merge later from the console.
 
 ## Output
 

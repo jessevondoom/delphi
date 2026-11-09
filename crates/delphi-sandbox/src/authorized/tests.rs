@@ -736,6 +736,58 @@ fn more_credential_names_are_refused_in_the_home() {
     assert!(h.recheck().unwrap_err().contains("credential"));
 }
 
+// ---------------------------------------------------------------------------------------------- the daemon's views (S2d2b)
+
+#[test]
+fn a_view_of_the_snapshot_checks_the_tree_and_removes_nothing_when_dropped() {
+    let t = tempfile::tempdir().unwrap();
+    let root = canon(t.path());
+    let project = root.join("project");
+    fs::create_dir_all(project.join("sub")).unwrap();
+    fs::write(project.join("a.sh"), "echo a\n").unwrap();
+    fs::write(project.join("sub/b.txt"), "b\n").unwrap();
+    let names: Vec<PathBuf> = vec!["a.sh".into(), "sub/b.txt".into()];
+    let snap = Snapshot::from_files(&project, &names, &root).unwrap();
+    // a tree hash other than the one built is refused
+    assert!(Snapshot::attach(snap.path(), &"0".repeat(64)).unwrap_err().contains("not the tree"));
+    let view = Snapshot::attach(snap.path(), snap.tree_hash()).unwrap();
+    assert_eq!((view.path(), view.tree_hash(), view.file_count()), (snap.path(), snap.tree_hash(), 2));
+    assert!(view.lookup("sub/b.txt").is_ok() && view.lookup("missing").is_err());
+    // the view does not own the tree: dropping it removes nothing; only the builder's own drop does
+    drop(view);
+    assert!(snap.path().join("a.sh").is_file());
+    let (dir, snap_root) = (snap.path().to_path_buf(), snap.root().to_path_buf());
+    drop(snap);
+    assert!(!dir.exists() && !snap_root.exists());
+    // a directory not named `snapshot` is refused
+    let odd = root.join("odd");
+    fs::create_dir(&odd).unwrap();
+    assert!(Snapshot::attach(&odd, "x").unwrap_err().contains("not named"));
+}
+
+#[test]
+fn the_live_view_of_the_home_tolerates_the_daemons_own_socket_and_nothing_else_the_walk_refuses() {
+    let t = tempfile::tempdir().unwrap();
+    let home = FreshHome::create(&canon(t.path())).unwrap();
+    let sock = home.path().join("d.sock");
+    let _listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+    // the owner's walk refuses a socket; the daemon's live view accepts its own
+    assert!(home.recheck().unwrap_err().contains("socket"));
+    let live = FreshHome::attach_live(home.path()).unwrap();
+    live.recheck().unwrap();
+    // a symlink and a credential-named file are refused in a live view as ever
+    std::os::unix::fs::symlink("/etc/hosts", home.path().join("evil")).unwrap();
+    assert!(live.recheck().unwrap_err().contains("symlink"));
+    fs::remove_file(home.path().join("evil")).unwrap();
+    fs::write(home.path().join("auth.json"), "{}").unwrap();
+    assert!(live.recheck().unwrap_err().contains("credential"));
+    fs::remove_file(home.path().join("auth.json")).unwrap();
+    // dropping the view removes nothing
+    let p = home.path().to_path_buf();
+    drop(live);
+    assert!(p.exists());
+}
+
 // ---------------------------------------------------------------------------------------------- the probe library
 
 /// sha256 and blake3 of the committed `probe_mark.dylib`. Change the C file, the binary and these together, on purpose.

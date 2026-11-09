@@ -24,7 +24,7 @@ Agents can read PDF, Word, Excel, PowerPoint, CSV, HTML, JSON/YAML/TOML, noteboo
 
 ## Working while you are away
 
-- **`delphi run "<task>"`** does one task headless by a written policy (never Red, never a merge), stops at "ready to merge", and exits with a code scripts can read: 0 ok, 1 gates failed, 2 card denied, 3 budget, 4 infrastructure, 5 an optimistic build awaits review ([`specs/016`](../specs/016-headless-run.md)).
+- **`delphi run "<task>"`** does one task headless by a written policy (Red only through a spec 092 authorization, never a merge), stops at "ready to merge", and exits with a code scripts can read: 0 ok, 1 gates failed, 2 card denied, 3 budget, 4 infrastructure, 5 an optimistic build awaits review ([`specs/016`](../specs/016-headless-run.md)).
 - **`delphi relay`** mails approval cards to you (email or Telegram) and takes your replies, with a TOTP step-up for anything sensitive ([`specs/014`](../specs/014-relay-and-away-mode.md)).
 - **Timers** wake a role later ([`specs/017`](../specs/017-timers.md)). **Operator hooks** run your commands on events, or as vetoes; they can only watch or refuse ([`specs/018`](../specs/018-operator-hooks.md)).
 

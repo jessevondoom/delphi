@@ -180,7 +180,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/031-layered-learning-and-training-mode.md",
-    "sha256": "5e2a5573d81f9ced0a6e0f5d296bc1bf8c58588fe60d0df69b2d95c5896e651a"
+    "sha256": "65c58206c6da9962c82ab9b482b8c2fc6982f6e9ed59646c072c51cc519abf18"
   },
   "source_status_at_hash": {
     "line": {
@@ -193,7 +193,7 @@
       },
       "text": "status: approved   # by the operator, 2026-10-26 (\"ratify all specs\"); text merged on the operator's \"go\" 2026-10-26; OD-1..OD-6 follow the recommendations being built to"
     },
-    "sha256": "5e2a5573d81f9ced0a6e0f5d296bc1bf8c58588fe60d0df69b2d95c5896e651a",
+    "sha256": "65c58206c6da9962c82ab9b482b8c2fc6982f6e9ed59646c072c51cc519abf18",
     "word": "approved"
   },
   "spec": {

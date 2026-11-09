@@ -1,8 +1,9 @@
 //! Operator-authorized tests, slice S1 (`specs/092` TA-0, TA-0r, TA-1): the request, its staging rules, and the protected store.
 //!
 //! **This module grants no capability.** Nothing here runs an action, adds `--on-card authorization:<id>`, touches the
-//! sandbox, or turns a record into an approval; no code path leads from a record to a decision on any card (S2 and S3 do
-//! that, each reviewed on its own, and `specs/016` invariant 1, "Red is never allowed", stands unamended).
+//! sandbox, or turns a record into an approval; no code path in THIS module leads from a record to a decision on any card. The
+//! approval is the daemon's, in `authorization_use` (S2d2b), under `specs/016` §3 invariant 1 as amended by `specs/092`: Red is
+//! never allowed by a policy, and in a headless run only by an operator authorization.
 //!
 //! What it does:
 //!
@@ -838,7 +839,7 @@ pub fn this_machine() -> String {
 }
 
 /// Spec 092 S2a, TA-2: may a run that names this record start? A PURE function: every reason it cannot is an `Err` naming it.
-/// It can only refuse. Passing it grants nothing: in S2a the run still denies every Red card (`run::AUTHORIZED_APPROVAL_ENABLED`).
+/// It can only refuse. Passing it grants nothing: the approval is the daemon's check (`authorization_use`), never this launch gate.
 /// `operator_home` is the home the record was read from (the record's `home` is that home, canonical); `run` is the id the
 /// operator gave at authorize time. The second factor is not needed at launch: it was given when the record was made.
 pub fn check_launch(r: &Record, now_unix: i64, run: &str, operator_home: &Path, machine: &str, policy: &Policy) -> Result<(), String> {

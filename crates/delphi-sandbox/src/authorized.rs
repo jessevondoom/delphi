@@ -16,7 +16,7 @@ use std::ffi::CString;
 use std::fs;
 use std::io::{self, Write as _};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
@@ -142,6 +142,9 @@ pub struct Snapshot {
     /// The tracked regular files, by project-relative path (never a symlink, never a directory): the table `@snapshot/<rel>` resolves
     /// against (spec 092 S2d2a). A name not in it does not resolve, whatever the disk holds.
     table: std::collections::BTreeSet<String>,
+    /// Whether dropping this value removes the tree. The launcher's snapshot owns it; the daemon's view of that same snapshot
+    /// ([`Snapshot::attach`]) does not, so a daemon that exits never deletes the launcher's tree and the launcher discards it once.
+    owned: bool,
 }
 
 impl Snapshot {
@@ -212,13 +215,54 @@ impl Snapshot {
         match result {
             Ok(files) => {
                 let tree_hash = tree_hash_of(&dir)?;
-                Ok(Snapshot { root, dir, tree_hash, files, table })
+                Ok(Snapshot { root, dir, tree_hash, files, table, owned: true })
             }
             Err(e) => {
                 remove_tree(&root);
                 Err(e)
             }
         }
+    }
+
+    /// A NON-OWNING view of a snapshot the launcher built, for the daemon that runs the authorized command (spec 092 S2d2b). `dir` must be
+    /// the `snapshot` directory directly under a private directory of this user, and its tree hash must equal `expect_tree` (the launcher's
+    /// report): a directory that is not exactly what the launcher hashed is refused. The table of tracked regular files is read from the
+    /// tree, which holds tracked files only. Dropping the view removes nothing.
+    pub fn attach(dir: &Path, expect_tree: &str) -> Result<Snapshot, String> {
+        let meta = fs::symlink_metadata(dir).map_err(|e| format!("snapshot: {e}"))?;
+        if meta.is_symlink() || !meta.is_dir() {
+            return Err("the snapshot is a symlink or not a directory".into());
+        }
+        let root = dir.parent().ok_or("the snapshot has no parent")?.to_path_buf();
+        if dir.file_name().and_then(|n| n.to_str()) != Some("snapshot") {
+            return Err("the snapshot directory is not named `snapshot`".into());
+        }
+        let rmeta = fs::symlink_metadata(&root).map_err(|e| format!("snapshot parent: {e}"))?;
+        // SAFETY: geteuid has no preconditions.
+        let me = unsafe { libc::geteuid() };
+        if rmeta.is_symlink() || !rmeta.is_dir() || rmeta.uid() != me || rmeta.permissions().mode() & 0o077 != 0 {
+            return Err("the snapshot's parent is not a private directory of this user".into());
+        }
+        let tree_hash = tree_hash_of(dir)?;
+        if tree_hash != expect_tree {
+            return Err("the snapshot is not the tree the launcher hashed".into());
+        }
+        let mut table = std::collections::BTreeSet::new();
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(d) = stack.pop() {
+            for e in fs::read_dir(&d).map_err(|e| e.to_string())?.flatten() {
+                let m = fs::symlink_metadata(e.path()).map_err(|e| e.to_string())?;
+                if m.is_dir() {
+                    stack.push(e.path());
+                } else if m.is_file() {
+                    if let Ok(rel) = e.path().strip_prefix(dir) {
+                        table.insert(rel.to_string_lossy().into_owned());
+                    }
+                }
+            }
+        }
+        let files = table.len();
+        Ok(Snapshot { root, dir: dir.to_path_buf(), tree_hash, files, table, owned: false })
     }
 
     /// The read-only directory a sandboxed command sees.
@@ -262,7 +306,9 @@ impl Snapshot {
 
 impl Drop for Snapshot {
     fn drop(&mut self) {
-        remove_tree(&self.root);
+        if self.owned {
+            remove_tree(&self.root);
+        }
     }
 }
 
@@ -484,6 +530,11 @@ impl Minted {
 pub struct FreshHome {
     path: PathBuf,
     dev: u64,
+    /// The launcher's home removes itself when dropped; the daemon's view of it ([`FreshHome::attach_live`]) does not.
+    owned: bool,
+    /// The home the daemon is RUNNING in holds its own listening sockets; a live view tolerates those and nothing else that
+    /// [`judge_home_entry`] refuses (a symlink, a mount, a device or pipe, a credential-named file are refused as ever).
+    live: bool,
 }
 
 impl FreshHome {
@@ -494,13 +545,22 @@ impl FreshHome {
         }
         let path = mkdtemp(root, "delphi-home-").map_err(|e| format!("home: {e}"))?;
         let meta = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
-        let h = FreshHome { path, dev: meta.dev() };
+        let h = FreshHome { path, dev: meta.dev(), owned: true, live: false };
         h.recheck()?;
         Ok(h)
     }
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// A NON-OWNING view of the throwaway home the daemon runs in (spec 092 S2d2b), walked once now: it must be a private directory of
+    /// this user that passes the walk. Its own listening sockets are tolerated; dropping the view removes nothing.
+    pub fn attach_live(path: &Path) -> Result<FreshHome, String> {
+        let meta = fs::symlink_metadata(path).map_err(|e| format!("home: {e}"))?;
+        let h = FreshHome { path: path.to_path_buf(), dev: meta.dev(), owned: false, live: true };
+        h.recheck()?;
+        Ok(h)
     }
 
     /// Walk the home now. `Err` names the first problem.
@@ -522,7 +582,8 @@ impl FreshHome {
                 let path = e.path();
                 let m = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
                 let name = e.file_name().to_string_lossy().into_owned();
-                if let Some(why) = judge_home_entry(&name, m.is_symlink(), m.is_dir() || m.is_file(), m.dev(), self.dev) {
+                let own_socket = self.live && m.file_type().is_socket();
+                if let Some(why) = judge_home_entry(&name, m.is_symlink(), m.is_dir() || m.is_file() || own_socket, m.dev(), self.dev) {
                     return Err(format!("{}: {why}", path.display()));
                 }
                 if m.is_dir() {
@@ -536,7 +597,9 @@ impl FreshHome {
 
 impl Drop for FreshHome {
     fn drop(&mut self) {
-        remove_tree(&self.path);
+        if self.owned {
+            remove_tree(&self.path);
+        }
     }
 }
 

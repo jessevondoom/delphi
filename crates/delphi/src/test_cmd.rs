@@ -236,7 +236,7 @@ fn render_store(store: &auth::Store, now: i64) -> String {
         let state = if r.is_revoked() { "revoked" } else if expired { "expired" } else { "active" };
         o.push_str(&format!("{:<14} {:<8} run {:<12} uses {}/{}  expires {}  {} entr{}  {}\n", r.id, state, r.run, r.uses, r.max_uses, r.expires, r.manifest.len(), if r.manifest.len() == 1 { "y" } else { "ies" }, auth::clean_text(&r.purpose, 60)));
     }
-    o.push_str("`delphi run --on-card authorization:<id> --auth-run <run>` exists, but authorized approval is not enabled yet: a run that carries it still denies every card, so an authorization approves nothing in this build.\n");
+    o.push_str("`delphi run --on-card authorization:<id> --auth-run <run>` (spec 092) approves only a Red `run_command` that exactly matches an entry of the record, as `/bin/bash <pinned script>` in the sandbox, network off (macOS); every other card is denied.\n");
     auth::safe_lines(&o)
 }
 
@@ -435,7 +435,7 @@ fn authorize(home: &Path, ws_dir: &Path, args: &[String], term: &mut dyn Termina
     if let Err(e) = auth::create_audited(home, rec.clone(), payload) {
         return fail(format!("refused: {e}"));
     }
-    println!("authorized {}: run `{}`, {} use(s), until {}. It approves nothing yet: a run that carries it still denies every card (spec 092 S2d2a).", rec.id, rec.run, rec.max_uses, rec.expires);
+    println!("authorized {}: run `{}`, {} use(s), until {}. A run that carries it (`delphi run --on-card authorization:{} --auth-run {}`) approves only a Red `run_command` that exactly matches an entry, as a pinned `/bin/bash` script in the sandbox; every other card is denied (spec 092).", rec.id, rec.run, rec.max_uses, rec.expires, rec.id, rec.run);
     0
 }
 

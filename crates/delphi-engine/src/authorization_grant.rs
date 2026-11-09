@@ -183,7 +183,6 @@ pub fn take_use(home: &Path, id: &str, record_hash: &str, run: &str, max_uses: u
     take_in(&ledger_dir(home, id), id, record_hash, run, max_uses, false, None).map(|r| r.0)
 }
 
-#[cfg(test)]
 /// [`take_use`] under the anchor: the ledger must be exactly at `expect` (the state this run last saw) or no use is taken. Returns the
 /// use and the state after it, which the caller keeps as the next `expect`.
 pub fn take_use_anchored(home: &Path, id: &str, record_hash: &str, run: &str, max_uses: u32, expect: &LedgerState) -> Result<(Used, LedgerState), String> {
@@ -326,6 +325,8 @@ pub struct Grant {
     pub(crate) anchor: std::sync::Mutex<LedgerState>,
     /// The run's snapshot directory as the launcher reported it (S2d2a); `None` when the launcher gave none.
     pub(crate) snapshot_dir: Option<PathBuf>,
+    /// The tree hash the launcher reported for that snapshot (S2d2b): the daemon attaches to the snapshot only if it still hashes to it.
+    pub(crate) snapshot_tree: Option<String>,
     /// Tests only: weaken the profile `run_authorized` builds, so a test can show the sweep notices a hole. Not compiled into the product.
     #[cfg(test)]
     pub(crate) weaken: Option<WeakenFn>,
@@ -350,7 +351,7 @@ impl Grant {
         if a::record_hash(&b.record) != b.record_hash {
             return Err("the grant's record does not match its hash".into());
         }
-        let g = Grant { record: b.record, record_hash: b.record_hash, run: b.run, operator_home: PathBuf::from(b.operator_home), launch_seq: b.launch_seq, policy, probe: Arc::new(delphi_sandbox::authorized::probe_authorized), probes: Default::default(), anchor: std::sync::Mutex::new(b.ledger), snapshot_dir: b.snapshot_dir.map(PathBuf::from), #[cfg(test)] weaken: None };
+        let g = Grant { record: b.record, record_hash: b.record_hash, run: b.run, operator_home: PathBuf::from(b.operator_home), launch_seq: b.launch_seq, policy, probe: Arc::new(delphi_sandbox::authorized::probe_authorized), probes: Default::default(), anchor: std::sync::Mutex::new(b.ledger), snapshot_dir: b.snapshot_dir.map(PathBuf::from), snapshot_tree: b.snapshot_tree.clone(), #[cfg(test)] weaken: None };
         g.reverify(now_unix)?;
         // The snapshot the launcher built must be the one the record was made for (tree hash and every pinned file): a grant that is
         // already wrong never takes hold.
@@ -374,7 +375,7 @@ impl Grant {
     pub(crate) fn for_test(record: a::Record, run: &str, operator_home: &Path, launch_seq: u64, policy: a::Policy) -> Grant {
         let record_hash = a::record_hash(&record);
         let anchor = ledger_state(operator_home, &record.id).unwrap_or_default();
-        Grant { record, record_hash, run: run.into(), operator_home: operator_home.to_path_buf(), launch_seq, policy, probe: Arc::new(delphi_sandbox::authorized::probe_authorized), probes: Default::default(), anchor: std::sync::Mutex::new(anchor), snapshot_dir: None, weaken: None }
+        Grant { record, record_hash, run: run.into(), operator_home: operator_home.to_path_buf(), launch_seq, policy, probe: Arc::new(delphi_sandbox::authorized::probe_authorized), probes: Default::default(), anchor: std::sync::Mutex::new(anchor), snapshot_dir: None, snapshot_tree: None, weaken: None }
     }
 
     /// A grant with an empty manifest, only so a test can run the engine as a run that holds one (the seat guards read `grant.get()`).
@@ -423,6 +424,11 @@ impl Grant {
 
     pub fn id(&self) -> &str {
         &self.record.id
+    }
+
+    /// The snapshot directory and tree hash the launcher reported, for the daemon to attach to (S2d2b). `None` when it reported none.
+    pub fn snapshot_boot(&self) -> Option<(&Path, &str)> {
+        Some((self.snapshot_dir.as_deref()?, self.snapshot_tree.as_deref()?))
     }
 
     /// Read the store and the audit chain again, strictly, and require: the record present, its hash equal to the one at launch, not
@@ -672,4 +678,4 @@ pub fn seat_native_tools_off(cli: &str, tooled: bool, native_empty: bool, app_se
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
