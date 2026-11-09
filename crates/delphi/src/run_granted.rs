@@ -190,7 +190,7 @@ pub fn process_chain() -> Option<Vec<String>> {
 }
 
 /// Why the ancestry shows this launch is not the operator's own terminal, or `None`. BEST EFFORT, an extra line behind the launch code
-/// ([`launch_step_up`]), which is the real guarantee: a chain that reaches pid 1 at once (the parent is init, as after a double fork) is
+/// ([`launch_step_up`]), which is the launch gate (see the stated keychain limit in specs/092 and GOVERNANCE 5.12): a chain that reaches pid 1 at once (the parent is init, as after a double fork) is
 /// suspicious and is not a pass.
 pub fn seat_refusal() -> Option<String> {
     match process_chain() {
@@ -233,6 +233,31 @@ pub fn require_step_up(ws_dir: &Path, now_unix: Option<i64>, factor: &dyn Fn(&Pa
 /// and read only by them; `tcsetattr`, `signal` and `raise` are async-signal-safe.
 static SAVED_FD: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
 static mut SAVED_TERMIOS: std::mem::MaybeUninit<libc::termios> = std::mem::MaybeUninit::uninit();
+/// The echo-off settings, for the stop handler to put back when the process is continued.
+static mut QUIET_TERMIOS: std::mem::MaybeUninit<libc::termios> = std::mem::MaybeUninit::uninit();
+
+/// Ctrl-Z while the code is asked: put the terminal back, stop as the default action would, and when continued hide the echo again and
+/// install this handler again.
+extern "C" fn restore_stop_and_resume(sig: libc::c_int) {
+    let fd = SAVED_FD.load(std::sync::atomic::Ordering::SeqCst);
+    // SAFETY: only async-signal-safe calls; the termios statics were written before SAVED_FD was set.
+    unsafe {
+        if fd >= 0 {
+            libc::tcsetattr(fd, libc::TCSANOW, std::ptr::addr_of!(SAVED_TERMIOS).cast::<libc::termios>());
+        }
+        libc::signal(sig, libc::SIG_DFL);
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut set);
+        libc::sigaddset(&mut set, sig);
+        libc::sigprocmask(libc::SIG_UNBLOCK, &set, std::ptr::null_mut());
+        libc::raise(sig);
+        // continued
+        libc::signal(sig, restore_stop_and_resume as *const () as usize);
+        if fd >= 0 {
+            libc::tcsetattr(fd, libc::TCSAFLUSH, std::ptr::addr_of!(QUIET_TERMIOS).cast::<libc::termios>());
+        }
+    }
+}
 
 extern "C" fn restore_and_die(sig: libc::c_int) {
     let fd = SAVED_FD.load(std::sync::atomic::Ordering::SeqCst);
@@ -266,19 +291,28 @@ impl NoEcho {
         quiet.c_lflag &= !(libc::ECHO | libc::ECHONL);
         quiet.c_lflag |= libc::ICANON;
         // SAFETY: published before the descriptor, so the handler never sees a half-written value.
-        unsafe { std::ptr::addr_of_mut!(SAVED_TERMIOS).write(std::mem::MaybeUninit::new(old)) };
+        unsafe {
+            std::ptr::addr_of_mut!(SAVED_TERMIOS).write(std::mem::MaybeUninit::new(old));
+            std::ptr::addr_of_mut!(QUIET_TERMIOS).write(std::mem::MaybeUninit::new(quiet));
+        }
         SAVED_FD.store(fd, std::sync::atomic::Ordering::SeqCst);
         let mut handlers = vec![];
-        for sig in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP, libc::SIGQUIT] {
+        for sig in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP, libc::SIGQUIT, libc::SIGTSTP] {
             // SAFETY: a plain handler that only calls async-signal-safe functions.
             unsafe {
                 let mut act: libc::sigaction = std::mem::zeroed();
-                act.sa_sigaction = restore_and_die as *const () as usize;
+                act.sa_sigaction = if sig == libc::SIGTSTP { restore_stop_and_resume as *const () as usize } else { restore_and_die as *const () as usize };
                 libc::sigemptyset(&mut act.sa_mask);
                 let mut prev: libc::sigaction = std::mem::zeroed();
-                if libc::sigaction(sig, &act, &mut prev) == 0 {
-                    handlers.push((sig, prev));
+                if libc::sigaction(sig, &act, &mut prev) != 0 {
+                    continue;
                 }
+                if prev.sa_sigaction == libc::SIG_IGN {
+                    // Ignored before (SIGHUP under nohup, say): it stays ignored; nothing of ours is left installed for it.
+                    libc::sigaction(sig, &prev, std::ptr::null_mut());
+                    continue;
+                }
+                handlers.push((sig, prev));
             }
         }
         // FLUSH: anything typed before the prompt (a paste) is discarded, not taken as the code.
@@ -468,6 +502,36 @@ mod tests {
         master.write_all(&[0x04]).unwrap();
         assert_eq!(w2.join().unwrap(), None);
         assert!(echo(keep.as_raw_fd()), "echo is back after an end of input");
+    }
+
+    // A signal that was ignored before the prompt stays ignored, and every disposition is back as it was afterwards (SIGTSTP included).
+    #[test]
+    fn the_prompt_leaves_an_ignored_signal_ignored_and_restores_every_disposition() {
+        let disposition = |sig: libc::c_int| {
+            // SAFETY: reading the current action only.
+            let mut cur: libc::sigaction = unsafe { std::mem::zeroed() };
+            unsafe { libc::sigaction(sig, std::ptr::null(), &mut cur) };
+            cur.sa_sigaction
+        };
+        let (mut master, mut slave) = (0, 0);
+        // SAFETY: openpty fills two descriptors that are closed below.
+        assert_eq!(unsafe { libc::openpty(&mut master, &mut slave, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) }, 0);
+        // SAFETY: SIGHUP is set to ignore for this test process, as a shell does under nohup.
+        let before_hup = unsafe { libc::signal(libc::SIGHUP, libc::SIG_IGN) };
+        let (int_before, tstp_before) = (disposition(libc::SIGINT), disposition(libc::SIGTSTP));
+        let g = NoEcho::on(slave).expect("echo off on a pty");
+        assert_eq!(disposition(libc::SIGHUP), libc::SIG_IGN, "an ignored signal stays ignored");
+        assert_ne!(disposition(libc::SIGINT), int_before, "SIGINT restores the terminal");
+        assert_ne!(disposition(libc::SIGTSTP), tstp_before, "SIGTSTP restores the terminal when the process is stopped");
+        assert!(g.handlers.iter().all(|(s, _)| *s != libc::SIGHUP));
+        drop(g);
+        assert_eq!((disposition(libc::SIGINT), disposition(libc::SIGTSTP), disposition(libc::SIGHUP)), (int_before, tstp_before, libc::SIG_IGN));
+        // SAFETY: put the process back as it was.
+        unsafe {
+            libc::signal(libc::SIGHUP, before_hup);
+            libc::close(master);
+            libc::close(slave);
+        }
     }
 
     #[test]

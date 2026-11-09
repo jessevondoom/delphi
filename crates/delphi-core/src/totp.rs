@@ -134,7 +134,8 @@ impl std::fmt::Display for StepUpError {
 /// file without the marker, the marker without the file, and, with the anchor, both deleted. **Accepted limit:** a process running as the
 /// same user that deletes all three (the file, the marker and the anchor) gets a clean start and resets the five-per-300-seconds rationing;
 /// it can also read the authenticator secret from the login keychain (see `specs/092`, known limits), so this closes the accidental and the
-/// partial deletion, not that process.
+/// partial deletion, not that process. The same class, equally accepted: restoring an OLDER copy of the state file with the marker and the
+/// anchor intact, and deleting `operator/` together with the file and the marker.
 #[derive(Default)]
 pub struct Verifier {
     used: Mutex<HashSet<u64>>,
@@ -309,8 +310,18 @@ fn anchor_of(path: &Path) -> Option<PathBuf> {
     operator.is_dir().then(|| operator.join("totp-armed"))
 }
 
+/// Write the anchor without following a symlink (a dangling one would create its target): `O_NOFOLLOW`, then the opened file must be a
+/// regular file owned by this user.
 fn write_anchor(a: &Path) -> std::io::Result<()> {
-    std::fs::write(a, b"armed\n")
+    use std::io::Write as _;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).custom_flags(libc::O_NOFOLLOW).open(a)?;
+    let m = f.metadata()?;
+    // SAFETY: geteuid has no preconditions.
+    if !m.is_file() || m.uid() != unsafe { libc::geteuid() } {
+        return Err(std::io::Error::other("the anchor is not a regular file of this user"));
+    }
+    f.write_all(b"armed\n")
 }
 
 /// Write the marker, then the anchor (the marker first, so a state file never exists without one).
@@ -582,6 +593,25 @@ mod tests {
             let _ = std::fs::remove_file(marker_of(p));
             let _ = std::fs::remove_file(anchor_of(p).unwrap());
         }));
+    }
+
+    #[test]
+    fn the_anchor_is_never_written_through_a_symlink() {
+        let (d, path) = homed();
+        let anchor = anchor_of(&path).unwrap();
+        let victim = d.path().join("created-by-a-followed-link");
+        std::os::unix::fs::symlink(&victim, &anchor).unwrap();
+        assert!(write_anchor(&anchor).is_err(), "a dangling symlink at the anchor path is refused");
+        assert!(!victim.exists(), "its target was not created");
+        // arming through the verifier refuses the same way and fails closed
+        let v = Verifier::persistent(path.clone());
+        assert!(matches!(v.check(RFC_SECRET, &code_at(RFC_SECRET, 1_700_000_000), 1_700_000_000), Err(StepUpError::Locked { .. })));
+        assert!(!victim.exists());
+        // a plain path is written, as 0600
+        let (_d2, p2) = homed();
+        let a2 = anchor_of(&p2).unwrap();
+        write_anchor(&a2).unwrap();
+        assert_eq!(std::fs::read(&a2).unwrap(), b"armed\n");
     }
 
     #[test]

@@ -452,7 +452,7 @@ pub fn run(home: &Path, ws_dir: &Path, opts: Opts) -> i32 {
             return EXIT_INFRA;
         }
         // The launch is the operator's own act because it needs a FRESH authenticator code, read from the terminal (GOVERNANCE §5.12). The
-        // ancestry, environment, terminal and marker checks above are extra lines; this is the guarantee. Asked before anything is made, so
+        // ancestry, environment, terminal and marker checks above are extra lines; this is the launch gate (see the stated keychain limit in specs/092 and GOVERNANCE 5.12). Asked before anything is made, so
         // a wrong code costs no use and starts no daemon; recorded in the audit chain without the code.
         if let OnCard::Authorization { id, run } = &opts.on_card {
             if let Err(why) = crate::run_granted::require_step_up(ws_dir, now, &crate::test_cmd::configured_factor, &mut crate::run_granted::tty_ask) {
