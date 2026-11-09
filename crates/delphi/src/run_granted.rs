@@ -35,9 +35,17 @@ pub fn fixed_root() -> Result<PathBuf, String> {
 pub fn prepare(operator_ws_dir: &Path, project: &Path) -> Result<GrantedArea, String> {
     let root = fixed_root()?;
     let home = FreshHome::create(&root)?;
+    let snapshot = Snapshot::build(project, &root).map_err(|e| format!("the project snapshot: {e}"))?;
     let name = operator_ws_dir.file_name().ok_or("the workspace has no name")?;
     let ws_dir = home.path().join("workspaces").join(name);
     crate::train_arms::copy_filtered(operator_ws_dir, &ws_dir, Path::new(""))?;
+    // The workspace's project is the SNAPSHOT here, not the operator's real tree: a read tool that resolves `@project` reads the
+    // disposable copy. The line is not a pinned block. If the configuration does not have exactly one `projects = [...]` line the run
+    // is refused rather than left pointing at the real project.
+    let cfg_path = ws_dir.join("config.toml");
+    let cfg = std::fs::read_to_string(&cfg_path).map_err(|e| format!("config.toml: {e}"))?;
+    let cfg = crate::train_run::set_projects(&cfg, snapshot.path()).map_err(|e| format!("the throwaway home cannot point at the snapshot: {e}"))?;
+    std::fs::write(&cfg_path, cfg).map_err(|e| e.to_string())?;
     // A clean operator layer: a valid, empty lock and nothing ratified in it (the daemon here has no store and no ledger).
     let op = home.path().join("operator");
     std::fs::create_dir_all(op.join("ratified")).map_err(|e| e.to_string())?;
@@ -45,7 +53,6 @@ pub fn prepare(operator_ws_dir: &Path, project: &Path) -> Result<GrantedArea, St
     // The walk, now that everything is in: no symlink, no mount, no credential-named file.
     home.recheck().map_err(|e| format!("the throwaway home does not pass its walk: {e}"))?;
     crate::train_run::sock_fits(home.path())?;
-    let snapshot = Snapshot::build(project, &root).map_err(|e| format!("the project snapshot: {e}"))?;
     Ok(GrantedArea { home, ws_dir, snapshot })
 }
 
@@ -167,6 +174,9 @@ mod tests {
         let area = prepare(&src, &project).unwrap();
         let ws = &area.ws_dir;
         assert!(ws.join("config.toml").is_file() && ws.join("agents/a.md").is_file());
+        let cfg = std::fs::read_to_string(ws.join("config.toml")).unwrap();
+        assert!(cfg.contains(&format!("projects = [\"{}\"]", area.snapshot.path().display())), "the project is the snapshot, not the real tree: {cfg}");
+        assert!(!cfg.contains(project.to_str().unwrap()));
         assert!(!ws.join("local/missions").exists() && !ws.join("local/state.db").exists() && !ws.join("team/specs").exists() && !ws.join("link").exists());
         assert!(area.home.path().join("operator/ratified.lock").is_file());
         assert!(!area.home.path().join(concat!("operator/authoriza", "tions.json")).exists() && !area.home.path().join("operator/uses").exists() && !area.home.path().join("operator/audit").exists());
@@ -181,9 +191,15 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         let src = std::fs::canonicalize(t.path()).unwrap().join("workspaces/w");
         std::fs::create_dir_all(src.join("local")).unwrap();
-        std::fs::write(src.join("config.toml"), "x").unwrap();
+        std::fs::write(src.join("config.toml"), "[workspace]\nprojects = []\n").unwrap();
         std::fs::write(src.join("local/auth.json"), "token").unwrap();
-        let err = prepare(&src, t.path()).err().unwrap();
+        let project = t.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let run = |args: &[&str]| assert!(std::process::Command::new("/usr/bin/git").args(["-c", "user.name=t", "-c", "user.email=t@t"]).args(args).current_dir(&project).output().unwrap().status.success());
+        run(&["init", "-q"]);
+        std::fs::write(project.join("a.txt"), "a").unwrap();
+        run(&["add", "a.txt"]);
+        let err = prepare(&src, &project).err().unwrap();
         assert!(err.contains("credential-named"), "{err}");
     }
 }

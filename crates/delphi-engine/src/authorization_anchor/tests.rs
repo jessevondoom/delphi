@@ -203,3 +203,19 @@ fn the_payload_carries_the_ledger_state_the_launcher_recorded() {
     let plain = launch_payload(&f.home, &f.id, "run-1", now(), &f.policy).unwrap();
     assert_eq!(serde_json::from_slice::<serde_json::Value>(&plain).unwrap()["ledger"]["count"], json!(2));
 }
+
+#[test]
+fn a_crashed_runs_ledger_replaced_by_a_longer_forged_one_is_refused_by_its_head() {
+    // Crash containment: the launch event recorded the ledger's head. A different ledger that is at least as long (so the count test
+    // passes) but does not contain that head event is not the ledger that run launched with.
+    let f = fixture(10);
+    f.run(1);
+    let (_b, anchor) = f.launch().unwrap();
+    std::mem::forget(anchor); // the run "crashed": no run.end
+    fs::remove_dir_all(ledger_dir(&f.home, &f.id)).unwrap();
+    take_use(&f.home, &f.id, "a-different-record-hash", "another-run", 10).unwrap();
+    take_use(&f.home, &f.id, "a-different-record-hash", "another-run", 10).unwrap();
+    assert!(ledger_state(&f.home, &f.id).unwrap().count >= 1, "long enough for the count check");
+    let err = f.launch().err().unwrap();
+    assert!(err.contains("does not contain the event") && err.contains("replaced by another copy"), "{err}");
+}

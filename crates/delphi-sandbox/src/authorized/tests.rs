@@ -118,6 +118,20 @@ impl Layout {
 }
 
 #[test]
+fn every_credential_shaped_name_is_refused_in_a_throwaway_home() {
+    for bad in [
+        ".env", ".env.local", ".env.production", ".git-credentials", ".pgpass", "secret", "secrets.yaml", "secret_key_base", "cert.pfx", "AuthKey_AB12.p8", "release.jks", "key.gpg", "id_rsa", "id_ed25519", "credentials.json", "tokens.txt", "server.pem", "tls.key", "bundle.p12", "auth.json", ".netrc", "_netrc", ".npmrc", ".pypirc", ".ssh", ".aws", ".gnupg", "VAULT.KDBX",
+    ] {
+        assert!(judge_home_entry(bad, false, true, 1, 1).is_some_and(|w| w.contains("credential")), "{bad} was not refused");
+    }
+    for fine in ["config.toml", "agents", "ratified.lock", "README.md", "environment.md", "tokenizer-notes.md.bak.txt"] {
+        let r = judge_home_entry(fine, false, true, 1, 1);
+        // `tokenizer-...` starts with `token`: refused by design (a prefix rule is blunt on purpose); the others are fine
+        assert!(r.is_none() || fine.starts_with("token"), "{fine}: {r:?}");
+    }
+}
+
+#[test]
 fn the_sweep_passes_only_when_every_attempt_is_blocked() {
     let Some(sb) = mac_sandbox() else { return };
     let l = layout();

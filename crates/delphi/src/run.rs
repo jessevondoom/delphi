@@ -425,6 +425,12 @@ pub fn run(home: &Path, ws_dir: &Path, opts: Opts) -> i32 {
         let now = delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339());
         // The environment test, and a second one that does not rely on the environment: the ancestry of this process (S2d1).
         let seat = crate::xenia_terminal::inside_an_agent_seat();
+        // Also refused when the options are parsed; checked again here because the anchor is ended and the home deleted when this
+        // process finishes, which a daemon that outlived it would not survive.
+        if opts.keep_daemon {
+            say_err("refused: --keep-daemon cannot be used with --on-card authorization:<id>; the daemon holds the grant and is stopped with the run");
+            return EXIT_INFRA;
+        }
         if let Some(why) = crate::run_granted::seat_refusal() {
             say_err(&why);
             return EXIT_INFRA;
@@ -474,6 +480,11 @@ pub fn run(home: &Path, ws_dir: &Path, opts: Opts) -> i32 {
                 say_err(&format!("the project snapshot has tree hash {} ({} files); the run's home and snapshot are discarded when it ends", area.snapshot.tree_hash(), area.snapshot.file_count()));
                 let granted_opts = SpawnOptions { home: area.home.path(), workspace: &area.ws_dir, daemon_exe: &exe, extra_args: vec![], prefix_args: vec!["__core".into()], own_version: Some(env!("CARGO_PKG_VERSION")) };
                 let r = delphi_core::spawn::connect_or_spawn_granted(&granted_opts, &bytes);
+                // The mission is opened from the SNAPSHOT: the real project's path is never sent to the throwaway daemon.
+                if let Err(e) = std::env::set_current_dir(area.snapshot.path()) {
+                    say_err(&format!("refused: cannot enter the snapshot ({e})"));
+                    return EXIT_INFRA;
+                }
                 granted = Some((area, anchor));
                 r
             }

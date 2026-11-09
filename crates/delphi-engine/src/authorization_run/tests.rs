@@ -44,6 +44,7 @@ struct Rig {
     argv: Vec<String>,
     id: String,
     script: String,
+    policy: a::Policy,
 }
 
 struct Victim(std::process::Child);
@@ -58,8 +59,25 @@ impl Drop for Victim {
 /// An operator home with one live record for `/bin/bash <script> <args>`, a snapshot holding the script, a no-exec scratch directory
 /// with the sweep's fixtures, and a fresh throwaway home. `args` is built from the rig once its paths exist.
 fn rig(script_text: &str, max_uses: u32, args: impl Fn(&Rig0) -> Vec<String>) -> Rig {
+    rig_with(script_text, max_uses, args, false)
+}
+
+/// As [`rig`]; with `own_bash` the interpreter is a copy of `/bin/bash` in the rig's own directory (a policy that names it), so a test
+/// can change the interpreter's bytes. The probe still uses the real `/bin/bash`; nothing is run from the copy in those tests.
+fn rig_with(script_text: &str, max_uses: u32, args: impl Fn(&Rig0) -> Vec<String>, own_bash: bool) -> Rig {
     let t = tempfile::tempdir().unwrap();
     let root = fs::canonicalize(t.path()).unwrap();
+    let (bin, policy) = if own_bash {
+        let dir = root.join("interp");
+        fs::create_dir(&dir).unwrap();
+        let copy = dir.join("bash");
+        fs::copy("/bin/bash", &copy).unwrap();
+        fs::set_permissions(&copy, fs::Permissions::from_mode(0o755)).unwrap();
+        let b = copy.to_string_lossy().into_owned();
+        (b.clone(), a::Policy { interpreters: vec![b], sealed_roots: vec![] })
+    } else {
+        ("/bin/bash".to_string(), a::Policy::system())
+    };
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
     fs::write(project.join("job.sh"), script_text).unwrap();
@@ -89,7 +107,7 @@ fn rig(script_text: &str, max_uses: u32, args: impl Fn(&Rig0) -> Vec<String>) ->
     let script = snap.path().join("job.sh").to_string_lossy().into_owned();
 
     let r0 = Rig0 { snap: snap.path().to_path_buf(), scratch: scratch.clone(), canary, opshome, fakedelphi, port: listener.local_addr().unwrap().port(), victim: victim.0.id() };
-    let mut argv = vec!["/bin/bash".to_string(), script.clone()];
+    let mut argv = vec![bin.clone(), script.clone()];
     argv.extend(args(&r0));
 
     // The operator's home, with a record made the way `delphi test authorize` makes it (real /bin/bash, sealed-volume check on).
@@ -97,11 +115,11 @@ fn rig(script_text: &str, max_uses: u32, args: impl Fn(&Rig0) -> Vec<String>) ->
     fs::create_dir_all(home.join("operator")).unwrap();
     delphi_core::lock::write(&home.join("operator/ratified.lock"), &Default::default()).unwrap();
     let entry = a::Entry { tool: "shell".into(), argv: argv.clone(), files: vec![script.clone()], runner_provenance: "project_snapshot".into() };
-    let n = a::NewRecord { purpose: "S2d1 acceptance".into(), intent: "red-team sweep".into(), run: "run-1".into(), expires_in_secs: a::DEFAULT_EXPIRY_SECS, max_uses, entries: vec![entry], request: None, policy: a::Policy::system() };
+    let n = a::NewRecord { purpose: "S2d1 acceptance".into(), intent: "red-team sweep".into(), run: "run-1".into(), expires_in_secs: a::DEFAULT_EXPIRY_SECS, max_uses, entries: vec![entry], request: None, policy: policy.clone() };
     let rec = a::build_record(&home, &n, now(), &delphi_core::time::now_rfc3339()).unwrap();
     let id = rec.id.clone();
     a::create_audited(&home, rec.clone(), json!({"id": rec.id, "manifest_hash": rec.manifest_hash, "run": rec.run, "by": "operator", "source": "operator"})).unwrap();
-    Rig { _t: t, root, home, snap, fresh, scratch, listener, victim, argv, id, script }
+    Rig { _t: t, root, home, snap, fresh, scratch, listener, victim, argv, id, script, policy }
 }
 
 /// The paths a rig makes, for building the arguments.
@@ -128,8 +146,8 @@ type Events = std::sync::Arc<Mutex<Vec<(String, Value)>>>;
 impl Rig {
     /// A grant made the way the daemon makes it: through the launcher's payload (anchor event, ledger state), in this process.
     fn launch(&self) -> (Grant, RunAnchor) {
-        let (bytes, anchor) = launch_granted(&self.home, &self.id, "run-1", now(), &a::Policy::system()).unwrap();
-        (Grant::from_boot(&bytes, std::process::id(), now(), a::Policy::system()).unwrap(), anchor)
+        let (bytes, anchor) = launch_granted(&self.home, &self.id, "run-1", now(), &self.policy).unwrap();
+        (Grant::from_boot(&bytes, std::process::id(), now(), self.policy.clone()).unwrap(), anchor)
     }
 
     fn area(&self) -> Area<'_> {
@@ -141,6 +159,20 @@ impl Rig {
         let sink = ev.clone();
         let r = g.run_authorized(&self.argv, &self.area(), now(), &mut |k, v| {
             sink.lock().unwrap().push((k.to_string(), v));
+            Ok(())
+        });
+        (r, ev)
+    }
+
+    /// As [`Rig::call`], and `between` runs when `authorization.used` has been logged: after the use is taken, before the exec.
+    fn call_hooked(&self, g: &Grant, mut between: impl FnMut(&Rig)) -> (Result<AuthorizedRun, Refusal>, Events) {
+        let ev: Events = Default::default();
+        let sink = ev.clone();
+        let r = g.run_authorized(&self.argv, &self.area(), now(), &mut |k, v| {
+            sink.lock().unwrap().push((k.to_string(), v));
+            if k == USED {
+                between(self);
+            }
             Ok(())
         });
         (r, ev)
@@ -424,4 +456,68 @@ fn the_runner_never_reaches_exec_run_and_never_runs_without_the_sandbox() {
     assert!(!code.contains("exec.run") && !code.contains("exec::") && !code.contains("plain_command"));
     assert!(!code.contains("Command::new"), "the runner starts nothing but through the sandbox");
     assert!(code.contains("sb.command(&spec,") && code.contains("run_bounded("));
+}
+
+// ---------------------------------------------------------------------------------------------- tampering after the use is logged
+
+#[test]
+fn a_private_copy_changed_between_the_log_and_the_exec_is_not_run() {
+    if !can_run() {
+        return;
+    }
+    let r = trivial_rig(3);
+    let (g, _anchor) = r.launch();
+    let (res, ev) = r.call_hooked(&g, |r| {
+        let dir = fs::read_dir(r.snap.root()).unwrap().flatten().map(|e| e.path()).find(|p| p.file_name().unwrap().to_string_lossy().starts_with("use-")).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+        let file = dir.join("job.sh");
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::write(&file, "#!/bin/bash\necho swapped\n").unwrap();
+    });
+    let err = res.unwrap_err();
+    assert!(err.use_taken && err.reason.contains("private copy"), "{err:?}");
+    assert_eq!((count(&ev, USED), count(&ev, RAN), r.real()), (1, 0, 1), "consumed, logged, never run");
+}
+
+#[test]
+fn an_interpreter_changed_between_the_log_and_the_exec_is_not_run() {
+    if !can_run() {
+        return;
+    }
+    let r = rig_with("#!/bin/bash\necho job-ran\n", 3, |_| vec![], true);
+    let (g, _anchor) = r.launch();
+    let bin = r.argv[0].clone();
+    let (res, ev) = r.call_hooked(&g, |_| {
+        use std::io::Write as _;
+        let mut f = fs::OpenOptions::new().append(true).open(&bin).unwrap();
+        f.write_all(b"\0tampered").unwrap();
+    });
+    let err = res.unwrap_err();
+    assert!(err.use_taken && err.reason.contains("interpreter"), "{err:?}");
+    assert_eq!((count(&ev, USED), count(&ev, RAN)), (1, 0));
+}
+
+#[test]
+fn the_places_changed_between_the_log_and_the_exec_stop_the_command() {
+    if !can_run() {
+        return;
+    }
+    let r = trivial_rig(5);
+    let (g, _anchor) = r.launch();
+    // a symlink planted in the throwaway home
+    let evil = r.fresh.path().join("evil");
+    let (res, ev) = r.call_hooked(&g, |r| std::os::unix::fs::symlink("/etc/hosts", r.fresh.path().join("evil")).unwrap());
+    let err = res.unwrap_err();
+    assert!(err.use_taken && err.reason.contains("walk"), "{err:?}");
+    assert_eq!(count(&ev, RAN), 0);
+    fs::remove_file(&evil).unwrap();
+    // the snapshot written to
+    let (res, ev) = r.call_hooked(&g, |r| {
+        let dir = r.snap.path().to_path_buf();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::write(dir.join("planted"), "x").unwrap();
+    });
+    let err = res.unwrap_err();
+    assert!(err.use_taken && err.reason.contains("snapshot"), "{err:?}");
+    assert_eq!(count(&ev, RAN), 0);
 }

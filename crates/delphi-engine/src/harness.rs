@@ -214,7 +214,7 @@ pub enum Event {
     ToolUse { id: String, name: String, input: Value },
     ToolResult { id: String, is_error: bool },
     /// The CLI answered a tool call with "No such tool available": it refused the call and ran nothing (emitted just before the `ToolResult`).
-    ToolRefused { id: String },
+    ToolRefused { id: String, tool: String },
     /// What the CLI listed at init besides tools (spec 092 S2d1): slash commands, skills, agents and plugins, by name. Recorded, never a reason to stop.
     InitExtras { slash_commands: Vec<String>, skills: Vec<String>, agents: Vec<String>, plugins: Vec<String> },
     Permission(Permission),
@@ -276,8 +276,11 @@ pub fn parse_line(line: &str) -> Vec<Event> {
                         Value::Array(a) => a.iter().filter_map(|x| x["text"].as_str()).collect::<Vec<_>>().join(" "),
                         _ => String::new(),
                     };
-                    if is_error && text.contains("No such tool available") {
-                        out.push(Event::ToolRefused { id: id.clone() });
+                    // The CLI's exact refusal, anchored at the start of an error result: "No such tool available: <Name>. <Name> is
+                    // disabled ...". A result that merely CONTAINS the phrase (a file's text, a command's output) is not one.
+                    if let Some(rest) = is_error.then(|| text.strip_prefix("No such tool available: ")).flatten() {
+                        let tool: String = rest.chars().take_while(|c| *c != '.' && !c.is_whitespace()).collect();
+                        out.push(Event::ToolRefused { id: id.clone(), tool });
                     }
                     out.push(Event::ToolResult { id, is_error });
                 }
@@ -2478,9 +2481,14 @@ read never
     #[test]
     fn a_refused_tool_call_is_told_apart_from_one_that_ran_and_init_lists_are_recorded() {
         let refused = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu1","is_error":true,"content":"No such tool available: Task"}]}}"#;
-        assert_eq!(parse_line(refused), vec![Event::ToolRefused { id: "tu1".into() }, Event::ToolResult { id: "tu1".into(), is_error: true }]);
+        assert_eq!(parse_line(refused), vec![Event::ToolRefused { id: "tu1".into(), tool: "Task".into() }, Event::ToolResult { id: "tu1".into(), is_error: true }]);
         let blocks = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu2","is_error":true,"content":[{"type":"text","text":"No such tool available: Bash"}]}]}}"#;
-        assert_eq!(parse_line(blocks)[0], Event::ToolRefused { id: "tu2".into() });
+        assert_eq!(parse_line(blocks)[0], Event::ToolRefused { id: "tu2".into(), tool: "Bash".into() });
+        // the phrase in the middle of an error, or as a prefix without the exact form, is not the CLI's refusal
+        for text in ["exit 1: No such tool available: Bash", "  No such tool available: Bash", "No such tool available", "no such tool available: Bash"] {
+            let line = format!(r#"{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id":"x","is_error":true,"content":"{text}"}}]}}}}"#);
+            assert_eq!(parse_line(&line), vec![Event::ToolResult { id: "x".into(), is_error: true }], "{text}");
+        }
         let ran = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu3","is_error":false,"content":"No such tool available"}]}}"#;
         assert_eq!(parse_line(ran), vec![Event::ToolResult { id: "tu3".into(), is_error: false }], "only an error result is a refusal");
         let init = parse_line(r#"{"type":"system","subtype":"init","session_id":"s","tools":[],"slash_commands":["a"],"skills":["b"],"agents":[],"plugins":[{"name":"p"}]}"#);

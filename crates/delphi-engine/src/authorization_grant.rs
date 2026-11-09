@@ -183,6 +183,7 @@ pub fn take_use(home: &Path, id: &str, record_hash: &str, run: &str, max_uses: u
     take_in(&ledger_dir(home, id), id, record_hash, run, max_uses, false, None).map(|r| r.0)
 }
 
+#[cfg(test)]
 /// [`take_use`] under the anchor: the ledger must be exactly at `expect` (the state this run last saw) or no use is taken. Returns the
 /// use and the state after it, which the caller keeps as the next `expect`.
 pub fn take_use_anchored(home: &Path, id: &str, record_hash: &str, run: &str, max_uses: u32, expect: &LedgerState) -> Result<(Used, LedgerState), String> {

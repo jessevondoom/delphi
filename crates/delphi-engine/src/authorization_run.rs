@@ -1,5 +1,6 @@
 //! Operator-authorized tests, slice S2d1 (`specs/092` TA-3): `run_authorized`, the forced-sandbox runner.
 //!
+//! **Compiled in test builds only** (`#[cfg(test)] mod authorization_run;` in `lib.rs`): until S2d2 there is no way to call this from the product.
 //! **Nothing in a run calls this.** `delphi run` and the engine still deny every Red card (`AUTHORIZED_APPROVAL_ENABLED` is false and
 //! `decide()` denies); this function is exercised only by its own tests (the scan in `authorization/tests.rs` fails on any other
 //! caller). S2d2 is the slice that connects it, with the operator's ratification.
@@ -23,7 +24,9 @@
 //! a process of the same user OUTSIDE the sandbox could swap it; that attacker can do far more already. Executing by descriptor does
 //! not close it for a script (bash opens the path it is given). (b) The interpreter, `/bin/bash`, is on the sealed system volume and is
 //! re-hashed here, but it is exec'd by path: a swap in that gap needs a write to the sealed volume. (c) A use taken and then lost to a
-//! failed second probe, a failed log write or a refused exec stays consumed (fail-safe, never refunded). (d) Arguments after the
+//! failed second probe, a failed log write or a refused exec stays consumed (fail-safe, never refunded). (e) The script is run from a
+//! private copy in its own directory, so a script that finds its siblings by a path relative to `$0` finds none; the other pinned files
+//! are re-hashed at their original paths and are readable only where the snapshot is. This is a limit of S2d1 and is not widened. (d) Arguments after the
 //! script are the record's own fixed text; a script that names per-run paths (a snapshot or scratch directory chosen at launch) can
 //! only be authorized for paths the operator knew in advance (an open question for S2d2).
 

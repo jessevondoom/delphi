@@ -1132,6 +1132,22 @@ fn run_authorized_has_no_caller_but_its_tests() {
         let uses_anchor = code.iter().any(|l| l.contains("authorization_anchor"));
         assert!(!uses_anchor || ANCHOR_USERS.contains(&rel.as_str()), "{rel} names the ledger anchor module");
     }
+    // by construction, not only by scan: the module is compiled in test builds only, so no product code can call it
+    let lib = &sources.iter().find(|(r, _)| r == "crates/delphi-engine/src/lib.rs").unwrap().1;
+    assert!(lib.contains("#[cfg(test)]\nmod authorization_run;"), "authorization_run must be `#[cfg(test)] mod` until S2d2");
+    let grant_src = &sources.iter().find(|(r, _)| r == "crates/delphi-engine/src/authorization_grant.rs").unwrap().1;
+    assert!(grant_src.contains("#[cfg(test)]\n/// [`take_use`] under the anchor"), "take_use_anchored is test-only until S2d2");
+    // text forms that could hide a call from the plain-substring scan: an include! of the module, or a macro that builds the name
+    for (rel, text) in &sources {
+        if ALLOWED.contains(&rel.as_str()) || MODULE_USERS.contains(&rel.as_str()) {
+            continue;
+        }
+        for l in text.lines().filter(|l| !l.trim_start().starts_with("//")) {
+            assert!(!(l.contains("include!") && l.contains("authorization")), "{rel}: {l}");
+            assert!(!(l.contains("run_auth") && (l.contains("concat!") || l.contains("stringify!") || l.contains("paste!") || l.contains("macro_rules!"))), "{rel}: {l}");
+            assert!(!(l.contains("macro_rules!") && l.contains("authorization")), "{rel}: {l}");
+        }
+    }
     // the definition is a method of the grant and is the only `fn run_authorized`
     let defs: Vec<&str> = sources.iter().filter(|(r, t)| r != "crates/delphi-engine/src/authorization/tests.rs" && t.lines().any(|l| l.contains("fn run_authorized("))).map(|(r, _)| r.as_str()).collect();
     assert_eq!(defs, ["crates/delphi-engine/src/authorization_run.rs"]);
