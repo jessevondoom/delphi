@@ -644,8 +644,14 @@ fn an_unreadable_process_count_fails_the_launch_and_the_command_does_not_run() {
     limits.test_count = Some(Some(0)); // a zero count is as unusable as none
     assert_eq!(launch_marker(limits), (true, false));
     // control: with a readable count the same command runs, so the failures above are the count's doing
+    // (macOS only: elsewhere the live count is deliberately unavailable, so a launch with a headroom fails closed, always)
     limits.test_count = None;
-    assert_eq!(launch_marker(limits), (false, true));
+    if cfg!(target_os = "macos") {
+        assert_eq!(launch_marker(limits), (false, true));
+    } else {
+        eprintln!("skip: no live process count off macOS; the launch fails closed");
+        assert_eq!(launch_marker(limits), (true, false));
+    }
 }
 
 #[test]
@@ -661,14 +667,29 @@ fn a_refused_setrlimit_fails_the_launch_and_the_command_does_not_run() {
     assert_eq!(launch_marker(limits), (true, false));
 }
 
+/// Run a flood of `n` parked subshells under the production profile; how many started before a fork was refused.
+fn flood_started(sb: &Sandbox, l: &Layout, n: u32) -> u64 {
+    settle_process_count();
+    let script = "trap 'echo started=$i' EXIT; exec 9<> \"$1\"; i=0; last=''; while [ $i -lt $2 ]; do ( read -t 20 -u 9 x ) & if [ \"$!\" = \"$last\" ]; then break; fi; last=$!; i=$((i + 1)); done";
+    let args = [std::ffi::OsString::from("-c"), script.into(), "sh".into(), l.scratch.join("fifo").into(), n.to_string().into()];
+    let mut cmd = sb.command(&l.spec(), INTERPRETER, args).unwrap();
+    cmd.current_dir(l.snap.path());
+    let out = run_bounded(cmd, &RunOptions { timeout: Duration::from_secs(60), max_output_bytes: 1 << 16, quota: vec![], kill_over_quota: false }).unwrap();
+    out.stdout.lines().find_map(|x| x.strip_prefix("started=")).and_then(|x| x.trim().parse().ok()).unwrap_or(u64::MAX)
+}
+
 #[test]
-fn the_production_headroom_is_pinned_in_the_limit_the_child_actually_gets() {
-    // A flood cannot pin this: the count `proc_listallpids` returns covers every user's processes, the kernel's limit counts the
-    // user's, so a flood has an unknown extra margin. The limit itself is exact: the child reports its own `ulimit -u`, which must
-    // be the system count at launch plus 128. A headroom of 256 (the old value) puts it a hundred above and goes red.
+fn the_production_headroom_is_pinned_by_floods_and_by_the_limit_the_child_gets() {
     let Some(sb) = mac_sandbox() else { return };
     let l = layout();
     let _turn = FLOOD.lock().unwrap_or_else(|e| e.into_inner());
+    // The cap is the user's own count plus 128 (the child bash is already in the count): 100 forks fit, 200 and 250 do not.
+    // 200 sits well under the old headroom of 256 (which would let it through) and leaves a margin of ~70 for the user's own
+    // processes coming and going between the launch and the flood (130 was tried: a drift of a dozen processes flips it).
+    assert_eq!(flood_started(&sb, &l, 100), 100);
+    assert!(flood_started(&sb, &l, 200) < 200);
+    assert!(flood_started(&sb, &l, 250) < 250);
+    // second assertion: the limit itself, reported by the child, is the user's count at launch plus the literal 128
     settle_process_count();
     let before = crate::live_process_count().unwrap();
     let mut cmd = sb.command(&l.spec(), INTERPRETER, ["-c", "echo nproc=$(ulimit -u)"]).unwrap();
@@ -677,8 +698,26 @@ fn the_production_headroom_is_pinned_in_the_limit_the_child_actually_gets() {
     let after = crate::live_process_count().unwrap();
     let got: u64 = out.stdout.lines().find_map(|x| x.strip_prefix("nproc=")).and_then(|x| x.trim().parse().ok()).unwrap_or(0);
     let (lo, hi) = (before.min(after) + 128, before.max(after) + 128); // the literal, on purpose: the pin
-    // the child and the sandbox helper count too (a handful), and unrelated processes come and go (a few tens at most once settled)
-    assert!(got + 40 >= lo && got <= hi + 40, "limit {got} not within [{lo}, {hi}] (headroom 128): {out:?}");
+    assert!(got + 20 >= lo && got <= hi + 20, "limit {got} not within [{lo}, {hi}] (headroom 128): {out:?}");
+}
+
+#[test]
+fn the_count_is_the_users_processes_not_the_systems() {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    settle_process_count();
+    let ours = crate::live_process_count().unwrap() as i64;
+    // SAFETY: plain getuid.
+    let uid = unsafe { libc::getuid() };
+    let ps = Command::new("/bin/ps").args(["-ax", "-o", "uid="]).output().unwrap();
+    let text = String::from_utf8_lossy(&ps.stdout);
+    let mine = text.lines().filter(|x| x.trim() == uid.to_string()).count() as i64;
+    let all = text.lines().count() as i64;
+    assert!((ours - mine).abs() <= 25, "counted {ours}, ps shows {mine} processes of uid {uid}");
+    if uid != 0 {
+        assert!(all - mine > 25 && (all - ours).abs() > 25, "this machine cannot tell the user's count from the system's ({all} vs {mine})");
+    }
 }
 
 #[test]

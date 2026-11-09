@@ -73,8 +73,8 @@ pub struct Limits {
     pub max_open_files: Option<u64>,
     /// `RLIMIT_NPROC` as headroom over the user's process count, measured in the child between `fork` and `exec` (the last moment
     /// before the program runs), so processes that exit between building the spec and the launch cannot lift the cap. If the count
-    /// cannot be read, or the limit cannot be set, the launch FAILS (closed); it never runs without the limit. `proc_listallpids` counts ALL processes
-    /// on the system, not only the user's, so the cap is at least `headroom` above the user's own count: looser than a per-user cap.
+    /// cannot be read, or the limit cannot be set, the launch FAILS (closed); it never runs without the limit. The count is the user's own
+    /// processes (what the kernel limit counts), so the cap is exactly that count plus `headroom`.
     pub proc_headroom: Option<u64>,
     /// Test hook (absent from production builds): `Some(count)` replaces the live process count; `Some(None)` is an unreadable one.
     #[cfg(test)]
@@ -271,13 +271,22 @@ pub fn resolve_nproc(headroom: u64, count: Option<u64>) -> Option<u64> {
     count.filter(|n| *n > 0).map(|n| n.saturating_add(headroom))
 }
 
-/// How many processes exist now (macOS; `None` elsewhere). A syscall wrapper with a null buffer, safe after `fork`.
+/// How many processes the calling user owns now (macOS; `None` elsewhere, or when the answer cannot be trusted).
+///
+/// `RLIMIT_NPROC` counts the user's processes only, and `proc_listallpids` counts every user's (a hundred or more extra, varying
+/// by machine), so the cap would drift above the headroom by that amount. `proc_listpids(PROC_UID_ONLY, uid, ..)` with a real
+/// buffer returns just this user's pids (a null-buffer size query ignores the uid filter, so it cannot be used). It is a thin
+/// wrapper over one `proc_info` system call: the buffer is on the stack, nothing is allocated and no lock is taken, so it is safe
+/// between `fork` and `exec`. A buffer that comes back full is "unknown" (fail closed), never a truncated count.
 pub fn live_process_count() -> Option<u64> {
     #[cfg(target_os = "macos")]
     {
-        // SAFETY: a null buffer asks proc_listallpids only for the size.
-        let n = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
-        (n > 0).then_some(n as u64)
+        const SLOTS: usize = 8192; // 32 KiB; kern.maxproc is 4000 or so on current macOS
+        let mut pids = [0 as libc::pid_t; SLOTS];
+        // SAFETY: the buffer is valid for the size passed; proc_listpids only writes pids into it.
+        let bytes = unsafe { libc::proc_listpids(4 /* PROC_UID_ONLY */, libc::getuid(), pids.as_mut_ptr().cast(), std::mem::size_of_val(&pids) as libc::c_int) };
+        let n = usize::try_from(bytes).ok()? / std::mem::size_of::<libc::pid_t>();
+        (n > 0 && n < SLOTS).then_some(n as u64)
     }
     #[cfg(not(target_os = "macos"))]
     {
