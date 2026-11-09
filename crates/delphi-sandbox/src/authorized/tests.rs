@@ -2,7 +2,7 @@
 //! machine with no sandbox they print why and skip. The Linux tests (bubblewrap) assert that the profile is REFUSED there.
 
 use super::*;
-use crate::{bwrap_args, sbpl, sbpl_str, Resolved};
+use crate::{bwrap_args, sbpl, sbpl_str, Limits, Resolved};
 use std::process::Command;
 use std::sync::Mutex;
 
@@ -614,7 +614,7 @@ fn the_sweep_fails_when_tmp_users_and_the_home_are_writable_or_listable() {
 #[test]
 fn the_sweep_fails_when_a_fork_flood_is_not_limited() {
     // the process limit removed: the 900 forks all succeed, and the sweep says so
-    weakened("no nproc", "fork_flood", |_, spec| { spec.limits.max_procs = None; spec.limits.proc_headroom = None; });
+    weakened("no nproc", "fork_flood", |_, spec| spec.limits.proc_headroom = None);
 }
 
 #[test]
@@ -622,6 +622,63 @@ fn an_unreadable_process_count_means_no_limit_value_and_so_no_launch() {
     assert_eq!(crate::resolve_nproc(128, None), None);
     assert_eq!(crate::resolve_nproc(128, Some(0)), None);
     assert_eq!(crate::resolve_nproc(128, Some(1000)), Some(1128));
+}
+
+/// Run `/bin/sh -c 'touch <marker>'` under `limits` with the production hardening; returns (spawn failed, marker exists).
+fn launch_marker(limits: Limits) -> (bool, bool) {
+    let dir = mkdtemp(&std::env::temp_dir(), "delphi-nproc-").unwrap();
+    let marker = dir.join("ran");
+    let mut cmd = Command::new("/bin/sh");
+    cmd.arg("-c").arg(format!("echo x > '{}'", marker.display()));
+    crate::harden_process(&mut cmd, limits);
+    let spawned = cmd.status();
+    let ran = marker.exists();
+    let _ = fs::remove_dir_all(&dir);
+    (spawned.is_err(), ran)
+}
+
+#[test]
+fn an_unreadable_process_count_fails_the_launch_and_the_command_does_not_run() {
+    let mut limits = Limits { proc_headroom: Some(PROC_HEADROOM), test_count: Some(None), ..Limits::default() };
+    assert_eq!(launch_marker(limits), (true, false));
+    limits.test_count = Some(Some(0)); // a zero count is as unusable as none
+    assert_eq!(launch_marker(limits), (true, false));
+    // control: with a readable count the same command runs, so the failures above are the count's doing
+    limits.test_count = None;
+    assert_eq!(launch_marker(limits), (false, true));
+}
+
+#[test]
+fn a_refused_setrlimit_fails_the_launch_and_the_command_does_not_run() {
+    // A cap above the hard limit cannot be set by an unprivileged process: the launch must fail, not run without the cap.
+    let mut hard = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+    // SAFETY: plain getrlimit on this process with a valid pointer.
+    assert_eq!(unsafe { libc::getrlimit(libc::RLIMIT_NPROC, &mut hard) }, 0);
+    if hard.rlim_max == libc::RLIM_INFINITY || unsafe { libc::geteuid() } == 0 {
+        return; // every value is settable; nothing to refuse
+    }
+    let limits = Limits { proc_headroom: Some(PROC_HEADROOM), test_count: Some(Some(hard.rlim_max)), ..Limits::default() };
+    assert_eq!(launch_marker(limits), (true, false));
+}
+
+#[test]
+fn the_production_headroom_is_pinned_in_the_limit_the_child_actually_gets() {
+    // A flood cannot pin this: the count `proc_listallpids` returns covers every user's processes, the kernel's limit counts the
+    // user's, so a flood has an unknown extra margin. The limit itself is exact: the child reports its own `ulimit -u`, which must
+    // be the system count at launch plus 128. A headroom of 256 (the old value) puts it a hundred above and goes red.
+    let Some(sb) = mac_sandbox() else { return };
+    let l = layout();
+    let _turn = FLOOD.lock().unwrap_or_else(|e| e.into_inner());
+    settle_process_count();
+    let before = crate::live_process_count().unwrap();
+    let mut cmd = sb.command(&l.spec(), INTERPRETER, ["-c", "echo nproc=$(ulimit -u)"]).unwrap();
+    cmd.current_dir(l.snap.path());
+    let out = run_bounded(cmd, &RunOptions { timeout: Duration::from_secs(30), max_output_bytes: 1 << 16, quota: vec![], kill_over_quota: false }).unwrap();
+    let after = crate::live_process_count().unwrap();
+    let got: u64 = out.stdout.lines().find_map(|x| x.strip_prefix("nproc=")).and_then(|x| x.trim().parse().ok()).unwrap_or(0);
+    let (lo, hi) = (before.min(after) + 128, before.max(after) + 128); // the literal, on purpose: the pin
+    // the child and the sandbox helper count too (a handful), and unrelated processes come and go (a few tens at most once settled)
+    assert!(got + 40 >= lo && got <= hi + 40, "limit {got} not within [{lo}, {hi}] (headroom 128): {out:?}");
 }
 
 #[test]
