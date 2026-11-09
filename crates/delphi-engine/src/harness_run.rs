@@ -655,6 +655,11 @@ impl Engine {
             // A Builder's file edits and commands are judged through the ACP approval bridge.
             opts.app_server = true;
         }
+        // A granted run leaves no transcript behind: the CLI would write it under the operator's real `~/.claude/projects`, outside the
+        // throwaway home, whatever `[harness.claude] session` says (spec 092 S2d2a). Resume is a saved session of another run: not either.
+        if granted {
+            opts.session = SessionMode::Ephemeral;
+        }
         let keyed = opts.api_key.is_some();
         let streamed = opts.partial_messages && cli == Cli::Claude;
         let persist = opts.session != SessionMode::Ephemeral;
@@ -744,6 +749,16 @@ impl Engine {
         let before = builder.then(|| exec::snapshot(&wt.as_ref().expect("builder has a worktree").path));
         let builtin = if builder { "standard" } else if native_for_note.is_empty() { "none" } else { "native" };
         sc.m.append(sc.agent_ev("harness.started", json!({"endpoint_id": ep.id, "tools": builtin, "native_tools": native_for_note, "bridge": bridge_defs.iter().map(|d| d.name.clone()).collect::<Vec<_>>(), "gated": gate_rx.is_some(), "approvals": if delegate { "delegate" } else { "delphi" }, "claudeai_connectors": launch.profile.claudeai_connectors, "cap_tokens": self.settings.harness_token_cap}), ep, &launch.model)).await?;
+        // The flags a granted launch relies on (`--disable-slash-commands`, `--disallowedTools`, `--max-turns`) are the 2.1 line's: the CLI's
+        // version is read first, and a CLI that will not say or is older is not started (the other seat or the API serves the span).
+        if granted && cli == Cli::Claude {
+            let prog = launch.program.clone();
+            let line = tokio::task::spawn_blocking(move || crate::capabilities::cli_version_bounded(&prog, 5)).await.ok().flatten();
+            if let Some(why) = crate::authorization_grant::claude_version_problem(line.as_deref()) {
+                sc.m.append(sc.ev("authorization.refused", json!({"seat": cli.program(), "reason": why, "version": line.as_deref().map(|l| crate::authorization_grant::clean_for_log(l, 40)), "approved": false}))).await?;
+                return Ok(Err(HarnessErr::retry(format!("a run with an operator authorization cannot use the claude seat: {why}"))));
+            }
+        }
         let mut session = match Session::start(&launch).await {
             Ok(s) => s,
             Err(e) => return Ok(Err(HarnessErr::retry(e))),
@@ -826,6 +841,14 @@ impl Engine {
                     // Exactly one known pseudo-tool is let through, and only when a schema was asked for (`StructuredOutput`). A CLI that
                     // reports NO tools at all is not trusted either: the flag cannot be shown to have held.
                     if granted && cli == Cli::Claude {
+                        // Exactly Delphi's bridge and nothing else: the launch passed `--strict-mcp-config` with one server, so a CLI that reports
+                        // another (an account connector, a plugin's server), none, or the bridge's name twice is not the seat that was asked for.
+                        if let Some(why) = crate::authorization_grant::mcp_server_problem(mcp_servers.as_deref(), crate::bridge::SERVER_NAME) {
+                            session.kill().await;
+                            sc.m.append(sc.ev("authorization.refused", json!({"seat": cli.program(), "reason": why, "mcp_servers": mcp_servers.clone().unwrap_or_default().iter().map(|(n, s)| json!({"name": crate::authorization_grant::clean_for_log(n, 40), "status": s})).collect::<Vec<_>>(), "approved": false}))).await?;
+                            failure = Some((format!("a run with an operator authorization stops: {why}"), false));
+                            break;
+                        }
                         let bad = crate::authorization_grant::native_tool_problem(tools, launch.opts.json_schema.is_some(), TOOL_PREFIX);
                         if let Some(bad) = bad.as_ref() {
                             session.kill().await;
@@ -3157,7 +3180,7 @@ echo "$answer" > '{answer_file}'
         assert!(f.engine.grant.set(std::sync::Arc::new(crate::authorization_grant::Grant::bare_for_test(&f.root))).is_ok());
     }
 
-    const G_INIT: &str = r#"echo '{"type":"system","subtype":"init","session_id":"s1","tools":["mcp__delphi__search"],"slash_commands":["compact","review"],"skills":["pdf"],"agents":["general-purpose"],"plugins":[{"name":"p1"}]}'"#;
+    const G_INIT: &str = r#"echo '{"type":"system","subtype":"init","session_id":"s1","tools":["mcp__delphi__search"],"mcp_servers":[{"name":"delphi","status":"connected"}],"slash_commands":["compact","review"],"skills":["pdf"],"agents":["general-purpose"],"plugins":[{"name":"p1"}]}'"#;
 
     /// A fake CLI that calls `tool` and then, a third of a second later, would leave a marker (what the tool would have done).
     /// The span must be over, and the CLI killed, before that: the kill is issued on the tool_use event itself, without waiting for a result.
@@ -3197,9 +3220,98 @@ echo "$answer" > '{answer_file}'
         assert_eq!((note["slash_commands"].clone(), note["skills"].clone(), note["plugins"].clone()), (json!(["compact", "review"]), json!(["pdf"]), json!(["p1"])));
     }
 
+    const G_FINISH_LINE: &str = FINISH;
+
+    /// A granted fixture whose stand-in CLI answers `--version` with `version`.
+    fn granted_fixture(body: &str, version: &str, tweak: impl FnOnce(&mut crate::engine::Settings)) -> (Fx, tempfile::TempDir) {
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = crate::harness::tests::fake_cli_versioned(scripts.path(), body, version);
+        let f = setup_with_exec(vec![], 5.0, |s| { s.harness_program = prog; tweak(s); }, |c| { c.sandbox = crate::exec::SandboxMode::Off; });
+        crate::worktree::tests::init_repo(&f.root.join("proj"), &f.root.join("git-home"));
+        crate::testkit::ratify_spec(&f);
+        use_harness(&f);
+        hold_a_grant(&f);
+        (f, scripts)
+    }
+
+    #[tokio::test]
+    async fn a_granted_claude_launch_never_persists_a_session_whatever_the_profile_says() {
+        let dir = tempfile::tempdir().unwrap();
+        let dump = dir.path().join("dump");
+        let body = format!("echo \"$*\" > {}\n{}\n{}", dump.display(), G_INIT, G_FINISH_LINE);
+        // the profile asks for a kept session (the default for a login is Ephemeral, so this is the case that matters)
+        let (f, _s) = granted_fixture(&body, "2.1.319 (Claude Code)", |s| s.harness_claude.session = SessionMode::Persist);
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert_eq!(out.status, Status::Done, "{}", out.text);
+        let seen = fs::read_to_string(&dump).unwrap();
+        assert!(seen.contains("--no-session-persistence"), "a granted launch writes no transcript under the real ~/.claude/projects: {seen}");
+        assert!(!seen.contains("--resume"), "{seen}");
+        assert!(events_of(&f, "harness.session").is_empty(), "no session id is kept");
+        // and the same profile outside a grant does keep it (the control)
+        let dir2 = tempfile::tempdir().unwrap();
+        let dump2 = dir2.path().join("dump");
+        let body2 = format!("echo \"$*\" > {}\n{}\n{}", dump2.display(), G_INIT, G_FINISH_LINE);
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = crate::harness::tests::fake_cli(scripts.path(), &body2);
+        let f2 = setup_with_exec(vec![], 5.0, |s| { s.harness_program = prog; s.harness_claude.session = SessionMode::Persist; }, |c| { c.sandbox = crate::exec::SandboxMode::Off; });
+        crate::worktree::tests::init_repo(&f2.root.join("proj"), &f2.root.join("git-home"));
+        crate::testkit::ratify_spec(&f2);
+        use_harness(&f2);
+        f2.engine.run_task(&f2.m, "architect", "Plan the change").await.unwrap();
+        assert!(!fs::read_to_string(&dump2).unwrap().contains("--no-session-persistence"));
+    }
+
+    #[tokio::test]
+    async fn a_granted_seat_whose_cli_loaded_any_server_but_the_bridge_exactly_once_is_stopped() {
+        let init = |servers: &str| format!("echo '{{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"s1\",\"tools\":[\"mcp__delphi__search\"],\"mcp_servers\":[{servers}]}}'");
+        let d = r#"{"name":"delphi","status":"connected"}"#;
+        for (label, servers) in [
+            ("an extra server", format!(r#"{d},{{"name":"claude_ai_Slack","status":"connected"}}"#)),
+            ("the bridge's name twice", format!("{d},{d}")),
+            ("another name only", r#"{"name":"delphi_lookalike","status":"connected"}"#.to_string()),
+            ("no server", String::new()),
+        ] {
+            let (f, _s) = granted_fixture(&format!("{}\n{}", init(&servers), G_FINISH_LINE), "2.1.319 (Claude Code)", |_| {});
+            let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+            assert_ne!(out.status, Status::Done, "{label}");
+            let refused = events_of(&f, "authorization.refused");
+            assert!(refused.iter().any(|e| e.payload["reason"].as_str().unwrap_or("").contains("MCP server")), "{label}: {:?}", refused.iter().map(|e| e.payload.to_string()).collect::<Vec<_>>());
+        }
+        // a CLI that reports no list at all is not trusted either
+        let (f, _s) = granted_fixture(&format!("echo '{{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"s1\",\"tools\":[\"mcp__delphi__search\"]}}'\n{}", G_FINISH_LINE), "2.1.319 (Claude Code)", |_| {});
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert_ne!(out.status, Status::Done);
+        // the exact bridge is accepted
+        let (f, _s) = granted_fixture(&format!("{}\n{}", init(d), G_FINISH_LINE), "2.1.319 (Claude Code)", |_| {});
+        assert_eq!(f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap().status, Status::Done);
+    }
+
+    #[tokio::test]
+    async fn a_granted_claude_seat_starts_only_on_a_cli_version_the_flags_were_tested_on() {
+        for (version, ok) in [("2.1.319 (Claude Code)", true), ("2.1.0", true), ("2.2.0 (Claude Code)", true), ("3.0.1", true), ("2.0.99 (Claude Code)", false), ("1.9.9", false), ("", false), ("claude something", false), ("2.1", false)] {
+            let (f, _s) = granted_fixture(&format!("{}\n{}", G_INIT, G_FINISH_LINE), version, |_| {});
+            let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+            assert_eq!(out.status == Status::Done, ok, "version {version:?}: {:?}", out.status);
+            if !ok {
+                assert!(events_of(&f, "authorization.refused").iter().any(|e| e.payload["reason"].as_str().unwrap_or("").contains("Claude CLI")), "{version:?}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_claude_cli_that_hangs_on_version_is_killed_and_the_launch_refused_not_blocked() {
+        let body = "case \"${1-}\" in --version) sleep 60;; esac\n".to_string() + &format!("{}\n{}", G_INIT, G_FINISH_LINE);
+        let (f, _s) = granted_fixture(&body, "2.1.319", |_| {});
+        let t = std::time::Instant::now();
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert!(t.elapsed() < Duration::from_secs(40), "the version call was not bounded: {:?}", t.elapsed());
+        assert_ne!(out.status, Status::Done);
+        assert!(events_of(&f, "authorization.refused").iter().any(|e| e.payload["reason"].as_str().unwrap_or("").contains("version")));
+    }
+
     #[tokio::test]
     async fn the_init_tool_list_check_is_unchanged() {
-        let (f, _s) = fixture(&format!("echo '{{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"s1\",\"tools\":[\"Bash\"]}}'\n{}", FINISH), |_| {});
+        let (f, _s) = fixture(&format!("echo '{{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"s1\",\"tools\":[\"Bash\"],\"mcp_servers\":[{{\"name\":\"delphi\",\"status\":\"connected\"}}]}}'\n{}", FINISH), |_| {});
         hold_a_grant(&f);
         let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
         assert_ne!(out.status, Status::Done);

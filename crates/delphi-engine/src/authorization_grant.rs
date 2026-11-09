@@ -219,11 +219,32 @@ struct Boot {
     /// and every use must find the ledger exactly there.
     #[serde(default)]
     ledger: LedgerState,
+    /// The run's snapshot (S2d2a): its directory and tree hash. The daemon checks the record's pins against it at boot, and its dry path
+    /// resolves `@snapshot` tokens against the directory to show the vector it WOULD run.
+    #[serde(default)]
+    snapshot_dir: Option<String>,
+    #[serde(default)]
+    snapshot_tree: Option<String>,
 }
 
 /// The bytes the launcher writes into the pipe. Refuses a payload the pipe could not hold without a reader.
 pub fn encode_boot(record: &a::Record, run: &str, operator_home: &Path, launch_seq: u64, ledger: &LedgerState) -> Result<Vec<u8>, String> {
-    let b = Boot { record_hash: a::record_hash(record), record: record.clone(), run: run.to_string(), operator_home: operator_home.to_string_lossy().into_owned(), launch_seq, launcher_pid: std::process::id(), ledger: ledger.clone() };
+    encode_boot_with(record, run, operator_home, launch_seq, ledger, None)
+}
+
+/// As [`encode_boot`], with the run's snapshot `(directory, tree hash)`.
+pub fn encode_boot_with(record: &a::Record, run: &str, operator_home: &Path, launch_seq: u64, ledger: &LedgerState, snapshot: Option<(&Path, &str)>) -> Result<Vec<u8>, String> {
+    let b = Boot {
+        record_hash: a::record_hash(record),
+        record: record.clone(),
+        run: run.to_string(),
+        operator_home: operator_home.to_string_lossy().into_owned(),
+        launch_seq,
+        launcher_pid: std::process::id(),
+        ledger: ledger.clone(),
+        snapshot_dir: snapshot.map(|s| s.0.to_string_lossy().into_owned()),
+        snapshot_tree: snapshot.map(|s| s.1.to_string()),
+    };
     let bytes = serde_json::to_vec(&b).map_err(|e| e.to_string())?;
     if bytes.len() > MAX_BOOT_BYTES {
         return Err(format!("the grant is {} bytes, over the {} the boot pipe takes", bytes.len(), MAX_BOOT_BYTES));
@@ -303,6 +324,8 @@ pub struct Grant {
     probes: std::sync::atomic::AtomicU32,
     /// Where the real use ledger stood when this run last looked (the launcher's record at boot, then after each use this daemon took).
     pub(crate) anchor: std::sync::Mutex<LedgerState>,
+    /// The run's snapshot directory as the launcher reported it (S2d2a); `None` when the launcher gave none.
+    pub(crate) snapshot_dir: Option<PathBuf>,
     /// Tests only: weaken the profile `run_authorized` builds, so a test can show the sweep notices a hole. Not compiled into the product.
     #[cfg(test)]
     pub(crate) weaken: Option<WeakenFn>,
@@ -327,8 +350,13 @@ impl Grant {
         if a::record_hash(&b.record) != b.record_hash {
             return Err("the grant's record does not match its hash".into());
         }
-        let g = Grant { record: b.record, record_hash: b.record_hash, run: b.run, operator_home: PathBuf::from(b.operator_home), launch_seq: b.launch_seq, policy, probe: Arc::new(delphi_sandbox::authorized::probe_authorized), probes: Default::default(), anchor: std::sync::Mutex::new(b.ledger), #[cfg(test)] weaken: None };
+        let g = Grant { record: b.record, record_hash: b.record_hash, run: b.run, operator_home: PathBuf::from(b.operator_home), launch_seq: b.launch_seq, policy, probe: Arc::new(delphi_sandbox::authorized::probe_authorized), probes: Default::default(), anchor: std::sync::Mutex::new(b.ledger), snapshot_dir: b.snapshot_dir.map(PathBuf::from), #[cfg(test)] weaken: None };
         g.reverify(now_unix)?;
+        // The snapshot the launcher built must be the one the record was made for (tree hash and every pinned file): a grant that is
+        // already wrong never takes hold.
+        if let (Some(dir), Some(tree)) = (&g.snapshot_dir, &b.snapshot_tree) {
+            a::check_snapshot_pins(&g.record, dir, tree)?;
+        }
         let seen = ledger_state(&g.operator_home, &g.record.id)?;
         if seen != *g.anchor.lock().unwrap_or_else(|p| p.into_inner()) {
             return Err("the use ledger is not where the launcher left it; refused".into());
@@ -346,7 +374,7 @@ impl Grant {
     pub(crate) fn for_test(record: a::Record, run: &str, operator_home: &Path, launch_seq: u64, policy: a::Policy) -> Grant {
         let record_hash = a::record_hash(&record);
         let anchor = ledger_state(operator_home, &record.id).unwrap_or_default();
-        Grant { record, record_hash, run: run.into(), operator_home: operator_home.to_path_buf(), launch_seq, policy, probe: Arc::new(delphi_sandbox::authorized::probe_authorized), probes: Default::default(), anchor: std::sync::Mutex::new(anchor), weaken: None }
+        Grant { record, record_hash, run: run.into(), operator_home: operator_home.to_path_buf(), launch_seq, policy, probe: Arc::new(delphi_sandbox::authorized::probe_authorized), probes: Default::default(), anchor: std::sync::Mutex::new(anchor), snapshot_dir: None, weaken: None }
     }
 
     /// A grant with an empty manifest, only so a test can run the engine as a run that holds one (the seat guards read `grant.get()`).
@@ -369,6 +397,8 @@ impl Grant {
             request_hash: None,
             requester: None,
             revoked: None,
+            token_scheme: 0,
+            snapshot: None,
         };
         Grant::for_test(rec, "run-1", root, 0, a::Policy::system())
     }
@@ -376,6 +406,12 @@ impl Grant {
     #[cfg(test)]
     pub(crate) fn with_weakened_profile(mut self, w: impl Fn(&mut delphi_sandbox::SandboxSpec) + Send + Sync + 'static) -> Grant {
         self.weaken = Some(Arc::new(w));
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_snapshot_dir(mut self, d: &Path) -> Grant {
+        self.snapshot_dir = Some(d.to_path_buf());
         self
     }
 
@@ -444,7 +480,7 @@ impl Grant {
             Ok(_) => {}
             Err(why) => return refuse(why),
         }
-        if let Err(why) = self.verify_entry_at_use(i, now_unix) {
+        if let Err(why) = self.verify_entry_at_use(i, now_unix, self.snapshot_dir.as_deref()) {
             return refuse(why);
         }
         if let Err(why) = self.probe_now() {
@@ -460,7 +496,7 @@ impl Grant {
     /// revocation state ([`Grant::reverify`]), the deny-list and the runner rules, and the interpreter and every pinned file
     /// re-resolved and re-hashed (a symlinked script is refused). Reads and hashes only; consumes nothing. The dry path
     /// ([`Grant::evaluate`]) and the real one (`run_authorized`) both call exactly this, so they cannot drift apart.
-    pub(crate) fn verify_entry_at_use(&self, i: usize, now_unix: i64) -> Result<(), String> {
+    pub(crate) fn verify_entry_at_use(&self, i: usize, now_unix: i64, snapshot_dir: Option<&Path>) -> Result<(), String> {
         self.reverify(now_unix)?;
         let e = &self.record.manifest[i];
         let entry = a::Entry { tool: e.tool.clone(), argv: e.argv.clone(), files: e.files.iter().map(|f| f.path.clone()).collect(), runner_provenance: e.runner_provenance.clone() };
@@ -473,6 +509,16 @@ impl Grant {
             Err(why) => return Err(format!("the interpreter cannot be pinned again: {why}")),
         }
         for f in &e.files {
+            if let Some(rel) = crate::authorization_tokens::snapshot_rel(&f.path) {
+                // A symbolic path: looked up in the run's snapshot (a symlink never resolves) and hashed there.
+                let Some(dir) = snapshot_dir else { return Err(format!("`{}` is a snapshot path and this run's snapshot is not known", a::clean_text(&f.path, 60))) };
+                let real = delphi_sandbox::authorized::snapshot_lookup(dir, &rel).map_err(|why| format!("a pinned file cannot be found again: {why}"))?;
+                let bytes = crate::authorization_tokens::read_nofollow(&real).map_err(|why| format!("a pinned file cannot be read again: {why}"))?;
+                if delphi_core::lock::hash(&bytes) != f.blake3 {
+                    return Err(format!("`{}` is not the file that was pinned (its hash changed)", a::clean_text(&f.path, 60)));
+                }
+                continue;
+            }
             match a::pin_file(&f.path, false) {
                 Ok(p) if p.blake3 == f.blake3 => {}
                 Ok(_) => return Err(format!("`{}` is not the file that was pinned (its hash changed)", a::clean_text(&f.path, 60))),
@@ -498,6 +544,12 @@ impl Grant {
     pub fn evaluate_card(&self, tool: &str, argv: &[String], now_unix: i64) -> Outcome {
         let env = a::scrubbed_env();
         self.evaluate(&Candidate { tool, argv, cwd: a::CWD, env: &env }, now_unix)
+    }
+
+    /// The vector as the dry path can show it: `@snapshot` tokens resolved against the snapshot the launcher reported, the other tokens
+    /// named as minted at use. Display only: nothing is run from it.
+    pub fn resolve_dry(&self, argv: &[String]) -> Vec<String> {
+        crate::authorization_tokens::resolve_argv_dry(argv, self.snapshot_dir.as_deref())
     }
 
     /// The operator's words for the event.
@@ -548,6 +600,47 @@ pub fn native_tool_problem(tools: &[String], schema_requested: bool, bridge_pref
         return Some("(no tool list reported)".into());
     }
     tools.iter().find(|t| !t.starts_with(bridge_prefix) && !(schema_requested && t.as_str() == "StructuredOutput")).cloned()
+}
+
+/// The tested minimum of the Claude CLI for a granted launch: `--disable-slash-commands`, `--disallowedTools` and `--max-turns` are
+/// flags of the 2.1 line (probed on 2.1.319). An older CLI may not know one and, depending on its parser, ignore it rather than refuse.
+pub const CLAUDE_MIN_VERSION: (u32, u32, u32) = (2, 1, 0);
+
+/// Why the version line `claude --version` printed is not one a granted launch may use, or `None`. A version that cannot be read is
+/// refused (the flags cannot be assumed), and so is one below [`CLAUDE_MIN_VERSION`].
+pub fn claude_version_problem(line: Option<&str>) -> Option<String> {
+    let Some(line) = line.map(str::trim).filter(|l| !l.is_empty()) else {
+        return Some("the Claude CLI's version could not be determined, so the flags a granted launch relies on cannot be assumed".into());
+    };
+    let first = line.split_whitespace().next().unwrap_or("");
+    let parts: Vec<Option<u32>> = first.split('.').map(|p| p.parse::<u32>().ok()).collect();
+    match parts.as_slice() {
+        [Some(a), Some(b), Some(c), ..] => {
+            if (*a, *b, *c) < CLAUDE_MIN_VERSION {
+                Some(format!("the Claude CLI is {a}.{b}.{c}, below {}.{}.{}, the oldest this launch was tested on (--disable-slash-commands, --disallowedTools and --max-turns)", CLAUDE_MIN_VERSION.0, CLAUDE_MIN_VERSION.1, CLAUDE_MIN_VERSION.2))
+            } else {
+                None
+            }
+        }
+        _ => Some(format!("the Claude CLI's version `{}` could not be read as major.minor.patch, so the flags a granted launch relies on cannot be assumed", a::clean_text(line, 40))),
+    }
+}
+
+/// Why the MCP servers a Claude CLI reported at init are not exactly Delphi's bridge, or `None`. A granted launch is given one server
+/// (`--strict-mcp-config`); a list that is missing, empty, holds another name, or holds the bridge's name more than once is not what was
+/// asked for and the seat is stopped before the model acts.
+pub fn mcp_server_problem(servers: Option<&[(String, String)]>, bridge_name: &str) -> Option<String> {
+    let Some(list) = servers else { return Some("the CLI reported no list of MCP servers".into()) };
+    match list {
+        [(name, _)] if name == bridge_name => None,
+        [] => Some("the CLI loaded no MCP server, but Delphi's bridge was asked for".into()),
+        _ => Some(format!("the CLI loaded {} MCP server(s) ({}), not exactly Delphi's bridge `{}`", list.len(), list.iter().map(|(n, _)| a::clean_text(n, 40)).collect::<Vec<_>>().join(", "), bridge_name)),
+    }
+}
+
+/// Free text from a CLI, cleaned and cut for an event.
+pub fn clean_for_log(s: &str, max: usize) -> String {
+    a::clean_text(s, max)
 }
 
 /// Whether a tool call seen in the stream is one a granted seat may make: a Delphi bridge tool, or `StructuredOutput` with a schema.

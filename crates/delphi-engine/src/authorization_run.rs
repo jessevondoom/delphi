@@ -32,11 +32,12 @@
 
 use crate::authorization as a;
 use crate::authorization_grant::{self as g, Candidate, Grant, MATCHED_TOOL};
-use delphi_sandbox::authorized::{authorized_run_options, authorized_spec, FreshHome, Snapshot};
+use crate::authorization_tokens::{self as tok, Places};
+use delphi_sandbox::authorized::{authorized_run_options, authorized_spec, FreshHome, Minted, Snapshot};
 use delphi_sandbox::{run_bounded, Sandbox};
 use serde_json::{json, Value};
 use std::fs;
-use std::io::{Read as _, Write as _};
+use std::io::Write as _;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
@@ -45,12 +46,13 @@ pub const USED: &str = "authorization.used";
 /// Logged after the command ran: how it ended.
 pub const RAN: &str = "authorization.ran";
 
-/// The places an authorized command runs in: made by the launcher (or a test), never by the model. `scratch` is a writable, no-exec
-/// directory the caller prepared (and, for the sweep, filled with its fixtures).
+/// The places an authorized command runs in: made by the launcher (or a test), never by the model. `minted` is what the daemon made
+/// AFTER the record (S2d2a): the writable no-exec scratch directory with its fixtures, the canary and the decoy home. The symbolic
+/// tokens of the record resolve to these and to the snapshot, and to nothing the card or the record names.
 pub struct Area<'a> {
     pub snapshot: &'a Snapshot,
     pub home: &'a FreshHome,
-    pub scratch: &'a Path,
+    pub minted: &'a Minted,
 }
 
 /// Why a command did not run. `use_taken` is true when the ledger had already been written (a failure after the decrement consumes
@@ -97,34 +99,32 @@ impl Drop for PrivateDir {
     }
 }
 
-/// Read a regular file without following a link (`O_NOFOLLOW`), `fstat`ed on the descriptor that is read.
-fn read_nofollow(path: &Path) -> Result<Vec<u8>, String> {
-    let mut f = fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC).open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let meta = f.metadata().map_err(|e| e.to_string())?;
-    if !meta.is_file() {
-        return Err(format!("{} is not a regular file", path.display()));
-    }
-    let mut v = Vec::with_capacity(meta.len() as usize);
-    f.read_to_end(&mut v).map_err(|e| e.to_string())?;
-    Ok(v)
-}
+use crate::authorization_tokens::read_nofollow;
 
 /// Check the places the command will run in: the throwaway home re-walked, the snapshot re-hashed, the scratch a real private directory of this user.
 fn check_area(area: &Area) -> Result<(), String> {
     area.home.recheck().map_err(|e| format!("the throwaway home no longer passes its walk: {e}"))?;
     area.snapshot.verify().map_err(|e| format!("the snapshot: {e}"))?;
-    let m = fs::symlink_metadata(area.scratch).map_err(|e| format!("the scratch directory: {e}"))?;
+    let scratch: &Path = &area.minted.scratch;
+    let m = fs::symlink_metadata(scratch).map_err(|e| format!("the scratch directory: {e}"))?;
     // SAFETY: geteuid has no preconditions.
     let me = unsafe { libc::geteuid() };
     if m.is_symlink() || !m.is_dir() || m.uid() != me {
         return Err("the scratch directory is a symlink, not a directory, or not this user's".into());
     }
-    let canon = fs::canonicalize(area.scratch).map_err(|e| e.to_string())?;
-    if canon != area.scratch {
+    let canon = fs::canonicalize(scratch).map_err(|e| e.to_string())?;
+    if canon != scratch {
         return Err(format!("the scratch directory is not canonical (it resolves to {})", canon.display()));
     }
     if canon.starts_with(area.snapshot.path()) {
         return Err("the scratch directory is inside the snapshot".into());
+    }
+    // The canary and the decoy home are the daemon's, beside the snapshot, never inside it (and never inside scratch).
+    for (what, p) in [("canary", &area.minted.canary), ("decoy home", &area.minted.operator_home)] {
+        let m = fs::symlink_metadata(p).map_err(|e| format!("the {what}: {e}"))?;
+        if m.is_symlink() || m.uid() != me || p.starts_with(area.snapshot.path()) || p.starts_with(scratch) {
+            return Err(format!("the {what} is a symlink, not this user's, or inside the snapshot or scratch"));
+        }
     }
     Ok(())
 }
@@ -133,18 +133,33 @@ impl Grant {
     /// Run the command `argv` under this grant, in the sandbox, once. See the module comment for the order and the guarantees.
     /// `emit` writes an event to the mission log; an error from it after the use was taken ends the call (the use stays consumed).
     pub fn run_authorized(&self, argv: &[String], area: &Area, now_unix: i64, emit: &mut dyn FnMut(&str, Value) -> Result<(), String>) -> Result<AuthorizedRun, Refusal> {
-        // 1. The record's working directory and environment, never the call's: the match is made with the record's own constants.
+        // 1. The record's working directory and environment, never the call's: the match is made with the record's own constants,
+        // and on the SYMBOLIC vector: the card must equal the record element by element, token text included. Only then are the
+        // tokens replaced, by paths the daemon minted for this run (a card never supplies a value).
         let env = a::scrubbed_env();
         let Some(i) = self.match_entry(&Candidate { tool: MATCHED_TOOL, argv, cwd: a::CWD, env: &env }) else { return Err(no("no manifest entry equals this command")) };
         let e = &self.record.manifest[i];
         if e.cwd != a::CWD || e.env != env || e.scratch_mode != a::SCRATCH_MODE {
             return Err(no("the record's working directory, environment or scratch mode is not the fixed one"));
         }
-        let script = argv.get(1).cloned().ok_or_else(|| no("the command has no script"))?;
-        let pinned = e.files.iter().find(|f| f.path == script).ok_or_else(|| no("the script is not pinned"))?;
+        if self.record.token_scheme > tok::TOKEN_SCHEME {
+            return Err(no("the record uses a token scheme this build does not read"));
+        }
+        if self.snapshot_dir.as_deref().is_some_and(|d| d != area.snapshot.path()) {
+            return Err(no("the snapshot of this call is not the one the launcher gave the daemon"));
+        }
+        let script_symbolic = argv.get(1).cloned().ok_or_else(|| no("the command has no script"))?;
+        let pinned = e.files.iter().find(|f| f.path == script_symbolic).ok_or_else(|| no("the script is not pinned"))?;
+        let resolved = if self.record.token_scheme >= 1 {
+            tok::resolve_argv(argv, &Places { snapshot: area.snapshot, minted: area.minted }).map_err(no)?
+        } else {
+            argv.to_vec()
+        };
+        let script = resolved[1].clone();
 
         // 2. Everything the dry path checks, then the places, the budget and the anchor.
-        self.verify_entry_at_use(i, now_unix).map_err(no)?;
+        self.verify_entry_at_use(i, now_unix, Some(area.snapshot.path())).map_err(no)?;
+        a::check_snapshot_pins(&self.record, area.snapshot.path(), area.snapshot.tree_hash()).map_err(no)?;
         check_area(area).map_err(no)?;
         let expect = self.anchor.lock().unwrap_or_else(|p| p.into_inner()).clone();
         let seen = g::ledger_state(&self.operator_home, &self.record.id).map_err(no)?;
@@ -188,13 +203,13 @@ impl Grant {
         let (used, after) = g::take_use_anchored(&self.operator_home, &self.record.id, &self.record_hash, &self.run, self.record.max_uses, &expect).map_err(no)?;
         *self.anchor.lock().unwrap_or_else(|p| p.into_inner()) = after;
         let uses_left = self.record.max_uses.saturating_sub(used.index);
-        let mut run_argv = argv.to_vec();
+        let mut run_argv = resolved.clone();
         run_argv[1] = copy.to_string_lossy().into_owned();
         emit(
             USED,
             json!({
                 "authorization_id": self.record.id, "record_hash": self.record_hash, "entry": i, "index": used.index, "uses_left": uses_left,
-                "ledger_seq": used.seq, "purpose": self.record.purpose, "tree_hash": area.snapshot.tree_hash(), "argv": argv,
+                "ledger_seq": used.seq, "purpose": self.record.purpose, "tree_hash": area.snapshot.tree_hash(), "argv": argv, "resolved_argv": resolved, "token_scheme": self.record.token_scheme,
                 "run_argv_script": copy.to_string_lossy(), "cwd_env": "the record's; the call's own are ignored", "sandbox": "forced", "approved": true,
             }),
         )
@@ -209,7 +224,7 @@ impl Grant {
         check_area(area).map_err(after_use)?;
         self.probe_now().map_err(after_use)?;
         let sb = Sandbox::detect().map_err(|e| after_use(format!("no sandbox: {e}")))?;
-        let mut spec = authorized_spec(area.snapshot.path(), area.scratch, &e.binary.path);
+        let mut spec = authorized_spec(area.snapshot.path(), &area.minted.scratch, &e.binary.path);
         spec.read_only.push(private.0.clone());
         #[cfg(test)]
         if let Some(w) = &self.weaken {
@@ -218,7 +233,7 @@ impl Grant {
         let cmd_args: Vec<std::ffi::OsString> = run_argv[1..].iter().map(std::ffi::OsString::from).collect();
         let mut cmd = sb.command(&spec, &e.binary.path, cmd_args).map_err(|e| after_use(format!("the authorized profile cannot be built: {e}")))?;
         cmd.current_dir(area.snapshot.path());
-        let out = run_bounded(cmd, &authorized_run_options(area.scratch)).map_err(|e| after_use(format!("the command could not be started: {e}")))?;
+        let out = run_bounded(cmd, &authorized_run_options(&area.minted.scratch)).map_err(|e| after_use(format!("the command could not be started: {e}")))?;
 
         // 6. After: the snapshot re-hashed, and how it ended logged.
         let snapshot_unchanged = area.snapshot.verify().is_ok();

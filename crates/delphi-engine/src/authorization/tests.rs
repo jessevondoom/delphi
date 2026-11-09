@@ -992,6 +992,7 @@ fn nothing_consumes_a_record_in_this_slice() {
         "crates/delphi-engine/src/tools.rs",    // the agent tool
         "crates/delphi/src/test_cmd.rs",        // the operator's commands
         "crates/delphi/src/test_cmd_tests.rs",
+        "crates/delphi/tests/e2e.rs", // S2d2a: builds a record for the real-binary launcher test (a test, not product code)
         "crates/delphi/src/doctor.rs",          // verifies the pin
         "crates/delphi/tests/docs.rs",          // schemas
         "crates/delphi/src/run.rs",             // S2a: the launch gate only (checked below); it approves nothing
@@ -1018,12 +1019,14 @@ fn nothing_consumes_a_record_in_this_slice() {
         "crates/delphi-engine/src/core_main.rs",            // reads the grant pipe once, at boot
         "crates/delphi/src/run.rs",                         // the launcher writes the pipe (`launch_payload`)
         "crates/delphi/src/run_authorization_tests.rs",    // its tests
+        "crates/delphi/src/test_cmd_tests.rs",             // S2d2a: the console-flow test reads the ledger count
+        "crates/delphi/tests/e2e.rs",                      // S2d2a: asserts no real use was taken
         "crates/delphi-engine/src/authorization_anchor.rs", // S2d1: writes the launch/end events and builds the boot payload
         "crates/delphi-engine/src/authorization_anchor/tests.rs",
         "crates/delphi-engine/src/authorization_run.rs",    // S2d1: `run_authorized`, a method of the grant
         "crates/delphi-engine/src/authorization_run/tests.rs",
     ];
-    const STORE_READERS: &[&str] = &["crates/delphi-engine/src/authorization_anchor.rs", "crates/delphi-engine/src/authorization_anchor/tests.rs", "crates/delphi-engine/src/authorization_run/tests.rs", "crates/delphi-engine/src/authorization.rs", "crates/delphi-engine/src/authorization/tests.rs", "crates/delphi-engine/src/authorization_grant.rs", "crates/delphi-engine/src/authorization_grant/tests.rs", "crates/delphi-engine/tests/daemon.rs", "crates/delphi/src/test_cmd.rs", "crates/delphi/src/test_cmd_tests.rs", "crates/delphi/src/run_authorization_tests.rs", "crates/delphi/src/doctor.rs", "crates/delphi/tests/docs.rs"];
+    const STORE_READERS: &[&str] = &["crates/delphi-engine/src/authorization_anchor.rs", "crates/delphi-engine/src/authorization_anchor/tests.rs", "crates/delphi-engine/src/authorization_run/tests.rs", "crates/delphi-engine/src/authorization.rs", "crates/delphi-engine/src/authorization/tests.rs", "crates/delphi-engine/src/authorization_grant.rs", "crates/delphi-engine/src/authorization_grant/tests.rs", "crates/delphi-engine/tests/daemon.rs", "crates/delphi/src/test_cmd.rs", "crates/delphi/src/test_cmd_tests.rs", "crates/delphi/src/run_authorization_tests.rs", "crates/delphi/src/doctor.rs", "crates/delphi/tests/docs.rs", "crates/delphi/tests/e2e.rs"];
     const STORE_ITEMS: &[&str] = &["load", "load_or_ignore", "mutate", "add_record", "revoke", "store_path", "Store", "Record", "build_record", "create_audited", "revoke_audited", "refuse_audited", "read_audit", "audit_dir", "open_audit", "append_audit", "AuditHead"];
     let sources = workspace_sources();
     assert!(sources.len() > 200, "the scan must see the whole workspace");
@@ -1119,7 +1122,7 @@ fn run_authorized_has_no_caller_but_its_tests() {
         "crates/delphi-engine/src/authorization/tests.rs",     // this scan
     ];
     const MODULE_USERS: &[&str] = &["crates/delphi-engine/src/lib.rs", "crates/delphi-engine/src/authorization_run.rs", "crates/delphi-engine/src/authorization_run/tests.rs", "crates/delphi-engine/src/authorization/tests.rs"];
-    const ANCHOR_USERS: &[&str] = &["crates/delphi-engine/src/lib.rs", "crates/delphi-engine/src/authorization_anchor.rs", "crates/delphi-engine/src/authorization_anchor/tests.rs", "crates/delphi-engine/src/authorization_run/tests.rs", "crates/delphi/src/run.rs", "crates/delphi-engine/src/authorization/tests.rs"];
+    const ANCHOR_USERS: &[&str] = &["crates/delphi-engine/src/lib.rs", "crates/delphi-engine/src/authorization_anchor.rs", "crates/delphi-engine/src/authorization_anchor/tests.rs", "crates/delphi-engine/src/authorization_run/tests.rs", "crates/delphi/src/run.rs", "crates/delphi-engine/src/authorization/tests.rs", "crates/delphi/src/test_cmd_tests.rs"];
     let sources = workspace_sources();
     assert!(sources.len() > 200, "the scan must see the whole workspace");
     for (rel, text) in &sources {
@@ -1319,8 +1322,7 @@ fn pure(f: &Fix, r: &Record) -> Result<(), String> {
 }
 
 fn rehash(r: &mut Record) {
-    let entries: Vec<Entry> = r.manifest.iter().map(|e| Entry { tool: e.tool.clone(), argv: e.argv.clone(), files: e.files.iter().map(|x| x.path.clone()).collect(), runner_provenance: e.runner_provenance.clone() }).collect();
-    r.manifest_hash = manifest_hash(&entries);
+    r.manifest_hash = r.computed_manifest_hash();
 }
 
 #[test]
@@ -1359,4 +1361,77 @@ fn check_launch_runs_the_manifest_through_the_deny_list_and_the_runner_check_aga
     bad.manifest[0].argv[0] = "/tmp/bash".into();
     rehash(&mut bad);
     assert!(pure(&f, &bad).unwrap_err().contains("not an interpreter"));
+}
+
+// ---------------------------------------------------------------------------------------------- S2d2a: path tokens in an entry
+
+#[test]
+fn an_entry_with_a_malformed_or_misplaced_token_is_refused_when_the_record_is_made() {
+    let p = Policy::system();
+    let e = |argv: &[&str], files: &[&str]| Entry { tool: "shell".into(), argv: argv.iter().map(|s| s.to_string()).collect(), files: files.iter().map(|s| s.to_string()).collect(), runner_provenance: "project_snapshot".into() };
+    assert!(check_entry(&e(&["/bin/bash", "@snapshot/job.sh", "@snapshot", "@scratch", "@canary", "@operator_home"], &["@snapshot/job.sh"]), &p).is_ok());
+    for (argv, files) in [
+        (vec!["/bin/bash", "@snapshot/job.sh", "@unknown"], vec!["@snapshot/job.sh"]),
+        (vec!["/bin/bash", "@snapshot/job.sh", "x@snapshot"], vec!["@snapshot/job.sh"]),
+        (vec!["@snapshot", "@snapshot/job.sh"], vec!["@snapshot/job.sh"]),
+        (vec!["/bin/bash", "@snapshot/../x"], vec!["@snapshot/../x"]),
+        (vec!["/bin/bash", "@snapshot//job.sh"], vec!["@snapshot//job.sh"]),
+        (vec!["/bin/bash", "@snapshot/./job.sh"], vec!["@snapshot/./job.sh"]),
+        (vec!["/bin/bash", "@Snapshot/job.sh"], vec!["@Snapshot/job.sh"]),
+        (vec!["/bin/bash", "@snapshot/job.sh "], vec!["@snapshot/job.sh "]),
+        (vec!["/bin/bash", "@snapshot/job.sh", "@snapshot "], vec!["@snapshot/job.sh"]),
+        (vec!["/bin/bash", "@snapshot/job.sh"], vec!["@scratch/x"]),
+        (vec!["/bin/bash", "@snapshot/job.sh"], vec!["@snapshot"]),
+        (vec!["/bin/bash", "@scratch/job.sh"], vec!["@scratch/job.sh"]),
+    ] {
+        assert!(check_entry(&e(&argv, &files), &p).is_err(), "{argv:?} {files:?} was accepted");
+    }
+}
+
+#[test]
+fn a_symbolic_record_is_hashed_with_its_scheme_and_a_scheme_change_is_seen() {
+    let f = fix();
+    let (r, _) = made(&f, 1, None);
+    assert_eq!(r.token_scheme, 1);
+    let mut old = r.clone();
+    old.token_scheme = 0;
+    assert!(pure(&f, &old).unwrap_err().contains("recorded hash"), "the scheme is covered by the manifest hash");
+    let mut future = r.clone();
+    future.token_scheme = 9;
+    rehash(&mut future);
+    assert!(pure(&f, &future).unwrap_err().contains("token scheme"));
+}
+
+// ---------------------------------------------------------------------------------------------- red-team of #607: the hash covers what was signed
+
+#[test]
+#[allow(clippy::type_complexity)]
+fn the_manifest_hash_covers_the_tree_pin_its_absence_and_every_pinned_files_path_and_hash() {
+    let f = fix();
+    let (r, _) = made(&f, 1, None);
+    assert_eq!(r.computed_manifest_hash(), r.manifest_hash);
+    let each: Vec<(&str, Box<dyn Fn(&mut Record)>)> = vec![
+        ("a tree pin added", Box::new(|r| r.snapshot = Some(SnapshotPin { source: "tracked_files".into(), tree_blake3: Some("a".repeat(64)) }))),
+        ("the snapshot pin removed", Box::new(|r| r.snapshot = None)),
+        ("the source changed", Box::new(|r| r.snapshot.as_mut().unwrap().source = "other".into())),
+        ("a pinned file's hash", Box::new(|r| r.manifest[0].files[0].blake3 = "b".repeat(64))),
+        ("a pinned file's path", Box::new(|r| r.manifest[0].files[0].path.push('x'))),
+        ("a pinned file dropped", Box::new(|r| {
+            r.manifest[0].files.pop();
+        })),
+    ];
+    for (what, edit) in each {
+        let mut bad = r.clone();
+        edit(&mut bad);
+        assert_ne!(bad.computed_manifest_hash(), r.manifest_hash, "{what} does not change the manifest hash");
+        assert!(pure(&f, &bad).unwrap_err().contains("recorded hash") || pure(&f, &bad).is_err(), "{what}");
+    }
+    // a tree pin that is present, then removed (the --no-pin-tree look), is a different hash too
+    let mut pinned = r.clone();
+    pinned.snapshot = Some(SnapshotPin { source: "tracked_files".into(), tree_blake3: Some("c".repeat(64)) });
+    rehash(&mut pinned);
+    let mut stripped = pinned.clone();
+    stripped.snapshot.as_mut().unwrap().tree_blake3 = None;
+    assert_ne!(stripped.computed_manifest_hash(), pinned.manifest_hash);
+    assert!(pure(&f, &stripped).unwrap_err().contains("recorded hash"));
 }

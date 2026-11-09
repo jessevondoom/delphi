@@ -551,6 +551,24 @@ mod engine {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_symbolic_card_is_logged_with_both_the_symbolic_and_the_resolved_vector_and_is_still_denied() {
+        let sym = symbolic(3);
+        let f = setup(vec![], 5.0, |_| {});
+        f.engine.grant.set(Arc::new(sym.grant())).unwrap();
+        let payload = json!({"tool": "run_command", "argv": sym.argv(), "ceiling": "l0"});
+        let who = Asker { m: &f.m, task_id: "t1", span_id: "s1", role: "builder" };
+        let matched = f.engine.observe_grant_call(&who, "run_command", &payload).await.unwrap();
+        assert!(matched);
+        let would = events_of(&f, WOULD_USE);
+        assert_eq!(would.len(), 1);
+        let p = &would[0].payload;
+        assert_eq!(p["approved"], json!(false));
+        assert_eq!(p["argv"], json!(sym.argv()));
+        assert_eq!(p["resolved_argv"][1], json!(sym.snap.path().join("job.sh").display().to_string()));
+        assert!(events_of(&f, "action.intent").is_empty() && events_of(&f, "action.result").is_empty(), "nothing ran");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_red_card_that_does_not_match_is_logged_and_asked_as_before() {
         let g = fixture(3);
         let f = setup(vec![], 5.0, |_| {});
@@ -776,7 +794,7 @@ printf '{{"token":"%s"}}\n%s\n' "$tok" '{req}' | /usr/bin/nc -U -w 3 "$sock" > '
         let scripts = tempfile::tempdir().unwrap();
         let body = format!(
             "{}\necho '{{\"type\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"tool_use\",\"id\":\"tu1\",\"name\":\"Bash\",\"input\":{{\"command\":\"touch made.txt\"}}}}]}}}}'\nsleep 1\n{}",
-            r#"echo '{"type":"system","subtype":"init","session_id":"s1","tools":["mcp__delphi__run_command"]}'"#, FINISH
+            r#"echo '{"type":"system","subtype":"init","session_id":"s1","tools":["mcp__delphi__run_command"],"mcp_servers":[{"name":"delphi","status":"connected"}]}'"#, FINISH
         );
         let prog = fake_cli(scripts.path(), &body);
         let f = fx(prog);
@@ -1028,4 +1046,86 @@ fn a_daemon_booted_with_a_ledger_that_is_not_where_the_launcher_left_it_is_refus
     take_use(&f.home, &f.id, "h", "run-1", 3).unwrap(); // the ledger moves after the launcher recorded it
     let err = Grant::from_boot(&bytes, std::process::id(), now(), f.policy.clone()).err().unwrap();
     assert!(err.contains("not where the launcher left it"), "{err}");
+}
+
+// ---------------------------------------------------------------------------------------------- S2d2a: the dry path with symbolic text
+
+fn git_in(project: &Path, args: &[&str]) {
+    let out = std::process::Command::new("/usr/bin/git").arg("-C").arg(project).args(["-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false"]).args(args).env_clear().env("PATH", "/usr/bin:/bin").env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1").output().unwrap();
+    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+}
+
+/// A symbolic record (made against a project that is a git repository), and the snapshot a run of it would be given.
+struct Sym {
+    _t: tempfile::TempDir,
+    home: PathBuf,
+    snap: delphi_sandbox::authorized::Snapshot,
+    id: String,
+}
+
+fn symbolic(max_uses: u32) -> Sym {
+    let t = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(t.path()).unwrap();
+    let project = root.join("project");
+    fs::create_dir_all(&project).unwrap();
+    fs::write(project.join("job.sh"), "#!/bin/bash\nexit 0\n").unwrap();
+    git_in(&project, &["init", "-q"]);
+    git_in(&project, &["add", "job.sh"]);
+    git_in(&project, &["commit", "-q", "-m", "x"]);
+    let home = root.join("home");
+    fs::create_dir_all(home.join("operator")).unwrap();
+    delphi_core::lock::write(&home.join("operator/ratified.lock"), &Default::default()).unwrap();
+    let entry = a::Entry { tool: "shell".into(), argv: vec!["/bin/bash".into(), "@snapshot/job.sh".into(), "@scratch".into()], files: vec!["@snapshot/job.sh".into()], runner_provenance: "project_snapshot".into() };
+    let n = a::NewRecord { purpose: "PURPOSE-MARKER-7f3a".into(), intent: "i".into(), run: "run-1".into(), expires_in_secs: a::DEFAULT_EXPIRY_SECS, max_uses, entries: vec![entry], request: None, policy: a::Policy::system() };
+    let ctx = a::TokenCtx { project: Some(project.clone()), pin_tree: true, expect: Default::default(), expect_tree: None };
+    let rec = a::build_record_with(&home, &n, &ctx, now(), &delphi_core::time::now_rfc3339()).unwrap();
+    a::create_audited(&home, rec.clone(), json!({"id": rec.id, "manifest_hash": rec.manifest_hash, "run": rec.run, "by": "operator", "source": "operator"})).unwrap();
+    let snap = delphi_sandbox::authorized::Snapshot::build(&project, &root).unwrap();
+    Sym { _t: t, home, snap, id: rec.id }
+}
+
+impl Sym {
+    fn grant(&self) -> Grant {
+        let rec = a::load(&self.home).unwrap().records.into_iter().find(|r| r.id == self.id).unwrap();
+        let seq = a::load(&self.home).unwrap().audit_head.map(|h| h.seq).unwrap_or(0);
+        Grant::for_test(rec, "run-1", &self.home, seq, a::Policy::system()).with_probe(ok_probe).with_snapshot_dir(self.snap.path())
+    }
+
+    fn argv(&self) -> Vec<String> {
+        ["/bin/bash", "@snapshot/job.sh", "@scratch"].iter().map(|s| s.to_string()).collect()
+    }
+}
+
+#[test]
+fn the_dry_path_matches_the_symbolic_text_and_shows_the_resolved_vector_but_never_a_resolved_card() {
+    let s = symbolic(3);
+    let g = s.grant();
+    assert!(is_would_use(&card(&g, "run_command", &s.argv())), "the symbolic text matches");
+    let shown = g.resolve_dry(&s.argv());
+    assert_eq!(shown[1], s.snap.path().join("job.sh").display().to_string());
+    assert!(shown[2].contains("@scratch") && shown[2].contains("minted at use"), "{shown:?}");
+    // a card with the resolved absolute path is not the record's text
+    let mut abs = s.argv();
+    abs[1] = shown[1].clone();
+    assert!(matches!(card(&g, "run_command", &abs), Outcome::NotMatched(_)));
+    // a different token spelling is not the record's text either
+    for bad in ["@Snapshot/job.sh", "@snapshot/./job.sh", "@snapshot//job.sh", "@snapshot/job.sh "] {
+        let mut v = s.argv();
+        v[1] = bad.into();
+        assert!(matches!(card(&g, "run_command", &v), Outcome::NotMatched(_)), "{bad}");
+    }
+    assert_eq!((ledger_count(&s.home, &s.id).unwrap(), dry_count(&s.home, &s.id).unwrap()), (0, 1));
+}
+
+#[test]
+fn a_grant_booted_with_a_snapshot_that_is_not_the_one_pinned_is_refused() {
+    let s = symbolic(3);
+    let now_u = now();
+    let rec = a::load(&s.home).unwrap().records.into_iter().find(|r| r.id == s.id).unwrap();
+    let seq = a::load(&s.home).unwrap().audit_head.map(|h| h.seq).unwrap_or(0);
+    let state = ledger_state(&s.home, &s.id).unwrap();
+    let ok = encode_boot_with(&rec, "run-1", &s.home, seq, &state, Some((s.snap.path(), s.snap.tree_hash()))).unwrap();
+    assert!(Grant::from_boot(&ok, std::process::id(), now_u, a::Policy::system()).is_ok());
+    let wrong_tree = encode_boot_with(&rec, "run-1", &s.home, seq, &state, Some((s.snap.path(), "0".repeat(64).as_str()))).unwrap();
+    assert!(Grant::from_boot(&wrong_tree, std::process::id(), now_u, a::Policy::system()).is_err());
 }

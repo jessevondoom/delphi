@@ -1709,9 +1709,16 @@ echo '{"type":"result","subtype":"success","result":"fin","usage":{"input_tokens
 
     /// A stand-in `claude`: prints scripted lines, and for each `control_request` waits for the answer.
     pub(crate) fn fake_cli(dir: &std::path::Path, body: &str) -> String {
+        fake_cli_versioned(dir, body, "2.1.319 (Claude Code)")
+    }
+
+    /// As [`fake_cli`], answering `--version` with `version` (empty: it prints nothing, like a CLI that will not say).
+    pub(crate) fn fake_cli_versioned(dir: &std::path::Path, body: &str, version: &str) -> String {
         use std::os::unix::fs::PermissionsExt;
         let p = dir.join("fake-claude");
-        std::fs::write(&p, format!("#!/bin/sh\nread first\n{}\n", body)).unwrap();
+        // A body that answers `--version` itself (an agy stand-in that reports its own version) keeps doing so.
+        let v = if body.contains("--version") { String::new() } else if version.is_empty() { "case \"${1-}\" in --version) exit 0;; esac\n".to_string() } else { format!("case \"${{1-}}\" in --version) echo '{version}'; exit 0;; esac\n") };
+        std::fs::write(&p, format!("#!/bin/sh\n{v}read first\n{}\n", body)).unwrap();
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
         p.display().to_string()
     }

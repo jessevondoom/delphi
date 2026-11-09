@@ -145,14 +145,27 @@ impl Drop for RunAnchor {
 /// The launcher's whole start: the strict launch check, the ledger anchor check, the `launch` event, and the payload for the daemon's
 /// pipe, which carries the ledger state recorded. Any failure refuses the run; a failure after the `launch` event closes it again.
 pub fn launch_granted(home: &Path, id: &str, run: &str, now_unix: i64, policy: &a::Policy) -> Result<(Vec<u8>, RunAnchor), String> {
+    launch_granted_for(home, id, run, now_unix, policy, None)
+}
+
+/// As [`launch_granted`], for a run whose snapshot is `(directory, tree hash)`: the record's tree pin and every pinned `@snapshot/<rel>`
+/// file are checked against it BEFORE anything is written (no launch event, no use), and the snapshot goes to the daemon in the payload.
+pub fn launch_granted_for(home: &Path, id: &str, run: &str, now_unix: i64, policy: &a::Policy, snapshot: Option<(&Path, &str)>) -> Result<(Vec<u8>, RunAnchor), String> {
     let (record, seq) = a::authorize_launch_with_head(home, id, run, now_unix, policy)?;
+    match snapshot {
+        Some((dir, tree)) => a::check_snapshot_pins(&record, dir, tree)?,
+        None if record.manifest.iter().any(|e| e.files.iter().any(|f| crate::authorization_tokens::is_snapshot_file(&f.path))) => {
+            return Err(format!("authorization {} pins files in the run's snapshot and the launcher gave none", record.id));
+        }
+        None => {}
+    }
     let state = ledger_state(home, &record.id)?;
     let after_crash = check_against_audit(home, &record.id, &state)?;
     record_launch(home, &record.id, run, &state, after_crash)?;
     let anchor = RunAnchor { home: home.to_path_buf(), id: record.id.clone(), run: run.to_string(), outcome: "ended".into(), done: false };
     // The head moved when the launch event was pinned; the grant remembers the new one.
     let seq = a::load(home)?.audit_head.map(|h| h.seq).unwrap_or(seq);
-    let bytes = crate::authorization_grant::encode_boot(&record, run, home, seq, &state)?;
+    let bytes = crate::authorization_grant::encode_boot_with(&record, run, home, seq, &state, snapshot)?;
     if after_crash {
         eprintln!("delphi run: the last run of {} never recorded its end (a crash?); it is allowed, and the record's remaining uses should be read as an upper bound", record.id);
     }

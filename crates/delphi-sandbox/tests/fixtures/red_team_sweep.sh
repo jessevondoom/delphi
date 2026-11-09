@@ -5,20 +5,24 @@
 # ATTEMPTS hostile actions. Each attempt is one line of output. The script exits 0 ONLY if EVERY attempt was blocked.
 # Bash 3.2 compatible (the macOS /bin/bash): no associative arrays, no ${var,,}, no |&, no coproc.
 #
-# Arguments (fixed, in this order):
+# Arguments (fixed, in this order; in a granted run they are the symbolic tokens `@snapshot @scratch @canary @operator_home`, and the
+# daemon puts the real per-run paths in after the card matched; nothing else about the run's layout is passed in):
 #   1 snapshot dir   (read-only to the sandbox; holds this script and data.txt)
-#   2 scratch dir    (writable, no-exec; the host has put an executable file `preplaced-exec` in it)
+#   2 scratch dir    (writable, no-exec; the daemon put in it an executable file `preplaced-exec`, a native library `mark.dylib`
+#                     (a tiny library whose constructor creates mark.dylib.loaded beside itself) and a named pipe `fifo`)
 #   3 canary file    (outside every grant; its parent is the snapshot's parent)
-#   4 operator home  (a directory outside every grant)
-#   5 port           (a TCP port on 127.0.0.1 where the host is listening)
-#   6 stand-in for the `delphi` executable (outside every grant)
-#   7 pid of a process the host owns (the sweep must not be able to signal it)
-#   scratch also holds `mark.dylib` (a tiny native library whose constructor creates mark.dylib.loaded beside itself) and `fifo` (a named pipe)
+#   4 operator home  (a DECOY directory outside every grant; holds visible.txt and bin/delphi, a stand-in for the delphi executable)
+# Script-internal (no longer passed in): the stand-in for `delphi` is `$opshome/bin/delphi`; the process the sweep tries to signal is
+# its own parent (the host process that started the sandbox, outside it); the network target is a loopback port nothing listens on, so
+# a connect that is merely refused is NOT a block: only the sandbox's own denial ("Operation not permitted") counts as one.
 #
 # Exit codes: 0 every attempt blocked; 1 at least one attempt succeeded (named in the last line); 2 the sweep itself could not
 # do what it must to be meaningful (a positive control failed); 3 an attempt was skipped.
 
-snap="$1"; scratch="$2"; canary="$3"; opshome="$4"; port="$5"; fakedelphi="$6"; victim="$7"
+snap="$1"; scratch="$2"; canary="$3"; opshome="$4"
+fakedelphi="$opshome/bin/delphi"
+victim="$PPID"
+port=9
 EXPECTED=22
 n=0
 bad=0
@@ -55,6 +59,12 @@ if [ ! -e "$scratch/preplaced-exec" ] || [ ! -r "$scratch/mark.dylib" ] || [ ! -
     echo "SWEEP INCONCLUSIVE: a scratch fixture is missing, so a block proves nothing"
     exit 2
 fi
+# (the decoy home and the stand-in executable are outside every grant, so the script cannot stat them: the daemon that minted them is
+# what vouches that they exist)
+if ! [ "$victim" -gt 1 ] 2>/dev/null; then
+    echo "SWEEP INCONCLUSIVE: the parent process is not a process to aim at, so a failure to signal it proves nothing"
+    exit 2
+fi
 for t in /usr/bin/osascript /usr/bin/open /bin/launchctl /usr/bin/pbcopy; do
     if [ ! -e "$t" ]; then
         echo "SWEEP INCONCLUSIVE: $t is not visible, so a failure to run it proves nothing"
@@ -79,7 +89,16 @@ a_write_scratch_then_exec() {
     "$scratch/own.sh"
 }
 a_exec_preplaced_file_in_scratch() { "$scratch/preplaced-exec"; }
-a_network_connect() { exec 3<> "/dev/tcp/127.0.0.1/$port"; }
+a_network_connect() {
+    # The attempt SUCCEEDED (exit 0) unless the connect was denied by the sandbox. A closed port answers "Connection refused", which
+    # proves nothing about the sandbox, so it counts as not blocked.
+    local err
+    err=$( { exec 3<> "/dev/tcp/127.0.0.1/$port"; } 2>&1 )
+    case "$err" in
+        *"not permitted"*|*"Operation not permitted"*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
 a_read_env_for_credentials() {
     local v
     for v in $(compgen -e); do

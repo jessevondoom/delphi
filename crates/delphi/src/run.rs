@@ -475,7 +475,7 @@ pub fn run(home: &Path, ws_dir: &Path, opts: Opts) -> i32 {
             }
         };
         // The launch check, the ledger anchor (the ledger must be where the audit log says), the `launch` event, and the payload.
-        match delphi_engine::authorization_anchor::launch_granted(home, id, run, now, &delphi_engine::authorization::Policy::system()) {
+        match delphi_engine::authorization_anchor::launch_granted_for(home, id, run, now, &delphi_engine::authorization::Policy::system(), Some((area.snapshot.path(), area.snapshot.tree_hash()))) {
             Ok((bytes, anchor)) => {
                 say_err(&format!("the project snapshot has tree hash {} ({} files); the run's home and snapshot are discarded when it ends", area.snapshot.tree_hash(), area.snapshot.file_count()));
                 let granted_opts = SpawnOptions { home: area.home.path(), workspace: &area.ws_dir, daemon_exe: &exe, extra_args: vec![], prefix_args: vec!["__core".into()], own_version: Some(env!("CARGO_PKG_VERSION")) };
