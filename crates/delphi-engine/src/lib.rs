@@ -129,9 +129,10 @@ pub mod authorization;
 pub mod authorization_grant;
 pub mod authorization_tokens;
 pub mod authorization_anchor;
-// Test builds only until S2d2 connects it: with the module compiled out, no code in the product can call `run_authorized` (spec 092 S2d1).
-#[cfg(test)]
+// Spec 092 S2d2b: `run_authorized` is reachable from the engine's granted-run check (`authorization_use`) and from nothing else; the scan
+// in `authorization/tests.rs` holds that.
 mod authorization_run;
+mod authorization_use;
 pub mod research_report;
 pub mod provisional_run;
 pub mod hostmap;

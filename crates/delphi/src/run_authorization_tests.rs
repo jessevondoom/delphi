@@ -64,9 +64,12 @@ fn a_broken_store_refuses_the_run() {
     assert!(gate(&home, &id, "run-1", false, false, &policy).unwrap().contains("pin"));
 }
 
-// The safety boundary of S2a: a valid record and the flag approve nothing.
+// The client-side half of the boundary (S2a, kept in S2d2b): a valid record and the flag let the run START; the run's own `decide` still
+// denies a Red card with the unchanged text. The approval of a matching `run_command` is the daemon's, tested in
+// `delphi_engine::authorization_use` (non-matching Red, merge, network, dispatch, `.git` write, wrong hash, expired, revoked, used up,
+// probe failure and a tainted span all denied; a matching card approved).
 #[test]
-fn a_red_card_is_denied_even_with_a_valid_record_and_the_flag() {
+fn the_client_still_denies_a_red_card_with_a_valid_record_and_the_flag() {
     let (_t, home, id, policy) = authorized_home();
     let on = OnCard::Authorization { id: id.clone(), run: "run-1".into() };
     assert_eq!(gate(&home, &id, "run-1", false, false, &policy), None, "the record is valid and the run may start");
@@ -108,10 +111,9 @@ fn a_launch_with_no_controlling_terminal_is_refused() {
     assert_eq!(controlling_terminal_refusal(true), None);
 }
 
-// The safety boundary again, at S2c: with a grant held by the daemon, the run itself still denies every Red card.
+// The safety boundary again: whatever the daemon does with its grant, the run's own answer to a Red card of any kind is a denial.
 #[test]
-fn the_run_still_denies_a_red_card_and_the_approval_switch_is_off() {
-    const { assert!(!AUTHORIZED_APPROVAL_ENABLED) };
+fn the_run_itself_denies_a_red_card_of_every_kind_it_is_asked_about() {
     let on = OnCard::Authorization { id: "ta-x".into(), run: "run-1".into() };
     for tool in ["run_command", "shell", "harness_bash", "harness_edit", "dispatch_agent"] {
         let (d, why) = decide(&on, &json!({"tier": "red", "tool": tool, "pattern": tool})).unwrap();

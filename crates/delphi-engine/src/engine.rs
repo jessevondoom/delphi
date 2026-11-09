@@ -346,6 +346,10 @@ pub struct Engine {
     /// pipe (`core_main`); never serialized, never in an environment variable or a file; a child process, a dispatched agent and a
     /// harness seat get none. In S2c it is only observed: a matching Red card is logged and still denied.
     pub grant: std::sync::OnceLock<Arc<crate::authorization_grant::Grant>>,
+    /// Spec 092 S2d2b: where the granted run's authorized commands run (the launcher's snapshot and throwaway home, and what this
+    /// daemon minted for the run). Set once at boot beside the grant, by `core_main` and by nothing else; with a grant and no places,
+    /// every command is denied.
+    pub(crate) places: std::sync::OnceLock<Arc<crate::authorization_run::RunPlaces>>,
 }
 
 /// What the operator decided about weaker substitutes for one task, as `(endpoint, model)` pairs.
@@ -851,7 +855,10 @@ impl Engine {
             }
             // A role that writes to `@worktree/**` works in its task's worktree, cut from the project's HEAD.
             let mut setup_error: Option<String> = bundle_err;
-            if sc.manifest.write.iter().any(|g| g.starts_with("@worktree/")) {
+            // Spec 092 TA-5: a run that holds a grant gives NO role a worktree. Its project is the read-only snapshot (no `.git`), nothing
+            // may be written, and the spec gate's card would only be denied; a Builder there is a bridge-only seat (`harness_run`) whose
+            // one way to act is Delphi's `run_command`, which the daemon check approves or denies.
+            if sc.manifest.write.iter().any(|g| g.starts_with("@worktree/")) && self.grant.get().is_none() {
                 if let Err(e) = self.attach_worktree(&mut sc, &handoff).await {
                     setup_error = Some(e);
                 }
@@ -1858,7 +1865,9 @@ impl Engine {
         if sc.manifest.execute.iter().any(|e| e == "settings") {
             defs.push(crate::settings_run::def());
         }
-        if sc.guard.zones.worktree.is_some() && sc.manifest.execute.iter().any(|e| e == "shell-worktree-scoped") {
+        // A granted run has no worktree (see `attach_worktree`'s caller): the command is offered anyway, and the daemon check
+        // (`granted_run_command`) is what decides each call; `shell` is stripped below by the allowlist.
+        if (sc.guard.zones.worktree.is_some() || granted) && sc.manifest.execute.iter().any(|e| e == "shell-worktree-scoped") {
             defs.push(run_command_def());
             if self.exec.cfg.shell {
                 defs.push(shell_def());
@@ -1874,6 +1883,9 @@ impl Engine {
         if let Some(allowed) = sc.bundle_agent.as_ref().and_then(|a| a.allowed_tools.as_ref()) {
             defs.retain(|d| allowed.contains(&d.name));
         }
+        // The allowlist is applied here, again by the bridge's own retain in `harness_run`, and finally at call time (`tool_stripped`): three
+        // lines on purpose, because a tool the offer forgot must still be denied. `the_seat_is_not_offered_a_file_write_tool...` asserts the
+        // offer; `every_card_that_is_not_the_matching_run_command...` asserts the call-time denial.
         if granted {
             defs.retain(|d| crate::authorization_grant::tool_allowed(&d.name));
         }
@@ -2202,8 +2214,10 @@ impl Engine {
     }
 
     async fn exec_command(self: &Arc<Self>, sc: &mut SpanCtx, call_id: &str, args: &Value) -> Result<tools::ToolResult, EngineError> {
-        if let Some(denied) = self.granted_exec_denial(sc, "run_command", args).await? {
-            return Ok(denied);
+        // Spec 092 S2d2b: in a run that holds a grant, EVERY run_command ends here: approved and run in the forced sandbox, or denied
+        // with the one fixed message. Nothing a model asks for reaches `exec.run`, the standard sandbox, an allow rule or a card.
+        if let Some(done) = self.granted_run_command(sc, args).await? {
+            return Ok(done);
         }
         if !sc.manifest.execute.iter().any(|e| e == "shell-worktree-scoped") {
             return Ok(tool_result_error("this role's manifest does not authorize shell-worktree-scoped"));
@@ -2440,8 +2454,9 @@ impl Engine {
 
     /// Spec 092 S2c, DRY: with a grant held, a Red card is run through the grant's matching and use path and the outcome is logged
     /// (`authorization.would_use`, `.refused`, `.no_match`). **It resolves nothing and approves nothing**: the caller raises the card
-    /// afterwards, and the run's own policy (`delphi run`'s `decide`) denies it. It never calls `exec.run` or any runner. A use the
-    /// ledger records here is really consumed (the counter is the part S2d needs proven).
+    /// afterwards, and the run's own policy (`delphi run`'s `decide`) denies it. It never calls `exec.run` or any runner. Since S2d2b a
+    /// matching `run_command` is decided by `granted_run_command` and never comes here; what comes here is a card of another kind, which
+    /// no entry matches, so it is logged `authorization.no_match` and denied.
     async fn observe_grant(&self, who: &Asker<'_>, tier: ApprovalTier, tool: &str, payload: &Value) -> Result<(), EngineError> {
         if tier != ApprovalTier::Red {
             return Ok(());

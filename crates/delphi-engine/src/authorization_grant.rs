@@ -7,12 +7,13 @@
 //! * **Matching** ([`Grant::evaluate`]) looks at one card kind only (`run_command`); the argument vector must equal a manifest entry
 //!   element by element; the interpreter, every pinned file, the store, the audit chain, the revocation state and the sandbox probe
 //!   are all checked again immediately before the answer is returned.
-//! * **The use ledger** ([`take_use`]) is `operator/uses/<id>` (written by S2d, not by S2c): append-only, hash-chained, fsynced before anything else happens, one
+//! * **The use ledger** ([`take_use`]) is `operator/uses/<id>` (written by `run_authorized`, S2d1; the DRY ledger below is what observation wrote in S2c): append-only, hash-chained, fsynced before anything else happens, one
 //!   writer at a time under the log's own lock. The count is the number of `use` entries. It is the one new write the daemon makes
 //!   under `operator/`. It has NO external anchor: its chain is verified without a stored head, so an edit in the middle is seen but a cut
-//!   tail or a deleted directory restores uses undetected. S2d must record each real use in the pinned audit chain (or pin the head).
+//!   tail or a deleted directory restores uses undetected. S2d1 anchors it in the pinned audit chain (`authorization_anchor`: the launcher records the count and head at launch and at the end).
 //! * **Observation uses a DRY ledger** (`operator/uses/<id>.dry`, [`take_dry_use`]): the real ledger is never written by S2c, so a run that
-//!   approves nothing cannot use up the operator's record. S2d writes the real one.
+//!   approves nothing cannot use up the operator's record. (S2d2b: a granted run now takes REAL uses through `run_authorized`; the dry
+//!   ledger is still written for the cards the daemon check does not decide, such as a `shell` call, which only observation sees.)
 //! * **No approval.** The answer is [`Outcome::WouldUse`], which the engine logs as `authorization.would_use`; the card is still
 //!   raised and the run still denies it. S2d turns an outcome into an approval, in a separate, separately reviewed slice.
 
@@ -183,7 +184,6 @@ pub fn take_use(home: &Path, id: &str, record_hash: &str, run: &str, max_uses: u
     take_in(&ledger_dir(home, id), id, record_hash, run, max_uses, false, None).map(|r| r.0)
 }
 
-#[cfg(test)]
 /// [`take_use`] under the anchor: the ledger must be exactly at `expect` (the state this run last saw) or no use is taken. Returns the
 /// use and the state after it, which the caller keeps as the next `expect`.
 pub fn take_use_anchored(home: &Path, id: &str, record_hash: &str, run: &str, max_uses: u32, expect: &LedgerState) -> Result<(Used, LedgerState), String> {
@@ -193,8 +193,8 @@ pub fn take_use_anchored(home: &Path, id: &str, record_hash: &str, run: &str, ma
     take_in(&ledger_dir(home, id), id, record_hash, run, max_uses, false, Some(expect))
 }
 
-/// The same operation on the DRY ledger: what observation does in S2c, so the operator's record is never used up by a run that
-/// approves nothing.
+/// The same operation on the DRY ledger: what observation does for a card that is never approved (S2c), so the operator's record is
+/// never used up by an observation. A matching `run_command` no longer goes here: it takes a real use in `run_authorized` (S2d2b).
 pub fn take_dry_use(home: &Path, id: &str, record_hash: &str, run: &str, max_uses: u32) -> Result<Used, String> {
     if !id_ok(id) {
         return Err("an authorization id of the form ta-<10 hex digits> is required".into());
@@ -326,6 +326,8 @@ pub struct Grant {
     pub(crate) anchor: std::sync::Mutex<LedgerState>,
     /// The run's snapshot directory as the launcher reported it (S2d2a); `None` when the launcher gave none.
     pub(crate) snapshot_dir: Option<PathBuf>,
+    /// The tree hash the launcher reported for that snapshot (S2d2b): the daemon attaches to the snapshot only if it still hashes to it.
+    pub(crate) snapshot_tree: Option<String>,
     /// Tests only: weaken the profile `run_authorized` builds, so a test can show the sweep notices a hole. Not compiled into the product.
     #[cfg(test)]
     pub(crate) weaken: Option<WeakenFn>,
@@ -350,7 +352,7 @@ impl Grant {
         if a::record_hash(&b.record) != b.record_hash {
             return Err("the grant's record does not match its hash".into());
         }
-        let g = Grant { record: b.record, record_hash: b.record_hash, run: b.run, operator_home: PathBuf::from(b.operator_home), launch_seq: b.launch_seq, policy, probe: Arc::new(delphi_sandbox::authorized::probe_authorized), probes: Default::default(), anchor: std::sync::Mutex::new(b.ledger), snapshot_dir: b.snapshot_dir.map(PathBuf::from), #[cfg(test)] weaken: None };
+        let g = Grant { record: b.record, record_hash: b.record_hash, run: b.run, operator_home: PathBuf::from(b.operator_home), launch_seq: b.launch_seq, policy, probe: Arc::new(delphi_sandbox::authorized::probe_authorized), probes: Default::default(), anchor: std::sync::Mutex::new(b.ledger), snapshot_dir: b.snapshot_dir.map(PathBuf::from), snapshot_tree: b.snapshot_tree.clone(), #[cfg(test)] weaken: None };
         g.reverify(now_unix)?;
         // The snapshot the launcher built must be the one the record was made for (tree hash and every pinned file): a grant that is
         // already wrong never takes hold.
@@ -374,7 +376,7 @@ impl Grant {
     pub(crate) fn for_test(record: a::Record, run: &str, operator_home: &Path, launch_seq: u64, policy: a::Policy) -> Grant {
         let record_hash = a::record_hash(&record);
         let anchor = ledger_state(operator_home, &record.id).unwrap_or_default();
-        Grant { record, record_hash, run: run.into(), operator_home: operator_home.to_path_buf(), launch_seq, policy, probe: Arc::new(delphi_sandbox::authorized::probe_authorized), probes: Default::default(), anchor: std::sync::Mutex::new(anchor), snapshot_dir: None, weaken: None }
+        Grant { record, record_hash, run: run.into(), operator_home: operator_home.to_path_buf(), launch_seq, policy, probe: Arc::new(delphi_sandbox::authorized::probe_authorized), probes: Default::default(), anchor: std::sync::Mutex::new(anchor), snapshot_dir: None, snapshot_tree: None, weaken: None }
     }
 
     /// A grant with an empty manifest, only so a test can run the engine as a run that holds one (the seat guards read `grant.get()`).
@@ -423,6 +425,11 @@ impl Grant {
 
     pub fn id(&self) -> &str {
         &self.record.id
+    }
+
+    /// The snapshot directory and tree hash the launcher reported, for the daemon to attach to (S2d2b). `None` when it reported none.
+    pub fn snapshot_boot(&self) -> Option<(&Path, &str)> {
+        Some((self.snapshot_dir.as_deref()?, self.snapshot_tree.as_deref()?))
     }
 
     /// Read the store and the audit chain again, strictly, and require: the record present, its hash equal to the one at launch, not
@@ -672,4 +679,4 @@ pub fn seat_native_tools_off(cli: &str, tooled: bool, native_empty: bool, app_se
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

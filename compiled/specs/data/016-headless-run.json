@@ -40,19 +40,19 @@
     },
     {
       "level": 2,
-      "line": 54,
+      "line": 55,
       "number": "4",
       "title": "Output and exit codes"
     },
     {
       "level": 2,
-      "line": 72,
+      "line": 73,
       "number": "5",
       "title": "Other flags"
     },
     {
       "level": 2,
-      "line": 75,
+      "line": 76,
       "number": "6",
       "title": "Verification Plan"
     }
@@ -60,7 +60,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/016-headless-run.md",
-    "sha256": "713c96a4fa2f6a990123fc101b93bcb09968abca8d2ba55b76d481ab0ffee79a"
+    "sha256": "2ba347b2ea9eb8336f95e3a74e02d361e73e168e3fb9fe5a32ac9faa033eb458"
   },
   "source_status_at_hash": {
     "line": {
@@ -73,7 +73,7 @@
       },
       "text": "status: approved   # by the operator, 2026-10-25"
     },
-    "sha256": "713c96a4fa2f6a990123fc101b93bcb09968abca8d2ba55b76d481ab0ffee79a",
+    "sha256": "2ba347b2ea9eb8336f95e3a74e02d361e73e168e3fb9fe5a32ac9faa033eb458",
     "word": "approved"
   },
   "spec": {

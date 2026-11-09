@@ -110,6 +110,15 @@ pub fn run(args: Vec<String>) -> ! {
         // The engine publishes through the daemon's hub, so attached clients see its events.
         let booted = crate::boot::build(&home, &canon, daemon.hub.clone()).unwrap_or_else(|e| die(&e));
         if let Some(g) = boot_grant {
+            // Spec 092 S2d2b: the places the authorized command runs in. A grant without a snapshot, or one that does not attach, leaves the
+            // daemon with no places, and a daemon with a grant and no places denies every command: it never runs one anywhere else.
+            match g.snapshot_boot().map(|(dir, tree)| crate::authorization_run::RunPlaces::attach(dir, tree, &home)) {
+                Some(Ok(p)) => {
+                    let _ = booted.engine.places.set(std::sync::Arc::new(p));
+                }
+                Some(Err(e)) => eprintln!("delphi-core: the authorized-command places could not be attached ({e}); every command will be denied"),
+                None => eprintln!("delphi-core: the grant carries no snapshot; every command will be denied"),
+            }
             let _ = booted.engine.grant.set(std::sync::Arc::new(g));
         }
         daemon.set_extension(booted.service.extension());

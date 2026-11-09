@@ -171,7 +171,11 @@ pub fn connect_or_spawn(opts: &SpawnOptions) -> Result<Attached, ClientError> {
 /// serves only through harness logins.
 pub fn granted_env(vars: impl Iterator<Item = (String, String)>) -> Vec<(String, String)> {
     const KEEP: [&str; 11] = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "TERM", "TMPDIR", "XDG_CONFIG_HOME", "DELPHI_RELEASE_VERSION"];
-    vars.filter(|(k, _)| KEEP.contains(&k.as_str())).collect()
+    let mut kept: Vec<(String, String)> = vars.filter(|(k, _)| KEEP.contains(&k.as_str())).collect();
+    // The marker a nested `delphi run` finds in its environment and refuses on (spec 092 TA-2: a run nested inside an authorized run may
+    // not carry the flag). Every process the granted daemon starts inherits it.
+    kept.push(("DELPHI_AUTHORIZED_RUN".to_string(), "1".to_string()));
+    kept
 }
 
 /// Start a NEW daemon that holds `grant` (spec 092 S2c), never attach to a running one: the bytes are written into a pipe whose read
@@ -335,7 +339,7 @@ mod granted_env_tests {
         let vars = [("PATH", "/usr/bin"), ("HOME", "/Users/x"), ("LANG", "C"), ("ANTHROPIC_API_KEY", "sk-secret"), ("OPENAI_API_KEY", "sk-secret2"), ("GITHUB_TOKEN", "ghp_secret"), ("AWS_SECRET_ACCESS_KEY", "aws"), ("DELPHI_HOME", "/x"), ("DELPHI_BRIDGE_TOKEN", "t"), ("DELPHI_RELEASE_VERSION", "1.2.3"), ("SSH_AUTH_SOCK", "/sock")];
         let kept = granted_env(vars.iter().map(|(k, v)| (k.to_string(), v.to_string())));
         let names: Vec<&str> = kept.iter().map(|(k, _)| k.as_str()).collect();
-        assert_eq!(names, ["PATH", "HOME", "LANG", "DELPHI_RELEASE_VERSION"]);
+        assert_eq!(names, ["PATH", "HOME", "LANG", "DELPHI_RELEASE_VERSION", "DELPHI_AUTHORIZED_RUN"]);
         assert!(!kept.iter().any(|(_, v)| v.contains("secret")));
     }
 }

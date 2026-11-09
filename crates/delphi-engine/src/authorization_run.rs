@@ -1,9 +1,9 @@
 //! Operator-authorized tests, slice S2d1 (`specs/092` TA-3): `run_authorized`, the forced-sandbox runner.
 //!
-//! **Compiled in test builds only** (`#[cfg(test)] mod authorization_run;` in `lib.rs`): until S2d2 there is no way to call this from the product.
-//! **Nothing in a run calls this.** `delphi run` and the engine still deny every Red card (`AUTHORIZED_APPROVAL_ENABLED` is false and
-//! `decide()` denies); this function is exercised only by its own tests (the scan in `authorization/tests.rs` fails on any other
-//! caller). S2d2 is the slice that connects it, with the operator's ratification.
+//! **Reachable from one place only:** `Engine::granted_run_command` (`authorization_use.rs`), the daemon check that
+//! `GOVERNANCE.md` §5.12 and `context/invariant-enforcement.md` map the approval to. A card is approved under an operator authorization
+//! only there; `delphi run`'s `decide()` never approves a Red card (it cannot: it has no grant). The scan in `authorization/tests.rs`
+//! fails on any other caller. Spec 092 S2d2b connected it, with the operator's ratification.
 //!
 //! What it does, given a command that matches an entry of the grant's record:
 //!
@@ -45,6 +45,9 @@ use std::path::{Path, PathBuf};
 pub const USED: &str = "authorization.used";
 /// Logged after the command ran: how it ended.
 pub const RAN: &str = "authorization.ran";
+
+/// The reason `run_authorized` gives when no manifest entry equals the command: the caller logs it as `authorization.no_match`.
+pub const NO_ENTRY: &str = "no manifest entry equals this command";
 
 /// The places an authorized command runs in: made by the launcher (or a test), never by the model. `minted` is what the daemon made
 /// AFTER the record (S2d2a): the writable no-exec scratch directory with its fixtures, the canary and the decoy home. The symbolic
@@ -137,7 +140,7 @@ impl Grant {
         // and on the SYMBOLIC vector: the card must equal the record element by element, token text included. Only then are the
         // tokens replaced, by paths the daemon minted for this run (a card never supplies a value).
         let env = a::scrubbed_env();
-        let Some(i) = self.match_entry(&Candidate { tool: MATCHED_TOOL, argv, cwd: a::CWD, env: &env }) else { return Err(no("no manifest entry equals this command")) };
+        let Some(i) = self.match_entry(&Candidate { tool: MATCHED_TOOL, argv, cwd: a::CWD, env: &env }) else { return Err(no(NO_ENTRY)) };
         let e = &self.record.manifest[i];
         if e.cwd != a::CWD || e.env != env || e.scratch_mode != a::SCRATCH_MODE {
             return Err(no("the record's working directory, environment or scratch mode is not the fixed one"));
@@ -159,6 +162,8 @@ impl Grant {
 
         // 2. Everything the dry path checks, then the places, the budget and the anchor.
         self.verify_entry_at_use(i, now_unix, Some(area.snapshot.path())).map_err(no)?;
+        // Defence in depth, on purpose: `verify_entry_at_use` re-hashes the pinned files at their path; this checks the tree pin and the
+        // pinned `@snapshot/<rel>` files against the snapshot object the run holds. Neither is removed because the other exists.
         a::check_snapshot_pins(&self.record, area.snapshot.path(), area.snapshot.tree_hash()).map_err(no)?;
         check_area(area).map_err(no)?;
         let expect = self.anchor.lock().unwrap_or_else(|p| p.into_inner()).clone();
@@ -166,6 +171,8 @@ impl Grant {
         if seen != expect {
             return Err(no("the use ledger is not where this run last saw it (cut, deleted, replaced or written by another process); no use is taken"));
         }
+        // Defence in depth, on purpose: `take_use_anchored` makes the same test under the ledger's lock. This one refuses before the script is
+        // copied and the sandbox probed, so a used-up record costs nothing.
         if seen.count >= self.record.max_uses {
             return Err(no(format!("authorization {} has no uses left ({} of {} used)", self.record.id, seen.count, self.record.max_uses)));
         }
@@ -196,6 +203,8 @@ impl Grant {
             }
             Ok(())
         };
+        // Intentionally redundant with the two re-hashes after the use is taken (the copy is hashed again immediately before exec): this one
+        // refuses before a use is spent and before the sandbox is probed.
         rehash_copy().map_err(no)?;
 
         // 4. Probe (no fallback), then the decrement, then the log.
@@ -253,6 +262,43 @@ impl Grant {
         };
         let _ = emit(RAN, json!({"authorization_id": self.record.id, "entry": i, "index": used.index, "exit_code": result.exit_code, "success": result.success, "timed_out": result.timed_out, "output_capped": result.output_capped, "over_quota": result.over_quota, "snapshot_unchanged": snapshot_unchanged}));
         Ok(result)
+    }
+}
+
+/// What the daemon holds for the authorized commands of one granted run: non-owning views of the snapshot and the throwaway home the
+/// launcher made, and the places the daemon mints itself after the record (`@scratch`, `@canary`, `@operator_home`). One command runs at
+/// a time (the scratch directory is shared), so a second call waits for the first, and a one-use record still runs once.
+pub struct RunPlaces {
+    snapshot: delphi_sandbox::authorized::Snapshot,
+    home: delphi_sandbox::authorized::FreshHome,
+    minted: delphi_sandbox::authorized::Minted,
+    one_at_a_time: std::sync::Mutex<()>,
+}
+
+impl std::fmt::Debug for RunPlaces {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RunPlaces(<held by the daemon>)")
+    }
+}
+
+impl RunPlaces {
+    /// Attach to the launcher's snapshot (its tree hash must be the one reported at launch) and to the daemon's own home, and mint the
+    /// scratch directory, the canary and the decoy home beside the snapshot. Any failure refuses (the daemon then cannot run a command).
+    pub fn attach(snapshot_dir: &Path, expect_tree: &str, home_dir: &Path) -> Result<RunPlaces, String> {
+        let snapshot = Snapshot::attach(snapshot_dir, expect_tree)?;
+        let home = delphi_sandbox::authorized::FreshHome::attach_live(home_dir)?;
+        let minted = Minted::mint(&snapshot)?;
+        Ok(RunPlaces { snapshot, home, minted, one_at_a_time: Default::default() })
+    }
+
+    pub fn area(&self) -> Area<'_> {
+        Area { snapshot: &self.snapshot, home: &self.home, minted: &self.minted }
+    }
+
+    /// Run `argv` under `grant` in these places, once, waiting for any command already running.
+    pub fn run(&self, grant: &Grant, argv: &[String], now_unix: i64, emit: &mut dyn FnMut(&str, Value) -> Result<(), String>) -> Result<AuthorizedRun, Refusal> {
+        let _one = self.one_at_a_time.lock().unwrap_or_else(|p| p.into_inner());
+        grant.run_authorized(argv, &self.area(), now_unix, emit)
     }
 }
 

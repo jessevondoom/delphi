@@ -26,6 +26,19 @@ pub struct GrantedArea {
     pub snapshot: Snapshot,
 }
 
+/// Why a granted run may not start on this machine, from a probe of the authorized sandbox profile, or `None` (spec 092 TA-2,
+/// GOVERNANCE §5.12: "where no such sandbox exists the run does not start"). The launcher probes once before it makes anything; the
+/// daemon probes again before every authorized action, the first included. Pure over the probe so each case is tested.
+pub fn sandbox_refusal(p: &delphi_sandbox::authorized::AuthorizedProbe) -> Option<String> {
+    if p.is_ok() {
+        return None;
+    }
+    Some(format!(
+        "refused: no verified OS sandbox with the network off is available here ({}); an authorized run starts only where one exists (macOS today; on Linux and elsewhere the run refuses)",
+        p.summary()
+    ))
+}
+
 /// The fixed root of throwaway homes: the canonical `/tmp` (short enough for a daemon's Unix sockets, and not under the operator's home).
 pub fn fixed_root() -> Result<PathBuf, String> {
     std::fs::canonicalize("/tmp").map_err(|e| format!("/tmp: {e}"))
@@ -88,7 +101,9 @@ fn secret_key(k: &str) -> bool {
 fn scrub(v: &mut toml::Value) {
     match v {
         toml::Value::Table(t) => {
-            t.retain(|k, _| !secret_key(k));
+            // A key that names a secret is dropped, except a COUNT of tokens (`max_output_tokens`, `max_tokens`): a number under a name
+            // that says `tokens` is a model limit, not a credential, and the daemon refuses a model catalog without it.
+            t.retain(|k, v| !secret_key(k) || (k.to_ascii_lowercase().contains("tokens") && (v.is_integer() || v.is_float())));
             for (_, x) in t.iter_mut() {
                 scrub(x);
             }
@@ -174,12 +189,178 @@ pub fn process_chain() -> Option<Vec<String>> {
     None
 }
 
-/// Why the ancestry shows this launch is not the operator's own terminal, or `None`.
+/// Why the ancestry shows this launch is not the operator's own terminal, or `None`. BEST EFFORT, an extra line behind the launch code
+/// ([`launch_step_up`]), which is the launch gate (see the stated keychain limit in specs/092 and GOVERNANCE 5.12): a chain that reaches pid 1 at once (the parent is init, as after a double fork) is
+/// suspicious and is not a pass.
 pub fn seat_refusal() -> Option<String> {
     match process_chain() {
         None => Some("refused: the process ancestry of this launch could not be read, so it cannot be shown that no agent seat started it".into()),
-        Some(chain) => seat_in_chain(&chain).map(|p| format!("refused: this launch descends from `{p}`, an agent seat or Delphi's daemon; an authorized run is the operator's act from a terminal of their own")),
+        Some(chain) => chain_refusal(&chain),
     }
+}
+
+/// The pure half of [`seat_refusal`].
+pub fn chain_refusal(chain: &[String]) -> Option<String> {
+    if chain.is_empty() {
+        return Some("refused: this launch has no parent process but init, so it is detached from any terminal session or login; an authorized run is the operator's act from a terminal of their own".into());
+    }
+    seat_in_chain(chain).map(|p| format!("refused: this launch descends from `{p}`, an agent seat or Delphi's daemon; an authorized run is the operator's act from a terminal of their own"))
+}
+
+// ------------------------------------------------------------------------------------------------ the launch code
+
+/// The fresh authenticator code that starts a granted run (spec 092 TA-2, GOVERNANCE §5.12): the same second factor as
+/// `delphi test authorize` (`[relay] step_up = "totp"` with a `totp_credential`, in the ratified configuration), verified once per code with
+/// wrong guesses rationed (`delphi_core::totp`) and its state shared with the daemon and with `authorize`. It is asked BEFORE the launcher makes
+/// anything, so a refused code costs no use and starts no daemon. With no second factor configured the launch refuses; there is no fallback.
+/// `factor` gives the secret (or why there is none), `ask` reads one line from the operator. Neither the code nor the secret is returned,
+/// logged or kept.
+pub fn launch_step_up(ws_dir: &Path, now_unix: i64, factor: &dyn Fn(&Path) -> Result<Vec<u8>, String>, ask: &mut dyn FnMut(&str) -> Option<String>) -> Result<(), String> {
+    let secret = factor(ws_dir).map_err(|e| format!("refused: an authorized run needs the second factor at launch, and {e}"))?;
+    let Some(code) = ask("authenticator code to launch this authorized run: ") else { return Err("refused: no code given; nothing was launched".into()) };
+    let verifier = delphi_core::totp::Verifier::persistent(ws_dir.join("local/totp-state"));
+    verifier.check(&secret, code.trim(), now_unix.max(0) as u64).map_err(|e| format!("refused: step-up failed: {e}; nothing was launched"))
+}
+
+/// The launch step-up, or why the launch is refused. An unreadable clock refuses up front (fail closed): a code is checked against the time,
+/// and a launch with no time is not a launch. The caller makes nothing before this returns `Ok`.
+pub fn require_step_up(ws_dir: &Path, now_unix: Option<i64>, factor: &dyn Fn(&Path) -> Result<Vec<u8>, String>, ask: &mut dyn FnMut(&str) -> Option<String>) -> Result<(), String> {
+    let Some(now) = now_unix else { return Err("refused: the clock could not be read, so the launch code cannot be checked; nothing was launched".into()) };
+    launch_step_up(ws_dir, now, factor, ask)
+}
+
+/// What a signal handler needs to put the terminal back: the descriptor and the settings it had. Written before the handlers are installed
+/// and read only by them; `tcsetattr`, `signal` and `raise` are async-signal-safe.
+static SAVED_FD: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+static mut SAVED_TERMIOS: std::mem::MaybeUninit<libc::termios> = std::mem::MaybeUninit::uninit();
+/// The echo-off settings, for the stop handler to put back when the process is continued.
+static mut QUIET_TERMIOS: std::mem::MaybeUninit<libc::termios> = std::mem::MaybeUninit::uninit();
+
+/// Ctrl-Z while the code is asked: put the terminal back, stop as the default action would, and when continued hide the echo again and
+/// install this handler again.
+extern "C" fn restore_stop_and_resume(sig: libc::c_int) {
+    let fd = SAVED_FD.load(std::sync::atomic::Ordering::SeqCst);
+    // SAFETY: only async-signal-safe calls; the termios statics were written before SAVED_FD was set.
+    unsafe {
+        if fd >= 0 {
+            libc::tcsetattr(fd, libc::TCSANOW, std::ptr::addr_of!(SAVED_TERMIOS).cast::<libc::termios>());
+        }
+        libc::signal(sig, libc::SIG_DFL);
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut set);
+        libc::sigaddset(&mut set, sig);
+        libc::sigprocmask(libc::SIG_UNBLOCK, &set, std::ptr::null_mut());
+        libc::raise(sig);
+        // continued
+        libc::signal(sig, restore_stop_and_resume as *const () as usize);
+        if fd >= 0 {
+            libc::tcsetattr(fd, libc::TCSAFLUSH, std::ptr::addr_of!(QUIET_TERMIOS).cast::<libc::termios>());
+        }
+    }
+}
+
+extern "C" fn restore_and_die(sig: libc::c_int) {
+    let fd = SAVED_FD.load(std::sync::atomic::Ordering::SeqCst);
+    if fd >= 0 {
+        // SAFETY: SAVED_TERMIOS was fully written before SAVED_FD was set; the calls are async-signal-safe.
+        unsafe { libc::tcsetattr(fd, libc::TCSANOW, std::ptr::addr_of!(SAVED_TERMIOS).cast::<libc::termios>()) };
+    }
+    // SAFETY: back to the default action, then the same signal again, so the process ends as it would have.
+    unsafe {
+        libc::signal(sig, libc::SIG_DFL);
+        libc::raise(sig);
+    }
+}
+
+/// Terminal echo off for the length of the value, back on in `Drop` (every return path, a panic unwinding included), and by a signal handler
+/// for SIGINT, SIGTERM, SIGHUP and SIGQUIT (the process then dies as it would have, with the terminal restored). SIGKILL cannot be caught.
+struct NoEcho {
+    fd: i32,
+    old: libc::termios,
+    handlers: Vec<(libc::c_int, libc::sigaction)>,
+}
+
+impl NoEcho {
+    fn on(fd: i32) -> Option<NoEcho> {
+        // SAFETY: tcgetattr fills a termios; nothing is read from it unless it returned 0.
+        let mut old: libc::termios = unsafe { std::mem::zeroed() };
+        if unsafe { libc::tcgetattr(fd, &mut old) } != 0 {
+            return None;
+        }
+        let mut quiet = old;
+        quiet.c_lflag &= !(libc::ECHO | libc::ECHONL);
+        quiet.c_lflag |= libc::ICANON;
+        // SAFETY: published before the descriptor, so the handler never sees a half-written value.
+        unsafe {
+            std::ptr::addr_of_mut!(SAVED_TERMIOS).write(std::mem::MaybeUninit::new(old));
+            std::ptr::addr_of_mut!(QUIET_TERMIOS).write(std::mem::MaybeUninit::new(quiet));
+        }
+        SAVED_FD.store(fd, std::sync::atomic::Ordering::SeqCst);
+        let mut handlers = vec![];
+        for sig in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP, libc::SIGQUIT, libc::SIGTSTP] {
+            // SAFETY: a plain handler that only calls async-signal-safe functions.
+            unsafe {
+                let mut act: libc::sigaction = std::mem::zeroed();
+                act.sa_sigaction = if sig == libc::SIGTSTP { restore_stop_and_resume as *const () as usize } else { restore_and_die as *const () as usize };
+                libc::sigemptyset(&mut act.sa_mask);
+                let mut prev: libc::sigaction = std::mem::zeroed();
+                if libc::sigaction(sig, &act, &mut prev) != 0 {
+                    continue;
+                }
+                if prev.sa_sigaction == libc::SIG_IGN {
+                    // Ignored before (SIGHUP under nohup, say): it stays ignored; nothing of ours is left installed for it.
+                    libc::sigaction(sig, &prev, std::ptr::null_mut());
+                    continue;
+                }
+                handlers.push((sig, prev));
+            }
+        }
+        // FLUSH: anything typed before the prompt (a paste) is discarded, not taken as the code.
+        // SAFETY: a valid descriptor and termios.
+        if unsafe { libc::tcsetattr(fd, libc::TCSAFLUSH, &quiet) } != 0 {
+            let g = NoEcho { fd, old, handlers };
+            drop(g);
+            return None;
+        }
+        Some(NoEcho { fd, old, handlers })
+    }
+}
+
+impl Drop for NoEcho {
+    fn drop(&mut self) {
+        // SAFETY: restoring what was read; the descriptor is still open while the guard lives.
+        unsafe {
+            libc::tcsetattr(self.fd, libc::TCSANOW, &self.old);
+            for (sig, prev) in &self.handlers {
+                libc::sigaction(*sig, prev, std::ptr::null_mut());
+            }
+        }
+        SAVED_FD.store(-1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// The prompt and one line read from `tty`, with echo off while it is typed (a code on a shared screen or in a recording is not wanted) and a
+/// newline written after it. If echo cannot be turned off the code is NOT asked for: a launch that cannot hide its code is refused.
+pub fn ask_on(tty: std::fs::File, prompt: &str) -> Option<String> {
+    use std::io::{BufRead, Write};
+    use std::os::fd::AsRawFd;
+    let guard = NoEcho::on(tty.as_raw_fd())?;
+    let mut out = tty.try_clone().ok()?;
+    out.write_all(prompt.as_bytes()).ok()?;
+    out.flush().ok()?;
+    let mut line = String::new();
+    let got = std::io::BufReader::new(&tty).read_line(&mut line);
+    let _ = out.write_all(b"\n");
+    drop(guard);
+    match got {
+        Ok(0) | Err(_) => None,
+        Ok(_) => Some(line.trim().to_string()),
+    }
+}
+
+/// One line typed at the controlling terminal: `/dev/tty` is opened for the prompt and the answer, never stdin, an argument or the environment.
+pub fn tty_ask(prompt: &str) -> Option<String> {
+    ask_on(std::fs::OpenOptions::new().read(true).write(true).open("/dev/tty").ok()?, prompt)
 }
 
 #[cfg(test)]
@@ -196,6 +377,188 @@ mod tests {
         }
         // `delphi run` itself and a console are not seats
         assert_eq!(seat_in_chain(&["/usr/local/bin/delphi run --on-card deny".to_string()]), None);
+    }
+
+    const SECRET: &[u8] = b"12345678901234567890";
+
+    fn ws() -> tempfile::TempDir {
+        let t = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(t.path().join("local")).unwrap();
+        t
+    }
+
+    fn now() -> i64 {
+        delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339()).unwrap()
+    }
+
+    fn good_factor(_: &Path) -> Result<Vec<u8>, String> {
+        Ok(SECRET.to_vec())
+    }
+
+    // Spec 092 TA-2 / GOVERNANCE §5.12: the launch is the operator's own act because it needs a fresh authenticator code.
+    #[test]
+    fn a_valid_code_launches_and_the_same_code_a_second_time_is_a_replay() {
+        let t = ws();
+        let code = delphi_core::totp::code_at(SECRET, now() as u64);
+        let mut asked = vec![];
+        assert_eq!(launch_step_up(t.path(), now(), &good_factor, &mut |p| { asked.push(p.to_string()); Some(code.clone()) }), Ok(()));
+        assert!(asked[0].contains("authenticator code"));
+        let again = launch_step_up(t.path(), now(), &good_factor, &mut |_| Some(code.clone())).unwrap_err();
+        assert!(again.starts_with("refused:") && again.contains("nothing was launched"), "{again}");
+    }
+
+    #[test]
+    fn a_wrong_code_no_code_and_a_malformed_code_refuse_the_launch() {
+        let t = ws();
+        for code in ["000000", "", "12345", "abcdef", "1234567"] {
+            let e = launch_step_up(t.path(), now(), &good_factor, &mut |_| Some(code.to_string())).unwrap_err();
+            assert!(e.starts_with("refused:"), "{code}: {e}");
+        }
+        let e = launch_step_up(t.path(), now(), &good_factor, &mut |_| None).unwrap_err();
+        assert!(e.contains("no code given"), "{e}");
+    }
+
+    #[test]
+    fn with_no_second_factor_configured_the_launch_refuses_and_never_asks() {
+        let t = ws();
+        let mut asked = false;
+        let e = launch_step_up(t.path(), now(), &|_| Err("no second factor is configured".to_string()), &mut |_| { asked = true; Some("123456".into()) }).unwrap_err();
+        assert!(e.starts_with("refused:") && e.contains("second factor"), "{e}");
+        assert!(!asked, "no prompt, no fallback to no step-up");
+        // the real reader of the ratified configuration refuses a workspace that has none
+        assert!(crate::test_cmd::configured_factor(t.path()).is_err());
+    }
+
+    #[test]
+    fn wrong_guesses_are_rationed_so_the_right_code_is_refused_after_a_burst_of_wrong_ones() {
+        let t = ws();
+        for _ in 0..12 {
+            let _ = launch_step_up(t.path(), now(), &good_factor, &mut |_| Some("000000".into()));
+        }
+        let code = delphi_core::totp::code_at(SECRET, now() as u64);
+        assert!(launch_step_up(t.path(), now(), &good_factor, &mut |_| Some(code.clone())).is_err(), "locked out after repeated wrong codes");
+    }
+
+    #[test]
+    fn an_unreadable_clock_refuses_the_launch_before_the_code_is_asked() {
+        let t = ws();
+        let mut asked = false;
+        let e = require_step_up(t.path(), None, &good_factor, &mut |_| { asked = true; Some("123456".into()) }).unwrap_err();
+        assert!(e.starts_with("refused:") && e.contains("clock"), "{e}");
+        assert!(!asked);
+        let code = delphi_core::totp::code_at(SECRET, now() as u64);
+        assert_eq!(require_step_up(t.path(), Some(now()), &good_factor, &mut |_| Some(code.clone())), Ok(()));
+    }
+
+    // The code is typed without echo and the terminal is put back, on the normal path and when the line cannot be read.
+    #[test]
+    fn the_code_is_typed_without_echo_and_the_terminal_is_restored_on_every_path() {
+        use std::io::{Read, Write};
+        use std::os::fd::{AsRawFd, FromRawFd};
+        let (mut master, mut slave) = (0, 0);
+        // SAFETY: openpty fills two descriptors.
+        assert_eq!(unsafe { libc::openpty(&mut master, &mut slave, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) }, 0);
+        // SAFETY: both descriptors are ours and each File owns one.
+        let (mut master, slave) = unsafe { (std::fs::File::from_raw_fd(master), std::fs::File::from_raw_fd(slave)) };
+        let echo = |fd: i32| {
+            // SAFETY: tcgetattr on a valid descriptor.
+            let mut t: libc::termios = unsafe { std::mem::zeroed() };
+            assert_eq!(unsafe { libc::tcgetattr(fd, &mut t) }, 0);
+            t.c_lflag & libc::ECHO != 0
+        };
+        let fd = slave.as_raw_fd();
+        assert!(echo(fd), "a fresh terminal echoes");
+        let keep = slave.try_clone().unwrap();
+        let worker = std::thread::spawn(move || ask_on(slave, "code: "));
+        // wait for the prompt, which is written after echo is off
+        let mut seen = String::new();
+        let mut buf = [0u8; 64];
+        while !seen.contains("code: ") {
+            let n = master.read(&mut buf).unwrap();
+            seen.push_str(&String::from_utf8_lossy(&buf[..n]));
+        }
+        assert!(!echo(keep.as_raw_fd()), "echo is off while the code is typed");
+        master.write_all(b"424242\n").unwrap();
+        assert_eq!(worker.join().unwrap().as_deref(), Some("424242"));
+        assert!(echo(keep.as_raw_fd()), "echo is back after the line");
+        // what the screen showed: the prompt and a newline, never the digits
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let mut rest = [0u8; 256];
+        // SAFETY: the master is non-blocking for this one read.
+        unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) };
+        let n = master.read(&mut rest).unwrap_or(0);
+        // SAFETY: blocking again for the next prompt.
+        unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, 0) };
+        let shown = format!("{seen}{}", String::from_utf8_lossy(&rest[..n]));
+        assert!(!shown.contains("424242"), "the code was echoed: {shown:?}");
+        // an end of input (the other side hung up) is no code, and the terminal is restored all the same
+        let again = keep.try_clone().unwrap();
+        let w2 = std::thread::spawn(move || ask_on(again, "code: "));
+        let mut seen2 = String::new();
+        while !seen2.contains("code: ") {
+            let n = master.read(&mut buf).unwrap();
+            seen2.push_str(&String::from_utf8_lossy(&buf[..n]));
+        }
+        master.write_all(&[0x04]).unwrap();
+        assert_eq!(w2.join().unwrap(), None);
+        assert!(echo(keep.as_raw_fd()), "echo is back after an end of input");
+    }
+
+    // A signal that was ignored before the prompt stays ignored, and every disposition is back as it was afterwards (SIGTSTP included).
+    #[test]
+    fn the_prompt_leaves_an_ignored_signal_ignored_and_restores_every_disposition() {
+        let disposition = |sig: libc::c_int| {
+            // SAFETY: reading the current action only.
+            let mut cur: libc::sigaction = unsafe { std::mem::zeroed() };
+            unsafe { libc::sigaction(sig, std::ptr::null(), &mut cur) };
+            cur.sa_sigaction
+        };
+        let (mut master, mut slave) = (0, 0);
+        // SAFETY: openpty fills two descriptors that are closed below.
+        assert_eq!(unsafe { libc::openpty(&mut master, &mut slave, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) }, 0);
+        // SAFETY: SIGHUP is set to ignore for this test process, as a shell does under nohup.
+        let before_hup = unsafe { libc::signal(libc::SIGHUP, libc::SIG_IGN) };
+        let (int_before, tstp_before) = (disposition(libc::SIGINT), disposition(libc::SIGTSTP));
+        let g = NoEcho::on(slave).expect("echo off on a pty");
+        assert_eq!(disposition(libc::SIGHUP), libc::SIG_IGN, "an ignored signal stays ignored");
+        assert_ne!(disposition(libc::SIGINT), int_before, "SIGINT restores the terminal");
+        assert_ne!(disposition(libc::SIGTSTP), tstp_before, "SIGTSTP restores the terminal when the process is stopped");
+        assert!(g.handlers.iter().all(|(s, _)| *s != libc::SIGHUP));
+        drop(g);
+        assert_eq!((disposition(libc::SIGINT), disposition(libc::SIGTSTP), disposition(libc::SIGHUP)), (int_before, tstp_before, libc::SIG_IGN));
+        // SAFETY: put the process back as it was.
+        unsafe {
+            libc::signal(libc::SIGHUP, before_hup);
+            libc::close(master);
+            libc::close(slave);
+        }
+    }
+
+    #[test]
+    fn a_launch_whose_parent_is_init_is_suspicious_and_not_a_pass() {
+        assert!(chain_refusal(&[]).unwrap().contains("detached"));
+        assert_eq!(chain_refusal(&["-zsh".to_string(), "login -pf x".to_string()]), None);
+        assert!(chain_refusal(&["python3 x.py".to_string(), "claude".to_string()]).unwrap().contains("claude"));
+    }
+
+    #[test]
+    fn a_run_without_a_verified_sandbox_refuses_to_start_and_linux_always_refuses() {
+        use delphi_sandbox::authorized::AuthorizedProbe;
+        // nothing proven: refuse, say why, name where a sandbox exists
+        let none = sandbox_refusal(&AuthorizedProbe::default()).unwrap();
+        assert!(none.starts_with("refused:") && none.contains("macOS today") && none.contains("Linux"), "{none}");
+        let off = sandbox_refusal(&AuthorizedProbe { unavailable: Some("forced off (test)".into()), ..AuthorizedProbe::default() }).unwrap();
+        assert!(off.contains("forced off (test)"), "{off}");
+        // one canary short of ok is still a refusal
+        let partly = AuthorizedProbe { mode: Some("test"), network_blocked: true, outside_unreadable: true, snapshot_readonly: true, scratch_noexec: true, interpreter_runs: true, ..AuthorizedProbe::default() };
+        assert!(sandbox_refusal(&partly).is_some());
+        let ok = AuthorizedProbe { scratch_no_map_exec: true, ..partly };
+        assert_eq!(sandbox_refusal(&ok), None);
+        // on this machine: a Mac with the sandbox passes the real probe; anything else (Linux included) refuses
+        let real = sandbox_refusal(&delphi_sandbox::authorized::probe_authorized());
+        if !cfg!(target_os = "macos") {
+            assert!(real.is_some(), "Linux and every other platform refuse an authorized run");
+        }
     }
 
     #[test]
@@ -280,6 +643,25 @@ mod tests {
             }
         }
         false
+    }
+
+    // Found by the first run of the real binary (CI): a key containing `token` was dropped as a secret, which removed `max_output_tokens`
+    // from the model catalog and the granted daemon refused its own configuration.
+    #[test]
+    fn the_models_token_limits_survive_the_rewrite_and_the_daemon_can_still_read_what_is_left() {
+        let cfg = format!(
+            "{RICH_CONFIG}\n[models.claude]\nfast = \"haiku-t\"\nworkhorse = \"haiku-t\"\nfrontier = \"haiku-t\"\n[models.catalog.\"haiku-t\"]\nmax_output_tokens = 8000\nmin_thinking_budget = 1024\nmax_thinking_budget = 32000\ninput_usd_per_mtok = 1.0\noutput_usd_per_mtok = 5.0\nbearer_token = \"SECRET-TOKEN-KEY\"\naccess_token = \"SECRET-ACCESS\"\n"
+        );
+        let out = granted_config(&cfg, Path::new("/snap")).unwrap();
+        assert!(out.contains("max_output_tokens = 8000") && out.contains("max_thinking_budget"), "{out}");
+        assert!(!out.contains("SECRET-TOKEN-KEY") && !out.contains("SECRET-ACCESS") && !out.contains("bearer_token") && !out.contains("access_token"), "{out}");
+        // the same parser the daemon uses reads what is left
+        if let Err(problems) = delphi_adapter::config::Config::parse(&out) {
+            panic!("the rewritten configuration does not parse: {problems:?}");
+        }
+        // a token that is a TEXT under a `tokens` name is still dropped
+        let out = granted_config("[workspace]\nprojects = []\n[x]\ntokens = \"SECRET-LIST\"\nmax_tokens = 100\n", Path::new("/s")).unwrap();
+        assert!(!out.contains("SECRET-LIST") && out.contains("max_tokens = 100"), "{out}");
     }
 
     #[test]

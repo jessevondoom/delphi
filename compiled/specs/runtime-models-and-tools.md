@@ -40,7 +40,7 @@ Delphi gives agents access to outside services (v1: **Slack, Google Drive, Googl
 
 ## 016-headless-run
 
-**016: Headless Run (`delphi run`)** · approved (per source at `713c96a4fa2f`) · tier 0 · [source](../../specs/016-headless-run.md)
+**016: Headless Run (`delphi run`)** · approved (per source at `2ba347b2ea9e`) · tier 0 · [source](../../specs/016-headless-run.md)
 
 **source excerpt, untrusted** · `specs/016-headless-run.md` line 18
 

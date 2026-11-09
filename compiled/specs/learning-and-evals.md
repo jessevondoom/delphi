@@ -6,7 +6,7 @@
 
 ## 031-layered-learning-and-training-mode
 
-**031: Layered Learning, Cheap Capture, and Training Mode (draft)** · approved (per source at `5e2a5573d81f`) · tier 0 · [source](../../specs/031-layered-learning-and-training-mode.md)
+**031: Layered Learning, Cheap Capture, and Training Mode (draft)** · approved (per source at `65c58206c6da`) · tier 0 · [source](../../specs/031-layered-learning-and-training-mode.md)
 
 **source excerpt, untrusted** · `specs/031-layered-learning-and-training-mode.md` line 21
 

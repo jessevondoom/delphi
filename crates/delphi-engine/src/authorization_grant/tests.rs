@@ -698,7 +698,7 @@ fn the_dry_and_the_real_ledger_are_separate_directories() {
 
 // ---------------------------------------------------------------------------------------------- a claude seat with bridge tools only
 
-mod claude_seat {
+pub(crate) mod claude_seat {
     use super::*;
     use crate::harness::tests::fake_cli;
     use crate::testkit::{events_of, setup_with_exec};
@@ -707,28 +707,33 @@ mod claude_seat {
 
     /// A stand-in `claude` that lists `tools`, writes its arguments to `args`, then calls Delphi's bridge `run_command` over the socket
     /// the MCP config names (as the real CLI's MCP relay would) and finishes.
-    pub(super) fn script(dir: &Path, tools: &str, args_file: &Path, call: Option<(&str, serde_json::Value)>) -> String {
+    pub(crate) fn script(dir: &Path, tools: &str, args_file: &Path, call: Option<(&str, serde_json::Value)>) -> String {
+        script_n(dir, tools, args_file, call.into_iter().collect())
+    }
+
+    /// As [`script`], with several bridge calls one after the other (each reply goes to `<args>.resp`, `<args>.resp2`, ...).
+    pub(crate) fn script_n(dir: &Path, tools: &str, args_file: &Path, calls: Vec<(&str, serde_json::Value)>) -> String {
         let init = format!(r#"echo '{{"type":"system","subtype":"init","session_id":"s1","tools":[{tools}],"mcp_servers":[{{"name":"delphi","status":"connected"}}]}}'"#);
-        let call = call.map(|(name, arguments)| {
+        let calls: Vec<String> = calls.into_iter().enumerate().map(|(n, (name, arguments))| {
             let req = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}}).to_string();
             format!(
                 r#"cfg=""; prev=""; for a in "$@"; do [ "$prev" = "--mcp-config" ] && cfg="$a"; prev="$a"; done
 sock=$(tr ',{{}}' '\n\n\n' < "$cfg" | sed -n 's/.*"DELPHI_BRIDGE_SOCKET":"\([^"]*\)".*/\1/p')
 tok=$(tr ',{{}}' '\n\n\n' < "$cfg" | sed -n 's/.*"DELPHI_BRIDGE_TOKEN":"\([^"]*\)".*/\1/p')
-printf '{{"token":"%s"}}\n%s\n' "$tok" '{req}' | /usr/bin/nc -U -w 3 "$sock" > '{out}'"#,
+printf '{{"token":"%s"}}\n%s\n' "$tok" '{req}' | /usr/bin/nc -U -w 90 "$sock" > '{out}'"#,
                 req = req,
-                out = args_file.with_extension("resp").display()
+                out = args_file.with_extension(if n == 0 { "resp".to_string() } else { format!("resp{}", n + 1) }).display()
             )
-        });
-        let body = format!("printf '%s\\n' \"$@\" > '{}'\n{}\n{}\n{}", args_file.display(), init, call.unwrap_or_default(), FINISH);
+        }).collect();
+        let body = format!("printf '%s\\n' \"$@\" > '{}'\n{}\n{}\n{}", args_file.display(), init, calls.join("\n"), FINISH);
         fake_cli(dir, &body)
     }
 
-    pub(super) fn fx(prog: String) -> crate::testkit::Fx {
+    pub(crate) fn fx(prog: String) -> crate::testkit::Fx {
         fx_with(prog, crate::exec::SandboxMode::Off, vec![])
     }
 
-    pub(super) fn fx_with(prog: String, sandbox: crate::exec::SandboxMode, allow: Vec<String>) -> crate::testkit::Fx {
+    pub(crate) fn fx_with(prog: String, sandbox: crate::exec::SandboxMode, allow: Vec<String>) -> crate::testkit::Fx {
         let f = setup_with_exec(vec![], 5.0, |s| s.harness_program = prog, move |c| {
             c.sandbox = sandbox;
             c.allow = allow;
@@ -744,10 +749,10 @@ printf '{{"token":"%s"}}\n%s\n' "$tok" '{req}' | /usr/bin/nc -U -w 3 "$sock" > '
         f
     }
 
-    pub(super) const PROMPT: &str = "Implement @specs/011-retry.md in @project/app/src/lib.rs";
+    pub(crate) const PROMPT: &str = "Implement @specs/011-retry.md in @project/app/src/lib.rs";
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_claude_builder_seat_with_only_bridge_tools_raises_a_run_command_that_matches_and_is_logged_as_would_use_and_still_denied() {
+    async fn a_claude_builder_seat_with_only_bridge_tools_raises_a_run_command_that_reaches_the_daemon_check_and_with_no_places_nothing_runs() {
         let g = fixture(3);
         let scripts = tempfile::tempdir().unwrap();
         let args = scripts.path().join("args");
@@ -764,14 +769,16 @@ printf '{{"token":"%s"}}\n%s\n' "$tok" '{req}' | /usr/bin/nc -U -w 3 "$sock" > '
         assert!(started["bridge"].as_array().unwrap().iter().any(|v| v == "run_command"), "{started}");
         assert_eq!(started["native_tools"], json!([]));
         assert_eq!(started["claudeai_connectors"], false);
-        // The call reached `exec_command` as a run_command that the grant matched: logged, never run.
-        let would = events_of(&f, WOULD_USE);
-        assert_eq!(would.len(), 1, "{:?}", events_of(&f, REFUSED_USE).iter().map(|e| e.payload.to_string()).collect::<Vec<_>>());
-        assert_eq!((would[0].payload["approved"].as_bool(), would[0].payload["index"].as_u64()), (Some(false), Some(1)));
+        // The call reached the daemon check (`granted_run_command`). This daemon holds a grant and NO places (no snapshot, no throwaway
+        // home), so it runs nothing anywhere else: refused, logged, the use not taken. The approval itself is tested in
+        // `authorization_use::tests`, with the places a launched daemon has.
+        let refused = events_of(&f, REFUSED_USE);
+        assert_eq!(refused.len(), 1, "{:?}", events_of(&f, WOULD_USE).iter().map(|e| e.payload.to_string()).collect::<Vec<_>>());
+        assert_eq!((refused[0].payload["approved"].as_bool(), refused[0].payload["reason"].as_str().map(|r| r.contains("no snapshot"))), (Some(false), Some(true)));
         let resp = fs::read_to_string(args.with_extension("resp")).unwrap_or_default();
         assert!(resp.contains("denied") && resp.contains("not enabled"), "the model is told it was denied: {resp}");
-        assert!(!g.root.join("RAN").exists() && events_of(&f, "action.intent").is_empty(), "nothing ran");
-        assert_eq!((g.dry(), g.used()), (1, 0));
+        assert!(!g.root.join("RAN").exists() && events_of(&f, "action.intent").is_empty() && events_of(&f, WOULD_USE).is_empty(), "nothing ran");
+        assert_eq!((g.dry(), g.used()), (0, 0));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

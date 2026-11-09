@@ -233,6 +233,8 @@ fn totp_enroll(ws_dir: &Path) -> i32 {
     println!("  link: {}", delphi_core::totp::otpauth_uri(&ws, "Delphi", &secret));
     println!();
     println!("It is shown only here. Store the key where the daemon can read it, for example in the macOS keychain:");
+    println!("(Be plain about what that protects: a key in your login keychain can be read back, without a prompt, by any process running as you, so this");
+    println!("step-up stops an agent that cannot read your keychain, not one that can. A keychain item with a user-presence requirement is the planned hardening.)");
     println!("  security add-generic-password -s delphi -a delphi-relay-totp -w '{}'", key);
     println!();
     println!("Then add to config.toml, `/ratify` it in the console, and check it with `delphi relay totp-check <6 digits>`:");
