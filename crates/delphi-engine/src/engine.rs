@@ -2460,13 +2460,14 @@ impl Engine {
             _ => vec![],
         };
         let (now, tool_s) = ((self.clock_unix)(), tool.to_string());
+        let shown_argv = argv.clone();
         let g = grant.clone();
         let outcome = tokio::task::spawn_blocking(move || g.evaluate_card(&tool_s, &argv, now)).await.map_err(|e| EngineError::Invalid(e.to_string()))?;
         let matched = !matches!(outcome, Outcome::NotMatched(_));
         let (kind, body) = match outcome {
             Outcome::NotMatched(why) => (NO_MATCH, json!({"authorization_id": grant.id(), "tool": tool, "reason": why, "approved": false})),
             Outcome::Refused { entry, reason } => (REFUSED_USE, json!({"authorization_id": grant.id(), "tool": tool, "entry": entry, "reason": reason, "approved": false})),
-            Outcome::WouldUse { entry, index, uses_left, seq } => (WOULD_USE, json!({"authorization_id": grant.id(), "record_hash": grant.record_hash(), "tool": tool, "entry": entry, "index": index, "uses_left": uses_left, "ledger_seq": seq, "purpose": grant.purpose(), "approved": false, "dry": true, "verified": crate::authorization_grant::VERIFIED_IN_S2C})),
+            Outcome::WouldUse { entry, index, uses_left, seq } => (WOULD_USE, json!({"authorization_id": grant.id(), "record_hash": grant.record_hash(), "tool": tool, "entry": entry, "index": index, "uses_left": uses_left, "ledger_seq": seq, "purpose": grant.purpose(), "approved": false, "dry": true, "verified": crate::authorization_grant::VERIFIED_IN_S2C, "argv": shown_argv, "resolved_argv": grant.resolve_dry(&shown_argv)})),
         };
         let mut e = EventEnvelope::new(&who.m.id, kind, body);
         e.task_id = Some(who.task_id.to_string());

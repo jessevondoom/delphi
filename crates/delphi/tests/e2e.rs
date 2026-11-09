@@ -2392,3 +2392,51 @@ fn live_a_prompt_changes_a_setting_and_the_reply_says_what_changed() {
     println!("=== RESULT: the model {} the setting ===", if changed { "changed" } else { "did NOT change" });
     assert_eq!(c.ctrl_c_out(), 0);
 }
+
+// Spec 092 S2d2a: the real binary, in a throwaway home, with a SYMBOLIC record. The launcher reads the store, makes the fresh home and
+// the snapshot, compares the snapshot with the record's pins and starts the granted daemon; the run still denies every card (the
+// approval switch is off). Needs a controlling terminal for the launcher, so it runs under script(1)'s pseudo-terminal (macOS).
+#[test]
+fn delphi_run_with_a_symbolic_authorization_passes_the_launcher_and_still_approves_nothing() {
+    use delphi_engine::authorization as a;
+    if !cfg!(target_os = "macos") || !std::path::Path::new("/usr/bin/script").exists() {
+        eprintln!("skip: needs macOS (sandbox-exec and script(1) for a pseudo-terminal)");
+        return;
+    }
+    let m = mock(vec![]);
+    let e = setup(m.port);
+    ratify_and_stop(&e);
+    let proj = e._t.path().join("proj");
+    std::fs::write(proj.join("job.sh"), "#!/bin/bash\nexit 0\n").unwrap();
+    assert!(Command::new("git").arg("-C").arg(&proj).args(["add", "job.sh"]).stdout(Stdio::null()).status().unwrap().success());
+    assert!(Command::new("git").arg("-C").arg(&proj).args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-qm", "job"]).stdout(Stdio::null()).status().unwrap().success());
+    // the record, made the way `delphi test authorize` makes it: symbolic text, the tree pinned
+    let entry = a::Entry { tool: "shell".into(), argv: vec!["/bin/bash".into(), "@snapshot/job.sh".into(), "@scratch".into()], files: vec!["@snapshot/job.sh".into()], runner_provenance: "project_snapshot".into() };
+    let n = a::NewRecord { purpose: "e2e".into(), intent: "e2e".into(), run: "run-1".into(), expires_in_secs: a::DEFAULT_EXPIRY_SECS, max_uses: 2, entries: vec![entry], request: None, policy: a::Policy::system() };
+    let ctx = a::TokenCtx { project: Some(proj.clone()), pin_tree: true, expect: Default::default() };
+    let now = delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339()).unwrap();
+    let rec = a::build_record_with(&e.home, &n, &ctx, now, &delphi_core::time::now_rfc3339()).unwrap();
+    a::create_audited(&e.home, rec.clone(), json!({"id": rec.id, "manifest_hash": rec.manifest_hash, "run": rec.run, "by": "operator", "source": "operator"})).unwrap();
+    let on_card = format!("authorization:{}", rec.id);
+    let run_it = |extra: &[&str]| {
+        let o = Command::new("/usr/bin/script")
+            .args(["-q", "/dev/null", DELPHI, "run", "do the thing", "--on-card", &on_card, "--auth-run", "run-1", "--workspace", "e2e", "--home", e.home.to_str().unwrap(), "--timeout", "20s"])
+            .args(extra)
+            .current_dir(&proj)
+            .env("DELPHI_E2E_KEY", KEY)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        (o.status.code().unwrap_or(-1), String::from_utf8_lossy(&o.stdout).to_string() + &String::from_utf8_lossy(&o.stderr))
+    };
+    let (_code, out) = run_it(&[]);
+    if out.contains("descends from") {
+        // The launcher's own guard: run from under an agent seat (as an agent-driven test run is), it refuses, which is the point of it.
+        eprintln!("skip: this test run descends from an agent seat, so the launcher refuses it by design: {out}");
+        return;
+    }
+    assert!(out.contains("the authorization checks passed") && out.contains("denies every card"), "{out}");
+    assert!(out.contains("the project snapshot has tree hash"), "the launcher compared the snapshot with the record's pins: {out}");
+    assert!(!out.contains("authorization.used") && !out.contains("\"approved\":true"), "nothing was approved: {out}");
+    assert_eq!(delphi_engine::authorization_grant::ledger_count(&e.home, &rec.id).unwrap(), 0, "no real use was taken");
+}

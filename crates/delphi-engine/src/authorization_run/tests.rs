@@ -3,7 +3,8 @@
 //! called from any run (the scan in `authorization/tests.rs` fails if it is).
 
 use super::*;
-use crate::authorization_anchor::{launch_granted, RunAnchor};
+use std::path::Path;
+use crate::authorization_anchor::{launch_granted_for, RunAnchor};
 use delphi_sandbox::authorized::AuthorizedProbe;
 use std::process::Command;
 use std::sync::Mutex;
@@ -12,7 +13,6 @@ use std::sync::Mutex;
 static FLOOD: Mutex<()> = Mutex::new(());
 
 const SWEEP: &str = include_str!("../../../delphi-sandbox/tests/fixtures/red_team_sweep.sh");
-const DYLIB: &[u8] = include_bytes!("../../../delphi-sandbox/src/authorized/probe_mark.dylib");
 
 fn now() -> i64 {
     delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339()).unwrap()
@@ -35,36 +35,34 @@ fn can_run() -> bool {
 struct Rig {
     _t: tempfile::TempDir,
     root: PathBuf,
+    project: PathBuf,
     home: PathBuf,
     snap: Snapshot,
     fresh: FreshHome,
-    scratch: PathBuf,
-    listener: std::net::TcpListener,
-    victim: Victim,
+    minted: Minted,
+    /// The SYMBOLIC vector the record holds and the card carries.
     argv: Vec<String>,
     id: String,
+    /// The real path of the pinned script in this run's snapshot.
     script: String,
     policy: a::Policy,
 }
 
-struct Victim(std::process::Child);
-
-impl Drop for Victim {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
+fn git(project: &Path, args: &[&str]) {
+    let out = Command::new("/usr/bin/git").arg("-C").arg(project).args(["-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false"]).args(args).env_clear().env("PATH", "/usr/bin:/bin").env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1").output().unwrap();
+    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
 }
 
-/// An operator home with one live record for `/bin/bash <script> <args>`, a snapshot holding the script, a no-exec scratch directory
-/// with the sweep's fixtures, and a fresh throwaway home. `args` is built from the rig once its paths exist.
-fn rig(script_text: &str, max_uses: u32, args: impl Fn(&Rig0) -> Vec<String>) -> Rig {
+/// An operator home with one live record for `/bin/bash @snapshot/job.sh <args>` made the way `delphi test authorize` makes it (the
+/// project is a git repository with the script committed; the tree is pinned), a snapshot the real builder made from that project,
+/// the places the daemon mints after the record, and a fresh throwaway home. `args` are SYMBOLIC (tokens), as the record holds them.
+fn rig(script_text: &str, max_uses: u32, args: &[&str]) -> Rig {
     rig_with(script_text, max_uses, args, false)
 }
 
 /// As [`rig`]; with `own_bash` the interpreter is a copy of `/bin/bash` in the rig's own directory (a policy that names it), so a test
 /// can change the interpreter's bytes. The probe still uses the real `/bin/bash`; nothing is run from the copy in those tests.
-fn rig_with(script_text: &str, max_uses: u32, args: impl Fn(&Rig0) -> Vec<String>, own_bash: bool) -> Rig {
+fn rig_with(script_text: &str, max_uses: u32, args: &[&str], own_bash: bool) -> Rig {
     let t = tempfile::tempdir().unwrap();
     let root = fs::canonicalize(t.path()).unwrap();
     let (bin, policy) = if own_bash {
@@ -82,63 +80,35 @@ fn rig_with(script_text: &str, max_uses: u32, args: impl Fn(&Rig0) -> Vec<String
     fs::create_dir_all(&project).unwrap();
     fs::write(project.join("job.sh"), script_text).unwrap();
     fs::write(project.join("data.txt"), "snapshot data\n").unwrap();
-    let snap = Snapshot::from_files(&project, &[PathBuf::from("job.sh"), PathBuf::from("data.txt")], &root).unwrap();
-    let scratch = root.join("work");
-    fs::create_dir(&scratch).unwrap();
-    let pre = scratch.join("preplaced-exec");
-    fs::write(&pre, "#!/bin/bash\nexit 0\n").unwrap();
-    fs::set_permissions(&pre, fs::Permissions::from_mode(0o755)).unwrap();
-    fs::write(scratch.join("mark.dylib"), DYLIB).unwrap();
-    let fifo = std::ffi::CString::new(scratch.join("fifo").as_os_str().as_encoded_bytes()).unwrap();
-    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
-    let canary = snap.root().join("canary.txt");
-    fs::write(&canary, "CANARY\n").unwrap();
-    let opshome = root.join("opshome");
-    fs::create_dir(&opshome).unwrap();
-    fs::write(opshome.join("visible.txt"), "x").unwrap();
-    let tools = root.join("tools");
-    fs::create_dir(&tools).unwrap();
-    let fakedelphi = tools.join("delphi");
-    fs::write(&fakedelphi, "#!/bin/bash\nexit 0\n").unwrap();
-    fs::set_permissions(&fakedelphi, fs::Permissions::from_mode(0o755)).unwrap();
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let victim = Victim(Command::new("/bin/sleep").arg("120").spawn().unwrap());
-    let fresh = FreshHome::create(&root).unwrap();
-    let script = snap.path().join("job.sh").to_string_lossy().into_owned();
-
-    let r0 = Rig0 { snap: snap.path().to_path_buf(), scratch: scratch.clone(), canary, opshome, fakedelphi, port: listener.local_addr().unwrap().port(), victim: victim.0.id() };
-    let mut argv = vec![bin.clone(), script.clone()];
-    argv.extend(args(&r0));
-
-    // The operator's home, with a record made the way `delphi test authorize` makes it (real /bin/bash, sealed-volume check on).
+    git(&project, &["init", "-q"]);
+    git(&project, &["add", "job.sh", "data.txt"]);
+    git(&project, &["commit", "-q", "-m", "x"]);
+    // The record comes FIRST and holds only symbolic text: no per-run path exists yet.
+    let mut argv = vec![bin.clone(), "@snapshot/job.sh".to_string()];
+    argv.extend(args.iter().map(|a| a.to_string()));
     let home = root.join("opshome-store");
     fs::create_dir_all(home.join("operator")).unwrap();
     delphi_core::lock::write(&home.join("operator/ratified.lock"), &Default::default()).unwrap();
-    let entry = a::Entry { tool: "shell".into(), argv: argv.clone(), files: vec![script.clone()], runner_provenance: "project_snapshot".into() };
-    let n = a::NewRecord { purpose: "S2d1 acceptance".into(), intent: "red-team sweep".into(), run: "run-1".into(), expires_in_secs: a::DEFAULT_EXPIRY_SECS, max_uses, entries: vec![entry], request: None, policy: policy.clone() };
-    let rec = a::build_record(&home, &n, now(), &delphi_core::time::now_rfc3339()).unwrap();
+    let entry = a::Entry { tool: "shell".into(), argv: argv.clone(), files: vec!["@snapshot/job.sh".into()], runner_provenance: "project_snapshot".into() };
+    let n = a::NewRecord { purpose: "S2d2a acceptance".into(), intent: "red-team sweep".into(), run: "run-1".into(), expires_in_secs: a::DEFAULT_EXPIRY_SECS, max_uses, entries: vec![entry], request: None, policy: policy.clone() };
+    let ctx = a::TokenCtx { project: Some(project.clone()), pin_tree: true, expect: Default::default() };
+    let rec = a::build_record_with(&home, &n, &ctx, now(), &delphi_core::time::now_rfc3339()).unwrap();
     let id = rec.id.clone();
     a::create_audited(&home, rec.clone(), json!({"id": rec.id, "manifest_hash": rec.manifest_hash, "run": rec.run, "by": "operator", "source": "operator"})).unwrap();
-    Rig { _t: t, root, home, snap, fresh, scratch, listener, victim, argv, id, script, policy }
-}
-
-/// The paths a rig makes, for building the arguments.
-struct Rig0 {
-    snap: PathBuf,
-    scratch: PathBuf,
-    canary: PathBuf,
-    opshome: PathBuf,
-    fakedelphi: PathBuf,
-    port: u16,
-    victim: u32,
+    // The run: its snapshot and the places the daemon mints, made AFTER the record.
+    let snap = Snapshot::build(&project, &root).unwrap();
+    let minted = Minted::mint(&snap).unwrap();
+    let fresh = FreshHome::create(&root).unwrap();
+    let script = snap.path().join("job.sh").to_string_lossy().into_owned();
+    Rig { _t: t, root, project, home, snap, fresh, minted, argv, id, script, policy }
 }
 
 fn sweep_rig(max_uses: u32) -> Rig {
-    rig(SWEEP, max_uses, |r| vec![r.snap.display().to_string(), r.scratch.display().to_string(), r.canary.display().to_string(), r.opshome.display().to_string(), r.port.to_string(), r.fakedelphi.display().to_string(), r.victim.to_string()])
+    rig(SWEEP, max_uses, &["@snapshot", "@scratch", "@canary", "@operator_home"])
 }
 
 fn trivial_rig(max_uses: u32) -> Rig {
-    rig("#!/bin/bash\necho job-ran\nexit 0\n", max_uses, |_| vec![])
+    rig("#!/bin/bash\necho job-ran\nexit 0\n", max_uses, &[])
 }
 
 type Events = std::sync::Arc<Mutex<Vec<(String, Value)>>>;
@@ -146,12 +116,12 @@ type Events = std::sync::Arc<Mutex<Vec<(String, Value)>>>;
 impl Rig {
     /// A grant made the way the daemon makes it: through the launcher's payload (anchor event, ledger state), in this process.
     fn launch(&self) -> (Grant, RunAnchor) {
-        let (bytes, anchor) = launch_granted(&self.home, &self.id, "run-1", now(), &self.policy).unwrap();
+        let (bytes, anchor) = launch_granted_for(&self.home, &self.id, "run-1", now(), &self.policy, Some((self.snap.path(), self.snap.tree_hash()))).unwrap();
         (Grant::from_boot(&bytes, std::process::id(), now(), self.policy.clone()).unwrap(), anchor)
     }
 
     fn area(&self) -> Area<'_> {
-        Area { snapshot: &self.snap, home: &self.fresh, scratch: &self.scratch }
+        Area { snapshot: &self.snap, home: &self.fresh, minted: &self.minted }
     }
 
     fn call(&self, g: &Grant) -> (Result<AuthorizedRun, Refusal>, Events) {
@@ -229,15 +199,16 @@ fn the_red_team_sweep_runs_authorized_and_every_attempt_is_blocked() {
     assert!(res.snapshot_unchanged);
     r.snap.verify().unwrap();
     assert!(!r.snap.root().join("sweep-outside").exists() && !r.snap.root().join("sweep-new-file").exists());
-    assert!(!r.scratch.join("mark.dylib.loaded").exists(), "a native library was loaded from scratch");
-    assert_eq!(unsafe { libc::kill(r.victim.0.id() as i32, 0) }, 0, "the victim process was signalled");
-    assert!(!r.root.join("opshome/delphi-sweep-hole").exists());
-    r.listener.set_nonblocking(true).unwrap();
-    assert!(r.listener.accept().is_err(), "the sandboxed script reached the host's listener");
-    // the private copy of the script is gone with the call: only the snapshot (and the canary this test put there) remain beside it
-    let mut left: Vec<String> = fs::read_dir(r.snap.root()).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
-    left.sort();
-    assert_eq!(left, vec!["canary.txt".to_string(), "snapshot".to_string()], "a use-* directory was left behind");
+    assert!(!r.minted.scratch.join("mark.dylib.loaded").exists(), "a native library was loaded from scratch");
+    assert!(!r.minted.operator_home.join("delphi-sweep-hole").exists());
+    // the private copy of the script is gone with the call: only the snapshot and what the daemon minted remain beside it
+    let left: Vec<String> = fs::read_dir(r.snap.root()).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    assert!(!left.iter().any(|n| n.starts_with("use-")), "a use-* directory was left behind: {left:?}");
+    // the used event shows the symbolic vector AND the resolved one
+    assert_eq!(used["argv"], json!(r.argv));
+    let resolved: Vec<String> = serde_json::from_value(used["resolved_argv"].clone()).unwrap();
+    assert_eq!(resolved[1], r.script);
+    assert_eq!(resolved[2..], [r.snap.path().display().to_string(), r.minted.scratch.display().to_string(), r.minted.canary.display().to_string(), r.minted.operator_home.display().to_string()]);
     // the anchor: ending the run records the real ledger; the next launch finds it where it was left
     let end = anchor.end().unwrap();
     assert_eq!(end.count, 1);
@@ -337,7 +308,7 @@ fn two_concurrent_calls_on_a_one_use_record_run_exactly_one() {
     }
     let _turn = FLOOD.lock().unwrap_or_else(|e| e.into_inner());
     let r = std::sync::Arc::new(trivial_rig(1));
-    let (bytes, _anchor) = launch_granted(&r.home, &r.id, "run-1", now(), &a::Policy::system()).unwrap();
+    let (bytes, _anchor) = launch_granted_for(&r.home, &r.id, "run-1", now(), &a::Policy::system(), Some((r.snap.path(), r.snap.tree_hash()))).unwrap();
     // Two daemons' worth of state on one record: two grants, each with the launcher's anchor.
     let grants: Vec<_> = (0..2).map(|_| std::sync::Arc::new(Grant::from_boot(&bytes, std::process::id(), now(), a::Policy::system()).unwrap())).collect();
     let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
@@ -367,7 +338,7 @@ fn the_calls_own_working_directory_and_environment_are_never_used() {
         return;
     }
     // A record whose script prints what it was given: the record's constants, whatever the call might have carried.
-    let r = rig("#!/bin/bash\necho \"pwd=$(pwd) home=${HOME-unset} path=$PATH lc=$LC_ALL\"\n", 2, |_| vec![]);
+    let r = rig("#!/bin/bash\necho \"pwd=$(pwd) home=${HOME-unset} path=$PATH lc=$LC_ALL\"\n", 2, &[]);
     let (g, _anchor) = r.launch();
     let (res, _ev) = r.call(&g);
     let res = res.unwrap_or_else(|e| panic!("{e:?}"));
@@ -484,7 +455,7 @@ fn an_interpreter_changed_between_the_log_and_the_exec_is_not_run() {
     if !can_run() {
         return;
     }
-    let r = rig_with("#!/bin/bash\necho job-ran\n", 3, |_| vec![], true);
+    let r = rig_with("#!/bin/bash\necho job-ran\n", 3, &[], true);
     let (g, _anchor) = r.launch();
     let bin = r.argv[0].clone();
     let (res, ev) = r.call_hooked(&g, |_| {
@@ -520,4 +491,158 @@ fn the_places_changed_between_the_log_and_the_exec_stop_the_command() {
     let err = res.unwrap_err();
     assert!(err.use_taken && err.reason.contains("snapshot"), "{err:?}");
     assert_eq!(count(&ev, RAN), 0);
+}
+
+// ---------------------------------------------------------------------------------------------- S2d2a: symbolic paths
+
+fn used_event(ev: &Events) -> Value {
+    ev.lock().unwrap().iter().find(|(k, _)| k == USED).unwrap().1.clone()
+}
+
+#[test]
+fn two_runs_of_one_record_get_different_paths_and_the_same_manifest_hash() {
+    if !can_run() {
+        return;
+    }
+    let r = trivial_rig(5);
+    let (g1, _a1) = r.launch();
+    let (res1, ev1) = r.call(&g1);
+    assert!(res1.is_ok(), "{res1:?}");
+    // a second run: a new snapshot of the same project, new minted places, a new launch
+    let snap2 = Snapshot::build(&r.project, &r.root).unwrap();
+    let minted2 = Minted::mint(&snap2).unwrap();
+    assert_ne!(snap2.path(), r.snap.path());
+    assert_eq!(snap2.tree_hash(), r.snap.tree_hash(), "the same tracked files make the same tree");
+    let (bytes, _anchor2) = launch_granted_for(&r.home, &r.id, "run-1", now(), &r.policy, Some((snap2.path(), snap2.tree_hash()))).unwrap();
+    let g2 = Grant::from_boot(&bytes, std::process::id(), now(), r.policy.clone()).unwrap();
+    let ev2: Events = Default::default();
+    let sink = ev2.clone();
+    let res2 = g2.run_authorized(&r.argv, &Area { snapshot: &snap2, home: &r.fresh, minted: &minted2 }, now(), &mut |k, v| {
+        sink.lock().unwrap().push((k.to_string(), v));
+        Ok(())
+    });
+    assert!(res2.is_ok(), "{res2:?}");
+    let (u1, u2) = (used_event(&ev1), used_event(&ev2));
+    assert_eq!(u1["argv"], u2["argv"], "the symbolic vector is the same text");
+    assert_ne!(u1["resolved_argv"], u2["resolved_argv"], "the paths are minted per run");
+    assert_eq!(u1["record_hash"], u2["record_hash"]);
+    let rec = a::load(&r.home).unwrap().records.into_iter().find(|x| x.id == r.id).unwrap();
+    assert_eq!(rec.token_scheme, 1);
+    assert_eq!(rec.snapshot.as_ref().map(|s| s.source.as_str()), Some("tracked_files"));
+    assert_eq!(rec.snapshot.and_then(|s| s.tree_blake3), Some(r.snap.tree_hash().to_string()));
+}
+
+#[test]
+fn a_card_that_is_not_exactly_the_symbolic_text_matches_nothing_and_takes_no_use() {
+    if !can_run() {
+        return;
+    }
+    let _turn = FLOOD.lock().unwrap_or_else(|e| e.into_inner());
+    let r = sweep_rig(5);
+    let (g, _anchor) = r.launch();
+    let abs = |p: &Path| p.display().to_string();
+    let good = r.argv.clone();
+    let with = |i: usize, v: &str| {
+        let mut a = good.clone();
+        a[i] = v.to_string();
+        a
+    };
+    let cards: Vec<(&str, Vec<String>)> = vec![
+        ("wrong token", with(3, "@snapshot")),
+        ("swapped tokens", {
+            let mut a = good.clone();
+            a.swap(3, 4);
+            a
+        }),
+        ("parent directory", with(1, "@snapshot/../x")),
+        ("double slash", with(1, "@snapshot//job.sh")),
+        ("dot slash", with(1, "@snapshot/./job.sh")),
+        ("token inside text", with(2, "x@snapshot")),
+        ("unknown token", with(3, "@unknown")),
+        ("token in argv[0]", with(0, "@snapshot")),
+        ("wrong case", with(2, "@Snapshot")),
+        ("trailing space", with(2, "@snapshot ")),
+        ("resolved absolute snapshot", with(2, &abs(r.snap.path()))),
+        ("resolved absolute script", with(1, &r.script)),
+        ("resolved scratch", with(3, &abs(&r.minted.scratch))),
+        ("resolved canary", with(4, &abs(&r.minted.canary))),
+        ("the real operator home as a card", with(5, &abs(&r.home))),
+    ];
+    for (name, argv) in cards {
+        let err = g.run_authorized(&argv, &r.area(), now(), &mut |_, _| Ok(())).unwrap_err();
+        assert!(!err.use_taken && err.reason.contains("no manifest entry"), "{name}: {err:?}");
+        assert_eq!(r.real(), 0, "{name} took a use");
+    }
+    // and none of them ran anything: no use directory was made
+    assert!(!fs::read_dir(r.snap.root()).unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with("use-")));
+    // the exact text still runs
+    let ok = g.run_authorized(&good, &r.area(), now(), &mut |_, _| Ok(()));
+    assert!(ok.is_ok(), "{ok:?}");
+}
+
+#[test]
+fn a_changed_tree_or_a_tampered_pinned_file_is_refused_before_any_use() {
+    if !can_run() {
+        return;
+    }
+    // the project changes after the record was made: the launcher compares the snapshot with the pins first
+    let r = trivial_rig(3);
+    fs::write(r.project.join("data.txt"), "changed after the operator authorized\n").unwrap();
+    git(&r.project, &["add", "data.txt"]);
+    git(&r.project, &["commit", "-q", "-m", "change"]);
+    let snap = Snapshot::build(&r.project, &r.root).unwrap();
+    let before = a::load(&r.home).unwrap().audit_head.map(|h| h.seq);
+    let err = launch_granted_for(&r.home, &r.id, "run-1", now(), &r.policy, Some((snap.path(), snap.tree_hash()))).err().unwrap();
+    assert!(err.contains("tree"), "{err}");
+    assert_eq!(a::load(&r.home).unwrap().audit_head.map(|h| h.seq), before, "nothing was written: no launch event");
+    assert_eq!(r.real(), 0);
+    // the pinned SCRIPT changes: refused at launch, still before any use
+    let r = trivial_rig(3);
+    fs::write(r.project.join("job.sh"), "#!/bin/bash\necho tampered\n").unwrap();
+    git(&r.project, &["add", "job.sh"]);
+    git(&r.project, &["commit", "-q", "-m", "tamper"]);
+    let snap = Snapshot::build(&r.project, &r.root).unwrap();
+    let err = launch_granted_for(&r.home, &r.id, "run-1", now(), &r.policy, Some((snap.path(), snap.tree_hash()))).err().unwrap();
+    assert!(err.contains("tree") || err.contains("pinned file"), "{err}");
+    assert_eq!(r.real(), 0);
+}
+
+#[test]
+fn a_record_without_a_tree_pin_still_checks_each_pinned_file_by_hash() {
+    let r = trivial_rig(3);
+    // The --no-pin-tree record: an UNPINNED file may differ (that is the opt-out); the pinned script may not.
+    let mut rec = a::load(&r.home).unwrap().records.into_iter().find(|x| x.id == r.id).unwrap();
+    rec.snapshot.as_mut().unwrap().tree_blake3 = None;
+    fs::write(r.project.join("data.txt"), "changed unpinned file\n").unwrap();
+    git(&r.project, &["add", "data.txt"]);
+    git(&r.project, &["commit", "-q", "-m", "change"]);
+    let snap = Snapshot::build(&r.project, &r.root).unwrap();
+    assert!(a::check_snapshot_pins(&rec, snap.path(), snap.tree_hash()).is_ok(), "no tree pin: an unpinned file may differ");
+    fs::write(r.project.join("job.sh"), "#!/bin/bash\necho tampered\n").unwrap();
+    git(&r.project, &["add", "job.sh"]);
+    git(&r.project, &["commit", "-q", "-m", "tamper"]);
+    let snap = Snapshot::build(&r.project, &r.root).unwrap();
+    assert!(a::check_snapshot_pins(&rec, snap.path(), snap.tree_hash()).unwrap_err().contains("pinned file"));
+}
+
+#[test]
+fn authorize_refuses_a_pinned_file_that_is_untracked_modified_a_symlink_or_missing() {
+    let t = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(t.path()).unwrap();
+    let project = root.join("p");
+    fs::create_dir_all(&project).unwrap();
+    fs::write(project.join("job.sh"), "#!/bin/bash\nexit 0\n").unwrap();
+    fs::write(project.join("real.sh"), "#!/bin/bash\nexit 0\n").unwrap();
+    std::os::unix::fs::symlink("real.sh", project.join("link.sh")).unwrap();
+    git(&project, &["init", "-q"]);
+    git(&project, &["add", "job.sh", "real.sh", "link.sh"]);
+    git(&project, &["commit", "-q", "-m", "x"]);
+    fs::write(project.join("untracked.sh"), "x").unwrap();
+    let entry = |rel: &str| a::Entry { tool: "shell".into(), argv: vec!["/bin/bash".into(), format!("@snapshot/{rel}")], files: vec![format!("@snapshot/{rel}")], runner_provenance: "project_snapshot".into() };
+    assert!(a::preview_pins(&project, &[entry("job.sh")]).is_ok());
+    assert!(a::preview_pins(&project, &[entry("untracked.sh")]).unwrap_err().contains("untracked"));
+    assert!(a::preview_pins(&project, &[entry("link.sh")]).unwrap_err().contains("not a tracked file"), "a symlink entry never resolves");
+    assert!(a::preview_pins(&project, &[entry("missing.sh")]).is_err());
+    fs::write(project.join("job.sh"), "#!/bin/bash\nexit 1\n").unwrap();
+    assert!(a::preview_pins(&project, &[entry("job.sh")]).unwrap_err().contains("modified"));
 }

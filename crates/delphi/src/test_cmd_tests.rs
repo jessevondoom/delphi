@@ -13,11 +13,12 @@ struct Script {
     answers: VecDeque<String>,
     prompts: Vec<String>,
     on_prompt: Option<PromptHook>,
+    shown: String,
 }
 
 impl Script {
     fn new(answers: &[&str]) -> Script {
-        Script { tty: true, answers: answers.iter().map(|s| s.to_string()).collect(), prompts: vec![], on_prompt: None }
+        Script { tty: true, answers: answers.iter().map(|s| s.to_string()).collect(), prompts: vec![], on_prompt: None, shown: String::new() }
     }
 }
 
@@ -25,7 +26,9 @@ impl Terminal for Script {
     fn interactive(&self) -> Result<(), String> {
         if self.tty { Ok(()) } else { Err("not a terminal".into()) }
     }
-    fn show(&mut self, _text: &str) {}
+    fn show(&mut self, text: &str) {
+        self.shown.push_str(text);
+    }
     fn ask(&mut self, prompt: &str) -> Option<String> {
         self.prompts.push(prompt.to_string());
         if let Some(h) = &self.on_prompt {
@@ -107,7 +110,7 @@ impl Env {
     }
 
     fn deps(&self) -> Deps<'static> {
-        Deps { clock: &now, policy: self.policy(), factor: &good_factor }
+        Deps { clock: &now, policy: self.policy(), factor: &good_factor, project: &|| None }
     }
 
     fn code(&self) -> String {
@@ -208,7 +211,7 @@ fn authorize_refuses_when_no_second_factor_is_configured() {
         assert!(err.contains("no second factor") && err.contains("totp-enroll") && err.contains("no fallback"), "{err}");
     }
     let mut t = Script::new(&["y", "purpose", "123456"]);
-    let deps = Deps { clock: &now, policy: e.policy(), factor: &configured_factor };
+    let deps = Deps { clock: &now, policy: e.policy(), factor: &configured_factor, project: &|| None };
     let args: Vec<String> = ["authorize", "--from-request", &id, "--run", "r1"].iter().map(|s| s.to_string()).collect();
     assert_eq!(run(&e.home, &e.ws, &args, &mut t, &deps), 2);
     assert!(t.prompts.is_empty(), "it refuses before it asks anything, and there is no fallback to no step-up");
@@ -461,7 +464,7 @@ fn the_clock_is_read_again_after_the_prompts_for_the_code_and_for_the_record() {
         move || t.get()
     };
     let args: Vec<String> = ["authorize", "--from-request", &id, "--run", "r1"].iter().map(|s| s.to_string()).collect();
-    let deps = Deps { clock: &clock, policy: e.policy(), factor: &good_factor };
+    let deps = Deps { clock: &clock, policy: e.policy(), factor: &good_factor, project: &|| None };
     assert_eq!(run(&e.home, &e.ws, &args, &mut s, &deps), 0, "{:?}", s.prompts);
     let r = &e.store().records[0];
     assert_eq!(delphi_core::time::parse_rfc3339(&r.created), Some(later), "created is the time of the check, not of the start");
@@ -482,7 +485,7 @@ fn the_clock_is_read_again_after_the_prompts_for_the_code_and_for_the_record() {
         move || t2.get()
     };
     let args2: Vec<String> = ["authorize", "--from-request", &id2, "--run", "r1"].iter().map(|s| s.to_string()).collect();
-    assert_eq!(run(&e2.home, &e2.ws, &args2, &mut s2, &Deps { clock: &clock2, policy: e2.policy(), factor: &good_factor }), 2);
+    assert_eq!(run(&e2.home, &e2.ws, &args2, &mut s2, &Deps { clock: &clock2, policy: e2.policy(), factor: &good_factor, project: &|| None }), 2);
     assert!(!auth::store_path(&e2.home).exists());
 }
 
@@ -553,4 +556,166 @@ fn durations_parse() {
     assert_eq!(parse_duration("999999999999999999h"), None, "no overflow");
     assert_eq!((parse_duration("2h"), parse_duration("90m"), parse_duration("45s"), parse_duration("600")), (Some(7200), Some(5400), Some(45), Some(600)));
     assert_eq!((parse_duration("0"), parse_duration("-5m"), parse_duration("h"), parse_duration("")), (None, None, None, None));
+}
+
+// ---------------------------------------------------------------------------------------------- S2d2a: symbolic paths at the console
+
+fn git_cmd(project: &Path, args: &[&str]) {
+    let out = std::process::Command::new("/usr/bin/git").arg("-C").arg(project).args(["-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false"]).args(args).env_clear().env("PATH", "/usr/bin:/bin").env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1").output().unwrap();
+    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+}
+
+/// A project that is a git repository holding `job.sh`, beside the test home.
+fn project_of(e: &Env) -> PathBuf {
+    let proj = e.home.parent().unwrap().join("proj");
+    std::fs::create_dir_all(&proj).unwrap();
+    std::fs::write(proj.join("job.sh"), "#!/bin/bash\necho the-pinned-script\n").unwrap();
+    git_cmd(&proj, &["init", "-q"]);
+    git_cmd(&proj, &["add", "job.sh"]);
+    git_cmd(&proj, &["commit", "-q", "-m", "x"]);
+    proj
+}
+
+fn symbolic_entry(e: &Env) -> auth::Entry {
+    auth::Entry { tool: "shell".into(), argv: vec![e.bin.clone(), "@snapshot/job.sh".into(), "@scratch".into(), "@canary".into()], files: vec!["@snapshot/job.sh".into()], runner_provenance: "project_snapshot".into() }
+}
+
+fn authorize_sym(e: &Env, proj: &Path, extra: &[&str], t: &mut Script) -> i32 {
+    let entry = serde_json::to_string(&symbolic_entry(e)).unwrap();
+    let mut args: Vec<String> = ["authorize", "--run", "run-1", "--intent", "i", "--purpose", "p", "--entry-json", &entry].iter().map(|s| s.to_string()).collect();
+    args.extend(extra.iter().map(|s| s.to_string()));
+    let p = proj.to_path_buf();
+    let projf = move || Some(p.clone());
+    run(&e.home, &e.ws, &args, t, &Deps { clock: &now, policy: e.policy(), factor: &good_factor, project: &projf })
+}
+
+#[test]
+fn authorizing_symbolic_text_shows_the_fixed_token_table_and_the_pins_and_stores_a_scheme_1_record() {
+    let e = env();
+    let proj = project_of(&e);
+    let retype = line(&symbolic_entry(&e));
+    let mut t = Script::new(&[&retype, &e.code()]);
+    assert_eq!(authorize_sym(&e, &proj, &[], &mut t), 0, "{:?}", t.prompts);
+    let shown = t.shown.clone();
+    for token in ["@snapshot", "@snapshot/<rel>", "@scratch", "@canary", "@operator_home"] {
+        assert!(shown.contains(token), "the table lacks {token}: {shown}");
+    }
+    assert!(shown.contains("DECOY") && shown.contains("pinned file @snapshot/job.sh") && shown.contains("blake3 "), "{shown}");
+    assert!(shown.contains("snapshot tree hash pinned") && shown.contains("--show"), "{shown}");
+    assert!(!shown.contains("the-pinned-script"), "the content is shown only with --show");
+    let rec = e.store().records.into_iter().next().unwrap();
+    assert_eq!(rec.token_scheme, 1);
+    // the record holds the SYMBOLIC text and no per-run path
+    assert_eq!(rec.manifest[0].argv, symbolic_entry(&e).argv);
+    assert_eq!(rec.manifest[0].files[0].path, "@snapshot/job.sh");
+    assert!(rec.snapshot.as_ref().is_some_and(|s| s.source == "tracked_files" && s.tree_blake3.is_some()));
+    // the hash the operator saw is the hash that was stored
+    assert!(shown.contains(&rec.manifest[0].files[0].blake3));
+}
+
+#[test]
+fn show_prints_the_pinned_file_and_no_pin_tree_is_an_opt_out_that_is_said_out_loud() {
+    let e = env();
+    let proj = project_of(&e);
+    let retype = line(&symbolic_entry(&e));
+    let mut t = Script::new(&[&retype, &e.code()]);
+    assert_eq!(authorize_sym(&e, &proj, &["--show", "--no-pin-tree"], &mut t), 0);
+    assert!(t.shown.contains("the-pinned-script") && t.shown.contains("NOT pinned"), "{}", t.shown);
+    let rec = e.store().records.into_iter().next().unwrap();
+    assert_eq!(rec.snapshot.and_then(|s| s.tree_blake3), None);
+}
+
+#[test]
+fn symbolic_text_is_retyped_and_confirm_is_never_accepted() {
+    let e = env();
+    let proj = project_of(&e);
+    let retype = line(&symbolic_entry(&e));
+    for wrong in ["CONFIRM", "y", "", &retype.replace("@scratch", "@Scratch"), &format!("{retype} extra")] {
+        let mut t = Script::new(&[wrong, "p", &e.code()]);
+        assert_eq!(authorize_sym(&e, &proj, &[], &mut t), 2, "{wrong:?}");
+        assert!(!auth::store_path(&e.home).exists(), "{wrong:?} authorized something");
+    }
+    // a resolved absolute path in place of the token is a different text
+    let mut t = Script::new(&[&retype.replace("@scratch", "/tmp/x"), &e.code()]);
+    assert_eq!(authorize_sym(&e, &proj, &[], &mut t), 2);
+}
+
+#[test]
+fn a_pinned_file_that_is_untracked_modified_or_changes_while_the_operator_reads_refuses_the_authorization() {
+    let e = env();
+    let proj = project_of(&e);
+    let retype = line(&symbolic_entry(&e));
+    // modified: refused before anything is asked
+    std::fs::write(proj.join("job.sh"), "#!/bin/bash\necho edited\n").unwrap();
+    let mut t = Script::new(&[&retype, &e.code()]);
+    assert_eq!(authorize_sym(&e, &proj, &[], &mut t), 2);
+    assert!(t.prompts.is_empty(), "refused before the operator is asked to retype anything");
+    git_cmd(&proj, &["checkout", "--", "job.sh"]);
+    // untracked entry
+    let untracked = auth::Entry { files: vec!["@snapshot/new.sh".into()], argv: vec![e.bin.clone(), "@snapshot/new.sh".into()], ..symbolic_entry(&e) };
+    std::fs::write(proj.join("new.sh"), "x").unwrap();
+    let raw = serde_json::to_string(&untracked).unwrap();
+    let args: Vec<String> = ["authorize", "--run", "r", "--intent", "i", "--purpose", "p", "--entry-json", &raw].iter().map(|s| s.to_string()).collect();
+    let p = proj.clone();
+    let projf = move || Some(p.clone());
+    let mut t = Script::new(&[&line(&untracked), &e.code()]);
+    assert_eq!(run(&e.home, &e.ws, &args, &mut t, &Deps { clock: &now, policy: e.policy(), factor: &good_factor, project: &projf }), 2);
+    // changed while the operator reads: the file is edited when the code is asked for
+    let p2 = proj.clone();
+    let mut t = Script::new(&[&retype, &e.code()]);
+    t.on_prompt = Some(Box::new(move |prompt| {
+        if prompt.contains("authenticator") {
+            std::fs::write(p2.join("job.sh"), "#!/bin/bash\necho swapped while reading\n").unwrap();
+        }
+    }));
+    assert_eq!(authorize_sym(&e, &proj, &[], &mut t), 2);
+    assert!(!auth::store_path(&e.home).exists(), "nothing was authorized");
+    // no project at all: a token has nothing to resolve against
+    let entry = serde_json::to_string(&symbolic_entry(&e)).unwrap();
+    let args: Vec<String> = ["authorize", "--run", "r", "--intent", "i", "--purpose", "p", "--entry-json", &entry].iter().map(|s| s.to_string()).collect();
+    let mut t = Script::new(&[&retype, &e.code()]);
+    assert_eq!(run(&e.home, &e.ws, &args, &mut t, &e.deps()), 2);
+}
+
+// The real flow, end to end up to the line the flag still draws: authorize by the console path (second factor through the test seam),
+// then the launcher and the daemon's grant read what the console wrote. The run still denies every card.
+#[test]
+fn a_record_authorized_at_the_console_is_launched_resolved_in_the_dry_path_and_the_run_still_denies() {
+    if !cfg!(target_os = "macos") || delphi_sandbox::Sandbox::detect().is_err() {
+        eprintln!("skip: the authorized profile needs sandbox-exec (macOS)");
+        return;
+    }
+    use delphi_engine::{authorization_anchor::launch_granted_for, authorization_grant::{Grant, Outcome}};
+    let e = env();
+    let proj = project_of(&e);
+    let retype = line(&symbolic_entry(&e));
+    let mut t = Script::new(&[&retype, &e.code()]);
+    assert_eq!(authorize_sym(&e, &proj, &[], &mut t), 0);
+    let rec = e.store().records.into_iter().next().unwrap();
+    // the run: a snapshot of the project made NOW, after the record
+    let root = std::fs::canonicalize(e.home.parent().unwrap()).unwrap();
+    let snap = delphi_sandbox::authorized::Snapshot::build(&proj, &root).unwrap();
+    let (bytes, _anchor) = launch_granted_for(&e.home, &rec.id, "run-1", now(), &e.policy(), Some((snap.path(), snap.tree_hash()))).unwrap();
+    let grant = Grant::from_boot(&bytes, std::process::id(), now(), e.policy()).unwrap();
+    // the model's card carries the symbolic text; the dry path matches it and shows the vector it WOULD run
+    let card = symbolic_entry(&e).argv;
+    match grant.evaluate_card("run_command", &card, now()) {
+        Outcome::WouldUse { index, .. } => assert_eq!(index, 1),
+        other => panic!("expected the dry path to match, got {other:?}"),
+    }
+    let shown = grant.resolve_dry(&card);
+    assert_eq!(shown[1], snap.path().join("job.sh").display().to_string());
+    assert!(shown[2].contains("@scratch") && shown[3].contains("@canary"), "{shown:?}");
+    // a card holding the resolved path matches nothing
+    let mut resolved = card.clone();
+    resolved[1] = shown[1].clone();
+    assert!(matches!(grant.evaluate_card("run_command", &resolved, now()), Outcome::NotMatched(_)));
+    // and the run denies the Red card whatever the record says: the approval switch is off
+    let on = crate::run::OnCard::Authorization { id: rec.id.clone(), run: "run-1".into() };
+    let (verdict, why) = crate::run::decide(&on, &json!({"tier": "red", "tool": "run_command", "pattern": "run_command"})).unwrap();
+    assert_eq!(verdict, "deny");
+    assert!(why.contains("never approved without the operator"), "{why}");
+    const { assert!(!crate::run::AUTHORIZED_APPROVAL_ENABLED) };
+    // the real ledger is untouched by observation
+    assert_eq!(delphi_engine::authorization_grant::ledger_count(&e.home, &rec.id).unwrap(), 0);
 }

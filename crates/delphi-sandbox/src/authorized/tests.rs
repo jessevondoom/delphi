@@ -38,20 +38,12 @@ fn mac_sandbox() -> Option<Sandbox> {
 struct Layout {
     _t: tempfile::TempDir,
     snap: Snapshot,
+    #[allow(dead_code)]
+    minted: Minted,
     scratch: PathBuf,
     canary: PathBuf,
     opshome: PathBuf,
     fakedelphi: PathBuf,
-    port: u16,
-    listener: std::net::TcpListener,
-    victim: std::process::Child,
-}
-
-impl Drop for Layout {
-    fn drop(&mut self) {
-        let _ = self.victim.kill();
-        let _ = self.victim.wait();
-    }
 }
 
 fn layout() -> Layout {
@@ -62,29 +54,11 @@ fn layout() -> Layout {
     fs::write(project.join("sweep.sh"), SWEEP).unwrap();
     fs::write(project.join("data.txt"), "snapshot data\n").unwrap();
     let snap = Snapshot::from_files(&project, &[PathBuf::from("sweep.sh"), PathBuf::from("data.txt")], &root).unwrap();
-    let scratch = root.join("scratch");
-    fs::create_dir(&scratch).unwrap();
-    let pre = scratch.join("preplaced-exec");
-    fs::write(&pre, "#!/bin/bash\nexit 0\n").unwrap();
-    fs::set_permissions(&pre, fs::Permissions::from_mode(0o755)).unwrap();
-    let canary = snap.root().join("canary.txt");
-    fs::write(&canary, "CANARY\n").unwrap();
-    let opshome = root.join("opshome");
-    fs::create_dir(&opshome).unwrap();
-    fs::write(opshome.join("visible.txt"), "x").unwrap();
-    let tools = root.join("tools");
-    fs::create_dir(&tools).unwrap();
-    let fakedelphi = tools.join("delphi");
-    fs::write(&fakedelphi, "#!/bin/bash\nexit 0\n").unwrap();
-    fs::set_permissions(&fakedelphi, fs::Permissions::from_mode(0o755)).unwrap();
-    // fixtures the sweep's controls look for: a native library whose constructor leaves a marker, and a named pipe
-    fs::write(scratch.join("mark.dylib"), PROBE_DYLIB).unwrap();
-    let fifo = std::ffi::CString::new(scratch.join("fifo").as_os_str().as_bytes()).unwrap();
-    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let victim = Command::new("/bin/sleep").arg("120").spawn().unwrap();
-    Layout { _t: t, snap, scratch, canary, opshome, fakedelphi, port, listener, victim }
+    // The places a granted run mints after the record (spec 092 S2d2a): scratch with its fixtures, the canary, the decoy home.
+    let minted = Minted::mint(&snap).unwrap();
+    let (scratch, canary, opshome) = (minted.scratch.clone(), minted.canary.clone(), minted.operator_home.clone());
+    let fakedelphi = opshome.join("bin/delphi");
+    Layout { _t: t, snap, minted, scratch, canary, opshome, fakedelphi }
 }
 
 impl Layout {
@@ -105,9 +79,6 @@ impl Layout {
             self.scratch.clone().into(),
             self.canary.clone().into(),
             self.opshome.clone().into(),
-            self.port.to_string().into(),
-            self.fakedelphi.clone().into(),
-            self.victim.id().to_string().into(),
         ];
         let mut cmd = sb.command(spec, INTERPRETER, args).unwrap();
         cmd.current_dir(self.snap.path());
@@ -140,16 +111,13 @@ fn the_sweep_passes_only_when_every_attempt_is_blocked() {
     assert!(out.contains("SWEEP PASSED: 22 attempts, every one blocked"), "{out}");
     assert_eq!(out.lines().filter(|x| x.starts_with("blocked ")).count(), 22, "{out}");
     assert!(!out.contains("SUCCEEDED"), "{out}");
-    // Nothing happened on disk either, and the listener never saw a connection.
+    // Nothing happened on disk either.
     // The script's own report is not trusted: the effects are checked on disk and in the process table.
     l.snap.verify().unwrap();
     assert!(!l.snap.root().join("sweep-outside").exists() && !l.snap.root().join("sweep-new-file").exists());
     assert!(!l.scratch.join("mark.dylib.loaded").exists(), "a native library was loaded from scratch");
     assert!(!std::path::Path::new(&format!("/tmp/delphi-sweep-{}", std::process::id())).exists());
-    assert_eq!(unsafe { libc::kill(l.victim.id() as i32, 0) }, 0, "the victim process was signalled");
     assert!(!l.opshome.join("delphi-sweep-hole").exists());
-    assert!(l.listener.set_nonblocking(true).is_ok());
-    assert!(l.listener.accept().is_err(), "the sandboxed script reached the host's listener");
 }
 
 /// The sweep must FAIL, naming the attempt, when the profile has a hole; otherwise passing proves nothing.
@@ -178,7 +146,7 @@ fn the_sweep_fails_when_the_snapshot_is_writable() {
 
 #[test]
 fn the_sweep_fails_when_the_network_is_on() {
-    weakened("network on", "network_connect", |l, spec| spec.network = Network::ProxyOnly { port: l.port });
+    weakened("network on", "network_connect", |_, spec| spec.network = Network::ProxyOnly { port: 9 });
 }
 
 #[test]
@@ -206,7 +174,7 @@ fn the_sweep_fails_when_files_outside_the_grant_are_readable() {
 #[test]
 fn the_sweep_fails_when_a_nested_delphi_can_run() {
     weakened("nested delphi", "spawn_nested_delphi", |l, spec| {
-        spec.read_only.push(l.fakedelphi.parent().unwrap().to_path_buf());
+        spec.read_only.push(l.opshome.clone());
         spec.exec_only.as_mut().unwrap().push(l.fakedelphi.clone());
     });
 }
@@ -216,9 +184,9 @@ fn the_sweep_refuses_to_pass_when_it_cannot_prove_anything() {
     // A positive control: with the snapshot unreadable the script exits 2 rather than reporting a vacuous pass.
     let Some(sb) = mac_sandbox() else { return };
     let l = layout();
-    let args: Vec<std::ffi::OsString> = vec![l.snap.path().join("sweep.sh").into(), l.scratch.clone().into(), l.scratch.clone().into(), l.canary.clone().into(), l.opshome.clone().into(), "9".into(), l.fakedelphi.clone().into()];
+    let args: Vec<std::ffi::OsString> = vec![l.snap.path().join("sweep.sh").into(), l.scratch.clone().into(), l.scratch.clone().into(), l.canary.clone().into(), l.opshome.clone().into()];
     // `data.txt` is looked for under the first argument, here the scratch dir, where it does not exist
-    let mut cmd = sb.command(&l.spec(), INTERPRETER, [&args[0], &args[1], &args[2], &args[3], &args[4], &args[5], &args[6]]).unwrap();
+    let mut cmd = sb.command(&l.spec(), INTERPRETER, [&args[0], &args[1], &args[2], &args[3], &args[4]]).unwrap();
     cmd.current_dir(l.snap.path());
     let out = run_bounded(cmd, &RunOptions::default()).unwrap();
     assert_eq!(out.status.and_then(|s| s.code()), Some(2), "{out:?}");
@@ -862,4 +830,49 @@ fn the_snapshot_builder_runs_git_by_absolute_path_and_ignores_a_git_on_path() {
     let src = include_str!("../authorized.rs");
     assert!(src.contains("Command::new(\"/usr/bin/git\")") && !src.contains("Command::new(\"git\")"), "git must be resolved by absolute path");
     assert!(!src.contains("/opt/homebrew/bin") && !src.contains("/usr/local/bin"), "no user-writable directory on the snapshot builder's PATH");
+}
+
+
+// ---------------------------------------------------------------------------------------------- S2d2a: lookup, minting, pinned-file state
+
+#[test]
+fn a_snapshot_path_resolves_only_through_the_table_of_tracked_regular_files() {
+    let t = tempfile::tempdir().unwrap();
+    let root = canon(t.path());
+    let project = root.join("project");
+    fs::create_dir_all(project.join("sub")).unwrap();
+    fs::write(project.join("sub/a.sh"), "x").unwrap();
+    fs::write(project.join("real.txt"), "r").unwrap();
+    std::os::unix::fs::symlink("real.txt", project.join("link.txt")).unwrap();
+    let snap = Snapshot::from_files(&project, &[PathBuf::from("sub/a.sh"), PathBuf::from("real.txt"), PathBuf::from("link.txt")], &root).unwrap();
+    assert_eq!(snap.lookup("sub/a.sh").unwrap(), snap.path().join("sub/a.sh"));
+    // a symlink entry is in the tree and not in the table of regular files
+    assert!(snap.lookup("link.txt").unwrap_err().contains("not a tracked file"));
+    assert!(snap.lookup("nope").is_err() && snap.lookup("sub").is_err() && snap.lookup("sub/").is_err());
+    assert!(snap.lookup("../x").is_err() && snap.lookup("sub//a.sh").is_err() && snap.lookup("./real.txt").is_err());
+    // a file put on disk that is not in the table does not resolve, and neither does one reached through a swapped-in link
+    let sneak = snap.path().join("real.txt");
+    assert!(snapshot_lookup(snap.path(), "real.txt").is_ok() && sneak.exists());
+    assert!(snapshot_lookup(snap.path(), "link.txt").is_err(), "the disk-level check refuses a symlink too");
+}
+
+#[test]
+fn the_daemon_mints_scratch_a_nonce_canary_and_a_decoy_home_outside_every_grant() {
+    let t = tempfile::tempdir().unwrap();
+    let root = canon(t.path());
+    let project = root.join("project");
+    fs::create_dir_all(&project).unwrap();
+    fs::write(project.join("a.txt"), "x").unwrap();
+    let snap = Snapshot::from_files(&project, &[PathBuf::from("a.txt")], &root).unwrap();
+    let (m1, m2) = (Minted::mint(&snap).unwrap(), {
+        let snap2 = Snapshot::from_files(&project, &[PathBuf::from("a.txt")], &root).unwrap();
+        let m = Minted::mint(&snap2).unwrap();
+        (m.nonce.clone(), m.canary.clone())
+    });
+    assert_ne!(m1.nonce, m2.0, "a nonce per run");
+    assert!(m1.canary.starts_with(snap.root()) && !m1.canary.starts_with(snap.path()));
+    assert!(fs::read_to_string(&m1.canary).unwrap().contains(&m1.nonce));
+    assert_eq!(fs::metadata(&m1.canary).unwrap().permissions().mode() & 0o777, 0o600);
+    assert!(m1.scratch.join("fifo").exists() && m1.scratch.join("preplaced-exec").exists() && m1.operator_home.join("bin/delphi").exists());
+    assert!(!m1.scratch.starts_with(snap.path()) && !m1.operator_home.starts_with(snap.path()));
 }

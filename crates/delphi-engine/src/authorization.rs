@@ -251,14 +251,14 @@ pub fn isolation_problem(e: &Entry, policy: &Policy) -> Option<String> {
         return Some(format!("`{}`: bash runs a pinned script file only, with no `-c`, `-s`, `-i`, `--rcfile`, `--init-file` or other option", clean_text(a, 40)));
     }
     match e.argv.get(1).map(String::as_str) {
-        Some(script) if script.starts_with('/') => {
+        Some(script) if script.starts_with('/') || crate::authorization_tokens::is_snapshot_file(script) => {
             if e.files.iter().any(|f| f == script) {
                 None
             } else {
                 Some(format!("the script `{}` must be listed in `files` so it is pinned by hash", clean_text(script, 80)))
             }
         }
-        _ => Some("after the interpreter give the absolute path of the script, and no option: bash reads a pinned file, never a string or stdin".into()),
+        _ => Some("after the interpreter give the absolute path (or `@snapshot/<rel>`) of the script, and no option: bash reads a pinned file, never a string or stdin".into()),
     }
 }
 
@@ -291,8 +291,10 @@ pub fn check_entry(e: &Entry, policy: &Policy) -> Result<Entry, EntryError> {
     if WRAPPERS.contains(&basename(bin).as_str()) && !policy.interpreters.iter().any(|i| i == bin) {
         return inv(format!("`{}` is a shell or wrapper; name the real binary and its arguments", basename(bin)));
     }
-    if e.files.len() > MAX_FILES || e.files.iter().any(|f| !normal_abs(f) || !f.is_ascii() || f.chars().any(is_ctl)) {
-        return inv(format!("`files` takes up to {} absolute canonical paths", MAX_FILES));
+    // A pinned file is an absolute canonical path, or `@snapshot/<rel>` (spec 092 S2d2a): the file of a per-run snapshot whose path
+    // does not exist yet. No other token names a file the operator can pin (scratch is written by the agent).
+    if e.files.len() > MAX_FILES || e.files.iter().any(|f| !(normal_abs(f) || crate::authorization_tokens::is_snapshot_file(f)) || !f.is_ascii() || f.chars().any(is_ctl)) {
+        return inv(format!("`files` takes up to {} absolute canonical paths or `@snapshot/<rel>` tokens", MAX_FILES));
     }
     let mut seen = HashSet::new();
     if !e.files.iter().all(|f| seen.insert(f)) {
@@ -305,6 +307,10 @@ pub fn check_entry(e: &Entry, policy: &Policy) -> Result<Entry, EntryError> {
     if let Some(why) = deny_reason(&c) {
         return Err(EntryError::Denied(why));
     }
+    // After the deny-list, so an address with an at-sign stays a denial and not a malformed token.
+    if let Some(why) = crate::authorization_tokens::argv_problem(&c.argv) {
+        return inv(why);
+    }
     if let Some(why) = isolation_problem(&c, policy) {
         return inv(why);
     }
@@ -314,6 +320,16 @@ pub fn check_entry(e: &Entry, policy: &Policy) -> Result<Entry, EntryError> {
 /// The canonical, hashed form of a manifest: what the operator saw is what is hashed.
 pub fn manifest_hash(m: &[Entry]) -> String {
     hash(&serde_json::to_vec(m).unwrap_or_default())
+}
+
+/// The manifest hash of a record made under `scheme`: scheme 0 (records before S2d2a, no tokens) hashes the entries alone; scheme 1 hashes
+/// the scheme number WITH the entries, so the symbolic text and the scheme the text is read under are both what the operator saw.
+pub fn manifest_hash_for(m: &[Entry], scheme: u32) -> String {
+    if scheme == 0 {
+        manifest_hash(m)
+    } else {
+        hash(&serde_json::to_vec(&json!({"token_scheme": scheme, "manifest": m})).unwrap_or_default())
+    }
 }
 
 /// `argv` as one line, each element quoted only when it needs it. The operator retypes this line (TA-0r).
@@ -640,6 +656,19 @@ pub struct Record {
     pub request_hash: Option<String>,
     pub requester: Option<String>,
     pub revoked: Option<String>,
+    /// 0 = a record from before S2d2a (no tokens); 1 = symbolic path tokens (`authorization_tokens`). Covered by `manifest_hash`.
+    #[serde(default)]
+    pub token_scheme: u32,
+    /// What the snapshot of a granted run must be (S2d2a): where it comes from and, unless the operator opted out, its tree hash.
+    #[serde(default)]
+    pub snapshot: Option<SnapshotPin>,
+}
+
+/// The snapshot a record is bound to. `tree_blake3` is `None` only when the operator passed `--no-pin-tree`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnapshotPin {
+    pub source: String,
+    pub tree_blake3: Option<String>,
 }
 
 impl Record {
@@ -820,12 +849,25 @@ pub fn check_launch(r: &Record, now_unix: i64, run: &str, operator_home: &Path, 
         return Err(format!("authorization {} has a manifest of {} entries (1 to {} are valid)", r.id, r.manifest.len(), MAX_ENTRIES));
     }
     let entries: Vec<Entry> = r.manifest.iter().map(|e| Entry { tool: e.tool.clone(), argv: e.argv.clone(), files: e.files.iter().map(|f| f.path.clone()).collect(), runner_provenance: e.runner_provenance.clone() }).collect();
-    if manifest_hash(&entries) != r.manifest_hash {
+    if manifest_hash_for(&entries, r.token_scheme) != r.manifest_hash {
         return Err(format!("authorization {}: the manifest does not match its recorded hash", r.id));
+    }
+    if r.token_scheme > crate::authorization_tokens::TOKEN_SCHEME {
+        return Err(format!("authorization {} uses token scheme {}, this build reads up to {}", r.id, r.token_scheme, crate::authorization_tokens::TOKEN_SCHEME));
     }
     for (i, e) in entries.iter().enumerate() {
         if let Some(why) = deny_reason(e).or_else(|| isolation_problem(e, policy)) {
             return Err(format!("authorization {}: manifest entry {} fails the deny-list again at launch: {}", r.id, i + 1, why));
+        }
+    }
+    if r.token_scheme >= 1 {
+        for (i, e) in entries.iter().enumerate() {
+            if let Some(why) = crate::authorization_tokens::argv_problem(&e.argv) {
+                return Err(format!("authorization {}: manifest entry {} holds a path token that is not valid: {}", r.id, i + 1, why));
+            }
+            if let Some(f) = e.files.iter().find(|f| !(normal_abs(f) || crate::authorization_tokens::is_snapshot_file(f))) {
+                return Err(format!("authorization {}: manifest entry {} pins `{}`, which is neither an absolute path nor an `@snapshot/<rel>` token", r.id, i + 1, clean_text(f, 60)));
+            }
         }
     }
     Ok(())
@@ -911,6 +953,85 @@ pub struct NewRecord {
 /// Make the record: the deny-list and the runner check run again on every entry, each binary and file is resolved and
 /// hashed now, and the limits are held to the maximum. Nothing is written.
 pub fn build_record(home: &Path, n: &NewRecord, now_unix: i64, now_rfc: &str) -> Result<Record, String> {
+    build_record_with(home, n, &TokenCtx::default(), now_unix, now_rfc)
+}
+
+/// What a record with `@snapshot/<rel>` files needs when it is made (spec 092 S2d2a): the project whose tracked files the snapshot
+/// will hold, whether to pin the snapshot's tree hash (the default of `delphi test authorize`; `--no-pin-tree` opts out), and the
+/// hashes the operator was shown (`expect`: path to blake3), so a file that changed between the display and the write is refused.
+#[derive(Debug, Clone, Default)]
+pub struct TokenCtx {
+    pub project: Option<PathBuf>,
+    pub pin_tree: bool,
+    pub expect: BTreeMap<String, String>,
+}
+
+/// A dry snapshot of `project` under the canonical `/tmp`, discarded when dropped: the very builder a granted run uses.
+pub fn dry_snapshot(project: &Path) -> Result<delphi_sandbox::authorized::Snapshot, String> {
+    let tmp = fs::canonicalize("/tmp").map_err(|e| format!("/tmp: {e}"))?;
+    delphi_sandbox::authorized::Snapshot::build(project, &tmp).map_err(|e| format!("the dry snapshot of the project: {e}"))
+}
+
+/// One pinned snapshot file as the operator is shown it.
+#[derive(Debug, Clone)]
+pub struct PinPreview {
+    pub path: String,
+    pub size: usize,
+    pub blake3: String,
+    pub content: Vec<u8>,
+}
+
+/// The `@snapshot/<rel>` files of `entries`, read from a dry snapshot of `project` (so a file that is untracked, a symlink or missing
+/// is refused) and checked clean against git. Returns each file's size, hash and content, and the snapshot's tree hash.
+pub fn preview_pins(project: &Path, entries: &[Entry]) -> Result<(Vec<PinPreview>, String), String> {
+    let mut rels: Vec<String> = vec![];
+    let mut paths: Vec<String> = vec![];
+    for e in entries {
+        for f in &e.files {
+            if let Some(r) = crate::authorization_tokens::snapshot_rel(f) {
+                if !paths.contains(f) {
+                    rels.push(r);
+                    paths.push(f.clone());
+                }
+            }
+        }
+    }
+    delphi_sandbox::authorized::tracked_clean(project, &rels)?;
+    let snap = dry_snapshot(project)?;
+    let mut out = vec![];
+    for (p, r) in paths.iter().zip(rels.iter()) {
+        let real = snap.lookup(r).map_err(|e| format!("pinned file {p}: {e}"))?;
+        let bytes = crate::authorization_tokens::read_nofollow(&real)?;
+        out.push(PinPreview { path: p.clone(), size: bytes.len(), blake3: hash(&bytes), content: bytes });
+    }
+    Ok((out, snap.tree_hash().to_string()))
+}
+
+/// The snapshot a granted run was given must be the one the record was made for: every `@snapshot/<rel>` file looks up to a regular
+/// tracked file whose hash is the pinned one, and the tree hash equals the pinned tree hash when the record has one. Checked by the
+/// launcher before anything is written, by the daemon at boot, and at each use. `dir` is the snapshot's directory; `tree` its hash.
+pub fn check_snapshot_pins(r: &Record, dir: &Path, tree: &str) -> Result<(), String> {
+    if let Some(Some(pinned)) = r.snapshot.as_ref().map(|s| s.tree_blake3.as_ref()) {
+        if pinned != tree {
+            return Err(format!("authorization {}: this project's snapshot (tree {}) is not the one the record pins (tree {}); the project changed since the operator authorized, authorize again", r.id, &tree[..tree.len().min(12)], &pinned[..pinned.len().min(12)]));
+        }
+    }
+    for e in &r.manifest {
+        for f in &e.files {
+            if let Some(rel) = crate::authorization_tokens::snapshot_rel(&f.path) {
+                let real = delphi_sandbox::authorized::snapshot_lookup(dir, &rel).map_err(|why| format!("authorization {}: pinned file {}: {}", r.id, clean_text(&f.path, 80), why))?;
+                let bytes = crate::authorization_tokens::read_nofollow(&real)?;
+                if hash(&bytes) != f.blake3 {
+                    return Err(format!("authorization {}: pinned file {} is not the file that was pinned (its hash differs in this snapshot)", r.id, clean_text(&f.path, 80)));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// As [`build_record`], with the context symbolic paths need.
+pub fn build_record_with(home: &Path, n: &NewRecord, ctx: &TokenCtx, now_unix: i64, now_rfc: &str) -> Result<Record, String> {
     let purpose = clean_text(&n.purpose, MAX_PURPOSE);
     let run = n.run.trim().to_string();
     if purpose.is_empty() {
@@ -930,14 +1051,40 @@ pub fn build_record(home: &Path, n: &NewRecord, now_unix: i64, now_rfc: &str) ->
     }
     let mut manifest = Vec::new();
     let mut checked = Vec::new();
-    for (i, e) in n.entries.iter().enumerate() {
-        let c = check_entry(e, &n.policy).map_err(|e| format!("manifest entry {}: {}", i + 1, e))?;
+    let checked_entries = n.entries.iter().enumerate().map(|(i, e)| check_entry(e, &n.policy).map_err(|e| format!("manifest entry {}: {}", i + 1, e))).collect::<Result<Vec<_>, _>>()?;
+    let any_token = checked_entries.iter().any(|c| crate::authorization_tokens::has_tokens(&c.argv, &c.files));
+    // Symbolic paths and the tree pin need the project: its tracked files are read now, in a dry snapshot, exactly as a run will read them.
+    let (previews, tree) = match (&ctx.project, ctx.pin_tree || any_token) {
+        (Some(project), true) => {
+            let (p, t) = preview_pins(project, &checked_entries)?;
+            (p, Some(t))
+        }
+        (None, true) if any_token => return Err("a path token needs the project to resolve against: run `delphi test authorize` from the project's directory".into()),
+        _ => (vec![], None),
+    };
+    for (path, shown) in &ctx.expect {
+        match previews.iter().find(|p| &p.path == path) {
+            Some(p) if &p.blake3 == shown => {}
+            Some(_) => return Err(format!("pinned file {path} changed between what was shown and the write; nothing was authorized")),
+            None => return Err(format!("pinned file {path} was shown but is no longer pinned; nothing was authorized")),
+        }
+    }
+    for (i, c) in checked_entries.into_iter().enumerate() {
         let binary = pin_interpreter(&c.argv[0], &n.policy).map_err(|e| format!("manifest entry {}: binary {}", i + 1, e))?;
-        let files = c.files.iter().map(|f| pin_file(f, false)).collect::<Result<Vec<_>, _>>().map_err(|e| format!("manifest entry {}: file {}", i + 1, e))?;
+        let files = c
+            .files
+            .iter()
+            .map(|f| match previews.iter().find(|p| &p.path == f) {
+                Some(p) => Ok(Pinned { path: f.clone(), blake3: p.blake3.clone() }),
+                None => pin_file(f, false),
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("manifest entry {}: file {}", i + 1, e))?;
         manifest.push(RecordEntry { tool: c.tool.clone(), argv: c.argv.clone(), binary, files, env: scrubbed_env(), cwd: CWD.into(), runner_provenance: c.runner_provenance.clone(), scratch_mode: SCRATCH_MODE.into() });
         checked.push(c);
     }
-    let mh = manifest_hash(&checked);
+    let mh = manifest_hash_for(&checked, crate::authorization_tokens::TOKEN_SCHEME);
+    let snapshot = Some(SnapshotPin { source: "tracked_files".into(), tree_blake3: if ctx.pin_tree { tree } else { None } });
     let home_s = fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf()).to_string_lossy().into_owned();
     let id = format!("ta-{}", &hash(format!("{mh}|{run}|{now_rfc}|{}|{}", std::process::id(), now_unix).as_bytes())[..10]);
     Ok(Record {
@@ -957,6 +1104,8 @@ pub fn build_record(home: &Path, n: &NewRecord, now_unix: i64, now_rfc: &str) ->
         request_hash: n.request.as_ref().map(|r| r.1.clone()),
         requester: n.request.as_ref().map(|r| r.2.clone()),
         revoked: None,
+        token_scheme: crate::authorization_tokens::TOKEN_SCHEME,
+        snapshot,
     })
 }
 

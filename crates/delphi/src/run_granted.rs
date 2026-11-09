@@ -55,6 +55,15 @@ pub fn prepare(operator_ws_dir: &Path, project: &Path) -> Result<GrantedArea, St
     delphi_core::lock::write(&lock_path, &lk).map_err(|e| e.to_string())?;
     // The knowledge base is not carried into a granted run.
     let _ = std::fs::remove_dir_all(ws_dir.join("local/kb"));
+    // The workspace's project registry (`specs/058`, `local/projects.json`) maps project ids to the ROOT PATHS of every project the operator
+    // registered, and `local/projects/<id>/` holds each one's own layer of memory and rules. The daemon reads the registry to decide which
+    // project layer applies to a path (`delphi_engine::scope`) and its console views list the names; none of that is wanted in a run whose
+    // only project is the disposable snapshot, and the paths are the operator's. The copy is replaced by an EMPTY, valid registry
+    // (schema 1: the snapshot is not registered, so the persistent `default` project applies) and the per-project layers are not carried.
+    let local = ws_dir.join("local");
+    std::fs::create_dir_all(&local).map_err(|e| e.to_string())?;
+    std::fs::write(local.join("projects.json"), "{\"schema\":1,\"projects\":{}}\n").map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_dir_all(local.join("projects"));
     // A clean operator layer: a valid, empty lock and nothing ratified in it (the daemon here has no store and no ledger).
     let op = home.path().join("operator");
     std::fs::create_dir_all(op.join("ratified")).map_err(|e| e.to_string())?;
@@ -208,7 +217,7 @@ mod tests {
     fn the_throwaway_home_holds_the_workspace_and_an_empty_operator_layer_and_nothing_else_of_the_operators() {
         let t = tempfile::tempdir().unwrap();
         let src = std::fs::canonicalize(t.path()).unwrap().join("workspaces/w");
-        for (p, body) in [("config.toml", RICH_CONFIG), ("local/kb/index.db", "kb"), ("local/missions/m1/log", "secret mission"), ("local/state.db", "x"), ("team/specs/s.md", "x"), ("agents/a.md", "role")] {
+        for (p, body) in [("config.toml", RICH_CONFIG), ("local/kb/index.db", "kb"), ("local/projects.json", "{\"schema\":1,\"projects\":{\"p-aaaaaaaa\":{\"project_id\":\"p-aaaaaaaa\",\"root\":\"/srv/operator/secret-project\",\"display_name\":\"secret-project\",\"created_unix\":1}}}"), ("local/projects/p-aaaaaaaa/memory.md", "secret-project lessons"), ("local/missions/m1/log", "secret mission"), ("local/state.db", "x"), ("team/specs/s.md", "x"), ("agents/a.md", "role")] {
             let f = src.join(p);
             std::fs::create_dir_all(f.parent().unwrap()).unwrap();
             std::fs::write(f, body).unwrap();
@@ -234,6 +243,12 @@ mod tests {
         }
         assert!(cfg.contains("claude-sub") && cfg.contains("harness-login") && cfg.contains("allowed_endpoints"), "what a granted run needs is kept: {cfg}");
         assert!(!ws.join("local/kb").exists(), "the knowledge base is not carried");
+        // the operator's project registry and per-project layers are not carried: no operator path is in the throwaway workspace
+        let reg = std::fs::read_to_string(ws.join("local/projects.json")).unwrap();
+        assert!(!reg.contains("/srv/operator/secret-project") && !reg.contains("secret-project"), "{reg}");
+        assert!(!ws.join("local/projects").exists(), "per-project layers are not carried");
+        assert_eq!(delphi_engine::scope::registered_ids(ws).unwrap().len(), 0, "an empty registry that still parses");
+        assert!(!walkdir_contains(ws, "secret-project"), "an operator project path survived somewhere in the throwaway workspace");
         // the pinned access blocks are sealed over what is left, so the daemon loads the copy without a prompt
         let lock = delphi_core::lock::read(&ws.join("local/ratified.lock")).unwrap();
         assert_eq!(lock.files.get("config.toml#access"), Some(&delphi_core::lock::hash(delphi_core::lock::access_blocks(&cfg).as_bytes())));

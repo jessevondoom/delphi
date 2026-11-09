@@ -21,7 +21,7 @@
     "pinned": {
       "type": "object",
       "required": ["path", "blake3"],
-      "properties": { "path": { "type": "string", "pattern": "^/" }, "blake3": { "type": "string", "pattern": "^[0-9a-f]{64}$" } },
+      "properties": { "path": { "type": "string", "pattern": "^(/|@snapshot/[A-Za-z0-9._+-]{1,128}(/[A-Za-z0-9._+-]{1,128})*$)", "description": "An absolute canonical path, or `@snapshot/<rel>` (token scheme 1): one tracked regular file of a run's snapshot, whose path does not exist when the record is made." }, "blake3": { "type": "string", "pattern": "^[0-9a-f]{64}$" } },
       "additionalProperties": false
     },
     "entry": {
@@ -29,7 +29,7 @@
       "required": ["tool", "argv", "binary", "files", "env", "cwd", "runner_provenance", "scratch_mode"],
       "properties": {
         "tool": { "const": "shell" },
-        "argv": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "type": "string" }, "description": "The canonical argument vector, matched exactly: no globs, shell strings, wrappers, chaining or substitution." },
+        "argv": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "type": "string" }, "description": "The canonical argument vector, matched exactly: no globs, shell strings, wrappers, chaining or substitution. Under token scheme 1 it is SYMBOLIC: an element may be a whole token (`@snapshot`, `@snapshot/<rel>`, `@scratch`, `@canary`, `@operator_home`), never part of other text and never argv[0]; the card must equal this text, and only then does the daemon put in the paths it minted for the run." },
         "binary": { "$ref": "#/$defs/pinned", "description": "Absolute canonical path of argv[0] and a hash of it, taken when the operator authorized." },
         "files": { "type": "array", "items": { "$ref": "#/$defs/pinned" }, "description": "Every script or file the command reads and executes, each hashed at authorization time." },
         "env": { "type": "object", "additionalProperties": { "type": "string" }, "description": "The fixed, scrubbed environment: no PATH search, no LD_PRELOAD, no DYLD_*." },
@@ -58,7 +58,18 @@
         "request_id": { "type": ["string", "null"], "description": "The staged request this record was made from, or null for one the operator wrote at the console." },
         "request_hash": { "type": ["string", "null"] },
         "requester": { "type": ["string", "null"] },
-        "revoked": { "type": ["string", "null"], "description": "When it was revoked. Irreversible: a revoked record is only ever replaced by a new one." }
+        "revoked": { "type": ["string", "null"], "description": "When it was revoked. Irreversible: a revoked record is only ever replaced by a new one." },
+        "token_scheme": { "enum": [0, 1], "description": "0: a record from before S2d2a, no tokens. 1: symbolic path tokens; the manifest hash covers the scheme number with the entries." },
+        "snapshot": {
+          "type": ["object", "null"],
+          "required": ["source", "tree_blake3"],
+          "properties": {
+            "source": { "const": "tracked_files" },
+            "tree_blake3": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$", "description": "The hash of the snapshot tree the operator saw; a run whose snapshot differs is refused. Null only when the operator passed --no-pin-tree." }
+          },
+          "additionalProperties": false,
+          "description": "What the snapshot of a granted run must be (spec 092 S2d2a)."
+        }
       },
       "additionalProperties": false
     }

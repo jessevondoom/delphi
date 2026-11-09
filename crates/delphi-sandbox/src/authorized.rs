@@ -139,6 +139,9 @@ pub struct Snapshot {
     dir: PathBuf,
     tree_hash: String,
     files: usize,
+    /// The tracked regular files, by project-relative path (never a symlink, never a directory): the table `@snapshot/<rel>` resolves
+    /// against (spec 092 S2d2a). A name not in it does not resolve, whatever the disk holds.
+    table: std::collections::BTreeSet<String>,
 }
 
 impl Snapshot {
@@ -171,6 +174,7 @@ impl Snapshot {
     pub fn from_files(project: &Path, names: &[PathBuf], parent: &Path) -> Result<Snapshot, String> {
         let root = mkdtemp(parent, "delphi-snapshot-").map_err(|e| format!("snapshot directory: {e}"))?;
         let dir = root.join("snapshot");
+        let mut table = std::collections::BTreeSet::new();
         let result = (|| -> Result<usize, String> {
             fs::create_dir(&dir).map_err(|e| e.to_string())?;
             let mut count = 0;
@@ -198,6 +202,7 @@ impl Snapshot {
                     f.write_all(&bytes).map_err(|e| e.to_string())?;
                     drop(f);
                     fs::set_permissions(&dst, fs::Permissions::from_mode(0o444)).map_err(|e| e.to_string())?;
+                    table.insert(rel.to_string_lossy().into_owned());
                     count += 1;
                 } // a directory here is a submodule: left out
             }
@@ -207,7 +212,7 @@ impl Snapshot {
         match result {
             Ok(files) => {
                 let tree_hash = tree_hash_of(&dir)?;
-                Ok(Snapshot { root, dir, tree_hash, files })
+                Ok(Snapshot { root, dir, tree_hash, files, table })
             }
             Err(e) => {
                 remove_tree(&root);
@@ -230,6 +235,15 @@ impl Snapshot {
         self.files
     }
 
+    /// Resolve `@snapshot/<rel>`: `rel` must be in the table of tracked regular files and, on disk, still a regular file reached
+    /// through no symlink. This is a lookup, not a walk of the disk by name: a file the disk holds that is not in the table does not resolve.
+    pub fn lookup(&self, rel: &str) -> Result<PathBuf, String> {
+        if !self.table.contains(rel) {
+            return Err(format!("`{}` is not a tracked file of the snapshot", rel_for_message(rel)));
+        }
+        snapshot_lookup(&self.dir, rel)
+    }
+
     /// The directory that holds the snapshot and is removed with it (a sibling place for scratch and canaries).
     pub fn root(&self) -> &Path {
         &self.root
@@ -250,6 +264,70 @@ impl Drop for Snapshot {
     fn drop(&mut self) {
         remove_tree(&self.root);
     }
+}
+
+/// Whether each of `rels` (project-relative) is tracked by git and unmodified in the working tree and index: `git status
+/// --porcelain` names a file that is untracked (`??`), modified, added, deleted or ignored, and any such file is an error. Used when the
+/// operator pins a file by hash: what is pinned is what the repository holds. The same sealed `git` invocation as [`Snapshot::build`].
+pub fn tracked_clean(project: &Path, rels: &[String]) -> Result<(), String> {
+    if rels.is_empty() {
+        return Ok(());
+    }
+    let mut cmd = std::process::Command::new("/usr/bin/git");
+    cmd.arg("-C").arg(project).args(["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "status", "--porcelain=v1", "-z", "--ignored", "--"]);
+    cmd.args(rels).env_clear().env("PATH", "/usr/bin:/bin").env("GIT_CONFIG_NOSYSTEM", "1").env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_OPTIONAL_LOCKS", "0");
+    let out = cmd.output().map_err(|e| format!("git status: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("git status failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    let listed: Vec<String> = out.stdout.split(|b| *b == 0).filter(|n| !n.is_empty()).map(|n| String::from_utf8_lossy(n).into_owned()).collect();
+    if let Some(first) = listed.first() {
+        let (code, name) = first.split_at(first.len().min(3));
+        let why = match code.trim() {
+            "??" => "untracked",
+            "!!" => "ignored (not tracked)",
+            _ => "modified or staged",
+        };
+        return Err(format!("`{}` is {why}; commit it first, a pinned file is the one the repository holds", rel_for_message(name)));
+    }
+    // tracked at all? `git ls-files --error-unmatch` fails for a path git does not know
+    let mut ls = std::process::Command::new("/usr/bin/git");
+    ls.arg("-C").arg(project).args(["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "ls-files", "--error-unmatch", "--"]);
+    ls.args(rels).env_clear().env("PATH", "/usr/bin:/bin").env("GIT_CONFIG_NOSYSTEM", "1").env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_OPTIONAL_LOCKS", "0");
+    let o = ls.output().map_err(|e| format!("git ls-files: {e}"))?;
+    if !o.status.success() {
+        return Err(format!("a pinned file is not tracked by git: {}", String::from_utf8_lossy(&o.stderr).trim().chars().filter(|c| !c.is_control()).take(160).collect::<String>()));
+    }
+    Ok(())
+}
+
+fn rel_for_message(rel: &str) -> String {
+    rel.chars().filter(|c| c.is_ascii_graphic()).take(80).collect()
+}
+
+/// A project-relative path's components checked each with `lstat` under `dir`: every component exists, none is a symlink, the last is
+/// a regular file. Does not need the table (the daemon's dry path has only the snapshot's directory); the result is the joined path.
+pub fn snapshot_lookup(dir: &Path, rel: &str) -> Result<PathBuf, String> {
+    let mut cur = dir.to_path_buf();
+    let comps: Vec<&str> = rel.split('/').collect();
+    for (i, c) in comps.iter().enumerate() {
+        if c.is_empty() || *c == "." || *c == ".." {
+            return Err(format!("`{}` is not a plain relative path", rel_for_message(rel)));
+        }
+        cur.push(c);
+        let m = fs::symlink_metadata(&cur).map_err(|e| format!("`{}`: {e}", rel_for_message(rel)))?;
+        if m.is_symlink() {
+            return Err(format!("`{}` goes through a symlink; a snapshot path never resolves through one", rel_for_message(rel)));
+        }
+        let last = i + 1 == comps.len();
+        if last && !m.is_file() {
+            return Err(format!("`{}` is not a regular file", rel_for_message(rel)));
+        }
+        if !last && !m.is_dir() {
+            return Err(format!("`{}` has a component that is not a directory", rel_for_message(rel)));
+        }
+    }
+    Ok(cur)
 }
 
 /// Read a regular file without following a link or blocking on a pipe: opened `O_NOFOLLOW | O_NONBLOCK`, then `fstat`ed, so a
@@ -341,6 +419,58 @@ pub fn tree_hash_of(root: &Path) -> Result<String, String> {
         h.update(b"\n");
     }
     Ok(h.finalize().to_hex().to_string())
+}
+
+// ------------------------------------------------------------------------------------------------ what the daemon mints
+
+/// The places `@scratch`, `@canary` and `@operator_home` stand for in a granted run, made by the daemon after the record, beside the
+/// snapshot and discarded with it (spec 092 S2d2a). A record never holds a path to any of them and a card never supplies one.
+/// `scratch` is a writable no-exec directory seeded with the fixed fixtures of the escape canaries (an executable file, a native
+/// library whose constructor leaves a marker, a named pipe); `canary` is a file holding a fresh nonce, in the snapshot's 0700
+/// parent, outside every grant; `operator_home` is a DECOY of the operator's home (a visible file and a stand-in `bin/delphi`),
+/// also outside every grant. None of them is the operator's real home or anything in it.
+#[derive(Debug)]
+pub struct Minted {
+    pub scratch: PathBuf,
+    pub canary: PathBuf,
+    pub operator_home: PathBuf,
+    pub nonce: String,
+}
+
+impl Minted {
+    pub fn mint(snapshot: &Snapshot) -> Result<Minted, String> {
+        let io = |e: io::Error| e.to_string();
+        let root = snapshot.root();
+        let mut nonce_bytes = [0u8; 16];
+        // SAFETY: arc4random_buf fills the buffer; it has no failure mode.
+        unsafe { libc::arc4random_buf(nonce_bytes.as_mut_ptr().cast(), nonce_bytes.len()) };
+        let nonce: String = nonce_bytes.iter().map(|b| format!("{b:02x}")).collect();
+        let scratch = root.join("scratch");
+        fs::create_dir(&scratch).map_err(io)?;
+        fs::set_permissions(&scratch, fs::Permissions::from_mode(0o700)).map_err(io)?;
+        let pre = scratch.join("preplaced-exec");
+        fs::write(&pre, "#!/bin/bash\nexit 0\n").map_err(io)?;
+        fs::set_permissions(&pre, fs::Permissions::from_mode(0o755)).map_err(io)?;
+        fs::write(scratch.join("mark.dylib"), PROBE_DYLIB).map_err(io)?;
+        let fifo = CString::new(scratch.join("fifo").as_os_str().as_bytes()).map_err(|_| "NUL in path".to_string())?;
+        // SAFETY: a valid NUL-terminated path.
+        if unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) } != 0 {
+            return Err(format!("mkfifo: {}", io::Error::last_os_error()));
+        }
+        let canary = root.join(format!("canary-{nonce}.txt"));
+        {
+            let mut f = fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&canary).map_err(io)?;
+            f.write_all(format!("CANARY {nonce}\n").as_bytes()).map_err(io)?;
+        }
+        let operator_home = root.join("operator-home-decoy");
+        fs::create_dir_all(operator_home.join("bin")).map_err(io)?;
+        fs::set_permissions(&operator_home, fs::Permissions::from_mode(0o700)).map_err(io)?;
+        fs::write(operator_home.join("visible.txt"), "decoy\n").map_err(io)?;
+        let fake = operator_home.join("bin/delphi");
+        fs::write(&fake, "#!/bin/bash\nexit 0\n").map_err(io)?;
+        fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).map_err(io)?;
+        Ok(Minted { scratch, canary, operator_home, nonce })
+    }
 }
 
 // ------------------------------------------------------------------------------------------------ the fresh home
