@@ -101,7 +101,9 @@ fn secret_key(k: &str) -> bool {
 fn scrub(v: &mut toml::Value) {
     match v {
         toml::Value::Table(t) => {
-            t.retain(|k, _| !secret_key(k));
+            // A key that names a secret is dropped, except a COUNT of tokens (`max_output_tokens`, `max_tokens`): a number under a name
+            // that says `tokens` is a model limit, not a credential, and the daemon refuses a model catalog without it.
+            t.retain(|k, v| !secret_key(k) || (k.to_ascii_lowercase().contains("tokens") && (v.is_integer() || v.is_float())));
             for (_, x) in t.iter_mut() {
                 scrub(x);
             }
@@ -313,6 +315,25 @@ mod tests {
             }
         }
         false
+    }
+
+    // Found by the first run of the real binary (CI): a key containing `token` was dropped as a secret, which removed `max_output_tokens`
+    // from the model catalog and the granted daemon refused its own configuration.
+    #[test]
+    fn the_models_token_limits_survive_the_rewrite_and_the_daemon_can_still_read_what_is_left() {
+        let cfg = format!(
+            "{RICH_CONFIG}\n[models.claude]\nfast = \"haiku-t\"\nworkhorse = \"haiku-t\"\nfrontier = \"haiku-t\"\n[models.catalog.\"haiku-t\"]\nmax_output_tokens = 8000\nmin_thinking_budget = 1024\nmax_thinking_budget = 32000\ninput_usd_per_mtok = 1.0\noutput_usd_per_mtok = 5.0\nbearer_token = \"SECRET-TOKEN-KEY\"\naccess_token = \"SECRET-ACCESS\"\n"
+        );
+        let out = granted_config(&cfg, Path::new("/snap")).unwrap();
+        assert!(out.contains("max_output_tokens = 8000") && out.contains("max_thinking_budget"), "{out}");
+        assert!(!out.contains("SECRET-TOKEN-KEY") && !out.contains("SECRET-ACCESS") && !out.contains("bearer_token") && !out.contains("access_token"), "{out}");
+        // the same parser the daemon uses reads what is left
+        if let Err(problems) = delphi_adapter::config::Config::parse(&out) {
+            panic!("the rewritten configuration does not parse: {problems:?}");
+        }
+        // a token that is a TEXT under a `tokens` name is still dropped
+        let out = granted_config("[workspace]\nprojects = []\n[x]\ntokens = \"SECRET-LIST\"\nmax_tokens = 100\n", Path::new("/s")).unwrap();
+        assert!(!out.contains("SECRET-LIST") && out.contains("max_tokens = 100"), "{out}");
     }
 
     #[test]
