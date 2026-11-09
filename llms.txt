@@ -1,12 +1,12 @@
 # Delphi
 
-> A terminal-first, spec-driven multi-agent working environment for software engineering. One Rust executable plus a full-screen console: a small team of specialist agents plans, builds in isolated git worktrees, audits and argues in Councils, and asks the operator before anything leaves the sandbox. Pre-1.0; macOS and Linux.
+> A multi-agent working environment for research, strategy and product work, with software built spec-first. One Rust executable plus a full-screen console: thirteen specialist roles work together and argue in Councils, keep memory and context between sessions, run in the console and inside other agent tools over MCP (Claude Code, Copilot CLI, Codex), grow a local knowledge base whose claims carry sources and a status, and ask the operator before anything leaves the sandbox. Pre-1.0; macOS and Linux.
 
 Start with the README, then the guides. The specs are the design and say, in a `status` line, whether the operator has approved each.
 
 ## Use it
 
-- [README](README.md): what it is, how it works, install, quick start, configuration, limitations
+- [README](README.md): what it is, why it exists, how agents work together, memory and context, environments, the knowledge base, install, quick start, limitations
 - [Thesis](docs/thesis.md): why Delphi exists (research and strategy with shared, trusted knowledge), the claim, and how to judge a change
 - [Getting started](docs/getting-started.md): install, first session, first build
 - [Model access](docs/guides/model-access.md): endpoints, subscriptions, failover, local fallback
