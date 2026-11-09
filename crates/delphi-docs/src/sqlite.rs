@@ -102,7 +102,7 @@ fn run_query(conn: &Connection, sql: &str) -> Result<(String, usize, bool), DocE
     if !stmt.readonly() {
         return Err(DocError("only read-only statements are accepted".into()));
     }
-    let names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
+    let names: Vec<String> = stmt.column_names().map(|s| s.to_string()).collect();
     let mut out = format!("| {} |\n|{}\n", names.iter().map(|n| clip(n)).collect::<Vec<_>>().join(" | "), "---|".repeat(names.len().max(1)));
     let _watch = Watchdog::start(conn);
     let mut rows = stmt.query([]).map_err(|e| DocError(format!("query error: {}", e)))?;
@@ -185,7 +185,7 @@ mod tests {
     use super::*;
 
     fn db() -> Vec<u8> {
-        let c = Connection::open_in_memory().unwrap();
+        let mut c = Connection::open_in_memory().unwrap();
         c.execute_batch(
             "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, bio TEXT, avatar BLOB);
              CREATE TABLE \"odd \"\"name\" (x);
