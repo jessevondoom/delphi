@@ -189,11 +189,49 @@ pub fn process_chain() -> Option<Vec<String>> {
     None
 }
 
-/// Why the ancestry shows this launch is not the operator's own terminal, or `None`.
+/// Why the ancestry shows this launch is not the operator's own terminal, or `None`. BEST EFFORT, an extra line behind the launch code
+/// ([`launch_step_up`]), which is the real guarantee: a chain that reaches pid 1 at once (the parent is init, as after a double fork) is
+/// suspicious and is not a pass.
 pub fn seat_refusal() -> Option<String> {
     match process_chain() {
         None => Some("refused: the process ancestry of this launch could not be read, so it cannot be shown that no agent seat started it".into()),
-        Some(chain) => seat_in_chain(&chain).map(|p| format!("refused: this launch descends from `{p}`, an agent seat or Delphi's daemon; an authorized run is the operator's act from a terminal of their own")),
+        Some(chain) => chain_refusal(&chain),
+    }
+}
+
+/// The pure half of [`seat_refusal`].
+pub fn chain_refusal(chain: &[String]) -> Option<String> {
+    if chain.is_empty() {
+        return Some("refused: this launch has no parent process but init, so it is detached from any terminal session or login; an authorized run is the operator's act from a terminal of their own".into());
+    }
+    seat_in_chain(chain).map(|p| format!("refused: this launch descends from `{p}`, an agent seat or Delphi's daemon; an authorized run is the operator's act from a terminal of their own"))
+}
+
+// ------------------------------------------------------------------------------------------------ the launch code
+
+/// The fresh authenticator code that starts a granted run (spec 092 TA-2, GOVERNANCE §5.12): the same second factor as
+/// `delphi test authorize` (`[relay] step_up = "totp"` with a `totp_credential`, in the ratified configuration), verified once per code with
+/// wrong guesses rationed (`delphi_core::totp`) and its state shared with the daemon and with `authorize`. It is asked BEFORE the launcher makes
+/// anything, so a refused code costs no use and starts no daemon. With no second factor configured the launch refuses; there is no fallback.
+/// `factor` gives the secret (or why there is none), `ask` reads one line from the operator. Neither the code nor the secret is returned,
+/// logged or kept.
+pub fn launch_step_up(ws_dir: &Path, now_unix: i64, factor: &dyn Fn(&Path) -> Result<Vec<u8>, String>, ask: &mut dyn FnMut(&str) -> Option<String>) -> Result<(), String> {
+    let secret = factor(ws_dir).map_err(|e| format!("refused: an authorized run needs the second factor at launch, and {e}"))?;
+    let Some(code) = ask("authenticator code to launch this authorized run: ") else { return Err("refused: no code given; nothing was launched".into()) };
+    let verifier = delphi_core::totp::Verifier::persistent(ws_dir.join("local/totp-state"));
+    verifier.check(&secret, code.trim(), now_unix.max(0) as u64).map_err(|e| format!("refused: step-up failed: {e}; nothing was launched"))
+}
+
+/// One line typed at the controlling terminal: `/dev/tty` is opened for the prompt and the answer, never stdin, an argument or the environment.
+pub fn tty_ask(prompt: &str) -> Option<String> {
+    use std::io::{BufRead, Write};
+    let mut tty = std::fs::OpenOptions::new().read(true).write(true).open("/dev/tty").ok()?;
+    tty.write_all(prompt.as_bytes()).ok()?;
+    tty.flush().ok()?;
+    let mut line = String::new();
+    match std::io::BufReader::new(tty).read_line(&mut line) {
+        Ok(0) | Err(_) => None,
+        Ok(_) => Some(line.trim().to_string()),
     }
 }
 
@@ -211,6 +249,73 @@ mod tests {
         }
         // `delphi run` itself and a console are not seats
         assert_eq!(seat_in_chain(&["/usr/local/bin/delphi run --on-card deny".to_string()]), None);
+    }
+
+    const SECRET: &[u8] = b"12345678901234567890";
+
+    fn ws() -> tempfile::TempDir {
+        let t = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(t.path().join("local")).unwrap();
+        t
+    }
+
+    fn now() -> i64 {
+        delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339()).unwrap()
+    }
+
+    fn good_factor(_: &Path) -> Result<Vec<u8>, String> {
+        Ok(SECRET.to_vec())
+    }
+
+    // Spec 092 TA-2 / GOVERNANCE §5.12: the launch is the operator's own act because it needs a fresh authenticator code.
+    #[test]
+    fn a_valid_code_launches_and_the_same_code_a_second_time_is_a_replay() {
+        let t = ws();
+        let code = delphi_core::totp::code_at(SECRET, now() as u64);
+        let mut asked = vec![];
+        assert_eq!(launch_step_up(t.path(), now(), &good_factor, &mut |p| { asked.push(p.to_string()); Some(code.clone()) }), Ok(()));
+        assert!(asked[0].contains("authenticator code"));
+        let again = launch_step_up(t.path(), now(), &good_factor, &mut |_| Some(code.clone())).unwrap_err();
+        assert!(again.starts_with("refused:") && again.contains("nothing was launched"), "{again}");
+    }
+
+    #[test]
+    fn a_wrong_code_no_code_and_a_malformed_code_refuse_the_launch() {
+        let t = ws();
+        for code in ["000000", "", "12345", "abcdef", "1234567"] {
+            let e = launch_step_up(t.path(), now(), &good_factor, &mut |_| Some(code.to_string())).unwrap_err();
+            assert!(e.starts_with("refused:"), "{code}: {e}");
+        }
+        let e = launch_step_up(t.path(), now(), &good_factor, &mut |_| None).unwrap_err();
+        assert!(e.contains("no code given"), "{e}");
+    }
+
+    #[test]
+    fn with_no_second_factor_configured_the_launch_refuses_and_never_asks() {
+        let t = ws();
+        let mut asked = false;
+        let e = launch_step_up(t.path(), now(), &|_| Err("no second factor is configured".to_string()), &mut |_| { asked = true; Some("123456".into()) }).unwrap_err();
+        assert!(e.starts_with("refused:") && e.contains("second factor"), "{e}");
+        assert!(!asked, "no prompt, no fallback to no step-up");
+        // the real reader of the ratified configuration refuses a workspace that has none
+        assert!(crate::test_cmd::configured_factor(t.path()).is_err());
+    }
+
+    #[test]
+    fn wrong_guesses_are_rationed_so_the_right_code_is_refused_after_a_burst_of_wrong_ones() {
+        let t = ws();
+        for _ in 0..12 {
+            let _ = launch_step_up(t.path(), now(), &good_factor, &mut |_| Some("000000".into()));
+        }
+        let code = delphi_core::totp::code_at(SECRET, now() as u64);
+        assert!(launch_step_up(t.path(), now(), &good_factor, &mut |_| Some(code.clone())).is_err(), "locked out after repeated wrong codes");
+    }
+
+    #[test]
+    fn a_launch_whose_parent_is_init_is_suspicious_and_not_a_pass() {
+        assert!(chain_refusal(&[]).unwrap().contains("detached"));
+        assert_eq!(chain_refusal(&["-zsh".to_string(), "login -pf x".to_string()]), None);
+        assert!(chain_refusal(&["python3 x.py".to_string(), "claude".to_string()]).unwrap().contains("claude"));
     }
 
     #[test]

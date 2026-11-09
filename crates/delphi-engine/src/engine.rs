@@ -1883,6 +1883,9 @@ impl Engine {
         if let Some(allowed) = sc.bundle_agent.as_ref().and_then(|a| a.allowed_tools.as_ref()) {
             defs.retain(|d| allowed.contains(&d.name));
         }
+        // The allowlist is applied here, again by the bridge's own retain in `harness_run`, and finally at call time (`tool_stripped`): three
+        // lines on purpose, because a tool the offer forgot must still be denied. `the_seat_is_not_offered_a_file_write_tool...` asserts the
+        // offer; `every_card_that_is_not_the_matching_run_command...` asserts the call-time denial.
         if granted {
             defs.retain(|d| crate::authorization_grant::tool_allowed(&d.name));
         }
@@ -2451,8 +2454,9 @@ impl Engine {
 
     /// Spec 092 S2c, DRY: with a grant held, a Red card is run through the grant's matching and use path and the outcome is logged
     /// (`authorization.would_use`, `.refused`, `.no_match`). **It resolves nothing and approves nothing**: the caller raises the card
-    /// afterwards, and the run's own policy (`delphi run`'s `decide`) denies it. It never calls `exec.run` or any runner. A use the
-    /// ledger records here is really consumed (the counter is the part S2d needs proven).
+    /// afterwards, and the run's own policy (`delphi run`'s `decide`) denies it. It never calls `exec.run` or any runner. Since S2d2b a
+    /// matching `run_command` is decided by `granted_run_command` and never comes here; what comes here is a card of another kind, which
+    /// no entry matches, so it is logged `authorization.no_match` and denied.
     async fn observe_grant(&self, who: &Asker<'_>, tier: ApprovalTier, tool: &str, payload: &Value) -> Result<(), EngineError> {
         if tier != ApprovalTier::Red {
             return Ok(());

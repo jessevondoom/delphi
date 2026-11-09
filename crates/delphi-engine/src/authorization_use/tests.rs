@@ -84,6 +84,40 @@ fn rig(script_text: &str, max_uses: u32, args: &[&str]) -> Rig {
     Rig { _t: t, root, home, snap, fresh, id, argv }
 }
 
+/// As [`rig`], with one manifest entry per set of arguments, all on the one pinned script.
+fn rig_multi(script_text: &str, max_uses: u32, arg_sets: &[&[&str]]) -> Rig {
+    let t = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(t.path()).unwrap();
+    let project = root.join("project");
+    fs::create_dir_all(&project).unwrap();
+    fs::write(project.join("job.sh"), script_text).unwrap();
+    fs::write(project.join("data.txt"), "snapshot data\n").unwrap();
+    git(&project, &["init", "-q"]);
+    git(&project, &["add", "job.sh", "data.txt"]);
+    git(&project, &["commit", "-q", "-m", "x"]);
+    let home = root.join("opshome");
+    fs::create_dir_all(home.join("operator")).unwrap();
+    delphi_core::lock::write(&home.join("operator/ratified.lock"), &Default::default()).unwrap();
+    let mut entries = vec![];
+    let mut first = vec![];
+    for (i, args) in arg_sets.iter().enumerate() {
+        let mut argv = vec!["/bin/bash".to_string(), "@snapshot/job.sh".to_string()];
+        argv.extend(args.iter().map(|a| a.to_string()));
+        if i == 0 {
+            first = argv.clone();
+        }
+        entries.push(a::Entry { tool: "shell".into(), argv, files: vec!["@snapshot/job.sh".into()], runner_provenance: "project_snapshot".into() });
+    }
+    let n = a::NewRecord { purpose: "S2d2b".into(), intent: "test".into(), run: "run-1".into(), expires_in_secs: a::DEFAULT_EXPIRY_SECS, max_uses, entries, request: None, policy: a::Policy::system() };
+    let ctx = a::TokenCtx { project: Some(project.clone()), pin_tree: true, expect: Default::default(), expect_tree: None };
+    let rec = a::build_record_with(&home, &n, &ctx, now(), &delphi_core::time::now_rfc3339()).unwrap();
+    let id = rec.id.clone();
+    a::create_audited(&home, rec.clone(), serde_json::json!({"id": rec.id, "manifest_hash": rec.manifest_hash, "run": rec.run, "by": "operator", "source": "operator"})).unwrap();
+    let snap = Snapshot::build(&project, &root).unwrap();
+    let fresh = FreshHome::create(&root).unwrap();
+    Rig { _t: t, root, home, snap, fresh, id, argv: first }
+}
+
 fn trivial(max_uses: u32) -> Rig {
     rig("#!/bin/bash\necho job-ran\nexit 0\n", max_uses, &[])
 }
@@ -434,4 +468,93 @@ async fn the_seat_is_not_offered_a_file_write_tool_and_is_denied_one_it_calls_in
     let offered: Vec<String> = started["bridge"].as_array().unwrap().iter().filter_map(|v| v.as_str().map(String::from)).collect();
     assert!(offered.iter().all(|n| crate::authorization_grant::tool_allowed(n)), "{offered:?}");
     assert!(offered.iter().any(|n| n == "run_command") && !offered.iter().any(|n| n.contains("write") || n == "shell" || n == "note"), "{offered:?}");
+}
+
+// ---------------------------------------------------------------------------------------------- red-team of #608: the guards at the call site
+
+// The taint rule at its call site: a span whose ceiling is `federated_peer` or lower is refused even with a valid grant and a matching card.
+// (`pre_refusal` is tested over every tier above; this fails if the engine stops passing the span's own ceiling to it.) A harness seat never
+// gets this far with a tainted span (its launch is refused), so the call is made by an API-served Builder.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_span_tainted_to_l0_or_l1_calls_the_matching_command_under_a_grant_and_is_denied_while_a_trusted_one_runs() {
+    use crate::model::Step;
+    use crate::testkit::setup;
+    use delphi_core::provenance::Tier;
+    if !can_run() {
+        return;
+    }
+    for (tier, runs) in [(Tier::L0, false), (Tier::L1, false), (Tier::L3, true)] {
+        let r = trivial(3);
+        let f = setup(vec![Step::tool("c1", "run_command", serde_json::json!({"argv": r.argv})), Step::text("done")], 5.0, |_| {});
+        f.engine.grant.set(Arc::new(r.grant())).unwrap();
+        f.engine.places.set(Arc::new(RunPlaces::attach(r.snap.path(), r.snap.tree_hash(), r.fresh.path()).unwrap())).unwrap();
+        let task = f.m.next_task_id();
+        let _ = f.engine.run_task_woken(&f.m, task, "builder", "Run the pinned job.", tier).await;
+        let results: Vec<String> = events_of(&f, "tool.result").iter().map(|e| e.payload["content"].to_string()).collect();
+        if runs {
+            assert!(results.iter().any(|x| x.contains("job-ran")), "{tier:?}: a span above federated_peer is approved: {results:?}");
+            assert_eq!((events_of(&f, USED).len(), r.real()), (1, 1));
+        } else {
+            assert!(!results.iter().any(|x| x.contains("job-ran")), "{tier:?}: {results:?}");
+            let why = events_of(&f, REFUSED_USE);
+            assert!(why.iter().any(|e| e.payload["reason"].as_str().unwrap_or("").contains("tainted")), "{tier:?}: {:?} {results:?}", why.iter().map(|e| e.payload.to_string()).collect::<Vec<_>>());
+            assert_eq!((events_of(&f, USED).len(), r.real()), (0, 0), "{tier:?}: no use burned");
+        }
+    }
+}
+
+// The role guard: a role whose manifest does not run commands is refused even if it calls `run_command` with a grant, places and the
+// matching card (a model is not trusted to call only what it was offered).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_role_that_may_not_run_commands_calls_run_command_under_a_grant_and_is_denied() {
+    use crate::model::Step;
+    use crate::testkit::setup;
+    if !can_run() {
+        return;
+    }
+    let r = trivial(3);
+    let f = setup(vec![Step::tool("c1", "run_command", serde_json::json!({"argv": r.argv})), Step::text("done")], 5.0, |_| {});
+    f.engine.grant.set(Arc::new(r.grant())).unwrap();
+    f.engine.places.set(Arc::new(RunPlaces::attach(r.snap.path(), r.snap.tree_hash(), r.fresh.path()).unwrap())).unwrap();
+    let _ = f.engine.run_task(&f.m, "architect", "Draft a spec").await;
+    let results: Vec<String> = events_of(&f, "tool.result").iter().map(|e| e.payload["content"].to_string()).collect();
+    assert!(!results.iter().any(|x| x.contains("job-ran")), "the architect ran a command: {results:?}");
+    assert_eq!((events_of(&f, USED).len(), events_of(&f, RAN).len(), r.real()), (0, 0, 0));
+}
+
+// The one-at-a-time lock: the scratch directory is shared, so two seats that hold two DIFFERENT matching cards of a multi-use record run one
+// after the other. The script logs start and end into scratch; interleaved runs would show start-A start-B.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_seats_with_two_different_matching_cards_run_one_at_a_time_in_the_shared_scratch() {
+    if !can_run() {
+        return;
+    }
+    let script = "#!/bin/bash\nlog=\"$1/order.log\"\necho \"start-$2\" >> \"$log\"\nt=$SECONDS; while [ $((SECONDS-t)) -lt 2 ]; do :; done\necho \"end-$2\" >> \"$log\"\nwhile IFS= read -r l; do echo \"$l\"; done < \"$log\"\n";
+    let r = rig_multi(script, 5, &[&["@scratch", "A"], &["@scratch", "B"]]);
+    let mk = |tag: &str| {
+        let mut v = r.argv.clone();
+        v[3] = tag.to_string();
+        v
+    };
+    let (dir, mut progs) = (tempfile::tempdir().unwrap(), vec![]);
+    for tag in ["A", "B"] {
+        let d = dir.path().join(tag);
+        fs::create_dir_all(&d).unwrap();
+        let args = d.join("args");
+        progs.push((script_n(&d, TOOLS, &args, vec![run_cmd(&mk(tag))]), args));
+    }
+    // one program that behaves as seat A for the first launch and as seat B for the second (the version probe is answered by A)
+    let wrapper = dir.path().join("wrapper.sh");
+    fs::write(&wrapper, format!("#!/bin/sh\ncase \"${{1-}}\" in --version) exec '{a}' \"$@\";; esac\nif mkdir '{lock}' 2>/dev/null; then exec '{a}' \"$@\"; else exec '{b}' \"$@\"; fi\n", a = progs[0].0, b = progs[1].0, lock = dir.path().join("first.lock").display())).unwrap();
+    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
+    let f = r.engine(wrapper.display().to_string(), r.grant());
+    let (x, y) = tokio::join!(f.engine.run_task(&f.m, "builder", PROMPT), f.engine.run_task(&f.m, "builder", PROMPT));
+    let _ = (x, y);
+    assert_eq!((events_of(&f, USED).len(), r.real()), (2, 2), "both cards ran: {:?}", events_of(&f, REFUSED_USE).iter().map(|e| e.payload.to_string()).collect::<Vec<_>>());
+    let outs: Vec<String> = progs.iter().map(|(_, a)| fs::read_to_string(a.with_extension("resp")).unwrap_or_default()).collect();
+    let longest = outs.iter().max_by_key(|o| o.len()).unwrap();
+    // the later run printed the whole log: its two lines come after the earlier run's two, never between them
+    let log: Vec<&str> = longest.split("\\n").filter(|l| l.starts_with("start-") || l.starts_with("end-")).collect();
+    assert_eq!(log.len(), 4, "{longest}");
+    assert!(log[0].starts_with("start-") && log[1] == log[0].replace("start-", "end-") && log[2].starts_with("start-") && log[3] == log[2].replace("start-", "end-"), "interleaved: {log:?}");
 }

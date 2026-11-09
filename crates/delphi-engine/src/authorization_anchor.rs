@@ -28,6 +28,8 @@ use std::path::Path;
 
 pub const LAUNCH: &str = "authorization.run.launch";
 pub const RUN_END: &str = "authorization.run.end";
+/// The operator gave a fresh authenticator code to launch a granted run (spec 092 TA-2, GOVERNANCE §5.12). The event holds no code and no secret.
+pub const LAUNCH_STEP_UP: &str = "authorization.launch.step_up";
 
 fn state_of(e: &delphi_core::event::EventEnvelope) -> LedgerState {
     let p = &e.payload;
@@ -100,6 +102,12 @@ fn append_pinned(home: &Path, kind: &str, body: Value) -> Result<(), String> {
 /// Record that a run is about to start with the ledger at `state`.
 pub fn record_launch(home: &Path, id: &str, run: &str, state: &LedgerState, after_crash: bool) -> Result<(), String> {
     append_pinned(home, LAUNCH, payload(id, run, state, json!({"after_crash": after_crash})))
+}
+
+/// Record that the launch step-up was given and verified: written by the launcher before it makes anything, through the same writer lock and
+/// pinned-head update as the launch event. No code, no secret and no part of either is in it.
+pub fn record_launch_step_up(home: &Path, id: &str, run: &str) -> Result<(), String> {
+    append_pinned(home, LAUNCH_STEP_UP, json!({"id": id, "run": run, "step_up": "totp", "source": "launcher", "pid": std::process::id(), "by": "operator"}))
 }
 
 /// Record that the run ended, with the ledger as it now stands. If the ledger cannot be read the event is NOT written (the next launch

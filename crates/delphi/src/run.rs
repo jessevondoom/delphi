@@ -52,7 +52,7 @@ pub enum OnCard {
     Authorization { id: String, run: String },
 }
 
-/// Set by the (future, S2c) launcher in the environment of an authorized run's children. S2a sets it for nothing and refuses
+/// Set in the environment of the granted daemon (and so of everything it starts) by `spawn::granted_env`, and refused by the launcher in
 /// any run that finds it already present: a run nested inside an authorized run may not carry the flag (TA-2).
 pub const AUTHORIZED_RUN_ENV: &str = "DELPHI_AUTHORIZED_RUN";
 
@@ -450,6 +450,19 @@ pub fn run(home: &Path, ws_dir: &Path, opts: Opts) -> i32 {
         if let Some(why) = crate::run_granted::sandbox_refusal(&delphi_sandbox::authorized::probe_authorized()) {
             say_err(&why);
             return EXIT_INFRA;
+        }
+        // The launch is the operator's own act because it needs a FRESH authenticator code, read from the terminal (GOVERNANCE §5.12). The
+        // ancestry, environment, terminal and marker checks above are extra lines; this is the guarantee. Asked before anything is made, so
+        // a wrong code costs no use and starts no daemon; recorded in the audit chain without the code.
+        if let (OnCard::Authorization { id, run }, Some(now)) = (&opts.on_card, now) {
+            if let Err(why) = crate::run_granted::launch_step_up(ws_dir, now, &crate::test_cmd::configured_factor, &mut crate::run_granted::tty_ask) {
+                say_err(&why);
+                return EXIT_INFRA;
+            }
+            if let Err(e) = delphi_engine::authorization_anchor::record_launch_step_up(home, id, run) {
+                say_err(&format!("refused: the launch step-up could not be recorded ({e}); nothing was launched"));
+                return EXIT_INFRA;
+            }
         }
         say_err("the authorization checks passed. The daemon will hold the grant, in a throwaway home: a run_command that exactly matches an entry of the record is run as a pinned /bin/bash script in the sandbox (authorization.used); every other card is denied");
     }

@@ -162,6 +162,8 @@ impl Grant {
 
         // 2. Everything the dry path checks, then the places, the budget and the anchor.
         self.verify_entry_at_use(i, now_unix, Some(area.snapshot.path())).map_err(no)?;
+        // Defence in depth, on purpose: `verify_entry_at_use` re-hashes the pinned files at their path; this checks the tree pin and the
+        // pinned `@snapshot/<rel>` files against the snapshot object the run holds. Neither is removed because the other exists.
         a::check_snapshot_pins(&self.record, area.snapshot.path(), area.snapshot.tree_hash()).map_err(no)?;
         check_area(area).map_err(no)?;
         let expect = self.anchor.lock().unwrap_or_else(|p| p.into_inner()).clone();
@@ -169,6 +171,8 @@ impl Grant {
         if seen != expect {
             return Err(no("the use ledger is not where this run last saw it (cut, deleted, replaced or written by another process); no use is taken"));
         }
+        // Defence in depth, on purpose: `take_use_anchored` makes the same test under the ledger's lock. This one refuses before the script is
+        // copied and the sandbox probed, so a used-up record costs nothing.
         if seen.count >= self.record.max_uses {
             return Err(no(format!("authorization {} has no uses left ({} of {} used)", self.record.id, seen.count, self.record.max_uses)));
         }
@@ -199,6 +203,8 @@ impl Grant {
             }
             Ok(())
         };
+        // Intentionally redundant with the two re-hashes after the use is taken (the copy is hashed again immediately before exec): this one
+        // refuses before a use is spent and before the sandbox is probed.
         rehash_copy().map_err(no)?;
 
         // 4. Probe (no fallback), then the decrement, then the log.

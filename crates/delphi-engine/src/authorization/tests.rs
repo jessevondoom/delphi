@@ -995,7 +995,7 @@ fn nothing_consumes_a_record_in_this_slice() {
         "crates/delphi/tests/e2e.rs", // S2d2a: builds a record for the real-binary launcher test (a test, not product code)
         "crates/delphi/src/doctor.rs",          // verifies the pin
         "crates/delphi/tests/docs.rs",          // schemas
-        "crates/delphi/src/run.rs",             // S2a: the launch gate only (checked below); it approves nothing
+        "crates/delphi/src/run.rs",             // the launcher: the launch gate and, since S2d2b, the step-up record (checked below); it approves nothing itself
         "crates/delphi/src/run_authorization_tests.rs", // S2a: test fixtures that build records
         "crates/delphi-engine/src/authorization_grant.rs", // S2c: the daemon-side reader (grant, matching, use ledger); the one new importer
         "crates/delphi-engine/src/authorization_grant/tests.rs",
@@ -1007,7 +1007,7 @@ fn nothing_consumes_a_record_in_this_slice() {
         "crates/delphi-engine/src/authorization_run/tests.rs",
         "crates/delphi-engine/src/authorization_use/tests.rs", // S2d2b: tests of the daemon check build records
     ];
-    // S2c: who may name the grant module at all. The module approves nothing; this list is the exact set of its callers.
+    // S2c: who may name the grant module at all. The module is the daemon's reader; the approval is `authorization_use`; this list is the exact set of the module's callers.
     const GRANT_USERS: &[&str] = &[
         "crates/delphi-engine/src/lib.rs",                  // `pub mod authorization_grant;`
         "crates/delphi-engine/src/authorization.rs",        // `authorize_launch` reads the use ledger
