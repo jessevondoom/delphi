@@ -172,7 +172,7 @@ Answers arrive under the agent's own name and badge, marked `via delphi`, with t
 
 The rules live in code, not in prompts, so a mistaken or manipulated agent has little room to do harm.
 
-- **Three approval tiers.** Green runs without asking (reading, notes, commands your `[exec] allow` rules cover, anything inside the OS sandbox). Amber (commits, other commands) is shown to you. Red (anything outbound, merges, new dependencies, edits to the charter, destructive commands) always asks and is denied if nobody answers.
+- **Three approval tiers.** Green runs without asking (reading, notes, commands your `[exec] allow` rules cover, anything inside the OS sandbox). Amber (commits, other commands) is shown to you. Red (anything outbound, merges, new dependencies, edits to the charter, destructive commands) always asks and is denied if nobody answers. The one advance approval is narrow: for a headless test on macOS you may authorize, at a terminal beforehand, one pinned script that runs sandboxed with the network off ([`specs/092`](specs/092-operator-authorized-tests.md)).
 - **Taint.** Whatever an agent reads from outside carries a trust level, and a step that has read untrusted content cannot write, run commands, call out or dispatch other agents without a Red card.
 - **Ratification.** Model access, agent definitions, learned lessons, imported skills and release files arrive as proposals and take effect only when you `/ratify` them.
 - **Separate checkers.** The agent that audits a build is never the one that built it, and a Council's dissent is written by the daemon, not by the arbiter.

@@ -8,7 +8,22 @@ This file starts with the work after v0.2.7. For earlier releases, the history i
 
 ## Unreleased
 
+## 0.6.0 — 2026-11-09
+
+A summary by spec; the pull requests are listed on the releases page.
+
+- Operator-authorized tests (spec 092, GOVERNANCE §5.12): an agent or a host may ask for an advance authorization of a few exact commands for a headless test (`request_test_authorization`). It grants nothing until the operator reviews and authorizes it at a terminal (`delphi test`), and `delphi run --on-card authorization:<id> --auth-run <run>` then approves only that pinned, sandboxed `run_command`, on macOS.
+- The core-repo merge flow (spec 094): a merge queue label, `delphi merge <PR>` and `--all` with a recorded operator approval, a session-scoped `--auto`, cleanup after merge, a merge error log and a builder git skill. Agents never merge on their own.
+- A spec compile step (spec 088): `delphi specs compile|show|list|report`, the derived views under `compiled/specs/`, the `specs_show` and `specs_list` MCP tools and the `spec-driven-build` skill. Reads through Delphi are counted.
+- Three spec numbers that two specs shared are renumbered once (spec 090): documents and data visualization is 095, the console deck change log is 096, encyclopedia search pages is 097. `delphi lint` refuses a second spec on a taken number.
+- Councils and Panels: several foreign-family seats on a Panel, counted by family; a carrier plan in `council_frame`; option ids compared by id in Round 2; Copilot seats answer Round 2; host pointers reach a registered project as `@project/<name>/<path>`.
+- Fixed: a tool-less `agy` seat ran without Delphi's gate and is now always gated, and receipts show the tools actually granted (#591); `delphi update` could not download a release asset (#575); four causes of flaky tests (#604); the sandbox process cap (#611); `cargo deny` advisories (#610).
 - The README introduction is rewritten around four ideas: agents that work together, memory and context that carry over, one team in many environments, and a knowledge base that grows into expertise. It adds a "Why it exists" section, host examples (`@delphi`, a Panel), and a status section that says what has been measured. The one-line summaries in `docs/README.md` and `llms.txt` follow it. No behavior change.
+
+## 0.5.6 — 2026-11-08
+
+Not otherwise itemized; see the releases page.
+
 - Agent identity outside the console (spec 087 S3): a Delphi answer's identity now reads `⟦badge⟧ Name (role, via delphi)` (it was `Name (role) via delphi`) and arrives as one ready-to-print `display` line. A role a host adopts with `get_agent` shows the same identity and notice; the old "acting as" wording is gone. New `[mcp] badge_mode = "dark" | "light"` picks the colour pair for the ANSI form. Results may carry advisory `boundary_line` and `return_line`, and `delphi_roster` opens with a roster line (it takes an optional `speaking` list). Hosts may drop all of these.
 
 ## 0.5.5 — 2026-11-05
