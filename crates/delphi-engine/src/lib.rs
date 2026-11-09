@@ -127,6 +127,10 @@ pub mod decision_run;
 pub mod decision_raised;
 pub mod authorization;
 pub mod authorization_grant;
+pub mod authorization_anchor;
+// Test builds only until S2d2 connects it: with the module compiled out, no code in the product can call `run_authorized` (spec 092 S2d1).
+#[cfg(test)]
+mod authorization_run;
 pub mod research_report;
 pub mod provisional_run;
 pub mod hostmap;

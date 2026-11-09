@@ -419,8 +419,11 @@ pub fn judge_home_entry(name: &str, is_symlink: bool, regular_or_dir: bool, dev:
         return Some("a socket, device or pipe in the throwaway home".into());
     }
     let n = name.to_ascii_lowercase();
-    let named = [".ssh", ".aws", ".gnupg", ".env", ".npmrc", ".pypirc", "auth.json", ".netrc", "_netrc"].contains(&n.as_str());
-    if named || n.starts_with("credentials") || n.starts_with("token") || n.starts_with("id_") || n.ends_with(".pem") || n.ends_with(".key") || n.ends_with(".p12") {
+    let named = [".ssh", ".aws", ".gnupg", ".npmrc", ".pypirc", "auth.json", ".netrc", "_netrc", ".git-credentials", ".pgpass", ".dockercfg", ".htpasswd", ".docker", ".kube", ".git", ".gitconfig", "hosts.yml", "hosts.yaml", "kubeconfig"].contains(&n.as_str());
+    let prefixed = ["credentials", "token", "id_", ".env", "secret", ".secret", "kubeconfig"].iter().any(|p| n.starts_with(p));
+    let suffixed = [".pem", ".key", ".p12", ".pfx", ".p8", ".jks", ".gpg", ".asc", ".kdbx", ".keystore", ".keychain", ".keychain-db"].iter().any(|s| n.ends_with(s));
+    // `application_default_credentials.json`, `.git-credentials`, `aws_credentials`: the word anywhere in the name
+    if named || prefixed || suffixed || n.contains("credentials") {
         return Some("a credential-named file in the throwaway home".into());
     }
     None

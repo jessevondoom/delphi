@@ -423,7 +423,18 @@ pub fn run(home: &Path, ws_dir: &Path, opts: Opts) -> i32 {
     let started = Instant::now();
     if matches!(opts.on_card, OnCard::Authorization { .. }) {
         let now = delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339());
+        // The environment test, and a second one that does not rely on the environment: the ancestry of this process (S2d1).
         let seat = crate::xenia_terminal::inside_an_agent_seat();
+        // Also refused when the options are parsed; checked again here because the anchor is ended and the home deleted when this
+        // process finishes, which a daemon that outlived it would not survive.
+        if opts.keep_daemon {
+            say_err("refused: --keep-daemon cannot be used with --on-card authorization:<id>; the daemon holds the grant and is stopped with the run");
+            return EXIT_INFRA;
+        }
+        if let Some(why) = crate::run_granted::seat_refusal() {
+            say_err(&why);
+            return EXIT_INFRA;
+        }
         let marker = std::env::var_os(AUTHORIZED_RUN_ENV).is_some();
         if let Some(why) = launch_refusal(home, &opts.on_card, seat, marker, now, &delphi_engine::authorization::Policy::system()) {
             say_err(&why);
@@ -433,22 +444,50 @@ pub fn run(home: &Path, ws_dir: &Path, opts: Opts) -> i32 {
             say_err(&why);
             return EXIT_INFRA;
         }
-        say_err("the authorization checks passed. The daemon will hold the grant and log what it WOULD use (authorization.would_use), but authorized approval is not enabled in this build: this run denies every card, as --on-card deny does");
+        say_err("the authorization checks passed. The daemon will hold the grant, in a throwaway home, and log what it WOULD use (authorization.would_use), but authorized approval is not enabled in this build: this run denies every card, as --on-card deny does");
     }
     let Some(exe) = chat::daemon_exe() else {
         say_err("cannot locate this program to start the daemon");
         return EXIT_INFRA;
     };
     let spawn_opts = SpawnOptions { home, workspace: ws_dir, daemon_exe: &exe, extra_args: vec![], prefix_args: vec!["__core".into()], own_version: Some(env!("CARGO_PKG_VERSION")) };
-    // An authorized run gets a daemon of its own that holds the grant (an inherited pipe, read once); every other run is as before.
+    // An authorized run gets a daemon of its own that holds the grant (an inherited pipe, read once), started in a throwaway home with a
+    // disposable snapshot of the project; every other run is as before.
+    let mut granted: Option<(crate::run_granted::GrantedArea, delphi_engine::authorization_anchor::RunAnchor)> = None;
     let spawned = if let OnCard::Authorization { id, run } = &opts.on_card {
         // A clock that cannot be read must never read as time zero (every expiry would look in the future): refuse.
         let Some(now) = delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339()) else {
             say_err("refused: the clock could not be read, so expiry cannot be checked");
             return EXIT_INFRA;
         };
-        match delphi_engine::authorization_grant::launch_payload(home, id, run, now, &delphi_engine::authorization::Policy::system()) {
-            Ok(bytes) => delphi_core::spawn::connect_or_spawn_granted(&spawn_opts, &bytes),
+        let project = match std::env::current_dir() {
+            Ok(p) => p,
+            Err(e) => {
+                say_err(&format!("refused: the working directory cannot be read ({e})"));
+                return EXIT_INFRA;
+            }
+        };
+        let area = match crate::run_granted::prepare(ws_dir, &project) {
+            Ok(a) => a,
+            Err(e) => {
+                say_err(&format!("refused: {e}"));
+                return EXIT_INFRA;
+            }
+        };
+        // The launch check, the ledger anchor (the ledger must be where the audit log says), the `launch` event, and the payload.
+        match delphi_engine::authorization_anchor::launch_granted(home, id, run, now, &delphi_engine::authorization::Policy::system()) {
+            Ok((bytes, anchor)) => {
+                say_err(&format!("the project snapshot has tree hash {} ({} files); the run's home and snapshot are discarded when it ends", area.snapshot.tree_hash(), area.snapshot.file_count()));
+                let granted_opts = SpawnOptions { home: area.home.path(), workspace: &area.ws_dir, daemon_exe: &exe, extra_args: vec![], prefix_args: vec!["__core".into()], own_version: Some(env!("CARGO_PKG_VERSION")) };
+                let r = delphi_core::spawn::connect_or_spawn_granted(&granted_opts, &bytes);
+                // The mission is opened from the SNAPSHOT: the real project's path is never sent to the throwaway daemon.
+                if let Err(e) = std::env::set_current_dir(area.snapshot.path()) {
+                    say_err(&format!("refused: cannot enter the snapshot ({e})"));
+                    return EXIT_INFRA;
+                }
+                granted = Some((area, anchor));
+                r
+            }
             Err(e) => {
                 say_err(&format!("refused: {e}"));
                 return EXIT_INFRA;
@@ -469,9 +508,22 @@ pub fn run(home: &Path, ws_dir: &Path, opts: Opts) -> i32 {
         }
     };
     let spawned = attached.spawned;
+    let daemon_pid = attached.daemon_pid;
     let code = drive(&mut attached, &opts, started);
     if spawned && !opts.keep_daemon {
         let _ = attached.client.call("daemon.shutdown", json!({}));
+    }
+    if let Some((area, mut anchor)) = granted {
+        // The daemon is stopped before the end of the run is recorded, so the ledger is quiet when its state is written.
+        if !crate::run_granted::wait_gone(daemon_pid, Duration::from_secs(5)) {
+            say_err("the daemon did not exit within 5 seconds; the end of the run is recorded with the ledger as it stands");
+        }
+        anchor.set_outcome(if code == EXIT_OK { "completed" } else { "ended" });
+        match anchor.end() {
+            Ok(s) => say_err(&format!("authorized run ended: the use ledger holds {} use(s)", s.count)),
+            Err(e) => say_err(&format!("could not record the end of the authorized run ({e}); the next launch treats it as a crash")),
+        }
+        drop(area);
     }
     code
 }
@@ -573,6 +625,10 @@ fn drive(attached: &mut delphi_core::spawn::Attached, opts: &Opts, started: Inst
         }
         let mine = e["task_id"].as_str() == Some(task_id.as_str());
         let kind = e["type"].as_str().unwrap_or("");
+        // The throwaway home's mission log is discarded with the run, so the authorization events are echoed as they happen.
+        if kind.starts_with("authorization.") {
+            say_err(&format!("{kind} {}", e["payload"]).replace(|c: char| c.is_control() || c == '\u{1b}', " "));
+        }
         if kind == "approval.requested" && e["payload"]["task_id"].as_str() == Some(task_id.as_str()) {
             let card = &e["payload"];
             match decide(&opts.on_card, card) {

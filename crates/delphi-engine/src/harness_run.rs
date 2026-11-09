@@ -679,7 +679,7 @@ impl Engine {
         // Spec 092 TA-5: in a run that holds a grant a seat starts only if its own tools can be proven off for this launch. The Claude
         // seat's native list and account connectors are cleared; a Builder, agy and codex are refused (`seat_native_tools_off`).
         let connectors = connectors && !granted;
-        let mut lp = LaunchProfile { native_tools: if granted || builder || sc.readonly || sc.toolless || cli != Cli::Claude { vec![] } else { profile.native_tools.clone() }, auto_approve: delegate, claudeai_connectors: connectors, mcp_config: None, settle: self.settings.connector_settle, expect_servers };
+        let mut lp = LaunchProfile { native_tools: if granted || builder || sc.readonly || sc.toolless || cli != Cli::Claude { vec![] } else { profile.native_tools.clone() }, auto_approve: delegate, claudeai_connectors: connectors, mcp_config: None, settle: self.settings.connector_settle, expect_servers, lock_down: granted && cli == Cli::Claude };
         if granted {
             if let Err(why) = crate::authorization_grant::seat_native_tools_off(cli.program(), tools == Tools::Standard, lp.native_tools.is_empty(), opts.app_server) {
                 sc.m.append(sc.ev("authorization.refused", json!({"seat": cli.program(), "reason": why, "approved": false}))).await?;
@@ -853,6 +853,12 @@ impl Engine {
                     }
                 }
                 Event::McpStatus(_) => {}
+                // Listed at init, no tool bypass seen: recorded in the log as a launch note, never a reason to stop (spec 092 S2d1).
+                Event::InitExtras { ref slash_commands, ref skills, ref agents, ref plugins } => {
+                    if granted {
+                        sc.m.append(sc.ev("authorization.launch_note", json!({"seat": cli.program(), "slash_commands": slash_commands, "skills": skills, "agents": agents, "plugins": plugins, "note": "listed by the CLI at init; no tool of its own is reachable through them (--tools \"\", --disallowedTools, --disable-slash-commands)", "approved": false}))).await?;
+                    }
+                }
                 Event::Delta(t) => hub.push_delta(&span_id, DeltaKind::Text, &live.push(&t)),
                 Event::RateLimit { ref status, resets_at, ref window, .. } => {
                     if let Some(x) = delphi_adapter::exhaust::classify_rate_limit_event(status, resets_at, window) {
@@ -867,6 +873,10 @@ impl Engine {
                     text_parts.push(t);
                 }
                 Event::ToolUse { name, input, .. } => {
+                    // In a run that holds a grant EVERY tool_use that is not Delphi's bridge tool (or the schema's StructuredOutput) ends the span
+                    // at the call: a native tool, a connector, a plugin tool, an unknown name. Nothing is tolerated as an "attempt" and nothing waits
+                    // for a result: the CLI has no tool of its own loaded (`--tools ""`, checked at init), so a call to one can only cost a false
+                    // positive, and a wrong guess would let the tool run first. (Case differences are different names, and are stopped too.)
                     if granted && !crate::authorization_grant::stream_tool_ok(&name, launch.opts.json_schema.is_some(), TOOL_PREFIX) {
                         session.kill().await;
                         sc.m.append(sc.ev("authorization.refused", json!({"seat": cli.program(), "native_tool": name, "reason": "a native tool call was seen in the stream", "approved": false}))).await?;
@@ -3139,5 +3149,60 @@ echo "$answer" > '{answer_file}'
         let body0 = reqs[0].body.to_string();
         assert!(body0.contains("tool-inventory") && body0.contains("Tools by model path"), "the orchestrator sees the inventory: {}", &body0[body0.len().saturating_sub(1500)..]);
         assert!(!reqs[1].body.to_string().contains("@runtime/tool-inventory"), "a role that cannot dispatch is not given it");
+    }
+
+    // ---- spec 092 S2d1: a granted claude seat that calls ANY tool but Delphi's own is stopped at the call ----
+
+    fn hold_a_grant(f: &Fx) {
+        assert!(f.engine.grant.set(std::sync::Arc::new(crate::authorization_grant::Grant::bare_for_test(&f.root))).is_ok());
+    }
+
+    const G_INIT: &str = r#"echo '{"type":"system","subtype":"init","session_id":"s1","tools":["mcp__delphi__search"],"slash_commands":["compact","review"],"skills":["pdf"],"agents":["general-purpose"],"plugins":[{"name":"p1"}]}'"#;
+
+    /// A fake CLI that calls `tool` and then, a third of a second later, would leave a marker (what the tool would have done).
+    /// The span must be over, and the CLI killed, before that: the kill is issued on the tool_use event itself, without waiting for a result.
+    async fn call_run(tool: &str) -> (bool, crate::engine::TaskOutcome, Fx) {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("marker");
+        let use_line = format!(r#"echo '{{"type":"assistant","message":{{"content":[{{"type":"tool_use","id":"tu1","name":"{tool}","input":{{}}}}]}}}}'"#);
+        let body = format!("{}\n{}\nsleep 0.3\ntouch '{}'\n{}", G_INIT, use_line, marker.display(), FINISH);
+        let (f, _s) = fixture(&body, |_| {});
+        hold_a_grant(&f);
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        (marker.exists(), out, f)
+    }
+
+    #[tokio::test]
+    async fn every_tool_but_delphis_own_is_stopped_at_the_call_before_it_can_run() {
+        for tool in ["Bash", "Write", "WebFetch", "bash", "BASH", "Read", "Task", "mcp__claude_ai_Slack__slack_send_message", "mcp__someplugin__do", "mcp__delphi_lookalike__x", "NotARealTool"] {
+            let (ran, out, f) = call_run(tool).await;
+            assert!(!ran, "{tool}: its effect happened before the span was stopped");
+            assert_ne!(out.status, Status::Done, "{tool}");
+            let refused = events_of(&f, "authorization.refused");
+            assert!(refused.iter().any(|e| e.payload["native_tool"] == tool && e.payload["reason"].as_str().unwrap().contains("stream")), "{tool}: {:?}", refused.iter().map(|e| e.payload.to_string()).collect::<Vec<_>>());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_delphi_bridge_tool_call_is_not_stopped_and_the_init_lists_are_recorded() {
+        let use_line = r#"echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu1","name":"mcp__delphi__search","input":{"query":"x"}}]}}'"#;
+        let (f, _s) = fixture(&format!("{}\n{}\n{}", G_INIT, use_line, FINISH), |_| {});
+        hold_a_grant(&f);
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "All done."), "{}", out.text);
+        assert!(events_of(&f, "authorization.refused").is_empty());
+        // slash commands, skills, agents and plugins listed at init are a launch note, not a reason to stop
+        let note = &events_of(&f, "authorization.launch_note")[0].payload;
+        assert_eq!((note["slash_commands"].clone(), note["skills"].clone(), note["plugins"].clone()), (json!(["compact", "review"]), json!(["pdf"]), json!(["p1"])));
+    }
+
+    #[tokio::test]
+    async fn the_init_tool_list_check_is_unchanged() {
+        let (f, _s) = fixture(&format!("echo '{{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"s1\",\"tools\":[\"Bash\"]}}'\n{}", FINISH), |_| {});
+        hold_a_grant(&f);
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert_ne!(out.status, Status::Done);
+        assert!(events_of(&f, "authorization.refused").iter().any(|e| e.payload["native_tool"] == "Bash" && e.payload["reason"].as_str().unwrap().contains("started with none")));
     }
 }

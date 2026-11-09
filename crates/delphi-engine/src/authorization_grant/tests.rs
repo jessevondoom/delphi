@@ -375,7 +375,7 @@ fn a_probe_that_is_partly_ok_is_not_ok() {
 fn the_boot_payload_is_accepted_only_from_the_launcher_that_it_names_and_only_if_intact() {
     let f = fixture(5);
     let rec = f.record();
-    let bytes = encode_boot(&rec, "run-1", &f.home, f.seq()).unwrap();
+    let bytes = encode_boot(&rec, "run-1", &f.home, f.seq(), &LedgerState::default()).unwrap();
     let ok = Grant::from_boot(&bytes, std::process::id(), now(), f.policy.clone()).unwrap();
     assert_eq!(ok.id(), f.id);
     assert!(Grant::from_boot(&bytes, std::process::id() + 1, now(), f.policy.clone()).unwrap_err().contains("launcher"));
@@ -388,7 +388,7 @@ fn the_boot_payload_is_accepted_only_from_the_launcher_that_it_names_and_only_if
     // too large for the pipe
     let mut big = rec;
     big.purpose = "x".repeat(MAX_BOOT_BYTES);
-    assert!(encode_boot(&big, "run-1", &f.home, 0).unwrap_err().contains("bytes"));
+    assert!(encode_boot(&big, "run-1", &f.home, 0, &LedgerState::default()).unwrap_err().contains("bytes"));
 }
 
 #[test]
@@ -433,7 +433,7 @@ fn lists(view: &str, fd: i32) -> bool {
 #[test]
 fn a_child_of_the_daemon_inherits_neither_the_grant_nor_its_descriptor() {
     let f = fixture(5);
-    let bytes = encode_boot(&f.record(), "run-1", &f.home, f.seq()).unwrap();
+    let bytes = encode_boot(&f.record(), "run-1", &f.home, f.seq(), &LedgerState::default()).unwrap();
     let fd = pipe_with(&bytes);
     // Negative control: while the descriptor is open and inheritable, a bare child DOES see it, so the checks below can fail.
     assert!(lists(&child_view(true), fd), "control: an open inheritable descriptor must show in a bare child");
@@ -986,4 +986,46 @@ fn once_the_dry_budget_is_gone_a_looping_call_costs_no_probe_and_probes_are_capp
     }
     assert_eq!(calls.load(Ordering::SeqCst) as u32, MAX_PROBES_PER_RUN);
     assert!(last.contains("sandbox probes"), "{last}");
+}
+
+// ---------------------------------------------------------------------------------------------- S2d1 carry-overs
+
+#[test]
+fn inspect_system_is_not_on_the_allowlist_of_a_granted_run() {
+    // S2c review: `inspect_system` reads the system's endpoints and connectors; a run with an operator authorization has no use for it.
+    assert!(!tool_allowed("inspect_system"));
+    assert!(tool_stripped("inspect_system", false).is_some());
+    assert!(!GRANTED_TOOLS.contains(&"inspect_system"));
+}
+
+#[test]
+fn the_launcher_is_checked_against_the_parent_captured_once_and_a_dead_launcher_is_never_pid_one() {
+    // the payload names launcher 4242 and the daemon's parent captured at boot is 4242: fine
+    assert!(launcher_alive(4242, 4242));
+    // a launcher that died before the daemon looked leaves the daemon a parent of 1 (init): refused even if the payload also said 1
+    assert!(!launcher_alive(1, 1));
+    assert!(!launcher_alive(0, 0));
+    assert!(!launcher_alive(4242, 4243));
+    // the watcher compares the SAME captured value with the live parent: re-parenting to 1 ends the daemon
+    assert!(!launcher_gone(4242, 4242));
+    assert!(launcher_gone(4242, 1));
+}
+
+#[test]
+fn a_grant_whose_daemon_was_already_reparented_to_init_is_refused_at_boot() {
+    let f = fixture(3);
+    // a payload whose launcher pid is 1, as a forged or raced one could name: the daemon's captured parent is 1, so it is refused
+    let mut v: serde_json::Value = serde_json::from_slice(&launch_payload(&f.home, &f.id, "run-1", now(), &f.policy).unwrap()).unwrap();
+    v["launcher_pid"] = serde_json::json!(1);
+    let err = Grant::from_boot(&serde_json::to_vec(&v).unwrap(), 1, now(), f.policy.clone()).err().unwrap();
+    assert!(err.contains("already gone") || err.contains("another launcher"), "{err}");
+}
+
+#[test]
+fn a_daemon_booted_with_a_ledger_that_is_not_where_the_launcher_left_it_is_refused() {
+    let f = fixture(3);
+    let bytes = launch_payload(&f.home, &f.id, "run-1", now(), &f.policy).unwrap();
+    take_use(&f.home, &f.id, "h", "run-1", 3).unwrap(); // the ledger moves after the launcher recorded it
+    let err = Grant::from_boot(&bytes, std::process::id(), now(), f.policy.clone()).err().unwrap();
+    assert!(err.contains("not where the launcher left it"), "{err}");
 }
