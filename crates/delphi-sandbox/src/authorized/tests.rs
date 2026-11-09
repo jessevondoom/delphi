@@ -870,9 +870,30 @@ fn the_daemon_mints_scratch_a_nonce_canary_and_a_decoy_home_outside_every_grant(
         (m.nonce.clone(), m.canary.clone())
     });
     assert_ne!(m1.nonce, m2.0, "a nonce per run");
+    assert!(m1.nonce.len() == 32 && m1.nonce.chars().all(|c| c.is_ascii_hexdigit()) && m1.nonce != "0".repeat(32), "128 random bits from the kernel, hex: {}", m1.nonce);
     assert!(m1.canary.starts_with(snap.root()) && !m1.canary.starts_with(snap.path()));
     assert!(fs::read_to_string(&m1.canary).unwrap().contains(&m1.nonce));
     assert_eq!(fs::metadata(&m1.canary).unwrap().permissions().mode() & 0o777, 0o600);
     assert!(m1.scratch.join("fifo").exists() && m1.scratch.join("preplaced-exec").exists() && m1.operator_home.join("bin/delphi").exists());
     assert!(!m1.scratch.starts_with(snap.path()) && !m1.operator_home.starts_with(snap.path()));
+}
+
+#[test]
+fn a_symlink_component_or_a_dotdot_never_resolves_in_a_snapshot_lookup() {
+    let t = tempfile::tempdir().unwrap();
+    let root = canon(t.path());
+    let dir = root.join("snap");
+    fs::create_dir_all(dir.join("real")).unwrap();
+    fs::write(dir.join("real/a.txt"), "x").unwrap();
+    fs::write(root.join("outside.txt"), "secret").unwrap();
+    std::os::unix::fs::symlink("real", dir.join("alias")).unwrap();
+    std::os::unix::fs::symlink("../outside.txt", dir.join("real/out.txt")).unwrap();
+    assert!(snapshot_lookup(&dir, "real/a.txt").is_ok());
+    let e = snapshot_lookup(&dir, "alias/a.txt").unwrap_err();
+    assert!(e.contains("symlink"), "a directory component that is a symlink: {e}");
+    assert!(snapshot_lookup(&dir, "real/out.txt").unwrap_err().contains("symlink"));
+    for bad in ["../outside.txt", "real/../../outside.txt", "real/./a.txt", "real//a.txt", "", "real/", "/real/a.txt"] {
+        assert!(snapshot_lookup(&dir, bad).is_err(), "{bad:?} resolved");
+    }
+    assert!(snapshot_lookup(&dir, "..").unwrap_err().contains("plain relative"));
 }

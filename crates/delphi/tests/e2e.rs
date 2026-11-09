@@ -2413,7 +2413,7 @@ fn delphi_run_with_a_symbolic_authorization_passes_the_launcher_and_still_approv
     // the record, made the way `delphi test authorize` makes it: symbolic text, the tree pinned
     let entry = a::Entry { tool: "shell".into(), argv: vec!["/bin/bash".into(), "@snapshot/job.sh".into(), "@scratch".into()], files: vec!["@snapshot/job.sh".into()], runner_provenance: "project_snapshot".into() };
     let n = a::NewRecord { purpose: "e2e".into(), intent: "e2e".into(), run: "run-1".into(), expires_in_secs: a::DEFAULT_EXPIRY_SECS, max_uses: 2, entries: vec![entry], request: None, policy: a::Policy::system() };
-    let ctx = a::TokenCtx { project: Some(proj.clone()), pin_tree: true, expect: Default::default() };
+    let ctx = a::TokenCtx { project: Some(proj.clone()), pin_tree: true, expect: Default::default(), expect_tree: None };
     let now = delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339()).unwrap();
     let rec = a::build_record_with(&e.home, &n, &ctx, now, &delphi_core::time::now_rfc3339()).unwrap();
     a::create_audited(&e.home, rec.clone(), json!({"id": rec.id, "manifest_hash": rec.manifest_hash, "run": rec.run, "by": "operator", "source": "operator"})).unwrap();

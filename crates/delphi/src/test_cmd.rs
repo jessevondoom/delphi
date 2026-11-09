@@ -192,6 +192,9 @@ pub fn render_review(s: &auth::Staged, logs: &Logs, store: &auth::Store, expand:
 
 /// What the operator is shown when an entry holds symbolic paths (spec 092 S2d2a): the fixed token table (what each token will mean in
 /// a run; no entry or card can add to it), each pinned file's size and hash, the tree pin, and with `show` the pinned files' content.
+/// The most of one pinned file `--show` prints.
+const SHOW_CAP: usize = 64 * 1024;
+
 fn render_tokens(entries: &[auth::Entry], pins: &[auth::PinPreview], tree: &str, pin_tree: bool, show: bool) -> String {
     let mut o = String::from("\nSYMBOLIC PATHS. The record stores the text below, not a path: a run's snapshot, scratch directory and canary do not exist yet. The daemon makes them for the run and replaces each token with its own path only after a card equals this text exactly; a card never supplies a value.\n");
     o.push_str("  token resolution (fixed; nothing else resolves):\n");
@@ -211,7 +214,11 @@ fn render_tokens(entries: &[auth::Entry], pins: &[auth::PinPreview], tree: &str,
     }
     if show {
         for p in pins {
-            o.push_str(&format!("\n----- {} -----\n{}\n----- end of {} -----\n", p.path, String::from_utf8_lossy(&p.content), p.path));
+            let shown = &p.content[..p.content.len().min(SHOW_CAP)];
+            o.push_str(&format!("\n----- {} -----\n{}\n----- end of {} -----\n", p.path, String::from_utf8_lossy(shown), p.path));
+            if p.content.len() > SHOW_CAP {
+                o.push_str(&format!("  [truncated: the first {} of {} bytes are shown; the hash above covers the WHOLE file]\n", SHOW_CAP, p.content.len()));
+            }
         }
     } else if !pins.is_empty() {
         o.push_str("  (`--show` prints the pinned files' content)\n");
@@ -362,13 +369,15 @@ fn authorize(home: &Path, ws_dir: &Path, args: &[String], term: &mut dyn Termina
     // token table and each pinned file's size and hash, and a pinned file that is untracked, modified or not a regular file is refused.
     let symbolic = entries.iter().any(|e| tokens::has_tokens(&e.argv, &e.files));
     let pin_tree = !has(args, "--no-pin-tree") && symbolic;
-    let mut ctx = auth::TokenCtx { project: None, pin_tree, expect: Default::default() };
+    let mut ctx = auth::TokenCtx { project: None, pin_tree, expect: Default::default(), expect_tree: None };
     if symbolic {
         let Some(project) = (deps.project)() else { return fail("refused: the project directory cannot be read; run this from the project whose files the paths name") };
         match auth::preview_pins(&project, &entries) {
             Ok((pins, tree)) => {
                 term.show(&auth::safe_lines(&render_tokens(&entries, &pins, &tree, pin_tree, has(args, "--show"))));
                 ctx.expect = pins.iter().map(|p| (p.path.clone(), p.blake3.clone())).collect();
+                // The tree hash shown is the one that is stored: a tracked file edited while the operator reads refuses the write.
+                ctx.expect_tree = pin_tree.then_some(tree);
             }
             Err(e) => return fail(format!("refused: {e}")),
         }

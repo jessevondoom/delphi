@@ -442,8 +442,11 @@ impl Minted {
         let io = |e: io::Error| e.to_string();
         let root = snapshot.root();
         let mut nonce_bytes = [0u8; 16];
-        // SAFETY: arc4random_buf fills the buffer; it has no failure mode.
-        unsafe { libc::arc4random_buf(nonce_bytes.as_mut_ptr().cast(), nonce_bytes.len()) };
+        // The kernel's generator through /dev/urandom (portable; arc4random_buf is BSD-only). A failed read refuses the mint.
+        {
+            use std::io::Read as _;
+            fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut nonce_bytes)).map_err(|e| format!("no randomness for the canary nonce: {e}"))?;
+        }
         let nonce: String = nonce_bytes.iter().map(|b| format!("{b:02x}")).collect();
         let scratch = root.join("scratch");
         fs::create_dir(&scratch).map_err(io)?;

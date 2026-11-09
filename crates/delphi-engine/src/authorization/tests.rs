@@ -1322,8 +1322,7 @@ fn pure(f: &Fix, r: &Record) -> Result<(), String> {
 }
 
 fn rehash(r: &mut Record) {
-    let entries: Vec<Entry> = r.manifest.iter().map(|e| Entry { tool: e.tool.clone(), argv: e.argv.clone(), files: e.files.iter().map(|x| x.path.clone()).collect(), runner_provenance: e.runner_provenance.clone() }).collect();
-    r.manifest_hash = manifest_hash_for(&entries, r.token_scheme);
+    r.manifest_hash = r.computed_manifest_hash();
 }
 
 #[test]
@@ -1401,4 +1400,38 @@ fn a_symbolic_record_is_hashed_with_its_scheme_and_a_scheme_change_is_seen() {
     future.token_scheme = 9;
     rehash(&mut future);
     assert!(pure(&f, &future).unwrap_err().contains("token scheme"));
+}
+
+// ---------------------------------------------------------------------------------------------- red-team of #607: the hash covers what was signed
+
+#[test]
+#[allow(clippy::type_complexity)]
+fn the_manifest_hash_covers_the_tree_pin_its_absence_and_every_pinned_files_path_and_hash() {
+    let f = fix();
+    let (r, _) = made(&f, 1, None);
+    assert_eq!(r.computed_manifest_hash(), r.manifest_hash);
+    let each: Vec<(&str, Box<dyn Fn(&mut Record)>)> = vec![
+        ("a tree pin added", Box::new(|r| r.snapshot = Some(SnapshotPin { source: "tracked_files".into(), tree_blake3: Some("a".repeat(64)) }))),
+        ("the snapshot pin removed", Box::new(|r| r.snapshot = None)),
+        ("the source changed", Box::new(|r| r.snapshot.as_mut().unwrap().source = "other".into())),
+        ("a pinned file's hash", Box::new(|r| r.manifest[0].files[0].blake3 = "b".repeat(64))),
+        ("a pinned file's path", Box::new(|r| r.manifest[0].files[0].path.push('x'))),
+        ("a pinned file dropped", Box::new(|r| {
+            r.manifest[0].files.pop();
+        })),
+    ];
+    for (what, edit) in each {
+        let mut bad = r.clone();
+        edit(&mut bad);
+        assert_ne!(bad.computed_manifest_hash(), r.manifest_hash, "{what} does not change the manifest hash");
+        assert!(pure(&f, &bad).unwrap_err().contains("recorded hash") || pure(&f, &bad).is_err(), "{what}");
+    }
+    // a tree pin that is present, then removed (the --no-pin-tree look), is a different hash too
+    let mut pinned = r.clone();
+    pinned.snapshot = Some(SnapshotPin { source: "tracked_files".into(), tree_blake3: Some("c".repeat(64)) });
+    rehash(&mut pinned);
+    let mut stripped = pinned.clone();
+    stripped.snapshot.as_mut().unwrap().tree_blake3 = None;
+    assert_ne!(stripped.computed_manifest_hash(), pinned.manifest_hash);
+    assert!(pure(&f, &stripped).unwrap_err().contains("recorded hash"));
 }

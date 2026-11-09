@@ -91,7 +91,7 @@ fn rig_with(script_text: &str, max_uses: u32, args: &[&str], own_bash: bool) -> 
     delphi_core::lock::write(&home.join("operator/ratified.lock"), &Default::default()).unwrap();
     let entry = a::Entry { tool: "shell".into(), argv: argv.clone(), files: vec!["@snapshot/job.sh".into()], runner_provenance: "project_snapshot".into() };
     let n = a::NewRecord { purpose: "S2d2a acceptance".into(), intent: "red-team sweep".into(), run: "run-1".into(), expires_in_secs: a::DEFAULT_EXPIRY_SECS, max_uses, entries: vec![entry], request: None, policy: policy.clone() };
-    let ctx = a::TokenCtx { project: Some(project.clone()), pin_tree: true, expect: Default::default() };
+    let ctx = a::TokenCtx { project: Some(project.clone()), pin_tree: true, expect: Default::default(), expect_tree: None };
     let rec = a::build_record_with(&home, &n, &ctx, now(), &delphi_core::time::now_rfc3339()).unwrap();
     let id = rec.id.clone();
     a::create_audited(&home, rec.clone(), json!({"id": rec.id, "manifest_hash": rec.manifest_hash, "run": rec.run, "by": "operator", "source": "operator"})).unwrap();
@@ -645,4 +645,82 @@ fn authorize_refuses_a_pinned_file_that_is_untracked_modified_a_symlink_or_missi
     assert!(a::preview_pins(&project, &[entry("missing.sh")]).is_err());
     fs::write(project.join("job.sh"), "#!/bin/bash\nexit 1\n").unwrap();
     assert!(a::preview_pins(&project, &[entry("job.sh")]).unwrap_err().contains("modified"));
+}
+
+// ---------------------------------------------------------------------------------------------- red-team of #607
+
+fn small_project(root: &Path) -> PathBuf {
+    let project = root.join("p");
+    fs::create_dir_all(&project).unwrap();
+    fs::write(project.join("job.sh"), "#!/bin/bash\nexit 0\n").unwrap();
+    fs::write(project.join("data.txt"), "d\n").unwrap();
+    git(&project, &["init", "-q"]);
+    git(&project, &["add", "job.sh", "data.txt"]);
+    git(&project, &["commit", "-q", "-m", "x"]);
+    project
+}
+
+fn new_record(entries: Vec<a::Entry>) -> a::NewRecord {
+    a::NewRecord { purpose: "p".into(), intent: "i".into(), run: "run-1".into(), expires_in_secs: a::DEFAULT_EXPIRY_SECS, max_uses: 2, entries, request: None, policy: a::Policy::system() }
+}
+
+#[test]
+fn pinning_the_tree_without_a_project_is_refused_not_stored_as_unpinned() {
+    let t = tempfile::tempdir().unwrap();
+    let home = t.path().join("h");
+    fs::create_dir_all(home.join("operator")).unwrap();
+    delphi_core::lock::write(&home.join("operator/ratified.lock"), &Default::default()).unwrap();
+    let e = a::Entry { tool: "shell".into(), argv: vec!["/bin/bash".into(), "/bin/echo".into()], files: vec!["/bin/echo".into()], runner_provenance: "daemon_installed".into() };
+    let ctx = a::TokenCtx { project: None, pin_tree: true, expect: Default::default(), expect_tree: None };
+    let err = a::build_record_with(&home, &new_record(vec![e.clone()]), &ctx, now(), &delphi_core::time::now_rfc3339()).unwrap_err();
+    assert!(err.contains("needs the project") && err.contains("--no-pin-tree"), "{err}");
+}
+
+#[test]
+fn without_a_tree_pin_a_snapshot_file_argument_must_be_a_pinned_file() {
+    let t = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(t.path()).unwrap();
+    let project = small_project(&root);
+    let home = root.join("h");
+    fs::create_dir_all(home.join("operator")).unwrap();
+    delphi_core::lock::write(&home.join("operator/ratified.lock"), &Default::default()).unwrap();
+    let entry = |argv: &[&str]| a::Entry { tool: "shell".into(), argv: argv.iter().map(|s| s.to_string()).collect(), files: vec!["@snapshot/job.sh".into()], runner_provenance: "project_snapshot".into() };
+    let ctx = |pin_tree: bool| a::TokenCtx { project: Some(project.clone()), pin_tree, expect: Default::default(), expect_tree: None };
+    let build = |argv: &[&str], pin: bool| a::build_record_with(&home, &new_record(vec![entry(argv)]), &ctx(pin), now(), &delphi_core::time::now_rfc3339());
+    // data.txt is an argument, not pinned: refused with no tree pin, fine with one
+    let err = build(&["/bin/bash", "@snapshot/job.sh", "@snapshot/data.txt"], false).unwrap_err();
+    assert!(err.contains("--no-pin-tree") && err.contains("pinned file"), "{err}");
+    assert!(build(&["/bin/bash", "@snapshot/job.sh", "@snapshot/data.txt"], true).is_ok());
+    // with no tree pin, the script and the directory token are fine
+    assert!(build(&["/bin/bash", "@snapshot/job.sh", "@scratch"], false).is_ok());
+}
+
+#[test]
+fn a_tree_that_changes_between_the_shown_hash_and_the_write_refuses_the_write() {
+    let t = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(t.path()).unwrap();
+    let project = small_project(&root);
+    let home = root.join("h");
+    fs::create_dir_all(home.join("operator")).unwrap();
+    delphi_core::lock::write(&home.join("operator/ratified.lock"), &Default::default()).unwrap();
+    let e = a::Entry { tool: "shell".into(), argv: vec!["/bin/bash".into(), "@snapshot/job.sh".into()], files: vec!["@snapshot/job.sh".into()], runner_provenance: "project_snapshot".into() };
+    let (_, shown) = a::preview_pins(&project, std::slice::from_ref(&e)).unwrap();
+    let mk = |tree: Option<String>| a::build_record_with(&home, &new_record(vec![e.clone()]), &a::TokenCtx { project: Some(project.clone()), pin_tree: true, expect: Default::default(), expect_tree: tree }, now(), &delphi_core::time::now_rfc3339());
+    assert!(mk(Some(shown.clone())).is_ok());
+    fs::write(project.join("data.txt"), "edited while reading\n").unwrap();
+    let err = mk(Some(shown)).unwrap_err();
+    assert!(err.contains("tree hash that was shown"), "{err}");
+}
+
+#[test]
+fn the_launcher_refuses_a_wrong_snapshot_or_none_for_a_record_that_pins_files() {
+    let r = trivial_rig(3);
+    // none given for a record that pins files in the snapshot
+    let err = launch_granted_for(&r.home, &r.id, "run-1", now(), &r.policy, None).err().unwrap();
+    assert!(err.contains("launcher gave none"), "{err}");
+    // a snapshot whose tree is not the pinned one (the same directory, a different claimed hash)
+    let err = launch_granted_for(&r.home, &r.id, "run-1", now(), &r.policy, Some((r.snap.path(), &"0".repeat(64)))).err().unwrap();
+    assert!(err.contains("tree"), "{err}");
+    // the honest snapshot launches
+    assert!(launch_granted_for(&r.home, &r.id, "run-1", now(), &r.policy, Some((r.snap.path(), r.snap.tree_hash()))).is_ok());
 }

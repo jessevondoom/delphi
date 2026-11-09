@@ -59,7 +59,7 @@
         "request_hash": { "type": ["string", "null"] },
         "requester": { "type": ["string", "null"] },
         "revoked": { "type": ["string", "null"], "description": "When it was revoked. Irreversible: a revoked record is only ever replaced by a new one." },
-        "token_scheme": { "enum": [0, 1], "description": "0: a record from before S2d2a, no tokens. 1: symbolic path tokens; the manifest hash covers the scheme number with the entries." },
+        "token_scheme": { "enum": [0, 1], "description": "0: a record from before S2d2a, no tokens. 1: symbolic path tokens; the manifest hash covers the scheme number, the entries, every pinned file's path and hash, and the snapshot pin." },
         "snapshot": {
           "type": ["object", "null"],
           "required": ["source", "tree_blake3"],

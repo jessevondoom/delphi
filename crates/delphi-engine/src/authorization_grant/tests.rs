@@ -1077,7 +1077,7 @@ fn symbolic(max_uses: u32) -> Sym {
     delphi_core::lock::write(&home.join("operator/ratified.lock"), &Default::default()).unwrap();
     let entry = a::Entry { tool: "shell".into(), argv: vec!["/bin/bash".into(), "@snapshot/job.sh".into(), "@scratch".into()], files: vec!["@snapshot/job.sh".into()], runner_provenance: "project_snapshot".into() };
     let n = a::NewRecord { purpose: "PURPOSE-MARKER-7f3a".into(), intent: "i".into(), run: "run-1".into(), expires_in_secs: a::DEFAULT_EXPIRY_SECS, max_uses, entries: vec![entry], request: None, policy: a::Policy::system() };
-    let ctx = a::TokenCtx { project: Some(project.clone()), pin_tree: true, expect: Default::default() };
+    let ctx = a::TokenCtx { project: Some(project.clone()), pin_tree: true, expect: Default::default(), expect_tree: None };
     let rec = a::build_record_with(&home, &n, &ctx, now(), &delphi_core::time::now_rfc3339()).unwrap();
     a::create_audited(&home, rec.clone(), json!({"id": rec.id, "manifest_hash": rec.manifest_hash, "run": rec.run, "by": "operator", "source": "operator"})).unwrap();
     let snap = delphi_sandbox::authorized::Snapshot::build(&project, &root).unwrap();

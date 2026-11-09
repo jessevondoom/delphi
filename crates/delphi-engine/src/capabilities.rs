@@ -139,6 +139,37 @@ pub fn agy_version(program: &str) -> Option<String> {
     (out.status.success() && !line.is_empty()).then_some(line)
 }
 
+/// As [`agy_version`], bounded: the program is killed after `secs` seconds and the answer is `None` (a CLI that hangs on `--version` is not
+/// started). Its output goes to a temporary file, not a pipe, so a grandchild that outlives the kill cannot hold this call open.
+pub fn cli_version_bounded(program: &str, secs: u64) -> Option<String> {
+    use std::io::Read as _;
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("delphi-version-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)));
+    let out = std::fs::File::create(&path).ok()?;
+    let mut child = std::process::Command::new(program).arg("--version").stdin(std::process::Stdio::null()).stdout(out).stderr(std::process::Stdio::null()).spawn().ok()?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break Some(s),
+            Ok(None) if std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(20)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+        }
+    };
+    let mut text = String::new();
+    if status.is_some_and(|s| s.success()) {
+        if let Ok(mut f) = std::fs::File::open(&path) {
+            let _ = f.by_ref().take(4096).read_to_string(&mut text);
+        }
+    }
+    let _ = std::fs::remove_file(&path);
+    let line = text.lines().next()?.trim().to_string();
+    (!line.is_empty()).then_some(line)
+}
+
 fn probe_ipr(contract: &str) -> Ipr {
     Ipr { governance: "This is a capability probe. Follow the contract exactly.".into(), role: "You are a connectivity probe.".into(), persona: None, guidance: None, bundle_skills: None, heuristics: "None.".into(), lessons: "None.".into(), context_slices: vec![], contract: contract.into(), reminder: None, nonce: "probe".into() }
 }

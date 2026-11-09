@@ -719,3 +719,56 @@ fn a_record_authorized_at_the_console_is_launched_resolved_in_the_dry_path_and_t
     // the real ledger is untouched by observation
     assert_eq!(delphi_engine::authorization_grant::ledger_count(&e.home, &rec.id).unwrap(), 0);
 }
+
+// ---------------------------------------------------------------------------------------------- red-team of #607: what the operator signs
+
+#[test]
+fn a_tracked_file_edited_while_the_operator_reads_refuses_the_write_because_the_shown_tree_is_the_stored_one() {
+    let e = env();
+    let proj = project_of(&e);
+    // a tracked library the pinned script would source: not itself pinned, but part of the tree
+    std::fs::write(proj.join("lib.sh"), "echo lib\n").unwrap();
+    git_cmd(&proj, &["add", "lib.sh"]);
+    git_cmd(&proj, &["commit", "-q", "-m", "lib"]);
+    let retype = line(&symbolic_entry(&e));
+    let mut t = Script::new(&[&retype, &e.code()]);
+    let p2 = proj.clone();
+    t.on_prompt = Some(Box::new(move |prompt| {
+        if prompt.contains("authenticator") {
+            std::fs::write(p2.join("lib.sh"), "echo rewritten while the operator typed the code\n").unwrap();
+        }
+    }));
+    assert_eq!(authorize_sym(&e, &proj, &[], &mut t), 2);
+    assert!(!auth::store_path(&e.home).exists(), "nothing was stored");
+    // the reason is said: the tree changed since it was shown
+    let again = {
+        let mut t = Script::new(&[&retype, &e.code()]);
+        let p3 = proj.clone();
+        t.on_prompt = Some(Box::new(move |prompt| {
+            if prompt.contains("authenticator") {
+                std::fs::write(p3.join("lib.sh"), "echo rewritten again\n").unwrap();
+            }
+        }));
+        authorize_sym(&e, &proj, &[], &mut t)
+    };
+    assert_eq!(again, 2);
+}
+
+#[test]
+fn show_prints_at_most_64_kib_of_a_file_says_so_and_strips_control_characters() {
+    let e = env();
+    let proj = project_of(&e);
+    let mut big = String::from("echo \u{1b}[31mred\u{7}\n");
+    big.push_str(&"#".repeat(100_000));
+    big.push_str("\nTAIL-MARKER\n");
+    std::fs::write(proj.join("job.sh"), &big).unwrap();
+    git_cmd(&proj, &["add", "job.sh"]);
+    git_cmd(&proj, &["commit", "-q", "-m", "big"]);
+    let retype = line(&symbolic_entry(&e));
+    let mut t = Script::new(&[&retype, &e.code()]);
+    assert_eq!(authorize_sym(&e, &proj, &["--show"], &mut t), 0);
+    assert!(t.shown.contains("truncated") && t.shown.contains("covers the WHOLE file"), "{}", &t.shown[..400.min(t.shown.len())]);
+    assert!(!t.shown.contains("TAIL-MARKER"), "the tail is not printed");
+    assert!(!t.shown.contains('\u{1b}') && !t.shown.contains('\u{7}'), "control and escape characters are stripped");
+    assert!(t.shown.len() < 80_000);
+}

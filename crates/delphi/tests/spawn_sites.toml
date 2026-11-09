@@ -53,7 +53,7 @@ class = "opener"
 
 [[site]]
 file = "crates/delphi-engine/src/capabilities.rs"
-count = 1
+count = 2
 class = "probe"
 
 [[site]]

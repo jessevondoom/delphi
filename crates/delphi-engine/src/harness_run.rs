@@ -753,7 +753,7 @@ impl Engine {
         // version is read first, and a CLI that will not say or is older is not started (the other seat or the API serves the span).
         if granted && cli == Cli::Claude {
             let prog = launch.program.clone();
-            let line = tokio::task::spawn_blocking(move || crate::capabilities::agy_version(&prog)).await.ok().flatten();
+            let line = tokio::task::spawn_blocking(move || crate::capabilities::cli_version_bounded(&prog, 5)).await.ok().flatten();
             if let Some(why) = crate::authorization_grant::claude_version_problem(line.as_deref()) {
                 sc.m.append(sc.ev("authorization.refused", json!({"seat": cli.program(), "reason": why, "version": line.as_deref().map(|l| crate::authorization_grant::clean_for_log(l, 40)), "approved": false}))).await?;
                 return Ok(Err(HarnessErr::retry(format!("a run with an operator authorization cannot use the claude seat: {why}"))));
@@ -3296,6 +3296,17 @@ echo "$answer" > '{answer_file}'
                 assert!(events_of(&f, "authorization.refused").iter().any(|e| e.payload["reason"].as_str().unwrap_or("").contains("Claude CLI")), "{version:?}");
             }
         }
+    }
+
+    #[tokio::test]
+    async fn a_claude_cli_that_hangs_on_version_is_killed_and_the_launch_refused_not_blocked() {
+        let body = "case \"${1-}\" in --version) sleep 60;; esac\n".to_string() + &format!("{}\n{}", G_INIT, G_FINISH_LINE);
+        let (f, _s) = granted_fixture(&body, "2.1.319", |_| {});
+        let t = std::time::Instant::now();
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert!(t.elapsed() < Duration::from_secs(40), "the version call was not bounded: {:?}", t.elapsed());
+        assert_ne!(out.status, Status::Done);
+        assert!(events_of(&f, "authorization.refused").iter().any(|e| e.payload["reason"].as_str().unwrap_or("").contains("version")));
     }
 
     #[tokio::test]
