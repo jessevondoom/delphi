@@ -61,6 +61,25 @@ fn layout() -> Layout {
     Layout { _t: t, snap, minted, scratch, canary, opshome, fakedelphi }
 }
 
+/// Wait (bounded) until the user's process count has stopped falling.
+fn settle_process_count() {
+    let mut last = u64::MAX;
+    let mut calm = 0;
+    for _ in 0..100 {
+        let n = crate::live_process_count().unwrap_or(0);
+        if n >= last.saturating_sub(5) {
+            calm += 1;
+            if calm >= 4 {
+                return;
+            }
+        } else {
+            calm = 0;
+        }
+        last = n;
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
 impl Layout {
     fn spec(&self) -> SandboxSpec {
         authorized_spec(self.snap.path(), &self.scratch, INTERPRETER)
@@ -73,6 +92,9 @@ impl Layout {
     }
 
     fn sweep_unlocked(&self, sb: &Sandbox, spec: &SandboxSpec) -> (Option<i32>, String) {
+        // A previous flood's killed subshells are still being reaped; the cap is measured at launch, so let the count settle first
+        // (the headroom also covers a fall of several hundred, but a 900-process fall is not something a profile should rely on).
+        settle_process_count();
         let args: Vec<std::ffi::OsString> = vec![
             self.snap.path().join("sweep.sh").into(),
             self.snap.path().into(),
@@ -592,7 +614,32 @@ fn the_sweep_fails_when_tmp_users_and_the_home_are_writable_or_listable() {
 #[test]
 fn the_sweep_fails_when_a_fork_flood_is_not_limited() {
     // the process limit removed: the 900 forks all succeed, and the sweep says so
-    weakened("no nproc", "fork_flood", |_, spec| spec.limits.max_procs = None);
+    weakened("no nproc", "fork_flood", |_, spec| { spec.limits.max_procs = None; spec.limits.proc_headroom = None; });
+}
+
+#[test]
+fn an_unreadable_process_count_means_no_limit_value_and_so_no_launch() {
+    assert_eq!(crate::resolve_nproc(128, None), None);
+    assert_eq!(crate::resolve_nproc(128, Some(0)), None);
+    assert_eq!(crate::resolve_nproc(128, Some(1000)), Some(1128));
+}
+
+#[test]
+fn the_cap_is_taken_at_launch_so_a_drop_in_the_users_process_count_after_the_spec_is_built_cannot_lift_it() {
+    // Regression: the count used to be read when the spec was built, so processes that exited between then and the launch (a
+    // sibling test's 900-subshell flood ending, on a busy runner) left the cap out of the flood's reach and the sweep "failed".
+    let Some(sb) = mac_sandbox() else { return };
+    let l = layout();
+    let mut idle: Vec<std::process::Child> = (0..500).filter_map(|_| Command::new("/bin/sleep").arg("120").spawn().ok()).collect();
+    assert!(idle.len() >= 400, "could not start the idle processes");
+    let spec = l.spec(); // built while the extra processes exist
+    for c in &mut idle {
+        let _ = c.kill();
+        let _ = c.wait();
+    }
+    let (code, out) = l.sweep(&sb, &spec);
+    assert_eq!(code, Some(0), "{out}");
+    assert!(out.contains("blocked   fork_flood"), "{out}");
 }
 
 #[test]

@@ -1155,7 +1155,7 @@ impl Session {
             // `--output-schema` takes a file: it goes in the span's own scratch directory.
             std::fs::write(l.cwd.join(CODEX_SCHEMA_FILE), schema).map_err(|e| format!("cannot write the output schema: {}", e))?;
         }
-        let std_cmd = plain_command(Limits { cpu_secs: None, max_file_bytes: None, max_open_files: Some(4096), max_procs: None }, &env, &l.program, args(l));
+        let std_cmd = plain_command(Limits { cpu_secs: None, max_file_bytes: None, max_open_files: Some(4096), max_procs: None, proc_headroom: None }, &env, &l.program, args(l));
         let mut cmd = tokio::process::Command::from(std_cmd);
         cmd.current_dir(&l.cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(if delphi_core::elog::enabled(delphi_core::elog::Level::Error) { Stdio::piped() } else { Stdio::null() }).kill_on_drop(true);
         let mut child = cmd.spawn().map_err(|e| format!("cannot start `{}`: {}", l.program, e))?;

@@ -74,11 +74,15 @@ pub struct Limits {
     /// `RLIMIT_NPROC`: on macOS and Linux this counts every process of the user, so it is an absolute number the caller
     /// computes (the user's current count plus headroom); `None` leaves it alone. A fork loop stops at it.
     pub max_procs: Option<u64>,
+    /// `RLIMIT_NPROC` as headroom over the user's process count, measured in the child between `fork` and `exec` (the last moment
+    /// before the program runs), so processes that exit between building the spec and the launch cannot lift the cap. If the count
+    /// cannot be read, or the limit cannot be set, the launch FAILS (closed); it never runs without the limit. Wins over `max_procs`.
+    pub proc_headroom: Option<u64>,
 }
 
 impl Default for Limits {
     fn default() -> Limits {
-        Limits { cpu_secs: Some(900), max_file_bytes: Some(512 << 20), max_open_files: Some(1024), max_procs: None }
+        Limits { cpu_secs: Some(900), max_file_bytes: Some(512 << 20), max_open_files: Some(1024), max_procs: None, proc_headroom: None }
     }
 }
 
@@ -233,6 +237,14 @@ fn harden_process(cmd: &mut Command, limits: Limits) {
             if let Some(n) = limits.max_procs {
                 set(libc::RLIMIT_NPROC, n, n);
             }
+            if let Some(h) = limits.proc_headroom {
+                // Fail closed: no count, or a refused setrlimit, means the program does not start.
+                let n = resolve_nproc(h, live_process_count()).ok_or_else(|| io::Error::other("cannot read the process count"))?;
+                let rl = libc::rlimit { rlim_cur: n as libc::rlim_t, rlim_max: n as libc::rlim_t };
+                if libc::setrlimit(libc::RLIMIT_NPROC, &rl) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+            }
             let max = libc::getdtablesize().clamp(0, 65_536);
             for fd in 3..max {
                 let flags = libc::fcntl(fd, libc::F_GETFD);
@@ -243,6 +255,25 @@ fn harden_process(cmd: &mut Command, limits: Limits) {
             }
             Ok(())
         });
+    }
+}
+
+/// The `RLIMIT_NPROC` value for `headroom` over `count`; `None` (no usable count) means "do not start".
+pub fn resolve_nproc(headroom: u64, count: Option<u64>) -> Option<u64> {
+    count.filter(|n| *n > 0).map(|n| n.saturating_add(headroom))
+}
+
+/// How many processes exist now (macOS; `None` elsewhere). A syscall wrapper with a null buffer, safe after `fork`.
+pub fn live_process_count() -> Option<u64> {
+    #[cfg(target_os = "macos")]
+    {
+        // SAFETY: a null buffer asks proc_listallpids only for the size.
+        let n = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+        (n > 0).then_some(n as u64)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
     }
 }
 
