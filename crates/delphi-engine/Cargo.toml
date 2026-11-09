@@ -28,7 +28,7 @@ walkdir = "2"
 serde_yaml = { package = "serde_yaml_ng", version = "0.10" }
 toml = "1.1"
 toml_edit = "0.25"
-rusqlite = { version = "0.40.2", features = ["bundled"] }
+rusqlite = { version = "0.41.1", features = ["bundled"] }
 sqlite-vec = "0.1.9"
 candle-core = { version = "0.11", optional = true }
 candle-nn = { version = "0.11", optional = true }

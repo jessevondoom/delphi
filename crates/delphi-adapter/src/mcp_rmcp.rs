@@ -5,10 +5,7 @@
 //! above (taint, approvals, pinning) only sees Delphi's types.
 //!
 //! Known differences from the hand-written client this replaced, accepted when it was adopted:
-//! - **No cap on a plain JSON response.** rmcp bounds one SSE event (`max_sse_event_size`) but reads a JSON body
-//!   with `response.bytes()`; only the 60 s request timeout bounds it. Closing this needs a custom
-//!   `StreamableHttpClient`, or an upstream change.
-//! - **`Retry-After` is dropped**, so `Throttled` is always `None`.
+//! - **Retry-After** is kept only when it is a whole number of seconds (an HTTP date gives `None`).
 //! - **401/403 are typed through rmcp's own errors or the text `HTTP <status>: <body>`**, which `status_error`
 //!   parses; a change to that wording would silently turn them into `Transport`.
 //! - **Strict parsing.** rmcp rejects a server that omits `serverInfo.version`, or an image block with no
@@ -71,6 +68,11 @@ fn map_transport(t: &DynamicTransportError) -> McpError {
         Some(StreamableHttpError::AuthRequired(_)) => McpError::NeedsReauth,
         Some(StreamableHttpError::InsufficientScope(_)) => McpError::Forbidden("the token does not carry the scope this tool needs".into()),
         Some(StreamableHttpError::UnexpectedServerResponse(m)) => status_error(m),
+        // rmcp 3.9 reports 429 and 5xx as a bare status plus the raw Retry-After header, with no body.
+        Some(StreamableHttpError::HttpStatus(h)) => match h.status {
+            429 | 503 => McpError::Throttled(h.retry_after.as_deref().and_then(|v| v.trim().parse::<u64>().ok()).map(Duration::from_secs)),
+            s => McpError::Transport(format!("HTTP {}", s)),
+        },
         // Described by kind, never by `Display`, which includes the URL.
         Some(StreamableHttpError::Client(c)) => McpError::Transport(if c.is_timeout() { "the connector timed out" } else if c.is_connect() { "could not connect to the connector" } else { "the request to the connector failed" }.into()),
         Some(other) => McpError::Transport(other.to_string()),
