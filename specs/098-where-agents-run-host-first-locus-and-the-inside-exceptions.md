@@ -14,7 +14,7 @@ tags: [spec, hosts, locus, council, panel, red-team, routing, research, builder,
 
 # Spec 098: Where agents run
 
-> **Status: draft, a proposal.** Nothing here is permission to build. It amends and consolidates [`062`](062-delphi-as-host-agent-mcp-server.md), [`066`](066-mcp-research-endpoint-and-role-identity.md), [`072`](072-host-cognitive-parity-and-external-orchestration.md), [`077`](077-host-mention-routing-and-themed-alias-resolution.md), [`086`](086-outside-council-panel-and-host-subagents.md), [`091`](091-seats-families-and-outside-launch.md) and [`041`](041-agent-registry-routing-and-role-extensions.md), and amends [`052`](052-knowledge-status-capture-on-contact-and-the-digest.md) §3.1 and [`040`](040-validator-role-and-fact-ratification.md) §18.2 (a `corroborated` status). One spec, nine slices (§13).
+> **Status: draft, a proposal.** Nothing here is permission to build. It amends and consolidates [`062`](062-delphi-as-host-agent-mcp-server.md), [`066`](066-mcp-research-endpoint-and-role-identity.md), [`072`](072-host-cognitive-parity-and-external-orchestration.md), [`077`](077-host-mention-routing-and-themed-alias-resolution.md), [`086`](086-outside-council-panel-and-host-subagents.md), [`091`](091-seats-families-and-outside-launch.md) and [`041`](041-agent-registry-routing-and-role-extensions.md), and amends [`052`](052-knowledge-status-capture-on-contact-and-the-digest.md) §3.1 and [`040`](040-validator-role-and-fact-ratification.md) §18.2 (a `corroborated` status). One spec, ten slices (§13; S1 ships as four pull requests).
 
 ## 1. Scope and objectives
 
@@ -36,6 +36,7 @@ When an operator works in a host (Claude Code, Copilot CLI, Codex, `agy`) and ca
 5. The host never reaches for the Scout or Investigator on its own, and no role has a stated order in which to look: knowledge base, trusted sources, then the wider world. A role that finds one of its inside tools limited stops with "I can't", when the host beside it has the tool.
 6. **Research is limited while the knowledge base and the trusted list are small, and it holds back what it finds (§7.5).** Inside, the fetcher reaches only listed hosts and the span has no general search tool; pages from hosts off the trusted list are held for operator review instead of kept; a claim backed by several independent sources has no label that says so; and nothing sends the host's own search back in to grow the library.
 7. Nothing says how a build in the host relates to the spec gate, or requires that an approved spec was formalized and reviewed inside.
+8. **A Council or an inside job shows only a coarse phase (§19).** On 2026-11-10 a running Council read "convening: choosing the seats" for about ten minutes while its seats were working, because the phase is counted from stances. The host could not tell slow from stuck, convened a second Council on the same text, and the duplicate spent about 487,000 tokens beside the original's 426,000. No host tool could cancel either.
 
 ### 1.1 Non-goals
 
@@ -144,9 +145,13 @@ The Scout and Investigator manifests (`agents/scout/AGENT.md`, `agents/investiga
 
 - **The operator approves host sources in the host**, in its own settings and permission system (for Claude Code, its connector and tool permissions and a "research sources" section of `CLAUDE.md` that `delphi connect` writes as a template). Delphi does not read these settings, does not grant them and cannot widen them. The pack says: use the sources your host has approved, in rung order; do not ask Delphi for access to them.
 - **A missing source is skipped, not an error.** If a host has no Slack, no meeting-transcript tool or no email connector, the role goes to the next rung and says which rungs it used.
-- **Private material flows in freely and stays private at the exits.** Content from a rung-3 source enters the library like any other: no preview, no per-item approval. The daemon flags it `private` (055 §10.1) automatically, on the host's declared `rung` of 3 and on an omitted `rung`, and obvious secrets (keys, tokens, passwords) are redacted on capture without asking. The existing flag is enforced in code at every outbound path: bundles, Xenia, exports, `delphi debug bundle`, logs, the relay, connectors and mail, web-search queries and any other outbound request. Whether private text may appear in prompts to the operator's own configured model providers is the existing setting `[library] private_to_models` (default `allow`; `deny` keeps it out of every prompt, Council and panel seats included). Nothing new gates what comes in.
-  - **Stated limit.** Delphi cannot see where host content came from. The flag depends on the host's declared rung; a host that declares rung 4 for private text defeats it. This is the accepted gap of §12.
-  - A search query sent to a Delphi tool or to the web is the topic only, redacted as in 066 §6, and never text read from a private source. The **trusted-list candidates** (§7.5) are bare hostnames from rungs 1, 2 and 4, never a path, a query string or anything from rung 3.
+- **Private by default; public only when the daemon can check it.** Content enters the library like any other: no preview, no per-item approval, nothing held. The `private` flag (055 §10.1) is decided by the daemon, **not by the host's declared `rung`**:
+  - A claim is **public** only when it carries a source URL and a quote that the daemon fetches itself and finds in the page (a daemon refetch, under the fetcher's rules). Everything else is stored **private**: no URL, no quote, an unfetchable page, a missing, invalid or non-public `rung`, or `rung: 3`. The host's `rung` is advisory. It cannot declare private text public.
+  - Obvious secrets (keys, tokens, passwords) are redacted on capture without asking.
+  - `private` is enforced at every outbound path of 055 §10.1 through **one deny-by-default check in the shared egress layer** (§12 item 16). A private entry is also **never placed in the prompt of a seat on another provider's model** (a foreign-family seat), whatever `[library] private_to_models` says. That setting governs the operator's own configured providers (default `allow`), and `delphi doctor` warns when it is `allow` and private entries exist (OD-10).
+  - A private entry is kept, labeled, and searchable by the operator and their agents.
+  - **Stated limit.** Delphi cannot see where host content came from. It can only check that a claim is public, and treats the rest as private. That removes the dependence on the host's declaration.
+  - A search query sent to a Delphi tool or to the web is the topic only, redacted as in 066 §6, never text read from a private source and never the text of a private claim (§7.5 item 5). The **trusted-list candidates** (§7.5) are bare hostnames from public, daemon-verified claims only.
 - **Read content is data.** What a connector returns cannot change the ladder, add a source, raise trust or reach a tool. It is fenced evidence (066 §6).
 
 ### 7.3 The reflex and the offer
@@ -172,13 +177,16 @@ A role never stops with "I cannot" while a rung of its ladder is open. The rule 
 
 **Direction (operator, 2026-11-10): make research easier to find, not harder; do not restrict what flows in; hold research to due diligence, not to proof.** The model is a research library and scholarly practice: gather widely, keep what is found with its sources, say how well each claim is supported, and let more independent sources raise the standing of a claim.
 
-1. **Keep everything found.** A page or claim from any source is captured into the library (055) as **noted**, with its source, dated, whether or not its host is on the trusted list. Nothing is held for operator review as a precondition of being kept. The trusted list stays what 066 §5 already says it is: a ranking bias, automatic capture and a validator fast lane, **never a filter on what may enter**. (This amends 066 §3 and §6 where they hold non-trusted pages.)
+1. **Keep everything found.** A page or claim from any source is captured into the library (055) as **noted**, with its source, dated, whether or not its host is on the trusted list. Nothing is held for operator review as a precondition of being kept. The trusted list stays what 066 §5 already says it is: a ranking bias, automatic capture and a validator fast lane, **never a filter on what may enter**. (This amends 066 §3 and §6 where they hold non-trusted pages.) Kept material counts against the library budgets of 055 §3.6: past a budget a page is captured at the excerpt level, never dropped, and a fixed ranking test runs a query over a library that contains junk so that keeping everything does not bury good results.
 2. **Label by support, not by origin.** Each claim carries a status from the ladder (§7.6) and, beside it, the number of independent sources behind it. Three or more independent sources make a claim **corroborated**, computed by code, with no operator step.
 3. **A coverage report on every answer.** Per rung of §7.1: `rung`, `entries_found`, `kept`, and a `reason` when a rung gave nothing (`kb_empty`, `no_search_provider`, `credential_unresolved`, `no_results`, `not_connected`, `not_approved`). These are information for the reader. None of them stops the run.
 4. **Thin coverage widens the search.** When rungs 1 and 2 give fewer than `[research] thin_below` claims (default 3, OD-3), the answer says `coverage: thin`. In a host, the role goes on to rungs 3 and 4 with the host's tools without being asked. Inside, the answer names the host rungs that can take over.
-5. **A corroboration pass.** For a `survey` or `deep` run, each central claim with fewer than three independent origins gets one targeted query for independent support, and one for contradiction (066 §5 already plans a contradiction query). The pass is inside the depth budgets (about 5, 15 and 30 steps), so it cannot run away.
-6. **A way back in.** What the host's rungs find returns to Delphi labeled, never as validated: through `propose_kb_entry` as **noted**, searchable at once with its label and excluded only from always-loaded prompts (052 §3.2), fenced as data when a seat reads it (040 §19.1; 086 §4.3). The sites that supplied evidence and are not on the trusted list are listed as bare hostnames, **candidates for the trusted list**, with the claim each supported. Adding one stays the operator's act, because the list is operator-edited (066 §6).
-7. **Inside egress (OD-7).** The pipeline's fetch reaches only listed hosts, which is the other half of "the first result is thin". Recommended: the fetch may reach **any public https page that appeared in a search result or in a fetched page's links**, under the existing fetcher rules (https only, no private addresses, size cap, cloaking check) and with **no agent-composed URL or query string**, so the fetch cannot carry data out. The trusted list then ranks and fast-lanes; it does not gate. This widens an egress control (066 §6), so it is the operator's decision and the rest of this section works without it.
+5. **A corroboration pass, for public claims only.** For a `survey` or `deep` run, each central **public** claim with fewer than three independent origins gets one targeted query for independent support, and one for contradiction (066 §5 already plans a contradiction query). **A private claim is never put in an outbound query**; it is corroborated against internal files only. The pass is inside the depth budgets (about 5, 15 and 30 steps), so it cannot run away.
+6. **A way back in.** What the host's rungs find returns to Delphi labeled, never as validated: through `propose_kb_entry` (schema in §18) as **noted**, with the daemon deciding taint, status and the `private` flag. It is searchable at once with its label, excluded from always-loaded prompts (052 §3.2), fenced when a seat reads it, and **not injected into a Council, panel or red-team brief automatically** (§12 item 13). The sites that supplied public evidence and are not on the trusted list are raised as **decision cards of kind `source`** (044), one per hostname, at most 5 per run, each citing the claims it supported. Adding one stays the operator's act, because the list is operator-edited (066 §6).
+7. **Inside egress (OD-7).** The pipeline's fetch reaches only listed hosts, which is the other half of "the first result is thin", and it is also what lets the daemon refetch a host's citations (§7.2). Two steps, each the operator's decision:
+   - **7a, recommended.** The fetch may reach **any URL the search provider returned**, held in a per-run **observed set** the daemon builds; nothing outside the set is fetched. No query string or fragment is added or kept unless the provider supplied it verbatim; redirects to another origin are refused; the existing fetcher rules stay (https only, no private addresses, DNS pinning, size cap, cloaking check); per-host and per-run caps apply; each fetched URL and its provenance are recorded in `research_status`.
+   - **7b, off by default.** Links found on a fetched page may be followed **one hop**, under the same rules, behind `[research] follow_links = false`. Red-team asked for this to be rejected outright (a page's link can carry a token or point at an internal address); it stays a switch so the operator can decide.
+   Without 7a, a host's web claim whose host is not on the trusted list cannot be refetched, so it is stored private; the rest of this section still works.
 8. **A visible effect.** A second ask of a question already researched is answered from rungs 1 and 2, with the kept claims cited and their statuses shown.
 9. **`delphi doctor` states the inside limits** before a run, as facts: a search provider configured, its credential resolvable, the trusted list's size, the knowledge base's size by topic area ("trusted list: 6 hosts; knowledge base: 41 entries").
 
@@ -194,11 +202,13 @@ The ladder of 052 §3.1 gains one rung, between **noted** and **validated**:
 | **corroborated** | **three or more independent sources state it** | counted by code (below); marker `external_corroborated: true` |
 | validated | checked by the validator against a primary source or two independent reputable sources, or ratified by the operator | 040 §7, §18.2 (unchanged) |
 
-- **The count.** A claim record (055 §4) accumulates citations; a new citation to a known claim merges into it (066 §5 dedupe: canonical URL, content hash, claim fingerprint). The count is of **distinct origin keys** among citations whose stored quote the code re-finds in the stored snapshot. The daemon derives the origin, never a model: the registrable domain (public-suffix list), then content similarity across snapshots, and a source that cites another shares its origin (040 §6.2). Three citations with one origin count once.
-- **No judge, no operator step.** `corroborated` is a count of independent, quote-verified citations of the same claim fingerprint. It is a weaker statement than **validated** and the label says what it is: "corroborated · 3 independent sources". It is not an entailment check, so it does not claim the sources are right, only that several independent ones say it.
+- **The count.** A claim record (055 §4) accumulates citations; a new citation to a known claim merges into it (066 §5 dedupe). The count is of **distinct origin keys among citations the daemon itself refetched** and in which it re-found the stored quote. A host's own say-so that a citation exists never counts. Origins use **040 §6.2 exactly**: the registrable domain (public-suffix list), then content similarity across snapshots, and a source that cites another shares its origin. Beyond that: origins whose source class is Weak or Hostile (040 Appendix A, the operator's class list) count zero; a registrable domain younger than `[research] young_domain_days`, when its age is known, counts zero; origins with the same known registrant or network, or all first seen inside `[research] burst_hours`, count once. The numbers are in §18. Three citations with one origin count once.
+- **No judge, no operator step, a weaker promise than 040.** `corroborated` is a count of independent, quote-verified, daemon-refetched citations of the same claim fingerprint. It is not an entailment check and it can be gamed by coordinated pages, so it reads **"corroborated · N origins"**, never "N verified sources", and the detail says it is weaker than **validated**. Where at least one of the origins is in a Primary or Reputable source class (040 Appendix A) the detail adds `includes a reputable source`. That is information for the reader, not a condition of the label.
 - **Disagreement wins.** Any source or Council dissent that contradicts the claim makes it **contested** (052 §3.4), whatever its count. A `refuted` verdict makes it **disproved**.
 - **Taint does not change.** A corroborated claim is still read content: it stays `external_untrusted` for what an agent's span may do, it is never promoted into an always-loaded rule, lesson, skill or `REVIEW.md` on its count (GOVERNANCE §4), and a source's trust never alters a claim's taint (066 §6). The status is a statement of reliance for readers; the taint lattice (spec 001 §5) is unchanged. Making `corroborated` a taint level would amend the constitution and is not proposed.
 - **A path up.** A corroborated claim becomes a candidate for background validation at low priority (040 §18.3), so a cheap, code-counted status leads to a validator check without anyone asking.
+- **Retraction.** When a source is re-checked (055 §3.5) and its quote is gone, or it changed, its citation drops out of the count; the status is recomputed and falls back to **noted** or **contested**, and the change is recorded. The count is never cached past a re-check.
+- **Never an input to a grant.** No code path reads `corroborated` as a criterion for promotion, trust, tool access or approval (§12 item 17).
 - **The answer shows its evidence.** Each research answer includes a table: claim, sources, independent origins, status, and any dissent. A reader sees at once how much rests on one source and how much on several.
 - This amends 052 §3.1 (the ladder), 066 §3 and §6 (non-trusted pages are kept) and 040 §18.2 (a label for the new rung). The amendments take effect when this spec is approved.
 
@@ -221,7 +231,7 @@ The ladder of 052 §3.1 gains one rung, between **noted** and **validated**:
 
 - A generated pack is **task work only**. `council_open`, `council_brief` and red-team seats accept only canonical roles or registered bundle agents; a pack id is refused there with a fixed sentence.
 - A pack may narrow or equal its base role's scope, never widen it: scope, tools and counterweights come from the base role (already said in the pack). A test asserts that the pack text for any `custom_heuristics` input contains no grant of a tool, permission, approval or scope, using the existing rule linter (062 §4.4).
-- A per-task cap, `[mcp] max_packs_per_task` (default 5, OD-4), after which `spawn_agent_pack` answers a fixed sentence.
+- Two caps: `[mcp] max_packs_per_task` (default 5, OD-4) and `[mcp] max_packs_per_session` (default 20), so a host that cycles task names cannot spawn packs without limit. Past a cap, `spawn_agent_pack` answers a fixed sentence.
 - A pack is ephemeral and has the content hash of 062 §14.10. Promoting one to a saved role is a proposal (`propose_*`), applied only on ratification (GOVERNANCE §4, §7).
 
 ## 10. Builder in the host, and the spec lifecycle
@@ -239,8 +249,9 @@ The ladder of 052 §3.1 gains one rung, between **noted** and **validated**:
 
 1. **The spec link is verified, not trusted.** A PR that changes software files must carry `Implements-Spec: specs/NNN-*.md`, and the named spec must exist **at the base branch** with `status: approved` and an `approved_by` line. A trailer naming a draft, a missing spec or a spec added in the same PR fails. (A forged or careless trailer therefore cannot reach an unapproved spec; it can still name an approved spec the work does not implement, which only review can catch (`pr-alignment-review`, `scope-creep-detection`) and which this spec does not claim to enforce.)
 2. **Governed paths are Red.** A diff touching `GOVERNANCE.md`, `REVIEW.md`, `context/heuristics.md`, `agents/`, `skills/`, `memory/`, `.git/`, hooks, `.github/**` or the host-executed files of GOVERNANCE §5.5 needs the operator, regardless of author or authorization (§5.7). The one exception is creating or editing a spec whose `status` stays `draft`; changing a spec to `approved`, or editing an approved spec, is Red.
-3. **The spec-review lint** fails an `approved` spec with no `review:` value naming the Council or Panel that reviewed it, or an explicit `review: waived-by-operator (date)`. It checks presence and shape. It cannot check that the review was good, or that its record exists (the record lives in the Delphi home); the table of §12 says so. Its strength is OD-5.
-4. **Before building any of this, S8 verifies what `delphi lint`, CI and 094 already check** (**not verified**: whether the trailer is checked against an approved spec at the base today) and builds only what is missing.
+3. **The spec-review lint** fails an `approved` spec with no `review:` value of the form `review: <record path under missions/> sha256:<hash>` or `review: waived-by-operator (date)`. It checks that the record file exists in the PR or at the base, that its hash matches, and that its front matter shows `council_format: 1` and a `venue` of `daemon` or `panel`. `delphi specs review-stamp <id>` copies the record out of the Delphi home and writes the line. This is stronger than shape (a bare Council id fails) and weaker than authenticity: a host can still write a fabricated record file into a PR, and only the operator, who approves and merges the spec, can see that. Signing records with a key the daemon holds is deferred (OD-5).
+4. **The base spec is read from the target ref** with `git show <base>:specs/NNN-*.md`, and GOVERNANCE.md and REVIEW.md from the ratified copy (GOVERNANCE §5.2), at merge time, so a rebase race re-reads and never uses a cached copy. A PR that changes software files and carries no `Implements-Spec` trailer fails. S8 begins by **verifying what `delphi lint`, CI and 094 already check** (**not verified**: whether the trailer is checked against an approved spec at the base today) and builds only what is missing. This blocks S8, not the other slices.
+5. **Hook and config integrity (proposed).** `delphi merge` and `delphi doctor` compare `.git/hooks` and `.git/config` with a baseline recorded when the branch was opened, because a host Builder works in a working tree and a hook is not part of a diff. S8 may find this already covered.
 
 The Builder pack (host or inside) states the precondition: no approved spec, no build; a draft is a proposal.
 
@@ -268,9 +279,12 @@ The Builder pack (host or inside) states the precondition: no approved spec, no 
 10. Material from a rung-3 source never reaches a Delphi tool without the operator's say for that item; a test sends a fixture marked private through `propose_kb_entry`, `propose_note` and `handoff_put` and expects a refusal text, not a write.
 11. A role's answer lists the rungs used and the rungs skipped with a reason from the fixed list (§7.4); a pack that tells a role to stop with "I cannot" fails the pack linter.
 12. **Taint is stamped by the daemon at ingress, never declared by the host.** Every `propose_kb_entry`, `propose_note` and `handoff_put` from the host socket is stored `external_untrusted` and `not validated`. The host's `author`, `source_type`, `confidence`, `rung` and provenance fields are advisory and cannot raise either (GOVERNANCE §4); `propose_kb_entry` accepts only `not validated`. A test submits a payload claiming `user_ratified` and expects `external_untrusted`.
-13. **A host-proposed entry is searchable at once with its label and fenced as data** wherever a seat reads it; it is excluded only from always-loaded prompts (052 §3.2). A test proposes an entry containing instruction text and expects it returned as `noted`, fenced, and absent from every always-loaded prompt.
-14. **The `private` flag (§7.2):** a rung-3 or rung-less proposal is stored `private`, nothing waits for approval, and a fixture marked private is absent from each outbound path of 055 §10.1. Corroboration (§7.6) counts distinct origin keys only: three citations with one origin give `noted`; three with distinct origins give `corroborated`; a contradicting citation gives `contested`; no tool argument sets the status.
+13. **Host- and web-origin entries are searchable at once, labeled and fenced, and never injected into a governance prompt automatically.** A `noted` entry whose origin is the host socket or the web is returned to a Council, panel or red-team seat only when the seat asks (a search it runs, a pointer), never in the brief the daemon assembles; `corroborated` and `validated` entries may appear in a brief with their label. A seat that has read such a `noted` entry has no tools and cannot dispatch for the rest of that turn, as for peer text (086 §4.3). The fence is escaped so entry text cannot close it. A hostile-entry fixture (instruction text, a forged closing tag) runs through each path. Nothing is removed from the library and no ratification step is added (OD-9).
+14. **Private is decided by the daemon (§7.2).** A claim without a daemon-refetched URL and quote, or with a missing, invalid or non-public `rung`, is stored private with no approval step. A fixture marked private is absent from each outbound path of 055 §10.1 and from a foreign-family seat's prompt, with `private_to_models = allow`. Corroboration (§7.6) counts distinct origin keys of daemon-refetched citations only: three citations with one origin give `noted`; three with distinct origins give `corroborated`; a contradicting citation gives `contested`; a dropped quote recomputes; no tool argument sets the status.
 15. **The merge check (§10) fails** a trailer naming a draft or missing spec, a spec added in the same PR, and a diff on a governed path, each by a fixture.
+16. **One egress choke point.** Every outbound path of 055 §10.1 calls one deny-by-default `is_private` check in the shared egress layer. A test enumerates the registered egress paths and fails if one does not call it, so a new path cannot ship unguarded.
+17. **`corroborated` grants nothing.** A test asserts that no code path reads the label as a criterion for promotion, trust, tool access or approval; it changes only what is displayed and the validator's queue order.
+18. **Progress lines are fixed-form (§19).** They carry role, state, counts, elapsed time and a name from a closed list, never model text, tool arguments or paths, so a status call cannot carry an injection to the host. A hostile tool name or page title in a fixture does not appear in a tail.
 
 ### 12.1 What is enforced, and what is not
 
@@ -280,6 +294,8 @@ The Builder pack (host or inside) states the precondition: no approved spec, no 
 | Seat family and model | daemon receipt (091) | **enforced** |
 | Taint on everything a host sends back | daemon at ingress (§12 item 12) | **enforced** |
 | `private` flag at every outbound path; corroboration count; status never set by an agent | daemon (055 §10.1; §7.6) | **enforced** |
+| Progress tail and `cancel_job` | daemon (§19) | **enforced** (fixed-form lines; cancel limited to the host's own jobs) |
+| A seat that read a host- or web-origin `noted` entry has no tools | daemon at the seat (§12 item 13) | **enforced** |
 | Spec link, governed paths, spec-review lint | blocking script in `delphi merge` and CI (§10) | **enforced** |
 | Pack ids refused for Council, panel and red-team seats | daemon at seat assignment (§9) | **enforced** |
 | `locus` on roles and skills; pack header; schemas | schema lint and docs test | **enforced** |
@@ -295,7 +311,11 @@ S9 writes each *enforced* row into `context/invariant-enforcement.md`, and each 
 
 | # | Slice | Depends |
 | :-- | :-- | :-- |
-| S1 | **Keep everything found, corroboration and the way back in** (§7.5, §7.6): non-trusted pages kept as `noted`, the per-rung coverage report, the `thin_below` rule, the corroboration pass and the `corroborated` status, host findings returned through `propose_kb_entry`, trusted-list candidates, `delphi doctor` size checks; the wider fetch only if OD-7 is approved. | none |
+| S1a | **Keep everything and say how well it is supported** (§7.5 items 1 to 4, 9): non-trusted pages kept as `noted`, the per-rung coverage report, `thin_below`, `delphi doctor` size checks; amends 066 §3 and §6; storage under 055 §3.6 | none |
+| S1b | **Corroboration** (§7.6): the `corroborated` status, origin keys by 040 §6.2, daemon refetch, retraction, the public-only pass (item 5) | S1a |
+| S1c | **The way back in** (§7.5 item 6, §7.2, §18): the `propose_kb_entry` schema, daemon-decided `private`, source decision cards, the egress choke point, the seat rule of §12 item 13 | S1a |
+| S1d | **Wider fetch** (§7.5 item 7): 7a observed search-result URLs; 7b one-hop links behind `[research] follow_links` | S1c; OD-7 |
+| S10 | **Progress tail and cancel** (§19): seat states, the fixed-form tail, `stalled`, `cancel_job`, the host skill text | none |
 | S2 | **Councils inside only:** rename Mode B, `council_unavailable`, the no-relabel tests (§5). | none |
 | S3 | **`locus` field,** schemas, pack header, capability names and the Claude Code adapter with version and hash (§3.2, §4). Docs regenerated. | none |
 | S4 | **`route` for any query:** canonical roles, `locus`, `trigger`, `confidence`, `adopt`, the threshold and its labeled set, `route.decided` (§8). | S3 |
@@ -314,14 +334,15 @@ Each slice merges alone and leaves the repository working. Runtime behavior ship
 | 1: the rule and the trust base | **S2** Councils inside only | `council_unavailable` schema test; host-labelled-Council rejection test | none (a refusal, always on) |
 | | **S3** `locus` | schema lint and docs test pass; `get_agent` returns `locus` | none |
 | | **S7** pack guards | pack-id refusal at seat assignment; no-grant test | none |
+| | **S10** progress tail and cancel | fixed-form tail test with hostile names; `cancel_job` stops spend in a fixture | none |
 | 2: routing and the boundary | **S4** `route` | labeled-set precision meets OD-3; deterministic tie-break test | `[hosts] route_adopt` |
 | | **S8** builder gate | the §10 fixtures fail as listed; verified against what exists | `[merge] require_spec_link` |
 | 3: red team | **S6** standalone red team, `ask_family` | findings card shows receipt families; single-family label test | `[seats] red_team_kind` |
-| 4: research, last | **S1** keep everything, corroboration, way back in | §12 items 12 to 14 tests; acceptance (a) to (f) of §7.5 | `[research] ladder` |
+| 4: research, last | **S1a to S1d** keep everything, corroboration, way back in, wider fetch | §12 items 13, 14, 16, 17 tests; acceptance (a) to (f) of §7.5; each of S1a to S1d merges alone | `[research] ladder`, `[research] follow_links` |
 | | **S5** ladder, reflex, offer | pack tests; the `CLAUDE.md` template and skill text | `[hosts] source_ladder` |
 | 5: close | **S9** summaries, docs, `invariant-enforcement.md` | docs test passes; every enforced row mapped | none |
 
-Dependencies: S4 needs S3; S5 needs S1 and S4; S8 needs S2; S9 needs S2 and S6. Research (S1, S5) and generated packs (S7's cap) are last or independent, so they cannot gate the rule of Wave 1.
+Dependencies: S4 needs S3; S5 needs S1a to S1c and S4; S8 needs S2; S9 needs S2 and S6. Research (S1, S5) and generated packs (S7's cap) are last or independent, so they cannot gate the rule of Wave 1.
 
 Each slice follows `AGENTS.md`: tests, clippy and `delphi lint` before committing, the tracker updated in the same PR, `Implements-Spec: specs/098-*.md`.
 
@@ -336,6 +357,7 @@ Each slice follows `AGENTS.md`: tests, clippy and `delphi lint` before committin
 - Host Builder is allowed; spec authoring is formalized and reviewed inside after planning outside.
 - Scouts and investigators always check the KB first. The Scout then takes trusted-source entries (through the host or Delphi), then searches with the host's tooling, radiating from close sources to the wide internet; the host's connectors (team chat, meeting transcripts, email, shared documents) are available to it, and the operator approves search paths and sources as settings in the host environment. Investigators and the Red team do the same: everything Delphi has first, then the host's tooling, and never stop on a false limitation (§7.1 to §7.4).
 - **Research is easier to find, not harder (2026-11-10).** Stop restricting what flows in. Hold research to due diligence, not atomic truth: a research library with scholarly expectations of multiple sources, and a status for a claim corroborated by three or more independent sources (§7.5, §7.6).
+- **Show progress (2026-11-10).** Councils and inside jobs need tail output so the host knows what is happening, and the host needs to be able to cancel what it raised (§19).
 - The research offer is made only when Delphi was not invoked explicitly. An @mention, the `delphi` skill triggering, or "ask Delphi" all count as explicit.
 - The host should reach for the Scout on its own for "research a topic", best effort.
 - The host-run summary is required at the end of a panel, Council or red-team action, and best effort otherwise.
@@ -346,12 +368,14 @@ Each slice follows `AGENTS.md`: tests, clippy and `delphi lint` before committin
 
 - **OD-1.** `locus` list of `inside` skills (§3.2). [As written; the slice confirms.]
 - **OD-2.** Name of the field: `locus`, or reuse `venue`. [`locus` for the declaration, `venue` for the fact.]
-- **OD-3.** The numbers: `[research] thin_below` (§7.5) and `adopt` precision (§8). [3 kept claims; precision 0.9 on a 30-task set.]
+- **OD-3.** The numbers: `[research] thin_below` (§7.5) and `adopt` precision (§8). [3 kept claims; precision 0.9 on a 30-task set. Red-team of `t_0004` asked for 0.95.]
 - **OD-4.** The per-task pack cap. [5.]
-- **OD-5.** Strength of the spec-review lint (§10). [Presence and shape of a `review:` line now; a stamped record hash later.]
+- **OD-5.** Strength of the spec-review lint (§10 item 3). [A committed record file with its hash, checked by lint; signing records with a daemon key later.]
 - **OD-6.** Whether §7 research and the generated packs split into their own spec (the Council `t_0002` asked). [Stay in 098: you chose one spec; the waves, flags and exit criteria of §13.1 keep research from gating the rule.]
-- **OD-7.** Widen the pipeline's fetch from listed hosts to any public https page that appeared in a search result or a fetched page's links, with no agent-composed URL (§7.5 item 7). [Yes; it widens an egress control, so it needs your yes.]
+- **OD-7.** Inside fetch (§7.5 item 7). **7a:** any URL the search provider returned, from a per-run observed set, with the URL rules. **7b:** one-hop links from fetched pages. [7a yes; 7b off by default. Red-team asked to reject both link-following and any widening beyond provider results; 7a is the smallest form that lets the daemon refetch a host's citations.]
 - **OD-8.** Name and threshold of the new status: `corroborated`, three independent origins (§7.6). [As written.]
+- **OD-9.** The Council's own question (`t_0004`): host- and web-origin `noted` entries stay searchable at once, with seats made tool-less when they read them and the entries kept out of auto-retrieved briefs (§12 item 13), or are quarantined from Council seats until ratified. [The former; it restricts nothing coming in. Red-team of both Councils asked for the latter, or at least for briefs to carry only `validated` and `corroborated` entries; §12 item 13 already does that for briefs.]
+- **OD-10.** `[library] private_to_models` default (§7.2). [Keep `allow` for the operator's own providers; private entries never go to a foreign-family seat; `doctor` warns. Red-team asked for `deny`.]
 
 ## 15. Council review
 
@@ -367,7 +391,7 @@ A daemon Council (`t_0001`, 2026-11-10; architect, red-team and strategist, clau
 | No relabeling a panel as a Council; typed unreachable error (P1) | §5. |
 | Label the enforcement gap (P1) | §12. |
 | Injection through read content must not trigger route or adoption (P1) | §8 and §12 item 5. |
-| Split into phases (P1, strategist and architect) | Not adopted as separate specs; the operator chose one spec. The nine slices of §13 give the same ordering. |
+| Split into phases (P1, strategist and architect) | Not adopted as separate specs; the operator chose one spec. The ten slices of §13 give the same ordering. |
 | Pin defaults: absent locus, threshold, tie-break, offer scope, route logging, summary fields, adapter hash (P2) | §3.2, §8, §7.3, §11, §4. |
 
 The Council ruled on a different, smaller outline than this one. A review of this draft by a Council or a Panel, with the repository read, is the next step before approval.
@@ -388,6 +412,29 @@ Architect, red-team and strategist (claude and gemini) reviewed the draft and ru
 | Undefined: `propose_kb_entry` schema, trusted-list candidate format, foreign family on a single-family panel, barrier on host disconnect (P2) | Candidate format is in §7.2 (bare hostnames). The other three are listed in §17 for the slices to pin. |
 
 
+### 15.2 Councils `t_0004` and `t_0005` (2026-11-10, on the full text)
+
+Two independent Councils read the whole draft and the specs it amends. Both ruled PROCEED-WITH-CHANGES and both escalated (`t_0004`: 4 unresolved P0s; `t_0005`: 1), and **in both, the red-team seat's Round 2 critique could not be read**, so it counts as unresolved, not as agreement. Records: `missions/host-a4cc691a99d9ea4e/councils/003-…` and `004-…` in the Delphi home. They cost about 426,000 and 487,000 tokens.
+
+| Finding (raised by) | Answer |
+| :-- | :-- |
+| Fencing is not enough for the Council path; host entries can steer a seat (all six seats' P0s) | §12 item 13: not auto-injected into briefs; a seat that read one has no tools; fence escaped; hostile-entry tests. Nothing leaves the library (OD-9). |
+| The corroboration pass can send private claims to external search (4 P0s) | §7.5 item 5: public claims only; §7.2 queries rule. |
+| A host that declares rung 4 defeats the private flag (3 seats, one P0) | §7.2: the daemon decides, from a refetched URL and quote; the declared rung is advisory. |
+| Private entries reach foreign-family seats under `private_to_models = allow` (3 seats) | §7.2: never in a foreign-family seat's prompt; doctor warning; OD-10. |
+| `corroborated` is gameable by sybil, paraphrase and scraper pages (6 seats) | §7.6 and §18: 040 §6.2 exactly, Weak/Hostile and young domains count zero, burst and registrant once, daemon refetch only, "N origins" wording, retraction, no grant. The red-team's "one reputable origin required" is not adopted, because it restricts a due-diligence label; the detail shows `includes a reputable source` instead. |
+| OD-7 is an exfiltration and SSRF channel (6 seats) | §7.5 item 7: observed-URL set, URL rules, caps, provenance; link-following is a separate switch off by default (OD-7). |
+| The review lint is presence-only and a forged Council id passes (5 seats) | §10 item 3: a committed record with its hash; authenticity left to the operator's approval; signing deferred. |
+| Merge check: base ref, rebase race, trailer-less PRs, host-socket methods (4 seats) | §10 items 4 and 5; the methods are named by S2 from `host_rpc.rs`. |
+| The git hooks of a host working tree are not in a diff (red-team) | §10 item 5, proposed. |
+| §17 pinned items missing (4 seats) | §18. |
+| S1 carries five behaviours (3 seats) | §13: S1a to S1d. |
+| Pack bombing across sessions (red-team) | §9: a per-session cap. |
+| Standalone host-only red team is same-family review (red-team of `t_0005`) | Not adopted: the operator decided the caller chooses the seats. The default seats a foreign family when one is available (§6.2), and a host-only result is labeled single-family. |
+| Rename `propose_council_record` (red-team of `t_0005`) | Not adopted: it is an approved tool (072 §8.3) and renaming breaks hosts. Its records are labeled imported (§5). |
+| Storage growth from keeping everything (3 seats) | §7.5 item 1: library budgets and a ranking test. |
+
+
 ## 16. Acceptance criteria
 
 1. The locus table (§3.1) and the `locus` field exist; `get_agent` and `get_skill` return it; schemas and docs agree (`cargo test -p delphi --test docs` passes).
@@ -401,6 +448,10 @@ Architect, red-team and strategist (claude and gemini) reviewed the draft and ru
 9. Every invariant of §12 has a test.
 10. Research keeps pages from hosts that are not on the trusted list as `noted` and holds none for review; a claim with three independent origins reads `corroborated`, two read `noted` with a count; a rung-3 proposal is stored `private` with no approval step.
 11. The merge check rejects a trailer naming a draft or missing spec, a spec added in the same PR, and a governed-path diff.
+12. A proposal without a daemon-refetched URL and quote is stored private; a private fixture is absent from every outbound path and from a foreign-family seat's prompt; the egress enumeration test passes.
+13. A hostile entry (instruction text, a forged closing tag) is absent from an assembled Council brief, and a seat that reads it has no tools.
+14. `corroborated` follows §7.6 and §18 on fixtures: one origin repeated gives `noted`; three distinct, old, non-Weak origins give `corroborated · 3 origins`; a dropped quote recomputes; a Weak or young origin counts zero.
+15. A status call returns seat states and a fixed-form tail, flags a stalled seat, and `cancel_job` stops a job the host raised and refuses any other (§19).
 
 ## 17. Not verified
 
@@ -412,5 +463,40 @@ Architect, red-team and strategist (claude and gemini) reviewed the draft and ru
 - Which connectors (team chat, meeting transcripts, email, shared documents) each host actually offers, and how its permission system names them. §7.2 assumes only that a host can search what it is connected to and the operator approved.
 - How a host's settings should record "approved search paths and sources" beyond a section of `CLAUDE.md`; a host-native setting may be better and is the host's to define.
 - No live run of any host path in this spec.
-- Council `t_0002` reviewed the question text, not the draft (§15.1). A second review, with the draft readable to the seats, is still owed before approval.
+- Councils `t_0004` and `t_0005` read the full draft, but the red-team seat's Round 2 critique was unreadable in both (§15.2). A Round 2 from a red-team seat that completes is still owed before approval.
 - The shape of `propose_kb_entry`'s fields, what a single-family panel means by "foreign", and the barrier's behavior when the host disconnects mid-run. The slices pin these.
+- Every numeric value in §18 is a proposal for the slice to calibrate; none has been measured.
+- That a daemon refetch of a host's citation is possible under today's fetcher for hosts off the trusted list; it is not, until OD-7a is approved.
+- The host-socket method names that must reject Council labels (§5); S2 lists them from `host_rpc.rs`.
+
+## 18. Pinned items (proposed values; the slices calibrate them)
+
+| Item | Value |
+| :-- | :-- |
+| `propose_kb_entry` input | `{topic (<=200), role, rung (1 to 4, advisory), claims: [{text (<=500), source_url? (https, <=200), quote? (<=400), retrieved_at?}]}`, at most 20 claims. The daemon adds `taint = external_untrusted`, `status = noted`, `private`, origin keys and the claim fingerprint. Host fields named `taint`, `status`, `private`, `author`, `source_type` or `confidence` are ignored. |
+| `rung` | Integer 1 to 4. Any other value is absent. |
+| `thin_below` | Unit: kept, cited claims after dedupe. Default 3. |
+| Origin independence | 040 §6.2 exactly. Source classes Weak and Hostile count 0. `[research] young_domain_days` = 180 (age known only). `[research] similar_above` = 0.8 (shingle similarity) merges origins. Known same registrant or network counts once. Citations first seen within `[research] burst_hours` = 24 count once. |
+| Display | `corroborated · N origins`; the detail adds `includes a reputable source` when one origin is Primary or Reputable. |
+| Retraction | A re-check (055 §3.5) that loses a quote drops that citation; the status is recomputed and recorded. |
+| Flag defaults | Every new behavior flag is `false` until its slice's exit criterion passes: `[hosts] route_adopt`, `[hosts] source_ladder`, `[research] ladder`, `[research] follow_links`, `[merge] require_spec_link`, `[seats] red_team_kind`. Refusals (§5, §9, §12) are always on. |
+| Panel on host disconnect | After `[seats] host_wait_secs` (default 600) with no call from the host, the daemon ends the Panel as `abandoned`, writes held Round 1 stances to the record unreleased, and stops its foreign seats. |
+| Trusted-list candidates | Decision cards of kind `source` (044), one per hostname per run, at most 5. Accepting one is the operator's own action on their list. |
+| `route` | The trigger table and the labeled set are data files named by S4; the tie-break is §8. |
+| Host-socket methods that reject Council labels | Listed by S2 from `host_rpc.rs`. |
+
+## 19. Progress you can see, and cancel
+
+**Evidence (2026-11-10).** `council_status` named a running Council "convening: choosing the seats" for about ten minutes, because the phase is counted from stances (`host_rpc.rs`), while the seats were reading the repository (the log showed 33 tool calls by one seat). From the host, slow and stuck looked the same. A second Council was convened on the same text and cost about 487,000 tokens beside the first's 426,000, and no host tool could stop either.
+
+**Requirements.** They apply to every status call of a Council, a Panel, a red-team review, `request_help` and `request_research`:
+
+1. **Seat states.** Each seat or worker reports `{role, state, elapsed_s, idle_s, calls, last_call}`. `state` is one of `starting`, `reading`, `thinking`, `waiting_on_barrier`, `submitted`, `abstained`. `last_call` is a tool name from a closed list.
+2. **A tail.** The last 8 events (up to 20 with `lines`), each `HH:MM:SS role kind name` with `kind` from a closed list (tool call, stance, critique, gate, alert). It carries no model text, no tool arguments and no paths (§12 item 18).
+3. **A phase from the seats,** not only from stances: "round 1: 2 of 3 seats answered; red-team reading, 8 min".
+4. **A stall flag.** `stalled: true`, naming the seat, when no seat has had activity for `[council] stall_secs` (default 120).
+5. **`cancel_job {id}`**, a host tool that cancels a Council, Panel, help or research job **this host session raised**, stops spend, and records `cancelled` with the host's stated reason. It refuses any other job. The operator can cancel from the TUI. It can only reduce what runs, so it widens no authority.
+6. **Host guidance.** The skill and the `CLAUDE.md` template tell the host to read the tail, to treat `idle_s` and `stalled` as the signal, and **not to convene a second Council while any seat shows activity**. A duplicate is not a retry.
+7. **The TUI shows the same tail** for the operator.
+
+**Exit.** A fixture with a hostile tool name and page title leaves both out of the tail; a stalled fixture is flagged; `cancel_job` stops a running fixture job and refuses another session's.

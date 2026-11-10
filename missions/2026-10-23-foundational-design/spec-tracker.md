@@ -837,11 +837,14 @@ From Council `t_0001` over two research notes (CAO, Paperclip); the operator cho
 
 ## Spec 098: where agents run (2026-11-10, draft)
 
-A draft for the operator: host first, the inside exceptions (Council, panel and red-team seats of other families), a `locus` declaration, `route` for any query, generated task-scoped agents with guards, the Builder in the host against an approved spec, and a research path that works the first time. Written after Council `t_0001` (2026-11-10) reviewed the outline, which escalated; the draft answers its findings in §15 and Council `t_0002` reviewed the draft (PROCEED-WITH-CHANGES, 9 P0s, two seats could not read the text); its findings are answered in §15.1 and the slices now run in waves behind flags (§13.1). A second review with the draft readable is still owed. One spec by the operator's choice. Research is limited while the knowledge base and the trusted list are small; outside search fills the gap and grows Delphi (§7.5). Nothing below starts before approval.
+A draft for the operator: host first, the inside exceptions (Council, panel and red-team seats of other families), a `locus` declaration, `route` for any query, generated task-scoped agents with guards, the Builder in the host against an approved spec, and a research path that works the first time. Written after Council `t_0001` (2026-11-10) reviewed the outline, which escalated; the draft answers its findings in §15 and Council `t_0002` reviewed the draft (PROCEED-WITH-CHANGES, 9 P0s, two seats could not read the text); its findings are answered in §15.1 and the slices now run in waves behind flags (§13.1). Councils `t_0004` and `t_0005` then read the full text and both ruled PROCEED-WITH-CHANGES (answered in §15.2; red-team's Round 2 unreadable in both, so a rerun is owed). The research redesign keeps everything found and adds a `corroborated` status (§7.5, §7.6); §19 adds progress visibility. One spec by the operator's choice. Research is limited while the knowledge base and the trusted list are small; outside search fills the gap and grows Delphi (§7.5). Nothing below starts before approval.
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
-| S1 | coverage report per rung, the thin-coverage rule, host findings returned through `propose_kb_entry` with trusted-list candidates, `delphi doctor` size checks | not started |
+| S1a | keep everything found as `noted`, per-rung coverage report, `thin_below`, `delphi doctor` size checks | not started |
+| S1b | `corroborated` status: origin keys by 040 §6.2, daemon refetch, retraction, public-only pass | not started |
+| S1c | the way back in: `propose_kb_entry` schema, daemon-decided `private`, source decision cards, egress choke point, seat rule | not started |
+| S1d | wider fetch: 7a observed search-result URLs, 7b one-hop links behind a flag | not started; needs OD-7 |
 | S2 | Councils inside only: rename Mode B, `council_unavailable`, no-relabel tests | not started |
 | S3 | `locus` field, schemas, pack header, capability names, Claude Code adapter with version and hash | not started |
 | S4 | `route` for any query: canonical roles, `locus`, `trigger`, `confidence`, `adopt`, threshold, `route.decided` | not started |
@@ -850,3 +853,4 @@ A draft for the operator: host first, the inside exceptions (Council, panel and 
 | S7 | pack guards: council and red-team refuse packs, per-task cap, no-grant test | not started |
 | S8 | Builder gate and the spec-review lint, after verifying what lint and CI already check | not started |
 | S9 | required summary after a panel or red team, generated reference, `llms.txt`, tracker | not started |
+| S10 | progress tail, stall flag and `cancel_job` for Councils and inside jobs | not started |

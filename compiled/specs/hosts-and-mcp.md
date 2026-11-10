@@ -69,7 +69,7 @@ When developers work outside the native Delphi terminal TUI—in external harnes
 
 ## 098-where-agents-run-host-first-locus-and-the-inside-exceptions
 
-**098: Where agents run: host first, the inside exceptions (Council, panel seats, red team), a locus declaration, routing for any query, and a research path that works the first time (draft)** · draft (per source at `30904ea4413e`) · tier 0 · [source](../../specs/098-where-agents-run-host-first-locus-and-the-inside-exceptions.md)
+**098: Where agents run: host first, the inside exceptions (Council, panel seats, red team), a locus declaration, routing for any query, and a research path that works the first time (draft)** · draft (per source at `36619e6b4323`) · tier 0 · [source](../../specs/098-where-agents-run-host-first-locus-and-the-inside-exceptions.md)
 
 **source excerpt, untrusted** · `specs/098-where-agents-run-host-first-locus-and-the-inside-exceptions.md` line 21
 
