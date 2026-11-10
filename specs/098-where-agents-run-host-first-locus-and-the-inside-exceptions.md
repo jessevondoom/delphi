@@ -14,7 +14,7 @@ tags: [spec, hosts, locus, council, panel, red-team, routing, research, builder,
 
 # Spec 098: Where agents run
 
-> **Status: draft, a proposal.** Nothing here is permission to build. It amends and consolidates [`062`](062-delphi-as-host-agent-mcp-server.md), [`066`](066-mcp-research-endpoint-and-role-identity.md), [`072`](072-host-cognitive-parity-and-external-orchestration.md), [`077`](077-host-mention-routing-and-themed-alias-resolution.md), [`086`](086-outside-council-panel-and-host-subagents.md), [`091`](091-seats-families-and-outside-launch.md) and [`041`](041-agent-registry-routing-and-role-extensions.md), and amends [`052`](052-knowledge-status-capture-on-contact-and-the-digest.md) §3.1 and [`040`](040-validator-role-and-fact-ratification.md) §18.2 (a `corroborated` status). One spec, ten slices (§13; S1 ships as four pull requests).
+> **Status: draft, a proposal.** Nothing here is permission to build. It amends and consolidates [`062`](062-delphi-as-host-agent-mcp-server.md), [`066`](066-mcp-research-endpoint-and-role-identity.md), [`072`](072-host-cognitive-parity-and-external-orchestration.md), [`077`](077-host-mention-routing-and-themed-alias-resolution.md), [`086`](086-outside-council-panel-and-host-subagents.md), [`091`](091-seats-families-and-outside-launch.md) and [`041`](041-agent-registry-routing-and-role-extensions.md), and amends [`052`](052-knowledge-status-capture-on-contact-and-the-digest.md) §3.1, [`040`](040-validator-role-and-fact-ratification.md) §18.2 and [`066`](066-mcp-research-endpoint-and-role-identity.md) §5 and §9.3 (a `corroborated` status and an `anchored` flag). One spec, ten slices (§13; S1 ships as four pull requests).
 
 ## 1. Scope and objectives
 
@@ -203,10 +203,17 @@ The ladder of 052 §3.1 gains one rung, between **noted** and **validated**:
 | validated | checked by the validator against a primary source or two independent reputable sources, or ratified by the operator | 040 §7, §18.2 (unchanged) |
 
 - **The count.** A claim record (055 §4) accumulates citations; a new citation to a known claim merges into it (066 §5 dedupe). The count is of **distinct origin keys among citations the daemon itself refetched** and in which it re-found the stored quote. A host's own say-so that a citation exists never counts. Origins use **040 §6.2 exactly**: the registrable domain (public-suffix list), then content similarity across snapshots, and a source that cites another shares its origin. Beyond that: origins whose source class is Weak or Hostile (040 Appendix A, the operator's class list) count zero; a registrable domain younger than `[research] young_domain_days`, when its age is known, counts zero; origins with the same known registrant or network, or all first seen inside `[research] burst_hours`, count once. The numbers are in §18. Three citations with one origin count once.
-- **No judge, no operator step, a weaker promise than 040.** `corroborated` is a count of independent, quote-verified, daemon-refetched citations of the same claim fingerprint. It is not an entailment check and it can be gamed by coordinated pages, so it reads **"corroborated · N origins"**, never "N verified sources", and the detail says it is weaker than **validated**. Where at least one of the origins is in a Primary or Reputable source class (040 Appendix A) the detail adds `includes a reputable source`. That is information for the reader, not a condition of the label.
+- **No judge, no operator step, a weaker promise than 040.** `corroborated` is a count of independent, quote-verified, daemon-refetched citations of the same claim fingerprint. It is not an entailment check and it can be gamed by coordinated pages, so it reads **"corroborated · N origins"**, never "N verified sources", and the detail says it is weaker than **validated**. The detail also shows the **anchored** flag below. The flag is information for the reader. It is not a condition of the label, and in this spec it changes no status.
 - **Disagreement wins.** Any source or Council dissent that contradicts the claim makes it **contested** (052 §3.4), whatever its count. A `refuted` verdict makes it **disproved**.
 - **Taint does not change.** A corroborated claim is still read content: it stays `external_untrusted` for what an agent's span may do, it is never promoted into an always-loaded rule, lesson, skill or `REVIEW.md` on its count (GOVERNANCE §4), and a source's trust never alters a claim's taint (066 §6). The status is a statement of reliance for readers; the taint lattice (spec 001 §5) is unchanged. Making `corroborated` a taint level would amend the constitution and is not proposed.
 - **A path up.** A corroborated claim becomes a candidate for background validation at low priority (040 §18.3), so a cheap, code-counted status leads to a validator check without anyone asking.
+- **Anchored: a flag, not a rung.** Each claim carries `anchored: k`, the number of its counted origins that are *anchors*: an origin on the operator's trusted list **within the topic scope the operator set for that entry**, or in the Primary or Reputable source class (040 Appendix A). The flag is the kind of trust the operator asked to see: several independent sources, and how many of them the operator or the class table vouches for. Guards (Council `t_0006`):
+  - **Weak or Hostile class vetoes the list.** A host on the list whose class is Weak or Hostile never anchors.
+  - **Young-domain and burst rules apply** to an anchor as to any origin (§18).
+  - **No self-reinforcement.** An anchor must have been on the list or in the class table before the claim was captured; a source cannot anchor the claims that caused it to be added.
+  - **A cycle check.** A claim derived from a corroborated claim (the citation graph, and origin dedupe through KB support) adds no origin to itself.
+  - This **amends 066 §5 and §9.3** ("a claim from a trusted source stays noted; no code path raises it"): trusted-list membership may now set a *displayed flag* within its topic scope. It still never changes a claim's status, taint, tier or queue order.
+- **Tags are recorded from day one; tiers wait for data.** Every claim stores its origin count, its anchored count, its contradiction state and the track record of its origins (055 §3.8), so that tiers above `corroborated` (for example "substantiated", "vetted" and an accept-all workflow) can be calibrated later. This spec pre-registers no number except the three origins of `corroborated`: 040 §15.4 refuses to fix thresholds before the operator's labelled set exists, and the Council agreed. The ladder beyond `corroborated` is OD-11.
 - **Retraction.** When a source is re-checked (055 §3.5) and its quote is gone, or it changed, its citation drops out of the count; the status is recomputed and falls back to **noted** or **contested**, and the change is recorded. The count is never cached past a re-check.
 - **Never an input to a grant.** No code path reads `corroborated` as a criterion for promotion, trust, tool access or approval (§12 item 17).
 - **The answer shows its evidence.** Each research answer includes a table: claim, sources, independent origins, status, and any dissent. A reader sees at once how much rests on one source and how much on several.
@@ -283,7 +290,7 @@ The Builder pack (host or inside) states the precondition: no approved spec, no 
 14. **Private is decided by the daemon (§7.2).** A claim without a daemon-refetched URL and quote, or with a missing, invalid or non-public `rung`, is stored private with no approval step. A fixture marked private is absent from each outbound path of 055 §10.1 and from a foreign-family seat's prompt, with `private_to_models = allow`. Corroboration (§7.6) counts distinct origin keys of daemon-refetched citations only: three citations with one origin give `noted`; three with distinct origins give `corroborated`; a contradicting citation gives `contested`; a dropped quote recomputes; no tool argument sets the status.
 15. **The merge check (§10) fails** a trailer naming a draft or missing spec, a spec added in the same PR, and a diff on a governed path, each by a fixture.
 16. **One egress choke point.** Every outbound path of 055 §10.1 calls one deny-by-default `is_private` check in the shared egress layer. A test enumerates the registered egress paths and fails if one does not call it, so a new path cannot ship unguarded.
-17. **`corroborated` grants nothing.** A test asserts that no code path reads the label as a criterion for promotion, trust, tool access or approval; it changes only what is displayed and the validator's queue order.
+17. **`corroborated` and `anchored` grant nothing.** A test asserts that no code path reads either as a criterion for promotion, trust, tool access or approval, and that any later tier or fast lane may change only what is displayed and queue order, never status, taint, promotion or tool access (GOVERNANCE §4).
 18. **Progress lines are fixed-form (§19).** They carry role, state, counts, elapsed time and a name from a closed list, never model text, tool arguments or paths, so a status call cannot carry an injection to the host. A hostile tool name or page title in a fixture does not appear in a tail.
 
 ### 12.1 What is enforced, and what is not
@@ -376,6 +383,7 @@ Each slice follows `AGENTS.md`: tests, clippy and `delphi lint` before committin
 - **OD-8.** Name and threshold of the new status: `corroborated`, three independent origins (§7.6). [As written.]
 - **OD-9.** The Council's own question (`t_0004`): host- and web-origin `noted` entries stay searchable at once, with seats made tool-less when they read them and the entries kept out of auto-retrieved briefs (§12 item 13), or are quarantined from Council seats until ratified. [The former; it restricts nothing coming in. Red-team of both Councils asked for the latter, or at least for briefs to carry only `validated` and `corroborated` entries; §12 item 13 already does that for briefs.]
 - **OD-10.** `[library] private_to_models` default (§7.2). [Keep `allow` for the operator's own providers; private entries never go to a foreign-family seat; `doctor` warns. Red-team asked for `deny`.]
+- **OD-11.** The ladder beyond `corroborated` (Council `t_0006`). Your proposal: `substantiated` (3+ origins, 1+ anchored), `vetted` (5+ origins, 2+ anchored and the validator's checks pass), fast-tracking and an accept-all-vetted workflow, and KB-prior tags. [Defer to its own draft spec, gated on 040's labelled set and its PROMOTE gate (§15.4: 60 clean blind audits, 10 missions, a 20% origin cap, backlog 0). Reasons the Council gave: 040 forbids pre-registering numbers before labelled data; a 3-item sample bounds batch-accept error at nothing useful; the tiers need a joint amendment of 040 §18.2, 052 §3.1 and 066 §5; and 098 is already ten slices. This spec ships the tags (above) so the data accumulates.]
 
 ## 15. Council review
 
@@ -435,6 +443,22 @@ Two independent Councils read the whole draft and the specs it amends. Both rule
 | Storage growth from keeping everything (3 seats) | §7.5 item 1: library budgets and a ranking test. |
 
 
+### 15.3 Council `t_0006` (2026-11-10, on the confidence-ladder proposal)
+
+Ruling: no decision; the architect and strategist each recommended **ship `corroborated` plus an `anchored` flag in 098, and move `substantiated`, `vetted`, batch accept, calibration and KB-prior tags to a separate spec** (6 P0s, none from the red-team, whose Round 2 was again unreadable, §17). Record: `missions/host-a4cc691a99d9ea4e/councils/005-…`; about 425,000 tokens. **The seats read 098 only up to the start of §15.1**: the pointer excerpt is capped, so they never saw §18 or §19.
+
+| Finding | Answer |
+| :-- | :-- |
+| Trusted list as an anchor contradicts 066 §5 and §9.3, and can self-reinforce (3 P0s) | §7.6 "Anchored": a displayed flag only, topic-scoped, Weak/Hostile veto, no self-reinforcement, explicit amendment of 066 §5 and §9.3. |
+| Batch accept samples 3 items and bypasses 040 §15.4 PROMOTE (2 P0s) | Deferred (OD-11). Not in this spec. |
+| Four tiers are scope creep in a ten-slice spec (P0) | Deferred (OD-11); only the tags ship. |
+| 3 and 5+2 are invented numbers (3 P1s) | No new number is pre-registered (§7.6 "Tags are recorded from day one"). |
+| Circular trust through KB support (P1) | The cycle check in §7.6 "Anchored". KB-prior tags are deferred. |
+| Extend the "grants nothing" test (P1) | §12 item 17. |
+| Red-team Round 1: missing Verification Plan section (P0) | Real: `delphi check spec` failed on it. Added as §16.1. |
+| Red-team Round 1: no reputable-origin requirement for `corroborated` (P0) | Not adopted: it would restrict a due-diligence label. The `anchored` flag shows the same information. |
+| Red-team Round 1: link-following is an SSRF risk; `private_to_models` default `allow` (P0s) | Already handled as switches the operator decides (OD-7b off by default; OD-10). Stated again so they are not read as missed. |
+
 ## 16. Acceptance criteria
 
 1. The locus table (§3.1) and the `locus` field exist; `get_agent` and `get_skill` return it; schemas and docs agree (`cargo test -p delphi --test docs` passes).
@@ -453,6 +477,28 @@ Two independent Councils read the whole draft and the specs it amends. Both rule
 14. `corroborated` follows §7.6 and §18 on fixtures: one origin repeated gives `noted`; three distinct, old, non-Weak origins give `corroborated · 3 origins`; a dropped quote recomputes; a Weak or young origin counts zero.
 15. A status call returns seat states and a fixed-form tail, flags a stalled seat, and `cancel_job` stops a job the host raised and refuses any other (§19).
 
+### 16.1 Verification Plan
+
+Every slice is verified by tests that run without a network or a model, plus the repository gates of `AGENTS.md`. Nothing here claims a live run.
+
+| Slice | How it is verified |
+| :-- | :-- |
+| S1a | Fixture library: a page off the trusted list is kept as `noted`; the coverage report names a reason per empty rung; the ranking test over a library with junk. |
+| S1b | Origin-key fixtures (one origin repeated, three distinct origins, a Weak or young origin, a dropped quote, a contradicting citation); the "grants nothing" test (§12 item 17). |
+| S1c | A hostile entry (instruction text, a forged closing tag) absent from a built Council brief; the private-flag and egress-enumeration tests (§12 items 14, 16); the `propose_kb_entry` schema accepts and rejects fixtures. |
+| S1d | URL fixtures: query strings, cross-origin redirects, private addresses, DNS pinning, a link that was never observed. |
+| S2 | A daemon test that a host cannot submit `council_format`, `venue: daemon` or a Council kind; the `council_unavailable` schema fixture. |
+| S3 | Schema lint and the docs test (`cargo test -p delphi --test docs`). |
+| S4 | The labeled set of at least 30 tasks, scored in code; deterministic tie-break test. |
+| S5 | Pack text tests; the plugin skill and `CLAUDE.md` template golden files. |
+| S6 | A Panel integration test with a fake foreign carrier: receipt families, the single-family label. |
+| S7 | Unit tests for the pack-id refusal and both caps; the no-grant test. |
+| S8 | The merge-check fixtures of §12 item 15, run in `delphi merge` and CI. |
+| S9 | The docs test; `invariant-enforcement.md` maps every enforced row of §12.1. |
+| S10 | A hostile tool name and page title absent from a tail; a stalled-seat fixture; `cancel_job` stops a fixture job and refuses another session's. |
+
+The gates before each commit are those of `AGENTS.md`: `cargo test --workspace --locked`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `delphi lint --repo .`, and `delphi check spec` on this file.
+
 ## 17. Not verified
 
 - The default `thin_below` of 3, and how fast a knowledge base and a trusted list grow under the way back in (§7.5); the spec says the effect is visible on a repeat question, not how large it is.
@@ -468,6 +514,8 @@ Two independent Councils read the whole draft and the specs it amends. Both rule
 - Every numeric value in §18 is a proposal for the slice to calibrate; none has been measured.
 - That a daemon refetch of a host's citation is possible under today's fetcher for hosts off the trusted list; it is not, until OD-7a is approved.
 - The host-socket method names that must reject Council labels (§5); S2 lists them from `host_rpc.rs`.
+- Councils `t_0004`, `t_0005` and `t_0006` all lost the red-team seat's Round 2 to the daemon's reply reading, not to the seat's silence; the cause and the proposed fix are outside this spec and are reported to the operator. A completed Round 2 from a red-team seat is still owed before approval.
+- Council `t_0006` read this spec only up to §15.1 because the pointer excerpt is capped. A review of §16 to §19 with ranged pointers is owed.
 
 ## 18. Pinned items (proposed values; the slices calibrate them)
 
@@ -477,7 +525,7 @@ Two independent Councils read the whole draft and the specs it amends. Both rule
 | `rung` | Integer 1 to 4. Any other value is absent. |
 | `thin_below` | Unit: kept, cited claims after dedupe. Default 3. |
 | Origin independence | 040 §6.2 exactly. Source classes Weak and Hostile count 0. `[research] young_domain_days` = 180 (age known only). `[research] similar_above` = 0.8 (shingle similarity) merges origins. Known same registrant or network counts once. Citations first seen within `[research] burst_hours` = 24 count once. |
-| Display | `corroborated · N origins`; the detail adds `includes a reputable source` when one origin is Primary or Reputable. |
+| Display | `corroborated · N origins`, with `anchored: k` in the detail and the words "weaker than validated". |
 | Retraction | A re-check (055 §3.5) that loses a quote drops that citation; the status is recomputed and recorded. |
 | Flag defaults | Every new behavior flag is `false` until its slice's exit criterion passes: `[hosts] route_adopt`, `[hosts] source_ladder`, `[research] ladder`, `[research] follow_links`, `[merge] require_spec_link`, `[seats] red_team_kind`. Refusals (§5, §9, §12) are always on. |
 | Panel on host disconnect | After `[seats] host_wait_secs` (default 600) with no call from the host, the daemon ends the Panel as `abandoned`, writes held Round 1 stances to the record unreleased, and stops its foreign seats. |

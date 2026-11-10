@@ -130,97 +130,109 @@
     },
     {
       "level": 2,
-      "line": 215,
+      "line": 222,
       "number": "8",
       "title": "`route` for any query"
     },
     {
       "level": 2,
-      "line": 228,
+      "line": 235,
       "number": "9",
       "title": "Generated task-scoped agents"
     },
     {
       "level": 2,
-      "line": 237,
+      "line": 244,
       "number": "10",
       "title": "Builder in the host, and the spec lifecycle"
     },
     {
       "level": 2,
-      "line": 258,
+      "line": 265,
       "number": "11",
       "title": "Records and summaries"
     },
     {
       "level": 2,
-      "line": 264,
+      "line": 271,
       "number": "12",
       "title": "Authority invariants and the stated limit"
     },
     {
       "level": 3,
-      "line": 289,
+      "line": 296,
       "number": "12.1",
       "title": "What is enforced, and what is not"
     },
     {
       "level": 2,
-      "line": 310,
+      "line": 317,
       "number": "13",
       "title": "Slices (one pull request each; none starts before approval)"
     },
     {
       "level": 3,
-      "line": 328,
+      "line": 335,
       "number": "13.1",
       "title": "Order, exit criteria and flags"
     },
     {
       "level": 2,
-      "line": 349,
+      "line": 356,
       "number": "14",
       "title": "Decisions"
     },
     {
       "level": 2,
-      "line": 380,
+      "line": 388,
       "number": "15",
       "title": "Council review"
     },
     {
       "level": 3,
-      "line": 399,
+      "line": 407,
       "number": "15.1",
       "title": "Council `t_0002` (2026-11-10, on this draft)"
     },
     {
       "level": 3,
-      "line": 415,
+      "line": 423,
       "number": "15.2",
       "title": "Councils `t_0004` and `t_0005` (2026-11-10, on the full text)"
     },
     {
+      "level": 3,
+      "line": 446,
+      "number": "15.3",
+      "title": "Council `t_0006` (2026-11-10, on the confidence-ladder proposal)"
+    },
+    {
       "level": 2,
-      "line": 438,
+      "line": 462,
       "number": "16",
       "title": "Acceptance criteria"
     },
     {
+      "level": 3,
+      "line": 480,
+      "number": "16.1",
+      "title": "Verification Plan"
+    },
+    {
       "level": 2,
-      "line": 456,
+      "line": 502,
       "number": "17",
       "title": "Not verified"
     },
     {
       "level": 2,
-      "line": 472,
+      "line": 520,
       "number": "18",
       "title": "Pinned items (proposed values; the slices calibrate them)"
     },
     {
       "level": 2,
-      "line": 488,
+      "line": 536,
       "number": "19",
       "title": "Progress you can see, and cancel"
     }
@@ -228,7 +240,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/098-where-agents-run-host-first-locus-and-the-inside-exceptions.md",
-    "sha256": "36619e6b4323d9d3bdbcceed193d1947f26110a7bb458296c38ecfb6080297a8"
+    "sha256": "5903e89bd916ee5b98c3ca39d9f59d00f1618809dddd007acb79cd9c89935618"
   },
   "source_status_at_hash": {
     "line": {
@@ -241,7 +253,7 @@
       },
       "text": "status: draft"
     },
-    "sha256": "36619e6b4323d9d3bdbcceed193d1947f26110a7bb458296c38ecfb6080297a8",
+    "sha256": "5903e89bd916ee5b98c3ca39d9f59d00f1618809dddd007acb79cd9c89935618",
     "word": "draft"
   },
   "spec": {
@@ -256,10 +268,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 1943,
+      "end": 2037,
       "end_line": 21,
       "line": 21,
-      "start": 1562
+      "start": 1656
     },
     "text": "When an operator works in a host (Claude Code, Copilot CLI, Codex, `agy`) and calls Delphi, the work should happen **in the host**, with the host's full tools and skills, and Delphi should supply the persona, method, specs, knowledge, memory and the checks the host cannot do for itself. Delphi runs a role **inside** only where its audit trail or its model families are the point."
   }
