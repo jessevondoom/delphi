@@ -240,7 +240,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/098-where-agents-run-host-first-locus-and-the-inside-exceptions.md",
-    "sha256": "5903e89bd916ee5b98c3ca39d9f59d00f1618809dddd007acb79cd9c89935618"
+    "sha256": "bd3fb47175dfe521926d98e7e3951a48e1b33e6c13ee5a41296a635f2520dca2"
   },
   "source_status_at_hash": {
     "line": {
@@ -253,7 +253,7 @@
       },
       "text": "status: draft"
     },
-    "sha256": "5903e89bd916ee5b98c3ca39d9f59d00f1618809dddd007acb79cd9c89935618",
+    "sha256": "bd3fb47175dfe521926d98e7e3951a48e1b33e6c13ee5a41296a635f2520dca2",
     "word": "draft"
   },
   "spec": {
@@ -268,10 +268,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 2037,
+      "end": 2043,
       "end_line": 21,
       "line": 21,
-      "start": 1656
+      "start": 1662
     },
     "text": "When an operator works in a host (Claude Code, Copilot CLI, Codex, `agy`) and calls Delphi, the work should happen **in the host**, with the host's full tools and skills, and Delphi should supply the persona, method, specs, knowledge, memory and the checks the host cannot do for itself. Delphi runs a role **inside** only where its audit trail or its model families are the point."
   }
