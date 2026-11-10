@@ -854,3 +854,14 @@ A draft for the operator: host first, the inside exceptions (Council, panel and 
 | S8 | Builder gate and the spec-review lint, after verifying what lint and CI already check | not started |
 | S9 | required summary after a panel or red team, generated reference, `llms.txt`, tracker | not started |
 | S10 | progress tail, stall flag and `cancel_job` for Councils and inside jobs | not started |
+
+## Spec 099: Round 2 readability (2026-11-10, approved)
+
+Approved by the operator on 2026-11-10 ("build the round 2 fix first please yes"), after traces of three daemon Councils (`t_0004`, `t_0005`, `t_0006`) showed the red-team seat's valid Round 2 critique discarded as `unreadable` each time. The reader keeps a structured reply's first critique, tolerates Markdown restatements, asks for the object only, repairs once, and says why a reply was unreadable. It amends spec 003 §4.2 for structured replies; the line-format rule is unchanged.
+
+| Slice | Content | Hours | State |
+| :-- | :-- | --: | :-- |
+| S0 | spec 099 approval and tracker entry | 4-6 | approved 2026-11-10 (merged with R1, #613) |
+| R1 | the reader: Markdown tolerance and the kept first critique | 6-10 | built (merged, #613) |
+| R2 | the object-only objective and one repair turn (the `agy` structured request already exists) | 8-12 | built (merged, #614) |
+| R3 | the cause in the event and on the card; the cut-excerpt notice | 6-10 | not started |

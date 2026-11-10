@@ -1,0 +1,122 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 099: Round 2 readability"
+    },
+    {
+      "level": 2,
+      "line": 20,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 3,
+      "line": 39,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 45,
+      "number": "1.2",
+      "title": "Simpler alternative considered"
+    },
+    {
+      "level": 2,
+      "line": 49,
+      "number": "2",
+      "title": "The changes"
+    },
+    {
+      "level": 3,
+      "line": 51,
+      "number": null,
+      "title": "R1. The reader (built in the same pull request as this spec)"
+    },
+    {
+      "level": 3,
+      "line": 69,
+      "number": null,
+      "title": "R2. Ask, and repair once (a separate pull request)"
+    },
+    {
+      "level": 3,
+      "line": 77,
+      "number": null,
+      "title": "R3. Say why (a separate pull request)"
+    },
+    {
+      "level": 2,
+      "line": 82,
+      "number": "3",
+      "title": "Authority invariants (what the tests prove)"
+    },
+    {
+      "level": 2,
+      "line": 91,
+      "number": "4",
+      "title": "Slices (one pull request each)"
+    },
+    {
+      "level": 2,
+      "line": 100,
+      "number": "5",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 113,
+      "number": "6",
+      "title": "Verification Plan"
+    },
+    {
+      "level": 2,
+      "line": 124,
+      "number": "7",
+      "title": "Decisions and what is not verified"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/099-round-2-readability-keep-a-valid-critique-ask-for-the-object-only-and-say-why.md",
+    "sha256": "0247dd06bb0ff7a1f9a16839a46696105d9a3d938111537b8f0ac2b72c7e5907"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 515,
+        "end_line": 6,
+        "line": 6,
+        "start": 313
+      },
+      "text": "status: approved   # by the operator, 2026-11-10 (\"build the round 2 fix first please yes\") for the five-point fix the operator was shown; the text as written takes effect when this pull request merges."
+    },
+    "sha256": "0247dd06bb0ff7a1f9a16839a46696105d9a3d938111537b8f0ac2b72c7e5907",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "orchestration-and-council",
+    "number": "099",
+    "stem": "099-round-2-readability-keep-a-valid-critique-ask-for-the-object-only-and-say-why",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "099: Round 2 readability: keep a seat's valid critique, ignore Markdown restatements, ask for the object only, repair once, and say why a reply was unreadable"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 1556,
+      "end_line": 22,
+      "line": 22,
+      "start": 1368
+    },
+    "text": "A daemon Council escalates when a seat's Round 2 cannot be read. For the red-team seat it has happened every time it was raised lately, and the cause is the reader, not the seat's silence."
+  }
+}

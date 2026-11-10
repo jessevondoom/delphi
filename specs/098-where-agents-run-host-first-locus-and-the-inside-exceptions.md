@@ -25,7 +25,7 @@ When an operator works in a host (Claude Code, Copilot CLI, Codex, `agy`) and ca
 - Host-side adoption of a role: `get_agent`, the `delphi` plugin skill and the `CLAUDE.md` template (077 §3.4, 062 §4). A pack is instructions, not authority (062 §4.4; 072 §1.1).
 - The daemon Council (`request_council`, 072 §8.1) and the server-held Panel with foreign seats, N seats by family, seat receipts, the family table, `require_families` and the `homogeneous` label (086, 091; `council_open` takes `foreign_seats`).
 - `spawn_agent_pack` (072 §4.2): a deterministic, ephemeral pack from a base role, with a content hash.
-- `route` and `search_agent_registry` over bundle agents (041 §4), `consult_orchestrator` (072 §4.1), `request_research` (066), `record_session_summary`, and staged, ratified-only proposals (062 §14.6).
+- `route` and `search_agent_registry` over bundle agents (041 §4), `consult_orchestrator` (072 §4.1), `request_research` (066), `record_session_summary`, and staged, ratified-only proposals (062 §14 item 6).
 
 **What is missing or wrong:**
 
@@ -230,7 +230,7 @@ The ladder of 052 §3.1 gains one rung, between **noted** and **validated**:
 - `trigger` is derived from words and stakes in a fixed table (a decision between options, a review of a spec or a diff, an irreversible action); it is advice and never starts anything.
 - `consult_orchestrator` stays the escalation path (levels 1 to 4). `route` answers "who and where"; the orchestrator answers "how, in what order".
 - Read content cannot raise `confidence`, set `adopt` or choose the role: the query is the host's task text only, capped as today, and the result is returned as untrusted data.
-- When the daemon is reachable, each answer is logged as `route.decided {task_chars, target, confidence, adopt, threshold}` (no task text). `route` never starts a daemon (062 §14.2).
+- When the daemon is reachable, each answer is logged as `route.decided {task_chars, target, confidence, adopt, threshold}` (no task text). `route` never starts a daemon (062 §14 item 2).
 
 ## 9. Generated task-scoped agents
 
@@ -239,7 +239,7 @@ The ladder of 052 §3.1 gains one rung, between **noted** and **validated**:
 - A generated pack is **task work only**. `council_open`, `council_brief` and red-team seats accept only canonical roles or registered bundle agents; a pack id is refused there with a fixed sentence.
 - A pack may narrow or equal its base role's scope, never widen it: scope, tools and counterweights come from the base role (already said in the pack). A test asserts that the pack text for any `custom_heuristics` input contains no grant of a tool, permission, approval or scope, using the existing rule linter (062 §4.4).
 - Two caps: `[mcp] max_packs_per_task` (default 5, OD-4) and `[mcp] max_packs_per_session` (default 20), so a host that cycles task names cannot spawn packs without limit. Past a cap, `spawn_agent_pack` answers a fixed sentence.
-- A pack is ephemeral and has the content hash of 062 §14.10. Promoting one to a saved role is a proposal (`propose_*`), applied only on ratification (GOVERNANCE §4, §7).
+- A pack is ephemeral and has the content hash of 062 §14 item 10. Promoting one to a saved role is a proposal (`propose_*`), applied only on ratification (GOVERNANCE §4, §7).
 
 ## 10. Builder in the host, and the spec lifecycle
 
@@ -266,7 +266,7 @@ The Builder pack (host or inside) states the precondition: no approved spec, no 
 
 - A **Council** writes its record in the daemon (`council_format: 1`). A **Panel** or **red-team** review writes the same record and ends with a summary: the seats, the family of each from the receipts, whether each ran in the host or inside, and the single-family label when it applies. The host passes `record_session_summary` at the end of a panel or red-team action; the card is not complete without it, and the server writes the summary's seat lines itself from receipts, so the host's text adds only its own account.
 - Ordinary host work: a summary at the end is **best effort**, offered by the skill.
-- A host-written summary is `host-reported` and `external_untrusted`; it can never feed a lesson, heuristic, skill or rule without ratification (GOVERNANCE §4; 062 §14.6).
+- A host-written summary is `host-reported` and `external_untrusted`; it can never feed a lesson, heuristic, skill or rule without ratification (GOVERNANCE §4; 062 §14 item 6).
 
 ## 12. Authority invariants and the stated limit
 
@@ -280,7 +280,7 @@ The Builder pack (host or inside) states the precondition: no approved spec, no 
 4. A pack id is refused by `council_open`, `council_brief` and red-team seats.
 5. The `route` and `consult_orchestrator` answers are untrusted data; text read by the host cannot change them.
 6. A host's `record_session_summary`, `propose_kb_entry` and `handoff_put` stay `external_untrusted`/`host-reported` and unpromoted.
-7. No new MCP tool writes outside Delphi's own log; `delphi mcp` still opens no network socket and writes no file (062 §14.1).
+7. No new MCP tool writes outside Delphi's own log; `delphi mcp` still opens no network socket and writes no file (062 §14 item 1).
 8. Inside research reaches only trusted hosts and sends no host context into a query (066 §6); no agent changes the trusted list (§7.5).
 9. Delphi never reads, grants or widens the host's approved sources (§7.2): no Delphi tool takes a connector name, a token or a host setting as an argument, and the pack tests assert the pack contains no instruction to request access to a source.
 10. Material from a rung-3 source never reaches a Delphi tool without the operator's say for that item; a test sends a fixture marked private through `propose_kb_entry`, `propose_note` and `handoff_put` and expects a refusal text, not a write.
@@ -392,7 +392,7 @@ A daemon Council (`t_0001`, 2026-11-10; architect, red-team and strategist, clau
 | Finding | Answer in this draft |
 | :-- | :-- |
 | Host locus must exclude Builder and any mutating role (P0) | **Not adopted.** The gate is the approved spec and the boundary checks (§10); host-run roles already carry host authority (062 §1.1, 072 §1.1). The operator decided this on 2026-11-10. |
-| Host output and summaries need taint and may not feed promotion (P0) | Already true (062 §14.6, GOVERNANCE §4); restated in §11 and §12 item 6. |
+| Host output and summaries need taint and may not feed promotion (P0) | Already true (062 §14 item 6, GOVERNANCE §4); restated in §11 and §12 item 6. |
 | Part 6 generated definitions: defer; subset check; never in council or panel (P0, P1) | Not deferred, because `spawn_agent_pack` already exists. Guards added (§9). A pack id is refused for council, panel and red-team seats. |
 | Host-mediated dispatch breaks foreign-seat blindness (P0) | The Panel barrier holds Round 1 in daemon memory (086 §4.2); the red-team kind reuses it (§6.2). |
 | Seat receipts daemon-signed; host family is a claim (P1) | Already built (091 SR-1, SR-2); §6.3 states the rule. |
