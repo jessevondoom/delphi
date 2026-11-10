@@ -84,7 +84,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/099-round-2-readability-keep-a-valid-critique-ask-for-the-object-only-and-say-why.md",
-    "sha256": "0247dd06bb0ff7a1f9a16839a46696105d9a3d938111537b8f0ac2b72c7e5907"
+    "sha256": "07ae69e89ca385cbcaf61b37fdd0342ad5f6bc96394a9c3f6bd8e1b7a5e28269"
   },
   "source_status_at_hash": {
     "line": {
@@ -97,7 +97,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-10 (\"build the round 2 fix first please yes\") for the five-point fix the operator was shown; the text as written takes effect when this pull request merges."
     },
-    "sha256": "0247dd06bb0ff7a1f9a16839a46696105d9a3d938111537b8f0ac2b72c7e5907",
+    "sha256": "07ae69e89ca385cbcaf61b37fdd0342ad5f6bc96394a9c3f6bd8e1b7a5e28269",
     "word": "approved"
   },
   "spec": {

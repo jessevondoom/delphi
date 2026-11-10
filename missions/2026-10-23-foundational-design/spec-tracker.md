@@ -844,4 +844,4 @@ Approved by the operator on 2026-11-10 ("build the round 2 fix first please yes"
 | S0 | spec 099 approval and tracker entry | 4-6 | approved 2026-11-10; the same pull request carries R1 |
 | R1 | the reader: Markdown tolerance and the kept first critique | 6-10 | built in this pull request |
 | R2 | the object-only objective and one repair turn (the `agy` structured request already exists) | 8-12 | built (stacked pull request on #613) |
-| R3 | the cause in the event and on the card; the cut-excerpt notice | 6-10 | not started |
+| R3 | the cause in the event and on the card; the cut-excerpt notice | 6-10 | built (this pull request) |

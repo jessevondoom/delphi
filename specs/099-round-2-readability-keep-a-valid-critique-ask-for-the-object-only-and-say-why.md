@@ -77,7 +77,7 @@ This follows the 089 Panel pattern (two rejections) but allows one turn, because
 ### R3. Say why (a separate pull request)
 
 1. The `council.critique` event and the ruling card name a **cause** from a closed list: `conflicting_block`, `no_recommendation`, `empty`, `declined`, `abstained`. They show whether the first critique was kept ("kept; conflicting block dropped") or the reply was unreadable, with a pointer to the record section that holds the text.
-2. **An excerpt that the cap cut says so.** The brief states "lines 1 to N of M; read the rest with `read_file`". The seats of Council `t_0006` read spec 098 only up to its section 15.1 and never said how much was cut.
+2. **An excerpt that the cap cut says so.** The cap is in `tools::read_pointer`, which turns each context pointer of a daemon seat's handoff into a slice: 400 lines with no range, a 400-line window for a range, and 256 KiB of bytes read. When a cap cut the text, the slice ends with one fixed line: `[excerpt cut: lines 1 to N of M; read the rest with read_file]`, or, when the byte cap applied, a line that says so in bytes. A range the caller chose that fits inside the window gets no notice. The seats of Council `t_0006` read spec 098 only up to about its section 15.1 (line 400) and never said how much was cut. A Panel's seats read pointers with their own tools (`council_brief` attaches none), so no notice applies there.
 
 ## 3. Authority invariants (what the tests prove)
 
@@ -95,7 +95,7 @@ This follows the 089 Panel pattern (two rejections) but allows one turn, because
 | S0 | this spec | 4-6 | approved when its pull request merges (the same pull request carries R1) |
 | R1 | the reader: Markdown tolerance and the kept first critique | 6-10 | built in this pull request |
 | R2 | the object-only objective and the one repair turn (the `agy` structured request already exists) | 8-12 | built (stacked pull request) |
-| R3 | the cause in the event and on the card; the cut-excerpt notice | 6-10 | not started |
+| R3 | the cause in the event and on the card; the cut-excerpt notice | 6-10 | built (pull request open) |
 
 ## 5. Acceptance criteria
 
