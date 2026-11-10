@@ -835,13 +835,33 @@ From Council `t_0001` over two research notes (CAO, Paperclip); the operator cho
 | B1 | spawn-site ratchet, generalized must-run gate, home isolation, three authority audits, `cargo deny` gate, harness live-text test | 14-20 | built (merged, #552) |
 | B2 | newer-schema log error and a v0.5.5 log fixture, typed harness result failures, usage-quality doctor check | 8-12 | built (PR open); findings: totals add an unknown price as 0 (own slice); the in-band error list is unverified guesses |
 
+## Spec 098: where agents run (2026-11-10, draft)
+
+A draft for the operator: host first, the inside exceptions (Council, panel and red-team seats of other families), a `locus` declaration, `route` for any query, generated task-scoped agents with guards, the Builder in the host against an approved spec, and a research path that works the first time. Written after Council `t_0001` (2026-11-10) reviewed the outline, which escalated; the draft answers its findings in §15 and Council `t_0002` reviewed the draft (PROCEED-WITH-CHANGES, 9 P0s, two seats could not read the text); its findings are answered in §15.1 and the slices now run in waves behind flags (§13.1). Councils `t_0004` and `t_0005` then read the full text and both ruled PROCEED-WITH-CHANGES (answered in §15.2; red-team's Round 2 unreadable in both, so a rerun is owed). The research redesign keeps everything found and adds a `corroborated` status with a `trusted_sources` flag (§7.5, §7.6); §19 adds progress visibility. Council `t_0006` (on a substantiated/vetted ladder) advised shipping only `corroborated` plus `trusted_sources`; the higher tiers go to their own spec 100, built before release, with 040 §15.4's audit as a roll-back trigger, not a promotion gate (OD-11, decided 2026-11-10); `delphi check spec` now passes. One spec by the operator's choice. Research is limited while the knowledge base and the trusted list are small; outside search fills the gap and grows Delphi (§7.5). Nothing below starts before approval.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| S1a | keep everything found as `noted`, per-rung coverage report, `thin_below`, `delphi doctor` size checks | not started |
+| S1b | `corroborated` status: origin keys by 040 §6.2, daemon refetch, retraction, public-only pass | not started |
+| S1c | the way back in: `propose_kb_entry` schema, daemon-decided `private`, source decision cards, egress choke point, seat rule | not started |
+| S1d | wider fetch: 7a observed search-result URLs, 7b one-hop links behind a flag | not started; needs OD-7 |
+| S2 | Councils inside only: rename Mode B, `council_unavailable`, no-relabel tests | not started |
+| S3 | `locus` field, schemas, pack header, capability names, Claude Code adapter with version and hash | not started |
+| S4 | `route` for any query: canonical roles, `locus`, `trigger`, `confidence`, `adopt`, threshold, `route.decided` | not started |
+| S5 | KB first, the research reflex and the offer rule (manifests, plugin skill, `CLAUDE.md` template) | not started |
+| S6 | standalone red team (`kind: red_team`) and `ask_family` (091 SR-5) | not started |
+| S7 | pack guards: council and red-team refuse packs, per-task cap, no-grant test | not started |
+| S8 | Builder gate and the spec-review lint, after verifying what lint and CI already check | not started |
+| S9 | required summary after a panel or red team, generated reference, `llms.txt`, tracker | not started |
+| S10 | progress tail, stall flag and `cancel_job` for Councils and inside jobs | not started |
+
 ## Spec 099: Round 2 readability (2026-11-10, approved)
 
 Approved by the operator on 2026-11-10 ("build the round 2 fix first please yes"), after traces of three daemon Councils (`t_0004`, `t_0005`, `t_0006`) showed the red-team seat's valid Round 2 critique discarded as `unreadable` each time. The reader keeps a structured reply's first critique, tolerates Markdown restatements, asks for the object only, repairs once, and says why a reply was unreadable. It amends spec 003 §4.2 for structured replies; the line-format rule is unchanged.
 
 | Slice | Content | Hours | State |
 | :-- | :-- | --: | :-- |
-| S0 | spec 099 approval and tracker entry | 4-6 | approved 2026-11-10; the same pull request carries R1 |
-| R1 | the reader: Markdown tolerance and the kept first critique | 6-10 | built in this pull request |
-| R2 | the object-only objective and one repair turn (the `agy` structured request already exists) | 8-12 | built (stacked pull request on #613) |
+| S0 | spec 099 approval and tracker entry | 4-6 | approved 2026-11-10 (merged with R1, #613) |
+| R1 | the reader: Markdown tolerance and the kept first critique | 6-10 | built (merged, #613) |
+| R2 | the object-only objective and one repair turn (the `agy` structured request already exists) | 8-12 | built (merged, #614) |
 | R3 | the cause in the event and on the card; the cut-excerpt notice | 6-10 | not started |
