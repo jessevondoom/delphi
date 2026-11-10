@@ -101,7 +101,7 @@ _No standard scope section; open the spec._
 
 ## 099-round-2-readability-keep-a-valid-critique-ask-for-the-object-only-and-say-why
 
-**099: Round 2 readability: keep a seat's valid critique, ignore Markdown restatements, ask for the object only, repair once, and say why a reply was unreadable** · approved (per source at `07ae69e89ca3`) · tier 0 · [source](../../specs/099-round-2-readability-keep-a-valid-critique-ask-for-the-object-only-and-say-why.md)
+**099: Round 2 readability: keep a seat's valid critique, ignore Markdown restatements, ask for the object only, repair once, and say why a reply was unreadable** · approved (per source at `a2ebff4b2475`) · tier 0 · [source](../../specs/099-round-2-readability-keep-a-valid-critique-ask-for-the-object-only-and-say-why.md)
 
 **source excerpt, untrusted** · `specs/099-round-2-readability-keep-a-valid-critique-ask-for-the-object-only-and-say-why.md` line 22
 

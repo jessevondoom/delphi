@@ -1,0 +1,278 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 098: Where agents run"
+    },
+    {
+      "level": 2,
+      "line": 20,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 3,
+      "line": 42,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 50,
+      "number": "1.2",
+      "title": "Simpler alternative considered"
+    },
+    {
+      "level": 2,
+      "line": 54,
+      "number": "2",
+      "title": "Principles"
+    },
+    {
+      "level": 2,
+      "line": 63,
+      "number": "3",
+      "title": "The rule and the locus table"
+    },
+    {
+      "level": 3,
+      "line": 65,
+      "number": "3.1",
+      "title": "The table"
+    },
+    {
+      "level": 3,
+      "line": 77,
+      "number": "3.2",
+      "title": "The `locus` declaration"
+    },
+    {
+      "level": 2,
+      "line": 87,
+      "number": "4",
+      "title": "Host-portable definitions"
+    },
+    {
+      "level": 2,
+      "line": 94,
+      "number": "5",
+      "title": "Councils run inside only"
+    },
+    {
+      "level": 2,
+      "line": 109,
+      "number": "6",
+      "title": "Panels and red team"
+    },
+    {
+      "level": 3,
+      "line": 111,
+      "number": "6.1",
+      "title": "Panels"
+    },
+    {
+      "level": 3,
+      "line": 115,
+      "number": "6.2",
+      "title": "Red team"
+    },
+    {
+      "level": 3,
+      "line": 124,
+      "number": "6.3",
+      "title": "Family honesty"
+    },
+    {
+      "level": 2,
+      "line": 128,
+      "number": "7",
+      "title": "Research and investigation"
+    },
+    {
+      "level": 3,
+      "line": 130,
+      "number": "7.1",
+      "title": "The source ladder"
+    },
+    {
+      "level": 3,
+      "line": 145,
+      "number": "7.2",
+      "title": "Host sources are the host's to approve"
+    },
+    {
+      "level": 3,
+      "line": 158,
+      "number": "7.3",
+      "title": "The reflex and the offer"
+    },
+    {
+      "level": 3,
+      "line": 166,
+      "number": "7.4",
+      "title": "No false limitations"
+    },
+    {
+      "level": 3,
+      "line": 175,
+      "number": "7.5",
+      "title": "Research grows Delphi: everything found is kept, labeled by how well it is supported"
+    },
+    {
+      "level": 3,
+      "line": 196,
+      "number": "7.6",
+      "title": "Corroboration: due diligence, not proof"
+    },
+    {
+      "level": 2,
+      "line": 223,
+      "number": "8",
+      "title": "`route` for any query"
+    },
+    {
+      "level": 2,
+      "line": 236,
+      "number": "9",
+      "title": "Generated task-scoped agents"
+    },
+    {
+      "level": 2,
+      "line": 245,
+      "number": "10",
+      "title": "Builder in the host, and the spec lifecycle"
+    },
+    {
+      "level": 2,
+      "line": 266,
+      "number": "11",
+      "title": "Records and summaries"
+    },
+    {
+      "level": 2,
+      "line": 272,
+      "number": "12",
+      "title": "Authority invariants and the stated limit"
+    },
+    {
+      "level": 3,
+      "line": 297,
+      "number": "12.1",
+      "title": "What is enforced, and what is not"
+    },
+    {
+      "level": 2,
+      "line": 318,
+      "number": "13",
+      "title": "Slices (one pull request each; none starts before approval)"
+    },
+    {
+      "level": 3,
+      "line": 336,
+      "number": "13.1",
+      "title": "Order, exit criteria and flags"
+    },
+    {
+      "level": 2,
+      "line": 357,
+      "number": "14",
+      "title": "Decisions"
+    },
+    {
+      "level": 2,
+      "line": 389,
+      "number": "15",
+      "title": "Council review"
+    },
+    {
+      "level": 3,
+      "line": 408,
+      "number": "15.1",
+      "title": "Council `t_0002` (2026-11-10, on this draft)"
+    },
+    {
+      "level": 3,
+      "line": 424,
+      "number": "15.2",
+      "title": "Councils `t_0004` and `t_0005` (2026-11-10, on the full text)"
+    },
+    {
+      "level": 3,
+      "line": 447,
+      "number": "15.3",
+      "title": "Council `t_0006` (2026-11-10, on the confidence-ladder proposal)"
+    },
+    {
+      "level": 2,
+      "line": 463,
+      "number": "16",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 3,
+      "line": 481,
+      "number": "16.1",
+      "title": "Verification Plan"
+    },
+    {
+      "level": 2,
+      "line": 503,
+      "number": "17",
+      "title": "Not verified"
+    },
+    {
+      "level": 2,
+      "line": 521,
+      "number": "18",
+      "title": "Pinned items (proposed values; the slices calibrate them)"
+    },
+    {
+      "level": 2,
+      "line": 537,
+      "number": "19",
+      "title": "Progress you can see, and cancel"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/098-where-agents-run-host-first-locus-and-the-inside-exceptions.md",
+    "sha256": "fccaa17bcf7f609c9da00ab33ff7c0769e039ccbec5c876f98231f3517533bef"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 741,
+        "end_line": 6,
+        "line": 6,
+        "start": 317
+      },
+      "text": "status: approved   # by the operator, 2026-11-10 (\"approve spec 098\"): the text as written. OD-1 to OD-6 and OD-8 to OD-11 of section 14 take their recommendations. OD-7 (inside fetch) was decided by the operator the same day (\"7a yes, 7b off\"): 7a is approved, 7b is off and not built. A review with a completed red-team Round 2 (section 17) was not run before approval. The text takes effect when this pull request merges."
+    },
+    "sha256": "fccaa17bcf7f609c9da00ab33ff7c0769e039ccbec5c876f98231f3517533bef",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "hosts-and-mcp",
+    "number": "098",
+    "stem": "098-where-agents-run-host-first-locus-and-the-inside-exceptions",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "098: Where agents run: host first, the inside exceptions (Council, panel seats, red team), a locus declaration, routing for any query, and a research path that works the first time"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2498,
+      "end_line": 22,
+      "line": 22,
+      "start": 2117
+    },
+    "text": "When an operator works in a host (Claude Code, Copilot CLI, Codex, `agy`) and calls Delphi, the work should happen **in the host**, with the host's full tools and skills, and Delphi should supply the persona, method, specs, knowledge, memory and the checks the host cannot do for itself. Delphi runs a role **inside** only where its audit trail or its model families are the point."
+  }
+}

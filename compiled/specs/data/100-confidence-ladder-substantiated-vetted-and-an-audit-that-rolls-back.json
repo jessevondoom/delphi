@@ -1,0 +1,206 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 100: The confidence ladder"
+    },
+    {
+      "level": 2,
+      "line": 20,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 3,
+      "line": 36,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 43,
+      "number": "1.2",
+      "title": "Simpler alternative considered"
+    },
+    {
+      "level": 2,
+      "line": 47,
+      "number": "2",
+      "title": "Principles"
+    },
+    {
+      "level": 2,
+      "line": 56,
+      "number": "3",
+      "title": "The ladder"
+    },
+    {
+      "level": 3,
+      "line": 58,
+      "number": "3.1",
+      "title": "The tags (from spec 098)"
+    },
+    {
+      "level": 3,
+      "line": 64,
+      "number": "3.2",
+      "title": "The table, and why the numbers are only defaults"
+    },
+    {
+      "level": 2,
+      "line": 75,
+      "number": "4",
+      "title": "Vetted is the validator's would-ratify, made visible"
+    },
+    {
+      "level": 2,
+      "line": 86,
+      "number": "5",
+      "title": "The fast lane"
+    },
+    {
+      "level": 2,
+      "line": 90,
+      "number": "6",
+      "title": "Accept all vetted"
+    },
+    {
+      "level": 2,
+      "line": 100,
+      "number": "7",
+      "title": "The audit is a roll-back trigger, not a promotion gate"
+    },
+    {
+      "level": 3,
+      "line": 104,
+      "number": "7.1",
+      "title": "Running the audit"
+    },
+    {
+      "level": 3,
+      "line": 111,
+      "number": "7.2",
+      "title": "What triggers a roll-back"
+    },
+    {
+      "level": 3,
+      "line": 119,
+      "number": "7.3",
+      "title": "What a roll-back does"
+    },
+    {
+      "level": 3,
+      "line": 129,
+      "number": "7.4",
+      "title": "What the audit cannot show"
+    },
+    {
+      "level": 2,
+      "line": 136,
+      "number": "8",
+      "title": "Calibration"
+    },
+    {
+      "level": 2,
+      "line": 140,
+      "number": "9",
+      "title": "Knowledge-base tags and the amendments"
+    },
+    {
+      "level": 3,
+      "line": 142,
+      "number": "9.1",
+      "title": "KB-prior tags"
+    },
+    {
+      "level": 3,
+      "line": 148,
+      "number": "9.2",
+      "title": "Amendments (they take effect on approval)"
+    },
+    {
+      "level": 2,
+      "line": 155,
+      "number": "10",
+      "title": "Authority invariants (what the tests prove)"
+    },
+    {
+      "level": 2,
+      "line": 166,
+      "number": "11",
+      "title": "Slices (one pull request each; none starts before approval)"
+    },
+    {
+      "level": 2,
+      "line": 180,
+      "number": "12",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 192,
+      "number": "13",
+      "title": "Verification Plan"
+    },
+    {
+      "level": 2,
+      "line": 210,
+      "number": "14",
+      "title": "Decisions and open questions"
+    },
+    {
+      "level": 2,
+      "line": 229,
+      "number": "15",
+      "title": "Council record"
+    },
+    {
+      "level": 2,
+      "line": 244,
+      "number": "16",
+      "title": "Known limits and what is not verified"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/100-confidence-ladder-substantiated-vetted-and-an-audit-that-rolls-back.md",
+    "sha256": "9ade344670ba3a4ddff1f9a2003242464c98187af8b105dd702ba74cc7f69851"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 642,
+        "end_line": 6,
+        "line": 6,
+        "start": 264
+      },
+      "text": "status: approved   # by the operator, 2026-11-10 (\"approve spec 099 and spec 100\"): the text as written, including that 040 section 15.4's audit is a roll-back trigger and not a promotion gate. OD-1 to OD-6 of section 14 take their recommendations. The tier numbers are hypotheses to calibrate, not pre-registered thresholds. The text takes effect when this pull request merges."
+    },
+    "sha256": "9ade344670ba3a4ddff1f9a2003242464c98187af8b105dd702ba74cc7f69851",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "knowledge-and-memory",
+    "number": "100",
+    "stem": "100-confidence-ladder-substantiated-vetted-and-an-audit-that-rolls-back",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "100: The confidence ladder: substantiated and vetted tiers, an accept-all workflow, and an audit that rolls a tier back"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2392,
+      "end_line": 22,
+      "line": 22,
+      "start": 1820
+    },
+    "text": "The operator's aim (2026-11-10): **no learning is absolute, but a high degree of confidence is the goal.** Research should find more, keep what it finds, and say how well each claim is supported. As the knowledge base grows with accepted facts, that knowledge helps judge new learnings without expanding trust. Neither a human nor an agent is likely to do better than five independent sources with two trusted ones, so the strongest tier should be cheap for the operator to accept in bulk, and the operator should be able to find out afterwards whether that was a mistake."
+  }
+}
