@@ -156,7 +156,7 @@ Agents today read and write plain text only (`read_file`, `write_file`, 256 KB c
 
 ## 100-confidence-ladder-substantiated-vetted-and-an-audit-that-rolls-back
 
-**100: The confidence ladder: substantiated and vetted tiers, an accept-all workflow, and an audit that rolls a tier back** · approved (per source at `181498f0bf5a`) · tier 0 · [source](../../specs/100-confidence-ladder-substantiated-vetted-and-an-audit-that-rolls-back.md)
+**100: The confidence ladder: substantiated and vetted tiers, an accept-all workflow, and an audit that rolls a tier back** · approved (per source at `9ade344670ba`) · tier 0 · [source](../../specs/100-confidence-ladder-substantiated-vetted-and-an-audit-that-rolls-back.md)
 
 **source excerpt, untrusted** · `specs/100-confidence-ladder-substantiated-vetted-and-an-audit-that-rolls-back.md` line 22
 

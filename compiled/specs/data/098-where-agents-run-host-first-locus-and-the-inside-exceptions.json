@@ -240,20 +240,20 @@
   "schema_version": 1,
   "source": {
     "path": "specs/098-where-agents-run-host-first-locus-and-the-inside-exceptions.md",
-    "sha256": "f15ccfef00ea1d0c5eb52d9583f69827de45565789a13bf09c28e5b1bc603aea"
+    "sha256": "fccaa17bcf7f609c9da00ab33ff7c0769e039ccbec5c876f98231f3517533bef"
   },
   "source_status_at_hash": {
     "line": {
       "kind": "quote",
       "span": {
-        "end": 718,
+        "end": 741,
         "end_line": 6,
         "line": 6,
         "start": 317
       },
-      "text": "status: approved   # by the operator, 2026-11-10 (\"approve spec 098\"): the text as written. OD-1 to OD-6 and OD-8 to OD-11 of section 14 take their recommendations. OD-7 (inside fetch) is NOT decided by this approval: slice S1d waits for the operator's yes to 7a. A review with a completed red-team Round 2 (section 17) was not run before approval. The text takes effect when this pull request merges."
+      "text": "status: approved   # by the operator, 2026-11-10 (\"approve spec 098\"): the text as written. OD-1 to OD-6 and OD-8 to OD-11 of section 14 take their recommendations. OD-7 (inside fetch) was decided by the operator the same day (\"7a yes, 7b off\"): 7a is approved, 7b is off and not built. A review with a completed red-team Round 2 (section 17) was not run before approval. The text takes effect when this pull request merges."
     },
-    "sha256": "f15ccfef00ea1d0c5eb52d9583f69827de45565789a13bf09c28e5b1bc603aea",
+    "sha256": "fccaa17bcf7f609c9da00ab33ff7c0769e039ccbec5c876f98231f3517533bef",
     "word": "approved"
   },
   "spec": {
@@ -268,10 +268,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 2485,
+      "end": 2498,
       "end_line": 22,
       "line": 22,
-      "start": 2104
+      "start": 2117
     },
     "text": "When an operator works in a host (Claude Code, Copilot CLI, Codex, `agy`) and calls Delphi, the work should happen **in the host**, with the host's full tools and skills, and Delphi should supply the persona, method, specs, knowledge, memory and the checks the host cannot do for itself. Delphi runs a role **inside** only where its audit trail or its model families are the point."
   }

@@ -15,7 +15,7 @@ tags: [spec, knowledge, validator, confidence, audit, rollback, draft]
 
 # Spec 100: The confidence ladder
 
-> **Status: approved by the operator, 2026-11-10.** It depends on **spec 098** (approved, merged in pull request #612; its OD-7 is open and does not affect this spec), sections 7.5 and 7.6, which define the `corroborated` status, the `trusted_sources` flag and the tags this spec reads. It amends [`specs/040`](040-validator-role-and-fact-ratification.md) §15.4 and §18.2, [`specs/052`](052-knowledge-status-capture-on-contact-and-the-digest.md) §3.1 and [`specs/066`](066-mcp-research-endpoint-and-role-identity.md) §5; each amendment is listed in §9 and takes effect when this pull request merges. **It widens no authority**: no tier is a taint level, and none unlocks promotion, tool access or approval.
+> **Status: approved by the operator, 2026-11-10.** It depends on **spec 098** (approved, merged in pull request #612; its OD-7 was decided as "7a yes, 7b off" and does not affect this spec), sections 7.5 and 7.6, which define the `corroborated` status, the `trusted_sources` flag and the tags this spec reads. It amends [`specs/040`](040-validator-role-and-fact-ratification.md) §15.4 and §18.2, [`specs/052`](052-knowledge-status-capture-on-contact-and-the-digest.md) §3.1 and [`specs/066`](066-mcp-research-endpoint-and-role-identity.md) §5; each amendment is listed in §9 and takes effect when this pull request merges. **It widens no authority**: no tier is a taint level, and none unlocks promotion, tool access or approval.
 
 ## 1. Scope and objectives
 

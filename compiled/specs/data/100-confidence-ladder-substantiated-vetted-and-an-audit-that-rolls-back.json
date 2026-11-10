@@ -168,7 +168,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/100-confidence-ladder-substantiated-vetted-and-an-audit-that-rolls-back.md",
-    "sha256": "181498f0bf5ad975a40fc79dbbd8afaf7115abe9ffb347406dcef21fd4e824ad"
+    "sha256": "9ade344670ba3a4ddff1f9a2003242464c98187af8b105dd702ba74cc7f69851"
   },
   "source_status_at_hash": {
     "line": {
@@ -181,7 +181,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-10 (\"approve spec 099 and spec 100\"): the text as written, including that 040 section 15.4's audit is a roll-back trigger and not a promotion gate. OD-1 to OD-6 of section 14 take their recommendations. The tier numbers are hypotheses to calibrate, not pre-registered thresholds. The text takes effect when this pull request merges."
     },
-    "sha256": "181498f0bf5ad975a40fc79dbbd8afaf7115abe9ffb347406dcef21fd4e824ad",
+    "sha256": "9ade344670ba3a4ddff1f9a2003242464c98187af8b105dd702ba74cc7f69851",
     "word": "approved"
   },
   "spec": {
@@ -196,10 +196,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 2368,
+      "end": 2392,
       "end_line": 22,
       "line": 22,
-      "start": 1796
+      "start": 1820
     },
     "text": "The operator's aim (2026-11-10): **no learning is absolute, but a high degree of confidence is the goal.** Research should find more, keep what it finds, and say how well each claim is supported. As the knowledge base grows with accepted facts, that knowledge helps judge new learnings without expanding trust. Neither a human nor an agent is likely to do better than five independent sources with two trusted ones, so the strongest tier should be cheap for the operator to accept in bulk, and the operator should be able to find out afterwards whether that was a mistake."
   }
