@@ -704,6 +704,13 @@ pub struct McpConfig {
     /// cannot draw the badge's characters. `DELPHI_ASCII_BADGES=1` in the environment of the process that builds the identity
     /// has the same effect; this key is the one a host-spawned server always sees.
     pub badge_ascii: bool,
+    /// How many different generated packs (`spawn_agent_pack`) one named task may have (`specs/098` §9). A cap on one-off agent
+    /// *definitions*, not on calls: asking again for a pack already made costs nothing, and `specs/062` §9 still holds that host
+    /// calls have no limit or quota. `0` allows none.
+    pub max_packs_per_task: u32,
+    /// How many different generated packs one server session may have in all, so a host that cycles task names cannot spawn packs
+    /// without end (`specs/098` §9). `0` allows none.
+    pub max_packs_per_session: u32,
 }
 
 /// `[mcp] badge_mode`: the terminal background the ANSI identity is coloured for.
@@ -745,7 +752,7 @@ impl BadgeStyle {
 
 impl Default for McpConfig {
     fn default() -> McpConfig {
-        McpConfig { enabled: true, allow_remote: false, badge_style: BadgeStyle::Plain, badge_mode: BadgeMode::Dark, badge_ascii: false }
+        McpConfig { enabled: true, allow_remote: false, badge_style: BadgeStyle::Plain, badge_mode: BadgeMode::Dark, badge_ascii: false, max_packs_per_task: 5, max_packs_per_session: 20 }
     }
 }
 
@@ -1638,6 +1645,13 @@ pub(crate) mod tests {
         assert!(!McpConfig::read("").unwrap().badge_ascii);
         assert!(McpConfig::read("[mcp]\nbadge_ascii = true\n").unwrap().badge_ascii);
         assert!(McpConfig::read("[mcp]\nbadge_ascii = \"yes\"\n").is_none());
+        // Spec 098 §9: caps on different generated packs (not on calls: `max_help_per_session` above is still refused).
+        let d = McpConfig::read("").unwrap();
+        assert_eq!((d.max_packs_per_task, d.max_packs_per_session), (5, 20));
+        let c = McpConfig::read("[mcp]\nmax_packs_per_task = 2\nmax_packs_per_session = 9\n").unwrap();
+        assert_eq!((c.max_packs_per_task, c.max_packs_per_session), (2, 9));
+        assert_eq!(McpConfig::read("[mcp]\nmax_packs_per_task = 0\n").unwrap().max_packs_per_task, 0);
+        assert!(McpConfig::read("[mcp]\nmax_packs_per_task = -1\n").is_none() && McpConfig::read("[mcp]\nmax_packs_per_session = \"many\"\n").is_none());
     }
 
     #[test]

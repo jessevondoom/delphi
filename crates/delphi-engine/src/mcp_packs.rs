@@ -51,7 +51,7 @@ fn valid_name(s: &str) -> bool {
     !s.is_empty() && s.len() <= MAX_NAME && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
 }
 
-fn one_line(s: &str, max: usize) -> String {
+pub(crate) fn one_line(s: &str, max: usize) -> String {
     let flat: String = s.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
     let flat = flat.split_whitespace().collect::<Vec<_>>().join(" ");
     crate::mcp_wire::cut_at_char(&flat, max).to_string()

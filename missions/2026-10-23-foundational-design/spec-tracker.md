@@ -850,7 +850,7 @@ A draft for the operator: host first, the inside exceptions (Council, panel and 
 | S4 | `route` for any query: canonical roles, `locus`, `trigger`, `confidence`, `adopt`, threshold, `route.decided` | not started |
 | S5 | KB first, the research reflex and the offer rule (manifests, plugin skill, `CLAUDE.md` template) | not started |
 | S6 | standalone red team (`kind: red_team`) and `ask_family` (091 SR-5) | not started |
-| S7 | pack guards: council and red-team refuse packs, per-task cap, no-grant test | not started |
+| S7 | pack guards: council and red-team refuse packs, per-task cap, no-grant test | built (draft PR, stacked on S2): a pack has an id (`pack-<12 hex of its content>`); the daemon refuses a pack id, `pack:<name>` or `pool-<n>` as a seat in `council_open`, `council_frame`, `council_brief` and `council_submit`; `[mcp] max_packs_per_task` (5) and `max_packs_per_session` (20) cap DIFFERENT packs, a host names its task with the optional `task`; what a host writes into a pack is one flat line with `<` escaped. Finding: the "existing rule linter" of 062 §4.4 checks manifests and globs, not prose, so the no-grant test pins the pack's structure instead of phrases |
 | S8 | Builder gate and the spec-review lint, after verifying what lint and CI already check | not started |
 | S9 | required summary after a panel or red team, generated reference, `llms.txt`, tracker | not started |
 | S10 | progress tail, stall flag and `cancel_job` for Councils and inside jobs | not started |
