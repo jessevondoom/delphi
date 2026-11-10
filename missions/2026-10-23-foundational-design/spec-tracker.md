@@ -834,3 +834,20 @@ From Council `t_0001` over two research notes (CAO, Paperclip); the operator cho
 | B0 | spec 093 approval and tracker entry | 1 | approved 2026-11-07 (PR #552) |
 | B1 | spawn-site ratchet, generalized must-run gate, home isolation, three authority audits, `cargo deny` gate, harness live-text test | 14-20 | built (merged, #552) |
 | B2 | newer-schema log error and a v0.5.5 log fixture, typed harness result failures, usage-quality doctor check | 8-12 | built (PR open); findings: totals add an unknown price as 0 (own slice); the in-band error list is unverified guesses |
+
+## Spec 098: where agents run (2026-11-10, draft)
+
+A draft for the operator: host first, the inside exceptions (Council, panel and red-team seats of other families), a `locus` declaration, `route` for any query, generated task-scoped agents with guards, the Builder in the host against an approved spec, and a research path that works the first time. Written after Council `t_0001` (2026-11-10) reviewed the outline, which escalated; the draft answers its findings in §15 and a review of the draft itself is the next step. One spec by the operator's choice. The cause of the first-attempt research failure is not measured (S0). Nothing below starts before approval.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| S0 | measure the research failure: labeled set, probe through the host path and the inside Scout, outcomes by cause | not started |
+| S1 | fix the inside research path by the S0 cause: typed failures, egress-scoped search and fetch if needed, `delphi doctor` checks | not started |
+| S2 | Councils inside only: rename Mode B, `council_unavailable`, no-relabel tests | not started |
+| S3 | `locus` field, schemas, pack header, capability names, Claude Code adapter with version and hash | not started |
+| S4 | `route` for any query: canonical roles, `locus`, `trigger`, `confidence`, `adopt`, threshold, `route.decided` | not started |
+| S5 | KB first, the research reflex and the offer rule (manifests, plugin skill, `CLAUDE.md` template) | not started |
+| S6 | standalone red team (`kind: red_team`) and `ask_family` (091 SR-5) | not started |
+| S7 | pack guards: council and red-team refuse packs, per-task cap, no-grant test | not started |
+| S8 | Builder gate and the spec-review lint, after verifying what lint and CI already check | not started |
+| S9 | required summary after a panel or red team, generated reference, `llms.txt`, tracker | not started |
