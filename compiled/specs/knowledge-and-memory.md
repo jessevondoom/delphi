@@ -2,7 +2,7 @@
 
 # Knowledge and memory
 
-17 specs. [All groups](./index.md).
+18 specs. [All groups](./index.md).
 
 ## 004-memory-and-coaching
 
@@ -152,4 +152,14 @@ Agents today read and write plain text only (`read_file`, `write_file`, 256 KB c
 - **No arbitrary remote image hotlinking.** `/v1/image` renders only local bytes already captured under library source assets (`$DELPHI_HOME/library/sources/<sid>/assets/`) or indexed workspace directories (`local/knowledge/web/<host>/images/` and workspace document paths).
 - **Role IDs only.** All manifests, frontmatter, prompts, and code use the role ID `writer`, never theme display names.
 - **Every animation obeys reduce motion.** Any progress indicator during initial synthesis or page expansion takes its state from `stillMotion` in `ui/src/motion.ts`.
+```
+
+## 100-confidence-ladder-substantiated-vetted-and-an-audit-that-rolls-back
+
+**100: The confidence ladder: substantiated and vetted tiers, an accept-all workflow, and an audit that rolls a tier back (draft)** · draft (per source at `ef55a46dcfe7`) · tier 0 · [source](../../specs/100-confidence-ladder-substantiated-vetted-and-an-audit-that-rolls-back.md)
+
+**source excerpt, untrusted** · `specs/100-confidence-ladder-substantiated-vetted-and-an-audit-that-rolls-back.md` line 21
+
+```text
+The operator's aim (2026-11-10): **no learning is absolute, but a high degree of confidence is the goal.** Research should find more, keep what it finds, and say how well each claim is supported. As the knowledge base grows with accepted facts, that knowledge helps judge new learnings without expanding trust. Neither a human nor an agent is likely to do better than five independent sources with two trusted ones, so the strongest tier should be cheap for the operator to accept in bulk, and the operator should be able to find out afterwards whether that was a mistake.
 ```
