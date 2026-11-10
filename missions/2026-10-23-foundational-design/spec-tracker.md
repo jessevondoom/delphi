@@ -834,3 +834,14 @@ From Council `t_0001` over two research notes (CAO, Paperclip); the operator cho
 | B0 | spec 093 approval and tracker entry | 1 | approved 2026-11-07 (PR #552) |
 | B1 | spawn-site ratchet, generalized must-run gate, home isolation, three authority audits, `cargo deny` gate, harness live-text test | 14-20 | built (merged, #552) |
 | B2 | newer-schema log error and a v0.5.5 log fixture, typed harness result failures, usage-quality doctor check | 8-12 | built (PR open); findings: totals add an unknown price as 0 (own slice); the in-band error list is unverified guesses |
+
+## Spec 099: Round 2 readability (2026-11-10, approved)
+
+Approved by the operator on 2026-11-10 ("build the round 2 fix first please yes"), after traces of three daemon Councils (`t_0004`, `t_0005`, `t_0006`) showed the red-team seat's valid Round 2 critique discarded as `unreadable` each time. The reader keeps a structured reply's first critique, tolerates Markdown restatements, asks for the object only, repairs once, and says why a reply was unreadable. It amends spec 003 §4.2 for structured replies; the line-format rule is unchanged.
+
+| Slice | Content | Hours | State |
+| :-- | :-- | --: | :-- |
+| S0 | spec 099 approval and tracker entry | 4-6 | approved 2026-11-10; the same pull request carries R1 |
+| R1 | the reader: Markdown tolerance and the kept first critique | 6-10 | built in this pull request |
+| R2 | the object-only objective, the `agy` structured request, one repair turn | 8-12 | not started |
+| R3 | the cause in the event and on the card; the cut-excerpt notice | 6-10 | not started |
