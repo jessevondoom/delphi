@@ -2,7 +2,7 @@
 
 # Specs
 
-104 specs in 9 groups. The files under `specs/` are the authority; this page is a view of their compiled form, for review. Each group has its own page.
+105 specs in 9 groups. The files under `specs/` are the authority; this page is a view of their compiled form, for review. Each group has its own page.
 
 | Spec | Title | Status | Group | Supersedes / superseded by | Summary | Source |
 | :-- | :-- | :-- | :-- | :-- | :-- | :-- |
@@ -43,6 +43,7 @@
 | [086-outside-council-panel-and-host-subagents](./orchestration-and-council.md#086-outside-council-panel-and-host-subagents) | 086: The Council outside Delphi: a Panel run by host subagents, a server-held barrier, one front door, and a ruling card | approved (per source at `34e77bf81756`) | [Orchestration and Council](./orchestration-and-council.md) |  | yes | [source](../../specs/086-outside-council-panel-and-host-subagents.md) |
 | [089-panel-hardening-from-e2](./orchestration-and-council.md#089-panel-hardening-from-e2) | 089: Panel hardening from the E2 run: a server-side Round 2 shape check, honest question handling and confirmation, scorer and record fixes, agy seat reliability, and a matcher that can tell findings apart | approved (per source at `8bc8c6683865`) | [Orchestration and Council](./orchestration-and-council.md) |  | yes | [source](../../specs/089-panel-hardening-from-e2.md) |
 | [091-seats-families-and-outside-launch](./orchestration-and-council.md#091-seats-families-and-outside-launch) | 091: Seats, model families and launching agents on any carrier: receipts, a family table, an opt-in diversity requirement, and an ask-another-family tool | approved (per source at `b0a015c54c9a`) | [Orchestration and Council](./orchestration-and-council.md) |  | none | [source](../../specs/091-seats-families-and-outside-launch.md) |
+| [099-round-2-readability-keep-a-valid-critique-ask-for-the-object-only-and-say-why](./orchestration-and-council.md#099-round-2-readability-keep-a-valid-critique-ask-for-the-object-only-and-say-why) | 099: Round 2 readability: keep a seat's valid critique, ignore Markdown restatements, ask for the object only, repair once, and say why a reply was unreadable | approved (per source at `3612e7866a0d`) | [Orchestration and Council](./orchestration-and-council.md) |  | yes | [source](../../specs/099-round-2-readability-keep-a-valid-critique-ask-for-the-object-only-and-say-why.md) |
 | [005-console-and-narrator-tui](./console.md#005-console-and-narrator-tui) | 005: Console, Narrator Window & UDS Event-Bus Daemon | approved (per source at `24f1cb904d07`) | [Console](./console.md) |  | yes | [source](../../specs/005-console-and-narrator-tui.md) |
 | [005a-terminal-avatar-system](./console.md#005a-terminal-avatar-system) | 005a: In-Terminal Agent Avatar & Status Badge System | approved (per source at `dbe89cc5f49a`) | [Console](./console.md) |  | yes | [source](../../specs/005a-terminal-avatar-system.md) |
 | [005b-deck-navigation-and-visual-interface](./console.md#005b-deck-navigation-and-visual-interface) | 005b: Console Decks, Operator Inbox, Multi-Narrator & Chromeless Viewer | approved (per source at `789e9397c45b`) | [Console](./console.md) |  | yes | [source](../../specs/005b-deck-navigation-and-visual-interface.md) |

@@ -278,12 +278,16 @@ pub fn parse_critique(text: &str) -> Option<Critique> {
 /// Read a Round 2 reply: the FIRST complete critique (a schema-valid object, or the line format up to its first
 /// `ROUND 2 COMPLETE`) is the critique, and whatever follows is dropped. Repeats are common (seen on real Councils,
 /// 2026-11-07: the same block three more times, then extra lines). A later block or object that is identical to the
-/// first is tolerated; one that differs in recommendation, `CONCUR:` or set of findings makes the whole reply
-/// unreadable, because an injected second object must never be accepted or merged. Noise lines are dropped.
+/// first is tolerated; one that differs in recommendation, `CONCUR:` or set of findings makes a line-format reply
+/// unreadable, because an injected second object must never be accepted or merged. A reply that STARTS with a
+/// schema-valid object keeps that critique when a later block differs (spec 099 R1): nothing is merged, `concur` becomes
+/// `false` and a `P1` finding says a block was dropped. Markdown emphasis around a value is ignored, and a restatement
+/// whose value does not read is prose. Noise lines are dropped.
 pub fn critique_read(text: &str) -> CritiqueRead {
     let none = |trailer, conflict| CritiqueRead { critique: None, trailer, conflict };
     // A CLI that was given `critique_schema()` answers with that object, as compact JSON.
-    let (c, rest) = if text.trim_start().starts_with('{') {
+    let structured = text.trim_start().starts_with('{');
+    let (c, rest) = if structured {
         let t = text.trim();
         let mut it = serde_json::Deserializer::from_str(t).into_iter::<serde_json::Value>();
         let Some(Ok(first)) = it.next() else { return none(Trailer::default(), false) };
@@ -302,10 +306,10 @@ pub fn critique_read(text: &str) -> CritiqueRead {
                 end = Some(at);
                 break;
             } else if head("RECOMMENDATION") {
-                let Some(r) = recommendation_of(l[14..].trim_start_matches([':', ' ', '\t']).trim()) else { return none(Trailer::default(), false) };
+                let Some(r) = recommendation_of(&unmark(l[14..].trim_start_matches([':', ' ', '\t', '*', '`', '_']))) else { return none(Trailer::default(), false) };
                 rec = Some(r);
             } else if head("CONCUR") {
-                concur = concur_of(l[6..].trim_start_matches([':', ' ', '\t']));
+                concur = concur_of(&unmark(l[6..].trim_start_matches([':', ' ', '\t', '*', '`', '_'])));
             } else if head("FINDING") {
                 // A finding that cannot be read is still a finding: it blocks rather than vanishing.
                 findings.push(finding_of(l));
@@ -316,8 +320,33 @@ pub fn critique_read(text: &str) -> CritiqueRead {
     };
     match trailer_check(&c, rest) {
         Some(trailer) => CritiqueRead { critique: Some(c), trailer, conflict: false },
-        None => none(Trailer { bytes: rest.trim().len(), lines: rest.lines().filter(|l| !l.trim().is_empty()).count(), blocks: 0 }, true),
+        None => {
+            let trailer = Trailer { bytes: rest.trim().len(), lines: rest.lines().filter(|l| !l.trim().is_empty()).count(), blocks: 0 };
+            if structured {
+                // Spec 099 R1. The first object of a structured reply is the carrier's schema output; what follows is the seat's
+                // own free prose, and nothing in it can be placed before that object. The first critique stands, nothing from
+                // the later block is merged, and the seat can no longer concur: it cannot add to unanimity, and the P1 finding
+                // reaches the verdict card.
+                let mut kept = c;
+                kept.concur = Some(false);
+                kept.findings.push(("P1".to_string(), CONFLICT_FINDING.to_string()));
+                CritiqueRead { critique: Some(kept), trailer, conflict: true }
+            } else {
+                // The line format keeps the rule of spec 003 §4.2: a later block that differs refuses the whole reply.
+                none(trailer, true)
+            }
+        }
     }
+}
+
+/// The finding added to a structured critique that was kept although a later block in the same reply disagreed with it
+/// (spec 099 R1). Fixed text: it never echoes anything the seat wrote.
+pub const CONFLICT_FINDING: &str = "the reply carried a conflicting block after the critique; it was dropped";
+
+/// A value with the Markdown emphasis around it removed, so that `**`PROCEED-WITH-CHANGES`**` reads as
+/// `PROCEED-WITH-CHANGES` (spec 099 R1). Only the ends are trimmed; inner text is left alone.
+fn unmark(v: &str) -> String {
+    v.trim_matches(|c: char| c.is_whitespace() || matches!(c, '*' | '`' | '_' | ':')).to_string()
 }
 
 /// The `trailer` field of a `council.critique` event: counts and byte lengths of what followed the first critique, and
@@ -351,7 +380,9 @@ fn trailer_check(c: &Critique, rest: &str) -> Option<Trailer> {
         t.blocks += 1;
         let ok = recs.iter().all(|r| r.as_ref() == Some(&c.recommendation))
             && concurs.iter().all(|x| Some(*x) == c.concur)
-            && ((recs.is_empty() && findings.is_empty()) || finding_set(findings) == ours);
+            // A block that lists no findings (a restated verdict) cannot contradict the first critique's findings; one that lists
+            // findings must list the same set (spec 099 R1).
+            && (findings.is_empty() || finding_set(findings) == ours);
         recs.clear();
         concurs.clear();
         findings.clear();
@@ -360,7 +391,9 @@ fn trailer_check(c: &Critique, rest: &str) -> Option<Trailer> {
     for line in rest.lines() {
         let l = line.trim().trim_start_matches(['-', '*', '•', ' ']).trim();
         let head = |w: &str| l.get(..w.len()).is_some_and(|h| h.eq_ignore_ascii_case(w));
-        let after = |n: usize| l[n..].trim_start_matches([' ', '\t']).strip_prefix(':').map(|v| v.trim_start_matches([':', ' ', '\t']).trim().to_string());
+        // The value after `KEYWORD:`; Markdown emphasis may sit between the keyword and the colon (`**Recommendation**: X`) and
+        // around the value (`**Recommendation:** **`X`**`), so both are skipped (spec 099 R1).
+        let after = |n: usize| l[n..].trim_start_matches([' ', '\t', '*', '`', '_']).strip_prefix(':').map(unmark);
         if head("ROUND 2 COMPLETE") {
             if !close(&mut recs, &mut concurs, &mut findings, &mut t) {
                 return None;
@@ -380,8 +413,10 @@ fn trailer_check(c: &Critique, rest: &str) -> Option<Trailer> {
                 _ => return None,
             }
         } else if head("RECOMMENDATION") {
-            if let Some(v) = after(14) {
-                recs.push(recommendation_of(&v));
+            // A restatement whose value does not read as a recommendation (`Recommendation: see above`) is prose, not a
+            // disagreement; one that reads and differs from the first critique still conflicts (spec 099 R1).
+            if let Some(r) = after(14).as_deref().and_then(recommendation_of) {
+                recs.push(Some(r));
             }
         } else if head("CONCUR") {
             if let Some(x) = after(6).as_deref().and_then(concur_of) {
@@ -475,8 +510,10 @@ fn alternative_rec(name: &str) -> Rec {
     }
 }
 
+/// The first word of a `CONCUR:` value, so `false (blocked on three P0s)` reads as `false` (spec 099 R1).
 fn concur_of(v: &str) -> Option<bool> {
-    match v.trim().to_lowercase().as_str() {
+    let word: String = v.trim().chars().take_while(|c| c.is_alphabetic()).collect();
+    match word.to_lowercase().as_str() {
         "yes" | "true" => Some(true),
         "no" | "false" => Some(false),
         _ => None,
@@ -1500,12 +1537,16 @@ pub(crate) mod tests {
         let real = "{\"concur\":true,\"findings\":[{\"severity\":\"P1\",\"title\":\"a\"}],\"recommendation\":\"PROCEED-WITH-CHANGES\"}\nThe Council converges.\n\nRECOMMENDATION: PROCEED-WITH-CHANGES\nFINDING P1 a\nCONCUR: yes\nROUND 2 COMPLETE\nRECOMMENDATION: PROCEED-WITH-CHANGES\nFINDING P1 a\nCONCUR: yes\nROUND 2 COMPLETE";
         let c = parse_critique(real).unwrap();
         assert_eq!((c.recommendation.clone(), c.concur, c.findings.len()), (Rec::ProceedWithChanges, Some(true), 1), "a repeated finding is not counted twice");
-        // A finding that only a later block names is a different set of findings: the reply is refused (it escalates, so it
-        // still blocks). It used to be added to the object; the spec for the tolerant reader (003 section 4.2) says refuse.
-        assert!(parse_critique("{\"recommendation\":\"PROCEED\",\"findings\":[],\"concur\":true}\nFINDING P0 data loss").is_none());
-        // A disagreement is unreadable, never a guess.
-        assert!(parse_critique("{\"recommendation\":\"PROCEED\",\"findings\":[],\"concur\":true}\nRECOMMENDATION: DO-NOT-PROCEED").is_none());
-        assert!(parse_critique("{\"recommendation\":\"PROCEED\",\"findings\":[],\"concur\":true}\nCONCUR: no").is_none());
+        // A finding that only a later block names is a different set of findings. Nothing from the later block is merged
+        // (003 section 4.2), but since spec 099 R1 the structured reply's first critique stands, flagged: `concur` becomes
+        // false and a P1 finding says a block was dropped, so the seat cannot add to unanimity.
+        for later in ["FINDING P0 data loss", "RECOMMENDATION: DO-NOT-PROCEED", "CONCUR: no"] {
+            let r = critique_read(&format!("{{\"recommendation\":\"PROCEED\",\"findings\":[],\"concur\":true}}\n{later}"));
+            let c = r.critique.expect("the first critique of a structured reply stands");
+            assert!(r.conflict, "{later}");
+            assert_eq!((c.recommendation, c.concur), (Rec::Proceed, Some(false)), "{later}: a conflicted reply can no longer concur");
+            assert_eq!(c.findings, vec![("P1".to_string(), CONFLICT_FINDING.to_string())], "{later}: nothing from the later block is merged");
+        }
         // Plain trailing prose changes nothing; a broken object is still no critique.
         assert_eq!(parse_critique("{\"recommendation\":\"PROCEED\",\"findings\":[],\"concur\":false} thanks!").unwrap().concur, Some(false));
         assert!(parse_critique("{\"recommendation\":\"PROCEED\" oops}").is_none());
@@ -1548,25 +1589,116 @@ pub(crate) mod tests {
         assert!(critique_read(&bad).conflict);
     }
 
+    /// What a structured reply keeps when a later block disagrees (spec 099 R1): the first critique, no longer concurring,
+    /// plus the fixed P1 finding, and nothing from the later block.
+    fn assert_kept_and_flagged(got: &CritiqueRead, first: &Critique, what: &str) {
+        let c = got.critique.as_ref().unwrap_or_else(|| panic!("{what}: the first critique stands"));
+        assert!(got.conflict, "{what}");
+        assert_eq!(c.recommendation, first.recommendation, "{what}");
+        assert_eq!(c.concur, Some(false), "{what}: a conflicted reply can no longer concur");
+        let mut want = first.findings.clone();
+        want.push(("P1".to_string(), CONFLICT_FINDING.to_string()));
+        assert_eq!(c.findings, want, "{what}: nothing from the later block is merged");
+    }
+
     #[test]
-    fn a_conflicting_second_object_or_block_refuses_the_whole_reply() {
+    fn a_conflicting_second_object_or_block_in_a_structured_reply_keeps_the_first_and_flags_it() {
         let r = real_reply();
-        // A second object: a different recommendation, a different concur, fewer findings.
+        let first = parse_critique(REAL_OBJ).unwrap();
+        // A second object: a different recommendation, a different concur, fewer findings, an unreadable one.
         for evil in [
             r#"{"concur":false,"findings":[],"recommendation":"PROCEED"}"#,
             &REAL_OBJ.replace("\"concur\":false", "\"concur\":true"),
             r#"{"concur":false,"findings":[{"severity":"P0","title":"Exact argv matching bypassable via PATH shadowing without canonical binary resolution"}],"recommendation":"PROCEED-WITH-CHANGES"}"#,
             r#"{"recommendation":"MAYBE"}"#,
         ] {
-            let got = critique_read(&format!("{r}{evil}\n"));
-            assert!(got.critique.is_none() && got.conflict, "{evil}");
+            assert_kept_and_flagged(&critique_read(&format!("{r}{evil}\n")), &first, evil);
         }
         // A conflicting line-format block at the very end, with or without its closing line.
-        assert!(critique_read(&format!("{r}RECOMMENDATION: PROCEED\nCONCUR: yes\n")).critique.is_none());
-        assert!(critique_read(&format!("{r}FINDING P0 something new\n")).critique.is_none());
-        assert!(critique_read(&format!("{r}CONCUR: yes\nROUND 2 COMPLETE")).critique.is_none());
-        // A stub object ahead of the real one is the first object: what follows it must still agree, so the real one refuses it.
-        assert!(critique_read(&format!("{{\"recommendation\":\"PROCEED\",\"findings\":[],\"concur\":true}}\n{REAL_OBJ}")).critique.is_none());
+        assert_kept_and_flagged(&critique_read(&format!("{r}RECOMMENDATION: PROCEED\nCONCUR: yes\n")), &first, "late block");
+        assert_kept_and_flagged(&critique_read(&format!("{r}FINDING P0 something new\n")), &first, "late finding");
+        assert_kept_and_flagged(&critique_read(&format!("{r}CONCUR: yes\nROUND 2 COMPLETE")), &first, "late concur");
+        // A stub object ahead of the real one is the first object. It stands, flagged, and the real one is dropped: the seat can
+        // no longer concur and the verdict card shows the P1, so the stub cannot produce unanimity.
+        let stub = parse_critique(r#"{"recommendation":"PROCEED","findings":[],"concur":true}"#).unwrap();
+        assert_kept_and_flagged(&critique_read(&format!("{{\"recommendation\":\"PROCEED\",\"findings\":[],\"concur\":true}}\n{REAL_OBJ}")), &stub, "stub first");
+    }
+
+    #[test]
+    fn a_conflicting_later_block_still_refuses_a_line_format_reply() {
+        // Spec 003 section 4.2 is unchanged for the line format: no structured object came first, so nothing is kept.
+        let bad = format!("{REAL_BLOCK}{}", REAL_BLOCK.replace("PROCEED-WITH-CHANGES", "DO-NOT-PROCEED"));
+        let got = critique_read(&bad);
+        assert!(got.critique.is_none() && got.conflict);
+        for evil in ["RECOMMENDATION: PROCEED\nCONCUR: yes\n", "FINDING P0 something new\n", "CONCUR: yes\nROUND 2 COMPLETE"] {
+            let got = critique_read(&format!("{REAL_BLOCK}{evil}"));
+            assert!(got.critique.is_none() && got.conflict, "{evil}");
+        }
+        // A restatement in Markdown that reads and differs is a conflict in the line format too.
+        assert!(critique_read(&format!("{REAL_BLOCK}**Recommendation:** **`DO-NOT-PROCEED`**\n")).critique.is_none());
+    }
+
+    // The shape of the red-team replies of Councils t_0004, t_0005 and t_0006 (2026-11-10, a Gemini seat on the agy carrier),
+    // with generic text: a valid compact object first, then pages of Markdown that restate the verdict.
+    const MD_OBJ: &str = r#"{"alternative":"","concur":false,"findings":[{"severity":"P0","title":"First defect"},{"severity":"P1","title":"Second defect"}],"recommendation":"PROCEED-WITH-CHANGES"}"#;
+
+    #[test]
+    fn markdown_restatements_after_a_structured_critique_are_prose_not_a_conflict() {
+        let prose = format!(
+            "{MD_OBJ}\n# Audit\n\n- **Recommendation:** **`PROCEED-WITH-CHANGES`**\n- **Concur:** `false` (P0 defects remain open)\n**Concurrence:** `concur: false` (three active defects).\n**Recommendation**: PROCEED-WITH-CHANGES. Execution must pause on these points.\n**Recommendation:** see the table above.\n"
+        );
+        let r = critique_read(&prose);
+        let c = r.critique.expect("the critique was valid");
+        assert!(!r.conflict, "{:?}", r.trailer);
+        assert_eq!((c.recommendation, c.concur, c.findings.len()), (Rec::ProceedWithChanges, Some(false), 2), "no finding is added when nothing conflicts");
+    }
+
+    #[test]
+    fn a_markdown_restatement_that_reads_and_differs_is_a_flagged_conflict() {
+        let first = parse_critique(MD_OBJ).unwrap();
+        let got = critique_read(&format!("{MD_OBJ}\n**Recommendation:** **`DO-NOT-PROCEED`**\n"));
+        assert_kept_and_flagged(&got, &first, "markdown disagreement");
+        let got = critique_read(&format!("{MD_OBJ}\n**Concur:** **`true`**\n"));
+        assert_kept_and_flagged(&got, &first, "markdown concur disagreement");
+    }
+
+    #[test]
+    fn a_second_object_with_different_findings_keeps_the_first_critique_of_a_long_reply() {
+        // Councils t_0005 and t_0006: the object, a long report, then a later JSON line with slightly different findings.
+        let later = r#"{"alternative":"","concur":false,"findings":[{"severity":"P0","title":"First defect, reworded"},{"severity":"P1","title":"Second defect"}],"recommendation":"PROCEED-WITH-CHANGES"}"#;
+        let report = "Audit line.\n".repeat(400);
+        let reply = format!("{MD_OBJ}\n{report}{later}\nRECOMMENDATION: PROCEED-WITH-CHANGES\nFINDING P0 First defect, reworded\nFINDING P1 Second defect\nCONCUR: no\nROUND 2 COMPLETE\n");
+        let first = parse_critique(MD_OBJ).unwrap();
+        let got = critique_read(&reply);
+        assert_kept_and_flagged(&got, &first, "long reply");
+        assert!(got.trailer.bytes > 4000, "what was dropped is recorded as a length: {:?}", got.trailer);
+        let j = trailer_json(Some(&reply)).to_string();
+        assert!(j.contains("\"conflict\":true") && !j.contains("defect"), "counts only, never text: {j}");
+    }
+
+    #[test]
+    fn markdown_labels_in_a_line_format_reply_still_read() {
+        let r = critique_read("Sure.\n**RECOMMENDATION:** `PROCEED-WITH-CHANGES`\n- FINDING P0 Data loss on retry\n**CONCUR**: no\nROUND 2 COMPLETE\n");
+        let c = r.critique.expect("emphasis around the labels is skipped");
+        assert_eq!((c.recommendation, c.concur, c.findings), (Rec::ProceedWithChanges, Some(false), vec![("P0".to_string(), "Data loss on retry".to_string())]));
+        assert!(!r.conflict);
+    }
+
+    #[test]
+    fn a_restated_verdict_without_findings_agrees_but_a_changed_set_of_findings_does_not() {
+        let same = critique_read(&format!("{REAL_BLOCK}RECOMMENDATION: PROCEED-WITH-CHANGES\nCONCUR: no\nROUND 2 COMPLETE\n"));
+        assert!(same.critique.is_some() && !same.conflict, "a restated verdict lists no findings, so it contradicts none");
+        let fewer = critique_read(&format!("{REAL_BLOCK}RECOMMENDATION: PROCEED-WITH-CHANGES\nFINDING P0 Exact argv matching bypassable via PATH shadowing without canonical binary resolution\nCONCUR: no\nROUND 2 COMPLETE\n"));
+        assert!(fewer.critique.is_none() && fewer.conflict, "a block that lists findings must list the same set");
+    }
+
+    #[test]
+    fn concur_reads_its_first_word_only() {
+        assert_eq!(concur_of("false (blocked on three P0s)"), Some(false));
+        assert_eq!(concur_of("Yes, with changes"), Some(true));
+        assert_eq!(concur_of("maybe"), None);
+        assert_eq!(concur_of("(false)"), None);
+        assert_eq!(concur_of(""), None);
     }
 
     #[test]

@@ -2,7 +2,7 @@
 
 # Orchestration and Council
 
-9 specs. [All groups](./index.md).
+10 specs. [All groups](./index.md).
 
 ## 003-collaboration-and-council
 
@@ -98,3 +98,13 @@ E2 asked whether a Panel run by a host's subagents is as good as a daemon Counci
 **091: Seats, model families and launching agents on any carrier: receipts, a family table, an opt-in diversity requirement, and an ask-another-family tool** · approved (per source at `b0a015c54c9a`) · tier 0 · [source](../../specs/091-seats-families-and-outside-launch.md)
 
 _No standard scope section; open the spec._
+
+## 099-round-2-readability-keep-a-valid-critique-ask-for-the-object-only-and-say-why
+
+**099: Round 2 readability: keep a seat's valid critique, ignore Markdown restatements, ask for the object only, repair once, and say why a reply was unreadable** · approved (per source at `3612e7866a0d`) · tier 0 · [source](../../specs/099-round-2-readability-keep-a-valid-critique-ask-for-the-object-only-and-say-why.md)
+
+**source excerpt, untrusted** · `specs/099-round-2-readability-keep-a-valid-critique-ask-for-the-object-only-and-say-why.md` line 22
+
+```text
+A daemon Council escalates when a seat's Round 2 cannot be read. For the red-team seat it has happened every time it was raised lately, and the cause is the reader, not the seat's silence.
+```
