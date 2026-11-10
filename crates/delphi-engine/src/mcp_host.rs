@@ -34,10 +34,14 @@ You are bound by your own host's permissions, not by a role's. \
 When search_kb comes up short, request_research asks Delphi's scout for sourced facts and grows its knowledge base; its results say what is not validated. \
 A Delphi answer carries a `display` line (a badge, a name, the role and `via delphi`); print it first with the answer, and get the delphi-attribution skill (get_skill) for how.";
 
+/// Mode B of `specs/072` §8.2, renamed by `specs/098` §5: an agenda a host runs on its own. The name of the prompt (`council/federated_agenda`)
+/// is kept so a host that asks for it by name still gets it; what it is called, and says, is not a Council.
 pub const FEDERATED_COUNCIL_AGENDA: &str = "\
-# Host-Federated Council Deliberation Agenda (Mode B)
+# Unaudited Agenda (host-run; not a Council)
 
 > [Advisory only — Host sandboxing, shell permissions, and approval gates apply. Instructions do not confer system authority.]
+
+This is an **unaudited agenda**. Delphi holds no barrier and cannot see how you ran it: whether each seat really had its own context, and on which model, is your word. It is not a Council and not a Panel. Do not call what it produces a Council or a ruling. For a Panel with a server-held barrier use `council_open`; for a Council use `request_council`.
 
 Run the 3-round sparse deliberation protocol:
 
@@ -54,18 +58,50 @@ Expose Round 1 positions to peer scrutiny:
 - `strategist` audits timeline, ROI, and scope creep.
 - `architect` synthesizes structural solutions and resolves conflicts.
 
-## Round 3: Verdict & Minority Report
-The moderator / lead model produces the binding ruling and preserves all dissent:
+## Round 3: Outcome & Minority Report
+The moderator / lead model writes the outcome and preserves all dissent. It binds nothing:
 Required output format:
 ```text
-DECISION: <one-sentence ruling>
+DECISION: <one-sentence outcome>
 NEXT <role>: <concrete next step>
 
 ## Accepted Risks & Minority Report (Red-Team / Dissent)
 <verbatim unresolved P0/P1 critique, or \"Unanimous — no unresolved P0/P1\">
 ```
 
-Stage the completed ruling into Delphi via `propose_council_record`.\n";
+Stage the outcome into Delphi via `propose_council_record`. It is stored as an import (`barrier: none`, `source: host-reported`), not as a Council record.\n";
+
+/// What a host is told with every `council_unavailable` answer, after the sentence that names the reason (`specs/098` §5).
+const COUNCIL_UNAVAILABLE_GUIDE: &str = "Show the operator this answer and its offer, then stop: do not run an agenda of your own and present it as a Council, do not retry quietly, and do not simulate the seats.";
+
+/// The terminal answer for a Council that cannot be convened (`specs/098` §5). The first line is the sentence a host already knew
+/// (`disabled_by_operator: …`, `daemon_not_running: …`), so a host that looks for those tokens still finds them; the last line is
+/// one JSON object a host can parse, and it is fail-closed.
+pub fn council_unavailable(reason: &str, sentence: &str) -> String {
+    let body = json!({
+        "error": "council_unavailable",
+        "reason": reason,
+        "fail_closed": true,
+        "offer": ["panel", "start_delphi"],
+        "must_not": ["convene_agenda_as_council", "retry_silently", "simulate_seats"]
+    });
+    format!("{sentence} {COUNCIL_UNAVAILABLE_GUIDE}\n{body}")
+}
+
+/// The `council_unavailable` answer for an error from the daemon, or `None` when the error is something else (a bad argument stays a
+/// bad argument). `daemon_not_running` is `daemon_down`; the daemon's own `seats_unavailable: …` and `disabled_by_operator: …` keep their names.
+fn council_unavailable_for(error: &str) -> Option<String> {
+    let reason = if error.starts_with("daemon_not_running") {
+        "daemon_down"
+    } else if error.starts_with("disabled_by_operator") {
+        "disabled_by_operator"
+    } else if error.starts_with("seats_unavailable") {
+        "seats_unavailable"
+    } else {
+        return None;
+    };
+    Some(council_unavailable(reason, error))
+}
 
 /// The tool definitions; also the golden of the protocol tests.
 pub fn tools() -> Value {
@@ -367,8 +403,8 @@ pub fn tools() -> Value {
         },
         {
             "name": "propose_council_record",
-            "title": "Stage host-federated Council record",
-            "description": "Stage the results of a host-federated Council into Delphi's mission log.",
+            "title": "Stage an unaudited agenda (import)",
+            "description": "Stage the outcome of an agenda you ran yourself as an import: barrier none, source host-reported. It is not a Council record, and anything you send that is labelled one (council_format, venue: daemon, a Council kind) is refused.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -381,7 +417,7 @@ pub fn tools() -> Value {
                 "required": ["question", "decision", "minority_report"],
                 "additionalProperties": false
             },
-            "annotations": writes("Stage host-federated Council record")
+            "annotations": writes("Stage an unaudited agenda")
         },
         {
             "name": "record_session_summary",
@@ -560,7 +596,7 @@ pub fn tools() -> Value {
         {
             "name": "request_council",
             "title": "Ask Delphi's Council to rule",
-            "description": "Put a question to Delphi's Council: seats argue it blind, critique each other, and the Orchestrator rules, with the dissent kept. Returns a council_id at once; the Council takes a few minutes, so check it with council_status and read the ruling with council_result. The ruling is advice and binds nothing in your project. It spends the operator's tokens as any Council does: state the question and the options plainly.",
+            "description": "Put a question to Delphi's Council: seats argue it blind, critique each other, and the Orchestrator rules, with the dissent kept. Returns a council_id at once; the Council takes a few minutes, so check it with council_status and read the ruling with council_result. The ruling is advice and binds nothing in your project. It spends the operator's tokens as any Council does: state the question and the options plainly. When a Council cannot be convened (Delphi's daemon is not running, the server is switched off, or no seats can be seated) it answers `council_unavailable`: a terminal answer, so show it to the operator and stop.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -775,7 +811,7 @@ impl Server {
             "council_brief" => self.daemon("host.council_brief", args),
             "council_submit" => self.daemon("host.council_submit", args),
             "council_choose" => self.daemon("host.council_choose", args),
-            "request_council" => self.daemon("host.request_council", args),
+            "request_council" => self.daemon("host.request_council", args).map_err(|e| council_unavailable_for(&e).unwrap_or(e)),
             "council_status" => self.daemon("host.council_status", args),
             "council_result" => self.daemon_slow("host.council_result", args),
             "request_research" => self.daemon("host.request_research", args),
@@ -1102,8 +1138,10 @@ impl Server {
         Ok(pack)
     }
 
-    /// Stage the results of a host-federated Council into Delphi's mission log (`specs/072` §8.3).
+    /// Stage the outcome of an agenda a host ran itself (`specs/072` §8.3, renamed by `specs/098` §5). It is an import, `barrier: none,
+    /// source: host-reported`, never a Council record: a payload that labels itself one is refused, and the file says what it is.
     fn propose_council_record(&self, args: &Value) -> Result<String, String> {
+        crate::host_rpc::reject_council_labels(args, true).map_err(str::to_string)?;
         let question = args.get("question").and_then(Value::as_str).ok_or_else(|| "invalid arguments: `question` is required and must be a string".to_string())?;
         if question.trim().is_empty() || question.chars().count() > 1000 {
             return Err("invalid arguments: `question` must be 1 to 1000 characters".to_string());
@@ -1139,7 +1177,9 @@ impl Server {
         let timestamp = delphi_core::time::now_rfc3339();
         let q_slug = crate::council::slugify(question);
         let stamp_slug = timestamp.replace([':', '.', '-'], "").chars().take(14).collect::<String>();
-        let council_id = format!("council-{}-{}", stamp_slug, q_slug);
+        let agenda_id = format!("agenda-{}-{}", stamp_slug, q_slug);
+        // One line, no quotes: the question goes into the front matter and the heading, and must not add lines of its own.
+        let q_line = question.split_whitespace().collect::<Vec<_>>().join(" ").replace('"', "'");
 
         let seats_formatted = if seats.is_empty() {
             "None recorded".to_string()
@@ -1154,9 +1194,9 @@ impl Server {
         };
 
         let doc = format!(
-            "---\nid: {id}\ntitle: \"Council: {question}\"\nauthor: orchestrator\ntimestamp: {timestamp}\nsource_type: external_untrusted\nconfidence: low\nstatus: active\nsource_mission: federated-council\ntags: [council, federated]\ntier: L0\n---\n\n# Council: {question}\n\n## Ruling\nDECISION: {decision}\n\n## Seats Consulted\n{seats_formatted}\n\n## Accepted Risks & Minority Report (Red-Team / Dissent)\n{minority_report}\n{transcript_section}",
-            id = council_id,
-            question = question.trim(),
+            "---\nid: {id}\ntitle: \"Unaudited agenda: {question}\"\nauthor: orchestrator\ntimestamp: {timestamp}\nsource_type: external_untrusted\nconfidence: low\nstatus: active\nsource_mission: unaudited-agenda\nkind: unaudited_agenda\nimported: true\nbarrier: none\nsource: host-reported\ntags: [agenda, imported, host-reported]\ntier: L0\n---\n\n# Unaudited agenda: {question}\n\n> Imported from a host. Delphi held no barrier and cannot see how it was run. This is not a Council record.\n\n## Outcome the host reported\nDECISION: {decision}\n\n## Seats Consulted (host-reported)\n{seats_formatted}\n\n## Accepted Risks & Minority Report (Red-Team / Dissent)\n{minority_report}\n{transcript_section}",
+            id = agenda_id,
+            question = q_line,
             timestamp = timestamp,
             decision = decision.trim(),
             seats_formatted = seats_formatted,
@@ -1164,17 +1204,21 @@ impl Server {
             transcript_section = transcript_section,
         );
 
-        let out_dir = ws_dir.join("missions/councils");
-        std::fs::create_dir_all(&out_dir).map_err(|e| format!("cannot create councils directory: {}", e))?;
-        let file_path = out_dir.join(format!("{}.md", council_id));
-        std::fs::write(&file_path, doc).map_err(|e| format!("cannot write council record: {}", e))?;
+        // Not under `missions/councils/`: that directory holds the daemon's own Council records (spec 098 §5).
+        let out_dir = ws_dir.join("missions/agendas");
+        std::fs::create_dir_all(&out_dir).map_err(|e| format!("cannot create agendas directory: {}", e))?;
+        let file_path = out_dir.join(format!("{}.md", agenda_id));
+        std::fs::write(&file_path, doc).map_err(|e| format!("cannot write agenda record: {}", e))?;
 
         Ok(json!({
             "staged": true,
-            "id": council_id,
+            "id": agenda_id,
             "file": file_path.to_string_lossy(),
             "tier": "L0",
-            "rule": "Host-federated council staged under tier L0; review at next /retro."
+            "kind": "unaudited_agenda",
+            "barrier": "none",
+            "source": "host-reported",
+            "rule": "An unaudited agenda, staged as an import under tier L0. It is not a Council record; review at next /retro."
         }).to_string())
     }
 
@@ -1211,7 +1255,10 @@ impl Server {
             "tools/list" => ok(id, json!({"tools": tools()})),
             "tools/call" => {
                 if !self.enabled() {
-                    return Some(ok(id, tool_err(DISABLED)));
+                    // A Council asked for while the server is off gets the typed terminal answer (spec 098 §5); its first line is still
+                    // today's `disabled_by_operator: …` sentence, and every other tool keeps the plain sentence.
+                    let answer = if params.get("name").and_then(Value::as_str) == Some("request_council") { council_unavailable("disabled_by_operator", DISABLED) } else { DISABLED.to_string() };
+                    return Some(ok(id, tool_err(&answer)));
                 }
                 let Some(name) = params.get("name").and_then(Value::as_str) else { return Some(err(id, -32602, "invalid params: name is required")) };
                 let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
@@ -1238,8 +1285,8 @@ impl Server {
                     let mut list: Vec<Value> = self.packs().and_then(|p| p.roles()).unwrap_or_default().into_iter().filter(|r| r.servable).map(|r| json!({"name": r.id, "title": r.title, "description": r.purpose})).collect();
                     list.push(json!({
                         "name": "council/federated_agenda",
-                        "title": "Federated Council Deliberation Agenda",
-                        "description": "3-round sparse deliberation protocol for host subagent councils (blind opening, asymmetric cross-examination, verdict & minority report)."
+                        "title": "Unaudited Agenda (host-run; not a Council)",
+                        "description": "A 3-round agenda for host subagents (blind opening, asymmetric cross-examination, outcome & minority report). Delphi holds no barrier and cannot see how it was run: it is not a Council and not a Panel."
                     }));
                     list
                 } else {
@@ -1254,7 +1301,7 @@ impl Server {
                 let Some(name) = params.get("name").and_then(Value::as_str) else { return Some(err(id, -32602, "invalid params: name is required")) };
                 if name == "council/federated_agenda" {
                     return Some(ok(id, json!({
-                        "description": "Federated Council Deliberation Agenda",
+                        "description": "Unaudited Agenda (host-run; not a Council)",
                         "messages": [{
                             "role": "user",
                             "content": {
@@ -1906,10 +1953,28 @@ mod tests {
 
         let got = call(&mut s, json!({"jsonrpc": "2.0", "id": 6, "method": "prompts/get", "params": {"name": "council/federated_agenda"}}));
         let text = got["result"]["messages"][0]["content"]["text"].as_str().unwrap();
-        assert!(text.contains("Host-Federated Council Deliberation Agenda (Mode B)"));
+        assert!(text.contains("# Unaudited Agenda (host-run; not a Council)"));
         assert!(text.contains("Round 1: Blind Parallel Opening"));
         assert!(text.contains("Round 2: Asymmetric Cross-Examination"));
-        assert!(text.contains("Round 3: Verdict & Minority Report"));
+        assert!(text.contains("Round 3: Outcome & Minority Report"));
+        // The listing says the same.
+        let listed_one = prompts.iter().find(|p| p["name"] == "council/federated_agenda").unwrap();
+        assert!(listed_one["title"].as_str().unwrap().contains("Unaudited Agenda") && listed_one["description"].as_str().unwrap().contains("not a Council and not a Panel"));
+    }
+
+    #[test]
+    fn the_agenda_is_never_called_a_council_or_a_ruling_except_to_say_it_is_not_one() {
+        // Spec 098 section 5: Mode B is an unaudited agenda. Remove the sentences that say what it is not, and the tool names a
+        // host is pointed to; no "Council", "ruling" or "verdict" may remain.
+        let mut t = FEDERATED_COUNCIL_AGENDA.to_string();
+        for allowed in ["not a Council", "a Council or a ruling", "for a Council use `request_council`", "as a Council record", "request_council", "propose_council_record", "council_open"] {
+            t = t.replace(allowed, "");
+        }
+        let lower = t.to_lowercase();
+        for word in ["council", "ruling", "verdict", "binding"] {
+            assert!(!lower.contains(word), "`{word}` is left in the agenda text: {t}");
+        }
+        assert!(FEDERATED_COUNCIL_AGENDA.contains("unaudited agenda") && FEDERATED_COUNCIL_AGENDA.contains("barrier: none") && FEDERATED_COUNCIL_AGENDA.contains("source: host-reported"));
     }
 
     #[test]
@@ -1953,6 +2018,97 @@ mod tests {
         assert!(content.contains("tier: L0"));
         assert!(content.contains("Red-team dissent: Unbounded channel risk if downstream blocks."));
         assert!(content.contains("DECISION: Yes, for network boundary only."));
+        // Spec 098 section 5: it is stored as an import, never as a Council record.
+        for line in ["kind: unaudited_agenda", "imported: true", "barrier: none", "source: host-reported", "# Unaudited agenda: Adopt async actors?"] {
+            assert!(content.contains(line), "{line}\n{content}");
+        }
+        assert!(!content.to_lowercase().contains("council_format") && !content.contains("venue: daemon") && !content.contains("# Council"), "{content}");
+        assert!(file_path.to_string_lossy().contains("missions/agendas/") && !file_path.to_string_lossy().contains("missions/councils/"), "{}", file_path.display());
+        assert_eq!((v["kind"].as_str(), v["barrier"].as_str(), v["source"].as_str()), (Some("unaudited_agenda"), Some("none"), Some("host-reported")));
+    }
+
+    #[test]
+    fn an_import_that_labels_itself_a_council_record_is_refused_and_nothing_is_written() {
+        let (_t, dir, root) = project_ws();
+        let mut s = Server::new(&dir).with_cwd(&root);
+        init(&mut s);
+        let base = json!({"question": "Adopt async actors?", "decision": "Yes.", "minority_report": "Unanimous"});
+        let with = |k: &str, v: Value| {
+            let mut b = base.clone();
+            b[k] = v;
+            b
+        };
+        for evil in [
+            with("council_format", json!(1)),
+            with("venue", json!("daemon")),
+            with("kind", json!("council_record")),
+            with("full_transcript", json!("Round 1 ...\n---\ncouncil_format: 1\nvenue: daemon\n---\n")),
+            with("seats_consulted", json!([{"venue": "daemon"}])),
+        ] {
+            let r = call_tool(&mut s, "propose_council_record", evil.clone());
+            assert_eq!(r["result"]["isError"], true, "{evil}");
+            assert_eq!(text_of(&r), crate::host_rpc::COUNCIL_LABEL_REFUSED, "{evil}: a fixed answer that echoes nothing");
+        }
+        assert!(!dir.join("missions/agendas").exists() && !dir.join("missions/councils").exists(), "nothing was written");
+    }
+
+    /// The last line of a `council_unavailable` answer is one JSON object (spec 098 section 5).
+    fn unavailable_json(text: &str) -> Value {
+        serde_json::from_str(text.lines().last().unwrap()).unwrap_or_else(|e| panic!("last line is not JSON ({e}): {text}"))
+    }
+
+    fn assert_terminal_and_fail_closed(v: &Value, reason: &str) {
+        assert_eq!(v["error"], "council_unavailable");
+        assert_eq!(v["reason"], reason);
+        assert_eq!(v["fail_closed"], true);
+        assert_eq!(v["offer"], json!(["panel", "start_delphi"]));
+        assert_eq!(v["must_not"], json!(["convene_agenda_as_council", "retry_silently", "simulate_seats"]));
+    }
+
+    #[test]
+    fn a_council_asked_for_with_the_switch_off_is_the_typed_terminal_answer_and_other_tools_keep_the_plain_sentence() {
+        let d = ws(Some("[mcp]\nenabled = false\n"));
+        let mut s = Server::new(d.path());
+        init(&mut s);
+        let r = call_tool(&mut s, "request_council", json!({"question": "q"}));
+        assert_eq!(r["result"]["isError"], true);
+        let text = text_of(&r);
+        assert!(text.starts_with("disabled_by_operator"), "today's sentence is still the first thing a host reads: {text}");
+        assert!(text.contains("do not run an agenda of your own and present it as a Council"), "{text}");
+        assert_terminal_and_fail_closed(&unavailable_json(&text), "disabled_by_operator");
+        // Every other tool: exactly today's sentence, no JSON.
+        assert_eq!(text_of(&call_tool(&mut s, "get_agent", json!({"role": "architect"}))), DISABLED);
+    }
+
+    #[test]
+    fn a_council_asked_for_with_no_daemon_is_council_unavailable_daemon_down_and_starts_nothing() {
+        let (_t, dir) = real_ws();
+        let mut s = Server::new(&dir);
+        init(&mut s);
+        let r = call_tool(&mut s, "request_council", json!({"question": "Table or file?"}));
+        assert_eq!(r["result"]["isError"], true);
+        let text = text_of(&r);
+        assert!(text.starts_with("daemon_not_running"), "{text}");
+        assert_terminal_and_fail_closed(&unavailable_json(&text), "daemon_down");
+        // A tool that is not a Council keeps its plain answer: no JSON, no council_unavailable.
+        let other = text_of(&call_tool(&mut s, "handoff_get", json!({})));
+        assert!(other.starts_with("daemon_not_running") && !other.contains("council_unavailable"), "{other}");
+    }
+
+    #[test]
+    fn only_the_three_reasons_become_council_unavailable_and_a_bad_argument_stays_one() {
+        for (error, reason) in [
+            ("daemon_not_running: Delphi's daemon is not running", "daemon_down"),
+            ("disabled_by_operator: the operator turned Delphi off for host tools", "disabled_by_operator"),
+            ("seats_unavailable: `strategist` is not an enabled role, so the default Council cannot be seated", "seats_unavailable"),
+        ] {
+            let a = council_unavailable_for(error).unwrap_or_else(|| panic!("{error}"));
+            assert!(a.starts_with(error), "the daemon's own sentence is the first thing said: {a}");
+            assert_terminal_and_fail_closed(&unavailable_json(&a), reason);
+        }
+        for other in ["invalid arguments: `question` is required", "the question is at most 2000 characters", ""] {
+            assert!(council_unavailable_for(other).is_none(), "{other}");
+        }
     }
 
     #[test]

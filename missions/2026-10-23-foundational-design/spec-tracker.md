@@ -845,7 +845,7 @@ A draft for the operator: host first, the inside exceptions (Council, panel and 
 | S1b | `corroborated` status: origin keys by 040 §6.2, daemon refetch, retraction, public-only pass | not started |
 | S1c | the way back in: `propose_kb_entry` schema, daemon-decided `private`, source decision cards, egress choke point, seat rule | not started |
 | S1d | wider fetch: 7a observed search-result URLs only (7b off, not built) | not started; OD-7a approved |
-| S2 | Councils inside only: rename Mode B, `council_unavailable`, no-relabel tests | not started |
+| S2 | Councils inside only: rename Mode B, `council_unavailable`, no-relabel tests | built (draft PR): Mode B is an "unaudited agenda" in the prompt, the skills and the staged file (`missions/agendas/`, `kind: unaudited_agenda`, `barrier: none`, `source: host-reported`); `request_council` answers the typed terminal `council_unavailable` (`daemon_down`, `disabled_by_operator`, `seats_unavailable`); every `host.*` payload is refused if it carries `council_format`, `venue: daemon` or a Council kind, and the record-body methods also if a front-matter line does |
 | S3 | `locus` field, schemas, pack header, capability names, Claude Code adapter with version and hash | not started |
 | S4 | `route` for any query: canonical roles, `locus`, `trigger`, `confidence`, `adopt`, threshold, `route.decided` | not started |
 | S5 | KB first, the research reflex and the offer rule (manifests, plugin skill, `CLAUDE.md` template) | not started |

@@ -565,6 +565,11 @@ impl EngineService {
         let mut c = h::Caller::parse(&p).map_err(host_err)?;
         c.projects = self.engine.projects.clone();
         let proposition = h::council_proposition(&c, &p).map_err(host_err)?;
+        // Spec 098 §5: a Council that cannot be seated is a typed `seats_unavailable` answer now, not a task that fails later. The
+        // MCP process turns this message into the terminal `council_unavailable` answer.
+        if let Err(why) = self.engine.council_seatable() {
+            return Err(err(code::INVALID_PARAMS, format!("seats_unavailable: {why}")));
+        }
         let (task_id, m) = {
             let _gate = self.host_gate.lock().await;
             let m = self.mission_at(Some(&c.mission()), c.cwd.to_str()).await?;
@@ -3089,6 +3094,15 @@ impl Extension for ServiceExt {
     fn call(&self, method: &str, params: Value, ctx: CallContext) -> RpcFuture {
         let (svc, method) = (self.0.clone(), method.to_string());
         Box::pin(async move {
+            // Spec 098 §5, §12 item 1: nothing a host sends may be labelled a Council record. Every `host.*` payload is checked for the
+            // structural labels; the methods that store a record body (a note, a KB entry, a summary, a handoff) are also scanned for
+            // front-matter lines. The fixed answer echoes nothing of the payload.
+            if method.starts_with("host.") {
+                let scan_text = matches!(method.as_str(), "host.propose_note" | "host.propose_kb_entry" | "host.record_session_summary" | "host.handoff_put");
+                if let Err(why) = crate::host_rpc::reject_council_labels(&params, scan_text) {
+                    return Some(Err(err(code::INVALID_PARAMS, why)));
+                }
+            }
             Some(match method.as_str() {
                 "mission.open" => match need_console(&ctx) {
                     Err(e) => Err(e),
@@ -3285,6 +3299,27 @@ mod tests {
         match r {
             Err(ClientError::Rpc { code, .. }) => Some(code),
             _ => None,
+        }
+    }
+
+    /// The code and the message of an RPC error, or `(None, None)` for anything else.
+    fn rpc_error(r: Result<Value, ClientError>) -> (Option<i64>, Option<String>) {
+        match r {
+            Err(ClientError::Rpc { code, message, .. }) => (Some(code), Some(message)),
+            _ => (None, None),
+        }
+    }
+
+    /// Every file under `dir` whose text mentions `needle`.
+    fn files_mentioning(dir: &std::path::Path, needle: &str, out: &mut Vec<PathBuf>) {
+        let Ok(rd) = fs::read_dir(dir) else { return };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                files_mentioning(&p, needle, out);
+            } else if fs::read(&p).is_ok_and(|b| String::from_utf8_lossy(&b).contains(needle)) {
+                out.push(p);
+            }
         }
     }
 
@@ -3527,6 +3562,53 @@ mod tests {
         .await;
         let events = replay_log(&delphi_core::sessions::dir(&ws_dir, "host-abcdef0123456789"));
         assert_eq!(events.iter().filter(|e| e.kind == crate::host_rpc::COUNCIL_EVENT).count(), 1);
+    }
+
+    // Spec 098 section 5 and section 12 item 1: a Council that cannot be seated is `seats_unavailable` at once, and nothing a host sends
+    // can be labelled a Council record, on any host method, with a fixed answer that echoes nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_council_that_cannot_be_seated_is_seats_unavailable_and_no_host_call_can_write_a_council_label() {
+        let f = setup(vec![], 5.0, |s| s.enabled_agents.retain(|r| r != "strategist"));
+        let ws_dir = f.engine.ws.dir.clone();
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            c.hello(&htok).unwrap();
+            let p = |extra: Value| {
+                let mut b = json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cwd});
+                for (k, v) in extra.as_object().unwrap() {
+                    b[k] = v.clone();
+                }
+                b
+            };
+            // The default Council needs the strategist; with that role off, the host is told so at once and no Council task is raised.
+            let (code_, message) = rpc_error(c.call("host.request_council", p(json!({"question": "Table or file for the retry queue?"}))));
+            assert_eq!(code_, Some(code::INVALID_PARAMS));
+            assert!(message.as_deref().is_some_and(|m| m.starts_with("seats_unavailable: `strategist` is not an enabled role")), "{message:?}");
+            // The structural labels are refused on every host method; the methods that store a record body also refuse front matter.
+            for (method, extra) in [
+                ("host.propose_note", json!({"council_format": 1})),
+                ("host.request_help", json!({"need": "n", "venue": "daemon"})),
+                ("host.council_open", json!({"question": "q", "kind": "council_record"})),
+                ("host.handoff_put", json!({"objective": "o", "meta": {"x": [{"council_format": "1"}]}})),
+                ("host.record_session_summary", json!({"summary": "s\ncouncil_format: 1\nvenue: daemon\n"})),
+                ("host.propose_kb_entry", json!({"title": "t", "body": "text\n- venue: daemon\n"})),
+            ] {
+                let (code_, message) = rpc_error(c.call(method, p(extra.clone())));
+                assert_eq!(code_, Some(code::INVALID_PARAMS), "{method}: {extra}");
+                assert_eq!(message.as_deref(), Some(crate::host_rpc::COUNCIL_LABEL_REFUSED), "{method}: a fixed answer that echoes nothing");
+            }
+            // Free text a seat or a question carries is not scanned: this question mentions the words and is not refused for them.
+            let (code_, message) = rpc_error(c.call("host.request_council", p(json!({"question": "Is\nvenue: daemon\nsafe to allow?"}))));
+            assert!(message.as_deref().is_some_and(|m| m.starts_with("seats_unavailable")), "reaches the seat check, not the label check: {code_:?} {message:?}");
+        })
+        .await;
+        let mut found = Vec::new();
+        files_mentioning(&ws_dir, "council_format", &mut found);
+        assert!(found.is_empty(), "no host call wrote a Council label: {found:?}");
     }
 
     #[tokio::test(flavor = "multi_thread")]
