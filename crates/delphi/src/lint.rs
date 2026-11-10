@@ -41,6 +41,19 @@ const UNSEEDED: [&str; 5] = ["specs/", "missions/", "OVERVIEW.md", "README.md", 
 /// Text files scanned for absolute home paths (REV-SEC-05).
 const TEXT_EXTS: [&str; 11] = [".md", ".toml", ".rs", ".sh", ".py", ".json", ".yaml", ".yml", ".txt", ".js", ".ts"];
 const COGNITIVE: [&str; 4] = ["deep-reasoning", "code-craft", "high-context-discovery", "fast-triage"];
+/// The values of the optional `locus` field of a role or skill manifest (`specs/098` §3.2). Absent means `either`.
+const LOCI: [&str; 3] = ["host", "inside", "either"];
+
+/// `locus`, when a manifest has it, is one of [`LOCI`]. A value that is not (a number, a list, a word we do not know) fails, so
+/// a typo cannot quietly leave a role or skill running where its author meant it not to.
+fn locus_errors(fm: &Mapping) -> Option<String> {
+    let v = fm.get(Value::String("locus".into()))?;
+    if v.as_str().is_some_and(|s| LOCI.contains(&s)) {
+        None
+    } else {
+        Some(format!("locus must be one of {} (specs/098 §3.2)", LOCI.join(", ")))
+    }
+}
 pub const BODY_LINE_CAP: usize = 500;
 
 impl Tree {
@@ -411,6 +424,7 @@ pub fn skill_errors(fm: &Mapping, dir: &str, custom: bool) -> Vec<String> {
         Some(d) if !d.trim().is_empty() && d.chars().count() <= 200 => {}
         _ => errs.push("description must be 1–200 characters".into()),
     }
+    errs.extend(locus_errors(fm));
     let agents = str_list(fm, "authorized_agents");
     if agents.is_empty() {
         errs.push("authorized_agents must list at least one role".into());
@@ -512,6 +526,7 @@ pub fn manifest_errors(fm: &Mapping, dir: &str) -> Vec<String> {
             errs.push("default_tier `frontier`: no built-in role starts on the top tier; the orchestrator raises a role for a task that needs it (specs/035 D-14)".into());
         }
     }
+    errs.extend(locus_errors(fm));
     if ROLES.contains(&id) && get_str(fm, "memory_scope") != Some(format!("memory/agents/{}/", id).as_str()) {
         errs.push(format!("memory_scope must be `memory/agents/{}/`", id));
     }
@@ -990,6 +1005,23 @@ mod tests {
         assert!(manifest_errors(&with("huge"), "builder").iter().any(|e| e.contains("default_tier `huge`")));
         assert!(manifest_errors(&with("frontier"), "builder").iter().any(|e| e.contains("no built-in role starts on the top tier")));
         assert!(manifest_errors(&with("frontier"), "custom/builder").is_empty(), "an operator's own override may start a role on the top tier");
+    }
+
+    // specs/098 §3.2: an optional `locus` on a role or a skill names where it runs, in a word we know.
+    #[test]
+    fn locus_is_optional_and_checked_on_roles_and_skills() {
+        let role = |v: &str| frontmatter_of(&BUILDER.replace("cognitive_profile: code-craft\n", &format!("cognitive_profile: code-craft\nlocus: {}\n", v))).unwrap();
+        for ok in ["host", "inside", "either"] {
+            assert!(manifest_errors(&role(ok), "builder").is_empty(), "{ok}");
+        }
+        for bad in ["elsewhere", "Host", "[host]", "7"] {
+            assert!(manifest_errors(&role(bad), "builder").iter().any(|e| e.contains("locus must be one of host, inside, either")), "{bad}");
+        }
+        assert!(manifest_errors(&frontmatter_of(BUILDER).unwrap(), "builder").is_empty(), "absent means either");
+        let skill = |extra: &str| frontmatter_of(&format!("---\nname: demo\ndescription: d\nauthorized_agents: [builder]\ninput_schema: {{type: object}}\noutput_schema: {{type: object}}\nrequired_permissions: [read:all]\n{extra}---\nbody\n")).unwrap();
+        assert!(skill_errors(&skill(""), "demo", false).is_empty());
+        assert!(skill_errors(&skill("locus: inside\n"), "demo", false).is_empty());
+        assert!(skill_errors(&skill("locus: nowhere\n"), "demo", false).iter().any(|e| e.contains("locus must be one of")));
     }
 
     const BUILDER: &str = "---\nid: builder\ntitle: B\nrole: b\ncognitive_profile: code-craft\nmemory_scope: memory/agents/builder/\nmax_turn_budget: 5\ndefault_access_scope: {read: ['*'], write: ['@worktree/**'], execute: ['test-runner']}\nauthorized_skills: [tdd-execution]\n---\nbody\n";

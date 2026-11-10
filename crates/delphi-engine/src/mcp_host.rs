@@ -87,7 +87,7 @@ pub fn tools() -> Value {
         {
             "name": "list_roles",
             "title": "List Delphi roles",
-            "description": "The Delphi roles this workspace has: each role's ID, a one-line purpose, whether it may be served to a host agent (`servable`), and the skills it uses. Role IDs are stable; display names are not.",
+            "description": "The Delphi roles this workspace has: each role's ID, a one-line purpose, whether it may be served to a host agent (`servable`), where it runs (`locus`: host, inside or either), and the skills it uses. Role IDs are stable; display names are not.",
             "inputSchema": {"type": "object", "properties": {}, "additionalProperties": false},
             "annotations": annotations("List Delphi roles")
         },
@@ -113,7 +113,7 @@ pub fn tools() -> Value {
         {
             "name": "list_skills",
             "title": "List Delphi skills",
-            "description": "The release skills Delphi ships: a name and a one-line description each.",
+            "description": "The release skills Delphi ships: a name, a one-line description and where it runs (`locus`: host, inside or either) each.",
             "inputSchema": {"type": "object", "properties": {}, "additionalProperties": false},
             "annotations": annotations("List Delphi skills")
         },
@@ -754,7 +754,7 @@ impl Server {
                     Ok(format!("You are {who}. Show that line before what you write as this role, so the operator can tell who is speaking.\n\n{pack}"))
                 })
             }),
-            "list_skills" => self.packs().and_then(|p| p.skills()).map(|s| json!(s.iter().map(|(n, d)| json!({"name": n, "description": d})).collect::<Vec<_>>()).to_string()),
+            "list_skills" => self.packs().and_then(|p| p.skills_full()).map(|s| json!(s.iter().map(|s| json!({"name": s.name, "description": s.description, "locus": s.locus})).collect::<Vec<_>>()).to_string()),
             "get_skill" => arg("name").and_then(|n| self.packs().and_then(|p| p.skill(&n))),
             "search_kb" => query().and_then(|q| self.daemon("host.search_kb", &json!({"query": q, "limit": limit(5, 10)}))),
             "propose_note" => self.daemon("host.propose_note", args),

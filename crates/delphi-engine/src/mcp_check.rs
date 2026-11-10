@@ -133,6 +133,38 @@ pub fn check_claude_code(home: &Path, binary_release: &str) -> Check {
     }
 }
 
+/// Spec 098 §4: does the host adapter shipped in the installed Claude Code plugin (`adapter.json`) match the one this binary writes
+/// into its pack headers? `Some((matches, detail))`, or `None` when the plugin's folder cannot be read safely: no plugin state, an
+/// install path outside `~/.claude/plugins` (the path comes from a file Claude Code writes, so it is read only below its own
+/// plugins folder, never through a symlink), or an unreadable file. Read-only and offline; it says nothing the release check
+/// (`check_claude_code`) has not, except that a plugin of the right release can still carry an adapter of another hash.
+pub fn check_claude_adapter(home: &Path, expected_json: &str) -> Option<(bool, String)> {
+    let plugins = home.join(".claude").join("plugins");
+    let installed = safe_read(&plugins.join("installed_plugins.json")).ok()??;
+    let doc: serde_json::Value = serde_json::from_slice(&installed).ok()?;
+    if doc["version"] != 2 {
+        return None;
+    }
+    let entry = doc["plugins"].get(PLUGIN_KEY)?.as_array()?.iter().find(|e| e["scope"] == "user")?;
+    let install = Path::new(entry["installPath"].as_str()?);
+    if !install.is_absolute() || !install.starts_with(&plugins) || install.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return None;
+    }
+    let ours = crate::mcp_hosts::adapter_hash(expected_json);
+    match safe_read(&install.join("adapter.json")) {
+        Ok(Some(bytes)) => {
+            let theirs = crate::mcp_hosts::adapter_hash(&String::from_utf8_lossy(&bytes));
+            if theirs == ours {
+                Some((true, format!("the installed plugin's adapter (v{}, hash {ours}) is the one this binary writes", crate::mcp_hosts::ADAPTER_VERSION)))
+            } else {
+                Some((false, format!("the installed plugin's adapter (hash {theirs}) is not the one this binary writes (hash {ours}); a pack header names a mapping your plugin does not have")))
+            }
+        }
+        Ok(None) if install.is_dir() => Some((false, format!("the installed plugin has no adapter.json (it predates spec 098); this binary's adapter has hash {ours}"))),
+        _ => None,
+    }
+}
+
 /// Spec 074 L1: whether a stable install location holds this binary, from `stat` alone (nothing is executed). The directories are
 /// `install_dir` (`$DELPHI_INSTALL_DIR`, if set), `~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin`. It says nothing about a host's own `PATH`.
 pub fn launch_path(home: &Path, install_dir: Option<&Path>, exe: &Path) -> String {
@@ -320,6 +352,38 @@ mod tests {
         assert!(!format!("{r:?}").contains("SECRET"));
         write(s.path(), ".claude/plugins/installed_plugins.json", r#"{"version":2,"plugins":{"delphi@delphi":[{"scope":"user","version":"1.0.0-sk-SECRET"}]}}"#);
         assert!(!format!("{:?}", check_claude_code(s.path(), "0.5.3")).contains("SECRET"));
+    }
+
+    #[test]
+    fn the_adapter_in_the_installed_plugin_is_compared_with_this_binarys_and_read_only_below_the_plugins_folder() {
+        let want = crate::mcp_hosts::claude_code_adapter_json();
+        let t = tempfile::tempdir().unwrap();
+        let listing = |path: &std::path::Path| format!(r#"{{"version":2,"plugins":{{"delphi@delphi":[{{"scope":"user","version":"0.6.0","installPath":{}}}]}}}}"#, serde_json::json!(path.to_str().unwrap()));
+        let install = t.path().join(".claude/plugins/cache/delphi/delphi/0.6.0");
+        write(t.path(), ".claude/plugins/installed_plugins.json", &listing(&install));
+        assert!(check_claude_adapter(t.path(), &want).is_none(), "no folder, nothing to say");
+        std::fs::create_dir_all(&install).unwrap();
+        let (ok, why) = check_claude_adapter(t.path(), &want).unwrap();
+        assert!(!ok && why.contains("no adapter.json"), "{why}");
+        std::fs::write(install.join("adapter.json"), &want).unwrap();
+        let (ok, why) = check_claude_adapter(t.path(), &want).unwrap();
+        assert!(ok && why.contains("is the one this binary writes"), "{why}");
+        std::fs::write(install.join("adapter.json"), want.replace("\"Read\"", "\"Cat\"")).unwrap();
+        let (ok, why) = check_claude_adapter(t.path(), &want).unwrap();
+        assert!(!ok && why.contains("is not the one this binary writes"), "{why}");
+        // The install path is a value from a file Claude Code writes: outside ~/.claude/plugins, or with `..`, it is never read.
+        let outside = t.path().join("elsewhere");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("adapter.json"), &want).unwrap();
+        write(t.path(), ".claude/plugins/installed_plugins.json", &listing(&outside));
+        assert!(check_claude_adapter(t.path(), &want).is_none(), "outside the plugins folder");
+        write(t.path(), ".claude/plugins/installed_plugins.json", &listing(&install.join("../../../../../../elsewhere")));
+        assert!(check_claude_adapter(t.path(), &want).is_none(), "a `..` component");
+        // A symlinked adapter.json is refused, not followed.
+        write(t.path(), ".claude/plugins/installed_plugins.json", &listing(&install));
+        std::fs::remove_file(install.join("adapter.json")).unwrap();
+        std::os::unix::fs::symlink(outside.join("adapter.json"), install.join("adapter.json")).unwrap();
+        assert!(check_claude_adapter(t.path(), &want).is_none(), "a symlink is not followed");
     }
 
     #[test]

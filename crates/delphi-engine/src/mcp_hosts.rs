@@ -338,6 +338,29 @@ pub fn install_codex_agents(
     Ok(written)
 }
 
+/// The capability names a pack uses, in the order a pack lists them (spec 098 §4). A pack names these, never Delphi's own tool names.
+pub const CAPABILITIES: [&str; 7] = ["read", "search_code", "search_web", "fetch", "edit", "shell", "delegate"];
+
+/// The version of the Claude Code host adapter. Raise it when the mapping below changes (spec 098 §4).
+pub const ADAPTER_VERSION: u32 = 1;
+
+/// The Claude Code host adapter (spec 098 §4): each capability to the tool that provides it in that host. `None` means the host
+/// lacks the capability, and a pack says so ("unavailable"). Every capability of [`CAPABILITIES`] appears once.
+pub fn claude_code_adapter() -> Vec<(&'static str, Option<&'static str>)> {
+    vec![("read", Some("Read")), ("search_code", Some("Grep")), ("search_web", Some("WebSearch")), ("fetch", Some("WebFetch")), ("edit", Some("Edit")), ("shell", Some("Bash")), ("delegate", Some("Agent"))]
+}
+
+/// The adapter as the file `adapter.json` of the Claude Code plugin: fixed key order, fixed text, so its hash is stable.
+pub fn claude_code_adapter_json() -> String {
+    let caps: Vec<String> = claude_code_adapter().iter().map(|(c, t)| format!("    \"{c}\": {}", t.map(|t| format!("\"{t}\"")).unwrap_or_else(|| "null".into()))).collect();
+    format!("{{\n  \"host\": \"claude-code\",\n  \"version\": {ADAPTER_VERSION},\n  \"capabilities\": {{\n{}\n  }}\n}}\n", caps.join(",\n"))
+}
+
+/// The short hash of an adapter file's text, as a pack header and `delphi doctor` print it.
+pub fn adapter_hash(json: &str) -> String {
+    crate::workspace::hash(json.as_bytes())[..16].to_string()
+}
+
 /// The files of an export for `host`, relative to the output directory. `version` is the release the files are generated for.
 pub fn export_files(host: &str, version: &str) -> Result<Vec<(PathBuf, String)>, String> {
     export_files_with(host, version, &BTreeMap::new())
@@ -353,6 +376,7 @@ pub fn export_files_with(host: &str, version: &str, models: &BTreeMap<String, St
         "claude-code" => vec![
             (".claude-plugin/plugin.json".into(), plugin_json(version)),
             (".mcp.json".into(), plugin_mcp_json()),
+            ("adapter.json".into(), claude_code_adapter_json()),
             ("skills/delphi/SKILL.md".into(), skill),
             ("skills/delphi-council/SKILL.md".into(), council),
         ],
@@ -520,7 +544,14 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         let out = t.path().join("p");
         let w = write_export("claude-code", &out, "9.9.9").unwrap();
-        assert_eq!(w.len(), 8);
+        assert_eq!(w.len(), 9, "plugin.json, .mcp.json, the adapter, two skills and four seat agents");
+        // Spec 098 §4: the host adapter ships with the plugin, byte for byte what a pack header hashes.
+        assert_eq!(std::fs::read_to_string(out.join("adapter.json")).unwrap(), claude_code_adapter_json());
+        let adapter: serde_json::Value = serde_json::from_str(&claude_code_adapter_json()).unwrap();
+        assert_eq!((adapter["host"].as_str(), adapter["version"].as_u64()), (Some("claude-code"), Some(ADAPTER_VERSION as u64)));
+        assert!(CAPABILITIES.iter().all(|c| adapter["capabilities"].get(c).is_some()), "every capability a pack can name is in the adapter");
+        assert_eq!(adapter["capabilities"].as_object().unwrap().len(), CAPABILITIES.len());
+        assert_eq!(adapter_hash(&claude_code_adapter_json()).len(), 16);
         assert!(std::fs::read_to_string(out.join("skills/delphi/SKILL.md")).unwrap().starts_with("---\nname: delphi"));
         let council = std::fs::read_to_string(out.join("skills/delphi-council/SKILL.md")).unwrap();
         assert!(council.starts_with("---\nname: delphi-council") && council.contains("council_frame") && council.contains("**wait for a yes**"), "{council}");
