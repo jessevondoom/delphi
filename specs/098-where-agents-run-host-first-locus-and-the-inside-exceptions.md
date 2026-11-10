@@ -7,14 +7,14 @@ status: draft
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
-confidence: low   # written from the repo's specs and a sample of the code, not from live runs; the research failure cause (§7.5) is not yet measured
+confidence: low   # written from the repo's specs and a sample of the code, not from live runs; how much a thin knowledge base and trusted list limit research (§7.5) is argued from the code, not measured
 source_mission: 2026-11-10-session
 tags: [spec, hosts, locus, council, panel, red-team, routing, research, builder, draft]
 ---
 
 # Spec 098: Where agents run
 
-> **Status: draft, a proposal.** Nothing here is permission to build. It amends and consolidates [`062`](062-delphi-as-host-agent-mcp-server.md), [`066`](066-mcp-research-endpoint-and-role-identity.md), [`072`](072-host-cognitive-parity-and-external-orchestration.md), [`077`](077-host-mention-routing-and-themed-alias-resolution.md), [`086`](086-outside-council-panel-and-host-subagents.md), [`091`](091-seats-families-and-outside-launch.md) and [`041`](041-agent-registry-routing-and-role-extensions.md). One spec, ten slices (§13).
+> **Status: draft, a proposal.** Nothing here is permission to build. It amends and consolidates [`062`](062-delphi-as-host-agent-mcp-server.md), [`066`](066-mcp-research-endpoint-and-role-identity.md), [`072`](072-host-cognitive-parity-and-external-orchestration.md), [`077`](077-host-mention-routing-and-themed-alias-resolution.md), [`086`](086-outside-council-panel-and-host-subagents.md), [`091`](091-seats-families-and-outside-launch.md) and [`041`](041-agent-registry-routing-and-role-extensions.md). One spec, nine slices (§13).
 
 ## 1. Scope and objectives
 
@@ -34,7 +34,7 @@ When an operator works in a host (Claude Code, Copilot CLI, Codex, `agy`) and ca
 3. A red-team review exists only as a seat inside a Panel. There is no standalone, mixed-family red-team review.
 4. `route` ranks only bundle agents. It does not rank the canonical roles, say where to run, or say how sure it is.
 5. The host never reaches for the Scout or Investigator on its own, and no role has a stated order in which to look: knowledge base, trusted sources, then the wider world. A role that finds one of its inside tools limited stops with "I can't", when the host beside it has the tool.
-6. **Research fails on the first attempt (§7.5).** The inside Scout has no search or fetch tool in its inventory, and the research pipeline refuses unlisted hosts. The cause is not measured.
+6. **Research is limited while the knowledge base and the trusted list are small (§7.5).** Inside, the fetcher refuses unlisted hosts and the span has no general search tool, so an early request finds little. Nothing sends the host's own search back in to grow either one.
 7. Nothing says how a build in the host relates to the spec gate, or requires that an approved spec was formalized and reviewed inside.
 
 ### 1.1 Non-goals
@@ -47,7 +47,7 @@ When an operator works in a host (Claude Code, Copilot CLI, Codex, `agy`) and ca
 
 ### 1.2 Simpler alternative considered
 
-Do only slices S2 (relabel Mode B) and S5 (the research reflex), and leave the rest as convention. Rejected: without the locus declaration and a `route` that says where to run, the rule stays prose that each host reads differently, and the first-attempt research failure would stay hidden behind a reflex that sends more requests into it.
+Do only slices S2 (relabel Mode B) and S5 (the research reflex), and leave the rest as convention. Rejected: without the locus declaration and a `route` that says where to run, the rule stays prose that each host reads differently, and the reflex would send requests to a research path that has nothing to bring back and no way to grow.
 
 ## 2. Principles
 
@@ -125,7 +125,7 @@ The Scout works down this ladder, in order, and **stops descending when the ques
 | 1. Knowledge base | all KB entries on the topic, with their `knowledge_status` | `kb_retrieve`, `search_kb`, `search_memory` | `kb_search`, `recall_memory` |
 | 2. Trusted sources | entries from the operator's trusted-source list, already kept or fetchable | `request_research` (the pipeline) or the host's fetch limited to the listed hosts | the research pipeline |
 | 3. Close sources | the project and workspace files, then what the host is connected to and the operator has approved: team chat, meeting transcripts, email, shared documents, issue trackers | the host's own search and connector tools (§7.2) | not available inside; the role says so and the host rung takes over |
-| 4. The wider world | primary and official sources first, then reputable secondary sources, then the open web, radiating outward in that order | the host's search and fetch tools | the egress-scoped pair of §7.3, trusted hosts only |
+| 4. The wider world | primary and official sources first, then reputable secondary sources, then the open web, radiating outward in that order | the host's search and fetch tools | trusted hosts only (066 §6); beyond them the role says so and the host rung takes over |
 
 The Investigator and the Red team follow the same shape, each with its own rung 1 (§7.4). A source found on a rung carries that rung in its citation, so a reader sees how far out a claim came from.
 
@@ -155,51 +155,22 @@ A role never stops with "I cannot" while a rung of its ladder is open. The rule 
 - **Red team.** Rung 1 is everything Delphi holds for the review: the spec and its history, `REVIEW.md` and `GOVERNANCE.md` from the **base** branch (GOVERNANCE §5.2), prior findings, lessons. The host seat then augments with the host's tooling (run the code, fuzz, read the diff, search for the dependency's advisories). Inside seats of other families keep their own tool grant (none or read-only, 091 §5); the host seat's findings and the inside seats' findings are merged afterwards (§6.2).
 - **When a tool is missing, the role names the rung it could not use and goes on.** The final answer lists the rungs used and the rungs skipped, each with its reason (`not_connected`, `not_approved`, `no_results`, `refused_by_host`). "I cannot do this" is a defect in the pack, reported by `record_session_summary`.
 
-### 7.5 The inside Scout works the first time
+### 7.5 Research grows Delphi: outside search fills what the knowledge base and the trusted list lack
 
-**Problem.** The operator reports that most research requests fail on the first attempt, because the Scout is dispatched from an inside posture whose search and fetch tools are limited. What the code shows:
+**What is true today.** Delphi's own research is as wide as two things: the knowledge base and the operator's trusted-source list. Inside, the fetcher refuses any host not on the list (066 §6), the span tool inventory has no general web search or fetch tool (`crates/delphi-engine/src/tools.rs`), and a Scout dispatched for a host request is read-only with no network (062 §6.3). While both the knowledge base and the trusted list are small, a research request has little to find, and the first result is thin or empty. That is a property of a young installation, not a defect to patch inside.
 
-- The span tool inventory has no web search or fetch tool (`crates/delphi-engine/src/tools.rs`); the Scout's `web-search` entry in `execute` names no tool in it. A Scout dispatched for a host request is narrowed further to read-only with no network (062 §6.3).
-- Web research is a separate pipeline (`request_research`, 066): a search provider that needs a configured credential, and a fetcher that refuses any host not on the trusted list. The span-side `request_research` tool also waits for an operator card.
-- In the local logs I read, host-requested research has `host.research.requested` events but only one `research.finished` event, which kept 0 of 15 results. **That is thin evidence.** The cause is not established.
+**The answer is the ladder, plus a way back in.** Outside search fills the gap now, and what it finds makes the next request better. This spec widens nothing inside: inside egress stays limited to listed hosts, and the trusted list stays operator-edited.
 
-**Requirement.** A research request either returns kept, cited results on the first attempt or fails fast with a **named cause** from a fixed list: `no_search_provider`, `credential_unresolved`, `host_not_trusted`, `no_results`, `all_results_untrusted`, `waiting_for_operator`, `job_cap`. The result's `status` text says what to do about it, and when the cause is an inside limit, says which host rung can take over (§7.4). The cause is never a bare "failed" or an empty "done".
+1. **A coverage report on every answer.** The result names, per rung of §7.1, what it contributed: `rung`, `entries_found`, `kept`, and a `reason` from a fixed list when a rung gave nothing (`kb_empty`, `no_search_provider`, `credential_unresolved`, `host_not_trusted`, `no_results`, `all_results_untrusted`, `not_connected`, `not_approved`). A thin answer is never a bare "failed" or an empty "done".
+2. **A thin-coverage rule.** When rungs 1 and 2 together give fewer than `[research] thin_below` kept, cited claims (default 3, OD-3), the answer is marked `coverage: thin`. In a host, the role goes on to rungs 3 and 4 with the host's tools without being asked. Inside, the answer says `coverage: thin` and names the host rungs that can take over, so the host (or the operator) knows what to do next.
+3. **A way back in.** What the host's rungs found returns to Delphi, never as validated:
+   - claims and sources go through `propose_kb_entry`, marked not validated, to be checked by the validator (spec 040) before their status can rise;
+   - the hosts and sites that supplied evidence, and that are not on the trusted list, are listed in the summary as **candidates for the trusted list**, with the claim each supported. Adding one stays the operator's act: the list is operator-edited (066 §6) and no agent writes it;
+   - rung 3 follows §7.2: private material does not return unless the operator says so for that item.
+4. **A visible effect.** A second ask of a question the host has already researched is answered from rungs 1 and 2 alone, with the kept entries cited. The knowledge base and the list grow with use, which is the point.
+5. **`delphi doctor` reports the inside limits before a run:** a search provider configured, its credential resolvable, the trusted list's size, and the knowledge base's size by topic area. It states the limit as a fact ("trusted list: 6 hosts; knowledge base: 41 entries") and does not call it an error.
 
-**Mechanism (to be fixed by S0's measurement; these are candidates, not decisions):**
-
-1. The inside Scout and Investigator are offered a **first-class pair** of egress-scoped tools, search and fetch, bound to the same provider and trusted list as the pipeline (066 §6: separate scope, no connector tools, no writes, no commands). `exec_tool` still refuses any tool the span was not offered.
-2. A research job narrowed that way raises no card (066 §6); the span-side wait for an operator card is removed for that case only.
-3. `delphi doctor` reports, before any run: a provider configured, its credential resolvable, the trusted list non-empty, and the reachability of the first listed host.
-4. One reformulation inside the run when the first query returns nothing, then the typed failure.
-
-**Acceptance.** On a fixed labeled set of research questions (S0 creates it, at least 10, mixed depth), with a provider configured, the share answered with kept, cited results on the first attempt meets a bar the operator sets (§14 OD-3; my recommendation: 8 of 10). Without a provider, 10 of 10 fail with `no_search_provider` and name the host rung that can take over.
-
-### 7.2 The reflex and the offer
-
-- **Not explicit.** Explicit means an `@delphi` or `@<role>` mention, the `delphi` skill triggering, or the user saying "ask Delphi". When the request is research or investigation and Delphi was **not** invoked explicitly, the host adopts the Scout (or Investigator) in the host, with the host's search tools, checks the KB first, and makes **one** offer to run the same question through Delphi (`request_research`) for sourced, kept results. It continues in the host unless the operator accepts.
-- **Explicit.** No offer. The role runs by the locus table: in the host.
-- The host reaches for the role by calling `route` (§8); below the threshold it adopts nothing.
-- The text lives in the plugin skill and the `CLAUDE.md` template, which `delphi connect` generates. Delphi cannot enforce it; it is best effort and says so.
-- Host-found facts go back only through `propose_kb_entry`, marked not validated.
-
-### 7.3 The inside Scout works the first time
-
-**Problem.** The operator reports that most research requests fail on the first attempt, because the Scout is dispatched from an inside posture whose search and fetch tools are limited. What the code shows:
-
-- The span tool inventory has no web search or fetch tool (`crates/delphi-engine/src/tools.rs`); the Scout's `web-search` entry in `execute` names no tool in it. A Scout dispatched for a host request is narrowed further to read-only with no network (062 §6.3).
-- Web research is a separate pipeline (`request_research`, 066): a search provider that needs a configured credential, and a fetcher that refuses any host not on the trusted list. The span-side `request_research` tool also waits for an operator card.
-- In the local logs I read, host-requested research has `host.research.requested` events but only one `research.finished` event, which kept 0 of 15 results. **That is thin evidence.** The cause is not established.
-
-**Requirement.** A research request either returns kept, cited results on the first attempt or fails fast with a **named cause** from a fixed list: `no_search_provider`, `credential_unresolved`, `host_not_trusted`, `no_results`, `all_results_untrusted`, `waiting_for_operator`, `job_cap`. The result's `status` text says what to do about it. The cause is never a bare "failed" or an empty "done".
-
-**Mechanism (to be fixed by S0's measurement; these are candidates, not decisions):**
-
-1. The inside Scout is offered a **first-class pair** of egress-scoped tools, search and fetch, bound to the same provider and trusted list as the pipeline (066 §6: separate scope, no connector tools, no writes, no commands). `exec_tool` still refuses any tool the span was not offered.
-2. A research job narrowed that way raises no card (066 §6); the span-side wait for an operator card is removed for that case only.
-3. `delphi doctor` reports, before any run: a provider configured, its credential resolvable, the trusted list non-empty, and the reachability of the first listed host.
-4. One reformulation inside the run when the first query returns nothing, then the typed failure.
-
-**Acceptance.** On a fixed labeled set of research questions (S0 creates it, at least 10, mixed depth), with a provider configured, the share answered with kept, cited results on the first attempt meets a bar the operator sets (§14 OD-3; my recommendation: 8 of 10). Without a provider, 10 of 10 fail with `no_search_provider`.
+**Acceptance.** (a) Every research answer carries the coverage report, with a reason for each empty rung. (b) With an empty knowledge base and a trusted list that has no match, a host run goes on to rungs 3 and 4 and returns cited results, and the answer says `coverage: thin` for rungs 1 and 2. (c) After the host's findings are proposed and accepted into the knowledge base, a repeat of the same question is answered from rungs 1 and 2, with `coverage: ok`. (d) The trusted list is unchanged by any agent in the run.
 
 ## 8. `route` for any query
 
@@ -258,7 +229,7 @@ A role never stops with "I cannot" while a rung of its ladder is open. The rule 
 5. The `route` and `consult_orchestrator` answers are untrusted data; text read by the host cannot change them.
 6. A host's `record_session_summary`, `propose_kb_entry` and `handoff_put` stay `external_untrusted`/`host-reported` and unpromoted.
 7. No new MCP tool writes outside Delphi's own log; `delphi mcp` still opens no network socket and writes no file (062 §14.1).
-8. The research tools of §7.5 are refused when not offered, send no host context into a query, and reach only trusted hosts.
+8. Inside research reaches only trusted hosts and sends no host context into a query (066 §6); no agent changes the trusted list (§7.5).
 9. Delphi never reads, grants or widens the host's approved sources (§7.2): no Delphi tool takes a connector name, a token or a host setting as an argument, and the pack tests assert the pack contains no instruction to request access to a source.
 10. Material from a rung-3 source never reaches a Delphi tool without the operator's say for that item; a test sends a fixture marked private through `propose_kb_entry`, `propose_note` and `handoff_put` and expects a refusal text, not a write.
 11. A role's answer lists the rungs used and the rungs skipped with a reason from the fixed list (§7.4); a pack that tells a role to stop with "I cannot" fails the pack linter.
@@ -267,8 +238,7 @@ A role never stops with "I cannot" while a rung of its ladder is open. The rule 
 
 | # | Slice | Depends |
 | :-- | :-- | :-- |
-| S0 | **Measure the research failure.** A fixed labeled set (≥10 questions), a probe that runs each once through the host path and the inside Scout path in a scratch home (`--home <tmpdir>`), and a table of outcomes by cause. No behavior change. | none |
-| S1 | **Fix the inside research path** by the S0 cause (§7.5): the typed failures, the egress-scoped tool pair if S0 shows it is needed, the `delphi doctor` checks. | S0 |
+| S1 | **Coverage, thin-coverage and the way back in** (§7.5): the per-rung coverage report with fixed reasons, the `thin_below` rule, host findings returned through `propose_kb_entry` with trusted-list candidates in the summary, the `delphi doctor` size checks. No inside egress is widened. | none |
 | S2 | **Councils inside only:** rename Mode B, `council_unavailable`, the no-relabel tests (§5). | none |
 | S3 | **`locus` field,** schemas, pack header, capability names and the Claude Code adapter with version and hash (§3.2, §4). Docs regenerated. | none |
 | S4 | **`route` for any query:** canonical roles, `locus`, `trigger`, `confidence`, `adopt`, the threshold and its labeled set, `route.decided` (§8). | S3 |
@@ -294,13 +264,13 @@ Each slice follows `AGENTS.md`: tests, clippy and `delphi lint` before committin
 - The host should reach for the Scout on its own for "research a topic", best effort.
 - The host-run summary is required at the end of a panel, Council or red-team action, and best effort otherwise.
 - The enforcement gap in the host is accepted and not a risk.
-- One spec, on the condition that the first-attempt research failure is fixed (§7.5, S0 and S1).
+- One spec. Research is limited while the knowledge base and the trusted list are small; outside search fills the gap and grows Delphi's own capability (§7.5). Slice 0 (a measurement of the failure) is dropped.
 
 **Open (recommendations in brackets):**
 
 - **OD-1.** `locus` list of `inside` skills (§3.2). [As written; the slice confirms.]
 - **OD-2.** Name of the field: `locus`, or reuse `venue`. [`locus` for the declaration, `venue` for the fact.]
-- **OD-3.** The bars: first-attempt research success (§7.5) and `adopt` precision (§8). [8 of 10; precision 0.9 on a 30-task set.]
+- **OD-3.** The numbers: `[research] thin_below` (§7.5) and `adopt` precision (§8). [3 kept claims; precision 0.9 on a 30-task set.]
 - **OD-4.** The per-task pack cap. [5.]
 - **OD-5.** Strength of the spec-review lint (§10). [Presence and shape of a `review:` line now; a stamped record hash later.]
 
@@ -318,7 +288,7 @@ A daemon Council (`t_0001`, 2026-11-10; architect, red-team and strategist, clau
 | No relabeling a panel as a Council; typed unreachable error (P1) | §5. |
 | Label the enforcement gap (P1) | §12. |
 | Injection through read content must not trigger route or adoption (P1) | §8 and §12.5. |
-| Split into phases (P1, strategist and architect) | Not adopted as separate specs; the operator chose one spec. The ten slices of §13 give the same ordering, and S0 and S1 come first. |
+| Split into phases (P1, strategist and architect) | Not adopted as separate specs; the operator chose one spec. The nine slices of §13 give the same ordering. |
 | Pin defaults: absent locus, threshold, tie-break, offer scope, route logging, summary fields, adapter hash (P2) | §3.2, §8, §7.3, §11, §4. |
 
 The Council ruled on a different, smaller outline than this one. A review of this draft by a Council or a Panel, with the repository read, is the next step before approval.
@@ -330,14 +300,14 @@ The Council ruled on a different, smaller outline than this one. A review of thi
 3. A red-team review with a foreign seat returns findings labeled with receipt families; with none available it returns host-only findings labeled single-family.
 4. `route` returns the fields of §8 for an unlisted task, deterministically; below the threshold `adopt` is false.
 5. The Scout, Investigator and Red-team packs carry the ladder of §7.1 to §7.4 (KB, trusted sources, close sources, the wider world; used and skipped rungs reported); the plugin skill carries the reflex and the offer rule; the `CLAUDE.md` template has the host-sources section.
-6. On the S0 labeled set, the first-attempt research bar of OD-3 is met, and every failure carries one of the causes of §7.5.
+6. Every research answer carries the per-rung coverage report; a thin answer in a host goes on to rungs 3 and 4; after host findings are accepted, a repeat of the question is answered from rungs 1 and 2 with `coverage: ok`; no agent changes the trusted list (§7.5).
 7. `council_open` refuses a pack id; `spawn_agent_pack` stops at the cap.
 8. `delphi lint` rejects an `approved` spec with no `review:` line.
 9. Every invariant of §12 has a test.
 
 ## 17. Not verified
 
-- The cause of the first-attempt research failure (§7.5). The log sample was one finished run.
+- The default `thin_below` of 3, and how fast a knowledge base and a trusted list grow under the way back in (§7.5); the spec says the effect is visible on a repeat question, not how large it is.
 - Whether `delphi lint` or CI already check an `Implements-Spec` trailer against an approved spec (§10).
 - Which skills should be `inside` (§3.2), beyond the Council ones.
 - Whether `spawn_agent_pack` already has a per-task cap; I read its argument checks only.

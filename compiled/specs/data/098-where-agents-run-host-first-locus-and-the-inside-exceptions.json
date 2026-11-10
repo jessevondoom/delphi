@@ -120,77 +120,65 @@
       "level": 3,
       "line": 158,
       "number": "7.5",
-      "title": "The inside Scout works the first time"
-    },
-    {
-      "level": 3,
-      "line": 177,
-      "number": "7.2",
-      "title": "The reflex and the offer"
-    },
-    {
-      "level": 3,
-      "line": 185,
-      "number": "7.3",
-      "title": "The inside Scout works the first time"
+      "title": "Research grows Delphi: outside search fills what the knowledge base and the trusted list lack"
     },
     {
       "level": 2,
-      "line": 204,
+      "line": 175,
       "number": "8",
       "title": "`route` for any query"
     },
     {
       "level": 2,
-      "line": 217,
+      "line": 188,
       "number": "9",
       "title": "Generated task-scoped agents"
     },
     {
       "level": 2,
-      "line": 226,
+      "line": 197,
       "number": "10",
       "title": "Builder in the host, and the spec lifecycle"
     },
     {
       "level": 2,
-      "line": 242,
+      "line": 213,
       "number": "11",
       "title": "Records and summaries"
     },
     {
       "level": 2,
-      "line": 248,
+      "line": 219,
       "number": "12",
       "title": "Authority invariants and the stated limit"
     },
     {
       "level": 2,
-      "line": 266,
+      "line": 237,
       "number": "13",
       "title": "Slices (one pull request each; none starts before approval)"
     },
     {
       "level": 2,
-      "line": 283,
+      "line": 253,
       "number": "14",
       "title": "Decisions"
     },
     {
       "level": 2,
-      "line": 307,
+      "line": 277,
       "number": "15",
       "title": "Council review"
     },
     {
       "level": 2,
-      "line": 326,
+      "line": 296,
       "number": "16",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 338,
+      "line": 308,
       "number": "17",
       "title": "Not verified"
     }
@@ -198,7 +186,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/098-where-agents-run-host-first-locus-and-the-inside-exceptions.md",
-    "sha256": "536d7bcff498c11a12aa95b9ee89a0527ccdf25117f9233fd685916d04869807"
+    "sha256": "23a9f44fb3af0573fd71cf647359f76d3c5d55963e7cd2dabae4fb214bc0ac9c"
   },
   "source_status_at_hash": {
     "line": {
@@ -211,7 +199,7 @@
       },
       "text": "status: draft"
     },
-    "sha256": "536d7bcff498c11a12aa95b9ee89a0527ccdf25117f9233fd685916d04869807",
+    "sha256": "23a9f44fb3af0573fd71cf647359f76d3c5d55963e7cd2dabae4fb214bc0ac9c",
     "word": "draft"
   },
   "spec": {
@@ -226,10 +214,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 1682,
+      "end": 1737,
       "end_line": 21,
       "line": 21,
-      "start": 1301
+      "start": 1356
     },
     "text": "When an operator works in a host (Claude Code, Copilot CLI, Codex, `agy`) and calls Delphi, the work should happen **in the host**, with the host's full tools and skills, and Delphi should supply the persona, method, specs, knowledge, memory and the checks the host cannot do for itself. Delphi runs a role **inside** only where its audit trail or its model families are the point."
   }

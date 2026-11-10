@@ -837,12 +837,11 @@ From Council `t_0001` over two research notes (CAO, Paperclip); the operator cho
 
 ## Spec 098: where agents run (2026-11-10, draft)
 
-A draft for the operator: host first, the inside exceptions (Council, panel and red-team seats of other families), a `locus` declaration, `route` for any query, generated task-scoped agents with guards, the Builder in the host against an approved spec, and a research path that works the first time. Written after Council `t_0001` (2026-11-10) reviewed the outline, which escalated; the draft answers its findings in §15 and a review of the draft itself is the next step. One spec by the operator's choice. The cause of the first-attempt research failure is not measured (S0). Nothing below starts before approval.
+A draft for the operator: host first, the inside exceptions (Council, panel and red-team seats of other families), a `locus` declaration, `route` for any query, generated task-scoped agents with guards, the Builder in the host against an approved spec, and a research path that works the first time. Written after Council `t_0001` (2026-11-10) reviewed the outline, which escalated; the draft answers its findings in §15 and a Council reviews the draft itself next. One spec by the operator's choice. Research is limited while the knowledge base and the trusted list are small; outside search fills the gap and grows Delphi (§7.5). Nothing below starts before approval.
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
-| S0 | measure the research failure: labeled set, probe through the host path and the inside Scout, outcomes by cause | not started |
-| S1 | fix the inside research path by the S0 cause: typed failures, egress-scoped search and fetch if needed, `delphi doctor` checks | not started |
+| S1 | coverage report per rung, the thin-coverage rule, host findings returned through `propose_kb_entry` with trusted-list candidates, `delphi doctor` size checks | not started |
 | S2 | Councils inside only: rename Mode B, `council_unavailable`, no-relabel tests | not started |
 | S3 | `locus` field, schemas, pack header, capability names, Claude Code adapter with version and hash | not started |
 | S4 | `route` for any query: canonical roles, `locus`, `trigger`, `confidence`, `adopt`, threshold, `route.decided` | not started |
