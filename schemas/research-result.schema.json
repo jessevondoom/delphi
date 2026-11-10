@@ -14,6 +14,20 @@
     "kb_hits": { "type": "array", "items": { "type": "string" } },
     "new_claims": { "type": "integer", "minimum": 0, "description": "Deduplicated staged candidates, not search hits." },
     "contradictions": { "type": "array", "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "description": "Claim ids that disagree." } },
+    "coverage": { "enum": ["ok", "thin"], "description": "`thin` when the knowledge base and the trusted sources together gave fewer kept, cited claims than `[research] thin_below` (specs/098 section 7.5)." },
+    "coverage_report": {
+      "type": "object",
+      "description": "What each rung of the source ladder (specs/098 section 7.1) turned up and kept. A `reason` appears only on a rung that was searched and found nothing, or cannot be reached from inside; it is one word of a fixed list and never provider text.",
+      "required": ["thin_below", "counted", "rungs", "host_rungs", "leads_kept"],
+      "properties": {
+        "thin_below": { "type": "integer", "minimum": 1 },
+        "counted": { "type": "integer", "minimum": 0, "description": "Kept, cited claims from the knowledge base and the trusted sources, after dedupe." },
+        "rungs": { "type": "array", "items": { "$ref": "#/$defs/rung" } },
+        "host_rungs": { "type": "array", "items": { "enum": ["close", "web"] }, "description": "When thin: the rungs the host's own tools and connectors can take over." },
+        "leads_kept": { "type": "integer", "minimum": 0, "description": "Search results the fetcher would not reach, kept as noted leads." }
+      },
+      "additionalProperties": false
+    },
     "freshness": {
       "type": "object",
       "properties": { "retrieved": { "type": "string" }, "last_checked": { "type": "string" } },
@@ -35,6 +49,18 @@
   },
   "additionalProperties": false,
   "$defs": {
+    "rung": {
+      "type": "object",
+      "required": ["rung", "searched", "entries_found", "kept"],
+      "properties": {
+        "rung": { "enum": ["kb", "trusted", "close", "web"] },
+        "searched": { "type": "boolean" },
+        "entries_found": { "type": "integer", "minimum": 0 },
+        "kept": { "type": "integer", "minimum": 0 },
+        "reason": { "enum": ["kb_empty", "no_search_provider", "credential_unresolved", "no_results", "not_connected", "not_approved"] }
+      },
+      "additionalProperties": false
+    },
     "claim": {
       "type": "object",
       "required": ["id", "assertion", "source_ids", "quote", "locator", "retrieved", "licence", "knowledge_status", "contested"],

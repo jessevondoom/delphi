@@ -76,6 +76,9 @@ pub fn settings_from(root: &toml::Value) -> Settings {
             s.max_foreign_tokens = n as u64;
         }
     }
+    if let Some(n) = root.get("research").and_then(|r| r.get("thin_below")).and_then(|v| v.as_integer()).filter(|v| *v >= 1) {
+        s.thin_below = n.min(50) as usize;
+    }
     s.hooks = crate::hooks::parse(root).0;
     if let Some(r) = root.get("relay") {
         if r.get("step_up").and_then(|v| v.as_str()) == Some("totp") {
@@ -403,6 +406,13 @@ mod tests {
         assert_eq!((d.require_families, d.max_foreign_seats, d.max_foreign_tokens), (None, 1, 100_000), "unset never refuses");
         let s = settings_from(&toml::from_str("[seats]\nrequire_families = 2\nmax_foreign_seats = 0\nmax_foreign_tokens = 5000\n").unwrap());
         assert_eq!((s.require_families, s.max_foreign_seats, s.max_foreign_tokens), (Some(2), 0, 5000));
+        // `[research] thin_below` (specs/098 §7.5 item 4): default 3, a positive integer, capped at 50; anything else keeps the default.
+        assert_eq!(settings_from(&toml::from_str("").unwrap()).thin_below, 3);
+        assert_eq!(settings_from(&toml::from_str("[research]\nthin_below = 5\n").unwrap()).thin_below, 5);
+        assert_eq!(settings_from(&toml::from_str("[research]\nthin_below = 500\n").unwrap()).thin_below, 50);
+        for bad in ["thin_below = 0", "thin_below = -2", "thin_below = \"many\""] {
+            assert_eq!(settings_from(&toml::from_str(&format!("[research]\n{bad}\n")).unwrap()).thin_below, 3, "{bad}");
+        }
         assert_eq!(settings_from(&toml::from_str("[seats]\nrequire_families = 0\n").unwrap()).require_families, None, "0 is not a requirement");
     }
     fn workspace_with_config(extra: &str) -> (tempfile::TempDir, WorkspacePaths) {

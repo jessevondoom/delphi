@@ -36,6 +36,11 @@ pub trait Web: Send + Sync {
     fn search(&self, query: &str) -> Result<Vec<Row>, String>;
     /// Is the URL's host on a trusted list (`TrustedList::allows_url`)?
     fn is_trusted(&self, url: &str) -> bool;
+    /// Will the fetcher reach this URL at all? Today only a trusted host (`specs/066` §6); slice S1d of `specs/098` widens it to the
+    /// URLs a search returned. A URL it will not reach costs no step and no fetch: the result is kept as a lead instead (§7.5 item 1).
+    fn can_fetch(&self, url: &str) -> bool {
+        self.is_trusted(url)
+    }
     fn fetch(&self, url: &str) -> Result<Page, String>;
 }
 
@@ -77,6 +82,11 @@ pub trait Library: Send + Sync {
     fn capture<'a>(&'a self, url: &'a str, text: &'a str, trusted: bool) -> BoxFut<'a, Result<String, String>>;
     /// Stage a claim by capture on contact (`specs/052`): `noted` unless a check is queued.
     fn stage_claim(&self, claim: &ClaimRec) -> Result<(), String>;
+    /// Keep a search result the fetcher will not reach as a `noted` lead: its address, title and snippet, dated, with where it came
+    /// from, and nothing more (`specs/098` §7.5 item 1). It is never validated and is not a page. The default keeps nothing.
+    fn note_lead(&self, _row: &Row) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 pub struct Deps<'a> {
@@ -87,6 +97,9 @@ pub struct Deps<'a> {
     pub redactor: &'a Redactor,
     /// `TrustedList::site_filters`.
     pub sites: &'a [String],
+    /// `[research] thin_below` (`specs/098` §7.5 item 4): fewer kept, cited claims than this from the knowledge base and the
+    /// trusted sources together make the answer `coverage: thin`.
+    pub thin_below: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -152,6 +165,61 @@ fn day() -> String {
     delphi_core::time::now_rfc3339().chars().take(10).collect()
 }
 
+/// What the search turned up on each rung of `specs/098` §7.1, counted as a job goes.
+#[derive(Default)]
+struct Rungs {
+    /// Queries the engine answered (an empty answer counts), and the reason the first failed one failed.
+    answered: usize,
+    failure: Option<&'static str>,
+    /// New result rows by the rung they belong to: a trusted host, or the wider web.
+    trusted_rows: usize,
+    web_rows: usize,
+    /// Results kept as `noted` leads because the fetcher would not reach them.
+    leads: usize,
+    /// Whether any query beyond the trusted one was sent.
+    web_searched: bool,
+}
+
+/// The fixed reason a search failed. `Web::search` names a configuration problem by one of two words; any other failure of every
+/// engine counts as having found nothing.
+pub fn failure_reason(e: &str) -> &'static str {
+    match e {
+        "no_search_provider" => "no_search_provider",
+        "credential_unresolved" => "credential_unresolved",
+        _ => "no_results",
+    }
+}
+
+fn rung(name: &str, searched: bool, found: usize, kept: usize, reason: Option<&str>) -> Value {
+    let mut v = json!({"rung": name, "searched": searched, "entries_found": found, "kept": kept});
+    if let Some(r) = reason {
+        v["reason"] = json!(r);
+    }
+    v
+}
+
+/// The coverage report of `specs/098` §7.5 items 3 and 4: per rung what was found and kept, with a fixed `reason` when a rung that
+/// was searched found nothing, and whether the knowledge base and the trusted sources together gave fewer kept, cited claims than
+/// `thin_below`. Inside, the close-sources rung is never connected; the host's own tools can take over rungs 3 and 4.
+fn coverage_report(r: &Rungs, kb: usize, trusted_claims: usize, web_claims: usize, thin_below: usize) -> (bool, Value) {
+    let nothing = |found: usize, searched: bool| -> Option<&'static str> {
+        if found > 0 || !searched {
+            return None;
+        }
+        Some(if r.answered == 0 { r.failure.unwrap_or("no_results") } else { "no_results" })
+    };
+    let counted = kb + trusted_claims;
+    let thin = counted < thin_below;
+    let rungs = vec![
+        rung("kb", true, kb, kb, (kb == 0).then_some("kb_empty")),
+        rung("trusted", true, r.trusted_rows, trusted_claims, nothing(r.trusted_rows, true)),
+        rung("close", false, 0, 0, Some("not_connected")),
+        rung("web", r.web_searched, r.web_rows, r.leads + web_claims, nothing(r.web_rows, r.web_searched)),
+    ];
+    let host_rungs: Vec<&str> = if thin { vec!["close", "web"] } else { vec![] };
+    (thin, json!({"thin_below": thin_below, "counted": counted, "rungs": rungs, "host_rungs": host_rungs, "leads_kept": r.leads}))
+}
+
 /// Run one research job. `Finish::Partial` when the step budget ran out; an `Err` only when nothing could be done at all.
 pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Deps<'_>) -> Result<Finish, String> {
     let mut queries = plan(question, depth, deps.sites, deps.redactor);
@@ -163,6 +231,7 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     let (mut seen, mut claims, mut spent) = (Seen::default(), Vec::<ClaimRec>::new(), false);
     let (mut pages_read, mut trusted_kept) = (0usize, 0usize);
     let retrieved = day();
+    let mut cov = Rungs::default();
 
     'queries: for q in &queries {
         if q.kind != QueryKind::Trusted && !widen_to_web(trusted_kept) {
@@ -172,7 +241,19 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
             spent = true;
             break;
         }
-        let Ok(rows) = deps.web.search(&q.text) else { continue };
+        if q.kind != QueryKind::Trusted {
+            cov.web_searched = true;
+        }
+        let rows = match deps.web.search(&q.text) {
+            Ok(rows) => {
+                cov.answered += 1;
+                rows
+            }
+            Err(e) => {
+                cov.failure.get_or_insert(failure_reason(&e));
+                continue;
+            }
+        };
         let (mut trusted_rows, mut other): (Vec<Row>, Vec<Row>) = rows.into_iter().partition(|r| deps.web.is_trusted(&r.url));
         trusted_rows.append(&mut other);
         for row in trusted_rows {
@@ -180,6 +261,20 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
                 break 'queries;
             }
             if !seen.url(&row.url) {
+                continue;
+            }
+            let from_trusted_host = deps.web.is_trusted(&row.url);
+            if from_trusted_host {
+                cov.trusted_rows += 1;
+            } else {
+                cov.web_rows += 1;
+            }
+            // A result the fetcher will not reach is kept as a lead, not dropped, and costs no step (`specs/098` §7.5 item 1).
+            if !deps.web.can_fetch(&row.url) {
+                ctx.refused(&row.url);
+                if deps.library.note_lead(&row).is_ok() {
+                    cov.leads += 1;
+                }
                 continue;
             }
             if let Err(e) = ctx.egress("scout", Egress::Fetch, &row.url) {
@@ -191,6 +286,9 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
             }
             let Ok(page) = deps.web.fetch(&row.url) else {
                 ctx.refused(&row.url);
+                if !from_trusted_host && deps.library.note_lead(&row).is_ok() {
+                    cov.leads += 1;
+                }
                 continue;
             };
             if !seen.text(&page.text) {
@@ -260,7 +358,10 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     let mut source_ids: Vec<&String> = claims.iter().flat_map(|c| c.source_ids.iter()).collect();
     source_ids.sort();
     source_ids.dedup();
+    let trusted_claims = claims.iter().filter(|c| c.from_trusted).count();
+    let (thin, report) = coverage_report(&cov, set.kb_hits().len(), trusted_claims, claims.len() - trusted_claims, deps.thin_below);
     let result = json!({
+        "coverage": if thin { "thin" } else { "ok" }, "coverage_report": report,
         "answer": if answer.is_empty() { "No claim could be drawn from the sources read. (not validated)".to_string() } else { format!("{} (not validated: model synthesis)", answer) },
         "claims": claim_values, "citations": claims.iter().flat_map(|c| c.source_urls.iter().cloned()).collect::<BTreeSet<_>>(),
         "source_ids": source_ids, "kb_hits": set.kb_hits(), "new_claims": set.new_claims(), "contradictions": conflicts,
@@ -285,16 +386,28 @@ mod tests {
         pages: HashMap<String, String>,
         trusted: Vec<&'static str>,
         searched: Mutex<Vec<String>>,
+        /// URLs `fetch` was called with.
+        fetched: Mutex<Vec<String>>,
+        /// Every search fails with this word, as `LiveWeb` reports a configuration problem.
+        fail: Option<&'static str>,
     }
     impl Web for FakeWeb {
         fn search(&self, q: &str) -> Result<Vec<Row>, String> {
             self.searched.lock().unwrap().push(q.to_string());
-            Ok(self.rows.clone())
+            match self.fail {
+                Some(why) => Err(why.to_string()),
+                None => Ok(self.rows.clone()),
+            }
         }
         fn is_trusted(&self, url: &str) -> bool {
             self.trusted.iter().any(|h| host(url) == *h)
         }
+        /// The fake reaches any URL it holds a page for, trusted or not; a row with no page is one the fetcher will not reach.
+        fn can_fetch(&self, url: &str) -> bool {
+            self.pages.contains_key(url)
+        }
         fn fetch(&self, url: &str) -> Result<Page, String> {
+            self.fetched.lock().unwrap().push(url.to_string());
             self.pages.get(url).map(|t| Page { url: url.into(), text: t.clone() }).ok_or_else(|| "off list".to_string())
         }
     }
@@ -328,10 +441,15 @@ mod tests {
         known: BTreeSet<String>,
         captured: Mutex<Vec<(String, bool)>>,
         staged: Mutex<Vec<String>>,
+        leads: Mutex<Vec<String>>,
     }
     impl Library for FakeLib {
         fn known_fingerprints(&self) -> BTreeSet<String> {
             self.known.clone()
+        }
+        fn note_lead(&self, row: &Row) -> Result<(), String> {
+            self.leads.lock().unwrap().push(row.url.clone());
+            Ok(())
         }
         fn capture<'a>(&'a self, url: &'a str, _t: &'a str, trusted: bool) -> BoxFut<'a, Result<String, String>> {
             Box::pin(async move {
@@ -360,6 +478,7 @@ mod tests {
         lib: FakeLib,
         redactor: Redactor,
         sites: Vec<String>,
+        thin_below: usize,
     }
 
     impl Fixture {
@@ -374,10 +493,10 @@ mod tests {
                 ("https://nih.gov/b".to_string(), vec![x("fever")]),
                 ("https://blog.example/a".to_string(), vec![x("headaches")]),
             ]));
-            Fixture { web, scout, validator: FakeValidator { verdict, asked: Default::default() }, lib: FakeLib::default(), redactor: Redactor::new(), sites: vec!["who.int".into(), "nih.gov".into()] }
+            Fixture { web, scout, validator: FakeValidator { verdict, asked: Default::default() }, lib: FakeLib::default(), redactor: Redactor::new(), sites: vec!["who.int".into(), "nih.gov".into()], thin_below: 3 }
         }
         fn deps(&self) -> Deps<'_> {
-            Deps { web: &self.web, scout: &self.scout, validator: &self.validator, library: &self.lib, redactor: &self.redactor, sites: &self.sites }
+            Deps { web: &self.web, scout: &self.scout, validator: &self.validator, library: &self.lib, redactor: &self.redactor, sites: &self.sites, thin_below: self.thin_below }
         }
     }
 
@@ -503,5 +622,84 @@ mod tests {
         assert_eq!(jobs.status("r1", "s").unwrap()["status"], State::Done.as_str());
         let status = jobs.status("r1", "s").unwrap();
         assert!(!status["queries"].as_array().unwrap().is_empty() && !status["fetched"].as_array().unwrap().is_empty());
+    }
+
+    /// The rung with this name in a result's coverage report.
+    fn rung_of<'a>(v: &'a Value, name: &str) -> &'a Value {
+        v["coverage_report"]["rungs"].as_array().unwrap().iter().find(|r| r["rung"] == name).unwrap_or_else(|| panic!("no {name} rung in {v}"))
+    }
+
+    #[tokio::test]
+    async fn a_result_the_fetcher_will_not_reach_is_kept_as_a_lead_and_costs_no_fetch() {
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        // Two rows have no page: the fetcher will not reach them (the live web reaches trusted hosts only until slice S1d).
+        f.web.rows = vec![row("https://who.int/a"), row("https://blog.example/z"), row("https://other.example/y")];
+        f.web.pages = HashMap::from([("https://who.int/a".to_string(), "who text".to_string())]);
+        let c = ctx(Depth::Survey);
+        let (_, v) = value(run_research(&c, "does aspirin reduce fever", Depth::Survey, &f.deps()).await.unwrap());
+        assert_eq!(*f.lib.leads.lock().unwrap(), ["https://blog.example/z", "https://other.example/y"], "both results are kept, in the order found");
+        assert_eq!(*f.web.fetched.lock().unwrap(), ["https://who.int/a"], "no fetch and no step was spent on a URL the fetcher will not reach");
+        let web = rung_of(&v, "web");
+        assert_eq!((web["entries_found"].clone(), web["kept"].clone()), (json!(2), json!(2)), "{v}");
+        assert!(web.get("reason").is_none(), "a rung that found something gives no reason: {v}");
+        assert_eq!(v["coverage_report"]["leads_kept"], 2);
+    }
+
+    #[tokio::test]
+    async fn coverage_is_thin_below_the_setting_and_names_the_host_rungs_that_can_take_over() {
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        let c = ctx(Depth::Deep);
+        // Two trusted pages say the same thing: one claim from a trusted source, none from the knowledge base.
+        let (_, v) = value(run_research(&c, "does aspirin reduce fever", Depth::Deep, &f.deps()).await.unwrap());
+        assert_eq!(v["coverage"], "thin", "{v}");
+        assert_eq!((v["coverage_report"]["thin_below"].clone(), v["coverage_report"]["counted"].clone()), (json!(3), json!(1)));
+        assert_eq!(v["coverage_report"]["host_rungs"], json!(["close", "web"]));
+        f.thin_below = 1;
+        let c = ctx(Depth::Deep);
+        let (_, v) = value(run_research(&c, "does aspirin reduce fever", Depth::Deep, &f.deps()).await.unwrap());
+        assert_eq!(v["coverage"], "ok", "{v}");
+        assert_eq!(v["coverage_report"]["host_rungs"], json!([]), "nothing to hand over when the answer is not thin");
+    }
+
+    #[tokio::test]
+    async fn every_answer_reports_all_four_rungs_with_a_fixed_reason_when_one_found_nothing() {
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        f.web.rows = vec![];
+        let c = ctx(Depth::Quick);
+        let (_, v) = value(run_research(&c, "does aspirin reduce fever", Depth::Quick, &f.deps()).await.unwrap());
+        let names: Vec<&str> = v["coverage_report"]["rungs"].as_array().unwrap().iter().map(|r| r["rung"].as_str().unwrap()).collect();
+        assert_eq!(names, ["kb", "trusted", "close", "web"]);
+        assert_eq!(rung_of(&v, "kb")["reason"], "kb_empty");
+        assert_eq!(rung_of(&v, "trusted")["reason"], "no_results", "the engine answered with nothing");
+        assert_eq!((rung_of(&v, "close")["reason"].clone(), rung_of(&v, "close")["searched"].clone()), (json!("not_connected"), json!(false)), "inside, close sources are never connected");
+        assert!(rung_of(&v, "web").get("reason").is_none() && rung_of(&v, "web")["searched"] == false, "a quick job with enough from the trusted query never searched the web: {v}");
+        assert_eq!(v["coverage"], "thin");
+    }
+
+    #[tokio::test]
+    async fn a_search_that_cannot_run_says_why_in_the_words_of_the_fixed_list() {
+        for (token, want) in [("no_search_provider", "no_search_provider"), ("credential_unresolved", "credential_unresolved"), ("anything else", "no_results")] {
+            let mut f = Fixture::new(Verdict::Inconclusive);
+            f.web.fail = Some(token);
+            let c = ctx(Depth::Quick);
+            let (_, v) = value(run_research(&c, "does aspirin reduce fever", Depth::Quick, &f.deps()).await.unwrap());
+            assert_eq!(rung_of(&v, "trusted")["reason"], want, "{token}: {v}");
+            assert_eq!(v["coverage"], "thin");
+            assert!(v["claims"].as_array().unwrap().is_empty() && v["status"].is_null(), "a failed search is still an answer with no claims, not an error: {v}");
+        }
+        assert_eq!(failure_reason("no_search_provider"), "no_search_provider");
+        assert_eq!(failure_reason("{\"raw\": \"AllFailed\"}"), "no_results", "no provider text becomes a reason");
+    }
+
+    #[tokio::test]
+    async fn claims_the_library_already_holds_count_on_the_knowledge_base_rung() {
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        f.lib.known.insert(claim_fingerprint("aspirin", "causes", "headaches", "adults", ""));
+        let c = ctx(Depth::Deep);
+        let (_, v) = value(run_research(&c, "does aspirin reduce fever", Depth::Deep, &f.deps()).await.unwrap());
+        let kb = rung_of(&v, "kb");
+        assert_eq!((kb["entries_found"].clone(), kb["kept"].clone()), (json!(1), json!(1)), "{v}");
+        assert!(kb.get("reason").is_none());
+        assert_eq!(v["coverage_report"]["counted"], 2, "one known claim and one new trusted claim");
     }
 }

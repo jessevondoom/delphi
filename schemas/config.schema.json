@@ -133,6 +133,14 @@
         "google": { "$ref": "#/$defs/searchEngine" }
       }
     },
+    "research": {
+      "type": "object",
+      "description": "How a research answer describes its coverage (specs/098 section 7.5).",
+      "additionalProperties": false,
+      "properties": {
+        "thin_below": { "type": "integer", "minimum": 1, "maximum": 50, "description": "Fewer kept, cited claims than this from the knowledge base and the trusted sources together make a research answer say coverage: thin, and name the host rungs (close sources, the wider web) that can take over. Default 3." }
+      }
+    },
     "library": {
       "type": "object",
       "description": "The central library (specs/055).",

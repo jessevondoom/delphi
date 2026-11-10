@@ -845,6 +845,21 @@ impl Kb {
         let c: i64 = self.conn.query_row("SELECT COUNT(*) FROM kb_chunks", [], |r| r.get(0))?;
         Ok((d as usize, c as usize))
     }
+
+    /// Documents per zone, the knowledge base's own "topic area" (`missions`, `memory`, `context`, `library`, ...), by name.
+    pub fn zone_counts(&self) -> Result<Vec<(String, usize)>, KbError> {
+        let mut st = self.conn.prepare("SELECT zone, COUNT(*) FROM kb_documents GROUP BY zone ORDER BY zone")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+        Ok(rows.filter_map(Result::ok).map(|(z, n)| (z, n as usize)).collect())
+    }
+}
+
+/// What the knowledge base holds, by zone, for `delphi doctor` (`specs/098` §7.5 item 9). Empty when there is no index yet.
+pub fn zone_counts(ws: &Path) -> Result<Vec<(String, usize)>, KbError> {
+    if !db_path(ws).exists() {
+        return Ok(Vec::new());
+    }
+    Kb::open(&db_path(ws))?.zone_counts()
 }
 
 // ── vectors ─────────────────────────────────────────────────────────────────
@@ -2670,6 +2685,16 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `delphi doctor` states the knowledge base's size by zone (`specs/098` §7.5 item 9): nothing before an index exists, then a count per zone.
+    #[test]
+    fn documents_are_counted_by_zone_and_a_missing_index_is_empty_not_created() {
+        let t = tempfile::tempdir().unwrap();
+        assert!(zone_counts(t.path()).unwrap().is_empty());
+        assert!(!db_path(t.path()).exists(), "asking creates nothing");
+        let kb = kb_with(&[("missions/m/a.md", "missions", DOC), ("missions/m/b.md", "missions", "plain note"), ("library/x.md", "library", "another note")]);
+        assert_eq!(kb.zone_counts().unwrap(), vec![("library".to_string(), 1), ("missions".to_string(), 2)]);
+    }
 
     #[test]
     fn a_read_only_open_changes_nothing_refuses_writes_and_never_creates_an_index() {

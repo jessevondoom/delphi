@@ -92,6 +92,7 @@ Defaults are those of the template; "—" means no default.
 | `[search.<engine>] credential` ◆ | — | where the key comes from, as for an endpoint (`env:BRAVE_API_KEY`, `keychain:…`, `command:…`); every engine but `parallel` and `searxng` needs one |
 | `[search.searxng] url` ◆ | — | the SearXNG instance (https, or http to loopback) |
 | `[search.google] cx` ◆ | — | the Programmable Search engine id |
+| `[research] thin_below` | `3` | every research answer carries a coverage report per rung (knowledge base, trusted sources, close sources, the wider web); fewer kept, cited claims than this from the knowledge base and the trusted sources together make the answer say `coverage: thin` and name the host rungs that can take over. 1 to 50 ([`specs/098`](../../specs/098-where-agents-run-host-first-locus-and-the-inside-exceptions.md) §7.5) |
 
 Which sites the job may read is not here: it is `context/sources/trusted.toml` (ratified in a release) plus your own `$DELPHI_HOME/operator/trusted-sources.toml`.
 

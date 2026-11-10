@@ -9,7 +9,7 @@ use crate::engine::Engine;
 use crate::research::{clip, scout_ipr, words};
 use crate::research_jobs::{Egress, JobCtx};
 use crate::research_run::{BoxFut, ClaimRec, Extracted, Library, Page, Scout, Validator, Verdict, Web};
-use delphi_adapter::research::search::{search, ProviderSpec, Row};
+use delphi_adapter::research::search::{search, ProviderSpec, Row, SearchError};
 use delphi_adapter::research::transport::{HttpTransport, Transport};
 use delphi_adapter::research::trusted::TrustedList;
 use delphi_core::research::{role_look, role_look_light, Identity};
@@ -35,9 +35,20 @@ pub struct LiveWeb {
     pub engines: Vec<ProviderSpec>,
 }
 
+/// The word the runner turns into a coverage `reason` (`specs/098` §7.5 item 3). No engine configured is `no_search_provider`; every
+/// engine passed over for its key (missing, or refused) is `credential_unresolved`; any other failure of every engine is `no_results`.
+/// No provider text, key or error detail leaves this function.
+pub fn search_failure_token(e: &SearchError) -> &'static str {
+    match e {
+        SearchError::NotConfigured => "no_search_provider",
+        SearchError::AllFailed(why) if !why.is_empty() && why.iter().all(|(_, w)| w == "no key" || w == "the key was refused") => "credential_unresolved",
+        SearchError::AllFailed(_) => "no_results",
+    }
+}
+
 impl Web for LiveWeb {
     fn search(&self, query: &str) -> Result<Vec<Row>, String> {
-        blocking(|| search(self.transport.as_ref() as &dyn Transport, &self.engines, query).map(|f| f.rows).map_err(|e| format!("{e:?}")))
+        blocking(|| search(self.transport.as_ref() as &dyn Transport, &self.engines, query).map(|f| f.rows).map_err(|e| search_failure_token(&e).to_string()))
     }
 
     fn is_trusted(&self, url: &str) -> bool {
@@ -157,6 +168,27 @@ impl Library for LiveLibrary {
         let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&self.ledger).map_err(|e| e.to_string())?;
         writeln!(f, "{line}").map_err(|e| e.to_string())
     }
+
+    /// A lead is one line in `host-leads.jsonl` beside the claims ledger: what the search returned for a page the fetcher will not
+    /// reach, `noted`, `external_untrusted`, dated and labelled with who asked. The address is written once. The title and snippet are
+    /// data, capped, never read by a model from here and never marked as anything but a pointer.
+    fn note_lead(&self, row: &Row) -> Result<(), String> {
+        use std::io::Write;
+        let path = self.ledger.with_file_name("host-leads.jsonl");
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        let url: String = row.url.chars().take(300).collect();
+        let known = std::fs::read_to_string(&path).unwrap_or_default().lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()).any(|v| v["url"].as_str() == Some(url.as_str()));
+        if known {
+            return Ok(());
+        }
+        let clip = |s: &str, n: usize| -> String { s.chars().filter(|c| !c.is_control()).take(n).collect() };
+        let day: String = delphi_core::time::now_rfc3339().chars().take(10).collect();
+        let line = json!({"kind": "lead", "url": url, "title": clip(&row.title, 200), "snippet": clip(&row.snippet, 400), "rung": "web", "status": "noted", "trust": "external_untrusted", "retrieved": day, "requested_by": self.label});
+        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path).map_err(|e| e.to_string())?;
+        writeln!(f, "{line}").map_err(|e| e.to_string())
+    }
 }
 
 /// The display name the workspace's theme pack gives `role`, or the role's own id when there is none.
@@ -244,6 +276,41 @@ pub fn attach_identity(result: &mut Value, id: &Identity, style: &str, mode: &st
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_search_becomes_one_word_of_the_fixed_list_and_never_provider_text() {
+        use delphi_adapter::research::search::Provider;
+        assert_eq!(search_failure_token(&SearchError::NotConfigured), "no_search_provider");
+        let key_missing = SearchError::AllFailed(vec![(Provider::Brave, "no key".into()), (Provider::Kagi, "the key was refused".into())]);
+        assert_eq!(search_failure_token(&key_missing), "credential_unresolved");
+        let mixed = SearchError::AllFailed(vec![(Provider::Brave, "no key".into()), (Provider::Mojeek, "the service is down".into())]);
+        assert_eq!(search_failure_token(&mixed), "no_results", "one engine that tried and failed is not a credential problem");
+        assert_eq!(search_failure_token(&SearchError::AllFailed(vec![])), "no_results");
+        for e in [&key_missing, &mixed] {
+            assert!(!search_failure_token(e).contains("Brave") && !search_failure_token(e).contains("service"));
+        }
+    }
+
+    #[test]
+    fn a_lead_is_one_capped_line_written_once_with_no_control_characters() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = LiveLibrary { home: dir.path().to_path_buf(), ledger: dir.path().join("research/host-claims.jsonl"), label: "host:test".into() };
+        let row = Row { title: format!("A title\u{7}with{}", "t".repeat(500)), url: "https://blog.example/a".into(), snippet: format!("snippet\u{1b}[31m{}", "s".repeat(900)) };
+        lib.note_lead(&row).unwrap();
+        lib.note_lead(&row).unwrap();
+        lib.note_lead(&Row { title: "other".into(), url: "https://other.example/b".into(), snippet: String::new() }).unwrap();
+        let text = std::fs::read_to_string(dir.path().join("research/host-leads.jsonl")).unwrap();
+        let lines: Vec<Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert_eq!(lines.len(), 2, "the same address is written once: {text}");
+        let l = &lines[0];
+        assert_eq!((l["kind"].clone(), l["status"].clone(), l["trust"].clone(), l["rung"].clone()), (json!("lead"), json!("noted"), json!("external_untrusted"), json!("web")));
+        assert!(l["title"].as_str().unwrap().chars().count() <= 200 && l["snippet"].as_str().unwrap().chars().count() <= 400);
+        assert!(!text.contains('\u{7}') && !text.contains('\u{1b}'), "control characters are dropped");
+        assert_eq!(l["requested_by"], "host:test");
+        assert!(l["retrieved"].as_str().unwrap().len() == 10, "dated");
+        // A lead is not a claim: the claims ledger, which the next job reads for known fingerprints, is untouched.
+        assert!(!dir.path().join("research/host-claims.jsonl").exists());
+    }
 
     #[test]
     fn only_claims_whose_quote_is_in_the_page_survive() {
