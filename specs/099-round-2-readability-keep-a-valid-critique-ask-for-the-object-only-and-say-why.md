@@ -68,9 +68,9 @@ This amends spec 003 §4.2 for structured replies. The amendment takes effect wh
 
 ### R2. Ask, and repair once (a separate pull request)
 
-1. The Round 2 objective (`round2_objective` in `council.rs`) says the reply is the object only, with no other text, and gives a length cap.
-2. The `agy` carrier is asked for schema output. The daemon records any text after the first complete object, as today, and still ignores it for the verdict.
-3. **One repair turn.** When a Round 2 reply is unreadable (no critique, or a line-format conflict), the daemon sends the seat one message of **fixed text**, with no seat output echoed, asking for the object only. It runs inside the Council timeout and budget. If the second reply is also unreadable, it is unreadable as today.
+1. The Round 2 objective (`round2_objective` in `council.rs`) says that when the seat answers through the structured-output tool it sends nothing else (no restatement of the verdict, no second copy of the object), and keeps the whole reply under 600 words.
+2. Every Round 2 seat is already given the critique schema (`critique_schema()`), so the `agy` carrier is already asked for schema output. The daemon still records any text after the first complete object, and ignores it for the verdict. Nothing changes here; whether the carrier can be made to emit nothing else is not verified (§7).
+3. **One repair turn.** When a seat answered but its Round 2 could not be read (no critique, or a line-format conflict), the daemon starts one more span for that seat with a message of **fixed text** (`repair_objective`, which begins `COUNCIL, ROUND 2 REPAIR.`). Nothing the seat wrote is in the message. Its earlier reply is attached beside the Round 1 stances as a fenced context slice (`council/round2-unread/<role>`, capped at 6,000 characters, tier L3), so the seat can reformat it. The message tells the seat to do no new research and use no tools; that is a request, not an enforced limit, because the span runs under the seat's role scope. The turn runs inside the Council timeout and budget, and is skipped when the budget is already spent. A seat that declined or abstained is never asked. If the repaired reply reads, it replaces the first; otherwise the first stays and the seat is unreadable as today. The `council.critique` event carries `repair`: `repaired`, `failed`, or null when no repair was asked.
 
 This follows the 089 Panel pattern (two rejections) but allows one turn, because a daemon Council seat is billed per call.
 
@@ -94,7 +94,7 @@ This follows the 089 Panel pattern (two rejections) but allows one turn, because
 | :-- | :-- | --: | :-- |
 | S0 | this spec | 4-6 | approved when its pull request merges (the same pull request carries R1) |
 | R1 | the reader: Markdown tolerance and the kept first critique | 6-10 | built in this pull request |
-| R2 | the object-only objective, the `agy` structured request, the one repair turn | 8-12 | not started |
+| R2 | the object-only objective and the one repair turn (the `agy` structured request already exists) | 8-12 | built (stacked pull request) |
 | R3 | the cause in the event and on the card; the cut-excerpt notice | 6-10 | not started |
 
 ## 5. Acceptance criteria
@@ -124,4 +124,4 @@ No slice here is verified by a live run. The three Councils above are the eviden
 ## 7. Decisions and what is not verified
 
 - **Decided by the operator, 2026-11-10:** build the Round 2 fix first.
-- **Not verified:** whether the `agy` carrier's structured-output mode can suppress trailing prose (R2 tests it with a fake carrier first); whether one repair turn is enough; the token cost of the repair turn.
+- **Not verified:** whether the `agy` carrier's structured-output mode can suppress trailing prose (R2's tests use a fake model, not the carrier); whether one repair turn is enough; the token cost of the repair turn, which is a second full span for that seat (the red-team seat made 33 tool calls in one Round 2), so a repair is expensive until the "no tools" request is enforced or the span is resumed instead of restarted.
