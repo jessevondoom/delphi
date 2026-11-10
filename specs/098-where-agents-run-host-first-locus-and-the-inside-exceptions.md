@@ -1,9 +1,10 @@
 ---
 id: spec-098-where-agents-run-host-first-locus-and-the-inside-exceptions
-title: "098: Where agents run: host first, the inside exceptions (Council, panel seats, red team), a locus declaration, routing for any query, and a research path that works the first time (draft)"
+title: "098: Where agents run: host first, the inside exceptions (Council, panel seats, red team), a locus declaration, routing for any query, and a research path that works the first time"
 author: architect
 timestamp: 2026-11-10T00:00:00Z
-status: draft
+status: approved   # by the operator, 2026-11-10 ("approve spec 098"): the text as written. OD-1 to OD-6 and OD-8 to OD-11 of section 14 take their recommendations. OD-7 (inside fetch) is NOT decided by this approval: slice S1d waits for the operator's yes to 7a. A review with a completed red-team Round 2 (section 17) was not run before approval. The text takes effect when this pull request merges.
+approved_by: operator (2026-11-10)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +15,7 @@ tags: [spec, hosts, locus, council, panel, red-team, routing, research, builder,
 
 # Spec 098: Where agents run
 
-> **Status: draft, a proposal.** Nothing here is permission to build. It amends and consolidates [`062`](062-delphi-as-host-agent-mcp-server.md), [`066`](066-mcp-research-endpoint-and-role-identity.md), [`072`](072-host-cognitive-parity-and-external-orchestration.md), [`077`](077-host-mention-routing-and-themed-alias-resolution.md), [`086`](086-outside-council-panel-and-host-subagents.md), [`091`](091-seats-families-and-outside-launch.md) and [`041`](041-agent-registry-routing-and-role-extensions.md), and amends [`052`](052-knowledge-status-capture-on-contact-and-the-digest.md) §3.1, [`040`](040-validator-role-and-fact-ratification.md) §18.2 and [`066`](066-mcp-research-endpoint-and-role-identity.md) §5 and §9.3 (a `corroborated` status and a `trusted_sources` flag). One spec, ten slices (§13; S1 ships as four pull requests).
+> **Status: approved by the operator, 2026-11-10** (OD-7 excepted; slice S1d waits, section 14). It amends and consolidates [`062`](062-delphi-as-host-agent-mcp-server.md), [`066`](066-mcp-research-endpoint-and-role-identity.md), [`072`](072-host-cognitive-parity-and-external-orchestration.md), [`077`](077-host-mention-routing-and-themed-alias-resolution.md), [`086`](086-outside-council-panel-and-host-subagents.md), [`091`](091-seats-families-and-outside-launch.md) and [`041`](041-agent-registry-routing-and-role-extensions.md), and amends [`052`](052-knowledge-status-capture-on-contact-and-the-digest.md) §3.1, [`040`](040-validator-role-and-fact-ratification.md) §18.2 and [`066`](066-mcp-research-endpoint-and-role-identity.md) §5 and §9.3 (a `corroborated` status and a `trusted_sources` flag). One spec, ten slices (§13; S1 ships as four pull requests).
 
 ## 1. Scope and objectives
 

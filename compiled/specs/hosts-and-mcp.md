@@ -69,9 +69,9 @@ When developers work outside the native Delphi terminal TUI—in external harnes
 
 ## 098-where-agents-run-host-first-locus-and-the-inside-exceptions
 
-**098: Where agents run: host first, the inside exceptions (Council, panel seats, red team), a locus declaration, routing for any query, and a research path that works the first time (draft)** · draft (per source at `3f889d5a0acc`) · tier 0 · [source](../../specs/098-where-agents-run-host-first-locus-and-the-inside-exceptions.md)
+**098: Where agents run: host first, the inside exceptions (Council, panel seats, red team), a locus declaration, routing for any query, and a research path that works the first time** · approved (per source at `f15ccfef00ea`) · tier 0 · [source](../../specs/098-where-agents-run-host-first-locus-and-the-inside-exceptions.md)
 
-**source excerpt, untrusted** · `specs/098-where-agents-run-host-first-locus-and-the-inside-exceptions.md` line 21
+**source excerpt, untrusted** · `specs/098-where-agents-run-host-first-locus-and-the-inside-exceptions.md` line 22
 
 ```text
 When an operator works in a host (Claude Code, Copilot CLI, Codex, `agy`) and calls Delphi, the work should happen **in the host**, with the host's full tools and skills, and Delphi should supply the persona, method, specs, knowledge, memory and the checks the host cannot do for itself. Delphi runs a role **inside** only where its audit trail or its model families are the point.

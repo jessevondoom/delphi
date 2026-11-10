@@ -84,20 +84,20 @@
   "schema_version": 1,
   "source": {
     "path": "specs/099-round-2-readability-keep-a-valid-critique-ask-for-the-object-only-and-say-why.md",
-    "sha256": "0247dd06bb0ff7a1f9a16839a46696105d9a3d938111537b8f0ac2b72c7e5907"
+    "sha256": "cda78aec9e08d828ab1d08bf250628bd5ad47299da0591e6c241ab955995f149"
   },
   "source_status_at_hash": {
     "line": {
       "kind": "quote",
       "span": {
-        "end": 515,
+        "end": 537,
         "end_line": 6,
         "line": 6,
         "start": 313
       },
-      "text": "status: approved   # by the operator, 2026-11-10 (\"build the round 2 fix first please yes\") for the five-point fix the operator was shown; the text as written takes effect when this pull request merges."
+      "text": "status: approved   # by the operator, 2026-11-10 (\"build the round 2 fix first please yes\") for the five-point fix the operator was shown, and again after it was merged and read (\"approve spec 099 and spec 100\", 2026-11-10)."
     },
-    "sha256": "0247dd06bb0ff7a1f9a16839a46696105d9a3d938111537b8f0ac2b72c7e5907",
+    "sha256": "cda78aec9e08d828ab1d08bf250628bd5ad47299da0591e6c241ab955995f149",
     "word": "approved"
   },
   "spec": {
@@ -112,10 +112,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 1556,
+      "end": 1578,
       "end_line": 22,
       "line": 22,
-      "start": 1368
+      "start": 1390
     },
     "text": "A daemon Council escalates when a seat's Round 2 cannot be read. For the red-team seat it has happened every time it was raised lately, and the cause is the reader, not the seat's silence."
   }

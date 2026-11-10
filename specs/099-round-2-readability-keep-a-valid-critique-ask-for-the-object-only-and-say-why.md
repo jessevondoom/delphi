@@ -3,7 +3,7 @@ id: spec-099-round-2-readability-keep-a-valid-critique-ask-for-the-object-only-a
 title: "099: Round 2 readability: keep a seat's valid critique, ignore Markdown restatements, ask for the object only, repair once, and say why a reply was unreadable"
 author: architect
 timestamp: 2026-11-10T00:00:00Z
-status: approved   # by the operator, 2026-11-10 ("build the round 2 fix first please yes") for the five-point fix the operator was shown; the text as written takes effect when this pull request merges.
+status: approved   # by the operator, 2026-11-10 ("build the round 2 fix first please yes") for the five-point fix the operator was shown, and again after it was merged and read ("approve spec 099 and spec 100", 2026-11-10).
 approved_by: operator (2026-11-10)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"

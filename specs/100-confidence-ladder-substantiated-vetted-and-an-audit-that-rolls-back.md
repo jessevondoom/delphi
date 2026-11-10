@@ -1,9 +1,10 @@
 ---
 id: spec-100-confidence-ladder-substantiated-vetted-and-an-audit-that-rolls-back
-title: "100: The confidence ladder: substantiated and vetted tiers, an accept-all workflow, and an audit that rolls a tier back (draft)"
+title: "100: The confidence ladder: substantiated and vetted tiers, an accept-all workflow, and an audit that rolls a tier back"
 author: architect
 timestamp: 2026-11-10T00:00:00Z
-status: draft
+status: approved   # by the operator, 2026-11-10 ("approve spec 099 and spec 100"): the text as written, including that 040 section 15.4's audit is a roll-back trigger and not a promotion gate. OD-1 to OD-6 of section 14 take their recommendations. The tier numbers are hypotheses to calibrate, not pre-registered thresholds. The text takes effect when this pull request merges.
+approved_by: operator (2026-11-10)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +15,7 @@ tags: [spec, knowledge, validator, confidence, audit, rollback, draft]
 
 # Spec 100: The confidence ladder
 
-> **Status: draft, a proposal.** Nothing here is permission to build. It depends on **spec 098** (a draft in pull request #612), sections 7.5 and 7.6, which define the `corroborated` status, the `trusted_sources` flag and the tags this spec reads. It amends [`specs/040`](040-validator-role-and-fact-ratification.md) §15.4 and §18.2, [`specs/052`](052-knowledge-status-capture-on-contact-and-the-digest.md) §3.1 and [`specs/066`](066-mcp-research-endpoint-and-role-identity.md) §5; each amendment is listed in §9 and takes effect on approval. **It widens no authority**: no tier is a taint level, and none unlocks promotion, tool access or approval.
+> **Status: approved by the operator, 2026-11-10.** It depends on **spec 098** (approved, merged in pull request #612; its OD-7 is open and does not affect this spec), sections 7.5 and 7.6, which define the `corroborated` status, the `trusted_sources` flag and the tags this spec reads. It amends [`specs/040`](040-validator-role-and-fact-ratification.md) §15.4 and §18.2, [`specs/052`](052-knowledge-status-capture-on-contact-and-the-digest.md) §3.1 and [`specs/066`](066-mcp-research-endpoint-and-role-identity.md) §5; each amendment is listed in §9 and takes effect when this pull request merges. **It widens no authority**: no tier is a taint level, and none unlocks promotion, tool access or approval.
 
 ## 1. Scope and objectives
 
