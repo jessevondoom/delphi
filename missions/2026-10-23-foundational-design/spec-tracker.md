@@ -837,7 +837,7 @@ From Council `t_0001` over two research notes (CAO, Paperclip); the operator cho
 
 ## Spec 098: where agents run (2026-11-10, draft)
 
-A draft for the operator: host first, the inside exceptions (Council, panel and red-team seats of other families), a `locus` declaration, `route` for any query, generated task-scoped agents with guards, the Builder in the host against an approved spec, and a research path that works the first time. Written after Council `t_0001` (2026-11-10) reviewed the outline, which escalated; the draft answers its findings in §15 and a Council reviews the draft itself next. One spec by the operator's choice. Research is limited while the knowledge base and the trusted list are small; outside search fills the gap and grows Delphi (§7.5). Nothing below starts before approval.
+A draft for the operator: host first, the inside exceptions (Council, panel and red-team seats of other families), a `locus` declaration, `route` for any query, generated task-scoped agents with guards, the Builder in the host against an approved spec, and a research path that works the first time. Written after Council `t_0001` (2026-11-10) reviewed the outline, which escalated; the draft answers its findings in §15 and Council `t_0002` reviewed the draft (PROCEED-WITH-CHANGES, 9 P0s, two seats could not read the text); its findings are answered in §15.1 and the slices now run in waves behind flags (§13.1). A second review with the draft readable is still owed. One spec by the operator's choice. Research is limited while the knowledge base and the trusted list are small; outside search fills the gap and grows Delphi (§7.5). Nothing below starts before approval.
 
 | Slice | Content | State |
 | :-- | :-- | :-- |

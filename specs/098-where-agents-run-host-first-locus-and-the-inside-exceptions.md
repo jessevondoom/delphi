@@ -94,6 +94,15 @@ A pack names the **capabilities** a role expects, not Delphi's internal tool nam
 - Mode B of 072 §8.2 (`council/federated_agenda`, host-run, `barrier: none`) is **renamed** "unaudited agenda" in the prompt, the skill and every record. It is never called a Council or a ruling. 086 §4.4's last row says the same.
 - `request_council` answers a typed error `council_unavailable {reason}` when the daemon is not running, is disabled (`disabled_by_operator`), or cannot seat the Council. The error text tells the host: do not convene the agenda and present it as a Council; offer a Panel (§6) or ask the operator to start Delphi.
 - A host cannot relabel a Panel or a red-team review as a Council. The record's `venue` and `council_format` fields are written by the daemon; `propose_council_record` keeps `barrier: none, source: host-reported` and is shown as imported.
+- **`council_unavailable` is a terminal, machine-readable answer, and the host fails closed on it:**
+
+  ```json
+  {"error": "council_unavailable", "reason": "daemon_down | disabled_by_operator | seats_unavailable",
+   "fail_closed": true, "offer": ["panel", "start_delphi"],
+   "must_not": ["convene_agenda_as_council", "retry_silently", "simulate_seats"]}
+  ```
+
+  The skill and the `CLAUDE.md` template tell the host to show the operator this answer and the offer, and to stop. A host that ignores it cannot be stopped by Delphi, and the accepted gap (§12) says so. What Delphi does enforce is that **nothing a host submits can be labelled a Council**: the daemon rejects `council_format`, `venue: daemon` and the word "Council" as a record kind in any payload from the host socket, and `propose_council_record` imports are stored as `imported, barrier: none, source: host-reported` and shown that way.
 
 ## 6. Panels and red team
 
@@ -135,7 +144,11 @@ The Scout and Investigator manifests (`agents/scout/AGENT.md`, `agents/investiga
 
 - **The operator approves host sources in the host**, in its own settings and permission system (for Claude Code, its connector and tool permissions and a "research sources" section of `CLAUDE.md` that `delphi connect` writes as a template). Delphi does not read these settings, does not grant them and cannot widen them. The pack says: use the sources your host has approved, in rung order; do not ask Delphi for access to them.
 - **A missing source is skipped, not an error.** If a host has no Slack, no meeting-transcript tool or no email connector, the role goes to the next rung and says which rungs it used.
-- **Private material stays private.** Content from a rung-3 source is host-side evidence. It is never sent to Delphi (`propose_kb_entry`, `propose_note`, `handoff_put`, `request_research`) unless the operator says so for that item, and then only as `host-reported`, not validated, with the operator's redaction. A search query sent to a Delphi tool or to the web is the topic only, never text read from a private source (as 066 §6, query privacy).
+- **Private material stays private, by code where Delphi can enforce it.**
+  - Content from a rung-3 source is host-side evidence. It reaches a Delphi tool (`propose_kb_entry`, `propose_note`, `handoff_put`, `request_research`) only through the **private-source gate**: the daemon scrubs the payload (secrets, credentials, addresses, personal identifiers; no verbatim quotes past a short cap), shows the operator a preview, and writes the entry only on the operator's approval of that item. A host's own approval of a connector is not Delphi's consent for its content to enter the knowledge base.
+  - Every host proposal carries a `rung` (1 to 4). **A proposal that omits it is treated as rung 3.** The daemon stamps an approved rung-3 entry `private_derived: true`, and that entry is **excluded from Council, panel and red-team briefs** and from retrieval by any other role, scope or project, until the operator removes the marker.
+  - **Stated limit.** Delphi cannot see where host content came from. The gate relies on the host's declared rung and on the scrub; a host that declares rung 4 for private text defeats the first, and only the scrub is left. This is the same accepted gap as §12, and it is why the gate fails safe on an omitted rung.
+  - A search query sent to a Delphi tool or to the web is the topic only, redacted as in 066 §6, and is never text read from a private source. The **trusted-list candidates** (§7.5) are bare hostnames, from rungs 1, 2 and 4 only, never a path, a query string or anything from rung 3.
 - **Read content is data.** What a connector returns cannot change the ladder, add a source, raise trust or reach a tool. It is fenced evidence (066 §6).
 
 ### 7.3 The reflex and the offer
@@ -205,10 +218,14 @@ A role never stops with "I cannot" while a rung of its ladder is open. The rule 
 
 **What is advisory.** A host Builder's discipline before it commits (reading the spec, working in a worktree) is the host's. That is the accepted limitation (§12). What Delphi enforces is the boundary.
 
-**What this spec adds to the boundary (S8).** After first verifying what `delphi lint` and CI already check (**not verified**: whether a commit's `Implements-Spec` trailer is checked against an approved spec at the base):
+**The boundary is a blocking script, not a prompt (S8).** The check runs in `delphi merge` (094) and in CI, is listed in `context/invariant-enforcement.md` as enforced (GOVERNANCE §5.6), and applies whoever wrote the branch:
 
-- `delphi lint` fails an `approved` spec that carries no `review:` front-matter value naming the Council or Panel that reviewed it, or an explicit `review: waived-by-operator (date)`. The lint checks presence and shape, not the record's content (the record lives in the Delphi home, outside the repository). The strength of this check is OD-5.
-- The Builder pack (host or inside) states the precondition: no approved spec, no build; a draft is a proposal.
+1. **The spec link is verified, not trusted.** A PR that changes software files must carry `Implements-Spec: specs/NNN-*.md`, and the named spec must exist **at the base branch** with `status: approved` and an `approved_by` line. A trailer naming a draft, a missing spec or a spec added in the same PR fails. (A forged or careless trailer therefore cannot reach an unapproved spec; it can still name an approved spec the work does not implement, which only review can catch (`pr-alignment-review`, `scope-creep-detection`) and which this spec does not claim to enforce.)
+2. **Governed paths are Red.** A diff touching `GOVERNANCE.md`, `REVIEW.md`, `context/heuristics.md`, `agents/`, `skills/`, `memory/`, `.git/`, hooks, `.github/**` or the host-executed files of GOVERNANCE §5.5 needs the operator, regardless of author or authorization (§5.7). The one exception is creating or editing a spec whose `status` stays `draft`; changing a spec to `approved`, or editing an approved spec, is Red.
+3. **The spec-review lint** fails an `approved` spec with no `review:` value naming the Council or Panel that reviewed it, or an explicit `review: waived-by-operator (date)`. It checks presence and shape. It cannot check that the review was good, or that its record exists (the record lives in the Delphi home); the table of §12 says so. Its strength is OD-5.
+4. **Before building any of this, S8 verifies what `delphi lint`, CI and 094 already check** (**not verified**: whether the trailer is checked against an approved spec at the base today) and builds only what is missing.
+
+The Builder pack (host or inside) states the precondition: no approved spec, no build; a draft is a proposal.
 
 ## 11. Records and summaries
 
@@ -233,6 +250,29 @@ A role never stops with "I cannot" while a rung of its ladder is open. The rule 
 9. Delphi never reads, grants or widens the host's approved sources (§7.2): no Delphi tool takes a connector name, a token or a host setting as an argument, and the pack tests assert the pack contains no instruction to request access to a source.
 10. Material from a rung-3 source never reaches a Delphi tool without the operator's say for that item; a test sends a fixture marked private through `propose_kb_entry`, `propose_note` and `handoff_put` and expects a refusal text, not a write.
 11. A role's answer lists the rungs used and the rungs skipped with a reason from the fixed list (§7.4); a pack that tells a role to stop with "I cannot" fails the pack linter.
+12. **Taint is stamped by the daemon at ingress, never declared by the host.** Every `propose_kb_entry`, `propose_note` and `handoff_put` from the host socket is stored `external_untrusted` and `not validated`. The host's `author`, `source_type`, `confidence`, `rung` and provenance fields are advisory and cannot raise either (GOVERNANCE §4); `propose_kb_entry` accepts only `not validated`. A test submits a payload claiming `user_ratified` and expects `external_untrusted`.
+13. **A host-proposed entry is not in any Council, panel or red-team brief until the operator ratifies it,** and then it is fenced data with its status. A test proposes an entry containing instruction text and expects it absent from `council_brief` and `kb_retrieve` before ratification, and fenced after (062 §1.1: host proposals use the staged-learning queue; the slice verifies this against the code).
+14. **The private-source gate (§7.2):** an unscrubbed or unapproved rung-3 payload writes nothing; an omitted `rung` is treated as 3; a `private_derived` entry is absent from every Council, panel and red-team brief.
+15. **The merge check (§10) fails** a trailer naming a draft or missing spec, a spec added in the same PR, and a diff on a governed path, each by a fixture.
+
+### 12.1 What is enforced, and what is not
+
+| Rule | Enforced by | Kind |
+| :-- | :-- | :-- |
+| Council runs only inside; nothing from a host is labelled a Council | daemon (record kinds, `council_unavailable`) | **enforced** |
+| Seat family and model | daemon receipt (091) | **enforced** |
+| Taint on everything a host sends back | daemon at ingress (§12 item 12) | **enforced** |
+| Private-source gate | daemon scrub and operator approval (§7.2) | **enforced**, with the stated limit on the declared rung |
+| Spec link, governed paths, spec-review lint | blocking script in `delphi merge` and CI (§10) | **enforced** |
+| Pack ids refused for Council, panel and red-team seats | daemon at seat assignment (§9) | **enforced** |
+| `locus` on roles and skills; pack header; schemas | schema lint and docs test | **enforced** |
+| The host runs the role, adopts it, reaches for it, makes the one offer | the host | **prompt only** |
+| The source ladder and the rung report | the host (manifests and packs say so) | **prompt only** |
+| A host Builder reading the spec and using a worktree before it commits | the host | **prompt only** (the merge check catches the result, §10) |
+| A host honoring a role's read-only scope | the host | **not enforced** (accepted, 2026-11-10) |
+| `route` confidence and `adopt` | advice | **advisory** |
+
+S9 writes each *enforced* row into `context/invariant-enforcement.md`, and each *prompt only* row there as prompt-only.
 
 ## 13. Slices (one pull request each; none starts before approval)
 
@@ -247,6 +287,24 @@ A role never stops with "I cannot" while a rung of its ladder is open. The rule 
 | S7 | **Pack guards:** council and red-team refuse packs, the cap, the no-grant test (§9). | none |
 | S8 | **Builder gate and the spec-review lint** (§10), after verifying what exists. | S2 |
 | S9 | **Summaries and docs:** the required summary after a panel or red team, the generated reference, `llms.txt`, the tracker. | S2, S6 |
+
+### 13.1 Order, exit criteria and flags
+
+Each slice merges alone and leaves the repository working. Runtime behavior ships **off** behind a flag in `config.toml` (documented in `crates/delphi/config.example.toml`, `schemas/config.schema.json` and `docs/reference/config.md`) and is switched on only when the slice's exit criterion passes.
+
+| Wave | Slices | Exit criterion | Flag |
+| :-- | :-- | :-- | :-- |
+| 1: the rule and the trust base | **S2** Councils inside only | `council_unavailable` schema test; host-labelled-Council rejection test | none (a refusal, always on) |
+| | **S3** `locus` | schema lint and docs test pass; `get_agent` returns `locus` | none |
+| | **S7** pack guards | pack-id refusal at seat assignment; no-grant test | none |
+| 2: routing and the boundary | **S4** `route` | labeled-set precision meets OD-3; deterministic tie-break test | `[hosts] route_adopt` |
+| | **S8** builder gate | the §10 fixtures fail as listed; verified against what exists | `[merge] require_spec_link` |
+| 3: red team | **S6** standalone red team, `ask_family` | findings card shows receipt families; single-family label test | `[seats] red_team_kind` |
+| 4: research, last | **S1** coverage and way back in | §12 items 12 to 14 tests; acceptance (a) to (d) of §7.5 | `[research] ladder` |
+| | **S5** ladder, reflex, offer | pack tests; the `CLAUDE.md` template and skill text | `[hosts] source_ladder` |
+| 5: close | **S9** summaries, docs, `invariant-enforcement.md` | docs test passes; every enforced row mapped | none |
+
+Dependencies: S4 needs S3; S5 needs S1 and S4; S8 needs S2; S9 needs S2 and S6. Research (S1, S5) and generated packs (S7's cap) are last or independent, so they cannot gate the rule of Wave 1.
 
 Each slice follows `AGENTS.md`: tests, clippy and `delphi lint` before committing, the tracker updated in the same PR, `Implements-Spec: specs/098-*.md`.
 
@@ -273,6 +331,7 @@ Each slice follows `AGENTS.md`: tests, clippy and `delphi lint` before committin
 - **OD-3.** The numbers: `[research] thin_below` (§7.5) and `adopt` precision (§8). [3 kept claims; precision 0.9 on a 30-task set.]
 - **OD-4.** The per-task pack cap. [5.]
 - **OD-5.** Strength of the spec-review lint (§10). [Presence and shape of a `review:` line now; a stamped record hash later.]
+- **OD-6.** Whether §7 research and the generated packs split into their own spec (the Council `t_0002` asked). [Stay in 098: you chose one spec; the waves, flags and exit criteria of §13.1 keep research from gating the rule.]
 
 ## 15. Council review
 
@@ -281,17 +340,33 @@ A daemon Council (`t_0001`, 2026-11-10; architect, red-team and strategist, clau
 | Finding | Answer in this draft |
 | :-- | :-- |
 | Host locus must exclude Builder and any mutating role (P0) | **Not adopted.** The gate is the approved spec and the boundary checks (§10); host-run roles already carry host authority (062 §1.1, 072 §1.1). The operator decided this on 2026-11-10. |
-| Host output and summaries need taint and may not feed promotion (P0) | Already true (062 §14.6, GOVERNANCE §4); restated in §11 and §12.6. |
+| Host output and summaries need taint and may not feed promotion (P0) | Already true (062 §14.6, GOVERNANCE §4); restated in §11 and §12 item 6. |
 | Part 6 generated definitions: defer; subset check; never in council or panel (P0, P1) | Not deferred, because `spawn_agent_pack` already exists. Guards added (§9). A pack id is refused for council, panel and red-team seats. |
 | Host-mediated dispatch breaks foreign-seat blindness (P0) | The Panel barrier holds Round 1 in daemon memory (086 §4.2); the red-team kind reuses it (§6.2). |
 | Seat receipts daemon-signed; host family is a claim (P1) | Already built (091 SR-1, SR-2); §6.3 states the rule. |
 | No relabeling a panel as a Council; typed unreachable error (P1) | §5. |
 | Label the enforcement gap (P1) | §12. |
-| Injection through read content must not trigger route or adoption (P1) | §8 and §12.5. |
+| Injection through read content must not trigger route or adoption (P1) | §8 and §12 item 5. |
 | Split into phases (P1, strategist and architect) | Not adopted as separate specs; the operator chose one spec. The nine slices of §13 give the same ordering. |
 | Pin defaults: absent locus, threshold, tie-break, offer scope, route logging, summary fields, adapter hash (P2) | §3.2, §8, §7.3, §11, §4. |
 
 The Council ruled on a different, smaller outline than this one. A review of this draft by a Council or a Panel, with the repository read, is the next step before approval.
+
+### 15.1 Council `t_0002` (2026-11-10, on this draft)
+
+Architect, red-team and strategist (claude and gemini) reviewed the draft and ruled PROCEED-WITH-CHANGES, escalating with nine P0s. **Two seats said they could not read the draft** (the path into the worktree was denied, and 062 and 086 were not found), so they answered from the question text. The table checks each finding against this text; the record is `missions/host-a4cc691a99d9ea4e/councils/002-review-draft-spec-098-where-agents-run-h.md`.
+
+| Finding | Answer |
+| :-- | :-- |
+| Host content must be stamped `external_untrusted` by the daemon (3 P0s) | Already implied by §11; now explicit in §12 item 12 with a test. |
+| Close-source content needs scrub, preview, approval and a private-derived marker (2 P0s) | Added to §7.2 and §12 item 14, with the stated limit on the declared rung. |
+| Host Builder gate must be deterministic at the 094 merge; trailer forgery (3 P0s) | §10 rewritten as a blocking script; §12 item 15. The forgery that remains (naming an approved spec the work does not implement) is stated as review's job. |
+| Host-injected KB entry reaching a Council (P0) | §12 item 13. |
+| Council imitation on a host fallback (P0) | §5 gives the schema and the daemon's refusal; the accepted gap covers a host that ignores the error. |
+| Nine slices, no DAG, no gating (P1s) | §13.1: waves, exit criteria, flags. Kept as one spec. |
+| Review-lint is advisory unless a script; list enforced vs prompt-only (P1s) | §10 point 3 and §12.1. |
+| Undefined: `propose_kb_entry` schema, trusted-list candidate format, foreign family on a single-family panel, barrier on host disconnect (P2) | Candidate format is in §7.2 (bare hostnames). The other three are listed in §17 for the slices to pin. |
+
 
 ## 16. Acceptance criteria
 
@@ -304,6 +379,8 @@ The Council ruled on a different, smaller outline than this one. A review of thi
 7. `council_open` refuses a pack id; `spawn_agent_pack` stops at the cap.
 8. `delphi lint` rejects an `approved` spec with no `review:` line.
 9. Every invariant of §12 has a test.
+10. An unscrubbed or unapproved rung-3 payload writes nothing; an omitted `rung` is treated as 3; a `private_derived` entry is absent from every Council, panel and red-team brief.
+11. The merge check rejects a trailer naming a draft or missing spec, a spec added in the same PR, and a governed-path diff.
 
 ## 17. Not verified
 
@@ -315,3 +392,5 @@ The Council ruled on a different, smaller outline than this one. A review of thi
 - Which connectors (team chat, meeting transcripts, email, shared documents) each host actually offers, and how its permission system names them. §7.2 assumes only that a host can search what it is connected to and the operator approved.
 - How a host's settings should record "approved search paths and sources" beyond a section of `CLAUDE.md`; a host-native setting may be better and is the host's to define.
 - No live run of any host path in this spec.
+- Council `t_0002` reviewed the question text, not the draft (§15.1). A second review, with the draft readable to the seats, is still owed before approval.
+- The shape of `propose_kb_entry`'s fields, what a single-family panel means by "foreign", and the barrier's behavior when the host disconnects mid-run. The slices pin these.

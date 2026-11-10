@@ -64,121 +64,139 @@
     },
     {
       "level": 2,
-      "line": 98,
+      "line": 107,
       "number": "6",
       "title": "Panels and red team"
     },
     {
       "level": 3,
-      "line": 100,
+      "line": 109,
       "number": "6.1",
       "title": "Panels"
     },
     {
       "level": 3,
-      "line": 104,
+      "line": 113,
       "number": "6.2",
       "title": "Red team"
     },
     {
       "level": 3,
-      "line": 113,
+      "line": 122,
       "number": "6.3",
       "title": "Family honesty"
     },
     {
       "level": 2,
-      "line": 117,
+      "line": 126,
       "number": "7",
       "title": "Research and investigation"
     },
     {
       "level": 3,
-      "line": 119,
+      "line": 128,
       "number": "7.1",
       "title": "The source ladder"
     },
     {
       "level": 3,
-      "line": 134,
+      "line": 143,
       "number": "7.2",
       "title": "Host sources are the host's to approve"
     },
     {
       "level": 3,
-      "line": 141,
+      "line": 154,
       "number": "7.3",
       "title": "The reflex and the offer"
     },
     {
       "level": 3,
-      "line": 149,
+      "line": 162,
       "number": "7.4",
       "title": "No false limitations"
     },
     {
       "level": 3,
-      "line": 158,
+      "line": 171,
       "number": "7.5",
       "title": "Research grows Delphi: outside search fills what the knowledge base and the trusted list lack"
     },
     {
       "level": 2,
-      "line": 175,
+      "line": 188,
       "number": "8",
       "title": "`route` for any query"
     },
     {
       "level": 2,
-      "line": 188,
+      "line": 201,
       "number": "9",
       "title": "Generated task-scoped agents"
     },
     {
       "level": 2,
-      "line": 197,
+      "line": 210,
       "number": "10",
       "title": "Builder in the host, and the spec lifecycle"
     },
     {
       "level": 2,
-      "line": 213,
+      "line": 230,
       "number": "11",
       "title": "Records and summaries"
     },
     {
       "level": 2,
-      "line": 219,
+      "line": 236,
       "number": "12",
       "title": "Authority invariants and the stated limit"
     },
     {
+      "level": 3,
+      "line": 258,
+      "number": "12.1",
+      "title": "What is enforced, and what is not"
+    },
+    {
       "level": 2,
-      "line": 237,
+      "line": 277,
       "number": "13",
       "title": "Slices (one pull request each; none starts before approval)"
     },
     {
+      "level": 3,
+      "line": 291,
+      "number": "13.1",
+      "title": "Order, exit criteria and flags"
+    },
+    {
       "level": 2,
-      "line": 253,
+      "line": 311,
       "number": "14",
       "title": "Decisions"
     },
     {
       "level": 2,
-      "line": 277,
+      "line": 336,
       "number": "15",
       "title": "Council review"
     },
     {
+      "level": 3,
+      "line": 355,
+      "number": "15.1",
+      "title": "Council `t_0002` (2026-11-10, on this draft)"
+    },
+    {
       "level": 2,
-      "line": 296,
+      "line": 371,
       "number": "16",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 308,
+      "line": 385,
       "number": "17",
       "title": "Not verified"
     }
@@ -186,7 +204,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/098-where-agents-run-host-first-locus-and-the-inside-exceptions.md",
-    "sha256": "23a9f44fb3af0573fd71cf647359f76d3c5d55963e7cd2dabae4fb214bc0ac9c"
+    "sha256": "3a507da22d1083cd433db47dc96a9d11d3ee8258fcba362e8a99328774c01967"
   },
   "source_status_at_hash": {
     "line": {
@@ -199,7 +217,7 @@
       },
       "text": "status: draft"
     },
-    "sha256": "23a9f44fb3af0573fd71cf647359f76d3c5d55963e7cd2dabae4fb214bc0ac9c",
+    "sha256": "3a507da22d1083cd433db47dc96a9d11d3ee8258fcba362e8a99328774c01967",
     "word": "draft"
   },
   "spec": {
