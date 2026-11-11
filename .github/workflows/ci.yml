@@ -131,17 +131,19 @@ jobs:
       - name: Install bubblewrap and allow user namespaces
         run: |
           # Ubuntu's package hosts (azure.archive.ubuntu.com, archive.ubuntu.com) have failed to resolve from the runners
-          # for an hour at a time, so no single Ubuntu domain can be relied on. Order: the cached package; then apt on the
-          # runner's own mirror; then, after each failure, a mirror on an unrelated domain (kernel.org, berkeley.edu,
-          # leaseweb.net) and, from the second retry, public DNS resolvers. At most 3 retries (4 attempts), 20 seconds
-          # apart, with short timeouts so a dead host costs seconds. apt checks every package's signature on any mirror.
+          # for an hour at a time. On 2026-11-11 the cause was the runner's DNS server (168.63.129.16) failing for Ubuntu's
+          # names only; the same names resolved through public resolvers. Order: the cached package; apt on the runner's
+          # own mirror; after the first failure, public DNS resolvers; after the next, a mirror on an unrelated domain
+          # (kernel.org, then berkeley.edu). At most 3 retries (4 attempts), 20 seconds apart, with short timeouts so a dead
+          # host costs seconds. apt checks every package's signature on any mirror.
           mkdir -p "$HOME/bwrap-debs"
           APT_OPTS="-o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 -o Acquire::Retries=0"
 
           use_mirror() {
             for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list; do
               if [ -f "$f" ]; then
-                sudo sed -i -E "s#mirror\+file:/etc/apt/apt-mirrors\.txt#$1#g; s#https?://[a-z0-9.-]+/ubuntu/?#$1#g" "$f"
+                # Only a URL that ends at /ubuntu/ is a package mirror; others such as packages.microsoft.com/ubuntu/24.04/prod stay.
+                sudo sed -i -E "s#mirror\+file:/etc/apt/apt-mirrors\.txt#$1#g; s#https?://[a-z0-9.-]+/ubuntu/?([[:space:]]|\$)#$1\1#g" "$f"
               fi
             done
           }
@@ -176,9 +178,9 @@ jobs:
                 exit 1
               fi
               case "$attempt" in
-                1) diagnose; echo "switching apt to mirrors.edge.kernel.org"; use_mirror https://mirrors.edge.kernel.org/ubuntu/ ;;
-                2) use_public_dns; diagnose; echo "switching apt to mirrors.ocf.berkeley.edu"; use_mirror https://mirrors.ocf.berkeley.edu/ubuntu/ ;;
-                3) echo "switching apt to mirror.us.leaseweb.net"; use_mirror https://mirror.us.leaseweb.net/ubuntu/ ;;
+                1) diagnose; echo "pointing the runner at public DNS resolvers"; use_public_dns; diagnose ;;
+                2) echo "switching apt to mirrors.edge.kernel.org"; use_mirror https://mirrors.edge.kernel.org/ubuntu/ ;;
+                3) echo "switching apt to mirrors.ocf.berkeley.edu"; use_mirror https://mirrors.ocf.berkeley.edu/ubuntu/ ;;
               esac
               echo "apt failed (attempt $attempt of 4); retrying in 20s"
               sleep 20
