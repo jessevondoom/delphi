@@ -38,7 +38,7 @@ impl Library {
 
     fn export_one(&self, dir: &Path, id: &str, replace: bool) -> Result<Exported, String> {
         let meta = self.read_meta(id).ok_or_else(|| format!("no source `{}` in the library", id))?;
-        may_leave(&meta, Channel::Bundle).map_err(|e| format!("flagged private: {} (unflag it in the library if that was a mistake)", e))?;
+        crate::egress::check(&meta, Channel::Bundle).map_err(|e| format!("flagged private: {} (unflag it in the library if that was a mistake)", e))?;
         let src = self.source_dir(id);
         let held = meta["purged"].is_null();
         let text = if held { std::fs::read_to_string(src.join("source.md")).ok() } else { None };

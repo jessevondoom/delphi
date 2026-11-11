@@ -12,7 +12,7 @@ use super::excerpts::{Anchor, Resolution};
 use super::*;
 use crate::corroboration::{self, Cite};
 use crate::fact_sources::Class;
-use delphi_core::knowledge_status::{derive_fact, raise_for_support, Status};
+use delphi_core::knowledge_status::{derive_fact, raise_for_tags, tier_params, Status, Tags};
 use delphi_core::provenance::Tier;
 use std::collections::HashSet;
 
@@ -136,7 +136,14 @@ pub fn status(claim: &Value) -> Status {
     if claim["kind"] == "attributed" {
         return base;
     }
-    raise_for_support(base, claim["support"]["origins"].as_u64().unwrap_or(0) as usize)
+    raise_for_tags(base, &tags_of(claim), &tier_params())
+}
+
+/// The tags a claim's tier derives from (`specs/100` §3.2): all written by the daemon into `support`; `would_ratify` is the validator's
+/// dry-run outcome and is absent until that record exists, so a claim without it never reads `vetted`.
+pub fn tags_of(claim: &Value) -> Tags {
+    let n = |k: &str| claim["support"][k].as_u64().unwrap_or(0) as usize;
+    Tags { origins: n("origins"), trusted_sources: n("trusted_sources"), would_ratify: claim["support"]["would_ratify"].as_bool() == Some(true), protected: false }
 }
 
 fn class_of(s: &str) -> Class {
@@ -574,6 +581,9 @@ impl Library {
         let contradicted = c["contested_by"].as_array().is_some_and(|m| !m.is_empty()) || c["lifecycle"] == "disproved";
         let mut tags = s.to_json();
         tags["contradicted"] = json!(contradicted);
+        if let Some(w) = c["support"].get("would_ratify") {
+            tags["would_ratify"] = w.clone();
+        }
         tags["track"] = json!({"claims": track.claims, "stood": track.stood, "contested": track.contested, "disproved": track.disproved});
         let same = ["origins", "trusted_sources", "counted", "contradicted", "track", "zeroed"].iter().all(|k| c["support"][*k] == tags[*k]);
         if same {

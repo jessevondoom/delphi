@@ -79,7 +79,7 @@
         "locator": { "type": "string" },
         "retrieved": { "type": "string" },
         "licence": { "type": "string" },
-        "knowledge_status": { "enum": ["noted", "corroborated", "checking", "validated", "contested", "disproved", "retired"], "description": "`corroborated`: three or more independent origins state it, counted by code (specs/098 section 7.6). Weaker than `validated`; it raises nothing else and is never read as a reason to trust or permit anything." },
+        "knowledge_status": { "enum": ["noted", "corroborated", "substantiated", "vetted", "checking", "validated", "contested", "disproved", "retired"], "description": "`corroborated`: three or more independent origins state it, counted by code (specs/098 section 7.6). Weaker than `validated`; it raises nothing else and is never read as a reason to trust or permit anything." },
         "corroboration": {
           "type": "object",
           "required": ["origins", "trusted_sources", "detail"],

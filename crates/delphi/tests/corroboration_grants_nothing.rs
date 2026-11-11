@@ -1,4 +1,4 @@
-//! `specs/098` §12 item 17: `corroborated` and `trusted_sources` grant nothing. They are a count the daemon writes and a word it
+//! `specs/098` §12 item 17 and `specs/100` §10: `corroborated`, `substantiated`, `vetted` and `trusted_sources` grant nothing. They are a count the daemon writes and a word it
 //! shows; no promotion, no trust, no tool access, no approval and no queue order reads them. The test is a net, not a proof: it
 //! reads the non-test source of every crate and fails when a file not on the short list below mentions the status, the raising
 //! function, the `trusted_sources` tag or the stored `support` record. A new reader has to be added to the list by a reviewer,
@@ -14,6 +14,8 @@ const READERS: &[(&str, &str)] = &[
     ("crates/delphi-engine/src/library_claims.rs", "stores the tags, derives the displayed status, ranks a pull with the same weight as noted"),
     ("crates/delphi-engine/src/research_run.rs", "prints the count in a research answer; the corroboration pass sends only public claims' words to search"),
     ("crates/delphi-engine/src/research_host.rs", "records a staged claim's tags in the ledger"),
+    ("crates/delphi-engine/src/engine.rs", "holds the ladder's numbers as a setting; reads nothing"),
+    ("crates/delphi-engine/src/boot.rs", "parses `[research.tiers]` and installs it once at start"),
 ];
 
 fn root() -> PathBuf {
@@ -40,7 +42,7 @@ fn production(src: &str) -> &str {
 }
 
 fn pattern() -> Regex {
-    Regex::new(r#"Corroborated|raise_for_support|support_detail|trusted_sources|\["support"\]|CORROBORATED_MIN"#).unwrap()
+    Regex::new(r#"Corroborated|Substantiated|Vetted|raise_for_support|raise_for_tags|support_detail|tier_detail|tier_for|tier_params|TierParams|tags_of|trusted_sources|\["support"\]|CORROBORATED_MIN"#).unwrap()
 }
 
 #[test]
@@ -74,7 +76,7 @@ fn no_file_outside_the_list_reads_the_count_and_the_list_decides_nothing() {
 fn the_files_that_do_read_the_count_never_put_it_beside_a_permission_a_tier_or_an_approval() {
     // Within the listed files, a line that names the count must not also name an authority word. A word list is crude, which is
     // why the list above is short and each entry says what it does; this catches the careless edit.
-    let authority = Regex::new(r"(?i)\b(approve[sd]?|approval|permit|permission|grant|taint|tier|trust_level|allow(ed)?_tools?|sandbox|egress|elevate|promote|ratif)").unwrap();
+    let authority = Regex::new(r"(?i)\b(approve[sd]?|approval|permit|permission|grant|taint|tier\b|trust_level|allow(ed)?_tools?|sandbox|egress|elevate|promote|ratif)").unwrap();
     let pat = pattern();
     let root = root();
     let mut bad = Vec::new();
@@ -106,4 +108,39 @@ fn the_status_table_keeps_corroborated_at_the_not_validated_label_and_raises_onl
         assert_eq!(raise_for_support(s, 3), want);
         assert_eq!(raise_for_support(s, 2), s);
     }
+}
+
+#[test]
+fn the_ladder_is_computed_by_one_table_and_vetted_is_the_only_new_top_level_word() {
+    use delphi_core::knowledge_status::{raise_for_tags, tier_for, Status, Tags, TierParams};
+    let p = TierParams::default();
+    // the two rungs below vetted still read "not validated" and say so; "vetted" is the one new word
+    assert_eq!((Status::Substantiated.label(), Status::Vetted.label()), ("not validated", "vetted"));
+    assert_ne!(Status::Vetted.label(), "validated", "vetted never reads as validated");
+    // no count and no would_ratify ever overrides another status (a contradiction wins, a validated fact stays)
+    let top = Tags { origins: 50, trusted_sources: 50, would_ratify: true, protected: false };
+    for s in [Status::Validated, Status::Contested, Status::Disproved, Status::Retired] {
+        assert_eq!(raise_for_tags(s, &top, &p), s, "{s:?}");
+    }
+    // vetted needs the validator's would_ratify: without it the same counts stop at substantiated
+    assert_eq!(tier_for(&Tags { would_ratify: false, ..top }, &p), Status::Substantiated);
+    // a protected claim never rises
+    assert_eq!(tier_for(&Tags { protected: true, ..top }, &p), Status::Noted);
+}
+
+#[test]
+fn a_tier_is_never_set_by_a_tool_argument_or_a_model_field() {
+    // the only writer of a status tier is the derivation; no tool schema or MCP argument may take a `tier` or `knowledge_status` to store
+    let root = root();
+    let mut files = Vec::new();
+    rust_files(&root.join("crates"), &mut files);
+    let setter = Regex::new(r#"(?i)"(set_tier|tier_override|force_tier)"|Status::(Vetted|Substantiated)\s*=>\s*(true|allow)"#).unwrap();
+    let mut bad = Vec::new();
+    for f in &files {
+        let src = std::fs::read_to_string(f).unwrap();
+        if setter.is_match(production(&src)) {
+            bad.push(f.strip_prefix(&root).unwrap().to_string_lossy().to_string());
+        }
+    }
+    assert!(bad.is_empty(), "something sets or acts on a tier: {bad:?}");
 }
