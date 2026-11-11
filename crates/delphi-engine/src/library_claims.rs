@@ -12,7 +12,7 @@ use super::excerpts::{Anchor, Resolution};
 use super::*;
 use crate::corroboration::{self, Cite};
 use crate::fact_sources::Class;
-use delphi_core::knowledge_status::{derive_fact, raise_for_tags, tier_params, Status, Tags};
+use delphi_core::knowledge_status::{derive_fact, raise_for_tags, tier_params, tier_params_configured, Status, Tags, TierParams};
 use delphi_core::provenance::Tier;
 use std::collections::HashSet;
 
@@ -110,6 +110,12 @@ fn active(a: &Value) -> bool {
 /// anchor still holds; a contested mark, a lost anchor, a supersession or an expiry lowers it, and an attributed claim is
 /// never validated.
 pub fn status(claim: &Value) -> Status {
+    status_with(claim, &tier_params())
+}
+
+/// [`status`] under a given ladder. The tier audit uses the **configured** ladder (a roll-back latch changes how a claim is shown, not which claims
+/// reached the tier), and everything else uses the ladder in force now, latch included.
+pub fn status_with(claim: &Value, p: &TierParams) -> Status {
     if attested(claim) {
         return Status::Validated;
     }
@@ -136,7 +142,7 @@ pub fn status(claim: &Value) -> Status {
     if claim["kind"] == "attributed" {
         return base;
     }
-    raise_for_tags(base, &tags_of(claim), &tier_params())
+    raise_for_tags(base, &tags_of(claim), p)
 }
 
 /// The tags a claim's tier derives from (`specs/100` §3.2): all written by the daemon into `support`; `would_ratify` is the validator's
@@ -659,6 +665,46 @@ impl Library {
             }
         }
         written
+    }
+
+    /// The claims that reached an audited tier, as `(id, source class)` for the audit's stratified sample (`specs/100` §7.1). The tier is the claim's
+    /// status under the **configured** ladder, not the one a roll-back latch shows, so a latched tier can still be audited before it is restored.
+    /// `batch` is the claims an accept-all marked `batch-accepted` (slice L3); none exist yet. The class is the first anchored source's.
+    pub fn tier_members(&self, tier: &str) -> Vec<(String, String)> {
+        let want = match tier {
+            "substantiated" => Status::Substantiated,
+            "vetted" => Status::Vetted,
+            _ => return Vec::new(),
+        };
+        let p = tier_params_configured();
+        self.claims()
+            .iter()
+            .filter(|c| c["kind"] != "attributed" && status_with(c, &p) == want)
+            .map(|c| {
+                let class = anchors_of(c).iter().filter_map(|a| a["source_id"].as_str()).filter_map(|s| self.read_meta(s)).find_map(|m| m["source_class"].as_str().map(String::from));
+                (c["id"].as_str().unwrap_or("").to_string(), class.unwrap_or_else(|| "unknown".into()))
+            })
+            .collect()
+    }
+
+    /// What a claim rests on, for the card's second half (shown only after the operator answered): `(title, where, class)` per anchored source. A file the
+    /// operator added has no address and is said to be theirs.
+    pub fn claim_sources(&self, id: &str) -> Vec<(String, String, String)> {
+        let Some(c) = self.claim(id) else { return Vec::new() };
+        let mut seen = std::collections::BTreeSet::new();
+        anchors_of(&c)
+            .iter()
+            .filter_map(|a| a["source_id"].as_str())
+            .filter(|s| seen.insert(s.to_string()))
+            .filter_map(|s| self.read_meta(s))
+            .map(|m| {
+                (
+                    m["title"].as_str().unwrap_or("untitled").to_string(),
+                    m["canonical_url"].as_str().map(String::from).unwrap_or_else(|| "a file you added".into()),
+                    m["source_class"].as_str().unwrap_or("unclassified").to_string(),
+                )
+            })
+            .collect()
     }
 
     /// The claims the validator could be offered next, in the order to offer them (`specs/100` §5). With the lane on a `substantiated` claim comes

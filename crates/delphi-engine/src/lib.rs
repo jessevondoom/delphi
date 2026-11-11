@@ -159,6 +159,7 @@ pub mod trace_mine;
 pub mod trace_miner;
 pub mod service;
 pub mod status;
+pub mod tier_audit;
 pub mod timers;
 pub mod tools;
 pub mod workspace;

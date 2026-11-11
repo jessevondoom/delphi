@@ -17,6 +17,7 @@ const READERS: &[(&str, &str)] = &[
     ("crates/delphi-engine/src/engine.rs", "holds the ladder's numbers as a setting; reads nothing"),
     ("crates/delphi-engine/src/boot.rs", "parses `[research.tiers]` and installs it once at start"),
     ("crates/delphi/src/validation_audit_cmd.rs", "prints the claims the validator could be offered next in the fast lane's order (ids, rungs, counts); an order on a list, nothing else"),
+    ("crates/delphi/src/validation_tier_cmd.rs", "the operator's tier audit: shows a sampled claim, takes their answer, then prints its counts; the audit can only take a tier away"),
 ];
 
 fn root() -> PathBuf {
@@ -192,6 +193,43 @@ fn the_fast_lane_orders_a_list_and_changes_no_claim() {
         }
     }
     assert!(stray.is_empty(), "the fast lane is named outside the files that may order a list: {stray:?}");
+}
+
+#[test]
+fn only_the_operators_command_raises_a_rolled_back_tier_and_only_the_audit_and_the_operator_roll_one_back() {
+    // `specs/100` §10 items 5 and 7: a latched tier is raised by the operator's `delphi validation tier restore` and nothing else, and no daemon
+    // path, tool or span calls the restore. A roll-back can only lower; the audit's own triggers and the operator's command are its only callers.
+    let root = root();
+    let mut files = Vec::new();
+    rust_files(&root.join("crates"), &mut files);
+    let restore = Regex::new(r"tier_audit::restore\(|\bta::restore\(").unwrap();
+    let rollback = Regex::new(r"tier_audit::rollback\(|\bta::rollback\(").unwrap();
+    let (mut restorers, mut rollers) = (Vec::new(), Vec::new());
+    for f in &files {
+        let rel = f.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
+        let src = std::fs::read_to_string(f).unwrap();
+        let code: String = production(&src).lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+        if restore.is_match(&code) {
+            restorers.push(rel.clone());
+        }
+        if rollback.is_match(&code) {
+            rollers.push(rel);
+        }
+    }
+    assert_eq!(restorers, ["crates/delphi/src/validation_tier_cmd.rs"], "the operator's command is the only caller of the restore");
+    assert_eq!(rollers, ["crates/delphi/src/validation_tier_cmd.rs"], "outside the audit module itself, only the operator's command rolls a tier back");
+    // and the daemon's mutating paths never write the latch file by name
+    let latch_writer = Regex::new(r"LATCH_FILE|tier_latch\.json").unwrap();
+    let allowed = ["crates/delphi-engine/src/tier_audit.rs", "crates/delphi-core/src/knowledge_status.rs"];
+    let mut stray = Vec::new();
+    for f in &files {
+        let rel = f.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
+        let src = std::fs::read_to_string(f).unwrap();
+        if latch_writer.is_match(production(&src)) && !allowed.contains(&rel.as_str()) {
+            stray.push(rel);
+        }
+    }
+    assert!(stray.is_empty(), "the latch file is named outside the audit module and the reader: {stray:?}");
 }
 
 #[test]
