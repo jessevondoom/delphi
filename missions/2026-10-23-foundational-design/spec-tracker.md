@@ -873,7 +873,7 @@ Approved by the operator on 2026-11-10 ("approve spec 099 and spec 100"). It add
 | Slice | Content | Hours | State |
 | :-- | :-- | --: | :-- |
 | S0 | this spec, its review and amendments (040 §18.2 and §15.4, 052 §3.1, 066 §5) | 8-12 | approved 2026-11-10 (merged, #615) |
-| L1 | the tier table in `delphi-core`, labels, glyphs, docs, the `[research] tiers` setting | 10-16 | not started |
+| L1 | the tier table in `delphi-core`, labels, glyphs, docs, the `[research] tiers` setting | 10-16 | built (draft PR): tier table, labels, `[research.tiers]`, grants-nothing test; the `would_ratify` writer is L2 |
 | L2 | the fast lane (queue order only) and `would_ratify` shown as `vetted` | 12-18 | not started |
 | L6 | the roll-back: `tier-audit`, `tier-report`, `tier rollback` and `restore`, the tier latch and the event (built before L3) | 12-18 | not started |
 | L3 | the accept-all workflow (digest kind, `batch-accepted` mark) | 16-24 | not started |

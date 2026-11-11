@@ -158,7 +158,21 @@
         "burst_hours": { "type": "integer", "minimum": 0, "maximum": 720, "description": "Citations first seen within this many hours of each other count once, when their first-seen times are known. Default 24." },
         "similar_above": { "type": "number", "exclusiveMinimum": 0, "maximum": 1, "description": "Pages more similar than this are one origin. Never looser than the validator's own 0.5 (specs/040 section 6.2). Default 0.8." },
         "unfamiliar_counts": { "type": "boolean", "description": "Whether a domain no list names counts as an origin. A domain a list calls weak, and every excluded one, count zero either way. Default true." },
-        "thin_below": { "type": "integer", "minimum": 1, "maximum": 50, "description": "Fewer kept, cited claims than this from the knowledge base and the trusted sources together make a research answer say coverage: thin, and name the host rungs (close sources, the wider web) that can take over. Default 3." }
+        "thin_below": { "type": "integer", "minimum": 1, "maximum": 50, "description": "Fewer kept, cited claims than this from the knowledge base and the trusted sources together make a research answer say coverage: thin, and name the host rungs (close sources, the wider web) that can take over. Default 3." },
+        "tiers": {
+          "type": "object",
+          "description": "The confidence ladder (specs/100 section 3.2): when a claim reads corroborated, substantiated or vetted. Derived by code from tags; each rung reads not validated (vetted reads vetted) and is weaker than validated; none grants anything. Numbers are defaults to calibrate.",
+          "additionalProperties": false,
+          "properties": {
+            "corroborated_origins": { "type": "integer", "minimum": 1, "maximum": 50, "description": "Independent origins for corroborated. Default 3." },
+            "substantiated_trusted": { "type": "integer", "minimum": 1, "maximum": 50, "description": "Trusted sources, among those origins, for substantiated. Default 1." },
+            "vetted_origins": { "type": "integer", "minimum": 1, "maximum": 50, "description": "Independent origins for vetted (never fewer than corroborated_origins). Default 5." },
+            "vetted_trusted": { "type": "integer", "minimum": 1, "maximum": 50, "description": "Trusted sources for vetted (never fewer than substantiated_trusted); vetted also needs the validator's would_ratify. Default 2." },
+            "corroborated_enabled": { "type": "boolean", "description": "Whether the corroborated rung is shown. Off: the claim reads noted. Default true." },
+            "substantiated_enabled": { "type": "boolean", "description": "Whether the substantiated rung is shown. Off: it falls back one rung. Default true." },
+            "vetted_enabled": { "type": "boolean", "description": "Whether the vetted rung is shown. Off: it falls back one rung. Default true." }
+          }
+        }
       }
     },
     "library": {

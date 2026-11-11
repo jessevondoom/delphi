@@ -252,6 +252,22 @@ sandbox = "off"
 # burst_hours = 24
 # similar_above = 0.8
 # unfamiliar_counts = true
+#
+# The confidence ladder (specs/100 section 3.2). A claim's rung is derived by code from tags the daemon wrote: how many independent
+# origins it has, how many of those are trusted sources, whether anything contradicts it, and whether the validator's dry run recorded
+# "would_ratify". corroborated: corroborated_origins or more origins. substantiated: corroborated and substantiated_trusted or more trusted
+# sources. vetted: vetted_origins or more origins, vetted_trusted or more trusted sources, and a would_ratify. All three read "not validated"
+# (vetted reads "vetted") and each says it is weaker than "validated"; none grants a permission, a trust level or a promotion. The numbers are
+# first guesses for you to calibrate. A contradiction or a lost source lowers a claim at once. A rung switched off is skipped: a claim reads
+# the highest rung that is on (the audit's roll-back, specs/100 section 7, uses these switches).
+# [research.tiers]
+# corroborated_origins = 3
+# substantiated_trusted = 1
+# vetted_origins = 5
+# vetted_trusted = 2
+# corroborated_enabled = true
+# substantiated_enabled = true
+# vetted_enabled = true
 
 # Library acquisition (specs/055 section 8): once a day, the library scout proposes public-domain and research sources that match your projects
 # and these interests, as ONE batch in the digest. Nothing is fetched until you accept (or a standing rule covers it). Ratified, because it
