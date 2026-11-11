@@ -218,32 +218,76 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # The bubblewrap package, kept between runs. A run that installs it from a mirror saves it; later runs install
+      # from the cache and never touch Ubuntu's servers. Bump the -v1 suffix to refresh it. A cache saved on a
+      # pull-request branch is seen only by that branch; main's is seen by all, so it is filled after the first
+      # green run on main.
+      - name: Restore the bubblewrap package
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/bwrap-debs
+          key: bubblewrap-deb-ubuntu-24.04-v1
       - name: Install bubblewrap and allow user namespaces
         run: |
-          # The runner's package mirror (azure.archive.ubuntu.com) sometimes fails to resolve, for minutes at a time.
-          # `apt-get update` exits 0 then, so only the install fails; retry both together, at most 3 retries (4 attempts),
-          # 20 seconds apart. Short timeouts keep a dead mirror from costing five minutes an attempt, and after the first
-          # failure apt is pointed at archive.ubuntu.com instead (packages stay signature-checked by apt).
+          # Ubuntu's package hosts (azure.archive.ubuntu.com, archive.ubuntu.com) have failed to resolve from the runners
+          # for an hour at a time. On 2026-11-11 the cause was the runner's DNS server (168.63.129.16) failing for Ubuntu's
+          # names only; the same names resolved through public resolvers. Order: the cached package; apt on the runner's
+          # own mirror; after the first failure, public DNS resolvers; after the next, a mirror on an unrelated domain
+          # (kernel.org, then berkeley.edu). At most 3 retries (4 attempts), 20 seconds apart, with short timeouts so a dead
+          # host costs seconds. apt checks every package's signature on any mirror.
+          mkdir -p "$HOME/bwrap-debs"
           APT_OPTS="-o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 -o Acquire::Retries=0"
-          for attempt in 1 2 3 4; do
-            if sudo apt-get $APT_OPTS update -qq && sudo apt-get $APT_OPTS install -y -qq bubblewrap; then
-              break
+
+          use_mirror() {
+            for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list; do
+              if [ -f "$f" ]; then
+                # Only a URL that ends at /ubuntu/ is a package mirror; others such as packages.microsoft.com/ubuntu/24.04/prod stay.
+                sudo sed -i -E "s#mirror\+file:/etc/apt/apt-mirrors\.txt#$1#g; s#https?://[a-z0-9.-]+/ubuntu/?([[:space:]]|\$)#$1\1#g" "$f"
+              fi
+            done
+          }
+          use_public_dns() {
+            iface="$(ip route show default | awk '{print $5; exit}')"
+            if [ -n "$iface" ] && command -v resolvectl >/dev/null 2>&1; then
+              sudo resolvectl dns "$iface" 1.1.1.1 8.8.8.8 || true
+              sudo resolvectl flush-caches || true
             fi
-            if [ "$attempt" -eq 4 ]; then
-              echo "apt could not install bubblewrap after 3 retries"
-              exit 1
-            fi
-            if [ "$attempt" -eq 1 ]; then
-              echo "apt failed on the runner's mirror; switching to archive.ubuntu.com"
-              for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list; do
-                if [ -f "$f" ]; then
-                  sudo sed -i -E 's#mirror\+file:/etc/apt/apt-mirrors\.txt#http://archive.ubuntu.com/ubuntu/#g; s#https?://azure\.archive\.ubuntu\.com/ubuntu/?#http://archive.ubuntu.com/ubuntu/#g' "$f"
-                fi
-              done
-            fi
-            echo "apt failed (attempt $attempt of 4); retrying in 20s"
-            sleep 20
-          done
+          }
+          diagnose() {
+            echo "--- name resolution on this runner"
+            for h in archive.ubuntu.com azure.archive.ubuntu.com mirrors.edge.kernel.org mirrors.ocf.berkeley.edu github.com registry.npmjs.org; do
+              if getent hosts "$h" >/dev/null 2>&1; then echo "resolves:        $h"; else echo "does NOT resolve: $h"; fi
+            done
+            resolvectl status 2>&1 | head -20 || true
+            echo "---"
+          }
+
+          if command -v bwrap >/dev/null 2>&1; then
+            echo "bwrap is already installed"
+          elif ls "$HOME"/bwrap-debs/bubblewrap_*.deb >/dev/null 2>&1 && sudo dpkg -i "$HOME"/bwrap-debs/bubblewrap_*.deb; then
+            echo "installed bubblewrap from the cached package"
+          else
+            for attempt in 1 2 3 4; do
+              if sudo apt-get $APT_OPTS update -qq && sudo apt-get $APT_OPTS install -y -qq bubblewrap; then
+                break
+              fi
+              if [ "$attempt" -eq 4 ]; then
+                diagnose
+                echo "apt could not install bubblewrap after 3 retries"
+                exit 1
+              fi
+              case "$attempt" in
+                1) diagnose; echo "pointing the runner at public DNS resolvers"; use_public_dns; diagnose ;;
+                2) echo "switching apt to mirrors.edge.kernel.org"; use_mirror https://mirrors.edge.kernel.org/ubuntu/ ;;
+                3) echo "switching apt to mirrors.ocf.berkeley.edu"; use_mirror https://mirrors.ocf.berkeley.edu/ubuntu/ ;;
+              esac
+              echo "apt failed (attempt $attempt of 4); retrying in 20s"
+              sleep 20
+            done
+            # keep the package for the cache above
+            cp /var/cache/apt/archives/bubblewrap_*.deb "$HOME/bwrap-debs/" 2>/dev/null \
+              || (cd "$HOME/bwrap-debs" && sudo apt-get $APT_OPTS download bubblewrap) || true
+          fi
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           bwrap --version
           bwrap --ro-bind / / --unshare-all --die-with-parent true && echo "bwrap works here"
