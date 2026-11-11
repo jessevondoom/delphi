@@ -14,6 +14,12 @@ pub enum Status {
     /// Three or more independent origins state it (`specs/098` §7.6): a count made by code, between `Noted` and `Validated`. It is
     /// weaker than `Validated`, it is not a taint level, and nothing reads it as a reason to trust, promote or permit anything.
     Corroborated,
+    /// Three or more independent origins, at least one of them a trusted source (`specs/100` §3.2). A count made by code; weaker than
+    /// `Validated`; not a taint level.
+    Substantiated,
+    /// Five or more independent origins, at least two trusted sources, **and** the validator has recorded a `would_ratify` for the claim
+    /// (`specs/100` §4). Still `not validated` underneath: it waits for the operator, and nothing is written to the validated facts.
+    Vetted,
     Checking,
     Validated,
     Contested,
@@ -21,8 +27,185 @@ pub enum Status {
     Retired,
 }
 
-/// How many independent origins make a claim `corroborated` (`specs/098` §7.6). The one number this spec fixes.
+/// How many independent origins make a claim `corroborated` (`specs/098` §7.6). The default of `TierParams`.
 pub const CORROBORATED_MIN_ORIGINS: usize = 3;
+
+/// The numbers and switches of the ladder (`specs/100` §3.2; `[research.tiers]`). The four numbers are **defaults the operator calibrates**, a
+/// first guess and not a pre-registered threshold. A tier switched off is skipped: a claim reads the highest tier that is on and whose
+/// condition holds, which is how a roll-back falls back one tier (`specs/100` §7.3, slice L6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TierParams {
+    pub corroborated_origins: usize,
+    pub substantiated_trusted: usize,
+    pub vetted_origins: usize,
+    pub vetted_trusted: usize,
+    pub corroborated_on: bool,
+    pub substantiated_on: bool,
+    pub vetted_on: bool,
+    /// The fast lane (`specs/100` §5): a claim of a higher rung is offered to the validator before one of a lower rung. **Queue order only**:
+    /// it reads the tier, never writes one, and the same claim has the same status with the lane on or off.
+    pub fast_lane_on: bool,
+}
+
+impl Default for TierParams {
+    fn default() -> TierParams {
+        TierParams { corroborated_origins: CORROBORATED_MIN_ORIGINS, substantiated_trusted: 1, vetted_origins: 5, vetted_trusted: 2, corroborated_on: true, substantiated_on: true, vetted_on: true, fast_lane_on: true }
+    }
+}
+
+impl TierParams {
+    /// The same numbers kept in order: a higher tier never asks for fewer origins or trusted sources than the tier below it, so `vetted`
+    /// cannot be reached by a claim that is not also `substantiated` and `corroborated`.
+    pub fn ordered(mut self) -> TierParams {
+        self.vetted_origins = self.vetted_origins.max(self.corroborated_origins);
+        self.vetted_trusted = self.vetted_trusted.max(self.substantiated_trusted);
+        self
+    }
+}
+
+static TIERS: std::sync::RwLock<Option<TierParams>> = std::sync::RwLock::new(None);
+
+/// The ladder as the daemon was started with it, **ignoring any roll-back latch**. Set once at start from `[research.tiers]` (`set_tier_params`);
+/// until then, and in a process that never reads the config, the defaults of `TierParams`. The audit samples by this: a latch changes what a claim
+/// is shown as, not which claims reached the tier.
+pub fn tier_params_configured() -> TierParams {
+    TIERS.read().ok().and_then(|g| g.clone()).unwrap_or_default()
+}
+
+/// The ladder as it applies now: the configured one minus the tiers a roll-back holds (`specs/100` §7.3). With no latch file registered
+/// (`set_tier_latch_file`), the configured ladder.
+pub fn tier_params() -> TierParams {
+    apply_latch(tier_params_configured(), latched_tiers())
+}
+
+/// Take the held tiers out of a ladder. `held` is `(substantiated, vetted)`. A held `vetted` reads as `substantiated`; a held `substantiated` reads
+/// as `corroborated`, and because `vetted` rests on `substantiated`'s evidence it is held with it, so a claim never skips a rung down. Pure.
+pub fn apply_latch(mut p: TierParams, held: (bool, bool)) -> TierParams {
+    let (substantiated, vetted) = held;
+    if substantiated {
+        p.substantiated_on = false;
+        p.vetted_on = false;
+    }
+    if vetted {
+        p.vetted_on = false;
+    }
+    p
+}
+
+/// Read a roll-back latch file's bytes as `(substantiated, vetted)`. The file is `{"latched": {"vetted": {...}}}`; a name present is held. A file
+/// that cannot be parsed holds **both** (fail safe, as the validator's own latch does).
+pub fn tier_latch_of(bytes: &[u8]) -> (bool, bool) {
+    match serde_json::from_slice::<serde_json::Value>(bytes) {
+        Ok(v) => {
+            let held = |k: &str| v["latched"].get(k).is_some();
+            (held("substantiated"), held("vetted"))
+        }
+        Err(_) => (true, true),
+    }
+}
+
+static LATCH_FILE: std::sync::RwLock<Option<std::path::PathBuf>> = std::sync::RwLock::new(None);
+static LATCH_SEEN: std::sync::Mutex<Option<(std::time::Instant, (bool, bool))>> = std::sync::Mutex::new(None);
+
+/// Register the roll-back latch file (`<workspace>/local/validation/tier_latch.json`). The daemon calls this once at start, beside
+/// `set_tier_params`; the file is the operator's act (`delphi validation tier rollback`) or the audit's, never a model's, a tool argument's or a
+/// config edit's. It is re-read at most once a second, so a roll-back made from another process applies to a running daemon within about a second,
+/// and it survives a restart because it is a file.
+pub fn set_tier_latch_file(path: std::path::PathBuf) {
+    if let Ok(mut g) = LATCH_FILE.write() {
+        *g = Some(path);
+    }
+    reload_tier_latch();
+}
+
+/// Forget what was last read; the next `tier_params()` reads the file again.
+pub fn reload_tier_latch() {
+    if let Ok(mut g) = LATCH_SEEN.lock() {
+        *g = None;
+    }
+}
+
+fn latched_tiers() -> (bool, bool) {
+    let Some(path) = LATCH_FILE.read().ok().and_then(|g| g.clone()) else { return (false, false) };
+    let Ok(mut seen) = LATCH_SEEN.lock() else { return (true, true) };
+    if let Some((at, held)) = *seen {
+        if at.elapsed() < std::time::Duration::from_secs(1) {
+            return held;
+        }
+    }
+    let held = match std::fs::read(&path) {
+        Ok(b) => tier_latch_of(&b),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (false, false),
+        Err(_) => (true, true),
+    };
+    *seen = Some((std::time::Instant::now(), held));
+    held
+}
+
+/// Install the operator's ladder. Called by the daemon at start and nowhere else; nothing a model, a tool argument or a file says reaches it.
+pub fn set_tier_params(p: TierParams) {
+    if let Ok(mut g) = TIERS.write() {
+        *g = Some(p.ordered());
+    }
+}
+
+/// What the tier of a claim is derived from: tags the daemon wrote, never a field a caller can set (`specs/100` §2 item 2, §10 item 3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Tags {
+    /// Distinct origin keys of daemon-refetched, quote-verified citations (`specs/098` §7.6).
+    pub origins: usize,
+    /// Of those origins, how many are trusted sources (the operator's list within its topic scope, or a Primary or Reputable class).
+    pub trusted_sources: usize,
+    /// The validator has recorded `would_ratify` for the claim (`specs/100` §4): the advisory-mode dry run passed.
+    pub would_ratify: bool,
+    /// The claim is in a protected class (`specs/040` §9.2). Such a claim never rises.
+    pub protected: bool,
+}
+
+/// The tier a claim's tags give, ignoring every other status. The highest **enabled** tier whose condition holds; the conditions nest
+/// (`vetted` needs the `substantiated` and `corroborated` conditions too, because `TierParams::ordered` keeps the numbers in order).
+pub fn tier_for(tags: &Tags, p: &TierParams) -> Status {
+    if tags.protected {
+        return Status::Noted;
+    }
+    let corroborated = tags.origins >= p.corroborated_origins;
+    let substantiated = corroborated && tags.trusted_sources >= p.substantiated_trusted;
+    let vetted = substantiated && tags.origins >= p.vetted_origins && tags.trusted_sources >= p.vetted_trusted && tags.would_ratify;
+    if vetted && p.vetted_on {
+        Status::Vetted
+    } else if substantiated && p.substantiated_on {
+        Status::Substantiated
+    } else if corroborated && p.corroborated_on {
+        Status::Corroborated
+    } else {
+        Status::Noted
+    }
+}
+
+/// A claim that would read `noted` or `checking` reads the tier its tags give. Every other status wins over a count: `validated`,
+/// `contested`, `disproved`, `retired` and the rest are never changed by one, so a contradiction or a lost source always lowers a claim
+/// (`specs/100` §3.2 gates; `specs/098` §7.6 "Disagreement wins"). `checking` is an activity (a claim queued with the validator), not a rung.
+pub fn raise_for_tags(status: Status, tags: &Tags, p: &TierParams) -> Status {
+    if !matches!(status, Status::Noted | Status::Checking) {
+        return status;
+    }
+    match tier_for(tags, p) {
+        Status::Noted => status,
+        tier => tier,
+    }
+}
+
+/// What to print beside a tier: the counts and the words that keep it from reading as proof (`specs/100` §1 table). `None` for a status
+/// that is not a rung of the ladder.
+pub fn tier_detail(status: Status, origins: usize, trusted_sources: usize) -> Option<String> {
+    let trusted = |n: usize| if n == 1 { "1 trusted source".to_string() } else { format!("{} trusted sources", n) };
+    match status {
+        Status::Corroborated => Some(format!("not validated · corroborated ({} origins) · weaker than validated", origins)),
+        Status::Substantiated => Some(format!("not validated · substantiated ({} origins, {}) · weaker than validated", origins, trusted(trusted_sources))),
+        Status::Vetted => Some(format!("vetted ({} origins, {}; awaiting your accept) · weaker than validated", origins, trusted(trusted_sources))),
+        _ => None,
+    }
+}
 
 /// A claim that would read `noted` or `checking` reads `corroborated` when `origins` independent origins support it. `checking` is an
 /// activity (a claim queued with the validator), not a rung, and a claim waiting for a check can still have three origins; the
@@ -48,6 +231,8 @@ impl Status {
         match self {
             Status::Noted => "noted",
             Status::Corroborated => "corroborated",
+            Status::Substantiated => "substantiated",
+            Status::Vetted => "vetted",
             Status::Checking => "checking",
             Status::Validated => "validated",
             Status::Contested => "contested",
@@ -56,11 +241,13 @@ impl Status {
         }
     }
 
-    /// The operator label (`specs/040` §18.2, §23.1): `validated`, `not validated` or `disproved`.
+    /// The operator label (`specs/040` §18.2, §23.1): `validated`, `not validated`, `disproved`, and, since `specs/100`, `vetted`, the one new
+    /// top-level word. `corroborated` and `substantiated` stay `not validated`; their detail (`tier_detail`) says which rung and that it is weaker.
     pub fn label(&self) -> &'static str {
         match self {
             Status::Validated => "validated",
             Status::Disproved => "disproved",
+            Status::Vetted => "vetted",
             _ => "not validated",
         }
     }
@@ -176,12 +363,137 @@ mod tests {
     }
 
     #[test]
-    fn labels_are_the_three_operator_words_and_never_untrusted() {
-        for s in [Status::Noted, Status::Corroborated, Status::Checking, Status::Validated, Status::Contested, Status::Disproved, Status::Retired] {
-            assert!(["validated", "not validated", "disproved"].contains(&s.label()));
+    fn labels_are_the_operator_words_and_never_untrusted() {
+        for s in [Status::Noted, Status::Corroborated, Status::Substantiated, Status::Vetted, Status::Checking, Status::Validated, Status::Contested, Status::Disproved, Status::Retired] {
+            assert!(["validated", "not validated", "disproved", "vetted"].contains(&s.label()));
             assert!(!s.label().contains("untrusted") && !s.as_str().contains("untrusted"));
         }
         assert_eq!(Status::Contested.label(), "not validated");
+        // `vetted` is the only new top-level word; the two rungs below it stay `not validated`
+        assert_eq!((Status::Corroborated.label(), Status::Substantiated.label(), Status::Vetted.label()), ("not validated", "not validated", "vetted"));
+    }
+
+    fn tags(origins: usize, trusted_sources: usize, would_ratify: bool) -> Tags {
+        Tags { origins, trusted_sources, would_ratify, protected: false }
+    }
+
+    #[test]
+    fn the_tier_table_gives_each_rung_at_its_gate_and_not_before() {
+        let p = TierParams::default();
+        let t = |o, k, w| tier_for(&tags(o, k, w), &p);
+        // (origins, trusted, would_ratify) -> tier
+        let table = [
+            (0, 0, false, Status::Noted), (1, 0, false, Status::Noted), (2, 5, true, Status::Noted),
+            (3, 0, false, Status::Corroborated), (4, 0, true, Status::Corroborated),
+            (3, 1, false, Status::Substantiated), (4, 1, true, Status::Substantiated),
+            (5, 1, true, Status::Substantiated), (5, 2, false, Status::Substantiated),
+            (4, 2, true, Status::Substantiated), (5, 2, true, Status::Vetted), (9, 4, true, Status::Vetted),
+        ];
+        for (o, k, w, want) in table {
+            assert_eq!(t(o, k, w), want, "origins {o}, trusted {k}, would_ratify {w}");
+        }
+    }
+
+    #[test]
+    fn trusted_sources_cannot_exceed_what_the_origins_allow_to_count_alone() {
+        // two origins never rise however many trusted sources the tags say; the gate is origins first
+        assert_eq!(tier_for(&tags(2, 9, true), &TierParams::default()), Status::Noted);
+    }
+
+    #[test]
+    fn a_protected_claim_never_rises() {
+        let t = Tags { origins: 9, trusted_sources: 9, would_ratify: true, protected: true };
+        assert_eq!(tier_for(&t, &TierParams::default()), Status::Noted);
+    }
+
+    #[test]
+    fn contested_disproved_retired_and_validated_never_rise_and_checking_and_noted_do() {
+        let p = TierParams::default();
+        let top = tags(9, 4, true);
+        for fixed in [Status::Contested, Status::Disproved, Status::Retired, Status::Validated] {
+            assert_eq!(raise_for_tags(fixed, &top, &p), fixed, "{fixed:?}");
+        }
+        for open in [Status::Noted, Status::Checking] {
+            assert_eq!(raise_for_tags(open, &top, &p), Status::Vetted);
+            assert_eq!(raise_for_tags(open, &tags(1, 0, false), &p), open);
+        }
+    }
+
+    #[test]
+    fn a_retraction_lowers_the_tier_because_the_tier_is_derived_from_the_current_tags() {
+        let p = TierParams::default();
+        let before = raise_for_tags(Status::Noted, &tags(5, 2, true), &p);
+        let after = raise_for_tags(Status::Noted, &tags(4, 1, true), &p);
+        let gone = raise_for_tags(Status::Noted, &tags(2, 1, true), &p);
+        assert_eq!((before, after, gone), (Status::Vetted, Status::Substantiated, Status::Noted));
+    }
+
+    #[test]
+    fn the_numbers_are_the_operators_and_a_switched_off_tier_falls_back_one_rung() {
+        let top = tags(6, 3, true);
+        let strict = TierParams { corroborated_origins: 4, substantiated_trusted: 2, vetted_origins: 6, vetted_trusted: 3, ..TierParams::default() };
+        assert_eq!(tier_for(&top, &strict), Status::Vetted);
+        assert_eq!(tier_for(&tags(5, 3, true), &strict), Status::Substantiated);
+        assert_eq!(tier_for(&tags(3, 3, true), &strict), Status::Noted);
+        let no_vetted = TierParams { vetted_on: false, ..TierParams::default() };
+        assert_eq!(tier_for(&tags(9, 4, true), &no_vetted), Status::Substantiated);
+        let neither = TierParams { vetted_on: false, substantiated_on: false, ..TierParams::default() };
+        assert_eq!(tier_for(&tags(9, 4, true), &neither), Status::Corroborated);
+        let none = TierParams { vetted_on: false, substantiated_on: false, corroborated_on: false, ..TierParams::default() };
+        assert_eq!(tier_for(&tags(9, 4, true), &none), Status::Noted);
+    }
+
+    #[test]
+    fn an_out_of_order_setting_is_put_in_order_so_vetted_never_needs_less_than_the_rung_below() {
+        let odd = TierParams { corroborated_origins: 6, vetted_origins: 2, substantiated_trusted: 3, vetted_trusted: 1, ..TierParams::default() }.ordered();
+        assert_eq!((odd.vetted_origins, odd.vetted_trusted), (6, 3));
+    }
+
+    #[test]
+    fn a_held_tier_makes_the_labels_fall_back_one_rung_and_changes_no_tag() {
+        // `specs/100` §7.3 and §10 item 6: the latch removes a rung from the ladder; the claim's tags are untouched.
+        let top = tags(9, 4, true);
+        let base = TierParams::default();
+        assert_eq!(tier_for(&top, &apply_latch(base.clone(), (false, false))), Status::Vetted);
+        assert_eq!(tier_for(&top, &apply_latch(base.clone(), (false, true))), Status::Substantiated, "a held vetted reads substantiated");
+        assert_eq!(tier_for(&top, &apply_latch(base.clone(), (true, false))), Status::Corroborated, "a held substantiated reads corroborated, and takes vetted with it");
+        assert_eq!(tier_for(&top, &apply_latch(base.clone(), (true, true))), Status::Corroborated);
+        // a claim that is only substantiated falls to corroborated when substantiated is held
+        assert_eq!(tier_for(&tags(3, 1, false), &apply_latch(base.clone(), (true, false))), Status::Corroborated);
+        // a held tier never lifts anything and never touches another status
+        for held in [(false, true), (true, false), (true, true)] {
+            let p = apply_latch(base.clone(), held);
+            for s in [Status::Validated, Status::Contested, Status::Disproved, Status::Retired] {
+                assert_eq!(raise_for_tags(s, &top, &p), s);
+            }
+            assert_eq!(tier_for(&tags(1, 0, false), &p), Status::Noted);
+        }
+        // the numbers are the operator's and the latch leaves them alone
+        let strict = TierParams { vetted_origins: 6, ..base };
+        let held = apply_latch(strict.clone(), (false, true));
+        assert_eq!((held.vetted_origins, held.corroborated_origins, held.substantiated_trusted, held.fast_lane_on), (6, 3, 1, true));
+    }
+
+    #[test]
+    fn the_latch_file_is_read_as_the_tiers_it_names_and_an_unreadable_one_holds_both() {
+        assert_eq!(tier_latch_of(br#"{"latched": {}}"#), (false, false));
+        assert_eq!(tier_latch_of(br#"{"latched": {"vetted": {"trigger": "operator"}}}"#), (false, true));
+        assert_eq!(tier_latch_of(br#"{"latched": {"substantiated": {}}}"#), (true, false));
+        assert_eq!(tier_latch_of(br#"{"latched": {"substantiated": {}, "vetted": {}}}"#), (true, true));
+        assert_eq!(tier_latch_of(b"{ not json"), (true, true), "fail safe");
+        assert_eq!(tier_latch_of(b""), (true, true));
+        assert_eq!(tier_latch_of(br#"{"something": "else"}"#), (false, false), "a valid file that names no tier holds none");
+    }
+
+    #[test]
+    fn the_detail_says_which_rung_and_that_it_is_weaker_than_validated() {
+        let s = tier_detail(Status::Substantiated, 3, 1).unwrap();
+        assert!(s.starts_with("not validated · substantiated (3 origins, 1 trusted source)") && s.contains("weaker than validated"), "{s}");
+        let v = tier_detail(Status::Vetted, 5, 2).unwrap();
+        assert!(v.starts_with("vetted (5 origins, 2 trusted sources") && v.contains("weaker than validated"), "{v}");
+        assert!(tier_detail(Status::Corroborated, 3, 0).unwrap().contains("weaker than validated"));
+        assert_eq!(tier_detail(Status::Noted, 1, 0), None);
+        assert_eq!(tier_detail(Status::Validated, 9, 9), None);
     }
 
     #[test]

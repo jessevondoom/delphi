@@ -387,17 +387,26 @@ pub fn tools() -> Value {
         {
             "name": "propose_kb_entry",
             "title": "Propose a research entry for Delphi's knowledge base",
-            "description": "Hand Delphi research you gathered (a finding, a summary of internal sources) so the operator can keep it in the knowledge base. Give a title, the body in markdown, and the sources (URLs, paths or document names) it rests on. It is staged at tier L0 with your name on it, is not searchable and is never loaded into any agent's memory until the operator keeps it with `delphi kb review`; keeping it never marks it validated. Stages content only: it changes no file in your project.",
+            "description": "Hand Delphi research you gathered as claims. Give a topic, the role it serves and up to 20 claims, each with its text and, when you have them, the https source_url and the exact quote. It is stored at once as `noted` (not validated), labelled with where it came from, searchable with search_kb and never loaded into any agent's always-on prompt. Delphi decides whether it is private: an entry is public only when Delphi itself fetches your source_url and finds your quote in the page; everything else stays private to this install and never leaves it. Anything you say about taint, status, privacy, author or confidence is ignored. The older form (title, body, sources) still stages an entry for the operator's review. Changes no file in your project.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
+                    "topic": {"type": "string", "minLength": 1, "maxLength": 200},
+                    "role": {"type": "string", "maxLength": 64, "description": "The Delphi role this research serves."},
+                    "rung": {"type": "integer", "minimum": 1, "maximum": 4, "description": "The source rung you drew on (advisory)."},
+                    "claims": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"type": "object", "properties": {
+                        "text": {"type": "string", "minLength": 1, "maxLength": 500},
+                        "source_url": {"type": "string", "maxLength": 200, "description": "An https URL."},
+                        "quote": {"type": "string", "maxLength": 400, "description": "Words copied from the page, which Delphi looks for itself."},
+                        "retrieved_at": {"type": "string", "maxLength": 40}
+                    }, "required": ["text"], "additionalProperties": false}},
                     "title": {"type": "string", "minLength": 1, "maxLength": 120},
-                    "body": {"type": "string", "minLength": 1, "maxLength": 20000, "description": "The research, as markdown. Cite sources inline as links."},
+                    "body": {"type": "string", "minLength": 1, "maxLength": 20000, "description": "Older form: the research, as markdown. Cite sources inline as links."},
                     "sources": {"type": "array", "maxItems": 20, "items": {"type": "string", "maxLength": 300}, "description": "URLs, paths or document names the body rests on."},
                     "confidence": {"type": "string", "enum": ["low", "medium", "high"], "default": "low", "description": "Your own stated confidence; it is shown to the operator, not trusted."},
                     "model": {"type": "string", "maxLength": 64, "description": "Your model name, self-reported."}
                 },
-                "required": ["title", "body"],
+                "anyOf": [{"required": ["topic", "role", "claims"]}, {"required": ["title", "body"]}],
                 "additionalProperties": false
             },
             "annotations": writes("Propose a research entry to Delphi")
@@ -528,6 +537,7 @@ pub fn tools() -> Value {
                 "type": "object",
                 "properties": {
                     "question": {"type": "string", "minLength": 1, "maxLength": 2000, "description": "What the Panel should decide."},
+                    "kind": {"type": "string", "enum": ["red_team"], "description": "Optional: `red_team` makes this a red-team review whose result is a findings list (severity, seat, family from the receipt), advisory, never a ruling. Needs the operator to have turned on [seats] red_team_kind. With operator_confirmed: true and another usable family, Delphi adds one foreign red-team seat, blind to your pass; otherwise your pass stands alone and is labelled single-family."},
                     "options": {"type": "array", "maxItems": 8, "items": {"type": "string", "maxLength": 200}, "description": "The choices the operator gave, if any. Never add your own."},
                     "stakes": {"type": "string", "enum": ["low", "normal", "high"], "default": "normal"},
                     "foreign_seat": {"type": "string", "enum": ["architect", "red-team", "strategist"], "description": "Optional: have Delphi run this one seat on a model family other than your host's. Spends the operator's Delphi tokens; ask first (council_frame says how)."},
@@ -690,6 +700,24 @@ pub fn tools() -> Value {
                 "additionalProperties": false
             },
             "annotations": writes("Cancel a job you raised")
+        },
+        {
+            "name": "ask_family",
+            "title": "Ask another model family",
+            "description": "Ask ONE question of a model family other than your own, run by Delphi on the operator's Delphi tokens. The seat is read-only: no tools beyond the pointers you give it, it cannot dispatch anyone, and its answer is advice that binds nothing. The answer comes back WITH the daemon-written receipt (the served model and family, from Delphi's family table, not the one requested or your own claim). Counts against [seats] max_foreign_seats and max_foreign_tokens. Needs the operator's yes (operator_confirmed: true) and a running Delphi daemon; it never starts one.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string", "minLength": 1, "maxLength": 2000, "description": "What to ask."},
+                    "family": {"type": "string", "description": "A configured model family other than your host's; leave out to let Delphi choose."},
+                    "model": {"type": "string", "maxLength": 64, "description": "Your model name, self-reported; used only to avoid asking your own family."},
+                    "context_pointers": {"type": "array", "maxItems": 10, "items": {"type": "object", "properties": {"uri": {"type": "string", "maxLength": 200}, "reason": {"type": "string", "maxLength": 200}}, "required": ["uri", "reason"], "additionalProperties": false}, "description": "Project-relative files the seat may be shown. It gets nothing else."},
+                    "operator_confirmed": {"type": "boolean", "description": "Host-reported: true only if the operator said yes to spending their tokens on this. Required."}
+                },
+                "required": ["question", "operator_confirmed"],
+                "additionalProperties": false
+            },
+            "annotations": writes("Ask another model family")
         }
     ])
 }
@@ -863,6 +891,7 @@ impl Server {
             "research_status" => self.daemon("host.research_status", args),
             "research_result" => self.daemon_slow("host.research_result", args),
             "cancel_job" => self.daemon("host.cancel_job", args),
+            "ask_family" => self.daemon("host.ask_family", args),
             _ => return None,
         })
     }
@@ -1482,9 +1511,9 @@ mod tests {
         let r = call(&mut s, json!({"jsonrpc": "2.0", "id": 3, "method": "tools/list"}));
         let tools = r["result"]["tools"].as_array().unwrap();
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["search_kb", "list_roles", "delphi_roster", "get_agent", "list_skills", "get_skill", "specs_status", "specs_show", "specs_list", "scaffold_status", "search_project", "search_memory", "query_memory", "kb_retrieve", "consult_orchestrator", "spawn_agent_pack", "route", "propose_note", "request_test_authorization", "propose_kb_entry", "propose_council_record", "record_session_summary", "handoff_put", "handoff_get", "request_help", "help_result", "council_frame", "council_open", "council_brief", "council_submit", "council_choose", "request_council", "council_status", "council_result", "request_research", "research_status", "research_result", "cancel_job"]);
+        assert_eq!(names, ["search_kb", "list_roles", "delphi_roster", "get_agent", "list_skills", "get_skill", "specs_status", "specs_show", "specs_list", "scaffold_status", "search_project", "search_memory", "query_memory", "kb_retrieve", "consult_orchestrator", "spawn_agent_pack", "route", "propose_note", "request_test_authorization", "propose_kb_entry", "propose_council_record", "record_session_summary", "handoff_put", "handoff_get", "request_help", "help_result", "council_frame", "council_open", "council_brief", "council_submit", "council_choose", "request_council", "council_status", "council_result", "request_research", "research_status", "research_result", "cancel_job", "ask_family"]);
         for t in tools {
-            let writes = ["propose_note", "request_test_authorization", "propose_kb_entry", "propose_council_record", "record_session_summary", "handoff_put", "request_help", "request_council", "request_research", "council_open", "council_submit", "council_choose", "cancel_job"].contains(&t["name"].as_str().unwrap());
+            let writes = ["propose_note", "request_test_authorization", "propose_kb_entry", "propose_council_record", "record_session_summary", "handoff_put", "request_help", "request_council", "request_research", "council_open", "council_submit", "council_choose", "cancel_job", "ask_family"].contains(&t["name"].as_str().unwrap());
             assert_eq!(t["annotations"]["readOnlyHint"], !writes, "{}", t["name"]);
             assert_eq!(t["annotations"]["destructiveHint"], false, "{}", t["name"]);
             assert_eq!(t["annotations"]["openWorldHint"], t["name"] == "request_research", "{}", t["name"]);
@@ -1753,7 +1782,7 @@ mod tests {
             assert_eq!(r["result"]["isError"], true);
             assert!(r["result"]["content"][0]["text"].as_str().unwrap().starts_with("disabled_by_operator"));
         }
-        assert!(call(&mut s, json!({"jsonrpc": "2.0", "id": 9, "method": "tools/list"}))["result"]["tools"].as_array().unwrap().len() == 38);
+        assert!(call(&mut s, json!({"jsonrpc": "2.0", "id": 9, "method": "tools/list"}))["result"]["tools"].as_array().unwrap().len() == 39);
         std::fs::write(d.path().join("config.toml"), "[mcp]\nenabled = true\n").unwrap();
         assert_eq!(tool(&mut s, "no_such_tool")["error"]["code"], -32602);
         std::fs::write(d.path().join("config.toml"), "[mcp]\nenabled = false\n").unwrap();

@@ -72,6 +72,7 @@ pub fn settings_from(root: &toml::Value) -> Settings {
         if let Some(n) = sc.get("max_foreign_seats").and_then(|v| v.as_integer()).filter(|v| *v >= 0) {
             s.max_foreign_seats = n.min(64) as u32;
         }
+        s.red_team_kind = sc.get("red_team_kind").and_then(|v| v.as_bool()).unwrap_or(false);
         if let Some(n) = sc.get("max_foreign_tokens").and_then(|v| v.as_integer()).filter(|v| *v >= 0) {
             s.max_foreign_tokens = n as u64;
         }
@@ -96,6 +97,21 @@ pub fn settings_from(root: &toml::Value) -> Settings {
         if let Some(b) = r.get("unfamiliar_counts").and_then(|v| v.as_bool()) {
             s.support.unfamiliar_counts = b;
         }
+    }
+    // The confidence ladder (`specs/100` §3.2): counts of 1..=50 and on/off switches; a value of the wrong kind keeps the default.
+    if let Some(t) = root.get("research").and_then(|r| r.get("tiers")) {
+        let count = |k: &str| t.get(k).and_then(|v| v.as_integer()).filter(|v| (1..=50).contains(v)).map(|v| v as usize);
+        let switch = |k: &str| t.get(k).and_then(|v| v.as_bool());
+        let d = &mut s.tiers;
+        d.corroborated_origins = count("corroborated_origins").unwrap_or(d.corroborated_origins);
+        d.substantiated_trusted = count("substantiated_trusted").unwrap_or(d.substantiated_trusted);
+        d.vetted_origins = count("vetted_origins").unwrap_or(d.vetted_origins);
+        d.vetted_trusted = count("vetted_trusted").unwrap_or(d.vetted_trusted);
+        d.corroborated_on = switch("corroborated_enabled").unwrap_or(d.corroborated_on);
+        d.substantiated_on = switch("substantiated_enabled").unwrap_or(d.substantiated_on);
+        d.vetted_on = switch("vetted_enabled").unwrap_or(d.vetted_on);
+        d.fast_lane_on = switch("fast_lane_enabled").unwrap_or(d.fast_lane_on);
+        s.tiers = s.tiers.clone().ordered();
     }
     s.hooks = crate::hooks::parse(root).0;
     if let Some(r) = root.get("relay") {
@@ -359,7 +375,14 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
         model,
         secrets,
         ledger: Arc::new(Mutex::new(ledger)),
-        settings: settings_from(&root),
+        settings: {
+            let st = settings_from(&root);
+            delphi_core::knowledge_status::set_tier_params(st.tiers.clone());
+            // The roll-back latch (`specs/100` §7.3) is a file in the validator's state directory: it survives a restart, only the operator or the
+            // audit writes it, and it is re-read about once a second so a roll-back from another process applies to this daemon.
+            delphi_core::knowledge_status::set_tier_latch_file(crate::tier_audit::latch_file(&crate::fact_mode::state_dir(ws_dir)));
+            st
+        },
         probe: Arc::new(GitProbe::new()),
         projects: project_roots(&root),
         rules,
@@ -425,6 +448,34 @@ mod tests {
         assert_eq!(settings_from(&toml::from_str("[council]\nstall_secs = 0\n").unwrap()).council_stall_secs, 0);
         assert_eq!(settings_from(&toml::from_str("[council]\nstall_secs = -5\n").unwrap()).council_stall_secs, 120, "a negative value is ignored");
         assert_eq!(settings_from(&toml::from_str("[council]\nstall_secs = 99999999\n").unwrap()).council_stall_secs, 86_400, "and a huge one is capped at a day");
+    }
+
+    #[test]
+    fn the_ladder_defaults_to_3_1_5_2_all_on_and_a_bad_value_keeps_the_default() {
+        // `specs/100` §3.2: corroborated at 3 origins; substantiated needs 1 trusted source; vetted needs 5 origins and 2 trusted sources.
+        let d = settings_from(&toml::from_str("").unwrap()).tiers;
+        assert_eq!(d, delphi_core::knowledge_status::TierParams::default());
+        assert_eq!((d.corroborated_origins, d.substantiated_trusted, d.vetted_origins, d.vetted_trusted, d.corroborated_on, d.substantiated_on, d.vetted_on), (3, 1, 5, 2, true, true, true));
+        let t = settings_from(&toml::from_str("[research.tiers]\ncorroborated_origins = 4\nsubstantiated_trusted = 2\nvetted_origins = 8\nvetted_trusted = 3\nvetted_enabled = false\n").unwrap()).tiers;
+        assert_eq!((t.corroborated_origins, t.substantiated_trusted, t.vetted_origins, t.vetted_trusted, t.vetted_on, t.substantiated_on), (4, 2, 8, 3, false, true));
+        for bad in ["corroborated_origins = 0", "vetted_origins = 99", "vetted_trusted = \"two\"", "substantiated_trusted = -1", "vetted_enabled = \"no\"", "corroborated_enabled = 1"] {
+            let got = settings_from(&toml::from_str(&format!("[research.tiers]\n{bad}\n")).unwrap()).tiers;
+            assert_eq!(got, delphi_core::knowledge_status::TierParams::default(), "{bad}");
+        }
+        let odd = settings_from(&toml::from_str("[research.tiers]\ncorroborated_origins = 7\nvetted_origins = 4\n").unwrap()).tiers;
+        assert_eq!(odd.vetted_origins, 7, "vetted never asks for fewer origins than corroborated");
+    }
+
+    #[test]
+    fn the_fast_lane_is_on_by_default_and_switches_off_without_touching_a_rung() {
+        // `specs/100` §5: queue order only, so the switch moves nothing else in the ladder.
+        let d = settings_from(&toml::from_str("").unwrap()).tiers;
+        assert!(d.fast_lane_on);
+        let off = settings_from(&toml::from_str("[research.tiers]\nfast_lane_enabled = false\n").unwrap()).tiers;
+        assert!(!off.fast_lane_on);
+        assert_eq!(delphi_core::knowledge_status::TierParams { fast_lane_on: true, ..off }, delphi_core::knowledge_status::TierParams::default(), "the lane's switch is the only thing it changed");
+        let bad = settings_from(&toml::from_str("[research.tiers]\nfast_lane_enabled = \"no\"\n").unwrap()).tiers;
+        assert!(bad.fast_lane_on, "a value of the wrong kind keeps the default");
     }
 
     #[test]
