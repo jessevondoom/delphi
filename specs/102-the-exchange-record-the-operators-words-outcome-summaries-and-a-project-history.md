@@ -167,25 +167,25 @@ The Council advised **opt-in**; the operator decided **opt-out** (2026-11-11): "
 6. **`delphi history off`** stops new records at once. **`delphi history purge [--since <time>]`** erases the records (all, or those written since the time) and keeps a tombstone for each: its id, its time and its keyed hash, so the chain stays verifiable, as 055 §3.7 keeps a citation's hash after a takedown. **`delphi history delete <id>`** erases one record the same way. **`delphi history status`** shows what is stored, its size and whether it is on. `delphi doctor` shows the same line. **No prompt or reply text is written anywhere else:** the daemon's event log carries only ids, counts and keyed hashes for an exchange record, and a staged learn note made from the same summary is the 062 §8.1 note, not a copy of the record's prompt, so a purge has one place to clean and a test can prove it (§11 item 7).
 7. **A first-run notice** in the console states that the history is on and how to turn it off.
 8. **The timeline stays when records are off** (OD-1): it holds only ids and counts from the daemon's own events, with no operator text. A separate `[history] timeline` switch turns it off too.
-9. **Budgets** (hypotheses, OD-3): 90 days and 200 MB per project. At the budget the daemon stops adding and says so; it never evicts the operator's words silently. The red-team suggested 50 MB. At a few MB per repository the cap is academic.
+9. **Budgets** (hypotheses, OD-3): 90 days and **50 MB** per project. Neither number is derived from anything: the architect proposed 200 MB and the red-team 50 MB, and the expected use is a few MB per repository (about 36 MB a year at 100 records a day, before compression), so any cap between the two is academic. 50 MB is the starting default because it is still many times the expected use and a smaller store is a smaller thing to leak; calibrate from `status`. At the budget the daemon stops adding and says so; it never evicts the operator's words silently.
 10. **Ships dormant; the default flips only after the audit (Council `t_0009`, P0; OD-8).** The code may land with `[history] enabled = false` and the install question not yet shown. The default becomes on, and the question and the first-run notice start, in one small slice (S8) that may merge only after **both** (a) S7, the red-team audit of redaction, purge and egress, has passed, and (b) the shared egress check of 098 §12 item 16 is live, so the history store has an enforced boundary. S3 depends on (b). The operator's decision for opt-out stands; this orders it behind the audit. The operator may overrule the order (OD-8).
 
 ## 8. Slices (one pull request each; none starts before approval and before the 098, 100 and 101 gates)
 
 | Slice | Content | Hours | Depends |
 | :-- | :-- | --: | :-- |
-| S0 | this spec, its review and amendments (062 §8.1, 084 §3, 049 CX-5) | 6-10 | |
-| S1 | the pointer record, hash check, `unresolvable`, session-id search for Claude | 8-12 | S0 |
-| S2 | the daemon timeline and report: events only, 4 KB cap, supersession, footer | 10-14 | S0 |
-| S3 | exchange-record capture, redaction, `private`, the trigger wiring, pasted-block hashing | 18-26 | S1, S2, **the 098 §12 item 16 egress check live** |
-| S4 | the settings, `history off|purge|status`, doctor, and the install question and first-run notice (written, **not shown** until S8) | 10-14 | S3 |
+| S0 | this spec, its two Council reviews and amendments (062 §8.1, 084 §3, 049 CX-5, 055 §10.1) | 8-12 | |
+| S1 | the pointer record (keyed hash), hash check, `unresolvable`, role check, session-id search bounded to the Claude root | 9-13 | S0 |
+| S2 | the daemon timeline and report: events only, 4 KB cap, supersession, footer, the "N events not counted" line | 11-15 | S0 |
+| S3 | exchange-record capture, redaction against the secret-shape corpus, the daemon paste rule, keyed hashes and key handling, `private` and the history model deny, the five trigger wirings, the 070 reference, read-time chain verification | 28-40 | S1, S2, **the 098 §12 item 16 egress check live** |
+| S4 | the settings, `history off|purge [--since]|delete|status`, tombstones, doctor, and the install question (human-only) and first-run notice (written, **not shown** until S8) | 14-20 | S3 |
 | S5 | the operator's read-only console view of the records and the report (no model, control characters stripped) | 4-6 | S3 |
 | S5b | `history_search` with the rules of §5.1 (**deferred by recommendation**, OD-5) | 6-8, only if built | S3, S5 |
 | S6 | the citation check: every decision cites a resolving, hash-matching span; uncited reads unsourced | 6-10 | S1, S3 |
-| S7 | a red-team audit of redaction, purge and egress coverage | 10-14 | S3, S4 |
+| S7 | a red-team audit of redaction (with shapes the author did not choose), the zero-residue purge scan, paste-rule calibration and egress coverage | 16-24 | S3, S4 |
 | S8 | flip the default to on; show the install question and the first-run notice (**only after S7 passes and the egress check is live**; the operator's go) | 2-4 | S7 |
 
-Total about 76 to 112 hours with the spec, **my estimates, not measurements**. The Council's own numbers were: pointers and timeline about 16 hours (here S1 and S2, 18-26), a red-team audit about 12 (S7), and about 38 for the strategist's whole plan (a smaller scope than this one, which adds the install flow, the triggers and the console view).
+Total about **98 to 144 hours** with the spec, excluding S5b, which is deferred (6-8 more if it is built). **These are my estimates, not measurements.** The first draft said 76 to 112; Council `t_0009` called S3 and S7 optimistic and the amendments add work, so those two grew: S3 from 18-26 to 28-40 (the daemon paste rule and its calibration fixtures, keyed hashes and key handling, the ten-shape redaction corpus, read-time chain verification, the 070 reference, the history model deny and five trigger wirings against real event kinds), S4 from 10-14 to 14-20 (purge `--since`, per-record delete, tombstones, the human-only install question) and S7 from 10-14 to 16-24 (the zero-residue purge scan across logs, indexes, WAL and backups, a corpus the author did not choose, paste-rule calibration). The Council's own earlier numbers were: pointers and timeline about 16 hours (here S1 and S2, 20-28), a red-team audit about 12 (S7), and about 38 for the strategist's whole plan, a smaller scope than this one, which adds the install flow, the triggers, the dormant gate and the console view.
 
 ## 9. Considered and not adopted
 
@@ -299,7 +299,7 @@ Nothing here is verified by a live run.
 
 - **OD-1.** Does a project with the history off keep the daemon timeline? [Yes; it holds only ids and counts from the daemon's events, with its own switch.]
 - **OD-2.** Is the trigger list complete? [Start with the five; add a trigger when a gap shows. A concluded prompt with none of them leaves no record.]
-- **OD-3.** The numbers: 90 days, 200 MB per project, 4 KB for the agent view, 2,000 characters per prompt. [Defaults; calibrate from use. The red-team asked for 50 MB.]
+- **OD-3.** The numbers: 90 days, 50 MB per project (the architect proposed 200 MB; neither is derived), 4 KB for the agent view, 2,000 characters per prompt, and the paste thresholds of §3.4 (400 characters, 4.5 bits of entropy). [Defaults, all hypotheses; calibrate from use and from `status`.]
 - **OD-4.** Who writes the reply summary when the host did not? [The daemon writes the facts it observed and marks the reply absent; it never invents one.]
 - **OD-5.** May an agent search exchange records? [**Defer `history_search`** (the strategist: it is not needed for the stated goal and carries the injection risk; this saves about 6-8 hours). Keep the operator's read-only console view (S5). If it is built later, only under the rules of §5.1.]
 - **OD-6.** Does the installed default apply to existing installs? [They are asked once after the upgrade; the default is yes; no record is written until they answer.]
