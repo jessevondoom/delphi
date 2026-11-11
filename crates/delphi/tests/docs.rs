@@ -188,6 +188,21 @@ fn research_results_follow_their_schema_and_refuse_control_characters_in_identit
         "identity": { "role": "scout", "display_name": "Name", "badge": "⟦•_•⟧", "hex": "#123456", "ansi256": 33, "hex_light": "#654321", "ansi256_light": 94, "via": "delphi" }
     });
     must_pass("research-result.schema.json", "a research result", &ok);
+    // specs/098 §7.5: the coverage report, with a reason only from the fixed list.
+    let mut covered = ok.clone();
+    covered["coverage"] = json!("thin");
+    covered["coverage_report"] = json!({ "thin_below": 3, "counted": 1, "host_rungs": ["close", "web"], "leads_kept": 2, "rungs": [
+        { "rung": "kb", "searched": true, "entries_found": 0, "kept": 0, "reason": "kb_empty" },
+        { "rung": "trusted", "searched": true, "entries_found": 2, "kept": 1 },
+        { "rung": "close", "searched": false, "entries_found": 0, "kept": 0, "reason": "not_connected" },
+        { "rung": "web", "searched": true, "entries_found": 2, "kept": 2 } ] });
+    must_pass("research-result.schema.json", "a result with its coverage report", &covered);
+    let mut bad = covered.clone();
+    bad["coverage_report"]["rungs"][0]["reason"] = json!("the provider said: key sk-123 refused");
+    must_fail("research-result.schema.json", "provider text as a coverage reason", &bad);
+    let mut bad = covered;
+    bad["coverage"] = json!("poor");
+    must_fail("research-result.schema.json", "a coverage word outside ok and thin", &bad);
     let mut bad = ok.clone();
     bad["identity"]["display_name"] = json!("Evil\u{1b}[2J");
     must_fail("research-result.schema.json", "an escape in a display name", &bad);

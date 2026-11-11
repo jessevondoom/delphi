@@ -91,19 +91,40 @@ const STOP: &[&str] = &[
     "want", "help", "please", "about", "should", "would", "could", "me", "my", "us", "get", "make",
 ];
 
-/// Lowercase words of at least two characters, without filler, each with a trailing plural `s` removed.
+/// Lowercase words of at least two characters, without filler, each reduced to a rough stem (see [`stem`]).
 pub fn tokens(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     for w in text.to_lowercase().split(|c: char| !c.is_alphanumeric()) {
         if w.chars().count() < 2 || STOP.contains(&w) {
             continue;
         }
-        let w = if w.len() > 3 && w.ends_with('s') && !w.ends_with("ss") { &w[..w.len() - 1] } else { w };
-        if !out.iter().any(|t: &String| t == w) {
-            out.push(w.to_string());
+        let w = stem(w);
+        if !out.contains(&w) {
+            out.push(w);
         }
     }
     out
+}
+
+/// A rough stem, the same for the query and the entry so that `profile`, `profiled` and `profiling` meet: a trailing plural
+/// `s` goes, then `ing`, `ed`, `er` or `ion` from a long enough word, then a final `e`. It is not linguistics; it only has to
+/// be the same on both sides.
+fn stem(w: &str) -> String {
+    let mut s = w.to_string();
+    if s.len() > 3 && s.ends_with('s') && !s.ends_with("ss") {
+        s.pop();
+    }
+    for suffix in ["ing", "ion", "ed", "er"] {
+        let min = if suffix.len() == 3 { 6 } else { 5 };
+        if s.len() >= min && s.ends_with(suffix) {
+            s.truncate(s.len() - suffix.len());
+            break;
+        }
+    }
+    if s.len() > 4 && s.ends_with('e') {
+        s.pop();
+    }
+    s
 }
 
 /// What each field of an entry is worth to a matching word.
@@ -148,6 +169,12 @@ pub struct Query<'a> {
 /// The ranked candidates, best first, with a score above zero; ties break by target so the same query on the same index
 /// always gives the same answer. The floor is applied by the caller ([`Search::status`]).
 pub fn rank(entries: &[RegEntry], q: &Query, emb: Option<&dyn Embedder>) -> Vec<Candidate> {
+    rank_with(entries, q, emb, &|_| 0)
+}
+
+/// [`rank`] with a tie-break between equal scores: `tie` gives an entry's position (lower first), and only then does the
+/// target name decide (spec 098 §8: the lexical score, then the role order in the roster, then the target name).
+pub fn rank_with(entries: &[RegEntry], q: &Query, emb: Option<&dyn Embedder>, tie: &dyn Fn(&RegEntry) -> usize) -> Vec<Candidate> {
     let qt = tokens(q.text);
     let pool: Vec<&RegEntry> = entries
         .iter()
@@ -190,7 +217,7 @@ pub fn rank(entries: &[RegEntry], q: &Query, emb: Option<&dyn Embedder>) -> Vec<
         })
         .filter(|c| c.score > 0.0)
         .collect();
-    out.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.entry.target.cmp(&b.entry.target)));
+    out.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal).then_with(|| tie(&a.entry).cmp(&tie(&b.entry))).then_with(|| a.entry.target.cmp(&b.entry.target)));
     out.truncate(q.limit.clamp(1, 5));
     out
 }

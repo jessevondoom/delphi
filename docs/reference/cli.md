@@ -303,17 +303,23 @@ Acquisition (off until `[library.acquire] enabled = true`): once a day the daemo
 
 ### `delphi route`
 
-Which bundle agent fits a task (a dry run).
+Which role or agent fits a task (a dry run).
 
 ```
-  delphi route "<task>" [--domain <d>] [--role <role>] [--limit <1-5>] [--json] [--workspace <name>] [--home <dir>]
+  delphi route "<task>" [--domain <d>] [--role <role>] [--limit <1-5>] [--threshold <0-1>] [--json] [--workspace <name>] [--home <dir>]
+  delphi route --adopt-eval <labeled.json> [--threshold <0-1>] [--json] [--workspace <name>] [--home <dir>]
   delphi route --eval <labeled.json> [--json] [--workspace <name>] [--home <dir>]
 ```
 
-Ranks the agents of the added bundles for a task the way the orchestrator's `search_agent_registry` tool does: by name, tags,
-domain and summary, plus the local embedding model when one is installed. Nothing is dispatched, no model is called and nothing
-is created. `--eval` takes a JSON list of {"task", "target"} (target is `bundle:<bundle>/<agent>`) and prints recall at 1, 3 and 5,
-latency and the tokens of the domain index against the uncapped flat list. Turn routing on with `[routing] registry = "auto"`.
+Ranks Delphi's canonical roles and the agents of the added bundles together for a task, by name, tags, domain and summary, plus the
+local embedding model when one is installed. Each candidate says which role it runs as, where that runs (`locus`: host, inside or either), what
+the task looks like it wants (`trigger`: none, panel, council or red_team, from a fixed table of words), how sure the ranking is
+(`confidence`: the score, less what a close rival takes away) and whether that reaches `[routing] adopt_threshold` (`adopt`). Below it, adopt no role.
+The default threshold is provisional, set on a small labeled set; `[hosts] route_adopt` (off) says whether `adopt` is a recommendation or only advice.
+Nothing is dispatched, no model is called, nothing is created and no daemon is started. `--adopt-eval` takes a JSON list of {"task", "expect"}
+(`expect` is a role id, or `none` for a task that should adopt nothing) and prints how often `adopt` was right at the threshold. `--eval` takes a JSON list of
+{"task", "target"} (target is `bundle:<bundle>/<agent>`) and prints recall at 1, 3 and 5, latency and the tokens of the domain index against the
+uncapped flat list. Turn routing on with `[routing] registry = "auto"`.
 
 ### `delphi needs`
 

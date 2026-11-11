@@ -4,9 +4,11 @@
 
 pub mod agent_pool;
 pub mod agent_registry;
+pub mod route_any;
 pub mod approval;
 pub mod shellsafe;
 pub mod assign;
+pub mod corroboration;
 pub mod fact_check;
 pub mod fact_fetch;
 pub mod library;
@@ -116,6 +118,7 @@ pub mod model;
 pub mod observe;
 pub mod policy;
 pub mod pool;
+pub mod progress;
 pub mod quota;
 pub mod probe;
 pub mod provisional;
