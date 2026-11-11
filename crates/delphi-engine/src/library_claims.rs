@@ -146,6 +146,30 @@ pub fn tags_of(claim: &Value) -> Tags {
     Tags { origins: n("origins"), trusted_sources: n("trusted_sources"), would_ratify: claim["support"]["would_ratify"].as_bool() == Some(true), protected: false }
 }
 
+/// A claim the validator could be offered (`Library::validation_candidates`): its id and the tags the fast lane orders by.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Candidate {
+    pub id: String,
+    pub status: Status,
+    pub origins: usize,
+    pub trusted_sources: usize,
+}
+
+/// The fast lane (`specs/100` §5): with `lane_on`, a higher rung first, then more origins, then more trusted sources, then id; without it, by
+/// id. It reorders a list and nothing else. It reads a rung and never sets one.
+pub fn lane_order(v: &mut [Candidate], lane_on: bool) {
+    let rank = |s: Status| match s {
+        Status::Substantiated => 2,
+        Status::Corroborated => 1,
+        _ => 0,
+    };
+    if lane_on {
+        v.sort_by(|a, b| rank(b.status).cmp(&rank(a.status)).then(b.origins.cmp(&a.origins)).then(b.trusted_sources.cmp(&a.trusted_sources)).then(a.id.cmp(&b.id)));
+    } else {
+        v.sort_by(|a, b| a.id.cmp(&b.id));
+    }
+}
+
 fn class_of(s: &str) -> Class {
     match s {
         "primary" => Class::Primary,
@@ -581,8 +605,17 @@ impl Library {
         let contradicted = c["contested_by"].as_array().is_some_and(|m| !m.is_empty()) || c["lifecycle"] == "disproved";
         let mut tags = s.to_json();
         tags["contradicted"] = json!(contradicted);
+        // The validator's dry run (`record_would_ratify`) described the sources the claim had when it was checked. If the count of origins or of
+        // trusted sources has changed since, the check describes something else and is dropped: the claim falls back a rung until it is checked
+        // again (`specs/100` §6 "claims whose sources changed since the check"). Nothing a caller says reaches this field.
         if let Some(w) = c["support"].get("would_ratify") {
-            tags["would_ratify"] = w.clone();
+            let at_check = &c["support"]["would_ratify_for"];
+            let unchanged = at_check["origins"].as_u64() == Some(s.origins as u64) && at_check["trusted_sources"].as_u64() == Some(s.trusted_sources as u64);
+            if unchanged {
+                tags["would_ratify"] = w.clone();
+                tags["would_ratify_for"] = at_check.clone();
+                tags["would_ratify_at"] = c["support"]["would_ratify_at"].clone();
+            }
         }
         tags["track"] = json!({"claims": track.claims, "stood": track.stood, "contested": track.contested, "disproved": track.disproved});
         let same = ["origins", "trusted_sources", "counted", "contradicted", "track", "zeroed"].iter().all(|k| c["support"][*k] == tags[*k]);
@@ -597,6 +630,58 @@ impl Library {
             self.log("claim_support", json!({"id": id, "origins": s.origins, "trusted_sources": s.trusted_sources, "from": was_status.as_str(), "to": now_status.as_str()}));
         }
         Some(c)
+    }
+
+    /// The validator's advisory dry run passed for a statement (`specs/100` §4): write `support.would_ratify` on every claim whose text is the
+    /// one that was checked (the validator's fact id is a hash of the claim text), so a claim that also has the origins and trusted sources
+    /// reads `vetted`. **Daemon only**: it is called from the validator's own loop after the verdict was recorded (`fact_serve`), and nothing a
+    /// host, a tool argument or a model says reaches it. It writes the counts the check was made against, so `refresh_support` drops it when the
+    /// sources change; it never writes a status, never touches `context/facts/**`, and logs ids and counts, never the claim. A contested,
+    /// disproved, retired, expired or validated claim, and an attribution, are left as they are (a count never overrides those). Returns the
+    /// ids written.
+    pub fn record_would_ratify(&self, fact_id: &str) -> Vec<String> {
+        let mut written = Vec::new();
+        for mut c in self.claims() {
+            if c["kind"] == "attributed" || c["lifecycle"].is_string() || matches!(status(&c), Status::Validated | Status::Disproved | Status::Retired | Status::Contested) {
+                continue;
+            }
+            if crate::fact_store::fact_id(c["text"].as_str().unwrap_or("")) != fact_id {
+                continue;
+            }
+            let (origins, trusted) = (c["support"]["origins"].as_u64().unwrap_or(0), c["support"]["trusted_sources"].as_u64().unwrap_or(0));
+            c["support"]["would_ratify"] = json!(true);
+            c["support"]["would_ratify_for"] = json!({"origins": origins, "trusted_sources": trusted});
+            c["support"]["would_ratify_at"] = json!(delphi_core::time::now_rfc3339());
+            let id = c["id"].as_str().unwrap_or("").to_string();
+            if self.save_claim(&c).is_ok() {
+                self.log("claim_would_ratify", json!({"id": id, "origins": origins, "trusted_sources": trusted, "to": status(&c).as_str()}));
+                written.push(id);
+            }
+        }
+        written
+    }
+
+    /// The claims the validator could be offered next, in the order to offer them (`specs/100` §5). With the lane on a `substantiated` claim comes
+    /// before a `corroborated` one and that before a `noted` one, then by origins and trusted sources, then by id; with it off, by id. **Order
+    /// only**: this reads the status the claim already has and writes nothing, so the same claim has the same status either way. A claim that is
+    /// validated, vetted, contested, disproved, retired, expired, an attribution, or already has a recorded dry run is not a candidate.
+    pub fn validation_candidates(&self, lane_on: bool) -> Vec<Candidate> {
+        let mut v: Vec<Candidate> = self
+            .claims()
+            .iter()
+            .filter(|c| c["kind"] != "attributed" && c["lifecycle"].is_null() && c["support"]["would_ratify"] != true)
+            .filter_map(|c| {
+                let st = status(c);
+                matches!(st, Status::Noted | Status::Corroborated | Status::Substantiated).then(|| Candidate {
+                    id: c["id"].as_str().unwrap_or("").to_string(),
+                    status: st,
+                    origins: c["support"]["origins"].as_u64().unwrap_or(0) as usize,
+                    trusted_sources: c["support"]["trusted_sources"].as_u64().unwrap_or(0) as usize,
+                })
+            })
+            .collect();
+        lane_order(&mut v, lane_on);
+        v
     }
 
     pub fn origin_of(&self, c: &Value) -> String {
