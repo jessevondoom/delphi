@@ -209,6 +209,11 @@ Total about 76 to 112 hours with the spec, **my estimates, not measurements**. T
 10. `delphi history` commands refuse inside an agent seat.
 11. If `history_search` or any path returns record text to a seat (§5.1): the result is `external_untrusted` and `self_reported`, fenced, free of control characters, never given to a foreign-family or unknown-family seat, and the receiving span has no mutating tool; a record holding a jailbreak string in `open` cannot cause a mutating call in that span (a fixture); no record text is eligible for a promotion path (a test over the code that reads records).
 
+12. **The host cannot set `kind`.** `kind` (and `observed`, `private`, `chain`) are computed by the daemon; a schema test rejects a host-supplied value, so a host cannot claim `observed` for a prompt the daemon did not see.
+13. **Relayed text is never operator words.** Text that came from a tool result, a fetched page, another agent or any source other than the operator's own input is never stored as observed operator words; at most it is `reported` (a fixture with relayed text in a host's report).
+14. **The chain is verified at read time**, by every read of a record, of the report and of `status`. A broken link has a defined result: the records after the break are shown as `chain broken`, are left out of the report and of every count, `status` and `doctor` warn, and nothing is repaired or deleted silently (a fixture with a tampered record).
+15. **The install question is answered only by a human.** The answering path is the console or `delphi init|connect` at a terminal; it refuses an agent seat and any call on the host socket, and until a human answers, no record is written (a test of each refusal).
+
 ## 12. Council record
 
 Council `t_0008` (2026-11-11; architect, red-team, strategist; families claude and gemini) reviewed the transcript-storage proposal. Its record is `missions/host-a4cc691a99d9ea4e/councils/007-…` in the Delphi home. Round 2 split: the architect and the strategist ruled PROCEED-WITH-CHANGES, the red-team ruled OPTION A, none concurred, and two P0 findings stayed open. How this draft answers it:
@@ -261,6 +266,7 @@ Every item is verified without a network or a model, plus the repository gates o
 | Purge residue (6, §11 item 7) | Write a canary string into a fixture prompt and reply, run `purge`, `purge --since` and `delete`, then scan the **whole** Delphi home (record store, event logs, indexes, caches, WAL files, backups and exports made by the daemon) for the canary and for any plain hash of it: none; the tombstones verify the chain; a guessable short secret is not recoverable from a retained hash because the hashes are keyed. |
 | Egress (7, §11 item 3) | The egress enumeration test includes the history store; with the default `to_models` no prompt fixture contains a record; a foreign-family seat and an unknown-family seat get none under any setting. |
 | Authority (§11 items 1, 2, 5, 10) | The "grants nothing" test over the readers; the `SelfReported` scan; a host attempt to edit a record refused; the commands refuse inside an agent seat. |
+| Provenance and the question (§11 items 12 to 15) | A schema test that rejects a host-supplied `kind`; a fixture with relayed tool text that is stored at most as `reported`; a tampered record that breaks the chain and is excluded and warned about; the install question refused for an agent seat and for the host socket. |
 | Returned record text (§11 item 11, only if S5b is built) | A fixture record with a jailbreak string and an escape sequence in `open`; the result is tainted, fenced and stripped; the consuming span has no mutating tool; a family-unknown seat gets nothing. |
 | Budget (8) | A fixture at the cap stops adding and reports it. |
 | Dormant default (9) | A config test: before S8 a fresh home has `enabled = false` and no question is raised; a test fails if the default is on while the history store is not in the egress enumeration. |
