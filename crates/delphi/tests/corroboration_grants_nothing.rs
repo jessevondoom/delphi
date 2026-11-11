@@ -310,3 +310,25 @@ fn only_the_operators_command_accepts_a_batch_and_the_batch_mark_and_the_re_audi
     let (term, accept) = (arm.find("is_terminal").expect("a terminal check"), arm.find("validation_tier_cmd::accept_all(&ws.dir").expect("the accept call"));
     assert!(term < accept, "the terminal is checked before anything is accepted");
 }
+
+#[test]
+fn the_reached_mark_is_written_in_one_place_and_the_calibration_only_counts_it() {
+    // `specs/100` §8: `reached` records which rung a claim has read, for the calibration report. The daemon writes it in `refresh_support`;
+    // `tier_outcomes` counts it; the operator's report prints the counts. Nothing else names the mark, and nothing branches on it: it is a
+    // record for calibrating the defaults, never a criterion for promotion, trust, tool access or approval.
+    let root = root();
+    let mut files = Vec::new();
+    rust_files(&root.join("crates"), &mut files);
+    let uses = Regex::new(r#"\["reached"\]|tier_outcomes\("#).unwrap();
+    let allowed = ["crates/delphi-engine/src/library_claims.rs", "crates/delphi/src/validation_tier_cmd.rs"];
+    let mut stray = Vec::new();
+    for f in &files {
+        let rel = f.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
+        let src = std::fs::read_to_string(f).unwrap();
+        let code: String = production(&src).lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+        if uses.is_match(&code) && !allowed.contains(&rel.as_str()) {
+            stray.push(rel);
+        }
+    }
+    assert!(stray.is_empty(), "the reached mark or the calibration count is named outside the files that may: {stray:?}");
+}

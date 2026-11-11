@@ -294,7 +294,7 @@ fn verdict_line(st: &Stats, limit: Option<f64>) -> String {
 /// `delphi validation tier-report`: per tier, the sample, the errors, the bound, how many claims are not yet audited, whether the floor is met, the age
 /// of the last audit and the roll-backs. `members` is how many claims are at each tier now (the library's count). It reads only the journal and the
 /// latch file, never text a span could influence, and prints no claim.
-pub fn report(state: &Path, members: &BTreeMap<String, usize>, now: i64) -> String {
+pub fn report(state: &Path, members: &BTreeMap<String, usize>, outcomes: &BTreeMap<String, (usize, usize, usize)>, now: i64) -> String {
     let events = Journal::new(state).all();
     let batch = current_batch(state);
     let held = latched(state);
@@ -329,7 +329,31 @@ pub fn report(state: &Path, members: &BTreeMap<String, usize>, now: i64) -> Stri
             }
         }
     }
-    out.push_str("\nCalibration (how often a tier's claims were later contested or disproved) is the next slice; this report counts only your true and false answers.\n");
+    out.push_str(&calibration(outcomes));
+    out
+}
+
+/// The calibration section (`specs/100` §8): per rung, how many claims have read it and how many of those were later contested or disproved
+/// (`specs/055` §3.8's counts, joined by the rung a claim read, not the one it holds now). **No verdict below the floor**: under
+/// [`SAMPLE_FLOOR`] claims the numbers print and a line says they mean little; at or above it the observed share and its upper bound print.
+/// It is information for changing the defaults of §3.2 on evidence. It takes nothing away and grants nothing, and it reads no claim text.
+pub fn calibration(outcomes: &BTreeMap<String, (usize, usize, usize)>) -> String {
+    let mut out = String::from("\nCalibration: how often the claims that read a rung were later contested or disproved (the library's counts, specs/055 section 3.8). Counts start when the daemon began recording which rung a claim read; a claim already at a rung is counted from its next refresh, so early numbers are a lower bound. This is information for changing the defaults on evidence; it is not a roll-back trigger and not your audit.\n");
+    for rung in ["corroborated", "substantiated", "vetted"] {
+        let (reached, contested, disproved) = outcomes.get(rung).copied().unwrap_or((0, 0, 0));
+        out.push_str(&format!("\n{rung}\n  claims that read this rung: {reached}; later contested: {contested}; later disproved: {disproved}\n"));
+        if reached == 0 {
+            out.push_str("  no verdict: no claim has read this rung yet\n");
+            continue;
+        }
+        let bad = contested + disproved;
+        let share = bad as f64 / reached as f64;
+        if reached < SAMPLE_FLOOR {
+            out.push_str(&format!("  no verdict: {reached} claim(s) are below the floor of {SAMPLE_FLOOR} (observed share {:.1}%, which bounds nothing at this size)\n", share * 100.0));
+        } else {
+            out.push_str(&format!("  observed share later contested or disproved: {:.1}%; upper bound {:.1}% ({}); a bound on this sample, not a proof\n", share * 100.0, upper_bound(reached, bad) * 100.0, if bad == 0 { "rule of three: 3 / sample" } else { "95% interval" }));
+        }
+    }
     out
 }
 
@@ -389,7 +413,7 @@ mod tests {
         let (_d, s) = state();
         answered(&s, "vetted", &["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"], Answer::True, 100);
         let members = BTreeMap::from([("vetted".to_string(), 40usize)]);
-        let out = report(&s, &members, 100 + 3 * 86_400);
+        let out = report(&s, &members, &BTreeMap::new(), 100 + 3 * 86_400);
         assert!(out.contains("audited: 10") && out.contains("errors: 0") && out.contains("upper bound on the error rate: 30.0%") && out.contains("rule of three"), "{out}");
         assert!(out.contains("floor 30: NOT met") && out.contains("no verdict") && out.contains("about 26%"), "{out}");
         assert!(out.contains("claims at this tier now: 40; not yet audited: 30") && out.contains("last audit: 3 day(s) ago"), "{out}");
@@ -404,21 +428,56 @@ mod tests {
         let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
         answered(&s, "substantiated", &refs, Answer::True, 100);
         let members = BTreeMap::from([("substantiated".to_string(), 90usize)]);
-        let out = report(&s, &members, 200);
+        let out = report(&s, &members, &BTreeMap::new(), 200);
         assert!(out.contains("floor 30: met") && out.contains("you have not set a threshold"), "{out}");
         assert!(latched(&s).is_empty(), "no threshold, no roll-back");
         // zero errors in 30 bounds the rate to 10%: within a 15% limit, above a 5% one
         set_threshold(&s, "substantiated", 15.0, 201).unwrap();
         assert_eq!(evaluate(&s, "substantiated", 202).unwrap(), None);
-        assert!(report(&s, &members, 203).contains("within your 15% threshold"));
+        assert!(report(&s, &members, &BTreeMap::new(), 203).contains("within your 15% threshold"));
         set_threshold(&s, "substantiated", 5.0, 204).unwrap();
-        assert!(report(&s, &members, 205).contains("ABOVE your 5% threshold"));
+        assert!(report(&s, &members, &BTreeMap::new(), 205).contains("ABOVE your 5% threshold"));
         assert_eq!(evaluate(&s, "substantiated", 206).unwrap(), Some("error_rate".into()));
         assert!(latched(&s).contains("substantiated"));
         let ev = Journal::new(&s).all();
         let roll = ev.iter().find(|e| e["kind"] == "tier_rollback").expect("a tier.rollback event");
         assert_eq!((roll["tier"].as_str(), roll["trigger"].as_str(), roll["sample"].as_u64(), roll["errors"].as_u64()), (Some("substantiated"), Some("error_rate"), Some(30), Some(0)));
         assert!(roll["bound"].as_f64().unwrap() > 0.09 && roll["audit_batch"].is_string() && roll["reaudit_due"] == 0, "{roll}");
+    }
+
+    fn outcomes(rows: &[(&str, usize, usize, usize)]) -> BTreeMap<String, (usize, usize, usize)> {
+        rows.iter().map(|(r, a, b, c)| (r.to_string(), (*a, *b, *c))).collect()
+    }
+
+    #[test]
+    fn the_calibration_section_prints_every_rung_and_gives_no_verdict_below_the_floor() {
+        // synthetic outcomes: corroborated has volume, substantiated is below the floor, vetted is empty
+        let out = calibration(&outcomes(&[("corroborated", 40, 3, 1), ("substantiated", 12, 2, 0)]));
+        assert!(out.contains("\ncorroborated\n  claims that read this rung: 40; later contested: 3; later disproved: 1\n"), "{out}");
+        // at the floor and above: the observed share and the bound, and never a word that calls it proven
+        assert!(out.contains("observed share later contested or disproved: 10.0%; upper bound") && out.contains("95% interval") && out.contains("not a proof"), "{out}");
+        // below the floor: the numbers print, the verdict does not
+        assert!(out.contains("\nsubstantiated\n  claims that read this rung: 12; later contested: 2; later disproved: 0\n"), "{out}");
+        assert!(out.contains("no verdict: 12 claim(s) are below the floor of 30 (observed share 16.7%, which bounds nothing at this size)"), "{out}");
+        // a rung nobody has read says so instead of printing a rate
+        assert!(out.contains("\nvetted\n  claims that read this rung: 0; later contested: 0; later disproved: 0\n  no verdict: no claim has read this rung yet\n"), "{out}");
+        // information only: it says it is not a roll-back trigger, and it never offers a verdict word
+        assert!(out.contains("not a roll-back trigger") && !out.to_lowercase().contains("clean") && !out.contains("ABOVE"), "{out}");
+    }
+
+    #[test]
+    fn a_clean_rung_with_volume_uses_the_rule_of_three_not_a_zero() {
+        let out = calibration(&outcomes(&[("vetted", 60, 0, 0)]));
+        assert!(out.contains("observed share later contested or disproved: 0.0%; upper bound 5.0% (rule of three: 3 / sample)"), "{out}");
+    }
+
+    #[test]
+    fn the_report_carries_the_calibration_section_after_the_audit_numbers() {
+        let (_d, s) = state();
+        let out = report(&s, &BTreeMap::new(), &outcomes(&[("corroborated", 5, 1, 0)]), 100);
+        let (audit, cal) = (out.find("Tier audit, batch").expect("audit header"), out.find("Calibration: how often").expect("calibration header"));
+        assert!(audit < cal && out.contains("claims that read this rung: 5; later contested: 1"), "{out}");
+        assert!(!out.contains("is the next slice"), "the placeholder is gone: {out}");
     }
 
     #[test]

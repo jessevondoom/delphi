@@ -116,6 +116,16 @@ pub fn status(claim: &Value) -> Status {
     status_with(claim, &tier_params())
 }
 
+/// The rungs a status stands for, lowest first: a vetted claim has also read substantiated and corroborated. Nothing else stands for a rung.
+fn rungs_reached(st: Status) -> &'static [&'static str] {
+    match st {
+        Status::Vetted => &["corroborated", "substantiated", "vetted"],
+        Status::Substantiated => &["corroborated", "substantiated"],
+        Status::Corroborated => &["corroborated"],
+        _ => &[],
+    }
+}
+
 /// [`status`] under a given ladder. The tier audit uses the **configured** ladder (a roll-back latch changes how a claim is shown, not which claims
 /// reached the tier), and everything else uses the ladder in force now, latch included.
 pub fn status_with(claim: &Value, p: &TierParams) -> Status {
@@ -680,8 +690,22 @@ impl Library {
             }
         }
         tags["track"] = json!({"claims": track.claims, "stood": track.stood, "contested": track.contested, "disproved": track.disproved});
+        // Which rungs the claim has read (`specs/100` §8): the first time, kept for good, so a claim that is later contested still counts as
+        // having reached the rung. Judged on the configured ladder (a roll-back latch changes what is shown, not what a claim reached).
+        let mut probe = c.clone();
+        probe["support"] = tags.clone();
+        let mut reached_new = false;
+        for rung in rungs_reached(status_with(&probe, &tier_params_configured())) {
+            if c["reached"][*rung].is_null() {
+                c["reached"][*rung] = json!(delphi_core::time::now_rfc3339());
+                reached_new = true;
+            }
+        }
         let same = ["origins", "trusted_sources", "counted", "contradicted", "track", "zeroed"].iter().all(|k| c["support"][*k] == tags[*k]);
         if same {
+            if reached_new {
+                self.save_claim(&c).ok()?;
+            }
             return Some(c);
         }
         tags["computed"] = json!(delphi_core::time::now_rfc3339());
@@ -721,6 +745,31 @@ impl Library {
             }
         }
         written
+    }
+
+    /// For each rung of the ladder, how many claims have ever read it and how many of those are now contested or disproved (`specs/100` §8,
+    /// `specs/055` §3.8): `(reached, contested, disproved)`. Read-only, derived from the claim records (`reached`, `contested_by`, `lifecycle`);
+    /// a claim counts at every rung it has read (a vetted claim has also read substantiated and corroborated). Counts start when the daemon
+    /// began writing `reached`: a claim that was already at a rung gets its mark at its next refresh, so the first numbers are a lower bound.
+    pub fn tier_outcomes(&self) -> std::collections::BTreeMap<String, (usize, usize, usize)> {
+        let mut out: std::collections::BTreeMap<String, (usize, usize, usize)> = ["corroborated", "substantiated", "vetted"].iter().map(|r| (r.to_string(), (0, 0, 0))).collect();
+        let p = tier_params_configured();
+        for c in self.claims().iter().filter(|c| c["kind"] != "attributed") {
+            let now = status_with(c, &p);
+            for rung in ["corroborated", "substantiated", "vetted"] {
+                if c["reached"][rung].is_null() {
+                    continue;
+                }
+                let e = out.entry(rung.to_string()).or_insert((0, 0, 0));
+                e.0 += 1;
+                match now {
+                    Status::Disproved => e.2 += 1,
+                    Status::Contested => e.1 += 1,
+                    _ => {}
+                }
+            }
+        }
+        out
     }
 
     /// The claims that reached an audited tier, as `(id, source class)` for the audit's stratified sample (`specs/100` §7.1). The tier is the claim's
