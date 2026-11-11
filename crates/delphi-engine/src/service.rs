@@ -607,6 +607,8 @@ impl EngineService {
         // the run ends, so a claim the host later proposes with one of them as its source can be refetched by the daemon.
         let wider = self.engine.settings.wider_fetch.clone();
         let mission = self.mission_at(Some(&c.mission()), c.cwd.to_str()).await.ok();
+        // Spec 101 §3: searches the host says it ran. Only `tool`, `query` and `hits` are read; they are logged as declared and count as nothing.
+        let host_searches = crate::search_log::parse_declared(&p["host_searches"]);
         let rid = research_id.clone();
         self.research_jobs.submit(&research_id, &c.session, depth, move |jc| async move {
             let web = Arc::new(crate::research_host::LiveWeb::new(Arc::new(transport), Arc::new(list), engines, wider.clone()));
@@ -615,7 +617,7 @@ impl EngineService {
             let validator = crate::research_host::LiveValidator { web: web.clone() };
             let library = crate::research_host::LiveLibrary { home, ledger: wsd.join("research/host-claims.jsonl"), label };
             let redactor = delphi_core::redact::Redactor::new();
-            let deps = crate::research_run::Deps { web: web.as_ref(), scout: &scout, validator: &validator, library: &library, redactor: &redactor, sites: &sites, thin_below: engine.settings.thin_below, support: &engine.settings.support };
+            let deps = crate::research_run::Deps { web: web.as_ref(), scout: &scout, validator: &validator, library: &library, redactor: &redactor, sites: &sites, thin_below: engine.settings.thin_below, support: &engine.settings.support, search_log: engine.settings.search_log, host_searches: &host_searches };
             let out = crate::research_run::run_research(&jc, &q, depth, &deps).await;
             if wider.enabled {
                 if let Some(m) = &mission {
@@ -623,6 +625,12 @@ impl EngineService {
                     if !urls.is_empty() {
                         let _ = m.append(EventEnvelope::new(&m.id, crate::research_observed::OBSERVED_EVENT, json!({"research_id": rid, "urls": urls}))).await;
                     }
+                }
+            }
+            // Spec 101 §3: keep the log beside the result so `delphi research log <id>` can print it after the job is gone.
+            if let Ok(crate::research_jobs::Finish::Done(v) | crate::research_jobs::Finish::Partial(v)) = &out {
+                if v.get("search_log").is_some_and(|l| l.is_object()) {
+                    let _ = crate::search_log::persist(&wsd, &rid, &v["search_log"]);
                 }
             }
             out

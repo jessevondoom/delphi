@@ -119,6 +119,9 @@ pub struct Settings {
     /// reaches the URLs a search of the run returned (and a host's claim URL that an earlier search of its session returned), inside
     /// two caps. Off by default; the caps are hypotheses.
     pub wider_fetch: crate::research_observed::WiderFetch,
+    /// `[research] search_log` (`specs/101` §3, §8): write a search log beside each host research result. Default off until slice A's exit
+    /// criterion passes; off is spec 098 as merged.
+    pub search_log: bool,
     /// `[research] young_domain_days`, `burst_hours`, `similar_above`, `unfamiliar_counts` (`specs/098` §7.6, §18): the numbers the corroboration
     /// count uses. The defaults are proposals to calibrate.
     pub support: crate::corroboration::Params,
@@ -197,6 +200,7 @@ impl Default for Settings {
             red_team_kind: false,
             thin_below: 3,
             wider_fetch: Default::default(),
+            search_log: false,
             support: crate::corroboration::Params::default(),
             tiers: Default::default(),
             park_poll: Duration::from_secs(5),

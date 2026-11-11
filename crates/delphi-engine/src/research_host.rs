@@ -115,6 +115,10 @@ impl Web for LiveWeb {
         Ok(found.rows)
     }
 
+    fn search_via(&self, query: &str) -> Result<(Vec<Row>, Option<String>), String> {
+        blocking(|| search(self.transport.as_ref() as &dyn Transport, &self.engines, query).map(|f| (f.rows, Some(f.provider.name().to_string()))).map_err(|e| search_failure_token(&e).to_string()))
+    }
+
     fn is_trusted(&self, url: &str) -> bool {
         self.list.allows_url(url).is_some()
     }

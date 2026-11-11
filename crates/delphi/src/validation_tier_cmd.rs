@@ -24,7 +24,7 @@ fn members(home: &Path) -> BTreeMap<String, usize> {
 }
 
 pub fn report(ws: &Path, home: &Path) -> String {
-    ta::report(&state_dir(ws), &members(home), now())
+    ta::report(&state_dir(ws), &members(home), &Library::in_home(home).tier_outcomes(), now())
 }
 
 /// `delphi validation tier rollback <tier> --reason "<text>"`, `tier restore <tier> --reason "<text>"`, `tier threshold <tier> <percent>`.

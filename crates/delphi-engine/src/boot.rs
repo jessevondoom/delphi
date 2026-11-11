@@ -96,6 +96,10 @@ pub fn settings_from(root: &toml::Value) -> Settings {
             s.wider_fetch.per_run = n as usize;
         }
     }
+    // `[research] search_log` (`specs/101` §3, §8): a boolean, off unless it is exactly `true`; any other value keeps the default.
+    if let Some(b) = root.get("research").and_then(|r| r.get("search_log")).and_then(|v| v.as_bool()) {
+        s.search_log = b;
+    }
     // The corroboration numbers (`specs/098` §18): each ignored when it is not the right kind of value, so a typo keeps the default.
     if let Some(r) = root.get("research") {
         if let Some(n) = r.get("young_domain_days").and_then(|v| v.as_integer()).filter(|v| (0..=3650).contains(v)) {
@@ -534,6 +538,13 @@ mod tests {
             assert_eq!(settings_from(&toml::from_str(&format!("[research]\n{bad}\n")).unwrap()).thin_below, 3, "{bad}");
         }
         assert_eq!(settings_from(&toml::from_str("[seats]\nrequire_families = 0\n").unwrap()).require_families, None, "0 is not a requirement");
+        // `[research] search_log` (specs/101 §3, §8): off by default, on only for the boolean `true`; a typo keeps it off.
+        assert!(!settings_from(&toml::from_str("").unwrap()).search_log, "off unless asked for");
+        assert!(settings_from(&toml::from_str("[research]\nsearch_log = true\n").unwrap()).search_log);
+        assert!(!settings_from(&toml::from_str("[research]\nsearch_log = false\n").unwrap()).search_log);
+        for bad in ["search_log = \"yes\"", "search_log = 1"] {
+            assert!(!settings_from(&toml::from_str(&format!("[research]\n{bad}\n")).unwrap()).search_log, "{bad}");
+        }
     }
     fn workspace_with_config(extra: &str) -> (tempfile::TempDir, WorkspacePaths) {
         let t = tempfile::tempdir().unwrap();
