@@ -864,15 +864,15 @@ Approved by the operator on 2026-11-10 ("build the round 2 fix first please yes"
 | S0 | spec 099 approval and tracker entry | 4-6 | approved 2026-11-10 (merged with R1, #613) |
 | R1 | the reader: Markdown tolerance and the kept first critique | 6-10 | built (merged, #613) |
 | R2 | the object-only objective and one repair turn (the `agy` structured request already exists) | 8-12 | built (merged, #614) |
-| R3 | the cause in the event and on the card; the cut-excerpt notice | 6-10 | not started |
+| R3 | the cause in the event and on the card; the cut-excerpt notice | 6-10 | built (pull request #616) |
 
 ## Spec 100: the confidence ladder (2026-11-10, approved)
 
-A draft for the operator. It adds the tiers above `corroborated` (spec 098): `substantiated` (3+ origins, 1+ trusted source) and `vetted` (5+ origins, 2+ trusted sources and the validator's own checks pass, which is 040's advisory `would_ratify` made visible), a fast lane that changes queue order only, an accept-all-vetted workflow, and KB-prior tags. **040 §15.4's audit is a roll-back trigger, not a promotion gate** (operator decision, 2026-11-10; Council `t_0006` advised the opposite and is declined at the operator's direction). The operator runs the audit by hand once there is data; a tier that fails is latched off and the labels fall back. The tier numbers are defaults to calibrate, not pre-registered. It depends on spec 098 (a draft in #612). Hours are estimates. Nothing below starts before approval.
+Approved by the operator on 2026-11-10 ("approve spec 099 and spec 100"). It adds the tiers above `corroborated` (spec 098): `substantiated` (3+ origins, 1+ trusted source) and `vetted` (5+ origins, 2+ trusted sources and the validator's own checks pass, which is 040's advisory `would_ratify` made visible), a fast lane that changes queue order only, an accept-all-vetted workflow, and KB-prior tags. **040 §15.4's audit is a roll-back trigger, not a promotion gate** (operator decision, 2026-11-10; Council `t_0006` advised the opposite and is declined at the operator's direction). The operator runs the audit by hand once there is data; a tier that fails is latched off and the labels fall back. The tier numbers are defaults to calibrate, not pre-registered. It depends on spec 098 (approved, merged in #612). Hours are estimates.
 
 | Slice | Content | Hours | State |
 | :-- | :-- | --: | :-- |
-| S0 | this spec, its review and amendments (040 §18.2 and §15.4, 052 §3.1, 066 §5) | 8-12 | draft |
+| S0 | this spec, its review and amendments (040 §18.2 and §15.4, 052 §3.1, 066 §5) | 8-12 | approved 2026-11-10 (merged, #615) |
 | L1 | the tier table in `delphi-core`, labels, glyphs, docs, the `[research] tiers` setting | 10-16 | not started |
 | L2 | the fast lane (queue order only) and `would_ratify` shown as `vetted` | 12-18 | not started |
 | L6 | the roll-back: `tier-audit`, `tier-report`, `tier rollback` and `restore`, the tier latch and the event (built before L3) | 12-18 | not started |

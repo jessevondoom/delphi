@@ -356,6 +356,79 @@ pub fn trailer_json(text: Option<&String>) -> serde_json::Value {
     json!({"bytes": r.trailer.bytes, "lines": r.trailer.lines, "blocks": r.trailer.blocks, "conflict": r.conflict})
 }
 
+/// Why a seat's Round 2 stands as it does (spec 099 R3). A closed list, so an event, the record and the ruling card can name
+/// the cause without carrying any of the seat's words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Round2Cause {
+    /// A structured reply whose first critique was kept although a later block in the same reply disagreed with it (R1).
+    ConflictingBlock,
+    /// No readable recommendation, or a line-format reply whose later block disagreed: the reply is unreadable.
+    NoRecommendation,
+    /// The seat answered with nothing.
+    Empty,
+    /// The seat declined to take the question.
+    Declined,
+    /// The seat gave no Round 2 (it failed, timed out or abstained).
+    Abstained,
+}
+
+impl Round2Cause {
+    /// The name in the event, the record and the card.
+    pub fn name(self) -> &'static str {
+        match self {
+            Round2Cause::ConflictingBlock => "conflicting_block",
+            Round2Cause::NoRecommendation => "no_recommendation",
+            Round2Cause::Empty => "empty",
+            Round2Cause::Declined => "declined",
+            Round2Cause::Abstained => "abstained",
+        }
+    }
+}
+
+/// How a seat's Round 2 reads: the cause when it did not read cleanly, and whether the first critique was kept after a
+/// conflicting block was dropped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Round2Standing {
+    pub cause: Option<Round2Cause>,
+    pub kept: bool,
+}
+
+/// The marker `council_flow` stores as the text of a seat that gave no Round 2.
+const NO_ROUND_2: &str = "(no Round 2:";
+
+/// Derive a seat's [`Round2Standing`] from the text stored for it (`None` when nothing was stored). Pure: it reads the reply
+/// the same way the verdict does, and returns names, never text.
+pub fn round2_standing(text: Option<&str>) -> Round2Standing {
+    let Some(t) = text else { return Round2Standing { cause: Some(Round2Cause::Abstained), kept: false } };
+    if t.starts_with(NO_ROUND_2) {
+        return Round2Standing { cause: Some(Round2Cause::Abstained), kept: false };
+    }
+    let read = critique_read(t);
+    match (read.critique.is_some(), read.conflict) {
+        (true, true) => Round2Standing { cause: Some(Round2Cause::ConflictingBlock), kept: true },
+        (true, false) => Round2Standing { cause: None, kept: false },
+        (false, _) => {
+            let cause = if t.trim().is_empty() {
+                Round2Cause::Empty
+            } else if crate::refusal::declines(t).is_some() {
+                Round2Cause::Declined
+            } else {
+                Round2Cause::NoRecommendation
+            };
+            Round2Standing { cause: Some(cause), kept: false }
+        }
+    }
+}
+
+/// What the record and the ruling card say about a seat's Round 2, in words (spec 099 R3). `None` for a clean read.
+pub fn round2_standing_words(st: Round2Standing) -> Option<String> {
+    match (st.cause, st.kept) {
+        (Some(Round2Cause::ConflictingBlock), true) => Some("kept; conflicting block dropped".to_string()),
+        (Some(c), _) => Some(format!("unreadable: {}; the text is in the record under Round 2 critiques", c.name())),
+        (None, _) => None,
+    }
+}
+
 fn finding_set(f: &[(String, String)]) -> Vec<(String, String)> {
     let mut v = f.to_vec();
     v.sort();
@@ -756,10 +829,14 @@ pub fn render_artifact(a: &ArtifactInput) -> String {
             Some(Stance::Abstained(why)) => format!("abstained ({})", why.chars().take(60).collect::<String>()),
             None => "—".into(),
         };
-        let r2 = match a.round2.get(&p.role) {
-            Some(Some(_)) => "critique",
-            Some(None) => "unreadable",
-            None => "—",
+        // The cause is a name from a closed list (spec 099 R3), never the seat's words.
+        let standing = round2_standing(a.round2_text.get(&p.role).map(String::as_str));
+        let r2 = match (a.round2.get(&p.role), standing.cause) {
+            (Some(Some(_)), Some(Round2Cause::ConflictingBlock)) => "critique (kept; conflicting block dropped)".to_string(),
+            (Some(Some(_)), _) => "critique".to_string(),
+            (Some(None), Some(c)) => format!("unreadable ({})", c.name()),
+            (Some(None), None) => "unreadable".to_string(),
+            (None, _) => "—".to_string(),
         };
         let (parsed, declined) = seat_diagnostics(&p.role, a.stances, a.round2, a.round2_text);
         s.push_str(&format!("| `{}` | {} | {} | {} | {} | {} |\n", p.role, p.family, r1, r2, parsed, declined));
@@ -793,6 +870,7 @@ pub fn render_artifact(a: &ArtifactInput) -> String {
     }
     s.push_str("## Round 2 structured output\n\n");
     for (role, c) in a.round2 {
+        let standing = round2_standing(a.round2_text.get(role).map(String::as_str));
         match c {
             Some(c) => {
                 s.push_str(&format!("- {} | recommendation | {}\n", role, c.recommendation.label()));
@@ -803,7 +881,10 @@ pub fn render_artifact(a: &ArtifactInput) -> String {
                     s.push_str(&format!("- {} | {} | {}\n", role, sev, title));
                 }
             }
-            None => s.push_str(&format!("- {} | unreadable | no readable critique\n", role)),
+            None => match round2_standing_words(standing) {
+                Some(words) => s.push_str(&format!("- {} | unreadable | no readable critique ({})\n", role, words)),
+                None => s.push_str(&format!("- {} | unreadable | no readable critique\n", role)),
+            },
         }
     }
     s.push_str("\n## Verdict\n\n");
@@ -1210,7 +1291,8 @@ impl Engine {
         let stances = panel.stances().cloned().unwrap_or_default();
         let (round2, round2_text) = panel.parsed_round2();
         for (role, c) in &round2 {
-            let mut e = EventEnvelope::new(&m.id, "council.critique", json!({"round": 2, "role": role, "readable": c.is_some(), "declined": round2_text.get(role).is_some_and(|t| crate::refusal::declines(t).is_some()), "recommendation": c.as_ref().map(|c| c.recommendation.label()), "concur": c.as_ref().and_then(|c| c.concur), "findings": c.as_ref().map(|c| c.findings.iter().map(|(s, t)| json!({"severity": s, "title": t})).collect::<Vec<_>>()).unwrap_or_default(), "text": round2_text.get(role).map(|t| self.secrets.redact(t)), "brief_hash": panel.brief_hash(role, 2), "format_retries": panel.format_retries(role), "trailer": trailer_json(round2_text.get(role))}));
+            let st = round2_standing(round2_text.get(role).map(String::as_str));
+            let mut e = EventEnvelope::new(&m.id, "council.critique", json!({"round": 2, "role": role, "cause": st.cause.map(Round2Cause::name), "kept": st.kept, "readable": c.is_some(), "declined": round2_text.get(role).is_some_and(|t| crate::refusal::declines(t).is_some()), "recommendation": c.as_ref().map(|c| c.recommendation.label()), "concur": c.as_ref().and_then(|c| c.concur), "findings": c.as_ref().map(|c| c.findings.iter().map(|(s, t)| json!({"severity": s, "title": t})).collect::<Vec<_>>()).unwrap_or_default(), "text": round2_text.get(role).map(|t| self.secrets.redact(t)), "brief_hash": panel.brief_hash(role, 2), "format_retries": panel.format_retries(role), "trailer": trailer_json(round2_text.get(role))}));
             e.task_id = Some(task_id.clone());
             m.append(e).await?;
         }
@@ -1407,7 +1489,8 @@ impl Engine {
             }
         }
         for (role, c) in &round2 {
-            m.append(emit("council.critique", json!({"round": 2, "role": role, "repair": repair.get(role).copied(), "readable": c.is_some(), "declined": round2_text.get(role).is_some_and(|t| crate::refusal::declines(t).is_some()), "recommendation": c.as_ref().map(|c| c.recommendation.label()), "concur": c.as_ref().and_then(|c| c.concur), "findings": c.as_ref().map(|c| c.findings.iter().map(|(s, t)| json!({"severity": s, "title": t})).collect::<Vec<_>>()).unwrap_or_default(), "text": round2_text.get(role), "trailer": trailer_json(round2_text.get(role))}))).await?;
+            let st = round2_standing(round2_text.get(role).map(String::as_str));
+            m.append(emit("council.critique", json!({"round": 2, "role": role, "cause": st.cause.map(Round2Cause::name), "kept": st.kept, "repair": repair.get(role).copied(), "readable": c.is_some(), "declined": round2_text.get(role).is_some_and(|t| crate::refusal::declines(t).is_some()), "recommendation": c.as_ref().map(|c| c.recommendation.label()), "concur": c.as_ref().and_then(|c| c.concur), "findings": c.as_ref().map(|c| c.findings.iter().map(|(s, t)| json!({"severity": s, "title": t})).collect::<Vec<_>>()).unwrap_or_default(), "text": round2_text.get(role), "trailer": trailer_json(round2_text.get(role))}))).await?;
         }
         let decision = decide(&round2);
 
@@ -1902,7 +1985,7 @@ pub(crate) mod tests {
         assert!(doc.contains("| Parsed | Declined |"), "{doc}");
         assert!(doc.contains("| `architect` | claude | answered | critique | R1 yes, R2 yes | no |"), "{doc}");
         // An unreadable reply is still listed, with parsed no; the refusal-shaped Round 1 sets declined.
-        assert!(doc.contains("| `red-team` | claude | answered | unreadable | R1 no, R2 no | yes |"), "{doc}");
+        assert!(doc.contains("| `red-team` | claude | answered | unreadable (no_recommendation) | R1 no, R2 no | yes |"), "{doc}");
         assert!(doc.contains("| `strategist` | claude | abstained (timed out) | — | — | no |"), "{doc}");
         // The diagnostics are two short words per seat: none of the seat's text is in them.
         let (p, dcl) = seat_diagnostics("red-team", &stances, &round2, &texts);
@@ -2095,6 +2178,64 @@ pub(crate) mod tests {
         f.engine.run_council(&f.m, f.m.next_task_id(), "Should the retry queue be a table or a file?", CouncilOpts::default()).await.unwrap();
         assert_eq!(repairs.load(Ordering::SeqCst), 0);
         assert!(events_of(&f, "council.critique").iter().all(|e| e.payload["repair"].is_null()));
+    }
+
+    #[test]
+    fn round_two_standing_names_the_cause_from_a_closed_list() {
+        let none = Round2Standing { cause: None, kept: false };
+        assert_eq!(round2_standing(Some(RED_OK)), none, "a clean read has no cause");
+        assert_eq!(round2_standing(Some(MD_OBJ)), none, "a structured critique with nothing after it is clean");
+        // A structured reply whose first critique was kept although a later block disagreed.
+        let kept = round2_standing(Some(&format!("{MD_OBJ}\nCONCUR: yes\nROUND 2 COMPLETE")));
+        assert_eq!(kept, Round2Standing { cause: Some(Round2Cause::ConflictingBlock), kept: true });
+        // Unreadable: no verdict, or a line-format reply whose later block disagrees.
+        assert_eq!(round2_standing(Some("Thoughts, but no verdict line.")).cause, Some(Round2Cause::NoRecommendation));
+        let line_conflict = format!("{REAL_BLOCK}{}", REAL_BLOCK.replace("PROCEED-WITH-CHANGES", "DO-NOT-PROCEED"));
+        assert_eq!(round2_standing(Some(&line_conflict)), Round2Standing { cause: Some(Round2Cause::NoRecommendation), kept: false });
+        assert_eq!(round2_standing(Some("  \n ")).cause, Some(Round2Cause::Empty));
+        assert_eq!(round2_standing(Some("I cannot do that.")).cause, Some(Round2Cause::Declined));
+        // A seat that gave no Round 2 at all.
+        assert_eq!(round2_standing(Some("(no Round 2: no answer within 600s)")).cause, Some(Round2Cause::Abstained));
+        assert_eq!(round2_standing(None).cause, Some(Round2Cause::Abstained));
+        // The names are the closed list, and the words carry the name and never the seat's text.
+        let names: Vec<&str> = [Round2Cause::ConflictingBlock, Round2Cause::NoRecommendation, Round2Cause::Empty, Round2Cause::Declined, Round2Cause::Abstained].iter().map(|c| c.name()).collect();
+        assert_eq!(names, ["conflicting_block", "no_recommendation", "empty", "declined", "abstained"]);
+        assert_eq!(round2_standing_words(kept).as_deref(), Some("kept; conflicting block dropped"));
+        assert_eq!(round2_standing_words(round2_standing(Some("nothing"))).as_deref(), Some("unreadable: no_recommendation; the text is in the record under Round 2 critiques"));
+        assert_eq!(round2_standing_words(none), None);
+    }
+
+    #[tokio::test]
+    async fn the_critique_event_and_the_record_carry_the_cause() {
+        // A kept critique: the red-team seat's structured reply is followed by a block that disagrees with it.
+        let kept_reply: &'static str = Box::leak(format!("{MD_OBJ}\nCONCUR: yes\nROUND 2 COMPLETE").into_boxed_str());
+        let (f, repairs, _) = repair_fixture(kept_reply, "unused");
+        f.engine.run_council(&f.m, f.m.next_task_id(), "Should the retry queue be a table or a file?", CouncilOpts::default()).await.unwrap();
+        assert_eq!(repairs.load(Ordering::SeqCst), 0, "a kept critique is readable, so it costs no repair");
+        let crit = events_of(&f, "council.critique");
+        let red = crit.iter().find(|e| e.payload["role"] == "red-team").unwrap();
+        assert_eq!((red.payload["cause"].as_str(), red.payload["kept"].as_bool(), red.payload["readable"].as_bool()), (Some("conflicting_block"), Some(true), Some(true)));
+        let clean = crit.iter().find(|e| e.payload["role"] == "architect").unwrap();
+        assert!(clean.payload["cause"].is_null() && clean.payload["kept"] == false, "{}", clean.payload);
+        assert!(!red.payload["trailer"].to_string().contains("CONCUR"), "the trailer is counts only");
+        let doc = std::fs::read_to_string(std::fs::read_dir(f.m.dir.join("councils")).unwrap().flatten().next().unwrap().path()).unwrap();
+        assert!(doc.contains("| critique (kept; conflicting block dropped) |"), "{doc}");
+        assert!(doc.contains("| `architect` | claude | answered | critique |"), "a clean read keeps the old wording: {doc}");
+        assert!(lint_artifact(&doc).is_empty(), "{:?}", lint_artifact(&doc));
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_round_two_is_named_in_the_event_and_the_record() {
+        let (f, repairs, _) = repair_fixture("No verdict here.", "Still no verdict.");
+        f.engine.run_council(&f.m, f.m.next_task_id(), "Should the retry queue be a table or a file?", CouncilOpts::default()).await.unwrap();
+        assert_eq!(repairs.load(Ordering::SeqCst), 1);
+        let red = events_of(&f, "council.critique").into_iter().find(|e| e.payload["role"] == "red-team").unwrap();
+        assert_eq!((red.payload["cause"].as_str(), red.payload["kept"].as_bool(), red.payload["readable"].as_bool()), (Some("no_recommendation"), Some(false), Some(false)));
+        let doc = std::fs::read_to_string(std::fs::read_dir(f.m.dir.join("councils")).unwrap().flatten().next().unwrap().path()).unwrap();
+        assert!(doc.contains("| unreadable (no_recommendation) |"), "{doc}");
+        assert!(doc.contains("- red-team | unreadable | no readable critique (unreadable: no_recommendation; the text is in the record under Round 2 critiques)"), "{doc}");
+        assert!(doc.contains("Round 2 gave no readable critique"), "the Minority Report line is unchanged: {doc}");
+        assert!(lint_artifact(&doc).is_empty(), "{:?}", lint_artifact(&doc));
     }
 
     #[test]

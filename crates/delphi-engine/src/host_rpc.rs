@@ -615,7 +615,7 @@ pub fn council_view(events: &[delphi_core::event::EventEnvelope], mission_dir: &
             let marker = format!("\n{h}");
             doc.rsplit_once(marker.as_str()).map(|(_, t)| t.split("\n## ").next().unwrap_or("").trim().to_string())
         });
-        let critiques: Vec<Value> = of("council.critique").iter().map(|e| json!({"seat": e.payload["role"], "recommendation": e.payload["recommendation"], "concur": e.payload["concur"], "findings": e.payload["findings"]})).collect();
+        let critiques: Vec<Value> = of("council.critique").iter().map(|e| json!({"seat": e.payload["role"], "recommendation": e.payload["recommendation"], "concur": e.payload["concur"], "findings": e.payload["findings"], "cause": e.payload["cause"], "kept": e.payload["kept"]})).collect();
         // The families that actually sat, from the receipts' served family (`specs/091` SR-3). A Panel adds the host's own, host-reported.
         // A log without receipts keeps the plan's label.
         let (served, _) = crate::seat::served_for_task(events, task_id);
@@ -762,7 +762,16 @@ pub fn ruling_card(v: &Value, tokens: u64) -> String {
         .as_array()
         .into_iter()
         .flatten()
-        .map(|c| format!("`{}`: {}{}", text(&c["seat"]), c["recommendation"].as_str().unwrap_or("no readable critique"), match c["concur"].as_bool() { Some(false) => ", did not concur", _ => "" }))
+        .map(|c| {
+            // Spec 099 R3: say why a Round 2 is unreadable, or that a conflicting block was dropped from a kept critique. The
+            // cause is a name from a closed list; the text is in the record, never on the card.
+            let why = match (c["cause"].as_str(), c["kept"].as_bool()) {
+                (Some("conflicting_block"), Some(true)) => "; kept; conflicting block dropped".to_string(),
+                (Some(cause), _) if c["recommendation"].is_null() => format!(" ({cause}; the text is in the record under Round 2 critiques)"),
+                _ => String::new(),
+            };
+            format!("`{}`: {}{}{}", text(&c["seat"]), c["recommendation"].as_str().unwrap_or("no readable critique"), match c["concur"].as_bool() { Some(false) => ", did not concur", _ => "" }, why)
+        })
         .collect();
     if !split.is_empty() {
         s.push_str("**Where they stood in Round 2**\n");
@@ -1073,6 +1082,34 @@ mod tests {
         assert_eq!((v["state"].as_str(), v["ruling"]["decision"].as_str(), v["ruling"]["seat_positions"][0]["position"].as_str()), (Some("decided"), Some("table"), Some("table")));
         assert!(v["ruling"]["dissent"].as_str().unwrap().contains("keep a file"), "{v}");
     }
+    #[test]
+    fn the_card_says_why_a_round_two_is_unreadable_and_when_a_conflicting_block_was_dropped() {
+        // Spec 099 R3. The cause is a name from a closed list and the text stays in the record, never on the card.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("councils")).unwrap();
+        std::fs::write(dir.path().join("councils/001-x.md"), "## Decision\n\nx\n\n## Accepted Risks & Minority Report (Red-Team / Dissent)\n\n- [P1] red-team: a\n\n## Next\n").unwrap();
+        let ev = |kind: &str, payload: Value| {
+            let mut e = EventEnvelope::new("m", kind, payload);
+            e.task_id = Some("t-1".into());
+            e
+        };
+        let crit = |role: &str, rec: Value, concur: Value, cause: Value, kept: bool| ev("council.critique", json!({"round": 2, "role": role, "recommendation": rec, "concur": concur, "findings": [], "cause": cause, "kept": kept}));
+        let log = vec![
+            EventEnvelope::new("m", COUNCIL_EVENT, json!({"task_id": "t-1"})),
+            crit("architect", json!("PROCEED"), json!(true), Value::Null, false),
+            crit("red-team", json!("PROCEED-WITH-CHANGES"), json!(false), json!("conflicting_block"), true),
+            crit("strategist", Value::Null, Value::Null, json!("no_recommendation"), false),
+            ev("council.verdict", json!({"decision": "d", "path": "missions/m/councils/001-x.md", "options": [], "steps": []})),
+            ev("task.completed", json!({"status": "done", "reason": ""})),
+        ];
+        let v = council_view(&log, dir.path(), "t-1").unwrap();
+        let card = v["display"].as_str().unwrap();
+        assert!(card.contains("- `architect`: PROCEED\n"), "a clean read says nothing extra: {card}");
+        assert!(card.contains("- `red-team`: PROCEED-WITH-CHANGES, did not concur; kept; conflicting block dropped\n"), "{card}");
+        assert!(card.contains("- `strategist`: no readable critique (no_recommendation; the text is in the record under Round 2 critiques)\n"), "{card}");
+        assert_eq!((v["ruling"]["critiques"][1]["cause"].as_str(), v["ruling"]["critiques"][1]["kept"].as_bool()), (Some("conflicting_block"), Some(true)));
+    }
+
     #[test]
     fn a_heading_typed_inside_a_seats_text_cannot_forge_the_dissent_the_card_shows() {
         let dir = tempfile::tempdir().unwrap();
