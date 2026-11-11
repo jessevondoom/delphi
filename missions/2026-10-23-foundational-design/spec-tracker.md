@@ -841,7 +841,7 @@ A draft for the operator: host first, the inside exceptions (Council, panel and 
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
-| S1a | keep everything found as `noted`, per-rung coverage report, `thin_below`, `delphi doctor` size checks | not started |
+| S1a | keep everything found as `noted`, per-rung coverage report, `thin_below`, `delphi doctor` size checks | built (draft pull request, stacked on #615): the coverage report and `coverage: thin` on every host research answer, `[research] thin_below`, the `17 research` doctor facts, and search results the fetcher will not reach kept as `noted` leads (`host-leads.jsonl`) without spending a step. Not built: keeping the *pages* of unlisted hosts (needs S1d), the ranking test (leads are not indexed until S1c), and any change to the console expand job's own routing (`research.rs`) |
 | S1b | `corroborated` status: origin keys by 040 §6.2, daemon refetch, retraction, public-only pass | not started |
 | S1c | the way back in: `propose_kb_entry` schema, daemon-decided `private`, source decision cards, egress choke point, seat rule | not started |
 | S1d | wider fetch: 7a observed search-result URLs only (7b off, not built) | not started; OD-7a approved |

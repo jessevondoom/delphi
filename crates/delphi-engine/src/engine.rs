@@ -107,6 +107,9 @@ pub struct Settings {
     /// `[seats] max_foreign_seats` and `max_foreign_tokens` (SR-4): per Council.
     pub max_foreign_seats: u32,
     pub max_foreign_tokens: u64,
+    /// `[research] thin_below` (`specs/098` §7.5 item 4): fewer kept, cited claims than this from the knowledge base and the trusted
+    /// sources together make a research answer `coverage: thin`. Default 3.
+    pub thin_below: usize,
     /// While no model is usable, how often a parked task looks again (`specs/002` §4.1).
     pub park_poll: Duration,
     /// The longest a task waits for a model before escalating. `None` waits as long as it takes; `Some(0)` never waits.
@@ -176,6 +179,7 @@ impl Default for Settings {
             require_families: None,
             max_foreign_seats: 1,
             max_foreign_tokens: 100_000,
+            thin_below: 3,
             park_poll: Duration::from_secs(5),
             park_max: None,
             degrade_wait: Duration::from_secs(300),

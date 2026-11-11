@@ -219,6 +219,12 @@ sandbox = "off"
 # [search.searxng]
 # url = "https://searx.example.org"
 
+# What a research answer reports (specs/098 section 7.5). Every answer carries a coverage report per rung (knowledge base, trusted
+# sources, close sources, the wider web) with what was found and kept. Fewer kept, cited claims than thin_below from the knowledge
+# base and the trusted sources together make the answer say "coverage: thin" and name the host rungs that can take over. Default 3.
+# [research]
+# thin_below = 3
+
 # Library acquisition (specs/055 section 8): once a day, the library scout proposes public-domain and research sources that match your projects
 # and these interests, as ONE batch in the digest. Nothing is fetched until you accept (or a standing rule covers it). Ratified, because it
 # names where the daemon fetches from (the archives in context/sources/archives.toml and your operator/archives.toml). Off by default.
