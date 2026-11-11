@@ -8,6 +8,18 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request cancels that pull request's older run. A push to main is never cancelled.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# The repo's own lean build settings (AGENTS.md): a fresh checkout gains nothing from incremental compilation, and the tests
+# do not read debug info (panic locations and symbol names stay). This only affects the dev profile; the release build of
+# the console executable below is unchanged.
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+
 jobs:
   test:
     name: test (${{ matrix.os }})
@@ -20,12 +32,26 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Rust toolchain
         run: rustup show active-toolchain && rustc --version
+      - name: Cache the Cargo registry
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+      - name: Restore the build directory
+        id: target
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: target
+          key: cargo-target-${{ runner.os }}-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-target-${{ runner.os }}-test-
       - name: Test
         run: cargo test --workspace --locked
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - name: Repo lint
-        run: cargo run -q --locked -p delphi -- lint --repo .
       - name: Training cases are well formed
         run: cargo run -q --locked -p delphi -- train validate
       - name: Golden org bundle validates
@@ -34,6 +60,55 @@ jobs:
         run: python3 -I dev/bench/bench.py self-test
       - name: Model availability script self-test
         run: python3 -I dev/train/avail.py self-test
+      # Saved only by a push to main, so a pull request branch never writes the (size-capped) cache.
+      - name: Save the build directory
+        if: github.event_name == 'push' && steps.target.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: target
+          key: cargo-target-${{ runner.os }}-test-${{ hashFiles('**/Cargo.lock') }}
+
+  # Clippy and the repo lint, in parallel with the tests (they used to run after them in the `test` job). Both operating
+  # systems stay: code behind `cfg(target_os = ...)` is only checked where it compiles.
+  lint:
+    name: lint (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Rust toolchain
+        run: rustup show active-toolchain && rustc --version
+      - name: Cache the Cargo registry
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+      - name: Restore the build directory
+        id: target
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: target
+          key: cargo-target-${{ runner.os }}-lint-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-target-${{ runner.os }}-lint-
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Repo lint
+        run: cargo run -q --locked -p delphi -- lint --repo .
+      - name: Save the build directory
+        if: github.event_name == 'push' && steps.target.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: target
+          key: cargo-target-${{ runner.os }}-lint-${{ hashFiles('**/Cargo.lock') }}
 
   # The Rust dependency policy (spec 093 P, deny.toml): known vulnerabilities, yanked crates, licences, sources. The tool is
   # built at a fixed version from crates.io, not fetched through a third-party action, and it reads the advisory database
@@ -75,6 +150,24 @@ jobs:
         with:
           node-version: 26.4.0
       - run: node --version
+      - name: Cache the Cargo registry
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+      - name: Restore the build directory
+        id: target
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: target
+          key: cargo-target-${{ runner.os }}-ui-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-target-${{ runner.os }}-ui-
       - name: Install (pinned, no install scripts)
         run: |
           # A download from the npm registry can fail for a moment; 3 attempts, 20 seconds apart.
@@ -111,6 +204,12 @@ jobs:
           DELPHI_UI_COMPILED: ${{ github.workspace }}/ui/dist/delphi-ui
           DELPHI_REQUIRE_UI: "1"
         run: cargo test --locked -p delphi --test e2e -- full_screen esc_stops decision_inbox full_screen_observer research_panels terminal_is_given_back survives_a_daemon_restart
+      - name: Save the build directory
+        if: github.event_name == 'push' && steps.target.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: target
+          key: cargo-target-${{ runner.os }}-ui-${{ hashFiles('**/Cargo.lock') }}
 
   # The Linux sandbox (bubblewrap) is only exercised where it exists: install it, allow unprivileged user
   # namespaces (Ubuntu 24.04 restricts them by default), and require the sandbox tests to really run.
