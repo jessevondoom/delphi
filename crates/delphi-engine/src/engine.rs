@@ -110,6 +110,8 @@ pub struct Settings {
     /// `[seats] max_foreign_seats` and `max_foreign_tokens` (SR-4): per Council.
     pub max_foreign_seats: u32,
     pub max_foreign_tokens: u64,
+    /// `[seats] red_team_kind` (`specs/098` section 6.2): `council_open` accepts `kind: red_team`. Off by default.
+    pub red_team_kind: bool,
     /// `[research] thin_below` (`specs/098` §7.5 item 4): fewer kept, cited claims than this from the knowledge base and the trusted
     /// sources together make a research answer `coverage: thin`. Default 3.
     pub thin_below: usize,
@@ -188,6 +190,7 @@ impl Default for Settings {
             require_families: None,
             max_foreign_seats: 1,
             max_foreign_tokens: 100_000,
+            red_team_kind: false,
             thin_below: 3,
             support: crate::corroboration::Params::default(),
             tiers: Default::default(),
