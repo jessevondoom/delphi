@@ -828,6 +828,10 @@ impl Server {
                     // One identity everywhere (`specs/087` §5.3, OD-5): the same name, badge and role the console shows, ending
                     // `, via delphi)`. That notice is the only reminder that a host runs the role; there is no separate label.
                     let who = p.display(&canonical, self.client.as_deref());
+                    // Spec 098 S5: with `[hosts] source_ladder` on, the Scout, Investigator and Red team packs end with the source ladder.
+                    // Off (the default), the pack is exactly what it was.
+                    let ladder_on = self.config_path.as_ref().and_then(|c| std::fs::read_to_string(c).ok()).is_some_and(|t| crate::host_guidance::source_ladder_in(&t));
+                    let pack = crate::host_guidance::pack_with_ladder(&canonical, pack, ladder_on);
                     Ok(format!("You are {who}. Show that line before what you write as this role, so the operator can tell who is speaking.\n\n{pack}"))
                 })
             }),
@@ -1876,6 +1880,30 @@ mod tests {
         // Smuggled in as extra arguments, they are refused or ignored, never read.
         let out = text_of(&call_tool(&mut s, "route", json!({"task": "hello there", "adopt": true, "threshold": 0.0, "locus": "host", "confidence": 1.0})));
         assert!(!out.contains("\"adopt\":true"), "{out}");
+    }
+
+    #[test]
+    fn get_agent_ends_the_scout_investigator_and_red_team_packs_with_the_ladder_only_when_the_operator_turns_it_on() {
+        let (_t, dir, root) = project_ws();
+        let mut s = Server::new(&dir).with_cwd(&root);
+        init(&mut s);
+        let pack = |s: &mut Server, role: &str| text_of(&call_tool(s, "get_agent", json!({"role": role})));
+        // Off by default: no role's pack mentions the ladder.
+        let before: Vec<String> = ["scout", "investigator", "red-team", "architect"].iter().map(|r| pack(&mut s, r)).collect();
+        assert!(before.iter().all(|p| !p.contains("Source ladder")), "off by default");
+        // On: the three roles end with it; another role is unchanged; the rest of each pack is exactly what it was.
+        std::fs::write(dir.join("config.toml"), "[hosts]\nsource_ladder = true\n").unwrap();
+        for (i, role) in ["scout", "investigator", "red-team", "architect"].iter().enumerate() {
+            let after = pack(&mut s, role);
+            if *role == "architect" {
+                assert_eq!(after, before[i], "a role that does not work the ladder is unchanged");
+            } else {
+                assert!(after.starts_with(&before[i]) && after.contains("## Source ladder") && after.contains("Knowledge base, always first"), "{role}");
+            }
+        }
+        // A setting of the wrong type switches nothing on.
+        std::fs::write(dir.join("config.toml"), "[hosts]\nsource_ladder = \"yes\"\n").unwrap();
+        assert_eq!(pack(&mut s, "scout"), before[0]);
     }
 
     #[test]
