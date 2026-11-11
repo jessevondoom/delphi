@@ -8,11 +8,11 @@
 //!   flow is a plain sum over the lines and no model is in it.
 //! * **Daemon-written.** The host cannot add, edit or delete a line. A search a host ran with its own tools can be *declared*
 //!   ([`SearchLog::declare`]); it is logged `declared: true`, `kept` is always 0, and it is excluded from every count.
-//! * **Private by inheritance.** The log carries the strictest `private` flag of the claims it served. [`may_leave`] is the library's
+//! * **Private by inheritance.** The log carries the strictest `private` flag of the claims it served. [`log_allowed_out`] is the library's
 //!   own check (`specs/055` §10.1), so a private log is refused on every outbound channel, like a private source.
 //! * Nothing here is read as a reason to trust, promote or permit anything (`specs/101` §12 item 6).
 
-use crate::library::{self, Channel};
+use crate::library::Channel;
 use crate::research_plan::clean_query;
 use delphi_core::redact::Redactor;
 use serde_json::{json, Map, Value};
@@ -359,9 +359,10 @@ impl SearchLog {
     }
 }
 
-/// May this log go out through `channel`? The library's own check, on the log's `private` flag: a private log is refused everywhere.
-pub fn may_leave(log: &Value, channel: Channel) -> Result<(), String> {
-    library::may_leave(log, channel).map_err(|_| format!("a private search log never leaves the install ({:?})", channel))
+/// May this log go out through `channel`? The shared egress check (`specs/098` §12 item 16), on the log's `private` flag: a private
+/// log is refused everywhere.
+pub fn log_allowed_out(log: &Value, channel: Channel) -> Result<(), String> {
+    crate::egress::check(log, channel).map_err(|_| format!("a private search log never leaves the install ({:?})", channel))
 }
 
 fn id_ok(id: &str) -> bool {
@@ -557,11 +558,11 @@ mod tests {
     fn a_private_log_is_refused_on_every_outbound_channel_and_a_public_one_is_not_changed() {
         let mut log = run();
         for ch in Channel::ALL {
-            assert!(may_leave(&log.to_json(), ch).is_ok(), "{ch:?}");
+            assert!(log_allowed_out(&log.to_json(), ch).is_ok(), "{ch:?}");
         }
         log.private = true;
         for ch in Channel::ALL {
-            let e = may_leave(&log.to_json(), ch).unwrap_err();
+            let e = log_allowed_out(&log.to_json(), ch).unwrap_err();
             assert!(e.contains("private search log"), "{ch:?}: {e}");
         }
     }

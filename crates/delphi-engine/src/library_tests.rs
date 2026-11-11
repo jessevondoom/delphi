@@ -536,7 +536,7 @@ mod claims {
         let (d, l) = lib();
         let (ids, id) = three_fetched(d.path(), &l);
         let c = l.claim(&id).unwrap();
-        assert_eq!((status(&c), c["support"]["origins"].clone(), c["support"]["trusted_sources"].clone()), (Status::Corroborated, json!(3), json!(3)), "{c}");
+        assert_eq!((status(&c), c["support"]["origins"].clone(), c["support"]["trusted_sources"].clone()), (Status::Substantiated, json!(3), json!(3)), "three trusted origins read substantiated: {c}");
         assert!(c["support"]["computed"].is_string(), "the tags are stored with the day they were computed");
         // one origin is one origin, however many times the claim anchors into it
         let one = l.add_claim("Another.", &ClaimOpts::default(), &[spec(&ids[0], "the moon drives the tides"), spec(&ids[0], "the moon")]).unwrap();
@@ -544,7 +544,7 @@ mod claims {
         // a declared status is still ignored
         let mut edited = c.clone();
         edited["status"] = json!("validated");
-        assert_eq!(status(&edited), Status::Corroborated);
+        assert_eq!(status(&edited), Status::Substantiated);
         let files: Vec<AnchorSpec> = (0..3).map(|i| spec(&source(d.path(), &l, &format!("own{i}.md"), &page(&format!("topic {i}"))), "the moon drives")).collect();
         let own = l.add_claim("The moon drives something.", &ClaimOpts::default(), &files).unwrap();
         assert_eq!((status(&own), own["support"]["origins"].clone()), (Status::Noted, json!(0)), "operator files are not daemon-fetched pages");
@@ -565,10 +565,145 @@ mod claims {
         m["retired"] = Value::Null;
         std::fs::write(l.source_dir(&ids[0]).join("meta.json"), serde_json::to_vec(&m).unwrap()).unwrap();
         l.source_revived(&ids[0]);
-        assert_eq!(status(&l.claim(&id).unwrap()), Status::Corroborated, "the source came back");
+        assert_eq!(status(&l.claim(&id).unwrap()), Status::Substantiated, "the source came back");
         l.purge(&ids[1]).unwrap();
         let c = l.claim(&id).unwrap();
         assert_eq!((status(&c), c["support"]["origins"].clone()), (Status::Noted, json!(2)), "a purged source is pointer-only and no longer an origin: {c}");
+    }
+
+    /// Place a claim on a rung without the citations: the tier is read from the stored tags, so a test can give a claim any counts.
+    fn with_counts(l: &Library, id: &str, origins: u64, trusted: u64) -> Value {
+        let mut c = l.claim(id).unwrap();
+        c["support"]["origins"] = json!(origins);
+        c["support"]["trusted_sources"] = json!(trusted);
+        l.save_claim(&c).unwrap();
+        l.claim(id).unwrap()
+    }
+
+    #[test]
+    fn a_passed_dry_run_makes_five_origins_and_two_trusted_sources_read_vetted_and_a_change_of_sources_takes_it_back() {
+        let (d, l) = lib();
+        let (_ids, id) = three_fetched(d.path(), &l);
+        let text = l.claim(&id).unwrap()["text"].as_str().unwrap().to_string();
+        let c = with_counts(&l, &id, 5, 2);
+        assert_eq!(status(&c), Status::Substantiated, "the counts alone stop at substantiated: {c}");
+        // the dry run of another statement changes nothing
+        assert!(l.record_would_ratify(&crate::fact_store::fact_id("Something else entirely.")).is_empty());
+        assert_eq!(status(&l.claim(&id).unwrap()), Status::Substantiated);
+        // the validator's loop records the one it checked
+        assert_eq!(l.record_would_ratify(&crate::fact_store::fact_id(&text)), vec![id.clone()]);
+        let c = l.claim(&id).unwrap();
+        assert_eq!(status(&c), Status::Vetted, "{c}");
+        assert!(c["support"]["would_ratify_at"].is_string() && c["support"]["would_ratify_for"]["origins"] == 5, "{c}");
+        assert_eq!(Status::Vetted.label(), "vetted");
+        // the claim's sources are counted again: three origins now, not the five the check was made against, so the check no longer describes it
+        let c = l.refresh_support(&id).unwrap();
+        assert!(c["support"].get("would_ratify").is_none(), "a change of sources drops the dry run: {c}");
+        assert_eq!(status(&c), Status::Substantiated);
+    }
+
+    #[test]
+    fn a_dry_run_alone_lifts_nothing_and_survives_a_refresh_while_the_sources_are_the_same() {
+        let (d, l) = lib();
+        let (_ids, id) = three_fetched(d.path(), &l);
+        let text = l.claim(&id).unwrap()["text"].as_str().unwrap().to_string();
+        assert_eq!(status(&l.claim(&id).unwrap()), Status::Substantiated);
+        assert_eq!(l.record_would_ratify(&crate::fact_store::fact_id(&text)).len(), 1);
+        // three origins are not five: vetted needs the counts as well as the dry run
+        assert_eq!(status(&l.claim(&id).unwrap()), Status::Substantiated);
+        let c = l.refresh_support(&id).unwrap();
+        assert_eq!(c["support"]["would_ratify"], true, "unchanged sources keep the record: {c}");
+    }
+
+    #[test]
+    fn a_dry_run_is_not_written_for_a_contested_or_disproved_claim() {
+        let (d, l) = lib();
+        let (_ids, id) = three_fetched(d.path(), &l);
+        let text = l.claim(&id).unwrap()["text"].as_str().unwrap().to_string();
+        let fact = crate::fact_store::fact_id(&text);
+        let mut c = with_counts(&l, &id, 5, 2);
+        c["contested_by"] = json!([{"reason": "contradicted", "source": "x"}]);
+        l.save_claim(&c).unwrap();
+        assert!(l.record_would_ratify(&fact).is_empty(), "disagreement wins over a count and over a dry run");
+        assert_eq!(status(&l.claim(&id).unwrap()), Status::Contested);
+        let mut c = l.claim(&id).unwrap();
+        c["contested_by"] = json!([]);
+        c["lifecycle"] = json!("disproved");
+        l.save_claim(&c).unwrap();
+        assert!(l.record_would_ratify(&fact).is_empty());
+        assert_eq!(status(&l.claim(&id).unwrap()), Status::Disproved);
+    }
+
+    #[test]
+    fn the_fast_lane_offers_a_higher_rung_first_and_the_same_claims_keep_the_same_status_with_it_off() {
+        let (d, l) = lib();
+        let s = source(d.path(), &l, "lane.md", BODY);
+        let make = |text: &str, quote: &str, origins: u64, trusted: u64| {
+            let c = l.add_claim(text, &ClaimOpts::default(), &[spec(&s, quote)]).unwrap();
+            with_counts(&l, c["id"].as_str().unwrap(), origins, trusted)
+        };
+        let noted = make("The tide comes in twice a day.", "twice a day", 1, 0);
+        let corroborated = make("The moon drives most of the tide.", "the moon", 3, 0);
+        let substantiated = make("Spring tides are the highest tides.", "Spring tides are the highest", 3, 1);
+        let seen = |lane: bool| l.validation_candidates(lane).into_iter().map(|c| (c.id, c.status)).collect::<Vec<_>>();
+        let (id_n, id_c, id_s) = (noted["id"].as_str().unwrap().to_string(), corroborated["id"].as_str().unwrap().to_string(), substantiated["id"].as_str().unwrap().to_string());
+        let on = seen(true);
+        assert_eq!(on.iter().map(|x| x.0.clone()).collect::<Vec<_>>(), [id_s.clone(), id_c.clone(), id_n.clone()], "substantiated, then corroborated, then noted: {on:?}");
+        assert_eq!(on.iter().map(|x| x.1).collect::<Vec<_>>(), [Status::Substantiated, Status::Corroborated, Status::Noted]);
+        // with the lane off the same claims come out by id, each with the status it has now
+        let mut off = seen(false);
+        assert!(off.windows(2).all(|w| w[0].0 <= w[1].0), "off: by id");
+        let mut on_sorted = on.clone();
+        on_sorted.sort_by(|a, b| a.0.cmp(&b.0));
+        off.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(on_sorted, off, "the lane reorders and changes no status");
+        // and listing it wrote nothing: the stored claims read as before
+        for (id, st) in &on {
+            assert_eq!(status(&l.claim(id).unwrap()), *st);
+        }
+    }
+
+    #[test]
+    fn the_fast_lane_leaves_out_what_is_not_waiting_for_a_check() {
+        let (d, l) = lib();
+        let (_ids, id) = three_fetched(d.path(), &l);
+        assert_eq!(l.validation_candidates(true).len(), 1);
+        // a claim with a recorded dry run is no longer a candidate
+        let text = l.claim(&id).unwrap()["text"].as_str().unwrap().to_string();
+        l.record_would_ratify(&crate::fact_store::fact_id(&text));
+        assert!(l.validation_candidates(true).is_empty(), "already checked");
+        // neither is a contested one
+        let mut c = l.claim(&id).unwrap();
+        c["support"] = json!({"origins": 3, "trusted_sources": 3});
+        c["contested_by"] = json!([{"reason": "contradicted", "source": "x"}]);
+        l.save_claim(&c).unwrap();
+        assert!(l.validation_candidates(true).is_empty());
+    }
+
+    #[test]
+    fn a_held_tier_changes_the_label_and_not_the_claim_and_the_audit_still_finds_the_claims_that_reached_it() {
+        use crate::library::claims::status_with;
+        use delphi_core::knowledge_status::{apply_latch, tier_params_configured};
+        let (d, l) = lib();
+        let (_ids, id) = three_fetched(d.path(), &l);
+        let text = l.claim(&id).unwrap()["text"].as_str().unwrap().to_string();
+        with_counts(&l, &id, 5, 2);
+        l.record_would_ratify(&crate::fact_store::fact_id(&text));
+        let c = l.claim(&id).unwrap();
+        let p = tier_params_configured();
+        assert_eq!(status_with(&c, &p), Status::Vetted);
+        // a held vetted reads substantiated; a held substantiated reads corroborated; nothing stored moves (`specs/100` §7.3, §10 item 6)
+        assert_eq!(status_with(&c, &apply_latch(p.clone(), (false, true))), Status::Substantiated);
+        assert_eq!(status_with(&c, &apply_latch(p.clone(), (true, false))), Status::Corroborated);
+        assert_eq!(l.claim(&id).unwrap(), c, "a roll-back deletes and rewrites nothing");
+        // the audit samples by the configured ladder, so a rolled-back tier can still be audited before it is restored
+        let vetted = l.tier_members("vetted");
+        assert_eq!(vetted, vec![(id.clone(), "reputable_secondary".to_string())]);
+        assert!(l.tier_members("substantiated").is_empty() && l.tier_members("batch").is_empty() && l.tier_members("corroborated").is_empty());
+        // the reveal: where the claim rests, after the answer
+        let sources = l.claim_sources(&id);
+        assert_eq!(sources.len(), 3);
+        assert!(sources.iter().all(|s| s.1.starts_with("https://") && s.2 == "reputable_secondary"), "{sources:?}");
     }
 
     #[test]
@@ -581,7 +716,7 @@ mod claims {
         fetched(&l, &ids[0], "a.example", "reputable_secondary");
         let c = l.refresh_support(&id).unwrap();
         assert_eq!(c["support"]["origins"], 2, "{c}");
-        assert_ne!(status(&c), Status::Corroborated);
+        assert!(!matches!(status(&c), Status::Corroborated | Status::Substantiated | Status::Vetted), "two origins are not corroboration: {c}");
         // and a contradiction lowers a claim that has three origins
         let mut c = l.claim(&id).unwrap();
         c["support"]["origins"] = json!(3);

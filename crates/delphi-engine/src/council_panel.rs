@@ -126,6 +126,8 @@ pub struct Panel {
     /// (`specs/091` SR-3), kept so Round 2 and the ruling can be judged by the receipts.
     pub host_family: Option<String>,
     pub require_families: Option<u32>,
+    /// `red_team` for a red-team review (`specs/098` section 6.2); `None` for an ordinary Panel.
+    pub kind: Option<String>,
     /// Handles to the background tasks that run the seats Delphi owns, so `cancel_job` can stop them (`specs/098` §19).
     aborts: Vec<tokio::task::AbortHandle>,
 }
@@ -133,7 +135,7 @@ pub struct Panel {
 impl Panel {
     pub fn new(proposition: &str) -> Panel {
         let seats: Vec<String> = PANEL_SEATS.iter().map(|s| s.to_string()).collect();
-        Panel { proposition: proposition.to_string(), barrier: Barrier::new(&seats), seats, released: None, answered: Vec::new(), round2: BTreeMap::new(), verdict: None, models: BTreeMap::new(), opened: std::time::Instant::now(), foreign: Vec::new(), rejections: BTreeMap::new(), blind: "unknown".into(), operator_confirmed: None, options_source: None, host_family: None, require_families: None, aborts: Vec::new() }
+        Panel { proposition: proposition.to_string(), barrier: Barrier::new(&seats), seats, released: None, answered: Vec::new(), round2: BTreeMap::new(), verdict: None, models: BTreeMap::new(), opened: std::time::Instant::now(), foreign: Vec::new(), rejections: BTreeMap::new(), blind: "unknown".into(), operator_confirmed: None, options_source: None, host_family: None, require_families: None, kind: None, aborts: Vec::new() }
     }
 
     /// Remember the task that runs one of Delphi's seats, so it can be stopped.

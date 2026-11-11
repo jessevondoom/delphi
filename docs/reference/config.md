@@ -55,6 +55,7 @@ Defaults are those of the template; "—" means no default.
 | `[budget] per_watch_max_wakes_per_day` | `10` | |
 | `[council] stall_secs` | `120` | a status call flags a Council `stalled`, and names the seat idle longest, when every seat still working has been idle this many seconds. `0` turns the flag off (spec 098 section 19) |
 | `[seats] require_families` | unset | refuse a Panel that cannot show this many distinct known model families (the family of the model that was served, from the seat receipt; `unknown` never counts), before anything is spent. Unset never refuses: a result with fewer than two known families is labelled `homogeneous`. `council_open` also takes it per call ([`specs/091`](../../specs/091-seats-families-and-outside-launch.md) SR-3) |
+| `[seats] red_team_kind` | `false` | accept `kind: red_team` on `council_open`: a red-team review that returns a findings list (severity, seat, family from the receipt), advisory, not a ruling (spec 098 section 6.2) |
 | `[seats] max_foreign_seats`, `max_foreign_tokens` | `1`, `100000` | per Council: how many seats Delphi may run on another family for a Panel, and the tokens they may use. Over either, the foreign seat is refused before any spend, and the message names the cap (SR-4) |
 | `[hitl] approval_timeout_sec` | `600` | an unanswered card is denied after this long |
 
@@ -102,6 +103,10 @@ Defaults are those of the template; "—" means no default.
 | `[research] thin_below` | `3` | every research answer carries a coverage report per rung (knowledge base, trusted sources, close sources, the wider web); fewer kept, cited claims than this from the knowledge base and the trusted sources together make the answer say `coverage: thin` and name the host rungs that can take over. 1 to 50 ([`specs/098`](../../specs/098-where-agents-run-host-first-locus-and-the-inside-exceptions.md) §7.5) |
 | `[research] search_log` | `false` | write a search log beside each host research result: one line per search (of whom, why, the redacted query that was sent, when, results found and kept) and a flow that adds up. A search withheld because its claim rests on a private source says so and carries no query text; a search your host says it ran (`host_searches`) is logged as declared and counts as nothing. The log is private when any claim it served is. `delphi research log <id>` prints it ([`specs/101`](../../specs/101-library-practice-for-research-a-search-log-retraction-lookup-archived-copies-and-citation-chaining.md) §3) |
 
+| `[research.tiers]` `corroborated_origins`, `substantiated_trusted`, `vetted_origins`, `vetted_trusted` | `3`, `1`, `5`, `2` | the confidence ladder (`specs/100` §3.2), derived by code from tags: `corroborated` is that many independent origins; `substantiated` adds trusted sources; `vetted` adds more of both and the validator's `would_ratify`. Each reads `not validated` (`vetted` reads `vetted`) and says it is weaker than `validated`; none grants a permission, a trust level or a promotion. Counts of 1 to 50; a bad value keeps the default; `vetted` never asks for less than the rung below. First guesses for you to calibrate |
+| `[research.tiers]` `corroborated_enabled`, `substantiated_enabled`, `vetted_enabled` | `true` | show a rung or not; a rung that is off is skipped and a claim falls back one rung (the audit's roll-back switch, `specs/100` §7) |
+| `[research.tiers]` `fast_lane_enabled` | `true` | the validator is offered a higher rung's claims first (`specs/100` §5); queue order only, a claim's status is the same with it on or off |
+
 Which sites the job may read is not here: it is `context/sources/trusted.toml` (ratified in a release) plus your own `$DELPHI_HOME/operator/trusted-sources.toml`. An entry in your own list can carry two optional fields that decide only the `trusted_sources` count shown beside a corroborated claim (`specs/098` §7.6), never what may be fetched: `topics = ["postgres", "indexes"]` limits the entry to claims that contain one of those words (no `topics` means every claim), and `added = "2026-11-10"` makes it count only for claims captured after that day (no `added` means it predates every claim).
 
 ## Fact validator ◆
@@ -116,6 +121,7 @@ Which sites the job may read is not here: it is `context/sources/trusted.toml` (
 
 | Key | Default | Meaning |
 | :-- | :-- | :-- |
+| `[library] private_to_models` | `deny` | `allow` lets a model of the host's own family read private entries; a private entry is never placed in a foreign-family seat's prompt either way (`specs/098` §7.2). `delphi doctor` warns on `allow` while private entries exist |
 | `[library.acquire] enabled` ◆ | `false` | turns on the daily acquisition job (`specs/055` §8). It fetches from the archives in `context/sources/archives.toml` plus your `operator/archives.toml`, and only from those hosts. Proposals arrive as one batch in the digest; nothing is fetched until you accept or a standing rule (`delphi sources acquire rule add`) covers it |
 | `[library.acquire] byte_budget_mib` ◆ | `2048` | what acquisition may hold; reaching it stops acquiring and evicts nothing |
 | `[library.acquire] max_item_mib` ◆ | `16` | the largest text one acquired source may have; also the ceiling of a standing rule |

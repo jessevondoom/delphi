@@ -134,6 +134,7 @@ per_watch_max_wakes_per_day = 10
 # [seats]
 # require_families = 2               # unset (default): never refuse; a result with fewer than two known families is labelled homogeneous
 # max_foreign_seats = 1              # per Council; 0 turns the foreign seat off
+# red_team_kind = false              # spec 098 6.2: accept `kind: red_team` on council_open (a red-team review: findings list, advisory); off by default
 # max_foreign_tokens = 100000        # per Council: the foreign seat's token ceiling must fit under this, and Round 2 is skipped once Round 1 used it
 
 # What the engine adds around a role's model calls (specs/045). Not an access table: it adds notes and one verification turn,
@@ -258,6 +259,22 @@ sandbox = "off"
 # so and carries no query text; a search your host says it ran is logged as declared and counts as nothing. The log is private when
 # any claim it served is, and never leaves this machine then. `delphi research log <id>` prints it. Off by default.
 # search_log = false
+# The confidence ladder (specs/100 section 3.2). A claim's rung is derived by code from tags the daemon wrote: how many independent
+# origins it has, how many of those are trusted sources, whether anything contradicts it, and whether the validator's dry run recorded
+# "would_ratify". corroborated: corroborated_origins or more origins. substantiated: corroborated and substantiated_trusted or more trusted
+# sources. vetted: vetted_origins or more origins, vetted_trusted or more trusted sources, and a would_ratify. All three read "not validated"
+# (vetted reads "vetted") and each says it is weaker than "validated"; none grants a permission, a trust level or a promotion. The numbers are
+# first guesses for you to calibrate. A contradiction or a lost source lowers a claim at once. A rung switched off is skipped: a claim reads
+# the highest rung that is on (the audit's roll-back, specs/100 section 7, uses these switches).
+# [research.tiers]
+# corroborated_origins = 3
+# substantiated_trusted = 1
+# vetted_origins = 5
+# vetted_trusted = 2
+# corroborated_enabled = true
+# substantiated_enabled = true
+# vetted_enabled = true
+# fast_lane_enabled = true            # the validator is offered a higher rung's claims first (queue order only; the claim's status never changes)
 
 # Library acquisition (specs/055 section 8): once a day, the library scout proposes public-domain and research sources that match your projects
 # and these interests, as ONE batch in the digest. Nothing is fetched until you accept (or a standing rule covers it). Ratified, because it

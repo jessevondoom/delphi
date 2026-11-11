@@ -104,6 +104,7 @@
       "properties": {
         "require_families": { "type": "integer", "minimum": 1, "maximum": 8, "description": "Refuse a Panel that cannot show this many distinct known model families, before anything is spent. Unset (the default) never refuses; the result is labelled homogeneous." },
         "max_foreign_seats": { "type": "integer", "minimum": 0, "description": "Foreign seats one Council may run (default 1). 0 turns them off." },
+        "red_team_kind": { "type": "boolean", "description": "Accept kind: red_team on council_open: a red-team review whose result is a findings list with each seat's family from its receipt (spec 098 section 6.2). Default false." },
         "max_foreign_tokens": { "type": "integer", "minimum": 0, "description": "Tokens the foreign seats of one Council may use (default 100000)." }
       }
     },
@@ -158,7 +159,22 @@
         "similar_above": { "type": "number", "exclusiveMinimum": 0, "maximum": 1, "description": "Pages more similar than this are one origin. Never looser than the validator's own 0.5 (specs/040 section 6.2). Default 0.8." },
         "unfamiliar_counts": { "type": "boolean", "description": "Whether a domain no list names counts as an origin. A domain a list calls weak, and every excluded one, count zero either way. Default true." },
         "thin_below": { "type": "integer", "minimum": 1, "maximum": 50, "description": "Fewer kept, cited claims than this from the knowledge base and the trusted sources together make a research answer say coverage: thin, and name the host rungs (close sources, the wider web) that can take over. Default 3." },
-        "search_log": { "type": "boolean", "description": "Write a search log beside each host research result (specs/101 section 3): every search with the query that was sent, when, and how many results came back and were kept, and a flow that adds up. A search withheld for a private claim carries no query text. Private when any claim it served is. Default false." }
+        "search_log": { "type": "boolean", "description": "Write a search log beside each host research result (specs/101 section 3): every search with the query that was sent, when, and how many results came back and were kept, and a flow that adds up. A search withheld for a private claim carries no query text. Private when any claim it served is. Default false." },
+        "tiers": {
+          "type": "object",
+          "description": "The confidence ladder (specs/100 section 3.2): when a claim reads corroborated, substantiated or vetted. Derived by code from tags; each rung reads not validated (vetted reads vetted) and is weaker than validated; none grants anything. Numbers are defaults to calibrate.",
+          "additionalProperties": false,
+          "properties": {
+            "corroborated_origins": { "type": "integer", "minimum": 1, "maximum": 50, "description": "Independent origins for corroborated. Default 3." },
+            "substantiated_trusted": { "type": "integer", "minimum": 1, "maximum": 50, "description": "Trusted sources, among those origins, for substantiated. Default 1." },
+            "vetted_origins": { "type": "integer", "minimum": 1, "maximum": 50, "description": "Independent origins for vetted (never fewer than corroborated_origins). Default 5." },
+            "vetted_trusted": { "type": "integer", "minimum": 1, "maximum": 50, "description": "Trusted sources for vetted (never fewer than substantiated_trusted); vetted also needs the validator's would_ratify. Default 2." },
+            "corroborated_enabled": { "type": "boolean", "description": "Whether the corroborated rung is shown. Off: the claim reads noted. Default true." },
+            "substantiated_enabled": { "type": "boolean", "description": "Whether the substantiated rung is shown. Off: it falls back one rung. Default true." },
+            "vetted_enabled": { "type": "boolean", "description": "Whether the vetted rung is shown. Off: it falls back one rung. Default true." },
+            "fast_lane_enabled": { "type": "boolean", "description": "Whether the validator is offered a higher rung's claims first (queue order only; a claim's status never changes). Default true." }
+          }
+        }
       }
     },
     "library": {
@@ -205,6 +221,7 @@
       "description": "The central library (specs/055).",
       "additionalProperties": false,
       "properties": {
+        "private_to_models": { "enum": ["deny", "allow"], "default": "deny", "description": "Whether a private entry may be placed in the prompt of a model of the host's own family (specs/098 section 7.2). A private entry is never placed in a foreign-family seat's prompt, whatever this says. `delphi doctor` warns when it is `allow` and private entries exist." },
         "pages": {
           "type": "object",
           "description": "Generated search pages (specs/057 sections 5 and 6). A page is always labelled generated and not authoritative.",
