@@ -5356,6 +5356,14 @@ mod tests {
         svc.agent_research("m1", "queues", "orchestrator").await;
         let logged: Vec<_> = events_of(&f, "research.started").into_iter().chain(events_of(&f, "research.refused")).collect();
         assert_eq!((logged.len(), logged[0].payload["by"].as_str(), logged[0].payload["topic"].as_str()), (1, Some("orchestrator"), Some("queues")), "{logged:?}");
+        // A job that started writes its own `research.finished` when it ends, at a time the scheduler picks. Wait for it (a refusal
+        // writes nothing more) before the test adds its own, so every outcome is in the log before the first span and "told once" is
+        // about what was told, not about which task ran first under load.
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while events_of(&f, "research.refused").is_empty() && !events_of(&f, "research.finished").iter().any(|e| e.payload["topic"] == "queues") {
+            assert!(std::time::Instant::now() < deadline, "the started research job never wrote its outcome");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
         f.m.append(EventEnvelope::new(&f.m.id, "research.finished", json!({"topic": "retries", "by": "orchestrator", "new": 2, "updated": 1, "held": 1, "project": 0, "not_kept": 0, "outcome": "done"}))).await.unwrap();
         f.engine.run_task(&f.m, "orchestrator", "continue").await.unwrap();
         let told = f.model.requests()[0].body.to_string();
