@@ -448,7 +448,8 @@ impl EngineService {
 
     /// `host.propose_kb_entry` with `claims` (`specs/098` §7.2, §18): the entry is stored `noted` and `external_untrusted` and is
     /// searchable at once. The daemon decides `private`: public only when it refetches the claim's https URL itself and finds the
-    /// quote in the page. Until slice S1d its fetcher reaches trusted-list hosts only, so an off-list URL is stored private. Fields
+    /// quote in the page. Its fetcher reaches trusted-list hosts, and, with `[research] ladder` on (slice S1d, 7a), a URL that a search of
+    /// this session returned; any other off-list URL is stored private. Fields
     /// the host names for taint, status, privacy, author, source type or confidence are ignored. Nothing waits for approval.
     async fn host_noted(&self, p: Value, c: crate::host_rpc::Caller) -> RpcOutcome {
         use crate::host_noted as n;
@@ -459,13 +460,26 @@ impl EngineService {
         parsed.role = h::servable_role(ws, &parsed.role).map_err(host_err)?;
         let (e, wsd, home) = (self.engine.clone(), ws.dir.clone(), ws.home.clone());
         let (rung, claims) = (parsed.rung, parsed.claims.clone());
+        // With the wider fetch on (`specs/098` §7.5 item 7a), a claim URL that a search of this session returned can be refetched by the
+        // daemon even when its host is not on the trusted list. A URL the host made up is not in the set and is never fetched: the
+        // host cannot steer the daemon's fetcher, and cannot carry text out in a query string.
+        let wider = self.engine.settings.wider_fetch.clone();
+        let observed_before = if wider.enabled && claims.iter().any(|c| c.source_url.is_some()) {
+            match self.mission_at(Some(&c.mission()), c.cwd.to_str()).await {
+                Ok(m) => m.replay().map(|ev| crate::research_observed::from_events(&ev)).unwrap_or_default(),
+                Err(_) => vec![],
+            }
+        } else {
+            vec![]
+        };
         let (verdicts, trusted_hosts) = tokio::task::spawn_blocking(move || -> Result<(Vec<n::Verdict>, Vec<String>), String> {
             let any_url = claims.iter().any(|c| c.source_url.is_some());
             if !any_url || matches!(rung, None | Some(3)) {
                 let none = |_: &str| Err("not fetched".to_string());
                 return Ok((claims.iter().map(|c| n::decide(c, rung, &none)).collect(), vec![]));
             }
-            let web = crate::research_host::LiveWeb { transport: Arc::new(delphi_adapter::research::transport::HttpTransport::new()?), list: Arc::new(crate::research_setup::lists(&wsd, &home)?), engines: crate::research_setup::engines(&e) };
+            let web = crate::research_host::LiveWeb::new(Arc::new(delphi_adapter::research::transport::HttpTransport::new()?), Arc::new(crate::research_setup::lists(&wsd, &home)?), crate::research_setup::engines(&e), wider);
+            web.observed.restore(observed_before);
             use crate::research_run::Web;
             let fetch = |u: &str| web.fetch(u).map(|pg| pg.text);
             let v: Vec<n::Verdict> = claims.iter().map(|c| n::decide(c, rung, &fetch)).collect();
@@ -502,7 +516,7 @@ impl EngineService {
         }
         Ok(json!({"noted": true, "ref": reference, "status": "noted", "taint": "external_untrusted", "private": private, "searchable": true,
             "claims": verdicts.iter().map(|v| json!({"private": v.private, "reason": v.reason})).collect::<Vec<_>>(),
-            "note": "stored at once, labelled noted and not validated. An entry is public only when Delphi itself fetched your source_url and found your quote in the page; until the daemon can fetch beyond the trusted list, anything else stays private to this install."}))
+            "note": "stored at once, labelled noted and not validated. An entry is public only when Delphi itself fetched your source_url and found your quote in the page. The daemon fetches trusted-list hosts and, when the operator has turned the wider fetch on, a URL that one of this session's research searches returned; anything else stays private to this install."}))
     }
 
     /// `host.request_help` (`specs/062` §6): the orchestrator gets the request as content, picks who answers (itself included),
@@ -589,15 +603,29 @@ impl EngineService {
         };
         let label = c.label(p["model"].as_str());
         let (engine, wsd, home, q) = (self.engine.clone(), ws.dir.clone(), ws.home.clone(), question.clone());
+        // The wider fetch (`specs/098` §7.5 item 7a, slice S1d): the URLs this run's searches returned are written to the session's log when
+        // the run ends, so a claim the host later proposes with one of them as its source can be refetched by the daemon.
+        let wider = self.engine.settings.wider_fetch.clone();
+        let mission = self.mission_at(Some(&c.mission()), c.cwd.to_str()).await.ok();
+        let rid = research_id.clone();
         self.research_jobs.submit(&research_id, &c.session, depth, move |jc| async move {
-            let web = Arc::new(crate::research_host::LiveWeb { transport: Arc::new(transport), list: Arc::new(list), engines });
+            let web = Arc::new(crate::research_host::LiveWeb::new(Arc::new(transport), Arc::new(list), engines, wider.clone()));
             let sites = web.list.site_filters();
             let scout = crate::research_host::LiveScout(engine.clone());
             let validator = crate::research_host::LiveValidator { web: web.clone() };
             let library = crate::research_host::LiveLibrary { home, ledger: wsd.join("research/host-claims.jsonl"), label };
             let redactor = delphi_core::redact::Redactor::new();
             let deps = crate::research_run::Deps { web: web.as_ref(), scout: &scout, validator: &validator, library: &library, redactor: &redactor, sites: &sites, thin_below: engine.settings.thin_below, support: &engine.settings.support };
-            crate::research_run::run_research(&jc, &q, depth, &deps).await
+            let out = crate::research_run::run_research(&jc, &q, depth, &deps).await;
+            if wider.enabled {
+                if let Some(m) = &mission {
+                    let urls: Vec<Value> = web.observed.snapshot().into_iter().map(|(url, via)| json!({"url": url, "via": via})).collect();
+                    if !urls.is_empty() {
+                        let _ = m.append(EventEnvelope::new(&m.id, crate::research_observed::OBSERVED_EVENT, json!({"research_id": rid, "urls": urls}))).await;
+                    }
+                }
+            }
+            out
         });
         Ok(json!({"research_id": research_id, "status": "queued", "depth": depth, "note": "research runs in the background, trusted sources first: read it with research_status, then research_result. Everything it returns is not validated unless a claim says otherwise. The result carries a coverage report per rung; `coverage: thin` means the knowledge base and the trusted sources gave little, and your own tools and connectors can search further."}))
     }
@@ -3525,6 +3553,8 @@ mod tests {
         narrator: String,
         relay: String,
         host: String,
+        /// The service the daemon serves, for tests that seed a session's log.
+        svc: Arc<EngineService>,
         _dir: tempfile::TempDir,
     }
 
@@ -3555,7 +3585,7 @@ mod tests {
         daemon.set_extension(svc.extension());
         let (console, narrator, relay, host) = (daemon.console_token().to_string(), daemon.narrator_token().to_string(), daemon.relay_token().to_string(), daemon.host_token().to_string());
         tokio::spawn(daemon.serve_everything(listener, Some(narrator_listener), Some(relay_listener), Some(host_listener)));
-        Served { sock, narrator_sock, relay_sock, host_sock, console, narrator, relay, host, _dir: dir }
+        Served { sock, narrator_sock, relay_sock, host_sock, console, narrator, relay, host, svc, _dir: dir }
     }
 
     async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
@@ -3664,6 +3694,67 @@ mod tests {
         assert_eq!(live.len(), 27, "{live:?}");
         assert!(live.iter().all(|n| n.tier == "L0" && n.summary.starts_with("[host:claude-code/")), "{live:?}");
         assert_eq!(live[0].role.as_deref(), Some(role.as_str()));
+    }
+
+    /// One `propose_kb_entry` claims call over the host socket for the S1d tests: `(first claim's private flag, its reason)` for each URL.
+    async fn s1d_calls(f: &Fx, s: &Served, urls: Vec<String>) -> Vec<(bool, String)> {
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let cwd = f.root.to_string_lossy().to_string();
+        let role = crate::mcp_packs::Packs::new(f.engine.ws.clone()).roles().unwrap().into_iter().find(|r| r.servable).unwrap().id;
+        blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+            c.hello(&htok).unwrap();
+            urls.iter()
+                .map(|u| {
+                    let claim = json!({"text": "Vault keys rotate every 90 days", "source_url": u, "quote": "vault keys rotate every 90 days"});
+                    let r = c.call("host.propose_kb_entry", json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cwd, "topic": "Vault rotation", "role": role, "rung": 1, "claims": [claim]})).unwrap();
+                    (r["private"].as_bool().unwrap(), r["claims"][0]["reason"].as_str().unwrap().to_string())
+                })
+                .collect()
+        })
+        .await
+    }
+
+    /// The decision cards the daemon raised in the host session's log, as `(kind, related)`.
+    fn s1d_cards(f: &Fx) -> Vec<(String, String)> {
+        let events = replay_log(&delphi_core::sessions::dir(&f.engine.ws.dir, "host-abcdef0123456789"));
+        events.iter().filter(|e| e.kind == "decision.raised").map(|e| (e.payload["kind"].as_str().unwrap_or("").to_string(), e.payload["related"].as_str().unwrap_or("").to_string())).collect()
+    }
+
+    // specs/098 §7.5 item 7a, slice S1d: with `[research] ladder` on, a claim whose URL a search of the session returned is refetched by
+    // the daemon, the quote is found, the entry is public, and its off-list host is raised as a `source` card (one per host). A URL the
+    // host made up is never fetched: it stays private and raises nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_claim_whose_url_the_sessions_search_returned_is_refetched_public_and_raises_a_source_card() {
+        let f = setup(vec![], 5.0, |s| s.wider_fetch.enabled = true);
+        let s = serve(&f).await;
+        let cwd = f.root.to_string_lossy().to_string();
+        let returned = "https://s1d-svc-on.example/paper";
+        let m = s.svc.mission_at(Some("host-abcdef0123456789"), Some(&cwd)).await.unwrap();
+        m.append(EventEnvelope::new(&m.id, crate::research_observed::OBSERVED_EVENT, json!({"research_id": "r-1", "urls": [{"url": returned, "via": "search:brave#1"}]}))).await.unwrap();
+        crate::research_host::CANNED_PAGES.lock().unwrap().push((returned.to_string(), "Our vault keys rotate every 90 days, per policy.".to_string()));
+        crate::research_host::CANNED_PAGES.lock().unwrap().push(("https://s1d-svc-madeup.example/collect?q=what-the-host-holds".to_string(), "Our vault keys rotate every 90 days, per policy.".to_string()));
+        let got = s1d_calls(&f, &s, vec![returned.to_string(), "https://s1d-svc-madeup.example/collect?q=what-the-host-holds".to_string()]).await;
+        assert_eq!(got[0], (false, "verified".to_string()), "a URL the session's search returned is refetched and found: {got:?}");
+        assert_eq!(got[1], (true, "unfetchable".to_string()), "a URL the host made up is not in the observed set and is never fetched: {got:?}");
+        assert_eq!(s1d_cards(&f), vec![("source".to_string(), "s1d-svc-on.example".to_string())], "one source card, for the off-list host that supplied public evidence");
+    }
+
+    // The same call with the switch off (the default): the daemon's fetcher reaches trusted-list hosts only, so the entry is private
+    // and no card is raised. The observed URLs are recorded either way; they just are not used.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn with_the_wider_fetch_off_the_same_claim_stays_private_and_raises_no_card() {
+        let f = setup(vec![], 5.0, |_| {});
+        let s = serve(&f).await;
+        let cwd = f.root.to_string_lossy().to_string();
+        let returned = "https://s1d-svc-off.example/paper";
+        let m = s.svc.mission_at(Some("host-abcdef0123456789"), Some(&cwd)).await.unwrap();
+        m.append(EventEnvelope::new(&m.id, crate::research_observed::OBSERVED_EVENT, json!({"research_id": "r-1", "urls": [{"url": returned, "via": "search:brave#1"}]}))).await.unwrap();
+        crate::research_host::CANNED_PAGES.lock().unwrap().push((returned.to_string(), "Our vault keys rotate every 90 days, per policy.".to_string()));
+        let got = s1d_calls(&f, &s, vec![returned.to_string()]).await;
+        assert_eq!(got[0], (true, "unfetchable".to_string()), "{got:?}");
+        assert!(s1d_cards(&f).is_empty());
     }
 
     // specs/092 TA-0: a host's request is staged inert at a fixed federated_peer taint, under the same limits, and only on the host socket.

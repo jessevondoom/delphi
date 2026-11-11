@@ -93,6 +93,8 @@ struct Trail {
     queries: Vec<String>,
     fetched: Vec<String>,
     refused: Vec<String>,
+    /// For each page fetched: where its URL came from (`trusted`, or the search that returned it; `specs/098` §7.5 item 7a).
+    fetched_via: Vec<(String, String)>,
 }
 
 /// When a job last did something, and its last few calls by kind (`search`, `fetch`, `refused`): what a status call reports so a
@@ -162,6 +164,20 @@ impl JobCtx {
     pub fn refused(&self, url: &str) {
         push_capped(&mut self.trail.lock().unwrap().refused, url);
         self.note("refused");
+    }
+
+    /// What the trail holds of fetched pages' provenance, for tests.
+    #[cfg(test)]
+    pub(crate) fn fetched_via_list(&self) -> Vec<(String, String)> {
+        self.trail.lock().unwrap().fetched_via.clone()
+    }
+
+    /// Where a page the fetcher read came from. A label, never page text; the list is capped like the others.
+    pub fn fetched_via(&self, url: &str, via: &str) {
+        let mut t = self.trail.lock().unwrap();
+        if t.fetched_via.len() < LIST_CAP {
+            t.fetched_via.push((url.chars().take(300).collect(), via.chars().take(80).collect()));
+        }
     }
 }
 
@@ -280,6 +296,7 @@ impl Jobs {
             "research_id": id, "status": j.state.as_str(), "depth": j.depth, "queued_ahead": ahead,
             "steps": j.ctx.steps(), "max_steps": j.depth.max_steps(),
             "queries": t.queries, "fetched": t.fetched, "refused": t.refused,
+            "fetched_via": t.fetched_via.iter().map(|(u, v)| json!({"url": u, "via": v})).collect::<Vec<_>>(),
             "error": j.error,
         }))
     }
@@ -417,6 +434,28 @@ mod tests {
             assert_eq!(r["status"], "done");
         }
         assert_eq!(peak.load(Ordering::SeqCst), 2, "never more than two at once");
+    }
+
+    /// Slice S1d: `research_status` lists, for each page read, the URL and where it came from (a label, capped; never page text).
+    #[tokio::test]
+    async fn the_status_shows_where_each_fetched_url_came_from() {
+        let jobs = Jobs::default();
+        let (tx, rx) = oneshot::channel::<()>();
+        jobs.submit("rp", "s", Depth::Quick, move |ctx| async move {
+            ctx.fetched_via("https://who.int/a", "trusted");
+            ctx.fetched_via("https://blog.example/z", "search:brave#2");
+            ctx.fetched_via(&format!("https://long.example/{}", "x".repeat(400)), &"y".repeat(200));
+            let _ = rx.await;
+            done(json!({}))
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let s = jobs.status("rp", "s").unwrap();
+        let via = s["fetched_via"].as_array().unwrap();
+        assert_eq!(via[0], json!({"url": "https://who.int/a", "via": "trusted"}));
+        assert_eq!(via[1], json!({"url": "https://blog.example/z", "via": "search:brave#2"}));
+        assert!(via[2]["url"].as_str().unwrap().chars().count() <= 300 && via[2]["via"].as_str().unwrap().chars().count() <= 80, "{s}");
+        let _ = tx.send(());
+        jobs.wait("rp", "s", Duration::from_secs(5)).await.unwrap();
     }
 
     #[tokio::test]

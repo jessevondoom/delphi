@@ -83,6 +83,19 @@ pub fn settings_from(root: &toml::Value) -> Settings {
     if let Some(n) = root.get("research").and_then(|r| r.get("thin_below")).and_then(|v| v.as_integer()).filter(|v| *v >= 1) {
         s.thin_below = n.min(50) as usize;
     }
+    // The wider fetch (`specs/098` §7.5 item 7a, slice S1d): off unless `ladder = true`; the caps are counts of 1..=100, and a value of the
+    // wrong kind keeps the default.
+    if let Some(r) = root.get("research") {
+        if let Some(b) = r.get("ladder").and_then(|v| v.as_bool()) {
+            s.wider_fetch.enabled = b;
+        }
+        if let Some(n) = r.get("fetch_per_host").and_then(|v| v.as_integer()).filter(|v| (1..=100).contains(v)) {
+            s.wider_fetch.per_host = n as usize;
+        }
+        if let Some(n) = r.get("fetch_per_run").and_then(|v| v.as_integer()).filter(|v| (1..=100).contains(v)) {
+            s.wider_fetch.per_run = n as usize;
+        }
+    }
     // The corroboration numbers (`specs/098` §18): each ignored when it is not the right kind of value, so a typo keeps the default.
     if let Some(r) = root.get("research") {
         if let Some(n) = r.get("young_domain_days").and_then(|v| v.as_integer()).filter(|v| (0..=3650).contains(v)) {
@@ -448,6 +461,22 @@ mod tests {
         assert_eq!(settings_from(&toml::from_str("[council]\nstall_secs = 0\n").unwrap()).council_stall_secs, 0);
         assert_eq!(settings_from(&toml::from_str("[council]\nstall_secs = -5\n").unwrap()).council_stall_secs, 120, "a negative value is ignored");
         assert_eq!(settings_from(&toml::from_str("[council]\nstall_secs = 99999999\n").unwrap()).council_stall_secs, 86_400, "and a huge one is capped at a day");
+    }
+
+    #[test]
+    fn the_wider_fetch_is_off_by_default_with_small_caps_and_a_bad_value_keeps_the_default() {
+        use crate::research_observed::WiderFetch;
+        // `[research] ladder` (specs/098 §7.5 item 7a, slice S1d): off; two pages a host, ten a run.
+        assert_eq!(settings_from(&toml::from_str("").unwrap()).wider_fetch, WiderFetch::default());
+        assert_eq!(settings_from(&toml::from_str("").unwrap()).wider_fetch, WiderFetch { enabled: false, per_host: 2, per_run: 10 });
+        let on = settings_from(&toml::from_str("[research]\nladder = true\nfetch_per_host = 3\nfetch_per_run = 20\n").unwrap()).wider_fetch;
+        assert_eq!(on, WiderFetch { enabled: true, per_host: 3, per_run: 20 });
+        for bad in ["ladder = \"yes\"", "ladder = 1", "fetch_per_host = 0", "fetch_per_host = 1000", "fetch_per_run = -1", "fetch_per_run = \"many\""] {
+            let w = settings_from(&toml::from_str(&format!("[research]\n{bad}\n")).unwrap()).wider_fetch;
+            assert_eq!(w, WiderFetch::default(), "{bad}");
+        }
+        // The switch does not move the other [research] numbers.
+        assert_eq!(settings_from(&toml::from_str("[research]\nladder = true\n").unwrap()).thin_below, 3);
     }
 
     #[test]

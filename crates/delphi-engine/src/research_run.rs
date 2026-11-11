@@ -42,6 +42,11 @@ pub trait Web: Send + Sync {
     fn can_fetch(&self, url: &str) -> bool {
         self.is_trusted(url)
     }
+    /// Where a URL the fetcher read came from, for the status (`specs/098` §7.5 item 7a): `search:<provider>#<n>` for a URL a search
+    /// returned. `None` when the web does not track it.
+    fn provenance(&self, _url: &str) -> Option<String> {
+        None
+    }
     fn fetch(&self, url: &str) -> Result<Page, String>;
 }
 
@@ -382,6 +387,8 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
                 }
                 continue;
             };
+            // The status shows where each page came from: the trusted list, or the search that returned its URL (`specs/098` §7.5 item 7a).
+            ctx.fetched_via(&row.url, &if from_trusted_host { "trusted".to_string() } else { deps.web.provenance(&row.url).unwrap_or_else(|| "unknown".to_string()) });
             if !seen.text(&page.text) {
                 continue;
             }
@@ -524,8 +531,13 @@ mod tests {
         fail: Option<&'static str>,
         /// Results that only a query containing the marker returns, on top of `rows`.
         extra: Vec<(&'static str, Vec<Row>)>,
+        /// Where an off-list URL came from, as `LiveWeb::provenance` would say (`search:<provider>#<n>`).
+        via: HashMap<String, String>,
     }
     impl Web for FakeWeb {
+        fn provenance(&self, url: &str) -> Option<String> {
+            self.via.get(url).cloned()
+        }
         fn search(&self, q: &str) -> Result<Vec<Row>, String> {
             self.searched.lock().unwrap().push(q.to_string());
             match self.fail {
@@ -812,6 +824,24 @@ mod tests {
         assert_eq!((web["entries_found"].clone(), web["kept"].clone()), (json!(2), json!(2)), "{v}");
         assert!(web.get("reason").is_none(), "a rung that found something gives no reason: {v}");
         assert_eq!(v["coverage_report"]["leads_kept"], 2);
+    }
+
+    /// Slice S1d (`specs/098` §7.5 item 7a): the status shows, for each page read, where its URL came from.
+    #[tokio::test]
+    async fn each_page_read_records_where_its_url_came_from() {
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        f.web.via = HashMap::from([("https://blog.example/a".to_string(), "search:brave#1".to_string())]);
+        let c = ctx(Depth::Survey);
+        run_research(&c, "does aspirin reduce fever", Depth::Survey, &f.deps()).await.unwrap();
+        let got = c.fetched_via_list();
+        assert!(got.contains(&("https://who.int/a".to_string(), "trusted".to_string())), "{got:?}");
+        assert!(got.contains(&("https://blog.example/a".to_string(), "search:brave#1".to_string())), "{got:?}");
+        // A page whose provenance the web cannot tell is labelled `unknown`, never left out.
+        let mut g = Fixture::new(Verdict::Inconclusive);
+        g.web.via.clear();
+        let c = ctx(Depth::Survey);
+        run_research(&c, "does aspirin reduce fever", Depth::Survey, &g.deps()).await.unwrap();
+        assert!(c.fetched_via_list().contains(&("https://blog.example/a".to_string(), "unknown".to_string())));
     }
 
     #[tokio::test]

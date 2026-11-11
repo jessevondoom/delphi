@@ -3,7 +3,8 @@
 //! status (`noted`), and whether the entry is `private`. An entry is public only when the claim carries an https URL and a quote that
 //! THE DAEMON refetches itself and finds in the page; everything else is stored private. Nothing waits for approval.
 //!
-//! Until slice S1d the daemon's fetcher reaches trusted-list hosts only, so a claim whose URL is off the list is stored private.
+//! The daemon's fetcher reaches trusted-list hosts and, with the wider fetch on (slice S1d, 7a), a URL that a search of the session
+//! returned; a claim whose URL is neither is stored private. A host cannot make the daemon fetch a URL of its own choosing.
 //!
 //! Pure functions: the fetcher and the trusted-list test are passed in, so this file does no I/O.
 
