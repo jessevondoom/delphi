@@ -68,7 +68,7 @@ A record is written at a **trigger** (§3.2), one per operator prompt that the t
 | :-- | :-- | :-- |
 | `id`, `at`, `project`, `mission` | ids and a UTC time | daemon |
 | `prompt` | the operator's words, redacted, at most 2,000 characters (longer: cut, with `cut: true` and the hash of the full text) | daemon, from a prompt it observed, or from a host's report that the daemon checked against a pointer (§4) |
-| `pasted` | for each pasted block in the prompt: its hash and its length, **not its text** | daemon (the console and the host mark pasted text) |
+| `pasted` | for each pasted block in the prompt: its keyed hash (§3.4) and its length, **not its text** | daemon: blocks the console or host marked, **and** any text the daemon's own rule treats as pasted (§3.4) |
 | `reply` | `asked`, `did`, `open`: each at most 200 characters, plain text, no tool output | the host through `record_session_summary`, or absent |
 | `outcome` | the closed enum of 084 §3 (`done`, `partly`, `stopped`, `unknown`) | `observed` when the daemon saw the result, else `self_reported` |
 | `observed` | counts and ids the daemon saw: PR numbers, task ids, event ids, gate results | daemon |
@@ -98,6 +98,16 @@ S3 names the exact event kinds from the code it reads. The list is open to chang
 - **The host, best effort.** The host calls `record_session_summary` at a trigger with the exchange fields. It is requested by the plugin skill and the `CLAUDE.md` template, which Delphi cannot enforce (098 §7.3), so it is not required.
 - **If the host did not,** the daemon writes the record with only what it observed (`observed`, `outcome` if seen) and marks `reply` **absent**. It never invents a summary (OD-4).
 - **Labelled** `untrusted/self_reported`, as 084 §3 does for the outcome, and shown beside the observed facts, never in place of them.
+
+### 3.4 Pasted text: the daemon decides, not the host
+
+Marks from the console or a host are not enough: if bracketed paste is off, or a wrapper strips it, a key or a private file pasted into a prompt would be stored as typed words (Council `t_0009`, all three seats). So the daemon applies its own rule, and a host's mark can only **add** pasted status, never remove it.
+
+- **Treated as pasted unless the daemon itself saw it typed** (console input at typing rate, not in one burst): any span that is over `[history] paste_chars` characters (default 400), or arrived in one input burst, or has high entropy (Shannon entropy at or above 4.5 bits per character over a run of 40 or more characters), or is multi-line code-like text (three or more lines with brackets, indentation or key-value shapes).
+- **A pasted block is stored as a keyed hash and a length, never its text.** The prompt keeps a placeholder (`[pasted: 1,500 characters, hash]`) where the block was.
+- **A prompt the daemon did not observe** (`kind: resolved` or `reported`, §3.1) gets the same rule applied to the text the host reported.
+- **The thresholds are hypotheses** to calibrate from use (OD-3). The rule errs toward not storing: a long typed paragraph may be kept as a hash, which loses a convenience and leaks nothing.
+- **Keyed hashes.** A plain hash of a short secret can be guessed by trying candidates, so every retained hash (a pasted block, a cut prompt's full text, the chain link of §3.1) is an HMAC under a local key kept in the daemon-only `local/` area with owner-only permissions, never exported and never read by an agent.
 
 ## 4. Pointers: where the words can be checked
 
@@ -213,7 +223,7 @@ Council `t_0008` (2026-11-11; architect, red-team, strategist; families claude a
 ## 14. Acceptance criteria
 
 1. A merge, a research run, a panel, a Council ruling and a created artifact each write one exchange record when history is on, with the fields of §3.1 and no field the record does not have.
-2. A prompt with a pasted block stores the block as a hash and a length; a prompt with a recognisable secret stores it redacted.
+2. A prompt with a pasted block stores the block as a keyed hash and a length; a prompt with a recognisable secret stores it redacted. A 1,500-character key pasted with no paste mark, and not typed at typing rate, is stored as a hash and a length, not as text (§3.4).
 3. A host-reported prompt that matches a Claude transcript span by hash reads `resolved`; one that does not match reads `reported`; a pointer whose file is gone reads `unresolvable`.
 4. The report is at most 4 KB, quotes no event text, shows a reversed decision as superseded and ends with the fixed footer.
 5. With history off, or before the question is answered on an upgraded install, no record is written; the timeline follows its own switch.
@@ -228,7 +238,7 @@ Every item is verified without a network or a model, plus the repository gates o
 | Item | How |
 | :-- | :-- |
 | Records and triggers (1) | Engine tests over a fixture event log: one trigger per kind writes one record with the fixed fields. |
-| Redaction and pasted blocks (2, §11 item 4) | A fixture prompt with a key, a token and a pasted block; the stored record contains neither the secret nor the pasted text. |
+| Redaction and pasted blocks (2, §11 item 4) | A fixture prompt with a key, a token and a pasted block; the stored record contains neither the secret nor the pasted text. An **unmarked** 1,500-character key paste, a single-burst paste, a high-entropy run and a multi-line code block each store as a keyed hash and a length; a typed paragraph of the same length at typing rate is kept up to the 2,000-character cap or hashed by the length rule, and the test states which. |
 | Pointers (3, §11 item 8) | Fixture transcripts: a matching span, a changed span, a missing file, an unknown format; the session-id search finds a file in a renamed folder. |
 | Report (4, §11 item 9) | A golden report over a fixture log with a reversal; size, footer, no event text; a hostile event string leaves no trace. |
 | Off and upgrade (5, §11 items 6, 7) | A config test per switch; an upgrade fixture with no answer writes nothing; `off` and `purge` leave the hashes. |
