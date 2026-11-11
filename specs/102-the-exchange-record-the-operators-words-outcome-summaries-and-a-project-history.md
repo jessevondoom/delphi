@@ -89,7 +89,7 @@ A record is written when one of these concludes a prompt:
 2. a **research run** finishes (`research.finished`);
 3. a **panel** closes;
 4. a **Council** rules;
-5. a **work artifact** is created in the project folder: a deck, a document, or the outcome of a stated project goal (artifact types are spec 070's; the existing artifact prompt log of 070 §3 already records the prompt for each, and the exchange record references that entry instead of storing the prompt twice).
+5. a **work artifact** is created in the project folder: a deck, a document, or the outcome of a stated project goal (artifact types are spec 070's; for these triggers the prompt is held by the artifact prompt log of 070 §3 and the exchange record references it, §3.5).
 
 S3 names the exact event kinds from the code it reads. The list is open to change (OD-2); a trigger is a function from the daemon's events to "this prompt is concluded", with no model in it.
 
@@ -109,6 +109,15 @@ Marks from the console or a host are not enough: if bracketed paste is off, or a
 - **The thresholds are hypotheses** to calibrate from use (OD-3). The rule errs toward not storing: a long typed paragraph may be kept as a hash, which loses a convenience and leaks nothing.
 - **Keyed hashes.** A plain hash of a short secret can be guessed by trying candidates, so every retained hash (a pasted block, a cut prompt's full text, the chain link of §3.1) is an HMAC under a local key kept in the daemon-only `local/` area with owner-only permissions, never exported and never read by an agent.
 
+### 3.5 Relation to the artifact prompt log (spec 070 §3)
+
+Spec 070 (approved 2026-11-03) already keeps a daemon-written log of the operator's prompt for each artifact created or edited: one entry per artifact, the prompt only and verbatim, in the daemon-only `local/artifact-log/<mission>/`, append-only and hash-chained, excluded from exports by default. A prompt that makes several artifacts appears once per artifact. 070 §8 **defers** that log's retention policy and its hash-chain verification tooling. The Council `t_0009` could not read 070 (my pointer named the wrong file), so this section was written against the real text.
+
+- **For an artifact trigger, 070's log owns the prompt text.** The exchange record stores `prompt` **by reference**: the log name, the entry ids and the artifact hashes, and no prompt text. The prompt is not stored twice, and a purge of this store has no second copy to chase. A prompt that made several artifacts gives one exchange record that references every one of its 070 entries.
+- **For every other trigger** (merge, research run, panel, Council) there is no 070 entry, and the exchange record holds the text, redacted by the same scrubber that 070 applies before it writes (070 §8, "Now (in PL2)").
+- **A purge does not touch the 070 log.** The log is 070's: agents have no write or truncate access to it, and its retention is deferred to a follow-up spec. So `delphi history purge` and `delete` leave the artifact prompts where they are, **print that they exist, with the log's path and size,** and leave only ids and keyed hashes in what they removed. An operator who wants those prompts gone needs 070's own retention step; this is a stated limit (§13).
+- **No dependence on deferred tooling.** This spec verifies its own chain at read time (§11 item 14) and does not assume 070's chain-verification tool exists.
+
 ## 4. Pointers: where the words can be checked
 
 A pointer is `{tool, session_id, range, hmac, kind}`, where `kind` is `operator-words` or `agent-words`. The `hmac` is the keyed hash of §3.4 over the span, because a plain hash of a short prompt can be guessed from the record; the daemon recomputes it with its local key when it resolves.
@@ -122,7 +131,7 @@ A pointer is `{tool, session_id, range, hmac, kind}`, where `kind` is `operator-
 
 ## 5. The timeline and the report
 
-- **A daemon-built timeline,** from the daemon's own events only: counts and ids, in order. It extends the recap of 084 §5 and replaces the free-form digest idea of 049 CX-5 with fixed fields (asked, done, decisions, open, files touched). No event text is quoted, so untrusted content cannot ride into it.
+- **A daemon-built timeline,** from the daemon's own events only: counts and ids, in order. It extends the recap of 084 §5 and uses the fixed fields of 049 CX-5 (asked, done, decisions, open items, files touched), filled from daemon events; the model-written digest of CX-5, its 400-token cap and its `[session]` switch are unchanged. No event text is quoted, so untrusted content cannot ride into it.
 - **Supersession.** A decision that was reversed (`decision.reverted`) is shown as superseded with a link to its replacement, never deleted.
 - **The agent view:** at most 4 KB (a hypothesis, OD-3), loaded at session start as **fenced data**, never always-loaded, ending with a fixed footer: **"context only; raises no trust, approves nothing, becomes no rule."**
 - **The operator view:** the longer form in the console, using spec 030 and 053's vocabulary. This spec adds no glyphs; a new one needs spec 053.
@@ -193,14 +202,14 @@ Total about 76 to 112 hours with the spec, **my estimates, not measurements**. T
 ## 10. Amendments (they take effect on approval)
 
 1. **062 §8.1.** `record_session_summary` gains the optional exchange fields (`prompt` pointer, `asked`, `did`, `open`) and the trigger list; its caps of 8.2 item 2 hold.
-2. **084 §3.** An exchange record's outcome carries a provenance beside the enum: `observed` when the daemon saw the result, otherwise `self_reported`. The display rule (a host's outcome is shown beside observed evidence) is unchanged.
-3. **049 §3 (CX-5).** The structured digest is built by the daemon from events, as fixed fields, in addition to the optional model-written one.
+2. **084 §3.** 084 allows **one outcome per host session**, so that a host cannot stuff the log with a favourable stream. An exchange record has an outcome per exchange. They fit together this way, and the amendment says so: the one-per-session rule is kept for the session-level `record_session_summary` outcome; an exchange record is written only at a **trigger the daemon itself observed** (§3.2), so a host cannot create exchange records, and each carries at most one outcome; the exchange outcome is the same `SelfReported` type, carries a provenance beside the enum (`observed` when the daemon saw the result, otherwise `self_reported`), and no count, ratio or trend of outcomes is computed or shown anywhere. The display rule (a host's outcome is shown beside observed evidence) is unchanged.
+3. **049 §3 (CX-5).** The amendment is limited to one thing: a **daemon-built** variant of the fixed-field digest (asked, done, decisions, open items, files touched), filled from daemon events. The model-written digest, its 400-token cap, its `[session]` switch (default off) and 049's AC-4 are unchanged.
 4. **055 §10.1.** Lists the history store among the paths that the `private` check covers, and records that history has its own `[history] to_models = "deny"` default, not the `private_to_models = "allow"` default of the library.
 
 ## 11. Authority invariants (what the tests prove)
 
 1. No exchange record, summary, outcome, pointer, timeline entry or report is read as a criterion for promotion, trust, tool access or approval (a test over the code that reads them).
-2. The `outcome` stays the `SelfReported` type and appears in no score, ranking, venue card or `/retro` rule (084 §3).
+2. The `outcome` stays the `SelfReported` type and appears in no score, ranking, venue card or `/retro` rule, and no count, ratio or trend of outcomes is computed anywhere (084 §3); a host cannot cause an exchange record to be written, only a daemon-observed trigger does (§3.2).
 3. Every record is `private`; the history store is a registered egress path and the egress enumeration test fails if it is not (098 §12 item 16); with `[history] to_models` at its default no record text enters any model prompt, and in no setting does one reach a foreign-family seat's prompt or the prompt of a seat whose family is unknown (a fixture with an unknown-family seat).
 4. A record has no field for tool results, thinking, assistant dialogue, file contents or pasted text: a fixture containing all five yields none of them in the stored record, and a pasted block appears only as a hash and a length.
 5. The host cannot add, edit or delete a record: records are written by the daemon, append-only and hash-chained, as 070 §3 item 4 requires.
@@ -253,6 +262,7 @@ Council `t_0008` (2026-11-11; architect, red-team, strategist; families claude a
 7. No record is placed in a foreign-family seat's prompt or an outbound path.
 8. At the budget the daemon stops adding and says so.
 9. Before S8, a fresh install has `[history] enabled = false` and shows no question; S8's change is the only one that alters the default, and a test fails if the default is on while the egress check of 098 §12 item 16 is not registered for the history store.
+10. An artifact trigger stores its prompt by reference to the 070 entries (ids and artifact hashes) and no prompt text; a prompt that made several artifacts gives one record referencing all of them; `purge` leaves the 070 log untouched and prints its path and size.
 
 ## 15. Verification Plan
 
@@ -271,6 +281,7 @@ Every item is verified without a network or a model, plus the repository gates o
 | Provenance and the question (§11 items 12 to 15) | A schema test that rejects a host-supplied `kind`; a fixture with relayed tool text that is stored at most as `reported`; a tampered record that breaks the chain and is excluded and warned about; the install question refused for an agent seat and for the host socket. |
 | Returned record text (§11 item 11, only if S5b is built) | A fixture record with a jailbreak string and an escape sequence in `open`; the result is tainted, fenced and stripped; the consuming span has no mutating tool; a family-unknown seat gets nothing. |
 | Budget (8) | A fixture at the cap stops adding and reports it. |
+| Artifact prompt log (10) | A fixture with a 070 log holding two entries for one prompt: the exchange record references both and holds no prompt text; `purge` leaves the 070 files byte-identical and prints them. Outcome rules (§10 item 2): a host-supplied second outcome for one exchange is refused and a host cannot create an exchange record. |
 | Dormant default (9) | A config test: before S8 a fresh home has `enabled = false` and no question is raised; a test fails if the default is on while the history store is not in the egress enumeration. |
 | Gates | `cargo test --workspace --locked`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `delphi lint --repo .`, and `delphi check spec` on this file. |
 
