@@ -3215,6 +3215,10 @@ impl Extension for ServiceExt {
                 if let Err(why) = crate::host_rpc::reject_council_labels(&params, scan_text) {
                     return Some(Err(err(code::INVALID_PARAMS, why)));
                 }
+                // Spec 098 §9: a generated pack is task work only and is refused as a Council, Panel or red-team seat.
+                if let Err(why) = crate::host_rpc::refuse_pack_seats(&method, &params) {
+                    return Some(Err(err(code::INVALID_PARAMS, why)));
+                }
             }
             Some(match method.as_str() {
                 "mission.open" => match need_console(&ctx) {
@@ -3729,6 +3733,49 @@ mod tests {
         let mut found = Vec::new();
         files_mentioning(&ws_dir, "council_format", &mut found);
         assert!(found.is_empty(), "no host call wrote a Council label: {found:?}");
+    }
+
+    // Spec 098 section 9 and section 12 item 4: a generated pack is task work only; the daemon refuses its id as a Council, Panel or
+    // red-team seat, at seat assignment, before anything is opened or spent.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_generated_pack_is_refused_as_a_seat_and_real_seats_are_not() {
+        let f = setup(vec![], 5.0, |_| {});
+        let ws_dir = f.engine.ws.dir.clone();
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            c.hello(&htok).unwrap();
+            let p = |extra: Value| {
+                let mut b = json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cwd});
+                for (k, v) in extra.as_object().unwrap() {
+                    b[k] = v.clone();
+                }
+                b
+            };
+            for (method, extra) in [
+                ("host.council_open", json!({"question": "q", "foreign_seat": "pack-0123456789ab", "operator_confirmed": true})),
+                ("host.council_open", json!({"question": "q", "foreign_seats": [{"role": "red-team"}, {"role": "pool-36"}], "operator_confirmed": true})),
+                ("host.council_frame", json!({"question": "q", "foreign_seat": "pack:db-migrator"})),
+                ("host.council_brief", json!({"council_id": "t_0001", "seat": "pack-0123456789ab", "round": 1})),
+                ("host.council_submit", json!({"council_id": "t_0001", "seat": "pool-3", "round": 1, "text": "x"})),
+            ] {
+                let (code_, message) = rpc_error(c.call(method, p(extra.clone())));
+                assert_eq!(code_, Some(code::INVALID_PARAMS), "{method}: {extra}");
+                assert_eq!(message.as_deref(), Some(crate::host_rpc::PACK_SEAT_REFUSED), "{method}: a fixed answer that echoes nothing");
+            }
+            // A real seat is not touched by this check: it reaches the next check (here, a Panel that does not exist), whose answer is
+            // not the pack refusal.
+            let (code_, message) = rpc_error(c.call("host.council_brief", p(json!({"council_id": "t_nope", "seat": "red-team", "round": 1}))));
+            assert_eq!(code_, Some(code::INVALID_PARAMS));
+            assert_ne!(message.as_deref(), Some(crate::host_rpc::PACK_SEAT_REFUSED), "{message:?}");
+        })
+        .await;
+        // Nothing was opened: the host session has no Council or Panel event.
+        let events = replay_log(&delphi_core::sessions::dir(&ws_dir, "host-abcdef0123456789"));
+        assert_eq!(events.iter().filter(|e| e.kind == crate::host_rpc::COUNCIL_EVENT).count(), 0);
     }
 
     /// Spec 098 §19: a host stops a job it raised, with its reason, and no job it did not raise; the three ways of being refused read alike.

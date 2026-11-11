@@ -131,6 +131,34 @@ fn carries_council_label(v: &Value, depth: usize, scan_text: bool) -> bool {
     }
 }
 
+/// What a host is told when it names a generated pack as a seat (`specs/098` §9). Fixed text; it echoes nothing the host wrote.
+pub const PACK_SEAT_REFUSED: &str = "refused: a generated pack cannot take a Council, Panel or red-team seat. Seats are the canonical roles or registered bundle agents; a pack is task work only (spec 098 section 9)";
+
+/// Does `s` look like the id of a generated pack: `pack-<hex>` as `spawn_agent_pack` names it, `pack:<name>`, or the name of a pool
+/// slot a pack was given (`pool-<n>`, `specs/087`)? A canonical role id or `bundle:<bundle>/<agent>` never starts this way.
+pub fn is_pack_id(s: &str) -> bool {
+    let l = s.trim().to_ascii_lowercase();
+    l.starts_with("pack-") || l.starts_with("pack:") || l.starts_with("pool-")
+}
+
+/// `specs/098` §9, §12 item 4: `council_open`, `council_frame`, `council_brief` and `council_submit` refuse a seat that is a
+/// generated pack: the `seat` of a brief or a stance, the `foreign_seat` of an opening, or any `role` of `foreign_seats`.
+pub fn refuse_pack_seats(method: &str, v: &Value) -> Result<(), &'static str> {
+    if !matches!(method, "host.council_open" | "host.council_frame" | "host.council_brief" | "host.council_submit") {
+        return Ok(());
+    }
+    let named = |k: &str| v.get(k).and_then(Value::as_str);
+    let mut bad = ["seat", "foreign_seat", "role"].iter().any(|k| named(k).is_some_and(is_pack_id));
+    if let Some(list) = v.get("foreign_seats").and_then(Value::as_array) {
+        bad |= list.iter().any(|x| x.as_str().is_some_and(is_pack_id) || x.get("role").and_then(Value::as_str).is_some_and(is_pack_id));
+    }
+    if bad {
+        Err(PACK_SEAT_REFUSED)
+    } else {
+        Ok(())
+    }
+}
+
 /// Turn host tools on or off by editing `[mcp] enabled` in the workspace's `config.toml`, leaving every other byte of the file
 /// as the operator wrote it. Both the daemon and the MCP server read the file on each call, so it takes effect at once.
 pub fn set_enabled(ws_dir: &Path, on: bool) -> Result<(), String> {
@@ -1479,5 +1507,38 @@ mod tests {
         assert_eq!(reject_council_labels(&body, false), Ok(()));
         // A line that merely mentions the words is not front matter.
         assert_eq!(reject_council_labels(&json!({"text": "we discussed whether venue: daemon should be allowed"}), true), Ok(()));
+    }
+
+    #[test]
+    fn a_generated_pack_is_refused_as_a_seat_with_fixed_text_and_real_seats_are_not() {
+        // The ids of a pack: `pack-<hex>`, `pack:<name>`, and the pool slot a pack was given.
+        for id in ["pack-0123456789ab", "PACK-0123456789AB", " pack:flaky-test-hunter", "pool-36"] {
+            assert!(is_pack_id(id), "{id}");
+        }
+        for real in ["architect", "red-team", "strategist", "orchestrator", "bundle:acme/cmake-specialist", "packager", "pooling"] {
+            assert!(!is_pack_id(real), "{real}");
+        }
+        // Where a seat is named: a brief, a stance, an opening's foreign seat(s), a frame.
+        for (method, v) in [
+            ("host.council_brief", json!({"council_id": "t_1", "seat": "pack-0123456789ab", "round": 1})),
+            ("host.council_submit", json!({"council_id": "t_1", "seat": "pool-3", "round": 1, "text": "x"})),
+            ("host.council_open", json!({"question": "q", "foreign_seat": "pack:db-migrator", "operator_confirmed": true})),
+            ("host.council_open", json!({"question": "q", "foreign_seats": [{"role": "red-team"}, {"role": "pack-0123456789ab"}], "operator_confirmed": true})),
+            ("host.council_open", json!({"question": "q", "foreign_seats": ["pack-0123456789ab"]})),
+            ("host.council_frame", json!({"question": "q", "foreign_seat": "pool-9"})),
+        ] {
+            assert_eq!(refuse_pack_seats(method, &v), Err(PACK_SEAT_REFUSED), "{method}: {v}");
+        }
+        assert!(!PACK_SEAT_REFUSED.contains("pack-0123"), "the answer echoes nothing");
+        // Real seats pass, and a method that names no seat is never touched, whatever its fields say.
+        for (method, v) in [
+            ("host.council_brief", json!({"council_id": "t_1", "seat": "red-team", "round": 1})),
+            ("host.council_open", json!({"question": "q", "foreign_seats": [{"role": "red-team"}, {"role": "strategist"}]})),
+            ("host.council_open", json!({"question": "q", "foreign_seat": "bundle:acme/cmake-specialist"})),
+            ("host.request_help", json!({"need": "n", "seat": "pack-0123456789ab"})),
+            ("host.handoff_put", json!({"objective": "o", "role": "pool-3"})),
+        ] {
+            assert_eq!(refuse_pack_seats(method, &v), Ok(()), "{method}: {v}");
+        }
     }
 }
