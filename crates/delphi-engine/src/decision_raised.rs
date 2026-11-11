@@ -13,7 +13,7 @@ use crate::decision_model::{clean, TITLE_MAX};
 use delphi_core::event::EventEnvelope;
 use serde_json::{json, Value};
 
-pub const KINDS: [&str; 5] = ["spec", "question", "council", "release", "budget"];
+pub const KINDS: [&str; 6] = ["spec", "question", "council", "release", "budget", "source"];
 /// Roles that may raise one: not a builder, a scout or a bundle agent, so a span that read untrusted content cannot.
 pub const RAISERS: [&str; 3] = ["orchestrator", "architect", "strategist"];
 /// Open raised decisions allowed in one mission.

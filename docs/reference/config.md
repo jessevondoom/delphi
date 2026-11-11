@@ -55,6 +55,7 @@ Defaults are those of the template; "—" means no default.
 | `[budget] per_watch_max_wakes_per_day` | `10` | |
 | `[council] stall_secs` | `120` | a status call flags a Council `stalled`, and names the seat idle longest, when every seat still working has been idle this many seconds. `0` turns the flag off (spec 098 section 19) |
 | `[seats] require_families` | unset | refuse a Panel that cannot show this many distinct known model families (the family of the model that was served, from the seat receipt; `unknown` never counts), before anything is spent. Unset never refuses: a result with fewer than two known families is labelled `homogeneous`. `council_open` also takes it per call ([`specs/091`](../../specs/091-seats-families-and-outside-launch.md) SR-3) |
+| `[seats] red_team_kind` | `false` | accept `kind: red_team` on `council_open`: a red-team review that returns a findings list (severity, seat, family from the receipt), advisory, not a ruling (spec 098 section 6.2) |
 | `[seats] max_foreign_seats`, `max_foreign_tokens` | `1`, `100000` | per Council: how many seats Delphi may run on another family for a Panel, and the tokens they may use. Over either, the foreign seat is refused before any spend, and the message names the cap (SR-4) |
 | `[hitl] approval_timeout_sec` | `600` | an unanswered card is denied after this long |
 
@@ -118,6 +119,7 @@ Which sites the job may read is not here: it is `context/sources/trusted.toml` (
 
 | Key | Default | Meaning |
 | :-- | :-- | :-- |
+| `[library] private_to_models` | `deny` | `allow` lets a model of the host's own family read private entries; a private entry is never placed in a foreign-family seat's prompt either way (`specs/098` §7.2). `delphi doctor` warns on `allow` while private entries exist |
 | `[library.acquire] enabled` ◆ | `false` | turns on the daily acquisition job (`specs/055` §8). It fetches from the archives in `context/sources/archives.toml` plus your `operator/archives.toml`, and only from those hosts. Proposals arrive as one batch in the digest; nothing is fetched until you accept or a standing rule (`delphi sources acquire rule add`) covers it |
 | `[library.acquire] byte_budget_mib` ◆ | `2048` | what acquisition may hold; reaching it stops acquiring and evicts nothing |
 | `[library.acquire] max_item_mib` ◆ | `16` | the largest text one acquired source may have; also the ceiling of a standing rule |
