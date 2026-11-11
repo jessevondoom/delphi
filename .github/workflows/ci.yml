@@ -34,10 +34,6 @@ jobs:
         run: rustup show active-toolchain && rustc --version
       - name: Test
         run: cargo test --workspace --locked
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - name: Repo lint
-        run: cargo run -q --locked -p delphi -- lint --repo .
       - name: Training cases are well formed
         run: cargo run -q --locked -p delphi -- train validate
       - name: Golden org bundle validates
@@ -46,6 +42,24 @@ jobs:
         run: python3 -I dev/bench/bench.py self-test
       - name: Model availability script self-test
         run: python3 -I dev/train/avail.py self-test
+
+  # Clippy and the repo lint, in parallel with the tests (they used to run after them in the `test` job). Both operating
+  # systems stay: code behind `cfg(target_os = ...)` is only checked where it compiles.
+  lint:
+    name: lint (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Rust toolchain
+        run: rustup show active-toolchain && rustc --version
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Repo lint
+        run: cargo run -q --locked -p delphi -- lint --repo .
 
   # The Rust dependency policy (spec 093 P, deny.toml): known vulnerabilities, yanked crates, licences, sources. The tool is
   # built at a fixed version from crates.io, not fetched through a third-party action, and it reads the advisory database
