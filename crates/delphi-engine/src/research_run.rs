@@ -15,7 +15,7 @@ use crate::corroboration::{self, Cite, Params, Support};
 use crate::research_jobs::{Egress, Finish, JobCtx};
 use crate::research_plan::{canonical_url, clean_query, claim_fingerprint, plan, widen_to_web, Added, ClaimSet, QueryKind, Seen};
 use delphi_adapter::research::search::Row;
-use delphi_core::knowledge_status::{raise_for_support, support_detail, Status};
+use delphi_core::knowledge_status::{raise_for_tags, tier_detail, tier_params, Status, Tags};
 use delphi_core::redact::Redactor;
 use delphi_core::research::{capture_policy, claim_status, ClaimState, Depth};
 use serde_json::{json, Value};
@@ -173,8 +173,10 @@ fn claim_json(c: &ClaimRec, contested: bool) -> Value {
     let base: Status = if contested && c.state != ClaimState::Refuted { claim_status(ClaimState::Contradicted) } else { claim_status(c.state) };
     // Three or more independent origins lift a `noted` claim to `corroborated`; contested, checking, validated and disproved all win
     // over a count (`specs/098` §7.6). The count and the trusted-source flag are shown, never read as a reason to trust anything.
-    let status = raise_for_support(base, c.support.origins);
-    let detail = if status == Status::Corroborated { support_detail(c.support.origins, c.support.trusted_sources) } else { format!("{} independent origin(s) · trusted_sources: {}", c.support.origins, c.support.trusted_sources) };
+    // `would_ratify` is false here: a fresh research claim has had no validator dry run (`specs/100` §4), so it can reach `substantiated`, not `vetted`.
+    let tags = Tags { origins: c.support.origins, trusted_sources: c.support.trusted_sources, would_ratify: false, protected: false };
+    let status = raise_for_tags(base, &tags, &tier_params());
+    let detail = if let Some(d) = tier_detail(status, c.support.origins, c.support.trusted_sources) { d } else { format!("{} independent origin(s) · trusted_sources: {}", c.support.origins, c.support.trusted_sources) };
     json!({
         "id": c.id, "assertion": format!("{} {} {}", c.x.subject, c.x.predicate, c.x.object).split_whitespace().collect::<Vec<_>>().join(" "),
         "source_ids": c.source_ids, "quote": c.x.quote, "locator": c.x.locator, "retrieved": c.retrieved, "licence": "unknown",
@@ -897,10 +899,10 @@ mod tests {
         let c = ctx(Depth::Quick);
         let (_, v) = value(run_research(&c, "does aspirin reduce fever", Depth::Quick, &f.deps()).await.unwrap());
         let cl = fever(&v);
-        assert_eq!(cl["knowledge_status"], "corroborated", "{v}");
+        assert_eq!(cl["knowledge_status"], "substantiated", "three origins, all trusted: {v}");
         assert_eq!((cl["corroboration"]["origins"].clone(), cl["corroboration"]["trusted_sources"].clone()), (json!(3), json!(3)));
         let d = cl["corroboration"]["detail"].as_str().unwrap();
-        assert!(d.contains("3 origins") && d.contains("weaker than validated") && !d.contains("verified"), "{d}");
+        assert!(d.contains("3 origins") && d.contains("3 trusted sources") && d.contains("weaker than validated") && !d.contains("verified"), "{d}");
     }
 
     #[tokio::test]
@@ -968,7 +970,7 @@ mod tests {
         let searched = f.web.searched.lock().unwrap().clone();
         assert!(searched.iter().any(|q| q.contains("aspirin reduces fever") && !q.contains("disputed")), "a support query: {searched:?}");
         assert!(searched.iter().any(|q| q.contains("aspirin reduces fever") && q.contains("disputed OR incorrect OR false")), "a contradiction query: {searched:?}");
-        assert_eq!((fever(&v)["knowledge_status"].clone(), fever(&v)["corroboration"]["origins"].clone()), (json!("corroborated"), json!(3)), "the page the pass found is a third origin: {v}");
+        assert_eq!((fever(&v)["knowledge_status"].clone(), fever(&v)["corroboration"]["origins"].clone()), (json!("substantiated"), json!(3)), "the page the pass found is a third origin: {v}");
     }
 
     #[tokio::test]

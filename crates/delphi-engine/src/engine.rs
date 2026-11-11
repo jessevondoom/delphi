@@ -116,6 +116,8 @@ pub struct Settings {
     /// `[research] young_domain_days`, `burst_hours`, `similar_above`, `unfamiliar_counts` (`specs/098` §7.6, §18): the numbers the corroboration
     /// count uses. The defaults are proposals to calibrate.
     pub support: crate::corroboration::Params,
+    /// `[research.tiers]` (`specs/100` §3.2): the numbers and the per-tier switches of the confidence ladder. Defaults are hypotheses to calibrate.
+    pub tiers: delphi_core::knowledge_status::TierParams,
     /// While no model is usable, how often a parked task looks again (`specs/002` §4.1).
     pub park_poll: Duration,
     /// The longest a task waits for a model before escalating. `None` waits as long as it takes; `Some(0)` never waits.
@@ -188,6 +190,7 @@ impl Default for Settings {
             max_foreign_tokens: 100_000,
             thin_below: 3,
             support: crate::corroboration::Params::default(),
+            tiers: Default::default(),
             park_poll: Duration::from_secs(5),
             park_max: None,
             degrade_wait: Duration::from_secs(300),
