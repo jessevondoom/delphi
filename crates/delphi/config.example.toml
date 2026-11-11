@@ -126,6 +126,10 @@ council_budget_usd = 20.0            # D-10: Council Mode
 on_budget_exhausted = "escalate"     # halt node and ask the operator; never silently downscale
 per_watch_max_wakes_per_day = 10
 
+# What a Council status call reports while seats work (specs/098 section 19).
+# [council]
+# stall_secs = 120                   # flag a Council `stalled` when every seat still working has been idle this long; 0 turns it off
+
 # Foreign seats and model families (specs/091 SR-3, SR-4). A Panel's foreign seat is one Delphi runs itself on another model family.
 # [seats]
 # require_families = 2               # unset (default): never refuse; a result with fewer than two known families is labelled homogeneous

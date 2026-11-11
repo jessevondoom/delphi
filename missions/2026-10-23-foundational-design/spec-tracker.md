@@ -853,7 +853,7 @@ A draft for the operator: host first, the inside exceptions (Council, panel and 
 | S7 | pack guards: council and red-team refuse packs, per-task cap, no-grant test | not started |
 | S8 | Builder gate and the spec-review lint, after verifying what lint and CI already check | not started |
 | S9 | required summary after a panel or red team, generated reference, `llms.txt`, tracker | not started |
-| S10 | progress tail, stall flag and `cancel_job` for Councils and inside jobs | not started |
+| S10 | progress tail, stall flag and `cancel_job` for Councils and inside jobs | built (pull request open); the console (TUI) tail is not built |
 
 ## Spec 099: Round 2 readability (2026-11-10, approved; approved again after it was read, 2026-11-10)
 

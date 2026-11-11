@@ -13,7 +13,7 @@
 use crate::host_rpc::RESEARCH_EVENT;
 use delphi_core::research::Depth;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -95,16 +95,34 @@ struct Trail {
     refused: Vec<String>,
 }
 
+/// When a job last did something, and its last few calls by kind (`search`, `fetch`, `refused`): what a status call reports so a
+/// host can tell a slow job from a stuck one (`specs/098` §19). Never a query or a URL.
+struct Activity {
+    last: Instant,
+    recent: VecDeque<(i64, &'static str)>,
+}
+
 /// What a runner holds while it works.
 pub struct JobCtx {
     max_steps: u32,
     steps: AtomicU32,
     trail: Mutex<Trail>,
+    activity: Mutex<Activity>,
 }
 
 impl JobCtx {
     pub fn with_budget(max_steps: u32) -> JobCtx {
-        JobCtx { max_steps, steps: AtomicU32::new(0), trail: Mutex::new(Trail::default()) }
+        JobCtx { max_steps, steps: AtomicU32::new(0), trail: Mutex::new(Trail::default()), activity: Mutex::new(Activity { last: Instant::now(), recent: VecDeque::new() }) }
+    }
+
+    /// Note that the job just made a call of this kind.
+    fn note(&self, kind: &'static str) {
+        let mut a = self.activity.lock().unwrap();
+        a.last = Instant::now();
+        if a.recent.len() >= 20 {
+            a.recent.pop_front();
+        }
+        a.recent.push_back((crate::host_rpc::now_ms(), kind));
     }
 
     /// Count one step. The step that would pass the depth's budget is refused.
@@ -127,18 +145,23 @@ impl JobCtx {
         let mut t = self.trail.lock().unwrap();
         if let Err(e) = authorize(role, tool) {
             push_capped(&mut t.refused, what);
+            drop(t);
+            self.note("refused");
             return Err(e);
         }
         drop(t);
         self.step().map_err(|_| "the step budget for this depth is spent".to_string())?;
         let mut t = self.trail.lock().unwrap();
         push_capped(if tool == Egress::Search { &mut t.queries } else { &mut t.fetched }, what);
+        drop(t);
+        self.note(if tool == Egress::Search { "search" } else { "fetch" });
         Ok(())
     }
 
     /// A URL the fetcher refused (not trusted, not https, an internal address): listed in the status, never fetched.
     pub fn refused(&self, url: &str) {
         push_capped(&mut self.trail.lock().unwrap().refused, url);
+        self.note("refused");
     }
 }
 
@@ -185,7 +208,7 @@ impl Jobs {
         F: FnOnce(Arc<JobCtx>) -> Fut + Send + 'static,
         Fut: Future<Output = Result<Finish, String>> + Send + 'static,
     {
-        let ctx = Arc::new(JobCtx { max_steps: depth.max_steps(), steps: AtomicU32::new(0), trail: Mutex::new(Trail::default()) });
+        let ctx = Arc::new(JobCtx::with_budget(depth.max_steps()));
         let cancel = Arc::new(Notify::new());
         {
             let mut jobs = self.jobs.lock().unwrap();
@@ -261,6 +284,41 @@ impl Jobs {
         }))
     }
 
+    /// What a status call adds for a job (`specs/098` §19): one worker, its last calls as a fixed-form tail, and a stall flag.
+    /// `None` for a job that is not this session's. Nothing here is a query or a URL.
+    pub fn progress(&self, id: &str, session: &str, stall_secs: u64, lines: usize) -> Option<Value> {
+        let jobs = self.jobs.lock().unwrap();
+        let j = jobs.get(id).filter(|j| j.session == session)?;
+        let a = j.ctx.activity.lock().unwrap();
+        let idle = a.last.elapsed().as_secs();
+        let elapsed = j.ended.map(|e| e.duration_since(j.queued)).unwrap_or_else(|| j.queued.elapsed()).as_secs();
+        let last_call = a.recent.iter().rev().map(|(_, k)| *k).find(|k| *k != "refused");
+        let state = match j.state {
+            State::Queued => "starting",
+            State::Running if a.recent.is_empty() => "thinking",
+            State::Running => "reading",
+            State::Done | State::Partial => "submitted",
+            State::Failed | State::Cancelled => "abstained",
+        };
+        let tail: Vec<String> = a
+            .recent
+            .iter()
+            .rev()
+            .take(lines.clamp(1, 20))
+            .map(|(ms, k)| if *k == "refused" { format!("{} scout gate deny", crate::progress::clock_of_ms(*ms)) } else { format!("{} scout tool {}", crate::progress::clock_of_ms(*ms), k) })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        let stalled = j.state == State::Running && stall_secs > 0 && idle >= stall_secs;
+        Some(json!({
+            "workers": [{"role": "scout", "state": state, "elapsed_s": elapsed, "idle_s": idle, "calls": j.ctx.steps(), "last_call": last_call}],
+            "tail": tail,
+            "stalled": stalled,
+            "stalled_seat": if stalled { json!("scout") } else { Value::Null },
+        }))
+    }
+
     /// The finished result for the session that asked: the runner's value with the job's `status`, or `None` while it is
     /// still queued or running (and for a job that is not this session's).
     pub fn result(&self, id: &str, session: &str) -> Option<Value> {
@@ -318,7 +376,7 @@ mod tests {
 
     #[test]
     fn the_step_budget_is_hard_and_a_refused_tool_is_listed_not_counted() {
-        let ctx = JobCtx { max_steps: 2, steps: AtomicU32::new(0), trail: Mutex::new(Trail::default()) };
+        let ctx = JobCtx::with_budget(2);
         assert!(ctx.egress("validator", Egress::Search, "q").is_err());
         assert_eq!(ctx.steps(), 0);
         assert!(ctx.egress("scout", Egress::Search, "q1").is_ok());

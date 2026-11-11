@@ -84,6 +84,13 @@
         "per_watch_max_wakes_per_day": { "type": "integer", "minimum": 0 }
       }
     },
+    "council": {
+      "type": "object",
+      "description": "Councils, Panels and the progress a status call reports (spec 098 section 19).",
+      "properties": {
+        "stall_secs": { "type": "integer", "minimum": 0, "description": "A status call flags a Council stalled when every seat still working has been idle this many seconds (default 120). 0 turns the flag off." }
+      }
+    },
     "hosts": {
       "type": "object",
       "description": "Settings for the tools you code with (specs/098).",

@@ -31,6 +31,9 @@ pub struct EngineService {
     engine: Arc<Engine>,
     /// Handles to stop the tasks in `running` (`task.cancel`).
     aborts: Mutex<HashMap<String, tokio::task::AbortHandle>>,
+    /// Handles to stop the Councils and help requests a host session raised (`host.cancel_job`, `specs/098` §19), by (mission, task).
+    /// Task ids repeat across missions, so the mission is part of the key.
+    host_aborts: Mutex<HashMap<(String, String), tokio::task::AbortHandle>>,
     default_mission: String,
     missions: Mutex<HashMap<String, Arc<MissionState>>>,
     running: Arc<Mutex<HashMap<String, Running>>>,
@@ -164,7 +167,8 @@ async fn panel_step(engine: Arc<Engine>, panels: Panels, m: Arc<MissionState>, i
 /// Run the seat Delphi owns in this Panel for `round`, in the background, and feed its answer through [`panel_step`] like any other.
 /// A seat that fails or times out abstains; the Panel does not wait on it past the seat timeout.
 fn spawn_foreign(engine: Arc<Engine>, panels: Panels, m: Arc<MissionState>, id: String, seat: String, round: u8, stances: Option<std::collections::BTreeMap<String, crate::council::Stance>>) {
-    tokio::spawn(async move {
+    let (registry, own_key) = (panels.clone(), (m.id.clone(), id.clone()));
+    let handle = tokio::spawn(async move {
         let key = (m.id.clone(), id.clone());
         let (brief, prop, role, family, tools_none) = {
             let g = panels.lock().unwrap();
@@ -194,6 +198,10 @@ fn spawn_foreign(engine: Arc<Engine>, panels: Panels, m: Arc<MissionState>, id: 
         let model = Some(format!("{family}, run by Delphi"));
         let _ = panel_step(engine, panels, m, id, Who::Delphi(role), round, text, abstain, model).await;
     });
+    // Spec 098 §19: `cancel_job` stops the seats Delphi runs through these handles.
+    if let Some(p) = registry.lock().unwrap().get_mut(&own_key) {
+        p.add_abort(handle.abort_handle());
+    }
 }
 
 /// How long a Panel call waits, at most, for the seat Delphi runs (spec 089 P7); the seat's own clock is `council_seat_timeout`.
@@ -282,7 +290,7 @@ impl EngineService {
     pub fn new(engine: Arc<Engine>, default_mission: &str) -> Arc<EngineService> {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(String, String, String)>();
         let _ = engine.research_ask.set(tx);
-        let svc = Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), host_gate: tokio::sync::Mutex::new(()), helps: Arc::new(Mutex::new(HashMap::new())), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())), acquire_checked: Mutex::new(0), research_jobs: crate::research_jobs::Jobs::default(), panels: Arc::new(Mutex::new(HashMap::new())) });
+        let svc = Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), host_aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), host_gate: tokio::sync::Mutex::new(()), helps: Arc::new(Mutex::new(HashMap::new())), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())), acquire_checked: Mutex::new(0), research_jobs: crate::research_jobs::Jobs::default(), panels: Arc::new(Mutex::new(HashMap::new())) });
         // An approved `request_research` card (`specs/058` §20): the mission's own scope decides where the pages go.
         if tokio::runtime::Handle::try_current().is_ok() {
             let weak = Arc::downgrade(&svc);
@@ -463,7 +471,7 @@ impl EngineService {
             (task_id, m)
         };
         let (engine, helps, tid, mm) = (self.engine.clone(), self.helps.clone(), task_id.clone(), m.clone());
-        tokio::spawn(async move {
+        let job = tokio::spawn(async move {
             let run = engine.run_task_for_host(&mm, tid.clone(), "orchestrator", &prompt).await;
             let result = match run {
                 Ok(out) => {
@@ -482,7 +490,10 @@ impl EngineService {
                 r.at = Instant::now();
             }
         });
+        // Spec 098 §19: `host.cancel_job` can stop it.
+        self.host_aborts.lock().unwrap().insert((m.id.clone(), task_id.clone()), job.abort_handle());
         let v = self.wait_help(&task_id, HELP_WAIT).await;
+        let v = self.with_help_progress(v, &m, &task_id, h::tail_lines(&p));
         Ok(self.signed_help(v, &task_id))
     }
 
@@ -551,7 +562,32 @@ impl EngineService {
             let id = crate::research_host::identity(&ws.dir, &ws.home, "scout", None);
             crate::research_host::attach_identity(&mut v, &id, self.badge_style(), self.badge_mode(), Some("the research you asked for"));
         }
+        // Spec 098 §19: while the job is queued or running, say what its worker is doing and whether it has stalled.
+        if matches!(v["status"].as_str(), Some("queued" | "running")) {
+            if let Some(Value::Object(extra)) = self.research_jobs.progress(&id, &c.session, self.engine.settings.council_stall_secs, h::tail_lines(&p)) {
+                if let Value::Object(into) = &mut v {
+                    into.extend(extra);
+                }
+            }
+        }
         Ok(v)
+    }
+
+    /// While a help request is still being answered, say what the agents working on it are doing and whether they have stalled
+    /// (`specs/098` §19). A finished answer is returned as it is.
+    fn with_help_progress(&self, mut v: Value, m: &MissionState, task_id: &str, lines: usize) -> Value {
+        if v["status"] != "working" {
+            return v;
+        }
+        let Ok(events) = m.replay() else { return v };
+        let p = crate::progress::progress(&events, task_id, crate::host_rpc::now_ms(), self.engine.settings.council_stall_secs, lines);
+        if let (Value::Object(into), Value::Object(mut extra)) = (&mut v, p.to_json()) {
+            if let Some(seats) = extra.remove("seats") {
+                extra.insert("workers".into(), seats);
+            }
+            into.extend(extra);
+        }
+        v
     }
 
     /// `host.request_council` (`specs/062` §7): raise an on-demand Council on a host's question, in the host session's own mission, and
@@ -573,7 +609,7 @@ impl EngineService {
             (task_id, m)
         };
         let (engine, tid, mm) = (self.engine.clone(), task_id.clone(), m.clone());
-        tokio::spawn(async move {
+        let job = tokio::spawn(async move {
             if let Err(e) = engine.run_council(&mm, tid.clone(), &proposition, crate::council::CouncilOpts::default()).await {
                 elog_task_failed(&mm.id, &tid, &e);
                 let mut ev = EventEnvelope::new(&mm.id, "task.failed", json!({"error": engine.secrets.redact(&e.to_string())}));
@@ -581,6 +617,8 @@ impl EngineService {
                 let _ = mm.append(ev).await;
             }
         });
+        // Spec 098 §19: `host.cancel_job` can stop it.
+        self.host_aborts.lock().unwrap().insert((m.id.clone(), task_id.clone()), job.abort_handle());
         Ok(json!({"council_id": task_id, "state": "convening", "note": "a Council runs for a few minutes: ask again with council_status, then council_result; its ruling is advice and binds nothing in your project"}))
     }
 
@@ -830,8 +868,9 @@ impl EngineService {
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }
         }
+        let (stall, lines) = (self.engine.settings.council_stall_secs, h::tail_lines(&p));
         loop {
-            let mut view = h::council_view(&m.replay().map_err(engine_err)?, &m.dir, &id).ok_or_else(|| err(code::INVALID_PARAMS, "no such Council for this session"))?;
+            let mut view = h::council_view_at(&m.replay().map_err(engine_err)?, &m.dir, &id, h::now_ms(), stall, lines).ok_or_else(|| err(code::INVALID_PARAMS, "no such Council for this session"))?;
             if !wait {
                 self.annotate_panel_status(&panel_key, &mut view);
             }
@@ -840,6 +879,62 @@ impl EngineService {
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
+    }
+
+    /// `host.cancel_job` (`specs/098` §19): stop a Council, Panel, help request or research job that THIS host session raised, and say why.
+    /// It stops the work (the in-flight model calls end with their tasks), closes the task as `task.cancelled` with the host's reason, and
+    /// writes a `host.job.cancelled` audit event. It can only reduce what runs, so it widens no authority. A job another session raised, one
+    /// that has already ended, and an id that is nothing are all refused with the same words: the three are not told apart.
+    async fn host_cancel_job(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        use crate::host_rpc as h;
+        need_host(&ctx)?;
+        h::gate(&self.engine.ws.dir).map_err(host_err)?;
+        let c = h::Caller::parse(&p).map_err(host_err)?;
+        let id = h::clean("id", p["id"].as_str().unwrap_or(""), 64).map_err(host_err)?;
+        let reason = match p["reason"].as_str().filter(|r| !r.trim().is_empty()) {
+            Some(r) => h::clean("reason", r, 200).map_err(host_err)?,
+            None => "no reason given".to_string(),
+        };
+        let refuse = || err(code::INVALID_PARAMS, "no such running job for this session: only a Council, Panel, help request or research job that this host session raised, and that is still running, can be cancelled");
+        let m = self.mission_at(Some(&c.mission()), c.cwd.to_str()).await?;
+        let kind: &str = if id.starts_with("r-") {
+            if !self.research_jobs.cancel(&id, &c.session) {
+                return Err(refuse());
+            }
+            "research"
+        } else {
+            let events = m.replay().map_err(engine_err)?;
+            let raised_council = events.iter().any(|e| e.kind == h::COUNCIL_EVENT && e.payload["task_id"] == id.as_str());
+            let raised_help = self.helps.lock().unwrap().get(&id).is_some_and(|r| r.session == c.session) && events.iter().any(|e| e.kind == h::HELP_EVENT && e.payload["task_id"] == id.as_str());
+            let ended = events.iter().any(|e| e.task_id.as_deref() == Some(id.as_str()) && matches!(e.kind.as_str(), "task.completed" | "task.failed" | "task.cancelled"));
+            if !(raised_council || raised_help) || ended {
+                return Err(refuse());
+            }
+            let key = (m.id.clone(), id.clone());
+            if let Some(a) = self.host_aborts.lock().unwrap().remove(&key) {
+                a.abort();
+            }
+            let panel = self.panels.lock().unwrap().remove(&key);
+            if let Some(mut pn) = panel {
+                pn.abort_all();
+            }
+            self.engine.cancel_task_because(&m, &id, &format!("the host cancelled it: {reason}")).await.map_err(engine_err)?;
+            // Whatever the cancelled work still held is released, as `run_council` does at its end.
+            let _ = m.release_blocks(&id).await;
+            if raised_help {
+                if let Some(r) = self.helps.lock().unwrap().get_mut(&id) {
+                    r.result = Some(json!({"status": "cancelled", "help_id": id, "reason": reason, "note": "you cancelled this request"}));
+                    r.at = Instant::now();
+                }
+                "help"
+            } else if events.iter().any(|e| e.kind == h::COUNCIL_EVENT && e.payload["task_id"] == id.as_str() && e.payload["venue"] == "panel") {
+                "panel"
+            } else {
+                "council"
+            }
+        };
+        m.append(EventEnvelope::new(&m.id, "host.job.cancelled", json!({"id": id, "kind": kind, "reason": reason, "source": "host-reported"}))).await.map_err(engine_err)?;
+        Ok(json!({"id": id, "cancelled": true, "kind": kind, "reason": reason, "note": "stopped: nothing more is spent on it. Your reason is recorded as yours (host-reported)."}))
     }
 
     /// Spec 089 P7: what the Panel `key` waits on now (`delphi_seat`, `host_seats`), or `None` (no such Panel, or nothing outstanding).
@@ -953,6 +1048,8 @@ impl EngineService {
             return Err(err(code::INVALID_PARAMS, "no such help request for this session"));
         }
         let v = self.wait_help(&id, Duration::from_secs(25)).await;
+        let m = self.mission_at(Some(&c.mission()), c.cwd.to_str()).await?;
+        let v = self.with_help_progress(v, &m, &id, h::tail_lines(&p));
         Ok(self.signed_help(v, &id))
     }
 
@@ -3131,6 +3228,7 @@ impl Extension for ServiceExt {
                 "host.request_research" => svc.host_request_research(params, ctx).await,
                 "host.research_status" => svc.host_research_read(params, ctx, false).await,
                 "host.research_result" => svc.host_research_read(params, ctx, true).await,
+                "host.cancel_job" => svc.host_cancel_job(params, ctx).await,
                 "recovery.resume" => svc.recovery_resume(params, ctx).await,
                 "handoff.resume" => svc.handoff_resume(params, ctx).await,
                 "mcp.get" => svc.mcp_switch(params, ctx, false).await,
@@ -3549,6 +3647,53 @@ mod tests {
         .await;
         let events = replay_log(&delphi_core::sessions::dir(&ws_dir, "host-abcdef0123456789"));
         assert_eq!(events.iter().filter(|e| e.kind == crate::host_rpc::COUNCIL_EVENT).count(), 1);
+    }
+
+    /// Spec 098 §19: a host stops a job it raised, with its reason, and no job it did not raise; the three ways of being refused read alike.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_host_cancels_a_job_it_raised_and_no_other_and_says_so_in_the_record() {
+        let f = setup(vec![], 5.0, |_| {});
+        let ws_dir = f.engine.ws.dir.clone();
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            c.hello(&htok).unwrap();
+            let p = |extra: Value| {
+                let mut b = json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cwd});
+                for (k, v) in extra.as_object().unwrap() {
+                    b[k] = v.clone();
+                }
+                b
+            };
+            // A Panel costs nothing to open, which makes it a safe job to stop.
+            let r = c.call("host.council_open", p(json!({"question": "Table or file for the retry queue?", "options": ["table", "file"]}))).unwrap();
+            let id = r["council_id"].as_str().unwrap().to_string();
+            // Another session's, an id that is nothing, an empty id and a research id that is not ours: all refused alike.
+            let other = json!({"session": "fedcba9876543210", "tool": "x", "cwd": cwd, "id": id});
+            assert_eq!(rpc_code(c.call("host.cancel_job", other)), Some(code::INVALID_PARAMS));
+            for bad in ["t-nope", "", "r-t_0009"] {
+                assert_eq!(rpc_code(c.call("host.cancel_job", p(json!({"id": bad})))), Some(code::INVALID_PARAMS), "{bad:?}");
+            }
+            assert_eq!(c.call("host.council_status", p(json!({"council_id": id, "wait": false}))).unwrap()["state"], "deliberating", "a refused cancel stops nothing");
+            // Its own: stopped, with the reason it gave.
+            let done = c.call("host.cancel_job", p(json!({"id": id, "reason": "a duplicate of another Council"}))).unwrap();
+            assert_eq!((done["cancelled"].clone(), done["kind"].as_str(), done["reason"].as_str()), (json!(true), Some("panel"), Some("a duplicate of another Council")));
+            let st = c.call("host.council_status", p(json!({"council_id": id, "wait": false}))).unwrap();
+            assert_eq!(st["state"], "cancelled", "{st}");
+            assert!(st["reason"].as_str().unwrap().contains("the host cancelled it: a duplicate of another Council"), "{st}");
+            // It has ended, so a second cancel finds nothing running.
+            assert_eq!(rpc_code(c.call("host.cancel_job", p(json!({"id": id})))), Some(code::INVALID_PARAMS));
+        })
+        .await;
+        let events = replay_log(&delphi_core::sessions::dir(&ws_dir, "host-abcdef0123456789"));
+        let cancelled: Vec<_> = events.iter().filter(|e| e.kind == "host.job.cancelled").collect();
+        assert_eq!(cancelled.len(), 1, "one cancel, one audit event");
+        assert_eq!((cancelled[0].payload["kind"].as_str(), cancelled[0].payload["source"].as_str()), (Some("panel"), Some("host-reported")));
+        assert_eq!(events.iter().filter(|e| e.kind == "task.cancelled").count(), 1);
+        assert!(!events.iter().any(|e| e.kind == "host.job.cancelled" && e.payload["id"] == "t-nope"), "a refused cancel leaves no record of a job");
     }
 
     #[tokio::test(flavor = "multi_thread")]

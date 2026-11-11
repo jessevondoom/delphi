@@ -101,6 +101,9 @@ pub struct Settings {
     pub council_budget_usd: f64,
     /// A Council seat that has not answered by then abstains.
     pub council_seat_timeout: Duration,
+    /// `[council] stall_secs` (`specs/098` §19): a status call flags a Council `stalled` when every seat still working has been
+    /// idle this long. `0` turns the flag off.
+    pub council_stall_secs: u64,
     /// `[seats] require_families` (`specs/091` SR-3): refuse a Panel that cannot show this many known families. `None` (the default)
     /// never refuses; the result is labelled `homogeneous` instead.
     pub require_families: Option<u32>,
@@ -179,6 +182,7 @@ impl Default for Settings {
             connector_settle: Duration::from_secs(10),
             council_budget_usd: 20.0,
             council_seat_timeout: Duration::from_secs(600),
+            council_stall_secs: 120,
             require_families: None,
             max_foreign_seats: 1,
             max_foreign_tokens: 100_000,
@@ -1172,6 +1176,12 @@ impl Engine {
     /// model call is charged its full reservation (its real usage can't be known), approvals waiting on the task
     /// are closed, and `task.cancelled` ends it so recovery never offers it again.
     pub async fn cancel_task(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str) -> Result<(), EngineError> {
+        self.cancel_task_because(m, task_id, "the operator stopped it").await
+    }
+
+    /// [`Engine::cancel_task`] with the reason written on `task.cancelled`. A host cancelling a job it raised (`specs/098` §19) says
+    /// so there, with its own words, instead of the operator's.
+    pub async fn cancel_task_because(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, reason: &str) -> Result<(), EngineError> {
         let events = m.replay()?;
         let open = m.budget.lock().unwrap().open_reservations();
         let mut batch = Vec::new();
@@ -1192,7 +1202,7 @@ impl Engine {
             batch.push(EventEnvelope::new(&m.id, "approval.resolved", json!({"approval_id": id, "resolution": "expired", "by": "operator", "reason": "the task was cancelled"})));
         }
         self.broker.end_task(task_id);
-        let mut c = EventEnvelope::new(&m.id, "task.cancelled", json!({"reason": "the operator stopped it"}));
+        let mut c = EventEnvelope::new(&m.id, "task.cancelled", json!({"reason": reason}));
         c.task_id = Some(task_id.to_string());
         batch.push(c);
         m.append_batch(batch).await?;

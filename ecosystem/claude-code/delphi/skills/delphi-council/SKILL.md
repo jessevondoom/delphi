@@ -24,6 +24,8 @@ Say plainly which depth you will run.
 
 Call `request_council` with the same arguments, relay each `phase` line from `council_status` while you wait, then call `council_result` with `wait: true` and show its `display` card **exactly as returned**. Do not paraphrase the dissent.
 
+**Waiting is not the same as stuck.** While it deliberates, `council_status` lists each seat's `state` (starting, reading, thinking, waiting_on_barrier, submitted, abstained), its `idle_s` (seconds since it last did anything) and `calls`, a short `tail` of what happened, and `stalled`. A seat that is reading or thinking is working, and in Round 1 the answers of the seats that are done are held back until the slowest one is in, so the `phase` can look unchanged for many minutes. Read the seats and the tail before you decide anything is wrong, and tell the operator what they show. **Do not convene a second Council while any seat shows activity: a duplicate is not a retry, it spends the operator's tokens twice.** Only when `stalled` is true (every working seat idle past the stall window) is it reasonable to stop, and then use `cancel_job` with the `council_id` and a short reason before you ask again.
+
 ## 3. A Panel
 
 Delphi holds the barrier and the rules; you run the seats.
