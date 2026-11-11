@@ -35,9 +35,9 @@ pub struct LiveWeb {
     pub transport: Arc<HttpTransport>,
     pub list: Arc<TrustedList>,
     pub engines: Vec<ProviderSpec>,
-    /// `[research] ladder` and its caps (`specs/098` §7.5 item 7a). Off: the fetcher reaches trusted-list hosts only.
+    /// The caps of the wider fetch (`specs/098` §7.5 item 7a), always on since the `ladder` flag was pulled (§13.2).
     pub wider: WiderFetch,
-    /// The URLs this run's searches returned; with the wider fetch on, the fetcher reaches these and nothing else beyond the list.
+    /// The URLs this run's searches returned; the fetcher reaches these and nothing else beyond the trusted list.
     pub observed: Arc<Observed>,
     allowance: Allowance,
     queries: AtomicUsize,
@@ -56,9 +56,9 @@ impl LiveWeb {
         }
     }
 
-    /// May the wider fetch read this URL: it is on, and a search of this run (or, for a host's claim, of the host's session) returned it.
+    /// May the wider fetch read this URL: a search of this run (or, for a host's claim, of the host's session) returned it.
     fn reaches(&self, url: &str) -> bool {
-        self.wider.enabled && self.observed.contains(url)
+        self.observed.contains(url)
     }
 
     /// An off-list page the search returned. It is fetched exactly as the provider gave it, through the daemon's own fetcher
@@ -512,9 +512,9 @@ mod tests {
 
     // ── slice S1d of spec 098: the wider fetch (7a only) ──
 
-    fn live(enabled: bool, per_host: usize, per_run: usize) -> LiveWeb {
+    fn live(per_host: usize, per_run: usize) -> LiveWeb {
         let list = TrustedList::parse("[[source]]\nhost = \"who.int\"\nreuse = \"full\"\n", None).unwrap();
-        LiveWeb::new(Arc::new(HttpTransport::new().unwrap()), Arc::new(list), vec![], WiderFetch { enabled, per_host, per_run })
+        LiveWeb::new(Arc::new(HttpTransport::new().unwrap()), Arc::new(list), vec![], WiderFetch { per_host, per_run })
     }
 
     fn canned(url: &str, text: &str) {
@@ -526,21 +526,8 @@ mod tests {
     }
 
     #[test]
-    fn with_the_flag_off_nothing_beyond_the_trusted_list_is_reachable() {
-        let w = live(false, 2, 10);
-        let u = "https://off-s1d-a.example/a";
-        w.remember(1, &found(delphi_adapter::research::search::Provider::Brave, &[u]));
-        canned(u, "text");
-        assert!(w.observed.contains(u), "the set is built either way");
-        assert!(!w.can_fetch(u), "but the fetcher does not use it");
-        assert!(w.fetch(u).unwrap_err().contains("OffList"), "the old refusal, unchanged");
-        assert!(w.can_fetch("https://who.int/x"), "the trusted list is reached as before");
-        assert_eq!(w.allowance.used(), 0);
-    }
-
-    #[test]
-    fn with_it_on_only_a_url_a_search_returned_is_reachable_and_it_is_fetched_as_given() {
-        let w = live(true, 2, 10);
+    fn only_a_url_a_search_returned_is_reachable_and_it_is_fetched_as_given() {
+        let w = live(2, 10);
         let (a, other_path, with_query) = ("https://on-s1d-a.example/a?id=7", "https://on-s1d-a.example/b", "https://on-s1d-a.example/a?id=7&utm=x");
         w.remember(2, &found(delphi_adapter::research::search::Provider::Searxng, &[a]));
         for u in [a, other_path, with_query] {
@@ -553,11 +540,32 @@ mod tests {
             assert!(w.fetch(u).unwrap_err().contains("OffList"), "{u}");
         }
         assert_eq!(w.allowance.used(), 1, "a refused URL costs no allowance");
+        assert!(w.can_fetch("https://who.int/x"), "the trusted list is reached directly, as before");
+    }
+
+    // `specs/098` §12 item 16 (the exempt fetch path): what is fetched is the string the provider returned. A fragment (never sent to a server)
+    // is dropped when looking the URL up, but the page is fetched from, and reported as, the provider's own string; nothing is appended.
+    #[test]
+    fn a_fetched_url_is_exactly_the_one_the_provider_returned() {
+        let w = live(2, 10);
+        let given = "https://exact-s11.example/p?id=7&lang=en";
+        w.remember(1, &found(delphi_adapter::research::search::Provider::Brave, &[given]));
+        canned(given, "exact text");
+        let page = w.fetch(&format!("{given}#section-3")).unwrap();
+        assert_eq!(page.url, given, "the page is the provider's URL, with no fragment and nothing added");
+        assert_eq!(page.text, "exact text");
+        // the lookup key never grows a URL: it is the URL without its fragment
+        for u in ["https://a.example/x", "https://a.example/x?q=1", "https://a.example/x?q=1#frag", "https://a.example:443/x?q=a%20b"] {
+            let k = crate::research_observed::key(u).unwrap();
+            assert!(u.starts_with(&k) || k.starts_with(u.split('#').next().unwrap()), "{u} -> {k}");
+            assert!(k.len() <= u.len(), "{u} -> {k}: the key must not be longer than the URL");
+            assert!(!k.contains('#'));
+        }
     }
 
     #[test]
     fn provenance_is_the_provider_and_the_query_number_or_trusted_and_never_the_query() {
-        let w = live(true, 2, 10);
+        let w = live(2, 10);
         w.remember(3, &found(delphi_adapter::research::search::Provider::Brave, &["https://prov-s1d.example/a"]));
         assert_eq!(w.provenance("https://prov-s1d.example/a").as_deref(), Some("search:brave#3"));
         assert_eq!(w.provenance("https://who.int/x").as_deref(), Some("trusted"));
@@ -566,7 +574,7 @@ mod tests {
 
     #[test]
     fn the_per_host_and_per_run_caps_hold_and_the_refusal_is_a_fixed_word() {
-        let w = live(true, 2, 3);
+        let w = live(2, 3);
         let urls = ["https://cap-s1d-a.example/1", "https://cap-s1d-a.example/2", "https://cap-s1d-a.example/3", "https://cap-s1d-b.example/1", "https://cap-s1d-c.example/1"];
         w.remember(1, &found(delphi_adapter::research::search::Provider::Brave, &urls));
         for u in urls {
@@ -584,7 +592,7 @@ mod tests {
     /// string it builds out of text it holds is never sent anywhere.
     #[test]
     fn a_url_the_host_made_up_is_not_fetched_even_with_the_flag_on() {
-        let w = live(true, 2, 10);
+        let w = live(2, 10);
         let returned = "https://host-s1d.example/paper";
         w.observed.restore(vec![(returned.to_string(), "search:brave#4".to_string())]);
         canned(returned, "paper text");
@@ -601,7 +609,7 @@ mod tests {
     #[test]
     fn a_verified_off_list_claim_is_public_and_raises_one_source_card_per_host() {
         use crate::host_noted as n;
-        let w = live(true, 2, 10);
+        let w = live(2, 10);
         let returned = "https://card-s1d.example/paper";
         w.observed.restore(vec![(returned.to_string(), "search:brave#1".to_string())]);
         canned(returned, "Our vault keys rotate every 90 days, per policy.");

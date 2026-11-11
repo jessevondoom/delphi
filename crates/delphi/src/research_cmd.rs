@@ -1,5 +1,5 @@
 //! `delphi research log <id>`: the search log of a finished host research job (`specs/101` §3). Read-only: it prints what the daemon
-//! wrote beside the result when `[research] search_log` was on, and calls no model and no network.
+//! wrote beside the result, and calls no model and no network.
 
 use delphi_engine::search_log;
 use std::path::Path;

@@ -57,10 +57,64 @@ pub const PATHS: [(Channel, &str, Wired); 11] = [
     (Channel::Telemetry, "", Wired::Unaudited),
 ];
 
+/// A path that is deliberately NOT guarded by [`check`] (`specs/098` §12 item 16, §7.5 item 7a): it carries no text from any entry, so there
+/// is nothing for the check to read, and its guard is structural. Listing it here, with its reason and the tests that keep the reason true,
+/// makes the exemption a recorded decision and not an oversight. Each named test must exist (the enumeration test checks). If a change could
+/// put entry text into the request, the exemption lapses and the path must be registered in [`PATHS`] and call [`check`].
+pub struct Exempt {
+    pub name: &'static str,
+    /// The file that sends, relative to this crate's `src`.
+    pub sender: &'static str,
+    pub reason: &'static str,
+    /// `(file relative to the crates directory, test name)`.
+    pub proofs: &'static [(&'static str, &'static str)],
+}
+
+pub const EXEMPT: [Exempt; 1] = [Exempt {
+    name: "the fetch of an observed URL (slice S1d, 7a)",
+    sender: "research_host.rs",
+    reason: "it sends one URL that the daemon's own provider search returned, exactly as returned, so no entry text can be in it; its guard is membership in the per-run observed set, which only the daemon's own search fills",
+    proofs: &[
+        ("delphi-engine/src/egress.rs", "only_the_daemons_own_search_adds_to_the_observed_set"),
+        ("delphi-engine/src/research_host.rs", "a_fetched_url_is_exactly_the_one_the_provider_returned"),
+        ("delphi-engine/src/research_host.rs", "only_a_url_a_search_returned_is_reachable_and_it_is_fetched_as_given"),
+        ("delphi-engine/src/research_observed.rs", "no_file_of_the_job_pipeline_follows_a_link_found_in_a_page"),
+        ("delphi-engine/src/research_run.rs", "a_url_a_model_wrote_never_reaches_the_fetcher"),
+        ("delphi-engine/src/search_log.rs", "a_host_declared_search_carries_no_url_and_never_touches_the_observed_set"),
+        ("delphi-engine/src/service.rs", "a_claim_whose_url_the_sessions_search_returned_is_refetched_public_and_raises_a_source_card"),
+    ],
+}];
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The non-test text of a source file: everything before its last `mod tests`. (Cutting at the first `#[cfg(test)]` would hide the rest of
+    /// a file that has an early `#[cfg(test)] mod x_tests;` line, and an attribute indented inside a module is not a test module.)
+    fn production(src: &str) -> &str {
+        let cut = src.rfind("\n#[cfg(test)]\nmod tests").or_else(|| src.rfind("\nmod tests")).unwrap_or(src.len());
+        &src[..cut]
+    }
+
+    fn crate_sources() -> Vec<(String, String)> {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    if !matches!(p.file_name().and_then(|n| n.to_str()), Some("target" | "tests" | "node_modules" | "fixtures")) {
+                        walk(&p, out);
+                    }
+                } else if p.extension().is_some_and(|x| x == "rs") {
+                    out.push(p);
+                }
+            }
+        }
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").canonicalize().unwrap();
+        let mut files = Vec::new();
+        walk(&crates, &mut files);
+        files.into_iter().map(|f| (f.strip_prefix(&crates).unwrap().to_string_lossy().replace('\\', "/"), std::fs::read_to_string(&f).unwrap())).collect()
+    }
 
     #[test]
     fn deny_by_default_and_private_never_leaves() {
@@ -123,5 +177,53 @@ mod tests {
             let prod = text.split("#[cfg(test)]\nmod ").next().unwrap_or("");
             assert!(!prod.contains("may_leave("), "{name} calls may_leave directly: go through egress::check");
         }
+    }
+
+    /// An exemption is only as good as the tests that keep its reason true: every one named in [`EXEMPT`] must exist.
+    #[test]
+    fn every_exempt_path_names_proof_tests_that_exist() {
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        for e in EXEMPT.iter() {
+            assert!(!e.reason.is_empty() && !e.proofs.is_empty(), "{}: an exempt path needs a reason and proofs", e.name);
+            assert!(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(e.sender).is_file(), "{}: the sender file {} is missing", e.name, e.sender);
+            for (file, test) in e.proofs {
+                let text = std::fs::read_to_string(crates.join(file)).unwrap_or_else(|er| panic!("{file}: {er}"));
+                assert!(text.contains(&format!("fn {test}(")), "{}: the proof test `{test}` is missing from {file}", e.name);
+            }
+        }
+    }
+
+    /// `specs/098` §12 item 16, test (a): the observed set is filled only by the daemon's own provider search (`LiveWeb::remember`, called
+    /// right after the provider returned its rows) and restored only from the `research.observed` events the daemon's own research job
+    /// wrote. A host, a model, a claim's `source_url`, a declared search or a page's links have no way in. A new caller fails here, and a
+    /// reviewer has to ask whether it can put entry text into a fetched URL.
+    #[test]
+    fn only_the_daemons_own_search_adds_to_the_observed_set() {
+        let re = |p: &str| regex::Regex::new(p).unwrap();
+        let (observe, restore, new_set, remember) = (re(r"observed\s*\.\s*observe\("), re(r"observed\s*\.\s*restore\("), re(r"Observed::new\("), re(r"\bself\s*\.\s*remember\("));
+        let mut seen: std::collections::BTreeMap<String, (usize, usize, usize, usize)> = Default::default();
+        for (rel, src) in crate_sources() {
+            if rel.ends_with("research_observed.rs") {
+                continue; // the module that defines the set
+            }
+            let code: String = production(&src).lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+            let counts = (observe.find_iter(&code).count(), restore.find_iter(&code).count(), new_set.find_iter(&code).count(), remember.find_iter(&code).count());
+            if counts != (0, 0, 0, 0) {
+                seen.insert(rel, counts);
+            }
+        }
+        let want: std::collections::BTreeMap<String, (usize, usize, usize, usize)> = [
+            // the provider search: one `observe` in `remember`, which is called once, in `search`, after the provider answered; one set per `LiveWeb`
+            ("delphi-engine/src/research_host.rs".to_string(), (1, 0, 1, 1)),
+            // the daemon restores the set for a host's claim from the `research.observed` events its own research job wrote
+            ("delphi-engine/src/service.rs".to_string(), (0, 1, 0, 0)),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(seen, want, "something new fills the observed set: it must come only from the daemon's own provider search");
+        // and the one `remember` call sits in `search`, right after the provider's answer
+        let host = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/research_host.rs")).unwrap();
+        let at = host.find("self.remember(n, &found);").expect("the one remember call");
+        assert!(host[..at].rsplit("fn search(&self").next().is_some_and(|b| b.contains("search(self.transport")), "`remember` must follow the provider search in `search`");
     }
 }

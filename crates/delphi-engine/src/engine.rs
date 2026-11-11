@@ -110,18 +110,13 @@ pub struct Settings {
     /// `[seats] max_foreign_seats` and `max_foreign_tokens` (SR-4): per Council.
     pub max_foreign_seats: u32,
     pub max_foreign_tokens: u64,
-    /// `[seats] red_team_kind` (`specs/098` section 6.2): `council_open` accepts `kind: red_team`. Off by default.
-    pub red_team_kind: bool,
     /// `[research] thin_below` (`specs/098` §7.5 item 4): fewer kept, cited claims than this from the knowledge base and the trusted
     /// sources together make a research answer `coverage: thin`. Default 3.
     pub thin_below: usize,
-    /// `[research] ladder`, `fetch_per_host`, `fetch_per_run` (`specs/098` §7.5 item 7a, slice S1d): with `ladder` on, the daemon's fetch also
-    /// reaches the URLs a search of the run returned (and a host's claim URL that an earlier search of its session returned), inside
-    /// two caps. Off by default; the caps are hypotheses.
+    /// `[research] fetch_per_host`, `fetch_per_run` (`specs/098` §7.5 item 7a, slice S1d): the daemon's fetch also reaches the URLs a search
+    /// of the run returned (and a host's claim URL that an earlier search of its session returned), inside two caps. Always on since the
+    /// `ladder` flag was pulled (§13.2); the caps are hypotheses.
     pub wider_fetch: crate::research_observed::WiderFetch,
-    /// `[research] search_log` (`specs/101` §3, §8): write a search log beside each host research result. Default off until slice A's exit
-    /// criterion passes; off is spec 098 as merged.
-    pub search_log: bool,
     /// `[research] young_domain_days`, `burst_hours`, `similar_above`, `unfamiliar_counts` (`specs/098` §7.6, §18): the numbers the corroboration
     /// count uses. The defaults are proposals to calibrate.
     pub support: crate::corroboration::Params,
@@ -197,10 +192,8 @@ impl Default for Settings {
             require_families: None,
             max_foreign_seats: 1,
             max_foreign_tokens: 100_000,
-            red_team_kind: false,
             thin_below: 3,
             wider_fetch: Default::default(),
-            search_log: false,
             support: crate::corroboration::Params::default(),
             tiers: Default::default(),
             park_poll: Duration::from_secs(5),

@@ -395,7 +395,7 @@ pub fn persist(ws: &Path, research_id: &str, log: &Value) -> Result<(), String> 
 
 pub fn read(ws: &Path, research_id: &str) -> Result<Value, String> {
     let p = path(ws, research_id).ok_or_else(|| format!("`{research_id}` is not a research id"))?;
-    let text = std::fs::read_to_string(&p).map_err(|_| format!("no search log for `{research_id}`: it is written only when [research] search_log is on, and only for a research job that has finished"))?;
+    let text = std::fs::read_to_string(&p).map_err(|_| format!("no search log for `{research_id}`: it is written only for a research job that has finished"))?;
     serde_json::from_str(&text).map_err(|e| format!("the search log for `{research_id}` is not readable: {e}"))
 }
 
@@ -596,6 +596,22 @@ mod tests {
         let t = render(&log.to_json(), "r-1");
         for needle in ["search log for r-1", "(private", "search:brave", "\"postgres index bloat\"", "withheld: private", "declared by the host", "flow: 7 found, 1 duplicates removed, 3 kept", "budget 2", "failed: no_results"] {
             assert!(t.contains(needle), "{needle}\n{t}");
+        }
+    }
+
+    // `specs/098` §12 item 16 (the exempt fetch path): a search the host says it ran is a tool word, a query string and a count. It has no
+    // URL field, a `url` or `urls` it carries is never read, and this module cannot reach the observed set at all.
+    #[test]
+    fn a_host_declared_search_carries_no_url_and_never_touches_the_observed_set() {
+        let v = serde_json::json!([{"tool": "slack", "query": "index bloat", "hits": 3, "url": "https://evil.example/x", "urls": ["https://evil.example/y"], "results": [{"url": "https://evil.example/z"}]}]);
+        let got = parse_declared(&v);
+        assert_eq!(got.len(), 1);
+        let shown = format!("{:?}", got[0]);
+        assert!(!shown.contains("evil.example"), "{shown}");
+        let src = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/search_log.rs")).unwrap();
+        let prod = &src[..src.rfind("\nmod tests").or_else(|| src.rfind("#[cfg(test)]")).unwrap_or(src.len())];
+        for needle in ["Observed", "research_observed", "fact_fetch", "LiveWeb"] {
+            assert!(!prod.contains(needle), "the search log module must not reach the fetcher or the observed set: `{needle}`");
         }
     }
 }

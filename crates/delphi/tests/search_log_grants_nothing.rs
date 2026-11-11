@@ -12,8 +12,6 @@ const READERS: &[(&str, &str)] = &[
     ("crates/delphi-engine/src/research_run.rs", "writes lines as the run searches and attaches the log to the result; no branch reads it"),
     ("crates/delphi-engine/src/service.rs", "reads the host's declared searches and keeps the finished log beside the result"),
     ("crates/delphi-engine/src/mcp_host.rs", "declares the optional `host_searches` input of `request_research`; the daemon reads it"),
-    ("crates/delphi-engine/src/engine.rs", "holds the `[research] search_log` setting"),
-    ("crates/delphi-engine/src/boot.rs", "parses the `[research] search_log` setting"),
     ("crates/delphi-engine/src/lib.rs", "declares the module"),
     ("crates/delphi/src/research_cmd.rs", "prints a kept log for the operator"),
     ("crates/delphi/src/main.rs", "registers `delphi research log` and its help text"),
@@ -123,7 +121,7 @@ fn the_runner_only_writes_to_the_log_and_never_branches_on_it() {
         }
     }
     assert!(other.is_empty(), "the runner uses the log in a way this test does not know: {other:?}");
-    // the only reads are the summary and the attachment that sit under `if deps.search_log`
+    // the only reads are the summary and the attachment the runner writes into the result
     for (n, l) in &reads {
         assert!(!l.starts_with("if ") && !l.contains("match ") && !l.contains("&&") && !l.contains("||"), "line {n} branches on the log's content: {l}");
     }
