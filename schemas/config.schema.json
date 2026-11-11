@@ -138,6 +138,10 @@
       "description": "How a research answer describes its coverage (specs/098 section 7.5).",
       "additionalProperties": false,
       "properties": {
+        "young_domain_days": { "type": "integer", "minimum": 0, "maximum": 3650, "description": "A registrable domain younger than this counts zero toward corroboration, when its age is known (specs/098 section 7.6). Default 180." },
+        "burst_hours": { "type": "integer", "minimum": 0, "maximum": 720, "description": "Citations first seen within this many hours of each other count once, when their first-seen times are known. Default 24." },
+        "similar_above": { "type": "number", "exclusiveMinimum": 0, "maximum": 1, "description": "Pages more similar than this are one origin. Never looser than the validator's own 0.5 (specs/040 section 6.2). Default 0.8." },
+        "unfamiliar_counts": { "type": "boolean", "description": "Whether a domain no list names counts as an origin. A domain a list calls weak, and every excluded one, count zero either way. Default true." },
         "thin_below": { "type": "integer", "minimum": 1, "maximum": 50, "description": "Fewer kept, cited claims than this from the knowledge base and the trusted sources together make a research answer say coverage: thin, and name the host rungs (close sources, the wider web) that can take over. Default 3." }
       }
     },

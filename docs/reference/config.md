@@ -92,9 +92,13 @@ Defaults are those of the template; "—" means no default.
 | `[search.<engine>] credential` ◆ | — | where the key comes from, as for an endpoint (`env:BRAVE_API_KEY`, `keychain:…`, `command:…`); every engine but `parallel` and `searxng` needs one |
 | `[search.searxng] url` ◆ | — | the SearXNG instance (https, or http to loopback) |
 | `[search.google] cx` ◆ | — | the Programmable Search engine id |
+| `[research] young_domain_days` | `180` | a registrable domain younger than this counts zero toward corroboration when its age is known; nothing supplies an age yet, so it does not fire today (`specs/098` §7.6) |
+| `[research] burst_hours` | `24` | citations first seen within this many hours of each other count once, when their first-seen times are known |
+| `[research] similar_above` | `0.8` | pages more similar than this are one origin; never looser than the validator's own `0.5` |
+| `[research] unfamiliar_counts` | `true` | whether a domain no list names counts as an origin; a domain a list calls weak, and every excluded one, count zero either way |
 | `[research] thin_below` | `3` | every research answer carries a coverage report per rung (knowledge base, trusted sources, close sources, the wider web); fewer kept, cited claims than this from the knowledge base and the trusted sources together make the answer say `coverage: thin` and name the host rungs that can take over. 1 to 50 ([`specs/098`](../../specs/098-where-agents-run-host-first-locus-and-the-inside-exceptions.md) §7.5) |
 
-Which sites the job may read is not here: it is `context/sources/trusted.toml` (ratified in a release) plus your own `$DELPHI_HOME/operator/trusted-sources.toml`.
+Which sites the job may read is not here: it is `context/sources/trusted.toml` (ratified in a release) plus your own `$DELPHI_HOME/operator/trusted-sources.toml`. An entry in your own list can carry two optional fields that decide only the `trusted_sources` count shown beside a corroborated claim (`specs/098` §7.6), never what may be fetched: `topics = ["postgres", "indexes"]` limits the entry to claims that contain one of those words (no `topics` means every claim), and `added = "2026-11-10"` makes it count only for claims captured after that day (no `added` means it predates every claim).
 
 ## Fact validator ◆
 

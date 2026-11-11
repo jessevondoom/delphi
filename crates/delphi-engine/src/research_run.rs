@@ -11,10 +11,11 @@
 //!   a page cannot confirm what it alone said;
 //! * the runner never writes trust metadata and the validator has no way to return any.
 
+use crate::corroboration::{self, Cite, Params, Support};
 use crate::research_jobs::{Egress, Finish, JobCtx};
-use crate::research_plan::{canonical_url, claim_fingerprint, plan, widen_to_web, Added, ClaimSet, QueryKind, Seen};
+use crate::research_plan::{canonical_url, clean_query, claim_fingerprint, plan, widen_to_web, Added, ClaimSet, QueryKind, Seen};
 use delphi_adapter::research::search::Row;
-use delphi_core::knowledge_status::Status;
+use delphi_core::knowledge_status::{raise_for_support, support_detail, Status};
 use delphi_core::redact::Redactor;
 use delphi_core::research::{capture_policy, claim_status, ClaimState, Depth};
 use serde_json::{json, Value};
@@ -87,6 +88,16 @@ pub trait Library: Send + Sync {
     fn note_lead(&self, _row: &Row) -> Result<(), String> {
         Ok(())
     }
+    /// What the corroboration count needs to know about a source this run captured (`specs/098` §7.6): its registrable domain, class,
+    /// whether the class is weak only by default, its text, and whether the operator's trusted list covered it inside the topic scope of
+    /// the claim (`claim_text`). `None` when the library cannot describe it; such a source does not count.
+    fn cite_info(&self, _source_id: &str, _claim_text: &str) -> Option<Cite> {
+        None
+    }
+    /// Is the source private? A claim that rests on a private source is never put in an outbound query (`specs/098` §7.5 item 5).
+    fn is_private(&self, _source_id: &str) -> bool {
+        false
+    }
 }
 
 pub struct Deps<'a> {
@@ -100,6 +111,8 @@ pub struct Deps<'a> {
     /// `[research] thin_below` (`specs/098` §7.5 item 4): fewer kept, cited claims than this from the knowledge base and the
     /// trusted sources together make the answer `coverage: thin`.
     pub thin_below: usize,
+    /// `[research]` numbers for the corroboration count (`specs/098` §18).
+    pub support: &'a Params,
 }
 
 #[derive(Debug, Clone)]
@@ -113,6 +126,10 @@ pub struct ClaimRec {
     pub from_trusted: bool,
     pub state: ClaimState,
     pub retrieved: String,
+    /// How many independent origins and trusted sources state it, counted by code at the end of the run (`corroboration`). Display only.
+    pub support: Support,
+    /// Another claim about the same thing disagrees (`contradictions`), set before the claim is staged.
+    pub contested: bool,
 }
 
 /// How many pages a job reads at each depth.
@@ -153,12 +170,49 @@ pub fn validation_order(claims: &[ClaimRec]) -> Vec<usize> {
 }
 
 fn claim_json(c: &ClaimRec, contested: bool) -> Value {
-    let status: Status = if contested && c.state != ClaimState::Refuted { claim_status(ClaimState::Contradicted) } else { claim_status(c.state) };
+    let base: Status = if contested && c.state != ClaimState::Refuted { claim_status(ClaimState::Contradicted) } else { claim_status(c.state) };
+    // Three or more independent origins lift a `noted` claim to `corroborated`; contested, checking, validated and disproved all win
+    // over a count (`specs/098` §7.6). The count and the trusted-source flag are shown, never read as a reason to trust anything.
+    let status = raise_for_support(base, c.support.origins);
+    let detail = if status == Status::Corroborated { support_detail(c.support.origins, c.support.trusted_sources) } else { format!("{} independent origin(s) · trusted_sources: {}", c.support.origins, c.support.trusted_sources) };
     json!({
         "id": c.id, "assertion": format!("{} {} {}", c.x.subject, c.x.predicate, c.x.object).split_whitespace().collect::<Vec<_>>().join(" "),
         "source_ids": c.source_ids, "quote": c.x.quote, "locator": c.x.locator, "retrieved": c.retrieved, "licence": "unknown",
         "knowledge_status": status.as_str(), "contested": contested, "from_trusted_source": c.from_trusted,
+        "corroboration": {"origins": c.support.origins, "trusted_sources": c.support.trusted_sources, "detail": detail},
     })
+}
+
+/// The corroboration of one claim from the sources the run captured for it: its citations are pages the daemon fetched itself, and the
+/// scout's quote was found in each page's text by code (`parse_claims`), so a citation here is quote-verified.
+fn support_of(c: &ClaimRec, deps: &Deps<'_>) -> Support {
+    let text = format!("{} {} {}", c.x.subject, c.x.predicate, c.x.object);
+    let cites: Vec<Cite> = c.source_ids.iter().filter_map(|s| deps.library.cite_info(s, &text)).collect();
+    corroboration::support(&cites, deps.support)
+}
+
+/// The claims the corroboration pass looks for more support for, and how many queries it may send (`specs/098` §7.5 item 5). A `quick`
+/// run has no pass; the others keep to a few claims so the pass stays inside the depth's step budget.
+fn pass_claims(depth: Depth) -> usize {
+    match depth {
+        Depth::Quick => 0,
+        Depth::Survey => 2,
+        Depth::Deep => 4,
+    }
+}
+
+/// The two queries of the corroboration pass for one claim: one for independent support, one for contradiction. Built from the claim
+/// by code and cleaned like any query (`clean_query` redacts secrets, paths and private addresses). `None` when nothing usable is left.
+fn pass_queries(c: &ClaimRec, redactor: &Redactor) -> Vec<(&'static str, String)> {
+    let claim = format!("{} {} {}", c.x.subject, c.x.predicate, c.x.object);
+    let mut out = Vec::new();
+    if let Some(q) = clean_query(&claim, redactor) {
+        out.push(("support", q));
+    }
+    if let Some(q) = clean_query(&format!("{} disputed OR incorrect OR false", claim), redactor) {
+        out.push(("contradiction", q));
+    }
+    out
 }
 
 fn day() -> String {
@@ -218,6 +272,41 @@ fn coverage_report(r: &Rungs, kb: usize, trusted_claims: usize, web_claims: usiz
     ];
     let host_rungs: Vec<&str> = if thin { vec!["close", "web"] } else { vec![] };
     (thin, json!({"thin_below": thin_below, "counted": counted, "rungs": rungs, "host_rungs": host_rungs, "leads_kept": r.leads}))
+}
+
+/// Read one page into the claim set: keep it as a source, extract its claims, and merge a claim already known into the claim that holds
+/// it (a second citation) or start a new one. The scout's quote was found in the page's text by code, so each citation is quote-verified.
+async fn ingest(deps: &Deps<'_>, question: &str, page: &Page, trusted: bool, retrieved: &str, set: &mut ClaimSet, claims: &mut Vec<ClaimRec>) {
+    let Ok(source_id) = deps.library.capture(&page.url, &page.text, trusted).await else { return };
+    let Ok(found) = deps.scout.extract(question, page).await else { return };
+    for x in found {
+        let fp = claim_fingerprint(&x.subject, &x.predicate, &x.object, &x.scope, &x.time);
+        match set.add(&fp, &source_id) {
+            Added::Known => {}
+            Added::New => claims.push(ClaimRec {
+                id: fp[..12].to_string(),
+                group: claim_fingerprint(&x.subject, &x.predicate, "", &x.scope, &x.time),
+                fingerprint: fp,
+                x,
+                source_ids: vec![source_id.clone()],
+                source_urls: vec![page.url.clone()],
+                from_trusted: trusted,
+                state: ClaimState::Captured,
+                retrieved: retrieved.to_string(),
+                support: Support::default(),
+                contested: false,
+            }),
+            Added::Merged => {
+                if let Some(c) = claims.iter_mut().find(|c| c.fingerprint == fp) {
+                    if !c.source_ids.contains(&source_id) {
+                        c.source_ids.push(source_id.clone());
+                        c.source_urls.push(page.url.clone());
+                    }
+                    c.from_trusted |= trusted;
+                }
+            }
+        }
+    }
 }
 
 /// Run one research job. `Finish::Partial` when the step budget ran out; an `Err` only when nothing could be done at all.
@@ -299,32 +388,66 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
             if trusted {
                 trusted_kept += 1;
             }
-            let Ok(source_id) = deps.library.capture(&page.url, &page.text, trusted).await else { continue };
-            let Ok(found) = deps.scout.extract(question, &page).await else { continue };
-            for x in found {
-                let fp = claim_fingerprint(&x.subject, &x.predicate, &x.object, &x.scope, &x.time);
-                match set.add(&fp, &source_id) {
-                    Added::Known => {}
-                    Added::New => claims.push(ClaimRec {
-                        id: fp[..12].to_string(),
-                        group: claim_fingerprint(&x.subject, &x.predicate, "", &x.scope, &x.time),
-                        fingerprint: fp,
-                        x,
-                        source_ids: vec![source_id.clone()],
-                        source_urls: vec![page.url.clone()],
-                        from_trusted: trusted,
-                        state: ClaimState::Captured,
-                        retrieved: retrieved.clone(),
-                    }),
-                    Added::Merged => {
-                        if let Some(c) = claims.iter_mut().find(|c| c.fingerprint == fp) {
-                            if !c.source_ids.contains(&source_id) {
-                                c.source_ids.push(source_id.clone());
-                                c.source_urls.push(page.url.clone());
-                            }
-                            c.from_trusted |= trusted;
-                        }
+            ingest(deps, question, &page, trusted, &retrieved, &mut set, &mut claims).await;
+        }
+    }
+
+    // The corroboration pass (`specs/098` §7.5 item 5): for a survey or a deep run, each central PUBLIC claim with fewer than three
+    // independent origins gets one query for independent support and one for contradiction. A claim that rests on a private source is
+    // never put in an outbound query. Every search and fetch still goes through `ctx.egress`, so the depth's step budget bounds it.
+    let mut pass = (0usize, 0usize);
+    if pass_claims(depth) > 0 && !spent {
+        let mut wanted: Vec<(usize, String)> = claims
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| !c.source_ids.iter().any(|s| deps.library.is_private(s)))
+            .filter_map(|(i, c)| {
+                // A claim whose sources the library cannot describe cannot be counted, so there is nothing to measure the pass against.
+                if c.source_ids.iter().all(|sid| deps.library.cite_info(sid, "").is_none()) {
+                    return None;
+                }
+                let s = support_of(c, deps);
+                (s.origins < delphi_core::knowledge_status::CORROBORATED_MIN_ORIGINS).then_some((i, format!("{:02}{}", 99 - s.origins.min(99), c.id)))
+            })
+            .collect();
+        wanted.sort_by(|a, b| a.1.cmp(&b.1));
+        'pass: for (i, _) in wanted.into_iter().take(pass_claims(depth)) {
+            let c = claims[i].clone();
+            pass.0 += 1;
+            for (_kind, q) in pass_queries(&c, deps.redactor) {
+                if ctx.egress("scout", Egress::Search, &q).is_err() {
+                    spent = true;
+                    break 'pass;
+                }
+                pass.1 += 1;
+                let Ok(rows) = deps.web.search(&q) else { continue };
+                for row in rows.into_iter().take(3) {
+                    if !seen.url(&row.url) {
+                        continue;
                     }
+                    if !deps.web.can_fetch(&row.url) {
+                        ctx.refused(&row.url);
+                        if deps.library.note_lead(&row).is_ok() {
+                            cov.leads += 1;
+                        }
+                        continue;
+                    }
+                    if let Err(e) = ctx.egress("scout", Egress::Fetch, &row.url) {
+                        if e.contains("budget") {
+                            spent = true;
+                            break 'pass;
+                        }
+                        continue;
+                    }
+                    let Ok(page) = deps.web.fetch(&row.url) else {
+                        ctx.refused(&row.url);
+                        continue;
+                    };
+                    if !seen.text(&page.text) {
+                        continue;
+                    }
+                    let trusted = deps.web.is_trusted(&page.url);
+                    ingest(deps, question, &page, trusted, &retrieved, &mut set, &mut claims).await;
                 }
             }
         }
@@ -346,11 +469,17 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     }
 
     let conflicts = contradictions(&claims);
-    let contested: BTreeSet<&String> = conflicts.iter().flatten().collect();
+    let contested: BTreeSet<String> = conflicts.iter().flatten().cloned().collect();
+    // The tags every claim carries from the day it is staged (`specs/098` §7.6): its origins, its trusted sources, and whether
+    // anything contradicts it. Counted by code from the sources the run captured; the scout and the validator have no way to set them.
+    for c in claims.iter_mut() {
+        c.support = support_of(c, deps);
+        c.contested = contested.contains(&c.id);
+    }
     for c in &claims {
         let _ = deps.library.stage_claim(c);
     }
-    let claim_values: Vec<Value> = claims.iter().map(|c| claim_json(c, contested.contains(&c.id))).collect();
+    let claim_values: Vec<Value> = claims.iter().map(|c| claim_json(c, c.contested)).collect();
     let answer = match deps.scout.answer(question, &claims).await {
         Ok(a) => a.chars().take(7900).collect::<String>(),
         Err(_) => String::new(),
@@ -362,6 +491,7 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     let (thin, report) = coverage_report(&cov, set.kb_hits().len(), trusted_claims, claims.len() - trusted_claims, deps.thin_below);
     let result = json!({
         "coverage": if thin { "thin" } else { "ok" }, "coverage_report": report,
+        "corroboration_pass": {"claims": pass.0, "queries": pass.1},
         "answer": if answer.is_empty() { "No claim could be drawn from the sources read. (not validated)".to_string() } else { format!("{} (not validated: model synthesis)", answer) },
         "claims": claim_values, "citations": claims.iter().flat_map(|c| c.source_urls.iter().cloned()).collect::<BTreeSet<_>>(),
         "source_ids": source_ids, "kb_hits": set.kb_hits(), "new_claims": set.new_claims(), "contradictions": conflicts,
@@ -390,13 +520,23 @@ mod tests {
         fetched: Mutex<Vec<String>>,
         /// Every search fails with this word, as `LiveWeb` reports a configuration problem.
         fail: Option<&'static str>,
+        /// Results that only a query containing the marker returns, on top of `rows`.
+        extra: Vec<(&'static str, Vec<Row>)>,
     }
     impl Web for FakeWeb {
         fn search(&self, q: &str) -> Result<Vec<Row>, String> {
             self.searched.lock().unwrap().push(q.to_string());
             match self.fail {
                 Some(why) => Err(why.to_string()),
-                None => Ok(self.rows.clone()),
+                None => {
+                    let mut rows = self.rows.clone();
+                    for (marker, more) in &self.extra {
+                        if q.contains(marker) {
+                            rows.extend(more.iter().cloned());
+                        }
+                    }
+                    Ok(rows)
+                }
             }
         }
         fn is_trusted(&self, url: &str) -> bool {
@@ -442,10 +582,36 @@ mod tests {
         captured: Mutex<Vec<(String, bool)>>,
         staged: Mutex<Vec<String>>,
         leads: Mutex<Vec<String>>,
+        /// Describe each captured source for the corroboration count (the real library always does).
+        describe: bool,
+        /// Hosts the operator's list covers, hosts a list calls weak, and hosts whose source is private.
+        listed: BTreeSet<String>,
+        weak: BTreeSet<String>,
+        private: BTreeSet<String>,
     }
     impl Library for FakeLib {
         fn known_fingerprints(&self) -> BTreeSet<String> {
             self.known.clone()
+        }
+        fn cite_info(&self, source_id: &str, _claim_text: &str) -> Option<Cite> {
+            use crate::fact_sources::Class;
+            let h = source_id.strip_prefix("src-")?;
+            self.describe.then(|| Cite {
+                source_id: source_id.into(),
+                url: format!("https://{h}/p"),
+                origin: h.into(),
+                class: if self.weak.contains(h) { Class::Weak } else { Class::ReputableSecondary },
+                unfamiliar: false,
+                text: format!("page text of {source_id}"),
+                first_seen: None,
+                domain_age_days: None,
+                registrant: None,
+                listed_in_scope: self.listed.contains(h),
+                derived: false,
+            })
+        }
+        fn is_private(&self, source_id: &str) -> bool {
+            source_id.strip_prefix("src-").is_some_and(|h| self.private.contains(h))
         }
         fn note_lead(&self, row: &Row) -> Result<(), String> {
             self.leads.lock().unwrap().push(row.url.clone());
@@ -479,6 +645,7 @@ mod tests {
         redactor: Redactor,
         sites: Vec<String>,
         thin_below: usize,
+        support: Params,
     }
 
     impl Fixture {
@@ -493,10 +660,10 @@ mod tests {
                 ("https://nih.gov/b".to_string(), vec![x("fever")]),
                 ("https://blog.example/a".to_string(), vec![x("headaches")]),
             ]));
-            Fixture { web, scout, validator: FakeValidator { verdict, asked: Default::default() }, lib: FakeLib::default(), redactor: Redactor::new(), sites: vec!["who.int".into(), "nih.gov".into()], thin_below: 3 }
+            Fixture { web, scout, validator: FakeValidator { verdict, asked: Default::default() }, lib: FakeLib::default(), redactor: Redactor::new(), sites: vec!["who.int".into(), "nih.gov".into()], thin_below: 3, support: Params::default() }
         }
         fn deps(&self) -> Deps<'_> {
-            Deps { web: &self.web, scout: &self.scout, validator: &self.validator, library: &self.lib, redactor: &self.redactor, sites: &self.sites, thin_below: self.thin_below }
+            Deps { web: &self.web, scout: &self.scout, validator: &self.validator, library: &self.lib, redactor: &self.redactor, sites: &self.sites, thin_below: self.thin_below, support: &self.support }
         }
     }
 
@@ -586,8 +753,8 @@ mod tests {
         assert_eq!(v["kb_hits"].as_array().unwrap().len(), 1);
         assert_eq!(f.lib.staged.lock().unwrap().len(), 1, "only the new claim is staged");
         let recs = [
-            ClaimRec { id: "a".into(), fingerprint: "a".into(), group: "g".into(), x: x("o"), source_ids: vec![], source_urls: vec![], from_trusted: false, state: ClaimState::Captured, retrieved: "".into() },
-            ClaimRec { id: "b".into(), fingerprint: "b".into(), group: "g2".into(), x: x("o"), source_ids: vec![], source_urls: vec![], from_trusted: true, state: ClaimState::Captured, retrieved: "".into() },
+            ClaimRec { id: "a".into(), fingerprint: "a".into(), group: "g".into(), x: x("o"), source_ids: vec![], source_urls: vec![], from_trusted: false, state: ClaimState::Captured, retrieved: "".into(), support: Support::default(), contested: false },
+            ClaimRec { id: "b".into(), fingerprint: "b".into(), group: "g2".into(), x: x("o"), source_ids: vec![], source_urls: vec![], from_trusted: true, state: ClaimState::Captured, retrieved: "".into(), support: Support::default(), contested: false },
         ];
         assert_eq!(validation_order(&recs), [1, 0]);
     }
@@ -701,5 +868,138 @@ mod tests {
         assert_eq!((kb["entries_found"].clone(), kb["kept"].clone()), (json!(1), json!(1)), "{v}");
         assert!(kb.get("reason").is_none());
         assert_eq!(v["coverage_report"]["counted"], 2, "one known claim and one new trusted claim");
+    }
+
+    // ── Corroboration (`specs/098` §7.6, slice S1b) ────────────────────────────────────────────────────────────────────────────────
+
+    /// Three pages on three hosts that state one claim; the library describes each captured source for the count.
+    fn three_origins() -> Fixture {
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        f.web.trusted = vec!["who.int", "nih.gov", "cdc.gov"];
+        f.web.rows = vec![row("https://who.int/a"), row("https://nih.gov/b"), row("https://cdc.gov/c")];
+        f.web.pages = HashMap::from([("https://who.int/a".to_string(), "who text".to_string()), ("https://nih.gov/b".to_string(), "nih text".to_string()), ("https://cdc.gov/c".to_string(), "cdc text".to_string())]);
+        f.scout = FakeScout(HashMap::from([
+            ("https://who.int/a".to_string(), vec![x("fever")]),
+            ("https://nih.gov/b".to_string(), vec![x("fever")]),
+            ("https://cdc.gov/c".to_string(), vec![x("fever")]),
+        ]));
+        f.lib.describe = true;
+        f
+    }
+
+    fn fever(v: &Value) -> &Value {
+        v["claims"].as_array().unwrap().iter().find(|c| c["assertion"].as_str().unwrap().contains("fever")).unwrap()
+    }
+
+    #[tokio::test]
+    async fn three_independent_origins_make_a_claim_corroborated_and_say_how_weakly() {
+        let f = three_origins();
+        let c = ctx(Depth::Quick);
+        let (_, v) = value(run_research(&c, "does aspirin reduce fever", Depth::Quick, &f.deps()).await.unwrap());
+        let cl = fever(&v);
+        assert_eq!(cl["knowledge_status"], "corroborated", "{v}");
+        assert_eq!((cl["corroboration"]["origins"].clone(), cl["corroboration"]["trusted_sources"].clone()), (json!(3), json!(3)));
+        let d = cl["corroboration"]["detail"].as_str().unwrap();
+        assert!(d.contains("3 origins") && d.contains("weaker than validated") && !d.contains("verified"), "{d}");
+    }
+
+    #[tokio::test]
+    async fn two_origins_do_not_corroborate_and_say_how_many() {
+        let mut f = three_origins();
+        f.web.rows.pop();
+        let c = ctx(Depth::Quick);
+        let (_, v) = value(run_research(&c, "does aspirin reduce fever", Depth::Quick, &f.deps()).await.unwrap());
+        let cl = fever(&v);
+        assert_eq!(cl["knowledge_status"], "checking", "queued with the validator, not lifted by a count of two: {v}");
+        assert_eq!(cl["corroboration"]["origins"], 2);
+        assert!(cl["corroboration"]["detail"].as_str().unwrap().contains("2 independent origin(s)"));
+    }
+
+    #[tokio::test]
+    async fn an_origin_a_list_calls_weak_counts_zero() {
+        let mut f = three_origins();
+        f.lib.weak.insert("cdc.gov".into());
+        let c = ctx(Depth::Quick);
+        let (_, v) = value(run_research(&c, "does aspirin reduce fever", Depth::Quick, &f.deps()).await.unwrap());
+        assert_eq!((fever(&v)["knowledge_status"].clone(), fever(&v)["corroboration"]["origins"].clone()), (json!("checking"), json!(2)), "{v}");
+    }
+
+    #[tokio::test]
+    async fn trusted_sources_count_the_listed_hosts_and_never_change_the_status() {
+        let mut f = three_origins();
+        f.lib.weak.insert("cdc.gov".into());
+        f.lib.listed.insert("cdc.gov".into());
+        let c = ctx(Depth::Quick);
+        let (_, v) = value(run_research(&c, "does aspirin reduce fever", Depth::Quick, &f.deps()).await.unwrap());
+        // The listed host is vetoed by its weak class: it counts zero, so it is not a trusted source either.
+        assert_eq!((fever(&v)["corroboration"]["origins"].clone(), fever(&v)["corroboration"]["trusted_sources"].clone()), (json!(2), json!(2)), "{v}");
+    }
+
+    #[tokio::test]
+    async fn a_contradiction_wins_over_a_count() {
+        let mut f = three_origins();
+        f.web.rows.push(row("https://blog.example/a"));
+        f.web.pages.insert("https://blog.example/a".into(), "blog text".into());
+        f.scout.0.insert("https://blog.example/a".into(), vec![x("chills")]);
+        let c = ctx(Depth::Deep);
+        let (_, v) = value(run_research(&c, "does aspirin reduce fever or chills", Depth::Deep, &f.deps()).await.unwrap());
+        assert_eq!(fever(&v)["corroboration"]["origins"], 3, "the count is still shown");
+        assert_eq!(fever(&v)["knowledge_status"], "contested", "but a disagreement lowers it: {v}");
+    }
+
+    #[tokio::test]
+    async fn a_library_that_cannot_describe_a_source_counts_nothing_and_runs_no_pass() {
+        let mut f = three_origins();
+        f.lib.describe = false;
+        let c = ctx(Depth::Deep);
+        let (_, v) = value(run_research(&c, "does aspirin reduce fever", Depth::Deep, &f.deps()).await.unwrap());
+        assert_eq!((fever(&v)["corroboration"]["origins"].clone(), v["corroboration_pass"]["queries"].clone()), (json!(0), json!(0)), "{v}");
+        assert_eq!(fever(&v)["knowledge_status"], "checking", "no count, so nothing lifts it");
+    }
+
+    #[tokio::test]
+    async fn the_pass_looks_for_support_and_for_contradiction_and_a_new_origin_corroborates() {
+        let mut f = three_origins();
+        f.web.rows.pop();
+        f.web.extra = vec![("aspirin reduces fever", vec![row("https://cdc.gov/c")])];
+        let c = ctx(Depth::Survey);
+        let (_, v) = value(run_research(&c, "does aspirin lower body temperature", Depth::Survey, &f.deps()).await.unwrap());
+        assert_eq!((v["corroboration_pass"]["claims"].clone(), v["corroboration_pass"]["queries"].clone()), (json!(1), json!(2)), "{v}");
+        let searched = f.web.searched.lock().unwrap().clone();
+        assert!(searched.iter().any(|q| q.contains("aspirin reduces fever") && !q.contains("disputed")), "a support query: {searched:?}");
+        assert!(searched.iter().any(|q| q.contains("aspirin reduces fever") && q.contains("disputed OR incorrect OR false")), "a contradiction query: {searched:?}");
+        assert_eq!((fever(&v)["knowledge_status"].clone(), fever(&v)["corroboration"]["origins"].clone()), (json!("corroborated"), json!(3)), "the page the pass found is a third origin: {v}");
+    }
+
+    #[tokio::test]
+    async fn a_quick_run_has_no_pass_and_a_claim_with_three_origins_needs_none() {
+        let mut f = three_origins();
+        f.web.rows.pop();
+        let c = ctx(Depth::Quick);
+        let (_, v) = value(run_research(&c, "does aspirin lower body temperature", Depth::Quick, &f.deps()).await.unwrap());
+        assert_eq!(v["corroboration_pass"], json!({"claims": 0, "queries": 0}), "quick: {v}");
+        let g = three_origins();
+        let (_, v) = value(run_research(&ctx(Depth::Deep), "does aspirin lower body temperature", Depth::Deep, &g.deps()).await.unwrap());
+        assert_eq!(v["corroboration_pass"]["claims"], 0, "three origins already: {v}");
+    }
+
+    #[tokio::test]
+    async fn a_claim_that_rests_on_a_private_source_is_never_put_in_an_outbound_query() {
+        let mut f = three_origins();
+        f.web.rows.pop();
+        f.lib.private.insert("who.int".into());
+        let c = ctx(Depth::Deep);
+        let (_, v) = value(run_research(&c, "does aspirin lower body temperature", Depth::Deep, &f.deps()).await.unwrap());
+        assert_eq!(v["corroboration_pass"], json!({"claims": 0, "queries": 0}), "{v}");
+        let searched = f.web.searched.lock().unwrap().clone();
+        assert!(searched.iter().all(|q| !q.contains("reduces fever") && !q.contains("disputed OR incorrect OR false")), "the claim's words went out: {searched:?}");
+    }
+
+    #[tokio::test]
+    async fn the_validator_queue_ignores_the_count() {
+        // The count is display: the order the validator works in is decided by the trusted fast lane alone (`specs/098` §12 item 17).
+        let rich = ClaimRec { id: "a".into(), fingerprint: "a".into(), group: "g".into(), x: x("o"), source_ids: vec![], source_urls: vec![], from_trusted: false, state: ClaimState::Captured, retrieved: "".into(), support: Support { origins: 9, trusted_sources: 9, ..Default::default() }, contested: false };
+        let poor = ClaimRec { id: "b".into(), from_trusted: true, support: Support::default(), ..rich.clone() };
+        assert_eq!(validation_order(&[rich, poor]), [1, 0]);
     }
 }
