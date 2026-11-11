@@ -14,7 +14,7 @@ tags: [spec, history, provenance, summaries, privacy, draft]
 
 # Spec 102: The exchange record
 
-> **Status: draft.** It reuses the daemon-written, append-only prompt log of [`specs/070`](070-spec-gate-scope-and-artifact-prompt-log.md) §3, the summary tool of [`specs/062`](062-delphi-as-host-agent-mcp-server.md) §8.1, the typed `outcome` of [`specs/084`](084-outcome-flip-question-resume-recap-learn-history.md) §3, the recap pattern of 084 §5, the structured digest of [`specs/049`](049-context-management-recoverable-compaction-and-handles.md) §3 (CX-5), and the `private` rule of [`specs/055`](055-the-central-library-sources-claims-and-pages.md) §10.1. It amends 062 §8.1, 084 §3 and 049 §3 (CX-5), each listed in §10, and takes effect only when the operator approves it and its pull request merges. **It widens no authority.** Its slices start only after the verification gates of specs 098, 100 and 101 pass; the spec itself can be reviewed now.
+> **Status: draft, amended after Council `t_0009`.** The Council ruled to approve with named changes; they are in the text (§12) and the operator's call on shipping dormant is OD-8. It reuses the daemon-written, append-only prompt log of [`specs/070`](070-spec-gate-scope-and-artifact-prompt-log.md) §3, the summary tool of [`specs/062`](062-delphi-as-host-agent-mcp-server.md) §8.1, the typed `outcome` of [`specs/084`](084-outcome-flip-question-resume-recap-learn-history.md) §3, the recap pattern of 084 §5, the structured digest of [`specs/049`](049-context-management-recoverable-compaction-and-handles.md) §3 (CX-5), and the `private` rule of [`specs/055`](055-the-central-library-sources-claims-and-pages.md) §10.1. It amends 062 §8.1, 084 §3 and 049 §3 (CX-5), each listed in §10, and takes effect only when the operator approves it and its pull request merges. **It widens no authority.** Its slices start only after the verification gates of specs 098, 100 and 101 pass; the spec itself can be reviewed now.
 
 ## 1. Scope and objectives
 
@@ -238,7 +238,25 @@ Council `t_0008` (2026-11-11; architect, red-team, strategist; families claude a
 | History report from the daemon's own events, about 4 KB, supersession, a fixed footer (architect, strategist) | §5. |
 | Summaries host-written, cited and hashed; no model-based drift check (architect, strategist, red-team) | §3.3, §6, §9. |
 | Its own spec, after the 098, 100 and 101 gates (all) | Header, §8. |
-| Budgets are guesses (architect, strategist, red-team) | §7 item 9: 90 days and 200 MB, labelled hypotheses. |
+| Budgets are guesses (architect, strategist, red-team) | §7 item 9: 90 days and 200 MB, labelled hypotheses. (Later changed by `t_0009`, below.) |
+
+Council `t_0009` (2026-11-11; architect, red-team, strategist; families claude and gemini) reviewed this draft. Its record is `missions/host-a4cc691a99d9ea4e/councils/008-…` in the Delphi home. Round 2: all three ruled to approve with named changes (architect and strategist PROCEED-WITH-CHANGES, red-team OPTION B), none concurred, and **seven P0 findings** were open (three distinct issues, each raised by two or three seats). Its seats could not read spec 070 (the pointer I gave named the wrong file), so their 070 findings were unverified; §3.5 was written against the real text. How this draft answers it:
+
+| Finding | Answer |
+| :-- | :-- |
+| P0 (all three): paste detection depends on host or console marks | §3.4: the daemon's own rule (length, burst, entropy, code-like) treats text as pasted unless it saw it typed; a host mark only adds; acceptance 2 and a test with an unmarked key paste. |
+| P0 (all three): `history_search` returns host-written reply text to a later seat | §5.1: deferred by recommendation (OD-5); if built, tainted `external_untrusted` and `self_reported`, fenced, control characters stripped, local seats only, no mutating tool in the consuming span, never a promotion path; invariant 11. |
+| P0 (strategist; P1 architect): default-on needs an enforced egress boundary and an audit first | §7 item 10, S3's dependency, S8 and **OD-8**: ship dormant and flip the default only after S7 passes and the 098 §12 item 16 check is live. The operator's opt-out decision is kept and ordered; the choice is the operator's. |
+| P1 (architect, red-team, strategist): a plain hash of a short secret is guessable; purge is all or nothing | §3.4 and §7 item 6: keyed hashes everywhere; `purge --since`, `delete <id>`, tombstones. |
+| P1: the purge test must prove zero residue | §11 item 7 and the Purge residue row: a canary scanned for across the whole Delphi home. |
+| P1: 055 §10.1 defaults `private_to_models` to allow; unknown seat family | §7 item 2: history's own `to_models = deny`; an unknown family means deny; amendment 4. |
+| P1: missing invariants | §11 items 12 to 15: the host cannot set `kind`; relayed text is never observed words; the chain is verified at read time; the question is answered only by a human. |
+| P2: redaction tested against a fixed corpus | §3.1: ten shapes, used by S3 and S7. |
+| P2: `resolved` proves existence, not authorship; the search must stay in the Claude root | §4. |
+| P2: the report can mislead by omission | §5: the fixed "N events not counted" line. |
+| P2: conflicts with 070 and 084; 049 amendment too wide | §3.5 against the real 070; amendment 2 (one outcome per session and per exchange) and amendment 3 (daemon digest only). |
+| P2: estimates optimistic; budgets unjustified | §8: 98 to 144 hours; §7 item 9: 50 MB default, both numbers labelled guesses. |
+| Scope: defer S5 and `history_search` (strategist) | S5 shrinks to the operator's read-only view; `history_search` is S5b, deferred. |
 
 ## 13. Known limits and what is not verified
 
@@ -249,7 +267,14 @@ Council `t_0008` (2026-11-11; architect, red-team, strategist; families claude a
 - **The default departs from the Council.** The risk the red-team named is accepted by the operator's decision, not removed.
 - **A confident wrong story is worse than none.** The report omits what it cannot count (084 §5).
 - **Sizes are from one machine on one day,** and the tool stores may grow or change.
-- **The trigger list and the numbers are hypotheses** to calibrate from use.
+- **The trigger list and the numbers are hypotheses** to calibrate from use, including the paste thresholds.
+- **The paste rule is a heuristic.** It will keep some pasted text it should have hashed and hash some typed text it should have kept; it errs toward not storing, and the S7 audit measures it (§3.4).
+- **Keyed hashes need key custody.** Losing the local key makes the hashes and the chain unverifiable; leaking it makes short secrets guessable again. The key lives in the daemon-only area with owner-only permissions and is never exported.
+- **`resolved` is weak evidence of authorship** (§4): it shows the text exists in the transcript, not who wrote it.
+- **A purge leaves spec 070's artifact prompt log** (§3.5), whose retention is deferred; the operator who wants those prompts gone needs 070's own step.
+- **The 098 egress check is only partly built** when this is written; S3 waits for it, and the dormant gate (OD-8) depends on it.
+- **The Council `t_0009` could not read spec 070,** so its findings on that conflict were unverified; §3.5 rests on my reading of the real file.
+- **Event names for the triggers are not verified;** S3 reads them from the code.
 
 ## 14. Acceptance criteria
 

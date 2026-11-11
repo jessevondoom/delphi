@@ -166,7 +166,7 @@ The operator's aim (2026-11-10): **no learning is absolute, but a high degree of
 
 ## 102-the-exchange-record-the-operators-words-outcome-summaries-and-a-project-history
 
-**102: The exchange record: the operator's words, outcome summaries and a project history** · draft (per source at `e39ae8f84f34`) · tier 0 · [source](../../specs/102-the-exchange-record-the-operators-words-outcome-summaries-and-a-project-history.md)
+**102: The exchange record: the operator's words, outcome summaries and a project history** · draft (per source at `4bfe0c7710a5`) · tier 0 · [source](../../specs/102-the-exchange-record-the-operators-words-outcome-summaries-and-a-project-history.md)
 
 **source excerpt, untrusted** · `specs/102-the-exchange-record-the-operators-words-outcome-summaries-and-a-project-history.md` line 21
 

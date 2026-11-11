@@ -57,80 +57,98 @@
       "title": "Who writes the reply summary"
     },
     {
-      "level": 2,
+      "level": 3,
       "line": 102,
+      "number": "3.4",
+      "title": "Pasted text: the daemon decides, not the host"
+    },
+    {
+      "level": 3,
+      "line": 112,
+      "number": "3.5",
+      "title": "Relation to the artifact prompt log (spec 070 §3)"
+    },
+    {
+      "level": 2,
+      "line": 121,
       "number": "4",
       "title": "Pointers: where the words can be checked"
     },
     {
       "level": 2,
-      "line": 111,
+      "line": 132,
       "number": "5",
       "title": "The timeline and the report"
     },
     {
+      "level": 3,
+      "line": 141,
+      "number": "5.1",
+      "title": "Anything that returns record text to a seat (`history_search`): deferred, and these rules if built"
+    },
+    {
       "level": 2,
-      "line": 120,
+      "line": 152,
       "number": "6",
       "title": "Provenance and trust"
     },
     {
       "level": 2,
-      "line": 126,
+      "line": 158,
       "number": "7",
       "title": "Controls: on by default, easy to turn off"
     },
     {
       "level": 2,
-      "line": 140,
+      "line": 173,
       "number": "8",
       "title": "Slices (one pull request each; none starts before approval and before the 098, 100 and 101 gates)"
     },
     {
       "level": 2,
-      "line": 155,
+      "line": 190,
       "number": "9",
       "title": "Considered and not adopted"
     },
     {
       "level": 2,
-      "line": 167,
+      "line": 202,
       "number": "10",
       "title": "Amendments (they take effect on approval)"
     },
     {
       "level": 2,
-      "line": 174,
+      "line": 209,
       "number": "11",
       "title": "Authority invariants (what the tests prove)"
     },
     {
       "level": 2,
-      "line": 187,
+      "line": 228,
       "number": "12",
       "title": "Council record"
     },
     {
       "level": 2,
-      "line": 202,
+      "line": 261,
       "number": "13",
       "title": "Known limits and what is not verified"
     },
     {
       "level": 2,
-      "line": 213,
+      "line": 279,
       "number": "14",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 224,
+      "line": 292,
       "number": "15",
       "title": "Verification Plan"
     },
     {
       "level": 2,
-      "line": 242,
+      "line": 315,
       "number": "16",
       "title": "Decisions and open questions"
     }
@@ -138,7 +156,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/102-the-exchange-record-the-operators-words-outcome-summaries-and-a-project-history.md",
-    "sha256": "e39ae8f84f34248cd7516f8fb2d270923335dc975181387fa2cac287edf8f8b9"
+    "sha256": "4bfe0c7710a5dffe3734a2b40e318e6c7670e74b4b3d4c665cebd09f30e33d25"
   },
   "source_status_at_hash": {
     "line": {
@@ -151,7 +169,7 @@
       },
       "text": "status: draft   # for the operator and a Council review. Nothing here is buildable until the operator approves it; a draft is a proposal, not permission."
     },
-    "sha256": "e39ae8f84f34248cd7516f8fb2d270923335dc975181387fa2cac287edf8f8b9",
+    "sha256": "4bfe0c7710a5dffe3734a2b40e318e6c7670e74b4b3d4c665cebd09f30e33d25",
     "word": "draft"
   },
   "spec": {
@@ -166,10 +184,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 2281,
+      "end": 2443,
       "end_line": 21,
       "line": 21,
-      "start": 1709
+      "start": 1871
     },
     "text": "The operator asked (2026-11-11) for Delphi to keep a history of what happened in a project: the operator's own words, what came of each request, and a build report, with deeper provenance, so that agents get more context and the operator can ask \"where did this decision come from\". The first idea was to store the sessions' transcripts. Council `t_0008` (architect, red-team, strategist; two model families) advised against that, and the operator then proposed a smaller unit, the **exchange record**: one prompt of the operator's, with a short summary of what came back."
   }
