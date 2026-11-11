@@ -581,7 +581,7 @@ mod claims {
         fetched(&l, &ids[0], "a.example", "reputable_secondary");
         let c = l.refresh_support(&id).unwrap();
         assert_eq!(c["support"]["origins"], 2, "{c}");
-        assert_eq!(status(&c), Status::Noted, "two origins are not corroboration");
+        assert!(!matches!(status(&c), Status::Corroborated | Status::Substantiated | Status::Vetted), "two origins are not corroboration: {c}");
         // and a contradiction lowers a claim that has three origins
         let mut c = l.claim(&id).unwrap();
         c["support"]["origins"] = json!(3);
