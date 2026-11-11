@@ -2,7 +2,7 @@
 
 # Knowledge and memory
 
-18 specs. [All groups](./index.md).
+19 specs. [All groups](./index.md).
 
 ## 004-memory-and-coaching
 
@@ -162,4 +162,14 @@ Agents today read and write plain text only (`read_file`, `write_file`, 256 KB c
 
 ```text
 The operator's aim (2026-11-10): **no learning is absolute, but a high degree of confidence is the goal.** Research should find more, keep what it finds, and say how well each claim is supported. As the knowledge base grows with accepted facts, that knowledge helps judge new learnings without expanding trust. Neither a human nor an agent is likely to do better than five independent sources with two trusted ones, so the strongest tier should be cheap for the operator to accept in bulk, and the operator should be able to find out afterwards whether that was a mistake.
+```
+
+## 102-the-exchange-record-the-operators-words-outcome-summaries-and-a-project-history
+
+**102: The exchange record: the operator's words, outcome summaries and a project history** · draft (per source at `36795fa4a198`) · tier 0 · [source](../../specs/102-the-exchange-record-the-operators-words-outcome-summaries-and-a-project-history.md)
+
+**source excerpt, untrusted** · `specs/102-the-exchange-record-the-operators-words-outcome-summaries-and-a-project-history.md` line 21
+
+```text
+The operator asked (2026-11-11) for Delphi to keep a history of what happened in a project: the operator's own words, what came of each request, and a build report, with deeper provenance, so that agents get more context and the operator can ask "where did this decision come from". The first idea was to store the sessions' transcripts. Council `t_0008` (architect, red-team, strategist; two model families) advised against that, and the operator then proposed a smaller unit, the **exchange record**: one prompt of the operator's, with a short summary of what came back.
 ```

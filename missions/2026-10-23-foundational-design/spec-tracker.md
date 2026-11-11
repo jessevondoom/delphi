@@ -879,3 +879,19 @@ Approved by the operator on 2026-11-10 ("approve spec 099 and spec 100"). It add
 | L3 | the accept-all workflow (digest kind, `batch-accepted` mark) | 16-24 | not started |
 | L4 | the per-tier calibration report | 10-16 | not started |
 | L5 | KB-prior tags: support through origins, cycle check, contradiction block, track record from operator-accepted history | 16-24 | not started |
+
+
+## Spec 102: the exchange record (2026-11-11, draft)
+
+A draft for the operator and a Council review. The operator asked for a project history with the operator's own words and deeper provenance; Council `t_0008` advised against storing transcripts, and the operator then chose a smaller unit, the exchange record (a prompt, a capped reply summary, an outcome and references). Decided by the operator on 2026-11-11: summaries are written after a merge, a research run, a panel, a Council and whenever a work artifact is created in the project folder; the store is opt-out, with a question at install (the Council advised opt-in; this departs from it). Nothing is buildable until the operator approves it, and the slices start only after the verification gates of specs 098, 100 and 101.
+
+| Slice | Content | Hours | State |
+| :-- | :-- | --: | :-- |
+| S0 | this spec, its review and amendments (062 §8.1, 084 §3, 049 CX-5, 055 §10.1) | 6-10 | draft |
+| S1 | the pointer record, hash check, `unresolvable`, session-id search for Claude | 8-12 | not started |
+| S2 | the daemon timeline and report (events only, 4 KB cap, supersession, footer) | 10-14 | not started |
+| S3 | exchange-record capture, redaction, `private`, trigger wiring, pasted-block hashing | 18-26 | not started |
+| S4 | the install question, settings, `history off|purge|status`, doctor, first-run notice | 10-14 | not started |
+| S5 | the console view and `history_search` | 8-12 | not started |
+| S6 | the citation check: a decision cites a resolving, hash-matching span, else unsourced | 6-10 | not started |
+| S7 | a red-team audit of redaction, purge and egress coverage | 10-14 | not started |
