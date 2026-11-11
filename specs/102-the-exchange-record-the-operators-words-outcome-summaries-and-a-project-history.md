@@ -79,7 +79,7 @@ A record is written at a **trigger** (§3.2), one per operator prompt that the t
 
 - **Never stored:** tool results, thinking, assistant dialogue, file contents, pasted text. The record has no field for them, so a fixture holding all five leaves no trace in it (§11 item 4).
 - **Cost.** A record is about 1 KB. 100 records a day for a year is about 36 MB, before compression.
-- **Redaction.** The prompt and the reply fields go through the existing redactor (`crates/delphi-core/src/redact.rs`) and the capture rules of 098 §7.2 before they are written: obvious keys, tokens and passwords are removed without asking. Redaction is best effort and the spec says so (§13).
+- **Redaction.** The prompt and the reply fields go through the existing redactor (`crates/delphi-core/src/redact.rs`) and the capture rules of 098 §7.2 before they are written: obvious keys, tokens and passwords are removed without asking. Redaction is best effort and the spec says so (§13). It is tested against a **fixed corpus of secret shapes** kept in the repository, not one key and one token: a private-key block, a cloud access key pair, a bearer token, a JWT, a password inside a URL, a token split across two lines, a base64 fragment, a long hex string, a `name: value` secret in a non-standard format, and a secret inside a code fence. S3 runs the corpus and the S7 audit runs it again with shapes the author did not choose; a shape the corpus lacks is a known gap (§13).
 
 ### 3.2 Triggers (decided by the operator, 2026-11-11)
 
@@ -259,7 +259,7 @@ Every item is verified without a network or a model, plus the repository gates o
 | Item | How |
 | :-- | :-- |
 | Records and triggers (1) | Engine tests over a fixture event log: one trigger per kind writes one record with the fixed fields. |
-| Redaction and pasted blocks (2, §11 item 4) | A fixture prompt with a key, a token and a pasted block; the stored record contains neither the secret nor the pasted text. An **unmarked** 1,500-character key paste, a single-burst paste, a high-entropy run and a multi-line code block each store as a keyed hash and a length; a typed paragraph of the same length at typing rate is kept up to the 2,000-character cap or hashed by the length rule, and the test states which. |
+| Redaction and pasted blocks (2, §11 item 4) | The fixed secret-shape corpus of §3.1 (ten shapes, including split, base64 and non-standard forms) run through capture: the stored record contains none of the secrets; a fixture prompt with a key, a token and a pasted block stores neither the secret nor the pasted text. An **unmarked** 1,500-character key paste, a single-burst paste, a high-entropy run and a multi-line code block each store as a keyed hash and a length; a typed paragraph of the same length at typing rate is kept up to the 2,000-character cap or hashed by the length rule, and the test states which. |
 | Pointers (3, §11 item 8) | Fixture transcripts: a matching span, a changed span, a missing file, an unknown format; the session-id search finds a file in a renamed folder. |
 | Report (4, §11 item 9) | A golden report over a fixture log with a reversal; size, footer, no event text; a hostile event string leaves no trace. |
 | Off and upgrade (5, §11 items 6, 7) | A config test per switch; an upgrade fixture with no answer writes nothing; `off` leaves everything. |
