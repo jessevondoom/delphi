@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+    # `ready_for_review` starts the full run (macOS included) when a draft is marked ready; see the macOS job.
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
@@ -110,8 +112,15 @@ jobs:
   # macOS: one job per run (the account may run only 5 macOS jobs at once). The full workspace tests, then Clippy, so
   # code behind `cfg(target_os = "macos")` is tested and checked where it compiles. Clippy runs even when the tests fail.
   # The repo lint and the data checks that do not depend on the system run once, in the Linux `lint` job.
+  #
+  # Once per pull request, on the head that is ready: while a pull request is a DRAFT this job is skipped (every push to a
+  # draft used to take a scarce macOS slot for ~25 minutes). GitHub cannot merge a draft, and marking it ready fires
+  # `ready_for_review`, which runs this job on that head; every later push to a ready pull request runs it again. So no
+  # pull request merges without the full macOS gates on its final head. Pushes to main always run it. The Linux jobs run
+  # on every push, draft or not.
   test-macos:
     name: macos (test + clippy)
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: macos-latest
     timeout-minutes: 45
     steps:
