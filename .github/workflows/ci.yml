@@ -23,13 +23,97 @@ env:
   CARGO_PROFILE_DEV_DEBUG: "0"
 
 jobs:
-  test:
-    name: test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, ubuntu-latest]
+  # Linux tests, in two jobs that together run exactly what `cargo test --workspace --locked` runs (the AGENTS.md gate):
+  # that command runs each package's library unit tests, then its binaries' unit tests, then its integration tests, then
+  # its doc tests. Here the first job runs `--lib`; the second runs `--bins --test '*'` (every integration test file) and
+  # then `--doc`. `--tests` is not used because it would run the library tests a second time. The union was compared with
+  # `cargo test --workspace -- --list` when this was written (same test count); if a new kind of target is ever added
+  # (an example with `test = true`, a bench), add it to one of the two.
+  test-linux-lib:
+    name: test linux (unit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Rust toolchain
+        run: rustup show active-toolchain && rustc --version
+      - name: Cache the Cargo registry
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+      - name: Restore the build directory
+        id: target
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: target
+          key: cargo-target-${{ runner.os }}-unit-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-target-${{ runner.os }}-unit-
+            cargo-target-${{ runner.os }}-test-
+      - name: Test (library unit tests)
+        run: cargo test --workspace --locked --lib
+      - name: Save the build directory
+        if: github.event_name == 'push' && steps.target.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: target
+          key: cargo-target-${{ runner.os }}-unit-${{ hashFiles('**/Cargo.lock') }}
+
+  test-linux-integration:
+    name: test linux (integration, bins, doc)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Rust toolchain
+        run: rustup show active-toolchain && rustc --version
+      - name: Cache the Cargo registry
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+      - name: Restore the build directory
+        id: target
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: target
+          key: cargo-target-${{ runner.os }}-integ-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-target-${{ runner.os }}-integ-
+            cargo-target-${{ runner.os }}-test-
+      # Cheap static checks first (milliseconds each once built), so a broken spec reference is reported minutes
+      # before the long tests finish. They run again in the full step below; that costs nothing.
+      - name: Static checks (spec references, compiled specs)
+        run: cargo test --locked -p delphi --test spec_refs --test compiled_specs
+      - name: Test (binaries and integration tests)
+        run: cargo test --workspace --locked --bins --test '*'
+      - name: Test (doc tests)
+        run: cargo test --workspace --locked --doc
+      - name: Save the build directory
+        if: github.event_name == 'push' && steps.target.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: target
+          key: cargo-target-${{ runner.os }}-integ-${{ hashFiles('**/Cargo.lock') }}
+
+  # macOS: one job per run (the account may run only 5 macOS jobs at once). The full workspace tests, then Clippy, so
+  # code behind `cfg(target_os = "macos")` is tested and checked where it compiles. Clippy runs even when the tests fail.
+  # The repo lint and the data checks that do not depend on the system run once, in the Linux `lint` job.
+  test-macos:
+    name: macos (test + clippy)
+    runs-on: macos-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Rust toolchain
@@ -54,31 +138,29 @@ jobs:
             cargo-target-${{ runner.os }}-test-
       - name: Test
         run: cargo test --workspace --locked
-      - name: Training cases are well formed
-        run: cargo run -q --locked -p delphi -- train validate
-      - name: Golden org bundle validates
-        run: cargo run -q --locked -p delphi -- bundle validate dev/bundles/acme-platform --claude
+      - name: Clippy
+        if: success() || failure()
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Benchmark runner self-test
+        if: success() || failure()
         run: python3 -I dev/bench/bench.py self-test
       - name: Model availability script self-test
+        if: success() || failure()
         run: python3 -I dev/train/avail.py self-test
-      # Saved only by a push to main, so a pull request branch never writes the (size-capped) cache.
       - name: Save the build directory
-        if: github.event_name == 'push' && steps.target.outputs.cache-hit != 'true'
+        if: success() && github.event_name == 'push' && steps.target.outputs.cache-hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: target
           key: cargo-target-${{ runner.os }}-test-${{ hashFiles('**/Cargo.lock') }}
 
-  # Clippy and the repo lint, in parallel with the tests (they used to run after them in the `test` job). Both operating
-  # systems stay: code behind `cfg(target_os = ...)` is only checked where it compiles.
+  # Clippy, the repo lint and the data checks, on Linux. (Clippy also runs on macOS, in the job above.) The checks that
+  # used to follow the tests in the `test` job (training cases, the golden bundle) are here, so they no longer rebuild
+  # the program on the long path.
   lint:
-    name: lint (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, ubuntu-latest]
+    name: lint (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Rust toolchain
@@ -105,6 +187,14 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Repo lint
         run: cargo run -q --locked -p delphi -- lint --repo .
+      - name: Training cases are well formed
+        run: cargo run -q --locked -p delphi -- train validate
+      - name: Golden org bundle validates
+        run: cargo run -q --locked -p delphi -- bundle validate dev/bundles/acme-platform --claude
+      - name: Benchmark runner self-test
+        run: python3 -I dev/bench/bench.py self-test
+      - name: Model availability script self-test
+        run: python3 -I dev/train/avail.py self-test
       - name: Save the build directory
         if: github.event_name == 'push' && steps.target.outputs.cache-hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
@@ -118,11 +208,22 @@ jobs:
   deny:
     name: dependency policy (cargo deny)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Rust toolchain
         run: rustup show active-toolchain && rustc --version
+      # The binary is kept between runs (building it took 114 s of the job's 130 s). The key names the version: change the
+      # version below and in the key together. A cache saved on a pull-request branch is seen only by that branch; main's
+      # is seen by all.
+      - name: Restore cargo-deny
+        id: deny
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cargo/bin/cargo-deny
+          key: cargo-deny-bin-${{ runner.os }}-0.20.2
       - name: Install cargo-deny (pinned)
+        if: steps.deny.outputs.cache-hit != 'true'
         run: |
           # The crate download can fail for a moment; 3 attempts, 20 seconds apart.
           for attempt in 1 2 3; do
@@ -137,12 +238,15 @@ jobs:
             sleep 20
           done
       - name: Check
-        run: cargo deny --locked check
+        run: |
+          cargo deny --version
+          cargo deny --locked check
 
   # The full-screen console (D-28): typecheck, unit tests, and the dependency gate. Runners ship Node.
   ui:
     name: ui (node)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     defaults:
       run:
         working-directory: ui
@@ -218,6 +322,7 @@ jobs:
   linux-sandbox:
     name: linux sandbox (bubblewrap)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       # The bubblewrap package, kept between runs. A run that installs it from a mirror saves it; later runs install
@@ -295,8 +400,32 @@ jobs:
           bwrap --ro-bind / / --unshare-all --die-with-parent true && echo "bwrap works here"
       - name: Rust toolchain
         run: rustup show active-toolchain && rustc --version
+      - name: Cache the Cargo registry
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+      - name: Restore the build directory
+        id: target
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: target
+          key: cargo-target-${{ runner.os }}-sandbox-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-target-${{ runner.os }}-sandbox-
       - name: Sandbox tests must run, not skip
         env:
           DELPHI_REQUIRE_SANDBOX: "1"
         run: |
           cargo test --locked -p delphi-sandbox -p delphi-engine -- sandbox 'authorized::' 'exec::' harness_run 'build::' 'finalize::'
+      - name: Save the build directory
+        if: github.event_name == 'push' && steps.target.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: target
+          key: cargo-target-${{ runner.os }}-sandbox-${{ hashFiles('**/Cargo.lock') }}

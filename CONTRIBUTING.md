@@ -27,6 +27,10 @@ npm run typecheck && npm test
 
 CI runs the same on macOS and Ubuntu, plus the UI suite and pty end-to-end tests against the real daemon. Gates must pass before merging; do not merge past a failing one.
 
+How the jobs are laid out (`.github/workflows/ci.yml`): on Ubuntu the workspace tests are two jobs (`test linux (unit)` runs `--lib`; `test linux (integration, bins, doc)` runs the spec checks first, then `--bins --test '*'`, then `--doc`), which together run what `cargo test --workspace --locked` runs. macOS is one job (`macos (test + clippy)`) because the account may run only 5 macOS jobs at once. Clippy runs on both systems; the repo lint and the data checks (`train validate`, `bundle validate`) run once, in `lint (ubuntu-latest)`. Every job has a `timeout-minutes`.
+
+**A red job: rerun the failed jobs, do not push again.** `gh run rerun <run-id> --failed` (or "Re-run failed jobs" in the web page) reruns only the jobs that failed and keeps the green ones; a new push reruns everything, including the macOS jobs that are the scarce resource. There is no automatic retry of tests: a test that fails on a rerun and passes on the next gets a fix or an issue, as the flaky ones did before (#154, #631). A push to a pull request cancels that branch's older run.
+
 ### Documentation is tested
 
 - `docs/reference/cli.md` and `docs/reference/delphi.1` are generated from the command table behind `--help` in `crates/delphi/src/main.rs`. After you change a command, regenerate them and commit the result:

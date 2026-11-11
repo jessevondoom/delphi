@@ -26,6 +26,7 @@ jobs:
   model:
     name: models
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Fetch, check and pack the embedding model
@@ -51,6 +52,7 @@ jobs:
   sign:
     name: sign the release files
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Sign
@@ -80,6 +82,7 @@ jobs:
     name: build (${{ matrix.target }})
     needs: [model, sign]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       fail-fast: true
       matrix:
@@ -170,6 +173,7 @@ jobs:
     if: github.event_name == 'push'
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
       id-token: write
@@ -202,6 +206,7 @@ jobs:
     if: github.event_name == 'push'
     needs: publish
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
