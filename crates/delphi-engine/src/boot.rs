@@ -72,6 +72,7 @@ pub fn settings_from(root: &toml::Value) -> Settings {
         if let Some(n) = sc.get("max_foreign_seats").and_then(|v| v.as_integer()).filter(|v| *v >= 0) {
             s.max_foreign_seats = n.min(64) as u32;
         }
+        s.red_team_kind = sc.get("red_team_kind").and_then(|v| v.as_bool()).unwrap_or(false);
         if let Some(n) = sc.get("max_foreign_tokens").and_then(|v| v.as_integer()).filter(|v| *v >= 0) {
             s.max_foreign_tokens = n as u64;
         }

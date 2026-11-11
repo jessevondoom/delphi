@@ -104,6 +104,7 @@
       "properties": {
         "require_families": { "type": "integer", "minimum": 1, "maximum": 8, "description": "Refuse a Panel that cannot show this many distinct known model families, before anything is spent. Unset (the default) never refuses; the result is labelled homogeneous." },
         "max_foreign_seats": { "type": "integer", "minimum": 0, "description": "Foreign seats one Council may run (default 1). 0 turns them off." },
+        "red_team_kind": { "type": "boolean", "description": "Accept kind: red_team on council_open: a red-team review whose result is a findings list with each seat's family from its receipt (spec 098 section 6.2). Default false." },
         "max_foreign_tokens": { "type": "integer", "minimum": 0, "description": "Tokens the foreign seats of one Council may use (default 100000)." }
       }
     },

@@ -134,6 +134,7 @@ per_watch_max_wakes_per_day = 10
 # [seats]
 # require_families = 2               # unset (default): never refuse; a result with fewer than two known families is labelled homogeneous
 # max_foreign_seats = 1              # per Council; 0 turns the foreign seat off
+# red_team_kind = false              # spec 098 6.2: accept `kind: red_team` on council_open (a red-team review: findings list, advisory); off by default
 # max_foreign_tokens = 100000        # per Council: the foreign seat's token ceiling must fit under this, and Round 2 is skipped once Round 1 used it
 
 # What the engine adds around a role's model calls (specs/045). Not an access table: it adds notes and one verification turn,

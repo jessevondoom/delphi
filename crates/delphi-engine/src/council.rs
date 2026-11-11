@@ -1265,7 +1265,7 @@ impl Engine {
     /// A host Panel's Round 1 has released (`specs/086` §4): the stances join the log as a daemon Council's do, and the plan is recorded
     /// as host-reported (the daemon cannot know the family or prove the isolation of a seat a host ran itself).
     #[allow(clippy::too_many_arguments)]
-    pub async fn panel_released(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, proposition: &str, stances: &BTreeMap<String, Stance>, models: &BTreeMap<String, String>, foreign: &[(String, String)], blind: &str, claims: (Option<bool>, Option<&str>), brief_hashes: &BTreeMap<String, String>, host: (Option<String>, Option<u32>)) -> Result<(), EngineError> {
+    pub async fn panel_released(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, proposition: &str, stances: &BTreeMap<String, Stance>, models: &BTreeMap<String, String>, foreign: &[(String, String)], blind: &str, claims: (Option<bool>, Option<&str>), brief_hashes: &BTreeMap<String, String>, host: (Option<String>, Option<u32>, Option<String>)) -> Result<(), EngineError> {
         let emit = |kind: &str, payload: Value| {
             let mut e = EventEnvelope::new(&m.id, kind, payload);
             e.task_id = Some(task_id.to_string());
@@ -1278,6 +1278,9 @@ impl Engine {
         }
         if let Some(o) = claims.1 {
             started["options_source"] = json!(o);
+        }
+        if let Some(k) = &host.2 {
+            started["kind"] = json!(k);
         }
         if foreign.len() > 1 {
             started["foreign_seats"] = json!(foreign.iter().map(|(r, f)| json!({"role": r, "family": f})).collect::<Vec<_>>());
