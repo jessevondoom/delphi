@@ -251,6 +251,13 @@ sandbox = "off"
 # burst_hours = 24
 # similar_above = 0.8
 # unfamiliar_counts = true
+#
+# A search log beside each host research result (specs/101 section 3). One line per search: of whom (the knowledge base, the trusted
+# list, a search provider), why, the query that was sent (the same redacted string), when, and how many results came back and were
+# kept, plus a found / duplicates / kept / not-kept flow that adds up. A search withheld because its claim rests on a private source says
+# so and carries no query text; a search your host says it ran is logged as declared and counts as nothing. The log is private when
+# any claim it served is, and never leaves this machine then. `delphi research log <id>` prints it. Off by default.
+# search_log = false
 
 # Library acquisition (specs/055 section 8): once a day, the library scout proposes public-domain and research sources that match your projects
 # and these interests, as ONE batch in the digest. Nothing is fetched until you accept (or a standing rule covers it). Ratified, because it

@@ -412,6 +412,16 @@ The finished console sessions, to review later.
 
 Written when a session ends (/new, or a daemon restart): the first words of what was asked, the changes recorded, and the summary when [session] summary is on. Reads the central log; calls no model.
 
+### `delphi research`
+
+The search log of a finished host research job.
+
+```
+  delphi research log <research-id> [--json] [--home <dir>] [--workspace <name>]
+```
+
+Prints what a research run searched, of whom, when, and how many results came back and were kept (specs/101 §3): one line per search with the query that was sent, a search withheld for a private claim without any query text, searches your host declared marked as such, and a found / duplicates / kept / not-kept flow that adds up. Written when [research] search_log is on, once the job has finished; a private log stays on this machine. Reads a file; calls no model and no network.
+
 ### `delphi tools`
 
 How tools are used, and how often models record their changes.

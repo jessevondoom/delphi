@@ -200,6 +200,31 @@ fn research_results_follow_their_schema_and_refuse_control_characters_in_identit
     let mut bad = covered.clone();
     bad["coverage_report"]["rungs"][0]["reason"] = json!("the provider said: key sk-123 refused");
     must_fail("research-result.schema.json", "provider text as a coverage reason", &bad);
+    // specs/101 §3: the search log, one line per search, closed source set, no query text on a withheld line.
+    let mut logged = covered.clone();
+    logged["coverage_report"]["search_log"] = json!({ "lines": 4, "found": 3, "kept": 2, "searches": 2, "withheld": 1, "declared": 1, "see": "search_log" });
+    logged["search_log"] = json!({ "version": 1, "private": false, "lines": [
+        { "rung": "kb", "source": "kb", "purpose": "kb", "query": "aspirin fever", "at": "2026-11-11T10:00:00.000Z", "hits": 1, "kept": 1, "duplicates": 0, "not_kept": {} },
+        { "rung": "trusted", "source": "trusted", "purpose": "trusted", "query": "aspirin fever site:who.int", "via": "brave", "at": "2026-11-11T10:00:01.000Z", "hits": 2, "kept": 1, "duplicates": 0, "not_kept": { "budget": 1 } },
+        { "rung": "web", "source": "search:brave", "purpose": "corroboration", "withheld": "private", "at": "2026-11-11T10:00:02.000Z", "hits": 0, "kept": 0, "duplicates": 0, "not_kept": {} },
+        { "rung": "web", "source": "host:slack", "purpose": "declared", "query": "index bloat", "declared": true, "at": "2026-11-11T10:00:03.000Z", "hits": 9, "kept": 0, "duplicates": 0, "not_kept": {} } ],
+        "flow": { "found": 2, "duplicates_removed": 0, "kept": 1, "not_kept": { "budget": 1 }, "searches": 1, "withheld": 1, "declared": 1 } });
+    must_pass("research-result.schema.json", "a result with its search log", &logged);
+    let mut bad = logged.clone();
+    bad["search_log"]["lines"][2]["query"] = json!("the claim's own words");
+    must_fail("research-result.schema.json", "query text on a withheld search", &bad);
+    let mut bad = logged.clone();
+    bad["search_log"]["lines"][1]["source"] = json!("web");
+    must_fail("research-result.schema.json", "a source outside the closed set", &bad);
+    let mut bad = logged.clone();
+    bad["search_log"]["lines"][1]["source"] = json!("search:Brave Search");
+    must_fail("research-result.schema.json", "a provider id that is not a clean word", &bad);
+    let mut bad = logged.clone();
+    bad["search_log"]["lines"][1]["not_kept"] = json!({ "because I said so": 1 });
+    must_fail("research-result.schema.json", "a not-kept reason outside the list", &bad);
+    let mut bad = logged;
+    bad["search_log"]["lines"][0]["raw_results"] = json!(["<html>"]);
+    must_fail("research-result.schema.json", "raw results in a log line", &bad);
     let mut bad = covered;
     bad["coverage"] = json!("poor");
     must_fail("research-result.schema.json", "a coverage word outside ok and thin", &bad);

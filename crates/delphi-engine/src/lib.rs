@@ -145,6 +145,7 @@ pub mod research_images;
 pub mod research_host;
 pub mod research_jobs;
 pub mod research_plan;
+pub mod search_log;
 pub mod research_run;
 pub mod research_digest;
 pub mod research_pending;

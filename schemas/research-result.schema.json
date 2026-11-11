@@ -31,10 +31,22 @@
         "counted": { "type": "integer", "minimum": 0, "description": "Kept, cited claims from the knowledge base and the trusted sources, after dedupe." },
         "rungs": { "type": "array", "items": { "$ref": "#/$defs/rung" } },
         "host_rungs": { "type": "array", "items": { "enum": ["close", "web"] }, "description": "When thin: the rungs the host's own tools and connectors can take over." },
-        "leads_kept": { "type": "integer", "minimum": 0, "description": "Search results the fetcher would not reach, kept as noted leads." }
+        "leads_kept": { "type": "integer", "minimum": 0, "description": "Search results the fetcher would not reach, kept as noted leads." },
+        "search_log": {
+          "type": "object",
+          "description": "Present only when `[research] search_log` is on (specs/101 section 3): a summary of, and a link to, the top-level `search_log`.",
+          "required": ["lines", "found", "kept", "searches", "withheld", "declared", "see"],
+          "properties": {
+            "lines": { "type": "integer", "minimum": 0 }, "found": { "type": "integer", "minimum": 0 }, "kept": { "type": "integer", "minimum": 0 },
+            "searches": { "type": "integer", "minimum": 0 }, "withheld": { "type": "integer", "minimum": 0 }, "declared": { "type": "integer", "minimum": 0 },
+            "see": { "const": "search_log" }
+          },
+          "additionalProperties": false
+        }
       },
       "additionalProperties": false
     },
+    "search_log": { "$ref": "#/$defs/search_log" },
     "freshness": {
       "type": "object",
       "properties": { "retrieved": { "type": "string" }, "last_checked": { "type": "string" } },
@@ -56,6 +68,51 @@
   },
   "additionalProperties": false,
   "$defs": {
+    "search_log": {
+      "type": "object",
+      "description": "What the run searched, of whom, when, and how much came back (specs/101 section 3). Written by the daemon: a host cannot add, edit or delete a line. It is private when any claim it served is, and a private log never leaves the install. It is information; nothing reads it as a reason to trust, promote or permit anything.",
+      "required": ["version", "private", "lines", "flow"],
+      "properties": {
+        "version": { "const": 1 },
+        "private": { "type": "boolean" },
+        "lines": { "type": "array", "items": { "$ref": "#/$defs/search_line" } },
+        "flow": { "$ref": "#/$defs/search_flow" }
+      },
+      "additionalProperties": false
+    },
+    "search_line": {
+      "type": "object",
+      "description": "One search. `query` is the same redacted string that was sent; a search withheld because its claim rests on a private source has `withheld: private` and no `query`. Every line the daemon ran balances: hits = duplicates + kept + the sum of not_kept.",
+      "required": ["rung", "source", "purpose", "at", "hits", "kept", "duplicates", "not_kept"],
+      "properties": {
+        "rung": { "enum": ["kb", "trusted", "close", "web"] },
+        "source": { "type": "string", "pattern": "^(kb|trusted|(host|search|doi|archive|citation):[a-z0-9._-]{1,40})$", "description": "Of whom: the knowledge base, the operator's trusted list, a host tool the host declared, or a provider. doi, archive and citation are reserved for later slices of spec 101." },
+        "purpose": { "enum": ["kb", "topic", "trusted", "gap", "support", "contradiction", "corroboration", "declared"] },
+        "query": { "type": "string", "maxLength": 200 },
+        "withheld": { "const": "private" },
+        "at": { "type": "string" },
+        "hits": { "type": "integer", "minimum": 0 },
+        "kept": { "type": "integer", "minimum": 0 },
+        "duplicates": { "type": "integer", "minimum": 0 },
+        "not_kept": { "type": "object", "propertyNames": { "enum": ["page_cap", "budget", "refused", "fetch_failed", "capture_failed", "lead_not_stored", "not_followed"] }, "additionalProperties": { "type": "integer", "minimum": 0 } },
+        "via": { "type": "string", "description": "The provider that answered a trusted-list search." },
+        "failed": { "enum": ["no_search_provider", "credential_unresolved", "no_results"], "description": "The search itself failed, in one word of the fixed list." },
+        "declared": { "const": true, "description": "Reported by the host, not made by the daemon. Its kept is 0 and it counts as nothing." }
+      },
+      "not": { "required": ["withheld", "query"] },
+      "additionalProperties": false
+    },
+    "search_flow": {
+      "type": "object",
+      "description": "The lines the daemon ran, summed (a declared line and the knowledge-base line are not in it): found = duplicates_removed + kept + the sum of not_kept.",
+      "required": ["found", "duplicates_removed", "kept", "not_kept", "searches", "withheld", "declared"],
+      "properties": {
+        "found": { "type": "integer", "minimum": 0 }, "duplicates_removed": { "type": "integer", "minimum": 0 }, "kept": { "type": "integer", "minimum": 0 },
+        "not_kept": { "type": "object", "propertyNames": { "enum": ["page_cap", "budget", "refused", "fetch_failed", "capture_failed", "lead_not_stored", "not_followed"] }, "additionalProperties": { "type": "integer", "minimum": 0 } },
+        "searches": { "type": "integer", "minimum": 0 }, "withheld": { "type": "integer", "minimum": 0 }, "declared": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
     "rung": {
       "type": "object",
       "required": ["rung", "searched", "entries_found", "kept"],

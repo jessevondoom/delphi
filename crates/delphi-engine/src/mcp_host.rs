@@ -645,7 +645,21 @@ pub fn tools() -> Value {
                 "properties": {
                     "question": {"type": "string", "minLength": 1, "maxLength": 2000, "description": "What to find out, in general terms."},
                     "depth": {"type": "string", "enum": ["quick", "survey", "deep"], "default": "survey"},
-                    "model": {"type": "string", "maxLength": 64, "description": "Your model name, self-reported."}
+                    "model": {"type": "string", "maxLength": 64, "description": "Your model name, self-reported."},
+                    "host_searches": {
+                        "type": "array", "maxItems": 20,
+                        "description": "Searches you already ran with your own tools for this question (team chat, shared documents, the web). Delphi records them in the search log as declared by you; they count as nothing in the coverage report or the flow. Only tool, query and hits are read.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "tool": {"type": "string", "maxLength": 40, "description": "The tool you searched with."},
+                                "query": {"type": "string", "maxLength": 400, "description": "What you searched for. Private text is removed; a query with nothing usable left is recorded as withheld."},
+                                "hits": {"type": "integer", "minimum": 0, "maximum": 1000, "description": "How many results it returned."}
+                            },
+                            "required": ["tool", "query"],
+                            "additionalProperties": false
+                        }
+                    }
                 },
                 "required": ["question"],
                 "additionalProperties": false
