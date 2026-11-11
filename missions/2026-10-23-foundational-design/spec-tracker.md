@@ -854,6 +854,8 @@ A draft for the operator: host first, the inside exceptions (Council, panel and 
 | S8 | Builder gate and the spec-review lint, after verifying what lint and CI already check | not started |
 | S9 | required summary after a panel or red team, generated reference, `llms.txt`, tracker | not started |
 | S10 | progress tail, stall flag and `cancel_job` for Councils and inside jobs | built (pull request open); the console (TUI) tail is not built |
+| S11 | pull the flags of S4, S5, S6, S1d and spec 101 slice A (`route_adopt`, `source_ladder`, `red_team_kind`, `[research] ladder`, `search_log`); the S5 ladder in the `agents/` manifests so inside seats get it too; the roll-back column (merge commit and revert command) per feature (§13.2) | not started; 7-13 h (estimate) |
+| S12 | the downgrade drill (a new-build home opens with the previous release) and the live trial of the built features (§13.2) | not started; 12-18 h (estimate); needs the operator |
 
 ## Spec 099: Round 2 readability (2026-11-10, approved; approved again after it was read, 2026-11-10)
 
