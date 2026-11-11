@@ -65,10 +65,81 @@ impl TierParams {
 
 static TIERS: std::sync::RwLock<Option<TierParams>> = std::sync::RwLock::new(None);
 
-/// The ladder as the daemon was started with it. Set once at start from `[research.tiers]` (`set_tier_params`); until then, and in a process
-/// that never reads the config, the defaults of `TierParams`.
-pub fn tier_params() -> TierParams {
+/// The ladder as the daemon was started with it, **ignoring any roll-back latch**. Set once at start from `[research.tiers]` (`set_tier_params`);
+/// until then, and in a process that never reads the config, the defaults of `TierParams`. The audit samples by this: a latch changes what a claim
+/// is shown as, not which claims reached the tier.
+pub fn tier_params_configured() -> TierParams {
     TIERS.read().ok().and_then(|g| g.clone()).unwrap_or_default()
+}
+
+/// The ladder as it applies now: the configured one minus the tiers a roll-back holds (`specs/100` §7.3). With no latch file registered
+/// (`set_tier_latch_file`), the configured ladder.
+pub fn tier_params() -> TierParams {
+    apply_latch(tier_params_configured(), latched_tiers())
+}
+
+/// Take the held tiers out of a ladder. `held` is `(substantiated, vetted)`. A held `vetted` reads as `substantiated`; a held `substantiated` reads
+/// as `corroborated`, and because `vetted` rests on `substantiated`'s evidence it is held with it, so a claim never skips a rung down. Pure.
+pub fn apply_latch(mut p: TierParams, held: (bool, bool)) -> TierParams {
+    let (substantiated, vetted) = held;
+    if substantiated {
+        p.substantiated_on = false;
+        p.vetted_on = false;
+    }
+    if vetted {
+        p.vetted_on = false;
+    }
+    p
+}
+
+/// Read a roll-back latch file's bytes as `(substantiated, vetted)`. The file is `{"latched": {"vetted": {...}}}`; a name present is held. A file
+/// that cannot be parsed holds **both** (fail safe, as the validator's own latch does).
+pub fn tier_latch_of(bytes: &[u8]) -> (bool, bool) {
+    match serde_json::from_slice::<serde_json::Value>(bytes) {
+        Ok(v) => {
+            let held = |k: &str| v["latched"].get(k).is_some();
+            (held("substantiated"), held("vetted"))
+        }
+        Err(_) => (true, true),
+    }
+}
+
+static LATCH_FILE: std::sync::RwLock<Option<std::path::PathBuf>> = std::sync::RwLock::new(None);
+static LATCH_SEEN: std::sync::Mutex<Option<(std::time::Instant, (bool, bool))>> = std::sync::Mutex::new(None);
+
+/// Register the roll-back latch file (`<workspace>/local/validation/tier_latch.json`). The daemon calls this once at start, beside
+/// `set_tier_params`; the file is the operator's act (`delphi validation tier rollback`) or the audit's, never a model's, a tool argument's or a
+/// config edit's. It is re-read at most once a second, so a roll-back made from another process applies to a running daemon within about a second,
+/// and it survives a restart because it is a file.
+pub fn set_tier_latch_file(path: std::path::PathBuf) {
+    if let Ok(mut g) = LATCH_FILE.write() {
+        *g = Some(path);
+    }
+    reload_tier_latch();
+}
+
+/// Forget what was last read; the next `tier_params()` reads the file again.
+pub fn reload_tier_latch() {
+    if let Ok(mut g) = LATCH_SEEN.lock() {
+        *g = None;
+    }
+}
+
+fn latched_tiers() -> (bool, bool) {
+    let Some(path) = LATCH_FILE.read().ok().and_then(|g| g.clone()) else { return (false, false) };
+    let Ok(mut seen) = LATCH_SEEN.lock() else { return (true, true) };
+    if let Some((at, held)) = *seen {
+        if at.elapsed() < std::time::Duration::from_secs(1) {
+            return held;
+        }
+    }
+    let held = match std::fs::read(&path) {
+        Ok(b) => tier_latch_of(&b),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (false, false),
+        Err(_) => (true, true),
+    };
+    *seen = Some((std::time::Instant::now(), held));
+    held
 }
 
 /// Install the operator's ladder. Called by the daemon at start and nowhere else; nothing a model, a tool argument or a file says reaches it.
@@ -376,6 +447,42 @@ mod tests {
     fn an_out_of_order_setting_is_put_in_order_so_vetted_never_needs_less_than_the_rung_below() {
         let odd = TierParams { corroborated_origins: 6, vetted_origins: 2, substantiated_trusted: 3, vetted_trusted: 1, ..TierParams::default() }.ordered();
         assert_eq!((odd.vetted_origins, odd.vetted_trusted), (6, 3));
+    }
+
+    #[test]
+    fn a_held_tier_makes_the_labels_fall_back_one_rung_and_changes_no_tag() {
+        // `specs/100` §7.3 and §10 item 6: the latch removes a rung from the ladder; the claim's tags are untouched.
+        let top = tags(9, 4, true);
+        let base = TierParams::default();
+        assert_eq!(tier_for(&top, &apply_latch(base.clone(), (false, false))), Status::Vetted);
+        assert_eq!(tier_for(&top, &apply_latch(base.clone(), (false, true))), Status::Substantiated, "a held vetted reads substantiated");
+        assert_eq!(tier_for(&top, &apply_latch(base.clone(), (true, false))), Status::Corroborated, "a held substantiated reads corroborated, and takes vetted with it");
+        assert_eq!(tier_for(&top, &apply_latch(base.clone(), (true, true))), Status::Corroborated);
+        // a claim that is only substantiated falls to corroborated when substantiated is held
+        assert_eq!(tier_for(&tags(3, 1, false), &apply_latch(base.clone(), (true, false))), Status::Corroborated);
+        // a held tier never lifts anything and never touches another status
+        for held in [(false, true), (true, false), (true, true)] {
+            let p = apply_latch(base.clone(), held);
+            for s in [Status::Validated, Status::Contested, Status::Disproved, Status::Retired] {
+                assert_eq!(raise_for_tags(s, &top, &p), s);
+            }
+            assert_eq!(tier_for(&tags(1, 0, false), &p), Status::Noted);
+        }
+        // the numbers are the operator's and the latch leaves them alone
+        let strict = TierParams { vetted_origins: 6, ..base };
+        let held = apply_latch(strict.clone(), (false, true));
+        assert_eq!((held.vetted_origins, held.corroborated_origins, held.substantiated_trusted, held.fast_lane_on), (6, 3, 1, true));
+    }
+
+    #[test]
+    fn the_latch_file_is_read_as_the_tiers_it_names_and_an_unreadable_one_holds_both() {
+        assert_eq!(tier_latch_of(br#"{"latched": {}}"#), (false, false));
+        assert_eq!(tier_latch_of(br#"{"latched": {"vetted": {"trigger": "operator"}}}"#), (false, true));
+        assert_eq!(tier_latch_of(br#"{"latched": {"substantiated": {}}}"#), (true, false));
+        assert_eq!(tier_latch_of(br#"{"latched": {"substantiated": {}, "vetted": {}}}"#), (true, true));
+        assert_eq!(tier_latch_of(b"{ not json"), (true, true), "fail safe");
+        assert_eq!(tier_latch_of(b""), (true, true));
+        assert_eq!(tier_latch_of(br#"{"something": "else"}"#), (false, false), "a valid file that names no tier holds none");
     }
 
     #[test]

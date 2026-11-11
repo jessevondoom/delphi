@@ -681,6 +681,32 @@ mod claims {
     }
 
     #[test]
+    fn a_held_tier_changes_the_label_and_not_the_claim_and_the_audit_still_finds_the_claims_that_reached_it() {
+        use crate::library::claims::status_with;
+        use delphi_core::knowledge_status::{apply_latch, tier_params_configured};
+        let (d, l) = lib();
+        let (_ids, id) = three_fetched(d.path(), &l);
+        let text = l.claim(&id).unwrap()["text"].as_str().unwrap().to_string();
+        with_counts(&l, &id, 5, 2);
+        l.record_would_ratify(&crate::fact_store::fact_id(&text));
+        let c = l.claim(&id).unwrap();
+        let p = tier_params_configured();
+        assert_eq!(status_with(&c, &p), Status::Vetted);
+        // a held vetted reads substantiated; a held substantiated reads corroborated; nothing stored moves (`specs/100` §7.3, §10 item 6)
+        assert_eq!(status_with(&c, &apply_latch(p.clone(), (false, true))), Status::Substantiated);
+        assert_eq!(status_with(&c, &apply_latch(p.clone(), (true, false))), Status::Corroborated);
+        assert_eq!(l.claim(&id).unwrap(), c, "a roll-back deletes and rewrites nothing");
+        // the audit samples by the configured ladder, so a rolled-back tier can still be audited before it is restored
+        let vetted = l.tier_members("vetted");
+        assert_eq!(vetted, vec![(id.clone(), "reputable_secondary".to_string())]);
+        assert!(l.tier_members("substantiated").is_empty() && l.tier_members("batch").is_empty() && l.tier_members("corroborated").is_empty());
+        // the reveal: where the claim rests, after the answer
+        let sources = l.claim_sources(&id);
+        assert_eq!(sources.len(), 3);
+        assert!(sources.iter().all(|s| s.1.starts_with("https://") && s.2 == "reputable_secondary"), "{sources:?}");
+    }
+
+    #[test]
     fn a_lost_anchor_after_a_new_version_retracts_it_and_disagreement_wins_over_the_count() {
         let (d, l) = lib();
         let (ids, id) = three_fetched(d.path(), &l);

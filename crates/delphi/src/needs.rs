@@ -146,7 +146,7 @@ pub fn validation_section(ws: &Path, now: i64) -> String {
     let cards = if open == 0 { "no audit card is waiting".to_string() } else { format!("{open} audit card(s) waiting, the oldest {} day(s); `delphi validation audit` answers one", oldest / 86_400) };
     let queued = delphi_engine::fact_audit::queue(&state);
     let waiting = if queued.is_empty() { String::new() } else { format!("{} claim(s) kept as not validated (budget reached), most-referenced first: `delphi validation queue`; `delphi validation more <mission>` raises a cap\n", queued.len()) };
-    format!("\nFact validation: {cards}\n{waiting}{line}\n")
+    format!("\nFact validation: {cards}\n{waiting}{line}\n{}", delphi_engine::tier_audit::needs_line(&state))
 }
 
 /// Key facts taken from summary pages that wait for the operator (`specs/068` §6.5). Silent when there are none.

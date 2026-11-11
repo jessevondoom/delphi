@@ -377,6 +377,9 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
         settings: {
             let st = settings_from(&root);
             delphi_core::knowledge_status::set_tier_params(st.tiers.clone());
+            // The roll-back latch (`specs/100` §7.3) is a file in the validator's state directory: it survives a restart, only the operator or the
+            // audit writes it, and it is re-read about once a second so a roll-back from another process applies to this daemon.
+            delphi_core::knowledge_status::set_tier_latch_file(crate::tier_audit::latch_file(&crate::fact_mode::state_dir(ws_dir)));
             st
         },
         probe: Arc::new(GitProbe::new()),
