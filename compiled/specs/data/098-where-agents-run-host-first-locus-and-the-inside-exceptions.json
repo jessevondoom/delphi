@@ -246,7 +246,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/098-where-agents-run-host-first-locus-and-the-inside-exceptions.md",
-    "sha256": "873f65a6d6bbf9638a8f7144a746b96715ee8be226cf4bdf9b72290e4d191bab"
+    "sha256": "0dce4527c3ee755674959c0050853186bf0168d93d35a26a266eccef6bf27556"
   },
   "source_status_at_hash": {
     "line": {
@@ -259,7 +259,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-10 (\"approve spec 098\"): the text as written. OD-1 to OD-6 and OD-8 to OD-11 of section 14 take their recommendations. OD-7 (inside fetch) was decided by the operator the same day (\"7a yes, 7b off\"): 7a is approved, 7b is off and not built. A review with a completed red-team Round 2 (section 17) was not run before approval. The text takes effect when this pull request merges."
     },
-    "sha256": "873f65a6d6bbf9638a8f7144a746b96715ee8be226cf4bdf9b72290e4d191bab",
+    "sha256": "0dce4527c3ee755674959c0050853186bf0168d93d35a26a266eccef6bf27556",
     "word": "approved"
   },
   "spec": {
