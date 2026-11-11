@@ -11,6 +11,9 @@ use crate::provenance::Tier;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
     Noted,
+    /// Three or more independent origins state it (`specs/098` §7.6): a count made by code, between `Noted` and `Validated`. It is
+    /// weaker than `Validated`, it is not a taint level, and nothing reads it as a reason to trust, promote or permit anything.
+    Corroborated,
     Checking,
     Validated,
     Contested,
@@ -18,10 +21,33 @@ pub enum Status {
     Retired,
 }
 
+/// How many independent origins make a claim `corroborated` (`specs/098` §7.6). The one number this spec fixes.
+pub const CORROBORATED_MIN_ORIGINS: usize = 3;
+
+/// A claim that would read `noted` or `checking` reads `corroborated` when `origins` independent origins support it. `checking` is an
+/// activity (a claim queued with the validator), not a rung, and a claim waiting for a check can still have three origins; the
+/// spec makes a corroborated claim a candidate for validation (`specs/098` §7.6 "A path up"). It raises nothing else: `validated`,
+/// `contested`, `disproved` and `retired` all win over a count, so a contradiction or a lost source always lowers a corroborated
+/// claim (`specs/098` §7.6 "Disagreement wins").
+pub fn raise_for_support(status: Status, origins: usize) -> Status {
+    if matches!(status, Status::Noted | Status::Checking) && origins >= CORROBORATED_MIN_ORIGINS {
+        Status::Corroborated
+    } else {
+        status
+    }
+}
+
+/// What to print beside a corroborated claim: the count and the words that keep it from reading as proof. `trusted_sources` is the
+/// flag of `specs/098` §7.6: shown, never a condition of the status.
+pub fn support_detail(origins: usize, trusted_sources: usize) -> String {
+    format!("corroborated · {} origins · trusted_sources: {} · weaker than validated", origins, trusted_sources)
+}
+
 impl Status {
     pub fn as_str(&self) -> &'static str {
         match self {
             Status::Noted => "noted",
+            Status::Corroborated => "corroborated",
             Status::Checking => "checking",
             Status::Validated => "validated",
             Status::Contested => "contested",
@@ -133,8 +159,25 @@ mod tests {
     }
 
     #[test]
+    fn three_independent_origins_raise_a_noted_or_queued_claim_and_anything_else_wins_over_a_count() {
+        assert_eq!(raise_for_support(Status::Noted, 2), Status::Noted);
+        assert_eq!(raise_for_support(Status::Noted, 3), Status::Corroborated);
+        assert_eq!(raise_for_support(Status::Noted, 40), Status::Corroborated);
+        assert_eq!(raise_for_support(Status::Checking, 3), Status::Corroborated, "a queued check is an activity, not a rung");
+        assert_eq!(raise_for_support(Status::Checking, 2), Status::Checking);
+        for lowered in [Status::Contested, Status::Disproved, Status::Retired, Status::Validated] {
+            assert_eq!(raise_for_support(lowered, 9), lowered, "{lowered:?}: a count never overrides another status");
+        }
+        assert_eq!(Status::Corroborated.as_str(), "corroborated");
+        assert_eq!(Status::Corroborated.label(), "not validated", "the operator still reads one of three words");
+        let d = support_detail(3, 1);
+        assert!(d.contains("3 origins") && d.contains("trusted_sources: 1") && d.contains("weaker than validated"), "{d}");
+        assert!(!d.contains("verified"), "a count is not verification: {d}");
+    }
+
+    #[test]
     fn labels_are_the_three_operator_words_and_never_untrusted() {
-        for s in [Status::Noted, Status::Checking, Status::Validated, Status::Contested, Status::Disproved, Status::Retired] {
+        for s in [Status::Noted, Status::Corroborated, Status::Checking, Status::Validated, Status::Contested, Status::Disproved, Status::Retired] {
             assert!(["validated", "not validated", "disproved"].contains(&s.label()));
             assert!(!s.label().contains("untrusted") && !s.as_str().contains("untrusted"));
         }

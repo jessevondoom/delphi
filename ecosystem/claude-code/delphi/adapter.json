@@ -1,0 +1,13 @@
+{
+  "host": "claude-code",
+  "version": 1,
+  "capabilities": {
+    "read": "Read",
+    "search_code": "Grep",
+    "search_web": "WebSearch",
+    "fetch": "WebFetch",
+    "edit": "Edit",
+    "shell": "Bash",
+    "delegate": "Agent"
+  }
+}

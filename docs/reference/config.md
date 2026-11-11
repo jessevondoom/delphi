@@ -39,6 +39,8 @@ Defaults are those of the template; "—" means no default.
 | `[routing] degrade_prompt_secs` | `300` | how long the "run on a weaker model?" card waits |
 | `[routing] max_park_secs` | wait forever | how long a task waits for a model; `0` escalates at once |
 | `[routing] registry` | `"flat"` | `"flat"`: the orchestrator sees one line per bundle agent, up to 20, with a note of how many are not listed. `"auto"`: past 20 agents it sees a domain index and gets `search_agent_registry` (spec 041); becomes the default only after the labeled set meets the recall bar |
+| `[routing] adopt_threshold` | `0.55` | The confidence, 0 to 1, at or above which `route` marks its best candidate `adopt = true` (spec 098 §8). Confidence is the ranking's score less what a close rival takes away. **Provisional**: the default was set on a 40-task labeled set written by the slice's author (20 of 20 adoptions right at this value; 20 of 30 role tasks adopted), which proves little. `delphi route --adopt-eval <file>` measures a better one. |
+| `[hosts] route_adopt` | `false` | Whether `route`'s `adopt` is a recommendation (`true`) or only advice (`false`). It changes the answer's `adopt_mode`, not what Delphi does. |
 | `[routing] assignment` | `"static"` | `"static"`: a role's tier picks the model. `"discovered"`: a model is assigned by capability class, measured results and quota (spec 056); becomes the default only after a benchmark shows it no worse |
 | `[routing] evidence_enough` | `8` | measured results per `(role, kind, model)` after which a model is scored by them alone |
 | `[routing] emergency_endpoint`, `emergency_model` | off | a local endpoint (`cost_model = "local"`) and its model that, only when every ratified seat is out of quota, write one hand-off record of the mission's state, labeled unverified until a capable model re-checks it against git and the journal (spec 056 section 3.5). Set both or neither; never used for ordinary work. The engine calls it only when every ratified seat is out (events `emergency.saved`, `emergency.recovered`, `emergency.blocked`); the task still waits for a real seat, and nothing resumes until a seat that meets the role's floor has verified the record |
@@ -51,6 +53,7 @@ Defaults are those of the template; "—" means no default.
 | `[budget] council_budget_usd` | `20.0` | ceiling for a Council |
 | `[budget] on_budget_exhausted` | `escalate` | halt the node and ask you; never silently downscale |
 | `[budget] per_watch_max_wakes_per_day` | `10` | |
+| `[council] stall_secs` | `120` | a status call flags a Council `stalled`, and names the seat idle longest, when every seat still working has been idle this many seconds. `0` turns the flag off (spec 098 section 19) |
 | `[seats] require_families` | unset | refuse a Panel that cannot show this many distinct known model families (the family of the model that was served, from the seat receipt; `unknown` never counts), before anything is spent. Unset never refuses: a result with fewer than two known families is labelled `homogeneous`. `council_open` also takes it per call ([`specs/091`](../../specs/091-seats-families-and-outside-launch.md) SR-3) |
 | `[seats] max_foreign_seats`, `max_foreign_tokens` | `1`, `100000` | per Council: how many seats Delphi may run on another family for a Panel, and the tokens they may use. Over either, the foreign seat is refused before any spend, and the message names the cap (SR-4) |
 | `[hitl] approval_timeout_sec` | `600` | an unanswered card is denied after this long |
@@ -92,8 +95,13 @@ Defaults are those of the template; "—" means no default.
 | `[search.<engine>] credential` ◆ | — | where the key comes from, as for an endpoint (`env:BRAVE_API_KEY`, `keychain:…`, `command:…`); every engine but `parallel` and `searxng` needs one |
 | `[search.searxng] url` ◆ | — | the SearXNG instance (https, or http to loopback) |
 | `[search.google] cx` ◆ | — | the Programmable Search engine id |
+| `[research] young_domain_days` | `180` | a registrable domain younger than this counts zero toward corroboration when its age is known; nothing supplies an age yet, so it does not fire today (`specs/098` §7.6) |
+| `[research] burst_hours` | `24` | citations first seen within this many hours of each other count once, when their first-seen times are known |
+| `[research] similar_above` | `0.8` | pages more similar than this are one origin; never looser than the validator's own `0.5` |
+| `[research] unfamiliar_counts` | `true` | whether a domain no list names counts as an origin; a domain a list calls weak, and every excluded one, count zero either way |
+| `[research] thin_below` | `3` | every research answer carries a coverage report per rung (knowledge base, trusted sources, close sources, the wider web); fewer kept, cited claims than this from the knowledge base and the trusted sources together make the answer say `coverage: thin` and name the host rungs that can take over. 1 to 50 ([`specs/098`](../../specs/098-where-agents-run-host-first-locus-and-the-inside-exceptions.md) §7.5) |
 
-Which sites the job may read is not here: it is `context/sources/trusted.toml` (ratified in a release) plus your own `$DELPHI_HOME/operator/trusted-sources.toml`.
+Which sites the job may read is not here: it is `context/sources/trusted.toml` (ratified in a release) plus your own `$DELPHI_HOME/operator/trusted-sources.toml`. An entry in your own list can carry two optional fields that decide only the `trusted_sources` count shown beside a corroborated claim (`specs/098` §7.6), never what may be fetched: `topics = ["postgres", "indexes"]` limits the entry to claims that contain one of those words (no `topics` means every claim), and `added = "2026-11-10"` makes it count only for claims captured after that day (no `added` means it predates every claim).
 
 ## Fact validator ◆
 

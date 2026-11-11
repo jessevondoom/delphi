@@ -140,6 +140,8 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
 
     // 7. Model access: offline, from config only (probing is `--probe`).
     let cfg = fs::read_to_string(ws.dir.join("config.toml")).unwrap_or_default();
+    // 17. What research can reach before any run (specs/098 §7.5 item 9): facts, not errors.
+    check_research(home, ws, &cfg, &mut r);
     let endpoints = toml::from_str::<toml::Value>(&cfg).ok().and_then(|v| v.get("endpoints").and_then(|e| e.as_array()).map(|a| a.len())).unwrap_or(0);
     if endpoints == 0 && opts.require_providers {
         r.fail("7 model-access", "", "no endpoints configured and --require-providers was given (specs/009)");
@@ -215,6 +217,52 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
     // Checks are pushed as they are cheap to run; show them in their numbered order.
     r.findings.sort_by_key(|f| f.check.split(' ').next().and_then(|n| n.parse::<u32>().ok()).unwrap_or(u32::MAX));
     r
+}
+
+/// `17 research` (spec 098 §7.5 item 9): read-only and offline. States the inside limits of research before a run, as facts: which
+/// search engines are configured and whether each one's key is there, how many hosts the trusted list holds, how many documents the
+/// knowledge base holds and in which zones, and the `thin_below` that decides when an answer says `coverage: thin`. A small list or
+/// an empty knowledge base is a property of a young installation, so none of it is a warning; only a config the doctor cannot read is.
+///
+/// A key is checked without asking for it: an `env:` variable is looked up, anything else (a keychain entry, a command) is said to
+/// be not checked here, because reading it could prompt or run a program.
+fn check_research(home: &Path, ws: &Workspace, cfg_text: &str, r: &mut Report) {
+    const CHECK: &str = "17 research";
+    let root: toml::Value = toml::from_str(cfg_text).unwrap_or_else(|_| toml::Value::Table(Default::default()));
+    let gemini = root.get("endpoints").and_then(|e| e.as_array()).is_some_and(|a| a.iter().any(|e| e.get("family").and_then(|f| f.as_str()) == Some("gemini")));
+    let search = match root.get("search") {
+        Some(t) => delphi_adapter::research::SearchConfig::parse(t, gemini),
+        None => Ok(delphi_adapter::research::SearchConfig::default()),
+    };
+    match search {
+        Err(errs) => r.warn(CHECK, "config.toml", format!("[search] cannot be read, so research cannot run: {}", errs.join("; "))),
+        Ok(s) if s.providers.is_empty() => r.push(Level::Ok, CHECK, "", "search: no engine is configured (`providers = []` under [search]), so research cannot search the web"),
+        Ok(s) => {
+            let names: Vec<&str> = s.providers.iter().map(|p| p.name()).collect();
+            r.push(Level::Ok, CHECK, "", format!("search: {}{}", names.join(", "), if s.explicit { "" } else { " (the default, keyless)" }));
+            for p in s.providers.iter().filter(|p| p.needs_key()) {
+                let cred = s.settings.get(p.name()).and_then(|x| x.credential.as_deref()).unwrap_or("");
+                let fact = match delphi_adapter::credential::CredentialRef::parse(cred) {
+                    Ok(delphi_adapter::credential::CredentialRef::Env(var)) if std::env::var(&var).is_ok_and(|v| !v.is_empty()) => format!("key: the variable {} is set", var),
+                    Ok(delphi_adapter::credential::CredentialRef::Env(var)) => format!("key: the variable {} is not set, so this engine is passed over", var),
+                    Ok(_) => "key: not checked here (a keychain entry or a command would be read at run time)".to_string(),
+                    Err(_) => "key: no credential is configured, so this engine is passed over".to_string(),
+                };
+                r.push(Level::Ok, CHECK, p.name(), fact);
+            }
+        }
+    }
+    let trusted = match delphi_engine::research_setup::lists(&ws.dir, home) {
+        Ok(l) => format!("trusted list: {} host(s)", l.len()),
+        Err(e) => format!("trusted list: could not be read ({})", e.chars().take(120).collect::<String>()),
+    };
+    let kb = match delphi_engine::kb::zone_counts(&ws.dir) {
+        Ok(z) if z.is_empty() => "knowledge base: no documents indexed yet".to_string(),
+        Ok(z) => format!("knowledge base: {} document(s) ({})", z.iter().map(|(_, n)| n).sum::<usize>(), z.iter().map(|(zone, n)| format!("{} {}", zone, n)).collect::<Vec<_>>().join(", ")),
+        Err(_) => "knowledge base: not readable (see check 6)".to_string(),
+    };
+    let thin = delphi_engine::boot::settings_from(&root).thin_below;
+    r.push(Level::Ok, CHECK, "", format!("{}; {}; an answer from fewer than {} kept claims says coverage: thin ([research] thin_below)", trusted, kb, thin));
 }
 
 /// `14 error-log`: read-only; says what is recorded and where, and warns when records were lost.
@@ -339,6 +387,15 @@ fn check_host_plugin(home: &Path, ws: &Workspace, r: &mut Report) {
             _ => r.push(Level::Skipped, "15 host-plugin", host, msg),
         }
         checks.push((host, c));
+    }
+    // Spec 098 §4: the capability map the plugin carries (`adapter.json`) against the one this binary names in its pack headers.
+    // A warning, never a failure, and silent when the plugin's folder cannot be read safely.
+    if let Some((same, detail)) = delphi_engine::mcp_check::check_claude_adapter(Path::new(&h), &delphi_engine::mcp_hosts::claude_code_adapter_json()) {
+        if same {
+            r.push(Level::Ok, "15 host-plugin", "claude-code adapter", detail);
+        } else {
+            r.warn("15 host-plugin", "claude-code adapter", format!("{detail}. Fix: `claude plugin update delphi@delphi`"));
+        }
     }
     let sock = delphi_core::spawn::layout(home, &ws.dir).ok().map(|l| l.host_sock);
     host_chain(&ws.dir, sock.as_deref(), &probe_socket, &checks, r);
@@ -1169,6 +1226,37 @@ mod tests {
         fs::write(&seg, fs::read_to_string(&seg).unwrap().replace("\"i\":1", "\"i\":9")).unwrap();
         let r = run(&home, &ws, &Options::default());
         assert!(r.findings.iter().any(|f| f.check == "8 event-chain" && f.level == Level::Fail), "{:?}", r.findings.iter().map(|f| &f.message).collect::<Vec<_>>());
+    }
+
+    /// Spec 098 §7.5 item 9: the inside limits of research are stated as facts. Nothing is a warning except a `[search]` table that
+    /// cannot be read, and a key is looked up without being read from a keychain or produced by a command.
+    #[test]
+    fn research_states_what_it_can_reach_as_facts_and_warns_only_about_an_unreadable_search_table() {
+        let (_t, home, ws, _p) = setup();
+        let findings = |cfg: &str| {
+            let mut r = Report::default();
+            check_research(&home, &ws, cfg, &mut r);
+            r.findings.into_iter().filter(|f| f.check == "17 research").collect::<Vec<_>>()
+        };
+        // The default: the keyless engine, the shipped trusted list, an empty knowledge base, thin below 3.
+        let f = findings("");
+        assert!(f.iter().all(|x| x.level == Level::Ok), "{f:?}");
+        assert!(f[0].message.contains("search: parallel") && f[0].message.contains("(the default, keyless)"), "{}", f[0].message);
+        let last = &f.last().unwrap().message;
+        assert!(last.contains("trusted list:") && last.contains("host(s)") && last.contains("knowledge base:") && last.contains("fewer than 3 kept claims"), "{last}");
+        // A key from a variable that is not set, one that is, and one the doctor does not read.
+        let f = findings("[search]\nproviders = [\"brave\", \"mojeek\", \"kagi\"]\n[search.brave]\ncredential = \"env:DELPHI_DOCTOR_TEST_KEY_NOT_SET\"\n[search.mojeek]\ncredential = \"env:PATH\"\n[search.kagi]\ncredential = \"keychain:delphi-kagi\"\n");
+        let by = |name: &str| f.iter().find(|x| x.location == name).map(|x| x.message.clone()).unwrap_or_default();
+        assert!(by("brave").contains("DELPHI_DOCTOR_TEST_KEY_NOT_SET is not set") && by("brave").contains("passed over"), "{}", by("brave"));
+        assert!(by("mojeek").contains("PATH is set"), "{}", by("mojeek"));
+        assert!(by("kagi").contains("not checked here"), "{}", by("kagi"));
+        assert!(f.iter().all(|x| x.level == Level::Ok), "a missing key is a fact, not a warning: {f:?}");
+        assert!(!f.iter().map(|x| x.message.as_str()).collect::<String>().contains("delphi-kagi"), "no credential reference is echoed");
+        // No engine at all, a custom threshold, and an unreadable table.
+        assert!(findings("[search]\nproviders = []\n")[0].message.contains("research cannot search the web"));
+        assert!(findings("[research]\nthin_below = 5\n").last().unwrap().message.contains("fewer than 5 kept claims"));
+        let f = findings("[search]\nproviders = [\"nonesuch\"]\n");
+        assert_eq!((f[0].level, f[0].location.as_str()), (Level::Warn, "config.toml"), "{f:?}");
     }
 
     #[test]

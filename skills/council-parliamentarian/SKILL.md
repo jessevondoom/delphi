@@ -1,6 +1,7 @@
 ---
 name: council-parliamentarian
 description: "Audit multi-agent Council debates for procedural compliance with REVIEW.md, extract irreconcilable contentions, and structure operator tie-breaker cards. Use when council sessions reach deadlock."
+locus: inside
 authorized_agents:
   - administrator
 input_schema:

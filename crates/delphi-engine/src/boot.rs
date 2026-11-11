@@ -76,6 +76,27 @@ pub fn settings_from(root: &toml::Value) -> Settings {
             s.max_foreign_tokens = n as u64;
         }
     }
+    if let Some(n) = root.get("council").and_then(|c| c.get("stall_secs")).and_then(|v| v.as_integer()).filter(|v| *v >= 0) {
+        s.council_stall_secs = n.min(86_400) as u64;
+    }
+    if let Some(n) = root.get("research").and_then(|r| r.get("thin_below")).and_then(|v| v.as_integer()).filter(|v| *v >= 1) {
+        s.thin_below = n.min(50) as usize;
+    }
+    // The corroboration numbers (`specs/098` §18): each ignored when it is not the right kind of value, so a typo keeps the default.
+    if let Some(r) = root.get("research") {
+        if let Some(n) = r.get("young_domain_days").and_then(|v| v.as_integer()).filter(|v| (0..=3650).contains(v)) {
+            s.support.young_domain_days = n as u32;
+        }
+        if let Some(n) = r.get("burst_hours").and_then(|v| v.as_integer()).filter(|v| (0..=720).contains(v)) {
+            s.support.burst_hours = n as u32;
+        }
+        if let Some(x) = r.get("similar_above").and_then(|v| v.as_float()).filter(|v| *v > 0.0 && *v <= 1.0) {
+            s.support.similar_above = x;
+        }
+        if let Some(b) = r.get("unfamiliar_counts").and_then(|v| v.as_bool()) {
+            s.support.unfamiliar_counts = b;
+        }
+    }
     s.hooks = crate::hooks::parse(root).0;
     if let Some(r) = root.get("relay") {
         if r.get("step_up").and_then(|v| v.as_str()) == Some("totp") {
@@ -398,11 +419,40 @@ mod tests {
 
 
     #[test]
+    fn the_council_stall_window_defaults_to_two_minutes_and_zero_turns_it_off() {
+        assert_eq!(settings_from(&toml::from_str("").unwrap()).council_stall_secs, 120);
+        assert_eq!(settings_from(&toml::from_str("[council]\nstall_secs = 300\n").unwrap()).council_stall_secs, 300);
+        assert_eq!(settings_from(&toml::from_str("[council]\nstall_secs = 0\n").unwrap()).council_stall_secs, 0);
+        assert_eq!(settings_from(&toml::from_str("[council]\nstall_secs = -5\n").unwrap()).council_stall_secs, 120, "a negative value is ignored");
+        assert_eq!(settings_from(&toml::from_str("[council]\nstall_secs = 99999999\n").unwrap()).council_stall_secs, 86_400, "and a huge one is capped at a day");
+    }
+
+    #[test]
+    fn the_corroboration_numbers_default_to_the_pinned_values_and_a_bad_value_keeps_the_default() {
+        // `specs/098` §18: 180 days, 24 hours, 0.8, and unfamiliar domains count.
+        let d = settings_from(&toml::from_str("").unwrap()).support;
+        assert_eq!((d.young_domain_days, d.burst_hours, d.similar_above, d.unfamiliar_counts), (180, 24, 0.8, true));
+        let s = settings_from(&toml::from_str("[research]\nyoung_domain_days = 30\nburst_hours = 6\nsimilar_above = 0.4\nunfamiliar_counts = false\n").unwrap()).support;
+        assert_eq!((s.young_domain_days, s.burst_hours, s.similar_above, s.unfamiliar_counts), (30, 6, 0.4, false));
+        for bad in ["young_domain_days = -1", "burst_hours = \"day\"", "similar_above = 1.5", "similar_above = 0.0", "unfamiliar_counts = \"yes\""] {
+            let got = settings_from(&toml::from_str(&format!("[research]\n{bad}\n")).unwrap()).support;
+            assert_eq!((got.young_domain_days, got.burst_hours, got.similar_above, got.unfamiliar_counts), (180, 24, 0.8, true), "{bad}");
+        }
+    }
+
+    #[test]
     fn the_seats_block_defaults_to_never_refusing_for_families_and_one_foreign_seat() {
         let d = settings_from(&toml::from_str("").unwrap());
         assert_eq!((d.require_families, d.max_foreign_seats, d.max_foreign_tokens), (None, 1, 100_000), "unset never refuses");
         let s = settings_from(&toml::from_str("[seats]\nrequire_families = 2\nmax_foreign_seats = 0\nmax_foreign_tokens = 5000\n").unwrap());
         assert_eq!((s.require_families, s.max_foreign_seats, s.max_foreign_tokens), (Some(2), 0, 5000));
+        // `[research] thin_below` (specs/098 §7.5 item 4): default 3, a positive integer, capped at 50; anything else keeps the default.
+        assert_eq!(settings_from(&toml::from_str("").unwrap()).thin_below, 3);
+        assert_eq!(settings_from(&toml::from_str("[research]\nthin_below = 5\n").unwrap()).thin_below, 5);
+        assert_eq!(settings_from(&toml::from_str("[research]\nthin_below = 500\n").unwrap()).thin_below, 50);
+        for bad in ["thin_below = 0", "thin_below = -2", "thin_below = \"many\""] {
+            assert_eq!(settings_from(&toml::from_str(&format!("[research]\n{bad}\n")).unwrap()).thin_below, 3, "{bad}");
+        }
         assert_eq!(settings_from(&toml::from_str("[seats]\nrequire_families = 0\n").unwrap()).require_families, None, "0 is not a requirement");
     }
     fn workspace_with_config(extra: &str) -> (tempfile::TempDir, WorkspacePaths) {

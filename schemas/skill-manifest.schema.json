@@ -11,7 +11,8 @@
     "authorized_agents": { "type": "array", "items": { "type": "string" } },
     "input_schema": { "type": "object" },
     "output_schema": { "type": "object" },
-    "required_permissions": { "type": "array", "items": { "type": "string", "pattern": "^[a-z_]+:[a-z_]+$", "description": "For example `read:all`, `write:worktree`, `shell:scoped_scripts`." } }
+    "required_permissions": { "type": "array", "items": { "type": "string", "pattern": "^[a-z_]+:[a-z_]+$", "description": "For example `read:all`, `write:worktree`, `shell:scoped_scripts`." } },
+    "locus": { "enum": ["host", "inside", "either"], "description": "Where the skill runs (specs/098 §3.2): in the host, inside Delphi, or either. Absent means either." }
   },
   "additionalProperties": true
 }

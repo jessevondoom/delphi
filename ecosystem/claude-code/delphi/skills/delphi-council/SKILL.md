@@ -26,6 +26,8 @@ Call `request_council` with the same arguments, relay each `phase` line from `co
 
 If `request_council` answers `council_unavailable` (Delphi's daemon is not running, the operator switched the server off, or no seats can be seated), that answer is terminal. Its first sentence says why and its last line is JSON with `fail_closed: true`. Show the operator the sentence and the `offer` (`panel`, `start_delphi`), then stop. Do not run an agenda of your own and present it as a Council, do not retry quietly, and do not simulate the seats.
 
+**Waiting is not the same as stuck.** While it deliberates, `council_status` lists each seat's `state` (starting, reading, thinking, waiting_on_barrier, submitted, abstained), its `idle_s` (seconds since it last did anything) and `calls`, a short `tail` of what happened, and `stalled`. A seat that is reading or thinking is working, and in Round 1 the answers of the seats that are done are held back until the slowest one is in, so the `phase` can look unchanged for many minutes. Read the seats and the tail before you decide anything is wrong, and tell the operator what they show. **Do not convene a second Council while any seat shows activity: a duplicate is not a retry, it spends the operator's tokens twice.** Only when `stalled` is true (every working seat idle past the stall window) is it reasonable to stop, and then use `cancel_job` with the `council_id` and a short reason before you ask again.
+
 ## 3. A Panel
 
 Delphi holds the barrier and the rules; you run the seats.
