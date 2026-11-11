@@ -1,0 +1,176 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 102: The exchange record"
+    },
+    {
+      "level": 2,
+      "line": 19,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 3,
+      "line": 41,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 48,
+      "number": "1.2",
+      "title": "Simpler alternative considered"
+    },
+    {
+      "level": 2,
+      "line": 52,
+      "number": "2",
+      "title": "Principles"
+    },
+    {
+      "level": 2,
+      "line": 61,
+      "number": "3",
+      "title": "The exchange record"
+    },
+    {
+      "level": 3,
+      "line": 65,
+      "number": "3.1",
+      "title": "Fields"
+    },
+    {
+      "level": 3,
+      "line": 84,
+      "number": "3.2",
+      "title": "Triggers (decided by the operator, 2026-11-11)"
+    },
+    {
+      "level": 3,
+      "line": 96,
+      "number": "3.3",
+      "title": "Who writes the reply summary"
+    },
+    {
+      "level": 2,
+      "line": 102,
+      "number": "4",
+      "title": "Pointers: where the words can be checked"
+    },
+    {
+      "level": 2,
+      "line": 111,
+      "number": "5",
+      "title": "The timeline and the report"
+    },
+    {
+      "level": 2,
+      "line": 120,
+      "number": "6",
+      "title": "Provenance and trust"
+    },
+    {
+      "level": 2,
+      "line": 126,
+      "number": "7",
+      "title": "Controls: on by default, easy to turn off"
+    },
+    {
+      "level": 2,
+      "line": 140,
+      "number": "8",
+      "title": "Slices (one pull request each; none starts before approval and before the 098, 100 and 101 gates)"
+    },
+    {
+      "level": 2,
+      "line": 155,
+      "number": "9",
+      "title": "Considered and not adopted"
+    },
+    {
+      "level": 2,
+      "line": 167,
+      "number": "10",
+      "title": "Amendments (they take effect on approval)"
+    },
+    {
+      "level": 2,
+      "line": 174,
+      "number": "11",
+      "title": "Authority invariants (what the tests prove)"
+    },
+    {
+      "level": 2,
+      "line": 187,
+      "number": "12",
+      "title": "Council record"
+    },
+    {
+      "level": 2,
+      "line": 202,
+      "number": "13",
+      "title": "Known limits and what is not verified"
+    },
+    {
+      "level": 2,
+      "line": 213,
+      "number": "14",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 224,
+      "number": "15",
+      "title": "Verification Plan"
+    },
+    {
+      "level": 2,
+      "line": 242,
+      "number": "16",
+      "title": "Decisions and open questions"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/102-the-exchange-record-the-operators-words-outcome-summaries-and-a-project-history.md",
+    "sha256": "e39ae8f84f34248cd7516f8fb2d270923335dc975181387fa2cac287edf8f8b9"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 397,
+        "end_line": 6,
+        "line": 6,
+        "start": 244
+      },
+      "text": "status: draft   # for the operator and a Council review. Nothing here is buildable until the operator approves it; a draft is a proposal, not permission."
+    },
+    "sha256": "e39ae8f84f34248cd7516f8fb2d270923335dc975181387fa2cac287edf8f8b9",
+    "word": "draft"
+  },
+  "spec": {
+    "group": "knowledge-and-memory",
+    "number": "102",
+    "stem": "102-the-exchange-record-the-operators-words-outcome-summaries-and-a-project-history",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "102: The exchange record: the operator's words, outcome summaries and a project history"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2281,
+      "end_line": 21,
+      "line": 21,
+      "start": 1709
+    },
+    "text": "The operator asked (2026-11-11) for Delphi to keep a history of what happened in a project: the operator's own words, what came of each request, and a build report, with deeper provenance, so that agents get more context and the operator can ask \"where did this decision come from\". The first idea was to store the sessions' transcripts. Council `t_0008` (architect, red-team, strategist; two model families) advised against that, and the operator then proposed a smaller unit, the **exchange record**: one prompt of the operator's, with a short summary of what came back."
+  }
+}

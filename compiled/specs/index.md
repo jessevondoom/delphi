@@ -2,7 +2,7 @@
 
 # Specs
 
-107 specs in 9 groups. The files under `specs/` are the authority; this page is a view of their compiled form, for review. Each group has its own page.
+108 specs in 9 groups. The files under `specs/` are the authority; this page is a view of their compiled form, for review. Each group has its own page.
 
 | Spec | Title | Status | Group | Supersedes / superseded by | Summary | Source |
 | :-- | :-- | :-- | :-- | :-- | :-- | :-- |
@@ -82,6 +82,7 @@
 | [095-documents-and-dataviz](./knowledge-and-memory.md#095-documents-and-dataviz) | 095: Document Reading, Document Creation & Data Visualization (dependency-free) | approved (per source at `a089843f7ae3`) | [Knowledge and memory](./knowledge-and-memory.md) |  | yes | [source](../../specs/095-documents-and-dataviz.md) |
 | [097-encyclopedia-search-pages](./knowledge-and-memory.md#097-encyclopedia-search-pages) | 097: Encyclopedia search pages, inline media, and reputable expansion | approved (per source at `f8696e219e8d`) | [Knowledge and memory](./knowledge-and-memory.md) |  | yes | [source](../../specs/097-encyclopedia-search-pages.md) |
 | [100-confidence-ladder-substantiated-vetted-and-an-audit-that-rolls-back](./knowledge-and-memory.md#100-confidence-ladder-substantiated-vetted-and-an-audit-that-rolls-back) | 100: The confidence ladder: substantiated and vetted tiers, an accept-all workflow, and an audit that rolls a tier back | approved (per source at `9ade344670ba`) | [Knowledge and memory](./knowledge-and-memory.md) |  | yes | [source](../../specs/100-confidence-ladder-substantiated-vetted-and-an-audit-that-rolls-back.md) |
+| [102-the-exchange-record-the-operators-words-outcome-summaries-and-a-project-history](./knowledge-and-memory.md#102-the-exchange-record-the-operators-words-outcome-summaries-and-a-project-history) | 102: The exchange record: the operator's words, outcome summaries and a project history | draft (per source at `e39ae8f84f34`) | [Knowledge and memory](./knowledge-and-memory.md) |  | yes | [source](../../specs/102-the-exchange-record-the-operators-words-outcome-summaries-and-a-project-history.md) |
 | [031-layered-learning-and-training-mode](./learning-and-evals.md#031-layered-learning-and-training-mode) | 031: Layered Learning, Cheap Capture, and Training Mode (draft) | approved (per source at `65c58206c6da`) | [Learning and evals](./learning-and-evals.md) |  | yes | [source](../../specs/031-layered-learning-and-training-mode.md) |
 | [037-training-experiments-quality-and-efficiency](./learning-and-evals.md#037-training-experiments-quality-and-efficiency) | 037: Training Experiments: Quality and Efficiency Across Models and Teams (draft) | approved (per source at `f0dba791f6f1`) | [Learning and evals](./learning-and-evals.md) |  | none | [source](../../specs/037-training-experiments-quality-and-efficiency.md) |
 | [048-harness-benchmarking-and-targeted-evals](./learning-and-evals.md#048-harness-benchmarking-and-targeted-evals) | 048: Harness benchmarking and targeted evals: fixed-model arms, efficiency, handoff fidelity, tool-count and context-retention tests | approved (per source at `a36221502b5b`) | [Learning and evals](./learning-and-evals.md) |  | none | [source](../../specs/048-harness-benchmarking-and-targeted-evals.md) |
