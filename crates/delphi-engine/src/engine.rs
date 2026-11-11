@@ -110,12 +110,16 @@ pub struct Settings {
     /// `[seats] max_foreign_seats` and `max_foreign_tokens` (SR-4): per Council.
     pub max_foreign_seats: u32,
     pub max_foreign_tokens: u64,
+    /// `[seats] red_team_kind` (`specs/098` section 6.2): `council_open` accepts `kind: red_team`. Off by default.
+    pub red_team_kind: bool,
     /// `[research] thin_below` (`specs/098` §7.5 item 4): fewer kept, cited claims than this from the knowledge base and the trusted
     /// sources together make a research answer `coverage: thin`. Default 3.
     pub thin_below: usize,
     /// `[research] young_domain_days`, `burst_hours`, `similar_above`, `unfamiliar_counts` (`specs/098` §7.6, §18): the numbers the corroboration
     /// count uses. The defaults are proposals to calibrate.
     pub support: crate::corroboration::Params,
+    /// `[research.tiers]` (`specs/100` §3.2): the numbers and the per-tier switches of the confidence ladder. Defaults are hypotheses to calibrate.
+    pub tiers: delphi_core::knowledge_status::TierParams,
     /// While no model is usable, how often a parked task looks again (`specs/002` §4.1).
     pub park_poll: Duration,
     /// The longest a task waits for a model before escalating. `None` waits as long as it takes; `Some(0)` never waits.
@@ -186,8 +190,10 @@ impl Default for Settings {
             require_families: None,
             max_foreign_seats: 1,
             max_foreign_tokens: 100_000,
+            red_team_kind: false,
             thin_below: 3,
             support: crate::corroboration::Params::default(),
+            tiers: Default::default(),
             park_poll: Duration::from_secs(5),
             park_max: None,
             degrade_wait: Duration::from_secs(300),

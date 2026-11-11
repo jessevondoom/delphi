@@ -497,7 +497,7 @@ impl Library {
     /// Topics the job may search for: the operator's interests, the workspace's project names and the tags of the library's own
     /// sources. A private source's tags never go into a request to an archive (`specs/055` §10.1).
     pub fn seed_topics(&self, interests: &[String], projects: &[String]) -> Vec<String> {
-        let tags = self.list().into_iter().filter(|(_, m)| may_leave(m, Channel::WebSearch).is_ok() && m["purged"].is_null()).flat_map(|(_, m)| m["tags"].as_array().cloned().unwrap_or_default()).filter_map(|t| t.as_str().map(String::from)).collect::<Vec<_>>();
+        let tags = self.list().into_iter().filter(|(_, m)| crate::egress::check(m, Channel::WebSearch).is_ok() && m["purged"].is_null()).flat_map(|(_, m)| m["tags"].as_array().cloned().unwrap_or_default()).filter_map(|t| t.as_str().map(String::from)).collect::<Vec<_>>();
         let mut out: Vec<String> = Vec::new();
         for t in interests.iter().chain(projects).chain(&tags).filter_map(|t| clean_topic(t)) {
             if !out.contains(&t) {
