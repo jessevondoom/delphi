@@ -5,6 +5,7 @@
 pub mod agent_pool;
 pub mod agent_registry;
 pub mod route_any;
+pub mod host_guidance;
 pub mod approval;
 pub mod shellsafe;
 pub mod assign;
