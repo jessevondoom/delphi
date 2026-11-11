@@ -8,9 +8,11 @@ on:
 permissions:
   contents: read
 
-# A new push to a pull request cancels that pull request's older run. A push to main is never cancelled.
+# A new push to a pull request cancels that pull request's older run. A push to main is never cancelled: each main run gets
+# its own group (the commit), because a group also cancels a run that is still PENDING when a newer one arrives, even with
+# cancel-in-progress off. Two merges a minute apart were leaving the first main run cancelled (a red mark, and no cache saved).
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # The repo's own lean build settings (AGENTS.md): a fresh checkout gains nothing from incremental compilation, and the tests
