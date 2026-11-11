@@ -841,13 +841,13 @@ A draft for the operator: host first, the inside exceptions (Council, panel and 
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
-| S1a | keep everything found as `noted`, per-rung coverage report, `thin_below`, `delphi doctor` size checks | not started |
-| S1b | `corroborated` status: origin keys by 040 §6.2, daemon refetch, retraction, public-only pass | not started |
+| S1a | keep everything found as `noted`, per-rung coverage report, `thin_below`, `delphi doctor` size checks | built (draft pull request, stacked on #615): the coverage report and `coverage: thin` on every host research answer, `[research] thin_below`, the `17 research` doctor facts, and search results the fetcher will not reach kept as `noted` leads (`host-leads.jsonl`) without spending a step. Not built: keeping the *pages* of unlisted hosts (needs S1d), the ranking test (leads are not indexed until S1c), and any change to the console expand job's own routing (`research.rs`) |
+| S1b | `corroborated` status: origin keys by 040 §6.2, daemon refetch, retraction, public-only pass | built (draft pull request, stacked on S1a): `corroborated · N origins` in the one status table (052 KS-1), the count in `corroboration.rs` (distinct origin keys among daemon-fetched, quote-verified citations; Weak/Hostile zero; similarity merge; young-domain, registrant and burst rules wired but fed no age, registrant or first-seen data yet), `trusted_sources: k` as display only, tags `origins`/`trusted_sources`/`contradicted`/`track` stored on the claim from day one, retraction on retire/purge/lost anchor, the public-only corroboration pass for survey and deep, `[research]` numbers, and the §12 item 17 grants-nothing test. Not built: domain age and registrant data (S1d), a validator verdict feeding `contested`/`disproved` from the pass, the operator list's `topics`/`added` fields are read but nothing writes them |
 | S1c | the way back in: `propose_kb_entry` schema, daemon-decided `private`, source decision cards, egress choke point, seat rule | not started |
 | S1d | wider fetch: 7a observed search-result URLs only (7b off, not built) | not started; OD-7a approved |
 | S2 | Councils inside only: rename Mode B, `council_unavailable`, no-relabel tests | not started |
-| S3 | `locus` field, schemas, pack header, capability names, Claude Code adapter with version and hash | not started |
-| S4 | `route` for any query: canonical roles, `locus`, `trigger`, `confidence`, `adopt`, threshold, `route.decided` | not started |
+| S3 | `locus` field, schemas, pack header, capability names, Claude Code adapter with version and hash | built (this pull request): `locus` on roles and skills (schemas, lint, `list_roles`, `list_skills`, `get_agent`, `get_skill`), the five `inside` skills, capability names and the `adapter.json` of the Claude Code plugin, `delphi doctor` compares the installed plugin's adapter. Not built: refusing an `inside` role or skill at `get_agent`/`get_skill` (spec 098 §12 item 1, with S2) |
+| S4 | `route` for any query: canonical roles, `locus`, `trigger`, `confidence`, `adopt`, threshold, `route.decided` | built (pull request, stacked on S3): the ranking now covers the canonical roles too; the default threshold is provisional |
 | S5 | KB first, the research reflex and the offer rule (manifests, plugin skill, `CLAUDE.md` template) | not started |
 | S6 | standalone red team (`kind: red_team`) and `ask_family` (091 SR-5) | not started |
 | S7 | pack guards: council and red-team refuse packs, per-task cap, no-grant test | not started |
@@ -864,15 +864,15 @@ Approved by the operator on 2026-11-10 ("build the round 2 fix first please yes"
 | S0 | spec 099 approval and tracker entry | 4-6 | approved 2026-11-10 (merged with R1, #613) |
 | R1 | the reader: Markdown tolerance and the kept first critique | 6-10 | built (merged, #613) |
 | R2 | the object-only objective and one repair turn (the `agy` structured request already exists) | 8-12 | built (merged, #614) |
-| R3 | the cause in the event and on the card; the cut-excerpt notice | 6-10 | not started |
+| R3 | the cause in the event and on the card; the cut-excerpt notice | 6-10 | built (pull request #616) |
 
 ## Spec 100: the confidence ladder (2026-11-10, approved)
 
-A draft for the operator. It adds the tiers above `corroborated` (spec 098): `substantiated` (3+ origins, 1+ trusted source) and `vetted` (5+ origins, 2+ trusted sources and the validator's own checks pass, which is 040's advisory `would_ratify` made visible), a fast lane that changes queue order only, an accept-all-vetted workflow, and KB-prior tags. **040 §15.4's audit is a roll-back trigger, not a promotion gate** (operator decision, 2026-11-10; Council `t_0006` advised the opposite and is declined at the operator's direction). The operator runs the audit by hand once there is data; a tier that fails is latched off and the labels fall back. The tier numbers are defaults to calibrate, not pre-registered. It depends on spec 098 (a draft in #612). Hours are estimates. Nothing below starts before approval.
+Approved by the operator on 2026-11-10 ("approve spec 099 and spec 100"). It adds the tiers above `corroborated` (spec 098): `substantiated` (3+ origins, 1+ trusted source) and `vetted` (5+ origins, 2+ trusted sources and the validator's own checks pass, which is 040's advisory `would_ratify` made visible), a fast lane that changes queue order only, an accept-all-vetted workflow, and KB-prior tags. **040 §15.4's audit is a roll-back trigger, not a promotion gate** (operator decision, 2026-11-10; Council `t_0006` advised the opposite and is declined at the operator's direction). The operator runs the audit by hand once there is data; a tier that fails is latched off and the labels fall back. The tier numbers are defaults to calibrate, not pre-registered. It depends on spec 098 (approved, merged in #612). Hours are estimates.
 
 | Slice | Content | Hours | State |
 | :-- | :-- | --: | :-- |
-| S0 | this spec, its review and amendments (040 §18.2 and §15.4, 052 §3.1, 066 §5) | 8-12 | draft |
+| S0 | this spec, its review and amendments (040 §18.2 and §15.4, 052 §3.1, 066 §5) | 8-12 | approved 2026-11-10 (merged, #615) |
 | L1 | the tier table in `delphi-core`, labels, glyphs, docs, the `[research] tiers` setting | 10-16 | not started |
 | L2 | the fast lane (queue order only) and `would_ratify` shown as `vetted` | 12-18 | not started |
 | L6 | the roll-back: `tier-audit`, `tier-report`, `tier rollback` and `restore`, the tier latch and the event (built before L3) | 12-18 | not started |

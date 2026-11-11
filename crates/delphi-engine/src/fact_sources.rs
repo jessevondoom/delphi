@@ -129,6 +129,15 @@ impl SourceList {
         self
     }
 
+    /// True when the class of `final_url` is `Weak` only because nothing on any list names the domain ("unfamiliar domains default to
+    /// weak"), as opposed to a domain a list or a rule calls weak. Corroboration (`specs/098` §7.6) tells the two apart: an
+    /// explicitly weak or excluded origin counts zero, an unfamiliar one counts unless `[research] unfamiliar_counts` is off,
+    /// because otherwise no ordinary web page could ever corroborate anything.
+    pub fn unfamiliar(&self, final_url: &str) -> bool {
+        let k = self.classify(final_url);
+        k.class == Class::Weak && k.reason.starts_with("not on the list")
+    }
+
     /// The class of the page at `final_url`. Only the final URL counts: a redirect does not lend its class.
     pub fn classify(&self, final_url: &str) -> Classified {
         let Ok(u) = delphi_adapter::reqwest::Url::parse(final_url) else {

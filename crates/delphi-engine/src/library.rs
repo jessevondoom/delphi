@@ -182,6 +182,9 @@ pub fn may_leave(meta: &Value, channel: Channel) -> Result<(), String> {
 
 pub struct Library {
     root: PathBuf,
+    /// The numbers the corroboration count uses (`specs/098` §7.6, §18): the defaults unless the caller sets the operator's `[research]`
+    /// values with [`Library::with_support`].
+    support: crate::corroboration::Params,
 }
 
 /// A short stable id from the canonical URL or identifier, not from content (`specs/055` §3.2).
@@ -268,7 +271,13 @@ struct Prepared {
 
 impl Library {
     pub fn in_home(home: &Path) -> Library {
-        Library { root: home.join("library") }
+        Library { root: home.join("library"), support: crate::corroboration::Params::default() }
+    }
+
+    /// The same library counting corroboration with the operator's numbers.
+    pub fn with_support(mut self, p: crate::corroboration::Params) -> Library {
+        self.support = p;
+        self
     }
 
     pub fn root(&self) -> &Path {
@@ -574,6 +583,12 @@ impl Library {
                 meta.insert("content_hash".into(), json!(format!("sha256:{}", snap.id)));
                 meta.insert("origin".into(), json!(snap.origin));
                 meta.insert("source_class".into(), json!(SourceList::default().classify(snap.final_url.for_daemon()).class.as_str()));
+                // What corroboration (`specs/098` §7.6) needs to know, frozen at capture so that a list edited later cannot count for a
+                // claim captured earlier: whether the class is Weak only by default, and the trusted-list entry that covered the host.
+                meta.insert("source_unfamiliar".into(), json!(SourceList::default().unfamiliar(snap.final_url.for_daemon())));
+                if let Some(entry) = crate::research_setup::lists(&self.root, self.root.parent().unwrap_or(&self.root)).ok().and_then(|l| l.allows_url(&canonical).cloned()) {
+                    meta.insert("trusted_entry".into(), json!({"host": entry.host, "topics": entry.topics, "added": entry.added}));
+                }
                 meta.insert("tags".into(), json!([]));
                 if let Some((_, l)) = snap.headers.for_daemon().iter().find(|(k, _)| k == "content-language") {
                     meta.insert("language".into(), json!(l.split(',').next().unwrap_or("").trim()));

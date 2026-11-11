@@ -76,6 +76,16 @@ max_parallel_agents = 4
 # `delphi route "<task>"` shows what the search would return, without a model call.
 # registry = "flat"
 
+# Which role to adopt (specs/098 section 8). `route` (the MCP tool and `delphi route "<task>"`) ranks Delphi's canonical roles and the bundle
+# agents together and gives each candidate a confidence from 0 to 1; a candidate at or above this has `adopt = true`, and below it a host adopts no
+# role. The default is provisional: it was set on a small labeled set (`delphi route --adopt-eval <file>` measures your own).
+# adopt_threshold = 0.55
+
+# Hosts (specs/098). `route_adopt` says whether `route`'s `adopt` is a recommendation (true) or only advice (false, the default). It changes what
+# the answer says, not what Delphi does.
+# [hosts]
+# route_adopt = false
+
 # Model assignment (specs/056). "static" (default): a role's tier picks the model, as always. "discovered": each dispatch is
 # assigned by capability class (role floor and preferred class), measured results and quota, from the pool you ratified;
 # a card only when no pool member meets a role's floor. `delphi capabilities --models` shows each model's class.
@@ -222,6 +232,23 @@ sandbox = "off"
 # credential = "env:MOJEEK_API_KEY"
 # [search.searxng]
 # url = "https://searx.example.org"
+
+# What a research answer reports (specs/098 section 7.5). Every answer carries a coverage report per rung (knowledge base, trusted
+# sources, close sources, the wider web) with what was found and kept. Fewer kept, cited claims than thin_below from the knowledge
+# base and the trusted sources together make the answer say "coverage: thin" and name the host rungs that can take over. Default 3.
+# [research]
+# thin_below = 3
+#
+# How corroboration is counted (specs/098 section 7.6). A claim with three or more independent origins, counted by code over pages the
+# daemon fetched itself, reads "corroborated": a weaker statement than "validated". Origins follow specs/040 section 6.2 (registrable
+# domain, near-duplicate text, a page that cites another). A domain a list calls weak and every excluded one count zero; a domain no list
+# names (unfamiliar) counts unless unfamiliar_counts is false. A registrable domain younger than young_domain_days counts zero when its age
+# is known (nothing supplies an age yet); citations first seen within burst_hours of each other count once when their first-seen times
+# are known; pages whose text is more similar than similar_above are one origin (never looser than specs/040's own 0.5).
+# young_domain_days = 180
+# burst_hours = 24
+# similar_above = 0.8
+# unfamiliar_counts = true
 
 # Library acquisition (specs/055 section 8): once a day, the library scout proposes public-domain and research sources that match your projects
 # and these interests, as ONE batch in the digest. Nothing is fetched until you accept (or a standing rule covers it). Ratified, because it

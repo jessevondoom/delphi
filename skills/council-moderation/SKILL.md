@@ -1,6 +1,7 @@
 ---
 name: council-moderation
 description: "Run the three-round Council: blind Round 1, cross-examination, Verdict plus verbatim Minority Report. Use when a decision needs adversarial review."
+locus: inside
 authorized_agents:
   - orchestrator
 input_schema:

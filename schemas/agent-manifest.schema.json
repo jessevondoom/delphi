@@ -24,7 +24,8 @@
     "authorized_skills": { "type": "array", "items": { "type": "string" } },
     "memory_scope": { "type": "string" },
     "max_turn_budget": { "type": "integer", "minimum": 1 },
-    "host_servable": { "type": "boolean", "description": "Whether the role may be served to a host agent over MCP (specs/062 §4.3). Absent means yes." }
+    "host_servable": { "type": "boolean", "description": "Whether the role may be served to a host agent over MCP (specs/062 §4.3). Absent means yes." },
+    "locus": { "enum": ["host", "inside", "either"], "description": "Where the role runs (specs/098 §3.2): in the host, inside Delphi, or either. Absent means either. A role with host_servable false is inside whatever this says." }
   },
   "additionalProperties": true
 }

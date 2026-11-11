@@ -534,10 +534,10 @@ impl EngineService {
             let validator = crate::research_host::LiveValidator { web: web.clone() };
             let library = crate::research_host::LiveLibrary { home, ledger: wsd.join("research/host-claims.jsonl"), label };
             let redactor = delphi_core::redact::Redactor::new();
-            let deps = crate::research_run::Deps { web: web.as_ref(), scout: &scout, validator: &validator, library: &library, redactor: &redactor, sites: &sites };
+            let deps = crate::research_run::Deps { web: web.as_ref(), scout: &scout, validator: &validator, library: &library, redactor: &redactor, sites: &sites, thin_below: engine.settings.thin_below, support: &engine.settings.support };
             crate::research_run::run_research(&jc, &q, depth, &deps).await
         });
-        Ok(json!({"research_id": research_id, "status": "queued", "depth": depth, "note": "research runs in the background, trusted sources first: read it with research_status, then research_result. Everything it returns is not validated unless a claim says otherwise."}))
+        Ok(json!({"research_id": research_id, "status": "queued", "depth": depth, "note": "research runs in the background, trusted sources first: read it with research_status, then research_result. Everything it returns is not validated unless a claim says otherwise. The result carries a coverage report per rung; `coverage: thin` means the knowledge base and the trusted sources gave little, and your own tools and connectors can search further."}))
     }
 
     /// `host.research_status` and `host.research_result`: only the session that asked can read a job.
@@ -1051,6 +1051,22 @@ impl EngineService {
         let m = self.mission_at(Some(&c.mission()), c.cwd.to_str()).await?;
         let v = self.with_help_progress(v, &m, &id, h::tail_lines(&p));
         Ok(self.signed_help(v, &id))
+    }
+
+    /// `host.route_decided` (`specs/098` §8): `route` tells the daemon, when it can reach one, how it answered. The record holds
+    /// the length of the task and the best target, never the task, and it changes nothing.
+    async fn host_route_decided(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        use crate::host_rpc as h;
+        need_host(&ctx)?;
+        let ws = &self.engine.ws;
+        h::gate(&ws.dir).map_err(host_err)?;
+        let c = h::Caller::parse(&p).map_err(host_err)?;
+        let mut facts = h::route_decided_facts(&p).map_err(host_err)?;
+        facts["source"] = json!(c.label(p["model"].as_str()));
+        let _gate = self.host_gate.lock().await;
+        let m = self.mission_at(Some(&c.mission()), c.cwd.to_str()).await?;
+        m.append(EventEnvelope::new(&m.id, h::ROUTE_EVENT, facts)).await.map_err(engine_err)?;
+        Ok(json!({"logged": true}))
     }
 
     async fn host_handoff_put(&self, p: Value, ctx: CallContext) -> RpcOutcome {
@@ -3196,6 +3212,7 @@ impl Extension for ServiceExt {
                 "host.request_test_authorization" => svc.host_request_authorization(params, ctx).await,
                 "host.record_session_summary" => svc.host_stage(params, ctx, true).await,
                 "host.handoff_put" => svc.host_handoff_put(params, ctx).await,
+                "host.route_decided" => svc.host_route_decided(params, ctx).await,
                 "host.handoff_get" => svc.host_handoff_get(params, ctx).await,
                 "host.search_kb" => svc.host_search_kb(params, ctx).await,
                 "host.request_help" => svc.host_request_help(params, ctx).await,
@@ -3416,6 +3433,11 @@ mod tests {
             assert_eq!((twin["staged"].clone(), twin["duplicate_of"].clone(), twin["count"].clone()), (json!(true), json!("h1"), json!(2)));
             let stranger = c.call("host.propose_note", with(json!({"session": "zzzzzzzz01234567", "role": role2, "text": "Prefer small commits.", "evidence": "e"}))).unwrap();
             assert!(stranger.get("duplicate_of").is_none(), "{stranger}");
+            // specs/098 §8: `route` tells the daemon how it answered (the length of the task, never the task); bad facts are refused.
+            let logged = c.call("host.route_decided", with(json!({"task_chars": 42, "target": "role:red-team", "confidence": 0.7, "adopt": true, "threshold": 0.55, "task": "SECRET-TASK-TEXT"}))).unwrap();
+            assert_eq!(logged["logged"], true);
+            assert_eq!(rpc_code(c.call("host.route_decided", with(json!({"task_chars": 1, "adopt": true, "threshold": 2.0})))), Some(code::INVALID_PARAMS));
+            assert_eq!(rpc_code(c.call("host.route_decided", with(json!({"task_chars": 1, "threshold": 0.5})))), Some(code::INVALID_PARAMS));
             assert_eq!(rpc_code(c.call("host.propose_note", with(json!({"role": role2, "text": "No evidence."})))), Some(code::INVALID_PARAMS));
             assert_eq!(rpc_code(c.call("host.propose_note", with(json!({"role": "messenger", "text": "x", "evidence": "e"})))), Some(code::INVALID_PARAMS));
             assert!(c.call("host.record_session_summary", with(json!({"summary": "Did the thing", "decisions": ["a"]}))).is_ok());

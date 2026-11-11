@@ -1349,26 +1349,46 @@ pub fn read_pointer(ctx: &mut ToolCtx, uri: &str) -> Result<(String, Tier), Stri
         Some((p, r)) => (p, Some(r)),
         None => (uri, None),
     };
-    let (bytes, _) = ctx.guard.read_file(path, MAX_READ_BYTES).map_err(|d| denied_in(ctx, d).content)?;
+    let (bytes, byte_cut) = ctx.guard.read_file(path, MAX_READ_BYTES).map_err(|d| denied_in(ctx, d).content)?;
     if bytes.contains(&0) {
         return Err("binary file".into());
     }
     let tier = observe(ctx, path, &bytes);
     let text = String::from_utf8_lossy(&bytes);
     let lines: Vec<&str> = text.lines().collect();
-    let (start, end) = match range {
-        None => (1, lines.len().min(400)),
+    // `line_cut`: the 400-line window, not the caller's own range, stopped short of what was asked for (spec 099 R3).
+    let (start, end, line_cut) = match range {
+        None => (1, lines.len().min(POINTER_WINDOW_LINES), lines.len() > POINTER_WINDOW_LINES),
         Some(r) => {
             let mut it = r.split("-L");
             let a: usize = it.next().and_then(|x| x.parse().ok()).ok_or("bad line range")?;
             let b: usize = it.next().and_then(|x| x.parse().ok()).unwrap_or(a);
-            (a.max(1), b.min(lines.len()).min(a.max(1) + 399))
+            let (start, wanted) = (a.max(1), b.min(lines.len()));
+            let end = wanted.min(start + POINTER_WINDOW_LINES - 1);
+            (start, end, wanted > end)
         }
     };
     if start > lines.len() {
         return Err(format!("line {} is past the end of the file ({} lines)", start, lines.len()));
     }
-    Ok((lines[start - 1..end.max(start)].join("\n"), tier))
+    let mut out = lines[start - 1..end.max(start)].join("\n");
+    out.push_str(&excerpt_cut_notice(start, end, lines.len(), line_cut, byte_cut));
+    Ok((out, tier))
+}
+
+/// How many lines of a pointed-to file one pointer shows.
+const POINTER_WINDOW_LINES: usize = 400;
+
+/// The fixed line that tells a reader a cap cut the excerpt, and in which unit (spec 099 R3). Empty when nothing was cut.
+/// Without it a seat reads the first 400 lines of a longer file and has no way to know that the rest exists.
+fn excerpt_cut_notice(start: usize, end: usize, total_read: usize, line_cut: bool, byte_cut: bool) -> String {
+    if byte_cut {
+        format!("\n[excerpt cut: only the first {MAX_READ_BYTES} bytes of the file were read, so lines {start} to {end} of the {total_read} lines read are shown; read the rest with read_file]")
+    } else if line_cut {
+        format!("\n[excerpt cut: lines {start} to {end} of {total_read}; read the rest with read_file]")
+    } else {
+        String::new()
+    }
 }
 
 pub fn run(ctx: &mut ToolCtx, tool: &str, args: &Value) -> ToolResult {
@@ -1703,6 +1723,40 @@ mod tests {
         let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "architect", mission_id: "m1", now_rfc3339: "2026-10-24T00:00:00.000Z", stamps: vec![], events: vec![] };
         let (text, _) = read_pointer(&mut ctx, &uri).unwrap();
         assert!(text.contains("fn needle() {}"), "{text}");
+    }
+
+    #[test]
+    fn a_pointer_excerpt_that_a_cap_cut_says_so_and_one_the_caller_chose_does_not() {
+        // Spec 099 R3: a seat that reads the first 400 lines of a longer file must be told the rest exists.
+        let mut f = fx(&[]);
+        let long: String = (1..=1000).map(|n| format!("line {n}\n")).collect();
+        std::fs::write(f.root.join("proj/src/long.rs"), &long).unwrap();
+        // 12,000 lines of about 24 bytes: past the 256 KiB read cap as well.
+        let huge: String = (1..=12_000).map(|n| format!("a fairly long line, no. {n}\n")).collect();
+        assert!(huge.len() > MAX_READ_BYTES);
+        std::fs::write(f.root.join("proj/src/huge.rs"), &huge).unwrap();
+        let mut read = |uri: &str| {
+            let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "architect", mission_id: "m1", now_rfc3339: "2026-10-24T00:00:00.000Z", stamps: vec![], events: vec![] };
+            read_pointer(&mut ctx, uri).unwrap().0
+        };
+        // No range: the 400-line window cut a 1,000-line file, and the text says where and how much is left.
+        let whole = read("@project/app/src/long.rs");
+        assert!(whole.starts_with("line 1\n") && whole.contains("line 400\n[excerpt cut: lines 1 to 400 of 1000; read the rest with read_file]"), "{whole}");
+        assert!(!whole.contains("line 401"), "nothing past the window");
+        // A range inside the window is the caller's own choice: nothing was cut by a cap, so there is no notice.
+        let part = read("@project/app/src/long.rs#L10-L20");
+        assert_eq!(part, (10..=20).map(|n| format!("line {n}")).collect::<Vec<_>>().join("\n"));
+        // A range wider than the window is cut by the window, and says so.
+        let wide = read("@project/app/src/long.rs#L100-L900");
+        assert!(wide.starts_with("line 100\n") && wide.ends_with("line 499\n[excerpt cut: lines 100 to 499 of 1000; read the rest with read_file]"), "{wide}");
+        // A range that reaches the end of the file within the window is complete.
+        let tail = read("@project/app/src/long.rs#L990-L2000");
+        assert!(tail.ends_with("line 1000") && !tail.contains("excerpt cut"), "{tail}");
+        // A short file is returned exactly as before.
+        assert_eq!(read("@project/app/src/lib.rs"), "line one\nfn needle() {}\nline three");
+        // A file longer than the byte cap says it was cut in bytes, which is the cap that actually applied.
+        let big = read("@project/app/src/huge.rs");
+        assert!(big.contains(&format!("[excerpt cut: only the first {MAX_READ_BYTES} bytes of the file were read")) && big.ends_with("read the rest with read_file]"), "{}", &big[big.len().saturating_sub(300)..]);
     }
 
     #[test]

@@ -255,6 +255,27 @@ pub const MAX_NEED: usize = 1500;
 pub const KINDS: [&str; 3] = ["expertise", "second_opinion", "decision"];
 pub const HELP_EVENT: &str = "host.help.requested";
 pub const MAX_ANSWER: usize = 8000;
+/// What `route` logs when the daemon is reachable (spec 098 §8): the length of the task and what the ranking answered.
+pub const ROUTE_EVENT: &str = "route.decided";
+
+/// The facts of `route.decided`, checked: the length of the task (never the task), the best target, its confidence, whether it
+/// was adopted and the threshold in force. Anything else a caller sends is dropped.
+pub fn route_decided_facts(p: &Value) -> Result<Value, HostErr> {
+    let Some(task_chars) = p["task_chars"].as_u64().filter(|n| *n <= 100_000) else { return bad("`task_chars` is a whole number up to 100000") };
+    let unit = |k: &str| -> Result<Option<f64>, HostErr> {
+        match &p[k] {
+            Value::Null => Ok(None),
+            v => v.as_f64().filter(|x| (0.0..=1.0).contains(x)).map(Some).ok_or_else(|| HostErr::Invalid(format!("`{k}` is a number from 0 to 1"))),
+        }
+    };
+    let target = match p["target"].as_str() {
+        Some(t) => Some(clean("target", t, 200)?),
+        None => None,
+    };
+    let Some(adopt) = p["adopt"].as_bool() else { return bad("`adopt` is true or false") };
+    let Some(threshold) = unit("threshold")? else { return bad("`threshold` is a number from 0 to 1") };
+    Ok(json!({"task_chars": task_chars, "target": target, "confidence": unit("confidence")?, "adopt": adopt, "threshold": threshold}))
+}
 
 /// How many help requests a host session's log already holds.
 pub fn helps_in(events: &[EventEnvelope]) -> usize {
@@ -648,7 +669,7 @@ pub fn council_view(events: &[delphi_core::event::EventEnvelope], mission_dir: &
             let marker = format!("\n{h}");
             doc.rsplit_once(marker.as_str()).map(|(_, t)| t.split("\n## ").next().unwrap_or("").trim().to_string())
         });
-        let critiques: Vec<Value> = of("council.critique").iter().map(|e| json!({"seat": e.payload["role"], "recommendation": e.payload["recommendation"], "concur": e.payload["concur"], "findings": e.payload["findings"]})).collect();
+        let critiques: Vec<Value> = of("council.critique").iter().map(|e| json!({"seat": e.payload["role"], "recommendation": e.payload["recommendation"], "concur": e.payload["concur"], "findings": e.payload["findings"], "cause": e.payload["cause"], "kept": e.payload["kept"]})).collect();
         // The families that actually sat, from the receipts' served family (`specs/091` SR-3). A Panel adds the host's own, host-reported.
         // A log without receipts keeps the plan's label.
         let (served, _) = crate::seat::served_for_task(events, task_id);
@@ -795,7 +816,16 @@ pub fn ruling_card(v: &Value, tokens: u64) -> String {
         .as_array()
         .into_iter()
         .flatten()
-        .map(|c| format!("`{}`: {}{}", text(&c["seat"]), c["recommendation"].as_str().unwrap_or("no readable critique"), match c["concur"].as_bool() { Some(false) => ", did not concur", _ => "" }))
+        .map(|c| {
+            // Spec 099 R3: say why a Round 2 is unreadable, or that a conflicting block was dropped from a kept critique. The
+            // cause is a name from a closed list; the text is in the record, never on the card.
+            let why = match (c["cause"].as_str(), c["kept"].as_bool()) {
+                (Some("conflicting_block"), Some(true)) => "; kept; conflicting block dropped".to_string(),
+                (Some(cause), _) if c["recommendation"].is_null() => format!(" ({cause}; the text is in the record under Round 2 critiques)"),
+                _ => String::new(),
+            };
+            format!("`{}`: {}{}{}", text(&c["seat"]), c["recommendation"].as_str().unwrap_or("no readable critique"), match c["concur"].as_bool() { Some(false) => ", did not concur", _ => "" }, why)
+        })
         .collect();
     if !split.is_empty() {
         s.push_str("**Where they stood in Round 2**\n");
@@ -934,6 +964,29 @@ pub fn read_handoff(ws_dir: &Path, project: Option<&str>, session: Option<&str>)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_route_facts_are_checked_and_anything_else_a_caller_sends_is_dropped() {
+        let ok = route_decided_facts(&json!({"task_chars": 42, "target": "role:red-team", "confidence": 0.7, "adopt": true, "threshold": 0.55, "task": "SECRET-TASK-TEXT", "extra": 1})).unwrap();
+        assert_eq!(ok, json!({"task_chars": 42, "target": "role:red-team", "confidence": 0.7, "adopt": true, "threshold": 0.55}));
+        assert!(!ok.to_string().contains("SECRET"));
+        // No candidate at all: a null target and confidence are fine.
+        let none = route_decided_facts(&json!({"task_chars": 3, "target": null, "confidence": null, "adopt": false, "threshold": 0.55})).unwrap();
+        assert_eq!((none["target"].clone(), none["adopt"].clone()), (Value::Null, json!(false)));
+        for bad in [
+            json!({"adopt": true, "threshold": 0.5}),
+            json!({"task_chars": -1, "adopt": true, "threshold": 0.5}),
+            json!({"task_chars": 1, "adopt": "yes", "threshold": 0.5}),
+            json!({"task_chars": 1, "adopt": true}),
+            json!({"task_chars": 1, "adopt": true, "threshold": 1.5}),
+            json!({"task_chars": 1, "adopt": true, "threshold": 0.5, "confidence": 2}),
+            json!({"task_chars": 1, "adopt": true, "threshold": 0.5, "target": "x".repeat(201)}),
+        ] {
+            assert!(route_decided_facts(&bad).is_err(), "{bad}");
+        }
+        // A control character in the target becomes a space, as everywhere else a host's text is cleaned.
+        assert_eq!(route_decided_facts(&json!({"task_chars": 1, "target": "a\u{7}b", "adopt": false, "threshold": 0.5})).unwrap()["target"], "a b");
+    }
 
     fn ws() -> (tempfile::TempDir, WorkspacePaths) {
         let t = tempfile::tempdir().unwrap();
@@ -1153,6 +1206,34 @@ mod tests {
         let c = council_view_at(&log, dir.path(), "t-1", at(100), 120, 8).unwrap();
         assert_eq!((c["state"].as_str(), c["reason"].as_str()), (Some("cancelled"), Some("the host cancelled it: a duplicate")));
         assert!(c.get("seats").is_none() && c.get("tail").is_none(), "{c}");
+    }
+
+    #[test]
+    fn the_card_says_why_a_round_two_is_unreadable_and_when_a_conflicting_block_was_dropped() {
+        // Spec 099 R3. The cause is a name from a closed list and the text stays in the record, never on the card.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("councils")).unwrap();
+        std::fs::write(dir.path().join("councils/001-x.md"), "## Decision\n\nx\n\n## Accepted Risks & Minority Report (Red-Team / Dissent)\n\n- [P1] red-team: a\n\n## Next\n").unwrap();
+        let ev = |kind: &str, payload: Value| {
+            let mut e = EventEnvelope::new("m", kind, payload);
+            e.task_id = Some("t-1".into());
+            e
+        };
+        let crit = |role: &str, rec: Value, concur: Value, cause: Value, kept: bool| ev("council.critique", json!({"round": 2, "role": role, "recommendation": rec, "concur": concur, "findings": [], "cause": cause, "kept": kept}));
+        let log = vec![
+            EventEnvelope::new("m", COUNCIL_EVENT, json!({"task_id": "t-1"})),
+            crit("architect", json!("PROCEED"), json!(true), Value::Null, false),
+            crit("red-team", json!("PROCEED-WITH-CHANGES"), json!(false), json!("conflicting_block"), true),
+            crit("strategist", Value::Null, Value::Null, json!("no_recommendation"), false),
+            ev("council.verdict", json!({"decision": "d", "path": "missions/m/councils/001-x.md", "options": [], "steps": []})),
+            ev("task.completed", json!({"status": "done", "reason": ""})),
+        ];
+        let v = council_view(&log, dir.path(), "t-1").unwrap();
+        let card = v["display"].as_str().unwrap();
+        assert!(card.contains("- `architect`: PROCEED\n"), "a clean read says nothing extra: {card}");
+        assert!(card.contains("- `red-team`: PROCEED-WITH-CHANGES, did not concur; kept; conflicting block dropped\n"), "{card}");
+        assert!(card.contains("- `strategist`: no readable critique (no_recommendation; the text is in the record under Round 2 critiques)\n"), "{card}");
+        assert_eq!((v["ruling"]["critiques"][1]["cause"].as_str(), v["ruling"]["critiques"][1]["kept"].as_bool()), (Some("conflicting_block"), Some(true)));
     }
 
     #[test]
