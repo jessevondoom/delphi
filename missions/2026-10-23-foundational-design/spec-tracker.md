@@ -879,3 +879,16 @@ Approved by the operator on 2026-11-10 ("approve spec 099 and spec 100"). It add
 | L3 | the accept-all workflow (digest kind, `batch-accepted` mark) | 16-24 | not started |
 | L4 | the per-tier calibration report | 10-16 | not started |
 | L5 | KB-prior tags: support through origins, cycle check, contradiction block, track record from operator-accepted history | 16-24 | not started |
+
+## Spec 101: library practice for research (2026-11-11, draft)
+
+A draft for the operator. A Scout reviewed library science for gaps in the research workstream; Council `t_0007` (architect, red-team, strategist) advised which to include. The operator ruled API-based citation chaining in scope and that an archived copy is captured as a labelled, searchable page (2026-11-11). Nothing is buildable until the operator approves it. No outside claim in the spec has been checked against its source.
+
+| Slice | Content | Hours (planned) | State |
+| :-- | :-- | --: | :-- |
+| S0 | this spec, its review and amendments (055 §3.5, 098 §7.5, §7.6, §18, 052 §3.1) | 6-10 | draft |
+| A | the search log, flow summary, `delphi research log` | 18-24 | not started |
+| B | local Retraction Watch snapshot, DOI match, `retracted` marks, minimal normaliser | 14-16 | not started |
+| C | archived-copy lookup, labelled version, searchable, zero-origin invariant | 18-20 | not started |
+| D | API reference-list chaining, one hop, bounds, noted-only | 20-24 | not started |
+| E | full DOI/ORCID/ROR normalisation (optional) | 6 | not started |

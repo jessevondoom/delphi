@@ -1,0 +1,170 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 101: Library practice for research"
+    },
+    {
+      "level": 2,
+      "line": 19,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 3,
+      "line": 33,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 40,
+      "number": "1.2",
+      "title": "Simpler alternative considered"
+    },
+    {
+      "level": 2,
+      "line": 44,
+      "number": "2",
+      "title": "What the Scout said, and how far to trust it"
+    },
+    {
+      "level": 2,
+      "line": 59,
+      "number": "3",
+      "title": "Slice A: the search log"
+    },
+    {
+      "level": 2,
+      "line": 73,
+      "number": "4",
+      "title": "Slice B: retraction lookup"
+    },
+    {
+      "level": 2,
+      "line": 91,
+      "number": "5",
+      "title": "Slice C: archived copies"
+    },
+    {
+      "level": 2,
+      "line": 113,
+      "number": "6",
+      "title": "Slice D: citation chaining"
+    },
+    {
+      "level": 2,
+      "line": 135,
+      "number": "7",
+      "title": "New outside endpoints (pinned; slice work verifies them)"
+    },
+    {
+      "level": 2,
+      "line": 147,
+      "number": "8",
+      "title": "Switches and the way back"
+    },
+    {
+      "level": 2,
+      "line": 158,
+      "number": "9",
+      "title": "Amendments (they take effect when the operator approves and this pull request merges)"
+    },
+    {
+      "level": 2,
+      "line": 166,
+      "number": "10",
+      "title": "Considered and deferred (with the condition that would revive each)"
+    },
+    {
+      "level": 2,
+      "line": 178,
+      "number": "11",
+      "title": "Slice E (optional): identifier normalisation"
+    },
+    {
+      "level": 2,
+      "line": 182,
+      "number": "12",
+      "title": "Authority invariants (what the tests prove)"
+    },
+    {
+      "level": 2,
+      "line": 194,
+      "number": "13",
+      "title": "Slices (one pull request each; none starts before approval)"
+    },
+    {
+      "level": 2,
+      "line": 207,
+      "number": "14",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 216,
+      "number": "15",
+      "title": "Verification Plan"
+    },
+    {
+      "level": 2,
+      "line": 232,
+      "number": "16",
+      "title": "Decisions and open questions"
+    },
+    {
+      "level": 2,
+      "line": 249,
+      "number": "17",
+      "title": "Council record"
+    },
+    {
+      "level": 2,
+      "line": 265,
+      "number": "18",
+      "title": "Known limits and what is not verified"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/101-library-practice-for-research-a-search-log-retraction-lookup-archived-copies-and-citation-chaining.md",
+    "sha256": "c5b82d3169b6b2935386904ca352a41cbb035656318e567dc5cc22abf7f56ee5"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 414,
+        "end_line": 6,
+        "line": 6,
+        "start": 282
+      },
+      "text": "status: draft   # for the operator. Nothing here is buildable until the operator approves it; a draft is a proposal, not permission."
+    },
+    "sha256": "c5b82d3169b6b2935386904ca352a41cbb035656318e567dc5cc22abf7f56ee5",
+    "word": "draft"
+  },
+  "spec": {
+    "group": "knowledge-and-memory",
+    "number": "101",
+    "stem": "101-library-practice-for-research-a-search-log-retraction-lookup-archived-copies-and-citation-chaining",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "101: Library practice for research: a search log, retraction lookup, archived copies and citation chaining"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2030,
+      "end_line": 21,
+      "line": 21,
+      "start": 1498
+    },
+    "text": "The operator asked (2026-11-11) whether traditional library practice offers anything this research workstream is missing. A Scout reviewed bibliography, citation, source evaluation and review methodology; Council `t_0007` (architect, red-team, strategist; two model families) then advised what to include. The operator ruled: **API-based citation chaining is in scope and a good idea**, the archive is captured **as a page with a clear label** so it is searchable and readable by people, and the rest of the Council's advice stands."
+  }
+}

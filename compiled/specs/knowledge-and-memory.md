@@ -2,7 +2,7 @@
 
 # Knowledge and memory
 
-18 specs. [All groups](./index.md).
+19 specs. [All groups](./index.md).
 
 ## 004-memory-and-coaching
 
@@ -162,4 +162,14 @@ Agents today read and write plain text only (`read_file`, `write_file`, 256 KB c
 
 ```text
 The operator's aim (2026-11-10): **no learning is absolute, but a high degree of confidence is the goal.** Research should find more, keep what it finds, and say how well each claim is supported. As the knowledge base grows with accepted facts, that knowledge helps judge new learnings without expanding trust. Neither a human nor an agent is likely to do better than five independent sources with two trusted ones, so the strongest tier should be cheap for the operator to accept in bulk, and the operator should be able to find out afterwards whether that was a mistake.
+```
+
+## 101-library-practice-for-research-a-search-log-retraction-lookup-archived-copies-and-citation-chaining
+
+**101: Library practice for research: a search log, retraction lookup, archived copies and citation chaining** · draft (per source at `c5b82d3169b6`) · tier 0 · [source](../../specs/101-library-practice-for-research-a-search-log-retraction-lookup-archived-copies-and-citation-chaining.md)
+
+**source excerpt, untrusted** · `specs/101-library-practice-for-research-a-search-log-retraction-lookup-archived-copies-and-citation-chaining.md` line 21
+
+```text
+The operator asked (2026-11-11) whether traditional library practice offers anything this research workstream is missing. A Scout reviewed bibliography, citation, source evaluation and review methodology; Council `t_0007` (architect, red-team, strategist; two model families) then advised what to include. The operator ruled: **API-based citation chaining is in scope and a good idea**, the archive is captured **as a page with a clear label** so it is searchable and readable by people, and the rest of the Council's advice stands.
 ```
