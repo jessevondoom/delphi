@@ -433,6 +433,11 @@ pub fn source_type_for(tier: &str) -> &'static str {
 
 /// One note as a Markdown document for the knowledge base: labelled with where it came from and how far to trust it.
 pub fn note_document(n: &LiveNote) -> String {
+    let doc = note_document_plain(n);
+    if n.trigger == "host_noted" { doc.replacen("# Staged note", "# Noted entry", 1) } else { doc }
+}
+
+fn note_document_plain(n: &LiveNote) -> String {
     format!(
         "---\nsource_type: {}\nauthor: daemon\nconfidence: low\nstatus: active\nkind: {}\n{}{}---\n# Staged note {}\n\nStaged note ({} · tier {} · {} · mission {}{}{}). A candidate lesson only: not ratified, not guidance.\n\n{}\n",
         source_type_for(&n.tier),

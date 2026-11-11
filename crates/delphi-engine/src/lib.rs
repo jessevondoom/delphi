@@ -128,6 +128,8 @@ pub mod digest_review;
 pub mod decision_brief;
 pub mod decision_run;
 pub mod decision_raised;
+pub mod egress;
+pub mod host_noted;
 pub mod authorization;
 pub mod authorization_grant;
 pub mod authorization_tokens;

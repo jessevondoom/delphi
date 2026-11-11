@@ -25,6 +25,8 @@ pub const MAX_KB_BODY: usize = 20_000;
 pub const MAX_KB_TITLE: usize = 120;
 pub const MAX_KB_SOURCES: usize = 20;
 pub const MAX_KB_ENTRIES: usize = 25;
+/// What the daemon stamps on everything a host leaves, at ingress (`specs/098` §12 item 12). A host's own claim about trust is advisory and never read.
+pub const TAINT: &str = "external_untrusted";
 
 #[derive(Debug, PartialEq)]
 pub enum HostErr {
@@ -201,7 +203,7 @@ pub fn proposals_in(events: &[EventEnvelope]) -> usize {
 }
 
 fn staged(c: &Caller, n: usize, trigger: &str, label: &str, summary: String, evidence: &str, role: Option<&str>) -> EventEnvelope {
-    let mut e = EventEnvelope::new(&c.mission(), "learn.staged", json!({"id": format!("h{}", n + 1), "trigger": trigger, "summary": summary, "event_seqs": [], "tier": "L0", "source": label, "evidence": evidence}));
+    let mut e = EventEnvelope::new(&c.mission(), "learn.staged", json!({"id": format!("h{}", n + 1), "trigger": trigger, "summary": summary, "event_seqs": [], "tier": "L0", "source": label, "evidence": evidence, "taint": TAINT}));
     e.agent = role.map(String::from);
     e
 }
@@ -250,7 +252,7 @@ pub fn kb_entry_event(c: &Caller, p: &Value, already: usize, kb_already: usize) 
     let label = c.label(p["model"].as_str());
     let id = format!("h{}", already + 1);
     let summary = format!("[{label}] KB entry: {title} ({} source(s), stated confidence {confidence})", sources.len());
-    let mut e = EventEnvelope::new(&c.mission(), "learn.staged", json!({"id": id, "trigger": "host_kb_entry", "summary": summary, "event_seqs": [], "tier": "L0", "source": label, "evidence": "the host's own research",
+    let mut e = EventEnvelope::new(&c.mission(), "learn.staged", json!({"id": id, "trigger": "host_kb_entry", "summary": summary, "event_seqs": [], "tier": "L0", "source": label, "evidence": "the host's own research", "taint": TAINT,
         "kb_entry": {"title": title, "body": body, "sources": sources, "confidence": confidence}}));
     e.agent = None;
     Ok(e)
@@ -777,10 +779,54 @@ pub fn council_view(events: &[delphi_core::event::EventEnvelope], mission_dir: &
             "dissent": dissent, "record": ve.payload["path"],
             "note": "advice to you: it binds nothing in your project; the record stays in Delphi for the operator to review"
         });
+        // Spec 098 section 6.2: a red-team review returns findings, not a ruling. The family of each finding is its seat's SERVED family
+        // from the receipt (091 SR-1); a seat the host ran has no receipt, so it is labelled host-declared. Disagreements stay separate.
+        if started.and_then(|e| e.payload["kind"].as_str()) == Some("red_team") {
+            let ran = v["ruling"]["seats_run_by_delphi"].as_array().cloned().unwrap_or_default();
+            let findings: Vec<Value> = of("council.critique")
+                .iter()
+                .flat_map(|e| {
+                    let seat = e.payload["role"].as_str().unwrap_or("").to_string();
+                    let fam = match ran.iter().find(|d| d["seat"] == seat.as_str()) {
+                        Some(d) => json!({"family": d["family"], "source": "receipt"}),
+                        None => json!({"family": host_fam, "source": "host-declared"}),
+                    };
+                    e.payload["findings"].as_array().cloned().unwrap_or_default().into_iter().map(move |f| json!({"severity": f["severity"], "title": f["title"], "seat": seat, "family": fam["family"], "family_source": fam["source"]}))
+                })
+                .collect();
+            v["ruling"]["kind"] = json!("red_team");
+            v["ruling"]["advisory"] = json!(true);
+            v["ruling"]["findings"] = json!(findings);
+            v["ruling"]["single_family"] = json!(homogeneous == json!(true));
+        }
         let tokens: u64 = of("agent.usage").iter().map(|e| e.payload["input_tokens"].as_u64().unwrap_or(0) + e.payload["output_tokens"].as_u64().unwrap_or(0)).sum();
-        v["display"] = json!(ruling_card(&v, tokens));
+        let mut card = ruling_card(&v, tokens);
+        if v["ruling"]["kind"] == "red_team" {
+            card = format!("{}{card}", findings_card(&v["ruling"]));
+        }
+        v["display"] = json!(card);
     }
     Some(v)
+}
+
+/// The head of a red-team review's card: the findings, one per line, each with its seat and family and where the family came from.
+/// Advisory, not a ruling; a single-family review says so.
+pub fn findings_card(r: &Value) -> String {
+    let mut s = String::from("**Red-team review: findings (advisory, not a ruling)**\n");
+    if r["single_family"] == true {
+        s.push_str("_Single-family review: every seat that sat is on one model family (homogeneous), so the seats may share blind spots._\n");
+    }
+    let fs = r["findings"].as_array().cloned().unwrap_or_default();
+    if fs.is_empty() {
+        s.push_str("- no findings were raised\n");
+    }
+    for f in &fs {
+        let fam = f["family"].as_str().unwrap_or("unknown");
+        let src = if f["family_source"] == "receipt" { "from the receipt" } else { "host-declared" };
+        s.push_str(&format!("- **{}** {} (`{}`, family {fam}, {src})\n", f["severity"].as_str().unwrap_or("?"), f["title"].as_str().unwrap_or(""), f["seat"].as_str().unwrap_or("")));
+    }
+    s.push('\n');
+    s
 }
 
 /// A decided Council as one block of markdown for the operator (spec 086 §7), built from the structured ruling only, so every
@@ -1127,6 +1173,26 @@ mod tests {
             other.payload["trigger"] = json!(trigger);
             assert_eq!(duplicate_of(&[other], &again), None, "{trigger}");
         }
+    }
+
+    #[test]
+    fn everything_a_host_leaves_is_stamped_external_untrusted_whatever_it_claims() {
+        let (_t, w) = ws();
+        let claims = json!({"taint": "user_ratified", "tier": "L5", "status": "ratified", "source_type": "user_ratified", "author": "operator", "private": false, "confidence": "high"});
+        let mut note = json!({"role": "builder", "text": "Lesson.", "evidence": "e"});
+        let mut kb = json!({"title": "t", "body": "b"});
+        for (k, v) in claims.as_object().unwrap() {
+            note[k] = v.clone();
+            kb[k] = v.clone();
+        }
+        let n = note_event(&caller(), &w, &note, 0).unwrap();
+        assert_eq!(n.payload["taint"], "external_untrusted");
+        assert_eq!(n.payload["tier"], "L0");
+        let k = kb_entry_event(&caller(), &kb, 0, 0).unwrap();
+        assert_eq!(k.payload["taint"], "external_untrusted");
+        assert_eq!(k.payload["tier"], "L0");
+        let s = summary_event(&caller(), &json!({"summary": "done", "tier": "L5", "taint": "user_ratified"}), 0).unwrap();
+        assert_eq!(s.payload["taint"], "external_untrusted");
     }
 
     #[test]
