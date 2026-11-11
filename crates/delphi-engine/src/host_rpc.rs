@@ -553,6 +553,34 @@ pub fn council_frame_with(p: &Value, env: &crate::carrier_plan::CarrierEnv) -> R
     }))
 }
 
+/// [`council_view`] plus, while the Council is still deliberating, what its seats are doing (`specs/098` §19): each seat's state,
+/// how long it has been idle, a fixed-form tail of recent events, and a `stalled` flag. The `phase` is then worded from the seats,
+/// so a seat that is busy reading the repository is no longer reported as "choosing the seats". `lines` is the tail length.
+pub fn council_view_at(events: &[delphi_core::event::EventEnvelope], mission_dir: &Path, task_id: &str, now_ms: i64, stall_secs: u64, lines: usize) -> Option<Value> {
+    let mut v = council_view(events, mission_dir, task_id)?;
+    if v["state"] == "deliberating" {
+        let p = crate::progress::progress(events, task_id, now_ms, stall_secs, lines);
+        if let (Value::Object(into), Value::Object(extra)) = (&mut v, p.to_json()) {
+            into.extend(extra);
+        }
+        if let Some(phase) = &p.phase {
+            v["phase"] = json!(phase);
+        }
+        v["round"] = json!(p.round);
+    }
+    Some(v)
+}
+
+/// The tail length a status call asked for: its `lines` argument, 8 when absent, 1 to 20 otherwise.
+pub fn tail_lines(p: &Value) -> usize {
+    p["lines"].as_u64().map(|n| n.clamp(1, 20) as usize).unwrap_or(8)
+}
+
+/// Now, as milliseconds since the Unix epoch (the clock `progress` compares event timestamps with).
+pub fn now_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+}
+
 /// A Council's state and, once it is decided, its ruling, read from the host session's log (so a daemon restart loses nothing).
 /// `None` when this session never raised that Council.
 pub fn council_view(events: &[delphi_core::event::EventEnvelope], mission_dir: &Path, task_id: &str) -> Option<Value> {
@@ -590,6 +618,11 @@ pub fn council_view(events: &[delphi_core::event::EventEnvelope], mission_dir: &
         (Some(d), None) => {
             v["reason"] = d.payload["reason"].clone();
             "not_decided"
+        }
+        // Spec 098 §19: a host that cancelled the job sees it ended, with the reason it gave.
+        (None, _) if !of("task.cancelled").is_empty() => {
+            v["reason"] = of("task.cancelled")[0].payload["reason"].clone();
+            "cancelled"
         }
         (None, _) if of("task.failed").is_empty() => {
             let (r1, r2) = (positions.len(), of("council.critique").len());
@@ -1073,6 +1106,55 @@ mod tests {
         assert_eq!((v["state"].as_str(), v["ruling"]["decision"].as_str(), v["ruling"]["seat_positions"][0]["position"].as_str()), (Some("decided"), Some("table"), Some("table")));
         assert!(v["ruling"]["dissent"].as_str().unwrap().contains("keep a file"), "{v}");
     }
+    /// Spec 098 §19: a status call names what each seat is doing instead of "choosing the seats", flags a stall, and reports a cancel.
+    #[test]
+    fn a_deliberating_council_names_its_seats_flags_a_stall_and_reports_a_cancel() {
+        let dir = tempfile::tempdir().unwrap();
+        let ev = |secs: u32, kind: &str, agent: Option<&str>, span: Option<&str>, payload: Value| {
+            let mut e = EventEnvelope::new("m", kind, payload);
+            e.timestamp = format!("2026-11-10T14:{:02}:{:02}.000Z", secs / 60, secs % 60);
+            e.task_id = Some("t-1".into());
+            e.agent = agent.map(String::from);
+            e.span_id = span.map(String::from);
+            e
+        };
+        let mut log = vec![
+            EventEnvelope::new("m", COUNCIL_EVENT, json!({"task_id": "t-1"})),
+            ev(0, "council.started", None, None, json!({"seats": [{"role": "architect"}, {"role": "red-team"}, {"role": "strategist"}]})),
+        ];
+        for r in ["architect", "red-team", "strategist"] {
+            log.push(ev(1, "dag.node.added", Some(r), Some(&format!("sp_{r}")), json!({})));
+            log.push(ev(1, "dag.node.state", Some(r), Some(&format!("sp_{r}")), json!({"state": "running"})));
+        }
+        for r in ["architect", "strategist"] {
+            log.push(ev(20, "dag.node.state", Some(r), Some(&format!("sp_{r}")), json!({"state": "done"})));
+        }
+        for s in [30, 60] {
+            log.push(ev(s, "harness.tool", Some("red-team"), Some("sp_red-team"), json!({"tool": "mcp_delphi_delphi_search", "summary": "/srv/x/private"})));
+        }
+        let at = |secs: i64| crate::progress::parse_ts_ms(&format!("2026-11-10T14:{:02}:{:02}.000Z", secs / 60, secs % 60)).unwrap();
+        // The old phase said nothing was happening; the new one names the busy seat.
+        assert_eq!(council_view(&log, dir.path(), "t-1").unwrap()["phase"], "convening: choosing the seats");
+        let v = council_view_at(&log, dir.path(), "t-1", at(90), 120, 8).unwrap();
+        assert_eq!(v["state"], "deliberating");
+        assert_eq!(v["phase"], "round 1: 2 of 3 seats answered; red-team reading, 1 min");
+        let red = v["seats"].as_array().unwrap().iter().find(|s| s["role"] == "red-team").unwrap();
+        assert_eq!((red["state"].as_str(), red["calls"].as_u64(), red["last_call"].as_str(), red["idle_s"].as_u64()), (Some("reading"), Some(2), Some("search"), Some(30)));
+        assert_eq!(v["stalled"], false);
+        assert_eq!(v["tail"].as_array().unwrap().len(), 2);
+        assert!(!v.to_string().contains("/srv/x/private"), "a path a tool touched never reaches the answer");
+        // Nothing has moved for longer than the window: stalled, and the seat is named.
+        let s = council_view_at(&log, dir.path(), "t-1", at(400), 120, 8).unwrap();
+        assert_eq!((s["stalled"].clone(), s["stalled_seat"].clone()), (json!(true), json!("red-team")));
+        assert_eq!(tail_lines(&json!({})), 8);
+        assert_eq!((tail_lines(&json!({"lines": 0})), tail_lines(&json!({"lines": 99})), tail_lines(&json!({"lines": 3}))), (1, 20, 3));
+        // The host cancelled it: the state says so, with the reason it gave, and no progress fields are added.
+        log.push(ev(95, "task.cancelled", None, None, json!({"reason": "the host cancelled it: a duplicate"})));
+        let c = council_view_at(&log, dir.path(), "t-1", at(100), 120, 8).unwrap();
+        assert_eq!((c["state"].as_str(), c["reason"].as_str()), (Some("cancelled"), Some("the host cancelled it: a duplicate")));
+        assert!(c.get("seats").is_none() && c.get("tail").is_none(), "{c}");
+    }
+
     #[test]
     fn a_heading_typed_inside_a_seats_text_cannot_forge_the_dissent_the_card_shows() {
         let dir = tempfile::tempdir().unwrap();

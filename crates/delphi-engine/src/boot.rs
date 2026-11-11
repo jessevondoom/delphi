@@ -76,6 +76,9 @@ pub fn settings_from(root: &toml::Value) -> Settings {
             s.max_foreign_tokens = n as u64;
         }
     }
+    if let Some(n) = root.get("council").and_then(|c| c.get("stall_secs")).and_then(|v| v.as_integer()).filter(|v| *v >= 0) {
+        s.council_stall_secs = n.min(86_400) as u64;
+    }
     s.hooks = crate::hooks::parse(root).0;
     if let Some(r) = root.get("relay") {
         if r.get("step_up").and_then(|v| v.as_str()) == Some("totp") {
@@ -396,6 +399,15 @@ mod tests {
         assert!(bad.len() == 1 && bad[0].contains("[harness.agy] mode"), "{:?}", bad);
     }
 
+
+    #[test]
+    fn the_council_stall_window_defaults_to_two_minutes_and_zero_turns_it_off() {
+        assert_eq!(settings_from(&toml::from_str("").unwrap()).council_stall_secs, 120);
+        assert_eq!(settings_from(&toml::from_str("[council]\nstall_secs = 300\n").unwrap()).council_stall_secs, 300);
+        assert_eq!(settings_from(&toml::from_str("[council]\nstall_secs = 0\n").unwrap()).council_stall_secs, 0);
+        assert_eq!(settings_from(&toml::from_str("[council]\nstall_secs = -5\n").unwrap()).council_stall_secs, 120, "a negative value is ignored");
+        assert_eq!(settings_from(&toml::from_str("[council]\nstall_secs = 99999999\n").unwrap()).council_stall_secs, 86_400, "and a huge one is capped at a day");
+    }
 
     #[test]
     fn the_seats_block_defaults_to_never_refusing_for_families_and_one_foreign_seat() {

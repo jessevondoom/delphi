@@ -126,12 +126,27 @@ pub struct Panel {
     /// (`specs/091` SR-3), kept so Round 2 and the ruling can be judged by the receipts.
     pub host_family: Option<String>,
     pub require_families: Option<u32>,
+    /// Handles to the background tasks that run the seats Delphi owns, so `cancel_job` can stop them (`specs/098` §19).
+    aborts: Vec<tokio::task::AbortHandle>,
 }
 
 impl Panel {
     pub fn new(proposition: &str) -> Panel {
         let seats: Vec<String> = PANEL_SEATS.iter().map(|s| s.to_string()).collect();
-        Panel { proposition: proposition.to_string(), barrier: Barrier::new(&seats), seats, released: None, answered: Vec::new(), round2: BTreeMap::new(), verdict: None, models: BTreeMap::new(), opened: std::time::Instant::now(), foreign: Vec::new(), rejections: BTreeMap::new(), blind: "unknown".into(), operator_confirmed: None, options_source: None, host_family: None, require_families: None }
+        Panel { proposition: proposition.to_string(), barrier: Barrier::new(&seats), seats, released: None, answered: Vec::new(), round2: BTreeMap::new(), verdict: None, models: BTreeMap::new(), opened: std::time::Instant::now(), foreign: Vec::new(), rejections: BTreeMap::new(), blind: "unknown".into(), operator_confirmed: None, options_source: None, host_family: None, require_families: None, aborts: Vec::new() }
+    }
+
+    /// Remember the task that runs one of Delphi's seats, so it can be stopped.
+    pub fn add_abort(&mut self, h: tokio::task::AbortHandle) {
+        self.aborts.retain(|a| !a.is_finished());
+        self.aborts.push(h);
+    }
+
+    /// Stop every seat Delphi runs in this Panel. A model call already in flight is not charged more by this; it just stops.
+    pub fn abort_all(&mut self) {
+        for a in self.aborts.drain(..) {
+            a.abort();
+        }
     }
 
     /// Give one seat to Delphi: it runs on `family`, the host may neither brief nor answer for it.
