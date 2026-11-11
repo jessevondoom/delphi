@@ -245,6 +245,17 @@ sandbox = "off"
 # [research]
 # thin_below = 3
 #
+# The wider fetch (specs/098 section 7.5 item 7a). Off by default: the daemon's fetch reaches trusted-list hosts only. With ladder = true
+# it also reaches any https URL that a search of the run returned (and, for a host's claim, a URL that an earlier search of the same host
+# session returned), so a result from a site you have not listed can be read, kept as "noted", and checked. Nothing else is fetched: a URL
+# a model or a host makes up is not in the set, a link found on a fetched page is never followed (7b is not built), a query string is
+# never added, a redirect to another origin is not followed, and the fetcher's other rules stay (https, public addresses only, a size
+# cap, the cloaking check). The status shows where each fetched URL came from. The two caps are hypotheses: distinct off-list pages per
+# host and per run (1 to 100).
+# ladder = false
+# fetch_per_host = 2
+# fetch_per_run = 10
+#
 # How corroboration is counted (specs/098 section 7.6). A claim with three or more independent origins, counted by code over pages the
 # daemon fetched itself, reads "corroborated": a weaker statement than "validated". Origins follow specs/040 section 6.2 (registrable
 # domain, near-duplicate text, a page that cites another). A domain a list calls weak and every excluded one count zero; a domain no list

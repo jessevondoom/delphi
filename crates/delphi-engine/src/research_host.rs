@@ -8,6 +8,7 @@
 use crate::engine::Engine;
 use crate::research::{clip, scout_ipr, words};
 use crate::research_jobs::{Egress, JobCtx};
+use crate::research_observed::{Allowance, Observed, WiderFetch};
 use crate::research_run::{BoxFut, ClaimRec, Extracted, Library, Page, Scout, Validator, Verdict, Web};
 use delphi_adapter::research::search::{search, ProviderSpec, Row, SearchError};
 use delphi_adapter::research::transport::{HttpTransport, Transport};
@@ -16,6 +17,7 @@ use delphi_core::research::{role_look, role_look_light, Identity};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 const MAX_PAGE_CHARS: usize = 24_000;
@@ -33,6 +35,65 @@ pub struct LiveWeb {
     pub transport: Arc<HttpTransport>,
     pub list: Arc<TrustedList>,
     pub engines: Vec<ProviderSpec>,
+    /// `[research] ladder` and its caps (`specs/098` §7.5 item 7a). Off: the fetcher reaches trusted-list hosts only.
+    pub wider: WiderFetch,
+    /// The URLs this run's searches returned; with the wider fetch on, the fetcher reaches these and nothing else beyond the list.
+    pub observed: Arc<Observed>,
+    allowance: Allowance,
+    queries: AtomicUsize,
+}
+
+impl LiveWeb {
+    pub fn new(transport: Arc<HttpTransport>, list: Arc<TrustedList>, engines: Vec<ProviderSpec>, wider: WiderFetch) -> LiveWeb {
+        LiveWeb { transport, list, engines, allowance: Allowance::new(wider.clone()), wider, observed: Arc::new(Observed::new()), queries: AtomicUsize::new(0) }
+    }
+
+    /// The set is built here, from what the provider returned and nothing else (`specs/098` §7.5 item 7a): `n` is the query's number in
+    /// this run, and the label of each URL is the provider and that number, never the query text.
+    fn remember(&self, n: usize, found: &delphi_adapter::research::search::Found) {
+        for r in &found.rows {
+            self.observed.observe(found.provider.name(), n, &r.url);
+        }
+    }
+
+    /// May the wider fetch read this URL: it is on, and a search of this run (or, for a host's claim, of the host's session) returned it.
+    fn reaches(&self, url: &str) -> bool {
+        self.wider.enabled && self.observed.contains(url)
+    }
+
+    /// An off-list page the search returned. It is fetched exactly as the provider gave it, through the daemon's own fetcher
+    /// ([`crate::fact_fetch`]: https on 443, public addresses only, the connection pinned, a redirect to another origin not followed,
+    /// a size cap, text only, and the cloaking check), inside the per-host and per-run caps. A page that shows the daemon something
+    /// other than it shows a browser is refused. Nothing a page says becomes a URL to fetch.
+    fn fetch_offlist(&self, url: &str) -> Result<Page, String> {
+        let prov = self.observed.get(url).ok_or_else(|| "not_observed".to_string())?;
+        self.allowance.take(&prov.url).map_err(|w| w.to_string())?;
+        // Tests only: a canned page stands in for the network, after the observed-set test and the caps have run.
+        #[cfg(test)]
+        if let Some((_, text)) = canned::PAGES.lock().unwrap().iter().find(|(u, _)| *u == prov.url) {
+            return Ok(Page { url: prov.url.clone(), text: text.clone() });
+        }
+        let policy = crate::fact_fetch::FetchPolicy::default();
+        let (snap, _) = blocking(|| run_async(crate::fact_fetch::fetch_snapshot_checked(&policy, &prov.url))).map_err(|e| e.to_string())?;
+        if snap.cloaked {
+            return Err("cloaked".to_string());
+        }
+        Ok(Page { url: snap.final_url.for_daemon().clone(), text: snap.text.for_daemon().clone() })
+    }
+}
+
+/// Pages the wider fetch returns in tests instead of reading the network: `(url as the provider gave it, page text)`. The attribute is
+/// indented inside a module on purpose: `tests/corroboration_grants_nothing.rs` reads everything before the first column-zero
+/// `#[cfg(test)]` as production code, and this must not end that reading early.
+pub(crate) mod canned {
+    #[cfg(test)]
+    pub(crate) static PAGES: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+}
+
+/// Run an async fetch to its end from the blocking side of the research code. A thread of its own, so it works whatever runtime
+/// (or none) the caller is on.
+fn run_async<T: Send>(f: impl std::future::Future<Output = T> + Send) -> T {
+    std::thread::scope(|s| s.spawn(|| tokio::runtime::Builder::new_current_thread().enable_all().build().expect("a runtime for one fetch").block_on(f)).join().expect("the fetch thread"))
 }
 
 /// The word the runner turns into a coverage `reason` (`specs/098` §7.5 item 3). No engine configured is `no_search_provider`; every
@@ -48,7 +109,10 @@ pub fn search_failure_token(e: &SearchError) -> &'static str {
 
 impl Web for LiveWeb {
     fn search(&self, query: &str) -> Result<Vec<Row>, String> {
-        blocking(|| search(self.transport.as_ref() as &dyn Transport, &self.engines, query).map(|f| f.rows).map_err(|e| search_failure_token(&e).to_string()))
+        let n = self.queries.fetch_add(1, Ordering::SeqCst) + 1;
+        let found = blocking(|| search(self.transport.as_ref() as &dyn Transport, &self.engines, query)).map_err(|e| search_failure_token(&e).to_string())?;
+        self.remember(n, &found);
+        Ok(found.rows)
     }
 
     fn search_via(&self, query: &str) -> Result<(Vec<Row>, Option<String>), String> {
@@ -59,7 +123,21 @@ impl Web for LiveWeb {
         self.list.allows_url(url).is_some()
     }
 
+    fn can_fetch(&self, url: &str) -> bool {
+        self.is_trusted(url) || self.reaches(url)
+    }
+
+    fn provenance(&self, url: &str) -> Option<String> {
+        if self.is_trusted(url) {
+            return Some("trusted".to_string());
+        }
+        self.observed.get(url).map(|p| p.label())
+    }
+
     fn fetch(&self, url: &str) -> Result<Page, String> {
+        if !self.is_trusted(url) && self.reaches(url) {
+            return self.fetch_offlist(url);
+        }
         let p = blocking(|| delphi_adapter::research::fetch::fetch(self.transport.as_ref() as &dyn Transport, &self.list, url)).map_err(|e| format!("{e:?}"))?;
         let (_, text) = crate::fact_fetch::extract_text(p.body.as_bytes(), "text/html");
         Ok(Page { url: p.url, text })
@@ -430,5 +508,114 @@ mod tests {
         std::fs::create_dir_all(home.path().join("themes/nosuch")).unwrap();
         std::fs::write(home.path().join("themes/nosuch/theme.md"), "roles:\n  scout:         { name: \"Hermes\", epithet: \"x\" }\n").unwrap();
         assert_eq!(display_name(ws.path(), home.path(), "scout"), "Hermes");
+    }
+
+    // ── slice S1d of spec 098: the wider fetch (7a only) ──
+
+    fn live(enabled: bool, per_host: usize, per_run: usize) -> LiveWeb {
+        let list = TrustedList::parse("[[source]]\nhost = \"who.int\"\nreuse = \"full\"\n", None).unwrap();
+        LiveWeb::new(Arc::new(HttpTransport::new().unwrap()), Arc::new(list), vec![], WiderFetch { enabled, per_host, per_run })
+    }
+
+    fn canned(url: &str, text: &str) {
+        canned::PAGES.lock().unwrap().push((url.to_string(), text.to_string()));
+    }
+
+    fn found(provider: delphi_adapter::research::search::Provider, urls: &[&str]) -> delphi_adapter::research::search::Found {
+        delphi_adapter::research::search::Found { provider, rows: urls.iter().map(|u| Row { title: "t".into(), url: u.to_string(), snippet: "s".into() }).collect(), passed_over: vec![] }
+    }
+
+    #[test]
+    fn with_the_flag_off_nothing_beyond_the_trusted_list_is_reachable() {
+        let w = live(false, 2, 10);
+        let u = "https://off-s1d-a.example/a";
+        w.remember(1, &found(delphi_adapter::research::search::Provider::Brave, &[u]));
+        canned(u, "text");
+        assert!(w.observed.contains(u), "the set is built either way");
+        assert!(!w.can_fetch(u), "but the fetcher does not use it");
+        assert!(w.fetch(u).unwrap_err().contains("OffList"), "the old refusal, unchanged");
+        assert!(w.can_fetch("https://who.int/x"), "the trusted list is reached as before");
+        assert_eq!(w.allowance.used(), 0);
+    }
+
+    #[test]
+    fn with_it_on_only_a_url_a_search_returned_is_reachable_and_it_is_fetched_as_given() {
+        let w = live(true, 2, 10);
+        let (a, other_path, with_query) = ("https://on-s1d-a.example/a?id=7", "https://on-s1d-a.example/b", "https://on-s1d-a.example/a?id=7&utm=x");
+        w.remember(2, &found(delphi_adapter::research::search::Provider::Searxng, &[a]));
+        for u in [a, other_path, with_query] {
+            canned(u, "page text");
+        }
+        assert!(w.can_fetch(a));
+        assert_eq!(w.fetch(a).unwrap().text, "page text");
+        for u in [other_path, with_query, "https://on-s1d-a.example/", "http://on-s1d-a.example/a?id=7"] {
+            assert!(!w.can_fetch(u), "{u} was not returned by a search");
+            assert!(w.fetch(u).unwrap_err().contains("OffList"), "{u}");
+        }
+        assert_eq!(w.allowance.used(), 1, "a refused URL costs no allowance");
+    }
+
+    #[test]
+    fn provenance_is_the_provider_and_the_query_number_or_trusted_and_never_the_query() {
+        let w = live(true, 2, 10);
+        w.remember(3, &found(delphi_adapter::research::search::Provider::Brave, &["https://prov-s1d.example/a"]));
+        assert_eq!(w.provenance("https://prov-s1d.example/a").as_deref(), Some("search:brave#3"));
+        assert_eq!(w.provenance("https://who.int/x").as_deref(), Some("trusted"));
+        assert_eq!(w.provenance("https://prov-s1d.example/never-returned"), None);
+    }
+
+    #[test]
+    fn the_per_host_and_per_run_caps_hold_and_the_refusal_is_a_fixed_word() {
+        let w = live(true, 2, 3);
+        let urls = ["https://cap-s1d-a.example/1", "https://cap-s1d-a.example/2", "https://cap-s1d-a.example/3", "https://cap-s1d-b.example/1", "https://cap-s1d-c.example/1"];
+        w.remember(1, &found(delphi_adapter::research::search::Provider::Brave, &urls));
+        for u in urls {
+            canned(u, "text");
+        }
+        assert!(w.fetch(urls[0]).is_ok() && w.fetch(urls[1]).is_ok());
+        assert_eq!(w.fetch(urls[2]).unwrap_err(), "per_host_cap");
+        assert!(w.fetch(urls[3]).is_ok());
+        assert_eq!(w.fetch(urls[4]).unwrap_err(), "per_run_cap");
+        assert!(w.fetch(urls[0]).is_ok(), "re-reading a page already read this run is free");
+        assert_eq!(w.allowance.used(), 3);
+    }
+
+    /// A host's claim URL is fetched only when a search of its session returned it: the host cannot steer the fetcher, and a query
+    /// string it builds out of text it holds is never sent anywhere.
+    #[test]
+    fn a_url_the_host_made_up_is_not_fetched_even_with_the_flag_on() {
+        let w = live(true, 2, 10);
+        let returned = "https://host-s1d.example/paper";
+        w.observed.restore(vec![(returned.to_string(), "search:brave#4".to_string())]);
+        canned(returned, "paper text");
+        let made_up = "https://exfil-s1d.example/collect?q=the-private-text-the-host-holds";
+        canned(made_up, "would be fetched if the gate were missing");
+        assert!(w.fetch(returned).is_ok());
+        assert!(!w.can_fetch(made_up));
+        assert!(w.fetch(made_up).unwrap_err().contains("OffList"));
+        assert_eq!(w.allowance.used(), 1);
+    }
+
+    /// The decision flow the host path runs (`service.rs` `host_noted`): a restored URL is refetched, the daemon finds the quote, the
+    /// claim is public, and its off-list host is raised as a `source` card; a made-up URL is private and raises nothing.
+    #[test]
+    fn a_verified_off_list_claim_is_public_and_raises_one_source_card_per_host() {
+        use crate::host_noted as n;
+        let w = live(true, 2, 10);
+        let returned = "https://card-s1d.example/paper";
+        w.observed.restore(vec![(returned.to_string(), "search:brave#1".to_string())]);
+        canned(returned, "Our vault keys rotate every 90 days, per policy.");
+        let claim = |url: &str| n::Claim { text: "Keys rotate every 90 days".into(), source_url: Some(url.into()), quote: Some("vault keys rotate every 90 days".into()), retrieved_at: None };
+        let claims = [claim(returned), claim("https://nowhere-s1d.example/x")];
+        let fetch = |u: &str| w.fetch(u).map(|p| p.text);
+        let verdicts: Vec<n::Verdict> = claims.iter().map(|c| n::decide(c, Some(1), &fetch)).collect();
+        assert_eq!((verdicts[0].private, verdicts[0].reason), (false, "verified"), "{:?}", verdicts[0]);
+        assert_eq!((verdicts[1].private, verdicts[1].reason), (true, "unfetchable"), "{:?}", verdicts[1]);
+        let cards = n::candidates(&verdicts, &|h| w.is_trusted(&format!("https://{h}/")));
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].0, "card-s1d.example");
+        let card = n::source_card(&cards[0].0, &[&claims[0]]);
+        assert_eq!(card["kind"], "source");
+        assert_eq!(card["related"], "card-s1d.example");
     }
 }
