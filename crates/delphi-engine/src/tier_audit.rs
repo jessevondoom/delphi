@@ -24,7 +24,7 @@ pub const DEFAULT_SAMPLE: usize = 10;
 /// The latch file's name in the validator's state directory.
 pub const LATCH_FILE: &str = "tier_latch.json";
 
-/// The tiers an audit can sample: `batch` is the claims an accept-all marked `batch-accepted` (slice L3; none exist before it).
+/// The tiers an audit can sample: `batch` is the claims an accept-all marked `batch-accepted` (`delphi validation accept-all`).
 pub const AUDITABLE: [&str; 3] = ["substantiated", "vetted", "batch"];
 /// The tiers a roll-back can latch. `corroborated` is spec 098's count and has no audit of its own.
 pub const ROLLABLE: [&str; 2] = ["substantiated", "vetted"];
@@ -120,7 +120,7 @@ pub fn set_threshold(state: &Path, tier: &str, percent: f64, now: i64) -> Result
 /// `tier.rollback` event (`tier_rollback` in the journal) records the trigger, the sample, the errors, the bound and the audit batch. Idempotent.
 ///
 /// `trigger` is `operator`, `hard_failure` or `error_rate`. An operator roll-back needs a reason of at least 8 characters. Items batch-accepted since
-/// the last good audit would be flagged `re-audit due` here; accept-all is slice L3, so none exist yet and `reaudit_due` is recorded as 0.
+/// the last good audit are flagged `re-audit due` by `accept_all::flag_reaudit`, which the caller runs after a roll-back (this module has no library); the count in this event is 0 for that reason.
 pub fn rollback(state: &Path, tier: &str, trigger: &str, reason: &str, now: i64) -> Result<String, String> {
     if !ROLLABLE.contains(&tier) {
         return Err(format!("`{tier}` cannot be rolled back; the tiers are substantiated and vetted"));
@@ -308,7 +308,7 @@ pub fn report(state: &Path, members: &BTreeMap<String, usize>, now: i64) -> Stri
         let state_word = if held.contains(tier) { " [ROLLED BACK]" } else { "" };
         out.push_str(&format!("\n{tier}{state_word}\n"));
         if tier == "batch" && total == 0 && st.sample == 0 {
-            out.push_str("  no claim is batch-accepted yet (accept-all is slice L3)\n");
+            out.push_str("  no claim is batch-accepted yet (`delphi validation accept-all` marks them)\n");
             continue;
         }
         let rate = if st.sample == 0 { "-".to_string() } else { format!("{:.1}%", st.rate * 100.0) };
