@@ -55,6 +55,7 @@
         "max_parallel_agents": { "type": "integer", "minimum": 1 },
         "degrade_prompt_secs": { "type": "integer", "minimum": 0 },
         "max_park_secs": { "type": "integer", "minimum": 0 },
+        "adopt_threshold": { "type": "number", "minimum": 0, "maximum": 1, "description": "The confidence at or above which route marks its best candidate adopt = true (specs/098 section 8). Provisional default 0.55; delphi route --adopt-eval measures a labeled set." },
         "registry": { "enum": ["flat", "auto"], "description": "How the orchestrator learns of bundle agents (specs/041). flat: one line per agent, up to 20. auto: past 20, a domain index and the search_agent_registry tool." },
         "assignment": { "enum": ["static", "discovered"], "description": "How a dispatch picks its model (specs/056). static: the role's tier. discovered: capability class, measured results and quota." },
         "evidence_enough": { "type": "integer", "minimum": 1, "description": "Measured results per (role, kind, model) after which a model is scored by them alone." },
@@ -81,6 +82,13 @@
         "council_budget_usd": { "type": "number", "minimum": 0 },
         "on_budget_exhausted": { "type": "string" },
         "per_watch_max_wakes_per_day": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "hosts": {
+      "type": "object",
+      "description": "Settings for the tools you code with (specs/098).",
+      "properties": {
+        "route_adopt": { "type": "boolean", "description": "Whether route's adopt is a recommendation (true) or only advice (false, the default). It changes what the answer says, not what Delphi does." }
       }
     },
     "seats": {

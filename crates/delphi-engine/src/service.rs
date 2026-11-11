@@ -956,6 +956,22 @@ impl EngineService {
         Ok(self.signed_help(v, &id))
     }
 
+    /// `host.route_decided` (`specs/098` §8): `route` tells the daemon, when it can reach one, how it answered. The record holds
+    /// the length of the task and the best target, never the task, and it changes nothing.
+    async fn host_route_decided(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        use crate::host_rpc as h;
+        need_host(&ctx)?;
+        let ws = &self.engine.ws;
+        h::gate(&ws.dir).map_err(host_err)?;
+        let c = h::Caller::parse(&p).map_err(host_err)?;
+        let mut facts = h::route_decided_facts(&p).map_err(host_err)?;
+        facts["source"] = json!(c.label(p["model"].as_str()));
+        let _gate = self.host_gate.lock().await;
+        let m = self.mission_at(Some(&c.mission()), c.cwd.to_str()).await?;
+        m.append(EventEnvelope::new(&m.id, h::ROUTE_EVENT, facts)).await.map_err(engine_err)?;
+        Ok(json!({"logged": true}))
+    }
+
     async fn host_handoff_put(&self, p: Value, ctx: CallContext) -> RpcOutcome {
         use crate::host_rpc as h;
         need_host(&ctx)?;
@@ -3099,6 +3115,7 @@ impl Extension for ServiceExt {
                 "host.request_test_authorization" => svc.host_request_authorization(params, ctx).await,
                 "host.record_session_summary" => svc.host_stage(params, ctx, true).await,
                 "host.handoff_put" => svc.host_handoff_put(params, ctx).await,
+                "host.route_decided" => svc.host_route_decided(params, ctx).await,
                 "host.handoff_get" => svc.host_handoff_get(params, ctx).await,
                 "host.search_kb" => svc.host_search_kb(params, ctx).await,
                 "host.request_help" => svc.host_request_help(params, ctx).await,
@@ -3318,6 +3335,11 @@ mod tests {
             assert_eq!((twin["staged"].clone(), twin["duplicate_of"].clone(), twin["count"].clone()), (json!(true), json!("h1"), json!(2)));
             let stranger = c.call("host.propose_note", with(json!({"session": "zzzzzzzz01234567", "role": role2, "text": "Prefer small commits.", "evidence": "e"}))).unwrap();
             assert!(stranger.get("duplicate_of").is_none(), "{stranger}");
+            // specs/098 §8: `route` tells the daemon how it answered (the length of the task, never the task); bad facts are refused.
+            let logged = c.call("host.route_decided", with(json!({"task_chars": 42, "target": "role:red-team", "confidence": 0.7, "adopt": true, "threshold": 0.55, "task": "SECRET-TASK-TEXT"}))).unwrap();
+            assert_eq!(logged["logged"], true);
+            assert_eq!(rpc_code(c.call("host.route_decided", with(json!({"task_chars": 1, "adopt": true, "threshold": 2.0})))), Some(code::INVALID_PARAMS));
+            assert_eq!(rpc_code(c.call("host.route_decided", with(json!({"task_chars": 1, "threshold": 0.5})))), Some(code::INVALID_PARAMS));
             assert_eq!(rpc_code(c.call("host.propose_note", with(json!({"role": role2, "text": "No evidence."})))), Some(code::INVALID_PARAMS));
             assert_eq!(rpc_code(c.call("host.propose_note", with(json!({"role": "messenger", "text": "x", "evidence": "e"})))), Some(code::INVALID_PARAMS));
             assert!(c.call("host.record_session_summary", with(json!({"summary": "Did the thing", "decisions": ["a"]}))).is_ok());

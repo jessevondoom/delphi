@@ -847,7 +847,7 @@ A draft for the operator: host first, the inside exceptions (Council, panel and 
 | S1d | wider fetch: 7a observed search-result URLs only (7b off, not built) | not started; OD-7a approved |
 | S2 | Councils inside only: rename Mode B, `council_unavailable`, no-relabel tests | not started |
 | S3 | `locus` field, schemas, pack header, capability names, Claude Code adapter with version and hash | built (this pull request): `locus` on roles and skills (schemas, lint, `list_roles`, `list_skills`, `get_agent`, `get_skill`), the five `inside` skills, capability names and the `adapter.json` of the Claude Code plugin, `delphi doctor` compares the installed plugin's adapter. Not built: refusing an `inside` role or skill at `get_agent`/`get_skill` (spec 098 §12 item 1, with S2) |
-| S4 | `route` for any query: canonical roles, `locus`, `trigger`, `confidence`, `adopt`, threshold, `route.decided` | not started |
+| S4 | `route` for any query: canonical roles, `locus`, `trigger`, `confidence`, `adopt`, threshold, `route.decided` | built (pull request, stacked on S3): the ranking now covers the canonical roles too; the default threshold is provisional |
 | S5 | KB first, the research reflex and the offer rule (manifests, plugin skill, `CLAUDE.md` template) | not started |
 | S6 | standalone red team (`kind: red_team`) and `ask_family` (091 SR-5) | not started |
 | S7 | pack guards: council and red-team refuse packs, per-task cap, no-grant test | not started |

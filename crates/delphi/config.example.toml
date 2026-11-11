@@ -76,6 +76,16 @@ max_parallel_agents = 4
 # `delphi route "<task>"` shows what the search would return, without a model call.
 # registry = "flat"
 
+# Which role to adopt (specs/098 section 8). `route` (the MCP tool and `delphi route "<task>"`) ranks Delphi's canonical roles and the bundle
+# agents together and gives each candidate a confidence from 0 to 1; a candidate at or above this has `adopt = true`, and below it a host adopts no
+# role. The default is provisional: it was set on a small labeled set (`delphi route --adopt-eval <file>` measures your own).
+# adopt_threshold = 0.55
+
+# Hosts (specs/098). `route_adopt` says whether `route`'s `adopt` is a recommendation (true) or only advice (false, the default). It changes what
+# the answer says, not what Delphi does.
+# [hosts]
+# route_adopt = false
+
 # Model assignment (specs/056). "static" (default): a role's tier picks the model, as always. "discovered": each dispatch is
 # assigned by capability class (role floor and preferred class), measured results and quota, from the pool you ratified;
 # a card only when no pool member meets a role's floor. `delphi capabilities --models` shows each model's class.
