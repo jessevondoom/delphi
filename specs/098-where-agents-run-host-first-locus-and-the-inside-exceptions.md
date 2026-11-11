@@ -327,7 +327,7 @@ S9 writes each *enforced* row into `context/invariant-enforcement.md`, and each 
 | S2 | **Councils inside only:** rename Mode B, `council_unavailable`, the no-relabel tests (§5). | none |
 | S3 | **`locus` field,** schemas, pack header, capability names and the Claude Code adapter with version and hash (§3.2, §4). Docs regenerated. | none |
 | S4 | **`route` for any query:** canonical roles, `locus`, `trigger`, `confidence`, `adopt`, the threshold and its labeled set, `route.decided` (§8). | S3 |
-| S5 | **The source ladder, the reflex and the offer:** the ladder in the Scout, Investigator and Red-team manifests and packs, the host-sources section of the `CLAUDE.md` template and `delphi connect` output, the plugin skill (§7.1 to §7.4). | S1, S4 |
+| S5 | **The source ladder, the reflex and the offer:** the ladder in the Scout, Investigator and Red-team manifests and packs, the host-sources section of the `CLAUDE.md` template and `delphi connect` output, the plugin skill (§7.1 to §7.4). **Also the repo rules (added 2026-11-11 at the operator's request):** a short "when this project has a repo" section in the plugin skill and the `CLAUDE.md` template, so a host in a Delphi project learns the commit and merge rules from the plugin and not first from a refused merge: the `Implements-Spec: specs/NNN-name.md` trailer on commits of software (and which approved spec to name when none is exact, saying so in the PR body); run the repository's gates before committing; one slice per pull request; agents queue and never merge, and a gate path needs the operator at a terminal; work in a worktree; scratch runs use `--home <tmp>`. The text is the same sentences as `AGENTS.md` and `skills/git-pr-packaging` (not a second copy of the rules that can drift): a test fails if the plugin text and `AGENTS.md` disagree on the trailer name, the merge rule or the gate commands. | S1, S4 |
 | S6 | **Standalone red team and `ask_family`:** `kind: red_team`, seat choice, findings card with receipt families (§6.2). | 091 S1 to S3 (built) |
 | S7 | **Pack guards:** council and red-team refuse packs, the cap, the no-grant test (§9). | none |
 | S8 | **Builder gate and the spec-review lint** (§10), after verifying what exists. | S2 |
@@ -492,7 +492,7 @@ Every slice is verified by tests that run without a network or a model, plus the
 | S2 | A daemon test that a host cannot submit `council_format`, `venue: daemon` or a Council kind; the `council_unavailable` schema fixture. |
 | S3 | Schema lint and the docs test (`cargo test -p delphi --test docs`). |
 | S4 | The labeled set of at least 30 tasks, scored in code; deterministic tie-break test. |
-| S5 | Pack text tests; the plugin skill and `CLAUDE.md` template golden files. |
+| S5 | Pack text tests; the plugin skill and `CLAUDE.md` template golden files, including the repo-rules section; a consistency test that the section and `AGENTS.md` name the same trailer, merge rule and gate commands (the skill files and `mcp_hosts.rs` stay byte-identical). |
 | S6 | A Panel integration test with a fake foreign carrier: receipt families, the single-family label. |
 | S7 | Unit tests for the pack-id refusal and both caps; the no-grant test. |
 | S8 | The merge-check fixtures of §12 item 15, run in `delphi merge` and CI. |
