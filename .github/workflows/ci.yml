@@ -97,7 +97,19 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install bubblewrap and allow user namespaces
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
+          # The runner's package mirror sometimes fails to resolve. `apt-get update` exits 0 then, so only the install fails;
+          # retry both together, at most 3 retries (4 attempts), 20 seconds apart.
+          for attempt in 1 2 3 4; do
+            if sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap; then
+              break
+            fi
+            if [ "$attempt" -eq 4 ]; then
+              echo "apt could not install bubblewrap after 3 retries"
+              exit 1
+            fi
+            echo "apt failed (attempt $attempt of 4); retrying in 20s"
+            sleep 20
+          done
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           bwrap --version
           bwrap --ro-bind / / --unshare-all --die-with-parent true && echo "bwrap works here"
