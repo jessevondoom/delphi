@@ -5356,13 +5356,24 @@ mod tests {
         svc.agent_research("m1", "queues", "orchestrator").await;
         let logged: Vec<_> = events_of(&f, "research.started").into_iter().chain(events_of(&f, "research.refused")).collect();
         assert_eq!((logged.len(), logged[0].payload["by"].as_str(), logged[0].payload["topic"].as_str()), (1, Some("orchestrator"), Some("queues")), "{logged:?}");
+        // A job that started writes its own `research.finished` when it ends, at a time the scheduler picks. Wait for it (a refusal
+        // writes nothing more) before the test adds its own, so every outcome is in the log before the first span and "told once" is
+        // about what was told, not about which task ran first under load.
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while events_of(&f, "research.refused").is_empty() && !events_of(&f, "research.finished").iter().any(|e| e.payload["topic"] == "queues") {
+            assert!(std::time::Instant::now() < deadline, "the started research job never wrote its outcome");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
         f.m.append(EventEnvelope::new(&f.m.id, "research.finished", json!({"topic": "retries", "by": "orchestrator", "new": 2, "updated": 1, "held": 1, "project": 0, "not_kept": 0, "outcome": "done"}))).await.unwrap();
+        // A research job that started shares this fake model, so its own call (the scout's page prompt) can land in the list before
+        // the orchestrator's first turn. Read the orchestrator's turns by what they are, not by their position.
+        let turns = || f.model.requests().into_iter().map(|r| r.body.to_string()).filter(|b| !b.contains("You are the scout.")).collect::<Vec<_>>();
         f.engine.run_task(&f.m, "orchestrator", "continue").await.unwrap();
-        let told = f.model.requests()[0].body.to_string();
+        let told = turns()[0].clone();
         assert!(told.contains("runtime/research-results") && told.contains("(asked by orchestrator): 2 new and 1 updated; 1 held for validation"), "{told}");
         assert!(!events_of(&f, "research.delivered").is_empty());
         f.engine.run_task(&f.m, "orchestrator", "and now?").await.unwrap();
-        assert!(!f.model.requests()[1].body.to_string().contains("runtime/research-results"), "told once");
+        assert!(!turns()[1].contains("runtime/research-results"), "told once");
     }
 
     // ── step-up: a Red answer through a relay needs the authenticator code (specs/014 §7) ──

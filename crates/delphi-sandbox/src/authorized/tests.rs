@@ -706,6 +706,9 @@ fn the_count_is_the_users_processes_not_the_systems() {
     if !cfg!(target_os = "macos") {
         return;
     }
+    // The two readings below are taken a moment apart, and a fork flood (the sweep and the headroom tests start hundreds of
+    // processes) between them moves the count by far more than the tolerance. Take the flood's turn, as every test that floods does.
+    let _turn = FLOOD.lock().unwrap_or_else(|e| e.into_inner());
     settle_process_count();
     let ours = crate::live_process_count().unwrap() as i64;
     // SAFETY: plain getuid.
