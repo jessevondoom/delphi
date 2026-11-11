@@ -83,8 +83,11 @@ max_parallel_agents = 4
 
 # Hosts (specs/098). `route_adopt` says whether `route`'s `adopt` is a recommendation (true) or only advice (false, the default). It changes what
 # the answer says, not what Delphi does.
+# `source_ladder` (specs/098 S5, default false): when true, the packs served for the scout, investigator and red team end with the source
+# ladder, and `delphi mcp --print-claude-md` includes the research reflex. Advice for the host; it grants nothing.
 # [hosts]
 # route_adopt = false
+# source_ladder = false
 
 # Model assignment (specs/056). "static" (default): a role's tier picks the model, as always. "discovered": each dispatch is
 # assigned by capability class (role floor and preferred class), measured results and quota, from the pool you ratified;
