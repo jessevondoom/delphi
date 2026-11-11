@@ -18,6 +18,7 @@ const READERS: &[(&str, &str)] = &[
     ("crates/delphi-engine/src/boot.rs", "parses `[research.tiers]` and installs it once at start"),
     ("crates/delphi/src/validation_audit_cmd.rs", "prints the claims the validator could be offered next in the fast lane's order (ids, rungs, counts); an order on a list, nothing else"),
     ("crates/delphi/src/validation_tier_cmd.rs", "the operator's tier audit: shows a sampled claim, takes their answer, then prints its counts; the audit can only take a tier away"),
+    ("crates/delphi-engine/src/accept_all.rs", "the operator's accept-all: reads the rung only to choose WHICH claims to show and, at the operator's typed word, to validate them as the operator; it grants no permission and sets no rung"),
 ];
 
 fn root() -> PathBuf {
@@ -261,4 +262,51 @@ fn only_the_validators_own_loop_records_a_dry_run() {
         }
     }
     assert!(schemas.is_empty(), "a tool schema takes `would_ratify` as an argument: {schemas:?}");
+}
+
+#[test]
+fn only_the_operators_command_accepts_a_batch_and_the_batch_mark_and_the_re_audit_flag_decide_nothing() {
+    // `specs/100` §10 items 1 and 4: accept-all writes only through the operator's act, and a `batch-accepted` mark or a `re-audit due` flag is a label for
+    // tracing, never a criterion for promotion, trust, tool access or approval. The one caller of the batch accept is the operator's command; the mark
+    // and the flag are named only by the library that stores them, the module that plans the batch, the audit that journals a roll-back, the
+    // operator's commands and the help text.
+    let root = root();
+    let mut files = Vec::new();
+    rust_files(&root.join("crates"), &mut files);
+    let callers = Regex::new(r"accept_all::accept\(|\bac::accept\(|validate_claim_in_batch\(|mark_reaudit_due\(|clear_reaudit_due\(").unwrap();
+    let callers_ok = [
+        "crates/delphi/src/validation_tier_cmd.rs",
+        "crates/delphi-engine/src/accept_all.rs",
+        "crates/delphi-engine/src/library_claims.rs",
+    ];
+    // the identifiers that store or read the claim mark; the phrase "batch-accepted" alone is also used by the decisions pane's own batch accept (spec 044)
+    let mark = Regex::new(r#"BATCH_MARK|reaudit_due|re-audit due|\["batch"\]\["mark"\]"#).unwrap();
+    let mark_ok = [
+        "crates/delphi/src/main.rs",
+        "crates/delphi/src/needs.rs",
+        "crates/delphi/src/validation_tier_cmd.rs",
+        "crates/delphi-engine/src/accept_all.rs",
+        "crates/delphi-engine/src/library_claims.rs",
+        "crates/delphi-engine/src/tier_audit.rs",
+    ];
+    let (mut stray_callers, mut stray_mark) = (Vec::new(), Vec::new());
+    for f in &files {
+        let rel = f.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
+        let src = std::fs::read_to_string(f).unwrap();
+        let code: String = production(&src).lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+        if callers.is_match(&code) && !callers_ok.contains(&rel.as_str()) {
+            stray_callers.push(rel.clone());
+        }
+        if mark.is_match(&code) && !mark_ok.contains(&rel.as_str()) {
+            stray_mark.push(rel);
+        }
+    }
+    assert!(stray_callers.is_empty(), "something other than the operator's command accepts a batch or flags a re-audit: {stray_callers:?}");
+    assert!(stray_mark.is_empty(), "the batch mark or the re-audit flag is named outside the files that store and show it: {stray_mark:?}");
+    // the command that accepts needs a terminal and the typed phrase, and the main dispatch checks the terminal before it calls the accept
+    let main = std::fs::read_to_string(root.join("crates/delphi/src/main.rs")).unwrap();
+    let at = main.find("\"accept-all\" => {").expect("the accept-all arm");
+    let arm = &main[at..at + 2500];
+    let (term, accept) = (arm.find("is_terminal").expect("a terminal check"), arm.find("validation_tier_cmd::accept_all(&ws.dir").expect("the accept call"));
+    assert!(term < accept, "the terminal is checked before anything is accepted");
 }
