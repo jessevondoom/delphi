@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request cancels that pull request's older run. A push to main is never cancelled.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 # The repo's own lean build settings (AGENTS.md): a fresh checkout gains nothing from incremental compilation, and the tests
 # do not read debug info (panic locations and symbol names stay). This only affects the dev profile; the release build of
 # the console executable below is unchanged.
