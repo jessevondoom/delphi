@@ -25,6 +25,8 @@ pub const MAX_KB_BODY: usize = 20_000;
 pub const MAX_KB_TITLE: usize = 120;
 pub const MAX_KB_SOURCES: usize = 20;
 pub const MAX_KB_ENTRIES: usize = 25;
+/// What the daemon stamps on everything a host leaves, at ingress (`specs/098` §12 item 12). A host's own claim about trust is advisory and never read.
+pub const TAINT: &str = "external_untrusted";
 
 #[derive(Debug, PartialEq)]
 pub enum HostErr {
@@ -201,7 +203,7 @@ pub fn proposals_in(events: &[EventEnvelope]) -> usize {
 }
 
 fn staged(c: &Caller, n: usize, trigger: &str, label: &str, summary: String, evidence: &str, role: Option<&str>) -> EventEnvelope {
-    let mut e = EventEnvelope::new(&c.mission(), "learn.staged", json!({"id": format!("h{}", n + 1), "trigger": trigger, "summary": summary, "event_seqs": [], "tier": "L0", "source": label, "evidence": evidence}));
+    let mut e = EventEnvelope::new(&c.mission(), "learn.staged", json!({"id": format!("h{}", n + 1), "trigger": trigger, "summary": summary, "event_seqs": [], "tier": "L0", "source": label, "evidence": evidence, "taint": TAINT}));
     e.agent = role.map(String::from);
     e
 }
@@ -250,7 +252,7 @@ pub fn kb_entry_event(c: &Caller, p: &Value, already: usize, kb_already: usize) 
     let label = c.label(p["model"].as_str());
     let id = format!("h{}", already + 1);
     let summary = format!("[{label}] KB entry: {title} ({} source(s), stated confidence {confidence})", sources.len());
-    let mut e = EventEnvelope::new(&c.mission(), "learn.staged", json!({"id": id, "trigger": "host_kb_entry", "summary": summary, "event_seqs": [], "tier": "L0", "source": label, "evidence": "the host's own research",
+    let mut e = EventEnvelope::new(&c.mission(), "learn.staged", json!({"id": id, "trigger": "host_kb_entry", "summary": summary, "event_seqs": [], "tier": "L0", "source": label, "evidence": "the host's own research", "taint": TAINT,
         "kb_entry": {"title": title, "body": body, "sources": sources, "confidence": confidence}}));
     e.agent = None;
     Ok(e)
@@ -1171,6 +1173,26 @@ mod tests {
             other.payload["trigger"] = json!(trigger);
             assert_eq!(duplicate_of(&[other], &again), None, "{trigger}");
         }
+    }
+
+    #[test]
+    fn everything_a_host_leaves_is_stamped_external_untrusted_whatever_it_claims() {
+        let (_t, w) = ws();
+        let claims = json!({"taint": "user_ratified", "tier": "L5", "status": "ratified", "source_type": "user_ratified", "author": "operator", "private": false, "confidence": "high"});
+        let mut note = json!({"role": "builder", "text": "Lesson.", "evidence": "e"});
+        let mut kb = json!({"title": "t", "body": "b"});
+        for (k, v) in claims.as_object().unwrap() {
+            note[k] = v.clone();
+            kb[k] = v.clone();
+        }
+        let n = note_event(&caller(), &w, &note, 0).unwrap();
+        assert_eq!(n.payload["taint"], "external_untrusted");
+        assert_eq!(n.payload["tier"], "L0");
+        let k = kb_entry_event(&caller(), &kb, 0, 0).unwrap();
+        assert_eq!(k.payload["taint"], "external_untrusted");
+        assert_eq!(k.payload["tier"], "L0");
+        let s = summary_event(&caller(), &json!({"summary": "done", "tier": "L5", "taint": "user_ratified"}), 0).unwrap();
+        assert_eq!(s.payload["taint"], "external_untrusted");
     }
 
     #[test]

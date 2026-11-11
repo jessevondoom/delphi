@@ -387,17 +387,26 @@ pub fn tools() -> Value {
         {
             "name": "propose_kb_entry",
             "title": "Propose a research entry for Delphi's knowledge base",
-            "description": "Hand Delphi research you gathered (a finding, a summary of internal sources) so the operator can keep it in the knowledge base. Give a title, the body in markdown, and the sources (URLs, paths or document names) it rests on. It is staged at tier L0 with your name on it, is not searchable and is never loaded into any agent's memory until the operator keeps it with `delphi kb review`; keeping it never marks it validated. Stages content only: it changes no file in your project.",
+            "description": "Hand Delphi research you gathered as claims. Give a topic, the role it serves and up to 20 claims, each with its text and, when you have them, the https source_url and the exact quote. It is stored at once as `noted` (not validated), labelled with where it came from, searchable with search_kb and never loaded into any agent's always-on prompt. Delphi decides whether it is private: an entry is public only when Delphi itself fetches your source_url and finds your quote in the page; everything else stays private to this install and never leaves it. Anything you say about taint, status, privacy, author or confidence is ignored. The older form (title, body, sources) still stages an entry for the operator's review. Changes no file in your project.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
+                    "topic": {"type": "string", "minLength": 1, "maxLength": 200},
+                    "role": {"type": "string", "maxLength": 64, "description": "The Delphi role this research serves."},
+                    "rung": {"type": "integer", "minimum": 1, "maximum": 4, "description": "The source rung you drew on (advisory)."},
+                    "claims": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"type": "object", "properties": {
+                        "text": {"type": "string", "minLength": 1, "maxLength": 500},
+                        "source_url": {"type": "string", "maxLength": 200, "description": "An https URL."},
+                        "quote": {"type": "string", "maxLength": 400, "description": "Words copied from the page, which Delphi looks for itself."},
+                        "retrieved_at": {"type": "string", "maxLength": 40}
+                    }, "required": ["text"], "additionalProperties": false}},
                     "title": {"type": "string", "minLength": 1, "maxLength": 120},
-                    "body": {"type": "string", "minLength": 1, "maxLength": 20000, "description": "The research, as markdown. Cite sources inline as links."},
+                    "body": {"type": "string", "minLength": 1, "maxLength": 20000, "description": "Older form: the research, as markdown. Cite sources inline as links."},
                     "sources": {"type": "array", "maxItems": 20, "items": {"type": "string", "maxLength": 300}, "description": "URLs, paths or document names the body rests on."},
                     "confidence": {"type": "string", "enum": ["low", "medium", "high"], "default": "low", "description": "Your own stated confidence; it is shown to the operator, not trusted."},
                     "model": {"type": "string", "maxLength": 64, "description": "Your model name, self-reported."}
                 },
-                "required": ["title", "body"],
+                "anyOf": [{"required": ["topic", "role", "claims"]}, {"required": ["title", "body"]}],
                 "additionalProperties": false
             },
             "annotations": writes("Propose a research entry to Delphi")

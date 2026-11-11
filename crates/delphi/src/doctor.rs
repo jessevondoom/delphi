@@ -263,6 +263,13 @@ fn check_research(home: &Path, ws: &Workspace, cfg_text: &str, r: &mut Report) {
     };
     let thin = delphi_engine::boot::settings_from(&root).thin_below;
     r.push(Level::Ok, CHECK, "", format!("{}; {}; an answer from fewer than {} kept claims says coverage: thin ([research] thin_below)", trusted, kb, thin));
+    // spec 098 §7.2: a private entry is never placed in a foreign-family seat's prompt whatever this says; `allow` also lets the host's own
+    // family read private entries, which is worth knowing once the install holds any.
+    let allow = root.get("library").and_then(|l| l.get("private_to_models")).and_then(|v| v.as_str()) == Some("allow");
+    let private = delphi_engine::host_noted::private_count(&ws.dir);
+    if allow && private > 0 {
+        r.warn(CHECK, "config.toml", format!("[library] private_to_models = \"allow\" while {private} private entr{} exist: a private entry can reach a model of the host's own family (never a foreign family). Set it to \"deny\" to keep them out of every prompt", if private == 1 { "y" } else { "ies" }));
+    }
 }
 
 /// `14 error-log`: read-only; says what is recorded and where, and warns when records were lost.
@@ -1257,6 +1264,26 @@ mod tests {
         assert!(findings("[research]\nthin_below = 5\n").last().unwrap().message.contains("fewer than 5 kept claims"));
         let f = findings("[search]\nproviders = [\"nonesuch\"]\n");
         assert_eq!((f[0].level, f[0].location.as_str()), (Level::Warn, "config.toml"), "{f:?}");
+    }
+
+    #[test]
+    fn research_warns_when_private_to_models_allows_and_private_entries_exist() {
+        let (_t, home, ws, _p) = setup();
+        let warns = |cfg: &str| {
+            let mut r = Report::default();
+            check_research(&home, &ws, cfg, &mut r);
+            r.findings.into_iter().filter(|f| f.check == "17 research" && f.level == Level::Warn).collect::<Vec<_>>()
+        };
+        assert!(warns("[library]\nprivate_to_models = \"allow\"\n").is_empty(), "no private entry yet, nothing to warn about");
+        let m = ws.dir.join("local/missions/m1");
+        let mut log = delphi_core::log::EventLog::open(&m, Default::default()).unwrap();
+        let e = delphi_core::event::EventEnvelope::new("m1", "learn.staged", serde_json::json!({"id": "n1", "trigger": "host_noted", "summary": "s", "event_seqs": [], "tier": "L0", "private": true}));
+        log.append(e).unwrap();
+        drop(log);
+        assert!(warns("").is_empty() && warns("[library]\nprivate_to_models = \"deny\"\n").is_empty());
+        let w = warns("[library]\nprivate_to_models = \"allow\"\n");
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].message.contains("1 private entry") && w[0].message.contains("never a foreign family"), "{}", w[0].message);
     }
 
     #[test]
