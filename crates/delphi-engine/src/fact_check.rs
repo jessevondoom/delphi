@@ -245,7 +245,7 @@ pub(crate) fn claim_shape(claim: &str) -> Vec<String> {
 }
 
 /// Deny by default (§9.2): the validator never ratifies these alone.
-fn protected_class(claim: &str) -> Option<&'static str> {
+pub(crate) fn protected_class(claim: &str) -> Option<&'static str> {
     static SEC: OnceLock<Regex> = OnceLock::new();
     static MED: OnceLock<Regex> = OnceLock::new();
     static PERSON: OnceLock<Regex> = OnceLock::new();
