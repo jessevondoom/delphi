@@ -117,6 +117,7 @@ Which sites the job may read is not here: it is `context/sources/trusted.toml` (
 
 | Key | Default | Meaning |
 | :-- | :-- | :-- |
+| `[library] private_to_models` | `deny` | `allow` lets a model of the host's own family read private entries; a private entry is never placed in a foreign-family seat's prompt either way (`specs/098` §7.2). `delphi doctor` warns on `allow` while private entries exist |
 | `[library.acquire] enabled` ◆ | `false` | turns on the daily acquisition job (`specs/055` §8). It fetches from the archives in `context/sources/archives.toml` plus your `operator/archives.toml`, and only from those hosts. Proposals arrive as one batch in the digest; nothing is fetched until you accept or a standing rule (`delphi sources acquire rule add`) covers it |
 | `[library.acquire] byte_budget_mib` ◆ | `2048` | what acquisition may hold; reaching it stops acquiring and evicts nothing |
 | `[library.acquire] max_item_mib` ◆ | `16` | the largest text one acquired source may have; also the ceiling of a standing rule |

@@ -218,6 +218,7 @@
       "description": "The central library (specs/055).",
       "additionalProperties": false,
       "properties": {
+        "private_to_models": { "enum": ["deny", "allow"], "default": "deny", "description": "Whether a private entry may be placed in the prompt of a model of the host's own family (specs/098 section 7.2). A private entry is never placed in a foreign-family seat's prompt, whatever this says. `delphi doctor` warns when it is `allow` and private entries exist." },
         "pages": {
           "type": "object",
           "description": "Generated search pages (specs/057 sections 5 and 6). A page is always labelled generated and not authoritative.",
