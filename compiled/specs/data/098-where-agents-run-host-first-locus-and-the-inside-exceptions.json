@@ -184,55 +184,55 @@
     },
     {
       "level": 2,
-      "line": 389,
+      "line": 390,
       "number": "15",
       "title": "Council review"
     },
     {
       "level": 3,
-      "line": 408,
+      "line": 409,
       "number": "15.1",
       "title": "Council `t_0002` (2026-11-10, on this draft)"
     },
     {
       "level": 3,
-      "line": 424,
+      "line": 425,
       "number": "15.2",
       "title": "Councils `t_0004` and `t_0005` (2026-11-10, on the full text)"
     },
     {
       "level": 3,
-      "line": 447,
+      "line": 448,
       "number": "15.3",
       "title": "Council `t_0006` (2026-11-10, on the confidence-ladder proposal)"
     },
     {
       "level": 2,
-      "line": 463,
+      "line": 464,
       "number": "16",
       "title": "Acceptance criteria"
     },
     {
       "level": 3,
-      "line": 481,
+      "line": 482,
       "number": "16.1",
       "title": "Verification Plan"
     },
     {
       "level": 2,
-      "line": 503,
+      "line": 504,
       "number": "17",
       "title": "Not verified"
     },
     {
       "level": 2,
-      "line": 521,
+      "line": 522,
       "number": "18",
       "title": "Pinned items (proposed values; the slices calibrate them)"
     },
     {
       "level": 2,
-      "line": 537,
+      "line": 538,
       "number": "19",
       "title": "Progress you can see, and cancel"
     }
@@ -240,7 +240,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/098-where-agents-run-host-first-locus-and-the-inside-exceptions.md",
-    "sha256": "fccaa17bcf7f609c9da00ab33ff7c0769e039ccbec5c876f98231f3517533bef"
+    "sha256": "6595bd44ee4df5d9e8dc37eb2ecf2bceddbe373e0f967100face3867a346c708"
   },
   "source_status_at_hash": {
     "line": {
@@ -253,7 +253,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-10 (\"approve spec 098\"): the text as written. OD-1 to OD-6 and OD-8 to OD-11 of section 14 take their recommendations. OD-7 (inside fetch) was decided by the operator the same day (\"7a yes, 7b off\"): 7a is approved, 7b is off and not built. A review with a completed red-team Round 2 (section 17) was not run before approval. The text takes effect when this pull request merges."
     },
-    "sha256": "fccaa17bcf7f609c9da00ab33ff7c0769e039ccbec5c876f98231f3517533bef",
+    "sha256": "6595bd44ee4df5d9e8dc37eb2ecf2bceddbe373e0f967100face3867a346c708",
     "word": "approved"
   },
   "spec": {
