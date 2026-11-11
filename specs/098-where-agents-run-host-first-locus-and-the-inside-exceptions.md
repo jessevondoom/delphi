@@ -335,7 +335,7 @@ S9 writes each *enforced* row into `context/invariant-enforcement.md`, and each 
 
 ### 13.1 Order, exit criteria and flags
 
-Each slice merges alone and leaves the repository working. Runtime behavior ships **off** behind a flag in `config.toml` (documented in `crates/delphi/config.example.toml`, `schemas/config.schema.json` and `docs/reference/config.md`) and is switched on only when the slice's exit criterion passes.
+Each slice merges alone and leaves the repository working. Runtime behavior shipped **off** behind a flag in `config.toml` (documented in `crates/delphi/config.example.toml`, `schemas/config.schema.json` and `docs/reference/config.md`) and was to be switched on only when the slice's exit criterion passed. **Superseded for five features by §13.2 (2026-11-11): the flag is pulled and a roll-back plan takes its place.** The exit criteria below stay as the tests a slice must pass before it merges.
 
 | Wave | Slices | Exit criterion | Flag |
 | :-- | :-- | :-- | :-- |
@@ -353,6 +353,28 @@ Each slice merges alone and leaves the repository working. Runtime behavior ship
 Dependencies: S4 needs S3; S5 needs S1a to S1c and S4; S8 needs S2; S9 needs S2 and S6. Research (S1, S5) and generated packs (S7's cap) are last or independent, so they cannot gate the rule of Wave 1.
 
 Each slice follows `AGENTS.md`: tests, clippy and `delphi lint` before committing, the tracker updated in the same PR, `Implements-Spec: specs/098-*.md`.
+
+### 13.2 Flags pulled, and the roll-back plan (operator decision, 2026-11-11)
+
+**The decision.** The operator, 2026-11-11: "S5: yes the same ladder should apply inside and outside. we should pull the flag on those features and instead come up with a roll-back plan. i'm the main user so there's low risk and a faster path to testing that way". Default-off flags slow the first real use of a feature to the day someone remembers to switch it on, and the operator is the main user, so a bad feature costs one person's time, not an audience's. The flag is replaced by a way back.
+
+**Which features.** The flags are removed and the features are on, for: S4 `route` (`[hosts] route_adopt`), S5 the ladder, reflex and offer (`[hosts] source_ladder`), S6 standalone red team and `ask_family` (`[seats] red_team_kind`), S1d the wider fetch (`[research] ladder`), and spec 101 slice A's search log (`[research] search_log`). **Kept, and why:** the `[research.tiers]` rung switches of spec 100 are the audit's roll-back mechanism (spec 100 §7), not release flags; `[merge] require_spec_link` belongs to S8, which is not built and changes a gate (decided with S8); **everything of spec 102 stays as OD-8 decided it** (the opt-out default holds until its audit passes), because that store keeps the operator's own words and is a different kind of risk; refusals (§5, §9, §12) and the hard switches (`[mcp] enabled`, `cancel_job`) stay always on or always available.
+
+**S5 inside and outside.** The same ladder applies inside Delphi and in a host. The Scout, Investigator and Red-team manifests under `agents/` carry the ladder text, and the packs a host is served are built from that same text, so there is one copy that cannot drift (a test fails if the served pack and the manifest disagree). Inside, a rung that is not available (host sources, the open web beyond the observed set) is named with its reason and the role goes on, as §7.4 says.
+
+**What changes in the slices.** One follow-up slice, **S11 (pull the flags)**, removes the five keys from the code, `config.example.toml`, `schemas/config.schema.json` and `docs/reference/config.md`, makes the behavior unconditional, deletes the tests that only proved "off means unchanged", and keeps every test of an authority invariant (§12), which no longer has a switch to hide behind. The exit criteria of §13.1 stay as the tests a slice must pass before it merges; after the flag goes, the signal that a feature is working is the live trial (S12 below), not a switch.
+
+**The roll-back plan.**
+1. **The unit is a slice's merge commit.** Every slice is one pull request, so one merge commit. The tracker gets a roll-back column for each feature: its merge commit and the command (`git revert -m 1 <commit>`). Stacked slices revert newest first. The merge ledger (`$DELPHI_HOME/merge/ledger.jsonl`) already records the heads; the tracker records the merge commits.
+2. **The release is the other unit.** `delphi update --rollback` undoes the program, the built-in files and the daemons (its own help text); `delphi update --version vX.Y.Z --allow-downgrade` goes to a named release. The previous release must stay installable.
+3. **Data must stay readable.** Everything in this spec is additive: optional fields, new labels, kept `noted` entries, search-log lines. A **downgrade drill** per release opens a home written by the new build with the previous release and checks that it starts and answers. A slice without a drill is marked "drill: not run" in the tracker. No drill has been written.
+4. **Switches that remain because they are safety tools, not flags:** `[mcp] enabled = false`, `cancel_job`, the tier latch and `[research.tiers]` rung switches, and the host's own control of the plugin (disable or uninstall it in the host, which turns off every host-side feature at once).
+5. **When to roll back, and who decides.** The operator decides. The signals are `delphi doctor`, `delphi logs`, `delphi merge log` and a failed live trial. **Revert first and diagnose after** when a feature gives a wrong answer an operator relies on, leaks a `private` claim, or lets an agent act outside its sandbox or approval; the last two are incidents and go in the error log.
+6. **What the plan does not give.** No per-feature switch at run time: a roll-back needs a revert or a release change, minutes to hours, not seconds. A revert deletes no data, so entries, logs and labels already written stay. And the plan is unproven until a drill and a live trial have run.
+
+**S12, the live trial.** After the flags are pulled and before the release, the operator runs the built features against a real host, a real daemon and a Council once: route, the ladder, a standalone red team, a research run with the wider fetch and the search log. It is the exit criterion the flags used to wait for. About 8 to 12 hours of the operator's and my time (an estimate, not a measurement).
+
+**Hours (estimates).** S11 4 to 8; the manifest change for S5 inside, 3 to 5; the downgrade drill, 4 to 6; S12, 8 to 12.
 
 ## 14. Decisions
 
@@ -529,7 +551,7 @@ The gates before each commit are those of `AGENTS.md`: `cargo test --workspace -
 | Origin independence | 040 §6.2 exactly. Source classes Weak and Hostile count 0. `[research] young_domain_days` = 180 (age known only). `[research] similar_above` = 0.8 (shingle similarity) merges origins. Known same registrant or network counts once. Citations first seen within `[research] burst_hours` = 24 count once. |
 | Display | `corroborated · N origins`, with `trusted_sources: k` in the detail and the words "weaker than validated". |
 | Retraction | A re-check (055 §3.5) that loses a quote drops that citation; the status is recomputed and recorded. |
-| Flag defaults | Every new behavior flag is `false` until its slice's exit criterion passes: `[hosts] route_adopt`, `[hosts] source_ladder`, `[research] ladder`, `[merge] require_spec_link`, `[seats] red_team_kind`. Refusals (§5, §9, §12) are always on. |
+| Flag defaults | **Changed by §13.2.** `[hosts] route_adopt`, `[hosts] source_ladder`, `[research] ladder` and `[seats] red_team_kind` are removed and their features are on; the roll-back plan of §13.2 takes the place of the flag. `[merge] require_spec_link` (S8, not built) keeps its flag until S8 is decided. Refusals (§5, §9, §12) are always on. |
 | Panel on host disconnect | After `[seats] host_wait_secs` (default 600) with no call from the host, the daemon ends the Panel as `abandoned`, writes held Round 1 stances to the record unreleased, and stops its foreign seats. |
 | Trusted-list candidates | Decision cards of kind `source` (044), one per hostname per run, at most 5. Accepting one is the operator's own action on their list. |
 | `route` | The trigger table and the labeled set are data files named by S4; the tie-break is §8. |
