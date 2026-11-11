@@ -156,7 +156,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/102-the-exchange-record-the-operators-words-outcome-summaries-and-a-project-history.md",
-    "sha256": "4bfe0c7710a5dffe3734a2b40e318e6c7670e74b4b3d4c665cebd09f30e33d25"
+    "sha256": "36795fa4a1982caa7134e02d8c0fbba4554195c63fa604a4e9a4a2d66ba24523"
   },
   "source_status_at_hash": {
     "line": {
@@ -169,7 +169,7 @@
       },
       "text": "status: draft   # for the operator and a Council review. Nothing here is buildable until the operator approves it; a draft is a proposal, not permission."
     },
-    "sha256": "4bfe0c7710a5dffe3734a2b40e318e6c7670e74b4b3d4c665cebd09f30e33d25",
+    "sha256": "36795fa4a1982caa7134e02d8c0fbba4554195c63fa604a4e9a4a2d66ba24523",
     "word": "draft"
   },
   "spec": {
@@ -184,10 +184,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 2443,
+      "end": 2511,
       "end_line": 21,
       "line": 21,
-      "start": 1871
+      "start": 1939
     },
     "text": "The operator asked (2026-11-11) for Delphi to keep a history of what happened in a project: the operator's own words, what came of each request, and a build report, with deeper provenance, so that agents get more context and the operator can ask \"where did this decision come from\". The first idea was to store the sessions' transcripts. Council `t_0008` (architect, red-team, strategist; two model families) advised against that, and the operator then proposed a smaller unit, the **exchange record**: one prompt of the operator's, with a short summary of what came back."
   }
