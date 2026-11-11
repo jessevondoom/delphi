@@ -256,6 +256,12 @@ sandbox = "off"
 # similar_above = 0.8
 # unfamiliar_counts = true
 #
+# A search log beside each host research result (specs/101 section 3). One line per search: of whom (the knowledge base, the trusted
+# list, a search provider), why, the query that was sent (the same redacted string), when, and how many results came back and were
+# kept, plus a found / duplicates / kept / not-kept flow that adds up. A search withheld because its claim rests on a private source says
+# so and carries no query text; a search your host says it ran is logged as declared and counts as nothing. The log is private when
+# any claim it served is, and never leaves this machine then. `delphi research log <id>` prints it. Off by default.
+# search_log = false
 # The confidence ladder (specs/100 section 3.2). A claim's rung is derived by code from tags the daemon wrote: how many independent
 # origins it has, how many of those are trusted sources, whether anything contradicts it, and whether the validator's dry run recorded
 # "would_ratify". corroborated: corroborated_origins or more origins. substantiated: corroborated and substantiated_trusted or more trusted

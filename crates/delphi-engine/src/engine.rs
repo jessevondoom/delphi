@@ -115,6 +115,9 @@ pub struct Settings {
     /// `[research] thin_below` (`specs/098` §7.5 item 4): fewer kept, cited claims than this from the knowledge base and the trusted
     /// sources together make a research answer `coverage: thin`. Default 3.
     pub thin_below: usize,
+    /// `[research] search_log` (`specs/101` §3, §8): write a search log beside each host research result. Default off until slice A's exit
+    /// criterion passes; off is spec 098 as merged.
+    pub search_log: bool,
     /// `[research] young_domain_days`, `burst_hours`, `similar_above`, `unfamiliar_counts` (`specs/098` §7.6, §18): the numbers the corroboration
     /// count uses. The defaults are proposals to calibrate.
     pub support: crate::corroboration::Params,
@@ -192,6 +195,7 @@ impl Default for Settings {
             max_foreign_tokens: 100_000,
             red_team_kind: false,
             thin_below: 3,
+            search_log: false,
             support: crate::corroboration::Params::default(),
             tiers: Default::default(),
             park_poll: Duration::from_secs(5),

@@ -889,7 +889,7 @@ Approved by the operator on 2026-11-11 ("spec 101 is approved"). Origin: A Scout
 | Slice | Content | Hours (planned) | State |
 | :-- | :-- | --: | :-- |
 | S0 | this spec, its review and amendments (055 §3.5, 098 §7.5, §7.6, §18, 052 §3.1) | 6-10 | approved 2026-11-11 (PR #628) |
-| A | the search log, flow summary, `delphi research log` | 18-24 | not started |
+| A | the search log, flow summary, `delphi research log` | 18-24 | built (PR open), behind `[research] search_log` (default off): `search_log.rs` (closed source set, per-line balance, flow, declared lines, private-by-inheritance, persistence), the runner records every search of the host research path (`research_run.rs`; the console `delphi research` path, `research.rs`, is not covered), `host_searches` on `request_research`, the result schema, `delphi research log <id>`, and a net test that nothing reads the log as a criterion. Not built or unverified: nothing has run against a live search provider or host; the shared egress check (#626's `egress::check`) is not on main, so the log uses the library's own outbound check (`library::may_leave`); the corroboration pass still treats an unknown private flag as public (098 S1a) |
 | B | local Retraction Watch snapshot, DOI match, `retracted` marks, minimal normaliser | 14-16 | not started |
 | C | archived-copy lookup, labelled version, searchable, zero-origin invariant | 18-20 | not started |
 | D | API reference-list chaining, one hop, bounds, noted-only | 20-24 | not started |

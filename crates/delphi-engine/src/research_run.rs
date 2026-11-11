@@ -14,6 +14,7 @@
 use crate::corroboration::{self, Cite, Params, Support};
 use crate::research_jobs::{Egress, Finish, JobCtx};
 use crate::research_plan::{canonical_url, clean_query, claim_fingerprint, plan, widen_to_web, Added, ClaimSet, QueryKind, Seen};
+use crate::search_log::{HostSearch, Purpose, SearchLog, Source};
 use delphi_adapter::research::search::Row;
 use delphi_core::knowledge_status::{raise_for_tags, tier_detail, tier_params, Status, Tags};
 use delphi_core::redact::Redactor;
@@ -35,6 +36,11 @@ pub struct Page {
 /// Search and fetch. Both are blocking calls in the adapters; the S5 wiring must not block the runtime.
 pub trait Web: Send + Sync {
     fn search(&self, query: &str) -> Result<Vec<Row>, String>;
+    /// [`search`](Web::search), and the id of the provider that answered when the transport knows it (`specs/101` §3, the search log). The
+    /// default names no provider.
+    fn search_via(&self, query: &str) -> Result<(Vec<Row>, Option<String>), String> {
+        self.search(query).map(|rows| (rows, None))
+    }
     /// Is the URL's host on a trusted list (`TrustedList::allows_url`)?
     fn is_trusted(&self, url: &str) -> bool;
     /// Will the fetcher reach this URL at all? Today only a trusted host (`specs/066` §6); slice S1d of `specs/098` widens it to the
@@ -113,6 +119,10 @@ pub struct Deps<'a> {
     pub thin_below: usize,
     /// `[research]` numbers for the corroboration count (`specs/098` §18).
     pub support: &'a Params,
+    /// `[research] search_log` (`specs/101` §3): put the search log in the result. Off, the result is exactly what spec 098 gives.
+    pub search_log: bool,
+    /// Searches the host says it ran before asking (`request_research`'s `host_searches`); logged as declared, counted as nothing.
+    pub host_searches: &'a [HostSearch],
 }
 
 #[derive(Debug, Clone)]
@@ -278,9 +288,10 @@ fn coverage_report(r: &Rungs, kb: usize, trusted_claims: usize, web_claims: usiz
 
 /// Read one page into the claim set: keep it as a source, extract its claims, and merge a claim already known into the claim that holds
 /// it (a second citation) or start a new one. The scout's quote was found in the page's text by code, so each citation is quote-verified.
-async fn ingest(deps: &Deps<'_>, question: &str, page: &Page, trusted: bool, retrieved: &str, set: &mut ClaimSet, claims: &mut Vec<ClaimRec>) {
-    let Ok(source_id) = deps.library.capture(&page.url, &page.text, trusted).await else { return };
-    let Ok(found) = deps.scout.extract(question, page).await else { return };
+/// `true` when the page was kept as a source (whether or not any claim came out of it), `false` when the library refused it.
+async fn ingest(deps: &Deps<'_>, question: &str, page: &Page, trusted: bool, retrieved: &str, set: &mut ClaimSet, claims: &mut Vec<ClaimRec>) -> bool {
+    let Ok(source_id) = deps.library.capture(&page.url, &page.text, trusted).await else { return false };
+    let Ok(found) = deps.scout.extract(question, page).await else { return true };
     for x in found {
         let fp = claim_fingerprint(&x.subject, &x.predicate, &x.object, &x.scope, &x.time);
         match set.add(&fp, &source_id) {
@@ -309,6 +320,18 @@ async fn ingest(deps: &Deps<'_>, question: &str, page: &Page, trusted: bool, ret
             }
         }
     }
+    true
+}
+
+/// The source a search belongs to in the search log (`specs/101` §3 item 1): the trusted-list search is `trusted`; every other search
+/// names the provider that answered, or `unknown` when the transport did not say.
+fn log_source(kind: QueryKind, via: Option<&str>) -> (&'static str, Source, Purpose) {
+    let provider = via.and_then(crate::search_log::clean_id).unwrap_or_else(|| "unknown".into());
+    match kind {
+        QueryKind::Trusted => ("trusted", Source::Trusted, Purpose::Trusted),
+        QueryKind::Topic => ("web", Source::Search(provider), Purpose::Topic),
+        QueryKind::Gap => ("web", Source::Search(provider), Purpose::Gap),
+    }
 }
 
 /// Run one research job. `Finish::Partial` when the step budget ran out; an `Err` only when nothing could be done at all.
@@ -323,6 +346,13 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     let (mut pages_read, mut trusted_kept) = (0usize, 0usize);
     let retrieved = day();
     let mut cov = Rungs::default();
+    // The search log (`specs/101` §3): the host's declared searches first (they happened before the request), then every search the
+    // daemon runs. It only records; no branch below reads it.
+    let mut log = SearchLog::new();
+    for h in deps.host_searches {
+        log.declare(h, deps.redactor);
+    }
+    let mut last_provider: Option<String> = None;
 
     'queries: for q in &queries {
         if q.kind != QueryKind::Trusted && !widen_to_web(trusted_kept) {
@@ -335,23 +365,36 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
         if q.kind != QueryKind::Trusted {
             cov.web_searched = true;
         }
-        let rows = match deps.web.search(&q.text) {
-            Ok(rows) => {
+        let (rows, via) = match deps.web.search_via(&q.text) {
+            Ok(found) => {
                 cov.answered += 1;
-                rows
+                found
             }
             Err(e) => {
-                cov.failure.get_or_insert(failure_reason(&e));
+                let why = failure_reason(&e);
+                cov.failure.get_or_insert(why);
+                let (rung, source, purpose) = log_source(q.kind, None);
+                let li = log.begin(rung, source, purpose, &q.text, None);
+                log.failed(li, why);
                 continue;
             }
         };
+        if via.is_some() {
+            last_provider = via.clone();
+        }
+        let (rung, source, purpose) = log_source(q.kind, via.as_deref());
+        let li = log.begin(rung, source, purpose, &q.text, via.as_deref());
+        log.rows(li, rows.len());
         let (mut trusted_rows, mut other): (Vec<Row>, Vec<Row>) = rows.into_iter().partition(|r| deps.web.is_trusted(&r.url));
         trusted_rows.append(&mut other);
-        for row in trusted_rows {
+        let total = trusted_rows.len();
+        for (i, row) in trusted_rows.into_iter().enumerate() {
             if pages_read >= page_cap(depth) {
+                log.dropped(li, "page_cap", total - i);
                 break 'queries;
             }
             if !seen.url(&row.url) {
+                log.duplicate(li);
                 continue;
             }
             let from_trusted_host = deps.web.is_trusted(&row.url);
@@ -365,24 +408,33 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
                 ctx.refused(&row.url);
                 if deps.library.note_lead(&row).is_ok() {
                     cov.leads += 1;
+                    log.kept(li);
+                } else {
+                    log.dropped(li, "lead_not_stored", 1);
                 }
                 continue;
             }
             if let Err(e) = ctx.egress("scout", Egress::Fetch, &row.url) {
                 if e.contains("budget") {
                     spent = true;
+                    log.dropped(li, "budget", total - i);
                     break 'queries;
                 }
+                log.dropped(li, "refused", 1);
                 continue;
             }
             let Ok(page) = deps.web.fetch(&row.url) else {
                 ctx.refused(&row.url);
                 if !from_trusted_host && deps.library.note_lead(&row).is_ok() {
                     cov.leads += 1;
+                    log.kept(li);
+                } else {
+                    log.dropped(li, "fetch_failed", 1);
                 }
                 continue;
             };
             if !seen.text(&page.text) {
+                log.duplicate(li);
                 continue;
             }
             pages_read += 1;
@@ -390,7 +442,11 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
             if trusted {
                 trusted_kept += 1;
             }
-            ingest(deps, question, &page, trusted, &retrieved, &mut set, &mut claims).await;
+            if ingest(deps, question, &page, trusted, &retrieved, &mut set, &mut claims).await {
+                log.kept(li);
+            } else {
+                log.dropped(li, "capture_failed", 1);
+            }
         }
     }
 
@@ -399,6 +455,13 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     // never put in an outbound query. Every search and fetch still goes through `ctx.egress`, so the depth's step budget bounds it.
     let mut pass = (0usize, 0usize);
     if pass_claims(depth) > 0 && !spent {
+        // A claim that rests on a private source gets no outbound query; the log says so, without any text of the claim
+        // (`specs/101` §3 item 3). At most as many lines as the pass would have run.
+        let private_claims = claims.iter().filter(|c| c.source_ids.iter().any(|s| deps.library.is_private(s))).count();
+        for _ in 0..private_claims.min(pass_claims(depth)) {
+            let provider = last_provider.as_deref().and_then(crate::search_log::clean_id).unwrap_or_else(|| "none".into());
+            log.withheld(Source::Search(provider), Purpose::Corroboration);
+        }
         let mut wanted: Vec<(usize, String)> = claims
             .iter()
             .enumerate()
@@ -416,40 +479,66 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
         'pass: for (i, _) in wanted.into_iter().take(pass_claims(depth)) {
             let c = claims[i].clone();
             pass.0 += 1;
-            for (_kind, q) in pass_queries(&c, deps.redactor) {
+            for (kind, q) in pass_queries(&c, deps.redactor) {
                 if ctx.egress("scout", Egress::Search, &q).is_err() {
                     spent = true;
                     break 'pass;
                 }
                 pass.1 += 1;
-                let Ok(rows) = deps.web.search(&q) else { continue };
-                for row in rows.into_iter().take(3) {
+                let purpose = if kind == "support" { Purpose::Support } else { Purpose::Contradiction };
+                let (rows, via) = match deps.web.search_via(&q) {
+                    Ok(found) => found,
+                    Err(e) => {
+                        let li = log.begin("web", Source::Search("unknown".into()), purpose, &q, None);
+                        log.failed(li, failure_reason(&e));
+                        continue;
+                    }
+                };
+                let provider = via.as_deref().and_then(crate::search_log::clean_id).unwrap_or_else(|| "unknown".into());
+                let li = log.begin("web", Source::Search(provider), purpose, &q, None);
+                log.rows(li, rows.len());
+                // Only the first three results of a corroboration query are followed; the rest are counted, not dropped silently.
+                let followed = rows.len().min(3);
+                log.dropped(li, "not_followed", rows.len() - followed);
+                for (i, row) in rows.into_iter().take(3).enumerate() {
                     if !seen.url(&row.url) {
+                        log.duplicate(li);
                         continue;
                     }
                     if !deps.web.can_fetch(&row.url) {
                         ctx.refused(&row.url);
                         if deps.library.note_lead(&row).is_ok() {
                             cov.leads += 1;
+                            log.kept(li);
+                        } else {
+                            log.dropped(li, "lead_not_stored", 1);
                         }
                         continue;
                     }
                     if let Err(e) = ctx.egress("scout", Egress::Fetch, &row.url) {
                         if e.contains("budget") {
                             spent = true;
+                            log.dropped(li, "budget", followed - i);
                             break 'pass;
                         }
+                        log.dropped(li, "refused", 1);
                         continue;
                     }
                     let Ok(page) = deps.web.fetch(&row.url) else {
                         ctx.refused(&row.url);
+                        log.dropped(li, "fetch_failed", 1);
                         continue;
                     };
                     if !seen.text(&page.text) {
+                        log.duplicate(li);
                         continue;
                     }
                     let trusted = deps.web.is_trusted(&page.url);
-                    ingest(deps, question, &page, trusted, &retrieved, &mut set, &mut claims).await;
+                    if ingest(deps, question, &page, trusted, &retrieved, &mut set, &mut claims).await {
+                        log.kept(li);
+                    } else {
+                        log.dropped(li, "capture_failed", 1);
+                    }
                 }
             }
         }
@@ -490,8 +579,16 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     source_ids.sort();
     source_ids.dedup();
     let trusted_claims = claims.iter().filter(|c| c.from_trusted).count();
-    let (thin, report) = coverage_report(&cov, set.kb_hits().len(), trusted_claims, claims.len() - trusted_claims, deps.thin_below);
-    let result = json!({
+    let (thin, mut report) = coverage_report(&cov, set.kb_hits().len(), trusted_claims, claims.len() - trusted_claims, deps.thin_below);
+    // The search log (`specs/101` §3): it inherits the strictest `private` flag of the claims the run produced, shows the knowledge-base
+    // line first, and is linked from the coverage report. Off, none of this is in the result.
+    log.private = claims.iter().any(|c| c.source_ids.iter().any(|s| deps.library.is_private(s)));
+    log.kb(clean_query(question, deps.redactor).as_deref(), set.kb_hits().len());
+    if deps.search_log {
+        let flow = log.flow();
+        report["search_log"] = json!({"lines": log.lines().len(), "found": flow.found, "kept": flow.kept, "searches": flow.searches, "withheld": flow.withheld, "declared": flow.declared, "see": "search_log"});
+    }
+    let mut result = json!({
         "coverage": if thin { "thin" } else { "ok" }, "coverage_report": report,
         "corroboration_pass": {"claims": pass.0, "queries": pass.1},
         "answer": if answer.is_empty() { "No claim could be drawn from the sources read. (not validated)".to_string() } else { format!("{} (not validated: model synthesis)", answer) },
@@ -501,6 +598,9 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
         "budget_used": {"steps": ctx.steps()},
         "answered_by": "scout", "consulted": ["scout", "validator"],
     });
+    if deps.search_log {
+        result["search_log"] = log.to_json();
+    }
     Ok(if spent { Finish::Partial(result) } else { Finish::Done(result) })
 }
 
@@ -524,8 +624,13 @@ mod tests {
         fail: Option<&'static str>,
         /// Results that only a query containing the marker returns, on top of `rows`.
         extra: Vec<(&'static str, Vec<Row>)>,
+        /// The provider `search_via` names, as the live transport does.
+        provider: Option<&'static str>,
     }
     impl Web for FakeWeb {
+        fn search_via(&self, q: &str) -> Result<(Vec<Row>, Option<String>), String> {
+            self.search(q).map(|rows| (rows, self.provider.map(String::from)))
+        }
         fn search(&self, q: &str) -> Result<Vec<Row>, String> {
             self.searched.lock().unwrap().push(q.to_string());
             match self.fail {
@@ -648,6 +753,8 @@ mod tests {
         sites: Vec<String>,
         thin_below: usize,
         support: Params,
+        search_log: bool,
+        host_searches: Vec<HostSearch>,
     }
 
     impl Fixture {
@@ -662,10 +769,10 @@ mod tests {
                 ("https://nih.gov/b".to_string(), vec![x("fever")]),
                 ("https://blog.example/a".to_string(), vec![x("headaches")]),
             ]));
-            Fixture { web, scout, validator: FakeValidator { verdict, asked: Default::default() }, lib: FakeLib::default(), redactor: Redactor::new(), sites: vec!["who.int".into(), "nih.gov".into()], thin_below: 3, support: Params::default() }
+            Fixture { web, scout, validator: FakeValidator { verdict, asked: Default::default() }, lib: FakeLib::default(), redactor: Redactor::new(), sites: vec!["who.int".into(), "nih.gov".into()], thin_below: 3, support: Params::default(), search_log: false, host_searches: Vec::new() }
         }
         fn deps(&self) -> Deps<'_> {
-            Deps { web: &self.web, scout: &self.scout, validator: &self.validator, library: &self.lib, redactor: &self.redactor, sites: &self.sites, thin_below: self.thin_below, support: &self.support }
+            Deps { web: &self.web, scout: &self.scout, validator: &self.validator, library: &self.lib, redactor: &self.redactor, sites: &self.sites, thin_below: self.thin_below, support: &self.support, search_log: self.search_log, host_searches: &self.host_searches }
         }
     }
 
@@ -1003,5 +1110,158 @@ mod tests {
         let rich = ClaimRec { id: "a".into(), fingerprint: "a".into(), group: "g".into(), x: x("o"), source_ids: vec![], source_urls: vec![], from_trusted: false, state: ClaimState::Captured, retrieved: "".into(), support: Support { origins: 9, trusted_sources: 9, ..Default::default() }, contested: false };
         let poor = ClaimRec { id: "b".into(), from_trusted: true, support: Support::default(), ..rich.clone() };
         assert_eq!(validation_order(&[rich, poor]), [1, 0]);
+    }
+
+    // ── the search log (`specs/101` §3) ──
+
+    fn log_lines(v: &Value) -> Vec<Value> {
+        v["search_log"]["lines"].as_array().cloned().unwrap_or_default()
+    }
+
+    /// Every line of the log accounts for each result it found: hits = duplicates + kept + Σ not_kept.
+    fn assert_balanced(v: &Value) {
+        for l in log_lines(v) {
+            if l["source"] == "kb" || l["declared"] == true {
+                continue;
+            }
+            let nk: u64 = l["not_kept"].as_object().unwrap().values().map(|n| n.as_u64().unwrap()).sum();
+            assert_eq!(l["hits"].as_u64().unwrap(), l["duplicates"].as_u64().unwrap() + l["kept"].as_u64().unwrap() + nk, "an unbalanced line: {l}");
+        }
+        let f = &v["search_log"]["flow"];
+        let nk: u64 = f["not_kept"].as_object().unwrap().values().map(|n| n.as_u64().unwrap()).sum();
+        assert_eq!(f["found"].as_u64().unwrap(), f["duplicates_removed"].as_u64().unwrap() + f["kept"].as_u64().unwrap() + nk, "the flow does not balance: {f}");
+    }
+
+    #[tokio::test]
+    async fn with_the_log_off_the_result_is_what_spec_098_gives_and_on_it_only_adds_the_log() {
+        let off = three_origins();
+        let (_, a) = value(run_research(&ctx(Depth::Survey), "does aspirin reduce fever", Depth::Survey, &off.deps()).await.unwrap());
+        assert!(a.get("search_log").is_none() && a["coverage_report"].get("search_log").is_none(), "off adds nothing: {a}");
+        let mut on = three_origins();
+        on.search_log = true;
+        let (_, mut b) = value(run_research(&ctx(Depth::Survey), "does aspirin reduce fever", Depth::Survey, &on.deps()).await.unwrap());
+        assert!(b["search_log"].is_object() && b["coverage_report"]["search_log"]["see"] == "search_log");
+        b.as_object_mut().unwrap().remove("search_log");
+        b["coverage_report"].as_object_mut().unwrap().remove("search_log");
+        assert_eq!(a, b, "the log changes nothing else in the result");
+    }
+
+    #[tokio::test]
+    async fn the_log_lists_what_was_sent_exactly_and_names_the_provider() {
+        // two trusted hosts answer, which is too few, so the run widens to the wider web and both kinds of search appear
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        f.search_log = true;
+        f.web.provider = Some("Brave");
+        let (_, v) = value(run_research(&ctx(Depth::Survey), "does aspirin reduce fever", Depth::Survey, &f.deps()).await.unwrap());
+        let sent = f.web.searched.lock().unwrap().clone();
+        let lines = log_lines(&v);
+        let queries: Vec<String> = lines.iter().filter_map(|l| l["query"].as_str().map(String::from)).collect();
+        for s in &sent {
+            assert!(queries.contains(s), "`{s}` was sent and is not in the log: {queries:?}");
+        }
+        assert!(queries.iter().filter(|q| !sent.contains(q)).all(|q| q == "does aspirin reduce fever"), "only the knowledge-base line may carry a query that was not sent: {queries:?}");
+        assert_eq!(lines[0]["source"], "kb", "the knowledge base first");
+        for l in &lines {
+            assert!(crate::search_log::Source::parse(l["source"].as_str().unwrap()).is_some(), "outside the closed set: {l}");
+        }
+        assert!(lines.iter().any(|l| l["source"] == "trusted" && l["via"] == "brave" && l["rung"] == "trusted"), "{lines:?}");
+        assert!(lines.iter().any(|l| l["source"] == "search:brave" && l["rung"] == "web"), "{lines:?}");
+        assert_balanced(&v);
+        assert_eq!(v["search_log"]["private"], false);
+    }
+
+    #[tokio::test]
+    async fn a_failed_search_is_a_line_with_its_fixed_reason() {
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        f.search_log = true;
+        f.web.fail = Some("credential_unresolved");
+        let (_, v) = value(run_research(&ctx(Depth::Survey), "does aspirin reduce fever", Depth::Survey, &f.deps()).await.unwrap());
+        let failed: Vec<Value> = log_lines(&v).into_iter().filter(|l| l["failed"].is_string()).collect();
+        assert!(!failed.is_empty(), "{v}");
+        assert!(failed.iter().all(|l| l["failed"] == "credential_unresolved" && l["hits"] == 0 && l["kept"] == 0), "{failed:?}");
+        assert_balanced(&v);
+    }
+
+    #[tokio::test]
+    async fn a_claim_on_a_private_source_gets_a_withheld_line_with_no_text_and_makes_the_log_private() {
+        let mut f = three_origins();
+        f.search_log = true;
+        f.web.rows.pop();
+        f.lib.private.insert("who.int".into());
+        let (_, v) = value(run_research(&ctx(Depth::Deep), "does aspirin lower body temperature", Depth::Deep, &f.deps()).await.unwrap());
+        let withheld: Vec<Value> = log_lines(&v).into_iter().filter(|l| l["withheld"] == "private").collect();
+        assert!(!withheld.is_empty(), "{v}");
+        for l in &withheld {
+            assert!(l.get("query").is_none() && l["hits"] == 0, "no query text on a withheld line: {l}");
+        }
+        let whole = v["search_log"].to_string();
+        assert!(!whole.contains("reduces fever") && !whole.contains("disputed OR incorrect"), "the claim's words are in the log: {whole}");
+        assert_eq!(v["search_log"]["private"], true, "it inherits the claim's flag");
+        assert!(crate::search_log::log_allowed_out(&v["search_log"], crate::library::Channel::Export).is_err());
+        assert_eq!(v["search_log"]["flow"]["withheld"].as_u64().unwrap() as usize, withheld.len());
+        assert_balanced(&v);
+    }
+
+    #[tokio::test]
+    async fn searches_the_host_declares_are_logged_and_change_no_count() {
+        let mut plain = three_origins();
+        plain.search_log = true;
+        let (_, a) = value(run_research(&ctx(Depth::Survey), "does aspirin reduce fever", Depth::Survey, &plain.deps()).await.unwrap());
+        let mut declared = three_origins();
+        declared.search_log = true;
+        declared.host_searches = vec![HostSearch { tool: "slack".into(), query: "index bloat thread".into(), hits: 40 }, HostSearch { tool: "gdrive".into(), query: "/srv/team/private/notes.md".into(), hits: 3 }];
+        let (_, b) = value(run_research(&ctx(Depth::Survey), "does aspirin reduce fever", Depth::Survey, &declared.deps()).await.unwrap());
+        let host_lines: Vec<Value> = log_lines(&b).into_iter().filter(|l| l["declared"] == true).collect();
+        assert_eq!(host_lines.len(), 2, "{b}");
+        assert!(host_lines.iter().all(|l| l["kept"] == 0 && l["source"].as_str().unwrap().starts_with("host:")), "{host_lines:?}");
+        assert_eq!(host_lines[1]["withheld"], "private", "a declared query with a path in it is not recorded");
+        assert!(host_lines[1].get("query").is_none());
+        for k in ["found", "kept", "duplicates_removed", "not_kept", "searches"] {
+            assert_eq!(a["search_log"]["flow"][k], b["search_log"]["flow"][k], "declared searches changed `{k}`");
+        }
+        assert_eq!(b["search_log"]["flow"]["declared"], 2);
+        assert_eq!(a["coverage_report"]["rungs"], b["coverage_report"]["rungs"], "and nothing in the coverage counts");
+        assert_balanced(&b);
+    }
+
+    #[tokio::test]
+    async fn the_corroboration_pass_searches_are_logged_with_their_purpose() {
+        let mut f = three_origins();
+        f.search_log = true;
+        f.web.rows.pop();
+        f.web.extra = vec![("aspirin reduces fever", vec![row("https://cdc.gov/c")])];
+        let (_, v) = value(run_research(&ctx(Depth::Survey), "does aspirin lower body temperature", Depth::Survey, &f.deps()).await.unwrap());
+        let lines = log_lines(&v);
+        let support = lines.iter().find(|l| l["purpose"] == "support").unwrap_or_else(|| panic!("{lines:?}"));
+        let contra = lines.iter().find(|l| l["purpose"] == "contradiction").unwrap_or_else(|| panic!("{lines:?}"));
+        assert!(support["query"].as_str().unwrap().contains("aspirin reduces fever") && !support["query"].as_str().unwrap().contains("disputed"));
+        assert!(contra["query"].as_str().unwrap().contains("disputed OR incorrect OR false"));
+        assert_balanced(&v);
+    }
+
+    #[tokio::test]
+    async fn a_run_that_runs_out_of_budget_still_balances_and_says_why_results_were_not_kept() {
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        f.search_log = true;
+        // one step for the search, one for the first page; the rest are found and not read
+        let (partial, v) = value(run_research(&JobCtx::with_budget(2), "does aspirin reduce fever", Depth::Survey, &f.deps()).await.unwrap());
+        assert!(partial);
+        assert!(v["search_log"]["flow"]["not_kept"]["budget"].as_u64().unwrap() >= 1, "{}", v["search_log"]);
+        assert_balanced(&v);
+    }
+
+    #[tokio::test]
+    async fn the_page_cap_and_the_results_not_followed_are_counted_not_dropped_silently() {
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        f.search_log = true;
+        f.web.trusted = vec!["who.int"];
+        f.web.rows = (0..12).map(|i| row(&format!("https://who.int/p{i}"))).collect();
+        for i in 0..12 {
+            f.web.pages.insert(format!("https://who.int/p{i}"), format!("text {i}"));
+        }
+        f.scout = FakeScout(HashMap::new());
+        let (_, v) = value(run_research(&ctx(Depth::Quick), "does aspirin reduce fever", Depth::Quick, &f.deps()).await.unwrap());
+        assert!(v["search_log"]["flow"]["not_kept"]["page_cap"].as_u64().unwrap_or(0) > 0, "a quick run reads a handful of pages: {}", v["search_log"]);
+        assert_balanced(&v);
     }
 }

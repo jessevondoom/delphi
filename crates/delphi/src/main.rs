@@ -40,6 +40,7 @@ mod kb_review;
 mod learn_cmd;
 mod agent_cmd;
 mod promote_cmd;
+mod research_cmd;
 mod retro_cmd;
 mod train_run;
 mod train_items;
@@ -137,6 +138,7 @@ const CMDS: &[Cmd] = &[
     Cmd { group: "Inspect", name: "changelog", about: "what the team recorded as finished, for a pull request", synopsis: "  delphi changelog [--mission <id>] [--session <s_0001>] [--since <date or time>] [--json]\n    [--workspace <name>] [--home <dir>]", detail: "Prints Markdown by session, from the mission's log (the latest unless --mission). --json: one line per change." },
     Cmd { group: "Inspect", name: "release", about: "whether this build is a signed release", synopsis: "  delphi release [status]", detail: "Signed by the maintainers' key, unsigned (a local or development build), or invalid. Needs no terminal." },
     Cmd { group: "Inspect", name: "sessions", about: "the finished console sessions, to review later", synopsis: "  delphi sessions [--mission <id>] [--limit <n>] [--full] [--json] [--home <dir>]", detail: "Written when a session ends (/new, or a daemon restart): the first words of what was asked, the changes recorded, and the summary when [session] summary is on. Reads the central log; calls no model." },
+    Cmd { group: "Inspect", name: "research", about: "the search log of a finished host research job", synopsis: "  delphi research log <research-id> [--json] [--home <dir>] [--workspace <name>]", detail: "Prints what a research run searched, of whom, when, and how many results came back and were kept (specs/101 §3): one line per search with the query that was sent, a search withheld for a private claim without any query text, searches your host declared marked as such, and a found / duplicates / kept / not-kept flow that adds up. Written when [research] search_log is on, once the job has finished; a private log stays on this machine. Reads a file; calls no model and no network." },
     Cmd { group: "Inspect", name: "tools", about: "how tools are used, and how often models record their changes", synopsis: "  delphi tools [--mission <id> | --all] [--json | --prom] [--workspace <name>] [--home <dir>]", detail: "Per model: runs that changed something and recorded a change. --prom: Prometheus text. Counts only." },
     Cmd { group: "Set up", name: "customize", about: "teach Delphi a note, a rule, a skill or a profile line yourself", synopsis: "  delphi customize note \"<text>\" [--mission <id>]\n  delphi customize rule \"<text>\" [--scope workspace|operator] [--why \"…\"] [--replace <ID> | --remove <ID>]\n  delphi customize skill <dir> --agents <role,role> [--description \"…\"]\n  delphi customize profile [\"<line>\" | --file <path>]\n    [--yes] [--workspace <name>] [--home <dir>]", detail: "What you write is yours: a rule, a skill or a profile line is ratified as you write it, after the same checks a proposal gets (no relaxing a rule, the caps, no near-duplicate). `note` only stages a note for review. Each verb needs a terminal; `--yes` skips the typed yes, not the terminal. A rule applies from the next task." },
     Cmd { group: "Inspect", name: "retro", about: "rules the Orchestrator proposed, waiting for your review", synopsis: "  delphi retro list [--mission <id>] [--json]\n  delphi retro show <mission>/<id> [--json]\n  delphi retro stale [--json]\n  delphi retro recurring [--json]\n  delphi retro mine [--mission <id>] [--json]\n  delphi retro stats [--mission <id>] [--json]\n  delphi retro accept <mission>/<id> [--scope workspace|operator]\n  delphi retro reject <mission>/<id> [--reason <text>]\n  delphi retro promote <project-id> <record>... --summary <text> --mission <id> [--uncertainty <text>]\n  delphi retro promotions [--json]\n  delphi retro withdraw <entry> [--reason <text>]\n    [--workspace <name>] [--home <dir>]", detail: "Proposals are made with the Orchestrator's `suggest_rule` tool and are never loaded into a prompt until you ratify them. `accept` and `reject` need a terminal and a typed yes, and `accept` needs the daemon stopped; `--scope` ratifies at a different scope than proposed. A promotion (`promote`) is a proposal to keep a summary of eligible project memory records as home memory: it records the summary, the records, their hashes and the home records it was checked against, and shows any duplicate or conflicting home entry without merging it. Accepting one runs the checks again and refuses if a record became private, retired or secret-bearing or if the proposal or home memory changed since; the entry keeps its provenance and its source tier and validates nothing. `reject` records only the outcome and your reason. `withdraw` retires a promoted entry with an audit reference and deletes nothing. `stale` lists staged notes past their `valid_until` date and rules files not confirmed within 90 days; it changes nothing. `recurring` (also shown at the end of `list`) counts, from a read-only scan of the mission logs, the staged claims that more than one daemon-assigned mission produced, with Council claims grouped by seat; a count a host reported is labelled `reported by N host sessions` and never ranks above a note your own work produced; it is a number to read and never proposes or writes a rule. `mine` ranks the failed or looping spans of a mission (a loop stop, a red gate, a denied card, an escalation, repeated tool failures) by a cause computed from event kinds and codes, never from text, and writes the report to the mission's `reports/trace-mining.json`; it applies nothing. `stats` shows, for each rule and skill that tasks carried, how often those tasks went first pass, with the count and a 95% interval, `not enough data` below 10 finished build tasks, and the comparison with tasks that did not carry it labelled as co-occurring, never causing; one task in five is a holdout counted apart. It changes nothing." },
@@ -319,6 +321,7 @@ fn main() {
         Some("tools") => cmd_tools(&args),
         Some("learn") => cmd_learn(&args),
         Some("retro") => cmd_retro(&args),
+        Some("research") => cmd_research(&args),
         Some("test") => cmd_test(&args),
         Some("agent") => cmd_agent(&args),
         Some("customize") => cmd_customize(&args),
@@ -1402,6 +1405,14 @@ fn cmd_learn(args: &[String]) -> i32 {
 fn cmd_customize(args: &[String]) -> i32 {
     match resolve_ws("customize", args) {
         Ok((home, ws)) => customize_cmd::cli(&ws.dir, args, &customize_cmd::Options { home }),
+        Err(code) => code,
+    }
+}
+
+/// `delphi research log <id>`: the search log of a finished host research job (see `research_cmd.rs`).
+fn cmd_research(args: &[String]) -> i32 {
+    match resolve_ws("research", args) {
+        Ok((_home, ws)) => research_cmd::cli(&ws.dir, args, &research_cmd::Options { json: args.iter().any(|a| a == "--json") }),
         Err(code) => code,
     }
 }
