@@ -149,7 +149,7 @@ An agent-facing search over exchange records would hand host-written reply text 
 The Council advised **opt-in**; the operator decided **opt-out** (2026-11-11): "operators still gain control and we can add a question on install to make sure it's known." This spec follows the operator and records the departure plainly (§12). The safeguards that make the default defensible:
 
 1. **Only the operator's words and a capped summary are stored** (§3.1), never tool results, thinking or assistant dialogue.
-2. **Every record is `private`** (055 §10.1): never placed in the prompt of a seat on another provider's model, never in a bundle, Xenia record, export, relay message or `delphi debug bundle` unless the operator exports it, and enforced by the one egress check (098 §12 item 16).
+2. **Every record is `private`** (055 §10.1): never in a bundle, Xenia record, export, relay message or `delphi debug bundle` unless the operator exports it, and enforced by the one egress check (098 §12 item 16). **History has its own model rule, not 055's default.** 055 §10.1 lets `private` text reach the operator's own configured providers when `[library] private_to_models = allow`, which is the default. History does not inherit that: `[history] to_models` defaults to **`deny`**, so no record text enters any model prompt unless the operator sets it, and even then **never the prompt of a seat on another provider's model**. The check needs the seat's family when the prompt is compiled, and **an unknown family means deny**.
 3. **Asked at install.** `delphi init` and `delphi connect` ask: *"Keep a history of your prompts and what came of them on this machine? Yes by default; you can turn it off or erase it at any time."*
 4. **Existing installs are asked once** on the first run after the upgrade, default yes, and it is **never switched on silently**: until answered, no record is written (OD-6).
 5. **Two switches.** A global one, `[history] enabled`, and a per-project one (a marker beside the `ingest.optin` marker of 062 §8.3, `local/projects/<id>/history.off`).
@@ -193,13 +193,13 @@ Total about 76 to 112 hours with the spec, **my estimates, not measurements**. T
 1. **062 §8.1.** `record_session_summary` gains the optional exchange fields (`prompt` pointer, `asked`, `did`, `open`) and the trigger list; its caps of 8.2 item 2 hold.
 2. **084 §3.** An exchange record's outcome carries a provenance beside the enum: `observed` when the daemon saw the result, otherwise `self_reported`. The display rule (a host's outcome is shown beside observed evidence) is unchanged.
 3. **049 §3 (CX-5).** The structured digest is built by the daemon from events, as fixed fields, in addition to the optional model-written one.
-4. **055 §10.1.** Lists the history store among the paths that the `private` check covers.
+4. **055 §10.1.** Lists the history store among the paths that the `private` check covers, and records that history has its own `[history] to_models = "deny"` default, not the `private_to_models = "allow"` default of the library.
 
 ## 11. Authority invariants (what the tests prove)
 
 1. No exchange record, summary, outcome, pointer, timeline entry or report is read as a criterion for promotion, trust, tool access or approval (a test over the code that reads them).
 2. The `outcome` stays the `SelfReported` type and appears in no score, ranking, venue card or `/retro` rule (084 §3).
-3. Every record is `private`; the history store is a registered egress path and the egress enumeration test fails if it is not (098 §12 item 16); no record reaches a foreign-family seat's prompt.
+3. Every record is `private`; the history store is a registered egress path and the egress enumeration test fails if it is not (098 §12 item 16); with `[history] to_models` at its default no record text enters any model prompt, and in no setting does one reach a foreign-family seat's prompt or the prompt of a seat whose family is unknown (a fixture with an unknown-family seat).
 4. A record has no field for tool results, thinking, assistant dialogue, file contents or pasted text: a fixture containing all five yields none of them in the stored record, and a pasted block appears only as a hash and a length.
 5. The host cannot add, edit or delete a record: records are written by the daemon, append-only and hash-chained, as 070 §3 item 4 requires.
 6. With history off, a trigger writes no record (a fixture); with it never answered on an upgraded install, no record is written.
@@ -259,7 +259,7 @@ Every item is verified without a network or a model, plus the repository gates o
 | Report (4, §11 item 9) | A golden report over a fixture log with a reversal; size, footer, no event text; a hostile event string leaves no trace. |
 | Off and upgrade (5, §11 items 6, 7) | A config test per switch; an upgrade fixture with no answer writes nothing; `off` leaves everything. |
 | Purge residue (6, §11 item 7) | Write a canary string into a fixture prompt and reply, run `purge`, `purge --since` and `delete`, then scan the **whole** Delphi home (record store, event logs, indexes, caches, WAL files, backups and exports made by the daemon) for the canary and for any plain hash of it: none; the tombstones verify the chain; a guessable short secret is not recoverable from a retained hash because the hashes are keyed. |
-| Egress (7, §11 item 3) | The egress enumeration test includes the history store; a foreign-family seat prompt fixture contains no record. |
+| Egress (7, §11 item 3) | The egress enumeration test includes the history store; with the default `to_models` no prompt fixture contains a record; a foreign-family seat and an unknown-family seat get none under any setting. |
 | Authority (§11 items 1, 2, 5, 10) | The "grants nothing" test over the readers; the `SelfReported` scan; a host attempt to edit a record refused; the commands refuse inside an agent seat. |
 | Returned record text (§11 item 11, only if S5b is built) | A fixture record with a jailbreak string and an escape sequence in `open`; the result is tainted, fenced and stripped; the consuming span has no mutating tool; a family-unknown seat gets nothing. |
 | Budget (8) | A fixture at the cap stops adding and reports it. |
