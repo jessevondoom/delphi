@@ -170,7 +170,8 @@
             "vetted_trusted": { "type": "integer", "minimum": 1, "maximum": 50, "description": "Trusted sources for vetted (never fewer than substantiated_trusted); vetted also needs the validator's would_ratify. Default 2." },
             "corroborated_enabled": { "type": "boolean", "description": "Whether the corroborated rung is shown. Off: the claim reads noted. Default true." },
             "substantiated_enabled": { "type": "boolean", "description": "Whether the substantiated rung is shown. Off: it falls back one rung. Default true." },
-            "vetted_enabled": { "type": "boolean", "description": "Whether the vetted rung is shown. Off: it falls back one rung. Default true." }
+            "vetted_enabled": { "type": "boolean", "description": "Whether the vetted rung is shown. Off: it falls back one rung. Default true." },
+            "fast_lane_enabled": { "type": "boolean", "description": "Whether the validator is offered a higher rung's claims first (queue order only; a claim's status never changes). Default true." }
           }
         }
       }
