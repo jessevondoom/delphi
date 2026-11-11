@@ -157,6 +157,7 @@ The Council advised **opt-in**; the operator decided **opt-out** (2026-11-11): "
 7. **A first-run notice** in the console states that the history is on and how to turn it off.
 8. **The timeline stays when records are off** (OD-1): it holds only ids and counts from the daemon's own events, with no operator text. A separate `[history] timeline` switch turns it off too.
 9. **Budgets** (hypotheses, OD-3): 90 days and 200 MB per project. At the budget the daemon stops adding and says so; it never evicts the operator's words silently. The red-team suggested 50 MB. At a few MB per repository the cap is academic.
+10. **Ships dormant; the default flips only after the audit (Council `t_0009`, P0; OD-8).** The code may land with `[history] enabled = false` and the install question not yet shown. The default becomes on, and the question and the first-run notice start, in one small slice (S8) that may merge only after **both** (a) S7, the red-team audit of redaction, purge and egress, has passed, and (b) the shared egress check of 098 §12 item 16 is live, so the history store has an enforced boundary. S3 depends on (b). The operator's decision for opt-out stands; this orders it behind the audit. The operator may overrule the order (OD-8).
 
 ## 8. Slices (one pull request each; none starts before approval and before the 098, 100 and 101 gates)
 
@@ -165,12 +166,13 @@ The Council advised **opt-in**; the operator decided **opt-out** (2026-11-11): "
 | S0 | this spec, its review and amendments (062 §8.1, 084 §3, 049 CX-5) | 6-10 | |
 | S1 | the pointer record, hash check, `unresolvable`, session-id search for Claude | 8-12 | S0 |
 | S2 | the daemon timeline and report: events only, 4 KB cap, supersession, footer | 10-14 | S0 |
-| S3 | exchange-record capture, redaction, `private`, the trigger wiring, pasted-block hashing | 18-26 | S1, S2 |
-| S4 | the install question, settings, `history off|purge|status`, doctor, first-run notice | 10-14 | S3 |
+| S3 | exchange-record capture, redaction, `private`, the trigger wiring, pasted-block hashing | 18-26 | S1, S2, **the 098 §12 item 16 egress check live** |
+| S4 | the settings, `history off|purge|status`, doctor, and the install question and first-run notice (written, **not shown** until S8) | 10-14 | S3 |
 | S5 | the operator's read-only console view of the records and the report (no model, control characters stripped) | 4-6 | S3 |
 | S5b | `history_search` with the rules of §5.1 (**deferred by recommendation**, OD-5) | 6-8, only if built | S3, S5 |
 | S6 | the citation check: every decision cites a resolving, hash-matching span; uncited reads unsourced | 6-10 | S1, S3 |
 | S7 | a red-team audit of redaction, purge and egress coverage | 10-14 | S3, S4 |
+| S8 | flip the default to on; show the install question and the first-run notice (**only after S7 passes and the egress check is live**; the operator's go) | 2-4 | S7 |
 
 Total about 76 to 112 hours with the spec, **my estimates, not measurements**. The Council's own numbers were: pointers and timeline about 16 hours (here S1 and S2, 18-26), a red-team audit about 12 (S7), and about 38 for the strategist's whole plan (a smaller scope than this one, which adds the install flow, the triggers and the console view).
 
@@ -243,6 +245,7 @@ Council `t_0008` (2026-11-11; architect, red-team, strategist; families claude a
 6. `purge` removes the records and keeps their hashes; `status` and `doctor` show the state and size.
 7. No record is placed in a foreign-family seat's prompt or an outbound path.
 8. At the budget the daemon stops adding and says so.
+9. Before S8, a fresh install has `[history] enabled = false` and shows no question; S8's change is the only one that alters the default, and a test fails if the default is on while the egress check of 098 §12 item 16 is not registered for the history store.
 
 ## 15. Verification Plan
 
@@ -259,6 +262,7 @@ Every item is verified without a network or a model, plus the repository gates o
 | Authority (§11 items 1, 2, 5, 10) | The "grants nothing" test over the readers; the `SelfReported` scan; a host attempt to edit a record refused; the commands refuse inside an agent seat. |
 | Returned record text (§11 item 11, only if S5b is built) | A fixture record with a jailbreak string and an escape sequence in `open`; the result is tainted, fenced and stripped; the consuming span has no mutating tool; a family-unknown seat gets nothing. |
 | Budget (8) | A fixture at the cap stops adding and reports it. |
+| Dormant default (9) | A config test: before S8 a fresh home has `enabled = false` and no question is raised; a test fails if the default is on while the history store is not in the egress enumeration. |
 | Gates | `cargo test --workspace --locked`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `delphi lint --repo .`, and `delphi check spec` on this file. |
 
 Nothing here is verified by a live run.
@@ -280,3 +284,4 @@ Nothing here is verified by a live run.
 - **OD-5.** May an agent search exchange records? [**Defer `history_search`** (the strategist: it is not needed for the stated goal and carries the injection risk; this saves about 6-8 hours). Keep the operator's read-only console view (S5). If it is built later, only under the rules of §5.1.]
 - **OD-6.** Does the installed default apply to existing installs? [They are asked once after the upgrade; the default is yes; no record is written until they answer.]
 - **OD-7.** Is the summary required or best effort? [Best effort; the host skill requests it.]
+- **OD-8.** (Council `t_0009`, three P0s on it.) Does the opt-out default ship **dormant** and flip to on only after the S7 audit has passed and the 098 §12 item 16 egress check is live, or does the opt-out default hold until every P0 is closed in the text and the code? [Ship dormant and flip after S7: the code and the questions are ready, nothing is stored by default until the audit has looked at redaction, purge and egress. Your 2026-11-11 decision (opt-out, an install question, one command off) is kept; this only orders it. This is the operator's call and the spec stays a draft until it is made.]
