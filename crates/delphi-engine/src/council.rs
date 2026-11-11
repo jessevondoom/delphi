@@ -2082,6 +2082,54 @@ pub(crate) mod tests {
         assert!(matches!(&r2, Stance::Said(t) if parse_critique(t).is_some()), "{r2:?}");
     }
 
+    /// Run one Round 1 Panel seat that reads `@project/app/src/lib.rs` and then asks for a second tool. Returns the fixture and the
+    /// text of the request that followed the second tool call (what the seat was told about it).
+    async fn seat_reads_then_asks_again(lib_rs: &str) -> (Fx, String) {
+        let f = crate::testkit::setup(vec![Step::tool("c1", "read_file", json!({"path": "@project/app/src/lib.rs"})), Step::tool("c2", "list_dir", json!({"path": "@project/app/src"})), Step::text("Answered from what I had.")], 50.0, |_| {});
+        std::fs::write(f.root.join("proj/src/lib.rs"), lib_rs).unwrap();
+        let tid = f.m.next_task_id();
+        let mut created = EventEnvelope::new(&f.m.id, "task.created", json!({"prompt": "q", "target": "council", "flow": "council"}));
+        created.task_id = Some(tid.clone());
+        f.m.append(created).await.unwrap();
+        let st = f.engine.panel_foreign_run(&f.m, &tid, "COUNCIL, ROUND 1 (blind). Proposition: q @project/app/src/lib.rs".into(), "q", "architect", "claude", 1, None).await;
+        assert!(matches!(&st, Stance::Said(_)), "{st:?}");
+        let reqs = f.model.requests();
+        let last = reqs.iter().map(|r| r.body.to_string()).collect::<Vec<_>>();
+        let after = last.get(2).cloned().unwrap_or_default();
+        (f, after)
+    }
+
+    // `specs/098` §12 item 13: a seat that has read a `noted` entry has no tools for the rest of its turn, as for peer text.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_seat_that_read_a_noted_entry_is_refused_every_tool_for_the_rest_of_its_turn() {
+        let (f, after) = seat_reads_then_asks_again(&crate::host_noted::fence("host:x", "the vault keys rotate every 90 days")).await;
+        assert!(after.contains("you read a noted entry"), "the second tool call was refused with the seat-rule text: {after}");
+        assert_eq!(events_of(&f, "seat.tools_withdrawn").len(), 1, "one withdrawal is logged");
+        assert_eq!(events_of(&f, "seat.tools_withdrawn")[0].payload["reason"], "read_noted_entry");
+    }
+
+    // The hostile-entry fixtures (`specs/098` §12 item 13) through a Panel seat, the path a Council and a red-team review also take
+    // (`run_seat`): the seat loses its tools, and the model sees one fence and no live tag.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn each_hostile_noted_entry_reaches_a_seat_as_inert_text_and_withdraws_its_tools() {
+        for (name, text) in crate::host_noted::tests::HOSTILE {
+            let (f, after) = seat_reads_then_asks_again(&crate::host_noted::fence("host:x", text)).await;
+            assert!(after.contains("you read a noted entry"), "{name}: the tools were not withdrawn: {after}");
+            let first_result = f.model.requests().get(1).map(|r| r.body.to_string()).unwrap_or_default();
+            assert_eq!(first_result.matches("</noted-entry>").count(), 1, "{name}: the fence was closed more than once: {first_result}");
+            for live in ["<function_calls>", "<invoke", "<tool_use", "<system>", "\\u0000", "\\u001b", "\\u202e"] {
+                assert!(!first_result.contains(live), "{name}: `{live}` reached the model: {first_result}");
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_seat_that_read_an_ordinary_file_keeps_its_tools() {
+        let (f, after) = seat_reads_then_asks_again("pub fn needle() {}\n").await;
+        assert!(!after.contains("you read a noted entry"), "{after}");
+        assert!(events_of(&f, "seat.tools_withdrawn").is_empty());
+    }
+
     #[test]
     fn a_panel_record_says_its_venue_and_whether_it_was_blind_in_the_front_matter() {
         let d = decide(&BTreeMap::new());

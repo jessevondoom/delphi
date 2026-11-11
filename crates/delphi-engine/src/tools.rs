@@ -2039,6 +2039,29 @@ mod tests {
         assert!(ctx.events.is_empty() && !r.content.contains("<fact>"), "{}", r.content);
     }
 
+    /// `specs/098` §12 item 13: an entry a host left (`noted`, `external_untrusted`, indexed under `staged/host-*`) is never returned by a
+    /// seat's own `kb_search`. It is returned to a host that asks (`search_kb`, which names the staged zone), never to a Council,
+    /// Panel or red-team seat, whose search leaves the staged zone out.
+    #[test]
+    fn a_noted_entry_is_found_by_the_hosts_search_and_never_by_a_seats_kb_search() {
+        let mut f = fx(&[]);
+        let doc = "---\nkind: fact\n---\n# Noted entry\n\nTopic: quokkaregistry\n\n- the quokkaregistry lives at the old host (source: https://example.com/q; quote verified by the daemon)\n";
+        let mut kb = crate::kb::Kb::open(&f.root.join("local/state.db")).unwrap();
+        kb.upsert_from("staged/host-abcd1234/n1.md", "staged", "external_untrusted", doc, "2026-11-11T00:00:00Z").unwrap();
+        drop(kb);
+        // the control: the host's search names the staged zone and finds it
+        let opts = crate::kb::SearchOpts { role: None, limit: 5, zones: Some(vec!["staged"]), include_staged: true, include_untrusted: true, ..Default::default() };
+        let home = std::path::PathBuf::new();
+        let hits = crate::retrieval::search(&home, &f.root.join("local/state.db"), "quokkaregistry", opts).map(|r| r.hits).unwrap_or_default();
+        assert!(hits.iter().any(|h| h.rel_path.starts_with("staged/host-")), "the fixture is searchable by the host");
+        // a seat's own search, for each role a Council or red team seats
+        for role in ["architect", "red-team", "strategist", "orchestrator"] {
+            let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role, mission_id: "m1", now_rfc3339: "t", stamps: vec![], events: vec![] };
+            let r = run(&mut ctx, "kb_search", &json!({"query": "quokkaregistry"}));
+            assert!(!r.content.contains("staged/host-") && !crate::host_noted::marks_noted(&r.content), "{role}: {}", r.content);
+        }
+    }
+
     #[test]
     fn any_role_stages_a_note_that_inherits_the_spans_taint() {
         let mut f = fx(&[]);
