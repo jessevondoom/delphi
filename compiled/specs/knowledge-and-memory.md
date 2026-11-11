@@ -166,9 +166,9 @@ The operator's aim (2026-11-10): **no learning is absolute, but a high degree of
 
 ## 101-library-practice-for-research-a-search-log-retraction-lookup-archived-copies-and-citation-chaining
 
-**101: Library practice for research: a search log, retraction lookup, archived copies and citation chaining** · draft (per source at `c5b82d3169b6`) · tier 0 · [source](../../specs/101-library-practice-for-research-a-search-log-retraction-lookup-archived-copies-and-citation-chaining.md)
+**101: Library practice for research: a search log, retraction lookup, archived copies and citation chaining** · approved (per source at `b2ea1b57a13e`) · tier 0 · [source](../../specs/101-library-practice-for-research-a-search-log-retraction-lookup-archived-copies-and-citation-chaining.md)
 
-**source excerpt, untrusted** · `specs/101-library-practice-for-research-a-search-log-retraction-lookup-archived-copies-and-citation-chaining.md` line 21
+**source excerpt, untrusted** · `specs/101-library-practice-for-research-a-search-log-retraction-lookup-archived-copies-and-citation-chaining.md` line 22
 
 ```text
 The operator asked (2026-11-11) whether traditional library practice offers anything this research workstream is missing. A Scout reviewed bibliography, citation, source evaluation and review methodology; Council `t_0007` (architect, red-team, strategist; two model families) then advised what to include. The operator ruled: **API-based citation chaining is in scope and a good idea**, the archive is captured **as a page with a clear label** so it is searchable and readable by people, and the rest of the Council's advice stands.

@@ -880,13 +880,13 @@ Approved by the operator on 2026-11-10 ("approve spec 099 and spec 100"). It add
 | L4 | the per-tier calibration report | 10-16 | not started |
 | L5 | KB-prior tags: support through origins, cycle check, contradiction block, track record from operator-accepted history | 16-24 | not started |
 
-## Spec 101: library practice for research (2026-11-11, draft)
+## Spec 101: library practice for research (2026-11-11, approved)
 
-A draft for the operator. A Scout reviewed library science for gaps in the research workstream; Council `t_0007` (architect, red-team, strategist) advised which to include. The operator ruled API-based citation chaining in scope and that an archived copy is captured as a labelled, searchable page (2026-11-11). Nothing is buildable until the operator approves it. No outside claim in the spec has been checked against its source.
+Approved by the operator on 2026-11-11 ("spec 101 is approved"). Origin: A Scout reviewed library science for gaps in the research workstream; Council `t_0007` (architect, red-team, strategist) advised which to include. The operator ruled API-based citation chaining in scope and that an archived copy is captured as a labelled, searchable page (2026-11-11). Slices are buildable once this pull request merges. No outside claim in the spec has been checked against its source.
 
 | Slice | Content | Hours (planned) | State |
 | :-- | :-- | --: | :-- |
-| S0 | this spec, its review and amendments (055 §3.5, 098 §7.5, §7.6, §18, 052 §3.1) | 6-10 | draft |
+| S0 | this spec, its review and amendments (055 §3.5, 098 §7.5, §7.6, §18, 052 §3.1) | 6-10 | approved 2026-11-11 (PR #628) |
 | A | the search log, flow summary, `delphi research log` | 18-24 | not started |
 | B | local Retraction Watch snapshot, DOI match, `retracted` marks, minimal normaliser | 14-16 | not started |
 | C | archived-copy lookup, labelled version, searchable, zero-origin invariant | 18-20 | not started |

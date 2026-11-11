@@ -3,7 +3,8 @@ id: spec-101-library-practice-for-research-a-search-log-retraction-lookup-archiv
 title: "101: Library practice for research: a search log, retraction lookup, archived copies and citation chaining"
 author: architect
 timestamp: 2026-11-11T00:00:00Z
-status: draft   # for the operator. Nothing here is buildable until the operator approves it; a draft is a proposal, not permission.
+status: approved   # by the operator, 2026-11-11 ("spec 101 is approved"): the text as written. OD-1 to OD-6 of section 16 take their recommendations. The amendments of section 9 take effect when this pull request merges.
+approved_by: operator (2026-11-11)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +15,7 @@ tags: [spec, research, library, provenance, retraction, citation, draft]
 
 # Spec 101: Library practice for research
 
-> **Status: draft, for the operator.** It depends on **spec 098** (approved, merged), sections 7.1, 7.2, 7.5, 7.6 and 18, whose source ladder, `private` rule, coverage report and `corroborated` status it extends. It amends [`specs/055`](055-the-central-library-sources-claims-and-pages.md) §3.5 and [`specs/098`](098-where-agents-run-host-first-locus-and-the-inside-exceptions.md) §7.5 and §18, each listed in §9; **an amendment takes effect only when the operator approves this spec and its pull request merges.** **It widens no authority and adds no gate on what flows in.**
+> **Status: approved by the operator, 2026-11-11.** It depends on **spec 098** (approved, merged), sections 7.1, 7.2, 7.5, 7.6 and 18, whose source ladder, `private` rule, coverage report and `corroborated` status it extends. It amends [`specs/055`](055-the-central-library-sources-claims-and-pages.md) §3.5 and [`specs/098`](098-where-agents-run-host-first-locus-and-the-inside-exceptions.md) §7.5 and §18, each listed in §9; **an amendment takes effect only when the operator approves this spec and its pull request merges.** **It widens no authority and adds no gate on what flows in.**
 
 ## 1. Scope and objectives
 
@@ -237,7 +238,9 @@ Nothing here is verified by a live run, and **no outside claim in §2 has been c
 - The archive is captured as a page with a clear label, searchable and readable by people (§5).
 - Archive lookups are read-only and for public, daemon-verified claims only; the Retraction Watch snapshot is refreshed by a manual import; chaining is one hop by default with a per-run cap, as hypotheses to calibrate. The rest of the Council's advice stands.
 
-**Open (recommendation in brackets):**
+**Approved 2026-11-11:** the operator approved the spec as written, so OD-1 to OD-6 below take their bracketed recommendations.
+
+**Open when drafted (recommendation in brackets; now taken):**
 
 - **OD-1.** Amend spec 098 or write a new spec. [New spec 101, as the Council advised; 098 keeps its locus theme.]
 - **OD-2.** Is slice E in or folded into B. [Fold the minimal normaliser into B; keep E as an optional later slice.]
