@@ -571,6 +571,115 @@ mod claims {
         assert_eq!((status(&c), c["support"]["origins"].clone()), (Status::Noted, json!(2)), "a purged source is pointer-only and no longer an origin: {c}");
     }
 
+    /// Place a claim on a rung without the citations: the tier is read from the stored tags, so a test can give a claim any counts.
+    fn with_counts(l: &Library, id: &str, origins: u64, trusted: u64) -> Value {
+        let mut c = l.claim(id).unwrap();
+        c["support"]["origins"] = json!(origins);
+        c["support"]["trusted_sources"] = json!(trusted);
+        l.save_claim(&c).unwrap();
+        l.claim(id).unwrap()
+    }
+
+    #[test]
+    fn a_passed_dry_run_makes_five_origins_and_two_trusted_sources_read_vetted_and_a_change_of_sources_takes_it_back() {
+        let (d, l) = lib();
+        let (_ids, id) = three_fetched(d.path(), &l);
+        let text = l.claim(&id).unwrap()["text"].as_str().unwrap().to_string();
+        let c = with_counts(&l, &id, 5, 2);
+        assert_eq!(status(&c), Status::Substantiated, "the counts alone stop at substantiated: {c}");
+        // the dry run of another statement changes nothing
+        assert!(l.record_would_ratify(&crate::fact_store::fact_id("Something else entirely.")).is_empty());
+        assert_eq!(status(&l.claim(&id).unwrap()), Status::Substantiated);
+        // the validator's loop records the one it checked
+        assert_eq!(l.record_would_ratify(&crate::fact_store::fact_id(&text)), vec![id.clone()]);
+        let c = l.claim(&id).unwrap();
+        assert_eq!(status(&c), Status::Vetted, "{c}");
+        assert!(c["support"]["would_ratify_at"].is_string() && c["support"]["would_ratify_for"]["origins"] == 5, "{c}");
+        assert_eq!(Status::Vetted.label(), "vetted");
+        // the claim's sources are counted again: three origins now, not the five the check was made against, so the check no longer describes it
+        let c = l.refresh_support(&id).unwrap();
+        assert!(c["support"].get("would_ratify").is_none(), "a change of sources drops the dry run: {c}");
+        assert_eq!(status(&c), Status::Substantiated);
+    }
+
+    #[test]
+    fn a_dry_run_alone_lifts_nothing_and_survives_a_refresh_while_the_sources_are_the_same() {
+        let (d, l) = lib();
+        let (_ids, id) = three_fetched(d.path(), &l);
+        let text = l.claim(&id).unwrap()["text"].as_str().unwrap().to_string();
+        assert_eq!(status(&l.claim(&id).unwrap()), Status::Substantiated);
+        assert_eq!(l.record_would_ratify(&crate::fact_store::fact_id(&text)).len(), 1);
+        // three origins are not five: vetted needs the counts as well as the dry run
+        assert_eq!(status(&l.claim(&id).unwrap()), Status::Substantiated);
+        let c = l.refresh_support(&id).unwrap();
+        assert_eq!(c["support"]["would_ratify"], true, "unchanged sources keep the record: {c}");
+    }
+
+    #[test]
+    fn a_dry_run_is_not_written_for_a_contested_or_disproved_claim() {
+        let (d, l) = lib();
+        let (_ids, id) = three_fetched(d.path(), &l);
+        let text = l.claim(&id).unwrap()["text"].as_str().unwrap().to_string();
+        let fact = crate::fact_store::fact_id(&text);
+        let mut c = with_counts(&l, &id, 5, 2);
+        c["contested_by"] = json!([{"reason": "contradicted", "source": "x"}]);
+        l.save_claim(&c).unwrap();
+        assert!(l.record_would_ratify(&fact).is_empty(), "disagreement wins over a count and over a dry run");
+        assert_eq!(status(&l.claim(&id).unwrap()), Status::Contested);
+        let mut c = l.claim(&id).unwrap();
+        c["contested_by"] = json!([]);
+        c["lifecycle"] = json!("disproved");
+        l.save_claim(&c).unwrap();
+        assert!(l.record_would_ratify(&fact).is_empty());
+        assert_eq!(status(&l.claim(&id).unwrap()), Status::Disproved);
+    }
+
+    #[test]
+    fn the_fast_lane_offers_a_higher_rung_first_and_the_same_claims_keep_the_same_status_with_it_off() {
+        let (d, l) = lib();
+        let s = source(d.path(), &l, "lane.md", BODY);
+        let make = |text: &str, quote: &str, origins: u64, trusted: u64| {
+            let c = l.add_claim(text, &ClaimOpts::default(), &[spec(&s, quote)]).unwrap();
+            with_counts(&l, c["id"].as_str().unwrap(), origins, trusted)
+        };
+        let noted = make("The tide comes in twice a day.", "twice a day", 1, 0);
+        let corroborated = make("The moon drives most of the tide.", "the moon", 3, 0);
+        let substantiated = make("Spring tides are the highest tides.", "Spring tides are the highest", 3, 1);
+        let seen = |lane: bool| l.validation_candidates(lane).into_iter().map(|c| (c.id, c.status)).collect::<Vec<_>>();
+        let (id_n, id_c, id_s) = (noted["id"].as_str().unwrap().to_string(), corroborated["id"].as_str().unwrap().to_string(), substantiated["id"].as_str().unwrap().to_string());
+        let on = seen(true);
+        assert_eq!(on.iter().map(|x| x.0.clone()).collect::<Vec<_>>(), [id_s.clone(), id_c.clone(), id_n.clone()], "substantiated, then corroborated, then noted: {on:?}");
+        assert_eq!(on.iter().map(|x| x.1).collect::<Vec<_>>(), [Status::Substantiated, Status::Corroborated, Status::Noted]);
+        // with the lane off the same claims come out by id, each with the status it has now
+        let mut off = seen(false);
+        assert!(off.windows(2).all(|w| w[0].0 <= w[1].0), "off: by id");
+        let mut on_sorted = on.clone();
+        on_sorted.sort_by(|a, b| a.0.cmp(&b.0));
+        off.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(on_sorted, off, "the lane reorders and changes no status");
+        // and listing it wrote nothing: the stored claims read as before
+        for (id, st) in &on {
+            assert_eq!(status(&l.claim(id).unwrap()), *st);
+        }
+    }
+
+    #[test]
+    fn the_fast_lane_leaves_out_what_is_not_waiting_for_a_check() {
+        let (d, l) = lib();
+        let (_ids, id) = three_fetched(d.path(), &l);
+        assert_eq!(l.validation_candidates(true).len(), 1);
+        // a claim with a recorded dry run is no longer a candidate
+        let text = l.claim(&id).unwrap()["text"].as_str().unwrap().to_string();
+        l.record_would_ratify(&crate::fact_store::fact_id(&text));
+        assert!(l.validation_candidates(true).is_empty(), "already checked");
+        // neither is a contested one
+        let mut c = l.claim(&id).unwrap();
+        c["support"] = json!({"origins": 3, "trusted_sources": 3});
+        c["contested_by"] = json!([{"reason": "contradicted", "source": "x"}]);
+        l.save_claim(&c).unwrap();
+        assert!(l.validation_candidates(true).is_empty());
+    }
+
     #[test]
     fn a_lost_anchor_after_a_new_version_retracts_it_and_disagreement_wins_over_the_count() {
         let (d, l) = lib();

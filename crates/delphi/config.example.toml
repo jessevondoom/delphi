@@ -268,6 +268,7 @@ sandbox = "off"
 # corroborated_enabled = true
 # substantiated_enabled = true
 # vetted_enabled = true
+# fast_lane_enabled = true            # the validator is offered a higher rung's claims first (queue order only; the claim's status never changes)
 
 # Library acquisition (specs/055 section 8): once a day, the library scout proposes public-domain and research sources that match your projects
 # and these interests, as ONE batch in the digest. Nothing is fetched until you accept (or a standing rule covers it). Ratified, because it

@@ -110,6 +110,7 @@ pub fn settings_from(root: &toml::Value) -> Settings {
         d.corroborated_on = switch("corroborated_enabled").unwrap_or(d.corroborated_on);
         d.substantiated_on = switch("substantiated_enabled").unwrap_or(d.substantiated_on);
         d.vetted_on = switch("vetted_enabled").unwrap_or(d.vetted_on);
+        d.fast_lane_on = switch("fast_lane_enabled").unwrap_or(d.fast_lane_on);
         s.tiers = s.tiers.clone().ordered();
     }
     s.hooks = crate::hooks::parse(root).0;
@@ -460,6 +461,18 @@ mod tests {
         }
         let odd = settings_from(&toml::from_str("[research.tiers]\ncorroborated_origins = 7\nvetted_origins = 4\n").unwrap()).tiers;
         assert_eq!(odd.vetted_origins, 7, "vetted never asks for fewer origins than corroborated");
+    }
+
+    #[test]
+    fn the_fast_lane_is_on_by_default_and_switches_off_without_touching_a_rung() {
+        // `specs/100` §5: queue order only, so the switch moves nothing else in the ladder.
+        let d = settings_from(&toml::from_str("").unwrap()).tiers;
+        assert!(d.fast_lane_on);
+        let off = settings_from(&toml::from_str("[research.tiers]\nfast_lane_enabled = false\n").unwrap()).tiers;
+        assert!(!off.fast_lane_on);
+        assert_eq!(delphi_core::knowledge_status::TierParams { fast_lane_on: true, ..off }, delphi_core::knowledge_status::TierParams::default(), "the lane's switch is the only thing it changed");
+        let bad = settings_from(&toml::from_str("[research.tiers]\nfast_lane_enabled = \"no\"\n").unwrap()).tiers;
+        assert!(bad.fast_lane_on, "a value of the wrong kind keeps the default");
     }
 
     #[test]

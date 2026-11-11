@@ -42,11 +42,14 @@ pub struct TierParams {
     pub corroborated_on: bool,
     pub substantiated_on: bool,
     pub vetted_on: bool,
+    /// The fast lane (`specs/100` §5): a claim of a higher rung is offered to the validator before one of a lower rung. **Queue order only**:
+    /// it reads the tier, never writes one, and the same claim has the same status with the lane on or off.
+    pub fast_lane_on: bool,
 }
 
 impl Default for TierParams {
     fn default() -> TierParams {
-        TierParams { corroborated_origins: CORROBORATED_MIN_ORIGINS, substantiated_trusted: 1, vetted_origins: 5, vetted_trusted: 2, corroborated_on: true, substantiated_on: true, vetted_on: true }
+        TierParams { corroborated_origins: CORROBORATED_MIN_ORIGINS, substantiated_trusted: 1, vetted_origins: 5, vetted_trusted: 2, corroborated_on: true, substantiated_on: true, vetted_on: true, fast_lane_on: true }
     }
 }
 
