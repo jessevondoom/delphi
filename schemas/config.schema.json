@@ -95,7 +95,8 @@
       "type": "object",
       "description": "Settings for the tools you code with (specs/098).",
       "properties": {
-        "route_adopt": { "type": "boolean", "description": "Whether route's adopt is a recommendation (true) or only advice (false, the default). It changes what the answer says, not what Delphi does." }
+        "route_adopt": { "type": "boolean", "description": "Whether route's adopt is a recommendation (true) or only advice (false, the default). It changes what the answer says, not what Delphi does." },
+        "source_ladder": { "type": "boolean", "description": "Whether the packs served for the scout, investigator and red team end with the source ladder, and `delphi mcp --print-claude-md` includes the research reflex (specs/098 section 7). false by default. Advice for the host; it grants nothing." }
       }
     },
     "seats": {

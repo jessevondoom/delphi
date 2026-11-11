@@ -18,6 +18,9 @@ use std::collections::HashSet;
 
 pub const KINDS: [&str; 4] = ["fact", "episode", "procedure", "attributed"];
 pub const SCOPES: [&str; 4] = ["personal", "project", "team", "org"];
+
+/// The mark an accept-all writes into a claim's validation record (`specs/100` §6): `batch-accepted`, with the audit batch it belongs to.
+pub const BATCH_MARK: &str = "batch-accepted";
 pub const TEXT_MAX: usize = 2048;
 /// Pointers one mission start pulls.
 pub const PULL_MAX: usize = 5;
@@ -352,6 +355,17 @@ impl Library {
     /// Record a validation. Only the operator (a terminal, by the command) or the validator role's daemon path calls
     /// this; it needs a live anchor and is refused for an attributed claim, a disproved one and a contested one.
     pub fn validate_claim(&self, id: &str, by: Validator) -> Result<Value, String> {
+        self.validate_inner(id, by, None)
+    }
+
+    /// The operator's accept-all (`specs/100` §6): exactly [`Self::validate_claim`] by the operator, and the validation record also carries the
+    /// `batch-accepted` mark and the audit batch it belongs to, written in the same save, so a later disproof or a failed audit can trace it. An
+    /// item accepted one at a time carries no mark. Only the accept-all command (a terminal, refused inside an agent seat) calls this.
+    pub fn validate_claim_in_batch(&self, id: &str, audit_batch: &str) -> Result<Value, String> {
+        self.validate_inner(id, Validator::Operator, Some(audit_batch))
+    }
+
+    fn validate_inner(&self, id: &str, by: Validator, batch: Option<&str>) -> Result<Value, String> {
         let mut c = self.claim(id).ok_or_else(|| format!("no claim `{}`", id))?;
         if c["kind"] == "attributed" {
             return Err("an attributed claim is an opinion, never validated as a fact".into());
@@ -366,10 +380,52 @@ impl Library {
         }
         let now = delphi_core::time::now_rfc3339();
         c["validation"] = json!({"by": if by == Validator::Operator { "operator" } else { "validator" }, "at": now});
+        if let Some(b) = batch {
+            c["validation"]["batch"] = json!({"mark": BATCH_MARK, "audit_batch": b, "at": now});
+        }
         c["last_confirmed"] = json!(now);
         self.save_claim(&c)?;
-        self.log("claim_validated", json!({"id": id, "by": c["validation"]["by"]}));
+        self.log("claim_validated", json!({"id": id, "by": c["validation"]["by"], "batch": batch}));
         Ok(c)
+    }
+
+    /// The claims an accept-all marked, with the audit batch and the time of each acceptance: `(id, audit_batch, accepted_at, re-audit due)`.
+    pub fn batch_accepted(&self) -> Vec<(String, String, String, bool)> {
+        self.claims()
+            .iter()
+            .filter(|c| c["validation"]["batch"]["mark"] == BATCH_MARK)
+            .map(|c| {
+                let b = &c["validation"]["batch"];
+                (c["id"].as_str().unwrap_or("").to_string(), b["audit_batch"].as_str().unwrap_or("").to_string(), b["at"].as_str().unwrap_or("").to_string(), b["reaudit_due"] == true)
+            })
+            .collect()
+    }
+
+    /// Flag batch-accepted claims `re-audit due` after a roll-back (`specs/100` §7.3). They stay `validated`, because the operator accepted them,
+    /// and stay searchable with the flag; nothing is retired or deleted. Only claims that carry the batch mark are touched. Returns how many changed.
+    pub fn mark_reaudit_due(&self, ids: &[String]) -> usize {
+        let mut n = 0;
+        for id in ids {
+            let Some(mut c) = self.claim(id) else { continue };
+            if c["validation"]["batch"]["mark"] != BATCH_MARK || c["validation"]["batch"]["reaudit_due"] == true {
+                continue;
+            }
+            c["validation"]["batch"]["reaudit_due"] = json!(true);
+            if self.save_claim(&c).is_ok() {
+                self.log("claim_reaudit_due", json!({"id": id}));
+                n += 1;
+            }
+        }
+        n
+    }
+
+    /// An audit answered `true` for a batch-accepted claim: it no longer needs a re-audit. The mark and the batch stay.
+    pub fn clear_reaudit_due(&self, id: &str) {
+        let Some(mut c) = self.claim(id) else { return };
+        if c["validation"]["batch"]["reaudit_due"] == true {
+            c["validation"]["batch"]["reaudit_due"] = json!(false);
+            let _ = self.save_claim(&c);
+        }
     }
 
     fn contest(&self, c: &mut Value, reason: &str, source: &str, note: Value) {
@@ -669,17 +725,21 @@ impl Library {
 
     /// The claims that reached an audited tier, as `(id, source class)` for the audit's stratified sample (`specs/100` §7.1). The tier is the claim's
     /// status under the **configured** ladder, not the one a roll-back latch shows, so a latched tier can still be audited before it is restored.
-    /// `batch` is the claims an accept-all marked `batch-accepted` (slice L3); none exist yet. The class is the first anchored source's.
+    /// `batch` is the claims an accept-all marked `batch-accepted` (`validate_claim_in_batch`). The class is the first anchored source's.
     pub fn tier_members(&self, tier: &str) -> Vec<(String, String)> {
         let want = match tier {
-            "substantiated" => Status::Substantiated,
-            "vetted" => Status::Vetted,
+            "substantiated" => Some(Status::Substantiated),
+            "vetted" => Some(Status::Vetted),
+            "batch" => None,
             _ => return Vec::new(),
         };
         let p = tier_params_configured();
         self.claims()
             .iter()
-            .filter(|c| c["kind"] != "attributed" && status_with(c, &p) == want)
+            .filter(|c| match &want {
+                Some(w) => c["kind"] != "attributed" && status_with(c, &p) == *w,
+                None => c["validation"]["batch"]["mark"] == BATCH_MARK,
+            })
             .map(|c| {
                 let class = anchors_of(c).iter().filter_map(|a| a["source_id"].as_str()).filter_map(|s| self.read_meta(s)).find_map(|m| m["source_class"].as_str().map(String::from));
                 (c["id"].as_str().unwrap_or("").to_string(), class.unwrap_or_else(|| "unknown".into()))
