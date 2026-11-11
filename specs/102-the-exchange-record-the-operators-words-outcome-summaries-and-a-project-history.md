@@ -3,7 +3,8 @@ id: spec-102-the-exchange-record-the-operators-words-outcome-summaries-and-a-pro
 title: "102: The exchange record: the operator's words, outcome summaries and a project history"
 author: architect
 timestamp: 2026-11-11T00:00:00Z
-status: draft   # for the operator and a Council review. Nothing here is buildable until the operator approves it; a draft is a proposal, not permission.
+status: approved   # by the operator, 2026-11-11 ("approve spec 102"): the text as written, including that the opt-out default HOLDS until the P0s are closed and the feature ships in one release (OD-8), and that it departs from Council t_0008's opt-in advice. OD-1 to OD-7 of section 16 take their recommendations. The slices start only after the verification gates of specs 098, 100 and 101 pass. The text takes effect when this pull request merges.
+approved_by: operator (2026-11-11)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +15,7 @@ tags: [spec, history, provenance, summaries, privacy, draft]
 
 # Spec 102: The exchange record
 
-> **Status: draft, amended after Council `t_0009`.** The Council ruled to approve with named changes; they are in the text (§12). OD-8 is decided (2026-11-11): the opt-out default holds until the P0s are closed, and the feature ships in one release. It reuses the daemon-written, append-only prompt log of [`specs/070`](070-spec-gate-scope-and-artifact-prompt-log.md) §3, the summary tool of [`specs/062`](062-delphi-as-host-agent-mcp-server.md) §8.1, the typed `outcome` of [`specs/084`](084-outcome-flip-question-resume-recap-learn-history.md) §3, the recap pattern of 084 §5, the structured digest of [`specs/049`](049-context-management-recoverable-compaction-and-handles.md) §3 (CX-5), and the `private` rule of [`specs/055`](055-the-central-library-sources-claims-and-pages.md) §10.1. It amends 062 §8.1, 084 §3 and 049 §3 (CX-5), each listed in §10, and takes effect only when the operator approves it and its pull request merges. **It widens no authority.** Its slices start only after the verification gates of specs 098, 100 and 101 pass; the spec itself can be reviewed now.
+> **Status: approved by the operator, 2026-11-11 ("approve spec 102"), amended after Council `t_0009`.** The Council ruled to approve with named changes; they are in the text (§12). OD-8 is decided (2026-11-11): the opt-out default holds until the P0s are closed, and the feature ships in one release. OD-1 to OD-7 take their recommendations. It reuses the daemon-written, append-only prompt log of [`specs/070`](070-spec-gate-scope-and-artifact-prompt-log.md) §3, the summary tool of [`specs/062`](062-delphi-as-host-agent-mcp-server.md) §8.1, the typed `outcome` of [`specs/084`](084-outcome-flip-question-resume-recap-learn-history.md) §3, the recap pattern of 084 §5, the structured digest of [`specs/049`](049-context-management-recoverable-compaction-and-handles.md) §3 (CX-5), and the `private` rule of [`specs/055`](055-the-central-library-sources-claims-and-pages.md) §10.1. It amends 062 §8.1, 084 §3 and 049 §3 (CX-5), each listed in §10, and takes effect only when the operator approves it and its pull request merges. **It widens no authority.** Its slices start only after the verification gates of specs 098, 100 and 101 pass; the spec itself can be reviewed now.
 
 ## 1. Scope and objectives
 
