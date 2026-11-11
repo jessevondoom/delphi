@@ -70,7 +70,7 @@ impl LiveWeb {
         self.allowance.take(&prov.url).map_err(|w| w.to_string())?;
         // Tests only: a canned page stands in for the network, after the observed-set test and the caps have run.
         #[cfg(test)]
-        if let Some((_, text)) = CANNED_PAGES.lock().unwrap().iter().find(|(u, _)| *u == prov.url) {
+        if let Some((_, text)) = canned::PAGES.lock().unwrap().iter().find(|(u, _)| *u == prov.url) {
             return Ok(Page { url: prov.url.clone(), text: text.clone() });
         }
         let policy = crate::fact_fetch::FetchPolicy::default();
@@ -82,9 +82,13 @@ impl LiveWeb {
     }
 }
 
-/// Pages the wider fetch returns in tests instead of reading the network: `(url as the provider gave it, page text)`.
-#[cfg(test)]
-pub(crate) static CANNED_PAGES: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+/// Pages the wider fetch returns in tests instead of reading the network: `(url as the provider gave it, page text)`. The attribute is
+/// indented inside a module on purpose: `tests/corroboration_grants_nothing.rs` reads everything before the first column-zero
+/// `#[cfg(test)]` as production code, and this must not end that reading early.
+pub(crate) mod canned {
+    #[cfg(test)]
+    pub(crate) static PAGES: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+}
 
 /// Run an async fetch to its end from the blocking side of the research code. A thread of its own, so it works whatever runtime
 /// (or none) the caller is on.
@@ -510,7 +514,7 @@ mod tests {
     }
 
     fn canned(url: &str, text: &str) {
-        CANNED_PAGES.lock().unwrap().push((url.to_string(), text.to_string()));
+        canned::PAGES.lock().unwrap().push((url.to_string(), text.to_string()));
     }
 
     fn found(provider: delphi_adapter::research::search::Provider, urls: &[&str]) -> delphi_adapter::research::search::Found {

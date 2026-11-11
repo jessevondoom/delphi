@@ -3733,8 +3733,8 @@ mod tests {
         let returned = "https://s1d-svc-on.example/paper";
         let m = s.svc.mission_at(Some("host-abcdef0123456789"), Some(&cwd)).await.unwrap();
         m.append(EventEnvelope::new(&m.id, crate::research_observed::OBSERVED_EVENT, json!({"research_id": "r-1", "urls": [{"url": returned, "via": "search:brave#1"}]}))).await.unwrap();
-        crate::research_host::CANNED_PAGES.lock().unwrap().push((returned.to_string(), "Our vault keys rotate every 90 days, per policy.".to_string()));
-        crate::research_host::CANNED_PAGES.lock().unwrap().push(("https://s1d-svc-madeup.example/collect?q=what-the-host-holds".to_string(), "Our vault keys rotate every 90 days, per policy.".to_string()));
+        crate::research_host::canned::PAGES.lock().unwrap().push((returned.to_string(), "Our vault keys rotate every 90 days, per policy.".to_string()));
+        crate::research_host::canned::PAGES.lock().unwrap().push(("https://s1d-svc-madeup.example/collect?q=what-the-host-holds".to_string(), "Our vault keys rotate every 90 days, per policy.".to_string()));
         let got = s1d_calls(&f, &s, vec![returned.to_string(), "https://s1d-svc-madeup.example/collect?q=what-the-host-holds".to_string()]).await;
         assert_eq!(got[0], (false, "verified".to_string()), "a URL the session's search returned is refetched and found: {got:?}");
         assert_eq!(got[1], (true, "unfetchable".to_string()), "a URL the host made up is not in the observed set and is never fetched: {got:?}");
@@ -3751,7 +3751,7 @@ mod tests {
         let returned = "https://s1d-svc-off.example/paper";
         let m = s.svc.mission_at(Some("host-abcdef0123456789"), Some(&cwd)).await.unwrap();
         m.append(EventEnvelope::new(&m.id, crate::research_observed::OBSERVED_EVENT, json!({"research_id": "r-1", "urls": [{"url": returned, "via": "search:brave#1"}]}))).await.unwrap();
-        crate::research_host::CANNED_PAGES.lock().unwrap().push((returned.to_string(), "Our vault keys rotate every 90 days, per policy.".to_string()));
+        crate::research_host::canned::PAGES.lock().unwrap().push((returned.to_string(), "Our vault keys rotate every 90 days, per policy.".to_string()));
         let got = s1d_calls(&f, &s, vec![returned.to_string()]).await;
         assert_eq!(got[0], (true, "unfetchable".to_string()), "{got:?}");
         assert!(s1d_cards(&f).is_empty());
