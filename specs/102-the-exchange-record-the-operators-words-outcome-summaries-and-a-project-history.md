@@ -75,7 +75,7 @@ A record is written at a **trigger** (§3.2), one per operator prompt that the t
 | `kind` | `observed` (the daemon saw the prompt), `resolved` (a host reported it and the daemon matched it to a transcript span by hash), or `reported` (a host reported it and nothing matched) | daemon |
 | `pointer` | §4 | daemon |
 | `private` | `true` | daemon |
-| `chain` | the previous record's hash | daemon |
+| `chain` | the previous record's keyed hash (HMAC, §3.4) | daemon |
 
 - **Never stored:** tool results, thinking, assistant dialogue, file contents, pasted text. The record has no field for them, so a fixture holding all five leaves no trace in it (§11 item 4).
 - **Cost.** A record is about 1 KB. 100 records a day for a year is about 36 MB, before compression.
@@ -111,7 +111,7 @@ Marks from the console or a host are not enough: if bracketed paste is off, or a
 
 ## 4. Pointers: where the words can be checked
 
-A pointer is `{tool, session_id, range, sha256, kind}`, where `kind` is `operator-words` or `agent-words`.
+A pointer is `{tool, session_id, range, hmac, kind}`, where `kind` is `operator-words` or `agent-words`. The `hmac` is the keyed hash of §3.4 over the span, because a plain hash of a short prompt can be guessed from the record; the daemon recomputes it with its local key when it resolves.
 
 - **The session id is stored, the path is not.** The path is searched for at resolve time. Evidence from the session that produced this draft: the project folder name of a Claude Code transcript is derived from the working directory, so a session that entered a worktree wrote to a different folder than the path it had been given. A fixed path goes stale; an id can be found.
 - **Resolving.** For Claude Code, the daemon reads the transcript with the versioned, fixture-tested reader of 062 §8.3 and compares the hash of the span. A match is `resolved`. A missing file, a changed format or a hash that no longer matches is **`unresolvable`**: the pointer says so, and a claim that cites it reads **not validated**. It is never silently valid.
@@ -153,7 +153,7 @@ The Council advised **opt-in**; the operator decided **opt-out** (2026-11-11): "
 3. **Asked at install.** `delphi init` and `delphi connect` ask: *"Keep a history of your prompts and what came of them on this machine? Yes by default; you can turn it off or erase it at any time."*
 4. **Existing installs are asked once** on the first run after the upgrade, default yes, and it is **never switched on silently**: until answered, no record is written (OD-6).
 5. **Two switches.** A global one, `[history] enabled`, and a per-project one (a marker beside the `ingest.optin` marker of 062 §8.3, `local/projects/<id>/history.off`).
-6. **`delphi history off`** stops new records at once. **`delphi history purge`** erases the records and keeps their hashes, as 055 §3.7 keeps a citation's hash after a takedown. **`delphi history status`** shows what is stored, its size and whether it is on. `delphi doctor` shows the same line.
+6. **`delphi history off`** stops new records at once. **`delphi history purge [--since <time>]`** erases the records (all, or those written since the time) and keeps a tombstone for each: its id, its time and its keyed hash, so the chain stays verifiable, as 055 §3.7 keeps a citation's hash after a takedown. **`delphi history delete <id>`** erases one record the same way. **`delphi history status`** shows what is stored, its size and whether it is on. `delphi doctor` shows the same line. **No prompt or reply text is written anywhere else:** the daemon's event log carries only ids, counts and keyed hashes for an exchange record, and a staged learn note made from the same summary is the 062 §8.1 note, not a copy of the record's prompt, so a purge has one place to clean and a test can prove it (§11 item 7).
 7. **A first-run notice** in the console states that the history is on and how to turn it off.
 8. **The timeline stays when records are off** (OD-1): it holds only ids and counts from the daemon's own events, with no operator text. A separate `[history] timeline` switch turns it off too.
 9. **Budgets** (hypotheses, OD-3): 90 days and 200 MB per project. At the budget the daemon stops adding and says so; it never evicts the operator's words silently. The red-team suggested 50 MB. At a few MB per repository the cap is academic.
@@ -203,7 +203,7 @@ Total about 76 to 112 hours with the spec, **my estimates, not measurements**. T
 4. A record has no field for tool results, thinking, assistant dialogue, file contents or pasted text: a fixture containing all five yields none of them in the stored record, and a pasted block appears only as a hash and a length.
 5. The host cannot add, edit or delete a record: records are written by the daemon, append-only and hash-chained, as 070 §3 item 4 requires.
 6. With history off, a trigger writes no record (a fixture); with it never answered on an upgraded install, no record is written.
-7. `purge` keeps hashes and deletes nothing else; `off` deletes nothing.
+7. `purge` (whole, `--since`, or `delete <id>`) leaves a tombstone of id, time and keyed hash and **no residual prompt or reply text anywhere under the Delphi home**: a canary string written into a prompt and a reply is absent after the purge from the record store, the daemon's event logs, every index, every cache, the database write-ahead logs and any backup or export the daemon made; `off` deletes nothing. Retained hashes are keyed (HMAC), so a short secret cannot be recovered by guessing candidates against them.
 8. An unresolvable pointer reads `unresolvable` and its claim reads not validated; it never passes.
 9. The agent view is at most the cap, quotes no event text, ends with the fixed footer and is fenced as data; it is never always-loaded.
 10. `delphi history` commands refuse inside an agent seat.
@@ -242,7 +242,7 @@ Council `t_0008` (2026-11-11; architect, red-team, strategist; families claude a
 3. A host-reported prompt that matches a Claude transcript span by hash reads `resolved`; one that does not match reads `reported`; a pointer whose file is gone reads `unresolvable`.
 4. The report is at most 4 KB, quotes no event text, shows a reversed decision as superseded and ends with the fixed footer.
 5. With history off, or before the question is answered on an upgraded install, no record is written; the timeline follows its own switch.
-6. `purge` removes the records and keeps their hashes; `status` and `doctor` show the state and size.
+6. `purge` (whole or `--since`) and `delete <id>` remove the records and keep a tombstone with a keyed hash, with no residual text anywhere under the Delphi home; `status` and `doctor` show the state and size.
 7. No record is placed in a foreign-family seat's prompt or an outbound path.
 8. At the budget the daemon stops adding and says so.
 9. Before S8, a fresh install has `[history] enabled = false` and shows no question; S8's change is the only one that alters the default, and a test fails if the default is on while the egress check of 098 §12 item 16 is not registered for the history store.
@@ -257,7 +257,8 @@ Every item is verified without a network or a model, plus the repository gates o
 | Redaction and pasted blocks (2, §11 item 4) | A fixture prompt with a key, a token and a pasted block; the stored record contains neither the secret nor the pasted text. An **unmarked** 1,500-character key paste, a single-burst paste, a high-entropy run and a multi-line code block each store as a keyed hash and a length; a typed paragraph of the same length at typing rate is kept up to the 2,000-character cap or hashed by the length rule, and the test states which. |
 | Pointers (3, §11 item 8) | Fixture transcripts: a matching span, a changed span, a missing file, an unknown format; the session-id search finds a file in a renamed folder. |
 | Report (4, §11 item 9) | A golden report over a fixture log with a reversal; size, footer, no event text; a hostile event string leaves no trace. |
-| Off and upgrade (5, §11 items 6, 7) | A config test per switch; an upgrade fixture with no answer writes nothing; `off` and `purge` leave the hashes. |
+| Off and upgrade (5, §11 items 6, 7) | A config test per switch; an upgrade fixture with no answer writes nothing; `off` leaves everything. |
+| Purge residue (6, §11 item 7) | Write a canary string into a fixture prompt and reply, run `purge`, `purge --since` and `delete`, then scan the **whole** Delphi home (record store, event logs, indexes, caches, WAL files, backups and exports made by the daemon) for the canary and for any plain hash of it: none; the tombstones verify the chain; a guessable short secret is not recoverable from a retained hash because the hashes are keyed. |
 | Egress (7, §11 item 3) | The egress enumeration test includes the history store; a foreign-family seat prompt fixture contains no record. |
 | Authority (§11 items 1, 2, 5, 10) | The "grants nothing" test over the readers; the `SelfReported` scan; a host attempt to edit a record refused; the commands refuse inside an agent seat. |
 | Returned record text (§11 item 11, only if S5b is built) | A fixture record with a jailbreak string and an escape sequence in `open`; the result is tainted, fenced and stripped; the consuming span has no mutating tool; a family-unknown seat gets nothing. |
