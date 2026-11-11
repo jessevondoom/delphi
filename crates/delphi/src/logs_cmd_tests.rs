@@ -56,6 +56,27 @@ fn mission_events_keep_ids_and_short_status_fields_only() {
     assert!(out.contains("task.failed") && out.contains("t_1") && out.contains("failed 4"));
 }
 
+/// Egress proof for the `DebugBundle` channel (`specs/098` §12 item 16, `specs/055` §10.1): the bundle's mission events keep only the
+/// payload keys of `EVENT_KEYS`, and a noted entry (a `learn.staged` event with `trigger: host_noted`) carries its text in none of them.
+#[test]
+fn a_bundle_never_carries_a_noted_entrys_text() {
+    for banned in ["summary", "text", "body", "topic", "claims", "claim", "quote", "preview", "noted", "evidence", "source", "content", "prompt", "output", "title", "heading", "snippet"] {
+        assert!(!EVENT_KEYS.contains(&banned), "`{banned}` would let entry text into a debug bundle");
+    }
+    let t = tempfile::tempdir().unwrap();
+    let dir = t.path().join("m1");
+    let mut log = delphi_core::log::EventLog::open(&dir, delphi_core::log::LogOptions::default()).unwrap();
+    let mut e = EventEnvelope::new("m1", "learn.staged", json!({"id": "n1", "trigger": "host_noted", "summary": "[host:x] PRIVATE-ENTRY-TEXT the vault key rotates every 90 days", "evidence": "the host's own research", "source": "host:x",
+        "private": true, "status": "noted", "taint": "external_untrusted", "tier": "L0", "noted": {"topic": "PRIVATE-TOPIC", "role": "scout", "claims": [{"fingerprint": "f", "private": true}]}}));
+    e.task_id = Some("t_1".into());
+    log.append(e).unwrap();
+    let out = event_summaries(&dir, 5, t.path()).unwrap();
+    assert!(out.contains("learn.staged"), "the event itself is listed: {out}");
+    for needle in ["PRIVATE-ENTRY-TEXT", "PRIVATE-TOPIC", "vault key", "the host's own research"] {
+        assert!(!out.contains(needle), "`{needle}` reached a debug bundle: {out}");
+    }
+}
+
 #[test]
 fn a_bundle_is_redacted_private_and_never_overwrites() {
     let t = tempfile::tempdir().unwrap();

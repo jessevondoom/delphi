@@ -465,6 +465,11 @@ pub(crate) struct SpanCtx {
     pub(crate) lp: crate::loopctl::SpanLoop,
     /// Seat numbering and the API turns waiting for the span's end (`specs/091` SR-1).
     pub(crate) seats: Mutex<crate::seat::SeatBook>,
+    /// This span is a Council, Panel or red-team seat (it was handed injected slices).
+    pub(crate) council_seat: bool,
+    /// A seat of the above read a `noted` entry a host or the web left in the knowledge base: for the rest of the span it has no tools
+    /// and cannot dispatch, as for peer text (`specs/098` §12 item 13, `specs/086` §4.3).
+    pub(crate) read_noted: bool,
 }
 
 impl SpanCtx {
@@ -837,7 +842,7 @@ impl Engine {
             let tier = handoff.routing_directive.model_tier.clone().unwrap_or_else(|| self.default_tier_of(&role, &manifest));
             let family = handoff.routing_directive.model_family.clone().unwrap_or_else(|| self.cfg.get().family_for_role(&role).to_string());
             let thinking = handoff.routing_directive.thinking_budget_tokens.unwrap_or_else(|| manifest.thinking_budget());
-            let mut sc = SpanCtx { served_tier: Mutex::new(None), m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), readonly: self.readonly_tasks.lock().unwrap().contains(task_id), output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), bundle_agent, streak: Default::default(), lp: crate::loopctl::SpanLoop::from_history(&history), seats: Default::default() };
+            let mut sc = SpanCtx { served_tier: Mutex::new(None), m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), readonly: self.readonly_tasks.lock().unwrap().contains(task_id), output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), bundle_agent, streak: Default::default(), lp: crate::loopctl::SpanLoop::from_history(&history), seats: Default::default(), council_seat: false, read_noted: false };
 
             // A resumed bundle agent keeps the name its start event recorded.
             if !fresh {
@@ -930,6 +935,7 @@ impl Engine {
                 }
                 injected.contains_key(&handoff.handoff_id)
             };
+            sc.council_seat = council_seat;
             // Span-start retrieval (`specs/064` §4.2): a root span only, one deterministic query, at most three passages.
             if fresh && handoff.parent_span_id == "operator" && !council_seat && handoff.distill.is_none() && handoff.context_pointers.is_empty() && !sc.toolless && self.cfg.get().retrieval.auto {
                 let (home, db, mid, obj, role) = (self.ws.home.clone(), self.ws.dir.join("local/state.db"), m.id.clone(), handoff.objective.clone(), sc.role.clone());
@@ -1976,8 +1982,23 @@ impl Engine {
         Ok(reaction)
     }
 
-    /// Run one tool call: classify → taint gate → approval if needed → execute → persist stamps.
+    /// Run one tool call: the seat rule of `specs/098` §12 item 13 around [`Self::exec_tool_inner`]. A Council, Panel or red-team seat
+    /// that has read a `noted` entry (text a host or the web left in the knowledge base) is refused every tool, `dispatch` included, for
+    /// the rest of the span; the check is on the result of every tool, so a path added later is covered without being named here.
     pub(crate) async fn exec_tool(self: &Arc<Self>, sc: &mut SpanCtx, call_id: &str, name: &str, args: &Value, rec: &Option<Arc<Recovered>>) -> Result<tools::ToolResult, EngineError> {
+        if sc.read_noted {
+            return Ok(tool_result_error(crate::host_noted::READ_REFUSAL));
+        }
+        let result = self.exec_tool_inner(sc, call_id, name, args, rec).await?;
+        if sc.council_seat && crate::host_noted::marks_noted(&result.content) {
+            sc.read_noted = true;
+            sc.m.append(sc.ev("seat.tools_withdrawn", json!({"reason": "read_noted_entry", "tool": crate::observe::tool_name(name)}))).await?;
+        }
+        Ok(result)
+    }
+
+    /// Run one tool call: classify → taint gate → approval if needed → execute → persist stamps.
+    async fn exec_tool_inner(self: &Arc<Self>, sc: &mut SpanCtx, call_id: &str, name: &str, args: &Value, rec: &Option<Arc<Recovered>>) -> Result<tools::ToolResult, EngineError> {
         if sc.toolless {
             return Ok(tool_result_error("this span answers in text only; it has no tools"));
         }

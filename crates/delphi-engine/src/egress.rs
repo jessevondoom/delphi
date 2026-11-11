@@ -33,8 +33,12 @@ pub fn check_for_seat(meta: &Value, foreign_family: bool, private_to_models_allo
 pub enum Wired {
     /// The file calls `egress::check` with this channel.
     Yes,
-    /// No code path carries library or KB entry text through this channel today, or the path has not been audited. Said plainly: the
-    /// test below does not prove it, and a path added later must be registered as `Yes`.
+    /// The channel carries no library or knowledge-base entry text, and a named test at the sender proves it (the file, relative to the
+    /// `crates/` directory, and the test's name). The enumeration test below checks that the named test exists; the named test is what
+    /// fails if the sender starts to carry entry text. A path added later that does carry it must be registered as `Yes`.
+    NoEntryText { proof_file: &'static str, proof_test: &'static str },
+    /// The path has not been audited. Said plainly: nothing below proves it carries no entry text, and a path added later must be
+    /// registered as `Yes`.
     Unaudited,
 }
 
@@ -44,8 +48,8 @@ pub const PATHS: [(Channel, &str, Wired); 11] = [
     (Channel::WebSearch, "library_acquire.rs", Wired::Yes),
     (Channel::Xenia, "", Wired::Unaudited),
     (Channel::Export, "", Wired::Unaudited),
-    (Channel::DebugBundle, "", Wired::Unaudited),
-    (Channel::Log, "", Wired::Unaudited),
+    (Channel::DebugBundle, "", Wired::NoEntryText { proof_file: "delphi/src/logs_cmd_tests.rs", proof_test: "a_bundle_never_carries_a_noted_entrys_text" }),
+    (Channel::Log, "", Wired::NoEntryText { proof_file: "delphi-core/src/elog_tests.rs", proof_test: "context_keys_never_name_a_field_that_carries_entry_text" }),
     (Channel::Relay, "", Wired::Unaudited),
     (Channel::Connector, "", Wired::Unaudited),
     (Channel::Mail, "", Wired::Unaudited),
@@ -84,14 +88,27 @@ mod tests {
             assert!(PATHS.iter().any(|(p, _, _)| *p == c), "channel {:?} has no registered path", c);
         }
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
         for (c, file, wired) in PATHS {
-            if wired != Wired::Yes {
-                continue;
+            match wired {
+                Wired::Yes => {
+                    let text = std::fs::read_to_string(dir.join(file)).unwrap_or_else(|e| panic!("{file}: {e}"));
+                    let prod = text.split("#[cfg(test)]\nmod ").next().unwrap_or("");
+                    assert!(prod.contains("egress::check(") && prod.contains(&format!("Channel::{:?}", c)), "{file} does not call egress::check for {:?}", c);
+                }
+                Wired::NoEntryText { proof_file, proof_test } => {
+                    let text = std::fs::read_to_string(crates.join(proof_file)).unwrap_or_else(|e| panic!("{proof_file}: {e}"));
+                    assert!(text.contains(&format!("fn {proof_test}(")), "{:?}: the proof test `{proof_test}` is missing from {proof_file}", c);
+                }
+                Wired::Unaudited => {}
             }
-            let text = std::fs::read_to_string(dir.join(file)).unwrap_or_else(|e| panic!("{file}: {e}"));
-            let prod = text.split("#[cfg(test)]\nmod ").next().unwrap_or("");
-            assert!(prod.contains("egress::check(") && prod.contains(&format!("Channel::{:?}", c)), "{file} does not call egress::check for {:?}", c);
         }
+    }
+
+    #[test]
+    fn the_unaudited_channels_are_listed_so_the_gap_is_visible() {
+        let un: Vec<String> = PATHS.iter().filter(|(_, _, w)| *w == Wired::Unaudited).map(|(c, _, _)| format!("{c:?}")).collect();
+        assert_eq!(un, ["Xenia", "Export", "Relay", "Connector", "Mail", "Outbound", "Telemetry"], "audit a channel, then move it out of this list");
     }
 
     #[test]

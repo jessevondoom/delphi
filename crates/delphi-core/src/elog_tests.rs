@@ -66,6 +66,25 @@ fn only_known_context_keys_survive() {
     assert!(!line.contains("the prompt text"));
 }
 
+/// Egress proof for the `Log` channel (`specs/098` §12 item 16, `specs/055` §10.1): the central log keeps only the context keys of
+/// [`CONTEXT_KEYS`], and none of them is a field a library or knowledge-base entry's text travels in. An entry a host left
+/// (`learn.staged`: `summary`, `noted`, `evidence`, `source`, ...) therefore cannot reach the log, private or not.
+#[test]
+fn context_keys_never_name_a_field_that_carries_entry_text() {
+    for banned in ["summary", "text", "body", "topic", "claims", "claim", "quote", "preview", "noted", "evidence", "source", "content", "prompt", "output", "title", "heading", "snippet"] {
+        assert!(!CONTEXT_KEYS.contains(&banned), "`{banned}` would let entry text into the log");
+    }
+    // and the functional check, with the fields a host-noted `learn.staged` payload really has
+    let d = tempfile::tempdir().unwrap();
+    let l = logger(d.path(), Level::Error, DEFAULT_MAX_BYTES, 3);
+    let entry = json!({"id": "n1", "trigger": "host_noted", "summary": "PRIVATE-ENTRY-TEXT the vault key rotates", "evidence": "the host's own research", "source": "host:x", "private": true,
+        "noted": {"topic": "PRIVATE-TOPIC", "claims": [{"fingerprint": "f"}]}, "status": "noted", "taint": "external_untrusted"});
+    let line = l.render(Level::Error, "engine", "learn.staged", "staged a note", &entry, &[], None);
+    for needle in ["PRIVATE-ENTRY-TEXT", "PRIVATE-TOPIC", "vault key", "the host's own research"] {
+        assert!(!line.contains(needle), "`{needle}` reached the log: {line}");
+    }
+}
+
 #[test]
 fn the_home_path_and_long_fields_are_shortened() {
     let d = tempfile::tempdir().unwrap();
