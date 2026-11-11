@@ -255,6 +255,27 @@ pub const MAX_NEED: usize = 1500;
 pub const KINDS: [&str; 3] = ["expertise", "second_opinion", "decision"];
 pub const HELP_EVENT: &str = "host.help.requested";
 pub const MAX_ANSWER: usize = 8000;
+/// What `route` logs when the daemon is reachable (spec 098 §8): the length of the task and what the ranking answered.
+pub const ROUTE_EVENT: &str = "route.decided";
+
+/// The facts of `route.decided`, checked: the length of the task (never the task), the best target, its confidence, whether it
+/// was adopted and the threshold in force. Anything else a caller sends is dropped.
+pub fn route_decided_facts(p: &Value) -> Result<Value, HostErr> {
+    let Some(task_chars) = p["task_chars"].as_u64().filter(|n| *n <= 100_000) else { return bad("`task_chars` is a whole number up to 100000") };
+    let unit = |k: &str| -> Result<Option<f64>, HostErr> {
+        match &p[k] {
+            Value::Null => Ok(None),
+            v => v.as_f64().filter(|x| (0.0..=1.0).contains(x)).map(Some).ok_or_else(|| HostErr::Invalid(format!("`{k}` is a number from 0 to 1"))),
+        }
+    };
+    let target = match p["target"].as_str() {
+        Some(t) => Some(clean("target", t, 200)?),
+        None => None,
+    };
+    let Some(adopt) = p["adopt"].as_bool() else { return bad("`adopt` is true or false") };
+    let Some(threshold) = unit("threshold")? else { return bad("`threshold` is a number from 0 to 1") };
+    Ok(json!({"task_chars": task_chars, "target": target, "confidence": unit("confidence")?, "adopt": adopt, "threshold": threshold}))
+}
 
 /// How many help requests a host session's log already holds.
 pub fn helps_in(events: &[EventEnvelope]) -> usize {
@@ -910,6 +931,29 @@ pub fn read_handoff(ws_dir: &Path, project: Option<&str>, session: Option<&str>)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_route_facts_are_checked_and_anything_else_a_caller_sends_is_dropped() {
+        let ok = route_decided_facts(&json!({"task_chars": 42, "target": "role:red-team", "confidence": 0.7, "adopt": true, "threshold": 0.55, "task": "SECRET-TASK-TEXT", "extra": 1})).unwrap();
+        assert_eq!(ok, json!({"task_chars": 42, "target": "role:red-team", "confidence": 0.7, "adopt": true, "threshold": 0.55}));
+        assert!(!ok.to_string().contains("SECRET"));
+        // No candidate at all: a null target and confidence are fine.
+        let none = route_decided_facts(&json!({"task_chars": 3, "target": null, "confidence": null, "adopt": false, "threshold": 0.55})).unwrap();
+        assert_eq!((none["target"].clone(), none["adopt"].clone()), (Value::Null, json!(false)));
+        for bad in [
+            json!({"adopt": true, "threshold": 0.5}),
+            json!({"task_chars": -1, "adopt": true, "threshold": 0.5}),
+            json!({"task_chars": 1, "adopt": "yes", "threshold": 0.5}),
+            json!({"task_chars": 1, "adopt": true}),
+            json!({"task_chars": 1, "adopt": true, "threshold": 1.5}),
+            json!({"task_chars": 1, "adopt": true, "threshold": 0.5, "confidence": 2}),
+            json!({"task_chars": 1, "adopt": true, "threshold": 0.5, "target": "x".repeat(201)}),
+        ] {
+            assert!(route_decided_facts(&bad).is_err(), "{bad}");
+        }
+        // A control character in the target becomes a space, as everywhere else a host's text is cleaned.
+        assert_eq!(route_decided_facts(&json!({"task_chars": 1, "target": "a\u{7}b", "adopt": false, "threshold": 0.5})).unwrap()["target"], "a b");
+    }
 
     fn ws() -> (tempfile::TempDir, WorkspacePaths) {
         let t = tempfile::tempdir().unwrap();
