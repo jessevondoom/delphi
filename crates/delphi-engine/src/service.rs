@@ -5365,12 +5365,15 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         f.m.append(EventEnvelope::new(&f.m.id, "research.finished", json!({"topic": "retries", "by": "orchestrator", "new": 2, "updated": 1, "held": 1, "project": 0, "not_kept": 0, "outcome": "done"}))).await.unwrap();
+        // A research job that started shares this fake model, so its own call (the scout's page prompt) can land in the list before
+        // the orchestrator's first turn. Read the orchestrator's turns by what they are, not by their position.
+        let turns = || f.model.requests().into_iter().map(|r| r.body.to_string()).filter(|b| !b.contains("You are the scout.")).collect::<Vec<_>>();
         f.engine.run_task(&f.m, "orchestrator", "continue").await.unwrap();
-        let told = f.model.requests()[0].body.to_string();
+        let told = turns()[0].clone();
         assert!(told.contains("runtime/research-results") && told.contains("(asked by orchestrator): 2 new and 1 updated; 1 held for validation"), "{told}");
         assert!(!events_of(&f, "research.delivered").is_empty());
         f.engine.run_task(&f.m, "orchestrator", "and now?").await.unwrap();
-        assert!(!f.model.requests()[1].body.to_string().contains("runtime/research-results"), "told once");
+        assert!(!turns()[1].contains("runtime/research-results"), "told once");
     }
 
     // ── step-up: a Red answer through a relay needs the authenticator code (specs/014 §7) ──
