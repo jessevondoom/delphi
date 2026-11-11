@@ -8,6 +8,13 @@ on:
 permissions:
   contents: read
 
+# The repo's own lean build settings (AGENTS.md): a fresh checkout gains nothing from incremental compilation, and the tests
+# do not read debug info (panic locations and symbol names stay). This only affects the dev profile; the release build of
+# the console executable below is unchanged.
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+
 jobs:
   test:
     name: test (${{ matrix.os }})
