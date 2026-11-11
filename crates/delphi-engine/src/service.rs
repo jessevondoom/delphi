@@ -1256,7 +1256,7 @@ impl EngineService {
             let noted: Vec<Value> = if db.is_file() {
                 let opts = crate::kb::SearchOpts { role: None, limit: limit * 3, zones: Some(vec!["staged"]), include_staged: true, include_untrusted: true, ..Default::default() };
                 crate::retrieval::search(&ws.home, &db, &query, opts).map(|r| r.hits).unwrap_or_default().iter().filter(|h| h.heading_path.contains(crate::host_noted::NOTED_HEADING)).take(limit)
-                    .map(|h| json!({"layer": "noted", "pointer": h.pointer, "heading": h.heading_path, "preview": h.preview, "label": h.shown_label()})).collect()
+                    .map(|h| json!({"layer": "noted", "pointer": h.pointer, "heading": h.heading_path, "preview": crate::host_noted::fence(&h.shown_label(), &h.preview), "label": h.shown_label()})).collect()
             } else {
                 vec![]
             };

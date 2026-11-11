@@ -618,6 +618,17 @@ mod tests {
         assert!(never_readable("context/domains/x.md", "scout").is_none());
     }
 
+    /// `specs/098` §12 item 13: entries a host or the web left in the knowledge base live under `local/staged/`, which no role may read
+    /// through the file tools. A seat reaches one only through a search it runs or a pointer, never by a path in a brief.
+    #[test]
+    fn noted_entries_under_local_staged_are_never_readable_by_any_role() {
+        for role in ["architect", "red-team", "strategist", "orchestrator", "scout", "builder"] {
+            for k in ["local/staged/host-abcd1234/n1.md", "local/staged/m1/n2.md", "local/staged"] {
+                assert!(never_readable(k, role).is_some(), "{role} {k}");
+            }
+        }
+    }
+
     use super::*;
     use std::fs;
     use std::os::unix::fs::{symlink, MetadataExt};
