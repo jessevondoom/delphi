@@ -27,7 +27,7 @@ pub const MAX_CLAIM_CHARS: usize = 300;
 pub const MAX_URLS: usize = 5; // `specs/040` §20.3: at most five fetches per claim
 const MAX_PASSAGE_CHARS: usize = 600;
 const PASSAGE_OVERLAP: f64 = 0.8;
-const NEAR_DUPLICATE: f64 = 0.5;
+pub(crate) const NEAR_DUPLICATE: f64 = 0.5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -271,7 +271,7 @@ fn mutable_claim(claim: &str) -> bool {
     re(&R, r"(?i)\b(currently|latest|now|today|recommend\w*|should|best|default|supported|deprecated|price[ds]?|version \d)").is_match(claim)
 }
 
-fn shingles(text: &str) -> BTreeSet<u64> {
+pub(crate) fn shingles(text: &str) -> BTreeSet<u64> {
     use std::hash::{Hash, Hasher};
     let words: Vec<String> = text.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(String::from).collect();
     let n = 5usize.min(words.len().max(1));
@@ -285,7 +285,7 @@ fn shingles(text: &str) -> BTreeSet<u64> {
         .collect()
 }
 
-fn jaccard(a: &BTreeSet<u64>, b: &BTreeSet<u64>) -> f64 {
+pub(crate) fn jaccard(a: &BTreeSet<u64>, b: &BTreeSet<u64>) -> f64 {
     if a.is_empty() || b.is_empty() {
         return 0.0;
     }

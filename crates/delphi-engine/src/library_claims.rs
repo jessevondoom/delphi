@@ -10,7 +10,9 @@
 
 use super::excerpts::{Anchor, Resolution};
 use super::*;
-use delphi_core::knowledge_status::{derive_fact, Status};
+use crate::corroboration::{self, Cite};
+use crate::fact_sources::Class;
+use delphi_core::knowledge_status::{derive_fact, raise_for_support, Status};
 use delphi_core::provenance::Tier;
 use std::collections::HashSet;
 
@@ -128,8 +130,26 @@ pub fn status(claim: &Value) -> Status {
         "active"
     };
     let tier = if recorded { Tier::L3.name() } else { Tier::L0.name() };
-    derive_fact(tier, doc_status, recorded)
+    let base = derive_fact(tier, doc_status, recorded);
+    // `corroborated` (`specs/098` §7.6): a count of independent origins the daemon wrote into `support` (`refresh_support`), never a
+    // field a caller can set. It lifts a `noted` fact only: an attributed claim is an opinion, and every other status wins over a count.
+    if claim["kind"] == "attributed" {
+        return base;
+    }
+    raise_for_support(base, claim["support"]["origins"].as_u64().unwrap_or(0) as usize)
 }
+
+fn class_of(s: &str) -> Class {
+    match s {
+        "primary" => Class::Primary,
+        "reputable_secondary" => Class::ReputableSecondary,
+        "excluded" => Class::Excluded,
+        _ => Class::Weak,
+    }
+}
+
+/// The text of a held source, capped: the near-duplicate and citation-graph tests need no more.
+const SUPPORT_TEXT_MAX: usize = 200_000;
 
 /// The operator attested a claim taken from a summary page (`specs/068` §6.6), it still has a held quote, and nothing has
 /// lowered it since. A record the daemon writes for the operator's key, never a claim's own words.
@@ -235,7 +255,7 @@ impl Library {
             self.cite(&spec.source_id, &id)?;
         }
         self.log("claim", json!({"id": id, "kind": kind, "scope": scope, "anchors": anchors.len()}));
-        Ok(claim)
+        Ok(self.refresh_support(&id).unwrap_or(claim))
     }
 
     pub fn add_anchor(&self, claim_id: &str, spec: &AnchorSpec) -> Result<Value, String> {
@@ -247,7 +267,7 @@ impl Library {
         self.save_claim(&claim)?;
         self.cite(&spec.source_id, claim_id)?;
         self.log("claim_anchor", json!({"id": claim_id, "source": spec.source_id}));
-        Ok(claim)
+        Ok(self.refresh_support(claim_id).unwrap_or(claim))
     }
 
     /// An anchor into a source. A source held whole resolves the quote in its text; one that is not (excerpts, pointer)
@@ -365,8 +385,13 @@ impl Library {
             for q in lost {
                 self.contest(&mut c, "anchor_lost", source_id, json!({"version": version, "quote_hash": q}));
             }
-            if changed && self.save_claim(&c).is_ok() && status(&c) == Status::Contested {
-                self.log("claim_contested", json!({"id": c["id"], "source": source_id, "version": version}));
+            if changed && self.save_claim(&c).is_ok() {
+                // A quote that is gone drops its citation out of the count (`specs/098` §7.6 "Retraction"): recompute, which logs the change.
+                let id = c["id"].as_str().unwrap_or("").to_string();
+                let c = self.refresh_support(&id).unwrap_or(c);
+                if status(&c) == Status::Contested {
+                    self.log("claim_contested", json!({"id": c["id"], "source": source_id, "version": version}));
+                }
             }
         }
     }
@@ -384,6 +409,16 @@ impl Library {
                     self.log("claim_contested", json!({"id": c["id"], "source": source_id, "reason": "source_retired"}));
                 }
             }
+            // A retired source no longer counts as an origin, whether or not another source keeps the claim standing.
+            self.retract_support(&c);
+        }
+    }
+
+    /// Recompute a claim's support after one of its sources stopped counting (retired, purged, unvouched) or came back. A retraction
+    /// is recorded in the log by `refresh_support`.
+    fn retract_support(&self, c: &Value) {
+        if let Some(id) = c["id"].as_str() {
+            let _ = self.refresh_support(id);
         }
     }
 
@@ -393,6 +428,7 @@ impl Library {
         for mut c in self.citing(source_id) {
             self.contest(&mut c, "no_longer_vouched", source_id, json!("the bundle that vouched for this source no longer does"));
             let _ = self.save_claim(&c);
+            self.retract_support(&c);
         }
     }
 
@@ -404,6 +440,7 @@ impl Library {
                 c["contested_by"] = Value::Array(kept);
                 let _ = self.save_claim(&c);
             }
+            self.retract_support(&c);
         }
     }
 
@@ -416,6 +453,7 @@ impl Library {
                 c["contested_by"] = Value::Array(kept);
                 let _ = self.save_claim(&c);
             }
+            self.retract_support(&c);
         }
     }
 
@@ -439,6 +477,7 @@ impl Library {
             if self.save_claim(&c).is_ok() {
                 self.log("claim_pointer_only", json!({"id": c["id"], "source": source_id}));
             }
+            self.retract_support(&c);
         }
     }
 
@@ -468,6 +507,86 @@ impl Library {
             }
         }
         r
+    }
+
+    /// The citations of a claim for the corroboration count (`specs/098` §7.6): one per source the claim still anchors into, and only a web
+    /// page the daemon itself fetched (it carries the fetcher's `origin`, `canonical_url` and `content_hash`; a file the operator added
+    /// or an imported bundle document does not). An anchor that was lost or made pointer-only no longer counts, which is how a
+    /// retraction reaches the count. A source captured before this slice has no `source_unfamiliar` mark and so reads as listed-weak,
+    /// which counts less, never more.
+    pub fn cites_of(&self, claim: &Value) -> Vec<Cite> {
+        let text = claim["text"].as_str().unwrap_or("");
+        let captured = claim["created"].as_str().and_then(|d| d.get(..10)).unwrap_or("9999-12-31");
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut out = Vec::new();
+        for a in anchors_of(claim).iter().filter(|a| active(a)) {
+            let Some(sid) = a["source_id"].as_str() else { continue };
+            if !seen.insert(sid.to_string()) {
+                continue;
+            }
+            let Some(meta) = self.read_meta(sid) else { continue };
+            if !meta["purged"].is_null() || !meta["retired"].is_null() {
+                continue;
+            }
+            let derived = meta["derived"].as_bool() == Some(true) || meta["origin"].as_str().is_some_and(|o| o.starts_with("page:"));
+            let (Some(url), Some(origin), true) = (meta["canonical_url"].as_str(), meta["origin"].as_str(), meta["content_hash"].is_string()) else { continue };
+            let held = std::fs::read(self.source_dir(sid).join("source.md")).ok().map(|b| String::from_utf8_lossy(&b[..b.len().min(SUPPORT_TEXT_MAX)]).into_owned()).unwrap_or_default();
+            let listed_in_scope = meta["trusted_entry"].as_object().is_some_and(|e| {
+                let topics: Vec<String> = e.get("topics").and_then(Value::as_array).map(|t| t.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+                let listed = e.get("added").and_then(Value::as_str).is_none_or(|d| d <= captured);
+                listed && delphi_adapter::research::trusted::topics_cover(&topics, text)
+            });
+            out.push(Cite {
+                source_id: sid.to_string(),
+                url: url.to_string(),
+                origin: origin.to_string(),
+                class: class_of(meta["source_class"].as_str().unwrap_or("weak")),
+                unfamiliar: meta["source_unfamiliar"].as_bool().unwrap_or(false),
+                text: held,
+                first_seen: None,
+                domain_age_days: None,
+                registrant: None,
+                listed_in_scope,
+                derived,
+            });
+        }
+        out
+    }
+
+    /// Recompute the support tags of a claim and store them (`specs/098` §7.6 "tags from day one"): the number of independent origins,
+    /// how many of them are trusted sources, whether anything contradicts the claim, and how the sources' earlier claims fared (055
+    /// §3.8). The daemon writes them; nothing a model or a tool argument says reaches them. The status derives from them
+    /// (`status`), and a change is logged, so a retraction is recorded. The count is recomputed at every change of anchors, never
+    /// cached past one.
+    pub fn refresh_support(&self, id: &str) -> Option<Value> {
+        let mut c = self.claim(id)?;
+        let (was_origins, was_status) = (c["support"]["origins"].as_u64().unwrap_or(0), status(&c));
+        let cites = self.cites_of(&c);
+        let s = corroboration::support(&cites, &self.support);
+        let mut track = Reliability::default();
+        for x in cites.iter().filter(|x| corroboration::zero_reason(x, &self.support).is_none()) {
+            let r = self.reliability_of_source(&x.source_id);
+            track.claims += r.claims;
+            track.stood += r.stood;
+            track.contested += r.contested;
+            track.disproved += r.disproved;
+        }
+        let contradicted = c["contested_by"].as_array().is_some_and(|m| !m.is_empty()) || c["lifecycle"] == "disproved";
+        let mut tags = s.to_json();
+        tags["contradicted"] = json!(contradicted);
+        tags["track"] = json!({"claims": track.claims, "stood": track.stood, "contested": track.contested, "disproved": track.disproved});
+        let same = ["origins", "trusted_sources", "counted", "contradicted", "track", "zeroed"].iter().all(|k| c["support"][*k] == tags[*k]);
+        if same {
+            return Some(c);
+        }
+        tags["computed"] = json!(delphi_core::time::now_rfc3339());
+        c["support"] = tags;
+        self.save_claim(&c).ok()?;
+        let now_status = status(&c);
+        if was_origins != s.origins as u64 || was_status != now_status {
+            self.log("claim_support", json!({"id": id, "origins": s.origins, "trusted_sources": s.trusted_sources, "from": was_status.as_str(), "to": now_status.as_str()}));
+        }
+        Some(c)
     }
 
     pub fn origin_of(&self, c: &Value) -> String {

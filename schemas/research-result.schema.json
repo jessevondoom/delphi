@@ -14,6 +14,13 @@
     "kb_hits": { "type": "array", "items": { "type": "string" } },
     "new_claims": { "type": "integer", "minimum": 0, "description": "Deduplicated staged candidates, not search hits." },
     "contradictions": { "type": "array", "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "description": "Claim ids that disagree." } },
+    "corroboration_pass": {
+      "type": "object",
+      "required": ["claims", "queries"],
+      "description": "The corroboration pass of a survey or deep run (specs/098 section 7.5 item 5): how many public claims it looked for more support for, and how many queries it sent. A claim resting on a private source is never queried.",
+      "properties": { "claims": { "type": "integer", "minimum": 0 }, "queries": { "type": "integer", "minimum": 0 } },
+      "additionalProperties": false
+    },
     "coverage": { "enum": ["ok", "thin"], "description": "`thin` when the knowledge base and the trusted sources together gave fewer kept, cited claims than `[research] thin_below` (specs/098 section 7.5)." },
     "coverage_report": {
       "type": "object",
@@ -72,7 +79,18 @@
         "locator": { "type": "string" },
         "retrieved": { "type": "string" },
         "licence": { "type": "string" },
-        "knowledge_status": { "enum": ["noted", "checking", "validated", "contested", "disproved", "retired"] },
+        "knowledge_status": { "enum": ["noted", "corroborated", "checking", "validated", "contested", "disproved", "retired"], "description": "`corroborated`: three or more independent origins state it, counted by code (specs/098 section 7.6). Weaker than `validated`; it raises nothing else and is never read as a reason to trust or permit anything." },
+        "corroboration": {
+          "type": "object",
+          "required": ["origins", "trusted_sources", "detail"],
+          "description": "How many independent origins state the claim and how many of them are trusted sources (the operator's list inside its topic scope, or a Primary or Reputable class). Display only: it changes no status, taint, tier or queue order.",
+          "properties": {
+            "origins": { "type": "integer", "minimum": 0 },
+            "trusted_sources": { "type": "integer", "minimum": 0 },
+            "detail": { "type": "string", "maxLength": 200 }
+          },
+          "additionalProperties": false
+        },
         "contested": { "type": "boolean" },
         "from_trusted_source": { "type": "boolean", "description": "Provenance only; does not change knowledge_status." }
       },

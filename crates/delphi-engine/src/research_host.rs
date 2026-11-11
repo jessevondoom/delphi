@@ -157,14 +157,38 @@ impl Library for LiveLibrary {
         })
     }
 
-    /// A staged claim is one ledger line: `noted`, with where it came from. Nothing here marks a claim validated.
+    /// The citation the corroboration count reads for a source this run captured: the same description the library gives a claim's
+    /// anchor (`Library::cites_of`), taken as of now, with the trusted-list entry frozen when the page was captured.
+    fn cite_info(&self, source_id: &str, claim_text: &str) -> Option<crate::corroboration::Cite> {
+        let claim = json!({"text": claim_text, "created": delphi_core::time::now_rfc3339(), "anchors": [{"source_id": source_id, "state": "active"}]});
+        crate::library::Library::in_home(&self.home).cites_of(&claim).into_iter().next()
+    }
+
+    fn is_private(&self, source_id: &str) -> bool {
+        crate::library::Library::in_home(&self.home).read_meta(source_id).is_some_and(|m| crate::library::is_private(&m))
+    }
+
+    /// A staged claim is one ledger line: `noted`, with where it came from. Nothing here marks a claim validated. The line carries the
+    /// tags every claim keeps from the day it is staged (`specs/098` §7.6): origins, trusted sources, whether anything contradicts it,
+    /// and how the sources' earlier claims fared (`specs/055` §3.8).
     fn stage_claim(&self, c: &ClaimRec) -> Result<(), String> {
         use std::io::Write;
         if let Some(dir) = self.ledger.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
+        let lib = crate::library::Library::in_home(&self.home);
+        let mut track = crate::library::claims::Reliability::default();
+        for s in &c.source_ids {
+            let r = lib.reliability_of_source(s);
+            track.claims += r.claims;
+            track.stood += r.stood;
+            track.contested += r.contested;
+            track.disproved += r.disproved;
+        }
         let line = json!({"fingerprint": c.fingerprint, "id": c.id, "subject": c.x.subject, "predicate": c.x.predicate, "object": c.x.object, "scope": c.x.scope, "time": c.x.time,
-            "quote": c.x.quote, "source_ids": c.source_ids, "source_urls": c.source_urls, "status": "noted", "trust": "external_untrusted", "retrieved": c.retrieved, "requested_by": self.label});
+            "quote": c.x.quote, "source_ids": c.source_ids, "source_urls": c.source_urls, "status": "noted", "trust": "external_untrusted", "retrieved": c.retrieved, "requested_by": self.label,
+            "tags": {"origins": c.support.origins, "trusted_sources": c.support.trusted_sources, "contradicted": c.contested,
+                     "track": {"claims": track.claims, "stood": track.stood, "contested": track.contested, "disproved": track.disproved}}});
         let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&self.ledger).map_err(|e| e.to_string())?;
         writeln!(f, "{line}").map_err(|e| e.to_string())
     }

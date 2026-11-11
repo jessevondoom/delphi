@@ -79,6 +79,21 @@ pub fn settings_from(root: &toml::Value) -> Settings {
     if let Some(n) = root.get("research").and_then(|r| r.get("thin_below")).and_then(|v| v.as_integer()).filter(|v| *v >= 1) {
         s.thin_below = n.min(50) as usize;
     }
+    // The corroboration numbers (`specs/098` §18): each ignored when it is not the right kind of value, so a typo keeps the default.
+    if let Some(r) = root.get("research") {
+        if let Some(n) = r.get("young_domain_days").and_then(|v| v.as_integer()).filter(|v| (0..=3650).contains(v)) {
+            s.support.young_domain_days = n as u32;
+        }
+        if let Some(n) = r.get("burst_hours").and_then(|v| v.as_integer()).filter(|v| (0..=720).contains(v)) {
+            s.support.burst_hours = n as u32;
+        }
+        if let Some(x) = r.get("similar_above").and_then(|v| v.as_float()).filter(|v| *v > 0.0 && *v <= 1.0) {
+            s.support.similar_above = x;
+        }
+        if let Some(b) = r.get("unfamiliar_counts").and_then(|v| v.as_bool()) {
+            s.support.unfamiliar_counts = b;
+        }
+    }
     s.hooks = crate::hooks::parse(root).0;
     if let Some(r) = root.get("relay") {
         if r.get("step_up").and_then(|v| v.as_str()) == Some("totp") {
@@ -399,6 +414,19 @@ mod tests {
         assert!(bad.len() == 1 && bad[0].contains("[harness.agy] mode"), "{:?}", bad);
     }
 
+
+    #[test]
+    fn the_corroboration_numbers_default_to_the_pinned_values_and_a_bad_value_keeps_the_default() {
+        // `specs/098` §18: 180 days, 24 hours, 0.8, and unfamiliar domains count.
+        let d = settings_from(&toml::from_str("").unwrap()).support;
+        assert_eq!((d.young_domain_days, d.burst_hours, d.similar_above, d.unfamiliar_counts), (180, 24, 0.8, true));
+        let s = settings_from(&toml::from_str("[research]\nyoung_domain_days = 30\nburst_hours = 6\nsimilar_above = 0.4\nunfamiliar_counts = false\n").unwrap()).support;
+        assert_eq!((s.young_domain_days, s.burst_hours, s.similar_above, s.unfamiliar_counts), (30, 6, 0.4, false));
+        for bad in ["young_domain_days = -1", "burst_hours = \"day\"", "similar_above = 1.5", "similar_above = 0.0", "unfamiliar_counts = \"yes\""] {
+            let got = settings_from(&toml::from_str(&format!("[research]\n{bad}\n")).unwrap()).support;
+            assert_eq!((got.young_domain_days, got.burst_hours, got.similar_above, got.unfamiliar_counts), (180, 24, 0.8, true), "{bad}");
+        }
+    }
 
     #[test]
     fn the_seats_block_defaults_to_never_refusing_for_families_and_one_foreign_seat() {

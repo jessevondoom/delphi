@@ -34,6 +34,37 @@ pub struct Source {
     /// Operator list only: remove this host (and its subdomains) for this install, though the default list names it.
     #[serde(default)]
     pub block: bool,
+    /// The topic scope the operator set for this entry (`specs/098` §7.6): words that must appear in a claim for this host to count as a
+    /// *trusted source* of it. Empty (the default) means every topic. It decides only the `trusted_sources` flag of a claim, never what
+    /// may be fetched, and the shipped list sets none.
+    #[serde(default)]
+    pub topics: Vec<String>,
+    /// The day the operator added this entry (`YYYY-MM-DD`). A source counts as a trusted source only for claims captured after it was
+    /// listed (`specs/098` §7.6 "no self-reinforcement"); an entry with no date predates every claim.
+    #[serde(default)]
+    pub added: Option<String>,
+}
+
+/// Do `topics` cover `text`? No topics (or only blank ones) cover every text; otherwise any one topic word must appear in the text as a
+/// whole word, ignoring case. The scope of a trusted-source entry (`specs/098` §7.6): a plain word match the operator can predict.
+pub fn topics_cover(topics: &[String], text: &str) -> bool {
+    if topics.iter().all(|t| t.trim().is_empty()) {
+        return true;
+    }
+    let words: Vec<String> = text.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_lowercase).collect();
+    topics.iter().map(|t| t.trim().to_lowercase()).filter(|t| !t.is_empty()).any(|t| words.contains(&t))
+}
+
+impl Source {
+    /// Is `text` (a claim) inside this entry's topic scope?
+    pub fn in_scope(&self, text: &str) -> bool {
+        topics_cover(&self.topics, text)
+    }
+
+    /// Had this entry been listed by `day` (`YYYY-MM-DD`)? No date means it had.
+    pub fn listed_by(&self, day: &str) -> bool {
+        self.added.as_deref().is_none_or(|a| a <= day)
+    }
 }
 
 fn unknown() -> String {
@@ -191,6 +222,19 @@ reuse = "summary-only"
         assert_eq!((w.reuse, w.share_alike), (Reuse::Full, true));
         assert!(l.allows_url("https://example.com/").is_none());
         assert!(l.len() >= 20);
+    }
+
+    #[test]
+    fn an_entry_can_carry_a_topic_scope_and_a_date_and_the_shipped_list_sets_neither() {
+        let l = TrustedList::parse(DEFAULT, Some("[[source]]\nhost = \"db.example\"\nreuse = \"full\"\ntopics = [\"Postgres\", \"  \", \"indexes\"]\nadded = \"2026-11-01\"\n")).unwrap();
+        let e = l.lookup("db.example").unwrap();
+        assert!(e.in_scope("Postgres 17 adds a new vacuum option") && e.in_scope("how B-tree INDEXES are used"));
+        assert!(!e.in_scope("the harbour bridge opened in 1932"), "no topic word, out of scope");
+        assert!(!e.in_scope("postgresql releases a new version"), "a whole word, not a prefix");
+        assert!(e.listed_by("2026-11-01") && e.listed_by("2026-12-01") && !e.listed_by("2026-10-31"));
+        let w = l.lookup("en.wikipedia.org").unwrap();
+        assert!(w.topics.is_empty() && w.added.is_none() && w.in_scope("anything at all") && w.listed_by("1999-01-01"));
+        assert!(topics_cover(&[], "x") && topics_cover(&["".into(), " ".into()], "x") && !topics_cover(&["rust".into()], "go"));
     }
 
     #[test]

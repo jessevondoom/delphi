@@ -501,6 +501,94 @@ mod claims {
         assert_eq!(status(&l.claim(&sole).unwrap()), Status::Noted);
     }
 
+    /// A source as the fetcher leaves it: a canonical URL, an origin, a content hash and a class. A file the operator adds has none, so
+    /// it never counts as an origin (`specs/098` §7.6: only pages the daemon itself fetched).
+    fn fetched(l: &Library, id: &str, host: &str, class: &str) {
+        let mut m = l.read_meta(id).unwrap();
+        m["canonical_url"] = json!(format!("https://{host}/page"));
+        m["origin"] = json!(host);
+        m["content_hash"] = json!(format!("sha256:{host}"));
+        m["source_class"] = json!(class);
+        m["source_unfamiliar"] = json!(false);
+        std::fs::write(l.source_dir(id).join("meta.json"), serde_json::to_vec(&m).unwrap()).unwrap();
+    }
+
+    fn page(topic: &str) -> String {
+        format!("# {topic}\n\nA separate write-up about {topic}, with its own wording and its own examples. Here the moon drives the tides. {topic} is all this page covers.\n")
+    }
+
+    fn three_fetched(d: &Path, l: &Library) -> (Vec<String>, String) {
+        let ids: Vec<String> = [("a.example", "harbours"), ("b.example", "fishing"), ("c.example", "navigation")]
+            .iter()
+            .map(|(h, topic)| {
+                let id = source(d, l, &format!("{h}.md"), &page(topic));
+                fetched(l, &id, h, "reputable_secondary");
+                id
+            })
+            .collect();
+        let specs: Vec<AnchorSpec> = ids.iter().map(|s| spec(s, "the moon drives the tides")).collect();
+        let c = l.add_claim("The moon drives the tides.", &ClaimOpts::default(), &specs).unwrap();
+        (ids, c["id"].as_str().unwrap().to_string())
+    }
+
+    #[test]
+    fn three_fetched_origins_corroborate_and_files_the_operator_added_never_count() {
+        let (d, l) = lib();
+        let (ids, id) = three_fetched(d.path(), &l);
+        let c = l.claim(&id).unwrap();
+        assert_eq!((status(&c), c["support"]["origins"].clone(), c["support"]["trusted_sources"].clone()), (Status::Corroborated, json!(3), json!(3)), "{c}");
+        assert!(c["support"]["computed"].is_string(), "the tags are stored with the day they were computed");
+        // one origin is one origin, however many times the claim anchors into it
+        let one = l.add_claim("Another.", &ClaimOpts::default(), &[spec(&ids[0], "the moon drives the tides"), spec(&ids[0], "the moon")]).unwrap();
+        assert_eq!((status(&one), one["support"]["origins"].clone()), (Status::Noted, json!(1)));
+        // a declared status is still ignored
+        let mut edited = c.clone();
+        edited["status"] = json!("validated");
+        assert_eq!(status(&edited), Status::Corroborated);
+        let files: Vec<AnchorSpec> = (0..3).map(|i| spec(&source(d.path(), &l, &format!("own{i}.md"), &page(&format!("topic {i}"))), "the moon drives")).collect();
+        let own = l.add_claim("The moon drives something.", &ClaimOpts::default(), &files).unwrap();
+        assert_eq!((status(&own), own["support"]["origins"].clone()), (Status::Noted, json!(0)), "operator files are not daemon-fetched pages");
+        let v = l.validate_claim(&id, Validator::Operator).unwrap();
+        assert_eq!(status(&v), Status::Validated);
+    }
+
+    #[test]
+    fn a_retired_or_purged_source_retracts_the_count_and_a_revived_one_restores_it() {
+        let (d, l) = lib();
+        let (ids, id) = three_fetched(d.path(), &l);
+        let mut m = l.read_meta(&ids[0]).unwrap();
+        m["retired"] = json!("now");
+        std::fs::write(l.source_dir(&ids[0]).join("meta.json"), serde_json::to_vec(&m).unwrap()).unwrap();
+        l.source_retired(&ids[0]);
+        let c = l.claim(&id).unwrap();
+        assert_eq!((status(&c), c["support"]["origins"].clone()), (Status::Noted, json!(2)), "two origins are not corroboration: {c}");
+        m["retired"] = Value::Null;
+        std::fs::write(l.source_dir(&ids[0]).join("meta.json"), serde_json::to_vec(&m).unwrap()).unwrap();
+        l.source_revived(&ids[0]);
+        assert_eq!(status(&l.claim(&id).unwrap()), Status::Corroborated, "the source came back");
+        l.purge(&ids[1]).unwrap();
+        let c = l.claim(&id).unwrap();
+        assert_eq!((status(&c), c["support"]["origins"].clone()), (Status::Noted, json!(2)), "a purged source is pointer-only and no longer an origin: {c}");
+    }
+
+    #[test]
+    fn a_lost_anchor_after_a_new_version_retracts_it_and_disagreement_wins_over_the_count() {
+        let (d, l) = lib();
+        let (ids, id) = three_fetched(d.path(), &l);
+        // source a changes and no longer says it
+        let next = page("harbours").replace("Here the moon drives the tides.", "Here nothing is said about it.");
+        l.add_file(&file(d.path(), "a.example.md", &next), &open("CC0-1.0"), &Budgets::default()).unwrap();
+        fetched(&l, &ids[0], "a.example", "reputable_secondary");
+        let c = l.refresh_support(&id).unwrap();
+        assert_eq!(c["support"]["origins"], 2, "{c}");
+        assert_ne!(status(&c), Status::Corroborated);
+        // and a contradiction lowers a claim that has three origins
+        let mut c = l.claim(&id).unwrap();
+        c["support"]["origins"] = json!(3);
+        c["contested_by"] = json!([{"reason": "contradicted", "source": "x"}]);
+        assert_eq!(status(&c), Status::Contested, "disagreement wins over a count");
+    }
+
     #[test]
     fn a_purge_makes_anchors_pointer_only_and_a_claim_another_source_supports_keeps_its_status() {
         let (d, l) = lib();

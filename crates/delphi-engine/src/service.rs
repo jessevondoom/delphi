@@ -523,7 +523,7 @@ impl EngineService {
             let validator = crate::research_host::LiveValidator { web: web.clone() };
             let library = crate::research_host::LiveLibrary { home, ledger: wsd.join("research/host-claims.jsonl"), label };
             let redactor = delphi_core::redact::Redactor::new();
-            let deps = crate::research_run::Deps { web: web.as_ref(), scout: &scout, validator: &validator, library: &library, redactor: &redactor, sites: &sites, thin_below: engine.settings.thin_below };
+            let deps = crate::research_run::Deps { web: web.as_ref(), scout: &scout, validator: &validator, library: &library, redactor: &redactor, sites: &sites, thin_below: engine.settings.thin_below, support: &engine.settings.support };
             crate::research_run::run_research(&jc, &q, depth, &deps).await
         });
         Ok(json!({"research_id": research_id, "status": "queued", "depth": depth, "note": "research runs in the background, trusted sources first: read it with research_status, then research_result. Everything it returns is not validated unless a claim says otherwise. The result carries a coverage report per rung; `coverage: thin` means the knowledge base and the trusted sources gave little, and your own tools and connectors can search further."}))
