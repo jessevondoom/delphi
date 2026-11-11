@@ -6614,13 +6614,18 @@ mod tests {
     /// Open a Panel with `open` (merged over the caller fields), let the host answer for `host_roles`, and read the card.
     /// Returns (the open answer, the result). The seats Delphi runs answer from the scripted model.
     fn drive_panel(hsock: PathBuf, htok: String, cwd: String, open: Value, host_roles: &'static [&'static str]) -> Result<(Value, Value), String> {
+        drive_panel_with(hsock, htok, cwd, open, host_roles, "OPTION: file\nPEER-MARKER-77", R2_GOOD)
+    }
+
+    /// [`drive_panel`] with the words the host's own seats give in Round 1 and Round 2.
+    fn drive_panel_with(hsock: PathBuf, htok: String, cwd: String, open: Value, host_roles: &'static [&'static str], r1_host: &str, r2_host: &str) -> Result<(Value, Value), String> {
         let mut c = Client::connect(&hsock).map_err(|e| e.to_string())?;
         c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
         c.hello(&htok).map_err(|e| e.to_string())?;
         let r = c.call("host.council_open", pbody(&cwd, open)).map_err(|e| e.to_string())?;
         let id = r["council_id"].as_str().unwrap().to_string();
         for seat in host_roles {
-            c.call("host.council_submit", pbody(&cwd, json!({"council_id": id, "seat": seat, "round": 1, "text": "OPTION: file\nPEER-MARKER-77", "model": "opus"}))).map_err(|e| e.to_string())?;
+            c.call("host.council_submit", pbody(&cwd, json!({"council_id": id, "seat": seat, "round": 1, "text": r1_host, "model": "opus"}))).map_err(|e| e.to_string())?;
         }
         let wait_brief = |c: &mut Client, seat: &str, round: u64| -> Result<(), String> {
             for _ in 0..300 {
@@ -6633,7 +6638,7 @@ mod tests {
         };
         wait_brief(&mut c, host_roles[0], 2)?;
         for seat in host_roles {
-            c.call("host.council_submit", pbody(&cwd, json!({"council_id": id, "seat": seat, "round": 2, "text": R2_GOOD}))).map_err(|e| e.to_string())?;
+            c.call("host.council_submit", pbody(&cwd, json!({"council_id": id, "seat": seat, "round": 2, "text": r2_host}))).map_err(|e| e.to_string())?;
         }
         wait_brief(&mut c, "orchestrator", 3)?;
         c.call("host.council_submit", pbody(&cwd, json!({"council_id": id, "seat": "orchestrator", "round": 3, "text": "DECISION: use a table\nNEXT builder: write the table"}))).map_err(|e| e.to_string())?;
@@ -6817,6 +6822,50 @@ mod tests {
         assert!(card.contains("**Red-team review: findings (advisory, not a ruling)**") && card.contains("family gemini, from the receipt") && card.contains("host-declared"), "{card}");
     }
 
+    // `specs/098` §6.2: Round 1 stances become findings too, and findings that name the same issue are grouped with the seats that raised them.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_red_team_review_turns_round_one_stances_into_findings_and_groups_the_same_issue_across_seats() {
+        let f = setup(vec![], 50.0, red_on);
+        crate::council::tests::two_families(&f);
+        f.model.respond_with(|body| {
+            let round2 = body.to_string().contains("COUNCIL, ROUND 2");
+            if round2 {
+                Step::text("RECOMMENDATION: PROCEED-WITH-CHANGES\nFINDING P1 replay of the barrier file\nFINDING P2 naming\nCONCUR: yes\nROUND 2 COMPLETE")
+            } else {
+                Step::text("OPTION: table\nMy concerns:\n- FINDING P2 The replay of the barrier file\nP3: a note that is only a nit")
+            }
+        });
+        f.model.served_with(|_| Some("gemini-4-argon".to_string()));
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let (_, got) = blocking(move || {
+            drive_panel_with(hsock, htok, cwd, json!({"question": "Is the plan safe?", "kind": "red_team", "model": "claude-opus", "operator_confirmed": true}), &["architect", "strategist"],
+                "OPTION: file\n[P0] Replay of the barrier file!\nunrelated prose", "RECOMMENDATION: PROCEED\nFINDING P2 naming\nCONCUR: yes\nROUND 2 COMPLETE").unwrap()
+        })
+        .await;
+        let r = &got["ruling"];
+        let fs = r["findings"].as_array().unwrap();
+        let mine = |seat: &str, title: &str| fs.iter().find(|x| x["seat"] == seat && x["title"].as_str().unwrap().to_lowercase().contains(title)).cloned();
+        let arch = mine("architect", "replay").expect("the host seat's Round 1 finding is listed");
+        assert_eq!((arch["severity"].as_str(), arch["rounds"].clone(), arch["family_source"].as_str()), (Some("P0"), json!([1]), Some("host-declared")), "{arch}");
+        let red = mine("red-team", "replay").expect("the foreign seat's findings are listed");
+        assert_eq!((red["severity"].as_str(), red["rounds"].clone(), red["family_source"].as_str(), red["family"].as_str()), (Some("P1"), json!([1, 2]), Some("receipt"), Some("gemini")), "raised in both rounds, worst severity kept: {red}");
+        assert!(mine("red-team", "nit").is_some(), "a Round 1 line stating a severity is a finding: {fs:?}");
+        // the group: one issue, both seats, worst severity, each seat's own family and its source
+        let groups = r["finding_groups"].as_array().unwrap();
+        let g = groups.iter().find(|g| g["title"].as_str().unwrap().to_lowercase().contains("replay")).expect("the replay issue is grouped");
+        assert_eq!((g["severity"].as_str(), g["raised_by"].as_u64()), (Some("P0"), Some(3)), "{g}");
+        let seats: Vec<(&str, &str)> = g["seats"].as_array().unwrap().iter().map(|x| (x["seat"].as_str().unwrap(), x["family_source"].as_str().unwrap())).collect();
+        assert!(seats.contains(&("architect", "host-declared")) && seats.contains(&("red-team", "receipt")), "{seats:?}");
+        let naming = groups.iter().find(|g| g["title"] == "naming").expect("naming");
+        assert_eq!(naming["raised_by"].as_u64(), Some(3), "Round 2 findings group too: {naming}");
+        let card = got["display"].as_str().unwrap();
+        assert!(card.contains("raised by 3 seats") && card.contains("`architect` (family claude, host-declared)") && card.contains("`red-team` (family gemini, from the receipt)"), "{card}");
+        // worst first
+        assert_eq!(groups[0]["severity"], "P0", "{groups:?}");
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn a_red_team_review_with_no_operator_yes_runs_host_only_and_says_single_family() {
         let f = setup(vec![], 50.0, red_on);
@@ -6854,6 +6903,34 @@ mod tests {
         assert!(ok["answer"].as_str().is_some_and(|a| !a.is_empty()), "{ok}");
         assert_eq!(ok["receipt"][0]["served_model"].as_str(), Some("gemini-4-argon"), "the receipt names the served model: {ok}");
         assert_eq!(ok["receipt"][0]["tools_offered"].as_array().map(Vec::len), Some(0), "no tools: {ok}");
+    }
+
+    // `specs/098` §6.2: `context_pointers` on `ask_family` reach the foreign seat the way they reach a Panel seat: listed in the question
+    // and read into the seat's context. Without pointers, none of the file's text is sent to the other family.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn ask_family_honors_context_pointers_and_sends_no_file_text_without_them() {
+        let f = setup(vec![], 50.0, roomy);
+        let _seen = foreign_fx(&f, |_| Some("gemini-4-argon".to_string()));
+        std::fs::write(f.root.join("proj/src/lib.rs"), "pub fn pointer_canary_needle() {}\n").unwrap();
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let (without, with) = blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            c.hello(&htok).unwrap();
+            let without = c.call("host.ask_family", pbody(&cwd, json!({"question": "Is this function name clear?", "model": "claude-opus", "operator_confirmed": true}))).unwrap();
+            let with = c.call("host.ask_family", pbody(&cwd, json!({"question": "Is this function name clear?", "model": "claude-opus", "operator_confirmed": true,
+                "context_pointers": [{"uri": "@project/app/src/lib.rs", "reason": "the function under discussion"}]}))).unwrap();
+            (without, with)
+        })
+        .await;
+        assert_eq!((without["advice_only"].clone(), with["advice_only"].clone()), (json!(true), json!(true)));
+        let bodies: Vec<String> = f.model.requests().iter().map(|q| q.body.to_string()).collect();
+        assert_eq!(bodies.len(), 2, "one seat call per ask");
+        assert!(!bodies[0].contains("pointer_canary_needle") && !bodies[0].contains("@project/app/src/lib.rs"), "no pointers, no file text: {}", bodies[0]);
+        assert!(bodies[1].contains("@project/app/src/lib.rs") && bodies[1].contains("the function under discussion"), "the pointer and its reason are listed in the question: {}", bodies[1]);
+        assert!(bodies[1].contains("pointer_canary_needle"), "and the file's text is read into the seat's context: {}", bodies[1]);
     }
 
     #[tokio::test(flavor = "multi_thread")]

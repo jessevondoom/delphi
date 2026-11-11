@@ -5459,6 +5459,8 @@ mod tests {
             s.loop_cfg.trim_arguments_kb = 1;
             s.loop_cfg.keep_recent_turns = 2;
             s.loop_cfg.nudge = false;
+            // Nobody answers the six approvals the writes under `specs/` raise; each times out (and is denied) quickly instead of in 30 s.
+            s.approval_timeout = Duration::from_millis(100);
         });
         crate::testkit::ratify_spec(&f);
         f.engine.run_task(&f.m, "architect", "Draft six specs").await.unwrap();
