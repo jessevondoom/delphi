@@ -1,3 +1,8 @@
 [workspace]
 members = ["crates/delphi", "crates/delphi-core", "crates/delphi-adapter", "crates/delphi-engine", "crates/delphi-sandbox", "crates/delphi-xenia", "crates/delphi-docs", "crates/delphi-bundle", "crates/delphi-release"]
 resolver = "2"
+
+# Dependencies build optimized in the dev profile: tests lean on regex, aho-corasick, serde and sha2, which are slow at opt-level 0
+# (delphi-bundle unit tests ran 6-9x faster). Workspace crates keep opt-level 0, so edit-and-test rebuilds stay quick.
+[profile.dev.package."*"]
+opt-level = 2
