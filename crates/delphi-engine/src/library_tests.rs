@@ -725,6 +725,32 @@ mod claims {
     }
 
     #[test]
+    fn tier_outcomes_count_the_claims_that_read_a_rung_and_those_later_contested() {
+        let (d, l) = lib();
+        let (ids, id) = three_fetched(d.path(), &l);
+        let c = l.claim(&id).unwrap();
+        assert_eq!(status(&c), Status::Substantiated);
+        // the daemon marks every rung the claim read, lowest first, and never one it did not
+        assert!(c["reached"]["corroborated"].is_string() && c["reached"]["substantiated"].is_string() && c["reached"]["vetted"].is_null(), "{c}");
+        let first = c["reached"]["substantiated"].clone();
+        let o = l.tier_outcomes();
+        assert_eq!((o["corroborated"], o["substantiated"], o["vetted"]), ((1, 0, 0), (1, 0, 0), (0, 0, 0)), "{o:?}");
+        // a claim with one origin never read a rung and is not counted anywhere
+        let one = l.add_claim("Another.", &ClaimOpts::default(), &[spec(&ids[0], "the moon drives the tides")]).unwrap();
+        assert!(one["reached"].is_null(), "{one}");
+        assert_eq!(l.tier_outcomes()["corroborated"].0, 1);
+        // source a changes and no longer says it: the claim is lowered, but it still read the rung, so it now counts as later contested
+        let next = page("harbours").replace("Here the moon drives the tides.", "Here nothing is said about it.");
+        l.add_file(&file(d.path(), "a.example.md", &next), &open("CC0-1.0"), &Budgets::default()).unwrap();
+        fetched(&l, &ids[0], "a.example", "reputable_secondary");
+        let c = l.refresh_support(&id).unwrap();
+        assert_eq!(status(&c), Status::Contested, "{c}");
+        assert_eq!(c["reached"]["substantiated"], first, "the mark is kept, not rewritten");
+        let o = l.tier_outcomes();
+        assert_eq!((o["corroborated"], o["substantiated"]), ((1, 1, 0), (1, 1, 0)), "{o:?}");
+    }
+
+    #[test]
     fn a_purge_makes_anchors_pointer_only_and_a_claim_another_source_supports_keeps_its_status() {
         let (d, l) = lib();
         let a = source(d.path(), &l, "a.md", BODY);

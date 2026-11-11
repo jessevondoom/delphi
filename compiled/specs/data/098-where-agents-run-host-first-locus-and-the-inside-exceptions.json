@@ -177,62 +177,68 @@
       "title": "Order, exit criteria and flags"
     },
     {
-      "level": 2,
+      "level": 3,
       "line": 357,
+      "number": "13.2",
+      "title": "Flags pulled, and the roll-back plan (operator decision, 2026-11-11)"
+    },
+    {
+      "level": 2,
+      "line": 379,
       "number": "14",
       "title": "Decisions"
     },
     {
       "level": 2,
-      "line": 390,
+      "line": 412,
       "number": "15",
       "title": "Council review"
     },
     {
       "level": 3,
-      "line": 409,
+      "line": 431,
       "number": "15.1",
       "title": "Council `t_0002` (2026-11-10, on this draft)"
     },
     {
       "level": 3,
-      "line": 425,
+      "line": 447,
       "number": "15.2",
       "title": "Councils `t_0004` and `t_0005` (2026-11-10, on the full text)"
     },
     {
       "level": 3,
-      "line": 448,
+      "line": 470,
       "number": "15.3",
       "title": "Council `t_0006` (2026-11-10, on the confidence-ladder proposal)"
     },
     {
       "level": 2,
-      "line": 464,
+      "line": 486,
       "number": "16",
       "title": "Acceptance criteria"
     },
     {
       "level": 3,
-      "line": 482,
+      "line": 504,
       "number": "16.1",
       "title": "Verification Plan"
     },
     {
       "level": 2,
-      "line": 504,
+      "line": 526,
       "number": "17",
       "title": "Not verified"
     },
     {
       "level": 2,
-      "line": 522,
+      "line": 544,
       "number": "18",
       "title": "Pinned items (proposed values; the slices calibrate them)"
     },
     {
       "level": 2,
-      "line": 538,
+      "line": 560,
       "number": "19",
       "title": "Progress you can see, and cancel"
     }
@@ -240,7 +246,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/098-where-agents-run-host-first-locus-and-the-inside-exceptions.md",
-    "sha256": "c3475462688d4eca0b269c6667bbc429aac3ea90862c924156c51da5dd5bb8e8"
+    "sha256": "0dce4527c3ee755674959c0050853186bf0168d93d35a26a266eccef6bf27556"
   },
   "source_status_at_hash": {
     "line": {
@@ -253,7 +259,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-10 (\"approve spec 098\"): the text as written. OD-1 to OD-6 and OD-8 to OD-11 of section 14 take their recommendations. OD-7 (inside fetch) was decided by the operator the same day (\"7a yes, 7b off\"): 7a is approved, 7b is off and not built. A review with a completed red-team Round 2 (section 17) was not run before approval. The text takes effect when this pull request merges."
     },
-    "sha256": "c3475462688d4eca0b269c6667bbc429aac3ea90862c924156c51da5dd5bb8e8",
+    "sha256": "0dce4527c3ee755674959c0050853186bf0168d93d35a26a266eccef6bf27556",
     "word": "approved"
   },
   "spec": {

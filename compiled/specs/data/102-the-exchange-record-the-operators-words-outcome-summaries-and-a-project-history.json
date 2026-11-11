@@ -4,151 +4,151 @@
   "outline": [
     {
       "level": 1,
-      "line": 15,
+      "line": 16,
       "number": null,
       "title": "Spec 102: The exchange record"
     },
     {
       "level": 2,
-      "line": 19,
+      "line": 20,
       "number": "1",
       "title": "Scope and objectives"
     },
     {
       "level": 3,
-      "line": 41,
+      "line": 42,
       "number": "1.1",
       "title": "Non-goals"
     },
     {
       "level": 3,
-      "line": 48,
+      "line": 49,
       "number": "1.2",
       "title": "Simpler alternative considered"
     },
     {
       "level": 2,
-      "line": 52,
+      "line": 53,
       "number": "2",
       "title": "Principles"
     },
     {
       "level": 2,
-      "line": 61,
+      "line": 62,
       "number": "3",
       "title": "The exchange record"
     },
     {
       "level": 3,
-      "line": 65,
+      "line": 66,
       "number": "3.1",
       "title": "Fields"
     },
     {
       "level": 3,
-      "line": 84,
+      "line": 85,
       "number": "3.2",
       "title": "Triggers (decided by the operator, 2026-11-11)"
     },
     {
       "level": 3,
-      "line": 96,
+      "line": 97,
       "number": "3.3",
       "title": "Who writes the reply summary"
     },
     {
       "level": 3,
-      "line": 102,
+      "line": 103,
       "number": "3.4",
       "title": "Pasted text: the daemon decides, not the host"
     },
     {
       "level": 3,
-      "line": 112,
+      "line": 113,
       "number": "3.5",
       "title": "Relation to the artifact prompt log (spec 070 §3)"
     },
     {
       "level": 2,
-      "line": 121,
+      "line": 122,
       "number": "4",
       "title": "Pointers: where the words can be checked"
     },
     {
       "level": 2,
-      "line": 132,
+      "line": 133,
       "number": "5",
       "title": "The timeline and the report"
     },
     {
       "level": 3,
-      "line": 141,
+      "line": 142,
       "number": "5.1",
       "title": "Anything that returns record text to a seat (`history_search`): deferred, and these rules if built"
     },
     {
       "level": 2,
-      "line": 152,
+      "line": 153,
       "number": "6",
       "title": "Provenance and trust"
     },
     {
       "level": 2,
-      "line": 158,
+      "line": 159,
       "number": "7",
       "title": "Controls: on by default, easy to turn off"
     },
     {
       "level": 2,
-      "line": 173,
+      "line": 174,
       "number": "8",
       "title": "Slices (one pull request each; none starts before approval and before the 098, 100 and 101 gates)"
     },
     {
       "level": 2,
-      "line": 190,
+      "line": 191,
       "number": "9",
       "title": "Considered and not adopted"
     },
     {
       "level": 2,
-      "line": 202,
+      "line": 203,
       "number": "10",
       "title": "Amendments (they take effect on approval)"
     },
     {
       "level": 2,
-      "line": 209,
+      "line": 210,
       "number": "11",
       "title": "Authority invariants (what the tests prove)"
     },
     {
       "level": 2,
-      "line": 228,
+      "line": 229,
       "number": "12",
       "title": "Council record"
     },
     {
       "level": 2,
-      "line": 261,
+      "line": 262,
       "number": "13",
       "title": "Known limits and what is not verified"
     },
     {
       "level": 2,
-      "line": 279,
+      "line": 280,
       "number": "14",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 292,
+      "line": 293,
       "number": "15",
       "title": "Verification Plan"
     },
     {
       "level": 2,
-      "line": 315,
+      "line": 316,
       "number": "16",
       "title": "Decisions and open questions"
     }
@@ -156,21 +156,21 @@
   "schema_version": 1,
   "source": {
     "path": "specs/102-the-exchange-record-the-operators-words-outcome-summaries-and-a-project-history.md",
-    "sha256": "36795fa4a1982caa7134e02d8c0fbba4554195c63fa604a4e9a4a2d66ba24523"
+    "sha256": "e301accd8418af96ce03934d6d9ff2f35f331b647d2a8b6c81bd67a3d7f4efa3"
   },
   "source_status_at_hash": {
     "line": {
       "kind": "quote",
       "span": {
-        "end": 397,
+        "end": 694,
         "end_line": 6,
         "line": 6,
         "start": 244
       },
-      "text": "status: draft   # for the operator and a Council review. Nothing here is buildable until the operator approves it; a draft is a proposal, not permission."
+      "text": "status: approved   # by the operator, 2026-11-11 (\"approve spec 102\"): the text as written, including that the opt-out default HOLDS until the P0s are closed and the feature ships in one release (OD-8), and that it departs from Council t_0008's opt-in advice. OD-1 to OD-7 of section 16 take their recommendations. The slices start only after the verification gates of specs 098, 100 and 101 pass. The text takes effect when this pull request merges."
     },
-    "sha256": "36795fa4a1982caa7134e02d8c0fbba4554195c63fa604a4e9a4a2d66ba24523",
-    "word": "draft"
+    "sha256": "e301accd8418af96ce03934d6d9ff2f35f331b647d2a8b6c81bd67a3d7f4efa3",
+    "word": "approved"
   },
   "spec": {
     "group": "knowledge-and-memory",
@@ -184,10 +184,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 2511,
-      "end_line": 21,
-      "line": 21,
-      "start": 1939
+      "end": 2936,
+      "end_line": 22,
+      "line": 22,
+      "start": 2364
     },
     "text": "The operator asked (2026-11-11) for Delphi to keep a history of what happened in a project: the operator's own words, what came of each request, and a build report, with deeper provenance, so that agents get more context and the operator can ask \"where did this decision come from\". The first idea was to store the sessions' transcripts. Council `t_0008` (architect, red-team, strategist; two model families) advised against that, and the operator then proposed a smaller unit, the **exchange record**: one prompt of the operator's, with a short summary of what came back."
   }
