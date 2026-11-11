@@ -1112,6 +1112,19 @@ impl Engine {
         f
     }
 
+    /// Can a Council be seated at all (`specs/098` §5)? Every default seat must be an enabled role and at least one model family must
+    /// be usable. Judged before a Council is raised for a host, so the host gets the typed `seats_unavailable` answer at once instead
+    /// of a task that fails later. The reason is fixed text naming a role or a fact, never anything a caller wrote.
+    pub(crate) fn council_seatable(&self) -> Result<(), String> {
+        if let Some(r) = DEFAULT_SEATS.iter().find(|r| !self.settings.enabled_agents.contains(&r.to_string())) {
+            return Err(format!("`{r}` is not an enabled role, so the default Council cannot be seated"));
+        }
+        if self.available_families().is_empty() {
+            return Err("no model family is usable right now, so no Council seat can be seated".to_string());
+        }
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn council_handoff(&self, m: &MissionState, task_id: &str, role: &str, round: &str, plan: &SeatPlan, objective: String, pointers: Vec<crate::handoff::ContextPointer>) -> HandoffEnvelope {
         let mut h = HandoffEnvelope::root(&m.id, task_id, role, &objective, pointers);
@@ -2466,6 +2479,19 @@ pub(crate) mod tests {
         let out = f.engine.run_council(&f.m, f.m.next_task_id(), "   ", CouncilOpts::default()).await.unwrap();
         assert!(matches!(out.status, Status::Escalated(_)));
         assert_eq!(f.model.requests().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_council_that_cannot_be_seated_is_known_before_one_is_raised() {
+        // Spec 098 section 5: the daemon tells a host `seats_unavailable` at once. The reason is fixed text naming a role or a fact.
+        let ok = crate::testkit::setup(vec![], 50.0, |_| {});
+        two_families(&ok);
+        assert_eq!(ok.engine.council_seatable(), Ok(()));
+        for role in DEFAULT_SEATS {
+            let f = crate::testkit::setup(vec![], 50.0, |s| s.enabled_agents.retain(|r| r != role));
+            let why = f.engine.council_seatable().unwrap_err();
+            assert!(why.contains(&format!("`{role}` is not an enabled role")), "{role}: {why}");
+        }
     }
 
     #[tokio::test]

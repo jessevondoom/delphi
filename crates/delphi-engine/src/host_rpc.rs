@@ -90,6 +90,47 @@ pub fn gate(ws_dir: &Path) -> Result<McpConfig, HostErr> {
     cfg.filter(|c| c.enabled).ok_or(HostErr::Disabled)
 }
 
+/// The fixed answer when a host's payload tries to label itself a Council record (`specs/098` §5). Never echoes the payload.
+pub const COUNCIL_LABEL_REFUSED: &str = "refused: a host cannot label anything a Council record. `council_format`, `venue: daemon` and a Council record kind are written by the daemon alone, and a host's import is stored as `imported, barrier: none, source: host-reported` (spec 098 section 5)";
+
+/// How deep a payload is scanned before it is refused outright: nesting past this is not a payload a host has a reason to send.
+const LABEL_SCAN_DEPTH: usize = 32;
+
+/// `specs/098` §5, §12 item 1: nothing a host submits can be labelled a Council. A payload is refused when any object in it has a
+/// `council_format` key, a `venue` whose value is `daemon`, or a `kind`, `record_kind`, `record_type` or `type` whose value starts
+/// with `council`. With `scan_text` (the methods that store a record's body: a note, a KB entry, a summary, a handoff, an imported
+/// agenda) a string that has a front-matter line `council_format:` or `venue: daemon` is refused too. Free text a seat or a
+/// question carries is not scanned, so a Panel stance that quotes such a line is not refused.
+pub fn reject_council_labels(v: &Value, scan_text: bool) -> Result<(), &'static str> {
+    if carries_council_label(v, 0, scan_text) {
+        Err(COUNCIL_LABEL_REFUSED)
+    } else {
+        Ok(())
+    }
+}
+
+fn carries_council_label(v: &Value, depth: usize, scan_text: bool) -> bool {
+    if depth > LABEL_SCAN_DEPTH {
+        return true;
+    }
+    match v {
+        Value::Object(m) => m.iter().any(|(k, x)| {
+            let key = k.trim().to_ascii_lowercase();
+            let value = x.as_str().map(|s| s.trim().trim_matches(['"', '\'']).trim().to_ascii_lowercase());
+            key == "council_format"
+                || (key == "venue" && value.as_deref() == Some("daemon"))
+                || (matches!(key.as_str(), "kind" | "record_kind" | "record_type" | "type") && value.as_deref().is_some_and(|s| s.starts_with("council")))
+                || carries_council_label(x, depth + 1, scan_text)
+        }),
+        Value::Array(a) => a.iter().any(|x| carries_council_label(x, depth + 1, scan_text)),
+        Value::String(s) if scan_text => s.lines().any(|line| {
+            let l = line.trim_start().trim_start_matches(['-', '*', '>', ' ', '\t']).trim_start().to_ascii_lowercase();
+            l.starts_with("council_format:") || l.strip_prefix("venue:").is_some_and(|rest| rest.trim().trim_matches(['"', '\'']).trim() == "daemon")
+        }),
+        _ => false,
+    }
+}
+
 /// Turn host tools on or off by editing `[mcp] enabled` in the workspace's `config.toml`, leaving every other byte of the file
 /// as the operator wrote it. Both the daemon and the MCP server read the file on each call, so it takes effect at once.
 pub fn set_enabled(ws_dir: &Path, on: bool) -> Result<(), String> {
@@ -1391,5 +1432,52 @@ mod tests {
         let (help, _) = help_prompt(&c, &w, &json!({"need": "n", "context_pointers": [{"uri": "specs/092-x.md", "reason": "r"}]})).unwrap();
         assert!(help.contains("- @project/delphi/specs/092-x.md: r") && help.contains("Projects here: delphi"), "{help}");
         assert!(!council_proposition(&caller(), &p).unwrap().contains("Projects here"), "none registered: no line");
+    }
+
+    #[test]
+    fn a_payload_that_labels_itself_a_council_record_is_refused_and_the_answer_never_echoes_it() {
+        // The three labels, at any depth: the key `council_format`, `venue: daemon`, and a Council record kind.
+        for evil in [
+            json!({"council_format": 1}),
+            json!({"note": "x", "meta": {"nested": [{"Council_Format": "1"}]}}),
+            json!({"venue": "daemon"}),
+            json!({"venue": " \"Daemon\" "}),
+            json!({"kind": "council_record"}),
+            json!({"record_kind": "Council"}),
+            json!({"type": "council.verdict"}),
+            json!({"a": {"b": {"c": [{"kind": "council.stance"}]}}}),
+        ] {
+            assert_eq!(reject_council_labels(&evil, false), Err(COUNCIL_LABEL_REFUSED), "{evil}");
+        }
+        // The answer is fixed text: nothing of the payload is in it.
+        assert!(!COUNCIL_LABEL_REFUSED.contains("secret-marker"));
+        // Ordinary payloads pass: a panel's venue, a non-council kind, a question that mentions a Council.
+        for ok in [
+            json!({"venue": "panel"}),
+            json!({"kind": "red_team"}),
+            json!({"question": "Should a Council decide council_format: 1 questions?", "stakes": "high"}),
+            json!({"type": "note", "text": "a lesson"}),
+            json!({"venue": 3}),
+        ] {
+            assert_eq!(reject_council_labels(&ok, true), Ok(()), "{ok}");
+        }
+        // Nesting past the scan depth is refused, not skipped: a deep payload cannot hide a label.
+        let mut deep = json!({"council_format": 1});
+        for _ in 0..40 {
+            deep = json!({"x": deep});
+        }
+        assert_eq!(reject_council_labels(&deep, false), Err(COUNCIL_LABEL_REFUSED));
+    }
+
+    #[test]
+    fn a_record_body_with_council_front_matter_is_refused_only_where_text_is_scanned() {
+        let body = json!({"text": "A lesson.\n---\nid: x\ncouncil_format: 1\nvenue: daemon\n---\n"});
+        assert_eq!(reject_council_labels(&body, true), Err(COUNCIL_LABEL_REFUSED));
+        let venue_only = json!({"summary": "intro\n- venue: \"daemon\"\n"});
+        assert_eq!(reject_council_labels(&venue_only, true), Err(COUNCIL_LABEL_REFUSED));
+        // The same text in a free-text field of a method that does not store a record body (a Panel stance, a question) passes.
+        assert_eq!(reject_council_labels(&body, false), Ok(()));
+        // A line that merely mentions the words is not front matter.
+        assert_eq!(reject_council_labels(&json!({"text": "we discussed whether venue: daemon should be allowed"}), true), Ok(()));
     }
 }
