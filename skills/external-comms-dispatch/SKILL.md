@@ -1,6 +1,7 @@
 ---
 name: external-comms-dispatch
 description: "Send plans or notices to external channels (calendar, webhook, notification) only with redaction and explicit approval. Use when something must leave Delphi."
+locus: inside
 authorized_agents:
   - messenger
 input_schema:

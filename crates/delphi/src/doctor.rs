@@ -340,6 +340,15 @@ fn check_host_plugin(home: &Path, ws: &Workspace, r: &mut Report) {
         }
         checks.push((host, c));
     }
+    // Spec 098 §4: the capability map the plugin carries (`adapter.json`) against the one this binary names in its pack headers.
+    // A warning, never a failure, and silent when the plugin's folder cannot be read safely.
+    if let Some((same, detail)) = delphi_engine::mcp_check::check_claude_adapter(Path::new(&h), &delphi_engine::mcp_hosts::claude_code_adapter_json()) {
+        if same {
+            r.push(Level::Ok, "15 host-plugin", "claude-code adapter", detail);
+        } else {
+            r.warn("15 host-plugin", "claude-code adapter", format!("{detail}. Fix: `claude plugin update delphi@delphi`"));
+        }
+    }
     let sock = delphi_core::spawn::layout(home, &ws.dir).ok().map(|l| l.host_sock);
     host_chain(&ws.dir, sock.as_deref(), &probe_socket, &checks, r);
 }
