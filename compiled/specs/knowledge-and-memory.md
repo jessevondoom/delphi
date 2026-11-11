@@ -166,9 +166,9 @@ The operator's aim (2026-11-10): **no learning is absolute, but a high degree of
 
 ## 102-the-exchange-record-the-operators-words-outcome-summaries-and-a-project-history
 
-**102: The exchange record: the operator's words, outcome summaries and a project history** · draft (per source at `36795fa4a198`) · tier 0 · [source](../../specs/102-the-exchange-record-the-operators-words-outcome-summaries-and-a-project-history.md)
+**102: The exchange record: the operator's words, outcome summaries and a project history** · approved (per source at `e301accd8418`) · tier 0 · [source](../../specs/102-the-exchange-record-the-operators-words-outcome-summaries-and-a-project-history.md)
 
-**source excerpt, untrusted** · `specs/102-the-exchange-record-the-operators-words-outcome-summaries-and-a-project-history.md` line 21
+**source excerpt, untrusted** · `specs/102-the-exchange-record-the-operators-words-outcome-summaries-and-a-project-history.md` line 22
 
 ```text
 The operator asked (2026-11-11) for Delphi to keep a history of what happened in a project: the operator's own words, what came of each request, and a build report, with deeper provenance, so that agents get more context and the operator can ask "where did this decision come from". The first idea was to store the sessions' transcripts. Council `t_0008` (architect, red-team, strategist; two model families) advised against that, and the operator then proposed a smaller unit, the **exchange record**: one prompt of the operator's, with a short summary of what came back.
