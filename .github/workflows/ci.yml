@@ -121,7 +121,19 @@ jobs:
       - name: Rust toolchain
         run: rustup show active-toolchain && rustc --version
       - name: Install cargo-deny (pinned)
-        run: cargo install --locked cargo-deny --version 0.20.2
+        run: |
+          # The crate download can fail for a moment; 3 attempts, 20 seconds apart.
+          for attempt in 1 2 3; do
+            if cargo install --locked cargo-deny --version 0.20.2; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "cargo install failed after 3 attempts"
+              exit 1
+            fi
+            echo "cargo install failed (attempt $attempt of 3); retrying in 20s"
+            sleep 20
+          done
       - name: Check
         run: cargo deny --locked check
 
@@ -157,7 +169,19 @@ jobs:
           restore-keys: |
             cargo-target-${{ runner.os }}-ui-
       - name: Install (pinned, no install scripts)
-        run: npm ci --ignore-scripts --no-audit --no-fund
+        run: |
+          # A download from the npm registry can fail for a moment; 3 attempts, 20 seconds apart.
+          for attempt in 1 2 3; do
+            if npm ci --ignore-scripts --no-audit --no-fund; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "npm ci failed after 3 attempts"
+              exit 1
+            fi
+            echo "npm ci failed (attempt $attempt of 3); retrying in 20s"
+            sleep 20
+          done
       - name: Dependency gate
         run: npm run check-deps
       - name: Typecheck
@@ -196,7 +220,30 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install bubblewrap and allow user namespaces
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
+          # The runner's package mirror (azure.archive.ubuntu.com) sometimes fails to resolve, for minutes at a time.
+          # `apt-get update` exits 0 then, so only the install fails; retry both together, at most 3 retries (4 attempts),
+          # 20 seconds apart. Short timeouts keep a dead mirror from costing five minutes an attempt, and after the first
+          # failure apt is pointed at archive.ubuntu.com instead (packages stay signature-checked by apt).
+          APT_OPTS="-o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 -o Acquire::Retries=0"
+          for attempt in 1 2 3 4; do
+            if sudo apt-get $APT_OPTS update -qq && sudo apt-get $APT_OPTS install -y -qq bubblewrap; then
+              break
+            fi
+            if [ "$attempt" -eq 4 ]; then
+              echo "apt could not install bubblewrap after 3 retries"
+              exit 1
+            fi
+            if [ "$attempt" -eq 1 ]; then
+              echo "apt failed on the runner's mirror; switching to archive.ubuntu.com"
+              for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list; do
+                if [ -f "$f" ]; then
+                  sudo sed -i -E 's#mirror\+file:/etc/apt/apt-mirrors\.txt#http://archive.ubuntu.com/ubuntu/#g; s#https?://azure\.archive\.ubuntu\.com/ubuntu/?#http://archive.ubuntu.com/ubuntu/#g' "$f"
+                fi
+              done
+            fi
+            echo "apt failed (attempt $attempt of 4); retrying in 20s"
+            sleep 20
+          done
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           bwrap --version
           bwrap --ro-bind / / --unshare-all --die-with-parent true && echo "bwrap works here"
