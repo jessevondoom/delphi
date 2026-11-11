@@ -96,6 +96,9 @@ fn every_tier_command_is_refused_inside_an_agent_seat_and_creates_nothing() {
         &["validation", "tier", "rollback", "vetted", "--reason", "an agent should not be able to do this"],
         &["validation", "tier", "restore", "vetted", "--reason", "an agent should not be able to do this"],
         &["validation", "tier", "threshold", "vetted", "5"],
+        &["validation", "accept-all"],
+        &["validation", "accept-all", "--list"],
+        &["validation", "accept-all", "--only", "c-1"],
     ] {
         let out = Command::new(DELPHI)
             .args(args)

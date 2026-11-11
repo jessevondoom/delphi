@@ -149,6 +149,16 @@ pub fn validation_section(ws: &Path, now: i64) -> String {
     format!("\nFact validation: {cards}\n{waiting}{line}\n{}", delphi_engine::tier_audit::needs_line(&state))
 }
 
+/// Accept-all and re-audit lines (`specs/100` §6, §7.3): how many vetted claims wait for the operator's accept, and how many batch-accepted claims are
+/// flagged `re-audit due`. Silent when the validator has never run or nothing waits. Nothing here accepts anything.
+pub fn accept_all_section(ws: &Path, home: &Path) -> String {
+    let state = delphi_engine::fact_mode::state_dir(ws);
+    if !state.is_dir() {
+        return String::new();
+    }
+    delphi_engine::accept_all::needs_line(&delphi_engine::library::Library::in_home(home), &state)
+}
+
 /// Key facts taken from summary pages that wait for the operator (`specs/068` §6.5). Silent when there are none.
 pub fn candidates_section(home: &Path) -> String {
     let (open, recheck) = delphi_engine::library::Library::in_home(home).candidate_counts();
