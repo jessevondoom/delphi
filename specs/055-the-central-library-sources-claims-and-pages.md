@@ -160,6 +160,8 @@ The operator wants the system to bring in public-domain literature and research 
 - Storage is bounded by the budgets of §3.6.
 
 ### 10.1 `private` is enforced at every outbound path
+*Reading, 2026-11-11 (specs/098 §12 item 16): "any outbound request" below means any outbound request that carries text from a private source. A fetch of a URL the daemon's own search returned carries none; it is guarded by the observed set and listed as an exempt path, with its tests, in the egress enumeration.*
+
 A source flagged `private` (and any restricted body) is excluded by daemon checks, not by convention, from: bundles, Xenia, exports, `delphi debug bundle` and logs, the relay, connectors and mail, web-search queries and any outbound request, and telemetry. Agents may read a private source like any file the operator has given them, **including in prompts to the operator's own configured model providers** (config `[library] private_to_models`, default `allow`; `deny` keeps private text out of every prompt and agents then see only the citation and the operator's notes).
 
 ## 11. Slices
