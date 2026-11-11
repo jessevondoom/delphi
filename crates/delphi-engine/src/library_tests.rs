@@ -536,7 +536,7 @@ mod claims {
         let (d, l) = lib();
         let (ids, id) = three_fetched(d.path(), &l);
         let c = l.claim(&id).unwrap();
-        assert_eq!((status(&c), c["support"]["origins"].clone(), c["support"]["trusted_sources"].clone()), (Status::Corroborated, json!(3), json!(3)), "{c}");
+        assert_eq!((status(&c), c["support"]["origins"].clone(), c["support"]["trusted_sources"].clone()), (Status::Substantiated, json!(3), json!(3)), "three trusted origins read substantiated: {c}");
         assert!(c["support"]["computed"].is_string(), "the tags are stored with the day they were computed");
         // one origin is one origin, however many times the claim anchors into it
         let one = l.add_claim("Another.", &ClaimOpts::default(), &[spec(&ids[0], "the moon drives the tides"), spec(&ids[0], "the moon")]).unwrap();
@@ -544,7 +544,7 @@ mod claims {
         // a declared status is still ignored
         let mut edited = c.clone();
         edited["status"] = json!("validated");
-        assert_eq!(status(&edited), Status::Corroborated);
+        assert_eq!(status(&edited), Status::Substantiated);
         let files: Vec<AnchorSpec> = (0..3).map(|i| spec(&source(d.path(), &l, &format!("own{i}.md"), &page(&format!("topic {i}"))), "the moon drives")).collect();
         let own = l.add_claim("The moon drives something.", &ClaimOpts::default(), &files).unwrap();
         assert_eq!((status(&own), own["support"]["origins"].clone()), (Status::Noted, json!(0)), "operator files are not daemon-fetched pages");
@@ -565,7 +565,7 @@ mod claims {
         m["retired"] = Value::Null;
         std::fs::write(l.source_dir(&ids[0]).join("meta.json"), serde_json::to_vec(&m).unwrap()).unwrap();
         l.source_revived(&ids[0]);
-        assert_eq!(status(&l.claim(&id).unwrap()), Status::Corroborated, "the source came back");
+        assert_eq!(status(&l.claim(&id).unwrap()), Status::Substantiated, "the source came back");
         l.purge(&ids[1]).unwrap();
         let c = l.claim(&id).unwrap();
         assert_eq!((status(&c), c["support"]["origins"].clone()), (Status::Noted, json!(2)), "a purged source is pointer-only and no longer an origin: {c}");
@@ -581,7 +581,7 @@ mod claims {
         fetched(&l, &ids[0], "a.example", "reputable_secondary");
         let c = l.refresh_support(&id).unwrap();
         assert_eq!(c["support"]["origins"], 2, "{c}");
-        assert_ne!(status(&c), Status::Corroborated);
+        assert_eq!(status(&c), Status::Noted, "two origins are not corroboration");
         // and a contradiction lowers a claim that has three origins
         let mut c = l.claim(&id).unwrap();
         c["support"]["origins"] = json!(3);

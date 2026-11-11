@@ -21,7 +21,8 @@ const BANNER_MID: &str = " from the sources listed below; ";
 const BANNER_TAIL: &str = "). Read the cited sources before relying on it.";
 const PENDING: &str = "not yet checked by the validator (";
 const CHECKED: &str = "checked by the validator on ";
-const SHOWN: [&str; 5] = ["● validated", "○ not validated", "◆ not validated", "◐ not validated", "✕ disproved"];
+// `vetted` (specs/100) shares the quiet `○`: no glyph in the 053 vocabulary means "vetted", so none is invented.
+const SHOWN: [&str; 6] = ["● validated", "○ not validated", "◆ not validated", "◐ not validated", "✕ disproved", "○ vetted"];
 const MAX_FLAGS: usize = 50;
 
 /// Where a page will be read: an external page never carries a private record (`specs/055` §10.1).
