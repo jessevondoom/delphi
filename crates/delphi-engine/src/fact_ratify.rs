@@ -42,6 +42,7 @@ fn verdict_event(r: &Report, mode: ValidatorMode, written: &Option<Written>) -> 
         "sources": r.findings.sources.iter().map(|s| json!({"url": s.url, "class": s.class.as_str(), "origin": s.origin, "counted": s.counted, "note": s.note, "snapshot_sha256": s.snapshot_sha256})).collect::<Vec<_>>(),
         "refused_fetches": r.refused_fetches.iter().map(|(u, why)| json!({"url": u, "why": why})).collect::<Vec<_>>(),
         "contradiction_queries": r.contradictions.iter().map(|c| c.query.clone()).collect::<Vec<_>>(),
+        "contradicted_validated": r.contradicted_validated,
         "tokens": r.tokens,
     })
 }
@@ -150,7 +151,7 @@ mod tests {
         let store = SnapshotStore::in_home(ws.path());
         let list = SourceList::new(ValidatorSources { primary: vec!["127.0.0.1".into()], ..Default::default() }).with_test_pin("/rfc");
         let ledger = TokenLedger::new(100_000);
-        let deps = Deps { policy: &policy, store: &store, list: &list, judge: &Yes, searcher: Some(&Nothing), ledger: &ledger, author_family: None, doi: None };
+        let deps = Deps { policy: &policy, store: &store, list: &list, judge: &Yes, searcher: Some(&Nothing), ledger: &ledger, author_family: None, doi: None, validated: None };
         let sub = Submission { claim: "HTTP status 418 is defined as I'm a teapot.".into(), needed_for: "q".into(), urls: vec![format!("http://{}/rfc/2324", addr)], kind: ClaimKind::Fact };
         let d = ratify_fact(&deps, &eff, ws.path(), &sub, "2026-10-28T00:00:00Z", "m1").await.unwrap();
         (d, ws)
@@ -201,7 +202,7 @@ mod tests {
         let store = SnapshotStore::in_home(ws.path());
         let list = SourceList::new(ValidatorSources::default());
         let ledger = TokenLedger::new(1);
-        let deps = Deps { policy: &policy, store: &store, list: &list, judge: &Yes, searcher: None, ledger: &ledger, author_family: None, doi: None };
+        let deps = Deps { policy: &policy, store: &store, list: &list, judge: &Yes, searcher: None, ledger: &ledger, author_family: None, doi: None, validated: None };
         let sub = Submission { claim: "X is Y.".into(), needed_for: "q".into(), urls: vec![format!("http://{}/", addr)], kind: ClaimKind::Fact };
         assert!(ratify_fact(&deps, &eff, ws.path(), &sub, "now", "m").await.is_err());
         assert!(!ws.path().join("local").exists() && facts_dir_empty(ws.path()));

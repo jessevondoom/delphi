@@ -103,7 +103,9 @@ impl Engine {
             HttpTransport::new().ok().map(|t| Arc::new(TransportSearcher { transport: Arc::new(t), engines: crate::research_setup::engines(self) }) as Arc<dyn Searcher>)
         };
         let doi = HandleResolver::default();
-        let deps = Deps { policy: &policy, store: &store, list: &list, judge: &judge, searcher: searcher.as_deref(), ledger: &ledger, author_family: judge.author_family.as_deref(), doi: Some(&doi) };
+        // The install's library, when there is one: its validated facts are read by the judge before any web search (`specs/100` §9.1).
+        let library = self.ws.home.join("library").is_dir().then(|| crate::library::Library::in_home(&self.ws.home));
+        let deps = Deps { policy: &policy, store: &store, list: &list, judge: &judge, searcher: searcher.as_deref(), ledger: &ledger, author_family: judge.author_family.as_deref(), doi: Some(&doi), validated: library.as_ref().map(|l| l as &dyn crate::fact_run::ValidatedFacts) };
         serve(&self.validator, m, &self.ws.dir, &self.now(), &eff, &deps, searcher.clone(), &shares_of(&self.ws.dir, &m.id), Some(&crate::fact_span::EngineSpan { engine: self.clone(), mission: m.clone(), author_family: judge.author_family.clone() }), req).await
     }
 }
@@ -267,6 +269,20 @@ fn observe_for_audit(ws_dir: &std::path::Path, mission: &str, done: &crate::fact
     if r.would_ratify {
         record_dry_run_on_claims(ws_dir, &id);
     }
+    if !r.contradicted_validated.is_empty() {
+        record_contradictions_on_claims(ws_dir, &id, &r.contradicted_validated);
+    }
+}
+
+/// The contradiction step found validated facts that say the opposite of this claim (`specs/100` §9.1): mark the library's claims with this text
+/// contested against them, so they cannot rise however many origins they have. Only the claim is written, never the validated fact; overturning a
+/// validated fact is the operator's act. Ids only travel here. This is the only caller of `Library::record_contradictions`, and it is the
+/// validator's own loop, not a tool. Where there is no library, nothing happens.
+fn record_contradictions_on_claims(ws_dir: &std::path::Path, fact_id: &str, validated_ids: &[String]) {
+    let Some(home) = ws_dir.ancestors().nth(2) else { return };
+    if home.join("library").is_dir() {
+        crate::library::Library::in_home(home).record_contradictions(fact_id, validated_ids);
+    }
 }
 
 /// An advisory dry run passed (`Report::would_ratify` is true only in `advisory` mode and only for a ratifiable claim): tell the library's claims
@@ -378,7 +394,7 @@ mod tests {
             u.push(format!("http://{}/rfc/2324", addr).into());
         }
         let search = search.map(|_| Arc::new(Fixed(format!("http://{}/rfc/2324", addr), Default::default())) as Arc<dyn Searcher>);
-        let deps = Deps { policy: &policy, store: &store, list: &list, judge: &Yes, searcher: search.as_deref(), ledger: &ledger, author_family: None, doi: None };
+        let deps = Deps { policy: &policy, store: &store, list: &list, judge: &Yes, searcher: search.as_deref(), ledger: &ledger, author_family: None, doi: None, validated: None };
         serve(&f.engine.validator, &f.m, &ws.dir, "2026-10-28T00:00:00Z", &eff, &deps, search.clone(), shares, spans, &req).await.unwrap();
     }
 
@@ -506,6 +522,49 @@ mod tests {
         g.engine.answer_validator_request(&g.m, &req, "claude").await.unwrap();
         assert_eq!(status(&l2.claim(&id2).unwrap()), Status::Substantiated, "in off mode the top rung is substantiated");
         assert!(l2.claim(&id2).unwrap()["support"].get("would_ratify").is_none());
+    }
+
+    /// Reads a passage marked `OPPOSITE` as saying the opposite of the claim, and any other passage as agreeing with it.
+    struct Opposite;
+    impl FactJudge for Opposite {
+        fn judge<'a>(&'a self, q: &'a JudgeQuery) -> JudgeFuture<'a> {
+            let v = if q.passage.contains("OPPOSITE") { Entail::Contradicts } else { Entail::Entails };
+            Box::pin(async move { Ok(JudgeReply { verdict: v, model: "judge".into(), family: "other".into(), tokens: 50 }) })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_claim_the_judge_reads_against_a_validated_fact_is_contested_in_the_library_and_the_fact_is_untouched() {
+        use crate::library::claims::{status, Validator};
+        use delphi_core::knowledge_status::Status;
+        let f = setup(vec![], 1.0, |_| {});
+        // The claim under check, with the counts of the top rung: without a contradiction it would be a candidate for `vetted`.
+        let (l, id) = library_claim(&f, CLAIM);
+        assert_eq!(status(&l.claim(&id).unwrap()), Status::Substantiated);
+        // A validated fact in the same library whose words overlap the claim's and which says the opposite.
+        let (_, fid) = library_claim(&f, "HTTP status 418 is not defined as a teapot, it was a joke. OPPOSITE");
+        l.validate_claim(&fid, Validator::Operator).unwrap();
+        let fact_before = l.claim(&fid).unwrap();
+        assert_eq!(status(&fact_before), Status::Validated);
+
+        let addr = page_server(PAGE);
+        let ws = &f.engine.ws;
+        let eff = effective(ValidatorMode::Advisory, &state_dir(&ws.dir));
+        let policy = FetchPolicy::default().with_fixture_addrs([addr]);
+        let store = SnapshotStore::in_home(&ws.home);
+        let list = SourceList::new(ValidatorSources { primary: vec!["127.0.0.1".into()], ..Default::default() }).with_test_pin("/rfc");
+        let ledger = f.engine.validator.ledger();
+        let req = json!({"tool": "ratify_fact", "caller": "validator", "claim": CLAIM, "needed_for": "q", "urls": [format!("http://{}/rfc/2324", addr)], "kind": null});
+        let deps = Deps { policy: &policy, store: &store, list: &list, judge: &Opposite, searcher: None, ledger: &ledger, author_family: None, doi: None, validated: Some(&l) };
+        serve(&f.engine.validator, &f.m, &ws.dir, "2026-10-28T00:00:00Z", &eff, &deps, None, &Shares::default(), None, &req).await.unwrap();
+
+        let ev = kinds(&f);
+        assert_eq!((ev[0].1["verdict"].clone(), ev[0].1["would_ratify"].clone()), (json!("conflicting"), json!(false)), "{:?}", ev[0].1);
+        assert_eq!(ev[0].1["contradicted_validated"], json!([fid.clone()]), "the event carries ids, not the validated fact's text");
+        let c = l.claim(&id).unwrap();
+        assert_eq!(status(&c), Status::Contested, "a claim with five origins and two trusted sources does not rise against a validated fact: {c}");
+        assert_eq!(l.claim(&fid).unwrap(), fact_before, "the validated fact is only read; overturning it is the operator's act");
+        assert!(no_facts(&f), "nothing was ratified");
     }
 
     #[tokio::test]

@@ -913,6 +913,47 @@ mod claims {
     }
 
     #[test]
+    fn the_validators_loop_marks_the_claim_with_that_text_contested_and_only_validated_facts_are_offered() {
+        use crate::fact_run::ValidatedFacts;
+        let (d, l) = lib();
+        let (_ids, strong) = three_fetched(d.path(), &l);
+        let strong_text = l.claim(&strong).unwrap()["text"].as_str().unwrap().to_string();
+        assert_eq!(status(&l.claim(&strong).unwrap()), Status::Substantiated);
+        let s = source(d.path(), &l, "t.md", BODY);
+        let add = |text: &str, quote: &str| l.add_claim(text, &ClaimOpts::default(), &[spec(&s, quote)]).unwrap()["id"].as_str().unwrap().to_string();
+        let fact = add("Tides come twice a day.", "twice a day");
+        let loose = add("The moon drives the tide.", "driven mostly by the moon");
+        l.validate_claim(&fact, Validator::Operator).unwrap();
+        assert_ne!(status(&l.claim(&loose).unwrap()), Status::Validated);
+        // what the contradiction step is offered: a validated fact that shares the claim's words, never an unvalidated claim, never the claim's own text
+        let offered = l.about("Tides come twice a day, the old sailor said.", 3);
+        assert_eq!(offered.iter().map(|f| f.id.as_str()).collect::<Vec<_>>(), vec![fact.as_str()], "{offered:?}");
+        assert!(l.about("Tides come twice a day.", 3).is_empty(), "a claim's own text is not read against itself");
+        assert!(l.about("The moon drives the tide.", 3).is_empty(), "an unvalidated claim is never offered");
+        assert!(l.about("Quartz grows slowly in caves under pressure.", 3).is_empty(), "unrelated facts are not read");
+        // the loop marks the claim with the contradicted text; the validated fact is not touched
+        let before = l.claim(&fact).unwrap();
+        let marked = l.record_contradictions(&crate::fact_store::fact_id(&strong_text), std::slice::from_ref(&fact));
+        assert_eq!(marked, vec![strong.clone()]);
+        let c = l.claim(&strong).unwrap();
+        assert_eq!(status(&c), Status::Contested, "a 3-origin claim that contradicts a validated fact does not rise: {c}");
+        assert_eq!(c["support"]["origins"], 3);
+        assert_eq!(l.claim(&fact).unwrap(), before, "the validated fact is only read; overturning it is the operator's act");
+        // refusals: a target that is not validated marks nothing, and a claim the operator validated is never marked
+        let (d2, l2) = lib();
+        let (_i2, strong2) = three_fetched(d2.path(), &l2);
+        let strong2_text = l2.claim(&strong2).unwrap()["text"].as_str().unwrap().to_string();
+        let s2 = source(d2.path(), &l2, "t.md", BODY);
+        let unvalidated = l2.add_claim("Tides come twice a day.", &ClaimOpts::default(), &[spec(&s2, "twice a day")]).unwrap()["id"].as_str().unwrap().to_string();
+        assert!(l2.record_contradictions(&crate::fact_store::fact_id(&strong2_text), &[unvalidated]).is_empty());
+        assert_eq!(status(&l2.claim(&strong2).unwrap()), Status::Substantiated, "an unvalidated target blocks nothing");
+        let other = add("Spring tides are the highest.", "Spring tides are the highest");
+        l.validate_claim(&other, Validator::Operator).unwrap();
+        assert!(l.record_contradictions(&crate::fact_store::fact_id("Spring tides are the highest."), std::slice::from_ref(&fact)).is_empty());
+        assert_eq!(status(&l.claim(&other).unwrap()), Status::Validated, "no mark lowers what the operator accepted");
+    }
+
+    #[test]
     fn a_sources_standing_counts_only_claims_the_operator_accepted_one_at_a_time() {
         let (d, l) = lib();
         let s = source(d.path(), &l, "t.md", BODY);
