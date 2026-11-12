@@ -2566,6 +2566,16 @@ impl EngineService {
         Ok(json!({"projects": items}))
     }
 
+    /// `history.view` `{mission_id?}` (`specs/102` §5.1, S5): the operator's read-only view of the exchange records of the open mission's
+    /// project and the project report. Console scope only; it calls no model, reads the store and the mission log, and writes nothing
+    /// (no key, no file). Every string in the answer is cleaned and cut again at read time (`history_view`).
+    async fn history_view(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let m = self.mission(p["mission_id"].as_str()).await?;
+        let (ws, settings, dir) = (self.engine.ws.dir.clone(), self.engine.settings.history.clone(), m.dir.clone());
+        tokio::task::spawn_blocking(move || crate::history_view::view(&ws, &settings, &dir)).await.map_err(|e| err(-32000, e.to_string()))
+    }
+
     /// `pending.list`: research held back from the knowledge base, in the default scope or in the named project (`specs/058` §14).
     async fn pending_list(&self, p: Value, ctx: CallContext) -> RpcOutcome {
         need_console(&ctx)?;
@@ -3481,6 +3491,7 @@ impl Extension for ServiceExt {
                 "build.merge" => svc.build_merge(params, ctx).await,
                 "research.start" => svc.research_start(params, ctx).await,
                 "projects.list" => svc.projects_list(ctx).await,
+                "history.view" => svc.history_view(params, ctx).await,
                 "pending.pass" => svc.pending_pass(params, ctx).await,
                 "pending.list" => svc.pending_list(params, ctx).await,
                 "pending.ratify" => svc.pending_decide(params, ctx, true).await,
@@ -5214,7 +5225,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let every_mutating_method_the_daemon_has = ["handoff.resume", "mcp.get", "mcp.set", "task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "kb.open", "research.start", "projects.list", "pending.pass", "pending.list", "pending.ratify", "pending.discard", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "retro.list", "retro.stale", "retro.recurring", "learn.health", "retro.accept", "retro.reject", "retro.promotions", "retro.promote", "retro.withdraw", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
+            let every_mutating_method_the_daemon_has = ["handoff.resume", "mcp.get", "mcp.set", "task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "kb.open", "research.start", "projects.list", "history.view", "pending.pass", "pending.list", "pending.ratify", "pending.discard", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "retro.list", "retro.stale", "retro.recurring", "learn.health", "retro.accept", "retro.reject", "retro.promotions", "retro.promote", "retro.withdraw", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
             for m in every_mutating_method_the_daemon_has {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }
@@ -5271,7 +5282,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let everything_a_relay_must_not_reach = ["handoff.resume", "mcp.get", "mcp.set", "task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "kb.open", "research.start", "projects.list", "pending.pass", "pending.list", "pending.ratify", "pending.discard", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","kb.search", "kb.get", "kb.allows", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "models.get", "anything.else"];
+            let everything_a_relay_must_not_reach = ["handoff.resume", "mcp.get", "mcp.set", "task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "kb.open", "research.start", "projects.list", "history.view", "pending.pass", "pending.list", "pending.ratify", "pending.discard", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","kb.search", "kb.get", "kb.allows", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "models.get", "anything.else"];
             for m in everything_a_relay_must_not_reach {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }
@@ -6442,6 +6453,34 @@ mod tests {
         let id = crate::scope::resolve(&ws, &root.join("src")).project.unwrap();
         assert_eq!(crate::scope::project_root(&ws, &id), Some(root));
         assert_eq!(crate::scope::project_root(&ws, &crate::scope::ProjectId::default_project()), None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn history_view_is_for_the_console_only_reads_only_and_says_history_is_off_when_it_is() {
+        let f = setup(vec![Step::text("unused")], 5.0, |_| {});
+        let ws = f.engine.ws.dir.clone();
+        let s = serve(&f).await;
+        let (sock, tok, n_sock, n_tok, r_sock, r_tok) = (s.sock.clone(), s.console.clone(), s.narrator_sock.clone(), s.narrator.clone(), s.relay_sock.clone(), s.relay.clone());
+        let ws2 = ws.clone();
+        blocking(move || {
+            let mut c = Client::connect(&sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            c.hello(&tok).unwrap();
+            let v = c.call("history.view", json!({})).unwrap();
+            assert_eq!(v["state"], "off", "history is off by default");
+            assert_eq!(v["read_only"], true);
+            assert!(v["message"].as_str().unwrap().contains("[history] enabled"));
+            assert!(!ws2.join("local/history.key").exists() && !ws2.join("local/history").exists(), "the view made no key and no store");
+            // The narrator and the relay cannot read the records: the method is on neither list.
+            for (sock, tok) in [(&n_sock, &n_tok), (&r_sock, &r_tok)] {
+                let mut c = Client::connect(sock).unwrap();
+                c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+                c.hello(tok).unwrap();
+                assert_eq!(rpc_code(c.call("history.view", json!({}))), Some(code::FORBIDDEN));
+            }
+        })
+        .await;
+        assert!(f.model.requests().is_empty(), "no model was called");
     }
 
     #[tokio::test(flavor = "multi_thread")]
