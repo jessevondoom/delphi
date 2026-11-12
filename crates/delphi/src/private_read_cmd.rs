@@ -29,7 +29,7 @@ fn safe(s: &str) -> String {
 pub fn render(v: &Value) -> String {
     let mut out = String::new();
     let marks = v["marks"].as_array().cloned().unwrap_or_default();
-    out.push_str(&format!("{} task(s) marked (observe only: nothing is blocked)\n", marks.len()));
+    out.push_str(&format!("{} task(s) marked (a marked task's web requests and connector calls ask you first)\n", marks.len()));
     for m in &marks {
         let entries: Vec<String> = m["entries"].as_array().map(|a| a.iter().filter_map(|e| e.as_str().map(safe)).collect()).unwrap_or_default();
         out.push_str(&format!("  {}  {} entr(y/ies) read: {}\n", safe(m["key"].as_str().unwrap_or("?")), entries.len(), entries.join(", ")));
@@ -104,7 +104,7 @@ mod tests {
     #[test]
     fn the_status_lists_marks_by_id_and_strips_control_characters() {
         let out = handle(&mut Fake { calls: vec![] }, &[]);
-        assert!(out.contains("1 task(s) marked (observe only: nothing is blocked)") && out.contains("host-abcd1234  1 entr(y/ies) read: host-abcd1234/n1 [31m"), "{out:?}");
+        assert!(out.contains("1 task(s) marked (a marked task's web requests and connector calls ask you first)") && out.contains("host-abcd1234  1 entr(y/ies) read: host-abcd1234/n1 [31m"), "{out:?}");
         assert!(!out.contains('\u{1b}'), "{out:?}");
     }
 

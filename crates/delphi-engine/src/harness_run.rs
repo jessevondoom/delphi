@@ -411,8 +411,20 @@ impl Engine {
             "WebFetch" | "WebSearch" => match gate(sc.span.ceiling(), Action::Outbound) {
                 Gate::Deny => deny("outbound requests are not allowed from a span at this taint level"),
                 _ => {
-                    // Spec 103 M1, observe only: count the send if the task's private-read mark would have changed it. Nothing depends on this.
-                    crate::private_read::observe_send(&self.ws.dir, "outbound", &sc.task_id);
+                    // Spec 103 M2: the task's private-read mark goes through the one egress check (channel Outbound). An unmarked task passes
+                    // it untouched and the card below is raised exactly as before. A marked task, or one whose mark cannot be read, is put
+                    // to the operator: Red whatever the delegation, the exact request on the card, never "allow similar" (Red), and not
+                    // approvable by a relay reply (`merge_class::console_only`). Nothing is sent before an answer; a timeout is a denial.
+                    let mark_key = crate::private_read::task_key(&sc.m.id, &sc.task_id);
+                    if crate::egress::check(&crate::private_read::send_record(&self.ws.dir, &mark_key), crate::library::Channel::Outbound).is_err() {
+                        crate::private_read::note_held(&self.ws.dir, "outbound", &mark_key);
+                        let card = format!("{} {} {}", crate::private_read::HELD_BANNER, name, crate::private_read::exact(&p.input));
+                        let tool = crate::private_read::OUTBOUND_TOOL;
+                        return match self.ask(sc, ApprovalTier::Red, tool, tool, &card, &json!({"tool": name, "input": p.input, "private_read_mark": true})).await? {
+                            Some(d) => Ok(Decision::Deny(d.content)),
+                            None => Ok(Decision::Allow),
+                        };
+                    }
                     let summary = format!("{} {}", name, summarize(name, &p.input));
                     // Delegated: the CLI's own policy has already had its say, so this is one ordinary card, not a Red one.
                     let tier = if ctl.delegate { ApprovalTier::Amber } else { ApprovalTier::Red };
@@ -3079,6 +3091,89 @@ echo "$answer" > '{answer_file}'
             task.await.unwrap().unwrap();
             assert!(fs::read_to_string(answer).unwrap().contains("\"behavior\":\"allow\""));
         }
+    }
+
+    /// Waits for the one pending card of this tool and returns it (or panics: a card that never comes is the failure).
+    async fn pending_card(f: &Fx, tool: &str) -> crate::approval::Request {
+        for _ in 0..400 {
+            if let Some(c) = f.engine.broker.pending().into_iter().find(|c| c.tool == tool) {
+                return c;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("no pending `{}` card; pending: {:?}", tool, f.engine.broker.pending().iter().map(|c| c.tool.clone()).collect::<Vec<_>>());
+    }
+
+    /// `specs/103` §6 `a_marked_tasks_web_query_is_asked_about_and_an_unmarked_one_is_not` (M2, §7.1 OD-1): a task that read a private entry is
+    /// put to the operator before a web request is sent: Red whatever the delegation, the exact request on the card, no ordinary card besides,
+    /// nothing sent before the answer, and a relay reply may deny it and never approve it.
+    #[tokio::test]
+    async fn a_marked_tasks_web_query_is_asked_about_before_it_is_sent_and_a_relay_cannot_approve_it() {
+        for delegated in [true, false] {
+            let scripts = tempfile::tempdir().unwrap();
+            let (body, answer) = ask_cli(scripts.path(), "WebSearch", r#"{"query":"vendor changelog 7f3a"}"#, r#"{"name":"delphi","status":"connected"}"#);
+            let (f, _s) = fixture(&body, |_| {});
+            use_harness_profile(&f, &format!("[harness.claude]\nbridge = false\napprovals = \"{}\"\nnative_tools = [\"WebSearch\"]\n", if delegated { "delegate" } else { "delphi" }));
+            let key = crate::private_read::task_key(&f.m.id, "t_0001");
+            crate::private_read::mark(&f.engine.ws.dir, &key, "host-abcd1234/n1", 1).unwrap();
+            let task = { let e = f.engine.clone(); let m = f.m.clone(); tokio::spawn(async move { e.run_task(&m, "architect", "Find the changelog").await }) };
+            let card = pending_card(&f, crate::private_read::OUTBOUND_TOOL).await;
+            assert_eq!(card.tier, ApprovalTier::Red, "Red whatever the delegation (delegated={delegated})");
+            assert!(card.summary.starts_with(crate::private_read::HELD_BANNER) && card.summary.contains("vendor changelog 7f3a"), "the banner, then the exact request: {}", card.summary);
+            assert_eq!(card.payload["private_read_mark"], true);
+            assert_eq!(card.payload["input"]["query"], "vendor changelog 7f3a");
+            assert!(!card.similar_allowed(), "a Red card takes no `allow similar`");
+            assert!(f.engine.broker.pending().iter().all(|c| c.tool != "harness_outbound"), "one card, not the ordinary one as well");
+            assert!(crate::merge_class::console_only(&card.tool, &card.payload).is_some(), "a relay reply cannot approve it");
+            assert!(!answer.exists(), "nothing is sent, and the CLI is not answered, before the operator answers");
+            f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Allow, "console-1").unwrap();
+            task.await.unwrap().unwrap();
+            assert!(fs::read_to_string(&answer).unwrap().contains("\"behavior\":\"allow\""));
+            assert_eq!(crate::private_read::counter(&f.engine.ws.dir).outbound_would_change, 1);
+        }
+    }
+
+    /// A denial is final for the request, and an unreadable mark fails closed: the same ask as for a marked task.
+    #[tokio::test]
+    async fn a_denied_marked_query_is_not_sent_and_an_unreadable_mark_asks_the_same() {
+        let scripts = tempfile::tempdir().unwrap();
+        let (body, answer) = ask_cli(scripts.path(), "WebFetch", r#"{"url":"https://example.com/a"}"#, r#"{"name":"delphi","status":"connected"}"#);
+        let (f, _s) = fixture(&body, |_| {});
+        use_harness_profile(&f, "[harness.claude]\nbridge = false\napprovals = \"delphi\"\nnative_tools = [\"WebFetch\"]\n");
+        let key = crate::private_read::task_key(&f.m.id, "t_0001");
+        crate::private_read::mark(&f.engine.ws.dir, &key, "host-abcd1234/n1", 1).unwrap();
+        // damage the record: it can no longer be read, which is held exactly like a mark
+        let file = crate::private_read::dir(&f.engine.ws.dir).join(format!("{}.json", key.replace('/', "__")));
+        fs::write(&file, b"{not json").unwrap();
+        let task = { let e = f.engine.clone(); let m = f.m.clone(); tokio::spawn(async move { e.run_task(&m, "architect", "Fetch it").await }) };
+        let card = pending_card(&f, crate::private_read::OUTBOUND_TOOL).await;
+        f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Deny { reason: "no".into() }, "console-1").unwrap();
+        task.await.unwrap().unwrap();
+        assert!(fs::read_to_string(&answer).unwrap().contains("\"behavior\":\"deny\""));
+        let c = crate::private_read::counter(&f.engine.ws.dir);
+        assert_eq!((c.outbound_would_change, c.unreadable), (1, 1));
+    }
+
+    /// Cleared at the console, the same task's request is one ordinary card again; a different mission's `t_0001` was never held.
+    #[tokio::test]
+    async fn a_cleared_mark_and_another_missions_task_of_the_same_id_are_asked_about_as_before() {
+        let scripts = tempfile::tempdir().unwrap();
+        let (body, answer) = ask_cli(scripts.path(), "WebSearch", r#"{"query":"q"}"#, r#"{"name":"delphi","status":"connected"}"#);
+        let (f, _s) = fixture(&body, |_| {});
+        use_harness_profile(&f, "[harness.claude]\nbridge = false\napprovals = \"delphi\"\nnative_tools = [\"WebSearch\"]\n");
+        let own = crate::private_read::task_key(&f.m.id, "t_0001");
+        let other = crate::private_read::task_key("some-other-mission", "t_0001");
+        assert_ne!(own, other);
+        crate::private_read::mark(&f.engine.ws.dir, &other, "host-abcd1234/n1", 1).unwrap();
+        crate::private_read::mark(&f.engine.ws.dir, &own, "host-abcd1234/n1", 1).unwrap();
+        crate::private_read::clear(&f.engine.ws.dir, &own, 2).unwrap();
+        let task = { let e = f.engine.clone(); let m = f.m.clone(); tokio::spawn(async move { e.run_task(&m, "architect", "Find it").await }) };
+        let card = pending_card(&f, "harness_outbound").await;
+        assert!(!card.summary.contains("PRIVATE-READ MARK") && card.payload.get("private_read_mark").is_none());
+        f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Allow, "console-1").unwrap();
+        task.await.unwrap().unwrap();
+        assert!(fs::read_to_string(answer).unwrap().contains("\"behavior\":\"allow\""));
+        assert_eq!(crate::private_read::counter(&f.engine.ws.dir).outbound_would_change, 0);
     }
 
     #[tokio::test]

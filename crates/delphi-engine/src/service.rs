@@ -1360,14 +1360,14 @@ impl EngineService {
         }
     }
 
-    /// `private_read.status` (spec 103 M1): the operator's view of the marks and the observe counter. Console scope only; ids and counts.
+    /// `private_read.status` (spec 103 M1, M2): the operator's view of the marks and the count of sends held for an answer. Console scope only; ids and counts.
     async fn private_read_status(&self, ctx: CallContext) -> RpcOutcome {
         need_console(&ctx)?;
         let ws_dir = self.engine.ws.dir.clone();
         let c = crate::private_read::counter(&ws_dir);
         let marks: Vec<Value> = crate::private_read::live(&ws_dir).into_iter().map(|(key, entries, first_at)| json!({"key": key, "entries": entries, "first_at": first_at})).collect();
         Ok(json!({
-            "observe_only": true,
+            "observe_only": false,
             "marks": marks,
             "counter": {"keys_marked": c.keys_marked, "entries_marked": c.entries_marked, "cleared": c.cleared, "outbound_would_change": c.outbound_would_change, "connector_would_change": c.connector_would_change, "unreadable": c.unreadable},
             "readers_not_yet_marking": crate::private_read::readers_not_yet_marking(),

@@ -221,14 +221,14 @@ every approval card, provisional decision and agent-raised decision you owe, one
 
 ### `delphi private-read`
 
-See which tasks read a private entry (observe only) and clear a mark.
+See which tasks read a private entry and clear a mark.
 
 ```
   delphi private-read [status | clear <key>]
     [--workspace <name>] [--home <dir>]
 ```
 
-Spec 103 slice M1. A task that was handed the text of a private entry is marked. In this slice a mark changes nothing: no read, prompt or send differs; the counter says how often a send would have changed. Only the operator clears a mark, here or at the console.
+Spec 103 slices M1 and M2. A task that was handed the text of a private entry is marked. A mark changes nothing that flows in: no read or prompt differs. On a marked task, a web request and a connector call that would carry text out are held and put to you first (Red, the exact text on the card, asked every time, approved only at the console, never by a relay reply); nothing is sent before you answer, and no answer is a denial. Relay and Mail are not held yet. The counter says how many sends were held. Only the operator clears a mark, here or at the console.
 
 ### `delphi timers`
 

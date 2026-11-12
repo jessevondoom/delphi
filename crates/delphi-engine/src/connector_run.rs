@@ -142,20 +142,33 @@ impl Engine {
         let tainted = ceiling <= Tier::L1;
         let has_query = all_strings(args).iter().any(|s| !s.trim().is_empty());
         let scopes: Vec<String> = conn.login.as_ref().and_then(|l| self.cfg.get().auth.get(l).map(|a| a.scopes.clone())).unwrap_or_default();
-        let payload = json!({
+        let mut payload = json!({
             "connector": connector, "tool": tool, "class": class.as_str(), "account": account, "scopes": scopes, "arguments": args,
             "taint": ceiling.as_str(),
             "notice": "Whatever this returns is sent to the model endpoint that runs this task.",
         });
         let who = format!("{}{}", dotted, if account.is_empty() { String::new() } else { format!(" as {}", account) });
         let args_line: String = args.to_string().chars().take(160).collect();
-        // Spec 103 M1, observe only: count the call if the task's private-read mark would have changed it. Nothing depends on this.
-        crate::private_read::observe_send(&self.ws.dir, "connector", &sc.task_id);
+        // Spec 103 M2: the task's private-read mark goes through the one egress check (channel Connector). An unmarked task passes it
+        // untouched and everything below is exactly as before. For a marked task, or one whose mark cannot be read, a write, a draft
+        // and a read that puts text in a query are held: Red, the banner and the exact arguments on the card, asked every time (no
+        // "allow similar": Red takes none, and the read path below is forced to ask), and not approvable by a relay reply
+        // (`merge_class::console_only` names a connector card carrying `private_read_mark`). A read with no text in it sends nothing an
+        // agent wrote, so it is not held. Nothing is sent before an answer; a timeout is a denial.
+        let mark_key = crate::private_read::task_key(&sc.m.id, &sc.task_id);
+        let held = crate::egress::check(&crate::private_read::send_record(&self.ws.dir, &mark_key), crate::library::Channel::Connector).is_err() && (class != ToolClass::Read || has_query);
+        let (args_line, banner) = if held {
+            crate::private_read::note_held(&self.ws.dir, "connector", &mark_key);
+            payload["private_read_mark"] = json!(true);
+            (crate::private_read::exact(args), format!("{} ", crate::private_read::HELD_BANNER))
+        } else {
+            (args_line, String::new())
+        };
         match class {
             ToolClass::Write => {
                 // Red at every taint level, never denied, never auto-approved, never "allow similar".
                 debug_assert_eq!(gate(ceiling, Action::ConnectorWrite), Gate::Red);
-                let summary = format!("{} (sends, posts, shares or deletes): {}", who, args_line);
+                let summary = format!("{}{} (sends, posts, shares or deletes): {}", banner, who, args_line);
                 if let Some(denied) = self.ask(sc, ApprovalTier::Red, "connector", &format!("{} write", dotted), &summary, &payload).await? {
                     return Ok(denied);
                 }
@@ -163,25 +176,32 @@ impl Engine {
             ToolClass::Draft => {
                 // Every draft gets its own card with the payload: no mode and no "allow similar" covers it. Red when a tainted span
                 // writes it or it names recipients or invitees, because that leaves the account or can carry read data out.
-                let leaves = tainted || names_recipients(args);
+                let leaves = tainted || held || names_recipients(args);
                 let tier = if leaves { ApprovalTier::Red } else { ApprovalTier::Amber };
                 let why = if tainted { ", from a span that read untrusted content" } else if leaves { ", with recipients or invitees" } else { "" };
-                let summary = format!("{} (creates a draft{}): {}", who, why, args_line);
+                let summary = format!("{}{} (creates a draft{}): {}", banner, who, why, args_line);
                 if let Some(denied) = self.ask(sc, tier, "connector", &format!("{} draft", dotted), &summary, &payload).await? {
                     return Ok(denied);
                 }
             }
             ToolClass::Read => {
                 // A tainted span that puts text in a query asks every time, with the text on the card.
-                let every_time = tainted && has_query;
+                let every_time = (tainted || held) && has_query;
                 let first_use_ok = conn.first_use.as_deref() == Some("allow") || self.connectors.first_read_done(&sc.task_id, connector);
                 if every_time || !first_use_ok {
-                    let summary = if every_time { format!("{} with a query, from a span that read untrusted content: {}", who, args_line) } else { format!("first use of {} in this task: {}", who, args_line) };
+                    let summary = if held {
+                        format!("{}{} with a query: {}", banner, who, args_line)
+                    } else if every_time {
+                        format!("{} with a query, from a span that read untrusted content: {}", who, args_line)
+                    } else {
+                        format!("first use of {} in this task: {}", who, args_line)
+                    };
                     let c = Classified { tool: "connector".into(), tier: ToolTier::Amber, kind: ActionKind::Read, summary: summary.clone(), payload: payload.clone(), pattern: format!("{} read {}", dotted, if every_time { args.to_string() } else { String::new() }) };
-                    // "Allow similar" covers an untainted first-use card for the rest of the task; a tainted query is never covered by it.
+                    // "Allow similar" covers an untainted first-use card for the rest of the task; a tainted or held query is never covered by it.
                     let asked = if every_time { true } else { matches!(self.broker.need(&sc.task_id, None, &c), Need::Yes(_)) };
                     if asked {
-                        if let Some(denied) = self.ask(sc, ApprovalTier::Amber, &c.tool, &c.pattern, &summary, &payload).await? {
+                        let tier = if held { ApprovalTier::Red } else { ApprovalTier::Amber };
+                        if let Some(denied) = self.ask(sc, tier, &c.tool, &c.pattern, &summary, &payload).await? {
                             return Ok(denied);
                         }
                     }
@@ -301,7 +321,11 @@ tools = { search = "read", draft_note = "draft", send = "write" }
 
     /// An engine with the `docs` connector configured, its tools listed and ratified.
     async fn fixture(steps: Vec<Step>) -> Fx {
-        let f = crate::testkit::setup(steps, 5.0, |_| {});
+        fixture_with(steps, |_| {}).await
+    }
+
+    async fn fixture_with(steps: Vec<Step>, tweak: impl FnOnce(&mut crate::engine::Settings)) -> Fx {
+        let f = crate::testkit::setup(steps, 5.0, tweak);
         f.engine.cfg.set(Config::parse(&format!("{}\n{}", crate::testkit::CONFIG, CONNECTORS)).unwrap());
         *f.connector_mock.tools.lock().unwrap() = vec![tool("search", "Search documents"), tool("draft_note", "Create a draft"), tool("send", "Send a message")];
         f.engine.connectors.refresh("docs").await.unwrap();
@@ -457,6 +481,101 @@ tools = { search = "read", draft_note = "draft", send = "write" }
         let queries: Vec<&(String, String)> = cards.iter().filter(|c| c.1.contains("docs.search")).collect();
         assert_eq!(queries.len(), 2, "both queries asked: {:?}", cards);
         assert!(queries[0].1.contains("first") && queries[1].1.contains("second") && queries[0].1.contains("untrusted"), "{:?}", cards);
+    }
+
+    /// Answer every approval card with `allow`, keeping the whole card (tool, tier, summary, payload).
+    fn approver_full(f: &Fx) -> Arc<Mutex<Vec<crate::approval::Request>>> {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let (broker, s2) = (f.engine.broker.clone(), seen.clone());
+        tokio::spawn(async move {
+            loop {
+                for c in broker.pending() {
+                    s2.lock().unwrap().push(c.clone());
+                    let _ = broker.resolve(&c.approval_id, &c.payload_blake3, Answer::Allow, "test");
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        });
+        seen
+    }
+
+    /// `specs/103` M2 (§7.1 OD-2): a task that read a private entry has every connector write, draft and text-bearing read put to the operator:
+    /// Red, the banner and the exact arguments on the card, asked every time, never "allow similar", and not approvable by a relay reply.
+    #[tokio::test]
+    async fn a_marked_tasks_connector_calls_are_held_red_with_the_banner_asked_every_time_and_not_approvable_by_a_relay() {
+        let f = fixture(vec![
+            Step::tool("c0", "docs__search", json!({})),
+            Step::tool("c1", "docs__search", json!({"query": "alpha"})),
+            Step::tool("c2", "docs__search", json!({"query": "beta"})),
+            Step::tool("c3", "docs__draft_note", json!({"body": "one"})),
+            Step::tool("c4", "docs__send", json!({"to": "a@b.c"})),
+            Step::text("ok"),
+        ])
+        .await;
+        let key = crate::private_read::task_key(&f.m.id, "t_0001");
+        crate::private_read::mark(&f.engine.ws.dir, &key, "host-abcd1234/n1", 1).unwrap();
+        let seen = approver_full(&f);
+        f.engine.run_task(&f.m, "orchestrator", "Look things up").await.unwrap();
+        let cards = seen.lock().unwrap().clone();
+        let held: Vec<&crate::approval::Request> = cards.iter().filter(|c| c.payload["private_read_mark"] == true).collect();
+        assert_eq!(held.len(), 4, "both queries, the draft and the write are held: {:?}", cards.iter().map(|c| c.summary.clone()).collect::<Vec<_>>());
+        for c in &held {
+            assert_eq!(c.tier, ApprovalTier::Red, "{}", c.summary);
+            assert!(c.summary.starts_with(crate::private_read::HELD_BANNER), "{}", c.summary);
+            assert!(!c.similar_allowed(), "a Red card takes no `allow similar`");
+            assert!(crate::merge_class::console_only(&c.tool, &c.payload).is_some(), "a relay reply may deny it and never approve it: {}", c.summary);
+        }
+        assert!(held[0].summary.contains("alpha") && held[1].summary.contains("beta"), "the exact arguments are on each card, asked every time");
+        assert!(held[2].summary.contains("creates a draft") && held[3].summary.contains("sends, posts, shares or deletes"));
+        // the read with no text in it sent nothing an agent wrote: it is the ordinary first-use card, not held
+        let plain: Vec<&crate::approval::Request> = cards.iter().filter(|c| c.payload["private_read_mark"].is_null()).collect();
+        assert_eq!(plain.len(), 1, "{:?}", plain.iter().map(|c| c.summary.clone()).collect::<Vec<_>>());
+        assert!(plain[0].tier == ApprovalTier::Amber && plain[0].summary.contains("first use of docs.search"));
+        assert_eq!(crate::private_read::counter(&f.engine.ws.dir).connector_would_change, 4);
+        assert!(f.engine.broker.allow_similar().is_empty());
+    }
+
+    /// An unmarked task is exactly as before: the same cards, no banner, nothing counted, and no mark file created.
+    #[tokio::test]
+    async fn an_unmarked_tasks_connector_calls_are_unchanged() {
+        let f = fixture(vec![Step::tool("c1", "docs__search", json!({"query": "alpha"})), Step::tool("c2", "docs__send", json!({"to": "a@b.c"})), Step::text("ok")]).await;
+        let seen = approver_full(&f);
+        f.engine.run_task(&f.m, "orchestrator", "Look and send").await.unwrap();
+        let cards = seen.lock().unwrap().clone();
+        assert!(cards.iter().all(|c| !c.summary.contains("PRIVATE-READ MARK") && c.payload.get("private_read_mark").is_none()), "{:?}", cards.iter().map(|c| c.summary.clone()).collect::<Vec<_>>());
+        assert_eq!(cards.iter().map(|c| c.tier.as_str()).collect::<Vec<_>>(), vec!["amber", "red"], "the first read is the amber first-use card, the write is Red");
+        assert_eq!(crate::private_read::counter(&f.engine.ws.dir), crate::private_read::Counter::default());
+        assert!(!crate::private_read::dir(&f.engine.ws.dir).exists());
+    }
+
+    /// Nothing is sent before an answer, a denial is final, a timeout is a denial, and an unreadable mark is held like a marked one.
+    #[tokio::test]
+    async fn a_held_connector_write_is_not_sent_when_denied_or_when_nobody_answers_and_an_unreadable_mark_is_held() {
+        // denied
+        let f = fixture(vec![Step::tool("c1", "docs__send", json!({"to": "a@b.c"})), Step::text("Not sent.")]).await;
+        let key = crate::private_read::task_key(&f.m.id, "t_0001");
+        crate::private_read::mark(&f.engine.ws.dir, &key, "host-abcd1234/n1", 1).unwrap();
+        let seen = approver(&f, deny);
+        f.engine.run_task(&f.m, "orchestrator", "Send").await.unwrap();
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        assert!(f.connector_mock.calls.lock().unwrap().is_empty(), "a denied held write never reaches the provider");
+        // nobody answers: the card times out and the write is denied
+        let f = fixture_with(vec![Step::tool("c1", "docs__send", json!({"to": "a@b.c"})), Step::text("Not sent.")], |s| s.approval_timeout = std::time::Duration::from_millis(80)).await;
+        let key = crate::private_read::task_key(&f.m.id, "t_0001");
+        crate::private_read::mark(&f.engine.ws.dir, &key, "host-abcd1234/n1", 1).unwrap();
+        f.engine.run_task(&f.m, "orchestrator", "Send").await.unwrap();
+        assert!(f.connector_mock.calls.lock().unwrap().is_empty(), "a timeout is a denial");
+        // an unreadable mark: held exactly like a marked task, and counted as unreadable
+        let f = fixture(vec![Step::tool("c1", "docs__send", json!({"to": "a@b.c"})), Step::text("Not sent.")]).await;
+        let key = crate::private_read::task_key(&f.m.id, "t_0001");
+        crate::private_read::mark(&f.engine.ws.dir, &key, "host-abcd1234/n1", 1).unwrap();
+        std::fs::write(crate::private_read::dir(&f.engine.ws.dir).join(format!("{}.json", key.replace('/', "__"))), b"{not json").unwrap();
+        let seen = approver_full(&f);
+        f.engine.run_task(&f.m, "orchestrator", "Send").await.unwrap();
+        let cards = seen.lock().unwrap().clone();
+        assert!(cards.len() == 1 && cards[0].payload["private_read_mark"] == true && cards[0].tier == ApprovalTier::Red);
+        let c = crate::private_read::counter(&f.engine.ws.dir);
+        assert_eq!((c.connector_would_change, c.unreadable), (1, 1));
     }
 
     #[tokio::test]

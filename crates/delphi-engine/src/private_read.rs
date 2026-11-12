@@ -1,17 +1,22 @@
-//! The private-read mark, slice M1 (`specs/103`): OBSERVE ONLY. A task (for a host over MCP, the host session) that was handed the text of a
-//! private entry is *marked*. In this slice the mark is computed, logged, counted and clearable at the console, and it changes nothing
-//! else: no read returns a different result, no prompt differs, no send differs, no gate or filter is added to anything that flows in
-//! (the operator, 2026-11-11: research must be easier to find, not harder). `M2` and `M3` use the counter this slice builds to decide
-//! what to do on Outbound, Connector, Relay and Mail.
+//! The private-read mark (`specs/103`). A task (for a host over MCP, the host session) that was handed the text of a private entry is
+//! *marked*. The mark is computed, logged, counted and clearable at the console. It changes nothing that flows IN: no read returns a
+//! different result, no prompt differs, and no gate or filter is added to anything a task reads (the operator, 2026-11-11: research must
+//! be easier to find, not harder).
 //!
-//! * The mark is not a tier and not a taint level and grants nothing (GOVERNANCE §4). It records entry ids and a time, never text.
+//! * Slice M1 built the mark and its counter. **Slice M2** (this file's [`send_record`], [`task_key`], [`note_held`]) makes two of the four
+//!   channels act on it: the senders of `Outbound` (a `WebFetch`/`WebSearch` request) and `Connector` (a connector call) hand the task's
+//!   record to the one egress check, and when the check refuses, the send is not made silently and not refused outright: it becomes an
+//!   operator card that shows the exact text, is Red, never takes "allow similar", and is approved only at the console (`specs/103` §7.1
+//!   OD-1, OD-2). Nothing is sent before an answer, and a timeout is a denial. Relay and Mail are `M3`'s.
+//! * The mark is not a tier and not a taint level and grants nothing (GOVERNANCE §4). It only ever raises a card or asks; it cannot lower
+//!   a tier, approve an action or grant a tool. It records entry ids and a time, never text.
 //! * It is set only by the readers listed in [`READS`], through [`mark`]. An inventory test fails when a file that reads entry text is not
 //!   listed, so a new reader cannot ship unrecorded.
 //! * It is cleared only by [`clear`], whose one caller is the daemon's console-scope method `private_read.clear`. A test enumerates the
 //!   callers; no tool, no host method, no relay reply and no handoff reaches it (`specs/103` §4.3, §7.1 OD-4: the delegated form, an agent
-//!   holding an operator permission, is a decision before M2 and is NOT built here).
-//! * An unreadable mark file reads as [`State::Unreadable`]. The counter counts such a task as one a send would have changed; in M1 that
-//!   changes nothing, and M2 and M3 make it fail closed on the four channels only.
+//!   holding an operator permission, is a separate decision and is NOT built).
+//! * An unreadable mark file reads as [`State::Unreadable`]. On Outbound and Connector, and only there, it fails closed: the send asks
+//!   the operator exactly as for a marked task.
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -24,6 +29,24 @@ use serde_json::{json, Value};
 pub const MARK_EVENT: &str = "task.private_read";
 /// The log event written when the operator clears a mark at the console.
 pub const CLEAR_EVENT: &str = "task.private_read_cleared";
+
+/// The approval card tool name of a held Outbound request. `merge_class::console_only` names it, so a relay reply can deny but never approve it.
+pub const OUTBOUND_TOOL: &str = "harness_outbound_marked";
+/// What every held card says first, in fixed words (it names no entry and carries no text from one).
+pub const HELD_BANNER: &str = "PRIVATE-READ MARK: this task read a private entry (or its mark cannot be read), so what is sent below could carry it out of this install. Nothing is sent until you answer at the console; a relay reply can only say no to it.";
+/// How much of a held request is written on the card's summary line (the payload carries the whole of it).
+const EXACT_CAP: usize = 1500;
+
+/// The exact text of a held request for the card: the request as JSON, cut at [`EXACT_CAP`] characters with a plain marker. The approval
+/// is bound to the whole payload's hash, so nothing is hidden by the cut; it only bounds one line.
+pub fn exact(v: &Value) -> String {
+    let t = v.to_string();
+    if t.chars().count() <= EXACT_CAP {
+        t
+    } else {
+        format!("{}… [cut at {} characters; the whole request is in the payload]", t.chars().take(EXACT_CAP).collect::<String>(), EXACT_CAP)
+    }
+}
 
 /// One writer at a time within the daemon process: the files are small read-modify-write records.
 static LOCK: Mutex<()> = Mutex::new(());
@@ -96,12 +119,12 @@ pub enum State {
     Unmarked,
     /// At least one entry read is not cleared. Ids and the first time only.
     Marked { entries: Vec<String>, first_at: i64 },
-    /// A record exists and cannot be read. M2 and M3 treat the task as marked on the four channels only; M1 only counts it.
+    /// A record exists and cannot be read. Outbound and Connector (M2) treat the task as marked; no other path reads this.
     Unreadable,
 }
 
 impl State {
-    /// Would a send on one of the four channels be affected by this state once M2 and M3 act on it?
+    /// Is a send on Outbound or Connector held for the operator's answer in this state? (Relay and Mail are M3's.)
     pub fn would_affect_a_send(&self) -> bool {
         !matches!(self, State::Unmarked)
     }
@@ -151,9 +174,9 @@ pub struct Counter {
     pub entries_marked: u64,
     /// Times the operator cleared a mark.
     pub cleared: u64,
-    /// Sends on Outbound that the mark would have changed, had M2 acted on it.
+    /// Sends on Outbound that the mark held for the operator's answer (M1 counted what it would have changed; since M2 the send really asks).
     pub outbound_would_change: u64,
-    /// Sends on Connector that the mark would have changed.
+    /// Sends on Connector that the mark held for the operator's answer.
     pub connector_would_change: u64,
     /// Of those, how many were because the mark could not be read.
     pub unreadable: u64,
@@ -245,13 +268,33 @@ pub fn clear(ws_dir: &Path, key: &str, now: i64) -> Result<usize, String> {
     Ok(newly.len())
 }
 
-/// OBSERVE: the send on `channel` (`"outbound"` or `"connector"`) of the task `key` is about to go ahead exactly as before. If the mark
-/// would have changed it, count that. Returns nothing a caller may act on: in M1 no send depends on it.
-pub fn observe_send(ws_dir: &Path, channel: &str, key: &str) {
-    let st = state(ws_dir, key);
-    if !st.would_affect_a_send() {
-        return;
+/// The key a Delphi task's mark is kept under: `<mission>/<task>`, because task ids (`t_0001`) repeat across missions and a mark in one must
+/// never hold a send in another. An id with a character a key cannot hold is replaced by a hash of the pair, so a task is never made
+/// unreadable (and so never asked about) just for how it was named. The readers that mark a Delphi task use the same function.
+pub fn task_key(mission: &str, task: &str) -> String {
+    let k = format!("{mission}/{task}");
+    if key_ok(&k) {
+        k
+    } else {
+        format!("x:{}", &blake3::hash(format!("{mission}\u{0}{task}").as_bytes()).to_hex()[..32])
     }
+}
+
+/// The record a send of the task `key` is checked against (`specs/103` §4, `egress::check`): `{"private": false}` when nothing is marked
+/// (the check passes and the send is exactly as before), `{"private": true}` when the task read a private entry, and a value that is not
+/// an object when the mark cannot be read, which the check refuses (deny by default). Reads the mark; writes nothing.
+pub fn send_record(ws_dir: &Path, key: &str) -> Value {
+    match state(ws_dir, key) {
+        State::Unmarked => json!({"private": false}),
+        State::Marked { .. } => json!({"private": true}),
+        State::Unreadable => Value::Null,
+    }
+}
+
+/// The send on `channel` (`"outbound"` or `"connector"`) of the task `key` was refused by the egress check and is being put to the
+/// operator instead. Count it. Called only by the two senders, only after the check refused; it decides nothing.
+pub fn note_held(ws_dir: &Path, channel: &str, key: &str) {
+    let st = state(ws_dir, key);
     let _g = LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let mut c = read_counter(ws_dir);
     match channel {
@@ -293,7 +336,7 @@ pub fn readers_not_yet_marking() -> usize {
 pub fn status_line(ws_dir: &Path) -> String {
     let c = counter(ws_dir);
     format!(
-        "private-read mark (observe only, changes nothing): {} task(s) marked, {} entr(y/ies) read, {} cleared; a send would have changed: outbound {}, connector {} ({} unreadable); {} reader(s) do not mark yet",
+        "private-read mark: {} task(s) marked, {} entr(y/ies) read, {} cleared; sends held for your answer: outbound {}, connector {} ({} unreadable); {} reader(s) do not mark yet",
         c.keys_marked,
         c.entries_marked,
         c.cleared,
@@ -409,8 +452,46 @@ pub fn event_state(ws_dir: &Path, event: &Value) -> State {
     let task = event["task_id"].as_str().or_else(|| event["payload"]["task_id"].as_str());
     let mission = event["mission_id"].as_str();
     let mut found = State::Unmarked;
-    for key in [task, mission].into_iter().flatten().filter(|k| key_ok(k)) {
+    // A Delphi task's mark is kept under `<mission>/<task>` (`task_key`, `specs/103` M2); the bare task id and the bare mission id are the
+    // keys the host session and an older mark use. All of them count, so a mark under any key withholds the event.
+    let mut keys: Vec<String> = [task, mission].into_iter().flatten().filter(|k| key_ok(k)).map(str::to_string).collect();
+    if let (Some(m), Some(t)) = (mission, task) {
+        keys.push(task_key(m, t));
+    }
+    for key in &keys {
         match state(ws_dir, key) {
+            State::Unreadable => return State::Unreadable,
+            m @ State::Marked { .. } => found = m,
+            State::Unmarked => {}
+        }
+    }
+    if mission.is_none() {
+        // No mission named: any mission's mark for this task id counts (it can only withhold more, never less).
+        if let Some(t) = task {
+            match task_state_in_any_mission(ws_dir, t) {
+                State::Unreadable => return State::Unreadable,
+                m @ State::Marked { .. } => found = m,
+                State::Unmarked => {}
+            }
+        }
+    }
+    found
+}
+
+/// The state of a task named without its mission (a card on the relay's list carries only the task id): every live mark whose key is
+/// `<mission>/<task>`, in any mission. Task ids repeat across missions, so this can withhold a card of an unmarked task that shares an id
+/// with a marked one; it can never let a marked task's text go. A record that exists and cannot be read makes the answer `Unreadable`.
+fn task_state_in_any_mission(ws_dir: &Path, task: &str) -> State {
+    if !key_ok(task) {
+        return State::Unmarked;
+    }
+    let suffix = format!("/{task}");
+    let mut found = State::Unmarked;
+    for (key, _, _) in live(ws_dir) {
+        if !key.ends_with(&suffix) {
+            continue;
+        }
+        match state(ws_dir, &key) {
             State::Unreadable => return State::Unreadable,
             m @ State::Marked { .. } => found = m,
             State::Unmarked => {}
@@ -424,7 +505,15 @@ pub fn card_withheld(ws_dir: &Path, approval_id: &str, task_id: &str) -> bool {
     if card_is_masked(approval_id) {
         return true;
     }
-    let st = if key_ok(task_id) { state(ws_dir, task_id) } else { State::Unmarked };
+    let st = if key_ok(task_id) {
+        // The bare key (host session, older marks) and any mission's `<mission>/<task>` mark: the card names no mission.
+        match state(ws_dir, task_id) {
+            State::Unmarked => task_state_in_any_mission(ws_dir, task_id),
+            other => other,
+        }
+    } else {
+        State::Unmarked
+    };
     !stream_text_can_go(&st)
 }
 
@@ -533,19 +622,27 @@ mod tests {
         assert!(after.contains("Ok(out)"), "the answer is returned as built");
     }
 
+    /// `specs/103` §6 `a_task_that_read_nothing_private_is_unchanged_on_all_four_channels`: with no mark the record a send is checked against is
+    /// public, the one egress check passes on every channel, and no file, counter or event is written. The two senders that act on a mark (M2)
+    /// do so only when that check refuses; Relay and Mail do not read the mark at all until M3.
     #[test]
     fn a_task_that_read_nothing_private_is_unchanged_on_all_four_channels() {
-        // observe mode with no mark: no file, no counter, no event; the senders call only `observe_send`, which returns nothing
+        use crate::library::Channel;
         let d = ws();
-        for ch in ["outbound", "connector", "relay", "mail"] {
-            observe_send(d.path(), ch, "t-9");
+        let rec = send_record(d.path(), &task_key("m-1", "t_0001"));
+        assert_eq!(rec, json!({"private": false}));
+        for ch in [Channel::Outbound, Channel::Connector, Channel::Relay, Channel::Mail] {
+            assert!(crate::egress::check(&rec, ch).is_ok(), "{ch:?}");
         }
-        assert!(!dir(d.path()).exists());
-        for name in ["harness_run.rs", "connector_run.rs"] {
+        assert!(!dir(d.path()).exists(), "looking at an unmarked task creates nothing");
+        // each acting sender passes the task's record to the one check, for its own channel, and only a refusal reaches the operator
+        for (name, channel) in [("harness_run.rs", "Channel::Outbound"), ("connector_run.rs", "Channel::Connector")] {
             let src = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(name)).unwrap();
-            let used: Vec<&str> = production(&src).lines().filter(|l| l.contains("private_read::")).collect();
-            assert_eq!(used.len(), 1, "{name} uses the mark module in one place only: {used:?}");
-            assert!(used[0].trim_start().starts_with("crate::private_read::observe_send("), "{name}: only the observe call, as a statement whose result is not used: {used:?}");
+            let prod = production(&src);
+            let call = format!("crate::egress::check(&crate::private_read::send_record(&self.ws.dir, &mark_key), crate::library::{channel})");
+            assert_eq!(prod.matches(&call).count(), 1, "{name} checks the task's mark once, through the one egress check");
+            assert_eq!(prod.matches("crate::private_read::note_held(").count(), 1, "{name} counts a held send in one place");
+            assert!(!prod.contains("observe_send"), "{name}: the M1 observe call is gone");
         }
     }
 
@@ -615,27 +712,73 @@ mod tests {
         mark(d.path(), "host-abcd1234", "host-abcd1234/n1", 1).unwrap();
         std::fs::write(file_of(d.path(), "host-abcd1234"), b"{not json").unwrap();
         assert_eq!(state(d.path(), "host-abcd1234"), State::Unreadable);
-        assert!(state(d.path(), "host-abcd1234").would_affect_a_send(), "an unreadable mark is counted as one a send would change");
+        assert!(state(d.path(), "host-abcd1234").would_affect_a_send(), "an unreadable mark holds a send on Outbound and Connector");
         assert_eq!(state(d.path(), "bad key with spaces"), State::Unreadable, "a key that is not an identifier is never read as unmarked");
-        observe_send(d.path(), "outbound", "host-abcd1234");
+        assert!(send_record(d.path(), "host-abcd1234").is_null(), "an unreadable mark is a record the egress check refuses (deny by default)");
+        note_held(d.path(), "outbound", "host-abcd1234");
         let c = counter(d.path());
         assert_eq!((c.outbound_would_change, c.unreadable), (1, 1));
     }
 
+    /// `send_record` is what the egress check reads: public when unmarked or fully cleared, private when marked, unreadable when damaged.
     #[test]
-    fn observing_a_send_counts_a_marked_task_and_never_an_unmarked_one() {
+    fn the_record_a_send_is_checked_against_follows_the_mark() {
+        use crate::library::Channel;
         let d = ws();
-        observe_send(d.path(), "outbound", "t-1");
-        observe_send(d.path(), "connector", "t-1");
-        assert_eq!(counter(d.path()), Counter::default(), "an unmarked task changes nothing and writes nothing");
-        assert!(!dir(d.path()).exists(), "observing an unmarked task creates no file");
+        let key = task_key("m-1", "t_0001");
+        assert_eq!(send_record(d.path(), &key), json!({"private": false}));
+        mark(d.path(), &key, "s-abc", 5).unwrap();
+        let rec = send_record(d.path(), &key);
+        assert_eq!(rec, json!({"private": true}));
+        for ch in [Channel::Outbound, Channel::Connector] {
+            assert!(crate::egress::check(&rec, ch).is_err(), "{ch:?}");
+        }
+        clear(d.path(), &key, 6).unwrap();
+        assert_eq!(send_record(d.path(), &key), json!({"private": false}), "cleared at the console, the next send is as before");
+        std::fs::write(file_of(d.path(), &key), b"{not json").unwrap();
+        assert!(send_record(d.path(), &key).is_null());
+        assert!(crate::egress::check(&send_record(d.path(), &key), Channel::Outbound).is_err());
+    }
+
+    /// Task ids repeat across missions, so the key carries the mission; an id a key cannot hold is hashed, not made unreadable.
+    #[test]
+    fn a_tasks_key_names_its_mission_and_a_name_a_key_cannot_hold_is_hashed_not_unreadable() {
+        let d = ws();
+        assert_ne!(task_key("m-1", "t_0001"), task_key("m-2", "t_0001"));
+        assert_eq!(task_key("m-1", "t_0001"), "m-1/t_0001");
+        mark(d.path(), &task_key("m-1", "t_0001"), "s-abc", 5).unwrap();
+        assert_eq!(send_record(d.path(), &task_key("m-2", "t_0001")), json!({"private": false}), "another mission's task of the same id is not held");
+        let long = "m".repeat(120);
+        for odd in ["a mission with spaces", "\u{fc}ber", "x.y", long.as_str()] {
+            let k = task_key(odd, "t_0001");
+            assert!(key_ok(&k), "{odd}: {k}");
+            assert!(k.starts_with("x:") && k.len() == 34, "{k}");
+            assert_eq!(state(d.path(), &k), State::Unmarked, "an oddly named task is unmarked, not unreadable");
+            assert_ne!(k, task_key(odd, "t_0002"));
+        }
+    }
+
+    /// A held send is counted per channel; the counter changes nothing else, and an unknown channel is ignored.
+    #[test]
+    fn a_held_send_is_counted_per_channel() {
+        let d = ws();
         mark(d.path(), "t-1", "s-abc", 5).unwrap();
-        observe_send(d.path(), "outbound", "t-1");
-        observe_send(d.path(), "outbound", "t-1");
-        observe_send(d.path(), "connector", "t-1");
-        observe_send(d.path(), "relay", "t-1");
+        note_held(d.path(), "outbound", "t-1");
+        note_held(d.path(), "outbound", "t-1");
+        note_held(d.path(), "connector", "t-1");
+        note_held(d.path(), "relay", "t-1");
         let c = counter(d.path());
-        assert_eq!((c.outbound_would_change, c.connector_would_change), (2, 1), "relay and mail are not observed in M1 (their seam is M3's)");
+        assert_eq!((c.outbound_would_change, c.connector_would_change, c.unreadable), (2, 1, 0), "relay and mail are not held in M2 (their seam is M3's)");
+    }
+
+    /// The card's one line of exact text is bounded and says so when it is cut.
+    #[test]
+    fn the_exact_text_on_a_held_card_is_bounded_and_says_when_it_is_cut() {
+        let short = json!({"query": "a b c"});
+        assert_eq!(exact(&short), short.to_string());
+        let long = json!({"query": "x".repeat(4000)});
+        let t = exact(&long);
+        assert!(t.chars().count() < 1700 && t.contains("cut at 1500 characters"), "{}", t.chars().count());
     }
 
     #[test]
@@ -651,7 +794,7 @@ mod tests {
         let d = ws();
         mark(d.path(), "host-abcd1234", "host-abcd1234/n1", 1).unwrap();
         let s = status_line(d.path());
-        assert!(s.contains("1 task(s) marked") && s.contains("observe only") && !s.contains("host-abcd1234"), "{s}");
+        assert!(s.contains("1 task(s) marked") && s.contains("sends held for your answer") && !s.contains("observe only") && !s.contains("host-abcd1234"), "{s}");
     }
 
     /// `specs/103` §6 `every_reader_of_private_text_is_in_the_reads_table`: a file that calls an accessor of entry text, or that the table
@@ -773,6 +916,29 @@ mod tests {
         assert_eq!((done["payload"]["status"].as_str(), done["payload"]["reason"].as_str()), (Some("done"), Some(RELAY_PHRASE)));
         // an empty reason has nothing to withhold and is not turned into the phrase
         assert_eq!(mask_event_for_relay(d.path(), &done_event("t_0001", "")).unwrap()["payload"]["reason"], "");
+    }
+
+    /// `specs/103` M2 keys a Delphi task's mark `<mission>/<task>` (`task_key`), because task ids repeat across missions. The relay filter must
+    /// find a mark under that key, or a task a reader marked would have its text sent to the relay: a mark in one mission holds that
+    /// mission's task, a card that names no mission is held when any mission's task of that id is marked, and another mission's task of the
+    /// same id (an event that names its mission) is not touched.
+    #[test]
+    fn a_mark_under_the_mission_and_task_key_withholds_the_relay_text_and_another_missions_task_is_untouched() {
+        let d = ws();
+        mark(d.path(), &task_key("m_9", "t_0001"), "entry-1", 100).unwrap();
+        let mut in_m9 = card_event("t_0001", "ap_key_a");
+        in_m9["mission_id"] = json!("m_9");
+        let masked = mask_event_for_relay(d.path(), &in_m9).expect("a mark under <mission>/<task> must withhold that task's card");
+        assert!(masked.to_string().contains(RELAY_PHRASE) && !masked.to_string().contains(CANARY), "{masked}");
+        let mut no_mission = done_event("t_0001", &format!("done with {CANARY}"));
+        no_mission.as_object_mut().unwrap().remove("mission_id");
+        let masked = mask_event_for_relay(d.path(), &no_mission).expect("an event naming no mission is withheld when any mission's task of that id is marked");
+        assert!(!masked.to_string().contains(CANARY), "{masked}");
+        assert!(card_withheld(d.path(), "ap_none", "t_0001"), "a relay card list entry names only the task id and is withheld");
+        let mut in_m2 = card_event("t_0001", "ap_key_b");
+        in_m2["mission_id"] = json!("m_2");
+        assert!(mask_event_for_relay(d.path(), &in_m2).is_none(), "the same task id in another mission is not marked");
+        assert!(!card_withheld(d.path(), "ap_other", "t_0002"), "another task is not withheld");
     }
 
     /// `specs/103` §6 `a_task_that_read_nothing_private_is_unchanged_on_all_four_channels`, the Relay and Mail rows: with no mark the filter
