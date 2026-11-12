@@ -18,6 +18,7 @@ const READERS: &[(&str, &str)] = &[
     ("crates/delphi-engine/src/boot.rs", "parses `[research.tiers]` and installs it once at start"),
     ("crates/delphi/src/validation_audit_cmd.rs", "prints the claims the validator could be offered next in the fast lane's order (ids, rungs, counts); an order on a list, nothing else"),
     ("crates/delphi/src/validation_tier_cmd.rs", "the operator's tier audit: shows a sampled claim, takes their answer, then prints its counts; the audit can only take a tier away"),
+    ("crates/delphi-engine/src/fact_background.rs", "the background worker: reads the fast lane's order and the rungs a claim may wait at, only to choose WHICH claim the validator checks next at low priority; the check is the same for every claim, runs at most advisory, and the worker sets no rung and ratifies nothing"),
     ("crates/delphi-engine/src/accept_all.rs", "the operator's accept-all: reads the rung only to choose WHICH claims to show and, at the operator's typed word, to validate them as the operator; it grants no permission and sets no rung"),
 ];
 
@@ -183,6 +184,8 @@ fn the_fast_lane_orders_a_list_and_changes_no_claim() {
         "crates/delphi-core/src/knowledge_status.rs",
         "crates/delphi-engine/src/boot.rs",
         "crates/delphi/src/validation_audit_cmd.rs",
+        // the background worker takes the next claim in the lane's order (`specs/040` §18.3); it orders spending, never a claim's standing
+        "crates/delphi-engine/src/fact_background.rs",
     ];
     let mut stray = Vec::new();
     for f in &files {
@@ -548,4 +551,43 @@ fn a_hard_failure_mark_only_lowers_what_is_shown_and_is_named_by_the_library_the
     }
     assert!(stray_names.is_empty(), "the hard-failure record is named outside the library and the latch function: {stray_names:?}");
     assert!(stray_latch.is_empty(), "the hard-failure latch is called from outside the validator's loop and the operator's accept: {stray_latch:?}");
+}
+
+#[test]
+fn the_background_worker_picks_a_claim_to_check_and_grants_nothing_and_only_the_daemon_asks_for_it() {
+    // `specs/040` §18.3 and `specs/100` §4: the worker chooses which claim the validator checks next and runs the same advisory check. It cannot
+    // ratify (it runs at most `advisory`), it writes no status and raises no tier, and a request a span wrote cannot switch it on: the `background`
+    // flag is set only by the daemon's own call. Nothing reads the worker's module to decide trust, a tier, tool access or an approval; the files
+    // that name it are listed on purpose.
+    let root = root();
+    let mut files = Vec::new();
+    rust_files(&root.join("crates"), &mut files);
+    let module = "crates/delphi-engine/src/fact_background.rs";
+    let code_of = |s: &str| -> String { production(s).lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n") };
+    // 1. the worker's own code names no way to grant: no ratify, no validate, no tier raise, no operator-only act
+    let code = code_of(&std::fs::read_to_string(root.join(module)).unwrap());
+    let grants = Regex::new(r"ratify_fact\(|validate_claim\(|Validator::Operator|restore\(|raise_latch|raise_share|unquarantine\(|record_would_ratify\(|\.accept\(|write_fact").unwrap();
+    assert!(!grants.is_match(&code), "the background worker names a way to grant: {:?}", grants.find(&code).map(|m| m.as_str()));
+    // 2. the module is named only by the daemon's service, the validator's loop, the two commands that show its status, and the engine's list
+    let named = Regex::new(r"fact_background").unwrap();
+    let named_ok = [module, "crates/delphi-engine/src/lib.rs", "crates/delphi-engine/src/service.rs", "crates/delphi-engine/src/fact_serve.rs", "crates/delphi/src/doctor.rs", "crates/delphi/src/validation_audit_cmd.rs"];
+    // 3. the request flag is built in one place, by the daemon, and the span-facing entry clears it
+    let flag = Regex::new(r#""background"\s*:\s*true"#).unwrap();
+    let flag_ok = ["crates/delphi-engine/src/fact_serve.rs"];
+    let (mut stray_named, mut stray_flag) = (Vec::new(), Vec::new());
+    for f in &files {
+        let rel = f.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
+        let c = code_of(&std::fs::read_to_string(f).unwrap());
+        if named.is_match(&c) && !named_ok.contains(&rel.as_str()) {
+            stray_named.push(rel.clone());
+        }
+        if flag.is_match(&c) && !flag_ok.contains(&rel.as_str()) {
+            stray_flag.push(rel);
+        }
+    }
+    assert!(stray_named.is_empty(), "something outside the daemon, the validator's loop and the status commands names the background worker: {stray_named:?}");
+    assert!(stray_flag.is_empty(), "a request is built with the daemon-only background flag outside the validator's loop: {stray_flag:?}");
+    let serve = std::fs::read_to_string(root.join("crates/delphi-engine/src/fact_serve.rs")).unwrap();
+    assert!(production(&serve).contains(r#"req["background"] = json!(false);"#), "the entry a span's request takes must clear the daemon-only background flag");
+    assert!(production(&serve).contains("never ratifies"), "a background check is capped at advisory");
 }

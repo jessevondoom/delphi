@@ -44,10 +44,23 @@ impl Host {
         self.ledger.get_or_init(|| Arc::new(TokenLedger::new(TOKEN_ALLOWANCE))).clone()
     }
 
+    /// Is a validator check in flight now? The background worker waits for it (`specs/040` §18.3: low priority).
+    pub(crate) fn busy(&self) -> bool {
+        self.intake.get().is_some_and(|i| i.in_flight() > 0)
+    }
+
     fn intake(&self) -> &Intake {
         self.intake.get_or_init(|| {
             Intake::new(self.ledger(), || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0))
         })
+    }
+}
+
+/// A background check runs at most `advisory`: it never ratifies, whatever the configured mode and PROMOTE say.
+pub(crate) fn cap_background(eff: &mut Effective, background: bool) {
+    if background && eff.mode == delphi_adapter::config::ValidatorMode::Ratify {
+        eff.mode = delphi_adapter::config::ValidatorMode::Advisory;
+        eff.reason = "background validation never ratifies".into();
     }
 }
 
@@ -84,8 +97,25 @@ impl Engine {
     }
 
     pub(crate) async fn answer_validator_request(self: &Arc<Self>, m: &Arc<MissionState>, req: &Value, author_family: &str) -> Result<(), String> {
+        // `background` is the daemon's own flag (it charges the background share, not a mission's, and caps the mode at advisory). A request a
+        // span wrote never carries it: it could otherwise spend outside its mission's cap.
+        let mut req = req.clone();
+        req["background"] = json!(false);
+        self.answer_validator_request_as(m, &req, author_family).await
+    }
+
+    /// One background check of a library claim (`specs/040` §18.3), asked by the daemon's own worker (`fact_background`), never by a request.
+    /// The words go through the same intake, search, fetch and judge as any `validate_claims` request, in advisory mode at most, charged to the
+    /// background share. A claim that rests on a private source is not sent here (`fact_background::pick` skips it).
+    pub(crate) async fn run_background_claim(self: &Arc<Self>, m: &Arc<MissionState>, claim: &str) -> Result<(), String> {
+        let req = json!({"tool": "validate_claims", "claims": [claim], "caller": "background", "background": true});
+        self.answer_validator_request_as(m, &req, "").await
+    }
+
+    async fn answer_validator_request_as(self: &Arc<Self>, m: &Arc<MissionState>, req: &Value, author_family: &str) -> Result<(), String> {
         let cfg = self.cfg.get();
-        let eff = effective(cfg.validator.mode, &state_dir(&self.ws.dir));
+        let mut eff = effective(cfg.validator.mode, &state_dir(&self.ws.dir));
+        cap_background(&mut eff, req["background"].as_bool().unwrap_or(false));
         let caller = req["caller"].as_str().unwrap_or("").to_string();
         if eff.mode == delphi_adapter::config::ValidatorMode::Off {
             m.append(event(m, "validator.event", json!({"kind": "refused", "caller": caller, "why": "the validator is off", "mode": eff.mode.as_str()}))).await.map_err(|e| e.to_string())?;
@@ -488,7 +518,7 @@ mod tests {
         let l = Library::in_home(&f.engine.ws.home);
         let dir = f.engine.ws.home.join("scratch");
         std::fs::create_dir_all(&dir).unwrap();
-        let p = dir.join("page.md");
+        let p = dir.join(format!("{}.md", crate::fact_store::fact_id(text)));
         std::fs::write(&p, format!("# Page\n\n{text}\n")).unwrap();
         let s = l.add_file(&p, &AddOpts { licence: Some("CC0-1.0".into()), ..Default::default() }, &Budgets::default()).unwrap();
         let anchor = AnchorSpec { source_id: s.id.clone(), locator: Some("§1".into()), quote: text.into(), ..Default::default() };
@@ -522,6 +552,104 @@ mod tests {
         g.engine.answer_validator_request(&g.m, &req, "claude").await.unwrap();
         assert_eq!(status(&l2.claim(&id2).unwrap()), Status::Substantiated, "in off mode the top rung is substantiated");
         assert!(l2.claim(&id2).unwrap()["support"].get("would_ratify").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_background_check_is_charged_to_the_background_share_records_a_dry_run_and_ratifies_nothing() {
+        use crate::library::claims::status;
+        use delphi_core::knowledge_status::Status;
+        let f = setup(vec![], 1.0, |_| {});
+        let (l, id) = library_claim(&f, CLAIM);
+        let req = json!({"tool": "validate_claims", "claims": [CLAIM], "caller": "background", "background": true});
+        let shares = Shares { other_mission: 0, install_week: 10_000_000 };
+        run_full(&f, req, Some(Arc::new(Fixed(String::new(), Default::default()))), ValidatorMode::Advisory, PAGE, &shares, None).await;
+        assert_eq!(status(&l.claim(&id).unwrap()), Status::Vetted);
+        assert!(no_facts(&f), "a background check never writes a validated fact");
+        let journal = crate::fact_audit::Journal::new(&state_dir(&f.engine.ws.dir)).all();
+        let v = journal.iter().find(|e| e["kind"] == "verdict").expect("a journalled verdict");
+        assert_eq!((v["mission"].clone(), v["would_ratify"].clone(), v["ratified"].clone()), (json!("background"), json!(true), json!(false)));
+    }
+
+    #[test]
+    fn the_worker_skips_protected_private_and_twice_tried_claims_and_changes_no_claim() {
+        use crate::fact_background::{pick, record_attempt, Inputs, Wait};
+        let f = setup(vec![], 1.0, |_| {});
+        let (l, ok) = library_claim(&f, "The lighthouse lamp is lit by hand.");
+        let (_, twice) = library_claim(&f, "The harbour bell rings at noon.");
+        let (_, prot) = library_claim(&f, "The treatment dose for the fog is two drops.");
+        let (_, private) = library_claim(&f, "The keeper's ledger lists every visitor.");
+        let sid = l.claim(&private).unwrap()["anchors"][0]["source_id"].as_str().unwrap().to_string();
+        let mut meta = l.read_meta(&sid).unwrap();
+        meta["licence"] = json!("private");
+        std::fs::write(l.source_dir(&sid).join("meta.json"), serde_json::to_vec(&meta).unwrap()).unwrap();
+        let state = state_dir(&f.engine.ws.dir);
+        let twice_text = l.claim(&twice).unwrap()["text"].as_str().unwrap().to_string();
+        let fid = crate::fact_store::fact_id(&twice_text);
+        record_attempt(&state, &fid, 1_000);
+        record_attempt(&state, &fid, 1_100);
+        let before: Vec<Value> = [&ok, &twice, &prot, &private].iter().map(|id| l.claim(id).unwrap()["lifecycle"].clone()).collect();
+        let i = Inputs { enabled: true, mode: ValidatorMode::Advisory, state: &state, lib: &l, now: 100_000, last_operator: 0, busy: false, install_week: 10_000_000, lane_on: true };
+        let chosen = pick(&i).unwrap();
+        assert_eq!(chosen.claim_id, ok, "the protected, the private and the twice-tried claim are all passed over");
+        assert_eq!(chosen.text, "The lighthouse lamp is lit by hand.");
+        let after: Vec<Value> = [&ok, &twice, &prot, &private].iter().map(|id| l.claim(id).unwrap()["lifecycle"].clone()).collect();
+        assert_eq!(before, after, "choosing a claim changes no claim's lifecycle");
+        // the only other claims are skipped, so once the first has a recorded dry run nothing is left
+        let mut c = l.claim(&ok).unwrap();
+        c["support"]["would_ratify"] = json!(true);
+        std::fs::write(l.claims_dir().join(format!("{ok}.json")), serde_json::to_vec(&c).unwrap()).unwrap();
+        assert_eq!(pick(&i), Err(Wait::Nothing));
+    }
+
+    #[test]
+    fn a_background_check_never_ratifies_even_when_the_mode_is_ratify() {
+        let mut eff = Effective { mode: ValidatorMode::Ratify, config: ValidatorMode::Ratify, reason: "as configured".into() };
+        cap_background(&mut eff, false);
+        assert_eq!(eff.mode, ValidatorMode::Ratify, "a foreground request is untouched");
+        cap_background(&mut eff, true);
+        assert_eq!(eff.mode, ValidatorMode::Advisory);
+        let mut off = Effective { mode: ValidatorMode::Off, config: ValidatorMode::Off, reason: String::new() };
+        cap_background(&mut off, true);
+        assert_eq!(off.mode, ValidatorMode::Off, "the cap only lowers");
+    }
+
+    #[test]
+    fn the_worker_follows_the_fast_lane_and_skips_contested_and_changed_source_claims_and_a_rolled_back_tier() {
+        use crate::fact_background::{pick, Inputs, Wait};
+        let f = setup(vec![], 1.0, |_| {});
+        let (l, a) = library_claim(&f, "The harbour bell rings at noon.");
+        let (_, b) = library_claim(&f, "The lighthouse lamp is lit by hand.");
+        let (_, c) = library_claim(&f, "The pier is painted every spring.");
+        let state = state_dir(&f.engine.ws.dir);
+        let i = |lane_on| Inputs { enabled: true, mode: ValidatorMode::Advisory, state: &state, lib: &l, now: 100_000, last_operator: 0, busy: false, install_week: 10_000_000, lane_on };
+        // the fixtures hold forged counts that a fresh derivation lowers; the lane reads what is stored, so make `b` the higher rung with a real origin count
+        let first_on = pick(&i(true)).unwrap().claim_id;
+        let first_off = pick(&i(false)).unwrap().claim_id;
+        let mut ids = [a.clone(), b.clone(), c.clone()];
+        ids.sort();
+        assert_eq!(first_off, ids[0], "lane off: by id");
+        assert!([&a, &b, &c].contains(&&first_on), "lane on still picks a waiting claim");
+        // a contested claim is not a candidate
+        let mut cc = l.claim(&first_off).unwrap();
+        cc["contested_by"] = json!([{"source": "x", "reason": "test"}]);
+        std::fs::write(l.claims_dir().join(format!("{first_off}.json")), serde_json::to_vec(&cc).unwrap()).unwrap();
+        assert_ne!(pick(&i(false)).unwrap().claim_id, first_off, "a contested claim is passed over");
+        // a rolled-back vetted tier closes the worker
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::write(crate::tier_audit::latch_file(&state), br#"{"latched":{"vetted":{"reason":"test"}}}"#).unwrap();
+        assert_eq!(pick(&i(false)), Err(Wait::Latched));
+    }
+
+    #[tokio::test]
+    async fn a_background_check_over_the_weekly_share_is_parked_not_run() {
+        use crate::library::claims::status;
+        use delphi_core::knowledge_status::Status;
+        let f = setup(vec![], 1.0, |_| {});
+        let (l, id) = library_claim(&f, CLAIM);
+        let req = json!({"tool": "validate_claims", "claims": [CLAIM], "caller": "background", "background": true});
+        run_full(&f, req, Some(Arc::new(Fixed(String::new(), Default::default()))), ValidatorMode::Advisory, PAGE, &Shares::default(), None).await;
+        assert_eq!(status(&l.claim(&id).unwrap()), Status::Substantiated, "no share, no check, no dry run");
+        assert!(kinds(&f).iter().any(|(k, p)| k == "validator.event" && p["kind"] == "queued"), "{:?}", kinds(&f));
     }
 
     /// Reads a passage marked `OPPOSITE` as saying the opposite of the claim, and any other passage as agreeing with it.

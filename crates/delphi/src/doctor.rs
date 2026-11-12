@@ -142,6 +142,8 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
     let cfg = fs::read_to_string(ws.dir.join("config.toml")).unwrap_or_default();
     // 17. What research can reach before any run (specs/098 §7.5 item 9): facts, not errors.
     check_research(home, ws, &cfg, &mut r);
+    // 19. Background validation (specs/040 §18.3): a fact when it is on and has stopped for a reason the operator should know.
+    check_background_validation(ws, home, &cfg, &mut r);
     // 18. Settings that were removed because their features are always on (specs/098 §13.2): one line per key an old config still carries.
     check_removed_settings(&cfg, &mut r);
     let endpoints = toml::from_str::<toml::Value>(&cfg).ok().and_then(|v| v.get("endpoints").and_then(|e| e.as_array()).map(|a| a.len())).unwrap_or(0);
@@ -239,6 +241,17 @@ fn check_removed_settings(cfg_text: &str, r: &mut Report) {
             r.warn("18 removed-settings", "config.toml", format!("[{table}] {key} was removed; the feature is always on; see specs/098 section 13.2"));
         }
     }
+}
+
+/// Background validation says something only when it is switched on: whether it is running, or why it stopped (a cap, a backlog, a rolled-back tier).
+fn check_background_validation(ws: &Workspace, home: &Path, cfg_text: &str, r: &mut Report) {
+    let now = delphi_core::xenia_index::unix_of(&delphi_core::time::now_rfc3339()).unwrap_or(0);
+    let s = delphi_engine::fact_background::status_from_files(&ws.dir, home, cfg_text, now);
+    if !s.enabled {
+        return;
+    }
+    let msg = s.doctor_fact().unwrap_or_else(|| format!("background validation is on: {} of {} tokens today, {} claim(s) checked", s.tokens_today, s.cap_today, s.claims_total));
+    r.push(Level::Ok, "19 background-validation", "", msg);
 }
 
 fn check_research(home: &Path, ws: &Workspace, cfg_text: &str, r: &mut Report) {
