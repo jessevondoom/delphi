@@ -455,6 +455,21 @@ pub fn global_off(ws_dir: &Path) -> bool {
     global_off_path(ws_dir).exists()
 }
 
+/// `local/history.purged`: written by `delphi history purge` (S7) with the time of the purge in milliseconds since the Unix epoch and
+/// no text. A running daemon holds the operator's last prompt in memory; without this marker the next trigger would write that
+/// prompt back into the store the operator had just emptied. The tap drops a held prompt noted at or before the marker.
+pub fn purged_marker_path(ws_dir: &Path) -> PathBuf {
+    ws_dir.join("local/history.purged")
+}
+
+fn purged_at_ms(ws_dir: &Path) -> i64 {
+    std::fs::read_to_string(purged_marker_path(ws_dir)).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0)
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+}
+
 /// An exclusive lock on the project's store, held across a process boundary: the daemon appends under it and `delphi history
 /// purge|delete` rewrites under it, so neither loses the other's write. The lock file holds nothing.
 pub(crate) struct StoreLock {
@@ -733,6 +748,8 @@ struct Pending {
     task_id: String,
     text: String,
     concluded: bool,
+    /// When the daemon noted it (ms), to compare with a purge (`purged_marker_path`).
+    noted_ms: i64,
 }
 
 /// A trigger the daemon saw while it held no operator prompt of its own (the usual case in a host's mission: the operator typed the
@@ -835,12 +852,16 @@ impl Tap {
         if !self.settings.enabled {
             return;
         }
-        *self.pending.lock().unwrap() = Some(Pending { task_id: task_id.to_string(), text: text.to_string(), concluded: false });
+        *self.pending.lock().unwrap() = Some(Pending { task_id: task_id.to_string(), text: text.to_string(), concluded: false, noted_ms: now_ms() });
     }
 
     fn conclude(&self, mission: &str, trigger: Trigger, outcome: Outcome, observed: Observed) -> Option<Appended> {
         let text = {
             let mut p = self.pending.lock().unwrap();
+            // A purge since the prompt was noted: the operator emptied the store, so the held copy is dropped, not written back (S7).
+            if p.as_ref().is_some_and(|x| x.noted_ms <= purged_at_ms(&self.ws_dir)) {
+                *p = None;
+            }
             match p.as_mut() {
                 Some(x) if !x.concluded => {
                     x.concluded = true;

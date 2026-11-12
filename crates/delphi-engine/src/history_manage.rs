@@ -87,6 +87,11 @@ pub fn erase(ws_dir: &Path, project: &str, which: Which, removed_at: &str) -> Re
             _ => Ok(Erased::default()),
         };
     }
+    // A purge also tells a running daemon to drop the operator prompt it holds in memory (S7): no text, only a time. With no store
+    // there is nothing to purge and nothing is made under the home.
+    if !matches!(which, Which::Id(_)) {
+        mark_purged(ws_dir);
+    }
     let _gate = APPEND_GATE.lock().unwrap_or_else(|p| p.into_inner());
     let _store = lock_store(&rec::store_dir(ws_dir, &project)).map_err(String::from)?;
     let text = std::fs::read_to_string(&path).map_err(|_| "the history store cannot be read".to_string())?;
@@ -147,6 +152,16 @@ pub fn erase(ws_dir: &Path, project: &str, which: Which, removed_at: &str) -> Re
     }
     write_atomically(&path, &out)?;
     Ok(done)
+}
+
+/// Best effort: if the marker cannot be written the purge itself still runs, and the CLI's note about a running daemon stands.
+fn mark_purged(ws_dir: &Path) {
+    let path = rec::purged_marker_path(ws_dir);
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    let _ = std::fs::write(path, format!("{ms}\n"));
 }
 
 fn write_atomically(path: &Path, text: &str) -> Result<(), String> {
@@ -366,3 +381,7 @@ pub fn doctor_line(o: &Overview) -> (bool, String) {
 #[cfg(test)]
 #[path = "history_manage_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "history_residue_tests.rs"]
+mod residue_tests;
