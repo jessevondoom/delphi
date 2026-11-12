@@ -26,7 +26,8 @@ fn human() -> Human {
 #[test]
 fn nothing_is_shown_today_because_the_s8_switch_is_off() {
     // The constant S8 flips. Until then neither text is ever returned to a caller that passes the real switch.
-    assert!(!SHOW_AT_INSTALL, "the opt-out default is held until S7 passes and the egress check is live (OD-8)");
+    // A compile-time check: flipping the switch is a deliberate edit that has to change this line too (slice S8, after S7 passes).
+    const { assert!(!SHOW_AT_INSTALL, "the opt-out default is held until S7 passes and the egress check is live (OD-8)") };
     let ws = tempfile::tempdir().unwrap();
     assert_eq!(question_to_show(ws.path(), SHOW_AT_INSTALL), None);
     assert_eq!(first_run_notice(ws.path(), SHOW_AT_INSTALL, true), None);

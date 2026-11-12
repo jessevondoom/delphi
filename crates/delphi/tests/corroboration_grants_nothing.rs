@@ -762,10 +762,10 @@ fn the_history_controls_and_the_install_question_are_the_operators_and_grant_and
     assert!(stray.is_empty(), "the history controls or the install question are named outside the files that wire them; read it and add it on purpose: {stray:?}");
     assert!(stray_answer.is_empty(), "the install question is answered from outside the consent module and the operator's command: {stray_answer:?}");
     // No daemon method or host tool is named for them.
+    let method = Regex::new(r#""(?:host\.)?history\.(?:off|purge|delete|status|answer|consent)""#).unwrap();
     for rel in ["crates/delphi-engine/src/service.rs", "crates/delphi-engine/src/host_rpc.rs", "crates/delphi-engine/src/mcp.rs"] {
         let Ok(src) = std::fs::read_to_string(root.join(rel)) else { continue };
-        let code = production(&src);
-        assert!(!Regex::new(r#""(?:host\.)?history\.(?:off|purge|delete|status|answer|consent)""#).unwrap().is_match(code), "{rel} exposes a history control as a method");
+        assert!(!method.is_match(production(&src)), "{rel} exposes a history control as a method");
     }
     let inert = ["crate::history_pointer", "crate::history_record", "crate::history_report", "crate::history_manage", "crate::history_consent", "delphi_core::time", "serde::", "serde_json::", "std::"];
     let reach = Regex::new(r"std::net|std::process|Command::new|TcpStream|reqwest|tiny_http|tokio::|delphi_adapter|complete\(|model_call|\.send\(").unwrap();
