@@ -95,6 +95,8 @@ pub struct Settings {
     pub harness_copilot: crate::harness::Opts,
     /// `[learning]`: what the daemon stages for the operator to review (`specs/031` §3.6).
     pub learning: crate::learn::LearningSettings,
+    /// `[history]` (`specs/102` §7): off until slice S8, so a default `Settings` records nothing.
+    pub history: crate::history_record::Settings,
     /// How long a Claude span waits, before its first turn, for the account's connectors to finish loading (`specs/020` §6).
     pub connector_settle: Duration,
     /// `council_budget_usd` (D-10): a separate ceiling for one Council.
@@ -198,6 +200,7 @@ impl Default for Settings {
             harness_copilot: Default::default(),
             copilot_program: "copilot".into(),
             learning: Default::default(),
+            history: Default::default(),
             connector_settle: Duration::from_secs(10),
             council_budget_usd: 20.0,
             council_seat_timeout: Duration::from_secs(600),
@@ -706,6 +709,9 @@ impl Engine {
                 prompts.clear();
             }
             prompts.insert(task_id.clone(), prompt.to_string());
+            drop(prompts);
+            // The project history (`specs/102` S3): the daemon saw the operator's prompt. Dormant unless `[history] enabled`.
+            m.history_note_prompt(&task_id, prompt);
         }
         // `@<bundle>:<agent>` from the console arrives as `bundle:<bundle>:<agent>`: the span is the agent's host role's,
         // attributed to the bundle agent, exactly as when a role dispatches it (`specs/023` §5B).
@@ -2214,11 +2220,17 @@ impl Engine {
         let op = if result.starts_with("replaced") { delphi_core::artifact::Op::Edit } else { delphi_core::artifact::Op::Create };
         let dir = self.ws.dir.join("local/artifact-log").join(&sc.m.id);
         let redactor = delphi_core::redact::Redactor::new();
+        let mut logged = Vec::new();
         for s in written {
             let r = delphi_core::artifact::PromptLog::open(&dir).and_then(|l| l.append(&redactor, &sc.task_id, &s.path, op, &prompt, Some(&s.blake3)).map_err(std::io::Error::other));
-            if let Err(e) = r {
-                eprintln!("delphi: artifact prompt log: {}", e);
+            match r {
+                // The project history references the log's entry and holds no prompt text (`specs/102` §3.5).
+                Ok(entry) => logged.push(crate::history_record::ArtifactRef { log: format!("local/artifact-log/{}/{}", sc.m.id, delphi_core::artifact::LOG_FILE), entry: entry.hash, artifact: s.path.clone(), artifact_hash: Some(s.blake3.clone()) }),
+                Err(e) => eprintln!("delphi: artifact prompt log: {}", e),
             }
+        }
+        if !logged.is_empty() {
+            sc.m.history_artifacts(&sc.task_id, logged);
         }
     }
 

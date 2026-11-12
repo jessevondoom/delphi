@@ -81,7 +81,7 @@ pub enum Wired {
 }
 
 /// Every channel of `specs/055` §10.1 and the file that sends through it.
-pub const PATHS: [(Channel, &str, Wired); 14] = [
+pub const PATHS: [(Channel, &str, Wired); 15] = [
     (Channel::Bundle, "library_export.rs", Wired::Yes),
     (Channel::WebSearch, "library_acquire.rs", Wired::Yes),
     (Channel::Xenia, "service_xenia.rs", Wired::Yes),
@@ -96,6 +96,7 @@ pub const PATHS: [(Channel, &str, Wired); 14] = [
     (Channel::ArchiveLookup, "library_archive.rs", Wired::Yes),
     (Channel::CitationLookup, "research_host.rs", Wired::Yes),
     (Channel::DoiResolve, "research_host.rs", Wired::Yes),
+    (Channel::History, "history_record.rs", Wired::Yes),
 ];
 
 /// A path that is deliberately NOT guarded by [`check`] (`specs/098` §12 item 16, §7.5 item 7a): it carries no text from any entry, so there

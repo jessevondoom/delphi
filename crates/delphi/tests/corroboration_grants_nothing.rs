@@ -560,7 +560,8 @@ fn a_history_pointer_and_the_project_timeline_are_context_that_nothing_reads_as_
     let mut files = Vec::new();
     rust_files(&root.join("crates"), &mut files);
     let names = Regex::new(r"history_pointer|history_report").unwrap();
-    let readers_ok = ["crates/delphi-engine/src/lib.rs", "crates/delphi-engine/src/history_pointer.rs", "crates/delphi-engine/src/history_report.rs"];
+    // The exchange record (slice S3) and its redactor hold a pointer, so they name it on purpose; the test below holds them to the same limits.
+    let readers_ok = ["crates/delphi-engine/src/lib.rs", "crates/delphi-engine/src/history_pointer.rs", "crates/delphi-engine/src/history_report.rs", "crates/delphi-engine/src/history_record.rs", "crates/delphi-engine/src/history_redact.rs"];
     let mut stray = Vec::new();
     for f in &files {
         let rel = f.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
@@ -580,5 +581,60 @@ fn a_history_pointer_and_the_project_timeline_are_context_that_nothing_reads_as_
             assert!(inert.iter().any(|p| l.trim_start_matches("use ").starts_with(p)), "{rel} imports from a path that is not on the inert list: {l}");
         }
         assert!(!reach.is_match(&code), "{rel} names a socket, a process or a model call");
+    }
+}
+
+#[test]
+fn an_exchange_record_is_context_that_nothing_reads_as_a_criterion_and_that_reaches_nothing() {
+    // `specs/102` §11 items 1, 2, 3 and 5 (slice S3): the exchange record and its redactor are named only where they are wired (the engine's
+    // task start and artifact log, the mission's event path, the daemon's mission open, the settings at boot, the egress enumeration and
+    // the module list), they import only inert crates, they name no socket, process, model call, promotion, trust, tool-access or
+    // approval path, and the record's `outcome` is read by nothing but the record itself (no count, ratio or trend of it exists).
+    let root = root();
+    let mut files = Vec::new();
+    rust_files(&root.join("crates"), &mut files);
+    let names = Regex::new(r"history_record|history_redact").unwrap();
+    let wired = [
+        "crates/delphi-engine/src/lib.rs",
+        "crates/delphi-engine/src/history_record.rs",
+        "crates/delphi-engine/src/history_redact.rs",
+        "crates/delphi-engine/src/engine.rs",
+        "crates/delphi-engine/src/mission.rs",
+        "crates/delphi-engine/src/service.rs",
+        "crates/delphi-engine/src/boot.rs",
+        "crates/delphi-engine/src/egress.rs",
+    ];
+    let mut stray = Vec::new();
+    for f in &files {
+        let rel = f.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
+        let src = std::fs::read_to_string(f).unwrap();
+        let code: String = production(&src).lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+        if names.is_match(&code) && !wired.contains(&rel.as_str()) {
+            stray.push(rel);
+        }
+    }
+    assert!(stray.is_empty(), "the exchange record is named outside the files that wire it; read it and add it on purpose: {stray:?}");
+    let inert = ["crate::history_pointer", "crate::history_redact", "crate::history_report", "crate::library::Channel", "delphi_core::event", "delphi_core::redact", "regex::", "serde::", "serde_json::", "std::"];
+    let reach = Regex::new(r"std::net|std::process|Command::new|TcpStream|reqwest|tiny_http|tokio::|delphi_adapter|complete\(|model_call|\.send\(").unwrap();
+    let grants = Regex::new(r"\b(?:promote\w*|ratif\w*|approv\w*|grant\w*|trust\w*|taint\w*|tier\w*|authoriz\w*|library_claims|knowledge_status|fact_\w*|validator\w*|score\w*|rank\w*)\b|council::|research_run").unwrap();
+    for rel in ["crates/delphi-engine/src/history_record.rs", "crates/delphi-engine/src/history_redact.rs"] {
+        let src = std::fs::read_to_string(root.join(rel)).unwrap();
+        let code: String = production(&src).lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+        for l in code.lines().filter(|l| l.starts_with("use ")) {
+            assert!(inert.iter().any(|p| l.trim_start_matches("use ").starts_with(p)), "{rel} imports from a path that is not on the inert list: {l}");
+        }
+        assert!(!reach.is_match(&code), "{rel} names a socket, a process or a model call");
+        assert!(!grants.is_match(&code), "{rel} names a promotion, trust, tool-access or approval path: {:?}", grants.find(&code).map(|m| m.as_str().to_string()));
+    }
+    // The outcome is a label: only the record module reads or builds one.
+    let outcome = Regex::new(r"OutcomeValue|history_record::Provenance").unwrap();
+    for f in &files {
+        let rel = f.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
+        if rel.ends_with("history_record.rs") || rel.ends_with("history_record_tests.rs") {
+            continue;
+        }
+        let src = std::fs::read_to_string(f).unwrap();
+        let code: String = production(&src).lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+        assert!(!outcome.is_match(&code), "{rel} names the record's outcome type: it is a label that nothing else reads");
     }
 }

@@ -161,10 +161,13 @@ pub enum Channel {
     /// A public DOI sent to the DOI-resolution endpoint to ask where the work lives (`specs/101` §6 item 8): read-only, no entry text, and
     /// never for a source that is private, whose record cannot be read, or that names no DOI.
     DoiResolve,
+    /// Text of a project-history record (`specs/102` §7 item 2): every record is private, so no record leaves the install by any
+    /// channel, and its text enters a model prompt only under `[history] to_models` (`history_record::for_prompt`).
+    History,
 }
 
 impl Channel {
-    pub const ALL: [Channel; 14] = [
+    pub const ALL: [Channel; 15] = [
         Channel::Bundle,
         Channel::Xenia,
         Channel::Export,
@@ -179,6 +182,7 @@ impl Channel {
         Channel::ArchiveLookup,
         Channel::CitationLookup,
         Channel::DoiResolve,
+        Channel::History,
     ];
 }
 
