@@ -66,6 +66,8 @@ pub mod mcp_packs;
 pub mod mcp_project;
 pub mod spec_lookup;
 pub mod transcript;
+pub mod history_pointer;
+pub mod history_report;
 pub mod mcp_wire;
 pub mod org_context;
 pub mod core_main;
