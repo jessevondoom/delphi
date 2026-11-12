@@ -295,6 +295,15 @@ pub fn timeline_of(mission_dir: &Path) -> Result<Timeline, String> {
     Ok(timeline(&events, bad))
 }
 
+/// The same, honouring `[history] timeline` (§7 item 8): `None` when the operator turned the timeline off, with nothing read. The
+/// timeline holds only ids and counts, so it is not tied to `[history] enabled`: it stays when records are off.
+pub fn timeline_of_if(mission_dir: &Path, timeline_on: bool) -> Result<Option<Timeline>, String> {
+    if !timeline_on {
+        return Ok(None);
+    }
+    timeline_of(mission_dir).map(Some)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

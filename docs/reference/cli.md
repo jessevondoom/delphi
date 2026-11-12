@@ -239,6 +239,19 @@ The wakes the daemon is keeping for roles.
     [--mission <id>] [--workspace <name>] [--home <dir>]
 ```
 
+### `delphi history`
+
+The project history: turn it off, erase it, see what is kept.
+
+```
+  delphi history status [--workspace <name>] [--home <dir>]
+  delphi history off [--project <id>] [--workspace <name>] [--home <dir>]
+  delphi history purge [--since <7d | date | time>] [--project <id>] [--yes] [--workspace <name>] [--home <dir>]
+  delphi history delete <id> [--project <id>] [--yes] [--workspace <name>] [--home <dir>]
+```
+
+The history is your own prompts, redacted, with a capped summary of what came of each, kept on this machine only (specs/102). It is off by default until the release that carries the whole feature; while it is off nothing is recorded. `status` shows whether it is on, how many records and erased tombstones each project has, the store size against its budget, whether the chain verifies, the time of the last record and how many records are past the age budget (`[history] retention_days`; nothing is deleted at that age); it prints no record text. `off` stops new records at once (for one project with --project) and deletes nothing: it writes a marker file, and removing the marker turns the history back on. `purge` erases the records (all, or those written at or after --since, a duration like 7d, a date or a time) and `delete` erases one record by id (with --project when several projects have a history); each erased record leaves a tombstone, which keeps its id, its time and its keyed hash and no text, so the chain still verifies and the erasure is visible. A record that had already failed the chain check leaves a tombstone that is itself a break. Both ask you to type `yes` (or take --yes). A running daemon is not told: it holds your last prompt in memory until its trigger fires or it stops, and `off` keeps that from being written. Every subcommand is the operator's and is refused inside an agent seat; there is no way for a host or a seat to call them.
+
 ### `delphi validation`
 
 Score the labelled set; audit, report on and retract validated facts.
