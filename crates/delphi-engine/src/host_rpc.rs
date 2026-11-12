@@ -1496,7 +1496,9 @@ mod tests {
     /// a Panel's capture at L0).
     #[test]
     fn only_the_known_files_read_a_council_verdict() {
-        let allowed = ["council.rs", "host_rpc.rs", "service.rs", "observe.rs", "learn.rs"];
+        // `history_record.rs` (and its tests) read the event as a trigger for a private project-history record (`specs/102` §3.2, reviewed
+        // against 086 §15): the record is a label, and nothing is gated, promoted or approved by it.
+        let allowed = ["council.rs", "host_rpc.rs", "service.rs", "observe.rs", "learn.rs", "history_record.rs", "history_record_tests.rs"];
         let mut found = Vec::new();
         for e in std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/src")).unwrap().flatten() {
             let name = e.file_name().to_string_lossy().to_string();

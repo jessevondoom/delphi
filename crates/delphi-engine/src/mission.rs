@@ -160,6 +160,8 @@ pub struct MissionState {
     held: Mutex<std::collections::HashMap<String, Vec<EventEnvelope>>>,
     /// Staged-note capture state (`learn.rs`), rebuilt from the log on open.
     stager: Mutex<crate::learn::Stager>,
+    /// The project-history tap (`specs/102` S3): absent until the daemon sets it, and dormant while `[history] enabled` is off.
+    history: Mutex<Option<Arc<crate::history_record::Tap>>>,
 }
 
 /// Highest trailing number among `prefix`-ed ids seen in `events` (so ids never repeat after a restart).
@@ -205,7 +207,31 @@ impl MissionState {
             append_gate: tokio::sync::Mutex::new(()),
             held: Mutex::new(std::collections::HashMap::new()),
             stager: Mutex::new(crate::learn::Stager::replay(crate::learn::LearningSettings::default(), &events)),
+            history: Mutex::new(None),
         }))
+    }
+
+    /// Install the project-history tap (`specs/102` S3). Without one, or with `[history] enabled` off, no record is written.
+    pub fn set_history(&self, tap: crate::history_record::Tap) {
+        *self.history.lock().unwrap() = Some(Arc::new(tap));
+    }
+
+    fn history_tap(&self) -> Option<Arc<crate::history_record::Tap>> {
+        self.history.lock().unwrap().clone()
+    }
+
+    /// The daemon saw an operator start a task with this prompt (`Engine::start_task`).
+    pub fn history_note_prompt(&self, task_id: &str, text: &str) {
+        if let Some(t) = self.history_tap() {
+            t.note_operator_prompt(task_id, text);
+        }
+    }
+
+    /// Artifacts a tool call wrote now have entries in the artifact prompt log (`Engine::log_artifact_prompts`).
+    pub fn history_artifacts(&self, task_id: &str, refs: Vec<crate::history_record::ArtifactRef>) {
+        if let Some(t) = self.history_tap() {
+            t.on_artifacts(&self.id, task_id, refs);
+        }
     }
 
     pub fn next_task_id(&self) -> String {
@@ -280,6 +306,11 @@ impl MissionState {
         };
         if !learned.is_empty() {
             self.write_and_apply(learned).await?;
+        }
+        // The project history (`specs/102` S3): a trigger the daemon observed concludes the operator's prompt. Dormant unless
+        // `[history] enabled`; a failure to write a record never fails the mission (the tap reports it and moves on).
+        if let Some(tap) = self.history_tap() {
+            tap.on_events(&self.id, &stored);
         }
         Ok(stored)
     }

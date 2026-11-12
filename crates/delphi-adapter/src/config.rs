@@ -581,6 +581,8 @@ pub struct Config {
     pub library: LibraryConfig,
     /// `[learning]`: capture and the bounds on the learning loop (`specs/031` §3.6). The engine clamps each value to the core's bounds.
     pub learning: LearningConfig,
+    /// `[history]`: the project history (`specs/102` §7). Types are checked here; the ranges are the engine's (`history_record::Settings`).
+    pub history: HistoryConfig,
     /// `[mcp]`: the server for host agents (`specs/062` §3.4).
     pub mcp: McpConfig,
     /// `[retrieval]`: knowledge retrieval for agents (`specs/064` §4).
@@ -870,6 +872,16 @@ pub struct LearningConfig {
     pub triggers: Option<Vec<String>>,
     pub retro_min_tasks: Option<i64>,
     pub exposure_randomization: Option<bool>,
+}
+
+/// `[history]` (`specs/102` §7). Off by default until slice S8; a wrong type is a `delphi doctor` problem, and the engine clamps each number.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(default)]
+pub struct HistoryConfig {
+    pub enabled: Option<bool>,
+    pub paste_chars: Option<i64>,
+    pub to_models: Option<String>,
+    pub budget_mb: Option<i64>,
 }
 
 /// `[validator] mode` (`specs/040` §15.1). Ordered so that `min` is the stricter of two.

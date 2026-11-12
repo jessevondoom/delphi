@@ -179,6 +179,15 @@ sandbox = "off"
 # exposure_randomization = false    # opt in: withhold a new rule from about half of its first 20 tasks, to measure it (security and always rules never)
 # retro_min_tasks = 10               # finished tasks before `delphi needs` says the coaching pass has material (3 to 200)
 
+# Project history (specs/102 section 7). Your own prompts, redacted, with a capped summary of what came of each, kept on this machine
+# only and never in a bundle, export or model prompt unless you say so. Pasted blocks are kept as a keyed hash and a length, not text.
+# Off until the release that carries the whole feature; nothing is recorded while `enabled` is false.
+# [history]
+# enabled = false
+# paste_chars = 400    # a span longer than this is treated as pasted unless Delphi saw it typed (50 to 5000; a hypothesis)
+# to_models = "deny"   # "allow" lets a seat of your host's own family read a record; a foreign or unknown family never does
+# budget_mb = 50       # per project, 1 to 1024; at the cap Delphi stops adding and says so
+
 # Delphi for the other tools you code with (specs/062): `delphi mcp` is an MCP server on stdio, for this machine and this user only.
 # [mcp]
 # enabled = true                     # false: every tool call is answered `disabled_by_operator`; read at each call, so it takes effect at once
