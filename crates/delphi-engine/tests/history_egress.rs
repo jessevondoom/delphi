@@ -151,7 +151,7 @@ fn no_debug_bundle_log_export_or_telemetry_source_reads_the_history_store() {
         assert!(!store.is_match(&production(src)), "{r} names the history store");
     }
     // And every other production file that names the store's files is one of the history modules or the CLI's own.
-    let ok = ["delphi-engine/src/history_", "delphi/src/history_cmd.rs", "delphi/src/doctor.rs", "delphi-engine/src/service.rs", "delphi-engine/src/library.rs", "delphi-engine/src/mission.rs"];
+    let ok = ["delphi-engine/src/history_", "delphi/src/history_cmd.rs", "delphi/src/main.rs" /* the help text of `delphi history` names the marker files */, "delphi/src/doctor.rs", "delphi-engine/src/service.rs", "delphi-engine/src/library.rs", "delphi-engine/src/mission.rs"];
     for (rel, src) in &all {
         if is_test_file(rel) || ok.iter().any(|o| rel.starts_with(o)) {
             continue;
