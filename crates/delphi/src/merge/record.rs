@@ -73,7 +73,10 @@ pub struct Record {
     pub base_sha: String,
     pub paths_count: usize,
     pub paths_hash: String,
+    /// The first (or first blocking) spec state; `specs` below has every one.
     pub spec: SpecState,
+    /// Every distinct spec named by a trailer, in order of appearance (one entry when none or one is named).
+    pub specs: Vec<SpecState>,
     /// `(check name, bucket)`.
     pub checks: Vec<(String, String)>,
     pub gate_changing: bool,
@@ -94,6 +97,7 @@ impl Record {
             "paths_count": self.paths_count,
             "paths_hash": self.paths_hash,
             "spec": self.spec.to_json(),
+            "specs": self.specs.iter().map(|s| s.to_json()).collect::<Vec<_>>(),
             "checks": self.checks.iter().map(|(n, b)| json!({"name": n, "bucket": b})).collect::<Vec<_>>(),
             "gate_changing": self.gate_changing,
             "attestation": self.attestation.label(),
@@ -251,6 +255,7 @@ mod tests {
             paths_count: 2,
             paths_hash: "h".into(),
             spec: SpecState::Exempt,
+            specs: vec![SpecState::Exempt],
             checks: vec![("test".into(), "pass".into())],
             gate_changing: false,
             attestation: Attestation::ChatQuote("merge 7 \"now\"".into()),

@@ -605,6 +605,33 @@ fn finding_of(l: &str) -> (String, String) {
     }
 }
 
+/// The findings a Round 1 stance names, for a red-team review (`specs/098` §6.2). Round 1 is free prose, so only a line that states a
+/// severity is a finding: `FINDING P1 title`, `[P1] title` or `P1: title` (a leading bullet is fine). Nothing else is guessed at, and
+/// a line that cannot be read is skipped, not turned into a finding (a Round 2 reply that cannot be read blocks; a stance is not
+/// asked to be a critique). At most 20 per stance; titles are capped at 200 characters. No model is involved.
+pub fn round1_findings(text: &str) -> Vec<(String, String)> {
+    let sev = |s: &str| matches!(s, "P0" | "P1" | "P2" | "P3");
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let l = line.trim().trim_start_matches(['-', '*', '•', '>', ' ']).trim();
+        let parsed = if l.get(..7).is_some_and(|h| h.eq_ignore_ascii_case("FINDING")) {
+            let (s, t) = finding_of(l);
+            (!t.starts_with("unparseable finding")).then(|| (s, t.trim_start_matches([':', '-', ' ']).trim().to_string()))
+        } else if let Some(rest) = l.strip_prefix('[') {
+            rest.split_once(']').filter(|(s, _)| sev(&s.to_uppercase())).map(|(s, t)| (s.to_uppercase(), t.trim_start_matches([':', '-', ' ']).trim().chars().take(200).collect::<String>()))
+        } else {
+            l.split_once([':', ' ']).filter(|(s, _)| sev(&s.to_uppercase())).map(|(s, t)| (s.to_uppercase(), t.trim_start_matches([':', '-', ' ']).trim().chars().take(200).collect::<String>()))
+        };
+        if let Some((s, t)) = parsed.filter(|(_, t)| !t.is_empty()) {
+            out.push((s, t));
+            if out.len() == 20 {
+                break;
+            }
+        }
+    }
+    out
+}
+
 /// The Round 2 reply as a JSON Schema, for a CLI that can validate its answer against one (`specs/021` §5).
 pub fn critique_schema() -> String {
     json!({
@@ -2128,6 +2155,18 @@ pub(crate) mod tests {
         let (f, after) = seat_reads_then_asks_again("pub fn needle() {}\n").await;
         assert!(!after.contains("you read a noted entry"), "{after}");
         assert!(events_of(&f, "seat.tools_withdrawn").is_empty());
+    }
+
+    #[test]
+    fn a_round_one_stance_yields_only_the_findings_that_state_a_severity() {
+        let t = "OPTION: B\nMy view is that the plan has holes.\n- FINDING P0 Replay of the barrier file\n* [P1] Missing idempotency keys\nP2: naming is inconsistent\n> finding p3 - trailing whitespace in the template\nFINDING: urgent data loss\nFINDING P9 not a severity\n[high] vague\nThe P1 in this sentence is not a finding.\nP1:\n[P1]   \nFINDING P2";
+        let got = round1_findings(t);
+        assert_eq!(got, vec![("P0".to_string(), "Replay of the barrier file".to_string()), ("P1".to_string(), "Missing idempotency keys".to_string()), ("P2".to_string(), "naming is inconsistent".to_string()), ("P3".to_string(), "trailing whitespace in the template".to_string())]);
+        assert!(round1_findings("").is_empty() && round1_findings("OPTION: A\nplain prose only").is_empty());
+        let many: String = (0..30).map(|i| format!("FINDING P2 issue {i}\n")).collect();
+        assert_eq!(round1_findings(&many).len(), 20, "capped per stance");
+        let long = format!("FINDING P1 {}", "x".repeat(500));
+        assert_eq!(round1_findings(&long)[0].1.chars().count(), 200);
     }
 
     #[test]

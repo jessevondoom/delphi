@@ -61,6 +61,23 @@ fn the_example_config_satisfies_its_schema() {
     must_pass("config.schema.json", "config.example.toml", &toml_json(&root().join("crates/delphi/config.example.toml")));
 }
 
+// `specs/098` §13.2: the five flags were removed, but an old config that still carries them must validate (the schema keeps them as
+// deprecated, ignored properties), while a typo next to them is still an error.
+#[test]
+fn an_old_config_with_the_removed_flags_still_satisfies_the_schema() {
+    let mut old = toml_json(&root().join("crates/delphi/config.example.toml"));
+    old["hosts"] = json!({ "route_adopt": true, "source_ladder": true });
+    old["seats"] = json!({ "red_team_kind": true });
+    old["research"] = json!({ "ladder": true, "search_log": true, "fetch_per_host": 3, "fetch_per_run": 20 });
+    must_pass("config.schema.json", "an old config with the five removed flags", &old);
+    let mut typo = old.clone();
+    typo["research"]["laddr"] = json!(true);
+    must_fail("config.schema.json", "a misspelled research key beside the removed ones", &typo);
+    let mut wrong = old;
+    wrong["research"]["ladder"] = json!("yes");
+    must_fail("config.schema.json", "a removed flag with a non-boolean value", &wrong);
+}
+
 #[test]
 fn config_schema_rejects_wrong_shapes() {
     let ok = toml_json(&root().join("crates/delphi/config.example.toml"));

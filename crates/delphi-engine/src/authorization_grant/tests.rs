@@ -720,7 +720,11 @@ pub(crate) mod claude_seat {
                 r#"cfg=""; prev=""; for a in "$@"; do [ "$prev" = "--mcp-config" ] && cfg="$a"; prev="$a"; done
 sock=$(tr ',{{}}' '\n\n\n' < "$cfg" | sed -n 's/.*"DELPHI_BRIDGE_SOCKET":"\([^"]*\)".*/\1/p')
 tok=$(tr ',{{}}' '\n\n\n' < "$cfg" | sed -n 's/.*"DELPHI_BRIDGE_TOKEN":"\([^"]*\)".*/\1/p')
-printf '{{"token":"%s"}}\n%s\n' "$tok" '{req}' | /usr/bin/nc -U -w 90 "$sock" > '{out}'"#,
+: > '{out}'
+printf '{{"token":"%s"}}\n%s\n' "$tok" '{req}' | /usr/bin/nc -U "$sock" >> '{out}' &
+ncpid=$!
+n=0; while [ "$n" -lt 2400 ] && kill -0 "$ncpid" 2>/dev/null && [ "$(wc -l < '{out}')" -lt 1 ]; do sleep 0.05; n=$((n+1)); done
+kill "$ncpid" 2>/dev/null; wait "$ncpid" 2>/dev/null"#,
                 req = req,
                 out = args_file.with_extension(if n == 0 { "resp".to_string() } else { format!("resp{}", n + 1) }).display()
             )

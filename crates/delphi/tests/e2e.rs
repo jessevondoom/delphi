@@ -2421,7 +2421,11 @@ echo '{{"type":"system","subtype":"init","session_id":"s1","tools":["mcp__delphi
 cfg=""; prev=""; for a in "$@"; do [ "$prev" = "--mcp-config" ] && cfg="$a"; prev="$a"; done
 sock=$(tr ',{{}}' '\n\n\n' < "$cfg" | sed -n 's/.*"DELPHI_BRIDGE_SOCKET":"\([^"]*\)".*/\1/p')
 tok=$(tr ',{{}}' '\n\n\n' < "$cfg" | sed -n 's/.*"DELPHI_BRIDGE_TOKEN":"\([^"]*\)".*/\1/p')
-printf '{{"token":"%s"}}\n%s\n' "$tok" '{req}' | /usr/bin/nc -U -w 120 "$sock" > '{resp}'
+: > '{resp}'
+printf '{{"token":"%s"}}\n%s\n' "$tok" '{req}' | /usr/bin/nc -U "$sock" >> '{resp}' &
+ncpid=$!
+n=0; while [ "$n" -lt 2400 ] && kill -0 "$ncpid" 2>/dev/null && [ "$(wc -l < '{resp}')" -lt 1 ]; do sleep 0.05; n=$((n+1)); done
+kill "$ncpid" 2>/dev/null; wait "$ncpid" 2>/dev/null
 echo '{{"type":"result","subtype":"success","result":"All done.","stop_reason":"end_turn","total_cost_usd":0.01,"usage":{{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":4}}}}'
 "#,
         req = req,

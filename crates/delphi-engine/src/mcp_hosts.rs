@@ -144,7 +144,7 @@ pub fn council_skill_md(version: &str) -> String {
 
 /// The skill text for `version`: the shared text plus the release it was generated for, so a host user can compare it with the binary's `serverInfo.version`.
 pub fn skill_md(version: &str) -> String {
-    // The repo rules restate `AGENTS.md` (spec 098 S5), so they ship whatever `[hosts] source_ladder` says.
+    // The repo rules restate `AGENTS.md` (spec 098 S5), so they ship always.
     format!("{SKILL_MD}\n{}\nGenerated for Delphi release {version}.\n", crate::host_guidance::REPO_RULES)
 }
 

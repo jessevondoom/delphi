@@ -80,6 +80,12 @@ pub trait Forge {
     fn merged_branches(&self, limit: usize) -> Result<Vec<(u64, String)>, ForgeError>;
 }
 
+/// The `gh pr merge` arguments. Always `--merge` (a merge commit): a squash or a rebase would collapse or rewrite the pull
+/// request's per-slice commits, and with them each slice's `Implements-Spec:` trailer and tracker update.
+fn merge_args(n: u64, expect_head: &str) -> Vec<String> {
+    ["pr", "merge", &n.to_string(), "--merge", "--match-head-commit", expect_head].iter().map(|s| s.to_string()).collect()
+}
+
 /// Characters allowed in a ref or a path that goes into an API URL. Anything else is refused, not escaped.
 fn url_safe(s: &str) -> bool {
     !s.is_empty() && s.len() <= 300 && !s.contains("..") && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '-'))
@@ -192,7 +198,9 @@ impl Forge for Gh {
     }
 
     fn merge(&self, n: u64, expect_head: &str) -> Result<(), ForgeError> {
-        self.run("merge", &["pr", "merge", &n.to_string(), "--merge", "--match-head-commit", expect_head], &[]).map(|_| ())
+        let args = merge_args(n, expect_head);
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        self.run("merge", &args, &[]).map(|_| ())
     }
 
     fn comment(&self, n: u64, body: &str) -> Result<(), ForgeError> {
@@ -229,6 +237,13 @@ impl Forge for Gh {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn merges_are_always_merge_commits_so_per_slice_commits_survive() {
+        let a = super::merge_args(7, "abc");
+        assert!(a.contains(&"--merge".to_string()) && !a.iter().any(|x| x == "--squash" || x == "--rebase"), "{a:?}");
+        assert!(a.windows(2).any(|w| w[0] == "--match-head-commit" && w[1] == "abc"));
+    }
+
     use super::*;
 
     #[test]

@@ -448,7 +448,7 @@ impl EngineService {
 
     /// `host.propose_kb_entry` with `claims` (`specs/098` §7.2, §18): the entry is stored `noted` and `external_untrusted` and is
     /// searchable at once. The daemon decides `private`: public only when it refetches the claim's https URL itself and finds the
-    /// quote in the page. Its fetcher reaches trusted-list hosts, and, with `[research] ladder` on (slice S1d, 7a), a URL that a search of
+    /// quote in the page. Its fetcher reaches trusted-list hosts and (slice S1d, 7a) a URL that a search of
     /// this session returned; any other off-list URL is stored private. Fields
     /// the host names for taint, status, privacy, author, source type or confidence are ignored. Nothing waits for approval.
     async fn host_noted(&self, p: Value, c: crate::host_rpc::Caller) -> RpcOutcome {
@@ -460,11 +460,11 @@ impl EngineService {
         parsed.role = h::servable_role(ws, &parsed.role).map_err(host_err)?;
         let (e, wsd, home) = (self.engine.clone(), ws.dir.clone(), ws.home.clone());
         let (rung, claims) = (parsed.rung, parsed.claims.clone());
-        // With the wider fetch on (`specs/098` §7.5 item 7a), a claim URL that a search of this session returned can be refetched by the
+        // With the wider fetch (`specs/098` §7.5 item 7a), a claim URL that a search of this session returned can be refetched by the
         // daemon even when its host is not on the trusted list. A URL the host made up is not in the set and is never fetched: the
         // host cannot steer the daemon's fetcher, and cannot carry text out in a query string.
         let wider = self.engine.settings.wider_fetch.clone();
-        let observed_before = if wider.enabled && claims.iter().any(|c| c.source_url.is_some()) {
+        let observed_before = if claims.iter().any(|c| c.source_url.is_some()) {
             match self.mission_at(Some(&c.mission()), c.cwd.to_str()).await {
                 Ok(m) => m.replay().map(|ev| crate::research_observed::from_events(&ev)).unwrap_or_default(),
                 Err(_) => vec![],
@@ -619,14 +619,12 @@ impl EngineService {
             let retractions_line = engine.settings.retractions.then(|| retractions.status_line(&delphi_core::time::now_rfc3339(), engine.settings.retractions_stale_days));
             let library = crate::research_host::LiveLibrary { home, ledger: wsd.join("research/host-claims.jsonl"), label, retractions };
             let redactor = delphi_core::redact::Redactor::new();
-            let deps = crate::research_run::Deps { web: web.as_ref(), scout: &scout, validator: &validator, library: &library, redactor: &redactor, sites: &sites, thin_below: engine.settings.thin_below, support: &engine.settings.support, search_log: engine.settings.search_log, host_searches: &host_searches, retractions: retractions_line.as_deref() };
+            let deps = crate::research_run::Deps { web: web.as_ref(), scout: &scout, validator: &validator, library: &library, redactor: &redactor, sites: &sites, thin_below: engine.settings.thin_below, support: &engine.settings.support, host_searches: &host_searches, retractions: retractions_line.as_deref() };
             let out = crate::research_run::run_research(&jc, &q, depth, &deps).await;
-            if wider.enabled {
-                if let Some(m) = &mission {
-                    let urls: Vec<Value> = web.observed.snapshot().into_iter().map(|(url, via)| json!({"url": url, "via": via})).collect();
-                    if !urls.is_empty() {
-                        let _ = m.append(EventEnvelope::new(&m.id, crate::research_observed::OBSERVED_EVENT, json!({"research_id": rid, "urls": urls}))).await;
-                    }
+            if let Some(m) = &mission {
+                let urls: Vec<Value> = web.observed.snapshot().into_iter().map(|(url, via)| json!({"url": url, "via": via})).collect();
+                if !urls.is_empty() {
+                    let _ = m.append(EventEnvelope::new(&m.id, crate::research_observed::OBSERVED_EVENT, json!({"research_id": rid, "urls": urls}))).await;
                 }
             }
             // Spec 101 §3: keep the log beside the result so `delphi research log <id>` can print it after the job is gone.
@@ -742,15 +740,10 @@ impl EngineService {
             Some(Value::Bool(b)) => Some(*b),
             Some(_) => return Err(err(code::INVALID_PARAMS, "`operator_confirmed` is true or false")),
         };
-        // Spec 098 section 6.2: a red-team review is a Panel of `kind: red_team`, behind `[seats] red_team_kind`.
+        // Spec 098 section 6.2: a red-team review is a Panel of `kind: red_team` (always available since the flag was pulled, §13.2).
         let kind = match p.get("kind") {
             None | Some(Value::Null) => None,
-            Some(Value::String(k)) if k == "red_team" => {
-                if !self.engine.settings.red_team_kind {
-                    return Err(err(code::INVALID_PARAMS, "kind `red_team` is off: the operator turns it on with [seats] red_team_kind = true (spec 098 section 6.2). Open an ordinary Panel instead"));
-                }
-                Some("red_team".to_string())
-            }
+            Some(Value::String(k)) if k == "red_team" => Some("red_team".to_string()),
             Some(_) => return Err(err(code::INVALID_PARAMS, "`kind` is `red_team` or left out; a review is never labelled a Council")),
         };
         let many = p.get("foreign_seats").is_some_and(|v| !v.is_null() && v.as_array().is_none_or(|a| !a.is_empty()));
@@ -3732,12 +3725,12 @@ mod tests {
         events.iter().filter(|e| e.kind == "decision.raised").map(|e| (e.payload["kind"].as_str().unwrap_or("").to_string(), e.payload["related"].as_str().unwrap_or("").to_string())).collect()
     }
 
-    // specs/098 §7.5 item 7a, slice S1d: with `[research] ladder` on, a claim whose URL a search of the session returned is refetched by
+    // specs/098 §7.5 item 7a, slice S1d: a claim whose URL a search of the session returned is refetched by
     // the daemon, the quote is found, the entry is public, and its off-list host is raised as a `source` card (one per host). A URL the
     // host made up is never fetched: it stays private and raises nothing.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_claim_whose_url_the_sessions_search_returned_is_refetched_public_and_raises_a_source_card() {
-        let f = setup(vec![], 5.0, |s| s.wider_fetch.enabled = true);
+        let f = setup(vec![], 5.0, |_| {});
         let s = serve(&f).await;
         let cwd = f.root.to_string_lossy().to_string();
         let returned = "https://s1d-svc-on.example/paper";
@@ -3749,22 +3742,6 @@ mod tests {
         assert_eq!(got[0], (false, "verified".to_string()), "a URL the session's search returned is refetched and found: {got:?}");
         assert_eq!(got[1], (true, "unfetchable".to_string()), "a URL the host made up is not in the observed set and is never fetched: {got:?}");
         assert_eq!(s1d_cards(&f), vec![("source".to_string(), "s1d-svc-on.example".to_string())], "one source card, for the off-list host that supplied public evidence");
-    }
-
-    // The same call with the switch off (the default): the daemon's fetcher reaches trusted-list hosts only, so the entry is private
-    // and no card is raised. The observed URLs are recorded either way; they just are not used.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn with_the_wider_fetch_off_the_same_claim_stays_private_and_raises_no_card() {
-        let f = setup(vec![], 5.0, |_| {});
-        let s = serve(&f).await;
-        let cwd = f.root.to_string_lossy().to_string();
-        let returned = "https://s1d-svc-off.example/paper";
-        let m = s.svc.mission_at(Some("host-abcdef0123456789"), Some(&cwd)).await.unwrap();
-        m.append(EventEnvelope::new(&m.id, crate::research_observed::OBSERVED_EVENT, json!({"research_id": "r-1", "urls": [{"url": returned, "via": "search:brave#1"}]}))).await.unwrap();
-        crate::research_host::canned::PAGES.lock().unwrap().push((returned.to_string(), "Our vault keys rotate every 90 days, per policy.".to_string()));
-        let got = s1d_calls(&f, &s, vec![returned.to_string()]).await;
-        assert_eq!(got[0], (true, "unfetchable".to_string()), "{got:?}");
-        assert!(s1d_cards(&f).is_empty());
     }
 
     // specs/092 TA-0: a host's request is staged inert at a fixed federated_peer taint, under the same limits, and only on the host socket.
@@ -6639,13 +6616,18 @@ mod tests {
     /// Open a Panel with `open` (merged over the caller fields), let the host answer for `host_roles`, and read the card.
     /// Returns (the open answer, the result). The seats Delphi runs answer from the scripted model.
     fn drive_panel(hsock: PathBuf, htok: String, cwd: String, open: Value, host_roles: &'static [&'static str]) -> Result<(Value, Value), String> {
+        drive_panel_with(hsock, htok, cwd, open, host_roles, "OPTION: file\nPEER-MARKER-77", R2_GOOD)
+    }
+
+    /// [`drive_panel`] with the words the host's own seats give in Round 1 and Round 2.
+    fn drive_panel_with(hsock: PathBuf, htok: String, cwd: String, open: Value, host_roles: &'static [&'static str], r1_host: &str, r2_host: &str) -> Result<(Value, Value), String> {
         let mut c = Client::connect(&hsock).map_err(|e| e.to_string())?;
         c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
         c.hello(&htok).map_err(|e| e.to_string())?;
         let r = c.call("host.council_open", pbody(&cwd, open)).map_err(|e| e.to_string())?;
         let id = r["council_id"].as_str().unwrap().to_string();
         for seat in host_roles {
-            c.call("host.council_submit", pbody(&cwd, json!({"council_id": id, "seat": seat, "round": 1, "text": "OPTION: file\nPEER-MARKER-77", "model": "opus"}))).map_err(|e| e.to_string())?;
+            c.call("host.council_submit", pbody(&cwd, json!({"council_id": id, "seat": seat, "round": 1, "text": r1_host, "model": "opus"}))).map_err(|e| e.to_string())?;
         }
         let wait_brief = |c: &mut Client, seat: &str, round: u64| -> Result<(), String> {
             for _ in 0..300 {
@@ -6658,7 +6640,7 @@ mod tests {
         };
         wait_brief(&mut c, host_roles[0], 2)?;
         for seat in host_roles {
-            c.call("host.council_submit", pbody(&cwd, json!({"council_id": id, "seat": seat, "round": 2, "text": R2_GOOD}))).map_err(|e| e.to_string())?;
+            c.call("host.council_submit", pbody(&cwd, json!({"council_id": id, "seat": seat, "round": 2, "text": r2_host}))).map_err(|e| e.to_string())?;
         }
         wait_brief(&mut c, "orchestrator", 3)?;
         c.call("host.council_submit", pbody(&cwd, json!({"council_id": id, "seat": "orchestrator", "round": 3, "text": "DECISION: use a table\nNEXT builder: write the table"}))).map_err(|e| e.to_string())?;
@@ -6803,25 +6785,23 @@ mod tests {
 
     fn red_on(s: &mut crate::engine::Settings) {
         roomy(s);
-        s.red_team_kind = true;
     }
 
+    // A review is never labelled a Council (`specs/098` §6.2, §12): any `kind` but `red_team` is refused, and nothing is spent.
     #[tokio::test(flavor = "multi_thread")]
-    async fn kind_red_team_is_refused_while_the_flag_is_off_and_a_review_cannot_be_labelled_a_council() {
+    async fn a_review_cannot_be_labelled_a_council() {
         let f = setup(vec![], 50.0, roomy);
         let cwd = f.root.to_string_lossy().to_string();
         let s = serve(&f).await;
         let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
-        let errs = blocking(move || {
+        let label = blocking(move || {
             let mut c = Client::connect(&hsock).unwrap();
             c.hello(&htok).unwrap();
-            let off = c.call("host.council_open", pbody(&cwd, json!({"question": "q?", "kind": "red_team"}))).unwrap_err().to_string();
-            let label = c.call("host.council_open", pbody(&cwd, json!({"question": "q?", "kind": "council_record"}))).unwrap_err().to_string();
-            (off, label)
+            c.call("host.council_open", pbody(&cwd, json!({"question": "q?", "kind": "council_record"}))).unwrap_err().to_string()
         })
         .await;
-        assert!(errs.0.contains("red_team_kind"), "{}", errs.0);
-        assert!(!errs.1.is_empty());
+        // refused by the §5 guard (a host cannot label anything a Council record) or by the `kind` check itself; either way it is a refusal
+        assert!(label.contains("Council record") || label.contains("never labelled a Council"), "{label}");
         assert!(f.model.requests().is_empty(), "nothing was spent");
     }
 
@@ -6843,6 +6823,50 @@ mod tests {
         assert_eq!(r["single_family"], json!(false), "{got}");
         let card = got["display"].as_str().unwrap();
         assert!(card.contains("**Red-team review: findings (advisory, not a ruling)**") && card.contains("family gemini, from the receipt") && card.contains("host-declared"), "{card}");
+    }
+
+    // `specs/098` §6.2: Round 1 stances become findings too, and findings that name the same issue are grouped with the seats that raised them.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_red_team_review_turns_round_one_stances_into_findings_and_groups_the_same_issue_across_seats() {
+        let f = setup(vec![], 50.0, red_on);
+        crate::council::tests::two_families(&f);
+        f.model.respond_with(|body| {
+            let round2 = body.to_string().contains("COUNCIL, ROUND 2");
+            if round2 {
+                Step::text("RECOMMENDATION: PROCEED-WITH-CHANGES\nFINDING P1 replay of the barrier file\nFINDING P2 naming\nCONCUR: yes\nROUND 2 COMPLETE")
+            } else {
+                Step::text("OPTION: table\nMy concerns:\n- FINDING P2 The replay of the barrier file\nP3: a note that is only a nit")
+            }
+        });
+        f.model.served_with(|_| Some("gemini-4-argon".to_string()));
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let (_, got) = blocking(move || {
+            drive_panel_with(hsock, htok, cwd, json!({"question": "Is the plan safe?", "kind": "red_team", "model": "claude-opus", "operator_confirmed": true}), &["architect", "strategist"],
+                "OPTION: file\n[P0] Replay of the barrier file!\nunrelated prose", "RECOMMENDATION: PROCEED\nFINDING P2 naming\nCONCUR: yes\nROUND 2 COMPLETE").unwrap()
+        })
+        .await;
+        let r = &got["ruling"];
+        let fs = r["findings"].as_array().unwrap();
+        let mine = |seat: &str, title: &str| fs.iter().find(|x| x["seat"] == seat && x["title"].as_str().unwrap().to_lowercase().contains(title)).cloned();
+        let arch = mine("architect", "replay").expect("the host seat's Round 1 finding is listed");
+        assert_eq!((arch["severity"].as_str(), arch["rounds"].clone(), arch["family_source"].as_str()), (Some("P0"), json!([1]), Some("host-declared")), "{arch}");
+        let red = mine("red-team", "replay").expect("the foreign seat's findings are listed");
+        assert_eq!((red["severity"].as_str(), red["rounds"].clone(), red["family_source"].as_str(), red["family"].as_str()), (Some("P1"), json!([1, 2]), Some("receipt"), Some("gemini")), "raised in both rounds, worst severity kept: {red}");
+        assert!(mine("red-team", "nit").is_some(), "a Round 1 line stating a severity is a finding: {fs:?}");
+        // the group: one issue, both seats, worst severity, each seat's own family and its source
+        let groups = r["finding_groups"].as_array().unwrap();
+        let g = groups.iter().find(|g| g["title"].as_str().unwrap().to_lowercase().contains("replay")).expect("the replay issue is grouped");
+        assert_eq!((g["severity"].as_str(), g["raised_by"].as_u64()), (Some("P0"), Some(3)), "{g}");
+        let seats: Vec<(&str, &str)> = g["seats"].as_array().unwrap().iter().map(|x| (x["seat"].as_str().unwrap(), x["family_source"].as_str().unwrap())).collect();
+        assert!(seats.contains(&("architect", "host-declared")) && seats.contains(&("red-team", "receipt")), "{seats:?}");
+        let naming = groups.iter().find(|g| g["title"] == "naming").expect("naming");
+        assert_eq!(naming["raised_by"].as_u64(), Some(3), "Round 2 findings group too: {naming}");
+        let card = got["display"].as_str().unwrap();
+        assert!(card.contains("raised by 3 seats") && card.contains("`architect` (family claude, host-declared)") && card.contains("`red-team` (family gemini, from the receipt)"), "{card}");
+        // worst first
+        assert_eq!(groups[0]["severity"], "P0", "{groups:?}");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -6882,6 +6906,34 @@ mod tests {
         assert!(ok["answer"].as_str().is_some_and(|a| !a.is_empty()), "{ok}");
         assert_eq!(ok["receipt"][0]["served_model"].as_str(), Some("gemini-4-argon"), "the receipt names the served model: {ok}");
         assert_eq!(ok["receipt"][0]["tools_offered"].as_array().map(Vec::len), Some(0), "no tools: {ok}");
+    }
+
+    // `specs/098` §6.2: `context_pointers` on `ask_family` reach the foreign seat the way they reach a Panel seat: listed in the question
+    // and read into the seat's context. Without pointers, none of the file's text is sent to the other family.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn ask_family_honors_context_pointers_and_sends_no_file_text_without_them() {
+        let f = setup(vec![], 50.0, roomy);
+        let _seen = foreign_fx(&f, |_| Some("gemini-4-argon".to_string()));
+        std::fs::write(f.root.join("proj/src/lib.rs"), "pub fn pointer_canary_needle() {}\n").unwrap();
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let (without, with) = blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            c.hello(&htok).unwrap();
+            let without = c.call("host.ask_family", pbody(&cwd, json!({"question": "Is this function name clear?", "model": "claude-opus", "operator_confirmed": true}))).unwrap();
+            let with = c.call("host.ask_family", pbody(&cwd, json!({"question": "Is this function name clear?", "model": "claude-opus", "operator_confirmed": true,
+                "context_pointers": [{"uri": "@project/app/src/lib.rs", "reason": "the function under discussion"}]}))).unwrap();
+            (without, with)
+        })
+        .await;
+        assert_eq!((without["advice_only"].clone(), with["advice_only"].clone()), (json!(true), json!(true)));
+        let bodies: Vec<String> = f.model.requests().iter().map(|q| q.body.to_string()).collect();
+        assert_eq!(bodies.len(), 2, "one seat call per ask");
+        assert!(!bodies[0].contains("pointer_canary_needle") && !bodies[0].contains("@project/app/src/lib.rs"), "no pointers, no file text: {}", bodies[0]);
+        assert!(bodies[1].contains("@project/app/src/lib.rs") && bodies[1].contains("the function under discussion"), "the pointer and its reason are listed in the question: {}", bodies[1]);
+        assert!(bodies[1].contains("pointer_canary_needle"), "and the file's text is read into the seat's context: {}", bodies[1]);
     }
 
     #[tokio::test(flavor = "multi_thread")]

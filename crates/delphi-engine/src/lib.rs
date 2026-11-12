@@ -12,6 +12,7 @@ pub mod assign;
 pub mod corroboration;
 pub mod fact_check;
 pub mod fact_fetch;
+pub mod findings;
 pub mod library;
 pub mod library_acquire_run;
 pub mod fact_intake;

@@ -537,7 +537,7 @@ pub fn tools() -> Value {
                 "type": "object",
                 "properties": {
                     "question": {"type": "string", "minLength": 1, "maxLength": 2000, "description": "What the Panel should decide."},
-                    "kind": {"type": "string", "enum": ["red_team"], "description": "Optional: `red_team` makes this a red-team review whose result is a findings list (severity, seat, family from the receipt), advisory, never a ruling. Needs the operator to have turned on [seats] red_team_kind. With operator_confirmed: true and another usable family, Delphi adds one foreign red-team seat, blind to your pass; otherwise your pass stands alone and is labelled single-family."},
+                    "kind": {"type": "string", "enum": ["red_team"], "description": "Optional: `red_team` makes this a red-team review whose result is a findings list (severity, seat, family from the receipt), advisory, never a ruling. With operator_confirmed: true and another usable family, Delphi adds one foreign red-team seat, blind to your pass; otherwise your pass stands alone and is labelled single-family."},
                     "options": {"type": "array", "maxItems": 8, "items": {"type": "string", "maxLength": 200}, "description": "The choices the operator gave, if any. Never add your own."},
                     "stakes": {"type": "string", "enum": ["low", "normal", "high"], "default": "normal"},
                     "foreign_seat": {"type": "string", "enum": ["architect", "red-team", "strategist"], "description": "Optional: have Delphi run this one seat on a model family other than your host's. Spends the operator's Delphi tokens; ask first (council_frame says how)."},
@@ -870,10 +870,6 @@ impl Server {
                     // One identity everywhere (`specs/087` §5.3, OD-5): the same name, badge and role the console shows, ending
                     // `, via delphi)`. That notice is the only reminder that a host runs the role; there is no separate label.
                     let who = p.display(&canonical, self.client.as_deref());
-                    // Spec 098 S5: with `[hosts] source_ladder` on, the Scout, Investigator and Red team packs end with the source ladder.
-                    // Off (the default), the pack is exactly what it was.
-                    let ladder_on = self.config_path.as_ref().and_then(|c| std::fs::read_to_string(c).ok()).is_some_and(|t| crate::host_guidance::source_ladder_in(&t));
-                    let pack = crate::host_guidance::pack_with_ladder(&canonical, pack, ladder_on);
                     Ok(format!("You are {who}. Show that line before what you write as this role, so the operator can tell who is speaking.\n\n{pack}"))
                 })
             }),
@@ -1925,28 +1921,53 @@ mod tests {
         assert!(!out.contains("\"adopt\":true"), "{out}");
     }
 
+    // `specs/098` §13.2: the source ladder is section 4 of the Scout, Investigator and Red-team manifests, and the pack `get_agent` serves is
+    // built from the same manifest body, so a host and a seat inside Delphi read one copy. The served pack must carry its manifest's ladder
+    // exactly; a role that does not work the ladder has none.
     #[test]
-    fn get_agent_ends_the_scout_investigator_and_red_team_packs_with_the_ladder_only_when_the_operator_turns_it_on() {
+    fn get_agent_serves_the_ladder_from_the_manifest_and_nothing_else_for_the_roles_that_work_it() {
         let (_t, dir, root) = project_ws();
         let mut s = Server::new(&dir).with_cwd(&root);
         init(&mut s);
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let pack = |s: &mut Server, role: &str| text_of(&call_tool(s, "get_agent", json!({"role": role})));
-        // Off by default: no role's pack mentions the ladder.
-        let before: Vec<String> = ["scout", "investigator", "red-team", "architect"].iter().map(|r| pack(&mut s, r)).collect();
-        assert!(before.iter().all(|p| !p.contains("Source ladder")), "off by default");
-        // On: the three roles end with it; another role is unchanged; the rest of each pack is exactly what it was.
-        std::fs::write(dir.join("config.toml"), "[hosts]\nsource_ladder = true\n").unwrap();
-        for (i, role) in ["scout", "investigator", "red-team", "architect"].iter().enumerate() {
-            let after = pack(&mut s, role);
-            if *role == "architect" {
-                assert_eq!(after, before[i], "a role that does not work the ladder is unchanged");
-            } else {
-                assert!(after.starts_with(&before[i]) && after.contains("## Source ladder") && after.contains("Knowledge base, always first"), "{role}");
+        let ladder_of = |role: &str| -> String {
+            let m = std::fs::read_to_string(repo.join(format!("agents/{role}/AGENT.md"))).unwrap();
+            let from = m.find("## 4. Source ladder").unwrap_or_else(|| panic!("{role}: the manifest has no source ladder section"));
+            m[from..].to_string()
+        };
+        for role in ["scout", "investigator", "red-team"] {
+            let served = pack(&mut s, role);
+            let ladder = ladder_of(role);
+            assert!(served.contains(ladder.trim_end()), "{role}: the served pack does not carry its manifest's ladder verbatim");
+            for must in ["Knowledge base, always first", "Trusted sources", "Close sources", "The wider world", "not_connected", "not_approved", "no_results", "refused_by_host", "`propose_kb_entry`"] {
+                assert!(served.contains(must), "{role} lacks {must}");
             }
         }
-        // A setting of the wrong type switches nothing on.
-        std::fs::write(dir.join("config.toml"), "[hosts]\nsource_ladder = \"yes\"\n").unwrap();
-        assert_eq!(pack(&mut s, "scout"), before[0]);
+        // a role that does not work the ladder has none
+        assert!(!pack(&mut s, "architect").contains("Source ladder"));
+        // the ladder is advice and grants nothing
+        let scout = pack(&mut s, "scout");
+        assert!(scout.contains("it grants no tool and no permission") && scout.contains("data, not instructions"));
+        for banned in ["you may now", "you are allowed to", "approved by delphi"] {
+            assert!(!scout.to_lowercase().contains(banned), "{banned}");
+        }
+    }
+
+    // The three manifests share one ladder block (section 4 up to the role's own first rung); a copy that drifts fails here.
+    #[test]
+    fn the_three_manifests_share_one_ladder_block() {
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let block = |role: &str| -> String {
+            let m = std::fs::read_to_string(repo.join(format!("agents/{role}/AGENT.md"))).unwrap();
+            let from = m.find("## 4. Source ladder").unwrap_or_else(|| panic!("{role}: no ladder section"));
+            let rest = &m[from..];
+            let to = rest.find("\n**Your first rung").unwrap_or(rest.len());
+            rest[..to].trim_end().to_string()
+        };
+        let scout = block("scout");
+        assert_eq!(block("investigator"), scout, "the investigator's ladder block differs from the scout's");
+        assert_eq!(block("red-team"), scout, "the red team's ladder block differs from the scout's");
     }
 
     #[test]
@@ -1955,14 +1976,14 @@ mod tests {
         let mut s = Server::new(&dir).with_cwd(&root);
         init(&mut s);
         let r: Value = serde_json::from_str(&text_of(&call_tool(&mut s, "route", json!({"task": "Should we threat model the webhook or the queue first?"})))).unwrap();
-        assert_eq!((r["untrusted_data"].clone(), r["adopt_mode"].clone(), r["trigger"].clone()), (json!(true), json!("advisory"), json!("red_team")), "{r}");
+        assert_eq!((r["untrusted_data"].clone(), r["adopt_mode"].clone(), r["trigger"].clone()), (json!(true), json!("recommended"), json!("red_team")), "{r}");
         assert!((r["adopt_threshold"].as_f64().unwrap() - crate::route_any::DEFAULT_ADOPT_THRESHOLD as f64).abs() < 0.01, "{r}");
         for c in r["candidates"].as_array().unwrap() {
             for k in ["target", "role", "locus", "trigger", "confidence", "adopt"] {
                 assert!(!c[k].is_null(), "{k} missing: {c}");
             }
         }
-        // The operator's setting: a threshold nothing reaches, and the flag that calls adopt a recommendation.
+        // The operator's setting: a threshold nothing reaches. (An old config that still has `route_adopt` is read and ignored.)
         std::fs::write(dir.join("config.toml"), "[routing]\nadopt_threshold = 1\n[hosts]\nroute_adopt = true\n").unwrap();
         let r: Value = serde_json::from_str(&text_of(&call_tool(&mut s, "route", json!({"task": "Should we threat model the webhook or the queue first?"})))).unwrap();
         assert_eq!((r["adopt_mode"].clone(), r["adopt_threshold"].clone()), (json!("recommended"), json!(1.0)), "{r}");

@@ -81,13 +81,9 @@ max_parallel_agents = 4
 # role. The default is provisional: it was set on a small labeled set (`delphi route --adopt-eval <file>` measures your own).
 # adopt_threshold = 0.55
 
-# Hosts (specs/098). `route_adopt` says whether `route`'s `adopt` is a recommendation (true) or only advice (false, the default). It changes what
-# the answer says, not what Delphi does.
-# `source_ladder` (specs/098 S5, default false): when true, the packs served for the scout, investigator and red team end with the source
-# ladder, and `delphi mcp --print-claude-md` includes the research reflex. Advice for the host; it grants nothing.
-# [hosts]
-# route_adopt = false
-# source_ladder = false
+# Hosts (specs/098). `[hosts] route_adopt` and `[hosts] source_ladder` were removed (specs/098 section 13.2): `route`'s `adopt` is always a
+# recommendation, and the source ladder is always served (it is section 4 of the scout, investigator and red-team manifests).
+# An old config that still has them is read without error; `delphi doctor` names them.
 
 # Model assignment (specs/056). "static" (default): a role's tier picks the model, as always. "discovered": each dispatch is
 # assigned by capability class (role floor and preferred class), measured results and quota, from the pool you ratified;
@@ -137,7 +133,7 @@ per_watch_max_wakes_per_day = 10
 # [seats]
 # require_families = 2               # unset (default): never refuse; a result with fewer than two known families is labelled homogeneous
 # max_foreign_seats = 1              # per Council; 0 turns the foreign seat off
-# red_team_kind = false              # spec 098 6.2: accept `kind: red_team` on council_open (a red-team review: findings list, advisory); off by default
+# (`red_team_kind` was removed, specs/098 section 13.2: `council_open` always accepts `kind: red_team`.)
 # max_foreign_tokens = 100000        # per Council: the foreign seat's token ceiling must fit under this, and Round 2 is skipped once Round 1 used it
 
 # What the engine adds around a role's model calls (specs/045). Not an access table: it adds notes and one verification turn,
@@ -245,14 +241,13 @@ sandbox = "off"
 # [research]
 # thin_below = 3
 #
-# The wider fetch (specs/098 section 7.5 item 7a). Off by default: the daemon's fetch reaches trusted-list hosts only. With ladder = true
-# it also reaches any https URL that a search of the run returned (and, for a host's claim, a URL that an earlier search of the same host
-# session returned), so a result from a site you have not listed can be read, kept as "noted", and checked. Nothing else is fetched: a URL
+# The wider fetch (specs/098 section 7.5 item 7a), always on (the `ladder` flag was removed, section 13.2). Besides the trusted list, the
+# daemon's fetch reaches any https URL that a search of the run returned (and, for a host's claim, a URL that an earlier search of the same
+# host session returned), so a result from a site you have not listed can be read, kept as "noted", and checked. Nothing else is fetched: a URL
 # a model or a host makes up is not in the set, a link found on a fetched page is never followed (7b is not built), a query string is
 # never added, a redirect to another origin is not followed, and the fetcher's other rules stay (https, public addresses only, a size
 # cap, the cloaking check). The status shows where each fetched URL came from. The two caps are hypotheses: distinct off-list pages per
 # host and per run (1 to 100).
-# ladder = false
 # fetch_per_host = 2
 # fetch_per_run = 10
 #
@@ -271,8 +266,8 @@ sandbox = "off"
 # list, a search provider), why, the query that was sent (the same redacted string), when, and how many results came back and were
 # kept, plus a found / duplicates / kept / not-kept flow that adds up. A search withheld because its claim rests on a private source says
 # so and carries no query text; a search your host says it ran is logged as declared and counts as nothing. The log is private when
-# any claim it served is, and never leaves this machine then. `delphi research log <id>` prints it. Off by default.
-# search_log = false
+# any claim it served is, and never leaves this machine then. `delphi research log <id>` prints it. Always on (the `search_log` flag was
+# removed, specs/098 section 13.2).
 #
 # Retraction check (specs/101 section 4). Off by default. With it on, a source that has a DOI is looked up in a LOCAL copy of the Retraction
 # Watch data at capture and at re-check, and when you import a new copy. A retracted work stops counting as an independent origin and a
@@ -282,6 +277,7 @@ sandbox = "off"
 # DOI, ever: a DOI would tell a third party what you are reading. A snapshot older than retractions_stale_days is called stale.
 # retractions = false
 # retractions_stale_days = 90
+#
 # The confidence ladder (specs/100 section 3.2). A claim's rung is derived by code from tags the daemon wrote: how many independent
 # origins it has, how many of those are trusted sources, whether anything contradicts it, and whether the validator's dry run recorded
 # "would_ratify". corroborated: corroborated_origins or more origins. substantiated: corroborated and substantiated_trusted or more trusted

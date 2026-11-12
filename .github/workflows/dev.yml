@@ -25,6 +25,7 @@ jobs:
   model:
     name: embedding model
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Fetch, check and pack the embedding model
@@ -49,6 +50,7 @@ jobs:
   sign:
     name: sign the release files
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Stamp the version
@@ -80,12 +82,11 @@ jobs:
     name: build (${{ matrix.target }})
     needs: [model, sign]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: true
       matrix:
         include:
-          - { os: macos-15, target: aarch64-apple-darwin, bun: bun-darwin-arm64 }
-          - { os: macos-15, target: x86_64-apple-darwin, bun: bun-darwin-x64 }
           - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, bun: bun-linux-x64 }
           - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, bun: bun-linux-arm64 }
     steps:
@@ -131,9 +132,67 @@ jobs:
           name: ${{ matrix.target }}
           path: dist/*
 
+  # Both darwin targets in one job: macOS runners are capped at 5 at a time for the account, and two parallel darwin builds
+  # here took 2 of those slots on every push to main. The two builds run one after the other (about 20 minutes in all).
+  build-macos:
+    name: build (darwin, both targets)
+    needs: [model, sign]
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Stamp the version
+        id: ver
+        run: |
+          echo "version=$(dev/stamp-version.sh "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
+      - name: Add the targets
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: embedmodel
+          path: ${{ runner.temp }}/model
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: releasesig
+          path: ${{ runner.temp }}/releasesig
+      - name: Put the release signature in the build
+        run: cp "$RUNNER_TEMP/releasesig/release.sig.json" crates/delphi/release.sig.json
+      - name: Build, build the console and package each target
+        env:
+          DELPHI_EMBED_MODEL_FILE: ${{ runner.temp }}/model/embed.dlphmdl
+          DELPHI_RERANK_MODEL_FILE: ${{ runner.temp }}/model/rerank.dlphmdl
+          DELPHI_SEED_VECTORS_FILE: ${{ runner.temp }}/model/seed.dlphvec
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -eu
+          mkdir -p dist
+          for pair in "aarch64-apple-darwin bun-darwin-arm64" "x86_64-apple-darwin bun-darwin-x64"; do
+            set -- $pair
+            target="$1"
+            bun="$2"
+            cargo build --release --locked --target "$target" -p delphi --features embedded-model
+            # build.sh installs the target's OpenTUI native package and leaves the other platforms external.
+            (cd ui && rm -rf dist && dev/build.sh "$VERSION" dist/delphi-ui "$bun" && test -x dist/delphi-ui)
+            name="delphi-v${VERSION}-${target}"
+            mkdir -p "dist/$name"
+            cp "target/${target}/release/delphi" ui/dist/delphi-ui LICENSE README.md "dist/$name/"
+            tar -C dist -czf "dist/$name.tar.gz" "$name"
+            (cd dist && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256")
+            rm -rf "dist/$name"
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: aarch64-apple-darwin
+          path: dist/*aarch64-apple-darwin*
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: x86_64-apple-darwin
+          path: dist/*x86_64-apple-darwin*
+
   publish:
-    needs: build
+    needs: [build, build-macos]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
       id-token: write

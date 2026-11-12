@@ -1,7 +1,7 @@
 //! `delphi research log <id>` and `delphi research retractions import|status`.
 //!
 //! `log` prints the search log of a finished host research job (`specs/101` §3): read-only, it prints what the daemon wrote beside the
-//! result when `[research] search_log` was on, and calls no model and no network.
+//! result, and calls no model and no network.
 //!
 //! `retractions` is the local Retraction Watch snapshot (`specs/101` §4). `import <file>` reads a file from disk, builds the local index,
 //! and, when `[research] retractions` is on, checks every source in the library against it. **It never calls a service**, and takes a path,
