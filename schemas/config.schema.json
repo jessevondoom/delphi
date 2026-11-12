@@ -315,6 +315,16 @@
         "exposure_randomization": { "type": "boolean", "description": "Withhold a newly ratified rule from about half of its first 20 tasks to measure it; security and always rules and holdout tasks never. Default false." }
       }
     },
+    "history": {
+      "type": "object",
+      "description": "The project history (specs/102 section 7): the operator's own redacted prompts with capped summaries, on this machine only. Off by default until the release that carries the whole feature. Every record is private: it never leaves the install, and its text enters a model prompt only under to_models.",
+      "properties": {
+        "enabled": { "type": "boolean", "description": "Keep a history of prompts and what came of them. Default false until slice S8 turns the default on." },
+        "paste_chars": { "type": "integer", "minimum": 50, "maximum": 5000, "description": "A span longer than this is treated as pasted and stored as a keyed hash and a length, not text, unless the daemon saw it typed (a hypothesis to calibrate). Default 400." },
+        "to_models": { "type": "string", "enum": ["deny", "allow"], "description": "Whether record text may enter a model prompt. Default deny. With allow, only a seat of the host's own family; never a foreign-family or unknown-family seat." },
+        "budget_mb": { "type": "integer", "minimum": 1, "maximum": 1024, "description": "The store's cap per project, in megabytes; at the cap the daemon stops adding and says so (a hypothesis). Default 50." }
+      }
+    },
     "mcp": {
       "type": "object",
       "description": "Delphi for host agents (specs/062 section 3.4): `delphi mcp`, an MCP server on stdio for the other tools you code with. Same machine and same user only.",

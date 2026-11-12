@@ -354,6 +354,7 @@ impl EngineService {
         }
         let m = MissionState::open(&mission_dir, id, e.hub.clone(), e.ledger.clone(), e.secrets.clone(), e.settings.mission_budget_usd).map_err(engine_err)?;
         m.set_learning(e.settings.learning.clone());
+        m.set_history(crate::history_record::Tap::new(e.ws.dir.clone(), e.settings.history.clone(), &crate::history_record::Tap::project_of(&mission_dir)));
         // The daemon has restarted since this mission was last open, so what was said before it is a past session (`specs/030`).
         if let Err(e) = self.begin_session(&m, "restart").await {
             self.notices.lock().unwrap().push(format!("could not start a session for {}: {}", id, e));
