@@ -116,8 +116,9 @@ pub struct Settings {
     /// `[research] archive_fallback` and `archive_endpoint` (`specs/101` §5, §8): look for an archived copy of a public source the
     /// daemon fetched and now finds gone. Off by default; the explicit `delphi sources archive` command works either way.
     pub archive: crate::library::ArchiveConfig,
-    /// `[research] citation_chaining`, `citation_endpoint`, `chain_depth`, `chain_fanout`, `chain_max_per_seed`, `chain_max_calls`
-    /// (`specs/101` §6, §8): follow the references and citing works of a public work's DOI through one pinned index, as `noted` leads.
+    /// `[research] citation_chaining`, `citation_endpoint`, `chain_depth`, `chain_fanout`, `chain_max_per_seed`, `chain_max_calls`,
+    /// `doi_endpoint`, `chain_max_pages` (`specs/101` §6, §8): follow the references and citing works of a public work's DOI through one
+    /// pinned index, as `noted` leads, and read up to `chain_max_pages` of them as pages (one resolution request and one capture each).
     /// Off by default; the bounds are hypotheses to calibrate from the search log.
     pub chain: crate::research_chain::ChainConfig,
     /// `[research] fetch_per_host`, `fetch_per_run` (`specs/098` §7.5 item 7a, slice S1d): the daemon's fetch also reaches the URLs a search

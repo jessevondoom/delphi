@@ -265,6 +265,12 @@ sandbox = "off"
 # chain_max_per_seed = 10
 # chain_max_calls = 30
 #
+# Read chained works as pages (specs/101 section 6 item 8): one request to the DOI-resolution endpoint per work, then one capture of the
+# first https address it gives, kept as a `noted` source. chain_max_pages is how many works are read this way per run (1 to 50); the
+# requests count against chain_max_calls. The endpoint is https only, without credentials, query or fragment.
+# doi_endpoint = "https://doi.org/api/handles"
+# chain_max_pages = 5
+#
 # The wider fetch (specs/098 section 7.5 item 7a), always on (the `ladder` flag was removed, section 13.2). Besides the trusted list, the
 # daemon's fetch reaches any https URL that a search of the run returned (and, for a host's claim, a URL that an earlier search of the same
 # host session returned), so a result from a site you have not listed can be read, kept as "noted", and checked. Nothing else is fetched: a URL
