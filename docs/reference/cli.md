@@ -219,6 +219,17 @@ Review an optimistic build's provisional decisions.
 This is the text form for a shell. In the console, `/decisions` with no argument opens the decisions pane:
 every approval card, provisional decision and agent-raised decision you owe, one at a time.
 
+### `delphi private-read`
+
+See which tasks read a private entry (observe only) and clear a mark.
+
+```
+  delphi private-read [status | clear <key>]
+    [--workspace <name>] [--home <dir>]
+```
+
+Spec 103 slice M1. A task that was handed the text of a private entry is marked. In this slice a mark changes nothing: no read, prompt or send differs; the counter says how often a send would have changed. Only the operator clears a mark, here or at the console.
+
 ### `delphi timers`
 
 The wakes the daemon is keeping for roles.
