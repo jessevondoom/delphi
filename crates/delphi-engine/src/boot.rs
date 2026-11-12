@@ -115,6 +115,14 @@ pub fn settings_from(root: &toml::Value) -> Settings {
         if let Some(n) = count("chain_max_calls", 200) {
             s.chain.max_calls = n;
         }
+        // Reading a chained work as a page (`specs/101` §6 item 8): the pinned DOI-resolution endpoint, under the same rule as the index
+        // endpoint (https, no credentials, query or fragment), and the page cap.
+        if let Some(e) = r.get("doi_endpoint").and_then(|v| v.as_str()).map(str::trim).filter(|e| e.len() <= 300 && crate::research_chain::resolve_url(e, "10.1000/x").is_some()) {
+            s.chain.doi_endpoint = e.to_string();
+        }
+        if let Some(n) = count("chain_max_pages", 50) {
+            s.chain.max_pages = n;
+        }
     }
     // The caps of the wider fetch (`specs/098` §7.5 item 7a, slice S1d): counts of 1..=100, and a value of the wrong kind keeps the
     // default. The fetch itself is always on; an old `ladder` key is ignored (§13.2).

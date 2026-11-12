@@ -620,10 +620,10 @@ impl EngineService {
             let library = crate::research_host::LiveLibrary { home, ledger: wsd.join("research/host-claims.jsonl"), label, retractions };
             let redactor = delphi_core::redact::Redactor::new();
             // Citation chaining (`specs/101` §6): the index exists only when the switch is on; off, nothing is ever sent to it.
-            let cites = engine.settings.chain.enabled.then(|| crate::research_host::LiveCites::new(crate::fact_fetch::FetchPolicy::default(), engine.settings.chain.endpoint.clone()));
+            let cites = engine.settings.chain.enabled.then(|| crate::research_host::LiveCites::new(crate::fact_fetch::FetchPolicy::default(), engine.settings.chain.endpoint.clone()).with_doi_endpoint(engine.settings.chain.doi_endpoint.clone()));
             let chain = cites.as_ref().map(|c| {
                 let b = &engine.settings.chain;
-                crate::research_chain::ChainPlan { cites: c, depth: b.depth, fanout: b.fanout, max_per_seed: b.max_per_seed, max_calls: b.max_calls }
+                crate::research_chain::ChainPlan { cites: c, depth: b.depth, fanout: b.fanout, max_per_seed: b.max_per_seed, max_calls: b.max_calls, max_pages: b.max_pages }
             });
             let deps = crate::research_run::Deps { web: web.as_ref(), scout: &scout, validator: &validator, library: &library, redactor: &redactor, sites: &sites, thin_below: engine.settings.thin_below, support: &engine.settings.support, host_searches: &host_searches, retractions: retractions_line.as_deref(), chain };
             let out = crate::research_run::run_research(&jc, &q, depth, &deps).await;

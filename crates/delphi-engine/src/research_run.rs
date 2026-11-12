@@ -359,6 +359,11 @@ struct ChainStats {
     /// Seeds the index answered for, with no work in either list: the index holds no list for them, or they cite and are cited by nothing it knows.
     no_list: usize,
     failed: usize,
+    /// Chained works read as pages (`specs/101` §6 item 8): resolved to a landing address and captured once.
+    pages: usize,
+    /// Chained works that could not be read as pages: the handle is unknown or has no https address, the capture failed, or the address was
+    /// already seen. They stay leads.
+    unresolved: usize,
 }
 
 fn works_word(n: usize) -> String {
@@ -376,6 +381,9 @@ fn chain_line(s: Option<&ChainStats>) -> String {
         parts.push(format!("not available for {}", works_word(s.no_list)));
     }
     parts.push(format!("followed {} from {} in {} call{}", works_word(s.kept), works_word(s.seeds), s.calls, if s.calls == 1 { "" } else { "s" }));
+    if s.pages > 0 || s.unresolved > 0 {
+        parts.push(format!("read {} as page{}, {} left as lead{}", s.pages, if s.pages == 1 { "" } else { "s" }, s.unresolved, if s.unresolved == 1 { "" } else { "s" }));
+    }
     if s.failed > 0 {
         parts.push(format!("{} call{} failed", s.failed, if s.failed == 1 { "" } else { "s" }));
     }
@@ -391,7 +399,8 @@ fn chain_line(s: Option<&ChainStats>) -> String {
 /// * Bounds: `depth` levels, `fanout` seeds a level, `max_per_seed` works kept per seed, `max_calls` calls. A work already seen is skipped.
 /// * A chained find is `noted`. It adds no origin to its seed's claim and moves no status; it counts toward `corroborated` only if a page
 ///   is later fetched and quote-verified the way any citation is.
-/// * Nothing here fetches a page or a URL: the only request is `plan.cites.works`.
+/// * The requests are `plan.cites.works` and, for a kept work inside the page cap, `plan.cites.resolve` and then one capture of the address
+///   the DOI-resolution endpoint gave for it ([`read_chained`]). No other address in any answer is fetched.
 async fn chain_pass(ctx: &JobCtx, deps: &Deps<'_>, claims: &[ClaimRec], seen: &mut Seen, cov: &mut Rungs, log: &mut SearchLog, spent: &mut bool) -> Option<ChainStats> {
     let plan = deps.chain.as_ref()?;
     let provider = || Source::Citation(crate::research_chain::PROVIDER_ID.to_string());
@@ -418,6 +427,9 @@ async fn chain_pass(ctx: &JobCtx, deps: &Deps<'_>, claims: &[ClaimRec], seen: &m
     stats.seeds = seeds.len();
     let mut known: BTreeSet<String> = seeds.iter().cloned().collect();
     let mut frontier = seeds;
+    // The works kept as leads, in the order they were kept. They are read as pages after every lookup, so the lookups always get their calls
+    // first and reading pages can only use what is left of `max_calls`.
+    let mut to_read: Vec<String> = Vec::new();
     'levels: for _ in 0..plan.depth {
         let mut next: Vec<String> = Vec::new();
         for seed in &frontier {
@@ -470,6 +482,7 @@ async fn chain_pass(ctx: &JobCtx, deps: &Deps<'_>, claims: &[ClaimRec], seen: &m
                             known.insert(w.doi.clone());
                             next.push(w.doi.clone());
                             room -= 1;
+                            to_read.push(w.doi.clone());
                         }
                         Err(_) => log.dropped(li, "lead_not_stored", 1),
                     }
@@ -485,7 +498,68 @@ async fn chain_pass(ctx: &JobCtx, deps: &Deps<'_>, claims: &[ClaimRec], seen: &m
         }
         frontier = next;
     }
+    // Reading the kept works as pages (`specs/101` §6 item 8): inside the page cap and the call cap, and only while the step budget lasts.
+    for doi in &to_read {
+        if *spent || stats.pages >= plan.max_pages || stats.calls >= plan.max_calls {
+            break;
+        }
+        if read_chained(ctx, deps, plan, doi, seen, log, &mut stats).await {
+            *spent = true;
+        }
+    }
     Some(stats)
+}
+
+/// Read one chained work as a page (`specs/101` §6 item 8), in two steps and no more. (1) One resolution request for the work's DOI to the
+/// pinned DOI-resolution endpoint, which counts against `max_calls` and is one line of the search log (`doi:doi.org`). (2) One capture of
+/// the first https address in the handle's record: `Library::capture` fetches it once, through the daemon's fetcher with every rule it
+/// has (https, public addresses only, pinning, the size cap, the cloaking check, a redirect to another origin refused), and keeps it as a
+/// source, `not validated`. The captured text is never read here. This is the "DOI resolution" that item 7 allows and nothing wider: the
+/// address is the work's own, an address anywhere else in an answer is never fetched, and no link on the page is followed (098 §7.5 item
+/// 7b stays off). A miss of any kind leaves the work as the lead it already is.
+async fn read_chained(ctx: &JobCtx, deps: &Deps<'_>, plan: &crate::research_chain::ChainPlan<'_>, doi: &str, seen: &mut Seen, log: &mut SearchLog, stats: &mut ChainStats) -> bool {
+    use crate::research_chain::Resolution;
+    let what = format!("resolve doi:{doi}");
+    if ctx.egress("scout", Egress::Search, &what).is_err() {
+        return true;
+    }
+    stats.calls += 1;
+    let li = log.begin("web", Source::Doi(crate::research_chain::DOI_PROVIDER_ID.to_string()), Purpose::Chain, &what, None);
+    let landing = match plan.cites.resolve(doi).await {
+        Ok(Resolution::Landing(u)) => u,
+        Ok(Resolution::Miss(_)) => {
+            log.rows(li, 0);
+            stats.unresolved += 1;
+            return false;
+        }
+        Err(_) => {
+            log.failed(li, "no_results");
+            stats.failed += 1;
+            stats.unresolved += 1;
+            return false;
+        }
+    };
+    log.rows(li, 1);
+    if !seen.url(&landing) {
+        log.duplicate(li);
+        stats.unresolved += 1;
+        return false;
+    }
+    if ctx.egress("scout", Egress::Fetch, &landing).is_err() {
+        log.dropped(li, "budget", 1);
+        return true;
+    }
+    match deps.library.capture(&landing, "", false).await {
+        Ok(_) => {
+            log.kept(li);
+            stats.pages += 1;
+        }
+        Err(_) => {
+            log.dropped(li, "capture_failed", 1);
+            stats.unresolved += 1;
+        }
+    }
+    false
 }
 
 /// Run one research job. `Finish::Partial` when the step budget ran out; an `Err` only when nothing could be done at all.
@@ -864,6 +938,8 @@ mod tests {
         private: BTreeSet<String>,
         /// The DOI each host's source names (the real library reads it from the source's own record).
         dois: BTreeMap<String, String>,
+        /// Hosts whose capture fails, as the fetcher refusing a cross-origin redirect or a cloaked page would.
+        capture_fails: BTreeSet<String>,
     }
     impl Library for FakeLib {
         /// As the live library does: a private source gives no seed, and neither does one that names no DOI.
@@ -904,6 +980,9 @@ mod tests {
         fn capture<'a>(&'a self, url: &'a str, _t: &'a str, trusted: bool) -> BoxFut<'a, Result<String, String>> {
             Box::pin(async move {
                 self.captured.lock().unwrap().push((url.into(), trusted));
+                if self.capture_fails.contains(&host(url)) {
+                    return Err("the fetcher refused".into());
+                }
                 Ok(format!("src-{}", host(url)))
             })
         }
@@ -927,8 +1006,17 @@ mod tests {
         lists: BTreeMap<(String, &'static str), Vec<crate::research_chain::Work>>,
         calls: Mutex<Vec<(String, &'static str)>>,
         fail: bool,
+        /// What the DOI-resolution endpoint answers per DOI (`Err` is a failed request); a DOI not listed is a miss. And every DOI asked about.
+        resolves: BTreeMap<String, Result<crate::research_chain::Resolution, String>>,
+        resolved: Mutex<Vec<String>>,
     }
     impl crate::research_chain::Cites for FakeCites {
+        fn resolve<'a>(&'a self, doi: &'a str) -> BoxFut<'a, Result<crate::research_chain::Resolution, String>> {
+            Box::pin(async move {
+                self.resolved.lock().unwrap().push(doi.to_string());
+                self.resolves.get(doi).cloned().unwrap_or(Ok(crate::research_chain::Resolution::Miss("the handle is unknown")))
+            })
+        }
         fn works<'a>(&'a self, doi: &'a str, dir: Direction) -> BoxFut<'a, Result<Vec<crate::research_chain::Work>, String>> {
             Box::pin(async move {
                 self.calls.lock().unwrap().push((doi.to_string(), dir.path()));
@@ -948,6 +1036,8 @@ mod tests {
         /// The citation index, when chaining is on, and the bounds (depth, fanout, max per seed, max calls).
         cites: Option<FakeCites>,
         bounds: (usize, usize, usize, usize),
+        /// Chained works to read as pages (`chain_max_pages`); zero reads none.
+        pages: usize,
         web: FakeWeb,
         scout: FakeScout,
         validator: FakeValidator,
@@ -971,10 +1061,10 @@ mod tests {
                 ("https://nih.gov/b".to_string(), vec![x("fever")]),
                 ("https://blog.example/a".to_string(), vec![x("headaches")]),
             ]));
-            Fixture { retractions: None, cites: None, bounds: (1, 2, 10, 30), web, scout, validator: FakeValidator { verdict, asked: Default::default() }, lib: FakeLib::default(), redactor: Redactor::new(), sites: vec!["who.int".into(), "nih.gov".into()], thin_below: 3, support: Params::default(), host_searches: Vec::new() }
+            Fixture { retractions: None, cites: None, bounds: (1, 2, 10, 30), pages: 0, web, scout, validator: FakeValidator { verdict, asked: Default::default() }, lib: FakeLib::default(), redactor: Redactor::new(), sites: vec!["who.int".into(), "nih.gov".into()], thin_below: 3, support: Params::default(), host_searches: Vec::new() }
         }
         fn deps(&self) -> Deps<'_> {
-            Deps { web: &self.web, scout: &self.scout, validator: &self.validator, library: &self.lib, redactor: &self.redactor, sites: &self.sites, thin_below: self.thin_below, support: &self.support, host_searches: &self.host_searches, retractions: self.retractions, chain: self.cites.as_ref().map(|c| ChainPlan { cites: c, depth: self.bounds.0, fanout: self.bounds.1, max_per_seed: self.bounds.2, max_calls: self.bounds.3 }) }
+            Deps { web: &self.web, scout: &self.scout, validator: &self.validator, library: &self.lib, redactor: &self.redactor, sites: &self.sites, thin_below: self.thin_below, support: &self.support, host_searches: &self.host_searches, retractions: self.retractions, chain: self.cites.as_ref().map(|c| ChainPlan { cites: c, depth: self.bounds.0, fanout: self.bounds.1, max_per_seed: self.bounds.2, max_calls: self.bounds.3, max_pages: self.pages }) }
         }
     }
 
@@ -1494,6 +1584,31 @@ mod tests {
         assert!(code.contains("format!(\"https://doi.org/{}\", w.doi)"));
     }
 
+    /// `specs/101` §6 item 8 and §12 item 5: reading a chained work is one resolution request and one capture of the address that request's
+    /// record gave, and nothing else. The function that does it must not reach the fetcher itself, must not read an address out of anything
+    /// but the resolution, and must hand the library exactly that one address. A change that fetches another address fails here, and a
+    /// reviewer has to ask whether 7b crept in.
+    #[test]
+    fn reading_a_chained_work_resolves_once_and_captures_only_the_address_the_record_gave() {
+        let src = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/research_run.rs")).unwrap();
+        let start = src.find("async fn read_chained(").expect("the page-reading step");
+        let body = &src[start..];
+        let body = &body[..body.find("\n}\n").expect("the end of the step")];
+        let code: String = body.lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+        for banned in ["deps.web", ".fetch(", "fetch_catalog", "fetch_snapshot", "canonical_url(", "Url::parse", "ingest(", "format!(\"https://", "works("] {
+            assert!(!code.contains(banned), "reading a chained work must not reach the fetcher or read or build another address: `{banned}`");
+        }
+        assert_eq!(code.matches("plan.cites.resolve(").count(), 1, "exactly one resolution request");
+        assert_eq!(code.matches("deps.library.capture(").count(), 1, "exactly one capture");
+        assert!(code.contains("Ok(Resolution::Landing(u)) => u"), "the address comes from the resolution record");
+        assert!(code.contains("deps.library.capture(&landing, \"\", false)"), "the capture is of that address, not a trusted one, and no page text goes through here");
+        // the pass that finds the works never captures; only the step above does
+        let pass = &src[src.find("async fn chain_pass(").unwrap()..];
+        let pass = &pass[..pass.find("\n}\n").unwrap()];
+        assert!(!pass.contains("library.capture"));
+        assert_eq!(pass.matches("read_chained(").count(), 1, "the pass reads pages only through the step");
+    }
+
     #[tokio::test]
     async fn chaining_stays_inside_the_step_budget() {
         let mut f = chained();
@@ -1513,6 +1628,146 @@ mod tests {
     }
 
     // ── the search log (`specs/101` §3) ──
+
+    // ---- reading a chained work as a page (`specs/101` §6 item 8) ----
+
+    fn landing(u: &str) -> Result<crate::research_chain::Resolution, String> {
+        Ok(crate::research_chain::Resolution::Landing(u.into()))
+    }
+    fn resolve_lines(v: &Value) -> Vec<Value> {
+        log_lines(v).into_iter().filter(|l| l["source"].as_str().is_some_and(|s| s.starts_with("doi:"))).collect()
+    }
+    /// What the library captured beyond the run's own pages: the chained works' landing addresses.
+    fn chained_captures(f: &Fixture) -> Vec<String> {
+        f.lib.captured.lock().unwrap().iter().map(|c| c.0.clone()).filter(|u| u.contains("publisher.example")).collect()
+    }
+    fn resolved(f: &Fixture) -> Vec<String> {
+        f.cites.as_ref().unwrap().resolved.lock().unwrap().clone()
+    }
+
+    #[tokio::test]
+    async fn a_kept_work_is_resolved_once_and_its_landing_address_is_captured_once_and_nothing_else_is_fetched() {
+        let mut f = chained();
+        f.pages = 5;
+        lists(&mut f, "10.1000/who", &["10.1000/ref1", "10.1000/ref2"], &[]);
+        let c = f.cites.as_mut().unwrap();
+        c.resolves.insert("10.1000/ref1".into(), landing("https://publisher.example/ref1"));
+        // ref2: the handle is unknown, so it stays a lead
+        let v = run_deep(&f).await;
+        assert_eq!(resolved(&f), ["10.1000/ref1", "10.1000/ref2"], "one resolution request per kept work");
+        assert_eq!(chained_captures(&f), ["https://publisher.example/ref1"], "one capture, of the address the record gave, and no other address");
+        assert!(f.lib.captured.lock().unwrap().iter().filter(|c| c.0.contains("publisher.example")).all(|c| !c.1), "a chained page is not a trusted capture");
+        // the works are leads as before, whether or not they were read
+        let leads = f.lib.leads.lock().unwrap().clone();
+        assert!(leads.iter().any(|u| u == "https://doi.org/10.1000/ref1") && leads.iter().any(|u| u == "https://doi.org/10.1000/ref2"));
+        // one `doi:doi.org` line a resolution, purpose chain; the read one kept a page, the miss found none
+        let lines = resolve_lines(&v);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(lines.iter().all(|l| l["source"] == "doi:doi.org" && l["purpose"] == "chain" && l["rung"] == "web"));
+        assert_eq!(lines[0]["query"], "resolve doi:10.1000/ref1");
+        assert_eq!((lines[0]["hits"].clone(), lines[0]["kept"].clone()), (json!(1), json!(1)));
+        assert_eq!((lines[1]["hits"].clone(), lines[1]["kept"].clone()), (json!(0), json!(0)));
+        assert_balanced(&v);
+        assert!(v["coverage_report"]["citations"].as_str().unwrap().contains("read 1 as page, 1 left as lead"), "{v}");
+    }
+
+    #[tokio::test]
+    async fn without_a_page_cap_no_work_is_resolved_and_the_run_is_what_slice_d_made_it() {
+        let mut f = chained();
+        assert_eq!(f.pages, 0);
+        lists(&mut f, "10.1000/who", &["10.1000/ref1"], &[]);
+        f.cites.as_mut().unwrap().resolves.insert("10.1000/ref1".into(), landing("https://publisher.example/ref1"));
+        let v = run_deep(&f).await;
+        assert!(resolved(&f).is_empty() && chained_captures(&f).is_empty() && resolve_lines(&v).is_empty());
+        assert!(!v["coverage_report"]["citations"].as_str().unwrap().contains("read "), "{v}");
+    }
+
+    #[tokio::test]
+    async fn the_page_cap_and_the_call_cap_both_hold() {
+        // three works are kept and all three would resolve; the page cap of 2 stops after two pages
+        let mut f = chained();
+        f.pages = 2;
+        lists(&mut f, "10.1000/who", &["10.1000/a", "10.1000/b", "10.1000/c"], &[]);
+        for d in ["a", "b", "c"] {
+            f.cites.as_mut().unwrap().resolves.insert(format!("10.1000/{d}"), landing(&format!("https://publisher.example/{d}")));
+        }
+        let v = run_deep(&f).await;
+        assert_eq!(chained_captures(&f), ["https://publisher.example/a", "https://publisher.example/b"], "{:?}", resolve_lines(&v));
+        assert_eq!(resolved(&f).len(), 2, "the third work is not even asked about");
+        assert_balanced(&v);
+        // the resolution requests count against `max_calls` with the index calls: two index calls and then one resolution make three
+        let mut f = chained();
+        f.pages = 5;
+        f.bounds = (1, 1, 10, 3);
+        lists(&mut f, "10.1000/who", &["10.1000/a", "10.1000/b"], &[]);
+        for d in ["a", "b"] {
+            f.cites.as_mut().unwrap().resolves.insert(format!("10.1000/{d}"), landing(&format!("https://publisher.example/{d}")));
+        }
+        let v = run_deep(&f).await;
+        assert_eq!(chain_calls(&f).len(), 2, "references and citations of the one seed");
+        assert_eq!(resolved(&f), ["10.1000/a"], "the third call is the only one left");
+        assert_eq!(chained_captures(&f), ["https://publisher.example/a"]);
+        assert_balanced(&v);
+    }
+
+    #[tokio::test]
+    async fn a_failed_resolution_a_refused_capture_and_a_repeated_address_leave_the_work_as_a_lead_and_are_counted() {
+        let mut f = chained();
+        f.pages = 5;
+        lists(&mut f, "10.1000/who", &["10.1000/err", "10.1000/refused", "10.1000/one", "10.1000/two"], &[]);
+        let c = f.cites.as_mut().unwrap();
+        c.resolves.insert("10.1000/err".into(), Err("the resolution failed".into()));
+        c.resolves.insert("10.1000/refused".into(), landing("https://refused.publisher.example/x"));
+        c.resolves.insert("10.1000/one".into(), landing("https://publisher.example/same"));
+        c.resolves.insert("10.1000/two".into(), landing("https://publisher.example/same"));
+        f.lib.capture_fails.insert("refused.publisher.example".into());
+        let v = run_deep(&f).await;
+        let lines = resolve_lines(&v);
+        assert_eq!(lines.len(), 4, "{lines:?}");
+        assert_eq!(lines[0]["failed"], "no_results", "a failed request is a failed line");
+        assert_eq!(lines[1]["not_kept"]["capture_failed"], 1, "a capture the fetcher refused");
+        assert_eq!(lines[2]["kept"], 1);
+        assert_eq!(lines[3]["duplicates"], 1, "the same landing address is read once");
+        assert_eq!(f.lib.captured.lock().unwrap().iter().filter(|c| c.0 == "https://publisher.example/same").count(), 1);
+        let leads = f.lib.leads.lock().unwrap().clone();
+        for d in ["err", "refused", "one", "two"] {
+            assert!(leads.iter().any(|u| *u == format!("https://doi.org/10.1000/{d}")), "{d} stays a lead");
+        }
+        assert_balanced(&v);
+        let line = v["coverage_report"]["citations"].as_str().unwrap();
+        assert!(line.contains("read 1 as page, 3 left as leads") && line.contains("1 call failed"), "{line}");
+    }
+
+    #[tokio::test]
+    async fn a_private_seed_gives_nothing_to_resolve_and_nothing_is_sent() {
+        let mut f = chained();
+        f.pages = 5;
+        f.lib.private = ["who.int", "nih.gov", "cdc.gov"].iter().map(|s| s.to_string()).collect();
+        lists(&mut f, "10.1000/who", &["10.1000/ref1"], &[]);
+        f.cites.as_mut().unwrap().resolves.insert("10.1000/ref1".into(), landing("https://publisher.example/ref1"));
+        let v = run_deep(&f).await;
+        assert!(chain_calls(&f).is_empty() && resolved(&f).is_empty() && chained_captures(&f).is_empty(), "zero requests of either kind");
+        assert!(resolve_lines(&v).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_chained_page_adds_no_origin_and_moves_no_status() {
+        let plain = {
+            let mut f = chained();
+            lists(&mut f, "10.1000/who", &["10.1000/ref1"], &[]);
+            run_deep(&f).await
+        };
+        let mut f = chained();
+        f.pages = 5;
+        lists(&mut f, "10.1000/who", &["10.1000/ref1"], &[]);
+        f.cites.as_mut().unwrap().resolves.insert("10.1000/ref1".into(), landing("https://publisher.example/ref1"));
+        let read = run_deep(&f).await;
+        assert_eq!(chained_captures(&f).len(), 1);
+        // the claims, their statuses and their origin counts are the ones the run had without reading the page
+        assert_eq!(fever(&plain)["knowledge_status"], fever(&read)["knowledge_status"]);
+        assert_eq!(fever(&plain)["corroboration"], fever(&read)["corroboration"], "a page read for a chained work is not a citation of the claim");
+        assert_eq!(plain["claims"], read["claims"], "reading a chained work changes no claim");
+    }
 
     fn log_lines(v: &Value) -> Vec<Value> {
         v["search_log"]["lines"].as_array().cloned().unwrap_or_default()

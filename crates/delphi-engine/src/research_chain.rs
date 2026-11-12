@@ -7,6 +7,14 @@
 //! This is not the following of links found on a page (`specs/098` §7.5 item 7b, which stays off): the input is a DOI the daemon holds
 //! for a public source, the output is a list of DOIs, and the only request is the one to the pinned endpoint.
 //!
+//! **Reading a work as a page (slice D2, `specs/101` §6 item 8).** For up to `max_pages` kept works the runner makes one more request, to
+//! the pinned DOI-resolution endpoint (`https://doi.org/api/handles/<doi>`, `Channel::DoiResolve`), and [`parse_handle`] takes from the
+//! record the first `URL` value that is an https address with a host and no credentials. The runner hands that one address to the library's
+//! capture, which fetches it once through the daemon's fetcher with every rule it has. A handle that is unknown (`responseCode` 100), has no
+//! values (200), has no https address, or a request that fails is a miss and the work stays a lead. No other address in any answer is read.
+//! Verified live 2026-11-12: `10.7717/peerj-cs.421` answers HTTP 200 with `responseCode` 1 and a `URL` value; an unknown DOI answers HTTP 404
+//! with `responseCode` 100. NOT VALIDATED: rate limits and terms of use (the DOI Foundation's documentation states none).
+//!
 //! **Nothing private is sent.** The one guard is [`crate::egress::check`] on the source's own record with `Channel::CitationLookup`
 //! (`research_host.rs`, `LiveLibrary::chainable_doi`): a source that is private, whose record cannot be read, or that names no DOI
 //! gives no seed, so nothing is sent for the claims that rest on it.
@@ -30,6 +38,10 @@ use delphi_adapter::reqwest::Url;
 pub const DEFAULT_ENDPOINT: &str = "https://api.opencitations.net/index/v2";
 /// The provider id the search log names (`citation:opencitations`).
 pub const PROVIDER_ID: &str = "opencitations";
+/// The pinned DOI-resolution endpoint (`specs/101` §7, pinned by the operator on 2026-11-11): the DOI Foundation's REST API, `GET <endpoint>/<doi>`.
+pub const DEFAULT_DOI_ENDPOINT: &str = "https://doi.org/api/handles";
+/// The provider id the search log names for a resolution (`doi:doi.org`).
+pub const DOI_PROVIDER_ID: &str = "doi.org";
 /// The most records read from one answer; a longer list is cut here, not parsed whole.
 const MAX_RECORDS: usize = 5000;
 
@@ -44,13 +56,17 @@ pub struct ChainConfig {
     pub fanout: usize,
     /// Works kept per seed (default 10).
     pub max_per_seed: usize,
-    /// Calls to the index per run (default 30).
+    /// Calls to the index and to the DOI-resolution endpoint per run, together (default 30).
     pub max_calls: usize,
+    /// The DOI-resolution endpoint (`specs/101` §6 item 8): https, no credentials, query or fragment.
+    pub doi_endpoint: String,
+    /// Chained works read as pages per run (default 5, a hypothesis): each costs one resolution request and one fetch.
+    pub max_pages: usize,
 }
 
 impl Default for ChainConfig {
     fn default() -> ChainConfig {
-        ChainConfig { enabled: false, endpoint: DEFAULT_ENDPOINT.into(), depth: 1, fanout: 2, max_per_seed: 10, max_calls: 30 }
+        ChainConfig { enabled: false, endpoint: DEFAULT_ENDPOINT.into(), depth: 1, fanout: 2, max_per_seed: 10, max_calls: 30, doi_endpoint: DEFAULT_DOI_ENDPOINT.into(), max_pages: 5 }
     }
 }
 
@@ -129,10 +145,80 @@ pub fn parse_works(body: &[u8], dir: Direction, seed: &str) -> Result<Vec<Work>,
     Ok(out)
 }
 
+/// The request that asks the DOI-resolution endpoint where a work lives (`specs/101` §6 item 8): `<endpoint>/<doi>`, a plain GET. The
+/// endpoint must be https with no credentials, query or fragment; a DOI that does not normalise to itself gives `None`. A character a path
+/// cannot carry is percent-encoded, so a `?` or `#` inside a DOI stays inside it.
+pub fn resolve_url(endpoint: &str, doi: &str) -> Option<String> {
+    resolve_url_with(endpoint, doi, false)
+}
+
+/// [`resolve_url`], with plain http allowed when `plain_http` is set. The daemon never sets it; the tests' loopback server needs it.
+pub fn resolve_url_with(endpoint: &str, doi: &str, plain_http: bool) -> Option<String> {
+    if crate::doi::normalize(doi).as_deref() != Some(doi) {
+        return None;
+    }
+    let base = Url::parse(endpoint).ok()?;
+    if !(base.scheme() == "https" || (plain_http && base.scheme() == "http")) || base.host_str().is_none() || !base.username().is_empty() || base.password().is_some() || base.query().is_some() || base.fragment().is_some() {
+        return None;
+    }
+    let mut enc = String::new();
+    for b in doi.bytes() {
+        if b.is_ascii_alphanumeric() || b"-._~/():;@!$&'*+,=".contains(&b) {
+            enc.push(b as char);
+        } else {
+            enc.push_str(&format!("%{:02X}", b));
+        }
+    }
+    Url::parse(&format!("{}/{}", endpoint.trim_end_matches('/'), enc)).ok().map(|u| u.to_string())
+}
+
+/// What the DOI-resolution endpoint said about a work.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Resolution {
+    /// The work's landing address: the first value of type `URL` in the handle's record that is an https address.
+    Landing(String),
+    /// No landing address to read, and why: the handle is unknown (`responseCode` 100), has no `URL` value (200), the record has no https
+    /// `URL` value, or the endpoint reported an error. The work stays a lead.
+    Miss(&'static str),
+}
+
+/// The handle record in the endpoint's answer. Only `responseCode` and the `values` of type `URL` are read; of those, only an `https`
+/// address with a host and no credentials is kept, and the first one wins. Nothing else in the answer is read, and no address in it
+/// other than that one is ever fetched. An answer that is not JSON, or has no `responseCode`, is an answer that did not read.
+pub fn parse_handle(body: &[u8]) -> Result<Resolution, &'static str> {
+    let v: serde_json::Value = serde_json::from_slice(body).map_err(|_| "the answer did not read")?;
+    let code = v["responseCode"].as_i64().ok_or("the answer did not read")?;
+    match code {
+        1 => {}
+        100 => return Ok(Resolution::Miss("the handle is unknown")),
+        200 => return Ok(Resolution::Miss("the handle has no URL value")),
+        _ => return Ok(Resolution::Miss("the endpoint reported an error")),
+    }
+    for val in v["values"].as_array().into_iter().flatten().take(64) {
+        if val["type"].as_str() != Some("URL") {
+            continue;
+        }
+        let Some(raw) = val["data"]["value"].as_str() else { continue };
+        if raw.len() > 2000 {
+            continue;
+        }
+        let Ok(u) = Url::parse(raw.trim()) else { continue };
+        if u.scheme() == "https" && u.host_str().is_some() && u.username().is_empty() && u.password().is_none() {
+            return Ok(Resolution::Landing(u.to_string()));
+        }
+    }
+    Ok(Resolution::Miss("no https URL in the record"))
+}
+
 /// The index, as the run sees it. Calls are async because the live one goes through the daemon's fetcher.
 pub trait Cites: Send + Sync {
     /// The works `doi` cites or that cite it. An empty list is both "none" and "the index holds no list" (the index answers `[]` for both).
     fn works<'a>(&'a self, doi: &'a str, dir: Direction) -> BoxFut<'a, Result<Vec<Work>, String>>;
+    /// Where the work `doi` lives (`specs/101` §6 item 8): one request to the DOI-resolution endpoint. `Err` is a request that failed.
+    /// The default offers no resolution, so an index that does not implement it is never asked to read a page.
+    fn resolve<'a>(&'a self, _doi: &'a str) -> BoxFut<'a, Result<Resolution, String>> {
+        Box::pin(async { Err("resolution is not offered".to_string()) })
+    }
 }
 
 /// What a run needs to chain: the index and the bounds. `None` in `Deps` is the switch off.
@@ -141,7 +227,10 @@ pub struct ChainPlan<'a> {
     pub depth: usize,
     pub fanout: usize,
     pub max_per_seed: usize,
+    /// Calls to the index and resolution requests, together.
     pub max_calls: usize,
+    /// Chained works read as pages in the run (`specs/101` §6 item 8). Zero reads none.
+    pub max_pages: usize,
 }
 
 #[cfg(test)]

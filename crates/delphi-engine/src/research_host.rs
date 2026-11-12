@@ -228,17 +228,37 @@ impl Validator for LiveValidator {
 pub struct LiveCites {
     pub policy: crate::fact_fetch::FetchPolicy,
     pub endpoint: String,
+    /// The DOI-resolution endpoint (`specs/101` §6 item 8, §7): one GET per chained work that is to be read as a page.
+    pub doi_endpoint: String,
     /// Always false in the daemon. Only the tests' loopback server, which cannot speak https, sets it.
     pub plain_http: bool,
 }
 
 impl LiveCites {
     pub fn new(policy: crate::fact_fetch::FetchPolicy, endpoint: String) -> LiveCites {
-        LiveCites { policy, endpoint, plain_http: false }
+        LiveCites { policy, endpoint, doi_endpoint: crate::research_chain::DEFAULT_DOI_ENDPOINT.to_string(), plain_http: false }
+    }
+
+    /// The same, with the operator's DOI-resolution endpoint (`[research] doi_endpoint`).
+    pub fn with_doi_endpoint(mut self, doi_endpoint: String) -> LiveCites {
+        self.doi_endpoint = doi_endpoint;
+        self
     }
 }
 
 impl crate::research_chain::Cites for LiveCites {
+    /// One GET to the pinned DOI-resolution endpoint for a public DOI, through the daemon's fetcher (public addresses only, pinned, a size
+    /// cap, no redirect to another origin, JSON allowed). The answer is parsed for its first https `URL` value and nothing else. The caller
+    /// has only DOIs that descend from a seed the library vouched for (`Library::chainable_doi`, where the egress check on
+    /// `Channel::DoiResolve` runs). The landing address is NOT fetched here; the runner hands it to the library's capture, once.
+    fn resolve<'a>(&'a self, doi: &'a str) -> BoxFut<'a, Result<crate::research_chain::Resolution, String>> {
+        Box::pin(async move {
+            let url = crate::research_chain::resolve_url_with(&self.doi_endpoint, doi, self.plain_http).ok_or_else(|| "not a resolution this slice makes".to_string())?;
+            let body = crate::fact_fetch::fetch_catalog(&self.policy, &url).await.map_err(|e| format!("the resolution failed: {e}"))?;
+            crate::research_chain::parse_handle(&body).map_err(String::from)
+        })
+    }
+
     fn works<'a>(&'a self, doi: &'a str, dir: crate::research_chain::Direction) -> BoxFut<'a, Result<Vec<crate::research_chain::Work>, String>> {
         Box::pin(async move {
             let url = crate::research_chain::lookup_url_with(&self.endpoint, dir, doi, self.plain_http).ok_or_else(|| "not a lookup this slice makes".to_string())?;
@@ -283,10 +303,12 @@ impl Library for LiveLibrary {
     /// The seed of a citation lookup (`specs/101` §6): the DOI the source's own record names (never read from the page's text), and only
     /// for a source the daemon fetched itself that is public and readable. The one guard is `egress::check` on the record with
     /// `Channel::CitationLookup`, so a private source, a record that cannot be read (or is missing) and a name the library cannot vouch
-    /// for send nothing: deny by default.
+    /// for send nothing: deny by default. The same record is also checked for `Channel::DoiResolve` (`specs/101` §6 item 8): the works the
+    /// chain finds descend from this seed, and each one that is resolved to a landing address is asked about only if its seed passed both.
     fn chainable_doi(&self, source_id: &str) -> Option<String> {
         let meta = crate::library::Library::in_home(&self.home).read_meta(source_id)?;
         crate::egress::check(&meta, crate::library::Channel::CitationLookup).ok()?;
+        crate::egress::check(&meta, crate::library::Channel::DoiResolve).ok()?;
         let generated = meta["derived"].as_bool() == Some(true) || meta["origin"].as_str().is_some_and(|o| o.starts_with("page:"));
         if !meta["purged"].is_null() || generated || !meta["content_hash"].is_string() {
             return None;
@@ -759,6 +781,78 @@ mod tests {
         assert_eq!(*seen.lock().unwrap(), ["/index/v2/references/doi:10.1000/seed"], "one request, the operation and the DOI, nothing else; the URL in the answer is not requested");
         // a DOI that is not in its normal form is not asked about at all
         assert!(c.works("DOI:10.1000/Seed", Direction::Citations).await.is_err());
+        assert_eq!(seen.lock().unwrap().len(), 1);
+    }
+
+    /// A handle record as the DOI Foundation's resolution API answers it: values of other types, an address that is not https, then the first
+    /// https `URL` value, then another https one that must never be looked at.
+    const HANDLE_OK: &str = r#"{"responseCode":1,"handle":"10.1000/seed","values":[{"index":2,"type":"URL","data":{"format":"string","value":"http://insecure.example/x"}},{"index":3,"type":"700050","data":{"format":"string","value":"20210310093515"}},{"index":1,"type":"URL","data":{"format":"string","value":"https://peerj.example/a?x=1"}},{"index":4,"type":"URL","data":{"format":"string","value":"https://second.example/b"}}]}"#;
+    const HANDLE_NOT_FOUND: &str = r#"{"responseCode":100,"message":"HandleException (SERVICE_NOT_FOUND)","handle":"10.1000/seed"}"#;
+    const HANDLE_NO_VALUES: &str = r#"{"responseCode":200,"handle":"10.1000/seed"}"#;
+    const HANDLE_NO_HTTPS: &str = r#"{"responseCode":1,"handle":"10.1000/seed","values":[{"index":1,"type":"URL","data":{"format":"string","value":"http://only-http.example/"}},{"index":2,"type":"URL","data":{"format":"string","value":"javascript:alert(1)"}},{"index":3,"type":"URL","data":{"format":"string","value":"https://user:pw@creds.example/x"}},{"index":4,"type":"HS_ADMIN","data":{"format":"admin","value":{"handle":"0.na/10.1000"}}}]}"#;
+    const HANDLE_ERROR: &str = r#"{"responseCode":2,"message":"internal error"}"#;
+
+    fn doi_cites(addr: std::net::SocketAddr) -> LiveCites {
+        let mut c = LiveCites::new(crate::fact_fetch::FetchPolicy::default().with_fixture_addrs([addr]), format!("http://127.0.0.1:{}/index/v2", addr.port())).with_doi_endpoint(format!("http://127.0.0.1:{}/api/handles", addr.port()));
+        c.plain_http = true;
+        c
+    }
+
+    #[tokio::test]
+    async fn the_live_resolution_makes_one_request_and_reads_only_the_first_https_url_value() {
+        use crate::research_chain::{Cites, Resolution};
+        let (addr, seen) = index(HANDLE_OK);
+        let mut c = doi_cites(addr);
+        // the pinned endpoint is https: a plain-http endpoint is refused before any request
+        c.plain_http = false;
+        assert!(c.resolve("10.1000/seed").await.is_err());
+        assert!(seen.lock().unwrap().is_empty(), "no request left for an endpoint that is not https");
+        c.plain_http = true;
+        assert_eq!(c.resolve("10.1000/seed").await.unwrap(), Resolution::Landing("https://peerj.example/a?x=1".into()));
+        assert_eq!(*seen.lock().unwrap(), ["/api/handles/10.1000/seed"], "one request, the DOI in the path; neither address in the answer is requested");
+        // a DOI that is not in its normal form is not asked about at all
+        assert!(c.resolve("DOI:10.1000/Seed").await.is_err());
+        assert_eq!(seen.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_unknown_handle_a_record_without_an_https_address_and_an_error_are_misses_and_garbage_is_a_failure() {
+        use crate::research_chain::{Cites, Resolution};
+        for (body, why) in [(HANDLE_NOT_FOUND, "the handle is unknown"), (HANDLE_NO_VALUES, "the handle has no URL value"), (HANDLE_NO_HTTPS, "no https URL in the record"), (HANDLE_ERROR, "the endpoint reported an error")] {
+            let (addr, seen) = index(body);
+            let got = doi_cites(addr).resolve("10.1000/seed").await.unwrap();
+            assert_eq!(got, Resolution::Miss(why), "{body}");
+            assert_eq!(seen.lock().unwrap().len(), 1, "a miss is still one request, and nothing is fetched afterwards");
+        }
+        let (addr, _) = index("this is not json");
+        assert!(doi_cites(addr).resolve("10.1000/seed").await.is_err(), "an answer that does not read is a failed request");
+    }
+
+    #[tokio::test]
+    async fn a_resolution_for_a_source_the_library_will_not_vouch_for_never_reaches_the_endpoint() {
+        use crate::research_chain::Cites;
+        let (home, files) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let l = crate::library::Library::in_home(home.path());
+        let live = live_library(home.path());
+        let (addr, seen) = index(HANDLE_OK);
+        let cites = doi_cites(addr);
+        let private = doi_source(&l, files.path(), "private", true, |_| {});
+        let unreadable = doi_source(&l, files.path(), "unreadable", false, |_| {});
+        std::fs::write(l.source_dir(&unreadable).join("meta.json"), b"{ not json").unwrap();
+        // the seed comes from the library, as `chain_pass` takes it, and every work the chain reads descends from one: a source the library
+        // will not vouch for gives none, so nothing is asked of the endpoint
+        for id in [private.as_str(), unreadable.as_str(), "nonesuch"] {
+            if let Some(doi) = live.chainable_doi(id) {
+                let _ = cites.resolve(&doi).await;
+            }
+        }
+        assert!(seen.lock().unwrap().is_empty(), "a private or unreadable source reached the resolution endpoint: {:?}", seen.lock().unwrap());
+        // and the record is checked for the resolution channel as well as the lookup channel: a private record is refused by both
+        let rec = l.read_meta(&private).unwrap();
+        assert!(crate::egress::check(&rec, crate::library::Channel::DoiResolve).is_err() && crate::egress::check(&rec, crate::library::Channel::CitationLookup).is_err());
+        let public = doi_source(&l, files.path(), "public", false, |_| {});
+        let doi = live.chainable_doi(&public).unwrap();
+        cites.resolve(&doi).await.unwrap();
         assert_eq!(seen.lock().unwrap().len(), 1);
     }
 

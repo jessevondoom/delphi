@@ -158,10 +158,13 @@ pub enum Channel {
     /// A public DOI sent to the citation index to ask what a work cites and what cites it (`specs/101` §6): read-only, no entry text, and
     /// never for a source that is private, whose record cannot be read, or that names no DOI.
     CitationLookup,
+    /// A public DOI sent to the DOI-resolution endpoint to ask where the work lives (`specs/101` §6 item 8): read-only, no entry text, and
+    /// never for a source that is private, whose record cannot be read, or that names no DOI.
+    DoiResolve,
 }
 
 impl Channel {
-    pub const ALL: [Channel; 13] = [
+    pub const ALL: [Channel; 14] = [
         Channel::Bundle,
         Channel::Xenia,
         Channel::Export,
@@ -175,6 +178,7 @@ impl Channel {
         Channel::Telemetry,
         Channel::ArchiveLookup,
         Channel::CitationLookup,
+        Channel::DoiResolve,
     ];
 }
 

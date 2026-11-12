@@ -81,7 +81,7 @@ pub enum Wired {
 }
 
 /// Every channel of `specs/055` §10.1 and the file that sends through it.
-pub const PATHS: [(Channel, &str, Wired); 13] = [
+pub const PATHS: [(Channel, &str, Wired); 14] = [
     (Channel::Bundle, "library_export.rs", Wired::Yes),
     (Channel::WebSearch, "library_acquire.rs", Wired::Yes),
     (Channel::Xenia, "service_xenia.rs", Wired::Yes),
@@ -95,6 +95,7 @@ pub const PATHS: [(Channel, &str, Wired); 13] = [
     (Channel::Telemetry, "", Wired::NoEntryText { proof_file: "delphi-engine/src/egress.rs", proof_test: "no_telemetry_sender_exists_and_every_file_that_can_reach_the_network_is_registered" }),
     (Channel::ArchiveLookup, "library_archive.rs", Wired::Yes),
     (Channel::CitationLookup, "research_host.rs", Wired::Yes),
+    (Channel::DoiResolve, "research_host.rs", Wired::Yes),
 ];
 
 /// A path that is deliberately NOT guarded by [`check`] (`specs/098` §12 item 16, §7.5 item 7a): it carries no text from any entry, so there

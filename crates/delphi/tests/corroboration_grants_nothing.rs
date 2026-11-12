@@ -374,7 +374,7 @@ fn a_chain_result_is_a_lead_that_only_the_run_the_live_side_and_the_settings_nam
     let root = root();
     let mut files = Vec::new();
     rust_files(&root.join("crates"), &mut files);
-    let uses = Regex::new(r#"research_chain|ChainPlan|ChainConfig|CitationLookup|chainable_doi|Purpose::Chain|chain_pass|LiveCites"#).unwrap();
+    let uses = Regex::new(r#"research_chain|ChainPlan|ChainConfig|CitationLookup|chainable_doi|Purpose::Chain|chain_pass|LiveCites|DoiResolve\b|resolve_url|parse_handle|read_chained|chain_max_pages"#).unwrap();
     let allowed = [
         "crates/delphi-engine/src/research_chain.rs",
         "crates/delphi-engine/src/research_run.rs",
