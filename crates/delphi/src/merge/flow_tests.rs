@@ -4,6 +4,12 @@ use super::approve::FakeTerminal;
 use super::check::{evaluate, QUEUE_LABEL, REVIEW_LABEL};
 use super::errors::Errors;
 use super::fake::{FakeForge, APPROVED_SPEC, DRAFT_SPEC, SPEC_PATH};
+
+const OTHER_SPEC: &str = "specs/095-other.md";
+
+fn trailers(specs: &[&str]) -> Vec<String> {
+    specs.iter().enumerate().map(|(i, s)| format!("Slice {i}\n\nImplements-Spec: {s}\n\nCo-Authored-By: x")).collect()
+}
 use super::forge::{Check, Forge};
 use super::gates::Source;
 use super::record::{Attestation, Ledger, SpecState};
@@ -302,6 +308,73 @@ fn the_linked_spec_rules() {
     assert!(matches!(small(&["docs/guide.md", "crates/x/src/lib.rs"], 900, 40), SpecState::Missing(_)), "code rides along");
     assert!(matches!(small(&["specs/095-new.md", "dev/run.py"], 900, 40), SpecState::Missing(_)), "a script rides along");
     assert!(matches!(small(&["docs/guide.md", "skills/x/SKILL.md"], 900, 40), SpecState::Missing(_)), "a governed directory rides along");
+}
+
+#[test]
+fn several_slices_of_the_same_spec_in_one_pull_request_pass_and_record_the_spec_once() {
+    let w = world();
+    w.forge.with_ready_pr(7, "h7", &["a.rs", "b.rs"]);
+    w.forge.edit(7, |p| p.commit_messages = trailers(&[SPEC_PATH, SPEC_PATH, SPEC_PATH]));
+    let v = evaluate(&w.forge, 7).unwrap();
+    assert!(v.ready(), "{:?}", v.refusals);
+    assert_eq!(v.specs.len(), 1);
+    assert!(matches!(&v.specs[0], SpecState::Approved { path, .. } if path == SPEC_PATH));
+    let out = with_ctx(&w, &mut FakeTerminal::new(false, &[]), Some("merge #7"), false, |c| merge_one(c, 7, None));
+    assert!(matches!(out, Outcome::Merged { .. }), "{out:?}");
+    let row = &Ledger::at(w.home.path()).read()[0];
+    assert_eq!(row["spec"]["kind"], "approved-on-base");
+    assert_eq!(row["specs"].as_array().unwrap().len(), 1);
+    assert_eq!(row["specs"][0]["path"], SPEC_PATH);
+}
+
+#[test]
+fn a_pull_request_naming_different_specs_is_judged_on_every_one_and_the_ledger_records_all() {
+    // Cross-spec pull requests were already accepted (every named spec had to be ratified, but only the first was recorded).
+    // The operator's same-spec rule is a review rule, not enforced here; this change records all of them and changes nothing else.
+    let w = world();
+    w.forge.with_ready_pr(7, "h7", &["a.rs"]);
+    w.forge.edit(7, |p| p.commit_messages = trailers(&[SPEC_PATH, OTHER_SPEC]));
+    for r in ["main", "h7"] {
+        w.forge.st.borrow_mut().files.insert((r.into(), OTHER_SPEC.into()), APPROVED_SPEC.into());
+    }
+    let out = with_ctx(&w, &mut FakeTerminal::new(false, &[]), Some("merge #7"), false, |c| merge_one(c, 7, None));
+    assert!(matches!(out, Outcome::Merged { .. }), "{out:?}");
+    let row = &Ledger::at(w.home.path()).read()[0];
+    let paths: Vec<&str> = row["specs"].as_array().unwrap().iter().map(|s| s["path"].as_str().unwrap()).collect();
+    assert_eq!(paths, vec![SPEC_PATH, OTHER_SPEC]);
+}
+
+#[test]
+fn one_unratified_spec_among_several_blocks_the_merge_and_every_blocker_is_named() {
+    for order in [[SPEC_PATH, OTHER_SPEC], [OTHER_SPEC, SPEC_PATH]] {
+        let w = world();
+        w.forge.with_ready_pr(7, "h7", &["a.rs"]);
+        w.forge.edit(7, |p| p.commit_messages = trailers(&order));
+        // OTHER_SPEC is a draft on the base; SPEC_PATH is approved.
+        w.forge.st.borrow_mut().files.insert(("main".into(), OTHER_SPEC.into()), DRAFT_SPEC.into());
+        let v = evaluate(&w.forge, 7).unwrap();
+        assert!(!v.ready() && matches!(v.spec, SpecState::Missing(_)), "{order:?}: {:?}", v.refusals);
+        assert!(v.refusals.iter().any(|r| r.contains(OTHER_SPEC)), "{:?}", v.refusals);
+        let out = with_ctx(&w, &mut FakeTerminal::new(false, &[]), Some("merge #7"), false, |c| merge_one(c, 7, None));
+        assert!(matches!(out, Outcome::Refused { .. }), "{out:?}");
+        assert!(merged(&w).is_empty() && kinds(&w).is_empty());
+    }
+    // Both unratified: both are named.
+    let w = world();
+    w.forge.with_ready_pr(7, "h7", &["a.rs"]);
+    w.forge.edit(7, |p| p.commit_messages = trailers(&[SPEC_PATH, OTHER_SPEC]));
+    w.forge.st.borrow_mut().files.insert(("main".into(), SPEC_PATH.into()), DRAFT_SPEC.into());
+    let v = evaluate(&w.forge, 7).unwrap();
+    assert!(v.refusals.iter().any(|r| r.contains(SPEC_PATH)) && v.refusals.iter().any(|r| r.contains(OTHER_SPEC)), "{:?}", v.refusals);
+}
+
+#[test]
+fn a_single_spec_row_keeps_its_old_field_and_specs_is_additive() {
+    let w = world();
+    w.forge.with_ready_pr(7, "h7", &["a.rs"]);
+    with_ctx(&w, &mut FakeTerminal::new(false, &[]), Some("merge #7"), false, |c| merge_one(c, 7, None));
+    let row = &Ledger::at(w.home.path()).read()[0];
+    assert_eq!(row["spec"], row["specs"][0]);
 }
 
 #[test]
