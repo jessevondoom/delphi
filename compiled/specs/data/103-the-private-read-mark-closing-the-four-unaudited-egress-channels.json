@@ -64,25 +64,31 @@
     },
     {
       "level": 2,
-      "line": 112,
+      "line": 113,
       "number": "6",
       "title": "Tests that would prove it"
     },
     {
       "level": 2,
-      "line": 128,
+      "line": 129,
       "number": "7",
       "title": "Open decisions for the operator"
     },
     {
+      "level": 3,
+      "line": 143,
+      "number": "7.1",
+      "title": "The operator's answers, 2026-11-12 (short version; fuller answers to follow)"
+    },
+    {
       "level": 2,
-      "line": 142,
+      "line": 160,
       "number": "8",
       "title": "What this does not change"
     },
     {
       "level": 2,
-      "line": 151,
+      "line": 169,
       "number": "9",
       "title": "NOT VALIDATED"
     }
@@ -90,21 +96,21 @@
   "schema_version": 1,
   "source": {
     "path": "specs/103-the-private-read-mark-closing-the-four-unaudited-egress-channels.md",
-    "sha256": "61226cb701de62c385acdabfb166aa340f5f21a86b9f65327e26cf2cb8960887"
+    "sha256": "d0786afc79a09dda7f69379f23dd1b0673240e60c30a2c8ad91904d75bc654e5"
   },
   "source_status_at_hash": {
     "line": {
       "kind": "quote",
       "span": {
-        "end": 417,
+        "end": 561,
         "end_line": 6,
         "line": 6,
         "start": 212
       },
-      "text": "status: draft   # a proposal for the operator to decide, not permission to build (AGENTS.md: No Spec, No Build). Nothing here has run; every size is a guess; the frequency of a marked task is not measured."
+      "text": "status: approved   # approved by the operator in chat on 2026-11-12 (\"approve spec 103 … go\"), with the short answers recorded in §7.1. Nothing here has run; every size is a guess; the frequency of a marked task is not measured. The operator will follow up with fuller answers; where this spec and a later answer differ, the later answer decides."
     },
-    "sha256": "61226cb701de62c385acdabfb166aa340f5f21a86b9f65327e26cf2cb8960887",
-    "word": "draft"
+    "sha256": "d0786afc79a09dda7f69379f23dd1b0673240e60c30a2c8ad91904d75bc654e5",
+    "word": "approved"
   },
   "spec": {
     "group": "governance-and-safety",

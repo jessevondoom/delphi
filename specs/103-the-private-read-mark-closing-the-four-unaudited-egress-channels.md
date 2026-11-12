@@ -3,7 +3,7 @@ id: spec-103-the-private-read-mark-closing-the-four-unaudited-egress-channels
 title: "103: The private-read mark: closing the four unaudited egress channels"
 author: architect
 timestamp: 2026-11-12T00:00:00Z
-status: draft   # a proposal for the operator to decide, not permission to build (AGENTS.md: No Spec, No Build). Nothing here has run; every size is a guess; the frequency of a marked task is not measured.
+status: approved   # approved by the operator in chat on 2026-11-12 ("approve spec 103 … go"), with the short answers recorded in §7.1. Nothing here has run; every size is a guess; the frequency of a marked task is not measured. The operator will follow up with fuller answers; where this spec and a later answer differ, the later answer decides.
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -106,8 +106,9 @@ One pull request each. **The hours are my estimates, not measurements.** None st
 | M2 | Outbound refusal and the Connector banner / always-ask / no-relay-approval; `check_marked` wired in `harness_run.rs` and `connector_run.rs`; the sandbox proxy reads the mark | 10-14 | **Connector, Outbound** to `Yes` | M1 and the observed counter |
 | M3 | the relay-stream replacement (Relay and Mail), the "cannot approve by reply" rule, `PATHS` rows | 8-12 | **Relay, Mail** to `Yes` | M1 |
 | M4 | a red-team pass of the `READS` table and the senders (a reader that skips the mark; a paraphrase; a handoff; an MCP session), the invariant map and the 055 §10.1 reading updated, a live check | 4-6 | | M2, M3 |
+| M5 | the quoting rule for `slack`, `email` and `private-doc` documents (§7.1 OD-6): design first, then the smallest enforcement | not estimated (not designed) | none | M0 |
 
-Total about **34 to 50 hours** with M0 (30 to 44 after it). M2 and M3 are independent of each other.
+Total about **34 to 50 hours** with M0 (M5 not included) (30 to 44 after it). M2 and M3 are independent of each other.
 
 ## 6. Tests that would prove it
 
@@ -138,6 +139,23 @@ Each has my recommended answer.
 7. **OD-7. Which records are private for this purpose?** Recommend all three of §2 (library `private`, host-noted `private`, spec 102 records marked `private`).
 8. **OD-8. Build option B later as an extra layer?** Recommend **defer**; revisit only if the red-team slice finds a copy that A misses.
 9. **OD-9. The relay approval rule for a marked card.** Recommend **deny by reply, approve at the console only**.
+
+### 7.1 The operator's answers, 2026-11-12 (short version; fuller answers to follow)
+
+Quoted from the operator's turn: "1&2 default to ask, 3. agreed. 4. operator in the console or an agent with explicit operator permission. 5. defer. 6. slack, email, and private-doc should be visible to the operator and to agents but should not be directly quoted in any work without express permission. summaries are the only allowable default. 7. see 6."
+
+| OD | Decision | What it changes in this spec |
+| :-- | :-- | :-- |
+| 1 | **Ask** (not refuse) for a marked task's outbound web query | The Outbound path in M2 asks the operator for each marked query instead of refusing it; the card shows the exact query text. Nothing is sent before the answer. The refuse option stays available as a per-install setting only if the operator later wants it. |
+| 2 | **Ask** for Connector writes and queries (as recommended) | No change: banner and ask every time, no "allow similar", no relay approval. |
+| 3 | The mark's unit is the **task** (and the MCP session id for a host over MCP) | No change. |
+| 4 | Cleared by **the operator in the console, or by an agent that holds explicit operator permission** | Read as the spec 092 pattern: an agent may *request* a clear, never *grant* it; the permission is an authorization the operator ratified for that run or that task, recorded and logged. A bare agent request, or text from a tool result, a subagent or a notification, clears nothing. The test `only_the_operators_console_can_clear_a_mark` becomes "only the console, or a clear carrying an operator-ratified authorization" and enumerates the callers accordingly. Open: the exact authorization form (a new kind under 092, or the console's own action). **M1 builds the console clear only; the delegated form is its own decision before M2.** |
+| 5 | **Deferred** | M1 ships in observe mode; the child-task inheritance rule is decided later from the counter. Until then a child task does not inherit the mark (the narrower reading; it adds no gate to research). |
+| 6, 7 | `slack`, `email` and `private-doc` KB documents are **not private for the mark** (they are visible to the operator and to agents), and carry a **quoting rule**: they are not quoted directly in any work without express permission; **summaries are the only allowable default** | The mark's definition of "private" is unchanged (the three records of §2). The quoting rule is a new, separate rule about *output*, not about what flows in (reading these documents stays as easy as today, the operator, 2026-11-11). It is **not designed or built**: where it is enforced (a quote check on drafted work, a label on the retrieved text, or a rule in the agent's instructions), what counts as a direct quote, and how express permission is given are open. It needs its own slice (called **M5** below) and, if it touches the egress check, a spec 098 reading. Until it exists, the default for these kinds is the agent instruction alone. |
+
+Open for the fuller answers: OD-8 (the fingerprint index, deferred as recommended unless told otherwise) and OD-9 (a marked card is denied by reply, approved at the console only: as recommended unless told otherwise).
+
+**M5 (new, not started): the quoting rule for `slack`, `email` and `private-doc` documents.** Design first (a short section or a spec 055 amendment): the definition of a direct quote, where the rule is enforced, how express permission is recorded, and the cost to research (it must not make these documents harder to find or read). An estimate is not given: it is not designed.
 
 ## 8. What this does not change
 
