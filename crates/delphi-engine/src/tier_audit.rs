@@ -167,6 +167,19 @@ pub fn restore(state: &Path, tier: &str, reason: &str, now: i64) -> Result<Strin
     Ok(format!("the {tier} tier is restored; a new audit batch ({batch}) starts, so it is judged on fresh answers"))
 }
 
+/// The audit's third trigger (`specs/100` §7.2 item 2): a hard failure the library recorded on a claim (a protected-class claim that reached vetted, a
+/// poisoned page that passed) latches the vetted tier at once, as an audited false claim does. The same roll-back and event as every other trigger,
+/// so it only lowers a label and deletes nothing; `accept_all::latch_on_hard_failures` is the one caller.
+pub fn trip_on_hard_failure(state: &Path, reason: &str, now: i64) -> Result<String, String> {
+    rollback(state, "vetted", "hard_failure", reason, now)
+}
+
+/// When the operator last restored this tier, if ever. A hard failure recorded before it has been dealt with by that restore and does not latch the
+/// tier again; one recorded after it does.
+pub fn last_restore(state: &Path, tier: &str) -> Option<i64> {
+    Journal::new(state).all().iter().filter(|e| e["kind"] == "tier_restore" && e["tier"] == tier).filter_map(|e| e["at"].as_i64()).max()
+}
+
 /// A claim the operator is asked about.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TierCard {
@@ -240,8 +253,8 @@ pub enum Answered {
 /// * **the error rate**: after the sample floor, if the operator set a threshold and the upper bound of the tier's error rate is above it, the tier is latched.
 ///
 /// A `false` answer on a **substantiated** claim is an error in the sample, not a hard failure: it counts toward the bound. (A protected-class claim that
-/// reached vetted, and a poisoned page that passed, are also hard failures in the spec; the library does not yet record either on a claim, so those two are
-/// not detected here.)
+/// reached vetted, and a poisoned page that passed, are also hard failures in the spec. The library records each on the claim and
+/// [`trip_on_hard_failure`] latches the tier for it, from the validator's loop and the operator's accept; neither needs an audit answer.)
 pub fn answer(state: &Path, card: &str, tier: &str, a: Answer, now: i64) -> Result<Answered, String> {
     if !open_tier_cards(state).iter().any(|c| c.card == card && c.tier == tier) {
         return Err("no such card, or it was already answered".into());
