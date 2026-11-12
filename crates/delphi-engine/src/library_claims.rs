@@ -767,6 +767,7 @@ impl Library {
                 registrant: None,
                 listed_in_scope,
                 derived,
+                work: super::retraction::doi_of(&meta),
             });
         }
         out
