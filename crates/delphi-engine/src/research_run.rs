@@ -12,6 +12,7 @@
 //! * the runner never writes trust metadata and the validator has no way to return any.
 
 use crate::corroboration::{self, Cite, Params, Support};
+use crate::research_chain::{ChainPlan, Direction};
 use crate::research_jobs::{Egress, Finish, JobCtx};
 use crate::research_plan::{canonical_url, clean_query, claim_fingerprint, plan, widen_to_web, Added, ClaimSet, QueryKind, Seen};
 use crate::search_log::{HostSearch, Purpose, SearchLog, Source};
@@ -109,6 +110,12 @@ pub trait Library: Send + Sync {
     fn is_private(&self, _source_id: &str) -> bool {
         false
     }
+    /// The DOI of a source this run captured, for citation chaining (`specs/101` §6), and only when the source may go out through the
+    /// citation lookup: its record is readable and public (`egress::check` with `Channel::CitationLookup`) and names a DOI. `None` for a
+    /// private source, a record that cannot be read, or a source with no DOI. Deny by default: this default says none.
+    fn chainable_doi(&self, _source_id: &str) -> Option<String> {
+        None
+    }
 }
 
 pub struct Deps<'a> {
@@ -129,6 +136,9 @@ pub struct Deps<'a> {
     /// `[research] retractions` (`specs/101` §4 item 4): the line the coverage report carries about the local snapshot (`retractions: current`,
     /// `stale`, `none loaded`). `None` is the switch off: the report is exactly what spec 098 gives.
     pub retractions: Option<&'a str>,
+    /// `[research] citation_chaining` (`specs/101` §6): the citation index and the bounds. `None` is the switch off: the run is what
+    /// spec 098 gives and nothing is sent to an index.
+    pub chain: Option<ChainPlan<'a>>,
 }
 
 #[derive(Debug, Clone)]
@@ -338,6 +348,144 @@ fn log_source(kind: QueryKind, via: Option<&str>) -> (&'static str, Source, Purp
         QueryKind::Topic => ("web", Source::Search(provider), Purpose::Topic),
         QueryKind::Gap => ("web", Source::Search(provider), Purpose::Gap),
     }
+}
+
+/// What a chain pass did, for the coverage report (`citations`).
+#[derive(Default)]
+struct ChainStats {
+    seeds: usize,
+    calls: usize,
+    kept: usize,
+    /// Seeds the index answered for, with no work in either list: the index holds no list for them, or they cite and are cited by nothing it knows.
+    no_list: usize,
+    failed: usize,
+}
+
+fn works_word(n: usize) -> String {
+    format!("{} work{}", n, if n == 1 { "" } else { "s" })
+}
+
+/// The one line the coverage report carries about citation chaining (`specs/101` §6 item 5).
+fn chain_line(s: Option<&ChainStats>) -> String {
+    let Some(s) = s else { return "not run: the step budget was spent".into() };
+    if s.seeds == 0 {
+        return "no public work with a DOI to follow".into();
+    }
+    let mut parts = Vec::new();
+    if s.no_list > 0 {
+        parts.push(format!("not available for {}", works_word(s.no_list)));
+    }
+    parts.push(format!("followed {} from {} in {} call{}", works_word(s.kept), works_word(s.seeds), s.calls, if s.calls == 1 { "" } else { "s" }));
+    if s.failed > 0 {
+        parts.push(format!("{} call{} failed", s.failed, if s.failed == 1 { "" } else { "s" }));
+    }
+    parts.join("; ")
+}
+
+/// Citation chaining (`specs/101` §6): from the public works the run read, ask the pinned index what they cite and what cites them, and
+/// keep the DOIs it names as `noted` leads (`https://doi.org/<doi>`, recorded and never fetched). `None` when chaining is off.
+///
+/// * A seed is a DOI the library gives for a source (`Library::chainable_doi`: public, readable, names a DOI). A claim that rests on a
+///   private source gives no seed and sends nothing; the log says so without any text.
+/// * Every call goes through `ctx.egress` (the step budget bounds it) and is one line of the search log, `citation:<provider>`.
+/// * Bounds: `depth` levels, `fanout` seeds a level, `max_per_seed` works kept per seed, `max_calls` calls. A work already seen is skipped.
+/// * A chained find is `noted`. It adds no origin to its seed's claim and moves no status; it counts toward `corroborated` only if a page
+///   is later fetched and quote-verified the way any citation is.
+/// * Nothing here fetches a page or a URL: the only request is `plan.cites.works`.
+async fn chain_pass(ctx: &JobCtx, deps: &Deps<'_>, claims: &[ClaimRec], seen: &mut Seen, cov: &mut Rungs, log: &mut SearchLog, spent: &mut bool) -> Option<ChainStats> {
+    let plan = deps.chain.as_ref()?;
+    let provider = || Source::Citation(crate::research_chain::PROVIDER_ID.to_string());
+    let mut stats = ChainStats::default();
+    let mut seeds: Vec<String> = Vec::new();
+    let mut withheld = 0usize;
+    for c in claims {
+        if c.source_ids.iter().any(|s| deps.library.is_private(s)) {
+            if withheld < plan.fanout {
+                log.withheld(provider(), Purpose::Chain);
+                withheld += 1;
+            }
+            continue;
+        }
+        for sid in &c.source_ids {
+            if let Some(d) = deps.library.chainable_doi(sid) {
+                if !seeds.contains(&d) {
+                    seeds.push(d);
+                }
+            }
+        }
+    }
+    seeds.truncate(plan.fanout);
+    stats.seeds = seeds.len();
+    let mut known: BTreeSet<String> = seeds.iter().cloned().collect();
+    let mut frontier = seeds;
+    'levels: for _ in 0..plan.depth {
+        let mut next: Vec<String> = Vec::new();
+        for seed in &frontier {
+            let (mut room, mut answered, mut listed) = (plan.max_per_seed, false, false);
+            for dir in [Direction::References, Direction::Citations] {
+                if stats.calls >= plan.max_calls {
+                    break 'levels;
+                }
+                let what = format!("{} doi:{}", dir.path(), seed);
+                if ctx.egress("scout", Egress::Search, &what).is_err() {
+                    *spent = true;
+                    break 'levels;
+                }
+                stats.calls += 1;
+                let li = log.begin("web", provider(), Purpose::Chain, &what, None);
+                let works = match plan.cites.works(seed, dir).await {
+                    Ok(w) => w,
+                    Err(_) => {
+                        log.failed(li, "no_results");
+                        stats.failed += 1;
+                        continue;
+                    }
+                };
+                answered = true;
+                listed |= !works.is_empty();
+                log.rows(li, works.len());
+                for w in &works {
+                    if known.contains(&w.doi) {
+                        log.duplicate(li);
+                        continue;
+                    }
+                    if room == 0 {
+                        log.dropped(li, "not_followed", 1);
+                        continue;
+                    }
+                    let url = format!("https://doi.org/{}", w.doi);
+                    if !seen.url(&url) {
+                        log.duplicate(li);
+                        known.insert(w.doi.clone());
+                        continue;
+                    }
+                    let how = if dir == Direction::References { "cited by" } else { "cites" };
+                    let year = w.year.as_deref().map(|y| format!(" ({y})")).unwrap_or_default();
+                    let row = Row { url, title: String::new(), snippet: format!("{how} doi:{seed}{year}; found by citation chaining") };
+                    match deps.library.note_lead(&row) {
+                        Ok(()) => {
+                            cov.leads += 1;
+                            stats.kept += 1;
+                            log.kept(li);
+                            known.insert(w.doi.clone());
+                            next.push(w.doi.clone());
+                            room -= 1;
+                        }
+                        Err(_) => log.dropped(li, "lead_not_stored", 1),
+                    }
+                }
+            }
+            if answered && !listed {
+                stats.no_list += 1;
+            }
+        }
+        next.truncate(plan.fanout);
+        if next.is_empty() {
+            break;
+        }
+        frontier = next;
+    }
+    Some(stats)
 }
 
 /// Run one research job. `Finish::Partial` when the step budget ran out; an `Err` only when nothing could be done at all.
@@ -552,6 +700,10 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
         }
     }
 
+    // Citation chaining (`specs/101` §6): off unless the run was given an index. After the pass and before the validator, inside the same
+    // step budget; it keeps leads and moves no claim.
+    let chain_stats = if deps.chain.is_some() && !spent { chain_pass(ctx, deps, &claims, &mut seen, &mut cov, &mut log, &mut spent).await } else { None };
+
     // The validator works through the queue, trusted sources first, until the budget says stop.
     for i in validation_order(&claims) {
         if spent {
@@ -590,6 +742,9 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     let (thin, mut report) = coverage_report(&cov, set.kb_hits().len(), trusted_claims, claims.len() - trusted_claims, deps.thin_below);
     if let Some(line) = deps.retractions {
         report["retractions"] = json!(line);
+    }
+    if deps.chain.is_some() {
+        report["citations"] = json!(chain_line(chain_stats.as_ref()));
     }
     // The search log (`specs/101` §3): it inherits the strictest `private` flag of the claims the run produced, shows the knowledge-base
     // line first, and is linked from the coverage report. It is in every result since the `search_log` flag was pulled (`specs/098` §13.2).
@@ -707,8 +862,18 @@ mod tests {
         listed: BTreeSet<String>,
         weak: BTreeSet<String>,
         private: BTreeSet<String>,
+        /// The DOI each host's source names (the real library reads it from the source's own record).
+        dois: BTreeMap<String, String>,
     }
     impl Library for FakeLib {
+        /// As the live library does: a private source gives no seed, and neither does one that names no DOI.
+        fn chainable_doi(&self, source_id: &str) -> Option<String> {
+            let h = source_id.strip_prefix("src-")?;
+            if self.private.contains(h) {
+                return None;
+            }
+            self.dois.get(h).cloned()
+        }
         fn known_fingerprints(&self) -> BTreeSet<String> {
             self.known.clone()
         }
@@ -756,8 +921,33 @@ mod tests {
         Row { title: "t".into(), url: url.into(), snippet: "s".into() }
     }
 
+    /// The citation index: what each (DOI, direction) answers, and every call it got. `fail` makes every call an error.
+    #[derive(Default)]
+    struct FakeCites {
+        lists: BTreeMap<(String, &'static str), Vec<crate::research_chain::Work>>,
+        calls: Mutex<Vec<(String, &'static str)>>,
+        fail: bool,
+    }
+    impl crate::research_chain::Cites for FakeCites {
+        fn works<'a>(&'a self, doi: &'a str, dir: Direction) -> BoxFut<'a, Result<Vec<crate::research_chain::Work>, String>> {
+            Box::pin(async move {
+                self.calls.lock().unwrap().push((doi.to_string(), dir.path()));
+                if self.fail {
+                    return Err("the index did not answer".into());
+                }
+                Ok(self.lists.get(&(doi.to_string(), dir.path())).cloned().unwrap_or_default())
+            })
+        }
+    }
+    fn work(doi: &str) -> crate::research_chain::Work {
+        crate::research_chain::Work { doi: doi.into(), year: None }
+    }
+
     struct Fixture {
         retractions: Option<&'static str>,
+        /// The citation index, when chaining is on, and the bounds (depth, fanout, max per seed, max calls).
+        cites: Option<FakeCites>,
+        bounds: (usize, usize, usize, usize),
         web: FakeWeb,
         scout: FakeScout,
         validator: FakeValidator,
@@ -781,10 +971,10 @@ mod tests {
                 ("https://nih.gov/b".to_string(), vec![x("fever")]),
                 ("https://blog.example/a".to_string(), vec![x("headaches")]),
             ]));
-            Fixture { retractions: None, web, scout, validator: FakeValidator { verdict, asked: Default::default() }, lib: FakeLib::default(), redactor: Redactor::new(), sites: vec!["who.int".into(), "nih.gov".into()], thin_below: 3, support: Params::default(), host_searches: Vec::new() }
+            Fixture { retractions: None, cites: None, bounds: (1, 2, 10, 30), web, scout, validator: FakeValidator { verdict, asked: Default::default() }, lib: FakeLib::default(), redactor: Redactor::new(), sites: vec!["who.int".into(), "nih.gov".into()], thin_below: 3, support: Params::default(), host_searches: Vec::new() }
         }
         fn deps(&self) -> Deps<'_> {
-            Deps { web: &self.web, scout: &self.scout, validator: &self.validator, library: &self.lib, redactor: &self.redactor, sites: &self.sites, thin_below: self.thin_below, support: &self.support, host_searches: &self.host_searches, retractions: self.retractions }
+            Deps { web: &self.web, scout: &self.scout, validator: &self.validator, library: &self.lib, redactor: &self.redactor, sites: &self.sites, thin_below: self.thin_below, support: &self.support, host_searches: &self.host_searches, retractions: self.retractions, chain: self.cites.as_ref().map(|c| ChainPlan { cites: c, depth: self.bounds.0, fanout: self.bounds.1, max_per_seed: self.bounds.2, max_calls: self.bounds.3 }) }
         }
     }
 
@@ -1145,6 +1335,173 @@ mod tests {
         assert_eq!(v["corroboration_pass"], json!({"claims": 0, "queries": 0}), "{v}");
         let searched = f.web.searched.lock().unwrap().clone();
         assert!(searched.iter().all(|q| !q.contains("reduces fever") && !q.contains("disputed OR incorrect OR false")), "the claim's words went out: {searched:?}");
+    }
+
+    // ---- citation chaining (`specs/101` §6) ----
+
+    /// Three public sources that name a DOI each, an index that is on, and the default bounds.
+    fn chained() -> Fixture {
+        let mut f = three_origins();
+        f.lib.dois = BTreeMap::from([("who.int".into(), "10.1000/who".into()), ("nih.gov".into(), "10.1000/nih".into()), ("cdc.gov".into(), "10.1000/cdc".into())]);
+        f.cites = Some(FakeCites::default());
+        f
+    }
+    fn lists(f: &mut Fixture, doi: &str, refs: &[&str], cites: &[crate::research_chain::Work]) {
+        let c = f.cites.as_mut().unwrap();
+        c.lists.insert((doi.into(), "references"), refs.iter().map(|d| work(d)).collect());
+        c.lists.insert((doi.into(), "citations"), cites.to_vec());
+    }
+    fn chain_calls(f: &Fixture) -> Vec<(String, &'static str)> {
+        f.cites.as_ref().unwrap().calls.lock().unwrap().clone()
+    }
+    fn chain_lines(v: &Value) -> Vec<Value> {
+        log_lines(v).into_iter().filter(|l| l["source"].as_str().is_some_and(|s| s.starts_with("citation:"))).collect()
+    }
+    async fn run_deep(f: &Fixture) -> Value {
+        value(run_research(&ctx(Depth::Deep), "does aspirin reduce fever", Depth::Deep, &f.deps()).await.unwrap()).1
+    }
+
+    #[tokio::test]
+    async fn without_an_index_nothing_is_asked_and_the_report_has_no_citations_line() {
+        let mut f = chained();
+        f.cites = None;
+        let v = run_deep(&f).await;
+        assert!(v["coverage_report"].get("citations").is_none(), "{v}");
+        assert!(chain_lines(&v).is_empty() && f.lib.leads.lock().unwrap().iter().all(|u| !u.contains("doi.org")));
+    }
+
+    #[tokio::test]
+    async fn the_references_and_citing_works_of_the_public_seeds_become_noted_leads_and_each_call_is_a_log_line() {
+        let mut f = chained();
+        lists(&mut f, "10.1000/who", &["10.1000/ref1", "10.1000/ref2"], &[crate::research_chain::Work { doi: "10.1000/cit1".into(), year: Some("2022".into()) }]);
+        lists(&mut f, "10.1000/nih", &["10.1000/ref1", "10.1000/ref3"], &[]);
+        let v = run_deep(&f).await;
+        // fanout 2: the first two seeds, both directions each; the third source's DOI is not asked about
+        assert_eq!(chain_calls(&f), [("10.1000/who".into(), "references"), ("10.1000/who".into(), "citations"), ("10.1000/nih".into(), "references"), ("10.1000/nih".into(), "citations")]);
+        let leads = f.lib.leads.lock().unwrap().clone();
+        let mut doi_leads: Vec<&str> = leads.iter().map(String::as_str).filter(|u| u.starts_with("https://doi.org/")).collect();
+        doi_leads.sort();
+        assert_eq!(doi_leads, ["https://doi.org/10.1000/cit1", "https://doi.org/10.1000/ref1", "https://doi.org/10.1000/ref2", "https://doi.org/10.1000/ref3"], "a work two seeds name is one lead");
+        // one line a call, named for the provider, with the purpose `chain` and the query that was sent
+        let lines = chain_lines(&v);
+        assert_eq!(lines.len(), 4, "{lines:?}");
+        assert!(lines.iter().all(|l| l["source"] == "citation:opencitations" && l["purpose"] == "chain" && l["rung"] == "web"));
+        assert_eq!(lines[0]["query"], "references doi:10.1000/who");
+        assert_eq!((lines[0]["hits"].clone(), lines[0]["kept"].clone()), (json!(2), json!(2)));
+        assert_eq!((lines[2]["hits"].clone(), lines[2]["kept"].clone(), lines[2]["duplicates"].clone()), (json!(2), json!(1), json!(1)), "ref1 was already kept from the first seed");
+        assert_balanced(&v);
+        assert_eq!(v["coverage_report"]["citations"], "followed 4 works from 2 works in 4 calls");
+    }
+
+    #[tokio::test]
+    async fn a_chained_find_adds_no_origin_moves_no_status_and_strengthens_no_claim() {
+        let plain = {
+            let mut f = three_origins();
+            f.lib.dois = chained().lib.dois;
+            run_deep(&f).await
+        };
+        let mut f = chained();
+        lists(&mut f, "10.1000/who", &["10.1000/ref1", "10.1000/ref2"], &[]);
+        let with = run_deep(&f).await;
+        assert!(!chain_calls(&f).is_empty());
+        assert_eq!(fever(&plain)["knowledge_status"], fever(&with)["knowledge_status"]);
+        assert_eq!(fever(&plain)["corroboration"], fever(&with)["corroboration"], "a chained work is a lead, not a citation of the claim");
+        assert_eq!(plain["claims"], with["claims"]);
+    }
+
+    #[tokio::test]
+    async fn a_claim_that_rests_on_a_private_source_is_never_chained_and_the_log_says_so_without_text() {
+        let mut f = chained();
+        f.lib.private.insert("who.int".into());
+        lists(&mut f, "10.1000/who", &["10.1000/secret"], &[]);
+        let v = run_deep(&f).await;
+        assert!(chain_calls(&f).is_empty(), "nothing is sent for a claim that rests on a private source: {:?}", chain_calls(&f));
+        let lines = chain_lines(&v);
+        assert!(!lines.is_empty() && lines.iter().all(|l| l["withheld"] == "private" && l.get("query").is_none()), "{lines:?}");
+        assert!(f.lib.leads.lock().unwrap().iter().all(|u| !u.contains("secret")));
+        assert_eq!(v["coverage_report"]["citations"], "no public work with a DOI to follow");
+        assert_eq!(v["search_log"]["private"], true);
+    }
+
+    #[tokio::test]
+    async fn a_source_the_library_will_not_vouch_for_gives_no_seed() {
+        // no DOI on record, or a record the library cannot read: `chainable_doi` says none, so nothing is sent
+        let mut f = chained();
+        f.lib.dois.clear();
+        let v = run_deep(&f).await;
+        assert!(chain_calls(&f).is_empty());
+        assert_eq!(v["coverage_report"]["citations"], "no public work with a DOI to follow");
+    }
+
+    #[tokio::test]
+    async fn the_bounds_hold_per_seed_per_level_and_per_run_and_a_cycle_is_skipped() {
+        // max_per_seed 3: of the five works the first seed's references name, three are kept and two are counted, not silently dropped
+        let mut f = chained();
+        f.bounds = (1, 1, 3, 30);
+        lists(&mut f, "10.1000/who", &["10.1000/a", "10.1000/b", "10.1000/c", "10.1000/d", "10.1000/e"], &[]);
+        let v = run_deep(&f).await;
+        assert_eq!(chain_calls(&f).len(), 2, "fanout 1: one seed, two directions");
+        let kept: usize = chain_lines(&v).iter().map(|l| l["kept"].as_u64().unwrap() as usize).sum();
+        assert_eq!(kept, 3);
+        assert_eq!(chain_lines(&v)[0]["not_kept"]["not_followed"], 2);
+        assert_balanced(&v);
+        // max_calls 3 stops the run's calls at three
+        let mut f = chained();
+        f.bounds = (1, 3, 10, 3);
+        let v = run_deep(&f).await;
+        assert_eq!(chain_calls(&f).len(), 3, "{:?}", chain_lines(&v));
+        // depth 2 follows the kept works one more level, and a work that cites the seed back is skipped, not asked about again
+        let mut f = chained();
+        f.bounds = (2, 1, 10, 30);
+        lists(&mut f, "10.1000/who", &["10.1000/next"], &[]);
+        lists(&mut f, "10.1000/next", &["10.1000/who", "10.1000/deeper"], &[]);
+        let v = run_deep(&f).await;
+        let asked: Vec<String> = chain_calls(&f).into_iter().map(|c| c.0).collect();
+        assert_eq!(asked, ["10.1000/who", "10.1000/who", "10.1000/next", "10.1000/next"], "the second level asks about the work the first kept");
+        assert_eq!(f.lib.leads.lock().unwrap().iter().filter(|u| u.contains("10.1000/who")).count(), 0, "the seed is never its own lead");
+        assert_balanced(&v);
+    }
+
+    #[tokio::test]
+    async fn an_index_that_fails_is_a_failed_line_and_an_empty_answer_is_reported_as_no_list() {
+        let mut f = chained();
+        f.cites.as_mut().unwrap().fail = true;
+        let v = run_deep(&f).await;
+        assert!(chain_lines(&v).iter().all(|l| l["failed"] == "no_results"), "{:?}", chain_lines(&v));
+        assert!(v["coverage_report"]["citations"].as_str().unwrap().contains("call"), "{v}");
+        assert!(v["claims"].as_array().is_some_and(|c| !c.is_empty()), "the run goes on");
+        // the index answers `[]` for a work it holds no list for
+        let f = chained();
+        let v = run_deep(&f).await;
+        assert_eq!(v["coverage_report"]["citations"], "not available for 2 works; followed 0 works from 2 works in 4 calls");
+        assert_balanced(&v);
+    }
+
+    /// `specs/101` §12 item 5: the chain pass makes one kind of request, `plan.cites.works`, and fetches no page or URL. A change that
+    /// reads a URL out of an answer, or reaches the fetcher from this pass, fails here and a reviewer has to ask whether 7b crept in.
+    #[test]
+    fn the_chain_pass_makes_one_kind_of_request_and_fetches_no_page_or_url() {
+        let src = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/research_run.rs")).unwrap();
+        let start = src.find("async fn chain_pass(").expect("the chain pass");
+        let body = &src[start..];
+        let body = &body[..body.find("\n}\n").expect("the end of the chain pass")];
+        let code: String = body.lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+        for banned in ["deps.web", ".fetch(", "fetch_catalog", "fetch_snapshot", "canonical_url(", "Url::parse", "ingest(", "library.capture"] {
+            assert!(!code.contains(banned), "the chain pass must not reach the fetcher or read a URL: `{banned}`");
+        }
+        assert_eq!(code.matches("plan.cites.works(").count(), 1, "exactly one request in the pass");
+        // what it keeps is an address the pass builds itself from a normalised DOI, never one taken from an answer
+        assert!(code.contains("format!(\"https://doi.org/{}\", w.doi)"));
+    }
+
+    #[tokio::test]
+    async fn chaining_stays_inside_the_step_budget() {
+        let mut f = chained();
+        lists(&mut f, "10.1000/who", &["10.1000/a"], &[]);
+        // a budget that the page reads and searches use up before the chain starts: the run is partial and the index is not called
+        let r = run_research(&JobCtx::with_budget(4), "does aspirin reduce fever", Depth::Deep, &f.deps()).await.unwrap();
+        assert!(matches!(r, Finish::Partial(_)));
+        assert!(chain_calls(&f).is_empty());
     }
 
     #[tokio::test]

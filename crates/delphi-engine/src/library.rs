@@ -155,10 +155,13 @@ pub enum Channel {
     /// A public URL sent to a web archive to ask whether it holds a copy (`specs/101` §5): read-only, no entry text, and never for a
     /// private source or a record that cannot be read.
     ArchiveLookup,
+    /// A public DOI sent to the citation index to ask what a work cites and what cites it (`specs/101` §6): read-only, no entry text, and
+    /// never for a source that is private, whose record cannot be read, or that names no DOI.
+    CitationLookup,
 }
 
 impl Channel {
-    pub const ALL: [Channel; 12] = [
+    pub const ALL: [Channel; 13] = [
         Channel::Bundle,
         Channel::Xenia,
         Channel::Export,
@@ -171,6 +174,7 @@ impl Channel {
         Channel::Outbound,
         Channel::Telemetry,
         Channel::ArchiveLookup,
+        Channel::CitationLookup,
     ];
 }
 

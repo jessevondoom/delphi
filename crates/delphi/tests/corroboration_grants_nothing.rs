@@ -365,6 +365,41 @@ fn an_archived_copy_is_a_locator_that_only_the_library_the_command_and_the_setti
 }
 
 #[test]
+fn a_chain_result_is_a_lead_that_only_the_run_the_live_side_and_the_settings_name() {
+    // `specs/101` §6 and §12 item 6: what citation chaining finds is a `noted` lead; it adds no origin, moves no status, and nothing reads
+    // it, the index's answer or the chain's bounds as a criterion for promotion, trust, tool access or approval. The module parses the
+    // answer (`research_chain.rs`), the run keeps leads (`research_run.rs`), the live side asks the index and guards the seed
+    // (`research_host.rs`), the channel is registered (`library.rs`, `egress.rs`), the log names its purpose (`search_log.rs`), and the
+    // settings carry the bounds (`engine.rs`, `boot.rs`, `service.rs`). Any other file naming it fails here and a reviewer has to ask why.
+    let root = root();
+    let mut files = Vec::new();
+    rust_files(&root.join("crates"), &mut files);
+    let uses = Regex::new(r#"research_chain|ChainPlan|ChainConfig|CitationLookup|chainable_doi|Purpose::Chain|chain_pass|LiveCites"#).unwrap();
+    let allowed = [
+        "crates/delphi-engine/src/research_chain.rs",
+        "crates/delphi-engine/src/research_run.rs",
+        "crates/delphi-engine/src/research_host.rs",
+        "crates/delphi-engine/src/library.rs",
+        "crates/delphi-engine/src/egress.rs",
+        "crates/delphi-engine/src/search_log.rs",
+        "crates/delphi-engine/src/engine.rs",
+        "crates/delphi-engine/src/boot.rs",
+        "crates/delphi-engine/src/service.rs",
+        "crates/delphi-engine/src/lib.rs",
+    ];
+    let mut stray = Vec::new();
+    for f in &files {
+        let rel = f.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
+        let src = std::fs::read_to_string(f).unwrap();
+        let code: String = production(&src).lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+        if uses.is_match(&code) && !allowed.contains(&rel.as_str()) {
+            stray.push(rel);
+        }
+    }
+    assert!(stray.is_empty(), "citation chaining, its channel or its bounds are named outside the files that may: {stray:?}");
+}
+
+#[test]
 fn a_contradiction_mark_is_made_only_by_the_library_and_nothing_reads_a_sources_standing() {
     // `specs/100` §9.1. `contradicts_validated` lowers only the contradicting claim, never the validated fact; the validator's contradiction
     // search will be its caller, so today no other production file names it. `standing()` is the only history that may ever count toward a
