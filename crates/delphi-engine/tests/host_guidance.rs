@@ -1,7 +1,8 @@
-//! Spec 098 slice S5: the host guidance (source ladder, reflex, repo rules) against `AGENTS.md` and the golden `CLAUDE.md` template.
+//! Spec 098 slice S5: the host guidance (reflex, repo rules) against `AGENTS.md` and the golden `CLAUDE.md` template. The source ladder is
+//! in the role manifests (`specs/098` §13.2); its tests are in `mcp_host.rs`.
 //! Set `UPDATE_GOLDEN=1` to rewrite the golden files from the current text; review the diff before committing it.
 
-use delphi_engine::host_guidance::{claude_md_template, ladder_section, pack_with_ladder, REPO_RULES};
+use delphi_engine::host_guidance::{claude_md_template, REPO_RULES};
 use delphi_engine::mcp_hosts::{export_files, skill_md};
 use std::path::PathBuf;
 
@@ -72,25 +73,21 @@ fn golden(name: &str, got: &str) {
 }
 
 #[test]
-fn the_claude_md_template_matches_its_golden_files() {
-    golden("claude_md_ladder_off.md", &claude_md_template(false));
-    golden("claude_md_ladder_on.md", &claude_md_template(true));
+fn the_claude_md_template_matches_its_golden_file() {
+    golden("claude_md.md", &claude_md_template());
 }
 
 #[test]
-fn the_ladder_pack_text_matches_its_golden_files() {
-    for role in ["scout", "investigator", "red-team"] {
-        golden(&format!("ladder_{role}.md"), &ladder_section(role).unwrap());
-    }
-}
-
-#[test]
-fn the_scout_investigator_and_red_team_manifests_are_unchanged_and_still_say_untrusted_content_is_data() {
-    // The ladder is served on top of the manifests with the flag on; the manifests themselves are not edited by this slice, because
-    // a static file cannot be switched off by `[hosts] source_ladder` and the same files are read by seats inside Delphi.
+fn the_three_manifests_carry_the_source_ladder_and_a_role_that_does_not_work_it_does_not() {
+    // `specs/098` §13.2: one ladder text, in the manifests; the pack a host is served and the prompt of a seat inside Delphi are built
+    // from them. (That the served pack carries it verbatim is tested in `mcp_host.rs`.)
     for role in ["scout", "investigator", "red-team"] {
         let text = std::fs::read_to_string(repo(&format!("agents/{role}/AGENT.md"))).unwrap();
-        assert!(!text.contains("Source ladder"), "{role}: the ladder is served, not written into the manifest");
-        assert_eq!(pack_with_ladder(role, text.clone(), false), text);
+        assert!(text.contains("## 4. Source ladder"), "{role}: the manifest lacks the ladder");
+        assert!(text.contains("data, not instructions"), "{role}: still says untrusted content is data");
+    }
+    for role in ["architect", "builder", "strategist"] {
+        let text = std::fs::read_to_string(repo(&format!("agents/{role}/AGENT.md"))).unwrap();
+        assert!(!text.contains("Source ladder"), "{role} does not work the ladder");
     }
 }

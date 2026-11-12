@@ -95,8 +95,8 @@
       "type": "object",
       "description": "Settings for the tools you code with (specs/098).",
       "properties": {
-        "route_adopt": { "type": "boolean", "description": "Whether route's adopt is a recommendation (true) or only advice (false, the default). It changes what the answer says, not what Delphi does." },
-        "source_ladder": { "type": "boolean", "description": "Whether the packs served for the scout, investigator and red team end with the source ladder, and `delphi mcp --print-claude-md` includes the research reflex (specs/098 section 7). false by default. Advice for the host; it grants nothing." }
+        "route_adopt": { "type": "boolean", "deprecated": true, "description": "Removed (specs/098 section 13.2): ignored. route's adopt is always a recommendation. The key stays here so an old config still validates; delphi doctor names it." },
+        "source_ladder": { "type": "boolean", "deprecated": true, "description": "Removed (specs/098 section 13.2): ignored. The source ladder is in the scout, investigator and red-team manifests and is always served, and `delphi mcp --print-claude-md` always includes the research reflex. The key stays here so an old config still validates; delphi doctor names it." }
       }
     },
     "seats": {
@@ -105,7 +105,7 @@
       "properties": {
         "require_families": { "type": "integer", "minimum": 1, "maximum": 8, "description": "Refuse a Panel that cannot show this many distinct known model families, before anything is spent. Unset (the default) never refuses; the result is labelled homogeneous." },
         "max_foreign_seats": { "type": "integer", "minimum": 0, "description": "Foreign seats one Council may run (default 1). 0 turns them off." },
-        "red_team_kind": { "type": "boolean", "description": "Accept kind: red_team on council_open: a red-team review whose result is a findings list with each seat's family from its receipt (spec 098 section 6.2). Default false." },
+        "red_team_kind": { "type": "boolean", "deprecated": true, "description": "Removed (specs/098 section 13.2): ignored. council_open always accepts kind: red_team. The key stays here so an old config still validates; delphi doctor names it." },
         "max_foreign_tokens": { "type": "integer", "minimum": 0, "description": "Tokens the foreign seats of one Council may use (default 100000)." }
       }
     },
@@ -162,10 +162,12 @@
         "thin_below": { "type": "integer", "minimum": 1, "maximum": 50, "description": "Fewer kept, cited claims than this from the knowledge base and the trusted sources together make a research answer say coverage: thin, and name the host rungs (close sources, the wider web) that can take over. Default 3." },
         "archive_fallback": { "type": "boolean", "description": "Archived copies (specs/101 section 5). On: when a re-check finds a PUBLIC source the daemon fetched itself gone, and no readable text is held, the daemon asks one web archive whether it holds a copy and keeps it as a labelled version of the source. Read-only (nothing is ever saved to the archive); a private source or an address that is not public sends nothing; a copy adds no origin and no trusted source. The explicit command `delphi sources archive` works either way. Default false." },
         "archive_endpoint": { "type": "string", "pattern": "^https://", "maxLength": 300, "description": "The one archive endpoint asked about a public URL (specs/101 section 7): the Internet Archive's Availability API by default. Must be https. Default https://archive.org/wayback/available." },
-        "ladder": { "type": "boolean", "description": "The wider fetch (specs/098 section 7.5 item 7a). Off: the daemon's fetch reaches trusted-list hosts only. On: it also reaches an https URL that a search of the run returned (for a host's claim, one that an earlier search of the same host session returned), inside the two caps below. A URL nobody searched for, and any link found on a page, are never fetched. Default false." },
+        "ladder": { "type": "boolean", "deprecated": true, "description": "Removed (specs/098 section 13.2): ignored. The wider fetch (section 7.5 item 7a) is always on, inside the two caps below. The key stays here so an old config still validates; delphi doctor names it." },
         "fetch_per_host": { "type": "integer", "minimum": 1, "maximum": 100, "description": "With the wider fetch on: distinct off-list pages read from one host in one run. A hypothesis to calibrate from the status. Default 2." },
         "fetch_per_run": { "type": "integer", "minimum": 1, "maximum": 100, "description": "With the wider fetch on: distinct off-list pages read in one run. A hypothesis to calibrate from the status. Default 10." },
-        "search_log": { "type": "boolean", "description": "Write a search log beside each host research result (specs/101 section 3): every search with the query that was sent, when, and how many results came back and were kept, and a flow that adds up. A search withheld for a private claim carries no query text. Private when any claim it served is. Default false." },
+        "search_log": { "type": "boolean", "deprecated": true, "description": "Removed (specs/098 section 13.2): ignored. Every host research result carries its search log (specs/101 section 3). The key stays here so an old config still validates; delphi doctor names it." },
+        "retractions": { "type": "boolean", "description": "Check a source's DOI against the local Retraction Watch snapshot at capture, at re-check and on import (specs/101 section 4). A retracted work, or one under an expression of concern, stops counting as an origin; a claim only a retracted source supports becomes contested; a correction is a label. Nothing is deleted and nothing is sent to a service. Default false." },
+        "retractions_stale_days": { "type": "integer", "minimum": 1, "maximum": 3650, "description": "A snapshot imported more than this many days ago is called stale in the coverage report and by delphi doctor. Default 90." },
         "tiers": {
           "type": "object",
           "description": "The confidence ladder (specs/100 section 3.2): when a claim reads corroborated, substantiated or vetted. Derived by code from tags; each rung reads not validated (vetted reads vetted) and is weaker than validated; none grants anything. Numbers are defaults to calibrate.",

@@ -32,9 +32,10 @@
         "rungs": { "type": "array", "items": { "$ref": "#/$defs/rung" } },
         "host_rungs": { "type": "array", "items": { "enum": ["close", "web"] }, "description": "When thin: the rungs the host's own tools and connectors can take over." },
         "leads_kept": { "type": "integer", "minimum": 0, "description": "Search results the fetcher would not reach, kept as noted leads." },
+        "retractions": { "type": "string", "description": "Present only when `[research] retractions` is on (specs/101 section 4): the state of the local Retraction Watch snapshot, `retractions: current (...)`, `retractions: stale (...)` or `retractions: none loaded`." },
         "search_log": {
           "type": "object",
-          "description": "Present only when `[research] search_log` is on (specs/101 section 3): a summary of, and a link to, the top-level `search_log`.",
+          "description": "A summary of, and a link to, the top-level `search_log` (specs/101 section 3). Every host research result carries it.",
           "required": ["lines", "found", "kept", "searches", "withheld", "declared", "see"],
           "properties": {
             "lines": { "type": "integer", "minimum": 0 }, "found": { "type": "integer", "minimum": 0 }, "kept": { "type": "integer", "minimum": 0 },

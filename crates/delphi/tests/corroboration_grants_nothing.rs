@@ -363,3 +363,30 @@ fn an_archived_copy_is_a_locator_that_only_the_library_the_command_and_the_setti
     }
     assert!(stray.is_empty(), "an archived copy, its lookup or its outcome is named outside the files that may: {stray:?}");
 }
+
+#[test]
+fn a_contradiction_mark_is_made_only_by_the_library_and_nothing_reads_a_sources_standing() {
+    // `specs/100` §9.1. `contradicts_validated` lowers only the contradicting claim, never the validated fact; the validator's contradiction
+    // search will be its caller, so today no other production file names it. `standing()` is the only history that may ever count toward a
+    // source's standing (claims the operator accepted one at a time); nothing reads it, because a source becomes a trusted source only by the
+    // operator's own edit of the list (`specs/066` §5). A caller of either one has to be added to this test on purpose.
+    let root = root();
+    let mut files = Vec::new();
+    rust_files(&root.join("crates"), &mut files);
+    let marker = Regex::new(r"contradicts_validated\(").unwrap();
+    let standing = Regex::new(r"\.standing\(\)").unwrap();
+    let (mut mark_callers, mut standing_readers) = (Vec::new(), Vec::new());
+    for f in &files {
+        let rel = f.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
+        let src = std::fs::read_to_string(f).unwrap();
+        let code: String = production(&src).lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+        if marker.is_match(&code) && rel != "crates/delphi-engine/src/library_claims.rs" {
+            mark_callers.push(rel.clone());
+        }
+        if standing.is_match(&code) {
+            standing_readers.push(rel);
+        }
+    }
+    assert!(mark_callers.is_empty(), "something other than the library names the contradiction mark: {mark_callers:?}");
+    assert!(standing_readers.is_empty(), "something reads a source's standing, which no path may do yet: {standing_readers:?}");
+}

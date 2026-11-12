@@ -142,6 +142,8 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
     let cfg = fs::read_to_string(ws.dir.join("config.toml")).unwrap_or_default();
     // 17. What research can reach before any run (specs/098 §7.5 item 9): facts, not errors.
     check_research(home, ws, &cfg, &mut r);
+    // 18. Settings that were removed because their features are always on (specs/098 §13.2): one line per key an old config still carries.
+    check_removed_settings(&cfg, &mut r);
     let endpoints = toml::from_str::<toml::Value>(&cfg).ok().and_then(|v| v.get("endpoints").and_then(|e| e.as_array()).map(|a| a.len())).unwrap_or(0);
     if endpoints == 0 && opts.require_providers {
         r.fail("7 model-access", "", "no endpoints configured and --require-providers was given (specs/009)");
@@ -226,6 +228,19 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
 ///
 /// A key is checked without asking for it: an `env:` variable is looked up, anything else (a keychain entry, a command) is said to
 /// be not checked here, because reading it could prompt or run a program.
+/// The five settings `specs/098` §13.2 removed when it pulled their flags. An old config that still has one is read without error and the
+/// key does nothing; this names each, once, so the operator can delete it. Nothing is changed.
+const REMOVED_SETTINGS: [(&str, &str); 5] = [("hosts", "route_adopt"), ("hosts", "source_ladder"), ("seats", "red_team_kind"), ("research", "ladder"), ("research", "search_log")];
+
+fn check_removed_settings(cfg_text: &str, r: &mut Report) {
+    let Ok(root) = toml::from_str::<toml::Value>(cfg_text) else { return };
+    for (table, key) in REMOVED_SETTINGS {
+        if root.get(table).and_then(|t| t.get(key)).is_some() {
+            r.warn("18 removed-settings", "config.toml", format!("[{table}] {key} was removed; the feature is always on; see specs/098 section 13.2"));
+        }
+    }
+}
+
 fn check_research(home: &Path, ws: &Workspace, cfg_text: &str, r: &mut Report) {
     const CHECK: &str = "17 research";
     let root: toml::Value = toml::from_str(cfg_text).unwrap_or_else(|_| toml::Value::Table(Default::default()));
@@ -263,6 +278,17 @@ fn check_research(home: &Path, ws: &Workspace, cfg_text: &str, r: &mut Report) {
     };
     let thin = delphi_engine::boot::settings_from(&root).thin_below;
     r.push(Level::Ok, CHECK, "", format!("{}; {}; an answer from fewer than {} kept claims says coverage: thin ([research] thin_below)", trusted, kb, thin));
+    // spec 101 §4 item 4: with the switch on, the retraction snapshot's age is a fact the operator needs: a missing or old one checks nothing
+    // or checks against old data. Off says nothing (the library as spec 098 left it). Read-only; no file but the snapshot is opened.
+    let st = delphi_engine::boot::settings_from(&root);
+    if st.retractions {
+        let line = delphi_engine::retractions::Policy::load(&home.join("library"), true).status_line(&delphi_core::time::now_rfc3339(), st.retractions_stale_days);
+        if line.contains("stale") || line.contains("none loaded") {
+            r.warn(CHECK, "config.toml", format!("{line}; import the Retraction Watch file with `delphi research retractions import <file>`"));
+        } else {
+            r.push(Level::Ok, CHECK, "", line);
+        }
+    }
     // spec 098 §7.2: a private entry is never placed in a foreign-family seat's prompt whatever this says; `allow` also lets the host's own
     // family read private entries, which is worth knowing once the install holds any.
     let allow = root.get("library").and_then(|l| l.get("private_to_models")).and_then(|v| v.as_str()) == Some("allow");
@@ -1264,6 +1290,26 @@ mod tests {
         assert!(findings("[research]\nthin_below = 5\n").last().unwrap().message.contains("fewer than 5 kept claims"));
         let f = findings("[search]\nproviders = [\"nonesuch\"]\n");
         assert_eq!((f[0].level, f[0].location.as_str()), (Level::Warn, "config.toml"), "{f:?}");
+    }
+
+    // `specs/098` §13.2: one line per removed key an old config still carries, none for a clean config, and nothing else changes.
+    #[test]
+    fn doctor_names_each_removed_setting_an_old_config_still_has() {
+        let named = |cfg: &str| {
+            let mut r = Report::default();
+            check_removed_settings(cfg, &mut r);
+            r.findings.into_iter().filter(|f| f.check == "18 removed-settings").map(|f| f.message).collect::<Vec<_>>()
+        };
+        assert!(named("").is_empty() && named("[hosts]\n[seats]\nmax_foreign_seats = 1\n[research]\nthin_below = 3\n").is_empty());
+        let old = "[hosts]\nroute_adopt = true\nsource_ladder = false\n[seats]\nred_team_kind = true\n[research]\nladder = true\nsearch_log = true\nfetch_per_host = 3\n";
+        let got = named(old);
+        assert_eq!(got.len(), 5, "{got:?}");
+        for key in ["[hosts] route_adopt", "[hosts] source_ladder", "[seats] red_team_kind", "[research] ladder", "[research] search_log"] {
+            assert!(got.iter().any(|m| m == &format!("{key} was removed; the feature is always on; see specs/098 section 13.2")), "{key}: {got:?}");
+        }
+        assert!(named("not toml [").is_empty(), "an unreadable config is reported elsewhere");
+        // a key that is still a setting is not named
+        assert!(named("[research]\nfetch_per_host = 3\nfetch_per_run = 20\n").is_empty());
     }
 
     #[test]

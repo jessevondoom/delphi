@@ -15,11 +15,10 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Mutex;
 
-/// `[research] ladder` and its two caps (`specs/098` §13.1, §18). The caps are hypotheses to calibrate from the provenance trail.
+/// The two caps of the wider fetch (`specs/098` §7.5 item 7a, §18). The fetch is always on since the `[research] ladder` flag was
+/// pulled (§13.2); the caps are hypotheses to calibrate from the provenance trail.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WiderFetch {
-    /// Off until the exit criterion passes: with it off the fetcher reaches trusted-list hosts only, as before this slice.
-    pub enabled: bool,
     /// At most this many distinct off-list pages from one host in one run.
     pub per_host: usize,
     /// At most this many distinct off-list pages in one run.
@@ -28,7 +27,7 @@ pub struct WiderFetch {
 
 impl Default for WiderFetch {
     fn default() -> WiderFetch {
-        WiderFetch { enabled: false, per_host: 2, per_run: 10 }
+        WiderFetch { per_host: 2, per_run: 10 }
     }
 }
 
@@ -267,7 +266,7 @@ mod tests {
 
     #[test]
     fn caps_are_per_host_and_per_run_and_a_repeat_costs_nothing() {
-        let a = Allowance::new(WiderFetch { enabled: true, per_host: 2, per_run: 3 });
+        let a = Allowance::new(WiderFetch { per_host: 2, per_run: 3 });
         assert_eq!(a.take("https://a.example.com/1"), Ok(()));
         assert_eq!(a.take("https://a.example.com/2"), Ok(()));
         assert_eq!(a.take("https://a.example.com/3"), Err("per_host_cap"));
@@ -279,9 +278,8 @@ mod tests {
     }
 
     #[test]
-    fn defaults_are_off_and_small() {
+    fn defaults_are_small() {
         let d = WiderFetch::default();
-        assert!(!d.enabled);
         assert_eq!((d.per_host, d.per_run), (2, 10));
     }
 

@@ -9,7 +9,7 @@ Delphi: a Rust workspace (`crates/`) plus an Ink/TypeScript console (`ui/`). One
 ## Rules
 
 - **No Spec, No Build** applies to software: building Delphi, writing code, or guiding a coding project outside Delphi (`specs/external/<project>/`). Work only against a spec with `status: approved`. Commit trailer: `Implements-Spec: specs/NNN-*.md`. A draft spec is a proposal, not permission. Artifacts (docs, decks, images, media) need no spec but take an entry in the operator-prompt log. Markdown, scaffolds without executable content and plain `scratch/` files are regular operation and need neither (governed paths such as `specs/`, `memory/`, `agents/` excepted). Unlisted or executable file types are software. See `specs/070` and `delphi_core::artifact`.
-- **One slice per pull request.** Update the spec tracker (`missions/2026-10-23-foundational-design/spec-tracker.md`) in the PR that changes a spec's state.
+- **One slice per pull request is preferred.** Update the spec tracker (`missions/2026-10-23-foundational-design/spec-tracker.md`) in the PR that changes a spec's state. Trial (reviewed 2026-11-25): during busy pushes a PR MAY carry several slices of the SAME spec only, if each slice is its own commit with its own `Implements-Spec` trailer and its own tracker update; no gate-changing paths (`.github/`, the charter, the rubric) are mixed with code; it stays reviewable (about 3 slices / 800 changed lines); it merges with a merge commit, not a squash. Cross-spec bundles are not allowed. See `CONTRIBUTING.md` for the reversal triggers and the ledger caveat.
 - **Never commit past a failing gate.** Run before committing:
   ```sh
   CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 cargo test --workspace --locked

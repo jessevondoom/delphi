@@ -124,10 +124,11 @@ pub struct Deps<'a> {
     pub thin_below: usize,
     /// `[research]` numbers for the corroboration count (`specs/098` §18).
     pub support: &'a Params,
-    /// `[research] search_log` (`specs/101` §3): put the search log in the result. Off, the result is exactly what spec 098 gives.
-    pub search_log: bool,
     /// Searches the host says it ran before asking (`request_research`'s `host_searches`); logged as declared, counted as nothing.
     pub host_searches: &'a [HostSearch],
+    /// `[research] retractions` (`specs/101` §4 item 4): the line the coverage report carries about the local snapshot (`retractions: current`,
+    /// `stale`, `none loaded`). `None` is the switch off: the report is exactly what spec 098 gives.
+    pub retractions: Option<&'a str>,
 }
 
 #[derive(Debug, Clone)]
@@ -587,14 +588,15 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     source_ids.dedup();
     let trusted_claims = claims.iter().filter(|c| c.from_trusted).count();
     let (thin, mut report) = coverage_report(&cov, set.kb_hits().len(), trusted_claims, claims.len() - trusted_claims, deps.thin_below);
+    if let Some(line) = deps.retractions {
+        report["retractions"] = json!(line);
+    }
     // The search log (`specs/101` §3): it inherits the strictest `private` flag of the claims the run produced, shows the knowledge-base
-    // line first, and is linked from the coverage report. Off, none of this is in the result.
+    // line first, and is linked from the coverage report. It is in every result since the `search_log` flag was pulled (`specs/098` §13.2).
     log.private = claims.iter().any(|c| c.source_ids.iter().any(|s| deps.library.is_private(s)));
     log.kb(clean_query(question, deps.redactor).as_deref(), set.kb_hits().len());
-    if deps.search_log {
-        let flow = log.flow();
-        report["search_log"] = json!({"lines": log.lines().len(), "found": flow.found, "kept": flow.kept, "searches": flow.searches, "withheld": flow.withheld, "declared": flow.declared, "see": "search_log"});
-    }
+    let flow = log.flow();
+    report["search_log"] = json!({"lines": log.lines().len(), "found": flow.found, "kept": flow.kept, "searches": flow.searches, "withheld": flow.withheld, "declared": flow.declared, "see": "search_log"});
     let mut result = json!({
         "coverage": if thin { "thin" } else { "ok" }, "coverage_report": report,
         "corroboration_pass": {"claims": pass.0, "queries": pass.1},
@@ -605,9 +607,7 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
         "budget_used": {"steps": ctx.steps()},
         "answered_by": "scout", "consulted": ["scout", "validator"],
     });
-    if deps.search_log {
-        result["search_log"] = log.to_json();
-    }
+    result["search_log"] = log.to_json();
     Ok(if spent { Finish::Partial(result) } else { Finish::Done(result) })
 }
 
@@ -757,6 +757,7 @@ mod tests {
     }
 
     struct Fixture {
+        retractions: Option<&'static str>,
         web: FakeWeb,
         scout: FakeScout,
         validator: FakeValidator,
@@ -765,7 +766,6 @@ mod tests {
         sites: Vec<String>,
         thin_below: usize,
         support: Params,
-        search_log: bool,
         host_searches: Vec<HostSearch>,
     }
 
@@ -781,10 +781,10 @@ mod tests {
                 ("https://nih.gov/b".to_string(), vec![x("fever")]),
                 ("https://blog.example/a".to_string(), vec![x("headaches")]),
             ]));
-            Fixture { web, scout, validator: FakeValidator { verdict, asked: Default::default() }, lib: FakeLib::default(), redactor: Redactor::new(), sites: vec!["who.int".into(), "nih.gov".into()], thin_below: 3, support: Params::default(), search_log: false, host_searches: Vec::new() }
+            Fixture { retractions: None, web, scout, validator: FakeValidator { verdict, asked: Default::default() }, lib: FakeLib::default(), redactor: Redactor::new(), sites: vec!["who.int".into(), "nih.gov".into()], thin_below: 3, support: Params::default(), host_searches: Vec::new() }
         }
         fn deps(&self) -> Deps<'_> {
-            Deps { web: &self.web, scout: &self.scout, validator: &self.validator, library: &self.lib, redactor: &self.redactor, sites: &self.sites, thin_below: self.thin_below, support: &self.support, search_log: self.search_log, host_searches: &self.host_searches }
+            Deps { web: &self.web, scout: &self.scout, validator: &self.validator, library: &self.lib, redactor: &self.redactor, sites: &self.sites, thin_below: self.thin_below, support: &self.support, host_searches: &self.host_searches, retractions: self.retractions }
         }
     }
 
@@ -965,6 +965,19 @@ mod tests {
         let (_, v) = value(run_research(&c, "does aspirin reduce fever", Depth::Deep, &f.deps()).await.unwrap());
         assert_eq!(v["coverage"], "ok", "{v}");
         assert_eq!(v["coverage_report"]["host_rungs"], json!([]), "nothing to hand over when the answer is not thin");
+    }
+
+    #[tokio::test]
+    async fn the_coverage_report_carries_the_retraction_snapshot_line_only_when_the_switch_is_on() {
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        let (_, off) = value(run_research(&ctx(Depth::Quick), "does aspirin reduce fever", Depth::Quick, &f.deps()).await.unwrap());
+        assert!(off["coverage_report"].get("retractions").is_none(), "off: the report is what spec 098 gives: {off}");
+        f.retractions = Some("retractions: none loaded");
+        let (_, on) = value(run_research(&ctx(Depth::Quick), "does aspirin reduce fever", Depth::Quick, &f.deps()).await.unwrap());
+        assert_eq!(on["coverage_report"]["retractions"], "retractions: none loaded");
+        f.retractions = None;
+        let (_, again) = value(run_research(&ctx(Depth::Quick), "does aspirin reduce fever", Depth::Quick, &f.deps()).await.unwrap());
+        assert_eq!(off["coverage_report"], again["coverage_report"], "switching it off again returns the old report");
     }
 
     #[tokio::test]
@@ -1163,24 +1176,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn with_the_log_off_the_result_is_what_spec_098_gives_and_on_it_only_adds_the_log() {
-        let off = three_origins();
-        let (_, a) = value(run_research(&ctx(Depth::Survey), "does aspirin reduce fever", Depth::Survey, &off.deps()).await.unwrap());
-        assert!(a.get("search_log").is_none() && a["coverage_report"].get("search_log").is_none(), "off adds nothing: {a}");
-        let mut on = three_origins();
-        on.search_log = true;
-        let (_, mut b) = value(run_research(&ctx(Depth::Survey), "does aspirin reduce fever", Depth::Survey, &on.deps()).await.unwrap());
-        assert!(b["search_log"].is_object() && b["coverage_report"]["search_log"]["see"] == "search_log");
-        b.as_object_mut().unwrap().remove("search_log");
-        b["coverage_report"].as_object_mut().unwrap().remove("search_log");
-        assert_eq!(a, b, "the log changes nothing else in the result");
+    async fn every_result_carries_the_log_and_the_coverage_report_links_to_it() {
+        let f = three_origins();
+        let (_, v) = value(run_research(&ctx(Depth::Survey), "does aspirin reduce fever", Depth::Survey, &f.deps()).await.unwrap());
+        assert!(v["search_log"].is_object() && v["coverage_report"]["search_log"]["see"] == "search_log", "{v}");
+        assert_balanced(&v);
+    }
+
+    // `specs/098` §12 item 16 (the exempt fetch path): text a model wrote, in an extracted claim or in the answer, is never a URL to fetch.
+    // The runner fetches only URLs the search rows carried.
+    #[tokio::test]
+    async fn a_url_a_model_wrote_never_reaches_the_fetcher() {
+        let mut f = three_origins();
+        let hostile = "see https://model-made-up.example/collect?q=secret and https://who.int/other";
+        f.scout.0.insert("https://who.int/a".to_string(), vec![Extracted { subject: hostile.into(), predicate: "reduces".into(), object: hostile.into(), scope: "adults".into(), time: "".into(), quote: hostile.into(), locator: "p1".into() }]);
+        let _ = run_research(&ctx(Depth::Survey), "does aspirin reduce fever", Depth::Survey, &f.deps()).await.unwrap();
+        let fetched = f.web.fetched.lock().unwrap().clone();
+        assert!(!fetched.is_empty(), "the run did fetch its search rows");
+        let rows: Vec<String> = f.web.rows.iter().map(|r| r.url.clone()).collect();
+        for u in &fetched {
+            assert!(rows.contains(u), "{u} was fetched but no search row carried it");
+        }
+        assert!(!fetched.iter().any(|u| u.contains("model-made-up")), "{fetched:?}");
     }
 
     #[tokio::test]
     async fn the_log_lists_what_was_sent_exactly_and_names_the_provider() {
         // two trusted hosts answer, which is too few, so the run widens to the wider web and both kinds of search appear
         let mut f = Fixture::new(Verdict::Inconclusive);
-        f.search_log = true;
         f.web.provider = Some("Brave");
         let (_, v) = value(run_research(&ctx(Depth::Survey), "does aspirin reduce fever", Depth::Survey, &f.deps()).await.unwrap());
         let sent = f.web.searched.lock().unwrap().clone();
@@ -1203,7 +1226,6 @@ mod tests {
     #[tokio::test]
     async fn a_failed_search_is_a_line_with_its_fixed_reason() {
         let mut f = Fixture::new(Verdict::Inconclusive);
-        f.search_log = true;
         f.web.fail = Some("credential_unresolved");
         let (_, v) = value(run_research(&ctx(Depth::Survey), "does aspirin reduce fever", Depth::Survey, &f.deps()).await.unwrap());
         let failed: Vec<Value> = log_lines(&v).into_iter().filter(|l| l["failed"].is_string()).collect();
@@ -1215,7 +1237,6 @@ mod tests {
     #[tokio::test]
     async fn a_claim_on_a_private_source_gets_a_withheld_line_with_no_text_and_makes_the_log_private() {
         let mut f = three_origins();
-        f.search_log = true;
         f.web.rows.pop();
         f.lib.private.insert("who.int".into());
         let (_, v) = value(run_research(&ctx(Depth::Deep), "does aspirin lower body temperature", Depth::Deep, &f.deps()).await.unwrap());
@@ -1234,11 +1255,9 @@ mod tests {
 
     #[tokio::test]
     async fn searches_the_host_declares_are_logged_and_change_no_count() {
-        let mut plain = three_origins();
-        plain.search_log = true;
+        let plain = three_origins();
         let (_, a) = value(run_research(&ctx(Depth::Survey), "does aspirin reduce fever", Depth::Survey, &plain.deps()).await.unwrap());
         let mut declared = three_origins();
-        declared.search_log = true;
         declared.host_searches = vec![HostSearch { tool: "slack".into(), query: "index bloat thread".into(), hits: 40 }, HostSearch { tool: "gdrive".into(), query: "/srv/team/private/notes.md".into(), hits: 3 }];
         let (_, b) = value(run_research(&ctx(Depth::Survey), "does aspirin reduce fever", Depth::Survey, &declared.deps()).await.unwrap());
         let host_lines: Vec<Value> = log_lines(&b).into_iter().filter(|l| l["declared"] == true).collect();
@@ -1257,7 +1276,6 @@ mod tests {
     #[tokio::test]
     async fn the_corroboration_pass_searches_are_logged_with_their_purpose() {
         let mut f = three_origins();
-        f.search_log = true;
         f.web.rows.pop();
         f.web.extra = vec![("aspirin reduces fever", vec![row("https://cdc.gov/c")])];
         let (_, v) = value(run_research(&ctx(Depth::Survey), "does aspirin lower body temperature", Depth::Survey, &f.deps()).await.unwrap());
@@ -1271,8 +1289,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_run_that_runs_out_of_budget_still_balances_and_says_why_results_were_not_kept() {
-        let mut f = Fixture::new(Verdict::Inconclusive);
-        f.search_log = true;
+        let f = Fixture::new(Verdict::Inconclusive);
         // one step for the search, one for the first page; the rest are found and not read
         let (partial, v) = value(run_research(&JobCtx::with_budget(2), "does aspirin reduce fever", Depth::Survey, &f.deps()).await.unwrap());
         assert!(partial);
@@ -1283,7 +1300,6 @@ mod tests {
     #[tokio::test]
     async fn the_page_cap_and_the_results_not_followed_are_counted_not_dropped_silently() {
         let mut f = Fixture::new(Verdict::Inconclusive);
-        f.search_log = true;
         f.web.trusted = vec!["who.int"];
         f.web.rows = (0..12).map(|i| row(&format!("https://who.int/p{i}"))).collect();
         for i in 0..12 {

@@ -783,20 +783,31 @@ pub fn council_view(events: &[delphi_core::event::EventEnvelope], mission_dir: &
         // from the receipt (091 SR-1); a seat the host ran has no receipt, so it is labelled host-declared. Disagreements stay separate.
         if started.and_then(|e| e.payload["kind"].as_str()) == Some("red_team") {
             let ran = v["ruling"]["seats_run_by_delphi"].as_array().cloned().unwrap_or_default();
-            let findings: Vec<Value> = of("council.critique")
-                .iter()
-                .flat_map(|e| {
-                    let seat = e.payload["role"].as_str().unwrap_or("").to_string();
-                    let fam = match ran.iter().find(|d| d["seat"] == seat.as_str()) {
-                        Some(d) => json!({"family": d["family"], "source": "receipt"}),
-                        None => json!({"family": host_fam, "source": "host-declared"}),
-                    };
-                    e.payload["findings"].as_array().cloned().unwrap_or_default().into_iter().map(move |f| json!({"severity": f["severity"], "title": f["title"], "seat": seat, "family": fam["family"], "family_source": fam["source"]}))
-                })
-                .collect();
+            let family_of = |seat: &str| match ran.iter().find(|d| d["seat"] == seat) {
+                Some(d) => (d["family"].clone(), "receipt".to_string()),
+                None => (json!(host_fam), "host-declared".to_string()),
+            };
+            // Round 1 stances that state a severity, then Round 2 critiques; a seat that raised an issue in both rounds is one entry.
+            let mut raws: Vec<crate::findings::Raw> = Vec::new();
+            for e in of("council.stance").iter().filter(|e| e.payload["round"].as_u64() == Some(1) && e.payload["status"] == "answered") {
+                let seat = e.payload["role"].as_str().unwrap_or("").to_string();
+                let (family, family_source) = family_of(&seat);
+                for (severity, title) in crate::council::round1_findings(e.payload["text"].as_str().unwrap_or("")) {
+                    raws.push(crate::findings::Raw { severity, title, seat: seat.clone(), family: family.clone(), family_source: family_source.clone(), round: 1 });
+                }
+            }
+            for e in of("council.critique") {
+                let seat = e.payload["role"].as_str().unwrap_or("").to_string();
+                let (family, family_source) = family_of(&seat);
+                for f in e.payload["findings"].as_array().cloned().unwrap_or_default() {
+                    raws.push(crate::findings::Raw { severity: f["severity"].as_str().unwrap_or("P1").to_string(), title: f["title"].as_str().unwrap_or("").to_string(), seat: seat.clone(), family: family.clone(), family_source: family_source.clone(), round: 2 });
+                }
+            }
+            let (findings, groups) = crate::findings::collect(&raws);
             v["ruling"]["kind"] = json!("red_team");
             v["ruling"]["advisory"] = json!(true);
             v["ruling"]["findings"] = json!(findings);
+            v["ruling"]["finding_groups"] = json!(groups);
             v["ruling"]["single_family"] = json!(homogeneous == json!(true));
         }
         let tokens: u64 = of("agent.usage").iter().map(|e| e.payload["input_tokens"].as_u64().unwrap_or(0) + e.payload["output_tokens"].as_u64().unwrap_or(0)).sum();
@@ -816,14 +827,34 @@ pub fn findings_card(r: &Value) -> String {
     if r["single_family"] == true {
         s.push_str("_Single-family review: every seat that sat is on one model family (homogeneous), so the seats may share blind spots._\n");
     }
-    let fs = r["findings"].as_array().cloned().unwrap_or_default();
-    if fs.is_empty() {
-        s.push_str("- no findings were raised\n");
-    }
-    for f in &fs {
+    let seat_words = |f: &Value| {
         let fam = f["family"].as_str().unwrap_or("unknown");
         let src = if f["family_source"] == "receipt" { "from the receipt" } else { "host-declared" };
-        s.push_str(&format!("- **{}** {} (`{}`, family {fam}, {src})\n", f["severity"].as_str().unwrap_or("?"), f["title"].as_str().unwrap_or(""), f["seat"].as_str().unwrap_or("")));
+        (f["seat"].as_str().unwrap_or("").to_string(), fam.to_string(), src)
+    };
+    let groups = r["finding_groups"].as_array().cloned().unwrap_or_default();
+    if !groups.is_empty() {
+        // Grouped by the same issue (`crate::findings`): worst first; a group names every seat that raised it and its own family.
+        for g in &groups {
+            let seats = g["seats"].as_array().cloned().unwrap_or_default();
+            let (sev, title) = (g["severity"].as_str().unwrap_or("?"), g["title"].as_str().unwrap_or(""));
+            if seats.len() == 1 {
+                let (seat, fam, src) = seat_words(&seats[0]);
+                s.push_str(&format!("- **{sev}** {title} (`{seat}`, family {fam}, {src})\n"));
+            } else {
+                let by: Vec<String> = seats.iter().map(|x| { let (seat, fam, src) = seat_words(x); format!("`{seat}` (family {fam}, {src})") }).collect();
+                s.push_str(&format!("- **{sev}** {title}: raised by {} seats: {}\n", seats.len(), by.join(", ")));
+            }
+        }
+    } else {
+        let fs = r["findings"].as_array().cloned().unwrap_or_default();
+        if fs.is_empty() {
+            s.push_str("- no findings were raised\n");
+        }
+        for f in &fs {
+            let (seat, fam, src) = seat_words(f);
+            s.push_str(&format!("- **{}** {} (`{seat}`, family {fam}, {src})\n", f["severity"].as_str().unwrap_or("?"), f["title"].as_str().unwrap_or("")));
+        }
     }
     s.push('\n');
     s

@@ -78,6 +78,23 @@ pub struct Reliability {
     pub stood: usize,
     pub contested: usize,
     pub disproved: usize,
+    /// Of the claims that stood: those the operator accepted one at a time (a validation by the operator without the batch mark, or the
+    /// operator's attestation of a summary-page claim). The only history that may count toward a source's standing (`standing`).
+    pub accepted: usize,
+    /// Of the claims that stood: those the operator accepted through accept-all (`batch-accepted`). Shown, never counted toward standing.
+    pub batch_accepted: usize,
+    /// Of the claims that stood: those the validator role ratified on its own. Shown, never counted toward standing.
+    pub auto_validated: usize,
+}
+
+impl Reliability {
+    /// The part of a source's history that may ever count toward its standing (`specs/100` §9.1): claims the operator accepted **one at a
+    /// time** that still stand. A claim that merely read a rung (a count of origins), a batch-accepted claim and a validator-ratified claim
+    /// do not, so a few auto-vetted facts cannot raise a source's standing and then vet more of its claims. Nothing reads this yet; a source
+    /// becomes a trusted source only by the operator's own edit of the list (`specs/066` §5).
+    pub fn standing(&self) -> usize {
+        self.accepted
+    }
 }
 
 /// `page:<key>`, the key being the page's file name or id the operator names: one line, at most 200 characters.
@@ -187,6 +204,12 @@ pub fn lane_order(v: &mut [Candidate], lane_on: bool) {
     } else {
         v.sort_by(|a, b| a.id.cmp(&b.id));
     }
+}
+
+/// Does this source record still count as an origin? Not purged, not retired, and not carrying a retraction mark that takes it out of the
+/// count (`specs/101` §4). The mark is read whether or not a snapshot is in use: a retraction does not un-happen when a switch changes.
+fn live_origin(meta: &Value) -> bool {
+    meta["purged"].is_null() && meta["retired"].is_null() && !super::retraction::drops_origin(meta)
 }
 
 fn class_of(s: &str) -> Class {
@@ -438,6 +461,30 @@ impl Library {
         }
     }
 
+    /// A claim contradicts a **validated** fact (`specs/100` §3.2 gate and §9.1): the claim is marked contested and so cannot rise, however many
+    /// origins it has. **Only the claim is written.** The validated fact is never touched, never lowered and never re-labelled: overturning a
+    /// validated fact is the operator's act (`retract`, 040 §15.3), not a count's. Refused when the target is not validated, when the two are the
+    /// same claim, or when the contradicting claim is itself validated (two validated facts that disagree are the operator's to resolve; a
+    /// mark would lower something they accepted). Daemon only: the validator's contradiction search is the caller, and nothing a host, a tool
+    /// argument or a model says reaches it. Idempotent; logs ids only.
+    pub fn contradicts_validated(&self, claim_id: &str, validated_id: &str) -> Result<Value, String> {
+        if claim_id == validated_id {
+            return Err("a claim cannot contradict itself".into());
+        }
+        let target = self.claim(validated_id).ok_or_else(|| format!("no claim `{validated_id}`"))?;
+        if status(&target) != Status::Validated {
+            return Err("only a validated fact blocks a claim this way: the target is not validated".into());
+        }
+        let mut c = self.claim(claim_id).ok_or_else(|| format!("no claim `{claim_id}`"))?;
+        if status(&c) == Status::Validated {
+            return Err("both claims are validated: a conflict between two things you accepted is yours to resolve, and no mark lowers either".into());
+        }
+        self.contest(&mut c, "contradicts_validated", validated_id, Value::Null);
+        self.save_claim(&c)?;
+        self.log("claim_contradicts_validated", json!({"id": claim_id, "against": validated_id}));
+        Ok(self.refresh_support(claim_id).unwrap_or(c))
+    }
+
     fn contest(&self, c: &mut Value, reason: &str, source: &str, note: Value) {
         let marks = c["contested_by"].as_array().cloned().unwrap_or_default();
         if marks.iter().any(|m| m["reason"] == reason && m["source"] == source) {
@@ -531,7 +578,7 @@ impl Library {
     pub(super) fn source_retired(&self, source_id: &str) {
         for mut c in self.citing(source_id) {
             let other = anchors_of(&c).iter().any(|a| {
-                active(a) && a["source_id"] != source_id && a["source_id"].as_str().and_then(|s| self.read_meta(s)).is_some_and(|m| m["retired"].is_null() && m["purged"].is_null())
+                active(a) && a["source_id"] != source_id && a["source_id"].as_str().and_then(|s| self.read_meta(s)).is_some_and(|m| live_origin(&m))
             });
             if !other {
                 self.contest(&mut c, "source_retired", source_id, Value::Null);
@@ -540,6 +587,32 @@ impl Library {
                 }
             }
             // A retired source no longer counts as an origin, whether or not another source keeps the claim standing.
+            self.retract_support(&c);
+        }
+    }
+
+    /// The source's retraction mark changed (`specs/101` §4): `new` is the kind now on it, or `None` when it was lifted. Any contest an earlier
+    /// mark caused is cleared first; a `retracted` source then contests a claim that no other live, uncounted-out source supports; and every
+    /// citing claim's support is recomputed, so a corroborated claim whose third origin was retracted falls back. Nothing is deleted.
+    pub(super) fn source_retraction_changed(&self, source_id: &str, new: Option<crate::retractions::Kind>) {
+        for mut c in self.citing(source_id) {
+            let marks: Vec<Value> = c["contested_by"].as_array().cloned().unwrap_or_default();
+            let kept: Vec<Value> = marks.iter().filter(|m| !(m["reason"] == "source_retracted" && m["source"] == source_id)).cloned().collect();
+            let mut changed = kept.len() != marks.len();
+            if changed {
+                c["contested_by"] = Value::Array(kept);
+            }
+            if new.is_some_and(|k| k.contests()) {
+                let other = anchors_of(&c).iter().any(|a| active(a) && a["source_id"] != source_id && a["source_id"].as_str().and_then(|s| self.read_meta(s)).is_some_and(|m| live_origin(&m)));
+                if !other {
+                    self.contest(&mut c, "source_retracted", source_id, json!("the source was retracted (Retraction Watch)"));
+                    changed = true;
+                    self.log("claim_contested", json!({"id": c["id"], "source": source_id, "reason": "source_retracted"}));
+                }
+            }
+            if changed {
+                let _ = self.save_claim(&c);
+            }
             self.retract_support(&c);
         }
     }
@@ -633,7 +706,17 @@ impl Library {
                 Status::Contested => r.contested += 1,
                 Status::Disproved => r.disproved += 1,
                 Status::Retired => {}
-                _ => r.stood += 1,
+                _ => {
+                    r.stood += 1;
+                    // who accepted it, for the record only (`specs/100` §9.1): batch and validator history is told apart from the operator's own
+                    match (c["validation"]["by"].as_str(), c["validation"]["batch"]["mark"] == BATCH_MARK) {
+                        (Some("operator"), true) => r.batch_accepted += 1,
+                        (Some("operator"), false) => r.accepted += 1,
+                        (Some("validator"), _) => r.auto_validated += 1,
+                        _ if c["attestation"]["by"] == "operator" => r.accepted += 1,
+                        _ => {}
+                    }
+                }
             }
         }
         r
@@ -655,7 +738,7 @@ impl Library {
                 continue;
             }
             let Some(meta) = self.read_meta(sid) else { continue };
-            if !meta["purged"].is_null() || !meta["retired"].is_null() {
+            if !live_origin(&meta) {
                 continue;
             }
             // An archived copy is a locator, not a source (`specs/101` §5 item 6): while the current version of a source is a copy taken
@@ -706,6 +789,9 @@ impl Library {
             track.stood += r.stood;
             track.contested += r.contested;
             track.disproved += r.disproved;
+            track.accepted += r.accepted;
+            track.batch_accepted += r.batch_accepted;
+            track.auto_validated += r.auto_validated;
         }
         let contradicted = c["contested_by"].as_array().is_some_and(|m| !m.is_empty()) || c["lifecycle"] == "disproved";
         let mut tags = s.to_json();
@@ -728,7 +814,7 @@ impl Library {
                 tags["would_ratify_at"] = c["support"]["would_ratify_at"].clone();
             }
         }
-        tags["track"] = json!({"claims": track.claims, "stood": track.stood, "contested": track.contested, "disproved": track.disproved});
+        tags["track"] = json!({"claims": track.claims, "stood": track.stood, "contested": track.contested, "disproved": track.disproved, "accepted": track.accepted, "batch_accepted": track.batch_accepted, "auto_validated": track.auto_validated});
         // Which rungs the claim has read (`specs/100` §8): the first time, kept for good, so a claim that is later contested still counts as
         // having reached the rung. Judged on the configured ladder (a roll-back latch changes what is shown, not what a claim reached).
         let mut probe = c.clone();

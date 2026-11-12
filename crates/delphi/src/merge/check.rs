@@ -17,7 +17,10 @@ pub struct Verdict {
     pub gate_hits: Vec<String>,
     pub gates_source: Source,
     pub checks: Vec<Check>,
+    /// The first spec state (kept for callers and ledger readers that expect one).
     pub spec: SpecState,
+    /// Every distinct spec the trailers name, each judged on its own; one entry (`Exempt`, `MarkdownOnly` or `Missing`) when none is named.
+    pub specs: Vec<SpecState>,
     /// Every reason this pull request cannot merge now; empty when it can.
     pub refusals: Vec<String>,
 }
@@ -39,6 +42,7 @@ impl Verdict {
             paths_count: self.paths.len(),
             paths_hash: paths_hash(&self.paths),
             spec: self.spec.clone(),
+            specs: self.specs.clone(),
             checks: self.checks.iter().map(|c| (c.name.clone(), c.bucket.clone())).collect(),
             gate_changing: self.gate_changing(),
             attestation,
@@ -78,18 +82,21 @@ fn markdown_only(paths: &[String]) -> bool {
     !paths.is_empty() && paths.iter().all(|p| p.to_lowercase().ends_with(".md") && !NEEDS_A_SPEC.iter().any(|g| gates::matches(g, p)))
 }
 
-fn spec_state(forge: &dyn Forge, pr: &PrInfo, paths: &[String], gate_hits: &[String]) -> Result<SpecState, ForgeError> {
+/// Judge every distinct spec the pull request's trailers name (any commit, or the body). The bundle is valid only if all of them
+/// are ratified; each one that is not is returned as `Missing`, so the refusal lists them all. Naming different specs is accepted
+/// today (each is still checked); that is recorded in full rather than changed here.
+fn spec_states(forge: &dyn Forge, pr: &PrInfo, paths: &[String], gate_hits: &[String]) -> Result<Vec<SpecState>, ForgeError> {
     let links = spec_links(&pr.commit_messages, &pr.body);
     if links.is_empty() {
-        return Ok(if markdown_only(paths) {
+        return Ok(vec![if markdown_only(paths) {
             SpecState::MarkdownOnly
         } else if within_exemption(paths, pr.additions, pr.deletions, gate_hits) {
             SpecState::Exempt
         } else {
             SpecState::Missing("no `Implements-Spec:` trailer, and the change is neither only Markdown nor inside the bounded exemption (more than 2 files or 100 lines, or it touches code, a manifest, a lockfile, or `agents/`, `skills/`, `themes/` or `memory/`)".into())
-        });
+        }]);
     }
-    let mut first: Option<SpecState> = None;
+    let mut states: Vec<SpecState> = Vec::new();
     for link in links {
         let touched = paths.iter().any(|p| p == &link);
         let head_text = forge.file_at(&pr.head_sha, &link)?;
@@ -106,12 +113,9 @@ fn spec_state(forge: &dyn Forge, pr: &PrInfo, paths: &[String], gate_hits: &[Str
                 _ => SpecState::Missing(format!("{link} is not approved on {} (it needs `status: approved` and `approved_by:` in its frontmatter)", pr.base_ref)),
             },
         };
-        if let SpecState::Missing(_) = state {
-            return Ok(state);
-        }
-        first.get_or_insert(state);
+        states.push(state);
     }
-    Ok(first.expect("at least one link"))
+    Ok(states)
 }
 
 /// Decide whether pull request `n` could merge now, from facts only. Whether it is *queued* is the caller's to judge: an ordinary
@@ -161,10 +165,14 @@ pub fn evaluate(forge: &dyn Forge, n: u64) -> Result<Verdict, ForgeError> {
     };
     let gate_hits = gates::hits(&patterns, &paths);
 
-    let spec = spec_state(forge, &pr, &paths, &gate_hits)?;
-    if let SpecState::Missing(why) = &spec {
-        refusals.push(why.clone());
+    let specs = spec_states(forge, &pr, &paths, &gate_hits)?;
+    for s in &specs {
+        if let SpecState::Missing(why) = s {
+            refusals.push(why.clone());
+        }
     }
+    // The first Missing if any, else the first state: a single-spec reader still sees a blocked bundle as blocked.
+    let spec = specs.iter().find(|s| matches!(s, SpecState::Missing(_))).or(specs.first()).cloned().expect("at least one spec state");
 
-    Ok(Verdict { pr, paths, gate_hits, gates_source, checks, spec, refusals })
+    Ok(Verdict { pr, paths, gate_hits, gates_source, checks, spec, specs, refusals })
 }

@@ -28,6 +28,8 @@ pub mod excerpts;
 pub mod history;
 #[path = "library_meta.rs"]
 pub mod meta;
+#[path = "library_retraction.rs"]
+pub mod retraction;
 #[path = "library_export.rs"]
 mod export;
 pub use export::Exported;
@@ -192,6 +194,10 @@ pub struct Library {
     /// The numbers the corroboration count uses (`specs/098` §7.6, §18): the defaults unless the caller sets the operator's `[research]`
     /// values with [`Library::with_support`].
     support: crate::corroboration::Params,
+    /// The local Retraction Watch snapshot sources are checked against (`specs/101` §4). Off by default: [`Library::in_home`] checks nothing,
+    /// which is the library as spec 098 left it. The caller that has the operator's `[research] retractions` sets it with
+    /// [`Library::with_retractions`].
+    retractions: crate::retractions::Policy,
 }
 
 /// A short stable id from the canonical URL or identifier, not from content (`specs/055` §3.2).
@@ -211,7 +217,7 @@ pub fn source_id(canonical: &str) -> String {
     if slug.is_empty() { format!("src-{}", &h[..8]) } else { format!("{}-{}", slug, &h[..8]) }
 }
 
-fn sha256_hex(b: &[u8]) -> String {
+pub(crate) fn sha256_hex(b: &[u8]) -> String {
     Sha256::digest(b).iter().map(|x| format!("{:02x}", x)).collect()
 }
 
@@ -278,7 +284,7 @@ struct Prepared {
 
 impl Library {
     pub fn in_home(home: &Path) -> Library {
-        Library { root: home.join("library"), support: crate::corroboration::Params::default() }
+        Library { root: home.join("library"), support: crate::corroboration::Params::default(), retractions: crate::retractions::Policy::off() }
     }
 
     /// The same library counting corroboration with the operator's numbers.
@@ -456,6 +462,11 @@ impl Library {
         if let (Some(ot), Some(nt)) = (&old_text, &p.text) {
             p.meta.insert("change_note".into(), json!(change_note(ot, nt)));
         }
+        // A retraction mark survives a new version of the capture (`specs/101` §4): the new record would otherwise drop it and the source
+        // would count again. It is carried whether or not the caller has a snapshot; only a snapshot lifts it.
+        if let Some(r) = old.as_ref().map(|o| &o["retraction"]).filter(|r| r.is_object()) {
+            p.meta.insert("retraction".into(), r.clone());
+        }
 
         let stage = self.root.join(".staging").join(format!("{}-{}", p.id, std::process::id()));
         let _ = std::fs::remove_dir_all(&stage);
@@ -513,6 +524,8 @@ impl Library {
             self.reanchor_claims(&p.id, p.text.as_deref(), version);
         }
         self.log("capture", json!({"id": p.id, "level": level.as_str(), "version": version, "content_hash": p.meta.get("content_hash")}));
+        // Checked against the local snapshot after the capture is in place, so it adds no step before a source is kept (`specs/101` §4 item 3).
+        self.check_retraction(&p.id);
         Ok(Stored { id: p.id, level, outcome, notes })
     }
 

@@ -219,7 +219,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo run -q --locked -p delphi -- lint --repo .
 ```
 
-Build only against an `approved` spec, one slice per pull request. When running the binary in a scratch setting always pass `--home <tmpdir>`: bare `delphi` and `delphi init` create a real workspace under `~/.delphi`. The repository layout is in [How it works inside](docs/how-it-works.md#repository-layout).
+Build only against an `approved` spec, one slice per pull request preferred (a trial, reviewed 2026-11-25, lets a busy PR carry several slices of the same spec; see [CONTRIBUTING.md](CONTRIBUTING.md)). When running the binary in a scratch setting always pass `--home <tmpdir>`: bare `delphi` and `delphi init` create a real workspace under `~/.delphi`. The repository layout is in [How it works inside](docs/how-it-works.md#repository-layout).
 
 ## License
 
