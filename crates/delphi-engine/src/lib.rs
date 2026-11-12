@@ -66,6 +66,8 @@ pub mod mcp_packs;
 pub mod mcp_project;
 pub mod spec_lookup;
 pub mod transcript;
+pub mod history_consent;
+pub mod history_manage;
 pub mod history_citation;
 pub mod history_merge;
 pub mod history_pointer;

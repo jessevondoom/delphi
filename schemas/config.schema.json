@@ -322,7 +322,9 @@
         "enabled": { "type": "boolean", "description": "Keep a history of prompts and what came of them. Default false until slice S8 turns the default on." },
         "paste_chars": { "type": "integer", "minimum": 50, "maximum": 5000, "description": "A span longer than this is treated as pasted and stored as a keyed hash and a length, not text, unless the daemon saw it typed (a hypothesis to calibrate). Default 400." },
         "to_models": { "type": "string", "enum": ["deny", "allow"], "description": "Whether record text may enter a model prompt. Default deny. With allow, only a seat of the host's own family; never a foreign-family or unknown-family seat." },
-        "budget_mb": { "type": "integer", "minimum": 1, "maximum": 1024, "description": "The store's cap per project, in megabytes; at the cap the daemon stops adding and says so (a hypothesis). Default 50." }
+        "budget_mb": { "type": "integer", "minimum": 1, "maximum": 1024, "description": "The store's cap per project, in megabytes; at the cap the daemon stops adding and says so (a hypothesis). Default 50." },
+        "retention_days": { "type": "integer", "minimum": 1, "maximum": 3650, "description": "The age budget in days (a hypothesis). Default 90. Nothing is deleted at this age: delphi history status and doctor count the records past it." },
+        "timeline": { "type": "boolean", "description": "The daemon timeline and report (ids and counts only, no operator text). Default true; it stays when records are off, and false turns it off too." }
       }
     },
     "mcp": {

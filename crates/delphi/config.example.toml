@@ -187,6 +187,9 @@ sandbox = "off"
 # paste_chars = 400    # a span longer than this is treated as pasted unless Delphi saw it typed (50 to 5000; a hypothesis)
 # to_models = "deny"   # "allow" lets a seat of your host's own family read a record; a foreign or unknown family never does
 # budget_mb = 50       # per project, 1 to 1024; at the cap Delphi stops adding and says so
+# retention_days = 90  # 1 to 3650 (a hypothesis); nothing is deleted at this age: `delphi history status` counts the records past it
+# timeline = true      # the daemon timeline and report (ids and counts only); it stays when records are off, false turns it off too
+# Controls: `delphi history off` stops new records at once, `purge [--since <when>]` / `delete <id>` erase records and keep a tombstone, `status` shows what is stored.
 
 # Delphi for the other tools you code with (specs/062): `delphi mcp` is an MCP server on stdio, for this machine and this user only.
 # [mcp]
