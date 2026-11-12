@@ -58,6 +58,11 @@ pub struct EngineService {
     briefs: Arc<Mutex<Briefs>>,
     /// When the acquisition job was last looked at (unix seconds): it is considered once an hour.
     acquire_checked: Mutex<i64>,
+    /// When the operator last called the daemon from the console (unix seconds; 0 = never). The background validator waits for quiet (`specs/040` §18.3).
+    last_operator: std::sync::atomic::AtomicI64,
+    /// When the background validator was last looked at, and whether a check of its is running now.
+    background_checked: std::sync::atomic::AtomicI64,
+    background_running: std::sync::atomic::AtomicBool,
     research_jobs: crate::research_jobs::Jobs,
     /// Host Panels in progress (`specs/086`): Round 1 is held here, in memory, until every seat has answered. A restart ends them.
     panels: Panels,
@@ -290,7 +295,7 @@ impl EngineService {
     pub fn new(engine: Arc<Engine>, default_mission: &str) -> Arc<EngineService> {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(String, String, String)>();
         let _ = engine.research_ask.set(tx);
-        let svc = Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), host_aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), host_gate: tokio::sync::Mutex::new(()), helps: Arc::new(Mutex::new(HashMap::new())), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())), acquire_checked: Mutex::new(0), research_jobs: crate::research_jobs::Jobs::default(), panels: Arc::new(Mutex::new(HashMap::new())) });
+        let svc = Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), host_aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), host_gate: tokio::sync::Mutex::new(()), helps: Arc::new(Mutex::new(HashMap::new())), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())), acquire_checked: Mutex::new(0), last_operator: Default::default(), background_checked: Default::default(), background_running: Default::default(), research_jobs: crate::research_jobs::Jobs::default(), panels: Arc::new(Mutex::new(HashMap::new())) });
         // An approved `request_research` card (`specs/058` §20): the mission's own scope decides where the pages go.
         if tokio::runtime::Handle::try_current().is_ok() {
             let weak = Arc::downgrade(&svc);
@@ -1497,6 +1502,7 @@ impl EngineService {
                 every.tick().await;
                 svc.timer_tick().await;
                 svc.acquire_tick().await;
+                svc.background_validate_tick().await;
             }
         });
     }
@@ -1517,6 +1523,29 @@ impl EngineService {
                 e.run_acquisition().await;
             });
         }
+    }
+
+    /// Every `TICK_SECS`: if `[validator] background` is on, look for one library claim to check while the daemon is idle (`fact_background`).
+    /// One check at a time; the check runs in its own task so the timer loop never waits for it.
+    async fn background_validate_tick(self: &Arc<Self>) {
+        use std::sync::atomic::Ordering::SeqCst;
+        let now = (self.engine.clock_unix)();
+        if !self.engine.cfg.get().validator.background || now - self.background_checked.load(SeqCst) < crate::fact_background::TICK_SECS {
+            return;
+        }
+        self.background_checked.store(now, SeqCst);
+        if self.background_running.swap(true, SeqCst) {
+            return;
+        }
+        let Ok(m) = self.mission(None).await else {
+            self.background_running.store(false, SeqCst);
+            return;
+        };
+        let (svc, tasks) = (self.clone(), self.running.lock().unwrap().len());
+        tokio::spawn(async move {
+            let _ = svc.engine.background_validate_tick(&m, svc.last_operator.load(SeqCst), tasks).await;
+            svc.background_running.store(false, SeqCst);
+        });
     }
 
     fn timers_json(&self) -> Value {
@@ -3435,6 +3464,10 @@ impl Extension for ServiceExt {
                 if let Err(why) = crate::host_rpc::refuse_pack_seats(&method, &params) {
                     return Some(Err(err(code::INVALID_PARAMS, why)));
                 }
+            }
+            // A console that only polls (a snapshot, a list, a status) is not the operator at work; any other console call is.
+            if ctx.scope == Scope::Console && !(method == "snapshot" || method.ends_with(".snapshot") || [".list", ".status", ".get", ".read"].iter().any(|s| method.ends_with(s))) {
+                svc.last_operator.store((svc.engine.clock_unix)(), std::sync::atomic::Ordering::SeqCst);
             }
             Some(match method.as_str() {
                 "mission.open" => match need_console(&ctx) {

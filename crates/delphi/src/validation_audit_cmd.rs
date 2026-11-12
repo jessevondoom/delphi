@@ -68,7 +68,19 @@ pub fn queue(ws: &Path, home: &Path) -> String {
         out.extend(q.iter().map(|(f, n)| format!("{f}  referenced {n} time(s)  not validated (budget reached)\n")));
     }
     out.push_str(&lane_listing(ws, home));
+    out.push_str(&background_listing(ws, home));
     out
+}
+
+/// Whether background validation is on, what it spent today against its cap, how many claims it checked, and when it last ran. Numbers only.
+fn background_listing(ws: &Path, home: &Path) -> String {
+    let cfg = std::fs::read_to_string(ws.join("config.toml")).unwrap_or_default();
+    let s = delphi_engine::fact_background::status_from_files(ws, home, &cfg, now());
+    // Silent while it is off and has never run, so an install that did not ask for it sees nothing new.
+    if !s.enabled && s.claims_total == 0 {
+        return String::new();
+    }
+    s.lines()
 }
 
 /// The library's claims the validator could be offered next, in the fast lane's order (`specs/100` §5). Ids, rungs and counts only, never a

@@ -62,7 +62,7 @@ impl Engine {
         FetchPolicy::default().with_max_bytes(cfg.max_item as usize)
     }
 
-    fn install_week_tokens(&self) -> u64 {
+    pub(crate) fn install_week_tokens(&self) -> u64 {
         use delphi_core::ledger::Ledger;
         let now = (self.clock_unix)();
         Ledger::open(&self.ws.dir.join("local/state.db")).ok().and_then(|l| l.tokens_since(&delphi_core::time::format_unix_millis(now - 7 * 86_400, 0)).ok()).unwrap_or(0)
