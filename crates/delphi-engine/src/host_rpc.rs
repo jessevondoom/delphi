@@ -659,8 +659,39 @@ pub fn council_view_at(events: &[delphi_core::event::EventEnvelope], mission_dir
             v["phase"] = json!(phase);
         }
         v["round"] = json!(p.round);
+    } else if matches!(v["state"].as_str(), Some("decided" | "needs_operator" | "not_decided")) {
+        // Spec 098 §6 and §13 (S9): a finished Council, Panel or red-team review expects a host summary. The daemon says so and says whether it
+        // has seen one since, from its own log; it never holds the result back for it.
+        if let Some(recorded) = summary_recorded_after(events, task_id) {
+            v["summary"] = json!({"expected": true, "recorded": recorded, "note": SUMMARY_NOTE});
+        }
     }
     Some(v)
+}
+
+/// The note on a finished review's `summary` block (`specs/098` §6, §13 S9). "Required" means the daemon tracks and says so; a host cannot be
+/// made to write one, so it is best effort and the result is never held back.
+pub const SUMMARY_NOTE: &str = "a summary is expected: call record_session_summary with what was decided and what stays open. This is best effort: Delphi records whether you did and never holds the result back for it (specs/098 section 6)";
+
+fn is_host_summary(e: &delphi_core::event::EventEnvelope) -> bool {
+    e.kind == "learn.staged" && e.payload["trigger"].as_str() == Some("host_summary")
+}
+
+/// Whether a host summary was staged AFTER `task_id` finished, read only from the daemon's own events (never a host field). `None` while the
+/// task has not finished, so nothing is expected yet. One summary written after several reviews covers each of them.
+pub fn summary_recorded_after(events: &[delphi_core::event::EventEnvelope], task_id: &str) -> Option<bool> {
+    let done = events.iter().position(|e| e.kind == "task.completed" && e.task_id.as_deref() == Some(task_id))?;
+    Some(events[done + 1..].iter().any(is_host_summary))
+}
+
+/// How many finished Councils, Panels and red-team reviews this host session raised that no host summary was staged after.
+pub fn summaries_missing(events: &[delphi_core::event::EventEnvelope]) -> usize {
+    events.iter().filter(|e| e.kind == COUNCIL_EVENT).filter_map(|e| e.payload["task_id"].as_str()).filter(|id| summary_recorded_after(events, id) == Some(false)).count()
+}
+
+/// `summaries_missing` over every host session log of a workspace (`delphi doctor` uses it).
+pub fn summaries_missing_in(ws_dir: &Path) -> usize {
+    delphi_core::sessions::dirs(ws_dir).into_iter().filter_map(|(_, dir)| delphi_core::log::replay(&dir).ok()).map(|events| summaries_missing(&events)).sum()
 }
 
 /// The tail length a status call asked for: its `lines` argument, 8 when absent, 1 to 20 otherwise.
@@ -1325,6 +1356,44 @@ mod tests {
         assert_eq!((v["state"].as_str(), v["ruling"]["decision"].as_str(), v["ruling"]["seat_positions"][0]["position"].as_str()), (Some("decided"), Some("table"), Some("table")));
         assert!(v["ruling"]["dissent"].as_str().unwrap().contains("keep a file"), "{v}");
     }
+    /// Spec 098 §6 and §13 (S9): a finished review says a summary is expected and whether the daemon has seen one since; the answer comes from
+    /// the daemon's own log, a summary written before the review ended does not count, and a review in progress expects nothing yet.
+    #[test]
+    fn a_finished_review_says_a_summary_is_expected_and_whether_the_daemon_has_seen_one_since() {
+        let dir = tempfile::tempdir().unwrap();
+        let task = |kind: &str, payload: Value| {
+            let mut e = EventEnvelope::new("m", kind, payload);
+            e.task_id = Some("t-1".into());
+            e
+        };
+        let staged = |trigger: &str| EventEnvelope::new("m", "learn.staged", json!({"id": "n1", "trigger": trigger, "summary": "s", "event_seqs": [], "tier": "L0"}));
+        // A summary the host wrote BEFORE the review ended.
+        let mut log = vec![staged("host_summary"), EventEnvelope::new("m", COUNCIL_EVENT, json!({"task_id": "t-1", "venue": "panel"}))];
+        // In progress: nothing is expected yet, and the view has no summary block.
+        let v = council_view_at(&log, dir.path(), "t-1", 0, 120, 8).unwrap();
+        assert!(v.get("summary").is_none(), "a review in progress expects nothing yet: {v}");
+        assert_eq!(summary_recorded_after(&log, "t-1"), None);
+        log.push(task("council.verdict", json!({"text": "go"})));
+        log.push(task("task.completed", json!({"status": "done"})));
+        // Finished, and the earlier summary does not count: expected, not recorded, one review missing one.
+        let v = council_view_at(&log, dir.path(), "t-1", 0, 120, 8).unwrap();
+        assert_eq!(v["state"], "decided");
+        assert_eq!((v["summary"]["expected"].clone(), v["summary"]["recorded"].clone()), (json!(true), json!(false)));
+        let note = v["summary"]["note"].as_str().unwrap();
+        assert!(note.contains("record_session_summary") && note.contains("best effort") && note.contains("never holds the result back"), "{note}");
+        assert_eq!(summaries_missing(&log), 1);
+        // A note is not a summary.
+        log.push(staged("host_note"));
+        assert_eq!(summary_recorded_after(&log, "t-1"), Some(false));
+        // A summary staged after the review ended is recorded, and nothing is missing.
+        log.push(staged("host_summary"));
+        let v = council_view_at(&log, dir.path(), "t-1", 0, 120, 8).unwrap();
+        assert_eq!(v["summary"]["recorded"], true);
+        assert_eq!(summaries_missing(&log), 0);
+        // The result itself is the same with or without a summary: the daemon tracks and never blocks.
+        assert_eq!(v["state"], "decided");
+    }
+
     /// Spec 098 §19: a status call names what each seat is doing instead of "choosing the seats", flags a stall, and reports a cancel.
     #[test]
     fn a_deliberating_council_names_its_seats_flags_a_stall_and_reports_a_cancel() {
