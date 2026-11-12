@@ -6798,7 +6798,8 @@ mod tests {
             c.call("host.council_open", pbody(&cwd, json!({"question": "q?", "kind": "council_record"}))).unwrap_err().to_string()
         })
         .await;
-        assert!(label.contains("never labelled a Council"), "{label}");
+        // refused by the §5 guard (a host cannot label anything a Council record) or by the `kind` check itself; either way it is a refusal
+        assert!(label.contains("Council record") || label.contains("never labelled a Council"), "{label}");
         assert!(f.model.requests().is_empty(), "nothing was spent");
     }
 

@@ -13,8 +13,9 @@ const READERS: &[(&str, &str)] = &[
     ("crates/delphi-engine/src/service.rs", "reads the host's declared searches and keeps the finished log beside the result"),
     ("crates/delphi-engine/src/mcp_host.rs", "declares the optional `host_searches` input of `request_research`; the daemon reads it"),
     ("crates/delphi-engine/src/lib.rs", "declares the module"),
+    ("crates/delphi/src/doctor.rs", "names the removed `[research] search_log` key so an old config is told it does nothing (specs/098 section 13.2); it reads no log"),
+    ("crates/delphi-engine/src/egress.rs", "names the search-log module's test among the proofs that the observed-URL fetch carries no entry text; it reads no log"),
     ("crates/delphi/src/research_cmd.rs", "prints a kept log for the operator"),
-    ("crates/delphi/src/main.rs", "registers `delphi research log` and its help text"),
 ];
 
 fn root() -> PathBuf {
