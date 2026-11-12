@@ -150,7 +150,7 @@ fn shapes() -> &'static Shapes {
         prefixed: Regex::new(r"\b(?:do[po]_v1_[0-9a-f]{40,}|gl(?:pat|ptt|rt|dt)-[A-Za-z0-9_\-]{20,}|[sr]k_(?:live|test)_[A-Za-z0-9]{10,}|whsec_[A-Za-z0-9]{20,}|hf_[A-Za-z0-9]{30,}|shp(?:at|ca|pa|ss)_[0-9a-fA-F]{32}|npm_[A-Za-z0-9]{30,}|LTAI[A-Za-z0-9]{12,}|key-[0-9a-f]{32}|SK[0-9a-f]{32}|SG\.[A-Za-z0-9_\-]{16,}\.[A-Za-z0-9_\-]{16,}|AGE-SECRET-KEY-1[A-Z0-9]{40,}|xapp-[A-Za-z0-9\-]{20,}|dckr_pat_[A-Za-z0-9_\-]{20,}|pypi-[A-Za-z0-9_\-]{30,}|rubygems_[0-9a-f]{40,}|sq0csp-[A-Za-z0-9_\-]{30,}|\d{8,10}:AA[A-Za-z0-9_\-]{33,})").unwrap(),
         pgp: Regex::new(r"-----BEGIN PGP PRIVATE KEY BLOCK-----[\s\S]*?(?:-----END PGP PRIVATE KEY BLOCK-----|$)").unwrap(),
         // `Authorization: Basic ...` (the word "basic" alone is ordinary prose, so the header name is required).
-        auth_scheme: Regex::new(r#"(?i)\b(authorization\s*[:=]\s*["']?(?:basic|token|digest|negotiate|apikey|hmac))\s+[^\s"']{8,}"#).unwrap(),
+        auth_scheme: Regex::new(r#"(?i)\b(author(?:iz)ation\s*[:=]\s*["']?(?:basic|token|digest|negotiate|apikey|hmac))\s+[^\s"']{8,}"#).unwrap(),
         cookie: Regex::new(r#"(?i)\b((?:set-)?cookie\s*:\s*)[^\r\n"'=]*=[^\r\n"']*"#).unwrap(),
         db_cli_password: Regex::new(r"(?i)(\b(?:mysql|mysqldump|mysqladmin|mariadb)\b[^\n.`;|]*?\s-p)\S{3,}").unwrap(),
         http_cli_user: Regex::new(r#"(?i)(\b(?:curl|wget|http|https|httpie)\b[^\n]*?\s(?:-u|--user|--proxy-user)[ =]+[^\s:"']+:)[^\s"']+"#).unwrap(),

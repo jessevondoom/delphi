@@ -174,7 +174,7 @@ const ORDINARY: &[&str] = &[
     "Write a function fn secret_santa(names: &[String]) -> Vec<(String, String)> that pairs people.",
     "What does the error 'invalid bearer token format' mean in the OAuth spec?",
     "Rename AWS_REGION to DELPHI_REGION in the docs; the region is eu-west-1.",
-    "The file is at /Users/me/projects/work/delphi/crates/delphi-engine/src/history_redact.rs line 138.",
+    "The file is at crates/delphi-engine/src/history_redact.rs line 138.",
     "Remember: the password manager export must never be committed; add it to .gitignore.",
     "Ticket PROJ-12345 and PR #675 both touch the same file; reconcile them.",
 ];
