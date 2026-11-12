@@ -1,4 +1,5 @@
-//! A verb heuristic for "is this approval card a merge?" (`specs/014` amendment 014-A1, REV-SEC-09).
+//! A verb heuristic for "is this approval card a merge?" (`specs/014` amendment 014-A1, REV-SEC-09). It also names the two card kinds
+//! of a task that read a private entry (`specs/103` M2), which a relay reply may deny and never approve.
 //!
 //! The finalize card (`merge`, `pull_request`) is exact. A merge can also be reached through a Red `harness_bash`,
 //! `run_command` or connector card, so a relay may not approve one whose command looks like it merges, pushes to a
@@ -18,6 +19,10 @@ pub fn console_only(tool: &str, payload: &Value) -> Option<String> {
             let argv: Vec<String> = payload["argv"].as_array()?.iter().filter_map(|a| a.as_str().map(str::to_string)).collect();
             scan(&argv).map(|v| format!("a command that looks like `{}`", v))
         }
+        // Spec 103 M2: a request or connector call held because the task read a private entry is the operator's at the console. The text
+        // would carry a private entry off the machine, and a relay account (a mailbox, a chat) is not where that is allowed. Denying stays open.
+        "harness_outbound_marked" => Some("an outbound request from a task that read a private entry".to_string()),
+        "connector" if payload["private_read_mark"].as_bool() == Some(true) => Some("a connector call from a task that read a private entry".to_string()),
         "connector" => {
             let name = payload["tool"].as_str().unwrap_or("");
             name.to_ascii_lowercase().contains("merge").then(|| format!("a connector call to `{}`", name))

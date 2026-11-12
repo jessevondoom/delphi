@@ -335,7 +335,7 @@ fn check_research(home: &Path, ws: &Workspace, cfg_text: &str, r: &mut Report) {
     if missing > 0 {
         r.push(Level::Ok, CHECK, "", format!("{missing} finished Council, Panel or red-team review(s) have no host summary recorded after them (best effort: ask the host to call record_session_summary)"));
     }
-    // spec 103 M1: what observe mode has seen. Shown once anything is marked or counted; it changes nothing and is a fact, not a warning.
+    // spec 103 M1, M2: the marks and the sends held for the operator's answer. Shown once anything is marked or counted; a fact, not a warning.
     let seen = delphi_engine::private_read::counter(&ws.dir);
     if seen.keys_marked > 0 || seen.outbound_would_change > 0 || seen.connector_would_change > 0 {
         r.push(Level::Ok, CHECK, "", delphi_engine::private_read::status_line(&ws.dir));

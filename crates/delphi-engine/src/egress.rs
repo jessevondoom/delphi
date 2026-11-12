@@ -89,9 +89,9 @@ pub const PATHS: [(Channel, &str, Wired); 15] = [
     (Channel::DebugBundle, "", Wired::NoEntryText { proof_file: "delphi/src/logs_cmd_tests.rs", proof_test: "a_bundle_never_carries_a_noted_entrys_text" }),
     (Channel::Log, "", Wired::NoEntryText { proof_file: "delphi-core/src/elog_tests.rs", proof_test: "context_keys_never_name_a_field_that_carries_entry_text" }),
     (Channel::Relay, "", Wired::Unaudited),
-    (Channel::Connector, "", Wired::Unaudited),
+    (Channel::Connector, "connector_run.rs", Wired::Yes),
     (Channel::Mail, "", Wired::Unaudited),
-    (Channel::Outbound, "", Wired::Unaudited),
+    (Channel::Outbound, "harness_run.rs", Wired::Yes),
     (Channel::Telemetry, "", Wired::NoEntryText { proof_file: "delphi-engine/src/egress.rs", proof_test: "no_telemetry_sender_exists_and_every_file_that_can_reach_the_network_is_registered" }),
     (Channel::ArchiveLookup, "library_archive.rs", Wired::Yes),
     (Channel::CitationLookup, "research_host.rs", Wired::Yes),
@@ -208,7 +208,8 @@ mod tests {
     #[test]
     fn the_unaudited_channels_are_listed_so_the_gap_is_visible() {
         let un: Vec<String> = PATHS.iter().filter(|(_, _, w)| *w == Wired::Unaudited).map(|(c, _, _)| format!("{c:?}")).collect();
-        assert_eq!(un, ["Relay", "Connector", "Mail", "Outbound"], "audit a channel, then move it out of this list");
+        // Spec 103: M2 moved Connector and Outbound out (their senders call the check with the task's private-read mark); M3 moves Relay and Mail.
+        assert_eq!(un, ["Relay", "Mail"], "audit a channel, then move it out of this list");
     }
 
     #[test]
