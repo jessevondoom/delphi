@@ -63,6 +63,10 @@ pub struct EngineService {
     /// When the background validator was last looked at, and whether a check of its is running now.
     background_checked: std::sync::atomic::AtomicI64,
     background_running: std::sync::atomic::AtomicBool,
+    /// The merge trigger (`specs/102` §3.2): when the merge ledger was last looked at, and the byte offset the daemon has read to
+    /// (`None` until the first look, which starts at the ledger's end so an old merge never concludes a later prompt).
+    merge_checked: std::sync::atomic::AtomicI64,
+    merge_offset: Mutex<Option<u64>>,
     research_jobs: crate::research_jobs::Jobs,
     /// Host Panels in progress (`specs/086`): Round 1 is held here, in memory, until every seat has answered. A restart ends them.
     panels: Panels,
@@ -242,6 +246,8 @@ fn need_host(ctx: &CallContext) -> Result<(), RpcError> {
 
 /// How long `host.request_help` waits for the answer before handing back a `help_id`.
 const HELP_WAIT: Duration = Duration::from_secs(45);
+/// How often the daemon looks at the merge ledger for the history store's merge trigger (`specs/102` §3.2). A hypothesis.
+const MERGE_TICK_SECS: i64 = 5;
 
 struct HelpRun {
     session: String,
@@ -295,7 +301,7 @@ impl EngineService {
     pub fn new(engine: Arc<Engine>, default_mission: &str) -> Arc<EngineService> {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(String, String, String)>();
         let _ = engine.research_ask.set(tx);
-        let svc = Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), host_aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), host_gate: tokio::sync::Mutex::new(()), helps: Arc::new(Mutex::new(HashMap::new())), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())), acquire_checked: Mutex::new(0), last_operator: Default::default(), background_checked: Default::default(), background_running: Default::default(), research_jobs: crate::research_jobs::Jobs::default(), panels: Arc::new(Mutex::new(HashMap::new())) });
+        let svc = Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), host_aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), host_gate: tokio::sync::Mutex::new(()), helps: Arc::new(Mutex::new(HashMap::new())), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())), acquire_checked: Mutex::new(0), last_operator: Default::default(), background_checked: Default::default(), background_running: Default::default(), merge_checked: Default::default(), merge_offset: Mutex::new(None), research_jobs: crate::research_jobs::Jobs::default(), panels: Arc::new(Mutex::new(HashMap::new())) });
         // An approved `request_research` card (`specs/058` §20): the mission's own scope decides where the pages go.
         if tokio::runtime::Handle::try_current().is_ok() {
             let weak = Arc::downgrade(&svc);
@@ -392,6 +398,20 @@ impl EngineService {
         let mut out = json!({"staged": true, "ref": format!("{}/{}", m.id, id), "tier": "L0", "count": already + 1});
         if let Some(d) = dup {
             out["duplicate_of"] = json!(d);
+        }
+        // The exchange fields of the project history (`specs/102` §3.3, §10 item 1). They never change what was staged above. With
+        // history off, or none sent, the answer is unchanged. A host cannot make a record: this completes a trigger the daemon saw.
+        if summary && crate::history_record::HOST_EXCHANGE_KEYS.iter().any(|k| !p[*k].is_null()) {
+            use crate::history_record::HostReport;
+            match m.history_host_exchange(&p, (self.engine.clock_unix)()) {
+                HostReport::Absent => {}
+                r => {
+                    out["history"] = json!(r.word());
+                    if let HostReport::Refused(why) = &r {
+                        out["history_note"] = json!(why);
+                    }
+                }
+            }
         }
         Ok(out)
     }
@@ -1560,8 +1580,46 @@ impl EngineService {
                 svc.timer_tick().await;
                 svc.acquire_tick().await;
                 svc.background_validate_tick().await;
+                svc.merge_ledger_tick().await;
             }
         });
+    }
+
+    /// The merge trigger (`specs/102` §3.2 item 1). `delphi merge` has no daemon connection and must not write the history store, so
+    /// the daemon reads the merge ledger itself, every `MERGE_TICK_SECS`, and only while `[history] enabled`: the first look just
+    /// notes the ledger's end (a merge from before the daemon watched never concludes a later prompt), and each later look reads the
+    /// complete new lines and hands each `merged` row (reduced to the pull request number) to the default mission's tap. Dormant
+    /// when history is off: the file is not even looked at.
+    async fn merge_ledger_tick(&self) {
+        use std::sync::atomic::Ordering::SeqCst;
+        if !self.engine.settings.history.enabled {
+            return;
+        }
+        let now = (self.engine.clock_unix)();
+        if now - self.merge_checked.load(SeqCst) < MERGE_TICK_SECS {
+            return;
+        }
+        self.merge_checked.store(now, SeqCst);
+        let path = crate::history_merge::ledger_path(&self.engine.ws.home);
+        let from = {
+            let mut seen = self.merge_offset.lock().unwrap();
+            match *seen {
+                Some(n) => n,
+                None => {
+                    *seen = Some(crate::history_merge::len(&path));
+                    return;
+                }
+            }
+        };
+        let batch = crate::history_merge::read_new(&path, from);
+        *self.merge_offset.lock().unwrap() = Some(batch.next);
+        if batch.rows.is_empty() {
+            return;
+        }
+        let Ok(m) = self.mission(None).await else { return };
+        for row in &batch.rows {
+            m.history_merge_row(row);
+        }
     }
 
     /// Once an hour, and only when the operator turned it on: a daily acquisition run if one is due (`specs/055` §8).
@@ -1716,7 +1774,10 @@ impl EngineService {
             None => crate::provisional::ledger_all(&events),
         };
         let pending = ds.iter().filter(|d| d.outcome == "allow" && d.review.is_none()).count();
-        Ok(json!({"mission_id": m.id, "decisions": ds.iter().map(|d| d.to_json()).collect::<Vec<_>>(), "pending": pending}))
+        let mut out: Vec<Value> = ds.iter().map(|d| d.to_json()).collect();
+        // Whether each decision cites a span that resolves (`specs/102` §6): derived now, shown, and granting nothing.
+        crate::history_citation::annotate_here(&self.engine.ws.dir, &events, &mut out);
+        Ok(json!({"mission_id": m.id, "decisions": out, "pending": pending}))
     }
 
     /// `decision.list`: every decision the operator owes (`specs/044` §4), built by `decision_model` from the pending
@@ -4638,6 +4699,111 @@ mod tests {
         assert_eq!(events_of(&f, "session.started").len(), 1);
         assert_eq!(svc.begin_session(&f.m, "new").await.unwrap(), "s_0002", "a session with nothing in it is still closed, and leaves no digest");
         assert_eq!(central_lines(&f).len(), 2, "the third task's session had one ask");
+    }
+
+    fn merge_row(pr: u64) -> String {
+        format!("{}\n", json!({"kind": "merged", "pr": pr, "quote": "merge it, token sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWX"}))
+    }
+
+    fn append_ledger(path: &std::path::Path, text: &str) {
+        use std::io::Write;
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::OpenOptions::new().create(true).append(true).open(path).unwrap().write_all(text.as_bytes()).unwrap();
+    }
+
+    // specs/102 §3.2 item 1: the daemon reads the merge ledger on its own timer; `delphi merge` never touches the store.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_daemon_reads_the_merge_ledger_and_a_merge_it_watched_concludes_the_operators_prompt() {
+        let f = setup(vec![], 5.0, |s| s.history.enabled = true);
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        svc.adopt(f.m.clone());
+        f.m.set_history(crate::history_record::Tap::new(f.engine.ws.dir.clone(), f.engine.settings.history.clone(), "home"));
+        f.m.history_note_prompt("t_0001", "land the queue fix");
+        let ledger = crate::history_merge::ledger_path(&f.engine.ws.home);
+        append_ledger(&ledger, &merge_row(1)); // a merge from before the daemon watched
+        svc.merge_ledger_tick().await; // the first look only notes the end of the ledger
+        f.now.fetch_add(10, std::sync::atomic::Ordering::SeqCst);
+        svc.merge_ledger_tick().await;
+        assert!(crate::history_record::read(&f.engine.ws.dir, "home").map(|r| r.counted().count()).unwrap_or(0) == 0, "an old merge never concludes a later prompt");
+        append_ledger(&ledger, &merge_row(42));
+        svc.merge_ledger_tick().await;
+        assert_eq!(crate::history_record::read(&f.engine.ws.dir, "home").unwrap().counted().count(), 0, "not looked at again before the tick is due");
+        f.now.fetch_add(10, std::sync::atomic::Ordering::SeqCst);
+        svc.merge_ledger_tick().await;
+        let read = crate::history_record::read(&f.engine.ws.dir, "home").unwrap();
+        let recs: Vec<_> = read.counted().collect();
+        assert_eq!(recs.len(), 1);
+        assert_eq!((recs[0].trigger, recs[0].observed.ids.clone()), (crate::history_record::Trigger::Merge, vec!["pr_42".to_string()]));
+        assert_eq!(recs[0].prompt.as_ref().unwrap().text, "land the queue fix");
+        let stored = fs::read_to_string(crate::history_record::store_path(&f.engine.ws.dir, "home")).unwrap();
+        assert!(!stored.contains("sk-ant"), "the ledger row's quote never reaches the store");
+        // A later tick finds nothing new and writes nothing more.
+        f.now.fetch_add(10, std::sync::atomic::Ordering::SeqCst);
+        svc.merge_ledger_tick().await;
+        assert_eq!(crate::history_record::read(&f.engine.ws.dir, "home").unwrap().counted().count(), 1);
+    }
+
+    // The default is dormant: with history off the ledger is not even looked at.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn with_history_off_the_merge_ledger_is_never_looked_at() {
+        let f = setup(vec![], 5.0, |_| {});
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        svc.adopt(f.m.clone());
+        append_ledger(&crate::history_merge::ledger_path(&f.engine.ws.home), &merge_row(7));
+        f.now.fetch_add(10, std::sync::atomic::Ordering::SeqCst);
+        svc.merge_ledger_tick().await;
+        assert!(svc.merge_offset.lock().unwrap().is_none(), "no offset was taken, so the file was not read");
+        assert!(!f.engine.ws.dir.join("local/history").exists());
+    }
+
+    // specs/102 §3.3, §10 item 1: a host's summary carries the exchange fields; it completes a trigger the daemon itself saw.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_host_summary_with_the_exchange_fields_completes_the_trigger_the_daemon_saw_and_without_them_the_answer_is_unchanged() {
+        let f = setup(vec![], 5.0, |s| s.history.enabled = true);
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        svc.adopt(f.m.clone());
+        let host = CallContext { scope: Scope::Host, client_id: 0 };
+        let base = json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": f.root.to_string_lossy()});
+        let with = |extra: Value| {
+            let mut b = base.clone();
+            for (k, v) in extra.as_object().unwrap() {
+                b[k] = v.clone();
+            }
+            b
+        };
+        let plain = svc.host_stage(with(json!({"summary": "Did a thing"})), host, true).await.unwrap();
+        assert!(plain.get("history").is_none(), "no exchange fields: the answer is the old one: {plain}");
+        let none_seen = svc.host_stage(with(json!({"summary": "Did a thing", "prompt": "research queues"})), host, true).await.unwrap();
+        assert_eq!(none_seen["history"], "no trigger seen", "a host cannot make a record: {none_seen}");
+        // The daemon sees the host's research run finish, then the host reports.
+        let m = svc.mission_at(Some("host-abcdef0123456789"), f.root.to_str()).await.unwrap();
+        m.append(EventEnvelope::new(&m.id, "research.finished", json!({"new": 2, "updated": 0, "held": 0, "outcome": "done"}))).await.unwrap();
+        let done = svc.host_stage(with(json!({"summary": "Did a thing", "prompt": "research queues", "asked": "queues", "did": "scouted", "open": "choose"})), host, true).await.unwrap();
+        assert_eq!((done["staged"].clone(), done["history"].clone()), (json!(true), json!("recorded")), "{done}");
+        // The host's mission may belong to a project other than `home`: find the one store that was made.
+        let projects: Vec<String> = fs::read_dir(f.engine.ws.dir.join("local/history")).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        assert_eq!(projects.len(), 1, "{projects:?}");
+        let read = crate::history_record::read(&f.engine.ws.dir, &projects[0]).unwrap();
+        let recs: Vec<_> = read.counted().collect();
+        assert_eq!(recs.len(), 1);
+        assert_eq!((recs[0].trigger, recs[0].kind), (crate::history_record::Trigger::ResearchRun, crate::history_record::Kind::Reported));
+        assert_eq!(recs[0].reply.as_ref().unwrap().did, "scouted");
+        // A bad field is refused in fixed words and the summary itself is still staged.
+        let bad = svc.host_stage(with(json!({"summary": "Did a thing", "prompt": "x", "asked": 4})), host, true).await.unwrap();
+        assert_eq!((bad["staged"].clone(), bad["history"].clone()), (json!(true), json!("refused")), "{bad}");
+    }
+
+    // specs/102 §7 item 10: with history off the fields are ignored and the answer says so.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn with_history_off_a_host_summary_ignores_the_exchange_fields() {
+        let f = setup(vec![], 5.0, |_| {});
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        svc.adopt(f.m.clone());
+        let host = CallContext { scope: Scope::Host, client_id: 0 };
+        let p = json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": f.root.to_string_lossy(), "summary": "s", "prompt": "research queues", "did": "scouted"});
+        let out = svc.host_stage(p, host, true).await.unwrap();
+        assert_eq!((out["staged"].clone(), out["history"].clone()), (json!(true), json!("off")), "{out}");
+        assert!(!f.engine.ws.dir.join("local/history").exists());
     }
 
     // specs/030 §6: `/context` says what the next task would be told, and nothing for a session with nothing in it.

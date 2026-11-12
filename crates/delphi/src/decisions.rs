@@ -79,6 +79,12 @@ fn render_one(d: &Value) -> String {
     for e in d["effects"].as_array().into_iter().flatten() {
         out.push_str(&format!("  effect: {} {} ({} bytes)\n", e["kind"].as_str().unwrap_or("?"), e["path"].as_str().unwrap_or("?"), e["bytes"]));
     }
+    // Whether the decision cites a transcript span that resolves (`specs/102` §6). Derived by the daemon at read time; it changes nothing above.
+    match (d["citation"]["state"].as_str(), d["citation"]["why"].as_str()) {
+        (Some("cited"), _) => out.push_str("  source: cited (a pointer resolves: the text exists in the transcript; that does not make the decision right)\n"),
+        (Some(_), why) => out.push_str(&format!("  source: unsourced ({})\n", short(why.unwrap_or("no citation"), 80))),
+        _ => {}
+    }
     if let Some(r) = d["review"].as_object() {
         out.push_str(&format!("  review: {} by {}{}\n", r.get("resolution").and_then(|v| v.as_str()).unwrap_or("?"), r.get("by").and_then(|v| v.as_str()).unwrap_or("?"), r.get("note").and_then(|v| v.as_str()).filter(|n| !n.is_empty()).map(|n| format!(" — {}", n)).unwrap_or_default()));
     }
@@ -228,6 +234,27 @@ mod tests {
         let out = handle(&mut fake(), "m1", &args(&["show", "dec_c"]));
         assert!(out.contains("effect: worktree_edit @worktree/src/dec_c.rs") && out.contains("hash_dec_c") && out.contains("review: ratified by console-1"), "{}", out);
         assert!(handle(&mut fake(), "m1", &args(&["show", "nope"])).starts_with("usage:"));
+    }
+
+    #[test]
+    fn showing_a_decision_says_whether_it_cites_a_span_that_resolves_and_nothing_about_it_changes_the_review() {
+        let mut cited = d("dec_a", "allow", "routine", None);
+        cited["citation"] = json!({"state": "cited"});
+        let mut un = d("dec_b", "allow", "routine", None);
+        un["citation"] = json!({"state": "unsourced", "why": "no citation"});
+        let mut hash = d("dec_c", "allow", "routine", None);
+        hash["citation"] = json!({"state": "unsourced", "why": "the text no longer matches its hash"});
+        let none = d("dec_d", "allow", "routine", None);
+        let mut f = Fake { list: json!({"decisions": [cited, un, hash, none], "pending": 4}), calls: vec![], fail_review: None };
+        let out = handle(&mut f, "m1", &args(&["show", "dec_a"]));
+        assert!(out.contains("source: cited (a pointer resolves") && out.contains("does not make the decision right"), "{}", out);
+        assert!(handle(&mut f, "m1", &args(&["show", "dec_b"])).contains("source: unsourced (no citation)"));
+        assert!(handle(&mut f, "m1", &args(&["show", "dec_c"])).contains("source: unsourced (the text no longer matches its hash)"));
+        assert!(!handle(&mut f, "m1", &args(&["show", "dec_d"])).contains("source:"), "an older daemon sends no citation: nothing is claimed");
+        // A cited decision is still pending and ratifies like any other: the citation is shown, not weighed.
+        assert!(handle(&mut f, "m1", &[]).contains("4 provisional decision(s), 4 awaiting your review"));
+        assert_eq!(handle(&mut f, "m1", &args(&["ratify", "dec_a"])), "dec_a: ratified\n");
+        assert!(handle(&mut f, "m1", &args(&["ratify", "dec_b"])).contains("dec_b: ratified"), "an unsourced decision is not blocked either");
     }
 
     #[test]

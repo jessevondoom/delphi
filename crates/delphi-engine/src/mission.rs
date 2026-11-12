@@ -234,6 +234,22 @@ impl MissionState {
         }
     }
 
+    /// A `merged` row of the merge ledger, read by the daemon's own timer (`history_merge`): the merge trigger (`specs/102` §3.2).
+    pub fn history_merge_row(&self, row: &serde_json::Value) {
+        if let Some(t) = self.history_tap() {
+            t.on_merge_row(&self.id, row);
+        }
+    }
+
+    /// The exchange fields a host sent with `record_session_summary` (`specs/102` §3.3). Without a tap, or with history off, nothing
+    /// is held or written.
+    pub fn history_host_exchange(&self, p: &serde_json::Value, now_unix: i64) -> crate::history_record::HostReport {
+        match self.history_tap() {
+            Some(t) => t.on_host_exchange(&self.id, p, now_unix),
+            None => crate::history_record::HostReport::Off,
+        }
+    }
+
     pub fn next_task_id(&self) -> String {
         format!("t_{:04}", self.next_task.fetch_add(1, Ordering::SeqCst) + 1)
     }
