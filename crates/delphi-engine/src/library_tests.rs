@@ -552,6 +552,71 @@ mod claims {
         assert_eq!(status(&v), Status::Validated);
     }
 
+    /// A library over the same home that checks sources against a snapshot (`specs/101` §4). `rows` are Retraction Watch lines.
+    fn with_snapshot(d: &Path, rows: &[&str]) -> Library {
+        let csv = format!("Record ID,Title,OriginalPaperDOI,RetractionNature,RetractionDate\n{}\n", rows.join("\n"));
+        let index = crate::retractions::Index::from_csv(csv.as_bytes(), "2026-11-11T12:00:00Z").unwrap();
+        Library::in_home(d).with_retractions(crate::retractions::Policy::with_index(index))
+    }
+
+    fn give_doi(l: &Library, id: &str, doi: &str) {
+        let mut m = l.read_meta(id).unwrap();
+        m["DOI"] = json!(doi);
+        std::fs::write(l.source_dir(id).join("meta.json"), serde_json::to_vec(&m).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_retracted_third_origin_drops_a_corroborated_claim_back_and_a_later_snapshot_that_lifts_it_restores_it() {
+        let (d, l) = lib();
+        let (ids, id) = three_fetched(d.path(), &l);
+        assert_eq!((status(&l.claim(&id).unwrap()), l.claim(&id).unwrap()["support"]["origins"].clone()), (Status::Substantiated, json!(3)));
+        give_doi(&l, &ids[2], "10.1001/Third");
+        let r = with_snapshot(d.path(), &["1,t,10.1001/third,Retraction,2021-03-04"]);
+        assert!(matches!(r.check_retraction(&ids[2]), crate::library::retraction::Check::Marked(_)));
+        let c = l.claim(&id).unwrap();
+        assert_eq!((status(&c), c["support"]["origins"].clone()), (Status::Noted, json!(2)), "two origins are not corroboration: {c}");
+        assert_eq!(c["anchors"].as_array().unwrap().len(), 3, "the anchors are all still there: nothing is deleted");
+        assert!(l.source_dir(&ids[2]).join("source.md").is_file(), "the capture stays readable");
+        assert!(c["contested_by"].as_array().is_none_or(|m| m.is_empty()), "two other sources still support it, so it is not contested: {c}");
+        assert!(std::fs::read_to_string(l.root().join("log.jsonl")).unwrap().contains("\"event\":\"source_retraction\""), "the event is recorded");
+        // a snapshot that no longer lists the work (a reinstatement) lifts the mark and the count comes back
+        let lifted = with_snapshot(d.path(), &["1,t,10.1001/other,Retraction,2021-03-04"]);
+        assert_eq!(lifted.check_all_retractions().lifted, 1);
+        let c = l.claim(&id).unwrap();
+        assert_eq!((status(&c), c["support"]["origins"].clone()), (Status::Substantiated, json!(3)), "{c}");
+    }
+
+    #[test]
+    fn a_claim_only_a_retracted_source_supports_becomes_contested_and_a_correction_does_not() {
+        let (d, l) = lib();
+        let only = source(d.path(), &l, "only.md", &page("harbours"));
+        fetched(&l, &only, "a.example", "reputable_secondary");
+        let c = l.add_claim("The moon drives the tides.", &ClaimOpts::default(), &[spec(&only, "the moon drives the tides")]).unwrap();
+        let id = c["id"].as_str().unwrap().to_string();
+        give_doi(&l, &only, "10.1001/only");
+        with_snapshot(d.path(), &["1,t,10.1001/only,Correction,2021-03-04"]).check_retraction(&only);
+        assert_ne!(status(&l.claim(&id).unwrap()), Status::Contested, "a correction is a label: it contests nothing");
+        with_snapshot(d.path(), &["1,t,10.1001/only,Retraction,2021-03-04"]).check_retraction(&only);
+        let c = l.claim(&id).unwrap();
+        assert_eq!(status(&c), Status::Contested, "the only source was retracted: {c}");
+        assert!(c["contested_by"].as_array().unwrap().iter().any(|m| m["reason"] == "source_retracted"));
+        assert_eq!(c["support"]["origins"], 0, "a retracted source is not an origin");
+    }
+
+    #[test]
+    fn a_mark_keeps_its_effect_when_the_switch_is_off_and_with_no_snapshot_nothing_changes() {
+        let (d, l) = lib();
+        let (ids, id) = three_fetched(d.path(), &l);
+        give_doi(&l, &ids[0], "10.1001/first");
+        // no policy: the library as spec 098 left it
+        assert_eq!(l.check_retraction(&ids[0]), crate::library::retraction::Check::NotChecked);
+        assert_eq!(l.claim(&id).unwrap()["support"]["origins"], 3);
+        with_snapshot(d.path(), &["1,t,10.1001/first,Retraction,2021-03-04"]).check_retraction(&ids[0]);
+        // a plain handle (the switch off) still honours the mark that was written
+        let c = l.refresh_support(&id).unwrap();
+        assert_eq!(c["support"]["origins"], 2, "a retraction does not un-happen: {c}");
+    }
+
     #[test]
     fn a_retired_or_purged_source_retracts_the_count_and_a_revived_one_restores_it() {
         let (d, l) = lib();

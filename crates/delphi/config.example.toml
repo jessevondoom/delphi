@@ -273,6 +273,15 @@ sandbox = "off"
 # so and carries no query text; a search your host says it ran is logged as declared and counts as nothing. The log is private when
 # any claim it served is, and never leaves this machine then. `delphi research log <id>` prints it. Off by default.
 # search_log = false
+#
+# Retraction check (specs/101 section 4). Off by default. With it on, a source that has a DOI is looked up in a LOCAL copy of the Retraction
+# Watch data at capture and at re-check, and when you import a new copy. A retracted work stops counting as an independent origin and a
+# claim only it supports reads contested; a work under an expression of concern stops counting too; a correction is only a label. Nothing
+# is deleted: the capture stays readable, marked. Import the file you downloaded yourself (the repository is
+# gitlab.com/crossref/retraction-watch-data) with `delphi research retractions import <file>`. Delphi makes no call to a service about a
+# DOI, ever: a DOI would tell a third party what you are reading. A snapshot older than retractions_stale_days is called stale.
+# retractions = false
+# retractions_stale_days = 90
 # The confidence ladder (specs/100 section 3.2). A claim's rung is derived by code from tags the daemon wrote: how many independent
 # origins it has, how many of those are trusted sources, whether anything contradicts it, and whether the validator's dry run recorded
 # "would_ratify". corroborated: corroborated_origins or more origins. substantiated: corroborated and substantiated_trusted or more trusted

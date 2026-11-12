@@ -189,6 +189,12 @@ pub fn lane_order(v: &mut [Candidate], lane_on: bool) {
     }
 }
 
+/// Does this source record still count as an origin? Not purged, not retired, and not carrying a retraction mark that takes it out of the
+/// count (`specs/101` §4). The mark is read whether or not a snapshot is in use: a retraction does not un-happen when a switch changes.
+fn live_origin(meta: &Value) -> bool {
+    meta["purged"].is_null() && meta["retired"].is_null() && !super::retraction::drops_origin(meta)
+}
+
 fn class_of(s: &str) -> Class {
     match s {
         "primary" => Class::Primary,
@@ -504,7 +510,7 @@ impl Library {
     pub(super) fn source_retired(&self, source_id: &str) {
         for mut c in self.citing(source_id) {
             let other = anchors_of(&c).iter().any(|a| {
-                active(a) && a["source_id"] != source_id && a["source_id"].as_str().and_then(|s| self.read_meta(s)).is_some_and(|m| m["retired"].is_null() && m["purged"].is_null())
+                active(a) && a["source_id"] != source_id && a["source_id"].as_str().and_then(|s| self.read_meta(s)).is_some_and(|m| live_origin(&m))
             });
             if !other {
                 self.contest(&mut c, "source_retired", source_id, Value::Null);
@@ -513,6 +519,32 @@ impl Library {
                 }
             }
             // A retired source no longer counts as an origin, whether or not another source keeps the claim standing.
+            self.retract_support(&c);
+        }
+    }
+
+    /// The source's retraction mark changed (`specs/101` §4): `new` is the kind now on it, or `None` when it was lifted. Any contest an earlier
+    /// mark caused is cleared first; a `retracted` source then contests a claim that no other live, uncounted-out source supports; and every
+    /// citing claim's support is recomputed, so a corroborated claim whose third origin was retracted falls back. Nothing is deleted.
+    pub(super) fn source_retraction_changed(&self, source_id: &str, new: Option<crate::retractions::Kind>) {
+        for mut c in self.citing(source_id) {
+            let marks: Vec<Value> = c["contested_by"].as_array().cloned().unwrap_or_default();
+            let kept: Vec<Value> = marks.iter().filter(|m| !(m["reason"] == "source_retracted" && m["source"] == source_id)).cloned().collect();
+            let mut changed = kept.len() != marks.len();
+            if changed {
+                c["contested_by"] = Value::Array(kept);
+            }
+            if new.is_some_and(|k| k.contests()) {
+                let other = anchors_of(&c).iter().any(|a| active(a) && a["source_id"] != source_id && a["source_id"].as_str().and_then(|s| self.read_meta(s)).is_some_and(|m| live_origin(&m)));
+                if !other {
+                    self.contest(&mut c, "source_retracted", source_id, json!("the source was retracted (Retraction Watch)"));
+                    changed = true;
+                    self.log("claim_contested", json!({"id": c["id"], "source": source_id, "reason": "source_retracted"}));
+                }
+            }
+            if changed {
+                let _ = self.save_claim(&c);
+            }
             self.retract_support(&c);
         }
     }
@@ -628,7 +660,7 @@ impl Library {
                 continue;
             }
             let Some(meta) = self.read_meta(sid) else { continue };
-            if !meta["purged"].is_null() || !meta["retired"].is_null() {
+            if !live_origin(&meta) {
                 continue;
             }
             let derived = meta["derived"].as_bool() == Some(true) || meta["origin"].as_str().is_some_and(|o| o.starts_with("page:"));

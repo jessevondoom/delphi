@@ -356,13 +356,15 @@ the finished console sessions, to review later.
 .PP
 Written when a session ends (/new, or a daemon restart): the first words of what was asked, the changes recorded, and the summary when [session] summary is on. Reads the central log; calls no model.
 .SS delphi research
-the search log of a finished host research job.
+the search log of a host research job; the local retraction snapshot.
 .PP
 .nf
   delphi research log <research\-id> [\-\-json] [\-\-home <dir>] [\-\-workspace <name>]
+  delphi research retractions import <file> [\-\-home <dir>] [\-\-workspace <name>]
+  delphi research retractions status [\-\-json] [\-\-home <dir>] [\-\-workspace <name>]
 .fi
 .PP
-Prints what a research run searched, of whom, when, and how many results came back and were kept (specs/101 §3): one line per search with the query that was sent, a search withheld for a private claim without any query text, searches your host declared marked as such, and a found / duplicates / kept / not\-kept flow that adds up. Written when [research] search_log is on, once the job has finished; a private log stays on this machine. Reads a file; calls no model and no network.
+`log` prints what a research run searched, of whom, when, and how many results came back and were kept (specs/101 §3): one line per search with the query that was sent, a search withheld for a private claim without any query text, searches your host declared marked as such, and a found / duplicates / kept / not\-kept flow that adds up. Written when [research] search_log is on, once the job has finished; a private log stays on this machine. `retractions import` reads the Retraction Watch CSV from a file you downloaded (the repository is gitlab.com/crossref/retraction\-watch\-data; a URL is refused, because Delphi makes no call to fetch it) into a local index; when [research] retractions is on it then checks every source that has a DOI against it, marks a retracted source (it stops counting as an origin and a claim only it supports becomes contested) and writes nothing off: the capture stays readable (specs/101 §4). `retractions status` prints the snapshot's date, size and age, and says stale after [research] retractions_stale_days (default 90). None of these calls a model or the network.
 .SS delphi tools
 how tools are used, and how often models record their changes.
 .PP

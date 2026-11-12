@@ -615,9 +615,11 @@ impl EngineService {
             let sites = web.list.site_filters();
             let scout = crate::research_host::LiveScout(engine.clone());
             let validator = crate::research_host::LiveValidator { web: web.clone() };
-            let library = crate::research_host::LiveLibrary { home, ledger: wsd.join("research/host-claims.jsonl"), label };
+            let retractions = crate::retractions::Policy::load(&home.join("library"), engine.settings.retractions);
+            let retractions_line = engine.settings.retractions.then(|| retractions.status_line(&delphi_core::time::now_rfc3339(), engine.settings.retractions_stale_days));
+            let library = crate::research_host::LiveLibrary { home, ledger: wsd.join("research/host-claims.jsonl"), label, retractions };
             let redactor = delphi_core::redact::Redactor::new();
-            let deps = crate::research_run::Deps { web: web.as_ref(), scout: &scout, validator: &validator, library: &library, redactor: &redactor, sites: &sites, thin_below: engine.settings.thin_below, support: &engine.settings.support, search_log: engine.settings.search_log, host_searches: &host_searches };
+            let deps = crate::research_run::Deps { web: web.as_ref(), scout: &scout, validator: &validator, library: &library, redactor: &redactor, sites: &sites, thin_below: engine.settings.thin_below, support: &engine.settings.support, search_log: engine.settings.search_log, host_searches: &host_searches, retractions: retractions_line.as_deref() };
             let out = crate::research_run::run_research(&jc, &q, depth, &deps).await;
             if wider.enabled {
                 if let Some(m) = &mission {

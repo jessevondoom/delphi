@@ -122,6 +122,11 @@ pub struct Settings {
     /// `[research] search_log` (`specs/101` §3, §8): write a search log beside each host research result. Default off until slice A's exit
     /// criterion passes; off is spec 098 as merged.
     pub search_log: bool,
+    /// `[research] retractions` (`specs/101` §4, §8): check a source's DOI against the local Retraction Watch snapshot at capture and re-check.
+    /// Default off until slice B's exit criterion passes; off is spec 098 as merged. Nothing is ever sent to a service.
+    pub retractions: bool,
+    /// `[research] retractions_stale_days` (`specs/101` §4 item 4): a snapshot older than this many days is called stale. Default 90.
+    pub retractions_stale_days: i64,
     /// `[research] young_domain_days`, `burst_hours`, `similar_above`, `unfamiliar_counts` (`specs/098` §7.6, §18): the numbers the corroboration
     /// count uses. The defaults are proposals to calibrate.
     pub support: crate::corroboration::Params,
@@ -201,6 +206,8 @@ impl Default for Settings {
             thin_below: 3,
             wider_fetch: Default::default(),
             search_log: false,
+            retractions: false,
+            retractions_stale_days: crate::retractions::DEFAULT_STALE_DAYS,
             support: crate::corroboration::Params::default(),
             tiers: Default::default(),
             park_poll: Duration::from_secs(5),
