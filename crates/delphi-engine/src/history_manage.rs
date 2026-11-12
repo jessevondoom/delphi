@@ -80,16 +80,17 @@ fn erased_record(which: Which, r: &Record) -> bool {
 /// Erase records in one project's store, leaving a tombstone for each. `removed_at` is the time to record (RFC 3339).
 pub fn erase(ws_dir: &Path, project: &str, which: Which, removed_at: &str) -> Result<Erased, String> {
     let project = safe_id(project).ok_or_else(|| "that is not a project id".to_string())?;
-    // A purge also tells a running daemon to drop the operator prompt it holds in memory (S7): no text, only a time.
-    if !matches!(which, Which::Id(_)) {
-        mark_purged(ws_dir);
-    }
     let path = rec::store_path(ws_dir, &project);
     if !path.exists() {
         return match which {
             Which::Id(id) => Err(format!("no record {} in project {project}", safe_id(id).unwrap_or_else(|| "(that id)".into()))),
             _ => Ok(Erased::default()),
         };
+    }
+    // A purge also tells a running daemon to drop the operator prompt it holds in memory (S7): no text, only a time. With no store
+    // there is nothing to purge and nothing is made under the home.
+    if !matches!(which, Which::Id(_)) {
+        mark_purged(ws_dir);
     }
     let _gate = APPEND_GATE.lock().unwrap_or_else(|p| p.into_inner());
     let _store = lock_store(&rec::store_dir(ws_dir, &project)).map_err(String::from)?;
