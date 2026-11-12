@@ -289,7 +289,7 @@ mod tests {
     /// Every production file that can reach the network, and what it is. A file that appears here must be one that does; a file that can reach
     /// the network and is not here fails the test, so a new sender has to be read and classified on purpose. (The first column is relative to
     /// the `crates/` directory.)
-    const NETWORK_FILES: [(&str, &str); 24] = [
+    const NETWORK_FILES: [(&str, &str); 25] = [
         ("delphi-adapter/src/http.rs", "model API calls (prompts are guarded by check_for_seat and [library] private_to_models)"),
         ("delphi-adapter/src/mcp_rmcp.rs", "connector sessions (channel Connector)"),
         ("delphi-adapter/src/oauth2.rs", "sign-in and token refresh"),
@@ -307,6 +307,7 @@ mod tests {
         ("delphi-engine/src/library_archive.rs", "archived-copy lookup (channel ArchiveLookup)"),
         ("delphi-engine/src/model.rs", "the model-call abstraction"),
         ("delphi-engine/src/research.rs", "the console research job"),
+        ("delphi-engine/src/research_chain.rs", "citation chaining: builds the lookup address and reads the answer; the one request is guarded (channel CitationLookup) and goes through the research transport; it reports nothing"),
         ("delphi-engine/src/research_images.rs", "pictures saved with a research entry"),
         ("delphi-engine/src/research_plan.rs", "the research planner"),
         ("delphi-engine/src/research_run.rs", "the research runner"),
