@@ -905,6 +905,7 @@ dependencies = [
  "delphi-core",
  "delphi-docs",
  "delphi-sandbox",
+ "hmac",
  "libc",
  "regex",
  "rusqlite",

@@ -44,7 +44,7 @@ fn snippet(s: &str, max: usize) -> String {
 }
 
 /// The text a person typed in a `user` record: a string, or the `text` parts of a list. Tool results are not typed by anyone.
-fn typed_text(rec: &Value) -> Option<String> {
+pub(crate) fn typed_text(rec: &Value) -> Option<String> {
     if rec["isMeta"].as_bool() == Some(true) || rec["isSidechain"].as_bool() == Some(true) {
         return None;
     }
