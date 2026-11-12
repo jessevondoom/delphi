@@ -80,6 +80,10 @@ fn erased_record(which: Which, r: &Record) -> bool {
 /// Erase records in one project's store, leaving a tombstone for each. `removed_at` is the time to record (RFC 3339).
 pub fn erase(ws_dir: &Path, project: &str, which: Which, removed_at: &str) -> Result<Erased, String> {
     let project = safe_id(project).ok_or_else(|| "that is not a project id".to_string())?;
+    // A purge also tells a running daemon to drop the operator prompt it holds in memory (S7): no text, only a time.
+    if !matches!(which, Which::Id(_)) {
+        mark_purged(ws_dir);
+    }
     let path = rec::store_path(ws_dir, &project);
     if !path.exists() {
         return match which {
@@ -147,6 +151,16 @@ pub fn erase(ws_dir: &Path, project: &str, which: Which, removed_at: &str) -> Re
     }
     write_atomically(&path, &out)?;
     Ok(done)
+}
+
+/// Best effort: if the marker cannot be written the purge itself still runs, and the CLI's note about a running daemon stands.
+fn mark_purged(ws_dir: &Path) {
+    let path = rec::purged_marker_path(ws_dir);
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    let _ = std::fs::write(path, format!("{ms}\n"));
 }
 
 fn write_atomically(path: &Path, text: &str) -> Result<(), String> {
@@ -366,3 +380,7 @@ pub fn doctor_line(o: &Overview) -> (bool, String) {
 #[cfg(test)]
 #[path = "history_manage_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "history_residue_tests.rs"]
+mod residue_tests;
