@@ -2595,6 +2595,9 @@ impl Engine {
             let req = Request { approval_id: String::new(), task_id: who.task_id.to_string(), span_id: who.span_id.to_string(), role: who.role.to_string(), tier, tool: tool.into(), pattern: pattern.into(), worktree: None, summary: summary.into(), payload: payload.clone(), payload_blake3: payload_blake3(payload), timeout: base_timeout };
             let waiting = self.broker.request(req);
             let id = waiting.approval_id.clone();
+            // Spec 103 M4: remember which mission this card belongs to (a card record names only its task), so the relay's card list and its
+            // answer find a mark kept under the mission. It records an id pair and nothing from the card.
+            crate::private_read::note_card_raised(&id, &who.m.id);
             if let Some(raised) = self.broker.get(&id) {
                 let mut p = raised.event_payload();
                 if let Some(prev) = &reraised_from {
