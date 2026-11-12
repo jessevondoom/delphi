@@ -1784,6 +1784,15 @@ impl EngineService {
             crate::digest_review::Pick::Acquire(a) => crate::digest_review::acquire_decision(&a, left, &now),
             crate::digest_review::Pick::Note(n) => crate::digest::to_decision(&n, left, &now),
         }));
+        // Accept all vetted (`specs/100` §6): one card for the batch, until the operator leaves it or it changes. It carries no choice that accepts.
+        let state = crate::fact_mode::state_dir(&self.engine.ws.dir);
+        let batch = crate::fact_audit::current_batch(&state);
+        if let Some(card) = crate::accept_all::card(&crate::accept_all::plan(&lib, &state, false), &now, &batch) {
+            let (id, hash) = (card["id"].as_str().unwrap_or(""), card["payload_blake3"].as_str().unwrap_or(""));
+            if !crate::accept_all::dismissed(&events, id, hash) {
+                list.push(card);
+            }
+        }
         list.sort_by_key(|d| crate::decision_model::rank(d["tier"].as_str().unwrap_or("")));
         // A card whose brief was written (once, for this payload) shows it; the rest keep the plain brief.
         for d in list.iter_mut().filter(|d| d["source"] == "card") {
@@ -1961,6 +1970,18 @@ impl EngineService {
         let events = m.replay().map_err(engine_err)?;
         let now = delphi_core::time::now_rfc3339();
         let lib = crate::library::Library::in_home(&self.engine.ws.home);
+        // The accept-all card (`specs/100` §6) is answered here: leave it, or reject one claim of the batch. Never accept: that is the terminal's.
+        if let Some(card_id) = p["id"].as_str().filter(|i| i.starts_with("accept-all-")) {
+            let state = crate::fact_mode::state_dir(&self.engine.ws.dir);
+            let (by, choice) = (format!("console-{}", ctx.client_id), p["choice_id"].as_str().unwrap_or(""));
+            let unix = delphi_core::xenia_index::unix_of(&now).unwrap_or(0);
+            let answer = crate::accept_all::Answer { card_id, payload_blake3: p["payload_blake3"].as_str().unwrap_or(""), choice };
+            let evs = crate::accept_all::act(&m.id, &lib, &state, &answer, &by, unix).map_err(|e| err(code::INVALID_PARAMS, e))?;
+            for ev in evs {
+                m.append(ev).await.map_err(|e| err(-32000, e.to_string()))?;
+            }
+            return Ok(json!({"ok": true, "id": card_id, "choice_id": choice}));
+        }
         let Some((pick, _)) = crate::digest_review::pick(&m.id, &lib, &events, &now) else {
             return Err(err(code::NOT_FOUND, "no digest item is waiting"));
         };
@@ -5426,6 +5447,52 @@ mod tests {
         let reviewed = events_of(&f, "decision.reviewed");
         assert_eq!(reviewed.len(), 1);
         assert!(reviewed[0].payload["by"].as_str().unwrap().starts_with("console-") && reviewed[0].task_id.as_deref() == Some("t_0001"));
+    }
+
+    // specs/100 §6: the accept-all card is in the decisions pane, the console can leave it or reject one claim of the batch, and nothing on it accepts.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_accept_all_card_is_listed_and_the_console_can_leave_it_or_reject_one_claim_but_never_accept() {
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        let fx = crate::accept_all::tests::fixture_in(&f.engine.ws.home, &f.engine.ws.dir);
+        let a = crate::accept_all::tests::vetted(&fx, "a", "The harbour closes at dusk.");
+        let b = crate::accept_all::tests::vetted(&fx, "b", "The lamp is lit by hand.");
+        let s = serve(&f).await;
+        let (sock, tok, n_sock, n_tok) = (s.sock.clone(), s.console.clone(), s.narrator_sock.clone(), s.narrator.clone());
+        let a2 = a.clone();
+        blocking(move || {
+            let mut c = Client::connect(&sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            c.hello(&tok).unwrap();
+            let find = |l: &Value| l["decisions"].as_array().unwrap().iter().find(|d| d["source_id"] == "accept_all_vetted").cloned();
+            let card = find(&c.call("decision.list", json!({})).unwrap()).expect("the accept-all card is listed");
+            let (id, hash) = (card["id"].as_str().unwrap().to_string(), card["payload_blake3"].as_str().unwrap().to_string());
+            let ids: Vec<&str> = card["choices"].as_array().unwrap().iter().filter_map(|x| x["id"].as_str()).collect();
+            assert!(ids.contains(&"skip") && !ids.iter().any(|i| i.contains("accept")), "the card offers no choice that accepts: {ids:?}");
+            // refusals: an accept, a stale hash, a claim that is not in the batch; and nothing changed
+            assert_eq!(rpc_code(c.call("digest.act", json!({"id": id, "choice_id": "accept", "payload_blake3": hash}))), Some(code::INVALID_PARAMS));
+            assert_eq!(rpc_code(c.call("digest.act", json!({"id": id, "choice_id": "skip", "payload_blake3": "stale"}))), Some(code::INVALID_PARAMS));
+            assert_eq!(rpc_code(c.call("digest.act", json!({"id": id, "choice_id": "reject:no-such-claim", "payload_blake3": hash}))), Some(code::INVALID_PARAMS));
+            // a narrator may not answer it
+            let mut n = Client::connect(&n_sock).unwrap();
+            n.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            n.hello(&n_tok).unwrap();
+            assert_eq!(rpc_code(n.call("digest.act", json!({"id": id, "choice_id": "skip", "payload_blake3": hash}))), Some(code::FORBIDDEN));
+            // reject one claim: the card changes with the batch and is still listed for the other
+            c.call("digest.act", json!({"id": id, "choice_id": format!("reject:{a2}"), "payload_blake3": hash})).unwrap();
+            let card2 = find(&c.call("decision.list", json!({})).unwrap()).expect("the card is still listed for the claim that is left");
+            let (id2, hash2) = (card2["id"].as_str().unwrap().to_string(), card2["payload_blake3"].as_str().unwrap().to_string());
+            assert_ne!(hash, hash2, "the card changed when the batch did");
+            assert_eq!(rpc_code(c.call("digest.act", json!({"id": id, "choice_id": "skip", "payload_blake3": hash}))), Some(code::INVALID_PARAMS), "the old card's hash is stale");
+            // leave it: the card is not offered again until it changes
+            c.call("digest.act", json!({"id": id2, "choice_id": "skip", "payload_blake3": hash2})).unwrap();
+            assert!(find(&c.call("decision.list", json!({})).unwrap()).is_none(), "a card the operator left is not offered again");
+        })
+        .await;
+        assert_eq!(events_of(&f, "accept_all.claim_rejected").len(), 1);
+        assert_eq!(events_of(&f, "accept_all.card_dismissed").len(), 1);
+        assert_eq!(fx.lib.claim(&a).unwrap()["lifecycle"], "disproved");
+        let cb = fx.lib.claim(&b).unwrap();
+        assert!(cb["lifecycle"].is_null() && cb["validation"]["batch"].is_null(), "the other claim was neither disproved nor accepted: {cb}");
     }
 
     #[tokio::test(flavor = "multi_thread")]

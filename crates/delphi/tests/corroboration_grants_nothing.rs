@@ -390,3 +390,43 @@ fn a_contradiction_mark_is_made_only_by_the_library_and_nothing_reads_a_sources_
     assert!(mark_callers.is_empty(), "something other than the library names the contradiction mark: {mark_callers:?}");
     assert!(standing_readers.is_empty(), "something reads a source's standing, which no path may do yet: {standing_readers:?}");
 }
+
+#[test]
+fn the_accept_all_cards_actions_and_the_rejection_are_the_operators_and_reach_no_grant() {
+    // `specs/100` §6 and §10 item 4: the decisions-pane card offers to leave the batch or to reject one claim of it (marking it `disproved`), never to
+    // accept; both go through the console, which only the operator holds, and the terminal path asks for a typed word. Only the card's own module,
+    // the service that answers it and the operator's command call them, and nothing reads the dismissal or the rejection as a criterion for anything.
+    let root = root();
+    let mut files = Vec::new();
+    rust_files(&root.join("crates"), &mut files);
+    let callers = Regex::new(r"accept_all::act\(|accept_all::reject_one\(|\bac::reject_one\(|accept_all_reject\(").unwrap();
+    let ok = ["crates/delphi-engine/src/accept_all.rs", "crates/delphi-engine/src/service.rs", "crates/delphi/src/validation_tier_cmd.rs", "crates/delphi/src/main.rs"];
+    let events = Regex::new(r#"accept_all\.card_dismissed|accept_all\.claim_rejected|accept_all_reject""#).unwrap();
+    let events_ok = ["crates/delphi-engine/src/accept_all.rs"];
+    let (mut stray, mut stray_events) = (Vec::new(), Vec::new());
+    for f in &files {
+        let rel = f.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
+        let src = std::fs::read_to_string(f).unwrap();
+        let code: String = production(&src).lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+        if callers.is_match(&code) && !ok.contains(&rel.as_str()) {
+            stray.push(rel.clone());
+        }
+        if events.is_match(&code) && !events_ok.contains(&rel.as_str()) {
+            stray_events.push(rel);
+        }
+    }
+    assert!(stray.is_empty(), "the card's actions or the rejection are called from outside the module, the service and the operator's command: {stray:?}");
+    assert!(stray_events.is_empty(), "the dismissal or rejection events are named outside accept_all.rs: {stray_events:?}");
+    // the terminal is checked before the `--reject` branch can run
+    let main = std::fs::read_to_string(root.join("crates/delphi/src/main.rs")).unwrap();
+    let at = main.find("\"accept-all\" => {").expect("the accept-all arm");
+    let arm = &main[at..at + 4000];
+    let (term, reject) = (arm.find("is_terminal").expect("a terminal check"), arm.find("validation_tier_cmd::accept_all_reject(").expect("the reject call"));
+    assert!(term < reject, "the terminal is checked before a claim can be rejected");
+    // the service answers the card only for a console client
+    let svc = std::fs::read_to_string(root.join("crates/delphi-engine/src/service.rs")).unwrap();
+    let at = svc.find("async fn digest_act").expect("digest_act");
+    let body = &svc[at..at + 3000];
+    let (console, act) = (body.find("need_console(&ctx)?").expect("the console check"), body.find("accept_all::act(").expect("the card action"));
+    assert!(console < act, "only a console client reaches the card's actions");
+}

@@ -16,6 +16,7 @@ use crate::fact_audit::{current_batch, Journal};
 use crate::library::claims::{status_with, tags_of};
 use crate::library::Library;
 use crate::tier_audit;
+use delphi_core::event::EventEnvelope;
 use delphi_core::knowledge_status::{tier_for, tier_params_configured, Status};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -250,9 +251,36 @@ pub fn needs_line(lib: &Library, state: &Path) -> String {
     s
 }
 
+/// The id of the decision card for an audit batch. A new batch (a `tier restore`) is a new card.
+pub fn card_id(batch: &str) -> String {
+    format!("accept-all-{}", short(batch, 24))
+}
+
+/// What the card asks the operator to judge, hashed: the batch, the claims on offer and the claims left out. An answer to a card that has changed
+/// since it was shown (a claim rejected, a source changed, a tier rolled back) is refused, as for every digest card.
+pub fn card_hash(plan: &Plan, batch: &str) -> String {
+    let mut s = format!("{batch}\n");
+    for r in &plan.rows {
+        s.push_str(&r.id);
+        s.push('\n');
+    }
+    s.push('|');
+    for k in &plan.skipped {
+        s.push_str(&k.id);
+        s.push('\n');
+    }
+    blake3::hash(s.as_bytes()).to_hex().to_string()
+}
+
+/// The choice id of a per-claim rejection: `reject:<claim id>`.
+pub const REJECT_PREFIX: &str = "reject:";
+/// How many claims a card offers a rejection for; the rest are rejected with `delphi validation accept-all --reject <id>` at a terminal.
+const REJECT_CHOICES: usize = 8;
+
 /// The decision card the digest would carry for the batch (`specs/052` §3.3, kind `learn`): counts by group, what is left out and why, and the
-/// command that does it. Pure data. `None` when nothing waits or accept-all is disabled. It carries no choice that writes: accepting is the
-/// operator's act at a terminal, so the card points at the command and offers only to dismiss it.
+/// command that does it. Pure data. `None` when nothing waits or accept-all is disabled. **Accepting is never a choice on the card**: it is the
+/// operator's act at a terminal, so the card points at the command. Its choices are to leave the batch for now (`skip`) and, per claim, to
+/// reject one as wrong (`reject:<id>`, which marks that claim `disproved`; nothing is deleted). Both are the operator's, via the console.
 pub fn card(plan: &Plan, now: &str, batch: &str) -> Option<Value> {
     if plan.disabled.is_some() || plan.rows.is_empty() {
         return None;
@@ -263,8 +291,12 @@ pub fn card(plan: &Plan, now: &str, batch: &str) -> Option<Value> {
         changes.push(format!("left out: {} ({})", short(&s.text, 80), short(&s.why, 80)));
     }
     changes.push(GLANCE_NOTE.to_string());
+    let mut choices = vec![json!({"id": "skip", "label": "Leave them for now", "effect": "digest", "reversible": true})];
+    for r in plan.rows.iter().take(REJECT_CHOICES) {
+        choices.push(json!({"id": format!("{REJECT_PREFIX}{}", r.id), "label": format!("Reject as wrong (disproved): {}", short(&r.text, 60)), "effect": "digest", "reversible": false}));
+    }
     Some(json!({
-        "id": format!("accept-all-{}", short(batch, 24)), "source": "digest", "source_id": "accept_all_vetted", "label": "DIGEST",
+        "id": card_id(batch), "source": "digest", "source_id": "accept_all_vetted", "label": "DIGEST", "payload_blake3": card_hash(plan, batch),
         "kind": "learn", "tier": "open", "title": format!("{} vetted claim(s) wait for your accept", plan.rows.len()),
         "requester": "daemon", "task": "", "raised_at": now, "timeout_secs": Value::Null,
         "brief": {
@@ -272,21 +304,74 @@ pub fn card(plan: &Plan, now: &str, batch: &str) -> Option<Value> {
             "changes": changes, "state": "plain",
             "recommendation": {"choice_id": "skip", "why": "accepting is yours, at a terminal: `delphi validation accept-all`"},
         },
-        "choices": [{"id": "skip", "label": "Leave them for now", "effect": "digest", "reversible": true}],
+        "choices": choices,
         "tickable": false, "tickable_reason": "accepting is done with the command, not from this card",
     }))
 }
 
+/// Has the operator already left this card (this batch, these claims) for now? The card is not offered again until it changes.
+pub fn dismissed(events: &[EventEnvelope], id: &str, hash: &str) -> bool {
+    events.iter().any(|e| e.kind == "accept_all.card_dismissed" && e.payload["id"] == id && e.payload["payload_blake3"] == hash)
+}
+
+/// The operator marks one claim of the batch wrong: it reads `disproved` through the library's existing operator path (`Library::reject_claim`),
+/// leaves the batch, and nothing is deleted. Only a claim that accept-all would take now can be rejected here, so this is not a way to disprove an
+/// arbitrary claim. Journaled. `by` is the operator's console or terminal; the callers are the console action and `--reject`, both refused inside
+/// an agent seat.
+pub fn reject_one(lib: &Library, state: &Path, claim: &str, by: &str, now: i64) -> Result<(), String> {
+    let p = plan(lib, state, false);
+    if let Some(why) = p.disabled {
+        return Err(why);
+    }
+    if !p.rows.iter().any(|r| r.id == claim) {
+        return Err("that claim is not in the list of vetted claims that accept-all can take now".into());
+    }
+    lib.reject_claim(claim)?;
+    Journal::new(state).append("accept_all_reject", json!({"claim": claim, "audit_batch": current_batch(state), "by": by}), now);
+    Ok(())
+}
+
+/// The operator's answer to the card: which card, the hash it was shown with, and the choice.
+#[derive(Debug, Clone, Copy)]
+pub struct Answer<'a> {
+    pub card_id: &'a str,
+    pub payload_blake3: &'a str,
+    pub choice: &'a str,
+}
+
+/// What the operator's choice on the card does, as the events to append. `Err`, writing nothing, while accept-all is disabled, when the card has
+/// changed since it was shown (`hash`), for a choice the card does not offer, and for a claim outside the batch. `skip` leaves the card; `reject:<id>`
+/// disproves one claim ([`reject_one`]). There is deliberately no choice that accepts.
+pub fn act(mission_id: &str, lib: &Library, state: &Path, answer: &Answer, by: &str, now: i64) -> Result<Vec<EventEnvelope>, String> {
+    let (id, hash, choice) = (answer.card_id, answer.payload_blake3, answer.choice);
+    let p = plan(lib, state, false);
+    if let Some(why) = &p.disabled {
+        return Err(why.clone());
+    }
+    let batch = current_batch(state);
+    if p.rows.is_empty() || id != card_id(&batch) || hash != card_hash(&p, &batch) {
+        return Err("the accept-all card changed since you looked at it; open it again".into());
+    }
+    if choice == "skip" {
+        return Ok(vec![EventEnvelope::new(mission_id, "accept_all.card_dismissed", json!({"id": id, "payload_blake3": hash}))]);
+    }
+    let Some(claim) = choice.strip_prefix(REJECT_PREFIX) else {
+        return Err(format!("`{choice}` is not an action of this card (skip, or {REJECT_PREFIX}<claim id>); accepting is done with `delphi validation accept-all` at a terminal"));
+    };
+    reject_one(lib, state, claim, by, now)?;
+    Ok(vec![EventEnvelope::new(mission_id, "accept_all.claim_rejected", json!({"claim": claim, "by": by, "audit_batch": batch}))])
+}
+
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::library::claims::{AnchorSpec, ClaimOpts, BATCH_MARK};
     use crate::library::{AddOpts, Budgets};
 
-    struct Fix {
-        _d: tempfile::TempDir,
-        lib: Library,
-        state: std::path::PathBuf,
+    pub(crate) struct Fix {
+        pub(crate) _d: tempfile::TempDir,
+        pub(crate) lib: Library,
+        pub(crate) state: std::path::PathBuf,
     }
 
     fn fixture() -> Fix {
@@ -298,9 +383,14 @@ mod tests {
         Fix { _d: d, lib, state }
     }
 
+    /// The same fixture over a home and workspace that already exist (a service test's), with its own scratch directory for the source pages.
+    pub(crate) fn fixture_in(home: &std::path::Path, ws_dir: &std::path::Path) -> Fix {
+        Fix { _d: tempfile::tempdir().unwrap(), lib: Library::in_home(home), state: crate::fact_mode::state_dir(ws_dir) }
+    }
+
     /// A claim on the vetted rung the real way: five sources as the fetcher leaves them (each its own origin, a reputable class, an address), the
     /// claim anchored in all five, its support computed by the library, and the validator's dry run recorded. Returns the claim id and its source ids.
-    fn vetted_with_sources(f: &Fix, name: &str, text: &str) -> (String, Vec<String>) {
+    pub(crate) fn vetted_with_sources(f: &Fix, name: &str, text: &str) -> (String, Vec<String>) {
         let topics = ["harbours", "fishing", "navigation", "weather", "lighthouses"];
         let quote = text.trim_end_matches('.').to_string();
         let ids: Vec<String> = topics
@@ -329,7 +419,7 @@ mod tests {
         (id, ids)
     }
 
-    fn vetted(f: &Fix, name: &str, text: &str) -> String {
+    pub(crate) fn vetted(f: &Fix, name: &str, text: &str) -> String {
         vetted_with_sources(f, name, text).0
     }
 
@@ -475,7 +565,80 @@ mod tests {
         let c = card(&p, "2026-11-11T00:00:00Z", "b1").unwrap();
         assert_eq!((c["kind"].as_str(), c["source_id"].as_str(), c["tickable"].as_bool()), (Some("learn"), Some("accept_all_vetted"), Some(false)));
         let choices = c["choices"].as_array().unwrap();
-        assert!(choices.len() == 1 && choices[0]["id"] == "skip", "the card offers no writing choice: {c}");
+        let ids: Vec<&str> = choices.iter().filter_map(|x| x["id"].as_str()).collect();
+        assert_eq!(ids[0], "skip");
+        assert!(ids[1..].iter().all(|i| i.starts_with(REJECT_PREFIX)) && ids.len() == 5, "skip, then one rejection per claim: {c}");
+        assert!(!ids.iter().any(|i| i.contains("accept")), "the card offers no choice that accepts: {c}");
         assert!(needs_line(&f.lib, &f.state).contains("Accept all vetted: 4 claim(s)"));
+    }
+
+    fn card_of(f: &Fix) -> (String, String, Plan) {
+        let p = plan(&f.lib, &f.state, false);
+        let batch = current_batch(&f.state);
+        (card_id(&batch), card_hash(&p, &batch), p)
+    }
+
+    #[test]
+    fn leaving_the_card_hides_it_until_the_batch_changes() {
+        let f = fixture();
+        vetted(&f, "a", "The harbour closes at dusk.");
+        let (id, hash, _) = card_of(&f);
+        let evs = act("m1", &f.lib, &f.state, &Answer { card_id: &id, payload_blake3: &hash, choice: "skip" }, "console-1", 10).unwrap();
+        assert_eq!(evs.len(), 1);
+        assert!(dismissed(&evs, &id, &hash), "the dismissal names this card and this hash");
+        assert!(!dismissed(&evs, &id, "some-other-hash"));
+        // a second vetted claim changes what the card asks, so the old dismissal no longer hides it
+        vetted(&f, "b", "The lamp is lit by hand.");
+        let (_, hash2, _) = card_of(&f);
+        assert_ne!(hash, hash2);
+        assert!(!dismissed(&evs, &id, &hash2));
+    }
+
+    #[test]
+    fn rejecting_a_claim_disproves_that_one_claim_deletes_nothing_and_touches_no_other() {
+        let f = fixture();
+        let a = vetted(&f, "a", "The harbour closes at dusk.");
+        let b = vetted(&f, "b", "The lamp is lit by hand.");
+        let (id, hash, _) = card_of(&f);
+        let choice = format!("{REJECT_PREFIX}{a}");
+        let evs = act("m1", &f.lib, &f.state, &Answer { card_id: &id, payload_blake3: &hash, choice: &choice }, "console-1", 10).unwrap();
+        assert_eq!((evs.len(), evs[0].kind.as_str()), (1, "accept_all.claim_rejected"));
+        let ca = f.lib.claim(&a).unwrap();
+        assert_eq!(ca["lifecycle"], "disproved");
+        assert_eq!(ca["disproved_by"]["by"], "operator");
+        assert!(ca["anchors"].as_array().is_some_and(|x| !x.is_empty()), "nothing was deleted");
+        assert!(f.lib.claim(&b).unwrap()["lifecycle"].is_null(), "the other claim is untouched");
+        assert!(Journal::new(&f.state).all().iter().any(|e| e["kind"] == "accept_all_reject" && e["claim"] == a.as_str() && e["by"] == "console-1"));
+        // the rejected claim has left the batch, and the card has changed with it
+        let (_, hash2, p2) = card_of(&f);
+        assert_eq!(p2.rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), vec![b.as_str()]);
+        assert_ne!(hash, hash2);
+    }
+
+    #[test]
+    fn the_card_refuses_a_stale_answer_a_claim_outside_the_batch_a_made_up_choice_and_an_accept() {
+        let f = fixture();
+        let a = vetted(&f, "a", "The harbour closes at dusk.");
+        let (id, hash, _) = card_of(&f);
+        let run = |card: &str, h: &str, choice: &str| act("m1", &f.lib, &f.state, &Answer { card_id: card, payload_blake3: h, choice }, "console-1", 10);
+        assert!(run(&id, "stale", "skip").unwrap_err().contains("changed"));
+        assert!(run("accept-all-other", &hash, "skip").unwrap_err().contains("changed"));
+        assert!(run(&id, &hash, &format!("{REJECT_PREFIX}no-such-claim")).unwrap_err().contains("not in the list"));
+        assert!(run(&id, &hash, "accept").unwrap_err().contains("not an action of this card"));
+        assert!(run(&id, &hash, "accept all").unwrap_err().contains("at a terminal"));
+        assert!(f.lib.claim(&a).unwrap()["lifecycle"].is_null() && f.lib.claim(&a).unwrap()["validated_by"].is_null(), "nothing was written");
+    }
+
+    #[test]
+    fn the_card_and_the_reject_are_refused_while_the_tier_is_rolled_back() {
+        let f = fixture();
+        let a = vetted(&f, "a", "The harbour closes at dusk.");
+        let (id, hash, _) = card_of(&f);
+        tier_audit::rollback(&f.state, "vetted", "operator", "an audit found a false claim", 50).unwrap();
+        let choice = format!("{REJECT_PREFIX}{a}");
+        let err = act("m1", &f.lib, &f.state, &Answer { card_id: &id, payload_blake3: &hash, choice: &choice }, "console-1", 60).unwrap_err();
+        assert!(err.contains("rolled back"), "{err}");
+        assert!(reject_one(&f.lib, &f.state, &a, "operator", 60).unwrap_err().contains("rolled back"));
+        assert!(f.lib.claim(&a).unwrap()["lifecycle"].is_null(), "nothing was disproved");
     }
 }
