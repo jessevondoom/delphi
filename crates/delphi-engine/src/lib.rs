@@ -68,6 +68,7 @@ pub mod spec_lookup;
 pub mod transcript;
 pub mod history_consent;
 pub mod history_manage;
+pub mod history_citation;
 pub mod history_pointer;
 pub mod history_record;
 pub mod history_redact;
