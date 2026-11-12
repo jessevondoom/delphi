@@ -72,7 +72,7 @@ _No standard scope section; open the spec._
 
 ## 055-the-central-library-sources-claims-and-pages
 
-**055: The central library: sources kept whole or by excerpt, claims that point into them, and pages generated from claims** · approved (per source at `1fb83f6c99f0`) · tier 0 · [source](../../specs/055-the-central-library-sources-claims-and-pages.md)
+**055: The central library: sources kept whole or by excerpt, claims that point into them, and pages generated from claims** · approved (per source at `3dcfda17ac84`) · tier 0 · [source](../../specs/055-the-central-library-sources-claims-and-pages.md)
 
 _No standard scope section; open the spec._
 
@@ -166,7 +166,7 @@ The operator's aim (2026-11-10): **no learning is absolute, but a high degree of
 
 ## 101-library-practice-for-research-a-search-log-retraction-lookup-archived-copies-and-citation-chaining
 
-**101: Library practice for research: a search log, retraction lookup, archived copies and citation chaining** · approved (per source at `b2ea1b57a13e`) · tier 0 · [source](../../specs/101-library-practice-for-research-a-search-log-retraction-lookup-archived-copies-and-citation-chaining.md)
+**101: Library practice for research: a search log, retraction lookup, archived copies and citation chaining** · approved (per source at `6ab858de7eab`) · tier 0 · [source](../../specs/101-library-practice-for-research-a-search-log-retraction-lookup-archived-copies-and-citation-chaining.md)
 
 **source excerpt, untrusted** · `specs/101-library-practice-for-research-a-search-log-retraction-lookup-archived-copies-and-citation-chaining.md` line 22
 
