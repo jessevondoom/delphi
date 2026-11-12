@@ -30,6 +30,8 @@ use std::sync::Arc;
 pub const CONTRADICTION_TEMPLATES: [&str; 4] = ["\"{s}\" false", "\"{s}\" myth OR incorrect", "{s} not true", "{s} disputed OR debunked"];
 const SUBJECT_WORDS: usize = 12;
 const CANDIDATES_PER_QUERY: usize = 3;
+/// How many validated facts of the knowledge base the judge reads for one claim (`specs/100` §9.1). A hypothesis to calibrate; each is one judge call.
+pub const VALIDATED_FACTS_JUDGED: usize = 3;
 
 #[derive(Debug, Clone)]
 pub struct Hit {
@@ -97,6 +99,20 @@ pub fn check_stored(sub: &Submission, snaps: &[Snapshot], list: &SourceList, doi
         None => DoiCheck::TextOnly,
     };
     check_fact_with(sub, snaps, list, &doi)
+}
+
+/// One validated fact of the knowledge base, as the contradiction step reads it: its id (a library claim id) and its text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidatedFact {
+    pub id: String,
+    pub text: String,
+}
+
+/// The validated facts of the knowledge base that are about a claim (`specs/100` §9.1). Local only: it reads what the library already holds,
+/// sends nothing, and writes nothing. The contradiction step offers each to the same entailment judge that reads a web passage.
+pub trait ValidatedFacts: Send + Sync {
+    /// At most `limit` validated facts about `claim`, never the claim's own text.
+    fn about(&self, claim: &str, limit: usize) -> Vec<ValidatedFact>;
 }
 
 /// The configured web search engines (`[search]`).
@@ -176,11 +192,14 @@ pub struct Report {
     pub refused_fetches: Vec<(String, String)>,
     pub reasons: Vec<String>,
     pub tokens: u64,
+    /// Ids of validated library claims the judge read as saying the opposite of this claim (`specs/100` §9.1). Ids only, never their text. The
+    /// validator's loop hands them to the library, which marks the contradicting claim contested; the validated fact is never touched.
+    pub contradicted_validated: Vec<String>,
 }
 
 impl Report {
     fn new(mode: ValidatorMode, findings: FactFindings) -> Report {
-        Report { verdict: Verdict::Failed, mode, would_ratify: false, findings, judged: vec![], contradictions: vec![], contradiction_search_ran: false, refused_fetches: vec![], reasons: vec![], tokens: 0 }
+        Report { verdict: Verdict::Failed, mode, would_ratify: false, findings, judged: vec![], contradictions: vec![], contradiction_search_ran: false, refused_fetches: vec![], reasons: vec![], tokens: 0, contradicted_validated: vec![] }
     }
 
     #[cfg(test)]
@@ -219,6 +238,8 @@ pub struct Deps<'a> {
     pub author_family: Option<&'a str>,
     /// With a resolver, a journal-publisher page counts only when its DOI is registered at a publisher; without one, when a DOI is written on it.
     pub doi: Option<&'a dyn DoiResolver>,
+    /// The knowledge base's validated facts, read by the judge before the web search (`specs/100` §9.1). `None`: the step does not run.
+    pub validated: Option<&'a dyn ValidatedFacts>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -301,6 +322,30 @@ pub async fn run_fact(deps: &Deps<'_>, mode: ValidatorMode, sub: &Submission) ->
             }
             Err(JudgeError::BudgetReached) => return Ok(r.end(Verdict::BudgetReached, "the validator's token allowance is used up: not validated (budget reached), queued for review")),
             Err(JudgeError::Failed(why)) => return Ok(r.end(Verdict::Escalate, format!("the entailment judge could not answer: {}", why))),
+        }
+    }
+
+    // The knowledge base's own validated facts (`specs/100` §9.1). Local and read first, so it runs with no search engine and sends nothing: it
+    // offers each validated fact about the claim to the SAME judge that reads a web passage, no new model and no new judge. A fact the judge reads
+    // as saying the opposite ends the check the way a contradicting source does, and its id goes on the report so the validator's loop can mark
+    // the contradicting library claim contested. The validated fact is only read.
+    if let Some(known) = deps.validated {
+        for fact in known.about(&r.findings.claim, VALIDATED_FACTS_JUDGED) {
+            let q = JudgeQuery { claim: r.findings.claim.clone(), passage: fact.text.clone() };
+            match judge_budgeted(deps.judge, deps.ledger, &q).await {
+                Ok(j) => {
+                    r.tokens += j.tokens;
+                    if j.verdict == Entail::Contradicts {
+                        r.judged.push(JudgeRecord { snapshot_sha256: format!("validated:{}", fact.id), verdict: j.verdict, same_family_as_author: deps.author_family == Some(j.family.as_str()), model: j.model, tokens: j.tokens });
+                        r.contradicted_validated.push(fact.id);
+                    }
+                }
+                Err(JudgeError::BudgetReached) => return Ok(r.end(Verdict::BudgetReached, "the allowance ran out while a validated fact was read")),
+                Err(JudgeError::Failed(why)) => return Ok(r.end(Verdict::Escalate, format!("the judge could not read a validated fact: {}", why))),
+            }
+        }
+        if !r.contradicted_validated.is_empty() {
+            return Ok(r.end(Verdict::Conflicting, "a validated fact in the knowledge base says the opposite: escalated, and the claim is marked contested"));
         }
     }
 
@@ -437,9 +482,64 @@ mod tests {
         let store = SnapshotStore::in_home(home.path());
         let judge = Says(says, Mutex::new(vec![]));
         let ledger = TokenLedger::new(tokens);
-        let deps = Deps { policy: &policy, store: &store, list: &list, judge: &judge, searcher: searcher.map(|s| s as &dyn Searcher), ledger: &ledger, author_family: Some("author"), doi: None };
+        let deps = Deps { policy: &policy, store: &store, list: &list, judge: &judge, searcher: searcher.map(|s| s as &dyn Searcher), ledger: &ledger, author_family: Some("author"), doi: None, validated: None };
         let r = run_fact(&deps, mode, &sub(format!("http://{}{}", addr, path))).await;
         (r, hits, judge)
+    }
+
+    struct Known(Vec<ValidatedFact>);
+    impl ValidatedFacts for Known {
+        fn about(&self, _claim: &str, limit: usize) -> Vec<ValidatedFact> {
+            self.0.iter().take(limit).cloned().collect()
+        }
+    }
+
+    /// `Contradicts` for a passage that contains `OPPOSITE`, `Entails` for any other.
+    struct ByMarker(Mutex<Vec<String>>);
+    impl FactJudge for ByMarker {
+        fn judge<'a>(&'a self, q: &'a JudgeQuery) -> JudgeFuture<'a> {
+            self.0.lock().unwrap().push(q.passage.clone());
+            let v = if q.passage.contains("OPPOSITE") { Entail::Contradicts } else { Entail::Entails };
+            Box::pin(async move { Ok(JudgeReply { verdict: v, model: "judge-model".into(), family: "other".into(), tokens: 100 }) })
+        }
+    }
+
+    async fn with_known(known: &Known, searcher: &Hits) -> (Report, Vec<String>) {
+        let (policy, list, addr, _hits) = setup(&[(PINNED, PAGE)]);
+        let home = tempfile::tempdir().unwrap();
+        let store = SnapshotStore::in_home(home.path());
+        let judge = ByMarker(Mutex::new(vec![]));
+        let ledger = TokenLedger::new(100_000);
+        let deps = Deps { policy: &policy, store: &store, list: &list, judge: &judge, searcher: Some(searcher), ledger: &ledger, author_family: None, doi: None, validated: Some(known) };
+        let r = run_fact(&deps, ValidatorMode::Advisory, &sub(format!("http://{}{}", addr, PINNED))).await.unwrap();
+        let read = judge.0.lock().unwrap().clone();
+        (r, read)
+    }
+
+    #[tokio::test]
+    async fn a_validated_fact_that_says_the_opposite_ends_the_check_as_conflicting_before_any_search_and_names_only_its_id() {
+        let known = Known(vec![
+            ValidatedFact { id: "c_7".into(), text: "Harry Nilsson did not write 'One'. OPPOSITE".into() },
+            ValidatedFact { id: "c_8".into(), text: "Nilsson recorded an album in 1968.".into() },
+        ]);
+        let s = Hits(vec![], Mutex::new(vec![]));
+        let (r, read) = with_known(&known, &s).await;
+        assert_eq!(r.verdict, Verdict::Conflicting, "{:?}", r.reasons);
+        assert_eq!(r.contradicted_validated, vec!["c_7".to_string()], "only the id of the fact that says the opposite");
+        assert!(!r.would_ratify, "a contradiction is never ratified");
+        assert!(s.1.lock().unwrap().is_empty(), "the validated store is read before the web search, and the search never ran");
+        assert_eq!(read.iter().filter(|p| p.contains("did not write") || p.contains("recorded an album")).count(), 2, "both validated facts were read: {read:?}");
+        assert!(r.judged.iter().any(|j| j.snapshot_sha256 == "validated:c_7"));
+    }
+
+    #[tokio::test]
+    async fn validated_facts_that_agree_change_nothing_and_the_search_still_runs() {
+        let known = Known(vec![ValidatedFact { id: "c_8".into(), text: "Nilsson recorded an album in 1968.".into() }]);
+        let s = Hits(vec![], Mutex::new(vec![]));
+        let (r, _read) = with_known(&known, &s).await;
+        assert_eq!(r.verdict, Verdict::Ratifiable, "{:?}", r.reasons);
+        assert!(r.contradicted_validated.is_empty());
+        assert_eq!(s.1.lock().unwrap().len(), 4, "the daemon's contradiction search ran as before");
     }
 
     #[tokio::test]
@@ -505,7 +605,7 @@ mod tests {
         let judge = Flip(Mutex::new(0));
         let ledger = TokenLedger::new(100_000);
         let s = Hits(vec![format!("http://{}/other", addr)], Mutex::new(vec![]));
-        let deps = Deps { policy: &policy, store: &store, list: &list, judge: &judge, searcher: Some(&s), ledger: &ledger, author_family: None, doi: None };
+        let deps = Deps { policy: &policy, store: &store, list: &list, judge: &judge, searcher: Some(&s), ledger: &ledger, author_family: None, doi: None, validated: None };
         let r = run_fact(&deps, ValidatorMode::Advisory, &sub(format!("http://{}{}", addr, PINNED))).await.unwrap();
         assert_eq!((r.verdict, r.would_ratify), (Verdict::Conflicting, false), "{:?}", r.reasons);
         assert_eq!(r.contradictions.len(), 1);

@@ -487,6 +487,31 @@ impl Library {
         Ok(self.refresh_support(claim_id).unwrap_or(c))
     }
 
+    /// The validator's contradiction step found, for the claim with this text, validated facts that say the opposite (`specs/100` §9.1): mark each
+    /// library claim with that text contested against each of them, through [`Library::contradicts_validated`], which writes only the claim and
+    /// refuses a target that is not validated, the claim itself, and a claim that is itself validated. A claim already contested, disproved or
+    /// retired is left as it is. Returns the ids of the claims marked. Daemon only: the validator's own loop is the sole caller.
+    pub fn record_contradictions(&self, fact_id: &str, validated_ids: &[String]) -> Vec<String> {
+        let mut marked = Vec::new();
+        for c in self.claims() {
+            if c["kind"] == "attributed" || c["lifecycle"].is_string() || matches!(status(&c), Status::Validated | Status::Disproved | Status::Retired) {
+                continue;
+            }
+            if crate::fact_store::fact_id(c["text"].as_str().unwrap_or("")) != fact_id {
+                continue;
+            }
+            let id = c["id"].as_str().unwrap_or("").to_string();
+            let mut any = false;
+            for v in validated_ids {
+                any |= self.contradicts_validated(&id, v).is_ok();
+            }
+            if any {
+                marked.push(id);
+            }
+        }
+        marked
+    }
+
     fn contest(&self, c: &mut Value, reason: &str, source: &str, note: Value) {
         let marks = c["contested_by"].as_array().cloned().unwrap_or_default();
         if marks.iter().any(|m| m["reason"] == reason && m["source"] == source) {
@@ -1102,5 +1127,42 @@ impl Library {
             s.push_str(&format!("source {} version {} {} [{}]\n", a["source_id"].as_str().unwrap_or(""), a["version"].as_str().unwrap_or(""), clean_text(a["locator"].as_str().unwrap_or("")), a["state"].as_str().unwrap_or("active")));
         }
         Some(s)
+    }
+}
+
+/// How many content words a validated fact must share with a claim to be read against it, and what share of the shorter text that is
+/// (`specs/100` §9.1). Hypotheses to calibrate: too loose reads unrelated facts (a wasted judge call), too tight misses a contradiction.
+const VALIDATED_MIN_SHARED_WORDS: usize = 3;
+const VALIDATED_MIN_SHARE: f64 = 0.4;
+
+fn content_words(text: &str) -> std::collections::BTreeSet<String> {
+    text.split(|c: char| !c.is_alphanumeric()).filter(|w| w.chars().count() > 2).map(|w| w.to_lowercase()).collect()
+}
+
+/// The library's validated claims, offered to the validator's contradiction step (`specs/100` §9.1). Local and read-only: it ranks the validated
+/// claims by the content words they share with the claim and returns the best few. An attribution, a claim in a lifecycle (retired, expired) and
+/// the claim's own text are never offered.
+impl crate::fact_run::ValidatedFacts for Library {
+    fn about(&self, claim: &str, limit: usize) -> Vec<crate::fact_run::ValidatedFact> {
+        let mine = content_words(claim);
+        let own = crate::fact_store::fact_id(claim);
+        let mut found: Vec<(usize, crate::fact_run::ValidatedFact)> = Vec::new();
+        for c in self.claims() {
+            if c["kind"] == "attributed" || c["lifecycle"].is_string() || status(&c) != Status::Validated {
+                continue;
+            }
+            let text = c["text"].as_str().unwrap_or("");
+            if text.is_empty() || crate::fact_store::fact_id(text) == own {
+                continue;
+            }
+            let theirs = content_words(text);
+            let shared = mine.intersection(&theirs).count();
+            let shorter = mine.len().min(theirs.len()).max(1);
+            if shared >= VALIDATED_MIN_SHARED_WORDS && (shared as f64) / (shorter as f64) >= VALIDATED_MIN_SHARE {
+                found.push((shared, crate::fact_run::ValidatedFact { id: c["id"].as_str().unwrap_or("").to_string(), text: text.to_string() }));
+            }
+        }
+        found.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.id.cmp(&b.1.id)));
+        found.into_iter().take(limit).map(|(_, f)| f).collect()
     }
 }

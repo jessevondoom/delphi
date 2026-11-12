@@ -401,16 +401,21 @@ fn a_chain_result_is_a_lead_that_only_the_run_the_live_side_and_the_settings_nam
 
 #[test]
 fn a_contradiction_mark_is_made_only_by_the_library_and_nothing_reads_a_sources_standing() {
-    // `specs/100` §9.1. `contradicts_validated` lowers only the contradicting claim, never the validated fact; the validator's contradiction
-    // search will be its caller, so today no other production file names it. `standing()` is the only history that may ever count toward a
-    // source's standing (claims the operator accepted one at a time); nothing reads it, because a source becomes a trusted source only by the
-    // operator's own edit of the list (`specs/066` §5). A caller of either one has to be added to this test on purpose.
+    // `specs/100` §9.1. `contradicts_validated` lowers only the contradicting claim, never the validated fact, and only the library names it.
+    // The validator's contradiction step offers the knowledge base's validated facts to its judge (`ValidatedFacts`: the trait lives in
+    // `fact_run.rs`, the library implements it) and the validator's own loop (`fact_serve.rs`) hands the ids the judge read as saying the opposite
+    // to `Library::record_contradictions`, the only route to the mark. No tool, host field or model reaches either. `standing()` is the only
+    // history that may ever count toward a source's standing (claims the operator accepted one at a time); nothing reads it, because a source
+    // becomes a trusted source only by the operator's own edit of the list (`specs/066` §5). A caller of any of these has to be added to this
+    // test on purpose.
     let root = root();
     let mut files = Vec::new();
     rust_files(&root.join("crates"), &mut files);
     let marker = Regex::new(r"contradicts_validated\(").unwrap();
+    let recorder = Regex::new(r"record_contradictions\(").unwrap();
+    let source_trait = Regex::new(r"\bValidatedFacts\b").unwrap();
     let standing = Regex::new(r"\.standing\(\)").unwrap();
-    let (mut mark_callers, mut standing_readers) = (Vec::new(), Vec::new());
+    let (mut mark_callers, mut recorders, mut trait_users, mut standing_readers) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for f in &files {
         let rel = f.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
         let src = std::fs::read_to_string(f).unwrap();
@@ -418,11 +423,19 @@ fn a_contradiction_mark_is_made_only_by_the_library_and_nothing_reads_a_sources_
         if marker.is_match(&code) && rel != "crates/delphi-engine/src/library_claims.rs" {
             mark_callers.push(rel.clone());
         }
+        if recorder.is_match(&code) && !["crates/delphi-engine/src/library_claims.rs", "crates/delphi-engine/src/fact_serve.rs"].contains(&rel.as_str()) {
+            recorders.push(rel.clone());
+        }
+        if source_trait.is_match(&code) && !["crates/delphi-engine/src/fact_run.rs", "crates/delphi-engine/src/library_claims.rs", "crates/delphi-engine/src/fact_serve.rs"].contains(&rel.as_str()) {
+            trait_users.push(rel.clone());
+        }
         if standing.is_match(&code) {
             standing_readers.push(rel);
         }
     }
     assert!(mark_callers.is_empty(), "something other than the library names the contradiction mark: {mark_callers:?}");
+    assert!(recorders.is_empty(), "something other than the library and the validator's loop records a contradiction: {recorders:?}");
+    assert!(trait_users.is_empty(), "the validated-fact source is named outside the validator, its loop and the library: {trait_users:?}");
     assert!(standing_readers.is_empty(), "something reads a source's standing, which no path may do yet: {standing_readers:?}");
 }
 
