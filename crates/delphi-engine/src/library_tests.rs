@@ -659,6 +659,29 @@ mod claims {
         assert_eq!(c["support"]["origins"], 2, "a retraction does not un-happen: {c}");
     }
 
+    /// Put a DOI on a source's record, as a capture that found one would.
+    fn with_doi(l: &Library, id: &str, doi: &str) {
+        let mut m = l.read_meta(id).unwrap();
+        m["DOI"] = json!(doi);
+        std::fs::write(l.source_dir(id).join("meta.json"), serde_json::to_vec(&m).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn two_sources_naming_one_work_are_one_origin_and_a_different_work_is_another() {
+        // `specs/101` §11: the same DOI written two ways, held by two hosts, is one origin; it never adds one.
+        let (d, l) = lib();
+        let (ids, id) = three_fetched(d.path(), &l);
+        assert_eq!(l.claim(&id).unwrap()["support"]["origins"], json!(3), "three hosts, no DOIs: three origins");
+        with_doi(&l, &ids[0], "10.1000/XYZ123");
+        with_doi(&l, &ids[1], "https://doi.org/10.1000/xyz123");
+        let c = l.refresh_support(&id).unwrap();
+        assert_eq!(c["support"]["origins"], json!(2), "one work under two spellings and two hosts is one origin: {c}");
+        assert!(!matches!(status(&c), Status::Corroborated | Status::Substantiated | Status::Vetted), "two origins are not corroboration: {c}");
+        with_doi(&l, &ids[1], "10.1000/xyz999");
+        let c = l.refresh_support(&id).unwrap();
+        assert_eq!(c["support"]["origins"], json!(3), "a different work is another origin: {c}");
+    }
+
     #[test]
     fn a_retired_or_purged_source_retracts_the_count_and_a_revived_one_restores_it() {
         let (d, l) = lib();

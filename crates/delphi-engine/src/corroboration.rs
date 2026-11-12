@@ -58,6 +58,10 @@ pub struct Cite {
     pub listed_in_scope: bool,
     /// The source is built from claims (a generated page), so counting it would let a claim support itself (`specs/098` §7.6 cycle check).
     pub derived: bool,
+    /// The normalised DOI of the work this page is (`crate::doi::normalize`), if its record names one. Two citations of the same work are
+    /// one origin however they are spelled and wherever they are hosted (`specs/101` §11). It is a *matching* key: it can only merge
+    /// origins, so it can only lower the count, and it raises nothing.
+    pub work: Option<String>,
 }
 
 /// What the count found. `zeroed` names each citation that did not count and why, so a reader can see it.
@@ -128,13 +132,15 @@ pub fn support(cites: &[Cite], p: &Params) -> Support {
             let (a, b) = (live[i], live[j]);
             let same_origin = !a.origin.is_empty() && a.origin == b.origin;
             let same_registrant = a.registrant.is_some() && a.registrant == b.registrant;
+            // One work cited twice (`10.1000/xyz` as a bare DOI and as a `doi.org` address, or held by two hosts) is one origin.
+            let same_work = a.work.is_some() && a.work == b.work;
             let copy = !a.text.is_empty() && !b.text.is_empty() && jaccard(&sh[i], &sh[j]) >= threshold;
             // A page that names the other's domain or address cites it (`specs/040` §6.2).
             let cites = |x: usize, y: usize| {
                 let (o, u) = (live[y].origin.to_lowercase(), live[y].url.to_lowercase());
                 (!o.is_empty() && lower[x].contains(&o)) || (!u.is_empty() && lower[x].contains(&u))
             };
-            if same_origin || same_registrant || copy || cites(i, j) || cites(j, i) {
+            if same_origin || same_registrant || same_work || copy || cites(i, j) || cites(j, i) {
                 union(&mut parent, i, j);
             }
         }
@@ -164,7 +170,7 @@ mod tests {
     use super::*;
 
     fn cite(id: &str, origin: &str, text: &str) -> Cite {
-        Cite { source_id: id.into(), url: format!("https://{origin}/{id}"), origin: origin.into(), class: Class::ReputableSecondary, unfamiliar: false, text: text.into(), first_seen: None, domain_age_days: None, registrant: None, listed_in_scope: false, derived: false }
+        Cite { source_id: id.into(), url: format!("https://{origin}/{id}"), origin: origin.into(), class: Class::ReputableSecondary, unfamiliar: false, text: text.into(), first_seen: None, domain_age_days: None, registrant: None, listed_in_scope: false, derived: false, work: None }
     }
     fn unfamiliar(id: &str, origin: &str, text: &str) -> Cite {
         Cite { class: Class::Weak, unfamiliar: true, ..cite(id, origin, text) }
@@ -229,6 +235,21 @@ mod tests {
         let s = support(&[young, unknown, old], &Params::default());
         assert_eq!(s.origins, 2);
         assert_eq!(s.zeroed, vec![("y".to_string(), "young_domain")]);
+    }
+
+    #[test]
+    fn one_work_under_two_spellings_or_two_hosts_is_one_origin_and_a_work_never_adds_one() {
+        // `specs/101` §11: the same DOI, however it was written and wherever it is held, is one origin.
+        let w = |id: &str, o: &str, text: &str, doi: &str| Cite { work: crate::doi::normalize(doi), ..cite(id, o, text) };
+        let same = [w("1", "publisher.example", A, "10.1000/XYZ123"), w("2", "mirror.example", B, "https://doi.org/10.1000/xyz123"), cite("3", "other.example", C)];
+        assert_eq!(support(&same, &Params::default()).origins, 2, "two spellings of one DOI are one origin; the third page stands alone");
+        let different = [w("1", "publisher.example", A, "10.1000/xyz123"), w("2", "mirror.example", B, "10.1000/xyz124"), cite("3", "other.example", C)];
+        assert_eq!(support(&different, &Params::default()).origins, 3, "two different works are two origins");
+        let named_once = [w("1", "publisher.example", A, "10.1000/xyz123"), cite("2", "mirror.example", B), cite("3", "other.example", C)];
+        assert_eq!(support(&named_once, &Params::default()).origins, 3, "a page with no DOI is not merged with one that has one");
+        // It only ever lowers the count: the same pages with the identifiers removed never count fewer.
+        let blank: Vec<Cite> = same.iter().map(|c| Cite { work: None, ..c.clone() }).collect();
+        assert!(support(&blank, &Params::default()).origins >= support(&same, &Params::default()).origins);
     }
 
     #[test]
