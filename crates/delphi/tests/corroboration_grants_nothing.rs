@@ -564,7 +564,7 @@ fn a_history_pointer_and_the_project_timeline_are_context_that_nothing_reads_as_
     rust_files(&root.join("crates"), &mut files);
     let names = Regex::new(r"history_pointer|history_report").unwrap();
     // The exchange record (slice S3) and its redactor hold a pointer, so they name it on purpose; the test below holds them to the same limits.
-    let readers_ok = ["crates/delphi-engine/src/lib.rs", "crates/delphi-engine/src/history_pointer.rs", "crates/delphi-engine/src/history_report.rs", "crates/delphi-engine/src/history_record.rs", "crates/delphi-engine/src/history_redact.rs", "crates/delphi-engine/src/history_citation.rs"];
+    let readers_ok = ["crates/delphi-engine/src/lib.rs", "crates/delphi-engine/src/history_pointer.rs", "crates/delphi-engine/src/history_report.rs", "crates/delphi-engine/src/history_record.rs", "crates/delphi-engine/src/history_redact.rs", "crates/delphi-engine/src/history_citation.rs", "crates/delphi-engine/src/history_view.rs"];
     let mut stray = Vec::new();
     for f in &files {
         let rel = f.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
@@ -601,6 +601,7 @@ fn an_exchange_record_is_context_that_nothing_reads_as_a_criterion_and_that_reac
         "crates/delphi-engine/src/lib.rs",
         "crates/delphi-engine/src/history_record.rs",
         "crates/delphi-engine/src/history_redact.rs",
+        "crates/delphi-engine/src/history_view.rs",
         "crates/delphi-engine/src/engine.rs",
         "crates/delphi-engine/src/mission.rs",
         "crates/delphi-engine/src/service.rs",
@@ -633,7 +634,8 @@ fn an_exchange_record_is_context_that_nothing_reads_as_a_criterion_and_that_reac
     let outcome = Regex::new(r"OutcomeValue|history_record::Provenance").unwrap();
     for f in &files {
         let rel = f.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
-        if rel.ends_with("history_record.rs") || rel.ends_with("history_record_tests.rs") {
+        // The operator's read-only view (S5) draws the label as a word; the test after this one holds it to drawing and counting nothing.
+        if rel.ends_with("history_record.rs") || rel.ends_with("history_record_tests.rs") || rel.ends_with("history_view.rs") {
             continue;
         }
         let src = std::fs::read_to_string(f).unwrap();
@@ -745,6 +747,41 @@ fn the_citation_check_is_derived_context_that_no_promotion_trust_tool_or_approva
         }
     }
     assert!(stray.is_empty(), "a decision's `citation` field is read outside the module that makes it and the console view that prints it: {stray:?}");
+}
+
+#[test]
+fn the_operators_history_view_only_reads_draws_and_counts_nothing_that_grants() {
+    // `specs/102` §5.1 and §11 items 1, 2 and 11 (slice S5): the console's view of the records has no model and no agent in it. So (1) its
+    // non-test code names no socket, process or model call; (2) it writes nothing (no file is created, written, renamed or removed, and no key
+    // is made: it reads `rec::read`, which only reads); (3) it names no promotion, trust, tool-access or approval path; (4) the only counts it
+    // makes are how many records verified, did not, or are hidden by the list's length; the outcome is drawn as a word and never counted;
+    // (5) the daemon method that serves it is for the console scope alone.
+    let root = root();
+    let rel = "crates/delphi-engine/src/history_view.rs";
+    let src = std::fs::read_to_string(root.join(rel)).unwrap();
+    let code: String = production(&src).lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+    let inert = ["crate::history_record", "crate::history_report", "serde_json::", "std::path"];
+    for l in code.lines().filter(|l| l.starts_with("use ")) {
+        assert!(inert.iter().any(|p| l.trim_start_matches("use ").starts_with(p)), "{rel} imports from a path that is not on the inert list: {l}");
+    }
+    let reach = Regex::new(r"std::net|std::process|Command::new|TcpStream|reqwest|tiny_http|tokio::|delphi_adapter|complete\(|model_call|\.send\(").unwrap();
+    assert!(!reach.is_match(&code), "{rel} names a socket, a process or a model call");
+    let writes = Regex::new(r"fs::write|fs::create|create_dir|OpenOptions|File::create|fs::remove|remove_file|remove_dir|fs::rename|fs::copy|set_permissions|load_or_create_key|append\(|Tap::new|\.on_events|on_merge_row|note_operator_prompt").unwrap();
+    assert!(!writes.is_match(&code), "{rel} writes, makes a key, or feeds the recorder: {:?}", writes.find(&code).map(|m| m.as_str().to_string()));
+    let grants = Regex::new(r"\b(?:promote\w*|ratif\w*|approv\w*|grant\w*|trust\w*|taint\w*|tier\w*|authoriz\w*|library_claims|knowledge_status|fact_\w*|validator\w*|score\w*|rank\w*)\b|council::|research_run").unwrap();
+    assert!(!grants.is_match(&code), "{rel} names a promotion, trust, tool-access or approval path: {:?}", grants.find(&code).map(|m| m.as_str().to_string()));
+    // The outcome is read once, to draw it. No line that touches it counts, filters, sums or compares.
+    let doing = Regex::new(r"count|filter|sum\(|len\(\)|max|min|sort|==|!=").unwrap();
+    for l in code.lines().filter(|l| l.contains("outcome")) {
+        assert!(!doing.is_match(l), "{rel} does something with the outcome besides draw it: {l}");
+    }
+    // Only the daemon method for the console scope reaches the view.
+    let service = std::fs::read_to_string(root.join("crates/delphi-engine/src/service.rs")).unwrap();
+    let at = service.find("async fn history_view(").expect("the method exists");
+    let method: String = service[at..].lines().take(8).collect::<Vec<_>>().join("\n");
+    assert!(method.contains("need_console(&ctx)?;"), "history.view is for the console scope alone");
+    let callers = service.matches("history_view::view(").count();
+    assert_eq!(callers, 1, "the view is reached by the one daemon method: {callers}");
 }
 
 #[test]
