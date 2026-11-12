@@ -432,14 +432,19 @@ pub fn tools() -> Value {
         {
             "name": "record_session_summary",
             "title": "Record a session summary",
-            "description": "Leave a short summary of what this session did, so a later Delphi session can learn from it. Staged for the operator at tier L0 and never loaded without ratification. Stages content only.",
+            "description": "Leave a short summary of what this session did, so a later Delphi session can learn from it. Staged for the operator at tier L0 and never loaded without ratification. Stages content only. Optionally add the operator's prompt and a three-line account of your reply (`prompt`, `asked`, `did`, `open`): when the operator has turned the project history on and Delphi itself saw a Council, Panel, research run, merge or artifact finish, it completes that exchange's record with them, labelled self-reported. You cannot create a record this way, and nothing here approves or trusts anything.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "summary": {"type": "string", "minLength": 1, "maxLength": 1000},
                     "decisions": {"type": "array", "maxItems": 10, "items": {"type": "string", "maxLength": 200}},
                     "open_questions": {"type": "array", "maxItems": 10, "items": {"type": "string", "maxLength": 200}},
-                    "model": {"type": "string", "maxLength": 64, "description": "Your model name, self-reported."}
+                    "model": {"type": "string", "maxLength": 64, "description": "Your model name, self-reported."},
+                    "prompt": {"type": "string", "maxLength": 4000, "description": "The operator's words that started this exchange, copied exactly (project history; ignored when it is off). Pasted blocks and secrets are not kept."},
+                    "session_id": {"type": "string", "maxLength": 64, "description": "Your host tool's own session id, if you know it, so Delphi can check the prompt against the transcript."},
+                    "asked": {"type": "string", "maxLength": 200, "description": "What the operator asked, in your words."},
+                    "did": {"type": "string", "maxLength": 200, "description": "What you did."},
+                    "open": {"type": "string", "maxLength": 200, "description": "What is still open."}
                 },
                 "required": ["summary"],
                 "additionalProperties": false
