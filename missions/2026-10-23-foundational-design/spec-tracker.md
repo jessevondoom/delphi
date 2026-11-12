@@ -924,3 +924,15 @@ Approved by the operator on 2026-11-11 ("approve spec 102"), after Council `t_00
 | S5 | the console view and `history_search` | 8-12 | not started |
 | S6 | the citation check: a decision cites a resolving, hash-matching span, else unsourced | 6-10 | not started |
 | S7 | a red-team audit of redaction, purge and egress coverage | 10-14 | not started |
+
+## Spec 103: the private-read mark (2026-11-12, draft)
+
+Drafted at the operator's request (2026-11-12, "the span-mark egress design in parallel") to retire the four rows `specs/098` §12 item 16 still lists as `Unaudited`: Relay, Mail, Connector and Outbound. A task that reads a private entry gets a sticky mark; Outbound refuses, a Connector card gains a banner and always asks, and the relay stream carries a fixed phrase in place of agent-written text. It changes nothing about what flows in or about trust. Not approved; nothing is built. All hours are estimates.
+
+| Slice | Content | Hours | State |
+| :-- | :-- | --: | :-- |
+| M0 | this spec, a Council review, amendments | 4-6 | draft (pull request open) |
+| M1 | the mark, the `READS` table and its test, log events, console clear, observe mode and counter; no send changes | 8-12 | not started |
+| M2 | Outbound refusal and the Connector banner, always-ask and no relay approval; flips Connector and Outbound | 10-14 | not started |
+| M3 | the relay-stream replacement; flips Relay and Mail | 8-12 | not started |
+| M4 | a red-team pass, invariant map, live check | 4-6 | not started |

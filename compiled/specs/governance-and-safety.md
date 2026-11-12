@@ -2,7 +2,7 @@
 
 # Governance and safety
 
-12 specs. [All groups](./index.md).
+13 specs. [All groups](./index.md).
 
 ## 001-governance-and-manifests
 
@@ -113,5 +113,11 @@ GOVERNANCE §5.6 says an invariant is enforced only when a daemon check or CI sc
 ## 094-core-repo-merge-flow
 
 **094: The core-repo merge flow: a queue, `delphi merge`, a session-scoped `--auto`, cleanup after merge, a merge error log and a builder that can fix what fails** · approved (per source at `717ed06ddbdd`) · tier 0 · [source](../../specs/094-core-repo-merge-flow.md)
+
+_No standard scope section; open the spec._
+
+## 103-the-private-read-mark-closing-the-four-unaudited-egress-channels
+
+**103: The private-read mark: closing the four unaudited egress channels** · draft (per source at `61226cb701de`) · tier 0 · [source](../../specs/103-the-private-read-mark-closing-the-four-unaudited-egress-channels.md)
 
 _No standard scope section; open the spec._
