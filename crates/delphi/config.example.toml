@@ -205,6 +205,7 @@ sandbox = "off"
 # [validator]
 # mode = "advisory"
 # weak_sources = "label"          # a claim only Weak sources support: "label" keeps it as unverified (weak), "off" refuses it
+# background = false              # while the daemon is idle, check queued library claims in advisory mode (never ratifies); 100k tokens/day and 10% of the install's week at most (specs/040 18.3)
 # [validator.sources]          # your additions to the default source list (registrable domains)
 # primary = []
 # reputable = []

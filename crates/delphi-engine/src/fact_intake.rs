@@ -129,6 +129,11 @@ impl Intake {
         (Receipt { status: Status::Queued, fact_id: Some(id.clone()) }, Some(Accepted { claim, fact_id: id, caller: caller.into(), reservation }))
     }
 
+    /// Checks accepted and not yet finished.
+    pub fn in_flight(&self) -> usize {
+        self.state.lock().unwrap().in_flight
+    }
+
     /// A dispatched claim is done: its reservation is settled to what it used, and a slot is free.
     pub fn finish(&self, a: &Accepted, tokens_used: u64) {
         self.ledger.settle(&a.reservation, tokens_used);

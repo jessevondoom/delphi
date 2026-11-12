@@ -220,6 +220,7 @@
       "properties": {
         "mode": { "enum": ["off", "advisory", "ratify"], "default": "advisory", "description": "off: no fetch of any kind. advisory: the full fact path as a dry run that writes nothing validated. ratify: real writes, only after PROMOTE." },
         "weak_sources": { "enum": ["label", "off"], "default": "label", "description": "A claim supported only by Weak sources: label keeps it as unverified (weak), never as evidence; off refuses it (specs/040 section 27)." },
+        "background": { "type": "boolean", "default": false, "description": "While the daemon is idle, check queued library claims in advisory mode (never ratifies), inside a daily token cap and 10 percent of the install's week (specs/040 section 18.3, 20.2)." },
         "sources": {
           "type": "object",
           "description": "The operator's additions to the default source list (specs/040 appendix A). Registrable domains.",

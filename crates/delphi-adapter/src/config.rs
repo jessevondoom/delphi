@@ -910,6 +910,9 @@ pub struct ValidatorConfig {
     /// What to do with a claim supported only by Weak sources (`specs/040` §27): keep it labelled, or refuse it.
     #[serde(deserialize_with = "de_weak")]
     pub weak_sources: WeakSources,
+    /// Background validation of library claims (`specs/040` §18.3): while the daemon is idle, run the validator in advisory mode, at low priority and
+    /// inside a token cap, on the claims that wait. Never ratifies. Off by default, since it spends tokens; it also needs `mode` not `off`.
+    pub background: bool,
 }
 
 /// `[validator] weak_sources`. Weak sources never count as evidence; this only says whether a claim they alone support is kept.
