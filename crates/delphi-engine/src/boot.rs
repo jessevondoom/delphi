@@ -72,7 +72,6 @@ pub fn settings_from(root: &toml::Value) -> Settings {
         if let Some(n) = sc.get("max_foreign_seats").and_then(|v| v.as_integer()).filter(|v| *v >= 0) {
             s.max_foreign_seats = n.min(64) as u32;
         }
-        s.red_team_kind = sc.get("red_team_kind").and_then(|v| v.as_bool()).unwrap_or(false);
         if let Some(n) = sc.get("max_foreign_tokens").and_then(|v| v.as_integer()).filter(|v| *v >= 0) {
             s.max_foreign_tokens = n as u64;
         }
@@ -83,22 +82,15 @@ pub fn settings_from(root: &toml::Value) -> Settings {
     if let Some(n) = root.get("research").and_then(|r| r.get("thin_below")).and_then(|v| v.as_integer()).filter(|v| *v >= 1) {
         s.thin_below = n.min(50) as usize;
     }
-    // The wider fetch (`specs/098` §7.5 item 7a, slice S1d): off unless `ladder = true`; the caps are counts of 1..=100, and a value of the
-    // wrong kind keeps the default.
+    // The caps of the wider fetch (`specs/098` §7.5 item 7a, slice S1d): counts of 1..=100, and a value of the wrong kind keeps the
+    // default. The fetch itself is always on; an old `ladder` key is ignored (§13.2).
     if let Some(r) = root.get("research") {
-        if let Some(b) = r.get("ladder").and_then(|v| v.as_bool()) {
-            s.wider_fetch.enabled = b;
-        }
         if let Some(n) = r.get("fetch_per_host").and_then(|v| v.as_integer()).filter(|v| (1..=100).contains(v)) {
             s.wider_fetch.per_host = n as usize;
         }
         if let Some(n) = r.get("fetch_per_run").and_then(|v| v.as_integer()).filter(|v| (1..=100).contains(v)) {
             s.wider_fetch.per_run = n as usize;
         }
-    }
-    // `[research] search_log` (`specs/101` §3, §8): a boolean, off unless it is exactly `true`; any other value keeps the default.
-    if let Some(b) = root.get("research").and_then(|r| r.get("search_log")).and_then(|v| v.as_bool()) {
-        s.search_log = b;
     }
     // The corroboration numbers (`specs/098` §18): each ignored when it is not the right kind of value, so a typo keeps the default.
     if let Some(r) = root.get("research") {
@@ -468,19 +460,22 @@ mod tests {
     }
 
     #[test]
-    fn the_wider_fetch_is_off_by_default_with_small_caps_and_a_bad_value_keeps_the_default() {
+    fn the_wider_fetch_has_small_caps_and_a_bad_value_keeps_the_default() {
         use crate::research_observed::WiderFetch;
-        // `[research] ladder` (specs/098 §7.5 item 7a, slice S1d): off; two pages a host, ten a run.
+        // The caps of the wider fetch (specs/098 §7.5 item 7a, slice S1d): two pages a host, ten a run.
         assert_eq!(settings_from(&toml::from_str("").unwrap()).wider_fetch, WiderFetch::default());
-        assert_eq!(settings_from(&toml::from_str("").unwrap()).wider_fetch, WiderFetch { enabled: false, per_host: 2, per_run: 10 });
-        let on = settings_from(&toml::from_str("[research]\nladder = true\nfetch_per_host = 3\nfetch_per_run = 20\n").unwrap()).wider_fetch;
-        assert_eq!(on, WiderFetch { enabled: true, per_host: 3, per_run: 20 });
-        for bad in ["ladder = \"yes\"", "ladder = 1", "fetch_per_host = 0", "fetch_per_host = 1000", "fetch_per_run = -1", "fetch_per_run = \"many\""] {
+        assert_eq!(settings_from(&toml::from_str("").unwrap()).wider_fetch, WiderFetch { per_host: 2, per_run: 10 });
+        let set = settings_from(&toml::from_str("[research]\nfetch_per_host = 3\nfetch_per_run = 20\n").unwrap()).wider_fetch;
+        assert_eq!(set, WiderFetch { per_host: 3, per_run: 20 });
+        for bad in ["fetch_per_host = 0", "fetch_per_host = 1000", "fetch_per_run = -1", "fetch_per_run = \"many\""] {
             let w = settings_from(&toml::from_str(&format!("[research]\n{bad}\n")).unwrap()).wider_fetch;
             assert_eq!(w, WiderFetch::default(), "{bad}");
         }
-        // The switch does not move the other [research] numbers.
-        assert_eq!(settings_from(&toml::from_str("[research]\nladder = true\n").unwrap()).thin_below, 3);
+        // An old config that still carries the removed `ladder` key reads without complaint and changes nothing (§13.2).
+        for old in ["ladder = true", "ladder = false", "ladder = \"yes\""] {
+            let s = settings_from(&toml::from_str(&format!("[research]\n{old}\n")).unwrap());
+            assert_eq!((s.wider_fetch, s.thin_below), (WiderFetch::default(), 3), "{old}");
+        }
     }
 
     #[test]
@@ -538,13 +533,17 @@ mod tests {
             assert_eq!(settings_from(&toml::from_str(&format!("[research]\n{bad}\n")).unwrap()).thin_below, 3, "{bad}");
         }
         assert_eq!(settings_from(&toml::from_str("[seats]\nrequire_families = 0\n").unwrap()).require_families, None, "0 is not a requirement");
-        // `[research] search_log` (specs/101 §3, §8): off by default, on only for the boolean `true`; a typo keeps it off.
-        assert!(!settings_from(&toml::from_str("").unwrap()).search_log, "off unless asked for");
-        assert!(settings_from(&toml::from_str("[research]\nsearch_log = true\n").unwrap()).search_log);
-        assert!(!settings_from(&toml::from_str("[research]\nsearch_log = false\n").unwrap()).search_log);
-        for bad in ["search_log = \"yes\"", "search_log = 1"] {
-            assert!(!settings_from(&toml::from_str(&format!("[research]\n{bad}\n")).unwrap()).search_log, "{bad}");
-        }
+    }
+
+    // The five flags pulled by `specs/098` §13.2 (`route_adopt`, `source_ladder`, `red_team_kind`, `[research] ladder`, `search_log`): an
+    // old config that still carries them is read without complaint and they change nothing; the features are always on.
+    #[test]
+    fn a_config_with_the_removed_flags_still_reads_and_they_change_nothing() {
+        let old = "[hosts]\nroute_adopt = true\nsource_ladder = true\n[seats]\nred_team_kind = true\nmax_foreign_seats = 2\n[research]\nladder = true\nsearch_log = true\nthin_below = 4\n";
+        let with = settings_from(&toml::from_str(old).unwrap());
+        let without = settings_from(&toml::from_str("[seats]\nmax_foreign_seats = 2\n[research]\nthin_below = 4\n").unwrap());
+        assert_eq!((with.max_foreign_seats, with.thin_below, with.wider_fetch.clone()), (without.max_foreign_seats, without.thin_below, without.wider_fetch.clone()));
+        assert_eq!((with.max_foreign_seats, with.thin_below), (2, 4), "the keys that are still settings are still read");
     }
     fn workspace_with_config(extra: &str) -> (tempfile::TempDir, WorkspacePaths) {
         let t = tempfile::tempdir().unwrap();

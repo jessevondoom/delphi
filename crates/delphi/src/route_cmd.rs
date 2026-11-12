@@ -78,7 +78,7 @@ pub fn run(args: &[String], home: &std::path::Path, ws_dir: &std::path::Path) ->
         return 0;
     }
     println!("{} canonical roles and {} bundle agents in the registry; the vector part is {}.", roles.len(), reg.entries.len(), if emb.is_some() { "on (confidence blends it in; the default threshold was set on words alone)" } else { "off (no embedding model)" });
-    println!("adopt threshold {:.2} ({}); the task looks like: {}", threshold, if settings.route_adopt { "recommended" } else { "advisory: [hosts] route_adopt is off" }, found.trigger);
+    println!("adopt threshold {:.2} (recommended); the task looks like: {}", threshold, found.trigger);
     if found.status == "no_specialist" {
         println!("no specialist: nothing scores {:.2} or more.", ar::TAU);
         match &found.fallback {

@@ -53,13 +53,11 @@ pub fn role_rows(p: &crate::mcp_packs::Packs) -> Result<Vec<RoleRow>, String> {
 pub struct Settings {
     /// `[routing] adopt_threshold`, 0 to 1.
     pub adopt_threshold: f32,
-    /// `[hosts] route_adopt` (default false): whether the answer calls its `adopt` a recommendation or only advice.
-    pub route_adopt: bool,
 }
 
 impl Default for Settings {
     fn default() -> Settings {
-        Settings { adopt_threshold: DEFAULT_ADOPT_THRESHOLD, route_adopt: false }
+        Settings { adopt_threshold: DEFAULT_ADOPT_THRESHOLD }
     }
 }
 
@@ -71,9 +69,6 @@ pub fn settings_in(text: &str) -> Settings {
     let number = |x: &toml::Value| x.as_float().or_else(|| x.as_integer().map(|i| i as f64));
     if let Some(t) = v.get("routing").and_then(|r| r.get("adopt_threshold")).and_then(number).filter(|t| (0.0..=1.0).contains(t)) {
         s.adopt_threshold = t as f32;
-    }
-    if let Some(b) = v.get("hosts").and_then(|h| h.get("route_adopt")).and_then(|b| b.as_bool()) {
-        s.route_adopt = b;
     }
     s
 }
@@ -201,7 +196,7 @@ fn round2(x: f32) -> f64 {
 }
 
 /// The answer a host reads. The summaries are text a bundle's author wrote, so the result says it is data.
-pub fn to_json(r: &Routed, settings: &Settings, bundle_agents: usize) -> Value {
+pub fn to_json(r: &Routed, _settings: &Settings, bundle_agents: usize) -> Value {
     let cands: Vec<Value> = r
         .candidates
         .iter()
@@ -221,7 +216,8 @@ pub fn to_json(r: &Routed, settings: &Settings, bundle_agents: usize) -> Value {
         "candidates": cands,
         "fallback": r.fallback,
         "adopt_threshold": round2(r.threshold),
-        "adopt_mode": if settings.route_adopt { "recommended" } else { "advisory" },
+        // Always a recommendation since the flag was pulled (`specs/098` §13.2); the key stays so a host that reads it is unaffected.
+        "adopt_mode": "recommended",
         "agents": bundle_agents,
     })
 }
@@ -410,8 +406,7 @@ mod tests {
             assert!(!c[k].is_null(), "{k} missing: {c}");
         }
         assert_eq!(v["untrusted_data"], true);
-        assert_eq!(v["adopt_mode"], "advisory");
-        assert_eq!(to_json(&r, &Settings { route_adopt: true, ..Settings::default() }, 0)["adopt_mode"], "recommended");
+        assert_eq!(v["adopt_mode"], "recommended");
         // A role that is not host-servable is reported as inside.
         let m = route(&[], &roles, &q("post the plan to the GitHub issue and update the pull request status"), 0.45, None);
         assert_eq!(m.candidates.iter().find(|c| c.role == "messenger").map(|c| c.locus.as_str()), Some("inside"));
@@ -434,7 +429,9 @@ mod tests {
         let r = route(&[], &roles, &q(t), DEFAULT_ADOPT_THRESHOLD, None);
         assert!(r.candidates.iter().all(|c| c.confidence < 0.99), "{:?}", r.candidates);
         assert_eq!(r.threshold, DEFAULT_ADOPT_THRESHOLD);
-        assert_eq!(settings_in("[routing]\nadopt_threshold = 0.6\n[hosts]\nroute_adopt = true\n"), Settings { adopt_threshold: 0.6, route_adopt: true });
+        assert_eq!(settings_in("[routing]\nadopt_threshold = 0.6\n"), Settings { adopt_threshold: 0.6 });
+        // an old config that still carries the removed `route_adopt` key is read without complaint and changes nothing
+        assert_eq!(settings_in("[routing]\nadopt_threshold = 0.6\n[hosts]\nroute_adopt = true\n"), Settings { adopt_threshold: 0.6 });
         for bad in ["[routing]\nadopt_threshold = 7\n", "[routing]\nadopt_threshold = \"high\"\n", "[routing]\nadopt_threshold = -1\n", "not toml at all {{", ""] {
             assert_eq!(settings_in(bad), Settings::default(), "{bad:?}");
         }

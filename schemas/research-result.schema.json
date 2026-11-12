@@ -34,7 +34,7 @@
         "leads_kept": { "type": "integer", "minimum": 0, "description": "Search results the fetcher would not reach, kept as noted leads." },
         "search_log": {
           "type": "object",
-          "description": "Present only when `[research] search_log` is on (specs/101 section 3): a summary of, and a link to, the top-level `search_log`.",
+          "description": "A summary of, and a link to, the top-level `search_log` (specs/101 section 3). Every host research result carries it.",
           "required": ["lines", "found", "kept", "searches", "withheld", "declared", "see"],
           "properties": {
             "lines": { "type": "integer", "minimum": 0 }, "found": { "type": "integer", "minimum": 0 }, "kept": { "type": "integer", "minimum": 0 },
