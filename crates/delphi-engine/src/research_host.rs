@@ -220,6 +220,34 @@ impl Validator for LiveValidator {
     }
 }
 
+/// The live citation index (`specs/101` §6): one GET to the pinned endpoint per list, through the daemon's fetcher (`fetch_catalog`:
+/// public addresses only, pinned, a size cap, no redirect to another origin, JSON allowed). The URL is the one
+/// [`crate::research_chain::lookup_url`] builds from the endpoint and a normalised DOI, and nothing in the answer is ever fetched: the
+/// answer is parsed for DOIs and that is all. The caller has already asked the library for the seed (`Library::chainable_doi`, which is
+/// where the egress check on `Channel::CitationLookup` runs), so a private source has no seed to send.
+pub struct LiveCites {
+    pub policy: crate::fact_fetch::FetchPolicy,
+    pub endpoint: String,
+    /// Always false in the daemon. Only the tests' loopback server, which cannot speak https, sets it.
+    pub plain_http: bool,
+}
+
+impl LiveCites {
+    pub fn new(policy: crate::fact_fetch::FetchPolicy, endpoint: String) -> LiveCites {
+        LiveCites { policy, endpoint, plain_http: false }
+    }
+}
+
+impl crate::research_chain::Cites for LiveCites {
+    fn works<'a>(&'a self, doi: &'a str, dir: crate::research_chain::Direction) -> BoxFut<'a, Result<Vec<crate::research_chain::Work>, String>> {
+        Box::pin(async move {
+            let url = crate::research_chain::lookup_url_with(&self.endpoint, dir, doi, self.plain_http).ok_or_else(|| "not a lookup this slice makes".to_string())?;
+            let body = crate::fact_fetch::fetch_catalog(&self.policy, &url).await.map_err(|e| format!("the lookup failed: {e}"))?;
+            crate::research_chain::parse_works(&body, dir, doi).map_err(String::from)
+        })
+    }
+}
+
 pub struct LiveLibrary {
     pub home: PathBuf,
     pub ledger: PathBuf,
@@ -250,6 +278,20 @@ impl Library for LiveLibrary {
 
     fn is_private(&self, source_id: &str) -> bool {
         crate::library::Library::in_home(&self.home).read_meta(source_id).is_some_and(|m| crate::library::is_private(&m))
+    }
+
+    /// The seed of a citation lookup (`specs/101` §6): the DOI the source's own record names (never read from the page's text), and only
+    /// for a source the daemon fetched itself that is public and readable. The one guard is `egress::check` on the record with
+    /// `Channel::CitationLookup`, so a private source, a record that cannot be read (or is missing) and a name the library cannot vouch
+    /// for send nothing: deny by default.
+    fn chainable_doi(&self, source_id: &str) -> Option<String> {
+        let meta = crate::library::Library::in_home(&self.home).read_meta(source_id)?;
+        crate::egress::check(&meta, crate::library::Channel::CitationLookup).ok()?;
+        let generated = meta["derived"].as_bool() == Some(true) || meta["origin"].as_str().is_some_and(|o| o.starts_with("page:"));
+        if !meta["purged"].is_null() || generated || !meta["content_hash"].is_string() {
+            return None;
+        }
+        crate::library::retraction::doi_of(&meta)
     }
 
     /// A staged claim is one ledger line: `noted`, with where it came from. Nothing here marks a claim validated. The line carries the
@@ -627,5 +669,121 @@ mod tests {
         let card = n::source_card(&cards[0].0, &[&claims[0]]);
         assert_eq!(card["kind"], "source");
         assert_eq!(card["related"], "card-s1d.example");
+    }
+
+    // ---- citation chaining, the live side (`specs/101` §6) ----
+
+    /// A source as the fetcher leaves it: public, a hash, a DOI on its record. `edit` changes the record before it is written back.
+    fn doi_source(l: &crate::library::Library, d: &std::path::Path, name: &str, private: bool, edit: impl FnOnce(&mut Value)) -> String {
+        use crate::library::{AddOpts, Budgets, Level};
+        let f = d.join(format!("{name}.md"));
+        std::fs::write(&f, name).unwrap();
+        let opts = AddOpts { licence: Some("CC0-1.0".into()), level: Some(Level::Pointer), private, ..Default::default() };
+        let id = l.add_file(&f, &opts, &Budgets::default()).unwrap().id;
+        let mut m = l.read_meta(&id).unwrap();
+        m["canonical_url"] = json!(format!("https://journal.example.org/{name}"));
+        m["DOI"] = json!("10.1000/Seed");
+        m["content_hash"] = json!("sha256:live");
+        edit(&mut m);
+        std::fs::write(l.source_dir(&id).join("meta.json"), serde_json::to_vec(&m).unwrap()).unwrap();
+        id
+    }
+
+    fn live_library(home: &std::path::Path) -> LiveLibrary {
+        LiveLibrary { home: home.to_path_buf(), ledger: home.join("ledger.jsonl"), label: "t".into(), retractions: crate::retractions::Policy::off() }
+    }
+
+    #[test]
+    fn a_source_gives_a_seed_only_when_it_is_public_readable_fetched_by_the_daemon_and_names_a_doi() {
+        let (home, files) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let l = crate::library::Library::in_home(home.path());
+        let live = live_library(home.path());
+        let public = doi_source(&l, files.path(), "public", false, |_| {});
+        assert_eq!(live.chainable_doi(&public).as_deref(), Some("10.1000/seed"), "the DOI of the record, normalised");
+        let by_address = doi_source(&l, files.path(), "byaddr", false, |m| {
+            m.as_object_mut().unwrap().remove("DOI");
+            m["canonical_url"] = json!("https://doi.org/10.1000/ViaAddress");
+        });
+        assert_eq!(live.chainable_doi(&by_address).as_deref(), Some("10.1000/viaaddress"));
+        // every one of these sends nothing
+        let private = doi_source(&l, files.path(), "private", true, |_| {});
+        let no_doi = doi_source(&l, files.path(), "nodoi", false, |m| {
+            m.as_object_mut().unwrap().remove("DOI");
+        });
+        let not_fetched = doi_source(&l, files.path(), "notfetched", false, |m| {
+            m.as_object_mut().unwrap().remove("content_hash");
+        });
+        let generated = doi_source(&l, files.path(), "generated", false, |m| m["derived"] = json!(true));
+        let purged = doi_source(&l, files.path(), "purged", false, |m| m["purged"] = json!("2026-11-11"));
+        let unreadable = doi_source(&l, files.path(), "unreadable", false, |_| {});
+        std::fs::write(l.source_dir(&unreadable).join("meta.json"), b"{ not json").unwrap();
+        let not_an_object = doi_source(&l, files.path(), "array", false, |_| {});
+        std::fs::write(l.source_dir(&not_an_object).join("meta.json"), b"[1,2]").unwrap();
+        for (name, id) in [("private", &private), ("no DOI", &no_doi), ("not fetched by the daemon", &not_fetched), ("generated", &generated), ("purged", &purged), ("unreadable record", &unreadable), ("a record that is not an object", &not_an_object), ("no such source", &"nonesuch".to_string())] {
+            assert_eq!(live.chainable_doi(id), None, "{name}");
+        }
+    }
+
+    /// A loopback index that counts every request it gets and answers the same JSON to each.
+    fn index(body: &'static str) -> (std::net::SocketAddr, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
+        std::thread::spawn(move || {
+            for mut st in listener.incoming().flatten() {
+                let mut buf = [0u8; 4096];
+                let n = st.read(&mut buf).unwrap_or(0);
+                log.lock().unwrap().push(String::from_utf8_lossy(&buf[..n]).split_whitespace().nth(1).unwrap_or("").to_string());
+                let r = format!("HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}", body.len(), body);
+                let _ = st.write_all(r.as_bytes());
+            }
+        });
+        (addr, seen)
+    }
+
+    const ANSWER: &str = r#"[{"citing":"doi:10.1000/seed","cited":"omid:br/2 doi:10.1000/Ref1 doi:10.1000/ref2 https://evil.example/follow-me","creation":"2021-03-10"}]"#;
+
+    #[tokio::test]
+    async fn the_live_index_makes_one_request_to_the_pinned_endpoint_and_follows_nothing_it_is_told() {
+        use crate::research_chain::{Cites, Direction};
+        let (addr, seen) = index(ANSWER);
+        let mut c = LiveCites::new(crate::fact_fetch::FetchPolicy::default().with_fixture_addrs([addr]), format!("http://127.0.0.1:{}/index/v2", addr.port()));
+        // the pinned endpoint is https: a plain-http endpoint is refused before any request
+        assert!(c.works("10.1000/seed", Direction::References).await.is_err());
+        assert!(seen.lock().unwrap().is_empty(), "no request left for an endpoint that is not https");
+        c.plain_http = true;
+        let w = c.works("10.1000/seed", Direction::References).await.unwrap();
+        assert_eq!(w.iter().map(|x| x.doi.as_str()).collect::<Vec<_>>(), ["10.1000/ref1", "10.1000/ref2"]);
+        assert_eq!(*seen.lock().unwrap(), ["/index/v2/references/doi:10.1000/seed"], "one request, the operation and the DOI, nothing else; the URL in the answer is not requested");
+        // a DOI that is not in its normal form is not asked about at all
+        assert!(c.works("DOI:10.1000/Seed", Direction::Citations).await.is_err());
+        assert_eq!(seen.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_chain_for_a_source_the_library_will_not_vouch_for_never_reaches_the_index() {
+        use crate::research_chain::{Cites, Direction};
+        let (home, files) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let l = crate::library::Library::in_home(home.path());
+        let live = live_library(home.path());
+        let (addr, seen) = index(ANSWER);
+        let mut cites = LiveCites::new(crate::fact_fetch::FetchPolicy::default().with_fixture_addrs([addr]), format!("http://127.0.0.1:{}/index/v2", addr.port()));
+        cites.plain_http = true;
+        let private = doi_source(&l, files.path(), "private", true, |_| {});
+        let unreadable = doi_source(&l, files.path(), "unreadable", false, |_| {});
+        std::fs::write(l.source_dir(&unreadable).join("meta.json"), b"{ not json").unwrap();
+        // the seed comes from the library, as `chain_pass` takes it; a source it will not vouch for gives none, so no call is made
+        for id in [private.as_str(), unreadable.as_str(), "nonesuch"] {
+            if let Some(doi) = live.chainable_doi(id) {
+                let _ = cites.works(&doi, Direction::References).await;
+            }
+        }
+        assert!(seen.lock().unwrap().is_empty(), "a private or unreadable source reached the index: {:?}", seen.lock().unwrap());
+        let public = doi_source(&l, files.path(), "public", false, |_| {});
+        let doi = live.chainable_doi(&public).unwrap();
+        cites.works(&doi, Direction::References).await.unwrap();
+        assert_eq!(seen.lock().unwrap().len(), 1);
     }
 }

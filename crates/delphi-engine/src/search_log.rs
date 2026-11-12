@@ -96,6 +96,9 @@ pub enum Purpose {
     /// A corroboration query that was not sent because the claim rests on a private source.
     Corroboration,
     Declared,
+    /// A call to the citation index for a public work's references or citing works (`specs/101` §6), or one not made because the work's
+    /// claim rests on a private source.
+    Chain,
 }
 
 impl Purpose {
@@ -109,6 +112,7 @@ impl Purpose {
             Purpose::Contradiction => "contradiction",
             Purpose::Corroboration => "corroboration",
             Purpose::Declared => "declared",
+            Purpose::Chain => "chain",
         }
     }
 }

@@ -88,7 +88,7 @@
       "properties": {
         "rung": { "enum": ["kb", "trusted", "close", "web"] },
         "source": { "type": "string", "pattern": "^(kb|trusted|(host|search|doi|archive|citation):[a-z0-9._-]{1,40})$", "description": "Of whom: the knowledge base, the operator's trusted list, a host tool the host declared, or a provider. doi, archive and citation are reserved for later slices of spec 101." },
-        "purpose": { "enum": ["kb", "topic", "trusted", "gap", "support", "contradiction", "corroboration", "declared"] },
+        "purpose": { "enum": ["kb", "topic", "trusted", "gap", "support", "contradiction", "corroboration", "declared", "chain"] },
         "query": { "type": "string", "maxLength": 200 },
         "withheld": { "const": "private" },
         "at": { "type": "string" },
