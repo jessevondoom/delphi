@@ -13,10 +13,12 @@
 //! * An unreadable mark file reads as [`State::Unreadable`]. The counter counts such a task as one a send would have changed; in M1 that
 //!   changes nothing, and M2 and M3 make it fail closed on the four channels only.
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde_json::{json, Value};
+
 
 /// The log event written when a task first reads an entry it had not read before (ids and time only).
 pub const MARK_EVENT: &str = "task.private_read";
@@ -340,6 +342,157 @@ pub fn private_noted_in<'a>(ws_dir: &Path, rel_paths: impl IntoIterator<Item = &
     out
 }
 
+// ---- slice M3 (`specs/103` §4.2): what a relay and a mailbox are sent --------------------------------------------------------------------
+//
+// The daemon, before an event reaches a relay client, replaces the text an agent wrote when the event's task read a private entry. A relay
+// client (the Telegram bot, the mailbox) is another process: it never receives what the daemon withheld, so it cannot leak it. Mail is the
+// relay's SMTP transport, fed by the same stream, so one seam covers both rows. The decision goes through the one egress check
+// ([`crate::egress::check`]) with a record shaped from the mark, so "unreadable" is private by the check's own deny-by-default rule. Nothing
+// here changes what flows in, grants anything, or is a tier; a mark only degrades a message.
+
+/// The one phrase a relay or mailbox is sent in place of agent-written text.
+pub const RELAY_PHRASE: &str = "[withheld: this task read a private entry; see it at the console]";
+
+/// The relay event kinds whose payload holds text an agent wrote. Every other kind carries ids, words the daemon chose, or fixed slugs.
+const AGENT_TEXT_KINDS: [&str; 4] = ["approval.requested", "decisions.review_requested", "task.completed", "task.failed"];
+
+/// The cards whose details the stream withheld, newest last. In memory only: a restarted daemon parks its cards and raises them again, and
+/// each passes the filter again. It lets the card list and the relay's answer agree with the stream when the mark was on the mission and
+/// not the task (a card record names its task, not its mission).
+static MASKED_CARDS: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
+const MASKED_CARDS_CAP: usize = 2000;
+
+fn note_masked_card(approval_id: &str) {
+    let mut q = MASKED_CARDS.lock().unwrap_or_else(|p| p.into_inner());
+    if !q.iter().any(|c| c == approval_id) {
+        if q.len() >= MASKED_CARDS_CAP {
+            q.pop_front();
+        }
+        q.push_back(approval_id.to_string());
+    }
+}
+
+fn card_is_masked(approval_id: &str) -> bool {
+    MASKED_CARDS.lock().unwrap_or_else(|p| p.into_inner()).iter().any(|c| c == approval_id)
+}
+
+/// The record the egress check reads for a mark: public when nothing is marked, private when something is, and not a record at all (so
+/// private by the check's deny-by-default rule) when the mark cannot be read.
+fn record_for(st: &State) -> Value {
+    match st {
+        State::Unmarked => json!({}),
+        State::Marked { .. } => json!({"private": true}),
+        State::Unreadable => Value::Null,
+    }
+}
+
+/// May text an agent wrote leave through `channel` for a task in this state? One question put to the one check.
+fn text_can_go(st: &State, channel: crate::library::Channel) -> bool {
+    crate::egress::check(&record_for(st), channel).is_ok()
+}
+
+/// May agent-written text go on the relay stream, which feeds the Telegram bot (`Relay`) and the mailbox (`Mail`)?
+pub fn stream_text_can_go(st: &State) -> bool {
+    text_can_go(st, crate::library::Channel::Relay) && text_can_go(st, crate::library::Channel::Mail)
+}
+
+/// Put the relay filter on `hub` for the workspace at `ws_dir`. Called once when an engine is built (the daemon's boot, and the test
+/// fixture that stands in for it), so every event a relay is sent passes [`mask_event_for_relay`].
+pub fn install_relay_filter(hub: &delphi_core::hub::Hub, ws_dir: &Path) {
+    let ws = ws_dir.to_path_buf();
+    hub.set_relay_filter(std::sync::Arc::new(move |e: &Value| mask_event_for_relay(&ws, e)));
+}
+
+/// The state of the keys an event names: its task and its mission. A key that is not a valid identifier cannot have been marked and is
+/// skipped; a record that exists and cannot be read makes the whole answer `Unreadable`.
+pub fn event_state(ws_dir: &Path, event: &Value) -> State {
+    let task = event["task_id"].as_str().or_else(|| event["payload"]["task_id"].as_str());
+    let mission = event["mission_id"].as_str();
+    let mut found = State::Unmarked;
+    for key in [task, mission].into_iter().flatten().filter(|k| key_ok(k)) {
+        match state(ws_dir, key) {
+            State::Unreadable => return State::Unreadable,
+            m @ State::Marked { .. } => found = m,
+            State::Unmarked => {}
+        }
+    }
+    found
+}
+
+/// Is a card's text withheld from a relay? True when the stream withheld it, or when its task is marked or its mark cannot be read.
+pub fn card_withheld(ws_dir: &Path, approval_id: &str, task_id: &str) -> bool {
+    if card_is_masked(approval_id) {
+        return true;
+    }
+    let st = if key_ok(task_id) { state(ws_dir, task_id) } else { State::Unmarked };
+    !stream_text_can_go(&st)
+}
+
+fn replace_text(v: &mut Value, field: &str) {
+    if v.get(field).is_some_and(|x| !x.is_null()) {
+        v[field] = json!(RELAY_PHRASE);
+    }
+}
+
+/// The event a relay is sent in place of `event`, or `None` when it goes out as written. Only the agent-written fields of the four kinds in
+/// `AGENT_TEXT_KINDS` change; ids, tier, tool name, payload hash, task id and status stay, so a card still reaches the operator.
+pub fn mask_event_for_relay(ws_dir: &Path, event: &Value) -> Option<Value> {
+    let kind = event["type"].as_str()?;
+    if !AGENT_TEXT_KINDS.contains(&kind) {
+        return None;
+    }
+    if stream_text_can_go(&event_state(ws_dir, event)) {
+        return None;
+    }
+    let mut e = event.clone();
+    let p = &mut e["payload"];
+    if !p.is_object() {
+        return Some(e);
+    }
+    match kind {
+        "approval.requested" => {
+            for f in ["summary", "payload", "pattern"] {
+                replace_text(p, f);
+            }
+            p["withheld"] = json!(true);
+            if let Some(id) = p["approval_id"].as_str().map(str::to_string) {
+                note_masked_card(&id);
+            }
+        }
+        "decisions.review_requested" => {
+            for d in p["decisions"].as_array_mut().into_iter().flatten() {
+                for f in ["summary", "rationale"] {
+                    replace_text(d, f);
+                }
+            }
+        }
+        "task.completed" => {
+            if p["reason"].as_str().is_some_and(|r| !r.is_empty()) {
+                p["reason"] = json!(RELAY_PHRASE);
+            }
+        }
+        "task.failed" => replace_text(p, "error"),
+        _ => {}
+    }
+    Some(e)
+}
+
+/// The card list a relay is sent (`approval.list`): the same replacement, for each pending card whose details the stream withheld or whose
+/// task is marked or unreadable.
+pub fn mask_pending_for_relay(ws_dir: &Path, mut list: Value) -> Value {
+    for card in list.as_array_mut().into_iter().flatten() {
+        let (id, task) = (card["approval_id"].as_str().unwrap_or("").to_string(), card["task_id"].as_str().unwrap_or("").to_string());
+        if card.is_object() && card_withheld(ws_dir, &id, &task) {
+            for f in ["summary", "payload", "pattern"] {
+                replace_text(card, f);
+            }
+            card["withheld"] = json!(true);
+            note_masked_card(&id);
+        }
+    }
+    list
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -571,6 +724,143 @@ mod tests {
         let at = svc.find("async fn private_read_clear").expect("the console method exists");
         let body = &svc[at..svc[at..].find("\n    }\n").map(|n| at + n).unwrap_or(svc.len())];
         assert!(body.contains("need_console(&ctx)"), "the clear method is console scope only");
+    }
+
+    // ---- slice M3: what a relay and a mailbox are sent ---------------------------------------------------------------------------------
+
+    const CANARY: &str = "CANARY-private-words-4f1c";
+
+    fn card_event(task: &str, id: &str) -> Value {
+        json!({"type": "approval.requested", "mission_id": "m_1", "task_id": task, "payload": {"approval_id": id, "task_id": task, "role": "architect", "tier": "amber", "tool": "write_file",
+               "pattern": format!("write_file {CANARY}"), "summary": format!("write {CANARY}.md"), "payload": {"path": format!("{CANARY}.md"), "content": CANARY},
+               "payload_blake3": "abcdef0123456789abcdef", "timeout_secs": 600}})
+    }
+
+    fn review_event(task: &str) -> Value {
+        json!({"type": "decisions.review_requested", "mission_id": "m_1", "task_id": task, "payload": {"count": 1, "decisions": [{"decision_id": "dec_a", "risk": "routine", "summary": format!("edit {CANARY}"), "rationale": format!("because {CANARY}")}]}})
+    }
+
+    fn done_event(task: &str, reason: &str) -> Value {
+        json!({"type": "task.completed", "mission_id": "m_1", "task_id": task, "payload": {"status": "done", "reason": reason}})
+    }
+
+    fn failed_event(task: &str) -> Value {
+        json!({"type": "task.failed", "mission_id": "m_1", "task_id": task, "payload": {"error": format!("could not read {CANARY}")}})
+    }
+
+    /// `specs/103` §4.2: a task that read a private entry has the text an agent wrote replaced by one fixed phrase, in all four kinds; the ids,
+    /// tier, tool name, payload hash, status and counts stay, so a card still reaches the operator.
+    #[test]
+    fn an_event_of_a_marked_task_loses_its_agent_written_fields_and_keeps_its_ids() {
+        let d = ws();
+        mark(d.path(), "t_0001", "entry-1", 100).unwrap();
+        for ev in [card_event("t_0001", "ap_m3_a"), review_event("t_0001"), done_event("t_0001", &format!("done with {CANARY}")), failed_event("t_0001")] {
+            let m = mask_event_for_relay(d.path(), &ev).unwrap_or_else(|| panic!("{} was not masked", ev["type"]));
+            let text = m.to_string();
+            assert!(!text.contains(CANARY), "{}: agent-written text reached the relay: {text}", ev["type"]);
+            assert!(text.contains(RELAY_PHRASE), "{}: the fixed phrase is missing: {text}", ev["type"]);
+            assert_eq!(m["type"], ev["type"]);
+            assert_eq!(m["task_id"], ev["task_id"]);
+        }
+        let card = mask_event_for_relay(d.path(), &card_event("t_0001", "ap_m3_b")).unwrap();
+        let p = &card["payload"];
+        assert_eq!((p["approval_id"].as_str(), p["payload_blake3"].as_str(), p["tier"].as_str(), p["tool"].as_str(), p["role"].as_str(), p["timeout_secs"].as_u64()), (Some("ap_m3_b"), Some("abcdef0123456789abcdef"), Some("amber"), Some("write_file"), Some("architect"), Some(600)));
+        assert_eq!((p["summary"].as_str(), p["payload"].as_str(), p["pattern"].as_str(), p["withheld"].as_bool()), (Some(RELAY_PHRASE), Some(RELAY_PHRASE), Some(RELAY_PHRASE), Some(true)));
+        let rev = mask_event_for_relay(d.path(), &review_event("t_0001")).unwrap();
+        let dec = &rev["payload"]["decisions"][0];
+        assert_eq!((rev["payload"]["count"].as_u64(), dec["decision_id"].as_str(), dec["risk"].as_str(), dec["summary"].as_str(), dec["rationale"].as_str()), (Some(1), Some("dec_a"), Some("routine"), Some(RELAY_PHRASE), Some(RELAY_PHRASE)));
+        let done = mask_event_for_relay(d.path(), &done_event("t_0001", "some reason")).unwrap();
+        assert_eq!((done["payload"]["status"].as_str(), done["payload"]["reason"].as_str()), (Some("done"), Some(RELAY_PHRASE)));
+        // an empty reason has nothing to withhold and is not turned into the phrase
+        assert_eq!(mask_event_for_relay(d.path(), &done_event("t_0001", "")).unwrap()["payload"]["reason"], "");
+    }
+
+    /// `specs/103` §6 `a_task_that_read_nothing_private_is_unchanged_on_all_four_channels`, the Relay and Mail rows: with no mark the filter
+    /// returns nothing to substitute for any event, and a marked task's events of kinds that carry no agent text are not touched either.
+    #[test]
+    fn a_task_that_read_nothing_private_is_sent_exactly_what_it_always_was_and_so_are_the_kinds_with_no_agent_text() {
+        let d = ws();
+        for ev in [card_event("t_0001", "ap_m3_c"), review_event("t_0001"), done_event("t_0001", "fine"), failed_event("t_0001")] {
+            assert!(mask_event_for_relay(d.path(), &ev).is_none(), "{} changed with no mark", ev["type"]);
+        }
+        assert!(!dir(d.path()).exists(), "looking at an event writes nothing");
+        mark(d.path(), "t_0001", "entry-1", 100).unwrap();
+        for kind in ["approval.resolved", "approval.parked", "xenia.alert", "task.output", "anything.else"] {
+            let ev = json!({"type": kind, "mission_id": "m_1", "task_id": "t_0001", "payload": {"reason": "stale", "by": "console-1"}});
+            assert!(mask_event_for_relay(d.path(), &ev).is_none(), "{kind} carries no agent-written text and is sent as written");
+        }
+        // a different task is not the marked one
+        assert!(mask_event_for_relay(d.path(), &card_event("t_0002", "ap_m3_d")).is_none());
+        // and the same event twice gives the same answer
+        assert_eq!(mask_event_for_relay(d.path(), &card_event("t_0001", "ap_m3_e")), mask_event_for_relay(d.path(), &card_event("t_0001", "ap_m3_e")));
+    }
+
+    #[test]
+    fn a_mark_on_the_host_mission_withholds_its_events_too_and_clearing_lifts_it() {
+        let d = ws();
+        mark(d.path(), "host-abcd1234", "host-abcd1234/n1", 100).unwrap();
+        let mut ev = card_event("t_0009", "ap_m3_f");
+        ev["mission_id"] = json!("host-abcd1234");
+        assert!(mask_event_for_relay(d.path(), &ev).is_some(), "the unit for a host over MCP is its session's mission");
+        clear(d.path(), "host-abcd1234", 200).unwrap();
+        assert!(mask_event_for_relay(d.path(), &ev).is_none(), "the operator's clear lifts it");
+    }
+
+    /// `specs/103` §4.3: a mark that cannot be read is treated as marked, on the stream only.
+    #[test]
+    fn an_unreadable_mark_withholds_on_the_stream_and_a_stranger_task_is_not_affected() {
+        let d = ws();
+        std::fs::create_dir_all(dir(d.path())).unwrap();
+        std::fs::write(file_of(d.path(), "t_0001"), "{ not json").unwrap();
+        let m = mask_event_for_relay(d.path(), &card_event("t_0001", "ap_m3_g")).expect("an unreadable mark fails closed");
+        assert!(!m.to_string().contains(CANARY));
+        assert!(mask_event_for_relay(d.path(), &card_event("t_0002", "ap_m3_h")).is_none(), "another task has no record and is unmarked");
+        assert!(!stream_text_can_go(&State::Unreadable) && !stream_text_can_go(&State::Marked { entries: vec!["e".into()], first_at: 1 }) && stream_text_can_go(&State::Unmarked));
+    }
+
+    /// The card list a relay asks for (`approval.list`) agrees with the stream: a marked task's cards, and any card the stream withheld
+    /// (the mark may have been on the mission, which a card record does not name), come back with the phrase and no details.
+    #[test]
+    fn the_card_list_a_relay_is_sent_agrees_with_the_stream() {
+        let d = ws();
+        mark(d.path(), "t_0001", "entry-1", 100).unwrap();
+        mark(d.path(), "host-abcd1234", "host-abcd1234/n1", 100).unwrap();
+        let rec = |id: &str, task: &str| json!({"approval_id": id, "task_id": task, "tier": "amber", "tool": "write_file", "pattern": "p", "summary": CANARY, "payload": {"content": CANARY}, "payload_blake3": "ab"});
+        // the stream withheld this one because its mission was marked; its task key is not
+        let mut ev = card_event("t_0005", "ap_m3_list_3");
+        ev["mission_id"] = json!("host-abcd1234");
+        assert!(mask_event_for_relay(d.path(), &ev).is_some());
+        let out = mask_pending_for_relay(d.path(), json!([rec("ap_m3_list_1", "t_0001"), rec("ap_m3_list_2", "t_0002"), rec("ap_m3_list_3", "t_0005")]));
+        let l = out.as_array().unwrap();
+        assert_eq!((l[0]["summary"].as_str(), l[0]["payload"].as_str(), l[0]["withheld"].as_bool()), (Some(RELAY_PHRASE), Some(RELAY_PHRASE), Some(true)));
+        assert_eq!((l[1]["summary"].as_str(), l[1]["payload"]["content"].as_str(), l[1].get("withheld")), (Some(CANARY), Some(CANARY), None), "an unmarked task's card is the list as it always was");
+        assert_eq!(l[2]["summary"].as_str(), Some(RELAY_PHRASE), "the list agrees with what the stream withheld");
+        assert!(card_withheld(d.path(), "ap_m3_list_3", "t_0005") && !card_withheld(d.path(), "ap_m3_list_2", "t_0002"));
+        assert_eq!(l.iter().map(|c| c["approval_id"].as_str().unwrap()).collect::<Vec<_>>(), ["ap_m3_list_1", "ap_m3_list_2", "ap_m3_list_3"], "ids and order stay");
+    }
+
+    /// The decision is put to the one egress check with a record shaped from the mark, and the relay filter is installed in one place, by the
+    /// boot (and the test fixture that stands in for it).
+    #[test]
+    fn the_stream_decision_goes_through_the_one_egress_check_and_the_filter_is_installed_once_at_boot() {
+        let src = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/private_read.rs")).unwrap();
+        let code = production(&src);
+        assert!(code.contains("egress::check(") && code.contains("crate::library::Channel::Relay") && code.contains("crate::library::Channel::Mail"), "Relay and Mail are decided by egress::check");
+        let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let (mut setters, mut installers): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+        for (rel, text) in engine_sources().into_iter().map(|(f, t)| (format!("delphi-engine/src/{f}"), t)).chain(["delphi-core/src/server.rs", "delphi/src/main.rs"].map(|f| (f.to_string(), std::fs::read_to_string(crates.join(f)).unwrap_or_default()))) {
+            let prod = production(&text);
+            if prod.contains(".set_relay_filter(") {
+                setters.push(rel.clone());
+            }
+            if prod.contains("private_read::install_relay_filter(") {
+                installers.push(rel);
+            }
+        }
+        setters.sort();
+        installers.sort();
+        assert_eq!(setters, vec!["delphi-engine/src/private_read.rs".to_string()], "the hub's filter is set by the one install function and nothing else");
+        assert_eq!(installers, vec!["delphi-engine/src/boot.rs".to_string(), "delphi-engine/src/testkit.rs".to_string()], "the filter is installed when an engine is built: by the boot, and by the test fixture that stands in for it");
     }
 
     /// The mark module reaches no network, no process and no model, and calls no promotion, trust, tool or approval path.

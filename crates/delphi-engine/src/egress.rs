@@ -88,9 +88,9 @@ pub const PATHS: [(Channel, &str, Wired); 15] = [
     (Channel::Export, "library_bib.rs", Wired::Yes),
     (Channel::DebugBundle, "", Wired::NoEntryText { proof_file: "delphi/src/logs_cmd_tests.rs", proof_test: "a_bundle_never_carries_a_noted_entrys_text" }),
     (Channel::Log, "", Wired::NoEntryText { proof_file: "delphi-core/src/elog_tests.rs", proof_test: "context_keys_never_name_a_field_that_carries_entry_text" }),
-    (Channel::Relay, "", Wired::Unaudited),
+    (Channel::Relay, "private_read.rs", Wired::Yes),
     (Channel::Connector, "", Wired::Unaudited),
-    (Channel::Mail, "", Wired::Unaudited),
+    (Channel::Mail, "private_read.rs", Wired::Yes),
     (Channel::Outbound, "", Wired::Unaudited),
     (Channel::Telemetry, "", Wired::NoEntryText { proof_file: "delphi-engine/src/egress.rs", proof_test: "no_telemetry_sender_exists_and_every_file_that_can_reach_the_network_is_registered" }),
     (Channel::ArchiveLookup, "library_archive.rs", Wired::Yes),
@@ -208,7 +208,7 @@ mod tests {
     #[test]
     fn the_unaudited_channels_are_listed_so_the_gap_is_visible() {
         let un: Vec<String> = PATHS.iter().filter(|(_, _, w)| *w == Wired::Unaudited).map(|(c, _, _)| format!("{c:?}")).collect();
-        assert_eq!(un, ["Relay", "Connector", "Mail", "Outbound"], "audit a channel, then move it out of this list");
+        assert_eq!(un, ["Connector", "Outbound"], "audit a channel, then move it out of this list");
     }
 
     #[test]

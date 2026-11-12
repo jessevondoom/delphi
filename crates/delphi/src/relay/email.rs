@@ -294,6 +294,30 @@ mod tests {
         }
     }
 
+    /// `specs/103` §6 (slice M3): the mail for a task that read a private entry holds only the fixed phrase where an agent's words would be, and
+    /// offers only a way to deny. The mail is composed from the same stream the daemon filters, so the daemon's replacement is what is mailed.
+    #[test]
+    fn a_mail_for_a_marked_task_holds_only_the_fixed_phrase() {
+        use crate::relay::{card_message, Detail};
+        const CANARY: &str = "CANARY-mail-private-9a2c";
+        let ws = tempfile::tempdir().unwrap();
+        delphi_engine::private_read::mark(ws.path(), "t_0001", "entry-1", 100).unwrap();
+        let ev = |task: &str, id: &str| serde_json::json!({"type": "approval.requested", "mission_id": "m_1", "task_id": task, "payload": {"approval_id": id, "task_id": task, "role": "architect", "tier": "amber", "tool": "write_file",
+            "pattern": format!("write_file {CANARY}"), "summary": format!("write {CANARY}.md"), "payload": {"path": format!("{CANARY}.md"), "content": CANARY}, "payload_blake3": "abcdef0123456789abcdef", "timeout_secs": 600}});
+        let masked = delphi_engine::private_read::mask_event_for_relay(ws.path(), &ev("t_0001", "ap_m3_mail_1")).expect("a marked task's card is withheld");
+        let mail = compose(&cfg(), &card_message(&masked["payload"], TOKEN, false, Detail::Full, false));
+        for (what, text) in [("body", &mail.body), ("subject", &mail.subject)] {
+            assert!(!text.contains(CANARY), "{what} carries agent-written text: {text}");
+        }
+        assert!(mail.body.contains(delphi_engine::private_read::RELAY_PHRASE), "the fixed phrase stands where the words were: {}", mail.body);
+        assert!(mail.body.contains(&format!("DENY {TOKEN}")) && !mail.body.contains("APPROVE"), "only a way to deny is offered: {}", mail.body);
+        assert!(mail.body.contains("approve it at the console"), "the operator is told where to approve it");
+        // a task that read nothing private is mailed exactly what it always was
+        assert!(delphi_engine::private_read::mask_event_for_relay(ws.path(), &ev("t_0002", "ap_m3_mail_2")).is_none());
+        let plain = compose(&cfg(), &card_message(&ev("t_0002", "ap_m3_mail_2")["payload"], TOKEN, false, Detail::Summary, false));
+        assert!(plain.body.contains(&format!("write {CANARY}.md")) && plain.body.contains(&format!("APPROVE {TOKEN}")), "unchanged when nothing was read: {}", plain.body);
+    }
+
     #[test]
     fn the_channel_sends_through_the_transport_and_reduces_what_it_receives() {
         let mut ch = EmailChannel { cfg: cfg(), transport: FakeMail { sent: vec![], inbox: vec![mail("", &format!("APPROVE {}\r\n", TOKEN)), b"\x00junk".to_vec()] } };

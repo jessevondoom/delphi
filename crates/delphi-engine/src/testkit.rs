@@ -121,6 +121,8 @@ fn assemble(t: tempfile::TempDir, root: PathBuf, steps: Vec<Step>, budget_usd: f
     let ws_dir_for_exec = ws.dir.clone();
     let model = ScriptedModel::new(steps);
     let hub = Hub::new();
+    // as the boot does: whatever a relay is sent passes the daemon's filter (`specs/103` §4.4)
+    crate::private_read::install_relay_filter(&hub, &ws_dir_for_exec);
     let ledger = Arc::new(Mutex::new(Ledger::open_in_memory().unwrap()));
     let secrets = SecretRegistry::new();
     // After a simulated death a blocking append may still be finishing and holds the log lock for a moment.

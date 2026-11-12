@@ -426,6 +426,9 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
     // A hook left out for being malformed is Delphi less strict than the operator meant: say so on attach.
     notices.extend(crate::hooks::parse(&root).1.into_iter().map(|p| format!("hooks: {}", p)));
     let pool = Arc::new(crate::pool::Pool::open(Some(ws_dir.join("local/pool-state.json")), cfg.get().routing.tuning.clone(), crate::pool::system_clock()));
+    // Spec 103 M3: what a relay and a mailbox are sent passes the daemon's filter first, so agent-written text of a task that read a private
+    // entry never reaches them. A task that read nothing private is sent exactly what it always was.
+    crate::private_read::install_relay_filter(&hub, ws_dir);
     let engine = Arc::new(Engine {
         research_ask: Default::default(),
         validator: Default::default(),
