@@ -735,7 +735,7 @@ pub(crate) mod tests {
         let (a, sources) = vetted_with_sources(&f, "harbour", "The harbour closes at dusk.");
         let (b, _) = vetted_with_sources(&f, "lamp", "The lamp is lit by hand.");
         // b is accepted in a batch earlier, while nothing was wrong
-        accept(&f.lib, &f.state, Some(&[b.clone()]), unix_now()).unwrap();
+        accept(&f.lib, &f.state, Some(std::slice::from_ref(&b)), unix_now()).unwrap();
         assert!(f.lib.claim(&b).unwrap()["validation"]["batch"]["mark"] == BATCH_MARK);
         // then a poisoned page turns up behind a (still vetted, not yet accepted) claim
         f.lib.refresh_support(&a).unwrap();
