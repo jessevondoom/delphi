@@ -1282,7 +1282,10 @@ impl EngineService {
             return Err(err(code::INVALID_PARAMS, "`query` must be 1 to 500 characters"));
         }
         let limit = p["limit"].as_u64().map(|n| (n as usize).clamp(1, 10)).unwrap_or(5);
-        let out = tokio::task::spawn_blocking(move || -> Result<Value, String> {
+        let (mark_key, mark_cwd) = (c.mission(), c.cwd.to_string_lossy().to_string());
+        let out = tokio::task::spawn_blocking(move || -> Result<(Value, Vec<String>), String> {
+            // Spec 103 M1 (observe only): the entries of this answer that the daemon stored private. They change nothing in the answer.
+            let mut private_seen: Vec<String> = Vec::new();
             let project = crate::mcp_project::Project::new(&ws.dir, &c.cwd);
             let db = ws.dir.join("local/state.db");
             let (core, mode) = if db.is_file() {
@@ -1297,8 +1300,10 @@ impl EngineService {
             // Entries hosts left with `propose_kb_entry` claims (`specs/098` §7.2): searchable at once, each with its `noted` label.
             let noted: Vec<Value> = if db.is_file() {
                 let opts = crate::kb::SearchOpts { role: None, limit: limit * 3, zones: Some(vec!["staged"]), include_staged: true, include_untrusted: true, ..Default::default() };
-                crate::retrieval::search(&ws.home, &db, &query, opts).map(|r| r.hits).unwrap_or_default().iter().filter(|h| h.heading_path.contains(crate::host_noted::NOTED_HEADING)).take(limit)
-                    .map(|h| json!({"layer": "noted", "pointer": h.pointer, "heading": h.heading_path, "preview": crate::host_noted::fence(&h.shown_label(), &h.preview), "label": h.shown_label()})).collect()
+                let hits = crate::retrieval::search(&ws.home, &db, &query, opts).map(|r| r.hits).unwrap_or_default();
+                let kept: Vec<_> = hits.iter().filter(|h| h.heading_path.contains(crate::host_noted::NOTED_HEADING)).take(limit).collect();
+                private_seen = crate::private_read::private_noted_in(&ws.dir, kept.iter().map(|h| h.rel_path.as_str()));
+                kept.iter().map(|h| json!({"layer": "noted", "pointer": h.pointer, "heading": h.heading_path, "preview": crate::host_noted::fence(&h.shown_label(), &h.preview), "label": h.shown_label()})).collect()
             } else {
                 vec![]
             };
@@ -1306,12 +1311,64 @@ impl EngineService {
             if out["core"].as_array().is_some_and(|a| a.is_empty()) && out["noted"].as_array().is_some_and(|a| a.is_empty()) && out["project_results"].as_array().is_none_or(|a| a.is_empty()) {
                 out["hint"] = json!("nothing found: request_research asks Delphi's scout to look it up in trusted sources and keep what it finds");
             }
-            Ok(out)
+            Ok((out, private_seen))
         })
         .await
         .map_err(|e| err(-32000, e.to_string()))?
         .map_err(|e| err(-32000, e))?;
+        let (out, private_seen) = out;
+        // Spec 103 M1 (observe only): mark the host session for each private entry its answer carried. A failure here never fails the search.
+        if !private_seen.is_empty() {
+            self.private_read_mark(&mark_key, &mark_cwd, &private_seen, "host.search_kb").await;
+        }
         Ok(out)
+    }
+
+    /// Spec 103 M1: record that `key` was handed the text of these private entries (ids only), and log the first read of each. It changes
+    /// nothing about what was returned; an error is dropped on purpose.
+    async fn private_read_mark(&self, key: &str, cwd: &str, entries: &[String], reader: &str) {
+        let (ws_dir, now) = (self.engine.ws.dir.clone(), (self.engine.clock_unix)());
+        for entry in entries {
+            if crate::private_read::mark(&ws_dir, key, entry, now).unwrap_or(false) {
+                if let Ok(m) = self.mission_at(Some(key), Some(cwd)).await {
+                    let mut ev = EventEnvelope::new(key, crate::private_read::MARK_EVENT, json!({"key": key, "entry": entry, "reader": reader, "at": now}));
+                    ev.agent = None;
+                    let _ = m.append(ev).await;
+                }
+            }
+        }
+    }
+
+    /// `private_read.status` (spec 103 M1): the operator's view of the marks and the observe counter. Console scope only; ids and counts.
+    async fn private_read_status(&self, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let ws_dir = self.engine.ws.dir.clone();
+        let c = crate::private_read::counter(&ws_dir);
+        let marks: Vec<Value> = crate::private_read::live(&ws_dir).into_iter().map(|(key, entries, first_at)| json!({"key": key, "entries": entries, "first_at": first_at})).collect();
+        Ok(json!({
+            "observe_only": true,
+            "marks": marks,
+            "counter": {"keys_marked": c.keys_marked, "entries_marked": c.entries_marked, "cleared": c.cleared, "outbound_would_change": c.outbound_would_change, "connector_would_change": c.connector_would_change, "unreadable": c.unreadable},
+            "readers_not_yet_marking": crate::private_read::readers_not_yet_marking(),
+            "line": crate::private_read::status_line(&ws_dir),
+        }))
+    }
+
+    /// `private_read.clear` (spec 103 M1, §4.3, §7.1 OD-4): the operator lifts the mark on one key at the console. Console scope only: no tool,
+    /// no host method, no relay reply and no handoff reaches this. Logged. The delegated form (an agent holding an operator permission) is not built.
+    async fn private_read_clear(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let key = p["key"].as_str().unwrap_or("").to_string();
+        let (ws_dir, now) = (self.engine.ws.dir.clone(), (self.engine.clock_unix)());
+        let n = crate::private_read::clear(&ws_dir, &key, now).map_err(|e| err(code::INVALID_PARAMS, e))?;
+        if n > 0 && valid_mission_id(&key) {
+            if let Ok(m) = self.mission_at(Some(&key), None).await {
+                let mut ev = EventEnvelope::new(&key, crate::private_read::CLEAR_EVENT, json!({"key": key, "entries_cleared": n, "by": "operator", "at": now}));
+                ev.agent = None;
+                let _ = m.append(ev).await;
+            }
+        }
+        Ok(json!({"key": key, "entries_cleared": n}))
     }
 
     async fn host_handoff_get(&self, p: Value, ctx: CallContext) -> RpcOutcome {
@@ -3541,6 +3598,8 @@ impl Extension for ServiceExt {
                 "decisions.review" => svc.decisions_review(params, ctx).await,
                 "council.start" => svc.council_start(params, ctx).await,
                 "bundle.distill" => svc.distill_start(params, ctx).await,
+                "private_read.status" => svc.private_read_status(ctx).await,
+                "private_read.clear" => svc.private_read_clear(params, ctx).await,
                 "kb.search" => svc.kb_search(params).await,
                 "kb.get" => svc.kb_get(params).await,
                 "kb.open" => svc.kb_open(params, ctx).await,

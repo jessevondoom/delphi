@@ -624,3 +624,61 @@ fn the_background_worker_picks_a_claim_to_check_and_grants_nothing_and_only_the_
     assert!(production(&serve).contains(r#"req["background"] = json!(false);"#), "the entry a span's request takes must clear the daemon-only background flag");
     assert!(production(&serve).contains("never ratifies"), "a background check is capped at advisory");
 }
+
+#[test]
+fn the_private_read_mark_is_named_only_where_it_is_set_observed_cleared_and_shown_and_it_reaches_nothing() {
+    // `specs/103` §8 and §4.3 (slice M1): a mark only ever raises, degrades or refuses; in M1 it does none of those and only counts. So (1) only the
+    // files below name the module: the readers that set it (`service.rs`), the two senders that observe it, the daemon's console methods, `doctor`,
+    // the operator's command and the module's own declaration; no promotion, trust, tool-access or approval file does; (2) `mark(` is called only
+    // by the daemon's marker and `observe_send(` only by the two senders (`clear(` is checked by the module's own test); (3) the module names no
+    // socket, process or model call, and its `use` lines come from a short list of inert crates.
+    let root = root();
+    let mut files = Vec::new();
+    rust_files(&root.join("crates"), &mut files);
+    let names = Regex::new(r"private_read").unwrap();
+    let named_ok = [
+        "crates/delphi-engine/src/lib.rs",
+        "crates/delphi-engine/src/private_read.rs",
+        "crates/delphi-engine/src/service.rs",
+        "crates/delphi-engine/src/harness_run.rs",
+        "crates/delphi-engine/src/connector_run.rs",
+        "crates/delphi/src/doctor.rs",
+        "crates/delphi/src/private_read_cmd.rs",
+        "crates/delphi/src/main.rs",
+    ];
+    let (mut stray, mut mark_callers, mut observe_callers) = (Vec::new(), Vec::new(), Vec::new());
+    // production code runs to the LAST `mod tests` (a file such as `service.rs` has an earlier `#[cfg(test)]` item, which `production()` would cut at)
+    let production_last = |src: &str| -> String {
+        let cut = src.rfind("\n#[cfg(test)]\nmod tests").or_else(|| src.rfind("\nmod tests")).unwrap_or(src.len());
+        src[..cut].to_string()
+    };
+    for f in &files {
+        let rel = f.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
+        let src = std::fs::read_to_string(f).unwrap();
+        let code: String = production_last(&src).lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+        if names.is_match(&code) && !named_ok.contains(&rel.as_str()) {
+            stray.push(rel.clone());
+        }
+        if rel != "crates/delphi-engine/src/private_read.rs" {
+            if code.contains("private_read::mark(") {
+                mark_callers.push(rel.clone());
+            }
+            if code.contains("private_read::observe_send(") {
+                observe_callers.push(rel.clone());
+            }
+        }
+    }
+    observe_callers.sort();
+    assert!(stray.is_empty(), "the private-read mark is named outside the files that set, observe, clear and show it; read the new file and add it on purpose: {stray:?}");
+    assert_eq!(mark_callers, vec!["crates/delphi-engine/src/service.rs".to_string()], "a mark is set only by the daemon's marker for a reader in READS");
+    assert_eq!(observe_callers, vec!["crates/delphi-engine/src/connector_run.rs".to_string(), "crates/delphi-engine/src/harness_run.rs".to_string()], "the observe call is made by the two senders only");
+    let inert = ["delphi_core::", "serde_json::", "std::"];
+    let reach = Regex::new(r"std::net|std::process|Command::new|TcpStream|reqwest|tiny_http|tokio::|delphi_adapter|complete\(|model_call|\.send\(").unwrap();
+    let rel = "crates/delphi-engine/src/private_read.rs";
+    let src = std::fs::read_to_string(root.join(rel)).unwrap();
+    let code: String = production(&src).lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+    for l in code.lines().filter(|l| l.starts_with("use ")) {
+        assert!(inert.iter().any(|p| l.trim_start_matches("use ").starts_with(p)), "{rel} imports from a path that is not on the inert list: {l}");
+    }
+    assert!(!reach.is_match(&code), "{rel} names a socket, a process or a model call");
+}
