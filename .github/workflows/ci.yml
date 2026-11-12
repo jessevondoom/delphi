@@ -54,7 +54,7 @@ jobs:
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: target
-          key: cargo-target-${{ runner.os }}-unit-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-target-${{ runner.os }}-unit-${{ hashFiles('**/Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml') }}
           restore-keys: |
             cargo-target-${{ runner.os }}-unit-
             cargo-target-${{ runner.os }}-test-
@@ -65,7 +65,7 @@ jobs:
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: target
-          key: cargo-target-${{ runner.os }}-unit-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-target-${{ runner.os }}-unit-${{ hashFiles('**/Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml') }}
 
   test-linux-integration:
     name: test linux (integration, bins, doc)
@@ -90,7 +90,7 @@ jobs:
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: target
-          key: cargo-target-${{ runner.os }}-integ-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-target-${{ runner.os }}-integ-${{ hashFiles('**/Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml') }}
           restore-keys: |
             cargo-target-${{ runner.os }}-integ-
             cargo-target-${{ runner.os }}-test-
@@ -107,7 +107,7 @@ jobs:
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: target
-          key: cargo-target-${{ runner.os }}-integ-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-target-${{ runner.os }}-integ-${{ hashFiles('**/Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml') }}
 
   # macOS: one job per run (the account may run only 5 macOS jobs at once). The full workspace tests, then Clippy, so
   # code behind `cfg(target_os = "macos")` is tested and checked where it compiles. Clippy runs even when the tests fail.
@@ -142,7 +142,7 @@ jobs:
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: target
-          key: cargo-target-${{ runner.os }}-test-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-target-${{ runner.os }}-test-${{ hashFiles('**/Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml') }}
           restore-keys: |
             cargo-target-${{ runner.os }}-test-
       - name: Test
@@ -161,7 +161,7 @@ jobs:
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: target
-          key: cargo-target-${{ runner.os }}-test-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-target-${{ runner.os }}-test-${{ hashFiles('**/Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml') }}
 
   # Clippy, the repo lint and the data checks, on Linux. (Clippy also runs on macOS, in the job above.) The checks that
   # used to follow the tests in the `test` job (training cases, the golden bundle) are here, so they no longer rebuild
@@ -189,7 +189,7 @@ jobs:
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: target
-          key: cargo-target-${{ runner.os }}-lint-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-target-${{ runner.os }}-lint-${{ hashFiles('**/Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml') }}
           restore-keys: |
             cargo-target-${{ runner.os }}-lint-
       - name: Clippy
@@ -209,7 +209,7 @@ jobs:
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: target
-          key: cargo-target-${{ runner.os }}-lint-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-target-${{ runner.os }}-lint-${{ hashFiles('**/Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml') }}
 
   # The Rust dependency policy (spec 093 P, deny.toml): known vulnerabilities, yanked crates, licences, sources. The tool is
   # built at a fixed version from crates.io, not fetched through a third-party action, and it reads the advisory database
@@ -280,7 +280,7 @@ jobs:
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: target
-          key: cargo-target-${{ runner.os }}-ui-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-target-${{ runner.os }}-ui-${{ hashFiles('**/Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml') }}
           restore-keys: |
             cargo-target-${{ runner.os }}-ui-
       - name: Install (pinned, no install scripts)
@@ -324,7 +324,7 @@ jobs:
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: target
-          key: cargo-target-${{ runner.os }}-ui-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-target-${{ runner.os }}-ui-${{ hashFiles('**/Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml') }}
 
   # The Linux sandbox (bubblewrap) is only exercised where it exists: install it, allow unprivileged user
   # namespaces (Ubuntu 24.04 restricts them by default), and require the sandbox tests to really run.
@@ -424,7 +424,7 @@ jobs:
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: target
-          key: cargo-target-${{ runner.os }}-sandbox-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-target-${{ runner.os }}-sandbox-${{ hashFiles('**/Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml') }}
           restore-keys: |
             cargo-target-${{ runner.os }}-sandbox-
       - name: Sandbox tests must run, not skip
@@ -437,4 +437,4 @@ jobs:
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: target
-          key: cargo-target-${{ runner.os }}-sandbox-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-target-${{ runner.os }}-sandbox-${{ hashFiles('**/Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml') }}
