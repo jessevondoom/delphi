@@ -245,6 +245,15 @@ sandbox = "off"
 # [research]
 # thin_below = 3
 #
+# Archived copies (specs/101 section 5). Off by default. With archive_fallback = true, when `delphi sources show` finds a PUBLIC source it
+# fetched itself gone and holds no readable text, the daemon asks one web archive whether it has a copy and keeps it as a labelled version
+# of the source ("Archived copy from <date>, not the live page"). Read-only: it only asks and reads, and never asks the archive to save a page.
+# A private source, a record that cannot be read, and an address that is not public send nothing. A copy adds no origin and no trusted
+# source to any claim; a claim resting on it reads "checked against an archived copy". `delphi sources archive <id | url>` does the same on
+# your say-so whether or not this is on. The endpoint must be https.
+# archive_fallback = false
+# archive_endpoint = "https://archive.org/wayback/available"
+#
 # The wider fetch (specs/098 section 7.5 item 7a). Off by default: the daemon's fetch reaches trusted-list hosts only. With ladder = true
 # it also reaches any https URL that a search of the run returned (and, for a host's claim, a URL that an earlier search of the same host
 # session returned), so a result from a site you have not listed can be read, kept as "noted", and checked. Nothing else is fetched: a URL

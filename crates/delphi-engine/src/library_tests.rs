@@ -531,6 +531,48 @@ mod claims {
         (ids, c["id"].as_str().unwrap().to_string())
     }
 
+    /// Mark the current version of a source as a copy from a web archive, as `Library::add_archived_copy` leaves it.
+    fn make_archived(l: &Library, id: &str, day: u8) {
+        let mut m = l.read_meta(id).unwrap();
+        m["archived_copy"] = json!({"archive": "web.archive.org", "archived_at": format!("2015-01-{:02}T00:00:00Z", day), "retrieved_at": "2026-11-11T00:00:00Z", "live_url": m["canonical_url"].clone()});
+        std::fs::write(l.source_dir(id).join("meta.json"), serde_json::to_vec(&m).unwrap()).unwrap();
+    }
+
+    /// `specs/101` §12 item 1 and acceptance 4: an archived copy shares the origin of the page it copies and adds ZERO origins and ZERO
+    /// trusted sources, however many copies there are; the claim is marked "checked against archived copy of <date>"; a live re-check
+    /// that succeeds drops the mark and the source counts again.
+    #[test]
+    fn an_archived_copy_adds_no_origin_and_no_trusted_source_however_many_copies_there_are() {
+        let (d, l) = lib();
+        let (ids, id) = three_fetched(d.path(), &l);
+        let c = l.claim(&id).unwrap();
+        assert_eq!((c["support"]["origins"].clone(), c["support"]["trusted_sources"].clone()), (json!(3), json!(3)), "three live origins: {c}");
+        assert!(c["support"]["archived"].is_null(), "nothing is archived yet");
+        // three copies of the same page, one after another: each is the current version in turn
+        for day in 1..=3 {
+            make_archived(&l, &ids[0], day);
+        }
+        let c = l.refresh_support(&id).unwrap();
+        assert_eq!((c["support"]["origins"].clone(), c["support"]["trusted_sources"].clone()), (json!(2), json!(2)), "the copy counts for nothing, not even as the page it copies: {c}");
+        assert!(!matches!(status(&c), Status::Corroborated | Status::Substantiated | Status::Vetted), "two origins are not corroboration");
+        assert_eq!(c["support"]["archived"], json!([{"source_id": ids[0], "archived_at": "2015-01-03T00:00:00Z"}]), "checked against the archived copy of that date");
+        // a claim anchored in ONE page that is now held only as a copy has no origin at all
+        let one = l.add_claim("A claim on one page.", &ClaimOpts::default(), &[spec(&ids[1], "the moon drives the tides")]).unwrap();
+        assert_eq!(one["support"]["origins"], json!(1));
+        make_archived(&l, &ids[1], 5);
+        let one = l.refresh_support(one["id"].as_str().unwrap()).unwrap();
+        assert_eq!(one["support"]["origins"], json!(0), "one page and a copy of it count none: {one}");
+        // the live page returns: a version without the mark counts again and the label goes
+        for i in [0usize, 1] {
+            let mut m = l.read_meta(&ids[i]).unwrap();
+            m.as_object_mut().unwrap().remove("archived_copy");
+            std::fs::write(l.source_dir(&ids[i]).join("meta.json"), serde_json::to_vec(&m).unwrap()).unwrap();
+        }
+        let c = l.refresh_support(&id).unwrap();
+        assert_eq!(c["support"]["origins"], json!(3));
+        assert!(c["support"]["archived"].is_null(), "the label is gone with the copy: {c}");
+    }
+
     #[test]
     fn three_fetched_origins_corroborate_and_files_the_operator_added_never_count() {
         let (d, l) = lib();

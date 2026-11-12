@@ -50,6 +50,9 @@ pub mod review;
 #[path = "library_recheck.rs"]
 mod recheck;
 pub use recheck::Recheck;
+#[path = "library_archive.rs"]
+pub mod archive;
+pub use archive::{ArchiveConfig, ArchiveOutcome};
 
 const MIB: u64 = 1024 * 1024;
 
@@ -147,10 +150,13 @@ pub enum Channel {
     WebSearch,
     Outbound,
     Telemetry,
+    /// A public URL sent to a web archive to ask whether it holds a copy (`specs/101` §5): read-only, no entry text, and never for a
+    /// private source or a record that cannot be read.
+    ArchiveLookup,
 }
 
 impl Channel {
-    pub const ALL: [Channel; 11] = [
+    pub const ALL: [Channel; 12] = [
         Channel::Bundle,
         Channel::Xenia,
         Channel::Export,
@@ -162,6 +168,7 @@ impl Channel {
         Channel::WebSearch,
         Channel::Outbound,
         Channel::Telemetry,
+        Channel::ArchiveLookup,
     ];
 }
 
