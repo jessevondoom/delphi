@@ -28,6 +28,7 @@ Start with the README, then the guides. The specs are the design and say, in a `
 - [Configuration reference](docs/reference/config.md); annotated template at [config.example.toml](crates/delphi/config.example.toml)
 - [Roles and skills catalog](docs/reference/catalog.md): every built-in role and skill, the skills each role may use (generated)
 - [Schemas guide](docs/reference/schemas.md)
+- [Invariant enforcement map](context/invariant-enforcement.md): which test enforces each authority invariant, with an honest status (enforced, partly, not yet); the spec 098 §12 table is checked by `crates/delphi/tests/invariant_map.rs`
 - [Golden bundle](dev/bundles/acme-platform): a complete bundle that passes `delphi bundle validate`; copy its shapes
 - [Skills catalog](skills/CATALOG.md) and [bundle authoring skill](skills/org-bundle-authoring/SKILL.md)
 - [Changelog](CHANGELOG.md)

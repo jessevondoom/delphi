@@ -292,6 +292,12 @@ fn check_research(home: &Path, ws: &Workspace, cfg_text: &str, r: &mut Report) {
     // spec 098 §7.2: a private entry is never placed in a foreign-family seat's prompt whatever this says; `allow` also lets the host's own
     // family read private entries, which is worth knowing once the install holds any.
     let allow = root.get("library").and_then(|l| l.get("private_to_models")).and_then(|v| v.as_str()) == Some("allow");
+    // spec 098 §6 and §13 (S9): a finished Council, Panel or red-team review expects a host summary. Delphi only counts the ones with none; it
+    // cannot make a host write one and never holds a result back for it, so this is a fact and not a warning.
+    let missing = delphi_engine::host_rpc::summaries_missing_in(&ws.dir);
+    if missing > 0 {
+        r.push(Level::Ok, CHECK, "", format!("{missing} finished Council, Panel or red-team review(s) have no host summary recorded after them (best effort: ask the host to call record_session_summary)"));
+    }
     let private = delphi_engine::host_noted::private_count(&ws.dir);
     if allow && private > 0 {
         r.warn(CHECK, "config.toml", format!("[library] private_to_models = \"allow\" while {private} private entr{} exist: a private entry can reach a model of the host's own family (never a foreign family). Set it to \"deny\" to keep them out of every prompt", if private == 1 { "y" } else { "ies" }));
