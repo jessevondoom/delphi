@@ -643,6 +643,63 @@ fn an_exchange_record_is_context_that_nothing_reads_as_a_criterion_and_that_reac
 }
 
 #[test]
+fn the_merge_trigger_and_the_hosts_exchange_fields_reach_the_store_only_through_the_daemon_and_grant_nothing() {
+    // `specs/102` §3.2 item 1, §3.3, §10 items 1 and 2, §11 item 5 (the S3 follow-ups). (1) The merge ledger reader is named only by the module
+    // list and the daemon's own timer; (2) `delphi merge` (the CLI's merge flow) names no history module at all, so it cannot write the daemon-only store;
+    // (3) the reader imports only `std` and `serde_json`, names no socket, process or model call and no promotion, trust, tool-access or approval
+    // path, and writes nothing; (4) the host's exchange entry points are called only by the daemon's host path, the mission that holds the tap and the
+    // tap itself, so a record can be completed by a trigger the daemon saw and made by no one else.
+    let root = root();
+    let mut files = Vec::new();
+    rust_files(&root.join("crates"), &mut files);
+    let strip = |src: &str| -> String { production(src).lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n") };
+    let reader = Regex::new(r"history_merge::|mod history_merge").unwrap();
+    let reader_ok = ["crates/delphi-engine/src/lib.rs", "crates/delphi-engine/src/history_merge.rs", "crates/delphi-engine/src/service.rs"];
+    let exchange = Regex::new(r"on_host_exchange|history_host_exchange").unwrap();
+    let exchange_ok = ["crates/delphi-engine/src/history_record.rs", "crates/delphi-engine/src/history_record_tests.rs", "crates/delphi-engine/src/mission.rs", "crates/delphi-engine/src/service.rs"];
+    let (mut stray_reader, mut stray_exchange, mut merge_names_history) = (Vec::new(), Vec::new(), Vec::new());
+    for f in &files {
+        let rel = f.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
+        let code = strip(&std::fs::read_to_string(f).unwrap());
+        if reader.is_match(&code) && !reader_ok.contains(&rel.as_str()) {
+            stray_reader.push(rel.clone());
+        }
+        if exchange.is_match(&code) && !exchange_ok.contains(&rel.as_str()) {
+            stray_exchange.push(rel.clone());
+        }
+        if rel.starts_with("crates/delphi/src/merge") && code.contains("history_") {
+            merge_names_history.push(rel);
+        }
+    }
+    assert!(stray_reader.is_empty(), "the merge ledger reader is named outside the daemon's timer: {stray_reader:?}");
+    assert!(stray_exchange.is_empty(), "the host's exchange entry points are named outside the daemon's host path: {stray_exchange:?}");
+    assert!(merge_names_history.is_empty(), "the merge command must not name the history store: {merge_names_history:?}");
+    let src = std::fs::read_to_string(root.join("crates/delphi-engine/src/history_merge.rs")).unwrap();
+    let code = strip(&src);
+    for l in code.lines().filter(|l| l.starts_with("use ")) {
+        let path = l.trim_start_matches("use ");
+        assert!(["std::", "serde_json::"].iter().any(|p| path.starts_with(p)), "history_merge imports from a path that is not on the inert list: {l}");
+    }
+    let reach = Regex::new(r"std::net|std::process|Command::new|TcpStream|reqwest|tiny_http|tokio::|delphi_adapter|complete\(|model_call|\.send\(").unwrap();
+    let grants = Regex::new(r"\b(?:promote\w*|ratif\w*|approv\w*|grant\w*|trust\w*|taint\w*|tier\w*|authoriz\w*|library_claims|knowledge_status|fact_\w*|validator\w*|score\w*|rank\w*)\b|council::|research_run").unwrap();
+    let writes = Regex::new(r"fs::write|File::create|OpenOptions|create_dir|remove_|rename|set_permissions|write_all").unwrap();
+    assert!(!reach.is_match(&code), "history_merge names a socket, a process or a model call");
+    assert!(!grants.is_match(&code), "history_merge names a promotion, trust, tool-access or approval path: {:?}", grants.find(&code).map(|m| m.as_str().to_string()));
+    assert!(!writes.is_match(&code), "history_merge writes or changes a file: it only reads the ledger");
+    // The daemon's timer reads the ledger only when history is on, and hands the tap only the reduced row.
+    let svc = std::fs::read_to_string(root.join("crates/delphi-engine/src/service.rs")).unwrap();
+    let tick = svc.split("async fn merge_ledger_tick").nth(1).and_then(|t| t.split("\n    }\n").next()).expect("the timer is in service.rs");
+    assert!(tick.contains("settings.history.enabled"), "the merge ledger is read only while history is on");
+    // The host's exchange fields never name what the daemon computes.
+    let rec = std::fs::read_to_string(root.join("crates/delphi-engine/src/history_record.rs")).unwrap();
+    let keys = rec.split("pub const HOST_EXCHANGE_KEYS").nth(1).and_then(|t| t.split("= [").nth(1)).and_then(|t| t.split(']').next()).expect("the key list is in history_record.rs");
+    assert!(keys.contains("\"prompt\"") && keys.contains("\"did\""), "the key list was not read: {keys}");
+    for daemon_only in ["kind", "observed", "private", "chain", "hash", "pointer", "\"id\"", "\"at\"", "project", "mission", "trigger", "outcome"] {
+        assert!(!keys.contains(daemon_only), "the host's exchange keys include a field the daemon computes: {daemon_only}");
+    }
+}
+
+#[test]
 fn the_citation_check_is_derived_context_that_no_promotion_trust_tool_or_approval_path_calls_and_that_it_never_calls() {
     // `specs/102` §6 and §11 item 8 (slice S6): whether a decision cites a span that resolves is worked out when it is asked and is shown. (1) Only the
     // module, the module list and the daemon's `decisions.list` answer name it; (2) it imports only inert crates and the two history modules it reads;
