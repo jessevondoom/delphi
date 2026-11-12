@@ -847,6 +847,8 @@ fn the_private_read_mark_is_named_only_where_it_is_set_observed_cleared_and_show
         "crates/delphi-engine/src/service.rs",
         "crates/delphi-engine/src/harness_run.rs",
         "crates/delphi-engine/src/connector_run.rs",
+        // the approval-refusal list names a payload key (`private_read_mark`) so a relay reply cannot approve a held card; it only widens what is refused
+        "crates/delphi-engine/src/merge_class.rs",
         "crates/delphi/src/doctor.rs",
         "crates/delphi/src/private_read_cmd.rs",
         "crates/delphi/src/main.rs",
@@ -880,6 +882,14 @@ fn the_private_read_mark_is_named_only_where_it_is_set_observed_cleared_and_show
     held_callers.sort();
     assert!(stray.is_empty(), "the private-read mark is named outside the files that set, observe, clear and show it; read the new file and add it on purpose: {stray:?}");
     assert_eq!(mark_callers, vec!["crates/delphi-engine/src/service.rs".to_string()], "a mark is set only by the daemon's marker for a reader in READS");
+    // `merge_class.rs` is the one approval-side file that names the mark, by a string, in one place, and only to refuse: the line returns `Some(..)`
+    // (a reason a relay may not approve), never a decision to allow.
+    let mc = std::fs::read_to_string(root.join("crates/delphi-engine/src/merge_class.rs")).unwrap();
+    let mc_code: Vec<&str> = production_last(&mc).lines().filter(|l| !l.trim_start().starts_with("//")).filter(|l| l.contains("private_read")).map(|_| "x").collect();
+    assert_eq!(mc_code.len(), 1, "merge_class.rs names the mark in exactly one line");
+    let mc_prod = production_last(&mc);
+    let line = mc_prod.lines().find(|l| !l.trim_start().starts_with("//") && l.contains("private_read")).unwrap();
+    assert!(line.contains("=> Some("), "that line only refuses: {line}");
     let senders = vec!["crates/delphi-engine/src/connector_run.rs".to_string(), "crates/delphi-engine/src/harness_run.rs".to_string()];
     assert_eq!(record_callers, senders, "the mark is read for a send by the two senders only");
     assert_eq!(held_callers, senders, "a held send is counted by the two senders only");
