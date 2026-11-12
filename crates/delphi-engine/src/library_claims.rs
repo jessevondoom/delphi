@@ -499,6 +499,33 @@ impl Library {
         self.claims().into_iter().filter(|c| anchors_of(c).iter().any(|a| a["source_id"] == source_id)).collect()
     }
 
+    /// Recompute the support tags of every claim that cites the source (a new version of it, possibly a copy from a web archive).
+    pub(super) fn refresh_citing(&self, source_id: &str) {
+        for c in self.citing(source_id) {
+            if let Some(id) = c["id"].as_str() {
+                self.refresh_support(id);
+            }
+        }
+    }
+
+    /// The sources a claim still anchors into whose current version is a copy from a web archive: `{source_id, archived_at}` each.
+    fn archived_anchors(&self, claim: &Value) -> Vec<Value> {
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut out = Vec::new();
+        for a in anchors_of(claim).iter().filter(|a| active(a)) {
+            let Some(sid) = a["source_id"].as_str() else { continue };
+            if !seen.insert(sid.to_string()) {
+                continue;
+            }
+            if let Some(meta) = self.read_meta(sid) {
+                if meta["archived_copy"].is_object() {
+                    out.push(json!({"source_id": sid, "archived_at": meta["archived_copy"]["archived_at"]}));
+                }
+            }
+        }
+        out
+    }
+
     /// A new version of a source: each live anchor into it is looked up again by its quote, then by its prefix and suffix
     /// (`specs/055` §4.3). Found: it moves to the new version. Not found: the anchor is marked lost, left pointing at the
     /// old version (readable under `versions/`), and the claim is contested. Nothing is re-pointed to different text. A
@@ -714,6 +741,12 @@ impl Library {
             if !live_origin(&meta) {
                 continue;
             }
+            // An archived copy is a locator, not a source (`specs/101` §5 item 6): while the current version of a source is a copy taken
+            // from a web archive it adds no origin and no trusted source, however many copies there are. A live re-check that succeeds
+            // stores a version without the mark, and the source counts again.
+            if meta["archived_copy"].is_object() {
+                continue;
+            }
             let derived = meta["derived"].as_bool() == Some(true) || meta["origin"].as_str().is_some_and(|o| o.starts_with("page:"));
             let (Some(url), Some(origin), true) = (meta["canonical_url"].as_str(), meta["origin"].as_str(), meta["content_hash"].is_string()) else { continue };
             let held = std::fs::read(self.source_dir(sid).join("source.md")).ok().map(|b| String::from_utf8_lossy(&b[..b.len().min(SUPPORT_TEXT_MAX)]).into_owned()).unwrap_or_default();
@@ -763,6 +796,12 @@ impl Library {
         let contradicted = c["contested_by"].as_array().is_some_and(|m| !m.is_empty()) || c["lifecycle"] == "disproved";
         let mut tags = s.to_json();
         tags["contradicted"] = json!(contradicted);
+        // Sources the daemon holds only as a copy from a web archive: the claim is "checked against archived copy of <date>", never
+        // "checked" (`specs/101` §5 item 5). A live re-check that succeeds drops the mark with the source's archived-copy record.
+        let archived = self.archived_anchors(&c);
+        if !archived.is_empty() {
+            tags["archived"] = json!(archived);
+        }
         // The validator's dry run (`record_would_ratify`) described the sources the claim had when it was checked. If the count of origins or of
         // trusted sources has changed since, the check describes something else and is dropped: the claim falls back a rung until it is checked
         // again (`specs/100` §6 "claims whose sources changed since the check"). Nothing a caller says reaches this field.
@@ -787,7 +826,7 @@ impl Library {
                 reached_new = true;
             }
         }
-        let same = ["origins", "trusted_sources", "counted", "contradicted", "track", "zeroed"].iter().all(|k| c["support"][*k] == tags[*k]);
+        let same = ["origins", "trusted_sources", "counted", "contradicted", "track", "zeroed", "archived"].iter().all(|k| c["support"][*k] == tags[*k]);
         if same {
             if reached_new {
                 self.save_claim(&c).ok()?;

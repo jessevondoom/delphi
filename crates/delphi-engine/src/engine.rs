@@ -113,6 +113,9 @@ pub struct Settings {
     /// `[research] thin_below` (`specs/098` §7.5 item 4): fewer kept, cited claims than this from the knowledge base and the trusted
     /// sources together make a research answer `coverage: thin`. Default 3.
     pub thin_below: usize,
+    /// `[research] archive_fallback` and `archive_endpoint` (`specs/101` §5, §8): look for an archived copy of a public source the
+    /// daemon fetched and now finds gone. Off by default; the explicit `delphi sources archive` command works either way.
+    pub archive: crate::library::ArchiveConfig,
     /// `[research] fetch_per_host`, `fetch_per_run` (`specs/098` §7.5 item 7a, slice S1d): the daemon's fetch also reaches the URLs a search
     /// of the run returned (and a host's claim URL that an earlier search of its session returned), inside two caps. Always on since the
     /// `ladder` flag was pulled (§13.2); the caps are hypotheses.
@@ -198,6 +201,7 @@ impl Default for Settings {
             max_foreign_seats: 1,
             max_foreign_tokens: 100_000,
             thin_below: 3,
+            archive: Default::default(),
             wider_fetch: Default::default(),
             retractions: false,
             retractions_stale_days: crate::retractions::DEFAULT_STALE_DAYS,

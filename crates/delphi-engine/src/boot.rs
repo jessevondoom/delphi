@@ -82,6 +82,16 @@ pub fn settings_from(root: &toml::Value) -> Settings {
     if let Some(n) = root.get("research").and_then(|r| r.get("thin_below")).and_then(|v| v.as_integer()).filter(|v| *v >= 1) {
         s.thin_below = n.min(50) as usize;
     }
+    // Archived copies (`specs/101` §5, §8): a boolean, off unless it is exactly `true`; the endpoint must be an https URL, else the pinned
+    // default stays. Any other value of either keeps the default.
+    if let Some(r) = root.get("research") {
+        if let Some(b) = r.get("archive_fallback").and_then(|v| v.as_bool()) {
+            s.archive.enabled = b;
+        }
+        if let Some(e) = r.get("archive_endpoint").and_then(|v| v.as_str()).map(str::trim).filter(|e| e.starts_with("https://") && e.len() <= 300 && delphi_adapter::reqwest::Url::parse(e).is_ok()) {
+            s.archive.endpoint = e.to_string();
+        }
+    }
     // The caps of the wider fetch (`specs/098` §7.5 item 7a, slice S1d): counts of 1..=100, and a value of the wrong kind keeps the
     // default. The fetch itself is always on; an old `ladder` key is ignored (§13.2).
     if let Some(r) = root.get("research") {
@@ -484,6 +494,22 @@ mod tests {
             let s = settings_from(&toml::from_str(&format!("[research]\n{old}\n")).unwrap());
             assert_eq!((s.wider_fetch, s.thin_below), (WiderFetch::default(), 3), "{old}");
         }
+    }
+
+    #[test]
+    fn archived_copies_are_off_by_default_the_endpoint_must_be_https_and_a_bad_value_keeps_the_default() {
+        use crate::library::ArchiveConfig;
+        // `[research] archive_fallback` and `archive_endpoint` (specs/101 §5, §8): off, and the one pinned endpoint.
+        assert_eq!(settings_from(&toml::from_str("").unwrap()).archive, ArchiveConfig::default());
+        assert!(!ArchiveConfig::default().enabled && ArchiveConfig::default().endpoint == "https://archive.org/wayback/available");
+        let on = settings_from(&toml::from_str("[research]\narchive_fallback = true\narchive_endpoint = \"https://archive.example.net/wayback/available\"\n").unwrap()).archive;
+        assert!(on.enabled && on.endpoint == "https://archive.example.net/wayback/available");
+        for bad in ["archive_fallback = \"yes\"", "archive_fallback = 1", "archive_endpoint = \"http://archive.org/wayback/available\"", "archive_endpoint = \"ftp://x.example/\"", "archive_endpoint = 3", "archive_endpoint = \"not a url\""] {
+            let a = settings_from(&toml::from_str(&format!("[research]\n{bad}\n")).unwrap()).archive;
+            assert_eq!(a, ArchiveConfig::default(), "{bad}");
+        }
+        // The switch does not move the other [research] numbers.
+        assert_eq!(settings_from(&toml::from_str("[research]\narchive_fallback = true\n").unwrap()).thin_below, 3);
     }
 
     #[test]

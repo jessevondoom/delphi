@@ -334,6 +334,37 @@ fn the_reached_mark_is_written_in_one_place_and_the_calibration_only_counts_it()
 }
 
 #[test]
+fn an_archived_copy_is_a_locator_that_only_the_library_the_command_and_the_settings_name() {
+    // `specs/101` §5 and §12 item 6: a copy taken from a web archive adds no origin and no trusted source, and nothing reads the mark,
+    // the lookup or its outcome as a criterion for promotion, trust, tool access or approval. The library stores and skips it
+    // (`library_archive.rs`, `library_claims.rs`), the registry lists its channel (`egress.rs`, `library.rs`), the operator's command and the
+    // settings carry it (`sources_cmd.rs`, `engine.rs`, `boot.rs`). Any other file naming it fails here and a reviewer has to ask why.
+    let root = root();
+    let mut files = Vec::new();
+    rust_files(&root.join("crates"), &mut files);
+    let uses = Regex::new(r#"archived_copy|ArchiveOutcome|ArchiveConfig|add_archived_copy|add_archived_url|ArchiveLookup|\["archived"\]"#).unwrap();
+    let allowed = [
+        "crates/delphi-engine/src/library_archive.rs",
+        "crates/delphi-engine/src/library_claims.rs",
+        "crates/delphi-engine/src/library.rs",
+        "crates/delphi-engine/src/egress.rs",
+        "crates/delphi-engine/src/engine.rs",
+        "crates/delphi-engine/src/boot.rs",
+        "crates/delphi/src/sources_cmd.rs",
+    ];
+    let mut stray = Vec::new();
+    for f in &files {
+        let rel = f.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
+        let src = std::fs::read_to_string(f).unwrap();
+        let code: String = production(&src).lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+        if uses.is_match(&code) && !allowed.contains(&rel.as_str()) {
+            stray.push(rel);
+        }
+    }
+    assert!(stray.is_empty(), "an archived copy, its lookup or its outcome is named outside the files that may: {stray:?}");
+}
+
+#[test]
 fn a_contradiction_mark_is_made_only_by_the_library_and_nothing_reads_a_sources_standing() {
     // `specs/100` §9.1. `contradicts_validated` lowers only the contradicting claim, never the validated fact; the validator's contradiction
     // search will be its caller, so today no other production file names it. `standing()` is the only history that may ever count toward a

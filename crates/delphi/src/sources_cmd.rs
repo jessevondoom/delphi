@@ -7,7 +7,7 @@
 use delphi_engine::fact_fetch::FetchPolicy;
 use delphi_engine::library::bib::{self, Format};
 use delphi_engine::library::excerpts::ExcerptOpts;
-use delphi_engine::library::{AddOpts, Budgets, Level, Library, Outcome, Recheck, Stored};
+use delphi_engine::library::{AddOpts, ArchiveConfig, ArchiveOutcome, Budgets, Level, Library, Outcome, Recheck, Stored};
 use serde_json::Value;
 use std::path::Path;
 
@@ -17,6 +17,7 @@ const USAGE: &str = "usage:
   delphi sources list [--json] [--home <dir>]
   delphi sources show <id> [--json] [--offline] [--home <dir>]
   delphi sources history <id> [--json] [--home <dir>]
+  delphi sources archive <id | url> [--licence <id>] [--title <t>] [--level full|excerpts|pointer] [--workspace <name>] [--home <dir>]
   delphi sources excerpt add <id> --locator <where> --purpose <why> (--text <passage> | --file <file>) [--prefix <t>] [--suffix <t>]
     [--work-bytes <n>] [--home <dir>]
   delphi sources excerpt list <id> [--json] [--home <dir>]
@@ -84,7 +85,8 @@ pub fn cli(args: &[String], home: &Path) -> i32 {
     match args.first().map(String::as_str) {
         Some("add") => add(&lib, rest),
         Some("list") => list(&lib, rest),
-        Some("show") => show(&lib, rest),
+        Some("show") => show(&lib, rest, home),
+        Some("archive") => archive(&lib, rest, home),
         Some("purge") => purge(&lib, rest),
         Some("history") => history(&lib, rest),
         Some("excerpt") => excerpt(&lib, rest),
@@ -171,7 +173,51 @@ fn list(lib: &Library, args: &[String]) -> i32 {
     0
 }
 
-fn show(lib: &Library, args: &[String]) -> i32 {
+/// `[research] archive_fallback` and `archive_endpoint` (`specs/101` §8) from the config.toml of the workspace named by `--workspace`,
+/// `DELPHI_WORKSPACE`, or the default workspace; the defaults (off, the pinned endpoint) when there is none or it does not read.
+fn archive_config(home: &Path, args: &[String]) -> ArchiveConfig {
+    let name = value_of(args, "--workspace").ok().flatten().or_else(|| std::env::var("DELPHI_WORKSPACE").ok()).unwrap_or_else(|| crate::start::DEFAULT_WORKSPACE.to_string());
+    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')) || name.starts_with('.') {
+        return ArchiveConfig::default();
+    }
+    std::fs::read_to_string(home.join("workspaces").join(name).join("config.toml")).ok().and_then(|t| toml::from_str::<toml::Value>(&t).ok()).map(|v| delphi_engine::boot::settings_from(&v).archive).unwrap_or_default()
+}
+
+/// `delphi sources archive <id | url>` (`specs/101` §5): look for a copy of a public page in a web archive and keep it as a labelled
+/// version of the source. Read-only (nothing is ever saved to the archive). The operator's own act, so `archive_fallback` need not be on;
+/// a private source, or an address that is not public, sends nothing.
+fn archive(lib: &Library, args: &[String], home: &Path) -> i32 {
+    if !operator_only("archive") {
+        return 2;
+    }
+    let opts = match parse_opts(args) {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("delphi sources archive: {}\n{}", e, USAGE);
+            return 2;
+        }
+    };
+    let pos = positional(args);
+    let [target] = pos[..] else {
+        eprintln!("{}", USAGE);
+        return 2;
+    };
+    let Ok(rt) = tokio::runtime::Builder::new_current_thread().enable_all().build() else { return 1 };
+    let (cfg, policy, budgets) = (archive_config(home, args), FetchPolicy::default(), Budgets::default());
+    let outcome = if target.starts_with("http://") || target.starts_with("https://") {
+        rt.block_on(lib.add_archived_url(&policy, &cfg, target, &opts, &budgets))
+    } else {
+        rt.block_on(lib.add_archived_copy(&policy, &cfg, target, &budgets, false))
+    };
+    println!("{}", outcome.line());
+    match outcome {
+        ArchiveOutcome::Captured { .. } | ArchiveOutcome::NotNeeded(_) => 0,
+        ArchiveOutcome::NoCopy | ArchiveOutcome::Unavailable(_) => 1,
+        ArchiveOutcome::Refused(_) => 2,
+    }
+}
+
+fn show(lib: &Library, args: &[String], home: &Path) -> i32 {
     let pos = positional(args);
     let [id] = pos[..] else {
         eprintln!("{}", USAGE);
@@ -191,7 +237,16 @@ fn show(lib: &Library, args: &[String]) -> i32 {
     match checked {
         Some(Recheck::Unchanged) => eprintln!("rechecked: unchanged (last_checked updated)"),
         Some(Recheck::Changed(n)) => eprintln!("rechecked: the source changed; version {} stored, the earlier one is kept under versions/", n),
-        Some(Recheck::Retired) => eprintln!("rechecked: the source is gone; the last capture is kept and the source is marked retired"),
+        Some(Recheck::Retired) => {
+            eprintln!("rechecked: the source is gone; the last capture is kept and the source is marked retired");
+            // `[research] archive_fallback` (`specs/101` §5, off by default): look for a copy, only for a public source with no readable text
+            let cfg = archive_config(home, args);
+            if cfg.enabled {
+                if let Ok(rt) = tokio::runtime::Builder::new_current_thread().enable_all().build() {
+                    eprintln!("{}", rt.block_on(lib.add_archived_copy(&FetchPolicy::default(), &cfg, id, &Budgets::default(), true)).line());
+                }
+            }
+        }
         Some(Recheck::Offline) => eprintln!("recheck skipped: offline (nothing changed)"),
         Some(Recheck::CapReached) => eprintln!("recheck skipped: the daily cap on rechecks was reached"),
         Some(Recheck::Fresh) | Some(Recheck::NotApplicable(_)) | None => {}
