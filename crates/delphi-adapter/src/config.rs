@@ -882,6 +882,8 @@ pub struct HistoryConfig {
     pub paste_chars: Option<i64>,
     pub to_models: Option<String>,
     pub budget_mb: Option<i64>,
+    pub retention_days: Option<i64>,
+    pub timeline: Option<bool>,
 }
 
 /// `[validator] mode` (`specs/040` §15.1). Ordered so that `min` is the stricter of two.

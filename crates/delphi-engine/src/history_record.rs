@@ -58,17 +58,23 @@ pub struct Settings {
     pub to_models: ToModels,
     /// The store's cap per project, in megabytes (§7 item 9, a hypothesis). At the cap the daemon stops adding and says so.
     pub budget_mb: u64,
+    /// The age budget in days (§7 item 9, a hypothesis). **Nothing is deleted at this age** (the daemon never evicts the operator's words
+    /// silently): `delphi history status` and `doctor` count the records past it, and the operator purges or keeps them.
+    pub retention_days: u32,
+    /// The daemon timeline and report (§7 item 8): holds only ids and counts, so it stays when records are off; this turns it off too.
+    pub timeline: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { enabled: false, paste_chars: crate::history_redact::DEFAULT_PASTE_CHARS, to_models: ToModels::Deny, budget_mb: 50 }
+        Settings { enabled: false, paste_chars: crate::history_redact::DEFAULT_PASTE_CHARS, to_models: ToModels::Deny, budget_mb: 50, retention_days: 90, timeline: true }
     }
 }
 
 impl Settings {
     pub const PASTE_CHARS_RANGE: (usize, usize) = (50, 5000);
     pub const BUDGET_MB_RANGE: (u64, u64) = (1, 1024);
+    pub const RETENTION_DAYS_RANGE: (u32, u32) = (1, 3650);
 
     /// Read `[history]` from a parsed `config.toml`. A number outside its range is clamped and reported; an unknown key or a wrong
     /// type is a returned problem, for the boot notices. A wrong value never turns the feature on.
@@ -77,8 +83,8 @@ impl Settings {
         let mut problems = Vec::new();
         let Some(t) = root.get("history").and_then(|v| v.as_table()) else { return (s, problems) };
         for k in t.keys() {
-            if !["enabled", "paste_chars", "to_models", "budget_mb"].contains(&k.as_str()) {
-                problems.push(format!("[history] {k}: not a setting (enabled, paste_chars, to_models, budget_mb)"));
+            if !["enabled", "paste_chars", "to_models", "budget_mb", "retention_days", "timeline"].contains(&k.as_str()) {
+                problems.push(format!("[history] {k}: not a setting (enabled, paste_chars, to_models, budget_mb, retention_days, timeline)"));
             }
         }
         if let Some(v) = t.get("enabled") {
@@ -111,6 +117,25 @@ impl Settings {
                     s.budget_mb = c;
                 }
                 None => problems.push("[history] budget_mb: expected a whole number".into()),
+            }
+        }
+        if let Some(v) = t.get("retention_days") {
+            match v.as_integer() {
+                Some(n) => {
+                    let (lo, hi) = Self::RETENTION_DAYS_RANGE;
+                    let c = (n.max(0) as u64).clamp(lo as u64, hi as u64) as u32;
+                    if c as i64 != n {
+                        problems.push(format!("[history] retention_days: {n} is outside {lo}..={hi}; using {c}"));
+                    }
+                    s.retention_days = c;
+                }
+                None => problems.push("[history] retention_days: expected a whole number".into()),
+            }
+        }
+        if let Some(v) = t.get("timeline") {
+            match v.as_bool() {
+                Some(b) => s.timeline = b,
+                None => problems.push("[history] timeline: expected true or false".into()),
             }
         }
         if let Some(v) = t.get("to_models") {
@@ -414,9 +439,79 @@ pub fn store_path(ws_dir: &Path, project: &str) -> PathBuf {
     store_dir(ws_dir, project).join(FILE)
 }
 
-/// The per-project switch (§7 item 5): `local/projects/<id>/history.off`. Written by a later slice; honoured here.
+/// The per-project switch (§7 item 5): `local/projects/<id>/history.off`. Written by `delphi history off --project` (S4).
 pub fn project_off(ws_dir: &Path, project: &str) -> bool {
     ws_dir.join("local/projects").join(project).join("history.off").exists()
+}
+
+/// The global switch `delphi history off` writes (§7 item 6, S4): `local/history.off`. A file, not a config edit, so a running daemon
+/// honours it on its next append without a restart ("stops new records at once"). It is checked beside `[history] enabled`: either one
+/// off means off. Removing the file (or answering the install question, S8) is the way back.
+pub fn global_off_path(ws_dir: &Path) -> PathBuf {
+    ws_dir.join("local/history.off")
+}
+
+pub fn global_off(ws_dir: &Path) -> bool {
+    global_off_path(ws_dir).exists()
+}
+
+/// An exclusive lock on the project's store, held across a process boundary: the daemon appends under it and `delphi history
+/// purge|delete` rewrites under it, so neither loses the other's write. The lock file holds nothing.
+pub(crate) struct StoreLock {
+    #[allow(dead_code)]
+    file: std::fs::File,
+}
+
+pub(crate) fn lock_store(dir: &Path) -> Result<StoreLock, &'static str> {
+    std::fs::create_dir_all(dir).map_err(|_| "the history store could not be made")?;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true).truncate(false).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let file = opts.open(dir.join(".lock")).map_err(|_| "the history store could not be locked")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        // SAFETY: flock on an open descriptor has no other preconditions; the lock is released when `file` is closed on drop.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+            return Err("the history store could not be locked");
+        }
+    }
+    Ok(StoreLock { file })
+}
+
+/// What stays of a record after `purge` or `delete` (§7 item 6): its id, its time and its keyed hash, plus the hash of the record
+/// before it (`chain`) so the chain still verifies through the gap, and a keyed seal over those fields. **No text.** `verified`
+/// says whether the record verified when it was erased: a tombstone made from a record that had already failed the chain check is
+/// itself a break, so erasing text never launders a tampered record into a clean chain.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Tombstone {
+    pub id: String,
+    pub at: String,
+    pub chain: String,
+    pub hash: String,
+    pub tombstone: bool,
+    pub removed_at: String,
+    pub verified: bool,
+    pub seal: String,
+}
+
+/// A line that is a tombstone (it has `tombstone: true` and the fields only a tombstone has), or `None`.
+pub(crate) fn parse_tombstone(line: &str) -> Option<Tombstone> {
+    serde_json::from_str::<Tombstone>(line).ok().filter(|t| t.tombstone)
+}
+
+pub(crate) fn tomb_seal(key: &[u8], t: &Tombstone) -> String {
+    span_hmac(key, &format!("tombstone|{}|{}|{}|{}|{}|{}", t.id, t.at, t.chain, t.hash, t.removed_at, t.verified))
+}
+
+pub(crate) fn make_tombstone(key: &[u8], r: &Record, verified: bool, removed_at: &str) -> Tombstone {
+    let mut t = Tombstone { id: r.id.clone(), at: r.at.clone(), chain: r.chain.clone(), hash: r.hash.clone(), tombstone: true, removed_at: removed_at.to_string(), verified, seal: String::new() };
+    t.seal = tomb_seal(key, &t);
+    t
 }
 
 /// What an append did. Everything but `Written` writes nothing.
@@ -427,13 +522,15 @@ pub enum Appended {
     Dormant,
     /// The project's own switch is off.
     ProjectOff,
+    /// `delphi history off` was run (S4): nothing is written until the operator turns it on again.
+    SwitchedOff,
     /// The store is at its budget: the daemon stops adding and says so (§7 item 9). Nothing is evicted.
     Budget,
     /// Not written, with a fixed reason (never record text).
     Failed(&'static str),
 }
 
-static APPEND_GATE: Mutex<()> = Mutex::new(());
+pub(crate) static APPEND_GATE: Mutex<()> = Mutex::new(());
 
 fn last_hash(path: &Path) -> Result<(String, usize), &'static str> {
     let text = match std::fs::read_to_string(path) {
@@ -444,20 +541,45 @@ fn last_hash(path: &Path) -> Result<(String, usize), &'static str> {
     let n = text.lines().count();
     match text.lines().last() {
         None => Ok((GENESIS.into(), 0)),
-        Some(l) => serde_json::from_str::<Record>(l).map(|r| (r.hash, n)).map_err(|_| "the last record cannot be read; nothing is repaired"),
+        // An erased record keeps its place in the chain: the next record links to the hash the tombstone kept.
+        Some(l) => match parse_tombstone(l) {
+            Some(t) => Ok((t.hash, n)),
+            None => serde_json::from_str::<Record>(l).map(|r| (r.hash, n)).map_err(|_| "the last record cannot be read; nothing is repaired"),
+        },
     }
 }
 
 /// Append one record. Dormant, project-off and budget are answered before anything is written or made.
 pub(crate) fn append(ws_dir: &Path, settings: &Settings, d: Draft) -> Appended {
+    append_in(ws_dir, settings, d, crate::history_consent::SHOW_AT_INSTALL)
+}
+
+/// [`append`] with the S8 switch given, so a test can turn the install question on: while it is on and nobody has answered, nothing is
+/// written (§7 item 4). With the switch off, as it is until S8, the question gates nothing.
+pub(crate) fn append_in(ws_dir: &Path, settings: &Settings, d: Draft, question_on: bool) -> Appended {
     if !settings.enabled {
         return Appended::Dormant;
+    }
+    if crate::history_consent::blocks_writes(ws_dir, question_on) {
+        return Appended::Dormant;
+    }
+    if global_off(ws_dir) {
+        return Appended::SwitchedOff;
     }
     if project_off(ws_dir, &d.project) {
         return Appended::ProjectOff;
     }
     let _gate = APPEND_GATE.lock().unwrap_or_else(|p| p.into_inner());
     let path = store_path(ws_dir, &d.project);
+    // The cross-process lock: `delphi history purge|delete` rewrites the file under it. The switches are checked again under it, so a
+    // record is never added after `off` returned.
+    let Ok(_store) = lock_store(&store_dir(ws_dir, &d.project)) else { return Appended::Failed("the history store could not be locked") };
+    if global_off(ws_dir) {
+        return Appended::SwitchedOff;
+    }
+    if project_off(ws_dir, &d.project) {
+        return Appended::ProjectOff;
+    }
     if std::fs::metadata(&path).map(|m| m.len() >= settings.budget_mb * MB).unwrap_or(false) {
         return Appended::Budget;
     }
@@ -514,8 +636,11 @@ pub struct Checked {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Read {
     pub records: Vec<Checked>,
-    /// The 0-based index of the first record that failed, if any.
+    /// The 0-based index of the first line (a record or a tombstone) that failed, if any. Lines, not entries of `records`: a
+    /// tombstone is a line too.
     pub broken_at: Option<usize>,
+    /// The records that were erased by `purge` or `delete`, in order: id, time and keyed hash, never text (§7 item 6).
+    pub tombstones: Vec<Tombstone>,
 }
 
 impl Read {
@@ -538,6 +663,18 @@ pub fn read(ws_dir: &Path, project: &str) -> Result<Read, String> {
     let mut out = Read::default();
     let mut prev = GENESIS.to_string();
     for (i, line) in text.lines().enumerate() {
+        if let Some(tomb) = parse_tombstone(line) {
+            // A tombstone vouches for the link only if it is sealed, was clean when it was made, and follows the line before it.
+            if let Some(k) = &key {
+                let ok = out.broken_at.is_none() && tomb.verified && tomb.chain == prev && tomb_seal(k, &tomb) == tomb.seal;
+                if !ok {
+                    out.broken_at.get_or_insert(i);
+                }
+            }
+            prev = tomb.hash.clone();
+            out.tombstones.push(tomb);
+            continue;
+        }
         let Ok(record) = serde_json::from_str::<Record>(line) else {
             // A line that cannot be read has no record to show: the chain breaks here, and what follows is flagged below.
             out.broken_at.get_or_insert(i);

@@ -564,7 +564,7 @@ fn a_history_pointer_and_the_project_timeline_are_context_that_nothing_reads_as_
     rust_files(&root.join("crates"), &mut files);
     let names = Regex::new(r"history_pointer|history_report").unwrap();
     // The exchange record (slice S3) and its redactor hold a pointer, so they name it on purpose; the test below holds them to the same limits.
-    let readers_ok = ["crates/delphi-engine/src/lib.rs", "crates/delphi-engine/src/history_pointer.rs", "crates/delphi-engine/src/history_report.rs", "crates/delphi-engine/src/history_record.rs", "crates/delphi-engine/src/history_redact.rs"];
+    let readers_ok = ["crates/delphi-engine/src/lib.rs", "crates/delphi-engine/src/history_pointer.rs", "crates/delphi-engine/src/history_report.rs", "crates/delphi-engine/src/history_record.rs", "crates/delphi-engine/src/history_redact.rs", "crates/delphi-engine/src/history_manage.rs"];
     let mut stray = Vec::new();
     for f in &files {
         let rel = f.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
@@ -606,6 +606,12 @@ fn an_exchange_record_is_context_that_nothing_reads_as_a_criterion_and_that_reac
         "crates/delphi-engine/src/service.rs",
         "crates/delphi-engine/src/boot.rs",
         "crates/delphi-engine/src/egress.rs",
+        // Slice S4: the operator's controls read the store's records to count, verify and erase them (`history_manage`), the install
+        // question gates the append (`history_consent` is named by the record, not the reverse), and the command and `doctor` call them.
+        "crates/delphi-engine/src/history_manage.rs",
+        "crates/delphi-engine/src/history_consent.rs",
+        "crates/delphi/src/history_cmd.rs",
+        "crates/delphi/src/doctor.rs",
     ];
     let mut stray = Vec::new();
     for f in &files {
@@ -679,4 +685,61 @@ fn the_background_worker_picks_a_claim_to_check_and_grants_nothing_and_only_the_
     let serve = std::fs::read_to_string(root.join("crates/delphi-engine/src/fact_serve.rs")).unwrap();
     assert!(production(&serve).contains(r#"req["background"] = json!(false);"#), "the entry a span's request takes must clear the daemon-only background flag");
     assert!(production(&serve).contains("never ratifies"), "a background check is capped at advisory");
+}
+
+#[test]
+fn the_history_controls_and_the_install_question_are_the_operators_and_grant_and_reach_nothing() {
+    // `specs/102` §11 items 7, 10 and 15 (slice S4): `off`, `purge`, `delete`, `status` and the install question live in two engine modules
+    // that read and write local files only. (1) Only the engine's module list, the record store (which checks the switches and the
+    // question), the operator's command, the command table, `delphi init` and `doctor` name them: no daemon method, host tool or seat
+    // path does, so nothing a host sends can reach them. (2) The one function that records an answer, and the one that proves a human
+    // is answering, are called from the consent module and the operator's command and nowhere else. (3) The two modules import only
+    // inert crates and name no socket, process, model call, promotion, trust, tool-access or approval path.
+    let root = root();
+    let mut files = Vec::new();
+    rust_files(&root.join("crates"), &mut files);
+    let names = Regex::new(r"history_manage|history_consent").unwrap();
+    let readers_ok = [
+        "crates/delphi-engine/src/lib.rs",
+        "crates/delphi-engine/src/history_manage.rs",
+        "crates/delphi-engine/src/history_consent.rs",
+        "crates/delphi-engine/src/history_record.rs",
+        "crates/delphi/src/history_cmd.rs",
+        "crates/delphi/src/main.rs",
+        "crates/delphi/src/doctor.rs",
+    ];
+    let answers = Regex::new(r"record_answer\(|Human::at_terminal\(").unwrap();
+    let answer_ok = ["crates/delphi-engine/src/history_consent.rs", "crates/delphi/src/history_cmd.rs"];
+    let (mut stray, mut stray_answer) = (Vec::new(), Vec::new());
+    for f in &files {
+        let rel = f.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
+        let src = std::fs::read_to_string(f).unwrap();
+        let code: String = production(&src).lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+        if names.is_match(&code) && !readers_ok.contains(&rel.as_str()) {
+            stray.push(rel.clone());
+        }
+        if answers.is_match(&code) && !answer_ok.contains(&rel.as_str()) {
+            stray_answer.push(rel);
+        }
+    }
+    assert!(stray.is_empty(), "the history controls or the install question are named outside the files that wire them; read it and add it on purpose: {stray:?}");
+    assert!(stray_answer.is_empty(), "the install question is answered from outside the consent module and the operator's command: {stray_answer:?}");
+    // No daemon method or host tool is named for them.
+    for rel in ["crates/delphi-engine/src/service.rs", "crates/delphi-engine/src/host_rpc.rs", "crates/delphi-engine/src/mcp.rs"] {
+        let Ok(src) = std::fs::read_to_string(root.join(rel)) else { continue };
+        let code = production(&src);
+        assert!(!Regex::new(r#""(?:host\.)?history\.(?:off|purge|delete|status|answer|consent)""#).unwrap().is_match(code), "{rel} exposes a history control as a method");
+    }
+    let inert = ["crate::history_pointer", "crate::history_record", "crate::history_report", "crate::history_manage", "crate::history_consent", "delphi_core::time", "serde::", "serde_json::", "std::"];
+    let reach = Regex::new(r"std::net|std::process|Command::new|TcpStream|reqwest|tiny_http|tokio::|delphi_adapter|complete\(|model_call|\.send\(").unwrap();
+    let grants = Regex::new(r"\b(?:promote\w*|ratif\w*|approv\w*|grant\w*|trust\w*|taint\w*|tier\w*|authoriz\w*|library_claims|knowledge_status|fact_\w*|validator\w*|score\w*|rank\w*)\b|council::|research_run").unwrap();
+    for rel in ["crates/delphi-engine/src/history_manage.rs", "crates/delphi-engine/src/history_consent.rs"] {
+        let src = std::fs::read_to_string(root.join(rel)).unwrap();
+        let code: String = production(&src).lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+        for l in code.lines().filter(|l| l.starts_with("use ")) {
+            assert!(inert.iter().any(|p| l.trim_start_matches("use ").starts_with(p)), "{rel} imports from a path that is not on the inert list: {l}");
+        }
+        assert!(!reach.is_match(&code), "{rel} names a socket, a process or a model call");
+        assert!(!grants.is_match(&code), "{rel} names a promotion, trust, tool-access or approval path: {:?}", grants.find(&code).map(|m| m.as_str().to_string()));
+    }
 }

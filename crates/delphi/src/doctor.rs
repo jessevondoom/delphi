@@ -144,6 +144,7 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
     check_research(home, ws, &cfg, &mut r);
     // 19. Background validation (specs/040 §18.3): a fact when it is on and has stopped for a reason the operator should know.
     check_background_validation(ws, home, &cfg, &mut r);
+    check_history(ws, &cfg, &mut r);
     // 18. Settings that were removed because their features are always on (specs/098 §13.2): one line per key an old config still carries.
     check_removed_settings(&cfg, &mut r);
     let endpoints = toml::from_str::<toml::Value>(&cfg).ok().and_then(|v| v.get("endpoints").and_then(|e| e.as_array()).map(|a| a.len())).unwrap_or(0);
@@ -240,6 +241,19 @@ fn check_removed_settings(cfg_text: &str, r: &mut Report) {
         if root.get(table).and_then(|t| t.get(key)).is_some() {
             r.warn("18 removed-settings", "config.toml", format!("[{table}] {key} was removed; the feature is always on; see specs/098 section 13.2"));
         }
+    }
+}
+
+/// The project history (`specs/102` §7 item 6): on or off, how many records, whether the chain verifies, whether the key is usable. It reads
+/// the store's metadata and verifies the chain; it prints no record text and makes no file (a fresh install says "off (default)").
+fn check_history(ws: &Workspace, cfg_text: &str, r: &mut Report) {
+    let settings = cfg_text.parse::<toml::Value>().ok().map(|v| delphi_engine::history_record::Settings::parse(&v).0).unwrap_or_default();
+    let now = delphi_core::xenia_index::unix_of(&delphi_core::time::now_rfc3339()).unwrap_or(0);
+    let (problem, line) = delphi_engine::history_manage::doctor_line(&delphi_engine::history_manage::overview(&ws.dir, &settings, now));
+    if problem {
+        r.warn("20 history", "local/history", line);
+    } else {
+        r.push(Level::Ok, "20 history", "", line);
     }
 }
 
