@@ -277,7 +277,17 @@ fn check_research(home: &Path, ws: &Workspace, cfg_text: &str, r: &mut Report) {
         Err(_) => "knowledge base: not readable (see check 6)".to_string(),
     };
     let thin = delphi_engine::boot::settings_from(&root).thin_below;
-    r.push(Level::Ok, CHECK, "", format!("{}; {}; an answer from fewer than {} kept claims says coverage: thin ([research] thin_below)", trusted, kb, thin));
+    // spec 098 §12 item 16: how far the one egress check reaches today, said plainly, with the paths still unaudited by name.
+    let (mut guarded, mut proven, mut open) = (0usize, 0usize, Vec::new());
+    for (channel, _, wired) in delphi_engine::egress::PATHS {
+        match wired {
+            delphi_engine::egress::Wired::Yes => guarded += 1,
+            delphi_engine::egress::Wired::NoEntryText { .. } => proven += 1,
+            delphi_engine::egress::Wired::Unaudited => open.push(format!("{channel:?}")),
+        }
+    }
+    let egress = format!("outbound paths: {guarded} guarded by the egress check, {proven} shown to carry no entry text, {} not yet audited{}", open.len(), if open.is_empty() { String::new() } else { format!(" ({})", open.join(", ")) });
+    r.push(Level::Ok, CHECK, "", format!("{}; {}; an answer from fewer than {} kept claims says coverage: thin ([research] thin_below); {}", trusted, kb, thin, egress));
     // spec 101 §4 item 4: with the switch on, the retraction snapshot's age is a fact the operator needs: a missing or old one checks nothing
     // or checks against old data. Off says nothing (the library as spec 098 left it). Read-only; no file but the snapshot is opened.
     let st = delphi_engine::boot::settings_from(&root);
