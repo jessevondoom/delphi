@@ -290,7 +290,7 @@ fn nothing_outside_the_tap_writes_a_record_and_parsing_a_host_exchange_makes_non
     let src = include_str!("history_record.rs");
     assert!(src.contains("pub(crate) fn append("));
     let prod = src.split("\n#[cfg(test)]").next().unwrap();
-    assert_eq!(prod.matches("append(&self.ws_dir").count(), 2, "only the tap's conclude and on_artifacts append");
+    assert_eq!(prod.matches("append(&self.ws_dir").count(), 3, "only the tap's conclude, on_artifacts and on_host_exchange append");
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
@@ -520,4 +520,207 @@ fn the_same_inputs_give_the_same_record_apart_from_the_time() {
         }
     };
     assert_eq!(mk(), mk());
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// The host's exchange fields (§3.3, §10 item 1): a host completes a trigger the daemon saw; it never makes a record
+
+fn exchange() -> Value {
+    json!({"prompt": "please research queue options", "asked": "queue options", "did": "ran the scout", "open": "pick one"})
+}
+
+fn records(ws: &Path) -> Vec<Record> {
+    read(ws, "home").map(|r| r.counted().cloned().collect()).unwrap_or_default()
+}
+
+#[test]
+fn a_host_summary_completes_the_trigger_the_daemon_saw_and_the_reply_is_labelled_self_reported() {
+    let ws = tempfile::tempdir().unwrap();
+    let t = tap(ws.path(), on());
+    // The daemon saw a research run finish, but held no prompt of its own (the operator typed into the host): nothing is written.
+    assert!(t.on_events(MISSION, &[research()]).is_empty());
+    assert!(!store_path(ws.path(), "home").exists(), "a trigger alone writes nothing when the daemon has no prompt");
+    let r = t.on_host_exchange(MISSION, &exchange(), 0);
+    assert_eq!(r.word(), "recorded");
+    let rec = records(ws.path()).pop().expect("one record");
+    assert_eq!((rec.trigger, rec.kind), (Trigger::ResearchRun, Kind::Reported), "no session id: the words are the host's report, nothing matched");
+    assert_eq!(rec.prompt.as_ref().unwrap().text, "please research queue options");
+    assert_eq!(rec.reply, Some(Reply { asked: "queue options".into(), did: "ran the scout".into(), open: "pick one".into() }));
+    // The daemon's own observation stands: the outcome is the daemon's, the facts are the daemon's.
+    assert_eq!(rec.outcome, Outcome { value: OutcomeValue::Done, provenance: Provenance::Observed });
+    assert!(rec.observed.ids.iter().any(|i| i.starts_with("ev_")) && rec.observed.counts.get("new") == Some(&3));
+    assert!(rec.private);
+}
+
+#[test]
+fn a_host_report_alone_never_makes_a_record() {
+    let ws = tempfile::tempdir().unwrap();
+    let t = tap(ws.path(), on());
+    assert_eq!(t.on_host_exchange(MISSION, &exchange(), 0), HostReport::NoTrigger);
+    assert!(!ws.path().join("local").exists(), "no record, no store, and no key");
+}
+
+#[test]
+fn a_report_with_no_prompt_writes_nothing_and_keeps_the_trigger_for_one_that_has_it() {
+    let ws = tempfile::tempdir().unwrap();
+    let t = tap(ws.path(), on());
+    t.on_events(MISSION, &[research()]);
+    assert_eq!(t.on_host_exchange(MISSION, &json!({"asked": "x", "did": "y"}), 0), HostReport::NoPrompt);
+    assert_eq!(t.on_host_exchange(MISSION, &json!({"prompt": "   ", "did": "y"}), 0), HostReport::NoPrompt);
+    assert!(records(ws.path()).is_empty());
+    assert_eq!(t.on_host_exchange(MISSION, &exchange(), 0).word(), "recorded", "the trigger was not used up");
+}
+
+#[test]
+fn one_report_completes_the_latest_trigger_once_and_the_next_report_finds_none() {
+    let ws = tempfile::tempdir().unwrap();
+    let t = tap(ws.path(), on());
+    t.on_events(MISSION, &[research()]);
+    t.on_events(MISSION, &[ev("council.verdict", json!({"venue": "daemon", "escalated": false}))]);
+    assert_eq!(t.on_host_exchange(MISSION, &exchange(), 0).word(), "recorded");
+    assert_eq!(records(ws.path())[0].trigger, Trigger::Council, "the latest trigger is the one the host just saw finish");
+    assert_eq!(t.on_host_exchange(MISSION, &exchange(), 0).word(), "recorded", "the earlier trigger is still waiting");
+    assert_eq!(t.on_host_exchange(MISSION, &exchange(), 0), HostReport::NoTrigger);
+    assert_eq!(records(ws.path()).len(), 2);
+}
+
+#[test]
+fn a_trigger_the_daemon_attributed_to_its_own_prompt_is_not_open_to_a_host_report() {
+    let ws = tempfile::tempdir().unwrap();
+    let t = tap(ws.path(), on());
+    t.note_operator_prompt("t_1", "the operator typed this into the daemon");
+    let rec = only(t.on_events(MISSION, &[research()]));
+    assert_eq!(rec.kind, Kind::Observed);
+    assert_eq!(t.on_host_exchange(MISSION, &exchange(), 0), HostReport::NoTrigger, "one record per prompt; the daemon's own is final");
+    assert_eq!(records(ws.path()).len(), 1);
+}
+
+#[test]
+fn a_trigger_is_forgotten_after_the_window_and_the_list_is_bounded() {
+    let ws = tempfile::tempdir().unwrap();
+    let t = tap(ws.path(), on());
+    t.on_events(MISSION, &[research()]);
+    let far = delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339()).unwrap() + AWAITING_SECS + 1000;
+    assert_eq!(t.on_host_exchange(MISSION, &exchange(), far), HostReport::NoTrigger, "a late summary is not bound to a trigger of another exchange");
+    for _ in 0..AWAITING_MAX + 3 {
+        t.on_events(MISSION, &[research()]);
+    }
+    let done = (0..AWAITING_MAX + 3).filter(|_| t.on_host_exchange(MISSION, &exchange(), 0).word() == "recorded").count();
+    assert_eq!(done, AWAITING_MAX, "the oldest are dropped");
+}
+
+#[test]
+fn a_host_cannot_set_what_the_daemon_computes_nor_the_outcome_through_a_summary() {
+    let ws = tempfile::tempdir().unwrap();
+    let t = tap(ws.path(), on());
+    // A research run that reports nothing the daemon can read as a result: the daemon's outcome is `unknown`.
+    t.on_events(MISSION, &[ev("research.finished", json!({"topic": "x"}))]);
+    let mut p = exchange();
+    for (k, v) in [("kind", "observed"), ("observed", "x"), ("private", "false"), ("outcome", "done"), ("trigger", "merge"), ("id", "ex_9999"), ("chain", "genesis")] {
+        p[k] = json!(v);
+    }
+    assert_eq!(t.on_host_exchange(MISSION, &p, 0).word(), "recorded");
+    let rec = records(ws.path()).pop().unwrap();
+    assert_eq!(rec.kind, Kind::Reported, "never observed for relayed text");
+    assert_eq!(rec.outcome, Outcome { value: OutcomeValue::Unknown, provenance: Provenance::Observed });
+    assert_eq!((rec.trigger, rec.private, rec.id.as_str()), (Trigger::ResearchRun, true, "ex_0001"));
+}
+
+#[test]
+fn the_reply_fields_are_capped_and_redacted_by_the_same_pipeline_and_a_secret_in_the_prompt_is_not_stored() {
+    let ws = tempfile::tempdir().unwrap();
+    let t = tap(ws.path(), on());
+    t.on_events(MISSION, &[research()]);
+    let p = json!({"prompt": "use Bearer abcDEF123456789xyzABC please", "asked": "queue options ".repeat(40), "did": "sent Bearer abcDEF123456789xyzABC", "open": "\u{1b}[2Jnothing"});
+    assert_eq!(t.on_host_exchange(MISSION, &p, 0).word(), "recorded");
+    let text = store_text(ws.path());
+    assert!(!text.contains("abcDEF123456789xyzABC") && !text.contains('\u{1b}'), "{text}");
+    let rec = records(ws.path()).pop().unwrap();
+    assert_eq!(rec.reply.unwrap().asked.chars().count(), 200);
+}
+
+#[test]
+fn a_reported_prompt_found_in_the_hosts_transcript_as_a_user_message_reads_resolved_and_a_tool_result_does_not() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let folder = root.path().join("-proj");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join(format!("{SID}.jsonl")), [user("please research queue options"), tool_result("text only a tool returned")].join("\n") + "\n").unwrap();
+    let t = tap(ws.path(), on()).with_claude_root(root.path().to_path_buf());
+    t.on_events(MISSION, &[research()]);
+    let mut p = exchange();
+    p["session_id"] = json!(SID);
+    assert_eq!(t.on_host_exchange(MISSION, &p, 0).word(), "recorded");
+    let hit = records(ws.path()).pop().unwrap();
+    assert_eq!(hit.kind, Kind::Resolved);
+    assert!(hit.pointer.is_some());
+    t.on_events(MISSION, &[research()]);
+    p["prompt"] = json!("text only a tool returned");
+    assert_eq!(t.on_host_exchange(MISSION, &p, 0).word(), "recorded");
+    assert_eq!(records(ws.path()).pop().unwrap().kind, Kind::Reported, "a span only in a tool result never reads resolved");
+    // A session that is not found, or an id that could name a path, is just `reported`.
+    t.on_events(MISSION, &[research()]);
+    p["prompt"] = json!("please research queue options");
+    p["session_id"] = json!("../../etc/passwd");
+    assert_eq!(t.on_host_exchange(MISSION, &p, 0).word(), "recorded");
+    assert_eq!(records(ws.path()).pop().unwrap().kind, Kind::Reported);
+}
+
+#[test]
+fn a_dormant_tap_ignores_the_exchange_fields_and_a_call_without_them_is_unchanged() {
+    let ws = tempfile::tempdir().unwrap();
+    let t = tap(ws.path(), Settings::default());
+    t.on_events(MISSION, &[research()]);
+    assert_eq!(t.on_host_exchange(MISSION, &exchange(), 0), HostReport::Off);
+    assert_eq!(t.on_host_exchange(MISSION, &json!({"summary": "s", "decisions": ["a"]}), 0), HostReport::Absent);
+    assert!(!ws.path().join("local").exists(), "nothing is held, written or made while history is off");
+    let on_tap = tap(ws.path(), on());
+    assert_eq!(on_tap.on_host_exchange(MISSION, &json!({"summary": "s"}), 0), HostReport::Absent);
+}
+
+#[test]
+fn a_bad_exchange_field_is_refused_with_a_fixed_reason_and_nothing_is_written() {
+    let ws = tempfile::tempdir().unwrap();
+    let t = tap(ws.path(), on());
+    t.on_events(MISSION, &[research()]);
+    let r = t.on_host_exchange(MISSION, &json!({"prompt": "x", "asked": 4}), 0);
+    assert!(matches!(&r, HostReport::Refused(why) if why.contains("asked")), "{r:?}");
+    assert!(records(ws.path()).is_empty());
+    assert_eq!(t.on_host_exchange(MISSION, &exchange(), 0).word(), "recorded", "a refused call does not use up the trigger");
+}
+
+#[test]
+fn a_project_marked_off_says_so_and_writes_nothing() {
+    let ws = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(ws.path().join("local/projects/home")).unwrap();
+    std::fs::write(ws.path().join("local/projects/home/history.off"), "").unwrap();
+    let t = tap(ws.path(), on());
+    t.on_events(MISSION, &[research()]);
+    let r = t.on_host_exchange(MISSION, &exchange(), 0);
+    assert_eq!(r, HostReport::Appended(Appended::ProjectOff));
+    assert_eq!(r.word(), "off for this project");
+    assert!(!ws.path().join("local/history").exists());
+}
+
+#[test]
+fn the_merge_trigger_concludes_the_daemons_prompt_with_the_pull_request_number_and_nothing_of_the_ledger_row() {
+    let ws = tempfile::tempdir().unwrap();
+    let t = tap(ws.path(), on());
+    t.note_operator_prompt("t_1", "land the queue fix");
+    let row = crate::history_merge::read_new(&{
+        let p = crate::history_merge::ledger_path(ws.path());
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, format!("{}\n", json!({"kind": "merged", "pr": 42, "quote": "merge 42 now, key sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWX"}))).unwrap();
+        p
+    }, 0)
+    .rows
+    .remove(0);
+    let rec = match t.on_merge_row(MISSION, &row) {
+        Some(Appended::Written(r)) => *r,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!((rec.trigger, rec.kind), (Trigger::Merge, Kind::Observed));
+    assert_eq!(rec.observed.ids, vec!["pr_42".to_string()]);
+    assert_eq!(rec.prompt.unwrap().text, "land the queue fix");
+    assert!(!store_text(ws.path()).contains("sk-ant"), "the ledger's quote never reaches the store");
 }

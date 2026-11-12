@@ -274,9 +274,9 @@ pub fn record_hash(key: &[u8], r: &Record) -> String {
 /// * research run: `research.finished`, written by the daemon's own research job (`service.rs`);
 /// * panel: `council.verdict` with `venue: panel`; Council: `council.verdict` with any other venue (`council.rs`);
 /// * work artifact: an entry the daemon appended to the artifact prompt log (`engine.rs` `log_artifact_prompts`; not an event kind, a call);
-/// * merge: a `merged` row of the merge ledger (`delphi merge`, spec 094). **Not wired**: the ledger is written by the `delphi merge`
-///   process, which has no daemon connection and must not write the daemon-only store (§11 item 5); [`Tap::on_merge_row`] is the entry
-///   point a later slice calls once the daemon reads that ledger.
+/// * merge: a `merged` row of the merge ledger (`delphi merge`, spec 094). The ledger is written by the `delphi merge` process, which
+///   has no daemon connection and must not write the daemon-only store (§11 item 5), so the daemon reads the ledger itself on its
+///   own timer (`history_merge`, `EngineService::merge_ledger_tick`) and calls [`Tap::on_merge_row`].
 pub fn trigger_of(e: &EventEnvelope) -> Option<Trigger> {
     match e.kind.as_str() {
         "research.finished" => Some(Trigger::ResearchRun),
@@ -735,6 +735,66 @@ struct Pending {
     concluded: bool,
 }
 
+/// A trigger the daemon saw while it held no operator prompt of its own (the usual case in a host's mission: the operator typed the
+/// prompt into the host, not into the daemon). It is the daemon's own observation, kept in memory only, so that the host's summary
+/// of that exchange can complete it (§3.3). It is never written without a host report of the prompt, and a host's report alone
+/// never makes a record (§10 item 2): both must exist.
+struct Awaiting {
+    trigger: Trigger,
+    outcome: Outcome,
+    observed: Observed,
+    at: String,
+    unix: i64,
+}
+
+/// At most this many unattributed triggers are remembered; the oldest is dropped. A hypothesis.
+pub const AWAITING_MAX: usize = 8;
+/// An unattributed trigger older than this (seconds) is forgotten, so a late summary cannot be bound to a trigger of another
+/// exchange. A hypothesis, to calibrate from use (OD-3).
+pub const AWAITING_SECS: i64 = 3600;
+/// A transcript file larger than this is not read to check a reported prompt (the record is then `reported`).
+pub const MAX_TRANSCRIPT_BYTES: u64 = 64 * 1024 * 1024;
+
+/// What the host's exchange fields did (the answer to `record_session_summary`, with fixed words only).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostReport {
+    /// `[history] enabled` is off: the exchange fields were ignored and nothing was held or made.
+    Off,
+    /// The call carried none of the exchange fields.
+    Absent,
+    /// The fields were refused, with the reason.
+    Refused(String),
+    /// The daemon has seen no trigger to complete (a host cannot create a record, §10 item 2): nothing was written.
+    NoTrigger,
+    /// The report named no prompt: the operator's words are the point of a record (§2 item 1), so nothing was written.
+    NoPrompt,
+    /// The record was written (or the append said why it was not).
+    Appended(Appended),
+}
+
+impl HostReport {
+    /// A fixed word for the tool's answer; it carries no record text.
+    pub fn word(&self) -> &'static str {
+        match self {
+            HostReport::Off => "off",
+            HostReport::Absent => "absent",
+            HostReport::Refused(_) => "refused",
+            HostReport::NoTrigger => "no trigger seen",
+            HostReport::NoPrompt => "no prompt given",
+            HostReport::Appended(Appended::Written(_)) => "recorded",
+            HostReport::Appended(Appended::Dormant) => "off",
+            HostReport::Appended(Appended::ProjectOff) => "off for this project",
+            HostReport::Appended(Appended::SwitchedOff) => "switched off by the operator",
+            HostReport::Appended(Appended::Budget) => "store at its budget",
+            HostReport::Appended(Appended::Failed(_)) => "not written",
+        }
+    }
+}
+
+/// The keys of the exchange fields a host may send with a summary (§10 item 1): the prompt, where its words can be found, and the
+/// reply in three short fields. Nothing the daemon computes is in this list.
+pub const HOST_EXCHANGE_KEYS: [&str; 5] = ["prompt", "session_id", "asked", "did", "open"];
+
 /// One per mission. It holds the last operator prompt the daemon saw (in memory, and only while history is on) and writes a record
 /// when a trigger concludes it. A trigger with no prompt, or for a prompt already concluded, writes nothing: one record per prompt.
 pub struct Tap {
@@ -742,11 +802,27 @@ pub struct Tap {
     settings: Settings,
     project: String,
     pending: Mutex<Option<Pending>>,
+    awaiting: Mutex<Vec<Awaiting>>,
+    /// Where Claude Code's transcripts are searched for (S1): `~/.claude/projects` unless a test or a setting says otherwise.
+    claude_root: Option<PathBuf>,
 }
 
 impl Tap {
     pub fn new(ws_dir: PathBuf, settings: Settings, project: &str) -> Tap {
-        Tap { ws_dir, settings, project: safe_id(project).unwrap_or_else(|| "home".into()), pending: Mutex::new(None) }
+        Tap {
+            ws_dir,
+            settings,
+            project: safe_id(project).unwrap_or_else(|| "home".into()),
+            pending: Mutex::new(None),
+            awaiting: Mutex::new(Vec::new()),
+            claude_root: crate::history_pointer::default_claude_root(),
+        }
+    }
+
+    /// Search another root for transcripts (a test's temporary folder).
+    pub fn with_claude_root(mut self, root: PathBuf) -> Tap {
+        self.claude_root = Some(root);
+        self
     }
 
     /// The project a mission belongs to: its `scope` file, else `home`.
@@ -770,7 +846,14 @@ impl Tap {
                     x.concluded = true;
                     x.text.clone()
                 }
-                _ => return None,
+                // A prompt the daemon already concluded: one record per prompt.
+                Some(_) => return None,
+                // No prompt of the daemon's own: the trigger is remembered (not written) so a host's summary can complete it.
+                None => {
+                    drop(p);
+                    self.remember_trigger(trigger, outcome, observed);
+                    return None;
+                }
             }
         };
         let d = Draft {
@@ -784,6 +867,84 @@ impl Tap {
             observed,
         };
         Some(self.report(append(&self.ws_dir, &self.settings, d)))
+    }
+
+    fn remember_trigger(&self, trigger: Trigger, outcome: Outcome, observed: Observed) {
+        let mut a = self.awaiting.lock().unwrap();
+        if a.len() >= AWAITING_MAX {
+            a.remove(0);
+        }
+        let at = delphi_core::time::now_rfc3339();
+        let unix = delphi_core::time::parse_rfc3339(&at).unwrap_or(0);
+        a.push(Awaiting { trigger, outcome, observed, at, unix });
+    }
+
+    /// The host's exchange fields, sent with `record_session_summary` (§3.3, §10 item 1). The host cannot create a record: this
+    /// completes the **latest trigger the daemon itself saw** and could not attribute to a prompt, with the prompt the host reports
+    /// (`kind` `resolved` if the S1 check finds those words in the host's transcript as a user message, else `reported`) and the
+    /// host's reply, labelled self-reported. The daemon's outcome and observed facts are the daemon's; a host's word never
+    /// replaces them. With no such trigger, no prompt, or history off, nothing is written. `now_unix` is the daemon's clock.
+    pub fn on_host_exchange(&self, mission: &str, p: &Value, now_unix: i64) -> HostReport {
+        let Some(obj) = p.as_object() else { return HostReport::Absent };
+        let mut fields = serde_json::Map::new();
+        for k in HOST_EXCHANGE_KEYS {
+            if let Some(v) = obj.get(k).filter(|v| !v.is_null()) {
+                fields.insert(k.to_string(), v.clone());
+            }
+        }
+        if fields.is_empty() {
+            return HostReport::Absent;
+        }
+        // Dormant: the fields are ignored (not validated, held or written) and the host is told so.
+        if !self.settings.enabled {
+            return HostReport::Off;
+        }
+        let x = match parse_host_exchange(&Value::Object(fields)) {
+            Ok(x) => x,
+            Err(why) => return HostReport::Refused(why),
+        };
+        let Some(prompt) = x.prompt.filter(|t| !t.trim().is_empty()) else { return HostReport::NoPrompt };
+        let a = {
+            let mut list = self.awaiting.lock().unwrap();
+            list.retain(|a| now_unix - a.unix <= AWAITING_SECS);
+            match list.pop() {
+                Some(a) => a,
+                None => return HostReport::NoTrigger,
+            }
+        };
+        let transcript = x.session_id.as_deref().and_then(|id| self.read_transcript(id));
+        let reply = (!x.reply.asked.is_empty() || !x.reply.did.is_empty() || !x.reply.open.is_empty()).then_some(x.reply);
+        // The daemon's outcome stands; a host's is used only where the daemon saw none, and it is labelled so.
+        let outcome = match (a.outcome.value, x.outcome) {
+            (OutcomeValue::Unknown, Some(v)) => Outcome { value: v, provenance: Provenance::SelfReported },
+            _ => a.outcome,
+        };
+        let d = Draft {
+            trigger: a.trigger,
+            mission: safe_id(mission).unwrap_or_default(),
+            project: self.project.clone(),
+            at: a.at,
+            prompt: PromptIn::Reported { text: prompt, marked: Vec::new(), session_id: x.session_id.unwrap_or_default(), transcript },
+            reply,
+            outcome,
+            observed: a.observed,
+        };
+        HostReport::Appended(self.report(append(&self.ws_dir, &self.settings, d)))
+    }
+
+    /// The text of the transcript for `session_id`, if one is found under the root (S1's bounded search) and is a plain file of a
+    /// size worth reading. The first readable candidate wins; the hash and the role decide the label, not this.
+    fn read_transcript(&self, session_id: &str) -> Option<String> {
+        let root = self.claude_root.as_deref()?;
+        for path in crate::history_pointer::find_sessions(root, session_id) {
+            if std::fs::metadata(&path).map(|m| m.len() > MAX_TRANSCRIPT_BYTES).unwrap_or(true) {
+                continue;
+            }
+            if let Ok(t) = std::fs::read_to_string(&path) {
+                return Some(t);
+            }
+        }
+        None
     }
 
     fn report(&self, a: Appended) -> Appended {
@@ -830,7 +991,7 @@ impl Tap {
         Some(self.report(append(&self.ws_dir, &self.settings, d)))
     }
 
-    /// A `merged` row of the merge ledger (spec 094). Nothing calls this yet: see [`trigger_of`].
+    /// A `merged` row of the merge ledger (spec 094), read by the daemon's own timer: see [`trigger_of`].
     pub fn on_merge_row(&self, mission: &str, row: &Value) -> Option<Appended> {
         if !self.settings.enabled {
             return None;
