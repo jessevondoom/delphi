@@ -19,6 +19,7 @@
 | `/decisions`, `/merge <task>` | open the decisions pane (everything you owe, one at a time); rerun the gates and merge card |
 | `/ratify` | pending proposals (config, manifests, skills, release files) |
 | `/search`, `/sources`, `/pin`, `/notes`, `/export` | knowledge base, where answers came from, the mission notebook, save the conversation |
+| `/history [records]` | the project history, read-only (`specs/102` S5): the exchange records, each checked and labelled `verified` or `CHAIN BROKEN` and never repaired, and the project report; `records` leaves the report out. Pasted text is shown as a hash and a length. No model is involved, and when history is off it says so and names the setting |
 | `/org` | the added org bundles, their goals, perspectives and open items |
 | `/observe [council\|epic\|agents\|archives\|changes]` | open the narrator in a new tmux or terminal window |
 | `/new`, `/context`, `/resume`, `/pause`, `/mission`, `/missions`, `/clear`, `/mouse`, `/quit` | sessions and conversation context; housekeeping |

@@ -9,6 +9,7 @@ import { lookup } from './commands.ts';
 import { bundleTarget, completions, enterAccepts, projectKey, searchHistory, type Completion, type ListDir } from './complete.ts';
 import { addBlock, fold, type State } from './fold.ts';
 import { contextReport, exportAll, exportHead } from './session.ts';
+import { historyReport } from './history.ts';
 import { loadHistory } from './attach.ts';
 import { resolveCard, runSlash } from './run.ts';
 import * as I from './inbox.ts';
@@ -281,6 +282,13 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
       cmd.call('session.context', { mission_id: mission })
         .then((r: any) => note(contextReport(r, line.slice(name.length).trim() === 'full')))
         .catch((e) => note('could not read the context: ' + (e?.message ?? JSON.stringify(e)), 'error'));
+      return;
+    }
+    if (name === '/history') {
+      // Read-only (`specs/102` §5.1): the exchange records and the report, from the daemon; no model, nothing written.
+      cmd.call('history.view', { mission_id: mission })
+        .then((r: any) => note(historyReport(r, line.slice(name.length).trim() !== 'records')))
+        .catch((e) => note('could not read the history: ' + (e?.message ?? JSON.stringify(e)), 'error'));
       return;
     }
     if (name === '/export') {
