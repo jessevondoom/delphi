@@ -63,8 +63,10 @@ pub fn export(lib: &Library, ids: &[String], format: Format) -> Result<Export, S
     } else {
         ids.iter().map(|i| all.iter().find(|(id, _)| id == i).ok_or_else(|| format!("no source `{}`", i))).collect::<Result<_, _>>()?
     };
-    let withheld = chosen.iter().filter(|(_, m)| is_private(m)).count();
-    let mut shown: Vec<&(String, Value)> = chosen.into_iter().filter(|(_, m)| !is_private(m)).collect();
+    // The shared egress check (`specs/098` §12 item 16): a private source, and a record that cannot be read, never leave through an export.
+    let leaves = |m: &Value| crate::egress::check(m, Channel::Export).is_ok();
+    let withheld = chosen.iter().filter(|(_, m)| !leaves(m)).count();
+    let mut shown: Vec<&(String, Value)> = chosen.into_iter().filter(|(_, m)| leaves(m)).collect();
     shown.sort_by_key(|(id, m)| (sort_key(m), id.clone()));
     let text = match format {
         Format::CslJson => serde_json::to_string_pretty(&shown.iter().map(|(id, m)| csl_item(id, m)).collect::<Vec<_>>()).unwrap_or_default() + "\n",

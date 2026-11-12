@@ -98,7 +98,18 @@ impl EngineService {
         let ctx_scope = ScopeCtx { home: home.clone(), workspace: Some(ws.clone()), today: delphi_core::time::now_rfc3339()[..10].to_string() };
         let action = tokio::task::spawn_blocking({
             let (opts, target) = (opts.clone(), target.clone());
-            move || Action::build(word, target.as_deref(), &opts, &ctx_scope)
+            let (guard_home, guard_ws) = (home.clone(), ws.clone());
+            move || {
+                // `specs/098` §12 item 16, channel Xenia: a private source in the library, and the host-noted store, never leave through a
+                // publish, whatever the operator names. Deny by default; a file outside both places passes as it did.
+                if word == "publish" {
+                    if let Some(t) = target.as_deref() {
+                        let record = crate::egress::xenia_file_record(&guard_home, Some(&guard_ws), std::path::Path::new(t));
+                        crate::egress::check(&record, crate::library::Channel::Xenia).map_err(|e| format!("{e}; `publish` takes a file of your own, not one from the library or the host-noted store"))?;
+                    }
+                }
+                Action::build(word, target.as_deref(), &opts, &ctx_scope)
+            }
         })
         .await
         .map_err(|e| err(-32000, e.to_string()))?
