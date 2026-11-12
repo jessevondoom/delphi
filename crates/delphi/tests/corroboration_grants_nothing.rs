@@ -427,6 +427,48 @@ fn a_contradiction_mark_is_made_only_by_the_library_and_nothing_reads_a_sources_
 }
 
 #[test]
+fn a_normalised_identifier_is_a_matching_key_that_only_the_matching_files_name() {
+    // `specs/101` §11: a normalised DOI, ORCID or ROR id is a key for matching and for merging origins, never a trust escalator. Only the
+    // normaliser, the retraction match, the chain parser and the library (which hands a source's DOI to the origin count) name it; nothing
+    // that decides a status, a tier, a queue order, an approval or a tool does. The ORCID and ROR normalisers have no caller yet (the library
+    // records no author or publisher identifier): a caller has to be added to this test on purpose.
+    let root = root();
+    let mut files = Vec::new();
+    rust_files(&root.join("crates"), &mut files);
+    let uses = Regex::new(r"crate::doi::|delphi_engine::doi::|\bdoi::(normalize|from_url|orcid|ror)\b|\bdoi_of\(").unwrap();
+    let people_and_orgs = Regex::new(r"\bdoi::(orcid|ror)\b|crate::doi::\{[^}]*\b(orcid|ror)\b").unwrap();
+    let allowed = [
+        "crates/delphi-engine/src/doi.rs",
+        "crates/delphi-engine/src/retractions.rs",
+        "crates/delphi-engine/src/library_retraction.rs",
+        "crates/delphi-engine/src/research_chain.rs",
+        "crates/delphi-engine/src/library_claims.rs",
+        // slice D's seed: `chainable_doi` reads the DOI of a public, daemon-fetched source to start a chain
+        "crates/delphi-engine/src/research_host.rs",
+    ];
+    let (mut stray, mut orcid_ror_callers) = (Vec::new(), Vec::new());
+    for f in &files {
+        let rel = f.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
+        let src = std::fs::read_to_string(f).unwrap();
+        let code: String = production(&src).lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+        if uses.is_match(&code) && !allowed.contains(&rel.as_str()) {
+            stray.push(rel.clone());
+        }
+        if people_and_orgs.is_match(&code) && rel != "crates/delphi-engine/src/doi.rs" {
+            orcid_ror_callers.push(rel);
+        }
+    }
+    assert!(stray.is_empty(), "a normalised identifier is named outside the files that may: {stray:?}");
+    assert!(orcid_ror_callers.is_empty(), "something calls the ORCID or ROR normaliser, which nothing may yet: {orcid_ror_callers:?}");
+    // The origin count may merge on the identifier (`Cite::work`); the files that turn counts into a label must not read it.
+    for f in ["crates/delphi-core/src/knowledge_status.rs", "crates/delphi-engine/src/accept_all.rs"] {
+        if let Ok(src) = std::fs::read_to_string(root.join(f)) {
+            assert!(!production(&src).contains("doi"), "{f} names an identifier");
+        }
+    }
+}
+
+#[test]
 fn the_accept_all_cards_actions_and_the_rejection_are_the_operators_and_reach_no_grant() {
     // `specs/100` §6 and §10 item 4: the decisions-pane card offers to leave the batch or to reject one claim of it (marking it `disproved`), never to
     // accept; both go through the console, which only the operator holds, and the terminal path asks for a typed word. Only the card's own module,

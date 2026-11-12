@@ -968,6 +968,7 @@ mod tests {
                 registrant: None,
                 listed_in_scope: self.listed.contains(h),
                 derived: false,
+                work: None,
             })
         }
         fn is_private(&self, source_id: &str) -> bool {
