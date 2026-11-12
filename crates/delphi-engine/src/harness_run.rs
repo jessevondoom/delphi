@@ -411,6 +411,8 @@ impl Engine {
             "WebFetch" | "WebSearch" => match gate(sc.span.ceiling(), Action::Outbound) {
                 Gate::Deny => deny("outbound requests are not allowed from a span at this taint level"),
                 _ => {
+                    // Spec 103 M1, observe only: count the send if the task's private-read mark would have changed it. Nothing depends on this.
+                    crate::private_read::observe_send(&self.ws.dir, "outbound", &sc.task_id);
                     let summary = format!("{} {}", name, summarize(name, &p.input));
                     // Delegated: the CLI's own policy has already had its say, so this is one ordinary card, not a Red one.
                     let tier = if ctl.delegate { ApprovalTier::Amber } else { ApprovalTier::Red };

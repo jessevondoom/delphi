@@ -149,6 +149,8 @@ impl Engine {
         });
         let who = format!("{}{}", dotted, if account.is_empty() { String::new() } else { format!(" as {}", account) });
         let args_line: String = args.to_string().chars().take(160).collect();
+        // Spec 103 M1, observe only: count the call if the task's private-read mark would have changed it. Nothing depends on this.
+        crate::private_read::observe_send(&self.ws.dir, "connector", &sc.task_id);
         match class {
             ToolClass::Write => {
                 // Red at every taint level, never denied, never auto-approved, never "allow similar".
