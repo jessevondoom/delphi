@@ -564,7 +564,7 @@ fn a_history_pointer_and_the_project_timeline_are_context_that_nothing_reads_as_
     rust_files(&root.join("crates"), &mut files);
     let names = Regex::new(r"history_pointer|history_report").unwrap();
     // The exchange record (slice S3) and its redactor hold a pointer, so they name it on purpose; the test below holds them to the same limits.
-    let readers_ok = ["crates/delphi-engine/src/lib.rs", "crates/delphi-engine/src/history_pointer.rs", "crates/delphi-engine/src/history_report.rs", "crates/delphi-engine/src/history_record.rs", "crates/delphi-engine/src/history_redact.rs", "crates/delphi-engine/src/history_view.rs"];
+    let readers_ok = ["crates/delphi-engine/src/lib.rs", "crates/delphi-engine/src/history_pointer.rs", "crates/delphi-engine/src/history_report.rs", "crates/delphi-engine/src/history_record.rs", "crates/delphi-engine/src/history_redact.rs", "crates/delphi-engine/src/history_citation.rs", "crates/delphi-engine/src/history_view.rs"];
     let mut stray = Vec::new();
     for f in &files {
         let rel = f.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
@@ -642,6 +642,54 @@ fn an_exchange_record_is_context_that_nothing_reads_as_a_criterion_and_that_reac
         let code: String = production(&src).lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
         assert!(!outcome.is_match(&code), "{rel} names the record's outcome type: it is a label that nothing else reads");
     }
+}
+
+#[test]
+fn the_citation_check_is_derived_context_that_no_promotion_trust_tool_or_approval_path_calls_and_that_it_never_calls() {
+    // `specs/102` §6 and §11 item 8 (slice S6): whether a decision cites a span that resolves is worked out when it is asked and is shown. (1) Only the
+    // module, the module list and the daemon's `decisions.list` answer name it; (2) it imports only inert crates and the two history modules it reads;
+    // (3) it names no socket, process or model call and no promotion, trust, tool-access or approval path, so a `cited` decision is exactly as
+    // approvable, ratifiable and trusted as an `unsourced` one; (4) it writes nothing; (5) the `citation` field is read only to print it, in the one file
+    // that renders decisions.
+    let root = root();
+    let mut files = Vec::new();
+    rust_files(&root.join("crates"), &mut files);
+    let names = Regex::new(r"history_citation").unwrap();
+    let wired = ["crates/delphi-engine/src/lib.rs", "crates/delphi-engine/src/history_citation.rs", "crates/delphi-engine/src/service.rs"];
+    let mut stray = Vec::new();
+    for f in &files {
+        let rel = f.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
+        let src = std::fs::read_to_string(f).unwrap();
+        let code: String = production(&src).lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+        if names.is_match(&code) && !wired.contains(&rel.as_str()) {
+            stray.push(rel);
+        }
+    }
+    assert!(stray.is_empty(), "the citation check is named outside the files that wire it; read it and add it on purpose: {stray:?}");
+    let rel = "crates/delphi-engine/src/history_citation.rs";
+    let src = std::fs::read_to_string(root.join(rel)).unwrap();
+    let code: String = production(&src).lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+    let inert = ["crate::history_pointer", "crate::history_report", "delphi_core::event", "serde_json::", "std::"];
+    for l in code.lines().filter(|l| l.starts_with("use ")) {
+        assert!(inert.iter().any(|p| l.trim_start_matches("use ").starts_with(p)), "{rel} imports from a path that is not on the inert list: {l}");
+    }
+    let reach = Regex::new(r"std::net|std::process|Command::new|TcpStream|reqwest|tiny_http|tokio::|delphi_adapter|complete\(|model_call|\.send\(").unwrap();
+    assert!(!reach.is_match(&code), "{rel} names a socket, a process or a model call");
+    let grants = Regex::new(r"\b(?:promote\w*|ratif\w*|approv\w*|grant\w*|trust\w*|taint\w*|tier\w*|authoriz\w*|library_claims|knowledge_status|fact_\w*|validator\w*|score\w*|rank\w*)\b|council::|research_run").unwrap();
+    assert!(!grants.is_match(&code), "{rel} names a promotion, trust, tool-access or approval path: {:?}", grants.find(&code).map(|m| m.as_str().to_string()));
+    let writes = Regex::new(r"fs::write|File::create|OpenOptions|create_dir|remove_file|rename\(").unwrap();
+    assert!(!writes.is_match(&code), "{rel} writes a file: a citation is derived, never stored");
+    let field = Regex::new(r#"\["citation"\]"#).unwrap();
+    let readers_ok = ["crates/delphi-engine/src/history_citation.rs", "crates/delphi/src/decisions.rs"];
+    for f in &files {
+        let rel = f.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
+        let src = std::fs::read_to_string(f).unwrap();
+        let code: String = production(&src).lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+        if field.is_match(&code) && !readers_ok.contains(&rel.as_str()) {
+            stray.push(rel);
+        }
+    }
+    assert!(stray.is_empty(), "a decision's `citation` field is read outside the module that makes it and the console view that prints it: {stray:?}");
 }
 
 #[test]

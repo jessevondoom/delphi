@@ -59,6 +59,9 @@ pub struct Timeline {
     pub failed: Vec<String>,
     /// Provisional decisions made (`decision.provisional`).
     pub decisions_made: Vec<String>,
+    /// The decisions in `decisions_made` whose citation resolved (`history_citation`, `specs/102` §6). Empty until that check has run,
+    /// so a timeline that was never given it reads every decision unsourced: the safe default.
+    pub cited: Vec<String>,
     pub superseded: Vec<Superseded>,
     pub raised: Vec<String>,
     /// Raised decisions with no `decision.resolved` yet: the open items an id can name.
@@ -192,7 +195,15 @@ fn report_with(t: &Timeline, max_ids: usize) -> String {
         t.failed.len(),
         ids(&t.failed, max_ids)
     ));
-    out.push(format!("Decisions: {} made{}; {} raised.", t.decisions_made.len(), ids(&t.decisions_made, max_ids), t.raised.len()));
+    let cited = t.decisions_made.iter().filter(|d| t.cited.contains(d)).count();
+    out.push(format!(
+        "Decisions: {} made{}, {} cited, {} unsourced; {} raised.",
+        t.decisions_made.len(),
+        ids(&t.decisions_made, max_ids),
+        cited,
+        t.decisions_made.len() - cited,
+        t.raised.len()
+    ));
     if t.superseded.is_empty() {
         out.push("Superseded: none.".into());
     } else if max_ids == 0 {

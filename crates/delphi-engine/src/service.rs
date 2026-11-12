@@ -1659,7 +1659,10 @@ impl EngineService {
             None => crate::provisional::ledger_all(&events),
         };
         let pending = ds.iter().filter(|d| d.outcome == "allow" && d.review.is_none()).count();
-        Ok(json!({"mission_id": m.id, "decisions": ds.iter().map(|d| d.to_json()).collect::<Vec<_>>(), "pending": pending}))
+        let mut out: Vec<Value> = ds.iter().map(|d| d.to_json()).collect();
+        // Whether each decision cites a span that resolves (`specs/102` §6): derived now, shown, and granting nothing.
+        crate::history_citation::annotate_here(&self.engine.ws.dir, &events, &mut out);
+        Ok(json!({"mission_id": m.id, "decisions": out, "pending": pending}))
     }
 
     /// `decision.list`: every decision the operator owes (`specs/044` §4), built by `decision_model` from the pending
