@@ -549,3 +549,36 @@ fn a_hard_failure_mark_only_lowers_what_is_shown_and_is_named_by_the_library_the
     assert!(stray_names.is_empty(), "the hard-failure record is named outside the library and the latch function: {stray_names:?}");
     assert!(stray_latch.is_empty(), "the hard-failure latch is called from outside the validator's loop and the operator's accept: {stray_latch:?}");
 }
+
+#[test]
+fn a_history_pointer_and_the_project_timeline_are_context_that_nothing_reads_as_a_criterion_and_that_reach_nothing() {
+    // `specs/102` §11 item 1 (slices S1 and S2): a pointer, a timeline entry and the report are read by no promotion, trust, tool-access or approval path,
+    // and the two modules reach no network, no process and no model. So (1) only the two modules (and the line that declares them) name each other's
+    // items today: the exchange record that will hold a pointer is S3, and when it lands a reviewer adds its file to the list on purpose; (2) every `use`
+    // in them comes from a short list of inert crates; (3) their non-test code names no socket, process or model call.
+    let root = root();
+    let mut files = Vec::new();
+    rust_files(&root.join("crates"), &mut files);
+    let names = Regex::new(r"history_pointer|history_report").unwrap();
+    let readers_ok = ["crates/delphi-engine/src/lib.rs", "crates/delphi-engine/src/history_pointer.rs", "crates/delphi-engine/src/history_report.rs"];
+    let mut stray = Vec::new();
+    for f in &files {
+        let rel = f.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
+        let src = std::fs::read_to_string(f).unwrap();
+        let code: String = production(&src).lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+        if names.is_match(&code) && !readers_ok.contains(&rel.as_str()) {
+            stray.push(rel);
+        }
+    }
+    assert!(stray.is_empty(), "a history pointer or the timeline is named outside its own modules; read it and add it on purpose: {stray:?}");
+    let inert = ["crate::transcript", "delphi_core::event", "delphi_core::server", "hmac::", "serde::", "serde_json::", "sha2::", "std::"];
+    let reach = Regex::new(r"std::net|std::process|Command::new|TcpStream|reqwest|tiny_http|tokio::|delphi_adapter|complete\(|model_call|\.send\(").unwrap();
+    for rel in ["crates/delphi-engine/src/history_pointer.rs", "crates/delphi-engine/src/history_report.rs"] {
+        let src = std::fs::read_to_string(root.join(rel)).unwrap();
+        let code: String = production(&src).lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+        for l in code.lines().filter(|l| l.starts_with("use ")) {
+            assert!(inert.iter().any(|p| l.trim_start_matches("use ").starts_with(p)), "{rel} imports from a path that is not on the inert list: {l}");
+        }
+        assert!(!reach.is_match(&code), "{rel} names a socket, a process or a model call");
+    }
+}
