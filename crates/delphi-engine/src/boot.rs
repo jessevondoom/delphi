@@ -92,6 +92,30 @@ pub fn settings_from(root: &toml::Value) -> Settings {
             s.archive.endpoint = e.to_string();
         }
     }
+    // Citation chaining (`specs/101` §6, §8): a boolean, off unless it is exactly `true`; the endpoint must be an https URL with no
+    // credentials, query or fragment, else the pinned default stays; the bounds are counts in a range, and a value of the wrong kind or
+    // outside the range keeps the default.
+    if let Some(r) = root.get("research") {
+        if let Some(b) = r.get("citation_chaining").and_then(|v| v.as_bool()) {
+            s.chain.enabled = b;
+        }
+        if let Some(e) = r.get("citation_endpoint").and_then(|v| v.as_str()).map(str::trim).filter(|e| e.len() <= 300 && crate::research_chain::lookup_url(e, crate::research_chain::Direction::References, "10.1000/x").is_some()) {
+            s.chain.endpoint = e.to_string();
+        }
+        let count = |key: &str, max: i64| r.get(key).and_then(|v| v.as_integer()).filter(|v| (1..=max).contains(v)).map(|n| n as usize);
+        if let Some(n) = count("chain_depth", 3) {
+            s.chain.depth = n;
+        }
+        if let Some(n) = count("chain_fanout", 10) {
+            s.chain.fanout = n;
+        }
+        if let Some(n) = count("chain_max_per_seed", 50) {
+            s.chain.max_per_seed = n;
+        }
+        if let Some(n) = count("chain_max_calls", 200) {
+            s.chain.max_calls = n;
+        }
+    }
     // The caps of the wider fetch (`specs/098` §7.5 item 7a, slice S1d): counts of 1..=100, and a value of the wrong kind keeps the
     // default. The fetch itself is always on; an old `ladder` key is ignored (§13.2).
     if let Some(r) = root.get("research") {

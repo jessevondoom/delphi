@@ -250,6 +250,21 @@ sandbox = "off"
 # archive_fallback = false
 # archive_endpoint = "https://archive.org/wayback/available"
 #
+# Citation chaining (specs/101 section 6). Off by default. With citation_chaining = true, a research run asks ONE citation index
+# (OpenCitations' Index API) what each of the run's best public works cites and what cites it, and keeps the DOIs it names as "noted"
+# leads (https://doi.org/<doi>, recorded and never fetched). What is sent is a public DOI of a source the daemon fetched itself, and
+# nothing else: a source that is private, whose record cannot be read, or that names no DOI gives nothing to send, and neither does a
+# claim that rests on one. The index's answer is read as data (only DOIs that parse); no link in it is followed. A chained find adds no
+# origin to any claim and changes no status. The index answers [] both for "none" and for "no list", so the report says "not available
+# for N works" when a seed had neither. The bounds are hypotheses to calibrate from the search log: levels followed (1 to 3), seed
+# works a level (1 to 10), works kept per seed (1 to 50), calls to the index per run (1 to 200). The endpoint must be https.
+# citation_chaining = false
+# citation_endpoint = "https://api.opencitations.net/index/v2"
+# chain_depth = 1
+# chain_fanout = 2
+# chain_max_per_seed = 10
+# chain_max_calls = 30
+#
 # The wider fetch (specs/098 section 7.5 item 7a), always on (the `ladder` flag was removed, section 13.2). Besides the trusted list, the
 # daemon's fetch reaches any https URL that a search of the run returned (and, for a host's claim, a URL that an earlier search of the same
 # host session returned), so a result from a site you have not listed can be read, kept as "noted", and checked. Nothing else is fetched: a URL
