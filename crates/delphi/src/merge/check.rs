@@ -82,9 +82,9 @@ fn markdown_only(paths: &[String]) -> bool {
     !paths.is_empty() && paths.iter().all(|p| p.to_lowercase().ends_with(".md") && !NEEDS_A_SPEC.iter().any(|g| gates::matches(g, p)))
 }
 
-/// Judge every distinct spec the pull request's trailers name (any commit, or the body). The bundle is valid only if all of them
-/// are ratified; each one that is not is returned as `Missing`, so the refusal lists them all. Naming different specs is accepted
-/// today (each is still checked); that is recorded in full rather than changed here.
+/// Judge every distinct spec the pull request's trailers name (any commit, or the body). Several slices may share one pull request
+/// only if they are slices of the SAME spec: trailers naming more than one distinct spec are refused outright (one `Missing`
+/// naming them all). With one spec, that spec must be ratified.
 fn spec_states(forge: &dyn Forge, pr: &PrInfo, paths: &[String], gate_hits: &[String]) -> Result<Vec<SpecState>, ForgeError> {
     let links = spec_links(&pr.commit_messages, &pr.body);
     if links.is_empty() {
@@ -95,6 +95,13 @@ fn spec_states(forge: &dyn Forge, pr: &PrInfo, paths: &[String], gate_hits: &[St
         } else {
             SpecState::Missing("no `Implements-Spec:` trailer, and the change is neither only Markdown nor inside the bounded exemption (more than 2 files or 100 lines, or it touches code, a manifest, a lockfile, or `agents/`, `skills/`, `themes/` or `memory/`)".into())
         }]);
+    }
+    if links.len() > 1 {
+        return Ok(vec![SpecState::Missing(format!(
+            "the pull request names {} different specs ({}); a bundled pull request may carry slices of one spec only: split it into one pull request per spec",
+            links.len(),
+            links.join(", ")
+        ))]);
     }
     let mut states: Vec<SpecState> = Vec::new();
     for link in links {

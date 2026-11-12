@@ -14,7 +14,7 @@ Delphi stays optional. The label, the PR comment and the merge commit are visibl
 
 ## The queue (S3)
 
-A PR is queued by the label `merge-queue`. An agent queues a PR when it is ready: not a draft, every check on the head commit passes, no conflicts, and an `Implements-Spec:` trailer naming an approved spec. `delphi merge queue <PR>` checks that and adds the label; adding it by hand also works. The queue is advice. The merge command re-derives everything and trusts nothing the label implies.
+A PR is queued by the label `merge-queue`. An agent queues a PR when it is ready: not a draft, every check on the head commit passes, no conflicts, and an `Implements-Spec:` trailer naming an approved spec. A PR that bundles several slices may name one spec only (several trailers of the same spec are fine; the same spec in a commit and in the PR body is one spec). Trailers naming more than one distinct spec are refused, with every spec named, and the PR must be split. `delphi merge queue <PR>` checks that and adds the label; adding it by hand also works. The queue is advice. The merge command re-derives everything and trusts nothing the label implies.
 
 ## The merge command (S3)
 

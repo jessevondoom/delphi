@@ -328,44 +328,56 @@ fn several_slices_of_the_same_spec_in_one_pull_request_pass_and_record_the_spec_
 }
 
 #[test]
-fn a_pull_request_naming_different_specs_is_judged_on_every_one_and_the_ledger_records_all() {
-    // Cross-spec pull requests were already accepted (every named spec had to be ratified, but only the first was recorded).
-    // The operator's same-spec rule is a review rule, not enforced here; this change records all of them and changes nothing else.
-    let w = world();
-    w.forge.with_ready_pr(7, "h7", &["a.rs"]);
-    w.forge.edit(7, |p| p.commit_messages = trailers(&[SPEC_PATH, OTHER_SPEC]));
-    for r in ["main", "h7"] {
-        w.forge.st.borrow_mut().files.insert((r.into(), OTHER_SPEC.into()), APPROVED_SPEC.into());
-    }
-    let out = with_ctx(&w, &mut FakeTerminal::new(false, &[]), Some("merge #7"), false, |c| merge_one(c, 7, None));
-    assert!(matches!(out, Outcome::Merged { .. }), "{out:?}");
-    let row = &Ledger::at(w.home.path()).read()[0];
-    let paths: Vec<&str> = row["specs"].as_array().unwrap().iter().map(|s| s["path"].as_str().unwrap()).collect();
-    assert_eq!(paths, vec![SPEC_PATH, OTHER_SPEC]);
-}
-
-#[test]
-fn one_unratified_spec_among_several_blocks_the_merge_and_every_blocker_is_named() {
+fn a_pull_request_naming_different_specs_is_refused_and_every_spec_is_named() {
+    // Bundles are for slices of one spec only; this is enforced here, not just in the rule text.
     for order in [[SPEC_PATH, OTHER_SPEC], [OTHER_SPEC, SPEC_PATH]] {
         let w = world();
         w.forge.with_ready_pr(7, "h7", &["a.rs"]);
         w.forge.edit(7, |p| p.commit_messages = trailers(&order));
-        // OTHER_SPEC is a draft on the base; SPEC_PATH is approved.
-        w.forge.st.borrow_mut().files.insert(("main".into(), OTHER_SPEC.into()), DRAFT_SPEC.into());
+        // Both are fully ratified: the refusal is about the mix, not about approval.
+        for r in ["main", "h7"] {
+            w.forge.st.borrow_mut().files.insert((r.into(), OTHER_SPEC.into()), APPROVED_SPEC.into());
+        }
         let v = evaluate(&w.forge, 7).unwrap();
-        assert!(!v.ready() && matches!(v.spec, SpecState::Missing(_)), "{order:?}: {:?}", v.refusals);
-        assert!(v.refusals.iter().any(|r| r.contains(OTHER_SPEC)), "{:?}", v.refusals);
+        assert!(!v.ready() && matches!(v.spec, SpecState::Missing(_)), "{:?}", v.refusals);
+        assert!(v.refusals.iter().any(|r| r.contains(SPEC_PATH) && r.contains(OTHER_SPEC) && r.contains("one spec only")), "{:?}", v.refusals);
         let out = with_ctx(&w, &mut FakeTerminal::new(false, &[]), Some("merge #7"), false, |c| merge_one(c, 7, None));
         assert!(matches!(out, Outcome::Refused { .. }), "{out:?}");
         assert!(merged(&w).is_empty() && kinds(&w).is_empty());
     }
-    // Both unratified: both are named.
+}
+
+#[test]
+fn the_same_spec_in_a_commit_and_in_the_body_is_not_a_conflict() {
     let w = world();
     w.forge.with_ready_pr(7, "h7", &["a.rs"]);
-    w.forge.edit(7, |p| p.commit_messages = trailers(&[SPEC_PATH, OTHER_SPEC]));
-    w.forge.st.borrow_mut().files.insert(("main".into(), SPEC_PATH.into()), DRAFT_SPEC.into());
+    w.forge.edit(7, |p| {
+        p.commit_messages = trailers(&[SPEC_PATH]);
+        p.body = format!("Implements-Spec: {SPEC_PATH}");
+    });
     let v = evaluate(&w.forge, 7).unwrap();
-    assert!(v.refusals.iter().any(|r| r.contains(SPEC_PATH)) && v.refusals.iter().any(|r| r.contains(OTHER_SPEC)), "{:?}", v.refusals);
+    assert!(v.ready(), "{:?}", v.refusals);
+    assert_eq!(v.specs.len(), 1);
+    // A different spec only in the body is still a mix.
+    w.forge.edit(7, |p| p.body = format!("Implements-Spec: {OTHER_SPEC}"));
+    assert!(!evaluate(&w.forge, 7).unwrap().ready());
+}
+
+#[test]
+fn an_unratified_spec_still_blocks_a_single_spec_pull_request_and_a_mixed_one_names_both() {
+    let w = world();
+    w.forge.with_ready_pr(7, "h7", &["a.rs"]);
+    w.forge.edit(7, |p| p.commit_messages = trailers(&[OTHER_SPEC, OTHER_SPEC]));
+    w.forge.st.borrow_mut().files.insert(("main".into(), OTHER_SPEC.into()), DRAFT_SPEC.into());
+    let v = evaluate(&w.forge, 7).unwrap();
+    assert!(!v.ready() && v.refusals.iter().any(|r| r.contains(OTHER_SPEC) && r.contains("not approved")), "{:?}", v.refusals);
+    let out = with_ctx(&w, &mut FakeTerminal::new(false, &[]), Some("merge #7"), false, |c| merge_one(c, 7, None));
+    assert!(matches!(out, Outcome::Refused { .. }), "{out:?}");
+    assert!(merged(&w).is_empty() && kinds(&w).is_empty());
+    // Mixed and one unratified: refused, both named.
+    w.forge.edit(7, |p| p.commit_messages = trailers(&[SPEC_PATH, OTHER_SPEC]));
+    let v = evaluate(&w.forge, 7).unwrap();
+    assert!(!v.ready() && v.refusals.iter().any(|r| r.contains(SPEC_PATH) && r.contains(OTHER_SPEC)), "{:?}", v.refusals);
 }
 
 #[test]
