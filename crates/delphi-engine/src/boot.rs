@@ -92,6 +92,14 @@ pub fn settings_from(root: &toml::Value) -> Settings {
             s.wider_fetch.per_run = n as usize;
         }
     }
+    // `[research] retractions` and `retractions_stale_days` (`specs/101` §4, §8): a boolean, off unless exactly `true`; the age is 1 to 3650
+    // days. A value of the wrong kind keeps the default.
+    if let Some(b) = root.get("research").and_then(|r| r.get("retractions")).and_then(|v| v.as_bool()) {
+        s.retractions = b;
+    }
+    if let Some(n) = root.get("research").and_then(|r| r.get("retractions_stale_days")).and_then(|v| v.as_integer()).filter(|v| (1..=3650).contains(v)) {
+        s.retractions_stale_days = n;
+    }
     // The corroboration numbers (`specs/098` §18): each ignored when it is not the right kind of value, so a typo keeps the default.
     if let Some(r) = root.get("research") {
         if let Some(n) = r.get("young_domain_days").and_then(|v| v.as_integer()).filter(|v| (0..=3650).contains(v)) {

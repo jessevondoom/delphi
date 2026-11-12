@@ -224,6 +224,8 @@ pub struct LiveLibrary {
     pub home: PathBuf,
     pub ledger: PathBuf,
     pub label: String,
+    /// `[research] retractions` and the local snapshot (`specs/101` §4): a source this run captures is checked against it. Off checks nothing.
+    pub retractions: crate::retractions::Policy,
 }
 
 impl Library for LiveLibrary {
@@ -233,7 +235,7 @@ impl Library for LiveLibrary {
 
     fn capture<'a>(&'a self, url: &'a str, _text: &'a str, _trusted: bool) -> BoxFut<'a, Result<String, String>> {
         Box::pin(async move {
-            let lib = crate::library::Library::in_home(&self.home);
+            let lib = crate::library::Library::in_home(&self.home).with_retractions(self.retractions.clone());
             let s = lib.add_url(&crate::fact_fetch::FetchPolicy::default(), url, &crate::library::AddOpts::default(), &crate::library::Budgets::default()).await?;
             Ok(s.id)
         })
@@ -400,7 +402,7 @@ mod tests {
     #[test]
     fn a_lead_is_one_capped_line_written_once_with_no_control_characters() {
         let dir = tempfile::tempdir().unwrap();
-        let lib = LiveLibrary { home: dir.path().to_path_buf(), ledger: dir.path().join("research/host-claims.jsonl"), label: "host:test".into() };
+        let lib = LiveLibrary { home: dir.path().to_path_buf(), ledger: dir.path().join("research/host-claims.jsonl"), label: "host:test".into(), retractions: crate::retractions::Policy::off() };
         let row = Row { title: format!("A title\u{7}with{}", "t".repeat(500)), url: "https://blog.example/a".into(), snippet: format!("snippet\u{1b}[31m{}", "s".repeat(900)) };
         lib.note_lead(&row).unwrap();
         lib.note_lead(&row).unwrap();

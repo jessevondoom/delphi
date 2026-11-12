@@ -164,6 +164,8 @@
         "fetch_per_host": { "type": "integer", "minimum": 1, "maximum": 100, "description": "With the wider fetch on: distinct off-list pages read from one host in one run. A hypothesis to calibrate from the status. Default 2." },
         "fetch_per_run": { "type": "integer", "minimum": 1, "maximum": 100, "description": "With the wider fetch on: distinct off-list pages read in one run. A hypothesis to calibrate from the status. Default 10." },
         "search_log": { "type": "boolean", "deprecated": true, "description": "Removed (specs/098 section 13.2): ignored. Every host research result carries its search log (specs/101 section 3). The key stays here so an old config still validates; delphi doctor names it." },
+        "retractions": { "type": "boolean", "description": "Check a source's DOI against the local Retraction Watch snapshot at capture, at re-check and on import (specs/101 section 4). A retracted work, or one under an expression of concern, stops counting as an origin; a claim only a retracted source supports becomes contested; a correction is a label. Nothing is deleted and nothing is sent to a service. Default false." },
+        "retractions_stale_days": { "type": "integer", "minimum": 1, "maximum": 3650, "description": "A snapshot imported more than this many days ago is called stale in the coverage report and by delphi doctor. Default 90." },
         "tiers": {
           "type": "object",
           "description": "The confidence ladder (specs/100 section 3.2): when a claim reads corroborated, substantiated or vetted. Derived by code from tags; each rung reads not validated (vetted reads vetted) and is weaker than validated; none grants anything. Numbers are defaults to calibrate.",

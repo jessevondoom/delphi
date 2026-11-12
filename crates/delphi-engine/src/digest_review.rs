@@ -26,6 +26,8 @@ pub enum Kind {
     Due(String),
     /// A pinned search page whose material changed since it was written (`specs/057` §5): the query and what changed.
     Page(String, String),
+    /// A source the library holds that the local Retraction Watch snapshot lists (`specs/101` §4): its title and what the notice is.
+    Retraction(String, String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -82,13 +84,30 @@ pub fn items(lib: &Library, events: &[EventEnvelope], now: &str) -> Vec<ReviewIt
             out.push(ReviewItem { id, kind: Kind::Page(clean(&p.query, 200), clean(&why, 200)), claims: Vec::new(), age_days: 0 });
         }
     }
+    // Sources the local Retraction Watch snapshot marks (`specs/101` §4). One item per source and snapshot, so a new snapshot that changes
+    // the notice raises it again. A private source's title stays in the library.
+    for (sid, title, kind, date, snapshot) in lib.retracted_sources() {
+        let id = format!("retraction:{}:{}", sid, snapshot);
+        if done.contains(&id.as_str()) {
+            continue;
+        }
+        let private = lib.read_meta(&sid).is_some_and(|m| crate::library::is_private(&m));
+        let shown = if private { "(a private source: the title stays in the library)".to_string() } else { clean(&title, 200) };
+        let what = match kind {
+            crate::retractions::Kind::Retracted => "retracted",
+            crate::retractions::Kind::ExpressionOfConcern => "under an expression of concern",
+            crate::retractions::Kind::Corrected => "corrected",
+        };
+        let why = clean(&format!("{} is {} ({}); snapshot {}", shown, what, if date.is_empty() { "date not given".to_string() } else { date }, snapshot), 200);
+        out.push(ReviewItem { id, kind: Kind::Retraction(shown, why), claims: Vec::new(), age_days: 0 });
+    }
     out
 }
 
 /// What the operator is asked to judge, hashed: it changes with the claims' text, so an answer to a stale card is refused.
 pub fn payload_hash(i: &ReviewItem) -> String {
     let mut texts: Vec<&str> = i.claims.iter().filter_map(|c| c["text"].as_str()).collect();
-    if let Kind::Page(q, why) = &i.kind {
+    if let Kind::Page(q, why) | Kind::Retraction(q, why) = &i.kind {
         texts.extend([q.as_str(), why.as_str()]);
     }
     blake3::hash(format!("{}\n{}", i.id, texts.join("\n")).as_bytes()).to_hex().to_string()
@@ -107,6 +126,12 @@ pub fn to_decision(i: &ReviewItem, left: usize, now: &str) -> Value {
             format!("Possible conflict: {}", i.claims.first().and_then(|c| c["text"].as_str()).unwrap_or("")),
         ),
         Kind::Page(q, why) => (&PAGE_ACTIONS[..], "A page you saved was written from records that have changed since. It is shown as it was, marked stale; searching again writes a new one.".to_string(), vec![why.clone(), "the saved page stays as it is until you search again".to_string()], format!("Saved page changed: {}", q)),
+        Kind::Retraction(title, why) => (
+            &PAGE_ACTIONS[..],
+            "A source in your library appears in the Retraction Watch data. It stays readable and keeps its place. A retracted source, or one under an expression of concern, no longer counts as an independent origin, and a claim only a retracted source supports reads contested; a correction is only a label.".to_string(),
+            vec![why.clone(), "nothing is deleted; the source and its claims stay as they are, marked".to_string()],
+            format!("Source marked: {}", title),
+        ),
         Kind::Due(why) => (&DUE_ACTIONS[..], format!("This claim is due for review: {}. It is still shown and still pulled; confirm it if it holds.", why), vec![why.clone(), "confirming moves only its date; it does not validate it".to_string()], format!("Review due: {}", i.claims.first().and_then(|c| c["text"].as_str()).unwrap_or(""))),
     };
     let label = |a: &str| match a {
@@ -137,7 +162,7 @@ pub fn to_decision(i: &ReviewItem, left: usize, now: &str) -> Value {
 pub fn act(mission_id: &str, i: &ReviewItem, action: &str) -> Result<Vec<EventEnvelope>, String> {
     let allowed: &[&str] = match i.kind {
         Kind::Pair => &PAIR_ACTIONS,
-        Kind::Page(..) => &PAGE_ACTIONS,
+        Kind::Page(..) | Kind::Retraction(..) => &PAGE_ACTIONS,
         Kind::Due(_) => &DUE_ACTIONS,
     };
     if !allowed.contains(&action) {
@@ -335,6 +360,30 @@ mod tests {
         assert!(act("m1", i, "check").is_err() && act("m1", i, "confirm").is_err());
         assert!(act("m1", i, "dismiss").is_ok());
         assert!(items(&l, &[digested(&i.id)], NOW).iter().all(|x| !matches!(x.kind, Kind::Page(..))));
+    }
+
+    #[test]
+    fn a_source_the_snapshot_marks_is_offered_once_per_snapshot_and_a_private_one_keeps_its_title_in_the_library() {
+        let d = tempfile::tempdir().unwrap();
+        let csv = "Record ID,Title,OriginalPaperDOI,RetractionNature,RetractionDate\n1,t,10.1001/aaaa,Retraction,2021-03-04\n2,t,10.1001/pppp,Correction,2021-03-04\n";
+        let index = crate::retractions::Index::from_csv(csv.as_bytes(), "2026-11-11T12:00:00Z").unwrap();
+        let l = Library::in_home(d.path()).with_retractions(crate::retractions::Policy::with_index(index));
+        let add = |name: &str, doi: &str, private: bool| {
+            let p = d.path().join(name);
+            std::fs::write(&p, format!("# {name}\\n\\nText.\\n")).unwrap();
+            l.add_file(&p, &crate::library::AddOpts { licence: Some("CC0-1.0".into()), doi: Some(doi.into()), private, ..Default::default() }, &crate::library::Budgets::default()).unwrap().id
+        };
+        let (open, private) = (add("open.md", "10.1001/aaaa", false), add("secret.md", "10.1001/pppp", true));
+        let found: Vec<ReviewItem> = items(&l, &[], NOW).into_iter().filter(|i| matches!(i.kind, Kind::Retraction(..))).collect();
+        assert_eq!(found.len(), 2);
+        let card_of = |sid: &str| to_decision(found.iter().find(|i| i.id.contains(sid)).unwrap(), 0, NOW);
+        let c = card_of(&open);
+        assert_eq!(c["choices"].as_array().unwrap().iter().map(|c| c["id"].as_str().unwrap()).collect::<Vec<_>>(), ["keep", "dismiss"]);
+        assert!(c["title"].as_str().unwrap().starts_with("Source marked:") && c["brief"]["changes"][0].as_str().unwrap().contains("retracted"));
+        let p = card_of(&private);
+        assert!(!p["title"].as_str().unwrap().contains("secret") && p["title"].as_str().unwrap().contains("private source"), "{p}");
+        assert!(act("m1", &found[0], "check").is_err() && act("m1", &found[0], "dismiss").is_ok());
+        assert!(items(&l, &[digested(&found[0].id)], NOW).iter().all(|x| x.id != found[0].id), "acted on, it is gone");
     }
 
     #[test]

@@ -278,6 +278,17 @@ fn check_research(home: &Path, ws: &Workspace, cfg_text: &str, r: &mut Report) {
     };
     let thin = delphi_engine::boot::settings_from(&root).thin_below;
     r.push(Level::Ok, CHECK, "", format!("{}; {}; an answer from fewer than {} kept claims says coverage: thin ([research] thin_below)", trusted, kb, thin));
+    // spec 101 §4 item 4: with the switch on, the retraction snapshot's age is a fact the operator needs: a missing or old one checks nothing
+    // or checks against old data. Off says nothing (the library as spec 098 left it). Read-only; no file but the snapshot is opened.
+    let st = delphi_engine::boot::settings_from(&root);
+    if st.retractions {
+        let line = delphi_engine::retractions::Policy::load(&home.join("library"), true).status_line(&delphi_core::time::now_rfc3339(), st.retractions_stale_days);
+        if line.contains("stale") || line.contains("none loaded") {
+            r.warn(CHECK, "config.toml", format!("{line}; import the Retraction Watch file with `delphi research retractions import <file>`"));
+        } else {
+            r.push(Level::Ok, CHECK, "", line);
+        }
+    }
     // spec 098 §7.2: a private entry is never placed in a foreign-family seat's prompt whatever this says; `allow` also lets the host's own
     // family read private entries, which is worth knowing once the install holds any.
     let allow = root.get("library").and_then(|l| l.get("private_to_models")).and_then(|v| v.as_str()) == Some("allow");

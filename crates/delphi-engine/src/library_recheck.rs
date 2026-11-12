@@ -69,6 +69,8 @@ impl Library {
                     self.write_json(&self.source_dir(id).join("meta.json"), &m)?;
                     self.source_revived(id);
                 }
+                // The re-check is when a snapshot imported since the last look is applied (`specs/101` §4); idempotent, a no-op with no policy.
+                self.check_retraction(id);
                 Ok(match s.outcome {
                     Outcome::NewVersion(n) => Recheck::Changed(n),
                     _ => Recheck::Unchanged,

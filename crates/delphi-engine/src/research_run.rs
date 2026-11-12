@@ -126,6 +126,9 @@ pub struct Deps<'a> {
     pub support: &'a Params,
     /// Searches the host says it ran before asking (`request_research`'s `host_searches`); logged as declared, counted as nothing.
     pub host_searches: &'a [HostSearch],
+    /// `[research] retractions` (`specs/101` §4 item 4): the line the coverage report carries about the local snapshot (`retractions: current`,
+    /// `stale`, `none loaded`). `None` is the switch off: the report is exactly what spec 098 gives.
+    pub retractions: Option<&'a str>,
 }
 
 #[derive(Debug, Clone)]
@@ -585,6 +588,9 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     source_ids.dedup();
     let trusted_claims = claims.iter().filter(|c| c.from_trusted).count();
     let (thin, mut report) = coverage_report(&cov, set.kb_hits().len(), trusted_claims, claims.len() - trusted_claims, deps.thin_below);
+    if let Some(line) = deps.retractions {
+        report["retractions"] = json!(line);
+    }
     // The search log (`specs/101` §3): it inherits the strictest `private` flag of the claims the run produced, shows the knowledge-base
     // line first, and is linked from the coverage report. It is in every result since the `search_log` flag was pulled (`specs/098` §13.2).
     log.private = claims.iter().any(|c| c.source_ids.iter().any(|s| deps.library.is_private(s)));
@@ -751,6 +757,7 @@ mod tests {
     }
 
     struct Fixture {
+        retractions: Option<&'static str>,
         web: FakeWeb,
         scout: FakeScout,
         validator: FakeValidator,
@@ -774,10 +781,10 @@ mod tests {
                 ("https://nih.gov/b".to_string(), vec![x("fever")]),
                 ("https://blog.example/a".to_string(), vec![x("headaches")]),
             ]));
-            Fixture { web, scout, validator: FakeValidator { verdict, asked: Default::default() }, lib: FakeLib::default(), redactor: Redactor::new(), sites: vec!["who.int".into(), "nih.gov".into()], thin_below: 3, support: Params::default(), host_searches: Vec::new() }
+            Fixture { retractions: None, web, scout, validator: FakeValidator { verdict, asked: Default::default() }, lib: FakeLib::default(), redactor: Redactor::new(), sites: vec!["who.int".into(), "nih.gov".into()], thin_below: 3, support: Params::default(), host_searches: Vec::new() }
         }
         fn deps(&self) -> Deps<'_> {
-            Deps { web: &self.web, scout: &self.scout, validator: &self.validator, library: &self.lib, redactor: &self.redactor, sites: &self.sites, thin_below: self.thin_below, support: &self.support, host_searches: &self.host_searches }
+            Deps { web: &self.web, scout: &self.scout, validator: &self.validator, library: &self.lib, redactor: &self.redactor, sites: &self.sites, thin_below: self.thin_below, support: &self.support, host_searches: &self.host_searches, retractions: self.retractions }
         }
     }
 
@@ -958,6 +965,19 @@ mod tests {
         let (_, v) = value(run_research(&c, "does aspirin reduce fever", Depth::Deep, &f.deps()).await.unwrap());
         assert_eq!(v["coverage"], "ok", "{v}");
         assert_eq!(v["coverage_report"]["host_rungs"], json!([]), "nothing to hand over when the answer is not thin");
+    }
+
+    #[tokio::test]
+    async fn the_coverage_report_carries_the_retraction_snapshot_line_only_when_the_switch_is_on() {
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        let (_, off) = value(run_research(&ctx(Depth::Quick), "does aspirin reduce fever", Depth::Quick, &f.deps()).await.unwrap());
+        assert!(off["coverage_report"].get("retractions").is_none(), "off: the report is what spec 098 gives: {off}");
+        f.retractions = Some("retractions: none loaded");
+        let (_, on) = value(run_research(&ctx(Depth::Quick), "does aspirin reduce fever", Depth::Quick, &f.deps()).await.unwrap());
+        assert_eq!(on["coverage_report"]["retractions"], "retractions: none loaded");
+        f.retractions = None;
+        let (_, again) = value(run_research(&ctx(Depth::Quick), "does aspirin reduce fever", Depth::Quick, &f.deps()).await.unwrap());
+        assert_eq!(off["coverage_report"], again["coverage_report"], "switching it off again returns the old report");
     }
 
     #[tokio::test]
