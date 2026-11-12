@@ -21,7 +21,7 @@ pub const REPO_RULES: &str = "## When this project has a repo
 These are the repository's own rules (its `AGENTS.md`), stated here so you do not first learn them from a refused merge.
 
 - Work only against a spec with `status: approved`. Commit trailer on commits of software: `Implements-Spec: specs/NNN-*.md`. A draft spec is a proposal, not permission. When no approved spec is exact, name the nearest one and say so in the pull request.
-- One slice per pull request is preferred. A pull request MAY carry several slices of the SAME spec only (each its own commit with its own `Implements-Spec` trailer and tracker update); cross-spec bundles are refused by the merge check. See `AGENTS.md` for the full conditions.
+- One slice per pull request is preferred. A pull request MAY carry several slices of the SAME spec only (each its own commit with its own tracker update and a trailer of the form `Implements-Spec: specs/NNN-*.md`); cross-spec bundles are refused by the merge check. See `AGENTS.md` for the full conditions.
 - Never commit past a failing gate. Run before committing:
   ```sh
   CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 cargo test --workspace --locked
