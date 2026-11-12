@@ -372,6 +372,17 @@ fn act(home: &Path, word: &str, p: &Parsed, approver: &mut dyn Approver) -> i32 
     };
     let ws = quiet_workspace(home, p);
     let ctx = ScopeCtx { home: home.to_path_buf(), workspace: ws.as_ref().map(|w| w.dir.clone()), today: delphi_core::time::now_rfc3339()[..10].to_string() };
+    // `specs/098` §12 item 16, channel Xenia: the same guard as the daemon's publish (`service_xenia.rs`): a private source in the library and
+    // the host-noted store never leave through a publish, whatever file is named. Deny by default; any other file passes as it did.
+    if word == "publish" {
+        if let Some(t) = p.positional.first() {
+            let record = delphi_engine::egress::xenia_file_record(home, ws.as_ref().map(|w| w.dir.as_path()), std::path::Path::new(t));
+            if let Err(e) = delphi_engine::egress::check(&record, delphi_engine::library::Channel::Xenia) {
+                eprintln!("delphi xenia {word}: {e}; `publish` takes a file of your own, not one from the library or the host-noted store");
+                return 2;
+            }
+        }
+    }
     let action = match Action::build(word, p.positional.first().map(String::as_str), &p.opts, &ctx) {
         Ok(a) => a,
         Err(e) => {

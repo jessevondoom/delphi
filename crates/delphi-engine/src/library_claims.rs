@@ -176,10 +176,12 @@ pub fn status_with(claim: &Value, p: &TierParams) -> Status {
 }
 
 /// The tags a claim's tier derives from (`specs/100` §3.2): all written by the daemon into `support`; `would_ratify` is the validator's
-/// dry-run outcome and is absent until that record exists, so a claim without it never reads `vetted`.
+/// dry-run outcome and is absent until that record exists, so a claim without it never reads `vetted`. `protected` is derived from the claim's own
+/// text by the validator's own check (`specs/040` §9.2): a protected-class claim never rises past `noted`, however many origins it has.
 pub fn tags_of(claim: &Value) -> Tags {
     let n = |k: &str| claim["support"][k].as_u64().unwrap_or(0) as usize;
-    Tags { origins: n("origins"), trusted_sources: n("trusted_sources"), would_ratify: claim["support"]["would_ratify"].as_bool() == Some(true), protected: false }
+    let protected = crate::fact_check::protected_class(claim["text"].as_str().unwrap_or("")).is_some();
+    Tags { origins: n("origins"), trusted_sources: n("trusted_sources"), would_ratify: claim["support"]["would_ratify"].as_bool() == Some(true), protected }
 }
 
 /// A claim the validator could be offered (`Library::validation_candidates`): its id and the tags the fast lane orders by.
@@ -827,9 +829,20 @@ impl Library {
                 reached_new = true;
             }
         }
+        // A hard failure of the ladder (`specs/100` §7.2 item 2) that needs no operator to see: a claim that reached `vetted` (or was batch-accepted) and
+        // is a protected-class claim, or rests on a held page that addresses its reader. Recorded the first time and kept for good, like `reached`; it
+        // changes no status and deletes nothing. Whether it trips the tier is `accept_all::latch_on_hard_failures`, which has the validator's state.
+        let mut failed_new = false;
+        if c["hard_failure"].is_null() {
+            if let Some((kind, detail)) = self.hard_failure_of(&c) {
+                c["hard_failure"] = json!({"kind": kind, "detail": detail, "at": delphi_core::time::now_rfc3339()});
+                self.log("claim_hard_failure", json!({"id": id, "kind": kind}));
+                failed_new = true;
+            }
+        }
         let same = ["origins", "trusted_sources", "counted", "contradicted", "track", "zeroed", "archived"].iter().all(|k| c["support"][*k] == tags[*k]);
         if same {
-            if reached_new {
+            if reached_new || failed_new {
                 self.save_claim(&c).ok()?;
             }
             return Some(c);
@@ -842,6 +855,40 @@ impl Library {
             self.log("claim_support", json!({"id": id, "origins": s.origins, "trusted_sources": s.trusted_sources, "from": was_status.as_str(), "to": now_status.as_str()}));
         }
         Some(c)
+    }
+
+    /// The two hard failures of `specs/100` §7.2 item 2 that the library can see on a claim, for a claim that reached `vetted` or was
+    /// batch-accepted: **a protected-class claim** (the validator's own check on its text, `specs/040` §9.2: such a claim is never vetted, so
+    /// reaching it means the ladder let one through), and **a poisoned page that passed** (a held source whose text addresses its reader, the validator's
+    /// own `addresses_reader` check, `specs/040` §6.1 "hostile"). `(kind, detail)`; the detail names a class or a source id, never the claim or the page.
+    fn hard_failure_of(&self, c: &Value) -> Option<(&'static str, String)> {
+        let reached = !c["reached"]["vetted"].is_null() || c["validation"]["batch"]["mark"] == BATCH_MARK;
+        if !reached {
+            return None;
+        }
+        if let Some(why) = crate::fact_check::protected_class(c["text"].as_str().unwrap_or("")) {
+            return Some(("protected_class_reached_vetted", why.to_string()));
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for sid in anchors_of(c).iter().filter_map(|a| a["source_id"].as_str()).filter(|s| seen.insert(s.to_string())) {
+            let held = std::fs::read(self.source_dir(sid).join("source.md")).ok().map(|b| String::from_utf8_lossy(&b[..b.len().min(SUPPORT_TEXT_MAX)]).into_owned()).unwrap_or_default();
+            if crate::fact_check::addresses_reader(&held) {
+                return Some(("poisoned_page_passed", format!("source {sid}")));
+            }
+        }
+        None
+    }
+
+    /// The claims with a recorded hard failure: `(claim id, kind, detail, when)`. Read-only.
+    pub fn hard_failures(&self) -> Vec<(String, String, String, String)> {
+        self.claims()
+            .iter()
+            .filter(|c| c["hard_failure"].is_object())
+            .filter_map(|c| {
+                let f = &c["hard_failure"];
+                Some((c["id"].as_str()?.to_string(), f["kind"].as_str()?.to_string(), f["detail"].as_str().unwrap_or("").to_string(), f["at"].as_str().unwrap_or("").to_string()))
+            })
+            .collect()
     }
 
     /// The validator's advisory dry run passed for a statement (`specs/100` §4): write `support.would_ratify` on every claim whose text is the

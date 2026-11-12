@@ -276,7 +276,12 @@ fn observe_for_audit(ws_dir: &std::path::Path, mission: &str, done: &crate::fact
 fn record_dry_run_on_claims(ws_dir: &std::path::Path, fact_id: &str) {
     let Some(home) = ws_dir.ancestors().nth(2) else { return };
     if home.join("library").is_dir() {
-        crate::library::Library::in_home(home).record_would_ratify(fact_id);
+        let lib = crate::library::Library::in_home(home);
+        lib.record_would_ratify(fact_id);
+        // The same loop is where a hard failure the library has recorded on a claim (a protected-class claim that reached vetted, a poisoned page that
+        // passed; `specs/100` §7.2 item 2) trips the vetted tier at once, through the audit's own roll-back.
+        let now = delphi_core::xenia_index::unix_of(&delphi_core::time::now_rfc3339()).unwrap_or(0);
+        crate::accept_all::latch_on_hard_failures(&lib, &state_dir(ws_dir), now);
     }
 }
 

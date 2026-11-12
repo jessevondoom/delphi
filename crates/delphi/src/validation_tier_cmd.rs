@@ -123,6 +123,32 @@ pub fn accept_all(ws: &Path, home: &Path, only: Option<Vec<String>>, input: &mut
     Ok(())
 }
 
+/// `delphi validation accept-all --reject <claim id>`: the operator marks one claim of the batch wrong. It reads `disproved` and leaves the batch;
+/// nothing is deleted. Only a claim accept-all would take now can be rejected here. Nothing happens unless the operator types `reject`; the caller
+/// needs a real terminal and refuses inside an agent seat.
+pub fn accept_all_reject(ws: &Path, home: &Path, claim: &str, input: &mut dyn BufRead, out: &mut dyn Write) -> Result<(), String> {
+    let (state, lib) = (state_dir(ws), Library::in_home(home));
+    let p = ac::plan(&lib, &state, false);
+    if let Some(why) = &p.disabled {
+        let _ = writeln!(out, "accept-all is off: {why}");
+        return Ok(());
+    }
+    let Some(r) = p.rows.iter().find(|r| r.id == claim) else {
+        return Err(format!("`{claim}` is not in the list of vetted claims that accept-all can take now (`--list` shows them)"));
+    };
+    let _ = writeln!(out, "{}\n  {} origins, {} trusted sources", r.text, r.origins, r.trusted_sources);
+    let _ = write!(out, "Type `reject` to mark this claim wrong (it reads disproved; nothing is deleted); anything else leaves it as it is: ");
+    let _ = out.flush();
+    let mut line = String::new();
+    if input.read_line(&mut line).map_err(|e| e.to_string())? == 0 || line.trim() != "reject" {
+        let _ = writeln!(out, "\nnothing was rejected");
+        return Ok(());
+    }
+    ac::reject_one(&lib, &state, claim, "operator", now())?;
+    let _ = writeln!(out, "\nrejected: {claim} now reads disproved and is out of the batch.");
+    Ok(())
+}
+
 /// Draw a sample if none is open, then show each claim, take the operator's answer, and only then reveal its sources. `input` is the terminal; a test
 /// passes lines. The claim's words are shown first and nothing else about it: not its rung's counts, not its sources.
 pub fn audit(ws: &Path, home: &Path, tier: &str, n: usize, input: &mut dyn BufRead, out: &mut dyn Write) -> Result<(), String> {
@@ -274,6 +300,27 @@ mod tests {
         let c = Library::in_home(&home).claim(&id).unwrap();
         assert_eq!((c["validation"]["by"].as_str(), c["validation"]["batch"]["mark"].as_str()), (Some("operator"), Some("batch-accepted")));
         assert_eq!(Library::in_home(&home).tier_members("batch").len(), 1);
+    }
+
+    #[test]
+    fn rejecting_a_claim_needs_the_word_typed_disproves_only_that_claim_and_refuses_one_that_is_not_in_the_batch() {
+        let d = tempfile::tempdir().unwrap();
+        let (ws, home, id) = real_vetted(d.path(), "harbour", "The harbour closes at dusk.");
+        for typed in ["yes\n", "", "REJECT\n", "reject it\n"] {
+            let mut out = Vec::new();
+            accept_all_reject(&ws, &home, &id, &mut std::io::Cursor::new(typed), &mut out).unwrap();
+            assert!(String::from_utf8(out).unwrap().contains("nothing was rejected"), "{typed:?}");
+            assert!(Library::in_home(&home).claim(&id).unwrap()["lifecycle"].is_null(), "{typed:?}: not rejected");
+        }
+        let err = accept_all_reject(&ws, &home, "no-such-claim", &mut std::io::Cursor::new("reject\n"), &mut Vec::new()).unwrap_err();
+        assert!(err.contains("not in the list"), "{err}");
+        let mut out = Vec::new();
+        accept_all_reject(&ws, &home, &id, &mut std::io::Cursor::new("reject\n"), &mut out).unwrap();
+        assert!(String::from_utf8(out).unwrap().contains("now reads disproved"));
+        let c = Library::in_home(&home).claim(&id).unwrap();
+        assert_eq!((c["lifecycle"].as_str(), c["disproved_by"]["by"].as_str()), (Some("disproved"), Some("operator")));
+        assert!(c["anchors"].as_array().is_some_and(|a| !a.is_empty()), "nothing was deleted");
+        assert!(delphi_engine::fact_audit::Journal::new(&state_dir(&ws)).all().iter().any(|e| e["kind"] == "accept_all_reject" && e["claim"] == id.as_str()));
     }
 
     #[test]

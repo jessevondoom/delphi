@@ -28,6 +28,44 @@ pub fn check_for_seat(meta: &Value, foreign_family: bool, private_to_models_allo
     Ok(())
 }
 
+/// The record a file named for a Xenia publish is checked against (`specs/098` §12 item 16, `specs/055` §10.1, channel `Xenia`).
+///
+/// A Xenia `publish` takes a file the operator names, behind an exact-bytes preview and an approval. Two places hold text that belongs
+/// to the private-source rule: **the library** (`<home>/library`) and **the host-noted store** (`<workspace>/local/staged/host-…`, where
+/// `propose_kb_entry` keeps entries whose `private` flag lives in an event, not in the file). So:
+///
+/// * a file inside `library/sources/<id>/` is checked against that source's own `meta.json`; one that cannot be read, and any other file
+///   of the library (claims, pages, the index), has no record to read and is treated as private;
+/// * a file in the host-noted store is treated as private, because nothing in the file says it is public;
+/// * any other file is not an entry, and the returned record is an empty object (public), so [`check`] lets it through.
+///
+/// Deny by default: only a file that is positively outside both places gets the empty record.
+pub fn xenia_file_record(home: &std::path::Path, workspace: Option<&std::path::Path>, file: &std::path::Path) -> Value {
+    let canon = |p: &std::path::Path| std::fs::canonicalize(p).ok();
+    let Some(f) = canon(file) else { return serde_json::json!({}) }; // a file that does not exist is refused by the publish itself
+    let private = || serde_json::json!({"private": true});
+    if let Some(lib) = canon(&home.join("library")) {
+        if let Ok(rel) = f.strip_prefix(&lib) {
+            let mut parts = rel.components().filter_map(|c| c.as_os_str().to_str());
+            if let (Some("sources"), Some(id)) = (parts.next(), parts.next()) {
+                // a file directly in `sources/` (no `<id>/` directory) is not a source's own file
+                if rel.components().count() > 2 {
+                    return std::fs::read_to_string(lib.join("sources").join(id).join("meta.json")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).unwrap_or(Value::Null);
+                }
+            }
+            return private();
+        }
+    }
+    if let Some(staged) = workspace.and_then(|w| canon(&w.join("local/staged"))) {
+        if let Ok(rel) = f.strip_prefix(&staged) {
+            if rel.components().next().and_then(|c| c.as_os_str().to_str()).is_some_and(|s| s.starts_with("host-")) {
+                return private();
+            }
+        }
+    }
+    serde_json::json!({})
+}
+
 /// Whether a path calls [`check`] today.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Wired {
@@ -46,15 +84,15 @@ pub enum Wired {
 pub const PATHS: [(Channel, &str, Wired); 13] = [
     (Channel::Bundle, "library_export.rs", Wired::Yes),
     (Channel::WebSearch, "library_acquire.rs", Wired::Yes),
-    (Channel::Xenia, "", Wired::Unaudited),
-    (Channel::Export, "", Wired::Unaudited),
+    (Channel::Xenia, "service_xenia.rs", Wired::Yes),
+    (Channel::Export, "library_bib.rs", Wired::Yes),
     (Channel::DebugBundle, "", Wired::NoEntryText { proof_file: "delphi/src/logs_cmd_tests.rs", proof_test: "a_bundle_never_carries_a_noted_entrys_text" }),
     (Channel::Log, "", Wired::NoEntryText { proof_file: "delphi-core/src/elog_tests.rs", proof_test: "context_keys_never_name_a_field_that_carries_entry_text" }),
     (Channel::Relay, "", Wired::Unaudited),
     (Channel::Connector, "", Wired::Unaudited),
     (Channel::Mail, "", Wired::Unaudited),
     (Channel::Outbound, "", Wired::Unaudited),
-    (Channel::Telemetry, "", Wired::Unaudited),
+    (Channel::Telemetry, "", Wired::NoEntryText { proof_file: "delphi-engine/src/egress.rs", proof_test: "no_telemetry_sender_exists_and_every_file_that_can_reach_the_network_is_registered" }),
     (Channel::ArchiveLookup, "library_archive.rs", Wired::Yes),
     (Channel::CitationLookup, "research_host.rs", Wired::Yes),
 ];
@@ -86,6 +124,10 @@ pub const EXEMPT: [Exempt; 1] = [Exempt {
         ("delphi-engine/src/service.rs", "a_claim_whose_url_the_sessions_search_returned_is_refetched_public_and_raises_a_source_card"),
     ],
 }];
+
+#[cfg(test)]
+#[path = "egress_xenia_tests.rs"]
+mod xenia_file_tests;
 
 #[cfg(test)]
 mod tests {
@@ -164,7 +206,7 @@ mod tests {
     #[test]
     fn the_unaudited_channels_are_listed_so_the_gap_is_visible() {
         let un: Vec<String> = PATHS.iter().filter(|(_, _, w)| *w == Wired::Unaudited).map(|(c, _, _)| format!("{c:?}")).collect();
-        assert_eq!(un, ["Xenia", "Export", "Relay", "Connector", "Mail", "Outbound", "Telemetry"], "audit a channel, then move it out of this list");
+        assert_eq!(un, ["Relay", "Connector", "Mail", "Outbound"], "audit a channel, then move it out of this list");
     }
 
     #[test]
@@ -227,5 +269,95 @@ mod tests {
         let host = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/research_host.rs")).unwrap();
         let at = host.find("self.remember(n, &found);").expect("the one remember call");
         assert!(host[..at].rsplit("fn search(&self").next().is_some_and(|b| b.contains("search(self.transport")), "`remember` must follow the provider search in `search`");
+    }
+
+    /// Both senders of a Xenia publish (the daemon's `service_xenia.rs` and the `delphi xenia` command) look at the named file before the action
+    /// is built, so neither is a way around the other.
+    #[test]
+    fn both_publish_senders_check_the_named_file_before_the_action_is_built() {
+        let engine_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        for (name, path) in [("service_xenia.rs", engine_src.join("service_xenia.rs")), ("xenia_cmd.rs", engine_src.join("../../delphi/src/xenia_cmd.rs"))] {
+            let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{name}: {e}"));
+            let prod = production(&text);
+            let guard = prod.find("xenia_file_record(").unwrap_or_else(|| panic!("{name} does not look at the named file"));
+            let build = prod.find("Action::build(").unwrap_or_else(|| panic!("{name} no longer builds an action"));
+            assert!(guard < build, "{name} must check the file before it builds the action");
+            assert!(prod.contains("egress::check(") && prod.contains("Channel::Xenia"), "{name} must call egress::check for the Xenia channel");
+        }
+    }
+
+    /// Every production file that can reach the network, and what it is. A file that appears here must be one that does; a file that can reach
+    /// the network and is not here fails the test, so a new sender has to be read and classified on purpose. (The first column is relative to
+    /// the `crates/` directory.)
+    const NETWORK_FILES: [(&str, &str); 25] = [
+        ("delphi-adapter/src/http.rs", "model API calls (prompts are guarded by check_for_seat and [library] private_to_models)"),
+        ("delphi-adapter/src/mcp_rmcp.rs", "connector sessions (channel Connector)"),
+        ("delphi-adapter/src/oauth2.rs", "sign-in and token refresh"),
+        ("delphi-adapter/src/research/fetch.rs", "reading a trusted page"),
+        ("delphi-adapter/src/research/html.rs", "a page as markdown"),
+        ("delphi-adapter/src/research/images.rs", "pictures for the research job"),
+        ("delphi-adapter/src/research/search.rs", "web search for the research job"),
+        ("delphi-adapter/src/research/transport.rs", "the research job's one GET"),
+        ("delphi-adapter/src/research/trusted.rs", "the trusted-source lists"),
+        ("delphi-engine/src/boot.rs", "settings that parse a URL"),
+        ("delphi-engine/src/fact_fetch.rs", "the fact-validation fetcher"),
+        ("delphi-engine/src/fact_sources.rs", "source classes"),
+        ("delphi-engine/src/library.rs", "the central library (URL handling)"),
+        ("delphi-engine/src/library_acquire.rs", "library acquisition (channel WebSearch)"),
+        ("delphi-engine/src/library_archive.rs", "archived-copy lookup (channel ArchiveLookup)"),
+        ("delphi-engine/src/model.rs", "the model-call abstraction"),
+        ("delphi-engine/src/research.rs", "the console research job"),
+        ("delphi-engine/src/research_chain.rs", "citation chaining: builds the lookup address and reads the answer; the one request is guarded (channel CitationLookup) and goes through the research transport; it reports nothing"),
+        ("delphi-engine/src/research_images.rs", "pictures saved with a research entry"),
+        ("delphi-engine/src/research_plan.rs", "the research planner"),
+        ("delphi-engine/src/research_run.rs", "the research runner"),
+        ("delphi-sandbox/src/egress.rs", "the egress proxy for sandboxed harnesses (policy for what a sandboxed command may reach)"),
+        ("delphi/src/relay/net.rs", "the relay mailbox: SMTP out, IMAP in (channel Mail)"),
+        ("delphi/src/relay/telegram.rs", "the relay Telegram channel (channel Relay)"),
+        ("delphi/src/selfupdate.rs", "`delphi update`: the release download"),
+    ];
+
+    /// `specs/098` §12 item 16, channel `Telemetry`: Delphi has no telemetry sender. Two facts keep that true. (1) No manifest in the workspace
+    /// depends on a telemetry or analytics service. (2) Every production file that can reach the network is in [`NETWORK_FILES`] with what it
+    /// is, and none of them is a reporter; a new network file fails here until someone reads it. **Limit:** a registered file could grow a
+    /// telemetry call; the inventory catches a new file, not a new call in a listed one.
+    #[test]
+    fn no_telemetry_sender_exists_and_every_file_that_can_reach_the_network_is_registered() {
+        // (1) the manifests
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").canonicalize().unwrap();
+        let mut manifests = vec![crates.join("../Cargo.toml")];
+        for e in std::fs::read_dir(&crates).unwrap().flatten() {
+            if e.path().join("Cargo.toml").is_file() {
+                manifests.push(e.path().join("Cargo.toml"));
+            }
+        }
+        let banned = ["sentry", "posthog", "segment", "mixpanel", "amplitude", "opentelemetry", "datadog", "newrelic", "rudderstack", "statsig", "launchdarkly", "bugsnag", "rollbar", "honeycomb", "splunk", "elastic-apm", "plausible", "matomo"];
+        for m in manifests {
+            let toml = std::fs::read_to_string(&m).unwrap_or_default().to_lowercase();
+            let deps: Vec<&str> = toml.lines().filter(|l| !l.trim_start().starts_with('#')).collect();
+            for b in banned {
+                assert!(!deps.iter().any(|l| l.trim_start().starts_with(&format!("{b} ")) || l.trim_start().starts_with(&format!("{b}=")) || l.contains(&format!("\"{b}\""))), "{} depends on `{b}`, a telemetry or analytics service", m.display());
+            }
+        }
+        // (2) the network files, found by what they name
+        let markers = ["reqwest", "lettre", "imap", "ureq", "hyper", "tungstenite"].map(|c| format!("{c}::"));
+        let mut found: std::collections::BTreeSet<String> = Default::default();
+        for (rel, src) in crate_sources() {
+            if rel == "delphi-engine/src/egress.rs" || rel.ends_with("_tests.rs") {
+                continue; // this file names the markers to look for; test files are not production senders
+            }
+            let code: String = production(&src).lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+            if markers.iter().any(|m| code.contains(m.as_str())) || code.contains("TcpStream::connect") {
+                found.insert(rel);
+            }
+        }
+        let listed: std::collections::BTreeSet<String> = NETWORK_FILES.iter().map(|(f, _)| f.to_string()).collect();
+        let new: Vec<&String> = found.difference(&listed).collect();
+        let gone: Vec<&String> = listed.difference(&found).collect();
+        assert!(new.is_empty(), "these files can reach the network and are not registered in NETWORK_FILES (read each one: what does it send, and is it a reporter?): {new:?}");
+        assert!(gone.is_empty(), "these registered files no longer name a network crate: remove them from NETWORK_FILES: {gone:?}");
+        for (f, what) in NETWORK_FILES {
+            assert!(!what.to_lowercase().contains("telemetry") && !what.to_lowercase().contains("analytics"), "{f} is described as a reporter: {what}");
+        }
     }
 }
