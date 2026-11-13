@@ -8,9 +8,10 @@
 //! * Replacement is a rename in the same directory, so a running `delphi` or daemon keeps working; the old
 //!   executable is kept as `delphi.prev` and `--rollback` puts it back.
 //! * Only releases newer than this one are installed, and never a prerelease unless asked for by version.
-//! * `--dev` follows `main` instead: every push to main publishes a build as the rolling `dev` release (see
-//!   `.github/workflows/dev.yml`). Its version is `<crate version>-dev.g<commit>`, so any other build is "different"
-//!   and is replaced, which the stable channel never does for a prerelease.
+//! * `--dev` follows `main` instead: a build of main is published as the rolling `dev` release when someone asks for
+//!   one (a `dev-*` tag or the Actions button; see `.github/workflows/dev.yml`), not on every merge, so it can be behind
+//!   main. Its version is `<crate version>-dev.g<commit>`, so any other build is "different" and is replaced, which the
+//!   stable channel never does for a prerelease.
 //!
 //! The checksum protects against a damaged or truncated download, not against a compromised release: the
 //! release workflow also publishes build-provenance attestations, which `gh attestation verify` checks.
@@ -182,7 +183,7 @@ pub fn find(net: &dyn Net, api: &str, current: &str, wanted: Option<&str>) -> Re
 pub fn find_dev(net: &dyn Net, api: &str, current: &str, target: &str) -> Result<Option<Release>> {
     let url = format!("{}/tags/dev", api.trim_end_matches('/'));
     let body = net.get(&url, 4 << 20).map_err(|e| anyhow!("could not read the dev release: {}", e))?;
-    let rel = releases_from(&body, api)?.pop().ok_or_else(|| anyhow!("no dev build is published yet"))?;
+    let rel = releases_from(&body, api)?.pop().ok_or_else(|| anyhow!("no dev build is published yet (dev builds are made on request: a `dev-*` tag or the dev workflow in the Actions tab)"))?;
     let suffix = format!("-{}.tar.gz", target);
     let tag = rel
         .assets
@@ -198,7 +199,7 @@ pub fn find_dev(net: &dyn Net, api: &str, current: &str, target: &str) -> Result
     // stale build of an older version must not replace this one.
     let core = |v: &str| parse_version(v).map(|(a, b, c, _)| (a, b, c));
     if core(&tag) < core(current) {
-        bail!("the latest dev build ({}) is older than this one ({}): no newer build of main has been published yet", tag.trim_start_matches('v'), current);
+        bail!("the latest dev build ({}) is older than this one ({}): no newer dev build has been published yet (dev builds are made on request, so they can be behind main)", tag.trim_start_matches('v'), current);
     }
     Ok(Some(Release { tag, prerelease: true, assets: rel.assets }))
 }
