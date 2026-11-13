@@ -173,9 +173,10 @@ pub fn run(args: &[String], ws: &Path, flag: impl Fn(&str) -> Option<String>) ->
     }
 }
 
-/// The install question (`delphi init`, spec 102 §7 item 3). **Not shown today:** `SHOW_AT_INSTALL` is `false` until slice S8, so this
-/// returns at once and prints nothing. When S8 flips it, a person at a terminal is asked once; an agent seat, a missing terminal or an
-/// answer already given asks nothing.
+/// The install question (spec 102 §7 items 3 and 4), shown since slice S8: `delphi init` and the first `delphi` start in a terminal ask
+/// it once, with what is stored, where, and how to stop it printed above. A person at a terminal answers; an agent seat, a missing
+/// terminal or an answer already given asks nothing, and **until it is answered nothing is recorded** (an upgraded install is asked on
+/// its first `delphi` start, the same way).
 pub fn ask_at_install(ws: &Path) {
     ask_with(ws, history_consent::SHOW_AT_INSTALL, std::io::stdin().is_terminal() && std::io::stdout().is_terminal(), crate::xenia_terminal::inside_an_agent_seat(), &mut std::io::stdin().lock(), &mut std::io::stdout());
 }
@@ -184,6 +185,7 @@ pub fn ask_at_install(ws: &Path) {
 pub(crate) fn ask_with(ws: &Path, show: bool, terminal: bool, agent_seat: bool, input: &mut dyn BufRead, out: &mut dyn Write) -> bool {
     let Some(question) = history_consent::question_to_show(ws, show) else { return false };
     let Ok(human) = Human::at_terminal(terminal, agent_seat, false) else { return false };
+    let _ = writeln!(out, "{}\n", history_consent::FACTS);
     let _ = write!(out, "{question} ");
     let _ = out.flush();
     let mut line = String::new();
@@ -210,19 +212,22 @@ mod tests {
     }
 
     #[test]
-    fn nothing_is_asked_today_and_with_the_switch_on_only_a_human_at_a_terminal_is() {
+    fn only_a_human_at_a_terminal_is_asked_and_the_question_says_what_is_stored_and_how_to_stop_it() {
         let ws = tempfile::tempdir().unwrap();
         let mut out = Vec::new();
-        // The real switch is off: nothing is printed or read, whatever the terminal says.
-        assert!(!ask_with(ws.path(), history_consent::SHOW_AT_INSTALL, true, false, &mut &b"n\n"[..], &mut out));
-        assert!(out.is_empty());
-        // Switch on, but an agent seat or no terminal: not asked, not answered.
+        // The real switch is on since S8; a test still passes it explicitly so the line below says what it relies on.
+        const { assert!(history_consent::SHOW_AT_INSTALL, "slice S8 turned the question on") };
+        // An agent seat or no terminal: not asked, not answered.
         assert!(!ask_with(ws.path(), true, true, true, &mut &b"n\n"[..], &mut out));
         assert!(!ask_with(ws.path(), true, false, false, &mut &b"n\n"[..], &mut out));
         assert!(out.is_empty() && history_consent::answered(ws.path()).is_none());
         // Switch on and a human: asked once, and the answer is recorded.
         assert!(ask_with(ws.path(), true, true, false, &mut &b"n\n"[..], &mut out));
-        assert!(String::from_utf8(out.clone()).unwrap().starts_with("Keep a history of your prompts"));
+        let said = String::from_utf8(out.clone()).unwrap();
+        assert!(said.contains("Keep a history of your prompts and what came of them on this machine?"), "{said}");
+        for must in ["Kept:", "Where:", "on this machine only", "delphi history off", "delphi history purge", "masked, best effort", "kept as written", "mission logs keep prompts after a purge"] {
+            assert!(said.contains(must), "the question must say `{must}`: {said}");
+        }
         assert_eq!(history_consent::answered(ws.path()), Some(Answer::No));
         assert!(!ask_with(ws.path(), true, true, false, &mut &b"y\n"[..], &mut out), "asked once");
     }

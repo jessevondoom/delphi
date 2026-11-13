@@ -28,7 +28,10 @@ const PATH_CAP: usize = 200;
 const REPORT_CAP: usize = 16 * 1024;
 
 pub const REPLY_LABEL: &str = "self-reported, not checked";
-pub const OFF_MESSAGE: &str = "history is off: nothing is being recorded. `[history] enabled = true` in config.toml turns it on (it is off by default until the release that ships it); `delphi doctor` shows the setting";
+/// The history is on but nobody has answered the install question (`specs/102` §7 item 4): nothing is recorded until a person does.
+pub const WAITING_MESSAGE: &str = "history is on, but nothing is recorded until you answer the install question: run `delphi` in a terminal";
+
+pub const OFF_MESSAGE: &str = "history is off: nothing is being recorded. it is off because `[history] enabled = false` is in config.toml or `delphi history off` was run; `delphi doctor` shows the setting";
 
 /// Strip every control character (the C0 and C1 ranges and DEL, so an escape sequence loses its lead byte), turn line breaks and tabs
 /// into spaces, and cut to `cap` characters. The result has nothing in it that a terminal acts on.
@@ -117,7 +120,16 @@ fn row(c: &Checked) -> Value {
 /// folded from its log). Reads only. Never fails: a problem is a `state` and a `message`, so the console always has something to say.
 pub fn view(ws_dir: &Path, settings: &Settings, mission_dir: &Path) -> Value {
     let project = rec::Tap::project_of(mission_dir);
-    let capture = if rec::project_off(ws_dir, &project) { "off for this project" } else if settings.enabled { "on" } else { "off" };
+    let waiting = settings.enabled && crate::history_consent::blocks_writes(ws_dir, crate::history_consent::SHOW_AT_INSTALL);
+    let capture = if rec::project_off(ws_dir, &project) {
+        "off for this project"
+    } else if waiting {
+        "waiting for your answer"
+    } else if settings.enabled {
+        "on"
+    } else {
+        "off"
+    };
     let report = match history_report::timeline_of(mission_dir) {
         Ok(t) => json!({"text": plain_report(&history_report::report(&t)), "error": Value::Null}),
         Err(_) => json!({"text": Value::Null, "error": "the report could not be built from this mission's log"}),
@@ -145,6 +157,9 @@ pub fn view(ws_dir: &Path, settings: &Settings, mission_dir: &Path) -> Value {
         Err(e) => return base("unreadable", Some(plain(&e, FIELD_CAP)), Vec::new(), 0, 0, (0, 0, 0), None),
     };
     if read.records.is_empty() {
+        if waiting {
+            return base("off", Some(WAITING_MESSAGE.into()), Vec::new(), 0, 0, (0, 0, 0), None);
+        }
         return if settings.enabled && capture == "on" {
             base("empty", Some("no records yet: one is written after a merge, a research run, a panel, a Council, or a work artifact".into()), Vec::new(), 0, 0, (0, 0, 0), None)
         } else {
@@ -216,7 +231,7 @@ mod tests {
     fn a_dormant_install_with_no_store_says_history_is_off_and_where_the_setting_is_and_writes_nothing() {
         let t = tempfile::tempdir().unwrap();
         let md = mission_dir(t.path());
-        let v = view(t.path(), &Settings::default(), &md);
+        let v = view(t.path(), &Settings { enabled: false, ..Settings::default() }, &md);
         assert_eq!(v["state"], "off");
         assert_eq!(v["capture"], "off");
         assert_eq!(v["read_only"], true);
@@ -228,7 +243,7 @@ mod tests {
 
     #[test]
     fn an_enabled_install_with_no_records_is_empty_not_off() {
-        let t = tempfile::tempdir().unwrap();
+        let t = crate::history_consent::answered_ws();
         let v = view(t.path(), &on(), &mission_dir(t.path()));
         assert_eq!(v["state"], "empty");
         assert_eq!(v["capture"], "on");
@@ -237,7 +252,7 @@ mod tests {
 
     #[test]
     fn records_are_listed_newest_first_verified_and_a_paste_is_a_hash_and_a_length() {
-        let t = tempfile::tempdir().unwrap();
+        let t = crate::history_consent::answered_ws();
         let md = mission_dir(t.path());
         written(append(t.path(), &on(), draft("first goal", "m1")));
         let big = "p".repeat(900);
@@ -265,7 +280,7 @@ mod tests {
 
     #[test]
     fn a_tampered_record_and_everything_after_it_read_chain_broken_never_verified() {
-        let t = tempfile::tempdir().unwrap();
+        let t = crate::history_consent::answered_ws();
         let md = mission_dir(t.path());
         for p in ["one", "two", "three"] {
             written(append(t.path(), &on(), draft(p, "m1")));
@@ -286,7 +301,7 @@ mod tests {
 
     #[test]
     fn a_missing_key_reads_unverifiable_not_verified() {
-        let t = tempfile::tempdir().unwrap();
+        let t = crate::history_consent::answered_ws();
         let md = mission_dir(t.path());
         written(append(t.path(), &on(), draft("one", "m1")));
         fs::remove_file(t.path().join("local/history.key")).unwrap();
@@ -298,7 +313,7 @@ mod tests {
 
     #[test]
     fn control_characters_in_a_stored_record_do_not_reach_the_view() {
-        let t = tempfile::tempdir().unwrap();
+        let t = crate::history_consent::answered_ws();
         let md = mission_dir(t.path());
         written(append(t.path(), &on(), draft("hello", "m1")));
         // Hand-edit the store: an escape sequence in the prompt, the reply and the mission, and an oversized reply field.
@@ -316,7 +331,7 @@ mod tests {
 
     #[test]
     fn a_reply_is_labelled_self_reported_and_cut_again_at_read_time() {
-        let t = tempfile::tempdir().unwrap();
+        let t = crate::history_consent::answered_ws();
         let md = mission_dir(t.path());
         let mut d = draft("goal", "m1");
         d.reply = Some(rec::Reply { asked: "a".into(), did: "d".into(), open: "o".into() });
@@ -334,10 +349,10 @@ mod tests {
 
     #[test]
     fn records_written_before_history_was_turned_off_are_still_shown_with_a_note() {
-        let t = tempfile::tempdir().unwrap();
+        let t = crate::history_consent::answered_ws();
         let md = mission_dir(t.path());
         written(append(t.path(), &on(), draft("earlier", "m1")));
-        let v = view(t.path(), &Settings::default(), &md);
+        let v = view(t.path(), &Settings { enabled: false, ..Settings::default() }, &md);
         assert_eq!(v["state"], "records");
         assert_eq!(v["capture"], "off");
         assert!(v["message"].as_str().unwrap().contains("written earlier"));
@@ -346,7 +361,7 @@ mod tests {
 
     #[test]
     fn the_list_is_capped_and_says_how_many_are_hidden() {
-        let t = tempfile::tempdir().unwrap();
+        let t = crate::history_consent::answered_ws();
         let md = mission_dir(t.path());
         for i in 0..(LIST_MAX + 3) {
             written(append(t.path(), &on(), draft(&format!("g{i}"), "m1")));

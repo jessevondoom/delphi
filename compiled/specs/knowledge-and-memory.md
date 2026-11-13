@@ -176,7 +176,7 @@ The operator asked (2026-11-11) whether traditional library practice offers anyt
 
 ## 102-the-exchange-record-the-operators-words-outcome-summaries-and-a-project-history
 
-**102: The exchange record: the operator's words, outcome summaries and a project history** · approved (per source at `e301accd8418`) · tier 0 · [source](../../specs/102-the-exchange-record-the-operators-words-outcome-summaries-and-a-project-history.md)
+**102: The exchange record: the operator's words, outcome summaries and a project history** · approved (per source at `aaf5e8b0262d`) · tier 0 · [source](../../specs/102-the-exchange-record-the-operators-words-outcome-summaries-and-a-project-history.md)
 
 **source excerpt, untrusted** · `specs/102-the-exchange-record-the-operators-words-outcome-summaries-and-a-project-history.md` line 22
 

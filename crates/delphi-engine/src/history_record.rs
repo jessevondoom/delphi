@@ -1,6 +1,7 @@
 //! The exchange record (`specs/102` §3), slice S3: one operator prompt, redacted, with a capped summary, a typed outcome and the
-//! facts the daemon saw. **Dormant**: `[history] enabled` is `false` until slice S8, and while it is, nothing here writes a file, makes
-//! the key, or holds a prompt.
+//! facts the daemon saw. **On by default since slice S8, but not until the operator has answered**: `[history] enabled` defaults to
+//! `true` (opt-out), and until a person has answered the install question (`history_consent`, `local/history.consent`) nothing here writes
+//! a file, makes the key, or holds a prompt ([`Tap::recording`]). Turned off (the setting, `delphi history off`), it does the same.
 //!
 //! * **The daemon writes what it saw.** A record is written only at a **trigger the daemon itself observed** (§3.2), by the [`Tap`]
 //!   that the mission's event path calls. A host cannot create, edit or delete one, and cannot set `kind`, `observed`, `private`,
@@ -48,8 +49,8 @@ pub enum ToModels {
     Allow,
 }
 
-/// `[history]`. The default is **off** (§7 item 10, OD-8): only slice S8 changes it, and a test fails if it is on while the egress
-/// check is not registered for the store.
+/// `[history]`. The default is **on** since slice S8 (§7 item 10, OD-8: the operator's go, 2026-11-12, after S7 passed and the egress
+/// check covered every channel), **but nothing is recorded until a person has answered the install question** (`history_consent`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
     pub enabled: bool,
@@ -67,7 +68,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { enabled: false, paste_chars: crate::history_redact::DEFAULT_PASTE_CHARS, to_models: ToModels::Deny, budget_mb: 50, retention_days: 90, timeline: true }
+        Settings { enabled: true, paste_chars: crate::history_redact::DEFAULT_PASTE_CHARS, to_models: ToModels::Deny, budget_mb: 50, retention_days: 90, timeline: true }
     }
 }
 
@@ -90,7 +91,11 @@ impl Settings {
         if let Some(v) = t.get("enabled") {
             match v.as_bool() {
                 Some(b) => s.enabled = b,
-                None => problems.push("[history] enabled: expected true or false".into()),
+                // A value that is not true or false cannot be trusted either way: the history stays off until it is fixed.
+                None => {
+                    s.enabled = false;
+                    problems.push("[history] enabled: expected true or false; the history stays off until it is fixed".into());
+                }
             }
         }
         if let Some(v) = t.get("paste_chars") {
@@ -779,6 +784,8 @@ pub enum HostReport {
     Off,
     /// The call carried none of the exchange fields.
     Absent,
+    /// The history is on but no person has answered the install question yet: the fields were ignored and nothing was held or made.
+    AwaitingAnswer,
     /// The fields were refused, with the reason.
     Refused(String),
     /// The daemon has seen no trigger to complete (a host cannot create a record, §10 item 2): nothing was written.
@@ -795,6 +802,7 @@ impl HostReport {
         match self {
             HostReport::Off => "off",
             HostReport::Absent => "absent",
+            HostReport::AwaitingAnswer => "waiting for the operator's answer",
             HostReport::Refused(_) => "refused",
             HostReport::NoTrigger => "no trigger seen",
             HostReport::NoPrompt => "no prompt given",
@@ -836,6 +844,13 @@ impl Tap {
         }
     }
 
+    /// May this tap hold or write anything now? `[history] enabled` is on **and** a person has answered the install question (`specs/102`
+    /// §7 item 4, §11 item 6): an upgraded install and a fresh one are asked the same way, and until then nothing is held in memory,
+    /// written, or keyed. (`delphi history off` is checked at the write, so a record is never added after it returned.)
+    pub fn recording(&self) -> bool {
+        self.settings.enabled && !crate::history_consent::blocks_writes(&self.ws_dir, crate::history_consent::SHOW_AT_INSTALL)
+    }
+
     /// Search another root for transcripts (a test's temporary folder).
     pub fn with_claude_root(mut self, root: PathBuf) -> Tap {
         self.claude_root = Some(root);
@@ -849,7 +864,9 @@ impl Tap {
 
     /// An operator-started task's prompt, at the daemon's own task start. Nothing is held while history is off.
     pub fn note_operator_prompt(&self, task_id: &str, text: &str) {
-        if !self.settings.enabled {
+        // Not held in memory either until the question is answered (a prompt typed before consent must not be written after it), and not
+        // while the history is switched off.
+        if !self.recording() || global_off(&self.ws_dir) {
             return;
         }
         *self.pending.lock().unwrap() = Some(Pending { task_id: task_id.to_string(), text: text.to_string(), concluded: false, noted_ms: now_ms() });
@@ -916,9 +933,12 @@ impl Tap {
         if fields.is_empty() {
             return HostReport::Absent;
         }
-        // Dormant: the fields are ignored (not validated, held or written) and the host is told so.
+        // Off, or not yet answered: the fields are ignored (not validated, held or written) and the host is told so.
         if !self.settings.enabled {
             return HostReport::Off;
+        }
+        if !self.recording() {
+            return HostReport::AwaitingAnswer;
         }
         let x = match parse_host_exchange(&Value::Object(fields)) {
             Ok(x) => x,
@@ -979,7 +999,7 @@ impl Tap {
 
     /// The mission's events just written. Does nothing unless history is on and an event is a trigger.
     pub fn on_events(&self, mission: &str, events: &[EventEnvelope]) -> Vec<Appended> {
-        if !self.settings.enabled {
+        if !self.recording() {
             return Vec::new();
         }
         events.iter().filter_map(|e| trigger_of(e).and_then(|t| self.conclude(mission, t, outcome_of(e), observed_of(e)))).collect()
@@ -988,7 +1008,7 @@ impl Tap {
     /// Artifacts a tool call wrote, each already in the artifact prompt log: one record that references every entry, with no
     /// prompt text (§3.5). It concludes that task's prompt, so no second copy of its text is kept by another trigger.
     pub fn on_artifacts(&self, mission: &str, task_id: &str, refs: Vec<ArtifactRef>) -> Option<Appended> {
-        if !self.settings.enabled || refs.is_empty() {
+        if !self.recording() || refs.is_empty() {
             return None;
         }
         {
@@ -1014,7 +1034,7 @@ impl Tap {
 
     /// A `merged` row of the merge ledger (spec 094), read by the daemon's own timer: see [`trigger_of`].
     pub fn on_merge_row(&self, mission: &str, row: &Value) -> Option<Appended> {
-        if !self.settings.enabled {
+        if !self.recording() {
             return None;
         }
         let t = trigger_of_ledger_row(row)?;

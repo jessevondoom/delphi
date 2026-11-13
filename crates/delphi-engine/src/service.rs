@@ -2747,6 +2747,22 @@ impl EngineService {
         tokio::task::spawn_blocking(move || crate::history_view::view(&ws, &settings, &dir)).await.map_err(|e| err(-32000, e.to_string()))
     }
 
+    /// `history.notice` `{}` (`specs/102` §7 item 7, S8): the first-run notice of the project history, **once**. After a person has answered
+    /// yes to the install question and while the history is on, the first call returns `{"text": ...}` and records that it was said
+    /// (`local/history.noticed`); every later call, and any call while the history is off or unanswered, returns `{"text": null}`. Console
+    /// scope only; no model, nothing from a record.
+    async fn history_notice(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        let _ = p;
+        need_console(&ctx)?;
+        let (ws, on) = (self.engine.ws.dir.clone(), self.engine.settings.history.enabled);
+        tokio::task::spawn_blocking(move || {
+            let on = on && !crate::history_record::global_off(&ws);
+            json!({"text": crate::history_consent::take_notice(&ws, on)})
+        })
+        .await
+        .map_err(|e| err(-32000, e.to_string()))
+    }
+
     /// `pending.list`: research held back from the knowledge base, in the default scope or in the named project (`specs/058` §14).
     async fn pending_list(&self, p: Value, ctx: CallContext) -> RpcOutcome {
         need_console(&ctx)?;
@@ -3667,6 +3683,7 @@ impl Extension for ServiceExt {
                 "research.start" => svc.research_start(params, ctx).await,
                 "projects.list" => svc.projects_list(ctx).await,
                 "history.view" => svc.history_view(params, ctx).await,
+                "history.notice" => svc.history_notice(params, ctx).await,
                 "pending.pass" => svc.pending_pass(params, ctx).await,
                 "pending.list" => svc.pending_list(params, ctx).await,
                 "pending.ratify" => svc.pending_decide(params, ctx, true).await,
@@ -4739,6 +4756,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn the_daemon_reads_the_merge_ledger_and_a_merge_it_watched_concludes_the_operators_prompt() {
         let f = setup(vec![], 5.0, |s| s.history.enabled = true);
+        crate::history_consent::answer_yes_in(&f.engine.ws.dir);
         let svc = EngineService::new(f.engine.clone(), "m1");
         svc.adopt(f.m.clone());
         f.m.set_history(crate::history_record::Tap::new(f.engine.ws.dir.clone(), f.engine.settings.history.clone(), "home"));
@@ -4770,7 +4788,7 @@ mod tests {
     // The default is dormant: with history off the ledger is not even looked at.
     #[tokio::test(flavor = "multi_thread")]
     async fn with_history_off_the_merge_ledger_is_never_looked_at() {
-        let f = setup(vec![], 5.0, |_| {});
+        let f = setup(vec![], 5.0, |s| s.history.enabled = false);
         let svc = EngineService::new(f.engine.clone(), "m1");
         svc.adopt(f.m.clone());
         append_ledger(&crate::history_merge::ledger_path(&f.engine.ws.home), &merge_row(7));
@@ -4784,6 +4802,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn a_host_summary_with_the_exchange_fields_completes_the_trigger_the_daemon_saw_and_without_them_the_answer_is_unchanged() {
         let f = setup(vec![], 5.0, |s| s.history.enabled = true);
+        crate::history_consent::answer_yes_in(&f.engine.ws.dir);
         let svc = EngineService::new(f.engine.clone(), "m1");
         svc.adopt(f.m.clone());
         let host = CallContext { scope: Scope::Host, client_id: 0 };
@@ -4820,7 +4839,7 @@ mod tests {
     // specs/102 §7 item 10: with history off the fields are ignored and the answer says so.
     #[tokio::test(flavor = "multi_thread")]
     async fn with_history_off_a_host_summary_ignores_the_exchange_fields() {
-        let f = setup(vec![], 5.0, |_| {});
+        let f = setup(vec![], 5.0, |s| s.history.enabled = false);
         let svc = EngineService::new(f.engine.clone(), "m1");
         svc.adopt(f.m.clone());
         let host = CallContext { scope: Scope::Host, client_id: 0 };
@@ -5507,7 +5526,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let every_mutating_method_the_daemon_has = ["handoff.resume", "mcp.get", "mcp.set", "task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "kb.open", "research.start", "projects.list", "history.view", "pending.pass", "pending.list", "pending.ratify", "pending.discard", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "retro.list", "retro.stale", "retro.recurring", "learn.health", "retro.accept", "retro.reject", "retro.promotions", "retro.promote", "retro.withdraw", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
+            let every_mutating_method_the_daemon_has = ["handoff.resume", "mcp.get", "mcp.set", "task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "kb.open", "research.start", "projects.list", "history.view", "history.notice", "pending.pass", "pending.list", "pending.ratify", "pending.discard", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "retro.list", "retro.stale", "retro.recurring", "learn.health", "retro.accept", "retro.reject", "retro.promotions", "retro.promote", "retro.withdraw", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
             for m in every_mutating_method_the_daemon_has {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }
@@ -5564,7 +5583,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let everything_a_relay_must_not_reach = ["handoff.resume", "mcp.get", "mcp.set", "task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "kb.open", "research.start", "projects.list", "history.view", "pending.pass", "pending.list", "pending.ratify", "pending.discard", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","kb.search", "kb.get", "kb.allows", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "models.get", "anything.else"];
+            let everything_a_relay_must_not_reach = ["handoff.resume", "mcp.get", "mcp.set", "task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "kb.open", "research.start", "projects.list", "history.view", "history.notice", "pending.pass", "pending.list", "pending.ratify", "pending.discard", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","kb.search", "kb.get", "kb.allows", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "models.get", "anything.else"];
             for m in everything_a_relay_must_not_reach {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }
@@ -6845,7 +6864,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn history_view_is_for_the_console_only_reads_only_and_says_history_is_off_when_it_is() {
-        let f = setup(vec![Step::text("unused")], 5.0, |_| {});
+        let f = setup(vec![Step::text("unused")], 5.0, |s| s.history.enabled = false);
         let ws = f.engine.ws.dir.clone();
         let s = serve(&f).await;
         let (sock, tok, n_sock, n_tok, r_sock, r_tok) = (s.sock.clone(), s.console.clone(), s.narrator_sock.clone(), s.narrator.clone(), s.relay_sock.clone(), s.relay.clone());
@@ -6869,6 +6888,58 @@ mod tests {
         })
         .await;
         assert!(f.model.requests().is_empty(), "no model was called");
+    }
+
+    /// `specs/102` §7 item 7 (S8): the first-run notice is said once, after a yes, to the console only; never before an answer, never after a
+    /// no, and never to the narrator or a relay (the call writes a marker, so it is on both "must not reach" lists).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn history_notice_is_said_once_after_a_yes_to_the_console_only() {
+        let f = setup(vec![Step::text("unused")], 5.0, |s| s.history.enabled = true);
+        let ws = f.engine.ws.dir.clone();
+        let s = serve(&f).await;
+        let (sock, tok, n_sock, n_tok, r_sock, r_tok) = (s.sock.clone(), s.console.clone(), s.narrator_sock.clone(), s.narrator.clone(), s.relay_sock.clone(), s.relay.clone());
+        blocking(move || {
+            let mut c = Client::connect(&sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            c.hello(&tok).unwrap();
+            // Unanswered: nothing to say, and nothing written.
+            assert_eq!(c.call("history.notice", json!({})).unwrap()["text"], json!(null));
+            assert!(!ws.join("local/history.noticed").exists() && !ws.join("local/history.consent").exists(), "asking made no marker and recorded no answer");
+            // The narrator and the relay cannot ask, answered or not.
+            for (sock, tok) in [(&n_sock, &n_tok), (&r_sock, &r_tok)] {
+                let mut c = Client::connect(sock).unwrap();
+                c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+                c.hello(tok).unwrap();
+                assert_eq!(rpc_code(c.call("history.notice", json!({}))), Some(code::FORBIDDEN));
+            }
+            // A person answers yes (here: the answer file, which only a human at a terminal can write through the CLI).
+            crate::history_consent::answer_yes_in(&ws);
+            let said = c.call("history.notice", json!({})).unwrap();
+            let text = said["text"].as_str().expect("the notice is said after a yes");
+            assert!(text.contains("delphi history off") && text.contains("best effort"), "{text}");
+            assert!(ws.join("local/history.noticed").exists(), "the marker records that it was said");
+            assert_eq!(c.call("history.notice", json!({})).unwrap()["text"], json!(null), "said once");
+        })
+        .await;
+        assert!(f.model.requests().is_empty(), "no model was called");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn history_notice_says_nothing_after_a_no_or_while_history_is_off() {
+        let f = setup(vec![Step::text("unused")], 5.0, |s| s.history.enabled = true);
+        let ws = f.engine.ws.dir.clone();
+        crate::history_consent::answer_yes_in(&ws);
+        std::fs::write(crate::history_record::global_off_path(&ws), "off\n").unwrap();
+        let s = serve(&f).await;
+        let (sock, tok) = (s.sock.clone(), s.console.clone());
+        blocking(move || {
+            let mut c = Client::connect(&sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            c.hello(&tok).unwrap();
+            assert_eq!(c.call("history.notice", json!({})).unwrap()["text"], json!(null), "switched off: no notice that it is on");
+            assert!(!ws.join("local/history.noticed").exists());
+        })
+        .await;
     }
 
     #[tokio::test(flavor = "multi_thread")]

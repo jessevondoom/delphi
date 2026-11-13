@@ -181,9 +181,10 @@ sandbox = "off"
 
 # Project history (specs/102 section 7). Your own prompts, redacted, with a capped summary of what came of each, kept on this machine
 # only and never in a bundle, export or model prompt unless you say so. Pasted blocks are kept as a keyed hash and a length, not text.
-# Off until the release that carries the whole feature; nothing is recorded while `enabled` is false.
+# On by default (opt out), but nothing is recorded until a person has answered the install question once, in a terminal (`delphi init`, or
+# the first `delphi` after an upgrade); an answer of no, `delphi history off` or `enabled = false` records nothing. Redaction is best effort.
 # [history]
-# enabled = false
+# enabled = true       # the default; false records nothing, whatever the question says
 # paste_chars = 400    # a span longer than this is treated as pasted unless Delphi saw it typed (50 to 5000; a hypothesis)
 # to_models = "deny"   # "allow" lets a seat of your host's own family read a record; a foreign or unknown family never does
 # budget_mb = 50       # per project, 1 to 1024; at the cap Delphi stops adding and says so

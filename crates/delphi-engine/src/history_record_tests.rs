@@ -4,6 +4,19 @@ use serde_json::json;
 const MISSION: &str = "m1";
 const SID: &str = "6f2c1a90-aaaa-4bbb-8ccc-1234567890ab";
 
+/// The settings of an install that turned the history off in config.toml. The default is on since S8 (nothing is recorded until the
+/// install question is answered), so "off" has to be said.
+fn off() -> Settings {
+    Settings { enabled: false, ..Settings::default() }
+}
+
+/// In a workspace where the question was answered, the answer is the only thing under `local/`: no store, no key, nothing else.
+fn only_the_answer_is_there(ws: &Path) -> bool {
+    let mut v: Vec<String> = std::fs::read_dir(ws.join("local")).map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
+    v.sort();
+    v == ["history.consent"]
+}
+
 fn on() -> Settings {
     Settings { enabled: true, ..Settings::default() }
 }
@@ -36,21 +49,29 @@ fn store_text(ws: &Path) -> String {
 // The default is dormant (§7 item 10, acceptance 9)
 
 #[test]
-fn the_default_is_off_and_the_egress_check_is_registered_for_the_store() {
+fn the_default_is_on_but_records_nothing_until_answered_and_the_egress_check_is_registered_for_the_store() {
     let s = Settings::default();
-    assert!(!s.enabled, "before S8 a fresh install records nothing");
+    assert!(s.enabled, "since S8 the default is on (opt-out); the install question is what holds the first record back");
     assert_eq!(s.to_models, ToModels::Deny);
     assert_eq!((s.paste_chars, s.budget_mb), (400, 50));
-    // Acceptance 9: a test fails if the default were on while the history store is not a registered, wired egress path.
+    // Acceptance 9: a test fails if the default is on while the history store is not a registered, wired egress path.
     let registered = crate::egress::PATHS.iter().any(|(c, f, w)| *c == Channel::History && *f == "history_record.rs" && *w == crate::egress::Wired::Yes);
     assert!(registered || !s.enabled, "the default is on but the history store is not registered with the egress check");
     assert!(registered);
+    // And on, with nobody having answered: the tap holds and writes nothing.
+    let ws = tempfile::tempdir().unwrap();
+    let t = tap(ws.path(), s);
+    assert!(!t.recording());
+    t.note_operator_prompt("t_1", "never held");
+    assert!(t.on_events(MISSION, &[research()]).is_empty());
+    assert!(!ws.path().join("local").exists(), "no file, no key and nothing held");
 }
 
 #[test]
 fn a_dormant_tap_writes_nothing_and_makes_no_key() {
+    // `enabled = false` in config.toml: nothing is held, written or keyed, whatever the install question says.
     let ws = tempfile::tempdir().unwrap();
-    let t = tap(ws.path(), Settings::default());
+    let t = tap(ws.path(), off());
     t.note_operator_prompt("t_1", "please do the thing");
     assert!(t.on_events(MISSION, &[research()]).is_empty());
     assert!(t.on_artifacts(MISSION, "t_1", vec![aref("a.md")]).is_none());
@@ -58,7 +79,7 @@ fn a_dormant_tap_writes_nothing_and_makes_no_key() {
     assert!(!ws.path().join("local").exists(), "nothing is made under the home while history is off");
     // And the lower function answers dormant before it touches the disk.
     let d = Draft { trigger: Trigger::ResearchRun, mission: MISSION.into(), project: "home".into(), at: "2026-11-12T00:00:00Z".into(), prompt: PromptIn::Artifacts(vec![]), reply: None, outcome: unknown(), observed: Observed::default() };
-    assert_eq!(append(ws.path(), &Settings::default(), d), Appended::Dormant);
+    assert_eq!(append(ws.path(), &off(), d), Appended::Dormant);
     assert!(!ws.path().join("local").exists());
 }
 
@@ -104,7 +125,7 @@ fn trigger_functions_read_the_event_kinds_that_exist() {
 fn each_trigger_writes_exactly_one_record_with_the_fixed_fields() {
     let cases: Vec<(&str, Trigger)> = vec![("research", Trigger::ResearchRun), ("panel", Trigger::Panel), ("council", Trigger::Council), ("merge", Trigger::Merge), ("artifact", Trigger::Artifact)];
     for (name, want) in cases {
-        let ws = tempfile::tempdir().unwrap();
+        let ws = crate::history_consent::answered_ws();
         let t = tap(ws.path(), on());
         t.note_operator_prompt("t_1", "tell me about queues");
         let rec = match name {
@@ -136,7 +157,7 @@ fn each_trigger_writes_exactly_one_record_with_the_fixed_fields() {
 
 #[test]
 fn the_observed_facts_are_counts_and_ids_and_the_outcome_is_read_from_the_event() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     let t = tap(ws.path(), on());
     t.note_operator_prompt("t_1", "go");
     let r = only(t.on_events(MISSION, &[research()]));
@@ -155,7 +176,7 @@ fn the_observed_facts_are_counts_and_ids_and_the_outcome_is_read_from_the_event(
 
 #[test]
 fn one_record_per_prompt_and_a_trigger_without_a_prompt_writes_nothing() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     let t = tap(ws.path(), on());
     assert!(t.on_events(MISSION, &[research()]).is_empty(), "no operator prompt was seen");
     t.note_operator_prompt("t_1", "first");
@@ -169,7 +190,7 @@ fn one_record_per_prompt_and_a_trigger_without_a_prompt_writes_nothing() {
 
 #[test]
 fn an_artifact_record_concludes_the_prompt_so_its_text_is_kept_once_in_the_070_log() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     let t = tap(ws.path(), on());
     t.note_operator_prompt("t_1", "SECRET-PROMPT-WORDS make a deck");
     assert!(matches!(t.on_artifacts(MISSION, "t_1", vec![aref("deck.pptx")]), Some(Appended::Written(_))));
@@ -180,7 +201,7 @@ fn an_artifact_record_concludes_the_prompt_so_its_text_is_kept_once_in_the_070_l
 
 #[test]
 fn a_prompt_over_the_cap_is_stored_cut_with_the_hash_of_the_full_text() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     let t = tap(ws.path(), on());
     t.note_operator_prompt("t_1", &"a short line.\n\n".repeat(600));
     let r = only(t.on_events(MISSION, &[research()]));
@@ -194,7 +215,7 @@ fn a_prompt_over_the_cap_is_stored_cut_with_the_hash_of_the_full_text() {
 
 #[test]
 fn secrets_and_pasted_text_never_reach_the_file() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     let t = tap(ws.path(), on());
     let pasted = "x9Qz".repeat(150); // 600 characters, one block
     let prompt = format!("Use sk-ant-FAKEFAKEFAKEFAKEFAKE00 for it, password is hunter2hunter2.\n\n{pasted}\n\nthen summarise");
@@ -211,7 +232,7 @@ fn secrets_and_pasted_text_never_reach_the_file() {
 
 #[test]
 fn a_record_has_no_field_for_tool_results_thinking_dialogue_file_contents_or_pasted_text() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     let t = tap(ws.path(), on());
     t.note_operator_prompt("t_1", "ok");
     only(t.on_events(MISSION, &[research()]));
@@ -283,9 +304,9 @@ fn a_host_exchange_has_one_outcome_capped_redacted_fields_and_a_checked_session_
 
 #[test]
 fn nothing_outside_the_tap_writes_a_record_and_parsing_a_host_exchange_makes_none() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     parse_host_exchange(&json!({"asked": "x", "prompt": "y", "outcome": "done"})).unwrap();
-    assert!(!ws.path().join("local").exists());
+    assert!(only_the_answer_is_there(ws.path()));
     // `append` is crate-private: the only callers are the tap's trigger paths.
     let src = include_str!("history_record.rs");
     assert!(src.contains("pub(crate) fn append("));
@@ -311,7 +332,7 @@ fn rewrite(ws: &Path, f: impl Fn(Vec<String>) -> Vec<String>) {
 
 #[test]
 fn an_untouched_chain_verifies_and_links_each_record_to_the_one_before() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     three(ws.path());
     let r = read(ws.path(), "home").unwrap();
     assert_eq!(r.records.len(), 3);
@@ -324,7 +345,7 @@ fn an_untouched_chain_verifies_and_links_each_record_to_the_one_before() {
 
 #[test]
 fn an_edited_record_breaks_the_chain_there_and_after_and_is_never_shown_as_valid() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     three(ws.path());
     rewrite(ws.path(), |l| l.into_iter().map(|x| x.replace("second prompt", "second EDITED")).collect());
     let r = read(ws.path(), "home").unwrap();
@@ -336,7 +357,7 @@ fn an_edited_record_breaks_the_chain_there_and_after_and_is_never_shown_as_valid
 
 #[test]
 fn a_tampered_last_record_is_caught_by_its_own_hash() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     three(ws.path());
     rewrite(ws.path(), |l| l.into_iter().map(|x| x.replace("third prompt", "third EDITED")).collect());
     let r = read(ws.path(), "home").unwrap();
@@ -345,21 +366,21 @@ fn a_tampered_last_record_is_caught_by_its_own_hash() {
 
 #[test]
 fn a_removed_or_reordered_record_and_an_unreadable_line_break_the_chain() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     three(ws.path());
     rewrite(ws.path(), |mut l| {
         l.remove(1);
         l
     });
     assert_eq!(read(ws.path(), "home").unwrap().broken_at, Some(1));
-    let ws2 = tempfile::tempdir().unwrap();
+    let ws2 = crate::history_consent::answered_ws();
     three(ws2.path());
     rewrite(ws2.path(), |mut l| {
         l.swap(0, 1);
         l
     });
     assert_eq!(read(ws2.path(), "home").unwrap().broken_at, Some(0));
-    let ws3 = tempfile::tempdir().unwrap();
+    let ws3 = crate::history_consent::answered_ws();
     three(ws3.path());
     rewrite(ws3.path(), |mut l| {
         l[1] = "{not json".into();
@@ -372,7 +393,7 @@ fn a_removed_or_reordered_record_and_an_unreadable_line_break_the_chain() {
 
 #[test]
 fn a_record_rewritten_as_not_private_does_not_verify() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     three(ws.path());
     rewrite(ws.path(), |l| l.into_iter().map(|x| x.replace("\"private\":true", "\"private\":false")).collect());
     assert_eq!(read(ws.path(), "home").unwrap().counted().count(), 0);
@@ -380,7 +401,7 @@ fn a_record_rewritten_as_not_private_does_not_verify() {
 
 #[test]
 fn without_the_key_nothing_is_verifiable_and_nothing_is_counted() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     three(ws.path());
     std::fs::remove_file(crate::history_pointer::key_path(ws.path())).unwrap();
     let r = read(ws.path(), "home").unwrap();
@@ -391,7 +412,7 @@ fn without_the_key_nothing_is_verifiable_and_nothing_is_counted() {
 
 #[test]
 fn appending_after_a_broken_store_never_repairs_it() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     three(ws.path());
     rewrite(ws.path(), |l| l.into_iter().map(|x| x.replace("first prompt", "first EDITED")).collect());
     let t = tap(ws.path(), on());
@@ -408,7 +429,7 @@ fn appending_after_a_broken_store_never_repairs_it() {
 #[test]
 fn the_store_and_the_key_are_owner_only() {
     use std::os::unix::fs::PermissionsExt;
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     three(ws.path());
     let mode = |p: PathBuf| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode(store_path(ws.path(), "home")), 0o600);
@@ -418,7 +439,7 @@ fn the_store_and_the_key_are_owner_only() {
 
 #[test]
 fn a_project_marked_off_records_nothing() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     std::fs::create_dir_all(ws.path().join("local/projects/home")).unwrap();
     std::fs::write(ws.path().join("local/projects/home/history.off"), "").unwrap();
     let t = tap(ws.path(), on());
@@ -429,7 +450,7 @@ fn a_project_marked_off_records_nothing() {
 
 #[test]
 fn at_the_budget_the_daemon_stops_adding_and_evicts_nothing() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     let s = Settings { budget_mb: 1, ..on() };
     std::fs::create_dir_all(store_dir(ws.path(), "home")).unwrap();
     let filler = vec![b'x'; 1_048_576];
@@ -455,7 +476,7 @@ fn the_project_comes_from_the_missions_scope_file_and_only_safe_names_are_used()
 // Egress (§7 item 2, §11 item 3)
 
 fn written() -> Record {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     let t = tap(ws.path(), on());
     t.note_operator_prompt("t_1", "private words of the operator");
     only(t.on_events(MISSION, &[research()]))
@@ -494,7 +515,7 @@ fn a_record_that_names_nothing_but_the_private_flag_is_private_by_construction()
 
 #[test]
 fn control_characters_in_a_prompt_are_not_stored() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     let t = tap(ws.path(), on());
     t.note_operator_prompt("t_1", "hello \u{1b}[2J\u{7} there");
     let r = only(t.on_events(MISSION, &[research()]));
@@ -505,7 +526,7 @@ fn control_characters_in_a_prompt_are_not_stored() {
 #[test]
 fn the_same_inputs_give_the_same_record_apart_from_the_time() {
     let mk = || {
-        let ws = tempfile::tempdir().unwrap();
+        let ws = crate::history_consent::answered_ws();
         std::fs::create_dir_all(ws.path().join("local")).unwrap();
         std::fs::write(crate::history_pointer::key_path(ws.path()), "07".repeat(32)).unwrap();
         #[cfg(unix)]
@@ -535,7 +556,7 @@ fn records(ws: &Path) -> Vec<Record> {
 
 #[test]
 fn a_host_summary_completes_the_trigger_the_daemon_saw_and_the_reply_is_labelled_self_reported() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     let t = tap(ws.path(), on());
     // The daemon saw a research run finish, but held no prompt of its own (the operator typed into the host): nothing is written.
     assert!(t.on_events(MISSION, &[research()]).is_empty());
@@ -554,15 +575,15 @@ fn a_host_summary_completes_the_trigger_the_daemon_saw_and_the_reply_is_labelled
 
 #[test]
 fn a_host_report_alone_never_makes_a_record() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     let t = tap(ws.path(), on());
     assert_eq!(t.on_host_exchange(MISSION, &exchange(), 0), HostReport::NoTrigger);
-    assert!(!ws.path().join("local").exists(), "no record, no store, and no key");
+    assert!(only_the_answer_is_there(ws.path()), "no record, no store, and no key");
 }
 
 #[test]
 fn a_report_with_no_prompt_writes_nothing_and_keeps_the_trigger_for_one_that_has_it() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     let t = tap(ws.path(), on());
     t.on_events(MISSION, &[research()]);
     assert_eq!(t.on_host_exchange(MISSION, &json!({"asked": "x", "did": "y"}), 0), HostReport::NoPrompt);
@@ -573,7 +594,7 @@ fn a_report_with_no_prompt_writes_nothing_and_keeps_the_trigger_for_one_that_has
 
 #[test]
 fn one_report_completes_the_latest_trigger_once_and_the_next_report_finds_none() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     let t = tap(ws.path(), on());
     t.on_events(MISSION, &[research()]);
     t.on_events(MISSION, &[ev("council.verdict", json!({"venue": "daemon", "escalated": false}))]);
@@ -586,7 +607,7 @@ fn one_report_completes_the_latest_trigger_once_and_the_next_report_finds_none()
 
 #[test]
 fn a_trigger_the_daemon_attributed_to_its_own_prompt_is_not_open_to_a_host_report() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     let t = tap(ws.path(), on());
     t.note_operator_prompt("t_1", "the operator typed this into the daemon");
     let rec = only(t.on_events(MISSION, &[research()]));
@@ -597,7 +618,7 @@ fn a_trigger_the_daemon_attributed_to_its_own_prompt_is_not_open_to_a_host_repor
 
 #[test]
 fn a_trigger_is_forgotten_after_the_window_and_the_list_is_bounded() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     let t = tap(ws.path(), on());
     t.on_events(MISSION, &[research()]);
     let far = delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339()).unwrap() + AWAITING_SECS + 1000;
@@ -611,7 +632,7 @@ fn a_trigger_is_forgotten_after_the_window_and_the_list_is_bounded() {
 
 #[test]
 fn a_host_cannot_set_what_the_daemon_computes_nor_the_outcome_through_a_summary() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     let t = tap(ws.path(), on());
     // A research run that reports nothing the daemon can read as a result: the daemon's outcome is `unknown`.
     t.on_events(MISSION, &[ev("research.finished", json!({"topic": "x"}))]);
@@ -628,7 +649,7 @@ fn a_host_cannot_set_what_the_daemon_computes_nor_the_outcome_through_a_summary(
 
 #[test]
 fn the_reply_fields_are_capped_and_redacted_by_the_same_pipeline_and_a_secret_in_the_prompt_is_not_stored() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     let t = tap(ws.path(), on());
     t.on_events(MISSION, &[research()]);
     let p = json!({"prompt": "use Bearer abcDEF123456789xyzABC please", "asked": "queue options ".repeat(40), "did": "sent Bearer abcDEF123456789xyzABC", "open": "\u{1b}[2Jnothing"});
@@ -641,7 +662,7 @@ fn the_reply_fields_are_capped_and_redacted_by_the_same_pipeline_and_a_secret_in
 
 #[test]
 fn a_reported_prompt_found_in_the_hosts_transcript_as_a_user_message_reads_resolved_and_a_tool_result_does_not() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     let root = tempfile::tempdir().unwrap();
     let folder = root.path().join("-proj");
     std::fs::create_dir_all(&folder).unwrap();
@@ -669,18 +690,20 @@ fn a_reported_prompt_found_in_the_hosts_transcript_as_a_user_message_reads_resol
 #[test]
 fn a_dormant_tap_ignores_the_exchange_fields_and_a_call_without_them_is_unchanged() {
     let ws = tempfile::tempdir().unwrap();
-    let t = tap(ws.path(), Settings::default());
+    let t = tap(ws.path(), off());
     t.on_events(MISSION, &[research()]);
     assert_eq!(t.on_host_exchange(MISSION, &exchange(), 0), HostReport::Off);
     assert_eq!(t.on_host_exchange(MISSION, &json!({"summary": "s", "decisions": ["a"]}), 0), HostReport::Absent);
     assert!(!ws.path().join("local").exists(), "nothing is held, written or made while history is off");
-    let on_tap = tap(ws.path(), on());
+    // On, and the question answered: a call without the fields is unchanged too.
+    let answered = crate::history_consent::answered_ws();
+    let on_tap = tap(answered.path(), on());
     assert_eq!(on_tap.on_host_exchange(MISSION, &json!({"summary": "s"}), 0), HostReport::Absent);
 }
 
 #[test]
 fn a_bad_exchange_field_is_refused_with_a_fixed_reason_and_nothing_is_written() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     let t = tap(ws.path(), on());
     t.on_events(MISSION, &[research()]);
     let r = t.on_host_exchange(MISSION, &json!({"prompt": "x", "asked": 4}), 0);
@@ -691,7 +714,7 @@ fn a_bad_exchange_field_is_refused_with_a_fixed_reason_and_nothing_is_written() 
 
 #[test]
 fn a_project_marked_off_says_so_and_writes_nothing() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     std::fs::create_dir_all(ws.path().join("local/projects/home")).unwrap();
     std::fs::write(ws.path().join("local/projects/home/history.off"), "").unwrap();
     let t = tap(ws.path(), on());
@@ -704,7 +727,7 @@ fn a_project_marked_off_says_so_and_writes_nothing() {
 
 #[test]
 fn the_merge_trigger_concludes_the_daemons_prompt_with_the_pull_request_number_and_nothing_of_the_ledger_row() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     let t = tap(ws.path(), on());
     t.note_operator_prompt("t_1", "land the queue fix");
     let row = crate::history_merge::read_new(&{

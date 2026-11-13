@@ -53,6 +53,10 @@ fn merged(pr: u64) -> serde_json::Value {
 
 async fn exchange(history: bool) -> Fx {
     let f = setup(vec![Step::text("done"), Step::text("noted")], 5.0, |s| s.history.enabled = history);
+    if history {
+        // The install question has been answered (a record is written only after that, `specs/102` S8).
+        crate::history_consent::answer_yes_in(&f.engine.ws.dir);
+    }
     f.m.set_history(on(&f));
     // The operator's prompt through the real task start, then a merge the daemon watched concludes it.
     f.engine.run_task(&f.m, "orchestrator", PROMPT).await.unwrap();
@@ -115,7 +119,7 @@ async fn purge_and_delete_leave_no_copy_the_history_made_anywhere_under_the_home
 
 #[test]
 fn a_prompt_the_daemon_still_holds_in_memory_is_not_written_back_after_a_purge() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     let tap = Tap::new(ws.path().to_path_buf(), Settings { enabled: true, ..Settings::default() }, "home");
     tap.note_operator_prompt("t_1", "ZXQ-RESIDUE-HELD-9001 first");
     let first = tap.on_merge_row("m1", &merged(1));
@@ -139,7 +143,7 @@ fn a_prompt_the_daemon_still_holds_in_memory_is_not_written_back_after_a_purge()
 
 #[test]
 fn the_rewrite_leaves_no_temporary_file_and_the_marker_holds_no_text() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     let tap = Tap::new(ws.path().to_path_buf(), Settings { enabled: true, ..Settings::default() }, "home");
     tap.note_operator_prompt("t_1", "ZXQ-RESIDUE-TMP-4411");
     tap.on_merge_row("m1", &merged(1));

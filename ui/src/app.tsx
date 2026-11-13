@@ -10,6 +10,7 @@ import { bundleTarget, completions, enterAccepts, projectKey, searchHistory, typ
 import { addBlock, fold, type State } from './fold.ts';
 import { contextReport, exportAll, exportHead } from './session.ts';
 import { historyReport } from './history.ts';
+import { sanitize as cleanNotice } from './elog.ts';
 import { loadHistory } from './attach.ts';
 import { resolveCard, runSlash } from './run.ts';
 import * as I from './inbox.ts';
@@ -193,6 +194,16 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
   useEffect(checkModels, []);
 
   const note = (text: string, tone?: 'info' | 'error' | 'ok') => setState((s) => addBlock(s, { kind: 'note', text, at: Date.now(), tone }));
+
+  // The first-run notice of the project history (`specs/102` §7 item 7): said once, after the operator answered yes to the install question.
+  // The daemon returns the text on the first ask only and records that it was said; a daemon that does not know the call says nothing.
+  // The text is data from the daemon: cleaned of control characters before it is drawn, and nothing here animates.
+  useEffect(() => {
+    cmd.call('history.notice', {}).then((r: any) => {
+      const text = typeof r?.text === 'string' ? cleanNotice(r.text, 800) : '';
+      if (text) note(text, 'info');
+    }).catch(() => {});
+  }, []);
 
   const send = (text: string) => {
     const m = /^@(\S+)\s+([\s\S]+)$/.exec(text);

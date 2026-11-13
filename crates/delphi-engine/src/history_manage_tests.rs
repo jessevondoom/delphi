@@ -48,7 +48,7 @@ fn unix(s: &str) -> i64 {
 
 #[test]
 fn off_stops_new_records_at_once_and_deletes_nothing() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     three(ws.path());
     let before = store(ws.path());
     let marker = off(ws.path(), None).unwrap();
@@ -62,7 +62,7 @@ fn off_stops_new_records_at_once_and_deletes_nothing() {
 
 #[test]
 fn off_for_one_project_leaves_the_others_writing() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     let marker = off(ws.path(), Some("alpha")).unwrap();
     assert!(marker.ends_with("local/projects/alpha/history.off"));
     let mut d = draft("2026-11-13T00:00:00Z", "x");
@@ -77,7 +77,7 @@ fn off_for_one_project_leaves_the_others_writing() {
 
 #[test]
 fn purge_all_leaves_tombstones_the_chain_verifies_through_them_and_no_text_remains() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     three(ws.path());
     let originals: Vec<String> = rec::read(ws.path(), PROJECT).unwrap().records.iter().map(|c| c.record.hash.clone()).collect();
     let done = erase(ws.path(), PROJECT, Which::All, NOW).unwrap();
@@ -101,7 +101,7 @@ fn purge_all_leaves_tombstones_the_chain_verifies_through_them_and_no_text_remai
 
 #[test]
 fn purge_since_erases_from_the_time_on_and_keeps_the_earlier_records() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     three(ws.path());
     // The boundary is inclusive: the second record is at exactly this time.
     let done = erase(ws.path(), PROJECT, Which::Since(unix("2026-11-11T00:00:00Z")), NOW).unwrap();
@@ -117,7 +117,7 @@ fn purge_since_erases_from_the_time_on_and_keeps_the_earlier_records() {
 
 #[test]
 fn delete_erases_one_record_and_says_when_it_is_missing_or_already_gone() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     three(ws.path());
     assert_eq!(erase(ws.path(), PROJECT, Which::Id("ex_0002"), NOW).unwrap().records, 1);
     let text = store(ws.path());
@@ -130,7 +130,7 @@ fn delete_erases_one_record_and_says_when_it_is_missing_or_already_gone() {
 
 #[test]
 fn erasing_a_tampered_record_does_not_launder_the_chain() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     three(ws.path());
     let path = rec::store_path(ws.path(), PROJECT);
     std::fs::write(&path, store(ws.path()).replacen("CANARY-TWO beta", "CANARY-TWO forged", 1)).unwrap();
@@ -145,7 +145,7 @@ fn erasing_a_tampered_record_does_not_launder_the_chain() {
 
 #[test]
 fn a_line_that_cannot_be_read_is_voided_so_no_text_hides_in_it() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     three(ws.path());
     let path = rec::store_path(ws.path(), PROJECT);
     let mut t = store(ws.path());
@@ -159,7 +159,7 @@ fn a_line_that_cannot_be_read_is_voided_so_no_text_hides_in_it() {
 
 #[test]
 fn a_tombstone_that_was_edited_breaks_the_chain() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     three(ws.path());
     erase(ws.path(), PROJECT, Which::Id("ex_0002"), NOW).unwrap();
     let path = rec::store_path(ws.path(), PROJECT);
@@ -178,7 +178,7 @@ fn an_erase_with_no_store_changes_nothing_and_makes_no_key() {
 
 #[test]
 fn the_store_file_stays_owner_only_after_a_rewrite() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     three(ws.path());
     erase(ws.path(), PROJECT, Which::Id("ex_0001"), NOW).unwrap();
     #[cfg(unix)]
@@ -195,7 +195,7 @@ fn the_store_file_stays_owner_only_after_a_rewrite() {
 
 #[test]
 fn status_shows_counts_and_chain_state_and_none_of_the_text() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     three(ws.path());
     erase(ws.path(), PROJECT, Which::Id("ex_0002"), NOW).unwrap();
     let o = overview(ws.path(), &on(), unix("2026-11-13T00:00:00Z"));
@@ -214,7 +214,7 @@ fn status_shows_counts_and_chain_state_and_none_of_the_text() {
 
 #[test]
 fn status_counts_records_past_the_age_budget_and_deletes_none() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     three(ws.path());
     let s = Settings { retention_days: 1, ..on() };
     let o = overview(ws.path(), &s, unix("2026-11-20T00:00:00Z"));
@@ -226,7 +226,7 @@ fn status_counts_records_past_the_age_budget_and_deletes_none() {
 
 #[test]
 fn status_and_doctor_warn_on_a_broken_chain_and_an_unreadable_key_and_repair_nothing() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     three(ws.path());
     let path = rec::store_path(ws.path(), PROJECT);
     let tampered = store(ws.path()).replacen("CANARY-TWO beta", "CANARY-TWO forged", 1);
@@ -245,19 +245,31 @@ fn status_and_doctor_warn_on_a_broken_chain_and_an_unreadable_key_and_repair_not
 }
 
 #[test]
-fn a_fresh_install_reads_off_with_no_key_and_no_files() {
+fn a_fresh_install_reads_on_but_waiting_for_the_answer_with_no_key_and_no_files() {
+    // Since S8 the default is on; a person has not answered the install question yet, so nothing is recorded, held or keyed.
     let ws = tempfile::tempdir().unwrap();
     let o = overview(ws.path(), &Settings::default(), unix(NOW));
-    assert!(o.rows.is_empty() && !o.enabled && o.key == KeyState::Absent);
+    assert!(o.rows.is_empty() && o.enabled && o.awaiting_answer && o.key == KeyState::Absent);
     let text = status_lines(&o).join("\n");
-    assert!(text.contains("History: off (the default until it is turned on; nothing is recorded)") && text.contains("0 record(s)") && text.contains("Timeline: on"), "{text}");
-    assert_eq!(doctor_line(&o), (false, "history: off (default); 0 record(s), 0 erased; chain intact; no key yet".to_string()));
+    assert!(text.contains("History: on, waiting for your answer") && text.contains("0 record(s)") && text.contains("Timeline: on"), "{text}");
+    let (problem, line) = doctor_line(&o);
+    assert!(!problem && line.starts_with("history: on, waiting for your answer") && line.contains("0 record(s), 0 erased; chain intact; no key yet"), "{line}");
     assert!(!ws.path().join("local").exists(), "reading the status makes nothing");
 }
 
 #[test]
+fn a_config_that_turns_the_history_off_reads_off_with_no_key_and_no_files() {
+    let ws = crate::history_consent::answered_ws();
+    let o = overview(ws.path(), &Settings { enabled: false, ..Settings::default() }, unix(NOW));
+    assert!(o.rows.is_empty() && !o.enabled && !o.awaiting_answer && o.key == KeyState::Absent);
+    let text = status_lines(&o).join("\n");
+    assert!(text.contains("History: off (`[history] enabled = false` in config.toml; nothing is recorded)") && text.contains("0 record(s)"), "{text}");
+    assert_eq!(doctor_line(&o), (false, "history: off (`[history] enabled = false`); 0 record(s), 0 erased; chain intact; no key yet".to_string()));
+}
+
+#[test]
 fn a_switch_off_reads_as_off_in_status_even_when_the_setting_is_on() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     off(ws.path(), None).unwrap();
     let text = status_lines(&overview(ws.path(), &on(), unix(NOW))).join("\n");
     assert!(text.contains("History: off (switched off with `delphi history off`"), "{text}");
@@ -268,7 +280,7 @@ fn a_switch_off_reads_as_off_in_status_even_when_the_setting_is_on() {
 
 #[test]
 fn the_timeline_switch_turns_the_report_off_without_reading_anything() {
-    let ws = tempfile::tempdir().unwrap();
+    let ws = crate::history_consent::answered_ws();
     let missing = ws.path().join("no-such-mission");
     assert!(crate::history_report::timeline_of_if(&missing, false).unwrap().is_none(), "off: nothing is read");
     assert!(Settings::default().timeline, "the timeline is on by default, and stays when records are off");

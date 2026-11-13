@@ -317,9 +317,9 @@
     },
     "history": {
       "type": "object",
-      "description": "The project history (specs/102 section 7): the operator's own redacted prompts with capped summaries, on this machine only. Off by default until the release that carries the whole feature. Every record is private: it never leaves the install, and its text enters a model prompt only under to_models.",
+      "description": "The project history (specs/102 section 7): the operator's own redacted prompts with capped summaries, on this machine only. On by default (opt-out), but nothing is recorded until a person has answered the install question once in a terminal. Every record is private: it never leaves the install, and its text enters a model prompt only under to_models.",
       "properties": {
-        "enabled": { "type": "boolean", "description": "Keep a history of prompts and what came of them. Default false until slice S8 turns the default on." },
+        "enabled": { "type": "boolean", "description": "Keep a history of prompts and what came of them. Default true; nothing is recorded until the install question has been answered, and false records nothing." },
         "paste_chars": { "type": "integer", "minimum": 50, "maximum": 5000, "description": "A span longer than this is treated as pasted and stored as a keyed hash and a length, not text, unless the daemon saw it typed (a hypothesis to calibrate). Default 400." },
         "to_models": { "type": "string", "enum": ["deny", "allow"], "description": "Whether record text may enter a model prompt. Default deny. With allow, only a seat of the host's own family; never a foreign-family or unknown-family seat." },
         "budget_mb": { "type": "integer", "minimum": 1, "maximum": 1024, "description": "The store's cap per project, in megabytes; at the cap the daemon stops adding and says so (a hypothesis). Default 50." },

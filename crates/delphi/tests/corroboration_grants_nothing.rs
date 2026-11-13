@@ -1006,12 +1006,26 @@ fn the_history_controls_and_the_install_question_are_the_operators_and_grant_and
     ];
     let answers = Regex::new(r"record_answer\(|Human::at_terminal\(").unwrap();
     let answer_ok = ["crates/delphi-engine/src/history_consent.rs", "crates/delphi/src/history_cmd.rs"];
+    // Slice S8: two files outside that list read the consent module for one reason each, and may name nothing else in it: the daemon's
+    // `history.notice` says the first-run notice once (`take_notice`), and the console view says the history is waiting for an answer
+    // (`blocks_writes`, `SHOW_AT_INSTALL`). Neither can answer the question, switch the history off, erase, or name the manage module.
+    let limited: [(&str, &[&str]); 2] = [
+        ("crates/delphi-engine/src/service.rs", &["take_notice"]),
+        ("crates/delphi-engine/src/history_view.rs", &["blocks_writes", "SHOW_AT_INSTALL"]),
+    ];
+    let consent_use = Regex::new(r"history_consent::(\w+)").unwrap();
     let (mut stray, mut stray_answer) = (Vec::new(), Vec::new());
     for f in &files {
         let rel = f.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
         let src = std::fs::read_to_string(f).unwrap();
         let code: String = production(&src).lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
-        if names.is_match(&code) && !readers_ok.contains(&rel.as_str()) {
+        if let Some((_, allowed)) = limited.iter().find(|(f, _)| *f == rel) {
+            let used: Vec<String> = consent_use.captures_iter(&code).map(|c| c[1].to_string()).collect();
+            let other = used.iter().any(|u| !allowed.contains(&u.as_str())) || code.contains("history_manage");
+            if other {
+                stray.push(format!("{rel} (may name only history_consent::{allowed:?}, named {used:?})"));
+            }
+        } else if names.is_match(&code) && !readers_ok.contains(&rel.as_str()) {
             stray.push(rel.clone());
         }
         if answers.is_match(&code) && !answer_ok.contains(&rel.as_str()) {

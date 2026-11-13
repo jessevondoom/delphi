@@ -27,6 +27,10 @@ fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
     let init = Command::new(DELPHI).args(["init", "--non-interactive", "--workspace", "w", "--project"]).arg(&proj).arg("--home").arg(&home).env_remove("DELPHI_HOME").stdin(Stdio::null()).output().unwrap();
     assert!(init.status.success(), "{}", text(&init));
     let ws = home.join("workspaces/w");
+    // The install question has been answered yes, as it is on a real install after its first terminal start (`specs/102` S8): a record
+    // is written only after that. `init --non-interactive` above did not ask, which is the behaviour under test elsewhere.
+    std::fs::create_dir_all(ws.join("local")).unwrap();
+    std::fs::write(ws.join("local/history.consent"), "yes\n").unwrap();
     let tap = Tap::new(ws.clone(), Settings { enabled: true, ..Settings::default() }, "home");
     for i in 0..2 {
         tap.note_operator_prompt("t_1", &format!("{CANARY} prompt number {i}"));
