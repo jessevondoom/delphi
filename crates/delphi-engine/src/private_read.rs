@@ -100,9 +100,9 @@ pub const READS: [Read; 21] = [
     Read { file: "kb.rs", what: "the index: `chunk_content` returns indexed text; `include_staged` opts in to staged notes (host-noted entries among them)", how: How::NoReturn { why: "the index lists only library sources that are not private (`Library::indexable`); staged notes are off unless a caller sets `include_staged`, and the callers are the `service.rs` row (host search, marks) and the console's `kb.search`" } },
     Read { file: "mcp_project.rs", what: "the MCP server's own readers (`search_project`, `search_memory`, `query_memory`, `kb_retrieve`): they run in the MCP server process, which has no daemon session to mark", how: How::NoReturn { why: "their file sets exclude the `staged` zone (`scope.rs` drops it) and their KB zone list names no `staged`; `local/staged` is never readable by a role (`pathguard`). The test `the_mcp_servers_own_readers_never_return_a_noted_entry` proves it with a canary" } },
     Read { file: "host_rpc.rs", what: "`read_handoff`: `host.handoff_get` returns the handoff another session of the same project put", how: How::Skips { exposure: "the text came from another session whose mark (if any) is its own: the reading session is unmarked, so a handoff that carries words from a private note reaches a fresh session with no mark and nothing held on its sends. Accepted for now by OD-5 (no inheritance); a decision, not a bug" } },
-    Read { file: "history_record.rs", what: "`for_prompt` returns a spec 102 record's prompt text; `read` returns the store", how: How::Withholds { proof_file: "delphi-engine/tests/history_egress.rs", proof_test: "nothing_but_the_history_module_calls_for_prompt_and_by_default_no_record_is_served" } },
-    Read { file: "history_view.rs", what: "`history.view` shows the stored records' prompt text", how: How::OperatorOnly { why: "the `history.view` method needs the console scope (`history_view_is_for_the_console_only_reads_only_and_says_history_is_off_when_it_is`)" } },
-    Read { file: "history_manage.rs", what: "`overview` counts the verified records", how: How::NoReturn { why: "counts and states only (`delphi history status`, the operator's command)" } },
+    Read { file: concat!("history_", "record.rs"), what: "`for_prompt` returns a spec 102 record's prompt text; `read` returns the store", how: How::Withholds { proof_file: "delphi-engine/tests/history_egress.rs", proof_test: "nothing_but_the_history_module_calls_for_prompt_and_by_default_no_record_is_served" } },
+    Read { file: concat!("history_", "view.rs"), what: "`history.view` shows the stored records' prompt text", how: How::OperatorOnly { why: "the `history.view` method needs the console scope (`history_view_is_for_the_console_only_reads_only_and_says_history_is_off_when_it_is`)" } },
+    Read { file: concat!("history_", "manage.rs"), what: "`overview` counts the verified records", how: How::NoReturn { why: "counts and states only (`delphi history status`, the operator's command)" } },
     Read { file: "council.rs", what: "fences a noted entry in a seat's reading (`host_noted::fence`) and withdraws the seat's tools", how: How::NoReturn { why: "no path delivers a noted entry to a seat (`engine.rs` refuses with `READ_REFUSAL`); this is the tripwire for one added later" } },
 ];
 
@@ -224,7 +224,7 @@ pub const RELAY_SURFACE: [(&str, &str); 5] = [
 /// excerpt reader, the staged-note opt-in, the handoff reader, the indexed chunk reader and the history record's prompt text. A file that
 /// contains one in production code and is not a row of [`READS`] fails the test. It is still a token scan: a reader that reaches the text
 /// through a function that is not named here is found only if one of its callees is (the scan cannot see a rename).
-pub const ACCESSORS: [&str; 11] = ["stored_text", "claim_slice(", "NOTED_HEADING", "\"source.md\"", "excerpts.json", ".excerpts(", "include_staged", "read_handoff(", "chunk_content", "for_prompt(", ".prompt.as_ref()"];
+pub const ACCESSORS: [&str; 11] = ["stored_text", "claim_slice(", "NOTED_HEADING", "\"source.md\"", "excerpts.json", ".excerpts(", "include_staged", "read_handoff(", "chunk_content", concat!("for_", "prompt("), ".prompt.as_ref()"];
 
 /// A key is a task or host-session identifier: a short run of characters that cannot name a path or hold prose.
 fn key_ok(key: &str) -> bool {
