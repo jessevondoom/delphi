@@ -2,7 +2,7 @@
 
 # Knowledge and memory
 
-20 specs. [All groups](./index.md).
+22 specs. [All groups](./index.md).
 
 ## 004-memory-and-coaching
 
@@ -182,4 +182,38 @@ The operator asked (2026-11-11) whether traditional library practice offers anyt
 
 ```text
 The operator asked (2026-11-11) for Delphi to keep a history of what happened in a project: the operator's own words, what came of each request, and a build report, with deeper provenance, so that agents get more context and the operator can ask "where did this decision come from". The first idea was to store the sessions' transcripts. Council `t_0008` (architect, red-team, strategist; two model families) advised against that, and the operator then proposed a smaller unit, the **exchange record**: one prompt of the operator's, with a short summary of what came back.
+```
+
+## 108-closing-the-learning-loop-for-host-sessions
+
+**108: Closing the learning loop for host sessions: recall what the last sessions left, keep a host note in one step, ingest transcripts without stopping the daemon, and run the trace harvester** · approved (per source at `bc656195bb38`) · tier 0 · [source](../../specs/108-closing-the-learning-loop-for-host-sessions.md)
+
+**source excerpt, untrusted** · `specs/108-closing-the-learning-loop-for-host-sessions.md` lines 25-33
+
+```text
+| # | Observation (code on `main`, 2026-11-13) |
+| :-- | :-- |
+| E-1 | `propose_note` and `record_session_summary` stage at L0 where no host tool can read them. The only thing a new host session can recover from an earlier one is one handoff file. |
+| E-2 | No command turns a staged host note into a rule or a lesson. The operator retypes it with `delphi customize rule`, which writes shared heuristics, never a role's `lessons.md`; no command writes a role's lessons at all. |
+| E-3 | The shipped `delphi` skill never mentions `propose_note`. |
+| E-4 | Transcript ingest is a manual command that needs the daemon stopped. |
+| E-5 | `harvest_episodes` (065 §4.1) has no production caller; no episode file is ever written. The tracker says built. |
+| E-6 | An entry the operator kept with `delphi kb review keep` lands in the `summaries` zone, which no host search reads, though 068 §3 says a kept entry is searchable at once. |
+| E-7 | `propose_council_record` says it will be reviewed at the next `/retro`; nothing lists it there. |
+```
+
+## 109-one-retrieval-path-for-host-search-a-fresh-index-and-passages-at-adoption
+
+**109: One retrieval path for host search, a fresh index, and passages at adoption** · approved (per source at `9c12e495c439`) · tier 0 · [source](../../specs/109-one-retrieval-path-for-host-search-a-fresh-index-and-passages-at-adoption.md)
+
+**source excerpt, untrusted** · `specs/109-one-retrieval-path-for-host-search-a-fresh-index-and-passages-at-adoption.md` lines 25-31
+
+```text
+| # | Observation (code on `main`, 2026-11-13) |
+| :-- | :-- |
+| E-1 | Five host search tools use three rankings: `search_kb` uses the retrieval service; `kb_retrieve` uses keyword tables with no embedder for core text and a word count for project text, and sorts the two score scales together; `search_project`, `search_memory` and `query_memory` use a per-file word count that the index may only reorder. A question in ordinary words about host friction returned an adapter diagram and none of the specs on the subject. |
+| E-2 | `kb_retrieve` opens the index with a call that sets the journal mode and creates the schema, though readers are meant to write nothing. Its project chunk ids are a hash modulo 900 and can collide. |
+| E-3 | `search_kb` never refreshes the index; the console's search does. |
+| E-4 | Core, context and spec files without a tier in their frontmatter index as `external_untrusted`, and `search_kb` excludes untrusted documents, so much of the release's own reference may be invisible to a host. |
+| E-5 | Nothing is retrieved for a host unless it asks. Delphi's own agents get up to three passages at the start of a span. |
 ```

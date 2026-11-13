@@ -1,0 +1,116 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 106: Compact packs and role subagents"
+    },
+    {
+      "level": 2,
+      "line": 23,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 3,
+      "line": 34,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 40,
+      "number": "1.2",
+      "title": "Simpler alternative considered"
+    },
+    {
+      "level": 2,
+      "line": 46,
+      "number": "2",
+      "title": "P1: the charter excerpt"
+    },
+    {
+      "level": 2,
+      "line": 54,
+      "number": "3",
+      "title": "P2: the compact pack, the hash and the check"
+    },
+    {
+      "level": 2,
+      "line": 64,
+      "number": "4",
+      "title": "P3: a worker file for every servable role"
+    },
+    {
+      "level": 2,
+      "line": 74,
+      "number": "5",
+      "title": "Slices (one per pull request)"
+    },
+    {
+      "level": 2,
+      "line": 83,
+      "number": "6",
+      "title": "Authority and trust"
+    },
+    {
+      "level": 2,
+      "line": 89,
+      "number": "7",
+      "title": "Decisions (taken as recommended, 2026-11-13)"
+    },
+    {
+      "level": 2,
+      "line": 96,
+      "number": "8",
+      "title": "Not verified"
+    },
+    {
+      "level": 2,
+      "line": 100,
+      "number": "9",
+      "title": "Measured sizes"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/106-compact-packs-and-role-subagents-a-charter-excerpt-a-hash-check-and-a-worker-file-for-every-role.md",
+    "sha256": "e9abf5bb01e7abc48c63943f8139016380f066407f6b7edfa324477ae5f23b68"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 688,
+        "end_line": 6,
+        "line": 6,
+        "start": 287
+      },
+      "text": "status: approved   # by the operator, 2026-11-13, in a host session (\"approve all your plans and suggestions and go\"). The approval was given to the plan this spec carries out (workstream 2: a deterministic governance digest with the full charter by reference, `pack_hash` in `list_roles`, fetch-if-changed, agent files for every role) BEFORE this text was written; the operator has not read the text."
+    },
+    "sha256": "e9abf5bb01e7abc48c63943f8139016380f066407f6b7edfa324477ae5f23b68",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "hosts-and-mcp",
+    "number": "106",
+    "stem": "106-compact-packs-and-role-subagents-a-charter-excerpt-a-hash-check-and-a-worker-file-for-every-role",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "106: Compact packs and role subagents: a charter excerpt, a hash check, and a worker file for every servable role"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2370,
+      "end_line": 30,
+      "line": 25,
+      "start": 1714
+    },
+    "text": "| # | Observation (code on `main`, 2026-11-13) |\n| :-- | :-- |\n| E-1 | An orchestrator pack is about 35 KB. 21 KB of it is the whole ratified charter, most of which (§5.9 to §5.12, §6, §7) describes daemon machinery the pack's own header says does not run in a host. |\n| E-2 | The header says \"fetch again only when pack_hash changes\", but `get_agent` takes only `role` and `list_roles` returns no hash: a host cannot learn the hash without fetching the pack. |\n| E-3 | A role adopted in a host runs in the host's main context. Subagent files exist only for four Panel seats. |\n| E-4 | Every pack names the Claude Code adapter whatever the client is. |"
+  }
+}

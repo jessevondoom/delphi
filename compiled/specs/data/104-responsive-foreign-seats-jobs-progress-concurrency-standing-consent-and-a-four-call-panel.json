@@ -1,0 +1,128 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 104: Responsive foreign seats"
+    },
+    {
+      "level": 2,
+      "line": 24,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 3,
+      "line": 41,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 47,
+      "number": "1.2",
+      "title": "Simpler alternative considered"
+    },
+    {
+      "level": 2,
+      "line": 53,
+      "number": "2",
+      "title": "R1: `ask_family` is a job (E-1, E-2)"
+    },
+    {
+      "level": 2,
+      "line": 64,
+      "number": "3",
+      "title": "R2: progress while a host waits (E-3)"
+    },
+    {
+      "level": 2,
+      "line": 74,
+      "number": "4",
+      "title": "R3: concurrent requests (E-4)"
+    },
+    {
+      "level": 2,
+      "line": 85,
+      "number": "5",
+      "title": "R4: an opt-in standing consent for foreign seats (E-5)"
+    },
+    {
+      "level": 2,
+      "line": 95,
+      "number": "6",
+      "title": "R5: a Panel in four calls (E-6)"
+    },
+    {
+      "level": 2,
+      "line": 109,
+      "number": "7",
+      "title": "Slices (one per pull request)"
+    },
+    {
+      "level": 2,
+      "line": 122,
+      "number": "8",
+      "title": "Authority and trust"
+    },
+    {
+      "level": 2,
+      "line": 129,
+      "number": "9",
+      "title": "Decisions (taken as recommended, 2026-11-13)"
+    },
+    {
+      "level": 2,
+      "line": 137,
+      "number": "10",
+      "title": "Beyond the approved plan (waits for the operator)"
+    },
+    {
+      "level": 2,
+      "line": 141,
+      "number": "11",
+      "title": "Not verified"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/104-responsive-foreign-seats-jobs-progress-concurrency-standing-consent-and-a-four-call-panel.md",
+    "sha256": "a50655371c78ed8848bbd1f41f240f9567b0a66c87b90bad33da78b719cca30c"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 710,
+        "end_line": 6,
+        "line": 6,
+        "start": 324
+      },
+      "text": "status: approved   # by the operator, 2026-11-13, in a host session (\"approve all your plans and suggestions and go\"). The approval was given to the plan this spec carries out (workstream 6b, with the decisions of §9 as recommended) BEFORE this text was written; the operator has not read the text. Anything here that goes beyond that plan is listed in §10 and waits for the operator."
+    },
+    "sha256": "a50655371c78ed8848bbd1f41f240f9567b0a66c87b90bad33da78b719cca30c",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "hosts-and-mcp",
+    "number": "104",
+    "stem": "104-responsive-foreign-seats-jobs-progress-concurrency-standing-consent-and-a-four-call-panel",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "104: Responsive foreign seats: `ask_family` as a job, progress while a host waits, concurrent requests, an opt-in standing consent, and a Panel in four calls"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 1988,
+      "end_line": 26,
+      "line": 26,
+      "start": 1811
+    },
+    "text": "A host that asks Delphi for another model family should get the answer, see that something is happening while it waits, and not need seventeen tool calls to hold a Panel. Today:"
+  }
+}

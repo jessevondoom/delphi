@@ -1,0 +1,110 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 110: Other hosts"
+    },
+    {
+      "level": 2,
+      "line": 23,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 3,
+      "line": 36,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 41,
+      "number": "1.2",
+      "title": "Simpler alternative considered"
+    },
+    {
+      "level": 2,
+      "line": 47,
+      "number": "2",
+      "title": "X1: host IDs and adapters"
+    },
+    {
+      "level": 2,
+      "line": 53,
+      "number": "3",
+      "title": "X2: one install command per host"
+    },
+    {
+      "level": 2,
+      "line": 62,
+      "number": "4",
+      "title": "X3: role files and hooks in each host's format"
+    },
+    {
+      "level": 2,
+      "line": 68,
+      "number": "5",
+      "title": "X4: the live check"
+    },
+    {
+      "level": 2,
+      "line": 74,
+      "number": "6",
+      "title": "Slices (one per pull request)"
+    },
+    {
+      "level": 2,
+      "line": 86,
+      "number": "7",
+      "title": "Authority and trust"
+    },
+    {
+      "level": 2,
+      "line": 92,
+      "number": "8",
+      "title": "Live-check results"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/110-other-hosts-adapters-instruction-files-and-install-paths.md",
+    "sha256": "5ad5f5d97a828484418024d353b916cf6f88ffb2c7a55c9955cc793fbf5894a5"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 741,
+        "end_line": 6,
+        "line": 6,
+        "start": 275
+      },
+      "text": "status: approved   # by the operator, 2026-11-13, in a host session (\"approve all your plans and suggestions and go\"). The approval was given to the plan this spec carries out (workstream 7: adapters, instruction files and install paths for Gemini, Codex and Copilot) BEFORE this text was written; the operator has not read the text. The operator said the same day that Copilot, agy (Gemini) and Codex are installed and signed in on this machine for the live checks."
+    },
+    "sha256": "5ad5f5d97a828484418024d353b916cf6f88ffb2c7a55c9955cc793fbf5894a5",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "hosts-and-mcp",
+    "number": "110",
+    "stem": "110-other-hosts-adapters-instruction-files-and-install-paths",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "110: Other hosts: adapters, instruction files, hooks and install paths for Copilot CLI, Codex and Gemini CLI, each with a recorded live check"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2589,
+      "end_line": 30,
+      "line": 25,
+      "start": 1929
+    },
+    "text": "| # | Observation (code on `main`, 2026-11-13) |\n| :-- | :-- |\n| E-1 | Only Claude Code has a capability adapter; every pack names it whatever the client. |\n| E-2 | Copilot and Codex install the Claude Code plugin unchanged, with Claude tool names in its agent files. Gemini CLI rejects that directory; it has only a config snippet marked unverified. The code folds Gemini CLI and Antigravity into one host ID, `agy`, though 071 says they are different hosts. |\n| E-3 | No host but Claude Code is given an instruction file, a hook or a transcript reader. |\n| E-4 | Every claim about these hosts in 086 §3 and 098 §17 is from vendor documents; none was run. |"
+  }
+}

@@ -2,7 +2,7 @@
 
 # Hosts and MCP
 
-8 specs. [All groups](./index.md).
+13 specs. [All groups](./index.md).
 
 ## 025-plugin-skill-and-tool-compatibility
 
@@ -75,4 +75,69 @@ When developers work outside the native Delphi terminal TUI—in external harnes
 
 ```text
 When an operator works in a host (Claude Code, Copilot CLI, Codex, `agy`) and calls Delphi, the work should happen **in the host**, with the host's full tools and skills, and Delphi should supply the persona, method, specs, knowledge, memory and the checks the host cannot do for itself. Delphi runs a role **inside** only where its audit trail or its model families are the point.
+```
+
+## 104-responsive-foreign-seats-jobs-progress-concurrency-standing-consent-and-a-four-call-panel
+
+**104: Responsive foreign seats: `ask_family` as a job, progress while a host waits, concurrent requests, an opt-in standing consent, and a Panel in four calls** · approved (per source at `a50655371c78`) · tier 0 · [source](../../specs/104-responsive-foreign-seats-jobs-progress-concurrency-standing-consent-and-a-four-call-panel.md)
+
+**source excerpt, untrusted** · `specs/104-responsive-foreign-seats-jobs-progress-concurrency-standing-consent-and-a-four-call-panel.md` line 26
+
+```text
+A host that asks Delphi for another model family should get the answer, see that something is happening while it waits, and not need seventeen tool calls to hold a Panel. Today:
+```
+
+## 105-session-hooks-for-hosts-a-brief-at-start-mention-routing-at-the-prompt-and-a-marker-at-the-end
+
+**105: Session hooks for hosts: a brief at session start, mention routing at the prompt, and a marker at the end** · approved (per source at `09e18b4d1be6`) · tier 0 · [source](../../specs/105-session-hooks-for-hosts-a-brief-at-start-mention-routing-at-the-prompt-and-a-marker-at-the-end.md)
+
+**source excerpt, untrusted** · `specs/105-session-hooks-for-hosts-a-brief-at-start-mention-routing-at-the-prompt-and-a-marker-at-the-end.md` line 26
+
+```text
+Today everything that makes a host session a Delphi session depends on the host's model remembering to do it: look at the specs, know the roster, notice `@name`, leave a summary. This spec moves the parts that need no judgement into three hooks, so the model starts each session already knowing who is on the team, what the project's specs say and what the last session left, and so `@name` works without a skill having to match it.
+```
+
+## 106-compact-packs-and-role-subagents-a-charter-excerpt-a-hash-check-and-a-worker-file-for-every-role
+
+**106: Compact packs and role subagents: a charter excerpt, a hash check, and a worker file for every servable role** · approved (per source at `e9abf5bb01e7`) · tier 0 · [source](../../specs/106-compact-packs-and-role-subagents-a-charter-excerpt-a-hash-check-and-a-worker-file-for-every-role.md)
+
+**source excerpt, untrusted** · `specs/106-compact-packs-and-role-subagents-a-charter-excerpt-a-hash-check-and-a-worker-file-for-every-role.md` lines 25-30
+
+```text
+| # | Observation (code on `main`, 2026-11-13) |
+| :-- | :-- |
+| E-1 | An orchestrator pack is about 35 KB. 21 KB of it is the whole ratified charter, most of which (§5.9 to §5.12, §6, §7) describes daemon machinery the pack's own header says does not run in a host. |
+| E-2 | The header says "fetch again only when pack_hash changes", but `get_agent` takes only `role` and `list_roles` returns no hash: a host cannot learn the hash without fetching the pack. |
+| E-3 | A role adopted in a host runs in the host's main context. Subagent files exist only for four Panel seats. |
+| E-4 | Every pack names the Claude Code adapter whatever the client is. |
+```
+
+## 107-a-briefing-behind-the-orchestrator-mention-one-call-that-reads-the-task
+
+**107: A briefing behind the orchestrator mention: one call that reads the task, and a model when the question needs one** · approved (per source at `5afdb0ba7b1b`) · tier 0 · [source](../../specs/107-a-briefing-behind-the-orchestrator-mention-one-call-that-reads-the-task.md)
+
+**source excerpt, untrusted** · `specs/107-a-briefing-behind-the-orchestrator-mention-one-call-that-reads-the-task.md` lines 25-30
+
+```text
+| # | Observation (code on `main`, 2026-11-13) |
+| :-- | :-- |
+| E-1 | `consult_orchestrator` checks the task's length and otherwise ignores it. Its level comes from two enums, its pointers are `AGENTS.md`, `specs/` and the first three specs in listing order, and its constraints name this repository's Rust gates for every project. A report with no code was told to convene five roles and run `cargo test`. |
+| E-2 | Neither shipped skill mentions `consult_orchestrator`; 077 routes `@delphi` to it. |
+| E-3 | An orchestrator working in a host must make five calls (`specs_status`, `route`, `search_project`, `search_memory`, `delphi_roster`) to learn what one call could tell it. |
+| E-4 | A model answers as the orchestrator only through `request_help`, which the skill presents as help for when work leaves the host's expertise. |
+```
+
+## 110-other-hosts-adapters-instruction-files-and-install-paths
+
+**110: Other hosts: adapters, instruction files, hooks and install paths for Copilot CLI, Codex and Gemini CLI, each with a recorded live check** · approved (per source at `5ad5f5d97a82`) · tier 0 · [source](../../specs/110-other-hosts-adapters-instruction-files-and-install-paths.md)
+
+**source excerpt, untrusted** · `specs/110-other-hosts-adapters-instruction-files-and-install-paths.md` lines 25-30
+
+```text
+| # | Observation (code on `main`, 2026-11-13) |
+| :-- | :-- |
+| E-1 | Only Claude Code has a capability adapter; every pack names it whatever the client. |
+| E-2 | Copilot and Codex install the Claude Code plugin unchanged, with Claude tool names in its agent files. Gemini CLI rejects that directory; it has only a config snippet marked unverified. The code folds Gemini CLI and Antigravity into one host ID, `agy`, though 071 says they are different hosts. |
+| E-3 | No host but Claude Code is given an instruction file, a hook or a transcript reader. |
+| E-4 | Every claim about these hosts in 086 §3 and 098 §17 is from vendor documents; none was run. |
 ```
