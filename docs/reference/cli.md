@@ -691,8 +691,9 @@ The program, the built-in files, then the daemons.
     [--workspace <name>] [--home <dir>]
 ```
 
---dev installs the latest dev build of main (built on request, so it can be behind main). --rollback undoes all three steps. --review leaves the release's
-changes pending for /ratify instead of ratifying them.
+--dev installs the latest dev build of main (built on request, so it can be behind main).
+--rollback undoes all three steps. --review leaves the release's changes pending for
+/ratify instead of ratifying them.
 
 ### `delphi train`
 
