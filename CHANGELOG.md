@@ -8,6 +8,20 @@ This file starts with the work after v0.2.7. For earlier releases, the history i
 
 ## Unreleased
 
+## 0.6.1 — 2026-11-13
+
+A summary by spec; the pull requests are listed on the releases page. Nothing in specs 098 to 103 below has been run against a real host, Council, Telegram bot or mailbox yet: the tests use fakes and scratch homes.
+
+- The first `delphi` start in a terminal now asks one question about the history (spec 102, below). Nothing is recorded until you answer it; an answer of no turns the history off.
+- The exchange record, a history of your own prompts (spec 102, #668 to #676, #681): on by default, but it records nothing until a person at a terminal has answered the install question. It stores your prompts and capped reply summaries on this machine, with secrets redacted (best effort: some secret shapes may not be masked), pasted blocks as a hash and a length, and short pasted text kept as written; the mission logs keep prompts after a purge. `delphi history off|purge [--since]|delete|status`, the console view `/history`, a daemon timeline, and a citation check on decisions. It never leaves the machine and is never read as an instruction.
+- The private-read mark (spec 103, #674, #677 to #680): a task that read a private entry asks you before it sends a web request or a connector call, and a relay or mailbox gets a fixed phrase in place of the text an agent wrote for it. A child task has the same scope as its parent within a session. Only the host's `search_kb` sets the mark today, so Delphi's own tasks are not marked yet.
+- Where agents run, host first (specs 098 and 099): Councils run inside Delphi only, and a host that cannot run one gets a labelled unaudited agenda (#617); roles and skills carry a locus (#618); `route` takes any query (#622); research reports its coverage and thin answers in `doctor` (#619); `corroborated` status with an origin count (#623); a claims-based `propose_kb_entry` with a private flag and an egress check (#626, #645); red-team review and `ask_family` (#627, #648); seat states, a stall flag and `cancel_job` (#621); a Round 2 critique is kept when it is valid, Markdown restatements are read, and an unreadable Round 2 is repaired once (#613, #614, #616). The five feature flags added along the way were removed again, with a roll-back plan in spec 098 §13.2 (#642, #653).
+- The confidence ladder (spec 100): a tier table, `would_ratify` and a fast lane, a roll-back with a tier audit and a latch, accept-all for vetted claims, a per-tier calibration report, KB-prior tags, and a contradiction step that reads the validated facts (#625, #636, #637, #640, #644, #646, #657, #663). The background validation worker (spec 040 §18.3, #667) is off by default (`[validator] background`).
+- Library practice for research (spec 101): a search log for a research run, a local Retraction Watch snapshot and a retraction mark, archived copies read from a web archive as a labelled version, and citation chaining through one pinned index (#635, #651, #652, #655, #658, #664). The lookups send only public URLs or DOIs.
+- The merge flow: `delphi merge` judges and records every spec named by trailers (#650) and refuses a bundle across specs (#654).
+- Fixed: on a fresh install, the first host `search_kb` no longer fails with `no such table: kb_meta` (#682).
+- CI and build, no change to behaviour: package-host outage survival, caches, split Linux tests, shorter test waits, longer limits for the embedding-model jobs (#629, #630, #638, #647, #649, #659, #665, #666).
+
 ## 0.6.0 — 2026-11-09
 
 A summary by spec; the pull requests are listed on the releases page.

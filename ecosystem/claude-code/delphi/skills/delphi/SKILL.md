@@ -42,4 +42,4 @@ These are the repository's own rules (its `AGENTS.md`), stated here so you do no
 - Work in a worktree, not in the operator's checkout.
 - Scratch runs need `--home <tmpdir>`: bare `delphi` and `delphi init` create a real workspace under `~/.delphi`.
 
-Generated for Delphi release 0.6.0.
+Generated for Delphi release 0.6.1.
