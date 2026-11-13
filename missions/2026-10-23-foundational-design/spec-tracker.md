@@ -979,12 +979,15 @@ The operator asked, in a host session on 2026-11-13, for a review of how Delphi'
 | 108 | M4 | the trace harvester | not started |
 | 108 | M5 | three conformance fixes | not started |
 | 109 | Q0 | the spec | approved in advance 2026-11-13 |
-| 109 | Q1 | the four tools on the retrieval service | not started |
+| 109 | Q0a | the `query_memory` facet leak (review amendment A3) | not started |
+| 109 | Q1 | the workspace corpus on the retrieval service; one shared project ranker (re-scoped by review amendment A1) | not started |
 | 109 | Q2 | a fresh index | not started |
-| 109 | Q3 | the release reference measurement and tier rule | not started |
+| 109 | Q3 | the release reference measurement only (the tier rule was struck by review amendment A2) | not started |
 | 109 | Q4 | `task` on `get_agent` | not started |
 | 110 | X0 | the spec | approved in advance 2026-11-13 |
 | 110 | X1 | host IDs and adapters | not started |
 | 110 | X2 | `delphi connect` for Codex and Gemini, the instruction section | not started |
 | 110 | X3 | role files and hooks per host | not started |
 | 110 | X4 | live-check scripts and results | not started |
+
+A red-team review of the seven specs ran on 2026-11-13 (one critic of the author's own family, so `homogeneous`), and one foreign seat (`ask_family`, served by the gemini family) reviewed spec 104. Their findings are recorded as an amendments section in each spec; two were P0 (an unratified handoff line in the session brief, and the trace harvester stamping episodes above their tier) and both were amended before the affected slice was built.

@@ -100,3 +100,15 @@ Objectives: a host adopts a role with one call and a pack a third of today's siz
 ## 9. Measured sizes
 
 To be filled when P2 is built.
+
+## 10. Amendments from review (2026-11-13)
+
+A red-team review on 2026-11-13 (one critic, the author's own model family, so `homogeneous`; checked against the code) found the defects below. Each amendment **supersedes** the text above where they differ. The review ran after the advance approval; the operator has not read these either.
+
+| # | Finding | Amendment |
+| :-- | :-- | :-- |
+| A1 | The charter's §2 table has nine rows and thirteen roles ship, so four roles would fail closed to the whole charter. | A role with no row in the charter's table gets the excerpt without a row, and the footer says the charter's table has no row for it. Fail-closed (§2 item 3) applies only when a selected section or numbered item is missing. |
+| A2 | The excerpt dropped rules that bind a role working in a host: the blind Round 1 and round cap (a host orchestrator moderates Panels), that personal memory never leaves the machine (a host reads memory and has a network), and the limits on test authorizations (a host has `request_test_authorization`). | The selection table adds §3 item 2 and §4 item 1, verbatim. §5 item 12 is too long to carry; the footer carries this fixed sentence for it, which is this spec's text and no model's: "§5.12: you may request a test authorization and never create, extend or approve one; nothing gives you a right or a reason to seek one or to shape work to fit one. Read the item in full before you call request_test_authorization." |
+| A3 | The 16 KiB budget cannot be met (the orchestrator's manifest is 8.8 KB and the excerpt about 8 KB), and "a third of today's size" is not reachable without trimming manifests. | The objective is: the compact pack is smaller than the full pack for every role, and the charter excerpt is under half the charter. P2's size test pins each release role's compact pack at its measured size plus 10 percent, and the orchestrator's at no more than 24 KiB. §9 records the sizes. Trimming a manifest with `inside-only` markers is separate work under its own review. |
+| A4 | A read-only tool list only for roles whose `write` is empty covers the validator alone; red-team, scout, investigator and strategist workers would inherit a shell and file writes, against charter §5.1. | Only roles whose manifest's write globs include the worktree (`@worktree/**`: builder and writer today) get a worker that inherits the session's tools. Every other worker gets the read-only list the seat files use plus Delphi's read tools. A drift test reads the manifests. |
+| A5 | §1 E-3 said four Panel seats; the builder has a seat file and is not a Panel seat. | Corrected here: four seat files, three Panel seats. |

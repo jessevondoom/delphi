@@ -92,3 +92,13 @@ X4 runs first for each host as a probe (what does this host do today?), and agai
 ## 8. Live-check results
 
 To be filled by X4, one table per host.
+
+## 9. Amendments from review (2026-11-13)
+
+A red-team review on 2026-11-13 (one critic, the author's own model family, so `homogeneous`; checked against the code) found the defects below. Each amendment **supersedes** the text above where they differ. The review ran after the advance approval; the operator has not read these either.
+
+| # | Sev | Finding | Amendment |
+| :-- | :-- | :-- | :-- |
+| A1 | P2 | `--home` isolates Delphi only; a non-interactive host run can still read the operator's home, including `~/.delphi`. | Each live-check script runs the host in its read-only or sandboxed mode where it has one, in a scratch project, with `DELPHI_HOME` set to a temporary home so the Delphi server the host starts cannot reach the operator's workspace, and with a fixed prompt that asks only for Delphi tool calls. The host itself still runs as the operator with the operator's sign-in: that limit is stated in each script's header and in §8. |
+| A2 | P2 | `delphi connect` could write the operator's always-loaded instruction file on a `yes` with no terminal check. | A write to an instruction file needs stdin to be a terminal and a typed `yes`, with no override. Without a terminal the command prints the block and the line to add, and writes only under Delphi's own directory. |
+| A3 | P2 | 105 §1.2 said Delphi does not write the operator's instruction files. | 105 was amended: a marked block the operator accepts at a terminal is the one exception. |

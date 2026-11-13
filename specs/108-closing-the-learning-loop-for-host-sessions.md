@@ -117,3 +117,16 @@ M3's daemon ingest and M5's fixes were not named in the plan. They are small, ch
 ## 10. Not verified
 
 - How often the two transcript rules produce a useful note has not been measured.
+
+## 11. Amendments from review (2026-11-13)
+
+A red-team review on 2026-11-13 (one critic, the author's own model family, so `homogeneous`; checked against the code) found the defects below. Each amendment **supersedes** the text above where they differ. The review ran after the advance approval; the operator has not read these either.
+
+| # | Sev | Finding | Amendment |
+| :-- | :-- | :-- | :-- |
+| A1 | P0 | M4 wrote an episode "at the tier the task's ceiling gives". Council, Panel, build and `ask_family` tasks end with a fixed L5 ceiling, and the harvester defaults to L4 when a task has no taint event, so a model-written episode would be stamped as ratified or empirical. | An episode's `source_type` is the lowest `span.taint` ceiling among the task's spans, capped at `internal_generated`; it is `external_untrusted` when the task has no span or no taint event. The task's ceiling is never used. M4 first corrects the harvester's L4 default and its fixed default timestamp, each with a test. |
+| A2 | P0 | M1 item 4 let the session-start brief show a line of the last summary: unratified text in every new session. | Struck. The brief carries a pointer only (105 A1). Recall is always a call the host chooses to make. |
+| A3 | P1 | M2's `learn.keep` daemon method was reachable by any process running as the operator, took free text, and did not say how the ratified copy and its lock are updated. | There is **no daemon method**. `delphi learn keep` is a terminal command only: stdin must be a terminal, with no override; it writes through the same path `delphi customize rule` uses (the ratified copy and `ratified.lock`, with the hash check), and runs the same no-relaxation test on the text. With the daemon running it does what `customize` does today in that case. The limit is stated as the charter states it for §5.12: a process running as the operator that can drive a terminal can do what the operator can. The console shows the count and the command; it does not perform the keep. |
+| A4 | P1 | M3's ingest trusted a path and a `cwd` from the caller, followed symlinks, could stage secrets from tool output, and had no role. | The transcript folder is derived from the project the daemon resolves for the session, never from caller text. The path is canonicalized and a symlink at any component is refused. Every staged note passes the secret redactor first. `role` is required and must be a servable role. |
+| A5 | P2 | With no project, recall pooled every unregistered folder's sessions. | With no project, recall returns only sessions whose canonical working directory equals the caller's. |
+| A6 | P2 | The `summaries` zone also holds external pages the operator imported, which host search filters out by design. | M5 item 1 adds only entries that carry the kept marker of `delphi kb review keep`; the untrusted filter stays for everything else in the zone. |

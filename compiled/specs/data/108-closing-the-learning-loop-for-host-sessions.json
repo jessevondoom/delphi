@@ -79,12 +79,18 @@
       "line": 117,
       "number": "10",
       "title": "Not verified"
+    },
+    {
+      "level": 2,
+      "line": 121,
+      "number": "11",
+      "title": "Amendments from review (2026-11-13)"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/108-closing-the-learning-loop-for-host-sessions.md",
-    "sha256": "bc656195bb38b0793e06b64154c50d149c702becd71fda087ed00f4f6c2c121d"
+    "sha256": "42132dbf867d75e0b6753585e0e87bef3cd48cfc0babfd2082d5bcd2c611ac44"
   },
   "source_status_at_hash": {
     "line": {
@@ -97,7 +103,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-13, in a host session (\"approve all your plans and suggestions and go\"). The approval was given to the plan this spec carries out (workstream 4: the next session can read prior notes and summaries, labelled not validated and never in a pack without ratification; a one-step ratify for host notes; wire the trace harvester) BEFORE this text was written; the operator has not read the text. What goes beyond that plan is listed in §9."
     },
-    "sha256": "bc656195bb38b0793e06b64154c50d149c702becd71fda087ed00f4f6c2c121d",
+    "sha256": "42132dbf867d75e0b6753585e0e87bef3cd48cfc0babfd2082d5bcd2c611ac44",
     "word": "approved"
   },
   "spec": {

@@ -88,3 +88,12 @@ The inputs `ambiguity` and `blast_radius` stay optional. Every existing argument
 ## 6. Not verified
 
 - The thresholds in §2 item 9 (0.05, the floor) are first values. B1 records how often each suggestion fires on the route evaluation set (`route_any`'s 20 cases).
+
+## 7. Amendments from review (2026-11-13)
+
+A red-team review on 2026-11-13 (one critic, the author's own model family, so `homogeneous`; checked against the code) found the defects below. Each amendment **supersedes** the text above where they differ. The review ran after the advance approval; the operator has not read these either.
+
+| # | Finding | Amendment |
+| :-- | :-- | :-- |
+| A1 | 105 §4 said the orchestrator mention means `get_agent`; this spec says `consult_orchestrator` first. | This spec's order stands; 105 was amended to match. |
+| A2 | With `kind` defaulting to `software`, a caller that leaves it out still gets the spec and gate lines for a report. | When `kind` is left out it is inferred by a fixed rule: `software` when the task has a build verb from a fixed list (build, implement, fix, refactor, add, write code, patch, migrate) or names a path or file with a source extension; otherwise `analysis`. The answer says which was used and that it was inferred. |

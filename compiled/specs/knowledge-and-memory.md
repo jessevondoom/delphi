@@ -186,7 +186,7 @@ The operator asked (2026-11-11) for Delphi to keep a history of what happened in
 
 ## 108-closing-the-learning-loop-for-host-sessions
 
-**108: Closing the learning loop for host sessions: recall what the last sessions left, keep a host note in one step, ingest transcripts without stopping the daemon, and run the trace harvester** · approved (per source at `bc656195bb38`) · tier 0 · [source](../../specs/108-closing-the-learning-loop-for-host-sessions.md)
+**108: Closing the learning loop for host sessions: recall what the last sessions left, keep a host note in one step, ingest transcripts without stopping the daemon, and run the trace harvester** · approved (per source at `42132dbf867d`) · tier 0 · [source](../../specs/108-closing-the-learning-loop-for-host-sessions.md)
 
 **source excerpt, untrusted** · `specs/108-closing-the-learning-loop-for-host-sessions.md` lines 25-33
 
@@ -204,7 +204,7 @@ The operator asked (2026-11-11) for Delphi to keep a history of what happened in
 
 ## 109-one-retrieval-path-for-host-search-a-fresh-index-and-passages-at-adoption
 
-**109: One retrieval path for host search, a fresh index, and passages at adoption** · approved (per source at `9c12e495c439`) · tier 0 · [source](../../specs/109-one-retrieval-path-for-host-search-a-fresh-index-and-passages-at-adoption.md)
+**109: One retrieval path for host search, a fresh index, and passages at adoption** · approved (per source at `6041ff883452`) · tier 0 · [source](../../specs/109-one-retrieval-path-for-host-search-a-fresh-index-and-passages-at-adoption.md)
 
 **source excerpt, untrusted** · `specs/109-one-retrieval-path-for-host-search-a-fresh-index-and-passages-at-adoption.md` lines 25-31
 

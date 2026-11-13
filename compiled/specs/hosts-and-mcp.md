@@ -99,7 +99,7 @@ Today everything that makes a host session a Delphi session depends on the host'
 
 ## 106-compact-packs-and-role-subagents-a-charter-excerpt-a-hash-check-and-a-worker-file-for-every-role
 
-**106: Compact packs and role subagents: a charter excerpt, a hash check, and a worker file for every servable role** · approved (per source at `e9abf5bb01e7`) · tier 0 · [source](../../specs/106-compact-packs-and-role-subagents-a-charter-excerpt-a-hash-check-and-a-worker-file-for-every-role.md)
+**106: Compact packs and role subagents: a charter excerpt, a hash check, and a worker file for every servable role** · approved (per source at `2b96f4bf3cd5`) · tier 0 · [source](../../specs/106-compact-packs-and-role-subagents-a-charter-excerpt-a-hash-check-and-a-worker-file-for-every-role.md)
 
 **source excerpt, untrusted** · `specs/106-compact-packs-and-role-subagents-a-charter-excerpt-a-hash-check-and-a-worker-file-for-every-role.md` lines 25-30
 
@@ -114,7 +114,7 @@ Today everything that makes a host session a Delphi session depends on the host'
 
 ## 107-a-briefing-behind-the-orchestrator-mention-one-call-that-reads-the-task
 
-**107: A briefing behind the orchestrator mention: one call that reads the task, and a model when the question needs one** · approved (per source at `5afdb0ba7b1b`) · tier 0 · [source](../../specs/107-a-briefing-behind-the-orchestrator-mention-one-call-that-reads-the-task.md)
+**107: A briefing behind the orchestrator mention: one call that reads the task, and a model when the question needs one** · approved (per source at `d78eff74846c`) · tier 0 · [source](../../specs/107-a-briefing-behind-the-orchestrator-mention-one-call-that-reads-the-task.md)
 
 **source excerpt, untrusted** · `specs/107-a-briefing-behind-the-orchestrator-mention-one-call-that-reads-the-task.md` lines 25-30
 
@@ -129,7 +129,7 @@ Today everything that makes a host session a Delphi session depends on the host'
 
 ## 110-other-hosts-adapters-instruction-files-and-install-paths
 
-**110: Other hosts: adapters, instruction files, hooks and install paths for Copilot CLI, Codex and Gemini CLI, each with a recorded live check** · approved (per source at `5ad5f5d97a82`) · tier 0 · [source](../../specs/110-other-hosts-adapters-instruction-files-and-install-paths.md)
+**110: Other hosts: adapters, instruction files, hooks and install paths for Copilot CLI, Codex and Gemini CLI, each with a recorded live check** · approved (per source at `7d00f84c5429`) · tier 0 · [source](../../specs/110-other-hosts-adapters-instruction-files-and-install-paths.md)
 
 **source excerpt, untrusted** · `specs/110-other-hosts-adapters-instruction-files-and-install-paths.md` lines 25-30
 

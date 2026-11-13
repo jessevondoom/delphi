@@ -73,12 +73,18 @@
       "line": 93,
       "number": "9",
       "title": "Measurements"
+    },
+    {
+      "level": 2,
+      "line": 97,
+      "number": "10",
+      "title": "Amendments from review (2026-11-13)"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/109-one-retrieval-path-for-host-search-a-fresh-index-and-passages-at-adoption.md",
-    "sha256": "9c12e495c4398e8ada8301e8bfef93593c43359f39975586f5147bae88ea9fa1"
+    "sha256": "6041ff88345267c1f33a85adfe95d90550d79917ae1b0b8d0412a2d2eb891980"
   },
   "source_status_at_hash": {
     "line": {
@@ -91,7 +97,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-13, in a host session (\"approve all your plans and suggestions and go\"). The approval was given to the plan this spec carries out (workstream 5: one retrieval engine for all five search tools, automatic index refresh, a small retrieval at role adoption) BEFORE this text was written; the operator has not read the text."
     },
-    "sha256": "9c12e495c4398e8ada8301e8bfef93593c43359f39975586f5147bae88ea9fa1",
+    "sha256": "6041ff88345267c1f33a85adfe95d90550d79917ae1b0b8d0412a2d2eb891980",
     "word": "approved"
   },
   "spec": {

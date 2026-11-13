@@ -93,3 +93,13 @@ Objective: the same question gets the same ranking from every host search tool; 
 ## 9. Measurements
 
 To be filled by Q1 and Q3.
+
+## 10. Amendments from review (2026-11-13)
+
+A red-team review on 2026-11-13 (one critic, the author's own model family, so `homogeneous`; checked against the code) found the defects below. Each amendment **supersedes** the text above where they differ. The review ran after the advance approval; the operator has not read these either.
+
+| # | Sev | Finding | Amendment |
+| :-- | :-- | :-- | :-- |
+| A1 | P1 | The registered project's files are not in the index (`kb::sources` indexes the workspace, missions, memory, bundles and the library). Even `search_kb` ranks project text with a word ranker, so §1 E-1 was half right, and Q1 cannot express the project tools as index filters without a new corpus. | Q1 is re-scoped. For the workspace corpus (core, context, specs, knowledge, library, memory) every tool asks the retrieval service, as written. For project text there is **one** word ranker, shared by `search_kb`'s project leg, `search_project` and `kb_retrieve`'s project leg (three exist today), and when project and index results share an answer they are merged by rank (reciprocal rank fusion), never by raw score. Indexing registered projects is a new corpus with a privacy question; it is recorded here as an open decision for the operator and is not built. |
+| A2 | P1 | Q3's "signed release manifest" does not exist at index time: `base/manifest.lock` is a plain hash list a shell can edit, and its `signature` field is a label. The release reference already lives in `base/about` at `user_ratified`, so E-4 was overstated. | Q3 item 2 is **struck**. Q3 is the measurement only (item 1). If it shows release text a host cannot find, the result goes to the operator with options; nothing raises a tier. |
+| A3 | P2 | The `query_memory` facet leak (Q1 item 4) is live today and should not wait for the larger slice. | It is its own first slice, **Q0a**: facets filter by zone and frontmatter and every result passes the role-memory check, with tests that another role's memory file and another project's mission file are refused. |

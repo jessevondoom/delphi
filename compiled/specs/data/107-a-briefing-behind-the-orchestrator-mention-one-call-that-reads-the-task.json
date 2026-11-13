@@ -55,12 +55,18 @@
       "line": 88,
       "number": "6",
       "title": "Not verified"
+    },
+    {
+      "level": 2,
+      "line": 92,
+      "number": "7",
+      "title": "Amendments from review (2026-11-13)"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/107-a-briefing-behind-the-orchestrator-mention-one-call-that-reads-the-task.md",
-    "sha256": "5afdb0ba7b1b4164a463dcc5b0463b1d1c10d7ea60503fad894145891b044082"
+    "sha256": "d78eff74846c30a19e3ff55225e07a8e3ac5558c9f0c89126de59f4d5f6c3b73"
   },
   "source_status_at_hash": {
     "line": {
@@ -73,7 +79,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-13, in a host session (\"approve all your plans and suggestions and go\"). The approval was given to the plan this spec carries out (workstream 3: route the orchestrator mention to `request_help`, make `consult_orchestrator` read the task, fix the skill text) BEFORE this text was written; the operator has not read the text."
     },
-    "sha256": "5afdb0ba7b1b4164a463dcc5b0463b1d1c10d7ea60503fad894145891b044082",
+    "sha256": "d78eff74846c30a19e3ff55225e07a8e3ac5558c9f0c89126de59f4d5f6c3b73",
     "word": "approved"
   },
   "spec": {
