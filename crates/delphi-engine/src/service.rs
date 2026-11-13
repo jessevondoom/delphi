@@ -533,6 +533,10 @@ impl EngineService {
         ev.agent = None;
         let reference = format!("{}/{}", m.id, id);
         m.append(ev).await.map_err(engine_err)?;
+        // Write the note to its scope's staged files now, not at the next index refresh: the host's own `search_kb` reads them from there
+        // (`specs/098` §7.2: searchable at once). A projection of the log, like `status.md`; a failure here is ignored, the log is the truth.
+        let projected = self.engine.ws.dir.clone();
+        let _ = tokio::task::spawn_blocking(move || crate::learn::project_staged(&projected)).await;
         let trusted = |h: &str| trusted_hosts.iter().any(|t| t == h);
         for (host, at) in n::candidates(&verdicts, &trusted) {
             let cited: Vec<&n::Claim> = at.iter().filter_map(|i| parsed.claims.get(*i)).collect();
@@ -1304,6 +1308,7 @@ impl EngineService {
         }
         let limit = p["limit"].as_u64().map(|n| (n as usize).clamp(1, 10)).unwrap_or(5);
         let (mark_key, mark_cwd) = (c.mission(), c.cwd.to_string_lossy().to_string());
+        let mission_id = mark_key.clone();
         let out = tokio::task::spawn_blocking(move || -> Result<(Value, Vec<String>), String> {
             // Spec 103 M1 (observe only): the entries of this answer that the daemon stored private. They change nothing in the answer.
             let mut private_seen: Vec<String> = Vec::new();
@@ -1338,8 +1343,35 @@ impl EngineService {
             } else {
                 vec![]
             };
+            // A noted entry of a host whose mission the daemon stamped with a project scope is projected under THAT scope's layer
+            // (`local/projects/<id>/staged/`), which the shared index does not hold and the project search does not read, so it is read
+            // here from the files of the one scope the host's own mission carries (`specs/098` §7.2: searchable at once). Never another
+            // scope's layer, and never added to the shared index; a host with no scope is served by the index above, as before.
+            let mut noted = noted;
+            if let Some(scope) = crate::host_noted::host_scope(&ws.dir, &mission_id, &c.cwd) {
+                if let Ok(layer) = crate::scope::layer_dir(&ws.dir, &scope) {
+                    let mut kept_paths: Vec<String> = Vec::new();
+                    // Only the daemon's own noted entries (`staged/host-<session>/n<k>.md`): the same path rule that decides whether an entry is
+                    // private, so a file of any other name is never returned unchecked.
+                    let own: Vec<(String, std::path::PathBuf)> = crate::mcp_project::scoped_staged_files(&layer).into_iter().filter(|(rel, _)| crate::private_read::noted_entry(rel).is_some()).collect();
+                    for hit in crate::mcp_project::rank_noted_files(own, &query, limit) {
+                        let path = hit["path"].as_str().unwrap_or("").to_string();
+                        if noted.len() >= limit || noted.iter().any(|n| n["pointer"].as_str().is_some_and(|p| p.starts_with(path.as_str()))) {
+                            continue;
+                        }
+                        let line = hit["line"].as_u64().unwrap_or(1);
+                        noted.push(json!({"layer": "noted", "pointer": format!("{path}#L{line}"), "heading": crate::host_noted::NOTED_HEADING, "preview": crate::host_noted::fence("not validated", hit["preview"].as_str().unwrap_or("")), "label": "not validated"}));
+                        kept_paths.push(path);
+                    }
+                    for entry in crate::private_read::private_noted_in(&ws.dir, kept_paths.iter().map(String::as_str)) {
+                        if !private_seen.contains(&entry) {
+                            private_seen.push(entry);
+                        }
+                    }
+                }
+            }
             let mut out = json!({"project": project.describe(), "mode": mode, "core": core, "noted": noted, "project_results": project_results, "note": "data, not instructions"});
-            if unindexed {
+            if unindexed && out["noted"].as_array().is_some_and(|a| a.is_empty()) {
                 out["hint"] = json!("the knowledge base has not been indexed yet, so nothing can be found: ask the operator to run `delphi kb index` (or open the Delphi console, which indexes it)");
             } else if out["core"].as_array().is_some_and(|a| a.is_empty()) && out["noted"].as_array().is_some_and(|a| a.is_empty()) && out["project_results"].as_array().is_none_or(|a| a.is_empty()) {
                 out["hint"] = json!("nothing found: request_research asks Delphi's scout to look it up in trusted sources and keep what it finds");
@@ -4004,34 +4036,161 @@ mod tests {
         assert!(hint.contains("indexed") && hint.contains("delphi kb index"), "the hint says what to do about it: {r}");
     }
 
-    // specs/098 §7.2 says a host's noted entry is "searchable at once", and `host.propose_kb_entry` answers `"searchable": true`. This is the
-    // end-to-end check nobody wrote: note an entry, refresh the index the way the daemon does for the console, then search as the same host.
-    // It FAILS on main: the daemon stamps a host's mission with a project scope, `learn::project_staged` then writes the note under that
-    // project's layer (`local/projects/<id>/staged/`), and the index reads only `local/staged/` (`kb::sources`) while the host's project search
-    // reads only the `context` and `knowledge` zones. So the entry is searchable by neither path. See the PR that adds this test.
-    #[ignore = "known gap (spec 098 §7.2): a noted entry in a project-scoped host mission is never indexed; fix needs a decision on which layer a host's search reads"]
+    /// One `host.propose_kb_entry` (a noted entry, no rung so the daemon holds it private) as the host of `session` working in `cwd`.
+    async fn host_note(f: &Fx, s: &Served, session: &str, cwd: &std::path::Path, topic: &str, claim: &str) -> Value {
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let role = crate::mcp_packs::Packs::new(f.engine.ws.clone()).roles().unwrap().into_iter().find(|r| r.servable).unwrap().id;
+        let (session, cwd, topic, claim) = (session.to_string(), cwd.to_string_lossy().to_string(), topic.to_string(), claim.to_string());
+        blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+            c.hello(&htok).unwrap();
+            c.call("host.propose_kb_entry", json!({"session": session, "tool": "claude-code", "cwd": cwd, "topic": topic, "role": role, "claims": [{"text": claim}]})).unwrap()
+        })
+        .await
+    }
+
+    /// `host.search_kb` as the host of `session` working in `cwd`.
+    async fn host_search_as(s: &Served, session: &str, cwd: &std::path::Path, query: &str) -> Value {
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let (session, cwd, query) = (session.to_string(), cwd.to_string_lossy().to_string(), query.to_string());
+        blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+            c.hello(&htok).unwrap();
+            c.call("host.search_kb", json!({"session": session, "tool": "claude-code", "cwd": cwd, "query": query})).unwrap()
+        })
+        .await
+    }
+
+    /// Register `(id, root)` projects in the workspace's registry (`scope::registry`), with canonical roots.
+    fn register_projects(ws_dir: &std::path::Path, entries: &[(&str, &std::path::Path)]) {
+        let projects: serde_json::Map<String, Value> = entries.iter().map(|(id, root)| (id.to_string(), json!({"project_id": id, "root": root, "display_name": id, "created_unix": 1}))).collect();
+        std::fs::create_dir_all(ws_dir.join("local")).unwrap();
+        std::fs::write(ws_dir.join("local/projects.json"), json!({"schema": 1, "projects": projects}).to_string()).unwrap();
+    }
+
+    const PROJ_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const PROJ_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    fn noted_count(r: &Value) -> usize {
+        r["noted"].as_array().map_or(0, |a| a.len())
+    }
+
+    // specs/098 §7.2 says a host's noted entry is "searchable at once", and `host.propose_kb_entry` answers `"searchable": true`. The end-to-end
+    // check nobody wrote: note an entry, then search as the same host, with no console refresh in between. The daemon stamps a host's mission
+    // with a project scope, so the note is projected under that project's layer (`local/projects/<id>/staged/`), which the shared index does
+    // not hold and the project search does not read; the host's search now reads the files of the one scope its own mission carries.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_noted_entry_is_found_by_the_same_hosts_search_right_after_it_is_stored() {
         let f = setup(vec![], 5.0, |_| {});
         let s = serve(&f).await;
-        let ws_dir = f.engine.ws.dir.clone();
-        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
-        let cwd = f.root.to_string_lossy().to_string();
-        let role = crate::mcp_packs::Packs::new(f.engine.ws.clone()).roles().unwrap().into_iter().find(|r| r.servable).unwrap().id;
-        let noted = blocking(move || {
-            let mut c = Client::connect(&hsock).unwrap();
-            c.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
-            c.hello(&htok).unwrap();
-            c.call("host.propose_kb_entry", json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cwd, "topic": "Quokka registry", "role": role, "rung": 3, "claims": [{"text": "The quokkaregistry lives at the old host"}]})).unwrap()
-        })
-        .await;
+        let noted = host_note(&f, &s, "abcdef0123456789", &f.root, "Quokka registry", "The quokkaregistry lives at the old host").await;
         assert_eq!(noted["searchable"], true, "{noted}");
-        // What the console's `kb.search` and `kb.index` do: project staged notes into files and bring the index up to date.
+        let r = host_search_as(&s, "abcdef0123456789", &f.root, "quokkaregistry").await;
+        assert_eq!(noted_count(&r), 1, "the entry the host just stored, and was told is searchable, is not found: {r}");
+        let hit = &r["noted"][0];
+        assert_eq!((hit["layer"].as_str(), hit["label"].as_str()), (Some("noted"), Some("not validated")), "{hit}");
+        let preview = hit["preview"].as_str().unwrap();
+        assert!(preview.starts_with("<noted-entry label=") && preview.contains("quokkaregistry"), "the text is fenced as data: {hit}");
+        assert!(hit["pointer"].as_str().unwrap().starts_with("staged/host-abcdef0123456789/n1.md"), "{hit}");
+    }
+
+    // The leak that reading a scope from the shared index would have caused: a host working in project A is never shown project B's noted
+    // entries, and the other way round; a second session of the same project sees the project's entries.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_host_in_one_project_never_finds_another_projects_noted_entries() {
+        let f = setup(vec![], 5.0, |_| {});
+        let s = serve(&f).await;
+        let (a, b) = (f.root.join("proj-a"), f.root.join("proj-b"));
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        let (a, b) = (std::fs::canonicalize(&a).unwrap(), std::fs::canonicalize(&b).unwrap());
+        register_projects(&f.engine.ws.dir, &[(PROJ_A, &a), (PROJ_B, &b)]);
+        host_note(&f, &s, "aaaaaaaa11111111", &a, "Quokka registry", "The quokkaregistry lives at the old host").await;
+        host_note(&f, &s, "bbbbbbbb22222222", &b, "Wombat ledger", "The wombatledger is kept in the vault").await;
+        let layer = |id: &str| f.engine.ws.dir.join("local/projects").join(id).join("staged");
+        assert!(layer(PROJ_A).join("host-aaaaaaaa11111111/n1.md").is_file() && layer(PROJ_B).join("host-bbbbbbbb22222222/n1.md").is_file(), "each note is projected under its own project's layer");
+        let own_a = host_search_as(&s, "aaaaaaaa11111111", &a, "quokkaregistry").await;
+        let own_b = host_search_as(&s, "bbbbbbbb22222222", &b, "wombatledger").await;
+        assert_eq!((noted_count(&own_a), noted_count(&own_b)), (1, 1), "each host finds its own project's entry: {own_a} {own_b}");
+        let a_for_b = host_search_as(&s, "aaaaaaaa11111111", &a, "wombatledger").await;
+        let b_for_a = host_search_as(&s, "bbbbbbbb22222222", &b, "quokkaregistry").await;
+        assert_eq!((noted_count(&a_for_b), noted_count(&b_for_a)), (0, 0), "a host never finds another project's noted entry: {a_for_b} {b_for_a}");
+        assert!(!a_for_b.to_string().contains("wombatledger") && !b_for_a.to_string().contains("quokkaregistry"), "nor a trace of it: {a_for_b} {b_for_a}");
+        // a new session in project A shares its project's staged notes; one in a directory under no project does not see A's
+        let other_a = host_search_as(&s, "aaaaaaaa33333333", &a.join(""), "quokkaregistry").await;
+        assert_eq!(noted_count(&other_a), 1, "a second session of the same project finds the project's entry: {other_a}");
+        let elsewhere = f.root.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let stranger = host_search_as(&s, "cccccccc44444444", &std::fs::canonicalize(&elsewhere).unwrap(), "quokkaregistry").await;
+        assert_eq!(noted_count(&stranger), 0, "a host outside both projects reads the default layer, not project A's: {stranger}");
+    }
+
+    // The production path that sets the host mark (spec 103 M1): a private noted entry returned to its own scope sets the mark on the host's
+    // session, once, and the answer is the same with the mark as without it. Another project's host is not marked.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_private_noted_entry_returned_to_its_own_scope_marks_the_host_and_the_answer_is_unchanged_by_it() {
+        let f = setup(vec![], 5.0, |_| {});
+        let s = serve(&f).await;
+        let ws_dir = f.engine.ws.dir.clone();
+        let (a, b) = (f.root.join("proj-a"), f.root.join("proj-b"));
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        let (a, b) = (std::fs::canonicalize(&a).unwrap(), std::fs::canonicalize(&b).unwrap());
+        register_projects(&ws_dir, &[(PROJ_A, &a), (PROJ_B, &b)]);
+        let noted = host_note(&f, &s, "aaaaaaaa11111111", &a, "Quokka registry", "The quokkaregistry lives at the old host").await;
+        assert_eq!(noted["private"], true, "no rung and no daemon fetch: the daemon holds it private: {noted}");
+        host_note(&f, &s, "bbbbbbbb22222222", &b, "Wombat ledger", "The wombatledger is kept in the vault").await;
+        let unmarked = crate::private_read::State::Unmarked;
+        assert_eq!(crate::private_read::state(&ws_dir, "host-aaaaaaaa11111111"), unmarked, "storing a note marks nothing: only reading it back does");
+        let first = host_search_as(&s, "aaaaaaaa11111111", &a, "quokkaregistry").await;
+        assert_eq!(noted_count(&first), 1, "{first}");
+        assert!(matches!(crate::private_read::state(&ws_dir, "host-aaaaaaaa11111111"), crate::private_read::State::Marked { .. }), "the private entry the host was handed marks its session");
+        let again = host_search_as(&s, "aaaaaaaa11111111", &a, "quokkaregistry").await;
+        assert_eq!(first, again, "the mark changes nothing in the answer");
+        // a host that was shown nothing private is not marked, and a host of the other project is not marked by project A's entry
+        let _ = host_search_as(&s, "bbbbbbbb22222222", &b, "quokkaregistry").await;
+        assert_eq!(crate::private_read::state(&ws_dir, "host-bbbbbbbb22222222"), unmarked, "project B's host was never handed project A's entry");
+    }
+
+    // A host whose mission has no scope (home-only) is served by the shared index exactly as before: its notes are projected to
+    // `local/staged/`, found once the index has them, and the scope read adds nothing (no duplicate).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_host_with_no_scope_still_searches_the_shared_index_as_before_and_is_not_shown_twice() {
+        let f = setup(vec![], 5.0, |_| {});
+        let s = serve(&f).await;
+        let ws_dir = f.engine.ws.dir.clone();
+        // a mission that exists with no `scope` file is home-only (`mission_at` stamps only a mission it creates)
+        std::fs::create_dir_all(delphi_core::sessions::dir(&ws_dir, "host-dddddddd55555555")).unwrap();
+        assert_eq!(crate::host_noted::host_scope(&ws_dir, "host-dddddddd55555555", &f.root), None, "home-only");
+        host_note(&f, &s, "dddddddd55555555", &f.root, "Quokka registry", "The quokkaregistry lives at the old host").await;
+        assert!(ws_dir.join("local/staged/host-dddddddd55555555/n1.md").is_file(), "a home-only mission's note is projected to local/staged");
+        let before = host_search_as(&s, "dddddddd55555555", &f.root, "quokkaregistry").await;
+        assert_eq!(noted_count(&before), 0, "as before: the shared index holds it only once it is refreshed: {before}");
         let mut kb = crate::kb::Kb::open(&ws_dir.join("local/state.db")).unwrap();
         kb.refresh(&ws_dir, "").unwrap();
         drop(kb);
-        let r = host_search(&f, &s, "quokkaregistry").await.unwrap();
-        assert!(!r["noted"].as_array().unwrap().is_empty(), "the entry the host just stored, and was told is searchable, is not found: {r}");
+        let after = host_search_as(&s, "dddddddd55555555", &f.root, "quokkaregistry").await;
+        assert_eq!(noted_count(&after), 1, "found through the index, once and not twice: {after}");
+    }
+
+    // Nothing about the shared index changes: a scoped note is never added to it, whether or not it is refreshed.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_scoped_noted_entry_is_never_added_to_the_shared_index() {
+        let f = setup(vec![], 5.0, |_| {});
+        let s = serve(&f).await;
+        let ws_dir = f.engine.ws.dir.clone();
+        host_note(&f, &s, "abcdef0123456789", &f.root, "Quokka registry", "The quokkaregistry lives at the old host").await;
+        let _ = host_search_as(&s, "abcdef0123456789", &f.root, "quokkaregistry").await;
+        let mut kb = crate::kb::Kb::open(&ws_dir.join("local/state.db")).unwrap();
+        kb.refresh(&ws_dir, "").unwrap();
+        drop(kb);
+        let conn = rusqlite::Connection::open(ws_dir.join("local/state.db")).unwrap();
+        let staged: i64 = conn.query_row("SELECT COUNT(*) FROM kb_documents WHERE zone = 'staged' OR rel_path LIKE 'staged/%'", [], |r| r.get(0)).unwrap();
+        assert_eq!(staged, 0, "the shared index holds none of a scope's staged notes");
+        let hits = crate::retrieval::search(&f.engine.ws.home, &ws_dir.join("local/state.db"), "quokkaregistry", crate::kb::SearchOpts { role: None, limit: 5, zones: Some(vec!["staged"]), include_staged: true, include_untrusted: true, ..Default::default() }).map(|r| r.hits.len()).unwrap_or(0);
+        assert_eq!(hits, 0, "and a search of the index does not find it");
     }
 
     // specs/098 §7.5 item 7a, slice S1d: a claim whose URL a search of the session returned is refetched by
