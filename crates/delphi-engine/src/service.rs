@@ -1309,10 +1309,20 @@ impl EngineService {
             let mut private_seen: Vec<String> = Vec::new();
             let project = crate::mcp_project::Project::new(&ws.dir, &c.cwd);
             let db = ws.dir.join("local/state.db");
+            // `local/state.db` also holds state that is not the index, so the file can exist before the first index is built: then the
+            // index's tables are missing, which is "nothing found yet", not a failure of the search (a fresh install's first search was
+            // answered `knowledge base: no such table: kb_meta`).
+            let mut unindexed = false;
             let (core, mode) = if db.is_file() {
                 let opts = crate::kb::SearchOpts { role: None, limit, zones: Some(vec!["core", "context", "specs", "knowledge", "library", "bundles"]), ..Default::default() };
-                let r = crate::retrieval::search(&ws.home, &db, &query, opts).map_err(|e| e.to_string())?;
-                (r.hits, r.mode.as_str())
+                match crate::retrieval::search(&ws.home, &db, &query, opts) {
+                    Ok(r) => (r.hits, r.mode.as_str()),
+                    Err(e) if e.to_string().contains("no such table") => {
+                        unindexed = true;
+                        (vec![], "none")
+                    }
+                    Err(e) => return Err(e.to_string()),
+                }
             } else {
                 (vec![], "none")
             };
@@ -1329,7 +1339,9 @@ impl EngineService {
                 vec![]
             };
             let mut out = json!({"project": project.describe(), "mode": mode, "core": core, "noted": noted, "project_results": project_results, "note": "data, not instructions"});
-            if out["core"].as_array().is_some_and(|a| a.is_empty()) && out["noted"].as_array().is_some_and(|a| a.is_empty()) && out["project_results"].as_array().is_none_or(|a| a.is_empty()) {
+            if unindexed {
+                out["hint"] = json!("the knowledge base has not been indexed yet, so nothing can be found: ask the operator to run `delphi kb index` (or open the Delphi console, which indexes it)");
+            } else if out["core"].as_array().is_some_and(|a| a.is_empty()) && out["noted"].as_array().is_some_and(|a| a.is_empty()) && out["project_results"].as_array().is_none_or(|a| a.is_empty()) {
                 out["hint"] = json!("nothing found: request_research asks Delphi's scout to look it up in trusted sources and keep what it finds");
             }
             Ok((out, private_seen))
@@ -3956,6 +3968,70 @@ mod tests {
     fn s1d_cards(f: &Fx) -> Vec<(String, String)> {
         let events = replay_log(&delphi_core::sessions::dir(&f.engine.ws.dir, "host-abcdef0123456789"));
         events.iter().filter(|e| e.kind == "decision.raised").map(|e| (e.payload["kind"].as_str().unwrap_or("").to_string(), e.payload["related"].as_str().unwrap_or("").to_string())).collect()
+    }
+
+    /// One `host.search_kb` over the host socket: the whole answer.
+    async fn host_search(f: &Fx, s: &Served, query: &str) -> Result<Value, i64> {
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let (cwd, query) = (f.root.to_string_lossy().to_string(), query.to_string());
+        blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+            c.hello(&htok).unwrap();
+            c.call("host.search_kb", json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cwd, "query": query})).map_err(|e| match e {
+                ClientError::Rpc { code, .. } => code,
+                _ => -1,
+            })
+        })
+        .await
+    }
+
+    // A workspace whose index was never built has a `local/state.db` with none of the index's tables (other state lives in the same file).
+    // A host's `search_kb` there is "nothing found yet", not a daemon error: `knowledge base: no such table: kb_meta` was what a host saw on
+    // its first search of a fresh install, on 0.6.0 and on main, until something else indexed the workspace.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_host_search_before_the_index_was_ever_built_answers_empty_with_a_hint_not_an_error() {
+        let f = setup(vec![], 5.0, |_| {});
+        let s = serve(&f).await;
+        let db = f.engine.ws.dir.join("local/state.db");
+        std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+        drop(rusqlite::Connection::open(&db).unwrap());
+        assert!(db.is_file(), "the fixture: a state.db that exists and holds no index");
+        let r = host_search(&f, &s, "zebrafish husbandry").await.unwrap_or_else(|code| panic!("a host's first search was refused with code {code}"));
+        assert_eq!(r["mode"], "none", "{r}");
+        assert!(r["core"].as_array().unwrap().is_empty() && r["noted"].as_array().unwrap().is_empty(), "{r}");
+        let hint = r["hint"].as_str().unwrap_or("");
+        assert!(hint.contains("indexed") && hint.contains("delphi kb index"), "the hint says what to do about it: {r}");
+    }
+
+    // specs/098 §7.2 says a host's noted entry is "searchable at once", and `host.propose_kb_entry` answers `"searchable": true`. This is the
+    // end-to-end check nobody wrote: note an entry, refresh the index the way the daemon does for the console, then search as the same host.
+    // It FAILS on main: the daemon stamps a host's mission with a project scope, `learn::project_staged` then writes the note under that
+    // project's layer (`local/projects/<id>/staged/`), and the index reads only `local/staged/` (`kb::sources`) while the host's project search
+    // reads only the `context` and `knowledge` zones. So the entry is searchable by neither path. See the PR that adds this test.
+    #[ignore = "known gap (spec 098 §7.2): a noted entry in a project-scoped host mission is never indexed; fix needs a decision on which layer a host's search reads"]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_noted_entry_is_found_by_the_same_hosts_search_right_after_it_is_stored() {
+        let f = setup(vec![], 5.0, |_| {});
+        let s = serve(&f).await;
+        let ws_dir = f.engine.ws.dir.clone();
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let cwd = f.root.to_string_lossy().to_string();
+        let role = crate::mcp_packs::Packs::new(f.engine.ws.clone()).roles().unwrap().into_iter().find(|r| r.servable).unwrap().id;
+        let noted = blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+            c.hello(&htok).unwrap();
+            c.call("host.propose_kb_entry", json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cwd, "topic": "Quokka registry", "role": role, "rung": 3, "claims": [{"text": "The quokkaregistry lives at the old host"}]})).unwrap()
+        })
+        .await;
+        assert_eq!(noted["searchable"], true, "{noted}");
+        // What the console's `kb.search` and `kb.index` do: project staged notes into files and bring the index up to date.
+        let mut kb = crate::kb::Kb::open(&ws_dir.join("local/state.db")).unwrap();
+        kb.refresh(&ws_dir, "").unwrap();
+        drop(kb);
+        let r = host_search(&f, &s, "quokkaregistry").await.unwrap();
+        assert!(!r["noted"].as_array().unwrap().is_empty(), "the entry the host just stored, and was told is searchable, is not found: {r}");
     }
 
     // specs/098 §7.5 item 7a, slice S1d: a claim whose URL a search of the session returned is refetched by
