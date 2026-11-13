@@ -4,7 +4,7 @@
 
 **A team of AI agents that works together, remembers what it learns, goes where you work, and grows a knowledge base it can cite.**
 
-> Status: pre-1.0, macOS and Linux, one person per install. Latest release: v0.6.0 (`delphi update --dev` follows `main`). What is proven and what is not: [Status and limitations](#status-and-limitations).
+> Status: pre-1.0, macOS and Linux, one person per install. Latest release: v0.6.1 (`delphi update --dev` follows `main`). What is proven and what is not: [Status and limitations](#status-and-limitations).
 
 ## What is Delphi?
 
