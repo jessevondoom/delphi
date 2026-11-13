@@ -862,6 +862,7 @@ fn the_private_read_mark_is_named_only_where_it_is_set_observed_cleared_and_show
         "crates/delphi/src/main.rs",
     ];
     let (mut stray, mut mark_callers, mut record_callers, mut held_callers) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let (mut link_callers, mut timer_note_callers, mut woken_link_callers): (Vec<String>, Vec<String>, Vec<String>) = (Vec::new(), Vec::new(), Vec::new());
     // production code runs to the LAST `mod tests` (a file such as `service.rs` has an earlier `#[cfg(test)]` item, which `production()` would cut at)
     let production_last = |src: &str| -> String {
         let cut = src.rfind("\n#[cfg(test)]\nmod tests").or_else(|| src.rfind("\nmod tests")).unwrap_or(src.len());
@@ -878,8 +879,18 @@ fn the_private_read_mark_is_named_only_where_it_is_set_observed_cleared_and_show
             if code.contains("private_read::mark(") {
                 mark_callers.push(rel.clone());
             }
-            if code.contains("private_read::send_record(") {
+            if code.contains("private_read::scope_record(") {
                 record_callers.push(rel.clone());
+            }
+            // OD-5: a parent link is written by the daemon from its own context and by nothing else
+            if code.contains("private_read::link_task(") {
+                link_callers.push(rel.clone());
+            }
+            if code.contains("private_read::note_timer_setter(") {
+                timer_note_callers.push(rel.clone());
+            }
+            if code.contains("private_read::link_woken_task(") {
+                woken_link_callers.push(rel.clone());
             }
             if code.contains("private_read::note_held(") {
                 held_callers.push(rel.clone());
@@ -888,6 +899,9 @@ fn the_private_read_mark_is_named_only_where_it_is_set_observed_cleared_and_show
     }
     record_callers.sort();
     held_callers.sort();
+    assert!(link_callers.is_empty(), "a parent link is made only inside the module, by `link_woken_task`: {link_callers:?}");
+    assert_eq!(timer_note_callers, vec!["crates/delphi-engine/src/engine.rs".to_string()], "the setter of a timer is noted only where the engine sets a role's timer (its own context, never a tool argument)");
+    assert_eq!(woken_link_callers, vec!["crates/delphi-engine/src/service.rs".to_string()], "a woken task is linked to its setter only where the daemon starts it");
     assert!(stray.is_empty(), "the private-read mark is named outside the files that set, observe, clear and show it; read the new file and add it on purpose: {stray:?}");
     assert_eq!(mark_callers, vec!["crates/delphi-engine/src/service.rs".to_string()], "a mark is set only by the daemon's marker for a reader in READS");
     // `merge_class.rs` is the one approval-side file that names the mark, by a string, in one place, and only to refuse: the line returns `Some(..)`
@@ -904,8 +918,9 @@ fn the_private_read_mark_is_named_only_where_it_is_set_observed_cleared_and_show
     // slice M4: the engine's one mention of the module is the call that notes a raised card's mission; it reads no mark, sets none, and decides nothing
     let engine = std::fs::read_to_string(root.join("crates/delphi-engine/src/engine.rs")).unwrap();
     let engine_lines: Vec<&str> = production_last(&engine).lines().filter(|l| !l.trim_start().starts_with("//")).filter(|l| l.contains("private_read")).map(|_| "x").collect();
-    assert_eq!(engine_lines.len(), 1, "engine.rs names the mark module in exactly one line");
-    assert!(production_last(&engine).contains("crate::private_read::note_card_raised(&id, &who.m.id);"), "and that line only notes the card's mission");
+    assert_eq!(engine_lines.len(), 2, "engine.rs names the mark module in exactly two lines");
+    assert!(production_last(&engine).contains("crate::private_read::note_card_raised(&id, &who.m.id);"), "one only notes the card's mission");
+    assert!(production_last(&engine).contains("crate::private_read::note_timer_setter("), "the other only notes which task set a timer (OD-5)");
     let inert = ["delphi_core::", "serde_json::", "std::"];
     let reach = Regex::new(r"std::net|std::process|Command::new|TcpStream|reqwest|tiny_http|tokio::|delphi_adapter|complete\(|model_call|\.send\(").unwrap();
     let rel = "crates/delphi-engine/src/private_read.rs";

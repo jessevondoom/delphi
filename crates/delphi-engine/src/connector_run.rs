@@ -155,10 +155,11 @@ impl Engine {
         // "allow similar": Red takes none, and the read path below is forced to ask), and not approvable by a relay reply
         // (`merge_class::console_only` names a connector card carrying `private_read_mark`). A read with no text in it sends nothing an
         // agent wrote, so it is not held. Nothing is sent before an answer; a timeout is a denial.
-        let mark_key = crate::private_read::task_key(&sc.m.id, &sc.task_id);
-        let held = crate::egress::check(&crate::private_read::send_record(&self.ws.dir, &mark_key), crate::library::Channel::Connector).is_err() && (class != ToolClass::Read || has_query);
+        // Spec 103 OD-5: the task is held by its own mark, its recorded ancestors' and its session's (`private_read::task_scope`).
+        let scope = crate::private_read::task_scope(&self.ws.dir, Some(&sc.m.id), &sc.task_id);
+        let held = crate::egress::check(&crate::private_read::scope_record(&scope.state), crate::library::Channel::Connector).is_err() && (class != ToolClass::Read || has_query);
         let (args_line, banner) = if held {
-            crate::private_read::note_held(&self.ws.dir, "connector", &mark_key);
+            crate::private_read::note_held(&self.ws.dir, "connector", &scope);
             payload["private_read_mark"] = json!(true);
             (crate::private_read::exact(args), format!("{} ", crate::private_read::HELD_BANNER))
         } else {
@@ -533,6 +534,38 @@ tools = { search = "read", draft_note = "draft", send = "write" }
         assert!(plain[0].tier == ApprovalTier::Amber && plain[0].summary.contains("first use of docs.search"));
         assert_eq!(crate::private_read::counter(&f.engine.ws.dir).connector_would_change, 4);
         assert!(f.engine.broker.allow_similar().is_empty());
+    }
+
+    /// `specs/103` §7.1 OD-5: a child of a marked task has the same connector calls held (Red, banner, exact text, asked every time, not
+    /// approvable by a relay); a child of an UNMARKED parent is the ordinary first-use card. The hold is counted as inherited.
+    #[tokio::test]
+    async fn a_child_tasks_connector_calls_are_held_when_its_parent_is_marked_and_not_when_it_is_not() {
+        for parent_marked in [true, false] {
+            let f = fixture(vec![Step::tool("c1", "docs__search", json!({"query": "alpha"})), Step::tool("c2", "docs__send", json!({"to": "a@b.c"})), Step::text("ok")]).await;
+            let parent = crate::private_read::task_key(&f.m.id, "t_parent");
+            let child = crate::private_read::task_key(&f.m.id, "t_0001");
+            crate::private_read::link_task(&f.engine.ws.dir, &child, &parent).unwrap();
+            if parent_marked {
+                crate::private_read::mark(&f.engine.ws.dir, &parent, "host-abcd1234/n1", 1).unwrap();
+            }
+            let seen = approver_full(&f);
+            f.engine.run_task(&f.m, "orchestrator", "Look it up").await.unwrap();
+            let cards = seen.lock().unwrap().clone();
+            let held: Vec<&crate::approval::Request> = cards.iter().filter(|c| c.payload["private_read_mark"] == true).collect();
+            let c = crate::private_read::counter(&f.engine.ws.dir);
+            if parent_marked {
+                assert_eq!(held.len(), 2, "the query and the write are both held: {:?}", cards.iter().map(|c| c.summary.clone()).collect::<Vec<_>>());
+                for h in &held {
+                    assert_eq!(h.tier, ApprovalTier::Red);
+                    assert!(h.summary.starts_with(crate::private_read::HELD_BANNER) && !h.similar_allowed());
+                    assert!(crate::merge_class::console_only(&h.tool, &h.payload).is_some(), "a relay reply cannot approve it");
+                }
+                assert_eq!((c.connector_would_change, c.held_by_inheritance), (2, 2));
+            } else {
+                assert!(held.is_empty(), "the child of an unmarked parent is not held");
+                assert_eq!((c.connector_would_change, c.held_by_inheritance), (0, 0));
+            }
+        }
     }
 
     /// An unmarked task is exactly as before: the same cards, no banner, nothing counted, and no mark file created.

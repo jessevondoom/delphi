@@ -2656,6 +2656,9 @@ impl Engine {
                 let req = NewTimer { mission_id: sc.m.id.clone(), target: sc.role.clone(), note: args["note"].as_str().unwrap_or("").into(), creator: sc.role.clone(), ceiling: sc.span.ceiling().as_str().into(), in_secs: args["in_secs"].as_i64(), at_unix, every_secs: args["every_secs"].as_i64() };
                 match self.timers.set(req, now) {
                     Ok(t) => {
+                        // Spec 103 OD-5: note which task set this timer (the daemon's own context, never a tool argument), so the task its wake
+                        // starts is held by what this one holds. A failure here never fails the timer.
+                        let _ = crate::private_read::note_timer_setter(&self.ws.dir, &t.id, &crate::private_read::task_key(&sc.m.id, &sc.task_id));
                         sc.m.append(sc.ev("timer.set", t.to_json())).await?;
                         let every = t.every_secs.map(|e| format!(", then every {}s", e)).unwrap_or_default();
                         Ok(tools::ToolResult { content: format!("timer {} set. It is now {}. You will be woken as `{}` at {} ({}){}. That wake is a new task: you will not be running in between, and you will see only your note: \"{}\"", t.id, at(now), t.target, at(t.due_unix), relative(t.due_unix, now), every, t.note), is_error: false })
