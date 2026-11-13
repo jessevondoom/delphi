@@ -63,6 +63,13 @@ pub enum How {
     NotYetMarked { why: &'static str },
     /// The file writes or defines the thing but returns no entry text to a model or host.
     NoReturn { why: &'static str },
+    /// The reader returns text only to the operator's own console (a method that needs the console scope, or a command the operator
+    /// runs), never to a model seat or an MCP caller. `why` names the check that keeps it so.
+    OperatorOnly { why: &'static str },
+    /// SKIPS THE MARK: a real gap. The reader can hand a model or a host words that came from a private entry and does not mark. `exposure`
+    /// says what leaks and what the operator should know. Found by the red-team pass (`specs/103` M4); it is not fixed because the fix is a
+    /// decision (a child or another session inheriting a mark, OD-5), not a bug.
+    Skips { exposure: &'static str },
 }
 
 /// One file that touches the text of a private entry and what it does about it. The file is relative to this crate's `src`.
@@ -74,20 +81,150 @@ pub struct Read {
 
 /// Every file of this crate that returns, or can return, the text of a private entry. The inventory test below checks the table against
 /// the accessors it scans for; a reader of private text that is not here fails it.
-pub const READS: [Read; 8] = [
-    Read { file: "service.rs", what: "`host.search_kb`: the `noted` layer returns entries a host left, with the preview; one the daemon stored private is private text handed to the host", how: How::Marks },
-    Read { file: "library_claims.rs", what: "`claim_slice`: opening `@library/claim/<id>`", how: How::Withholds { proof_file: "delphi-engine/src/private_read.rs", proof_test: "a_claim_that_rests_on_a_private_source_is_withheld_from_the_seat_that_opens_it" } },
+pub const READS: [Read; 21] = [
+    Read { file: "service.rs", what: "`host.search_kb`: the `noted` layer returns entries a host left, with the preview; one the daemon stored private is private text handed to the host. (The same file's `kb.search` and `kb.get` serve the console and the narrator pane with `include_staged`: the operator's own view, not a seat; the per-method tables `HOST_SURFACE` and `MCP_SURFACE` name every method a host can call)", how: How::Marks },
+    Read { file: "library_claims.rs", what: "`claim_slice`: opening `@library/claim/<id>`; also reads `source.md` and `excerpts` to check an anchor or a support count, which return counts and verdicts and no text", how: How::Withholds { proof_file: "delphi-engine/src/private_read.rs", proof_test: "a_claim_that_rests_on_a_private_source_is_withheld_from_the_seat_that_opens_it" } },
     Read { file: "engine.rs", what: "block 5 of a span: opens a claim pointer through `claim_slice` (above)", how: How::Withholds { proof_file: "delphi-engine/src/private_read.rs", proof_test: "a_claim_that_rests_on_a_private_source_is_withheld_from_the_seat_that_opens_it" } },
     Read { file: "library_page_search.rs", what: "a page search in the internal scope reads private sources into the page writer", how: How::NotYetMarked { why: "the writer is a model with no tools and no path to the four channels; the page is a library record, not a send. An external page leaves private sources out" } },
-    Read { file: "library_page_check.rs", what: "the page check reads source text to verify quotes (internal scope includes private sources)", how: How::NotYetMarked { why: "the checker reads text to compare it and returns verdicts, not text; an external page refuses a private source" } },
+    Read { file: "library_page_check.rs", what: "the page check reads source text and excerpts to verify quotes (internal scope includes private sources)", how: How::NotYetMarked { why: "the checker reads text to compare it and returns verdicts, not text; an external page refuses a private source" } },
     Read { file: "library_page_validate.rs", what: "the page validator reads source text", how: How::NotYetMarked { why: "a validator seat with no tools; it returns a verdict" } },
     Read { file: "library_pages.rs", what: "writes the `Noted, not validated` section of a page", how: How::NoReturn { why: "it composes a library page from entries that are already stored; it is not a reader of private text for a caller" } },
     Read { file: "host_noted.rs", what: "stores a host's entry, deciding `private`", how: How::NoReturn { why: "it stores and labels; it returns no entry text" } },
+    // ---- slice M4 (the red-team pass): the files the wider scan found ----
+    Read { file: "library.rs", what: "captures and recaptures a source: reads the previous `source.md` and `excerpts.json` to compute a change note (sizes and heading names) and to carry excerpts over", how: How::NoReturn { why: "it writes the library; its only text-derived output is a change note of sizes and heading names that `library history` shows the operator" } },
+    Read { file: "library_archive.rs", what: "asks whether a source's `source.md` exists", how: How::NoReturn { why: "an `is_file` check; it reads no text" } },
+    Read { file: "library_excerpts.rs", what: "`Library::excerpts` returns the kept excerpt text of any source, private included; `add_excerpt` reads `source.md` to locate a quote", how: How::NotYetMarked { why: "a helper: its callers are `library_claims.rs` (withholds), `library_page_check.rs` (above) and `library_export.rs` (egress-checked); `add_excerpt` is the operator's own act. No seat or host method calls it directly" } },
+    Read { file: "library_export.rs", what: "`export_one` reads `source.md` and the excerpts of a source to write a bundle", how: How::Withholds { proof_file: "delphi-engine/src/library_tests.rs", proof_test: "a_private_source_never_leaves_and_is_never_indexed" } },
+    Read { file: "library_extract.rs", what: "reads source text to check that a summary page's quote is a verbatim substring of a source the library holds, for the operator's accept and attest flow", how: How::OperatorOnly { why: "reached by `digest.act` and the attest commands, which need the console scope or the operator's terminal; the candidates carry the page's own quote" } },
+    Read { file: "library_history.rs", what: "`Library::history` lists a source's kept captures", how: How::NoReturn { why: "it measures `source.md` (bytes) and reads the record; the entry carries a version, a hash, a size, a change note and an anchor count, no text" } },
+    Read { file: "kb.rs", what: "the index: `chunk_content` returns indexed text; `include_staged` opts in to staged notes (host-noted entries among them)", how: How::NoReturn { why: "the index lists only library sources that are not private (`Library::indexable`); staged notes are off unless a caller sets `include_staged`, and the callers are the `service.rs` row (host search, marks) and the console's `kb.search`" } },
+    Read { file: "mcp_project.rs", what: "the MCP server's own readers (`search_project`, `search_memory`, `query_memory`, `kb_retrieve`): they run in the MCP server process, which has no daemon session to mark", how: How::NoReturn { why: "their file sets exclude the `staged` zone (`scope.rs` drops it) and their KB zone list names no `staged`; `local/staged` is never readable by a role (`pathguard`). The test `the_mcp_servers_own_readers_never_return_a_noted_entry` proves it with a canary" } },
+    Read { file: "host_rpc.rs", what: "`read_handoff`: `host.handoff_get` returns the handoff another session of the same project put", how: How::Skips { exposure: "the text came from another session whose mark (if any) is its own: the reading session is unmarked, so a handoff that carries words from a private note reaches a fresh session with no mark and nothing held on its sends. Accepted for now by OD-5 (no inheritance); a decision, not a bug" } },
+    Read { file: concat!("history_", "record.rs"), what: "`for_prompt` returns a spec 102 record's prompt text; `read` returns the store", how: How::Withholds { proof_file: "delphi-engine/tests/history_egress.rs", proof_test: "nothing_but_the_history_module_calls_for_prompt_and_by_default_no_record_is_served" } },
+    Read { file: concat!("history_", "view.rs"), what: "`history.view` shows the stored records' prompt text", how: How::OperatorOnly { why: "the `history.view` method needs the console scope (`history_view_is_for_the_console_only_reads_only_and_says_history_is_off_when_it_is`)" } },
+    Read { file: concat!("history_", "manage.rs"), what: "`overview` counts the verified records", how: How::NoReturn { why: "counts and states only (`delphi history status`, the operator's command)" } },
+    Read { file: "council.rs", what: "fences a noted entry in a seat's reading (`host_noted::fence`) and withdraws the seat's tools", how: How::NoReturn { why: "no path delivers a noted entry to a seat (`engine.rs` refuses with `READ_REFUSAL`); this is the tripwire for one added later" } },
 ];
+
+// ---- slice M4 (`specs/103` §6, the red-team pass): every way a host reaches the daemon ---------------------------------------------------
+//
+// `READS` is a table of FILES. The host surface is a table of NAMES: every method the host socket answers and every tool the MCP server
+// offers, each with what it does about a private entry. A method or tool added later fails `every_host_method_and_mcp_tool_is_classified`
+// until someone classifies it, so a new way to hand a host private text cannot ship unrecorded.
+
+/// One host method or MCP tool and what it does about a private entry's text.
+pub struct Surface {
+    pub name: &'static str,
+    pub how: How,
+}
+
+const fn no_return(name: &'static str, why: &'static str) -> Surface {
+    Surface { name, how: How::NoReturn { why } }
+}
+
+const WRITES: &str = "a write: it returns an id, a status or fixed words, never an entry's text";
+const PROJECT_FILES: &str = "reads the project's own files, the role packs or the specs, which hold no library or host-noted entry";
+const SEATS_CANNOT_READ: &str = "an answer written by seats that cannot read a noted entry (`engine.rs` refuses it) and that are handed a claim resting on a private source withheld (`claim_slice`); NOT VALIDATED beyond those two refusals";
+const MCP_OWN: &str = "runs in the MCP server's own process over files and the index; their file sets and zones exclude `staged` (`the_mcp_servers_own_readers_never_return_a_noted_entry`) and the index lists no private source";
+
+/// The methods of the host socket (`delphi_core::server::HOST_METHODS`).
+pub const HOST_SURFACE: [Surface; 24] = [
+    no_return("session.ping", "answers `pong`"),
+    Surface { name: "host.search_kb", how: How::Marks },
+    no_return("host.propose_note", WRITES),
+    no_return("host.propose_kb_entry", "a write: it returns a status, a ref, a `private` flag and a reason slug per claim, never the claim text"),
+    no_return("host.request_test_authorization", WRITES),
+    no_return("host.record_session_summary", WRITES),
+    no_return("host.handoff_put", WRITES),
+    Surface { name: "host.handoff_get", how: How::Skips { exposure: "returns the handoff another session put; that session's mark is its own and does not follow the text (OD-5)" } },
+    no_return("host.request_help", WRITES),
+    no_return("host.help_result", SEATS_CANNOT_READ),
+    no_return("host.request_council", WRITES),
+    no_return("host.council_status", "fixed-form progress (role, state, counts); no model text"),
+    no_return("host.council_result", SEATS_CANNOT_READ),
+    no_return("host.council_open", WRITES),
+    no_return("host.council_frame", "the static frame of a council: no entry"),
+    no_return("host.council_brief", "returns the brief the host's own session wrote"),
+    no_return("host.council_submit", WRITES),
+    no_return("host.council_choose", WRITES),
+    no_return("host.request_research", WRITES),
+    no_return("host.research_status", "fixed-form progress; no entry text"),
+    no_return("host.research_result", "the answer of a run over the indexed KB (no private source, no staged note) and pages the run fetched; a claim resting on a private source is counted and kept out of outbound queries; NOT VALIDATED beyond reading the run's callers"),
+    no_return("host.cancel_job", WRITES),
+    no_return("host.route_decided", WRITES),
+    no_return("host.ask_family", "the answer of another model family to the host's own question; it is handed no entry by the daemon"),
+];
+
+/// The tools of the MCP server (`mcp_host::tools()`).
+pub const MCP_SURFACE: [Surface; 39] = [
+    Surface { name: "search_kb", how: How::Marks },
+    no_return("list_roles", PROJECT_FILES),
+    no_return("delphi_roster", PROJECT_FILES),
+    no_return("get_agent", PROJECT_FILES),
+    no_return("list_skills", PROJECT_FILES),
+    no_return("get_skill", PROJECT_FILES),
+    no_return("specs_status", PROJECT_FILES),
+    no_return("specs_show", PROJECT_FILES),
+    no_return("specs_list", PROJECT_FILES),
+    no_return("scaffold_status", PROJECT_FILES),
+    no_return("search_project", MCP_OWN),
+    no_return("search_memory", MCP_OWN),
+    no_return("query_memory", MCP_OWN),
+    no_return("kb_retrieve", MCP_OWN),
+    no_return("consult_orchestrator", "advice from the role packs; no entry"),
+    no_return("spawn_agent_pack", PROJECT_FILES),
+    no_return("route", "ranks roles by words only"),
+    no_return("propose_note", WRITES),
+    no_return("request_test_authorization", WRITES),
+    no_return("propose_kb_entry", WRITES),
+    no_return("propose_council_record", WRITES),
+    no_return("record_session_summary", WRITES),
+    no_return("handoff_put", WRITES),
+    Surface { name: "handoff_get", how: How::Skips { exposure: "see `host.handoff_get`" } },
+    no_return("request_help", WRITES),
+    no_return("help_result", SEATS_CANNOT_READ),
+    no_return("council_frame", "the static frame of a council: no entry"),
+    no_return("council_open", WRITES),
+    no_return("council_brief", "returns the brief the host's own session wrote"),
+    no_return("council_submit", WRITES),
+    no_return("council_choose", WRITES),
+    no_return("request_council", WRITES),
+    no_return("council_status", "fixed-form progress; no model text"),
+    no_return("council_result", SEATS_CANNOT_READ),
+    no_return("request_research", WRITES),
+    no_return("research_status", "fixed-form progress; no entry text"),
+    no_return("research_result", "see `host.research_result`"),
+    no_return("cancel_job", WRITES),
+    no_return("ask_family", "see `host.ask_family`"),
+];
+
+/// The relay stream's event kinds that carry no text an agent wrote, and why. The kinds that do are `AGENT_TEXT_KINDS` (masked above). A
+/// kind added to `delphi_core::hub::RELAY_EVENTS` fails `every_relay_event_kind_is_masked_or_shown_to_carry_no_agent_text` until it is in
+/// one of the two lists.
+pub const RELAY_KINDS_WITHOUT_AGENT_TEXT: [(&str, &str); 3] = [
+    ("approval.resolved", "ids, the resolution word, `by` (a console client, `relay:<channel>:<sender>`, `timeout`, `recovery`) and a reason that is the operator's typed words or a fixed phrase of the daemon's; a hook's output becomes a denial, not an event"),
+    ("approval.parked", "ids and two counts"),
+    ("xenia.alert", "fixed slugs and counts; the relay words it from the help catalog and never from the payload"),
+];
+
+/// The methods the relay socket answers and what each returns (`delphi_core::server::RELAY_METHODS`).
+pub const RELAY_SURFACE: [(&str, &str); 5] = [
+    ("session.ping", "`pong`"),
+    ("events.subscribe", "the stream, through the relay filter"),
+    ("approval.list", "the pending cards, through `mask_pending_for_relay`"),
+    ("approval.relay_resolve", "the resolution of the card it answers (`Resolution::event_payload`: ids, the word, `by`, the operator's reason); refused for a withheld card that it would allow"),
+    ("budget.get", "numbers"),
+];
+
 
 /// The accessors whose callers are the readers of entry text. Matched against the production text of every file of this crate.
 /// This is a token scan of three accessors, not a proof of completeness (`specs/103` §2: NOT VALIDATED; the red-team slice M4 attacks it).
-pub const ACCESSORS: [&str; 3] = ["stored_text", "claim_slice(", "NOTED_HEADING"];
+///
+/// Slice M4 widened it from three accessors to the ones below: the raw files a source is kept in (`"source.md"`, `excerpts.json`), the
+/// excerpt reader, the staged-note opt-in, the handoff reader, the indexed chunk reader and the history record's prompt text. A file that
+/// contains one in production code and is not a row of [`READS`] fails the test. It is still a token scan: a reader that reaches the text
+/// through a function that is not named here is found only if one of its callees is (the scan cannot see a rename).
+pub const ACCESSORS: [&str; 11] = ["stored_text", "claim_slice(", "NOTED_HEADING", "\"source.md\"", "excerpts.json", ".excerpts(", "include_staged", "read_handoff(", "chunk_content", concat!("for_", "prompt("), ".prompt.as_ref()"];
 
 /// A key is a task or host-session identifier: a short run of characters that cannot name a path or hold prose.
 fn key_ok(key: &str) -> bool {
@@ -332,6 +469,11 @@ pub fn readers_not_yet_marking() -> usize {
     READS.iter().filter(|r| matches!(r.how, How::NotYetMarked { .. })).count()
 }
 
+/// How many readers in [`READS`] skip the mark and are a real gap (`How::Skips`): the red-team pass's findings, reported and not hidden.
+pub fn readers_skipping_the_mark() -> usize {
+    READS.iter().filter(|r| matches!(r.how, How::Skips { .. })).count()
+}
+
 /// One line for `delphi doctor` and the console: what observe mode has seen. Counts only.
 pub fn status_line(ws_dir: &Path) -> String {
     let c = counter(ws_dir);
@@ -415,6 +557,25 @@ fn note_masked_card(approval_id: &str) {
     }
 }
 
+/// The mission each raised card belongs to, noted when the engine raises the card (`note_card_raised`), newest last. In memory only. A card
+/// record names its task and not its mission, so without this a mark kept on the MISSION (a host session's mark is kept under its mission
+/// id) was found by the stream (the event names its mission) and not by the card list or a relay's answer when the relay was offline while
+/// the card was raised and asked for the list on reconnecting (the red-team pass, M4).
+static CARD_MISSIONS: Mutex<VecDeque<(String, String)>> = Mutex::new(VecDeque::new());
+
+/// Called by the engine when it raises a card: remember which mission it belongs to. Records nothing about its text.
+pub fn note_card_raised(approval_id: &str, mission: &str) {
+    let mut q = CARD_MISSIONS.lock().unwrap_or_else(|p| p.into_inner());
+    if q.len() >= MASKED_CARDS_CAP {
+        q.pop_front();
+    }
+    q.push_back((approval_id.to_string(), mission.to_string()));
+}
+
+fn card_mission(approval_id: &str) -> Option<String> {
+    CARD_MISSIONS.lock().unwrap_or_else(|p| p.into_inner()).iter().rev().find(|(id, _)| id == approval_id).map(|(_, m)| m.clone())
+}
+
 fn card_is_masked(approval_id: &str) -> bool {
     MASKED_CARDS.lock().unwrap_or_else(|p| p.into_inner()).iter().any(|c| c == approval_id)
 }
@@ -485,16 +646,23 @@ fn task_state_in_any_mission(ws_dir: &Path, task: &str) -> State {
     if !key_ok(task) {
         return State::Unmarked;
     }
-    let suffix = format!("/{task}");
+    // Found by FILE NAME, not by `live()`: a record that cannot be read has no key inside it for `live()` to find, and a damaged mark must
+    // fail closed here as it does on a send (`specs/103` §4.3; the red-team pass, M4). `file_of` writes `<mission>__<task>.json`.
+    let suffix = format!("__{}.json", task.replace(':', "_"));
     let mut found = State::Unmarked;
-    for (key, _, _) in live(ws_dir) {
-        if !key.ends_with(&suffix) {
+    for e in std::fs::read_dir(dir(ws_dir)).into_iter().flatten().flatten() {
+        let p = e.path();
+        if !p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with(&suffix)) {
             continue;
         }
-        match state(ws_dir, &key) {
-            State::Unreadable => return State::Unreadable,
-            m @ State::Marked { .. } => found = m,
-            State::Unmarked => {}
+        match read_record(&p) {
+            Err(()) => return State::Unreadable,
+            Ok(None) => {}
+            Ok(Some(v)) => match v["key"].as_str().map(|k| state(ws_dir, k)) {
+                Some(State::Unreadable) | None => return State::Unreadable,
+                Some(m @ State::Marked { .. }) => found = m,
+                Some(State::Unmarked) => {}
+            },
         }
     }
     found
@@ -514,7 +682,14 @@ pub fn card_withheld(ws_dir: &Path, approval_id: &str, task_id: &str) -> bool {
     } else {
         State::Unmarked
     };
-    !stream_text_can_go(&st)
+    if !stream_text_can_go(&st) {
+        return true;
+    }
+    // The mission the engine noted when it raised the card: a mark kept under the mission (a host session's) or under `<mission>/<task>`.
+    match card_mission(approval_id) {
+        Some(m) => !stream_text_can_go(&event_state(ws_dir, &json!({"mission_id": m, "task_id": task_id}))),
+        None => false,
+    }
 }
 
 fn replace_text(v: &mut Value, field: &str) {
@@ -652,7 +827,8 @@ mod tests {
 
     /// The non-test text of a source file (as `egress.rs` does).
     fn production(src: &str) -> &str {
-        let cut = src.rfind("\n#[cfg(test)]\nmod tests").or_else(|| src.rfind("\nmod tests")).unwrap_or(src.len());
+        // the last test module, however it is declared (`mod tests` or `pub(crate) mod tests`)
+        let cut = ["\n#[cfg(test)]\nmod tests", "\nmod tests", "\n#[cfg(test)]\npub(crate) mod tests", "\npub(crate) mod tests"].iter().filter_map(|p| src.rfind(p)).max().unwrap_or(src.len());
         &src[..cut]
     }
 
@@ -799,21 +975,47 @@ mod tests {
 
     /// `specs/103` §6 `every_reader_of_private_text_is_in_the_reads_table`: a file that calls an accessor of entry text, or that the table
     /// names, must be in the table; every table row names a file that exists and, for `Withholds`, a proof test that exists.
-    #[test]
-    fn every_reader_of_private_text_is_in_the_reads_table() {
-        let sources = engine_sources();
-        for (file, text) in &sources {
-            let prod = production(text);
-            let reads_text = ACCESSORS.iter().any(|a| prod.contains(a));
-            let listed = READS.iter().any(|r| r.file == file);
-            // the accessors' own definitions and the tests of this module are not readers
+    /// The files among `sources` that name an accessor of entry text in production code (comment lines do not count) and are not a row of
+    /// `READS`. The module's own file is skipped: it defines the accessors and the table.
+    fn unlisted_readers(sources: &[(String, String)]) -> Vec<String> {
+        let mut out = Vec::new();
+        for (file, text) in sources {
             if file == "private_read.rs" {
                 continue;
             }
-            if reads_text {
-                assert!(listed, "{file} reads the text of an entry (one of {ACCESSORS:?}) and is not in READS (specs/103 §2): add it with what it does about a private entry");
+            let code: String = production(text).lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+            if ACCESSORS.iter().any(|a| code.contains(a)) && !READS.iter().any(|r| r.file == file) {
+                out.push(file.clone());
             }
         }
+        out
+    }
+
+    /// The scan is only worth its name if it fails for a NEW reader. A fixture adds three unclassified files, each reaching entry text a
+    /// different way (the raw source file, the excerpt reader, the staged-note opt-in); one classified file and one that reads nothing are
+    /// not reported. A comment that merely names an accessor is not a reader.
+    #[test]
+    fn the_scan_catches_a_new_unclassified_reader_and_not_a_classified_or_an_innocent_file() {
+        let src = |body: &str| format!("pub fn f() {{\n{body}\n}}\n\n#[cfg(test)]\nmod tests {{\n    fn t() {{ let _ = \"source.md\"; }}\n}}\n");
+        let fixture: Vec<(String, String)> = vec![
+            ("new_raw.rs".into(), src("let t = std::fs::read_to_string(dir.join(\"source.md\"));")),
+            ("new_excerpts.rs".into(), src("let e = lib.excerpts(&id);")),
+            ("new_staged.rs".into(), src("let o = SearchOpts { include_staged: true, ..Default::default() };")),
+            ("library_export.rs".into(), src("let t = std::fs::read_to_string(dir.join(\"source.md\"));")),
+            ("innocent.rs".into(), src("// this comment names \"source.md\" and .excerpts( only to explain\nlet x = 1;")),
+            ("tests_only.rs".into(), src("let x = 1;")),
+        ];
+        assert_eq!(unlisted_readers(&fixture), vec!["new_raw.rs".to_string(), "new_excerpts.rs".to_string(), "new_staged.rs".to_string()]);
+        // and a row for a new file makes the same fixture pass: the failure message is "add it with what it does about a private entry"
+        let accessors_cover_the_known_paths = ["\"source.md\"", "excerpts.json", ".excerpts(", "include_staged", "read_handoff(", "stored_text", "claim_slice(", "NOTED_HEADING"];
+        assert!(accessors_cover_the_known_paths.iter().all(|a| ACCESSORS.contains(a)));
+    }
+
+    #[test]
+    fn every_reader_of_private_text_is_in_the_reads_table() {
+        let sources = engine_sources();
+        let missing = unlisted_readers(&sources);
+        assert!(missing.is_empty(), "{missing:?} read the text of an entry (one of {ACCESSORS:?}) and are not in READS (specs/103 §2): add each with what it does about a private entry");
         for r in READS.iter() {
             assert!(sources.iter().any(|(f, _)| f == r.file), "READS names {} which is not a file of this crate", r.file);
             if let How::Withholds { proof_file, proof_test } = r.how {
@@ -1037,6 +1239,324 @@ mod tests {
         for needle in ["TcpStream", "reqwest", "Command::new", "std::process", "hyper::", "ureq", "promote", "approve", "grant(", "trust("] {
             let hits = code.lines().filter(|l| !l.trim_start().starts_with("//") && l.contains(needle)).count();
             assert_eq!(hits, 0, "private_read.rs names `{needle}`");
+        }
+    }
+
+    // ---- slice M4 (`specs/103`): the red-team pass --------------------------------------------------------------------------------------
+    //
+    // Each test below is an attack written against fake fixtures only. Where an attack SUCCEEDS the test pins what happens today and says so
+    // in its name or its comment, so the gap is a recorded fact the operator can read and a change that closes it must update the test on
+    // purpose. Where it fails the test is the proof.
+
+    fn surface_names(s: &[Surface]) -> Vec<String> {
+        let mut v: Vec<String> = s.iter().map(|x| x.name.to_string()).collect();
+        v.sort();
+        v
+    }
+
+    /// Every method the host socket answers and every tool the MCP server offers is classified; a stale row is an error too. Only
+    /// `search_kb` marks, and the MCP tool of that name is the host method of that name.
+    #[test]
+    fn every_host_method_and_mcp_tool_is_classified() {
+        let mut host: Vec<String> = delphi_core::server::HOST_METHODS.iter().map(|s| s.to_string()).collect();
+        host.sort();
+        assert_eq!(host, surface_names(&HOST_SURFACE), "a host method is missing from HOST_SURFACE, or a row names a method the socket does not answer");
+        let tools = crate::mcp_host::tools();
+        let mut names: Vec<String> = tools.as_array().expect("tools() is a list").iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
+        names.sort();
+        assert_eq!(names, surface_names(&MCP_SURFACE), "an MCP tool is missing from MCP_SURFACE, or a row names a tool the server does not offer");
+        for table in [&HOST_SURFACE[..], &MCP_SURFACE[..]] {
+            let marking: Vec<&str> = table.iter().filter(|s| s.how == How::Marks).map(|s| s.name).collect();
+            assert!(marking == ["host.search_kb"] || marking == ["search_kb"], "only the host's search marks today: {marking:?}");
+            for s in table {
+                match s.how {
+                    How::NoReturn { why } | How::OperatorOnly { why } | How::NotYetMarked { why } => assert!(why.len() > 8, "{}: say why", s.name),
+                    How::Skips { exposure } => assert!(exposure.len() > 8, "{}: say what leaks", s.name),
+                    How::Marks | How::Withholds { .. } => {}
+                }
+            }
+        }
+        let mcp = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/mcp_host.rs")).unwrap();
+        assert!(production(&mcp).contains("\"search_kb\" => query().and_then(|q| self.daemon(\"host.search_kb\""), "the MCP search_kb is the host method that marks");
+        // the findings, counted: the two names of the one handoff reader
+        assert_eq!(HOST_SURFACE.iter().chain(MCP_SURFACE.iter()).filter(|s| matches!(s.how, How::Skips { .. })).count(), 2);
+        assert_eq!(readers_skipping_the_mark(), 1, "READS has the one file-level finding (the handoff reader)");
+    }
+
+    /// The MCP server's own readers run in a process with no daemon session, so they cannot mark. The table says they return no private
+    /// text; this is the canary that proves it for the one kind of private text that sits where they look: a staged host-noted entry,
+    /// present both as a file in the project layer and as an indexed document. (A private library source is never indexed: `library_tests`.)
+    #[test]
+    fn the_mcp_servers_own_readers_never_return_a_noted_entry() {
+        let t = tempfile::tempdir().unwrap();
+        let ws = t.path().join("workspaces/w");
+        let doc = format!("---\nkind: fact\n---\n# Noted entry\n\nTopic: quokkafixture\n\n- the quokkafixture holds {CANARY} (source: https://example.com/q; quote verified by the daemon)\n");
+        for rel in ["local/staged/host-abcd1234/n1.md", "local/staged/n2.md"] {
+            let p = ws.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, &doc).unwrap();
+        }
+        let mut kb = crate::kb::Kb::open(&ws.join("local/state.db")).unwrap();
+        kb.upsert_from("staged/host-abcd1234/n1.md", "staged", "external_untrusted", &doc, "2026-11-12T00:00:00Z").unwrap();
+        // the control: the daemon's host search (which names the staged zone) finds it, so the fixture is a real, searchable noted entry
+        let opts = crate::kb::SearchOpts { role: None, limit: 5, zones: Some(vec!["staged"]), include_staged: true, include_untrusted: true, ..Default::default() };
+        let hits = kb.search("quokkafixture", &opts).unwrap();
+        assert!(hits.iter().any(|h| h.rel_path.starts_with("staged/host-")), "the fixture is searchable by the host's search");
+        drop(kb);
+        let p = crate::mcp_project::Project::new(&ws, t.path());
+        let answers = [
+            p.search_project("quokkafixture", 10),
+            p.search_memory("quokkafixture", None, 10),
+            p.query_memory("quokkafixture", None, None, 10),
+            p.kb_retrieve("quokkafixture", 10, "all", "all"),
+            p.kb_retrieve("quokkafixture", 10, "propositions_included", "core_only"),
+        ];
+        for (i, a) in answers.iter().enumerate() {
+            let text = a.as_ref().map(|s| s.as_str()).unwrap_or("(error)");
+            assert!(!text.contains(CANARY) && !text.contains("staged/"), "reader {i} returned a noted entry: {text}");
+        }
+    }
+
+    /// A kind added to the relay stream must be masked or shown to carry no agent-written text, and the relay socket answers a closed list.
+    #[test]
+    fn every_relay_event_kind_is_masked_or_shown_to_carry_no_agent_text() {
+        for k in delphi_core::hub::RELAY_EVENTS {
+            assert!(AGENT_TEXT_KINDS.contains(&k) || RELAY_KINDS_WITHOUT_AGENT_TEXT.iter().any(|(n, _)| *n == k), "the relay is sent `{k}` and it is neither masked nor classified as carrying no agent text");
+        }
+        for k in AGENT_TEXT_KINDS {
+            assert!(delphi_core::hub::RELAY_EVENTS.contains(&k), "{k} is masked but is not a relay event");
+        }
+        for (k, why) in RELAY_KINDS_WITHOUT_AGENT_TEXT {
+            assert!(delphi_core::hub::RELAY_EVENTS.contains(&k) && !AGENT_TEXT_KINDS.contains(&k) && why.len() > 8, "{k}");
+        }
+        let mut methods: Vec<&str> = delphi_core::server::RELAY_METHODS.to_vec();
+        methods.sort();
+        let mut table: Vec<&str> = RELAY_SURFACE.iter().map(|(n, _)| *n).collect();
+        table.sort();
+        assert_eq!(methods, table, "a relay method is not classified");
+        // and the unmasked kinds really do carry nothing the filter would have replaced: their producers' payload keys are fixed words and ids
+        for (kind, payload) in [
+            ("approval.resolved", json!({"approval_id": "ap_1", "resolution": "denied", "reason": "the task ended", "by": "console-1"})),
+            ("approval.parked", json!({"approval_id": "ap_1", "parked_secs": 5, "park_max_secs": 60})),
+        ] {
+            let d = ws();
+            mark(d.path(), "t_0001", "entry-1", 1).unwrap();
+            let ev = json!({"type": kind, "mission_id": "m_1", "task_id": "t_0001", "payload": payload});
+            assert!(mask_event_for_relay(d.path(), &ev).is_none(), "{kind} is sent as written, and is shown above to hold no agent-written text");
+        }
+    }
+
+    /// ATTACK: a paraphrase. The mark is not content-based: it does not look at the words. It replaces ALL agent-written text of a marked task,
+    /// so a paraphrase, a translation or a summary of a private entry is withheld exactly as a copy is. It does NOT cover text that did not pass
+    /// through a marked task: the same words in an unmarked task's card go out untouched (nothing in the daemon knows they are private).
+    #[test]
+    fn attack_a_paraphrase_is_withheld_with_everything_else_a_marked_task_wrote_and_the_same_words_from_an_unmarked_task_are_not() {
+        let d = ws();
+        mark(d.path(), "m_1/t_0001", "entry-1", 1).unwrap();
+        let said = "the vault password rotates quarterly (in other words)";
+        let card = |task: &str, id: &str| {
+            let mut e = card_event(task, id);
+            e["payload"]["summary"] = json!(said);
+            e
+        };
+        let marked = mask_event_for_relay(d.path(), &card("t_0001", "ap_m4_par_1")).expect("a marked task's card is masked, whatever it says");
+        assert!(!marked.to_string().contains("vault") && !marked.to_string().contains("quarterly"));
+        assert!(mask_event_for_relay(d.path(), &card("t_0002", "ap_m4_par_2")).is_none(), "NOT COVERED: the same words from a task that never read the entry");
+    }
+
+    /// ATTACK: a handoff between tasks (OD-5). SUCCEEDS, by the operator's decision: a child task does not inherit the mark. A parent that read a
+    /// private entry and wrote a brief for a child leaves the child unmarked: the child's relay text is sent and its Outbound and Connector
+    /// sends are not asked about. Pinned so the day inheritance is built this test is the one to change.
+    #[test]
+    fn attack_a_child_task_does_not_inherit_the_mark_so_its_sends_and_relay_text_go_out_as_written() {
+        let d = ws();
+        let parent = task_key("m_1", "t_0001");
+        mark(d.path(), &parent, "entry-1", 1).unwrap();
+        let child = task_key("m_1", "t_0002");
+        assert_eq!(send_record(d.path(), &child), json!({"private": false}), "SUCCEEDS: the child's Outbound and Connector sends are not held");
+        let mut ev = card_event("t_0002", "ap_m4_child");
+        ev["mission_id"] = json!("m_1");
+        assert!(mask_event_for_relay(d.path(), &ev).is_none(), "SUCCEEDS: the child's card text goes to the relay");
+        let mut ev = card_event("t_0001", "ap_m4_parent");
+        ev["mission_id"] = json!("m_1");
+        assert!(mask_event_for_relay(d.path(), &ev).is_some(), "the parent itself is masked");
+    }
+
+    /// ATTACK: another MCP session of the same host. SUCCEEDS the same way: a mark is a session's own (`host-<session>`), a second session of
+    /// the same tool in the same folder reads the first session's handoff or note unmarked.
+    #[test]
+    fn attack_a_second_session_of_the_same_host_is_not_marked_by_the_first() {
+        let d = ws();
+        mark(d.path(), "host-aaaaaaaa", "host-aaaaaaaa/n1", 1).unwrap();
+        let mut ev = card_event("t_0001", "ap_m4_s2");
+        ev["mission_id"] = json!("host-bbbbbbbb");
+        assert!(mask_event_for_relay(d.path(), &ev).is_none(), "SUCCEEDS: session b is a different unit");
+        ev["mission_id"] = json!("host-aaaaaaaa");
+        assert!(mask_event_for_relay(d.path(), &ev).is_some());
+    }
+
+    /// ATTACK: a mission-level mark against a task-level check. SUCCEEDS on two of the four channels. The only reader that marks today is the
+    /// host's search, and it marks the host SESSION's mission (`host-<session>`). Help and council tasks that session starts run INSIDE that
+    /// mission (`host_request_help` opens `mission_at(host-<session>)`), and the relay filter counts the mission key, so their relay text is
+    /// withheld; but Outbound and Connector read `<mission>/<task>` only, so a help task's web request and connector call are NOT asked
+    /// about. Pinned as a finding for the operator (it is a decision: OD-5 says children do not inherit, and these are children of the host
+    /// session's brief written after the read). Exposure today is small: `run_task_for_host` runs these tasks read-only at taint ceiling L0,
+    /// where the taint gate already refuses an Outbound request; the connector read path at L0 is NOT VALIDATED.
+    #[test]
+    fn attack_a_mission_level_mark_withholds_relay_text_but_does_not_hold_a_helper_tasks_outbound_or_connector_send() {
+        let d = ws();
+        mark(d.path(), "host-abcd1234", "host-abcd1234/n1", 1).unwrap();
+        let helper = task_key("host-abcd1234", "t_0001");
+        assert_eq!(send_record(d.path(), &helper), json!({"private": false}), "SUCCEEDS: the helper task's Outbound and Connector sends are not held");
+        let mut ev = card_event("t_0001", "ap_m4_helper");
+        ev["mission_id"] = json!("host-abcd1234");
+        assert!(mask_event_for_relay(d.path(), &ev).is_some(), "the same task's relay text is withheld");
+    }
+
+    /// ATTACK: key collisions and odd keys. `t_0001` repeats across missions (an event that names its mission is held only for its own);
+    /// a mission or task name a key cannot hold is hashed (`x:`), not made unreadable, and the hashed mark withholds that mission's event;
+    /// `file_of` maps `/` to `__` and `:` to `_`, so two keys can share a file, which can only over-hold, and a clear of one lifts both.
+    #[test]
+    fn attack_colliding_and_odd_keys_over_hold_and_never_under_hold() {
+        let d = ws();
+        mark(d.path(), &task_key("m_9", "t_0001"), "entry-1", 1).unwrap();
+        let mut other = card_event("t_0001", "ap_m4_k1");
+        other["mission_id"] = json!("m_2");
+        assert!(mask_event_for_relay(d.path(), &other).is_none(), "another mission's t_0001 is untouched");
+        let mut no_mission = card_event("t_0001", "ap_m4_k2");
+        no_mission.as_object_mut().unwrap().remove("mission_id");
+        assert!(mask_event_for_relay(d.path(), &no_mission).is_some(), "an event that names no mission is held when any mission's task of that id is marked");
+        // a hashed key
+        let odd = task_key("a mission.with odd chars", "t_0001");
+        assert!(odd.starts_with("x:"));
+        mark(d.path(), &odd, "entry-2", 1).unwrap();
+        let mut ev = card_event("t_0001", "ap_m4_k3");
+        ev["mission_id"] = json!("a mission.with odd chars");
+        assert!(mask_event_for_relay(d.path(), &ev).is_some(), "the hashed key is found from the mission and task the event names");
+        // a key that cannot be a key can never be marked, and an event naming one is just unmarked
+        assert!(mark(d.path(), "../etc", "entry-3", 1).is_err() && mark(d.path(), "a/../b", "entry-3", 1).is_err() && mark(d.path(), "a//b", "entry-3", 1).is_err());
+        // two keys, one file: a mark under `a/b` is seen under `a__b` (over-hold), and the clear of either lifts both
+        mark(d.path(), "m_5/t_7", "entry-4", 1).unwrap();
+        assert!(matches!(state(d.path(), "m_5__t_7"), State::Marked { .. }));
+        clear(d.path(), "m_5__t_7", 2).unwrap();
+        assert_eq!(state(d.path(), "m_5/t_7"), State::Unmarked);
+    }
+
+    /// ATTACK: a task that renames itself. A mark is keyed by the mission and task ids the daemon chose; a name, a thread or any text field of an
+    /// event plays no part in the lookup.
+    #[test]
+    fn attack_a_task_that_renames_itself_keeps_its_mark() {
+        let d = ws();
+        mark(d.path(), &task_key("m_1", "t_0001"), "entry-1", 1).unwrap();
+        let mut ev = card_event("t_0001", "ap_m4_rn");
+        ev["mission_id"] = json!("m_1");
+        ev["payload"]["name"] = json!("t_0099");
+        ev["payload"]["thread"] = json!("a harmless thread");
+        ev["payload"]["role"] = json!("scout");
+        assert!(mask_event_for_relay(d.path(), &ev).is_some());
+        assert_eq!(task_key("m_1", "t_0001"), "m_1/t_0001", "a pure function of the two ids");
+    }
+
+    /// ATTACK: a relay that was offline when the card was raised, with the mark kept on the MISSION (a host session's). The stream never ran for
+    /// the card, so nothing noted it as withheld, and a card record names its task and not its mission: before the fix the relay's card list on
+    /// reconnecting and its `allow` both missed the mark. The engine now notes the card's mission when it raises it.
+    #[test]
+    fn attack_a_relay_that_reconnects_after_the_card_was_raised_still_finds_a_mission_level_mark() {
+        let d = ws();
+        mark(d.path(), "host-abcd1234", "host-abcd1234/n1", 1).unwrap();
+        let rec = |id: &str| json!({"approval_id": id, "task_id": "t_0003", "tier": "amber", "tool": "write_file", "pattern": "p", "summary": CANARY, "payload": {"content": CANARY}, "payload_blake3": "ab"});
+        assert!(!card_withheld(d.path(), "ap_m4_off_a", "t_0003"), "a card the engine never noted is not linked to any mission (the control)");
+        note_card_raised("ap_m4_off_a", "host-abcd1234");
+        note_card_raised("ap_m4_off_b", "m_other");
+        assert!(card_withheld(d.path(), "ap_m4_off_a", "t_0003"), "the engine noted the card's mission when it raised it");
+        assert!(!card_withheld(d.path(), "ap_m4_off_b", "t_0003"), "a card of an unmarked mission is untouched");
+        let out = mask_pending_for_relay(d.path(), json!([rec("ap_m4_off_a"), rec("ap_m4_off_b")]));
+        assert_eq!(out[0]["summary"], RELAY_PHRASE);
+        assert_eq!(out[1]["summary"], CANARY);
+        // and a mark kept under `<mission>/<task>` is found the same way
+        mark(d.path(), &task_key("m_7", "t_0003"), "entry-1", 1).unwrap();
+        note_card_raised("ap_m4_off_c", "m_7");
+        assert!(card_withheld(d.path(), "ap_m4_off_c", "t_0003"));
+    }
+
+    /// ATTACK: the card list for a card that carries no mission, with the mark UNREADABLE. Before the fix the any-mission lookup listed only marks
+    /// it could read, so a damaged `<mission>/<task>` record was invisible to the list and to `allow`: fail-open on the one place the spec says
+    /// fail closed. The lookup now goes by file name.
+    #[test]
+    fn attack_an_unreadable_mark_under_a_mission_and_task_key_fails_closed_for_a_card_that_names_no_mission() {
+        let d = ws();
+        mark(d.path(), &task_key("m_9", "t_0001"), "entry-1", 1).unwrap();
+        std::fs::write(file_of(d.path(), "m_9/t_0001"), b"{not json").unwrap();
+        assert_eq!(task_state_in_any_mission(d.path(), "t_0001"), State::Unreadable);
+        assert!(card_withheld(d.path(), "ap_m4_unr", "t_0001"), "a damaged mark withholds the card's text from the list");
+        assert!(!card_withheld(d.path(), "ap_m4_unr2", "t_0002"), "another task is not affected");
+        let ev = json!({"type": "task.failed", "task_id": "t_0001", "payload": {"error": CANARY}});
+        assert!(!mask_event_for_relay(d.path(), &ev).unwrap().to_string().contains(CANARY), "and an event that names no mission");
+    }
+
+    /// ATTACK: a mark cleared while a card is in flight. A card the stream withheld stays withheld (and cannot be allowed by a relay reply)
+    /// after the clear, because the relay may already have been sent the phrase and the operator never saw the text there; a card raised
+    /// AFTER the clear is sent as it always was. Both are conservative.
+    #[test]
+    fn attack_a_clear_mid_flight_keeps_the_withheld_card_withheld_and_frees_the_next_one() {
+        let d = ws();
+        mark(d.path(), "t_0001", "entry-1", 1).unwrap();
+        assert!(mask_event_for_relay(d.path(), &card_event("t_0001", "ap_m4_mid_a")).is_some());
+        clear(d.path(), "t_0001", 2).unwrap();
+        assert!(card_withheld(d.path(), "ap_m4_mid_a", "t_0001"), "the card the stream withheld stays withheld");
+        assert!(mask_event_for_relay(d.path(), &card_event("t_0001", "ap_m4_mid_b")).is_none(), "the next card is not");
+        assert!(!card_withheld(d.path(), "ap_m4_mid_b", "t_0001"));
+        // and a mark written AFTER a card was raised withholds it from the list, because the list looks at the mark when it is asked
+        mark(d.path(), "t_0002", "entry-2", 3).unwrap();
+        assert!(card_withheld(d.path(), "ap_m4_mid_c", "t_0002"));
+    }
+
+    /// ATTACK: reach the mark from outside the console. Nothing a seat, a host, a relay or the narrator can call clears or writes a mark; the
+    /// files sit under `local/`, which no role may read or write through the file tools.
+    #[test]
+    fn attack_nothing_but_the_consoles_clear_reaches_a_mark_and_no_role_can_touch_its_file() {
+        // the methods each lesser scope answers do not include the two console methods
+        for list in [&delphi_core::server::HOST_METHODS[..], &delphi_core::server::RELAY_METHODS[..], &delphi_core::server::NARRATOR_METHODS[..]] {
+            assert!(!list.iter().any(|m| m.starts_with("private_read.")), "{list:?}");
+        }
+        // and the daemon's method table gates both on the console scope
+        let svc = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/service.rs")).unwrap();
+        for f in ["async fn private_read_status", "async fn private_read_clear"] {
+            let at = svc.find(f).expect(f);
+            assert!(svc[at..at + 400].contains("need_console(&ctx)"), "{f} is console scope only");
+        }
+        // an agent's own file tools: the pathguard names `local/` as never readable, and the mark's directory is under it
+        assert!(dir(Path::new("/ws")).starts_with("/ws/local/"), "the marks live under local/");
+        let guard = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../delphi-core/src/pathguard.rs")).unwrap();
+        assert!(guard.contains("for p in [\"run/\", \"state.db\", \"local/\""), "local/ is on the never-readable list of the path guard");
+    }
+
+    /// ATTACK: a card text that reaches a relay client by some path that is not one of the four masked kinds. The relay socket answers five
+    /// methods (classified above); of them only `approval.list` and `approval.relay_resolve` return card data, and the first is masked. The
+    /// hub sends a relay client only `RELAY_EVENTS`, and a relay client is not sent `agent.*` deltas, `task.output` or any other kind.
+    #[test]
+    fn attack_a_relay_client_is_sent_only_the_relay_kinds_and_the_card_list_is_masked() {
+        let hub = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../delphi-core/src/hub.rs")).unwrap();
+        let prod = &hub[..hub.find("#[cfg(test)]").unwrap_or(hub.len())];
+        let sends = prod.matches("c.queue.push(").count();
+        assert!(sends >= 2, "the publish step pushes to a queue");
+        assert!(prod.contains("c.scope != Scope::Relay || RELAY_EVENTS.contains(&kind)"), "a relay client is sent only the relay kinds");
+        let svc = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/service.rs")).unwrap();
+        assert!(svc.contains("\"approval.list\" => Ok(svc.pending_json_for(ctx.scope))"), "the card list goes through the scope-aware masker");
+    }
+
+    /// `specs/103` §4.3: the unit of the mark's lookup for a Delphi task is `<mission>/<task>` and the relay filter counts the bare task, the
+    /// bare mission and the pair; a mark under any of the three withholds, and a clear lifts only what was read.
+    #[test]
+    fn attack_the_filter_finds_a_mark_under_each_of_the_three_keys() {
+        for key in ["t_0001", "m_1", "m_1/t_0001"] {
+            let d = ws();
+            mark(d.path(), key, "entry-1", 1).unwrap();
+            let mut ev = card_event("t_0001", "ap_m4_3k");
+            ev["mission_id"] = json!("m_1");
+            assert!(mask_event_for_relay(d.path(), &ev).is_some(), "{key}");
+            clear(d.path(), key, 2).unwrap();
+            assert!(mask_event_for_relay(d.path(), &ev).is_none(), "{key} cleared");
         }
     }
 }

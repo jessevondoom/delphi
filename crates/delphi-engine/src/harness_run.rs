@@ -3154,6 +3154,21 @@ echo "$answer" > '{answer_file}'
         assert_eq!((c.outbound_would_change, c.unreadable), (1, 1));
     }
 
+    /// Spec 103 M4 (an ask that times out): nobody answers the held card, so the request is DENIED and never sent.
+    #[tokio::test]
+    async fn a_held_web_request_nobody_answers_is_denied_not_sent() {
+        let scripts = tempfile::tempdir().unwrap();
+        let (body, answer) = ask_cli(scripts.path(), "WebSearch", r#"{"query":"vendor changelog 7f3a"}"#, r#"{"name":"delphi","status":"connected"}"#);
+        let (f, _s) = fixture(&body, |s| s.approval_timeout = Duration::from_millis(120));
+        use_harness_profile(&f, "[harness.claude]\nbridge = false\napprovals = \"delphi\"\nnative_tools = [\"WebSearch\"]\n");
+        let key = crate::private_read::task_key(&f.m.id, "t_0001");
+        crate::private_read::mark(&f.engine.ws.dir, &key, "host-abcd1234/n1", 1).unwrap();
+        f.engine.run_task(&f.m, "architect", "Find the changelog").await.unwrap();
+        let a = fs::read_to_string(&answer).unwrap();
+        assert!(a.contains("\"behavior\":\"deny\""), "a timeout is a denial: {a}");
+        assert_eq!(crate::private_read::counter(&f.engine.ws.dir).outbound_would_change, 1);
+    }
+
     /// Cleared at the console, the same task's request is one ordinary card again; a different mission's `t_0001` was never held.
     #[tokio::test]
     async fn a_cleared_mark_and_another_missions_task_of_the_same_id_are_asked_about_as_before() {

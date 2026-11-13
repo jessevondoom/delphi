@@ -160,25 +160,25 @@
     },
     {
       "level": 2,
-      "line": 169,
+      "line": 171,
       "number": "11",
       "title": "Slices"
     },
     {
       "level": 3,
-      "line": 184,
+      "line": 186,
       "number": "11.1",
       "title": "SK0b checklist (buildable; each item has a test)"
     },
     {
       "level": 2,
-      "line": 193,
+      "line": 195,
       "number": "12",
       "title": "Verification"
     },
     {
       "level": 2,
-      "line": 202,
+      "line": 204,
       "number": "13",
       "title": "Decisions (operator, 2026-10-29)"
     }
@@ -186,7 +186,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/055-the-central-library-sources-claims-and-pages.md",
-    "sha256": "3dcfda17ac84df2829af721f84cbaf3383a3fa7bc2378ddeaef30130b7693cd4"
+    "sha256": "7d5b649acca04826d200ef40ac654994ea86e2ce96817214aa6b09a34979aee9"
   },
   "source_status_at_hash": {
     "line": {
@@ -199,7 +199,7 @@
       },
       "text": "status: approved   # ratified by the operator, 2026-10-29: \"all your changes are accepted and approved. write the specs and mark them ratified since we built them together\"; the answers in §13 stand"
     },
-    "sha256": "3dcfda17ac84df2829af721f84cbaf3383a3fa7bc2378ddeaef30130b7693cd4",
+    "sha256": "7d5b649acca04826d200ef40ac654994ea86e2ce96817214aa6b09a34979aee9",
     "word": "approved"
   },
   "spec": {

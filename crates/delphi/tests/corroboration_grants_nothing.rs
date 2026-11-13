@@ -853,6 +853,8 @@ fn the_private_read_mark_is_named_only_where_it_is_set_observed_cleared_and_show
         "crates/delphi-engine/src/service.rs",
         "crates/delphi-engine/src/harness_run.rs",
         "crates/delphi-engine/src/connector_run.rs",
+        // slice M4: the engine, when it raises a card, notes the card's mission (an id pair) so the relay's card list finds a mark kept on the mission
+        "crates/delphi-engine/src/engine.rs",
         // the approval-refusal list names a payload key (`private_read_mark`) so a relay reply cannot approve a held card; it only widens what is refused
         "crates/delphi-engine/src/merge_class.rs",
         "crates/delphi/src/doctor.rs",
@@ -899,6 +901,11 @@ fn the_private_read_mark_is_named_only_where_it_is_set_observed_cleared_and_show
     let senders = vec!["crates/delphi-engine/src/connector_run.rs".to_string(), "crates/delphi-engine/src/harness_run.rs".to_string()];
     assert_eq!(record_callers, senders, "the mark is read for a send by the two senders only");
     assert_eq!(held_callers, senders, "a held send is counted by the two senders only");
+    // slice M4: the engine's one mention of the module is the call that notes a raised card's mission; it reads no mark, sets none, and decides nothing
+    let engine = std::fs::read_to_string(root.join("crates/delphi-engine/src/engine.rs")).unwrap();
+    let engine_lines: Vec<&str> = production_last(&engine).lines().filter(|l| !l.trim_start().starts_with("//")).filter(|l| l.contains("private_read")).map(|_| "x").collect();
+    assert_eq!(engine_lines.len(), 1, "engine.rs names the mark module in exactly one line");
+    assert!(production_last(&engine).contains("crate::private_read::note_card_raised(&id, &who.m.id);"), "and that line only notes the card's mission");
     let inert = ["delphi_core::", "serde_json::", "std::"];
     let reach = Regex::new(r"std::net|std::process|Command::new|TcpStream|reqwest|tiny_http|tokio::|delphi_adapter|complete\(|model_call|\.send\(").unwrap();
     let rel = "crates/delphi-engine/src/private_read.rs";
