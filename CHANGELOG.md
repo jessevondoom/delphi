@@ -1,6 +1,6 @@
 # Changelog
 
-What changed in each release, newest first. Delphi is pre-1.0: minor versions may change commands and formats, and the notes say so when they do. The `dev` tag is a rolling build of `main` (`delphi update --dev`).
+What changed in each release, newest first. Delphi is pre-1.0: minor versions may change commands and formats, and the notes say so when they do. The `dev` tag is a rolling build of `main`, made on request (`delphi update --dev`).
 
 Release builds, with their notes and build attestations, are on the [releases page](https://github.com/jessevondoom/delphi/releases). Entries that cite a pull request (`#nnn`) refer to this repository's pull requests.
 

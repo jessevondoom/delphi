@@ -1,29 +1,59 @@
 name: dev
 
-# Every push to main publishes the build as the rolling `dev` prerelease, which `delphi update --dev` installs.
+# A build of main is published as the rolling `dev` prerelease, which `delphi update --dev` installs, ON REQUEST: a merge
+# to main no longer starts one (they took 75 to 110 minutes each, on every merge, and competed with the pull request
+# checks for the account's capped macOS runners). Ask for a build in one of two ways:
+#   * push a tag whose name starts `dev-` on a commit that is on main:  git tag dev-$(date +%Y%m%d) <commit> && git push origin dev-$(date +%Y%m%d)
+#   * Actions > dev > Run workflow, with "Use workflow from" set to main (it builds the head of main).
+# A run from any other branch, or a tag on a commit that is not on main, stops at the `guard` job: the rolling release is
+# never replaced by a branch build. A build older than the one already published is not published (it would move the
+# channel backwards); to go back on purpose, delete the release first: gh release delete dev --cleanup-tag --yes.
+# The `dev-*` tags stay in the repository after a build; delete the ones you no longer want (git push origin :dev-...).
+# A nightly build may be added later; nothing here schedules one.
 # Same targets, checksums and provenance attestations as a release; the version is `<crate version>-dev.g<commit>`
-# so every build is distinct (the daemon and the console compare versions). The release is replaced on each push,
+# so every build is distinct (the daemon and the console compare versions). The release is replaced on each build,
 # so for a minute or so while it is being swapped `--dev` finds nothing. Homebrew and install.sh are not touched.
 # The model, build and package steps mirror release.yml: when one changes, change the other (a build input added to
 # the release and missing here fails the dev build, as the preloaded vectors did on the first run).
 
 on:
+  workflow_dispatch:
   push:
-    branches: [main]
+    tags: ["dev-*"]
 
 permissions:
   contents: read
 
-# A running build is allowed to finish (a build takes longer than the gap between merges, so cancelling it would
-# starve the channel); only the newest waiting push is kept, and the publish step skips a build that main has
-# already moved past.
+# A running build is allowed to finish (a build takes longer than the gap between requests, so cancelling it would
+# starve the channel); only the newest waiting request is kept, so a build asked for while another is running and
+# another is already waiting replaces the waiting one. The publish step never replaces a newer build with an older one.
 concurrency:
   group: dev-build
   cancel-in-progress: false
 
 jobs:
+  # What may be built at all. The rolling `dev` release is what `delphi update --dev` installs on other machines, so
+  # it only ever carries a commit of main that someone asked for.
+  guard:
+    name: guard (what may be built)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: A manual run must be from main
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          [ "$GITHUB_REF" = "refs/heads/main" ] || { echo "run this from main (Use workflow from: main), not from $GITHUB_REF: the rolling dev release is never replaced by a branch build"; exit 1; }
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: The built commit must be on main
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "$GITHUB_REF_NAME ($GITHUB_SHA) is not a commit on main"; exit 1; }
+
   model:
     name: embedding model
+    needs: [guard]
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -49,6 +79,7 @@ jobs:
   # holds over exactly these files and this version.
   sign:
     name: sign the release files
+    needs: [guard]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -133,7 +164,7 @@ jobs:
           path: dist/*
 
   # Both darwin targets in one job: macOS runners are capped at 5 at a time for the account, and two parallel darwin builds
-  # here took 2 of those slots on every push to main. The two builds run one after the other (about 20 minutes in all).
+  # here took 2 of those slots on every build. The two builds run one after the other (about 20 minutes in all).
   build-macos:
     name: build (darwin, both targets)
     needs: [model, sign]
@@ -214,15 +245,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}  # this job has no checkout, so gh cannot find the repository from git
         run: |
-          # Never replace a newer build with an older one: publish unless the published build is ahead of this commit.
-          # (Not "is this still the head of main" and not "is a newer run waiting": merges arrive faster than a build
-          # runs, and the release workflow's Homebrew commit moves main without starting a run, so either rule can
-          # leave the channel empty. The published commit is in the release notes.)
+          # Never replace a newer build with an older one. The compare below asks how this commit stands against the
+          # published one (`published...this`): a build someone asked for is published when it is ahead of it, the same
+          # commit, or on a different line of main; it is skipped only when it is BEHIND the published one (that would
+          # move the channel backwards), and the log says so. (Not "is this still the head of main" and not "is a newer
+          # run waiting": the release workflow's Homebrew commit moves main without starting a run, so either rule can
+          # leave the channel empty. The published commit is the first 40-hex string in the release notes.)
           have="$(gh release view dev --json body --jq .body 2>/dev/null | grep -oE '[0-9a-f]{40}' | head -n 1 || true)"
           if [ -n "$have" ]; then
             state="$(gh api "repos/$GITHUB_REPOSITORY/compare/$have...$GITHUB_SHA" --jq .status || echo unknown)"
-            case "$state" in ahead|identical) ;; *) echo "dev is at $have ($state of $GITHUB_SHA); not replacing it"; exit 0 ;; esac
+            case "$state" in
+              ahead|identical|diverged) ;;
+              behind) echo "dev is at $have, which is newer than $GITHUB_SHA; not moving the channel backwards (to go back on purpose: gh release delete dev --cleanup-tag --yes, then run this again)"; exit 0 ;;
+              *) echo "could not compare the published dev build $have with $GITHUB_SHA (got: $state); not replacing it. If $have no longer exists, delete the release (gh release delete dev --cleanup-tag --yes) and run this again"; exit 1 ;;
+            esac
           fi
           gh release delete dev --cleanup-tag --yes 2>/dev/null || true
           gh release create dev dist/* --prerelease --target "$GITHUB_SHA" --title "dev (main@${GITHUB_SHA::7})" \
-            --notes "Rolling build of main at $GITHUB_SHA, for \`delphi update --dev\`. Not a release: it is replaced on every push to main."
+            --notes "Dev build of main at $GITHUB_SHA, made on request ($GITHUB_EVENT_NAME), for \`delphi update --dev\`. Not a release: the next dev build replaces it."
