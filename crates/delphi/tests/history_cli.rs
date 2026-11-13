@@ -33,6 +33,10 @@ fn fixture(n: usize) -> (tempfile::TempDir, PathBuf, PathBuf) {
     assert!(init.status.success(), "{}", text(&init));
     let ws = home.join("workspaces/w");
     assert!(ws.is_dir(), "the workspace is at {}", ws.display());
+    // The install question has been answered yes, as it is on a real install after its first terminal start (`specs/102` S8): a record
+    // is written only after that. `init --non-interactive` above did not ask, which is the behaviour under test elsewhere.
+    std::fs::create_dir_all(ws.join("local")).unwrap();
+    std::fs::write(ws.join("local/history.consent"), "yes\n").unwrap();
     let tap = Tap::new(ws.clone(), Settings { enabled: true, ..Settings::default() }, "home");
     for i in 0..n {
         tap.note_operator_prompt("t_1", &format!("FAKE-CANARY prompt number {i}"));
@@ -69,7 +73,9 @@ fn off_stops_new_records_and_deletes_nothing() {
     let tap = Tap::new(ws.clone(), Settings { enabled: true, ..Settings::default() }, "home");
     tap.note_operator_prompt("t_2", "FAKE-CANARY after off");
     let wrote = tap.on_events("m1", &[EventEnvelope::new("m1", "research.finished", json!({"topic": "q", "new": 0, "updated": 0, "held": 0, "outcome": "done"}))]);
-    assert_eq!(wrote, vec![delphi_engine::history_record::Appended::SwitchedOff]);
+    // Since S8 the tap does not hold a prompt at all while the history is switched off, so there is nothing to conclude: nothing is written
+    // and nothing waits in memory to be written when it is switched back on.
+    assert!(wrote.is_empty(), "{wrote:?}");
     assert_eq!(store(&ws), before, "a running daemon honours the marker at once");
     let status = text(&delphi(&home, &["history", "status"], false));
     assert!(status.contains("switched off with `delphi history off`"), "{status}");
@@ -131,22 +137,37 @@ fn every_history_subcommand_is_refused_inside_an_agent_seat_and_changes_nothing(
 }
 
 #[test]
-fn a_fresh_workspace_reports_history_off_with_no_key_and_doctor_says_so() {
+fn an_answered_workspace_with_no_records_reports_on_with_no_key_and_doctor_says_so() {
     let (_t, home, ws) = fixture(0);
     let status = text(&delphi(&home, &["history", "status"], false));
-    assert!(status.contains("History: off (the default until it is turned on") && status.contains("0 record(s)"), "{status}");
+    assert!(status.contains("History: on\n") || status.contains("History: on\r"), "{status}");
+    assert!(status.contains("0 record(s)") && !status.contains("waiting for your answer"), "{status}");
     assert!(!ws.join("local/history").exists() && !ws.join("local/history.key").exists(), "reading the status made nothing");
     let doctor = text(&delphi(&home, &["doctor"], false));
-    assert!(doctor.contains("20 history") && doctor.contains("history: off (default)"), "{doctor}");
+    assert!(doctor.contains("20 history") && doctor.contains("history: on; 0 record(s)"), "{doctor}");
 }
 
+/// `specs/102` S8: the history is on by default, but a fresh install records nothing until a person has answered the install question. A
+/// non-interactive `init` does not ask (nobody can answer), so the workspace stays unanswered: nothing is held, written or keyed, and
+/// `status` and `doctor` say they are waiting.
 #[test]
-fn no_install_question_is_printed_by_init_today() {
+fn a_fresh_non_interactive_install_records_nothing_and_says_it_is_waiting_for_the_answer() {
     let t = tempfile::tempdir().unwrap();
     let home = t.path().join("home");
-    let o = Command::new(DELPHI).args(["init", "--non-interactive", "--workspace", "w"]).arg("--home").arg(&home).env_remove("DELPHI_HOME").stdin(Stdio::null()).output().unwrap();
-    assert!(o.status.success(), "{}", text(&o));
-    let out = text(&o);
-    assert!(!out.contains("Keep a history") && !out.contains("history"), "init printed something about the history before slice S8: {out}");
-    assert!(!home.join("workspaces/w/local/history.consent").exists());
+    let proj = t.path().join("proj");
+    std::fs::create_dir_all(proj.join(".git")).unwrap();
+    let init = Command::new(DELPHI).args(["init", "--non-interactive", "--workspace", "w", "--project"]).arg(&proj).arg("--home").arg(&home).env_remove("DELPHI_HOME").stdin(Stdio::null()).output().unwrap();
+    assert!(init.status.success(), "{}", text(&init));
+    let said = text(&init);
+    assert!(!said.contains("Keep a history of your prompts"), "a non-interactive init must not ask: {said}");
+    let ws = home.join("workspaces/w");
+    assert!(!ws.join("local/history.consent").exists(), "nobody answered");
+    let status = text(&delphi(&home, &["history", "status"], false));
+    assert!(status.contains("History: on, waiting for your answer"), "{status}");
+    // The daemon's tap holds and writes nothing either, whatever the setting says.
+    let tap = Tap::new(ws.clone(), Settings::default(), "home");
+    tap.note_operator_prompt("t_1", "FAKE-CANARY typed before any answer");
+    let wrote = tap.on_events("m1", &[EventEnvelope::new("m1", "research.finished", json!({"topic": "q", "new": 0, "updated": 0, "held": 0, "outcome": "done"}))]);
+    assert!(wrote.is_empty(), "{wrote:?}");
+    assert!(!ws.join("local/history").exists() && !ws.join("local/history.key").exists(), "no store and no key");
 }

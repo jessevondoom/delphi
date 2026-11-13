@@ -235,6 +235,8 @@ pub struct ProjectRow {
 pub struct Overview {
     pub enabled: bool,
     pub switched_off: bool,
+    /// On, but no person has answered the install question yet (`history_consent`): nothing is recorded, held or keyed until then.
+    pub awaiting_answer: bool,
     pub key: KeyState,
     pub budget_mb: u64,
     pub retention_days: u32,
@@ -254,6 +256,7 @@ pub fn overview(ws_dir: &Path, settings: &Settings, now: i64) -> Overview {
     let mut o = Overview {
         enabled: settings.enabled,
         switched_off: rec::global_off(ws_dir),
+        awaiting_answer: settings.enabled && crate::history_consent::blocks_writes(ws_dir, crate::history_consent::SHOW_AT_INSTALL),
         key,
         budget_mb: settings.budget_mb,
         retention_days: settings.retention_days,
@@ -319,10 +322,11 @@ fn chain_word(c: Chain) -> String {
 pub fn status_lines(o: &Overview) -> Vec<String> {
     let mut v = Vec::new();
     v.push(
-        match (o.enabled, o.switched_off) {
-            (_, true) => "History: off (switched off with `delphi history off`; nothing new is recorded)",
-            (true, false) => "History: on",
-            (false, false) => "History: off (the default until it is turned on; nothing is recorded)",
+        match (o.enabled, o.switched_off, o.awaiting_answer) {
+            (_, true, _) => "History: off (switched off with `delphi history off`; nothing new is recorded)",
+            (true, false, true) => "History: on, waiting for your answer (nothing is recorded until a person at a terminal answers the question: run `delphi` in a terminal)",
+            (true, false, false) => "History: on",
+            (false, false, _) => "History: off (`[history] enabled = false` in config.toml; nothing is recorded)",
         }
         .to_string(),
     );
@@ -373,7 +377,15 @@ pub fn doctor_line(o: &Overview) -> (bool, String) {
     }
     let records: usize = o.rows.iter().map(|r| r.records).sum();
     let tombs: usize = o.rows.iter().map(|r| r.tombstones).sum();
-    let state = if o.switched_off { "off (switched off)" } else if o.enabled { "on" } else { "off (default)" };
+    let state = if o.switched_off {
+        "off (switched off)"
+    } else if o.enabled && o.awaiting_answer {
+        "on, waiting for your answer (nothing is recorded until a person at a terminal answers the question: run `delphi`)"
+    } else if o.enabled {
+        "on"
+    } else {
+        "off (`[history] enabled = false`)"
+    };
     let key = if o.key == KeyState::Present { "key present" } else { "no key yet" };
     (false, format!("history: {state}; {records} record(s), {tombs} erased; chain intact; {key}"))
 }

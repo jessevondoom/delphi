@@ -156,7 +156,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/102-the-exchange-record-the-operators-words-outcome-summaries-and-a-project-history.md",
-    "sha256": "e301accd8418af96ce03934d6d9ff2f35f331b647d2a8b6c81bd67a3d7f4efa3"
+    "sha256": "aaf5e8b0262d5407a49215c9749004b7235bed4cf6b881bda5d885826fe2c085"
   },
   "source_status_at_hash": {
     "line": {
@@ -169,7 +169,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-11 (\"approve spec 102\"): the text as written, including that the opt-out default HOLDS until the P0s are closed and the feature ships in one release (OD-8), and that it departs from Council t_0008's opt-in advice. OD-1 to OD-7 of section 16 take their recommendations. The slices start only after the verification gates of specs 098, 100 and 101 pass. The text takes effect when this pull request merges."
     },
-    "sha256": "e301accd8418af96ce03934d6d9ff2f35f331b647d2a8b6c81bd67a3d7f4efa3",
+    "sha256": "aaf5e8b0262d5407a49215c9749004b7235bed4cf6b881bda5d885826fe2c085",
     "word": "approved"
   },
   "spec": {

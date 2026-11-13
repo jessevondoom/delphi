@@ -96,7 +96,7 @@ mod tests {
 
     #[test]
     fn a_missing_ledger_reads_as_empty_and_makes_nothing() {
-        let t = tempfile::tempdir().unwrap();
+        let t = crate::history_consent::answered_ws();
         let p = ledger_path(t.path());
         assert_eq!(len(&p), 0);
         assert_eq!(read_new(&p, 0), Batch { rows: vec![], next: 0 });
@@ -105,7 +105,7 @@ mod tests {
 
     #[test]
     fn only_merged_rows_come_back_reduced_to_the_number_and_nothing_of_the_quote() {
-        let t = tempfile::tempdir().unwrap();
+        let t = crate::history_consent::answered_ws();
         let p = ledger_path(t.path());
         append(&p, &(row("approved", 7) + &row("merged", 7) + &row("session_end", 0) + &row("merged", 9)));
         let b = read_new(&p, 0);
@@ -116,7 +116,7 @@ mod tests {
 
     #[test]
     fn a_read_starts_at_the_offset_so_an_old_merge_is_never_seen_again() {
-        let t = tempfile::tempdir().unwrap();
+        let t = crate::history_consent::answered_ws();
         let p = ledger_path(t.path());
         append(&p, &row("merged", 1));
         let start = len(&p); // the daemon begins watching here
@@ -129,7 +129,7 @@ mod tests {
 
     #[test]
     fn a_half_written_row_waits_for_the_next_read_and_is_then_read_whole() {
-        let t = tempfile::tempdir().unwrap();
+        let t = crate::history_consent::answered_ws();
         let p = ledger_path(t.path());
         let whole = row("merged", 5);
         let (head, tail) = whole.split_at(whole.len() / 2);
@@ -142,7 +142,7 @@ mod tests {
 
     #[test]
     fn a_ledger_that_shrank_is_not_replayed() {
-        let t = tempfile::tempdir().unwrap();
+        let t = crate::history_consent::answered_ws();
         let p = ledger_path(t.path());
         append(&p, &(row("merged", 1) + &row("merged", 2)));
         let far = len(&p);
@@ -154,7 +154,7 @@ mod tests {
 
     #[test]
     fn a_line_that_does_not_parse_is_skipped_not_fatal() {
-        let t = tempfile::tempdir().unwrap();
+        let t = crate::history_consent::answered_ws();
         let p = ledger_path(t.path());
         append(&p, &format!("not json\n{{\"kind\":\"merged\"}}\n{}", row("merged", 4)));
         assert_eq!(read_new(&p, 0).rows, vec![json!({"kind": "merged", "pr": 4})], "a merged row with no number is not a trigger");
@@ -162,7 +162,7 @@ mod tests {
 
     #[test]
     fn one_call_reads_at_most_the_window_and_the_rest_comes_on_the_next() {
-        let t = tempfile::tempdir().unwrap();
+        let t = crate::history_consent::answered_ws();
         let p = ledger_path(t.path());
         let one = row("merged", 1);
         let n = (MAX_READ as usize / one.len()) + 50;
@@ -176,7 +176,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_link_in_place_of_the_ledger_is_never_read() {
-        let t = tempfile::tempdir().unwrap();
+        let t = crate::history_consent::answered_ws();
         let real = t.path().join("elsewhere.jsonl");
         append(&real, &row("merged", 8));
         let p = ledger_path(t.path());
