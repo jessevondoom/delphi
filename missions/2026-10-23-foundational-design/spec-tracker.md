@@ -949,11 +949,11 @@ Drafted at the operator's request (2026-11-12, "the span-mark egress design in p
 
 ## Host experience program: specs 104 to 110 (2026-11-13, approved in advance)
 
-The operator asked, in a host session on 2026-11-13, for a review of how Delphi's agents behave in a host, approved the plan that came out of it ("approve all your plans and suggestions and go") and asked for the work to be built locally first ("build as much locally as possible so we don't get slowed down by merges up front"). The seven specs were written after that approval, so each says in its frontmatter that the plan was approved and the text was not read. Everything below is on the local branch `host-experience` until the operator asks for pull requests.
+The operator asked, in a host session on 2026-11-13, for a review of how Delphi's agents behave in a host, approved the plan that came out of it ("approve all your plans and suggestions and go") and asked for the work to be built locally first ("build as much locally as possible so we don't get slowed down by merges up front"). The seven specs were written after that approval, so each says in its frontmatter that the plan was approved and the text was not read. It was built on a local branch first and then split into pull requests, one spec at a time, on 2026-11-14.
 
 | Spec | Slice | Content | State |
 | :-- | :-- | :-- | :-- |
-| 098 | S6 follow-up | the socket outlasts the daemon's wait: `ask_family` (630 s), `council_brief` and `council_status` (80 s), one wait table with a test | built (local, not pushed) |
+| 098 | S6 follow-up | the socket outlasts the daemon's wait: `ask_family` (630 s), `council_brief` and `council_status` (80 s), one wait table with a test | built (pull request open) |
 | 104 | R0 | the spec | approved in advance 2026-11-13 |
 | 104 | R1 | `ask_family` as a job, `ask_result`, identity, cancel | not started |
 | 104 | R3 | concurrent requests | not started |
@@ -981,6 +981,7 @@ The operator asked, in a host session on 2026-11-13, for a review of how Delphi'
 | 109 | Q0 | the spec | approved in advance 2026-11-13 |
 | 109 | Q0a | the `query_memory` facet leak (review amendment A3) | not started |
 | 109 | Q1 | the workspace corpus on the retrieval service; one shared project ranker (re-scoped by review amendment A1) | not started |
+| 109 | Q1b | index registered projects as a per-project layer (the operator's decision of 2026-11-13) | not started |
 | 109 | Q2 | a fresh index | not started |
 | 109 | Q3 | the release reference measurement only (the tier rule was struck by review amendment A2) | not started |
 | 109 | Q4 | `task` on `get_agent` | not started |
