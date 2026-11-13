@@ -66,6 +66,27 @@ fn walk(dir: &Path, prefix: &str, depth: usize, out: &mut Vec<(String, PathBuf)>
     }
 }
 
+/// The Markdown files of ONE scope's own staged zone, `<layer>/staged/...`, as `(logical path, file)`, read from the files and never from the
+/// shared index. `layer` is that scope's layer directory (`scope::layer_dir`): another project's layer is a different directory and is never
+/// listed here (`specs/098` §7.2: a noted entry is searchable at once; `specs/103`). The caller keeps only the paths of the daemon's own
+/// noted entries (`private_read::noted_entry`), which is also what decides whether an entry is private.
+pub fn scoped_staged_files(layer: &Path) -> Vec<(String, PathBuf)> {
+    let mut all = Vec::new();
+    walk(&layer.join("staged"), "staged", 0, &mut all);
+    all
+}
+
+/// Rank those files against `query` by the words they hold (the project search's own ranker; no model, no index) and keep the entries
+/// that open with the noted heading. Each hit is `{layer, path, line, preview, source_type, note}`.
+pub fn rank_noted_files(files: Vec<(String, PathBuf)>, query: &str, limit: usize) -> Vec<Value> {
+    let docs: Vec<Doc> = files
+        .into_iter()
+        .filter(|(_, f)| read_capped(f).is_some_and(|t| t.lines().any(|l| l.starts_with('#') && l.contains(crate::host_noted::NOTED_HEADING))))
+        .map(|(path, file)| Doc { layer: "noted".into(), path, source: "external_untrusted", file })
+        .collect();
+    rank(docs, query, limit, &[])
+}
+
 fn read_capped(p: &Path) -> Option<String> {
     let m = std::fs::symlink_metadata(p).ok()?;
     if !m.is_file() || m.len() > MAX_FILE {
