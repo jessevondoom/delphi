@@ -1369,7 +1369,7 @@ impl EngineService {
         Ok(json!({
             "observe_only": false,
             "marks": marks,
-            "counter": {"keys_marked": c.keys_marked, "entries_marked": c.entries_marked, "cleared": c.cleared, "outbound_would_change": c.outbound_would_change, "connector_would_change": c.connector_would_change, "unreadable": c.unreadable},
+            "counter": {"keys_marked": c.keys_marked, "entries_marked": c.entries_marked, "cleared": c.cleared, "outbound_would_change": c.outbound_would_change, "connector_would_change": c.connector_would_change, "unreadable": c.unreadable, "held_by_inheritance": c.held_by_inheritance},
             "readers_not_yet_marking": crate::private_read::readers_not_yet_marking(),
             "line": crate::private_read::status_line(&ws_dir),
         }))
@@ -1437,7 +1437,7 @@ impl EngineService {
             return Err(err(code::INVALID_PARAMS, "no host handoff for this project: a coding tool leaves one with `handoff_put`"));
         };
         let target = if h::servable_role(ws, &env.target_agent).is_ok() && self.engine.settings.enabled_agents.contains(&env.target_agent) { env.target_agent.clone() } else { "orchestrator".to_string() };
-        let task_id = self.spawn_task(&m, &target, &h::resume_prompt(&session, &env), None);
+        let task_id = self.spawn_task(&m, &target, &h::resume_prompt(&session, &env), None, None);
         Ok(json!({"task_id": task_id, "mission_id": m.id, "session": session, "role": target}))
     }
 
@@ -1522,7 +1522,7 @@ impl EngineService {
             if !self.engine.is_interactive(&target) && !self.engine.is_interactive(&a.host_role) {
                 return Err(err(code::INVALID_PARAMS, format!("`{}` runs as {}, which is not an interactive role for the operator", target, a.host_role)));
             }
-            let task_id = self.spawn_task(&m, &target, &prompt, None);
+            let task_id = self.spawn_task(&m, &target, &prompt, None, None);
             return Ok(json!({"task_id": task_id, "mission_id": m.id, "bundle_agent": a.id, "role": a.host_role}));
         }
         if self.engine.is_forbidden(&target) {
@@ -1531,14 +1531,18 @@ impl EngineService {
         if !self.engine.is_interactive(&target) {
             return Err(err(code::INVALID_PARAMS, format!("`{}` is not an interactive role for the operator (interactive: {})", target, self.engine.settings.interactive_agents.join(", "))));
         }
-        let task_id = self.spawn_task(&m, &target, &prompt, None);
+        let task_id = self.spawn_task(&m, &target, &prompt, None, None);
         Ok(json!({"task_id": task_id, "mission_id": m.id}))
     }
 
     /// Start a task in the background and track it for `task.cancel` and the snapshot. A `ceiling` starts it
-    /// below full trust (a timer's wake carries its setter's).
-    fn spawn_task(&self, m: &Arc<MissionState>, target: &str, prompt: &str, ceiling: Option<Tier>) -> String {
+    /// below full trust (a timer's wake carries its setter's). `timer` names the timer whose wake this is: the task is linked to the task
+    /// that set the timer BEFORE it starts, so it is held by what its parent holds from its first send (`specs/103` §7.1 OD-5).
+    fn spawn_task(&self, m: &Arc<MissionState>, target: &str, prompt: &str, ceiling: Option<Tier>, timer: Option<&str>) -> String {
         let task_id = m.next_task_id();
+        if let Some(timer_id) = timer {
+            let _ = crate::private_read::link_woken_task(&self.engine.ws.dir, timer_id, &crate::private_read::task_key(&m.id, &task_id));
+        }
         self.running.lock().unwrap().insert(task_id.clone(), Running { target: target.to_string(), prompt: prompt.chars().take(120).collect(), started: Instant::now() });
         let (engine, running, tid, m, target, prompt) = (self.engine.clone(), self.running.clone(), task_id.clone(), m.clone(), target.to_string(), prompt.to_string());
         let h = tokio::spawn(async move {
@@ -1571,7 +1575,7 @@ impl EngineService {
                 continue;
             }
             let fired = Fired::of(&t, now);
-            let task_id = self.spawn_task(&m, &t.target, &timers::wake_prompt(&t, &fired), Some(Tier::parse(&t.ceiling).unwrap_or(Tier::L0)));
+            let task_id = self.spawn_task(&m, &t.target, &timers::wake_prompt(&t, &fired), Some(Tier::parse(&t.ceiling).unwrap_or(Tier::L0)), Some(&t.id));
             let mut ev = EventEnvelope::new(&m.id, "timer.fired", json!({"timer_id": t.id, "task_id": task_id, "target": t.target, "creator": t.creator, "note": t.note, "due_unix": t.due_unix, "late_by_secs": fired.late_by_secs, "missed": fired.missed, "every_secs": t.every_secs}));
             ev.task_id = Some(task_id);
             let _ = m.append(ev).await;

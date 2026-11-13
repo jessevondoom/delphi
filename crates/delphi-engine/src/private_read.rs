@@ -317,16 +317,19 @@ pub struct Counter {
     pub connector_would_change: u64,
     /// Of those, how many were because the mark could not be read.
     pub unreadable: u64,
+    /// Of the sends held on Outbound and Connector, how many were held ONLY because of the task's scope (an ancestor's mark or the session's)
+    /// and not its own: what the OD-5 rule costs, so the operator can see it (`specs/103` §7.1).
+    pub held_by_inheritance: u64,
 }
 
 fn read_counter(ws_dir: &Path) -> Counter {
     let v = std::fs::read_to_string(counter_path(ws_dir)).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).unwrap_or(Value::Null);
     let n = |k: &str| v[k].as_u64().unwrap_or(0);
-    Counter { keys_marked: n("keys_marked"), entries_marked: n("entries_marked"), cleared: n("cleared"), outbound_would_change: n("outbound_would_change"), connector_would_change: n("connector_would_change"), unreadable: n("unreadable") }
+    Counter { keys_marked: n("keys_marked"), entries_marked: n("entries_marked"), cleared: n("cleared"), outbound_would_change: n("outbound_would_change"), connector_would_change: n("connector_would_change"), unreadable: n("unreadable"), held_by_inheritance: n("held_by_inheritance") }
 }
 
 fn write_counter(ws_dir: &Path, c: &Counter) -> Result<(), String> {
-    let v = json!({"keys_marked": c.keys_marked, "entries_marked": c.entries_marked, "cleared": c.cleared, "outbound_would_change": c.outbound_would_change, "connector_would_change": c.connector_would_change, "unreadable": c.unreadable});
+    let v = json!({"keys_marked": c.keys_marked, "entries_marked": c.entries_marked, "cleared": c.cleared, "outbound_would_change": c.outbound_would_change, "connector_would_change": c.connector_would_change, "unreadable": c.unreadable, "held_by_inheritance": c.held_by_inheritance});
     write_atomic(&counter_path(ws_dir), &v)
 }
 
@@ -417,6 +420,211 @@ pub fn task_key(mission: &str, task: &str) -> String {
     }
 }
 
+// ---- OD-5 (`specs/103` §7.1): a child holds what its parent holds, within a session ----------------------------------------------------
+//
+// The operator, 2026-11-12: "the child should have the same scope as the parent in a given session". Read in the smallest faithful way, a
+// task is held when ANY key in its scope is marked:
+//
+//   * its own key, `<mission>/<task>`;
+//   * the keys of its recorded ancestors, followed through [`link_task`] (at most [`MAX_CHAIN`] steps; a cycle ends the walk);
+//   * the session scope: the mission's own key. A host session's mark is kept under its mission id (`host-<session>`), and every task the
+//     host started in that session (`host.request_help`, a Council, a research run) runs in that mission, so it shares the host's scope.
+//     Another session of the same host is another mission and does not share it;
+//   * the bare task id, which older marks and the relay tests used (it can only hold more).
+//
+// A task inside one mission already shares its own key with every span of its DAG (a scout the orchestrator dispatched is a span of the same
+// task), so the only parent links that need recording are the ones between separate TASKS. The one such link Delphi creates is a timer: the
+// wake is "a new task" set by an earlier one, so the setter's task key is noted when the timer is set ([`note_timer_setter`]) and linked to
+// the woken task before it starts ([`link_woken_task`]). Both are written by the daemon from its own context, never from a tool argument.
+// A task with no recorded link has no ancestors and behaves as before the decision (tasks that existed before it was built are such).
+//
+// Inheritance only ever ADDS a hold: it reads marks, writes none, and clearing is still the console clearing a KEY (`clear`). A task stays
+// held while any key in its scope is still marked, so clearing the parent's mark does not lift a hold that the session's key still gives.
+
+/// How many ancestors are followed. A chain this long is not made by a person; the cap ends a loop a damaged link could make.
+pub const MAX_CHAIN: usize = 8;
+
+fn links_dir(ws_dir: &Path) -> PathBuf {
+    dir(ws_dir).join("links")
+}
+
+fn link_file(ws_dir: &Path, name: &str) -> PathBuf {
+    links_dir(ws_dir).join(format!("{}.json", name.replace('/', "__").replace(':', "_")))
+}
+
+/// Record that the task `child_key` is a child of the task `parent_key` (both from [`task_key`]). Called by the daemon when it starts a task
+/// on a parent's behalf; never from a tool argument. A link is written once and not changed.
+pub fn link_task(ws_dir: &Path, child_key: &str, parent_key: &str) -> Result<(), String> {
+    if !key_ok(child_key) || !key_ok(parent_key) || child_key == parent_key {
+        return Err("a link names two different keys by identifier only".into());
+    }
+    let _g = LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let path = link_file(ws_dir, child_key);
+    if path.exists() {
+        return Ok(());
+    }
+    write_atomic(&path, &json!({"key": child_key, "parent": parent_key}))
+}
+
+/// Note which task set the timer `timer_id`, so the task its wake starts can be linked to it. Called by the daemon when a role's timer is
+/// set from inside a task. An operator-set timer has no setter task and no note.
+pub fn note_timer_setter(ws_dir: &Path, timer_id: &str, setter_key: &str) -> Result<(), String> {
+    if !id_ok(timer_id) || !key_ok(setter_key) {
+        return Err("a timer note names a timer and a task by identifier only".into());
+    }
+    let _g = LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    write_atomic(&link_file(ws_dir, &format!("timer:{timer_id}")), &json!({"timer": timer_id, "parent": setter_key}))
+}
+
+/// Link the task `child_key` (a timer's wake, about to start) to the task that set the timer, when one is noted. Nothing noted is nothing to
+/// link: the wake is then an ordinary task. Returns whether a link was made.
+pub fn link_woken_task(ws_dir: &Path, timer_id: &str, child_key: &str) -> bool {
+    let parent = match read_link(&link_file(ws_dir, &format!("timer:{timer_id}"))) {
+        Ok(Some(p)) => p,
+        _ => return false,
+    };
+    link_task(ws_dir, child_key, &parent).is_ok()
+}
+
+/// The parent a link file names: `Ok(None)` when there is no file, `Err(())` when a file exists and cannot be read.
+fn read_link(path: &Path) -> Result<Option<String>, ()> {
+    match std::fs::read_to_string(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(_) => Err(()),
+        Ok(t) => match serde_json::from_str::<Value>(&t) {
+            Ok(v) => match v["parent"].as_str() {
+                Some(p) if key_ok(p) => Ok(Some(p.to_string())),
+                _ => Err(()),
+            },
+            Err(_) => Err(()),
+        },
+    }
+}
+
+/// The parent of the task `key`: `Ok(None)` when none is recorded.
+fn parent_of(ws_dir: &Path, key: &str) -> Result<Option<String>, ()> {
+    read_link(&link_file(ws_dir, key))
+}
+
+/// What holds a task, and whether the hold is the task's own or came from its scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Scope {
+    pub state: State,
+    /// True when the task's own key is not marked and the hold came from an ancestor or the session (what the rule costs research).
+    pub inherited: bool,
+}
+
+/// Fold the states of several keys: any unreadable key makes the answer unreadable (deny by default on the four channels); otherwise any
+/// marked key marks it, with the entries of the first one found.
+fn fold(states: impl IntoIterator<Item = State>) -> State {
+    let mut found = State::Unmarked;
+    for s in states {
+        match s {
+            State::Unreadable => return State::Unreadable,
+            m @ State::Marked { .. } => {
+                if found == State::Unmarked {
+                    found = m;
+                }
+            }
+            State::Unmarked => {}
+        }
+    }
+    found
+}
+
+/// The keys that hold the task `task` of `mission`, as `(own, inherited)`. `Err(())` when a link on the chain cannot be read. The own keys
+/// are the task's key and the bare task id; the inherited ones are its ancestors' keys and the mission's own key.
+fn scope_keys(ws_dir: &Path, mission: &str, task: &str) -> Result<(Vec<String>, Vec<String>), ()> {
+    let own_key = task_key(mission, task);
+    let mut own = vec![own_key.clone()];
+    if key_ok(task) {
+        own.push(task.to_string());
+    }
+    let mut inherited = Vec::new();
+    let mut seen = vec![own_key.clone()];
+    let mut at = own_key;
+    for _ in 0..MAX_CHAIN {
+        match parent_of(ws_dir, &at)? {
+            Some(p) if !seen.contains(&p) => {
+                inherited.push(p.clone());
+                seen.push(p.clone());
+                at = p;
+            }
+            _ => break,
+        }
+    }
+    if key_ok(mission) {
+        inherited.push(mission.to_string());
+    }
+    Ok((own, inherited))
+}
+
+/// The one question every send and every relay text asks (`specs/103` §7.1 OD-5): is this task held, by its own mark or by its scope's?
+/// With a mission it resolves the keys above. Without one (a relay card that names no mission and has none noted) it asks of every mission
+/// that has a mark or a link for a task of that id, which can hold a card of an unmarked task that shares an id and can never let a
+/// marked task's text go. Reads marks and links; writes nothing.
+pub fn task_scope(ws_dir: &Path, mission: Option<&str>, task: &str) -> Scope {
+    match mission {
+        Some(m) => scope_in_mission(ws_dir, m, task),
+        None => {
+            // Marks under `<mission>/<task>` in any mission, found by FILE NAME so a damaged record fails closed (M4), and the bare id.
+            let own = fold([task_state_in_any_mission(ws_dir, task), if key_ok(task) { state(ws_dir, task) } else { State::Unmarked }]);
+            // Links: a task of that id in any mission may be the child of a marked task or of a marked session. A link file that cannot be
+            // read has no key inside it to find, so it is found by file name too, and a damaged one fails closed.
+            let mut missions: Vec<String> = Vec::new();
+            let mut damaged = false;
+            if key_ok(task) {
+                let name_suffix = format!("__{}.json", task.replace(':', "_"));
+                let key_suffix = format!("/{task}");
+                for e in std::fs::read_dir(links_dir(ws_dir)).into_iter().flatten().flatten() {
+                    let p = e.path();
+                    if !p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with(&name_suffix)) {
+                        continue;
+                    }
+                    let key = std::fs::read_to_string(&p).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).and_then(|v| v["key"].as_str().map(str::to_string));
+                    match key.as_deref().and_then(|k| k.strip_suffix(&key_suffix)) {
+                        Some(m) if !m.is_empty() => {
+                            if !missions.iter().any(|x| x == m) {
+                                missions.push(m.to_string());
+                            }
+                        }
+                        _ => damaged = true,
+                    }
+                }
+            }
+            let linked: Vec<Scope> = missions.iter().map(|m| scope_in_mission(ws_dir, m, task)).collect();
+            let own_marked = matches!(own, State::Marked { .. }) || linked.iter().any(|s| matches!(s.state, State::Marked { .. }) && !s.inherited);
+            let mut all = vec![own];
+            all.extend(linked.into_iter().map(|s| s.state));
+            if damaged {
+                all.push(State::Unreadable);
+            }
+            let state = fold(all);
+            Scope { inherited: matches!(state, State::Marked { .. }) && !own_marked, state }
+        }
+    }
+}
+
+fn scope_in_mission(ws_dir: &Path, mission: &str, task: &str) -> Scope {
+    let Ok((own, inherited)) = scope_keys(ws_dir, mission, task) else {
+        return Scope { state: State::Unreadable, inherited: false };
+    };
+    let own_state = fold(own.iter().map(|k| state(ws_dir, k)));
+    if own_state != State::Unmarked {
+        // an unreadable ancestor still makes the whole answer unreadable
+        let up = fold(inherited.iter().map(|k| state(ws_dir, k)));
+        let state = if up == State::Unreadable { State::Unreadable } else { own_state };
+        return Scope { state, inherited: false };
+    }
+    let up = fold(inherited.iter().map(|k| state(ws_dir, k)));
+    Scope { inherited: matches!(up, State::Marked { .. }), state: up }
+}
+
+/// The record a send of a task is checked against: [`send_record`] for a whole scope.
+pub fn scope_record(st: &State) -> Value {
+    record_for(st)
+}
+
 /// The record a send of the task `key` is checked against (`specs/103` §4, `egress::check`): `{"private": false}` when nothing is marked
 /// (the check passes and the send is exactly as before), `{"private": true}` when the task read a private entry, and a value that is not
 /// an object when the mark cannot be read, which the check refuses (deny by default). Reads the mark; writes nothing.
@@ -428,10 +636,11 @@ pub fn send_record(ws_dir: &Path, key: &str) -> Value {
     }
 }
 
-/// The send on `channel` (`"outbound"` or `"connector"`) of the task `key` was refused by the egress check and is being put to the
-/// operator instead. Count it. Called only by the two senders, only after the check refused; it decides nothing.
-pub fn note_held(ws_dir: &Path, channel: &str, key: &str) {
-    let st = state(ws_dir, key);
+/// The send on `channel` (`"outbound"` or `"connector"`) of a task whose scope is `scope` was refused by the egress check and is being put
+/// to the operator instead. Count it, and count it again when only the scope held it. Called only by the two senders, only after the check
+/// refused; it decides nothing.
+pub fn note_held(ws_dir: &Path, channel: &str, scope: &Scope) {
+    let st = &scope.state;
     let _g = LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let mut c = read_counter(ws_dir);
     match channel {
@@ -439,8 +648,11 @@ pub fn note_held(ws_dir: &Path, channel: &str, key: &str) {
         "connector" => c.connector_would_change += 1,
         _ => return,
     }
-    if st == State::Unreadable {
+    if *st == State::Unreadable {
         c.unreadable += 1;
+    }
+    if scope.inherited {
+        c.held_by_inheritance += 1;
     }
     let _ = write_counter(ws_dir, &c);
 }
@@ -478,13 +690,14 @@ pub fn readers_skipping_the_mark() -> usize {
 pub fn status_line(ws_dir: &Path) -> String {
     let c = counter(ws_dir);
     format!(
-        "private-read mark: {} task(s) marked, {} entr(y/ies) read, {} cleared; sends held for your answer: outbound {}, connector {} ({} unreadable); {} reader(s) do not mark yet",
+        "private-read mark: {} task(s) marked, {} entr(y/ies) read, {} cleared; sends held for your answer: outbound {}, connector {} ({} unreadable, {} only because a parent task or the session was marked); {} reader(s) do not mark yet",
         c.keys_marked,
         c.entries_marked,
         c.cleared,
         c.outbound_would_change,
         c.connector_would_change,
         c.unreadable,
+        c.held_by_inheritance,
         readers_not_yet_marking()
     )
 }
@@ -611,32 +824,19 @@ pub fn install_relay_filter(hub: &delphi_core::hub::Hub, ws_dir: &Path) {
 /// skipped; a record that exists and cannot be read makes the whole answer `Unreadable`.
 pub fn event_state(ws_dir: &Path, event: &Value) -> State {
     let task = event["task_id"].as_str().or_else(|| event["payload"]["task_id"].as_str());
-    let mission = event["mission_id"].as_str();
-    let mut found = State::Unmarked;
-    // A Delphi task's mark is kept under `<mission>/<task>` (`task_key`, `specs/103` M2); the bare task id and the bare mission id are the
-    // keys the host session and an older mark use. All of them count, so a mark under any key withholds the event.
-    let mut keys: Vec<String> = [task, mission].into_iter().flatten().filter(|k| key_ok(k)).map(str::to_string).collect();
-    if let (Some(m), Some(t)) = (mission, task) {
-        keys.push(task_key(m, t));
-    }
-    for key in &keys {
-        match state(ws_dir, key) {
-            State::Unreadable => return State::Unreadable,
-            m @ State::Marked { .. } => found = m,
-            State::Unmarked => {}
+    let mission = event["mission_id"].as_str().filter(|m| key_ok(m));
+    // The one lookup (`task_scope`): the task's own key, its recorded ancestors', the mission's (the session's) and the bare task id.
+    let mut st = match task {
+        Some(t) => task_scope(ws_dir, mission, t).state,
+        None => State::Unmarked,
+    };
+    // An event that names a mission and no task (a mission-level event) is held by the mission's own mark.
+    if task.is_none() {
+        if let Some(m) = mission {
+            st = state(ws_dir, m);
         }
     }
-    if mission.is_none() {
-        // No mission named: any mission's mark for this task id counts (it can only withhold more, never less).
-        if let Some(t) = task {
-            match task_state_in_any_mission(ws_dir, t) {
-                State::Unreadable => return State::Unreadable,
-                m @ State::Marked { .. } => found = m,
-                State::Unmarked => {}
-            }
-        }
-    }
-    found
+    st
 }
 
 /// The state of a task named without its mission (a card on the relay's list carries only the task id): every live mark whose key is
@@ -673,15 +873,8 @@ pub fn card_withheld(ws_dir: &Path, approval_id: &str, task_id: &str) -> bool {
     if card_is_masked(approval_id) {
         return true;
     }
-    let st = if key_ok(task_id) {
-        // The bare key (host session, older marks) and any mission's `<mission>/<task>` mark: the card names no mission.
-        match state(ws_dir, task_id) {
-            State::Unmarked => task_state_in_any_mission(ws_dir, task_id),
-            other => other,
-        }
-    } else {
-        State::Unmarked
-    };
+    // The one lookup, for a card that names no mission: any mission's mark or link for a task of that id, and the bare id.
+    let st = if key_ok(task_id) { task_scope(ws_dir, None, task_id).state } else { State::Unmarked };
     if !stream_text_can_go(&st) {
         return true;
     }
@@ -814,7 +1007,7 @@ mod tests {
         for (name, channel) in [("harness_run.rs", "Channel::Outbound"), ("connector_run.rs", "Channel::Connector")] {
             let src = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(name)).unwrap();
             let prod = production(&src);
-            let call = format!("crate::egress::check(&crate::private_read::send_record(&self.ws.dir, &mark_key), crate::library::{channel})");
+            let call = format!("crate::egress::check(&crate::private_read::scope_record(&scope.state), crate::library::{channel})");
             assert_eq!(prod.matches(&call).count(), 1, "{name} checks the task's mark once, through the one egress check");
             assert_eq!(prod.matches("crate::private_read::note_held(").count(), 1, "{name} counts a held send in one place");
             assert!(!prod.contains("observe_send"), "{name}: the M1 observe call is gone");
@@ -891,7 +1084,7 @@ mod tests {
         assert!(state(d.path(), "host-abcd1234").would_affect_a_send(), "an unreadable mark holds a send on Outbound and Connector");
         assert_eq!(state(d.path(), "bad key with spaces"), State::Unreadable, "a key that is not an identifier is never read as unmarked");
         assert!(send_record(d.path(), "host-abcd1234").is_null(), "an unreadable mark is a record the egress check refuses (deny by default)");
-        note_held(d.path(), "outbound", "host-abcd1234");
+        note_held(d.path(), "outbound", &Scope { state: State::Unreadable, inherited: false });
         let c = counter(d.path());
         assert_eq!((c.outbound_would_change, c.unreadable), (1, 1));
     }
@@ -939,10 +1132,11 @@ mod tests {
     fn a_held_send_is_counted_per_channel() {
         let d = ws();
         mark(d.path(), "t-1", "s-abc", 5).unwrap();
-        note_held(d.path(), "outbound", "t-1");
-        note_held(d.path(), "outbound", "t-1");
-        note_held(d.path(), "connector", "t-1");
-        note_held(d.path(), "relay", "t-1");
+        let own = Scope { state: state(d.path(), "t-1"), inherited: false };
+        note_held(d.path(), "outbound", &own);
+        note_held(d.path(), "outbound", &own);
+        note_held(d.path(), "connector", &own);
+        note_held(d.path(), "relay", &own);
         let c = counter(d.path());
         assert_eq!((c.outbound_would_change, c.connector_would_change, c.unreadable), (2, 1, 0), "relay and mail are not held in M2 (their seam is M3's)");
     }
@@ -1364,22 +1558,169 @@ mod tests {
         assert!(mask_event_for_relay(d.path(), &card("t_0002", "ap_m4_par_2")).is_none(), "NOT COVERED: the same words from a task that never read the entry");
     }
 
-    /// ATTACK: a handoff between tasks (OD-5). SUCCEEDS, by the operator's decision: a child task does not inherit the mark. A parent that read a
-    /// private entry and wrote a brief for a child leaves the child unmarked: the child's relay text is sent and its Outbound and Connector
-    /// sends are not asked about. Pinned so the day inheritance is built this test is the one to change.
+    /// `specs/103` §7.1 OD-5 (the operator, 2026-11-12: "the child should have the same scope as the parent in a given session"). Inheritance follows
+    /// RECORDED links and the session's key, never a guess from the mission alone: two tasks of one mission with no link between them are
+    /// siblings, and a mark on one does not hold the other. (M4 pinned the opposite for a child with a link; that test is now
+    /// `a_child_is_held_by_its_parents_mark...` below, with the same fixtures.)
     #[test]
-    fn attack_a_child_task_does_not_inherit_the_mark_so_its_sends_and_relay_text_go_out_as_written() {
+    fn a_task_with_no_recorded_parent_link_is_not_held_by_a_neighbours_mark() {
         let d = ws();
         let parent = task_key("m_1", "t_0001");
         mark(d.path(), &parent, "entry-1", 1).unwrap();
         let child = task_key("m_1", "t_0002");
-        assert_eq!(send_record(d.path(), &child), json!({"private": false}), "SUCCEEDS: the child's Outbound and Connector sends are not held");
+        assert_eq!(send_record(d.path(), &child), json!({"private": false}), "no link, no inheritance: the neighbour's sends are not held");
+        assert_eq!(task_scope(d.path(), Some("m_1"), "t_0002"), Scope { state: State::Unmarked, inherited: false });
         let mut ev = card_event("t_0002", "ap_m4_child");
         ev["mission_id"] = json!("m_1");
-        assert!(mask_event_for_relay(d.path(), &ev).is_none(), "SUCCEEDS: the child's card text goes to the relay");
+        assert!(mask_event_for_relay(d.path(), &ev).is_none(), "the neighbour's card text goes to the relay as before");
         let mut ev = card_event("t_0001", "ap_m4_parent");
         ev["mission_id"] = json!("m_1");
-        assert!(mask_event_for_relay(d.path(), &ev).is_some(), "the parent itself is masked");
+        assert!(mask_event_for_relay(d.path(), &ev).is_some(), "the marked task itself is masked");
+    }
+
+    /// The decision itself, with M4's fixtures: a parent that read a private entry and started a child (a timer's wake, linked by the daemon) holds
+    /// the child's Outbound and Connector sends and its relay text, on the first send, and the hold is counted as inherited.
+    #[test]
+    fn a_child_is_held_by_its_parents_mark_on_all_four_channels_through_one_lookup() {
+        let d = ws();
+        let (parent, child) = (task_key("m_1", "t_0001"), task_key("m_1", "t_0002"));
+        link_task(d.path(), &child, &parent).unwrap();
+        // a mark placed AFTER the child exists still holds it: the lookup is made at send time
+        assert_eq!(task_scope(d.path(), Some("m_1"), "t_0002").state, State::Unmarked);
+        mark(d.path(), &parent, "entry-1", 1).unwrap();
+        let s = task_scope(d.path(), Some("m_1"), "t_0002");
+        assert!(matches!(s.state, State::Marked { .. }) && s.inherited, "held, and by inheritance: {s:?}");
+        assert!(crate::egress::check(&scope_record(&s.state), crate::library::Channel::Outbound).is_err());
+        assert!(crate::egress::check(&scope_record(&s.state), crate::library::Channel::Connector).is_err());
+        assert!(!stream_text_can_go(&s.state), "Relay and Mail text is withheld");
+        let mut ev = card_event("t_0002", "ap_od5_child");
+        ev["mission_id"] = json!("m_1");
+        assert!(mask_event_for_relay(d.path(), &ev).is_some(), "the child's card text is replaced");
+        // the parent's own hold is not "inherited"
+        assert!(!task_scope(d.path(), Some("m_1"), "t_0001").inherited);
+        // and the cost is counted
+        note_held(d.path(), "outbound", &s);
+        note_held(d.path(), "connector", &task_scope(d.path(), Some("m_1"), "t_0001"));
+        let c = counter(d.path());
+        assert_eq!((c.outbound_would_change, c.connector_would_change, c.held_by_inheritance), (1, 1, 1));
+    }
+
+    /// A grandchild follows the chain; a sibling, an unrelated task and the child of an unmarked parent are not held.
+    #[test]
+    fn a_grandchild_is_held_and_a_sibling_an_unrelated_task_and_an_unmarked_parents_child_are_not() {
+        let d = ws();
+        let k = |t: &str| task_key("m_1", t);
+        link_task(d.path(), &k("t_0002"), &k("t_0001")).unwrap(); // child of the marked parent
+        link_task(d.path(), &k("t_0003"), &k("t_0002")).unwrap(); // grandchild
+        link_task(d.path(), &k("t_0004"), &k("t_0001")).unwrap(); // sibling of t_0002
+        link_task(d.path(), &k("t_0006"), &k("t_0005")).unwrap(); // child of an unmarked parent
+        mark(d.path(), &k("t_0002"), "entry-1", 1).unwrap(); // the middle task read the entry
+        assert!(matches!(task_scope(d.path(), Some("m_1"), "t_0003").state, State::Marked { .. }), "the grandchild is held by its parent's mark");
+        assert_eq!(task_scope(d.path(), Some("m_1"), "t_0001").state, State::Unmarked, "a mark never goes UP to the parent");
+        assert_eq!(task_scope(d.path(), Some("m_1"), "t_0004").state, State::Unmarked, "a sibling is not held");
+        assert_eq!(task_scope(d.path(), Some("m_1"), "t_0009").state, State::Unmarked, "an unrelated task is not held");
+        assert_eq!(task_scope(d.path(), Some("m_1"), "t_0006").state, State::Unmarked, "the child of an unmarked parent is not held");
+        assert_eq!(task_scope(d.path(), Some("m_2"), "t_0003").state, State::Unmarked, "the same task id in another mission is not held");
+    }
+
+    /// The session scope: the host's mark is kept under its mission (`host-<session>`), so every task that session started is held; another
+    /// session's tasks are not (the same fixtures as M4's second-session attack, which stays true).
+    #[test]
+    fn a_mark_on_the_session_holds_every_task_it_started_and_another_session_is_untouched() {
+        let d = ws();
+        mark(d.path(), "host-abcd1234", "host-abcd1234/n1", 1).unwrap();
+        let s = task_scope(d.path(), Some("host-abcd1234"), "t_0007");
+        assert!(matches!(s.state, State::Marked { .. }) && s.inherited, "a help task of the marked session is held by the session: {s:?}");
+        assert_eq!(task_scope(d.path(), Some("host-bbbbbbbb"), "t_0007").state, State::Unmarked, "another session is not");
+    }
+
+    /// Clearing is the console clearing a KEY. A task stays held while ANY key in its scope is still marked.
+    #[test]
+    fn clearing_one_key_lifts_the_hold_only_when_no_other_key_in_the_scope_is_marked() {
+        let d = ws();
+        let (parent, child) = (task_key("host-abcd1234", "t_0001"), task_key("host-abcd1234", "t_0002"));
+        link_task(d.path(), &child, &parent).unwrap();
+        mark(d.path(), &parent, "entry-1", 1).unwrap();
+        mark(d.path(), "host-abcd1234", "host-abcd1234/n1", 1).unwrap();
+        clear(d.path(), &parent, 2).unwrap();
+        assert!(matches!(task_scope(d.path(), Some("host-abcd1234"), "t_0002").state, State::Marked { .. }), "the session's key still holds the child");
+        clear(d.path(), "host-abcd1234", 3).unwrap();
+        assert_eq!(task_scope(d.path(), Some("host-abcd1234"), "t_0002").state, State::Unmarked, "every key in the scope is clear, so the hold is lifted");
+    }
+
+    /// An unreadable mark or link anywhere on the chain fails closed on the four channels (and only there: nothing inbound reads it); a cycle
+    /// ends; and the walk is bounded.
+    #[test]
+    fn an_unreadable_ancestor_or_link_fails_closed_and_a_cycle_or_a_long_chain_ends() {
+        let d = ws();
+        let k = |t: &str| task_key("m_1", t);
+        link_task(d.path(), &k("t_0002"), &k("t_0001")).unwrap();
+        mark(d.path(), &k("t_0001"), "entry-1", 1).unwrap();
+        std::fs::write(file_of(d.path(), &k("t_0001")), b"{not json").unwrap();
+        assert_eq!(task_scope(d.path(), Some("m_1"), "t_0002").state, State::Unreadable, "an unreadable ancestor mark");
+        assert!(scope_record(&State::Unreadable).is_null() && crate::egress::check(&scope_record(&State::Unreadable), crate::library::Channel::Outbound).is_err());
+        // a damaged LINK file: the child's chain cannot be read
+        link_task(d.path(), &k("t_0004"), &k("t_0003")).unwrap();
+        std::fs::write(link_file(d.path(), &k("t_0004")), b"{not json").unwrap();
+        assert_eq!(task_scope(d.path(), Some("m_1"), "t_0004").state, State::Unreadable, "an unreadable link");
+        // found by FILE NAME when the card names no mission, so the damaged link fails closed there too
+        assert_eq!(task_scope(d.path(), None, "t_0004").state, State::Unreadable);
+        assert!(card_withheld(d.path(), "ap_od5_dmg", "t_0004"));
+        // a cycle
+        link_task(d.path(), &k("t_0011"), &k("t_0012")).unwrap();
+        link_task(d.path(), &k("t_0012"), &k("t_0011")).unwrap();
+        assert_eq!(task_scope(d.path(), Some("m_1"), "t_0011").state, State::Unmarked, "a cycle ends the walk");
+        // a long chain is followed MAX_CHAIN steps and no further
+        for i in 0..(MAX_CHAIN + 2) {
+            link_task(d.path(), &k(&format!("t_1{:03}", i + 1)), &k(&format!("t_1{:03}", i))).unwrap();
+        }
+        mark(d.path(), &k(&format!("t_1{:03}", 0)), "entry-9", 1).unwrap();
+        assert!(matches!(task_scope(d.path(), Some("m_1"), &format!("t_1{:03}", MAX_CHAIN)).state, State::Marked { .. }), "within the cap");
+        assert_eq!(task_scope(d.path(), Some("m_1"), &format!("t_1{:03}", MAX_CHAIN + 2)).state, State::Unmarked, "beyond the cap the walk has ended");
+    }
+
+    /// A card that names no mission (a relay's list after a restart) is found through the links too, and a child's relay events are masked.
+    #[test]
+    fn a_card_with_no_mission_is_withheld_for_a_child_of_a_marked_task_and_not_for_an_unlinked_one() {
+        let d = ws();
+        let (parent, child) = (task_key("m_3", "t_0001"), task_key("m_3", "t_0002"));
+        link_task(d.path(), &child, &parent).unwrap();
+        mark(d.path(), &parent, "entry-1", 1).unwrap();
+        assert!(card_withheld(d.path(), "ap_od5_nm", "t_0002"), "the child's card, with no mission known");
+        assert!(!card_withheld(d.path(), "ap_od5_nm2", "t_0003"), "an unlinked task of another id");
+        let mut no_mission = card_event("t_0002", "ap_od5_nm3");
+        no_mission.as_object_mut().unwrap().remove("mission_id");
+        assert!(mask_event_for_relay(d.path(), &no_mission).is_some(), "an event that names no mission, for the child");
+        for ev in [done_event("t_0002", &format!("done with {CANARY}")), failed_event("t_0002"), review_event("t_0002")] {
+            let mut ev = ev;
+            ev["mission_id"] = json!("m_3");
+            let m = mask_event_for_relay(d.path(), &ev).unwrap_or_else(|| panic!("{} was not masked for the child", ev["type"]));
+            assert!(!m.to_string().contains(CANARY));
+        }
+    }
+
+    /// The link is made by the daemon from its own context: a timer's setter is noted when the timer is set, the wake is linked to it before it
+    /// starts, an operator-set timer (nothing noted) makes no link, a link is written once, and a link names two valid keys.
+    #[test]
+    fn a_woken_task_is_linked_to_the_task_that_set_its_timer_and_an_operator_timer_makes_no_link() {
+        let d = ws();
+        let (setter, woken) = (task_key("m_1", "t_0001"), task_key("m_1", "t_0005"));
+        note_timer_setter(d.path(), "tm_0001", &setter).unwrap();
+        assert!(link_woken_task(d.path(), "tm_0001", &woken));
+        assert_eq!(parent_of(d.path(), &woken), Ok(Some(setter.clone())));
+        // an every-N timer wakes again: another task, the same setter
+        assert!(link_woken_task(d.path(), "tm_0001", &task_key("m_1", "t_0006")));
+        assert_eq!(parent_of(d.path(), &task_key("m_1", "t_0006")), Ok(Some(setter.clone())));
+        // an operator-set timer has no note and so no link
+        assert!(!link_woken_task(d.path(), "tm_0002", &task_key("m_1", "t_0007")));
+        assert_eq!(parent_of(d.path(), &task_key("m_1", "t_0007")), Ok(None));
+        // write-once: a second link for the same child does not change the first
+        link_task(d.path(), &woken, &task_key("m_1", "t_0099")).unwrap();
+        assert_eq!(parent_of(d.path(), &woken), Ok(Some(setter)));
+        // names, not text
+        assert!(link_task(d.path(), "../x", &woken).is_err() && link_task(d.path(), &woken, &woken).is_err() && note_timer_setter(d.path(), "tm 1", &woken).is_err());
+        // the links directory is not a mark: nothing in it is listed as one, and the console lists no link
+        assert!(live(d.path()).is_empty());
     }
 
     /// ATTACK: another MCP session of the same host. SUCCEEDS the same way: a mark is a session's own (`host-<session>`), a second session of
@@ -1395,22 +1736,20 @@ mod tests {
         assert!(mask_event_for_relay(d.path(), &ev).is_some());
     }
 
-    /// ATTACK: a mission-level mark against a task-level check. SUCCEEDS on two of the four channels. The only reader that marks today is the
-    /// host's search, and it marks the host SESSION's mission (`host-<session>`). Help and council tasks that session starts run INSIDE that
-    /// mission (`host_request_help` opens `mission_at(host-<session>)`), and the relay filter counts the mission key, so their relay text is
-    /// withheld; but Outbound and Connector read `<mission>/<task>` only, so a help task's web request and connector call are NOT asked
-    /// about. Pinned as a finding for the operator (it is a decision: OD-5 says children do not inherit, and these are children of the host
-    /// session's brief written after the read). Exposure today is small: `run_task_for_host` runs these tasks read-only at taint ceiling L0,
-    /// where the taint gate already refuses an Outbound request; the connector read path at L0 is NOT VALIDATED.
+    /// M4 found, and pinned, that a mark on the host SESSION's mission (`host-<session>`, set by the host's search) withheld the relay text of the
+    /// tasks that session started but did not hold their Outbound and Connector sends, because those read `<mission>/<task>` only. OD-5 (the
+    /// operator, 2026-11-12) makes the session one scope: the same fixtures now hold on all four channels. Exposure that remains: a
+    /// session's tasks run read-only at taint ceiling L0, where the taint gate already refuses an Outbound request.
     #[test]
-    fn attack_a_mission_level_mark_withholds_relay_text_but_does_not_hold_a_helper_tasks_outbound_or_connector_send() {
+    fn a_mission_level_mark_withholds_relay_text_and_holds_a_helper_tasks_outbound_and_connector_send() {
         let d = ws();
         mark(d.path(), "host-abcd1234", "host-abcd1234/n1", 1).unwrap();
-        let helper = task_key("host-abcd1234", "t_0001");
-        assert_eq!(send_record(d.path(), &helper), json!({"private": false}), "SUCCEEDS: the helper task's Outbound and Connector sends are not held");
+        let helper = task_scope(d.path(), Some("host-abcd1234"), "t_0001");
+        assert!(crate::egress::check(&scope_record(&helper.state), crate::library::Channel::Outbound).is_err(), "the helper task's Outbound send is held");
+        assert!(crate::egress::check(&scope_record(&helper.state), crate::library::Channel::Connector).is_err(), "and its Connector send");
         let mut ev = card_event("t_0001", "ap_m4_helper");
         ev["mission_id"] = json!("host-abcd1234");
-        assert!(mask_event_for_relay(d.path(), &ev).is_some(), "the same task's relay text is withheld");
+        assert!(mask_event_for_relay(d.path(), &ev).is_some(), "the same task's relay text is withheld, as before");
     }
 
     /// ATTACK: key collisions and odd keys. `t_0001` repeats across missions (an event that names its mission is held only for its own);

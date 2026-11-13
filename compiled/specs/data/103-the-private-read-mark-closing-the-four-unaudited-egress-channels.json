@@ -64,31 +64,31 @@
     },
     {
       "level": 2,
-      "line": 113,
+      "line": 114,
       "number": "6",
       "title": "Tests that would prove it"
     },
     {
       "level": 2,
-      "line": 129,
+      "line": 130,
       "number": "7",
       "title": "Open decisions for the operator"
     },
     {
       "level": 3,
-      "line": 143,
+      "line": 144,
       "number": "7.1",
       "title": "The operator's answers, 2026-11-12 (short version; fuller answers to follow)"
     },
     {
       "level": 2,
-      "line": 160,
+      "line": 161,
       "number": "8",
       "title": "What this does not change"
     },
     {
       "level": 2,
-      "line": 169,
+      "line": 170,
       "number": "9",
       "title": "NOT VALIDATED"
     }
@@ -96,7 +96,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/103-the-private-read-mark-closing-the-four-unaudited-egress-channels.md",
-    "sha256": "d0786afc79a09dda7f69379f23dd1b0673240e60c30a2c8ad91904d75bc654e5"
+    "sha256": "53ab6619466b57635e84ef9347310996da2f1daab20b68567f0f0f4171a5c077"
   },
   "source_status_at_hash": {
     "line": {
@@ -109,7 +109,7 @@
       },
       "text": "status: approved   # approved by the operator in chat on 2026-11-12 (\"approve spec 103 … go\"), with the short answers recorded in §7.1. Nothing here has run; every size is a guess; the frequency of a marked task is not measured. The operator will follow up with fuller answers; where this spec and a later answer differ, the later answer decides."
     },
-    "sha256": "d0786afc79a09dda7f69379f23dd1b0673240e60c30a2c8ad91904d75bc654e5",
+    "sha256": "53ab6619466b57635e84ef9347310996da2f1daab20b68567f0f0f4171a5c077",
     "word": "approved"
   },
   "spec": {

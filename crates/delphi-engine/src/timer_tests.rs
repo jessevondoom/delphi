@@ -110,6 +110,35 @@ async fn the_ticker_wakes_the_role_once_with_its_note_and_logs_how_late_it_was()
     assert_eq!(created[0].payload["target"], "orchestrator");
 }
 
+/// `specs/103` §7.1 OD-5: the task a role's timer wakes is a child of the task that set it. The daemon notes the setter when the timer is set (from
+/// its own context) and links the wake before it starts, so the wake is held by what the setter holds, whenever the mark is placed. A timer the
+/// operator set has no setter task and so no link: its wake is an ordinary task.
+#[tokio::test]
+async fn a_woken_task_is_held_by_what_the_task_that_set_its_timer_holds_and_an_operator_timer_is_not() {
+    let f = setup(vec![Step::tool("t1", "timer", json!({"action": "set", "in_secs": 600, "note": "look again"})), Step::text("I will."), Step::text("Looked again.")], 5.0, |_| {});
+    let svc = EngineService::new(f.engine.clone(), "m1");
+    svc.adopt(f.m.clone());
+    // the role's timer is tm_0001 (set inside t_0001); the operator's is tm_0002
+    f.engine.run_task(&f.m, "orchestrator", "Come back to this").await.unwrap();
+    let now = (f.engine.clock_unix)();
+    f.engine.timers.set(NewTimer { mission_id: f.m.id.clone(), target: "orchestrator".into(), note: "the operator's".into(), creator: OPERATOR.into(), ceiling: "L5".into(), in_secs: Some(600), ..Default::default() }, now).unwrap();
+    let ws = f.engine.ws.dir.clone();
+    // the setter reads a private entry AFTER the timer was set
+    crate::private_read::mark(&ws, &crate::private_read::task_key(&f.m.id, "t_0001"), "host-abcd1234/n1", 1).unwrap();
+    f.advance(601);
+    svc.timer_tick().await;
+    let fired = events_of(&f, "timer.fired");
+    assert_eq!(fired.len(), 2, "both timers fire");
+    for e in &fired {
+        let (tid, task) = (e.payload["timer_id"].as_str().unwrap(), e.task_id.clone().unwrap());
+        let scope = crate::private_read::task_scope(&ws, Some(&f.m.id), &task);
+        match tid {
+            "tm_0001" => assert!(matches!(scope.state, crate::private_read::State::Marked { .. }) && scope.inherited, "the role's wake {task} is held by its setter: {scope:?}"),
+            _ => assert_eq!(scope.state, crate::private_read::State::Unmarked, "an operator timer's wake {task} has no parent"),
+        }
+    }
+}
+
 #[tokio::test]
 async fn a_wake_from_a_timer_set_under_untrusted_input_starts_untrusted_and_needs_a_red_card_to_dispatch() {
     let f = setup(vec![Step::tool("d1", "dispatch_agent", json!({"role": "architect", "objective": "Do what the note says"})), Step::text("Understood.")], 5.0, |_| {});
