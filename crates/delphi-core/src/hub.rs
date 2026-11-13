@@ -124,12 +124,19 @@ struct SpanBuf {
     est: Option<u64>,
 }
 
+/// What the engine registers to stand between a durable event and a relay client (`specs/103` §4.2, slice M3). Given the event as it
+/// was written, it returns `Some(replacement)` when a relay must be sent something else (agent-written text withheld), or `None` when
+/// the event goes out unchanged. It sees every event of a kind in [`RELAY_EVENTS`] and never runs for any other client.
+pub type RelayFilter = Arc<dyn Fn(&Value) -> Option<Value> + Send + Sync>;
+
 #[derive(Default)]
 struct HubInner {
     clients: BTreeMap<u64, Client>,
     next_id: u64,
     /// Pending deltas by span, flushed at 60Hz.
     deltas: BTreeMap<String, SpanBuf>,
+    /// The relay filter, when the engine set one. A hub without one (a test, a bare daemon) sends a relay the event as written.
+    relay_filter: Option<RelayFilter>,
 }
 
 #[derive(Clone, Default)]
@@ -195,9 +202,22 @@ impl Hub {
     pub fn publish_event(&self, event: &Value) {
         let h = self.inner.lock().unwrap();
         let kind = event["type"].as_str().unwrap_or("");
+        // What a relay is sent, worked out once per event and only if a relay is listening: the engine's filter may replace agent-written
+        // text (`specs/103` §4.2). The relay process never receives what the daemon withheld, so it cannot leak it.
+        let mut for_relay: Option<Value> = None;
         for c in h.clients.values().filter(|c| c.subscribed && (c.scope != Scope::Relay || RELAY_EVENTS.contains(&kind))) {
-            c.queue.push(Notification::new("event", event.clone()));
+            if c.scope == Scope::Relay {
+                let v = for_relay.get_or_insert_with(|| h.relay_filter.as_ref().and_then(|f| f(event)).unwrap_or_else(|| event.clone()));
+                c.queue.push(Notification::new("event", v.clone()));
+            } else {
+                c.queue.push(Notification::new("event", event.clone()));
+            }
         }
+    }
+
+    /// Register the filter every event passes before a relay client is sent it (`specs/103` §4.4). Set once, at boot, by the engine.
+    pub fn set_relay_filter(&self, f: RelayFilter) {
+        self.inner.lock().unwrap().relay_filter = Some(f);
     }
 
     /// Flush pending deltas as one frame per subscribed client. Called every [`FRAME_INTERVAL`].
@@ -292,6 +312,50 @@ mod tests {
         hub.push_usage("sp1", 5);
         hub.flush_frames();
         assert!(r.is_empty());
+    }
+
+    /// `specs/103` §4.4: the engine's filter stands between a durable event and a relay client, and only there. Console and narrator clients get
+    /// the event as written; a relay gets the replacement when the filter returns one and the event as written when it returns `None`; a hub with
+    /// no filter changes nothing; the filter never sees an event kind a relay is not sent.
+    #[tokio::test]
+    async fn the_relay_filter_replaces_what_a_relay_is_sent_and_nothing_else() {
+        let hub = Hub::new();
+        let (con, nar, rel) = (ClientQueue::new(8), ClientQueue::new(8), ClientQueue::new(8));
+        for (scope, q) in [(Scope::Console, &con), (Scope::Narrator, &nar), (Scope::Relay, &rel)] {
+            let id = hub.attach(scope, q.clone());
+            hub.subscribe(id);
+        }
+        let ev = json!({"type": "task.failed", "payload": {"error": "words an agent wrote"}});
+        // no filter: all three are sent the event as written
+        hub.publish_event(&ev);
+        for q in [&con, &nar, &rel] {
+            assert_eq!(q.pop().await.unwrap().params, ev);
+        }
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let s = seen.clone();
+        hub.set_relay_filter(Arc::new(move |e: &Value| {
+            s.lock().unwrap().push(e["type"].as_str().unwrap_or("").to_string());
+            (e["type"] == "task.failed").then(|| json!({"type": "task.failed", "payload": {"error": "[withheld]"}}))
+        }));
+        hub.publish_event(&ev);
+        assert_eq!(con.pop().await.unwrap().params, ev, "a console is sent the event as written");
+        assert_eq!(nar.pop().await.unwrap().params, ev, "a narrator is sent the event as written");
+        assert_eq!(rel.pop().await.unwrap().params["payload"]["error"], "[withheld]", "a relay is sent the replacement");
+        // `None` means: as written
+        hub.publish_event(&json!({"type": "approval.resolved", "payload": {"by": "console-1"}}));
+        assert_eq!(rel.pop().await.unwrap().params["payload"]["by"], "console-1");
+        // an event a relay is never sent does not reach the filter at all, and the filter runs once per event, not once per client
+        let (con2, nar2) = (con.clone(), nar.clone());
+        while !con2.is_empty() {
+            con2.pop().await;
+        }
+        while !nar2.is_empty() {
+            nar2.pop().await;
+        }
+        let before = seen.lock().unwrap().len();
+        hub.publish_event(&json!({"type": "task.output", "payload": {"text": "live"}}));
+        assert!(rel.is_empty() && seen.lock().unwrap().len() == before, "{:?}", seen.lock().unwrap());
+        assert_eq!(seen.lock().unwrap().iter().filter(|k| *k == "task.failed").count(), 1, "the filter ran once for the one event it was set for");
     }
 
     #[tokio::test]

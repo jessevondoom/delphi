@@ -831,11 +831,12 @@ fn the_background_worker_picks_a_claim_to_check_and_grants_nothing_and_only_the_
 
 #[test]
 fn the_private_read_mark_is_named_only_where_it_is_set_observed_cleared_and_shown_and_it_reaches_nothing() {
-    // `specs/103` §8 and §4.3 (slice M1): a mark only ever raises, degrades or refuses; in M1 it does none of those and only counts. So (1) only the
-    // files below name the module: the readers that set it (`service.rs`), the two senders that observe it, the daemon's console methods, `doctor`,
-    // the operator's command and the module's own declaration; no promotion, trust, tool-access or approval file does; (2) `mark(` is called only
-    // by the daemon's marker and `observe_send(` only by the two senders (`clear(` is checked by the module's own test); (3) the module names no
-    // socket, process or model call, and its `use` lines come from a short list of inert crates.
+    // `specs/103` §8 and §4.3 (slices M1 and M2): a mark only ever raises a card, degrades or refuses; it never lowers a tier, approves or grants. So
+    // (1) only the files below name the module: the readers that set it (`service.rs`), the two senders that act on it (M2), the daemon's console
+    // methods, `doctor`, the operator's command and the module's own declaration; no promotion, trust, tool-access or approval file does
+    // (`merge_class.rs` names the two held card kinds by string, so a relay reply can deny them and never approve); (2) `mark(` is called only by
+    // the daemon's marker, and `send_record(` and `note_held(` only by the two senders (`clear(` is checked by the module's own test); (3) the module
+    // names no socket, process or model call, and its `use` lines come from a short list of inert crates.
     let root = root();
     let mut files = Vec::new();
     rust_files(&root.join("crates"), &mut files);
@@ -843,14 +844,22 @@ fn the_private_read_mark_is_named_only_where_it_is_set_observed_cleared_and_show
     let named_ok = [
         "crates/delphi-engine/src/lib.rs",
         "crates/delphi-engine/src/private_read.rs",
+        // slice M3: the daemon's boot installs the relay filter that withholds agent-written text (`specs/103` §4.4), and so does the test
+        // fixture that stands in for the boot
+        "crates/delphi-engine/src/boot.rs",
+        "crates/delphi-engine/src/testkit.rs",
+        // the egress table names the file that decides the Relay and Mail rows (`PATHS`)
+        "crates/delphi-engine/src/egress.rs",
         "crates/delphi-engine/src/service.rs",
         "crates/delphi-engine/src/harness_run.rs",
         "crates/delphi-engine/src/connector_run.rs",
+        // the approval-refusal list names a payload key (`private_read_mark`) so a relay reply cannot approve a held card; it only widens what is refused
+        "crates/delphi-engine/src/merge_class.rs",
         "crates/delphi/src/doctor.rs",
         "crates/delphi/src/private_read_cmd.rs",
         "crates/delphi/src/main.rs",
     ];
-    let (mut stray, mut mark_callers, mut observe_callers) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut stray, mut mark_callers, mut record_callers, mut held_callers) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     // production code runs to the LAST `mod tests` (a file such as `service.rs` has an earlier `#[cfg(test)]` item, which `production()` would cut at)
     let production_last = |src: &str| -> String {
         let cut = src.rfind("\n#[cfg(test)]\nmod tests").or_else(|| src.rfind("\nmod tests")).unwrap_or(src.len());
@@ -867,15 +876,29 @@ fn the_private_read_mark_is_named_only_where_it_is_set_observed_cleared_and_show
             if code.contains("private_read::mark(") {
                 mark_callers.push(rel.clone());
             }
-            if code.contains("private_read::observe_send(") {
-                observe_callers.push(rel.clone());
+            if code.contains("private_read::send_record(") {
+                record_callers.push(rel.clone());
+            }
+            if code.contains("private_read::note_held(") {
+                held_callers.push(rel.clone());
             }
         }
     }
-    observe_callers.sort();
+    record_callers.sort();
+    held_callers.sort();
     assert!(stray.is_empty(), "the private-read mark is named outside the files that set, observe, clear and show it; read the new file and add it on purpose: {stray:?}");
     assert_eq!(mark_callers, vec!["crates/delphi-engine/src/service.rs".to_string()], "a mark is set only by the daemon's marker for a reader in READS");
-    assert_eq!(observe_callers, vec!["crates/delphi-engine/src/connector_run.rs".to_string(), "crates/delphi-engine/src/harness_run.rs".to_string()], "the observe call is made by the two senders only");
+    // `merge_class.rs` is the one approval-side file that names the mark, by a string, in one place, and only to refuse: the line returns `Some(..)`
+    // (a reason a relay may not approve), never a decision to allow.
+    let mc = std::fs::read_to_string(root.join("crates/delphi-engine/src/merge_class.rs")).unwrap();
+    let mc_code: Vec<&str> = production_last(&mc).lines().filter(|l| !l.trim_start().starts_with("//")).filter(|l| l.contains("private_read")).map(|_| "x").collect();
+    assert_eq!(mc_code.len(), 1, "merge_class.rs names the mark in exactly one line");
+    let mc_prod = production_last(&mc);
+    let line = mc_prod.lines().find(|l| !l.trim_start().starts_with("//") && l.contains("private_read")).unwrap();
+    assert!(line.contains("=> Some("), "that line only refuses: {line}");
+    let senders = vec!["crates/delphi-engine/src/connector_run.rs".to_string(), "crates/delphi-engine/src/harness_run.rs".to_string()];
+    assert_eq!(record_callers, senders, "the mark is read for a send by the two senders only");
+    assert_eq!(held_callers, senders, "a held send is counted by the two senders only");
     let inert = ["delphi_core::", "serde_json::", "std::"];
     let reach = Regex::new(r"std::net|std::process|Command::new|TcpStream|reqwest|tiny_http|tokio::|delphi_adapter|complete\(|model_call|\.send\(").unwrap();
     let rel = "crates/delphi-engine/src/private_read.rs";
@@ -885,6 +908,57 @@ fn the_private_read_mark_is_named_only_where_it_is_set_observed_cleared_and_show
         assert!(inert.iter().any(|p| l.trim_start_matches("use ").starts_with(p)), "{rel} imports from a path that is not on the inert list: {l}");
     }
     assert!(!reach.is_match(&code), "{rel} names a socket, a process or a model call");
+}
+
+#[test]
+fn the_relay_filter_only_withholds_text_and_a_card_it_withheld_is_approved_only_at_the_console() {
+    // `specs/103` §4.2 and §4.3 (slice M3): the mark now degrades one thing, the text an agent wrote on the relay stream, and refuses one thing, a
+    // relay reply that allows a card whose details the relay was not shown. It lowers no tier, grants no tool and approves nothing. So (1) the
+    // functions that withhold are called from one place each (the boot installs the stream filter; the daemon's card list and relay answer use the
+    // other two); (2) the daemon's relay answer asks `card_withheld` BEFORE it asks the broker to resolve anything, so a withheld card cannot be
+    // allowed by any reply; (3) the hub applies the filter to relay clients only, so no other scope is sent anything different.
+    let root = root();
+    let mut files = Vec::new();
+    rust_files(&root.join("crates"), &mut files);
+    let production_last = |src: &str| -> String {
+        let cut = src.rfind("\n#[cfg(test)]\nmod tests").or_else(|| src.rfind("\nmod tests")).unwrap_or(src.len());
+        src[..cut].to_string()
+    };
+    let (mut install, mut stream, mut list, mut asked) = (Vec::<String>::new(), Vec::<String>::new(), Vec::new(), Vec::new());
+    for f in &files {
+        let rel = f.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
+        if rel == "crates/delphi-engine/src/private_read.rs" {
+            continue;
+        }
+        let src = std::fs::read_to_string(f).unwrap();
+        let code: String = production_last(&src).lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+        if code.contains("private_read::install_relay_filter(") {
+            install.push(rel.clone());
+        }
+        if code.contains("private_read::mask_event_for_relay(") {
+            stream.push(rel.clone());
+        }
+        if code.contains("private_read::mask_pending_for_relay(") {
+            list.push(rel.clone());
+        }
+        if code.contains("private_read::card_withheld(") {
+            asked.push(rel.clone());
+        }
+    }
+    install.sort();
+    assert_eq!(install, vec!["crates/delphi-engine/src/boot.rs".to_string(), "crates/delphi-engine/src/testkit.rs".to_string()], "the stream filter is installed by the boot and by the test fixture that stands in for it, and by nothing else");
+    assert!(stream.is_empty(), "nothing outside the module calls the stream mask directly; it runs only through the installed filter: {stream:?}");
+    assert_eq!(list, vec!["crates/delphi-engine/src/service.rs".to_string()], "the card list is masked by the daemon's list method only");
+    assert_eq!(asked, vec!["crates/delphi-engine/src/service.rs".to_string()], "the withheld-card question is asked by the daemon's relay answer only");
+    let svc = std::fs::read_to_string(root.join("crates/delphi-engine/src/service.rs")).unwrap();
+    let at = svc.find("fn approval_relay_resolve").expect("the relay answer exists");
+    let body = &svc[at..svc[at..].find("\n    }\n").map(|n| at + n).unwrap_or(svc.len())];
+    let (asks, resolves) = (body.find("private_read::card_withheld(").expect("the relay answer asks whether the card was withheld"), body.find("broker.resolve(").expect("the relay answer resolves"));
+    assert!(asks < resolves, "the withheld-card question comes before anything is resolved");
+    assert!(body[..asks].rfind("if allow {").is_some_and(|i| asks - i < 200), "only an allow is refused (the question sits inside the nearest `if allow`); a deny stays open");
+    let hub = std::fs::read_to_string(root.join("crates/delphi-core/src/hub.rs")).unwrap();
+    let publish = &hub[hub.find("pub fn publish_event").unwrap()..hub.find("pub fn set_relay_filter").unwrap()];
+    assert!(publish.contains("c.scope == Scope::Relay") && publish.matches("relay_filter").count() == 1, "the filter runs for relay clients only, once per event");
 }
 
 #[test]

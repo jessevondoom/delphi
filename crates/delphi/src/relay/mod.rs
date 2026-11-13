@@ -430,7 +430,11 @@ pub fn card_message(p: &Value, token: &str, red: bool, detail: Detail, step_up: 
         text.push_str(&format!("\n(This replaces {}, which timed out; the old code no longer works.)\n", clean(r, 40)));
     }
     let mut actions = vec![Action { label: "Deny".into(), reply: format!("DENY {}", token) }];
-    if red && step_up {
+    if p["withheld"].as_bool() == Some(true) {
+        // `specs/103` §4.2: the daemon withheld this card's details because its task read a private entry, so a reply cannot approve it (the
+        // daemon refuses that too, whatever this message offers). Only Deny is offered.
+        text.push_str("\nThe details of this card are withheld because its task read a private entry. It cannot be approved by a reply, even with an authenticator code: see it and approve it at the console, or deny it here.\n");
+    } else if red && step_up {
         text.push_str("\nThis is a RED action. To approve it by reply you also need the 6-digit code from your authenticator app: add it after the code, as `APPROVE <code> <123456>`. Without it, this can only be denied here or approved at the console.\n");
         actions.insert(0, Action { label: "Approve (add your authenticator code)".into(), reply: format!("APPROVE {} ", token) });
     } else if red {
@@ -845,6 +849,28 @@ mod tests {
         assert!(m.card.is_none() && m.subject.contains("t_0004") && m.subject.contains("2 decision(s)"), "{:?}", m);
         assert!(m.text.contains("[elevated] write Cargo.toml") && m.text.contains("/decisions") && m.text.contains("Nothing has reached your checkout"), "{}", m.text);
         assert!(m.actions.is_empty(), "there is nothing to answer by reply: reviewing happens at the console");
+    }
+
+    /// `specs/103` §4.2 (slice M3): a card the daemon withheld the details of reaches the operator with the fixed phrase, offers only Deny, and a
+    /// forged approve reply for it is still the daemon's to refuse (it does: `approval.relay_resolve`).
+    #[test]
+    fn a_withheld_card_offers_only_deny_and_still_reaches_the_operator() {
+        let mut p = card("ap_w", "amber");
+        p["payload"]["summary"] = json!(delphi_engine::private_read::RELAY_PHRASE);
+        p["payload"]["payload"] = json!(delphi_engine::private_read::RELAY_PHRASE);
+        p["payload"]["withheld"] = json!(true);
+        let mut r = relay();
+        let now = Instant::now();
+        r.on_event(&p, now);
+        let m = &r.chan.sent[0];
+        assert_eq!(m.card.as_deref(), Some("ap_w"), "the card still reaches the operator");
+        assert!(m.text.contains(delphi_engine::private_read::RELAY_PHRASE) && !m.text.contains("SECRET BODY") && !m.text.contains("write specs/009.md"), "{}", m.text);
+        assert_eq!(m.actions.iter().map(|a| a.label.as_str()).collect::<Vec<_>>(), ["Deny"], "no approve line is offered for a card the operator was not shown");
+        assert!(m.text.contains("approve it at the console"));
+        // a card that was not withheld still offers both
+        let mut r2 = relay();
+        r2.on_event(&card("ap_n", "amber"), now);
+        assert_eq!(r2.chan.sent[0].actions.len(), 2);
     }
 
     #[test]

@@ -9,8 +9,10 @@
 //! * `for_prompt`, the one function that could hand a record's text to a model prompt, has no caller, defaults to deny and never
 //!   serves a foreign or unknown family.
 //!
-//! The four channels Relay, Connector, Mail and Outbound are still `Unaudited` in `egress::PATHS` (spec 103 covers them). Nothing here
-//! proves what they carry; the file lists below only show that no such file reads the history store today.
+//! The four channels Relay, Connector, Mail and Outbound were `Unaudited` in `egress::PATHS` when this file was written; `specs/103` M2 and M3
+//! wired them (they ask, refuse or replace agent-written text for a task whose private-read mark is live). That covers agent-written text
+//! and the private-read mark, not the history store: what proves the store never leaves is the file lists below, which show that no such
+//! file reads it today.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -75,10 +77,20 @@ fn the_history_channel_is_registered_and_its_sender_calls_the_one_check() {
     assert!(prod.contains("egress::check(") && prod.contains("Channel::History"), "{} must call egress::check for Channel::History", row.1);
 }
 
+/// Spec 102 S7 pinned the four channels that carry agent-written text (Relay, Connector, Mail, Outbound) as `Unaudited`, so the history work
+/// could not claim they were covered. `specs/103` M2 (Connector, Outbound) and M3 (Relay, Mail) are the change that retires them: each now asks,
+/// refuses or replaces text for a task whose private-read mark is live. This test follows that state, so a channel that falls back to
+/// `Unaudited` (or a new one added without an audit) fails here as well as in `egress.rs::no_channel_is_unaudited`.
 #[test]
-fn the_four_unaudited_channels_are_still_unaudited_and_this_slice_does_not_claim_otherwise() {
+fn no_channel_that_carries_agent_text_is_unaudited_since_spec_103_m2_and_m3() {
     let un: Vec<String> = PATHS.iter().filter(|(_, _, w)| *w == Wired::Unaudited).map(|(c, _, _)| format!("{c:?}")).collect();
-    assert_eq!(un, ["Relay", "Connector", "Mail", "Outbound"]);
+    assert!(un.is_empty(), "a channel is `Unaudited` again: {un:?}");
+    for ch in ["Relay", "Connector", "Mail", "Outbound"] {
+        assert!(
+            PATHS.iter().any(|(c, _, w)| format!("{c:?}") == ch && *w == Wired::Yes),
+            "{ch} is not wired through the one egress check"
+        );
+    }
 }
 
 #[test]

@@ -37,7 +37,13 @@ pub struct Policy {
     allow: HashSet<(String, u16)>,
     /// Tests only: permit loopback upstreams.
     allow_private: bool,
+    /// `specs/103` M2: set while the task this proxy serves holds a private-read mark. The proxy sees a host name and a TLS hello, never the
+    /// text of a request, so it cannot ask about one: while the flag is set it opens no tunnel at all, and says why.
+    hold: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
+
+/// The reason recorded for a tunnel refused because the task holds a private-read mark (`specs/103` §4, §7.1 OD-1).
+pub const HELD_REASON: &str = "this task read a private entry; the operator can lift the hold at the console";
 
 impl Policy {
     pub fn new<I: IntoIterator<Item = S>, S: AsRef<str>>(hosts: I) -> Policy {
@@ -51,7 +57,18 @@ impl Policy {
                 }
             })
             .collect();
-        Policy { allow, allow_private: false }
+        Policy { allow, allow_private: false, hold: None }
+    }
+
+    /// The caller owns the flag and sets it from the task's private-read mark; the proxy only reads it. An absent flag holds nothing, so
+    /// every existing caller is unchanged.
+    pub fn held_by(mut self, flag: Arc<std::sync::atomic::AtomicBool>) -> Policy {
+        self.hold = Some(flag);
+        self
+    }
+
+    fn held(&self) -> bool {
+        self.hold.as_ref().is_some_and(|f| f.load(std::sync::atomic::Ordering::SeqCst))
     }
 
     /// For tests that use a loopback upstream. Never used by the daemon.
@@ -243,6 +260,10 @@ async fn serve(mut client: TcpStream, policy: &Policy) -> Result<(), Denied> {
         }
     };
     let target = format!("{}:{}", host, port);
+    if policy.held() {
+        let _ = client.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n").await;
+        return Err(deny(target, HELD_REASON));
+    }
     if !policy.permits(&host, port) {
         let _ = client.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n").await;
         return Err(deny(target, "host is not on the allowlist"));
@@ -435,6 +456,22 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(100)).await;
         let reasons: Vec<String> = proxy.denied().into_iter().map(|d| d.reason).collect();
         assert!(reasons.iter().any(|r| r.contains("allowlist")) && reasons.iter().any(|r| r.contains("only CONNECT")) && reasons.iter().any(|r| r.contains("does not match")) && reasons.iter().any(|r| r.contains("no SNI")), "{:?}", reasons);
+    }
+
+    /// `specs/103` M2: while the flag is set no tunnel opens, even to an allowed host; cleared, the same request is tunnelled.
+    #[tokio::test]
+    async fn a_held_task_opens_no_tunnel_and_the_same_request_passes_when_the_hold_is_lifted() {
+        let flag = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let (up, _h) = upstream().await;
+        let proxy = EgressProxy::start(Policy::new([format!("localhost:{}", up)]).allowing_private_addresses().held_by(flag.clone())).await.unwrap();
+        let req = format!("CONNECT localhost:{} HTTP/1.1\r\n\r\n", up);
+        let (r, _) = connect(proxy.port(), req.as_bytes()).await;
+        assert!(r.starts_with("HTTP/1.1 403"), "{}", r);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(proxy.denied()[0].reason, HELD_REASON, "{:?}", proxy.denied());
+        flag.store(false, std::sync::atomic::Ordering::SeqCst);
+        let (r, _) = connect(proxy.port(), req.as_bytes()).await;
+        assert!(r.starts_with("HTTP/1.1 200"), "{}", r);
     }
 
     #[tokio::test]

@@ -15,6 +15,11 @@ const OPEN_GETTERS: &[&str] = &[
     "permissions.get", "ratify.list", "session.snapshot", "timer.list", "usage.get",
 ];
 
+/// Open getters whose ANSWER depends on the caller's scope without refusing any scope (`specs/103` §4.2, slice M3): a relay asking for the pending
+/// cards is sent the list with the details of a withheld card replaced. Each must also be on [`OPEN_GETTERS`], and its handler must refuse no scope
+/// (it names none of the `need_*` checks), so naming `ctx.scope` to choose what to return is not read as a gate.
+const SCOPE_AWARE_GETTERS: &[&str] = &["approval.list"];
+
 /// What counts as a scope check in a handler's opening lines.
 const GATES: &[&str] = &["need_console(", "need_host(", "need_relay(", "need_narrator(", "ctx.scope"];
 
@@ -99,7 +104,9 @@ fn ungated(files: &[(String, Vec<String>)]) -> (BTreeSet<String>, Vec<String>) {
                 None => missing.push(format!("{method}: handler `{h}` not found in src/service*.rs")),
             }
         }
-        if !gated(&text) {
+        // a scope-aware getter chooses what to return by scope; it is a gate only if it refuses one (a `need_*` check)
+        let refuses = ["need_console(", "need_host(", "need_relay(", "need_narrator("].iter().any(|g| text.contains(g));
+        if !gated(&text) || (SCOPE_AWARE_GETTERS.contains(&method.as_str()) && !refuses) {
             open.insert(method);
         }
     }
@@ -114,6 +121,9 @@ fn every_rpc_method_checks_the_callers_scope_or_is_a_reviewed_getter() {
     let (open, missing) = ungated(&files);
     assert!(missing.is_empty(), "{missing:?}");
     let listed: BTreeSet<String> = OPEN_GETTERS.iter().map(|s| s.to_string()).collect();
+    for m in SCOPE_AWARE_GETTERS {
+        assert!(listed.contains(*m) && open.contains(*m), "{m} is scope-aware: it must stay on OPEN_GETTERS and refuse no scope");
+    }
     let new: Vec<&String> = open.difference(&listed).collect();
     let stale: Vec<&String> = listed.difference(&open).collect();
     assert!(new.is_empty(), "these RPC methods check no scope at the top of their handler and are not on OPEN_GETTERS: {new:?}. Gate them (need_console / need_host / a ctx.scope check) or, if they only read, add them to OPEN_GETTERS with a reason");

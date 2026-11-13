@@ -1360,14 +1360,14 @@ impl EngineService {
         }
     }
 
-    /// `private_read.status` (spec 103 M1): the operator's view of the marks and the observe counter. Console scope only; ids and counts.
+    /// `private_read.status` (spec 103 M1, M2): the operator's view of the marks and the count of sends held for an answer. Console scope only; ids and counts.
     async fn private_read_status(&self, ctx: CallContext) -> RpcOutcome {
         need_console(&ctx)?;
         let ws_dir = self.engine.ws.dir.clone();
         let c = crate::private_read::counter(&ws_dir);
         let marks: Vec<Value> = crate::private_read::live(&ws_dir).into_iter().map(|(key, entries, first_at)| json!({"key": key, "entries": entries, "first_at": first_at})).collect();
         Ok(json!({
-            "observe_only": true,
+            "observe_only": false,
             "marks": marks,
             "counter": {"keys_marked": c.keys_marked, "entries_marked": c.entries_marked, "cleared": c.cleared, "outbound_would_change": c.outbound_would_change, "connector_would_change": c.connector_would_change, "unreadable": c.unreadable},
             "readers_not_yet_marking": crate::private_read::readers_not_yet_marking(),
@@ -1491,6 +1491,18 @@ impl EngineService {
 
     fn pending_json(&self) -> Value {
         Value::Array(self.engine.broker.pending().iter().map(|r| r.event_payload()).collect())
+    }
+
+    /// The pending cards as a caller of this scope is sent them. A relay gets what the stream gave it: the agent-written text of a card whose
+    /// task read a private entry is replaced (`specs/103` §4.2). Every other scope, and a relay for a task that read nothing private, gets
+    /// the list as it always was.
+    fn pending_json_for(&self, scope: Scope) -> Value {
+        let list = self.pending_json();
+        if scope == Scope::Relay {
+            crate::private_read::mask_pending_for_relay(&self.engine.ws.dir, list)
+        } else {
+            list
+        }
     }
 
     async fn task_submit(&self, p: Value, ctx: CallContext) -> RpcOutcome {
@@ -2339,6 +2351,14 @@ impl EngineService {
                 if let Some(what) = crate::merge_class::console_only(&r.tool, &r.payload) {
                     return Err(err(code::FORBIDDEN, format!("{} is approved only at the console, never by a relay reply, even with an authenticator code (it can still be denied here)", what)));
                 }
+            }
+        }
+        // A card whose details the daemon withheld from the relay (its task read a private entry, `specs/103` §4.2) is approved only at the
+        // console: otherwise the operator would be allowing content they were not shown. Denying stays open. A mark that cannot be read counts.
+        if allow {
+            let task = self.engine.broker.get(id).map(|r| r.task_id).unwrap_or_default();
+            if crate::private_read::card_withheld(&self.engine.ws.dir, id, &task) {
+                return Err(err(code::FORBIDDEN, "this card's details were withheld from the relay because its task read a private entry: approve it at the console (it can still be denied here)"));
             }
         }
         // A Red card can be denied by anyone the relay vouches for. Approving one also needs the operator's authenticator
@@ -3686,7 +3706,7 @@ impl Extension for ServiceExt {
                 "xenia.attest.decide" => svc.xenia_attest_decide(params, ctx).await,
                 "xenia.admin.prepare" => svc.xenia_admin_prepare(params, ctx).await,
                 "xenia.admin.decide" => svc.xenia_admin_decide(params, ctx).await,
-                "approval.list" => Ok(svc.pending_json()),
+                "approval.list" => Ok(svc.pending_json_for(ctx.scope)),
                 "approval.resolve" => svc.approval_resolve(params, ctx),
                 "approval.relay_resolve" => svc.approval_relay_resolve(params, ctx),
                 "usage.get" => svc.usage_get(params).await,
@@ -5623,6 +5643,112 @@ mod tests {
         assert!(f.root.join("workspaces/w/team/specs/009-relay.md").exists(), "the relay's answer approved the write");
         let resolved = events_of(&f, "approval.resolved");
         assert_eq!(resolved[0].payload["by"], "relay:email:me@example.com", "the log says who answered: {}", resolved[0].payload);
+    }
+
+    /// `specs/103` §4.2 (slice M3): a task that read a private entry is sent a relay stream with no agent-written text. Its card still
+    /// arrives (ids, tier, tool, payload hash), its details are the fixed phrase, the relay's card list agrees, the log keeps the real card, and the
+    /// relay can deny it but not allow it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_marked_tasks_relay_events_carry_no_agent_written_text() {
+        let f = setup(vec![Step::tool("w1", "write_file", json!({"path": "specs/009-relay.md", "content": "# Relay\nbody"})), Step::text("A very private model reply.")], 5.0, |_| {});
+        crate::private_read::mark(&f.engine.ws.dir, "t_0001", "entry-1", 100).unwrap();
+        let s = serve(&f).await;
+        let (c_sock, r_sock, c_tok, r_tok) = (s.sock.clone(), s.relay_sock.clone(), s.console.clone(), s.relay.clone());
+        let (kinds, listed, allow_code, denied) = blocking(move || {
+            let mut relay = Client::connect(&r_sock).unwrap();
+            relay.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+            relay.hello(&r_tok).unwrap();
+            relay.call("events.subscribe", json!({})).unwrap();
+            let mut console = Client::connect(&c_sock).unwrap();
+            console.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+            console.hello(&c_tok).unwrap();
+            console.call("task.submit", json!({"target": "architect", "prompt": "Draft a spec"})).unwrap();
+            let (mut kinds, mut listed, mut allow_code, mut denied) = (Vec::<String>::new(), Value::Null, None, false);
+            loop {
+                let n = relay.next_notification().unwrap();
+                if n["method"] != "event" {
+                    continue;
+                }
+                let e = &n["params"];
+                kinds.push(e["type"].as_str().unwrap().to_string());
+                let text = e.to_string();
+                assert!(!text.contains("009-relay") && !text.contains("# Relay") && !text.contains("private model reply"), "agent-written text reached the relay: {text}");
+                if e["type"] == "approval.requested" {
+                    let p = &e["payload"];
+                    assert_eq!((p["summary"].as_str(), p["withheld"].as_bool(), p["tool"].as_str()), (Some(crate::private_read::RELAY_PHRASE), Some(true), Some("write_file")), "the card arrives with its details withheld: {p}");
+                    assert!(p["approval_id"].is_string() && p["payload_blake3"].is_string() && p["tier"].is_string(), "the ids the operator needs stay: {p}");
+                    listed = relay.call("approval.list", json!({})).unwrap();
+                    allow_code = rpc_code(relay.call("approval.relay_resolve", json!({"approval_id": p["approval_id"], "payload_blake3": p["payload_blake3"], "decision": "allow", "channel": "email", "sender": "me@example.com"})));
+                    denied = relay.call("approval.relay_resolve", json!({"approval_id": p["approval_id"], "payload_blake3": p["payload_blake3"], "decision": "deny", "channel": "email", "sender": "me@example.com"})).is_ok();
+                }
+                if e["type"] == "task.completed" || e["type"] == "task.failed" {
+                    break;
+                }
+            }
+            (kinds, listed, allow_code, denied)
+        })
+        .await;
+        assert!(kinds.contains(&"approval.requested".to_string()), "the card reached the relay: {kinds:?}");
+        assert_eq!(allow_code, Some(code::FORBIDDEN), "a relay cannot allow a card whose details it was not shown");
+        assert!(denied, "denying stays open");
+        let cards = listed.as_array().unwrap();
+        assert!(cards.iter().all(|c| c["summary"] == crate::private_read::RELAY_PHRASE && c["withheld"] == true), "the relay's card list agrees with its stream: {listed}");
+        assert!(!f.root.join("workspaces/w/team/specs/009-relay.md").exists(), "nothing was written: the relay denied it");
+        let logged = events_of(&f, "approval.requested");
+        assert!(logged[0].payload["summary"].as_str().unwrap().contains("009-relay"), "the log keeps the real card: {}", logged[0].payload);
+    }
+
+    /// `specs/103` §4.2 (slice M3): a card whose details the relay was not shown can be denied by a relay reply and allowed only at the console.
+    /// The mark is the task's; another task's card is untouched; clearing the mark does not show an old card to a relay that never saw it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_marked_card_cannot_be_approved_by_a_relay_reply_but_can_be_denied() {
+        use crate::approval::{Request, Tier};
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        let s = serve(&f).await;
+        let mk = |task: &str| Request { approval_id: String::new(), task_id: task.into(), span_id: "sp1".into(), role: "architect".into(), tier: Tier::Amber, tool: "write_file".into(), pattern: "write_file".into(), worktree: None, summary: "write the private plan".into(), payload: json!({"tool": "write_file", "note": task}), payload_blake3: String::new(), timeout: Duration::from_secs(60) };
+        crate::private_read::mark(&f.engine.ws.dir, "t_0001", "entry-1", 100).unwrap();
+        let marked = f.engine.broker.request(mk("t_0001"));
+        let marked2 = f.engine.broker.request(mk("t_0001"));
+        let plain = f.engine.broker.request(mk("t_0002"));
+        let hash = |id: &str| f.engine.broker.get(id).unwrap().payload_blake3;
+        let ids = [marked.approval_id.clone(), marked2.approval_id.clone(), plain.approval_id.clone()];
+        let hashes: Vec<String> = ids.iter().map(|i| hash(i)).collect();
+        let (r_sock, r_tok, c_sock, c_tok) = (s.relay_sock.clone(), s.relay.clone(), s.sock.clone(), s.console.clone());
+        let (ids_in, ws_dir) = (ids.clone(), f.engine.ws.dir.clone());
+        blocking(move || {
+            let ids = ids_in;
+            let mut r = Client::connect(&r_sock).unwrap();
+            r.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            r.hello(&r_tok).unwrap();
+            let mut c = Client::connect(&c_sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            c.hello(&c_tok).unwrap();
+            let call = |r: &mut Client, i: usize, decision: &str| r.call("approval.relay_resolve", json!({"approval_id": ids[i], "payload_blake3": hashes[i], "decision": decision, "channel": "email", "sender": "me@example.com"}));
+            // what each scope is shown
+            let summary_of = |list: &Value, id: &str| list.as_array().unwrap().iter().find(|c| c["approval_id"] == id).map(|c| c["summary"].as_str().unwrap().to_string()).unwrap();
+            let relay_list = r.call("approval.list", json!({})).unwrap();
+            let console_list = c.call("approval.list", json!({})).unwrap();
+            assert_eq!(summary_of(&relay_list, &ids[0]), crate::private_read::RELAY_PHRASE, "the relay's list withholds a marked task's card");
+            assert_eq!(summary_of(&relay_list, &ids[2]), "write the private plan", "another task's card is as it always was");
+            assert_eq!(summary_of(&console_list, &ids[0]), "write the private plan", "the console is shown everything");
+            // allow is refused for the marked card, whatever the channel; the card is still waiting
+            assert_eq!(rpc_code(call(&mut r, 0, "allow")), Some(code::FORBIDDEN));
+            assert!(r.call("approval.list", json!({})).unwrap().as_array().unwrap().iter().any(|c| c["approval_id"] == ids[0]), "refusing the reply left the card waiting");
+            // an unmarked task's card is approved by a relay as before
+            assert_eq!(call(&mut r, 2, "allow").unwrap()["resolution"], "approved");
+            // the operator clears the mark at the console; a card whose details the relay already missed stays console-only
+            c.call("private_read.clear", json!({"key": "t_0001"})).unwrap();
+            assert_eq!(crate::private_read::state(&ws_dir, "t_0001"), crate::private_read::State::Unmarked);
+            assert_eq!(rpc_code(call(&mut r, 0, "allow")), Some(code::FORBIDDEN), "a card whose details were withheld stays for the console");
+            // deny is open for both cards; the console can still allow
+            assert!(call(&mut r, 0, "deny").is_ok());
+            let allowed_at_console = c.call("approval.resolve", json!({"approval_id": ids[1], "payload_blake3": hashes[1], "decision": "allow"}));
+            assert!(allowed_at_console.is_ok(), "the console allows what a relay could not: {allowed_at_console:?}");
+        })
+        .await;
+        assert!(matches!(marked.wait().await, crate::approval::Resolution::Denied { .. }));
+        assert!(matches!(marked2.wait().await, crate::approval::Resolution::Approved { .. }));
+        assert!(matches!(plain.wait().await, crate::approval::Resolution::Approved { .. }));
     }
 
     #[tokio::test(flavor = "multi_thread")]
