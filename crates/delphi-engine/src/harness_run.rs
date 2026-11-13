@@ -415,9 +415,10 @@ impl Engine {
                     // it untouched and the card below is raised exactly as before. A marked task, or one whose mark cannot be read, is put
                     // to the operator: Red whatever the delegation, the exact request on the card, never "allow similar" (Red), and not
                     // approvable by a relay reply (`merge_class::console_only`). Nothing is sent before an answer; a timeout is a denial.
-                    let mark_key = crate::private_read::task_key(&sc.m.id, &sc.task_id);
-                    if crate::egress::check(&crate::private_read::send_record(&self.ws.dir, &mark_key), crate::library::Channel::Outbound).is_err() {
-                        crate::private_read::note_held(&self.ws.dir, "outbound", &mark_key);
+                    // Spec 103 OD-5: the task is held by its own mark, its recorded ancestors' and its session's (`private_read::task_scope`).
+                    let scope = crate::private_read::task_scope(&self.ws.dir, Some(&sc.m.id), &sc.task_id);
+                    if crate::egress::check(&crate::private_read::scope_record(&scope.state), crate::library::Channel::Outbound).is_err() {
+                        crate::private_read::note_held(&self.ws.dir, "outbound", &scope);
                         let card = format!("{} {} {}", crate::private_read::HELD_BANNER, name, crate::private_read::exact(&p.input));
                         let tool = crate::private_read::OUTBOUND_TOOL;
                         return match self.ask(sc, ApprovalTier::Red, tool, tool, &card, &json!({"tool": name, "input": p.input, "private_read_mark": true})).await? {
@@ -3189,6 +3190,71 @@ echo "$answer" > '{answer_file}'
         task.await.unwrap().unwrap();
         assert!(fs::read_to_string(answer).unwrap().contains("\"behavior\":\"allow\""));
         assert_eq!(crate::private_read::counter(&f.engine.ws.dir).outbound_would_change, 0);
+    }
+
+    /// `specs/103` §7.1 OD-5 (the operator, 2026-11-12: "the child should have the same scope as the parent in a given session"): a task started on
+    /// a marked task's behalf (here a timer's wake, linked by the daemon before it starts) is put to the operator for a PUBLIC web query, exactly as
+    /// its parent would be; the same child of an UNMARKED parent passes as before. The research cost is the point: a scout-like child that only wants
+    /// a public page is asked about, and the held-by-inheritance count says how often.
+    #[tokio::test]
+    async fn a_child_tasks_web_query_is_asked_about_when_its_parent_is_marked_and_passes_when_it_is_not() {
+        for parent_marked in [true, false] {
+            let scripts = tempfile::tempdir().unwrap();
+            let (body, answer) = ask_cli(scripts.path(), "WebSearch", r#"{"query":"a public topic"}"#, r#"{"name":"delphi","status":"connected"}"#);
+            let (f, _s) = fixture(&body, |_| {});
+            use_harness_profile(&f, "[harness.claude]\nbridge = false\napprovals = \"delphi\"\nnative_tools = [\"WebSearch\"]\n");
+            let parent = crate::private_read::task_key(&f.m.id, "t_parent");
+            let child = crate::private_read::task_key(&f.m.id, "t_0001");
+            crate::private_read::link_task(&f.engine.ws.dir, &child, &parent).unwrap();
+            if parent_marked {
+                crate::private_read::mark(&f.engine.ws.dir, &parent, "host-abcd1234/n1", 1).unwrap();
+            }
+            let task = { let e = f.engine.clone(); let m = f.m.clone(); tokio::spawn(async move { e.run_task(&m, "architect", "Find the page").await }) };
+            if parent_marked {
+                let card = pending_card(&f, crate::private_read::OUTBOUND_TOOL).await;
+                assert_eq!(card.tier, ApprovalTier::Red);
+                assert!(card.summary.starts_with(crate::private_read::HELD_BANNER) && card.summary.contains("a public topic"), "{}", card.summary);
+                assert!(crate::merge_class::console_only(&card.tool, &card.payload).is_some(), "a relay reply cannot approve it");
+                assert!(!answer.exists(), "nothing is sent before the operator answers");
+                f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Allow, "console-1").unwrap();
+            } else {
+                let card = pending_card(&f, "harness_outbound").await;
+                assert!(!card.summary.contains("PRIVATE-READ MARK") && card.payload.get("private_read_mark").is_none(), "the child of an unmarked parent is one ordinary card");
+                f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Allow, "console-1").unwrap();
+            }
+            task.await.unwrap().unwrap();
+            let c = crate::private_read::counter(&f.engine.ws.dir);
+            assert_eq!((c.outbound_would_change, c.held_by_inheritance), if parent_marked { (1, 1) } else { (0, 0) }, "parent_marked={parent_marked}");
+        }
+    }
+
+    /// The session scope on the sender: a task in a marked host session's mission is asked about; the same task in another session's mission is not.
+    #[tokio::test]
+    async fn a_task_in_a_marked_session_is_asked_about_and_another_sessions_task_is_not() {
+        let scripts = tempfile::tempdir().unwrap();
+        let (body, answer) = ask_cli(scripts.path(), "WebSearch", r#"{"query":"q"}"#, r#"{"name":"delphi","status":"connected"}"#);
+        let (f, _s) = fixture(&body, |_| {});
+        use_harness_profile(&f, "[harness.claude]\nbridge = false\napprovals = \"delphi\"\nnative_tools = [\"WebSearch\"]\n");
+        // another session's mark, on its own mission: not this task's scope
+        crate::private_read::mark(&f.engine.ws.dir, "host-bbbbbbbb", "host-bbbbbbbb/n1", 1).unwrap();
+        let task = { let e = f.engine.clone(); let m = f.m.clone(); tokio::spawn(async move { e.run_task(&m, "architect", "Find it").await }) };
+        let card = pending_card(&f, "harness_outbound").await;
+        assert!(card.payload.get("private_read_mark").is_none(), "another session's mark does not hold this task");
+        f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Allow, "console-1").unwrap();
+        task.await.unwrap().unwrap();
+        assert!(fs::read_to_string(&answer).unwrap().contains("\"behavior\":\"allow\""));
+        // this task's own mission (its session) marked: held, and counted as inherited
+        let scripts = tempfile::tempdir().unwrap();
+        let (body, _answer) = ask_cli(scripts.path(), "WebSearch", r#"{"query":"q2"}"#, r#"{"name":"delphi","status":"connected"}"#);
+        let (f, _s) = fixture(&body, |_| {});
+        use_harness_profile(&f, "[harness.claude]\nbridge = false\napprovals = \"delphi\"\nnative_tools = [\"WebSearch\"]\n");
+        crate::private_read::mark(&f.engine.ws.dir, &f.m.id, "host-abcd1234/n1", 1).unwrap();
+        let task = { let e = f.engine.clone(); let m = f.m.clone(); tokio::spawn(async move { e.run_task(&m, "architect", "Find it").await }) };
+        let card = pending_card(&f, crate::private_read::OUTBOUND_TOOL).await;
+        assert_eq!(card.tier, ApprovalTier::Red);
+        f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Deny { reason: "no".into() }, "console-1").unwrap();
+        task.await.unwrap().unwrap();
+        assert_eq!(crate::private_read::counter(&f.engine.ws.dir).held_by_inheritance, 1);
     }
 
     #[tokio::test]

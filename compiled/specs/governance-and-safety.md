@@ -118,6 +118,6 @@ _No standard scope section; open the spec._
 
 ## 103-the-private-read-mark-closing-the-four-unaudited-egress-channels
 
-**103: The private-read mark: closing the four unaudited egress channels** · approved (per source at `d0786afc79a0`) · tier 0 · [source](../../specs/103-the-private-read-mark-closing-the-four-unaudited-egress-channels.md)
+**103: The private-read mark: closing the four unaudited egress channels** · approved (per source at `53ab6619466b`) · tier 0 · [source](../../specs/103-the-private-read-mark-closing-the-four-unaudited-egress-channels.md)
 
 _No standard scope section; open the spec._
