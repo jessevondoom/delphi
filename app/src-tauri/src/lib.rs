@@ -53,6 +53,15 @@ fn snapshot(bridge: State<'_, Arc<Bridge>>) -> Result<Value, String> {
     bridge.call(Method::ObserveSnapshot, json!({}))
 }
 
+/// One knowledge base read (`kb.get`): search, a listing or a document, and nothing else under `/v1/`.
+#[tauri::command(async)]
+fn kb(bridge: State<'_, Arc<Bridge>>, target: String) -> Result<Value, String> {
+    if !bridge::kb_target_ok(&target) {
+        return Err("that is not a knowledge base read this app makes".into());
+    }
+    bridge.call(Method::KbGet, json!({ "target": target }))
+}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
@@ -62,7 +71,7 @@ pub fn run() {
             std::thread::spawn(move || bridge.run(sink));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![info, conn, state, snapshot])
+        .invoke_handler(tauri::generate_handler![info, conn, state, snapshot, kb])
         .run(tauri::generate_context!())
         .expect("the Delphi window could not start");
 }

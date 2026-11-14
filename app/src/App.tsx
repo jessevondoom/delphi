@@ -4,6 +4,7 @@ import { openBridge, type Bridge } from './bridge.ts';
 import { load, save, type Prefs, type Screen } from './prefs.ts';
 import { Activity } from './screens/Activity.tsx';
 import { Council } from './screens/Council.tsx';
+import { Knowledge } from './screens/Knowledge.tsx';
 import type { Conn, Envelope, Info, OState } from './types.ts';
 import { defaultCouncil, isDecided, phaseNote, tilde, waiting } from './view.ts';
 
@@ -134,6 +135,8 @@ export function App() {
           <Activity info={info} state={state} events={events} light={light} />
         ) : prefs.screen === 'council' ? (
           <Council key={council} info={info} state={state} events={events} light={light} pick={council} />
+        ) : prefs.screen === 'knowledge' ? (
+          <Knowledge bridge={bridge} info={info} state={state} light={light} />
         ) : (
           <main className="main">
             <h1 className="title">{ITEMS.find((i) => i.key === prefs.screen)?.label}</h1>

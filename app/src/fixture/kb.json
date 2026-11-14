@@ -1,0 +1,40 @@
+{
+  "collections": [
+    { "name": "context", "documents": 19, "updated": "2026-11-02T15:32:28Z" },
+    { "name": "memory", "documents": 10, "updated": "2026-11-02T15:32:28Z" },
+    { "name": "missions", "documents": 7, "updated": "2026-11-13T23:29:42Z" },
+    { "name": "skills", "documents": 74, "updated": "2026-11-13T22:26:47Z" }
+  ],
+  "kinds": [
+    { "kind": "docs", "documents": 19, "updated": "2026-11-02T15:32:28Z" },
+    { "kind": "memory", "documents": 10, "updated": "2026-11-02T15:32:28Z" },
+    { "kind": "mission", "documents": 7, "updated": "2026-11-13T23:29:42Z" },
+    { "kind": "skill", "documents": 74, "updated": "2026-11-13T22:26:47Z" }
+  ],
+  "documents": [
+    { "rel_path": "missions/2026-10-25-rail/report.md", "kind": "mission", "zone": "missions", "status": "active", "source_type": "internal_generated", "updated_at": "2026-11-14T14:20:00Z", "blake3": "a1" },
+    { "rel_path": "missions/2026-10-25-rail/status.md", "kind": "mission", "zone": "missions", "status": "active", "source_type": "internal_generated", "updated_at": "2026-11-14T14:10:00Z", "blake3": "a2" },
+    { "rel_path": "context/domains/retry-queues.md", "kind": "docs", "zone": "context", "status": "active", "source_type": "user_ratified", "updated_at": "2026-11-12T09:00:00Z", "blake3": "a3" },
+    { "rel_path": "memory/lessons/visibility-timeouts.md", "kind": "memory", "zone": "memory", "status": "draft", "source_type": "internal_empirical", "updated_at": "2026-11-11T16:45:00Z", "blake3": "a4" },
+    { "rel_path": "skills/spec-driven-build/SKILL.md", "kind": "skill", "zone": "skills", "status": "active", "source_type": "user_ratified", "updated_at": "2026-11-10T12:00:00Z", "blake3": "a5" }
+  ],
+  "search": {
+    "query": "visibility timeout",
+    "mode": "hybrid",
+    "candidates": 3,
+    "capped": false,
+    "facets": { "docs": 1, "memory": 1, "mission": 1 },
+    "results": [
+      { "path": "context/domains/retry-queues.md", "pointer": "context/domains/retry-queues.md#L12-L24", "heading": "Retry queues > Claims > Visibility timeout", "preview": "A claimed row is hidden from other workers for the visibility timeout. If the worker does not finish in that time, the row becomes visible again.", "kind": "docs", "collection": "context", "label": "validated", "knowledge_status": "validated", "status": "active", "trust": "internal", "note": null, "vouched_by": "operator", "score": 0.41, "start_line": 12, "end_line": 24, "updated": "2026-11-12T09:00:00Z", "blake3": "a3" },
+      { "path": "memory/lessons/visibility-timeouts.md", "pointer": "memory/lessons/visibility-timeouts.md#L1-L9", "heading": "A timeout shorter than the slowest job loses work", "preview": "Kept from a session: the first timeout was thirty seconds and the slowest job took forty.", "kind": "memory", "collection": "memory", "label": "not validated", "knowledge_status": "noted", "status": "draft", "trust": "internal", "note": "a session note, not checked", "vouched_by": null, "score": 0.33, "start_line": 1, "end_line": 9, "updated": "2026-11-11T16:45:00Z", "blake3": "a4" },
+      { "path": "missions/2026-10-25-rail/report.md", "pointer": "missions/2026-10-25-rail/report.md#L30-L41", "heading": "Report: the retry queue > What we chose", "preview": "The queue is a table. A claim that times out is handed to another worker, and hand-offs are counted.", "kind": "mission", "collection": "missions", "label": "not validated", "knowledge_status": "noted", "status": "active", "trust": "internal", "note": null, "vouched_by": null, "score": 0.21, "start_line": 30, "end_line": 41, "updated": "2026-11-14T14:20:00Z", "blake3": "a1" }
+    ]
+  },
+  "docs": {
+    "context/domains/retry-queues.md": { "path": "context/domains/retry-queues.md", "collection": "context", "status": "active", "stale": false, "links": [], "blake3": "a3", "text": "---\nid: retry-queues\ntitle: \"Retry queues\"\nauthor: architect\ntimestamp: 2026-11-12T09:00:00Z\nsource_type: user_ratified\nconfidence: high\nstatus: active\ntags: [queues, reliability]\n---\n\n# Retry queues\n\nA queue hands each row to one worker at a time.\n\n## Claims\n\n### Visibility timeout\n\nA claimed row is hidden from other workers for the **visibility timeout**. If the worker does not finish in that time, the row becomes visible again.\n\n- Set it longer than the slowest job.\n- Count how often a row comes back: `handoffs`.\n\n```sql\nUPDATE queue SET claimed_until = now() + interval '90 seconds' WHERE id = $1;\n```\n" },
+    "memory/lessons/visibility-timeouts.md": { "path": "memory/lessons/visibility-timeouts.md", "collection": "memory", "status": "draft", "stale": false, "links": [], "blake3": "a4", "text": "---\ntitle: \"A timeout shorter than the slowest job loses work\"\nauthor: builder\ntimestamp: 2026-11-11T16:45:00Z\nsource_type: internal_empirical\nconfidence: low\nstatus: draft\n---\n\nKept from a session: the first timeout was thirty seconds and the slowest job took forty.\n" },
+    "missions/2026-10-25-rail/report.md": { "path": "missions/2026-10-25-rail/report.md", "collection": "missions", "status": "active", "stale": false, "links": [], "blake3": "a1", "text": "---\ntitle: \"Report: the retry queue\"\nauthor: writer\ntimestamp: 2026-11-14T14:20:00Z\nsource_type: internal_generated\nconfidence: medium\nstatus: active\n---\n\n# Report: the retry queue\n\n## What we chose\n\nThe queue is a table. A claim that times out is handed to another worker, and hand-offs are counted.\n\n## What is left\n\n1. The migration needs a rollback.\n2. Measure the hand-off rate for a week.\n" },
+    "missions/2026-10-25-rail/status.md": { "path": "missions/2026-10-25-rail/status.md", "collection": "missions", "status": "active", "stale": false, "links": [], "blake3": "a2", "text": "---\ntitle: \"Status: 2026-10-25-rail\"\nauthor: orchestrator\ntimestamp: 2026-11-14T14:10:00Z\nsource_type: internal_generated\nstatus: active\n---\n\n# Mission `2026-10-25-rail`\n\n## Goal\nAdd a retry queue to the claim loop\n" },
+    "skills/spec-driven-build/SKILL.md": { "path": "skills/spec-driven-build/SKILL.md", "collection": "skills", "status": "active", "stale": false, "links": [], "blake3": "a5", "text": "---\nname: spec-driven-build\ndescription: Build from an approved spec, one slice at a time.\nsource_type: user_ratified\nstatus: active\n---\n\n# Spec-driven build\n\nNo spec, no build.\n" }
+  }
+}

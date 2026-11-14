@@ -29,6 +29,16 @@ pub trait Sink: Send + Sync + 'static {
     fn resync(&self);
 }
 
+/// The knowledge base reads the window may ask for through `kb.get` (spec 111 §2.2): search, listings and one document.
+/// Everything else the daemon's retrieval service offers under `/v1/` is left out, images included.
+pub const KB_READS: [&str; 5] = ["/v1/search", "/v1/documents", "/v1/doc", "/v1/kinds", "/v1/collections"];
+
+/// Whether `target` is one of [`KB_READS`], with or without a query, and short enough for the daemon to take.
+pub fn kb_target_ok(target: &str) -> bool {
+    let path = target.split('?').next().unwrap_or("");
+    target.len() <= 2048 && !target.contains(['\n', '\r', '#']) && KB_READS.contains(&path)
+}
+
 /// How the bridge finds the socket: the app's asks `delphi`; a test's names its own.
 pub type Locator = Box<dyn Fn() -> Option<(Value, PathBuf)> + Send + Sync>;
 
@@ -352,6 +362,17 @@ mod tests {
         });
         let err = Client::attach(&sock, "1").err().expect("a console token must not be accepted");
         assert!(err.to_string().contains("another scope"), "{err}");
+    }
+
+    #[test]
+    fn only_the_listed_knowledge_base_reads_pass() {
+        for ok in ["/v1/search?q=narrator+socket&limit=20&facets=1", "/v1/documents?limit=50", "/v1/doc?path=SPEC.md", "/v1/kinds", "/v1/collections"] {
+            assert!(kb_target_ok(ok), "{ok}");
+        }
+        for bad in ["/v1/image?path=x.png", "/v1/health", "/v2/search?q=x", "/v1/searching", "/v1/doc/../x", "v1/doc?path=x", "/v1/doc?path=x\n/v1/health", "/v1/doc?path=x#frag", ""] {
+            assert!(!kb_target_ok(bad), "{bad}");
+        }
+        assert!(!kb_target_ok(&format!("/v1/search?q={}", "x".repeat(2100))));
     }
 
     #[test]

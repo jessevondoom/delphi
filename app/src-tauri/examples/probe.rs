@@ -23,6 +23,42 @@ fn main() {
         println!("{}", json!({ "info": found.info, "state": state, "events": events }));
         return;
     }
+    let args: Vec<String> = std::env::args().collect();
+    // `--get /v1/...`: one knowledge base read, printed whole.
+    if let Some(target) = args.iter().position(|a| a == "--get").and_then(|i| args.get(i + 1)) {
+        let mut c = Client::attach(&found.narrator, env!("CARGO_PKG_VERSION")).unwrap_or_else(|e| {
+            eprintln!("could not attach: {e}");
+            std::process::exit(1);
+        });
+        match c.call(Method::KbGet, json!({ "target": target })) {
+            Ok(v) => println!("{v}"),
+            Err(e) => println!("{e}"),
+        }
+        return;
+    }
+    // `--kb <query>`: the shapes of the knowledge base reads, for a query of the operator's.
+    if let Some(q) = args.iter().position(|a| a == "--kb").and_then(|i| args.get(i + 1)) {
+        let mut c = Client::attach(&found.narrator, env!("CARGO_PKG_VERSION")).unwrap_or_else(|e| {
+            eprintln!("could not attach: {e}");
+            std::process::exit(1);
+        });
+        let shape = |v: &serde_json::Value| -> String {
+            let text = v.to_string();
+            text.chars().take(1400).collect()
+        };
+        for (what, method, params) in [
+            ("kb.search", Method::KbSearch, json!({ "query": q })),
+            ("kb.get /v1/search", Method::KbGet, json!({ "target": format!("/v1/search?q={}&limit=3&facets=1", q.replace(' ', "+")) })),
+            ("kb.get /v1/documents", Method::KbGet, json!({ "target": "/v1/documents?limit=3" })),
+            ("kb.get /v1/doc", Method::KbGet, json!({ "target": format!("/v1/doc?path={}", args.iter().position(|a| a == "--doc").and_then(|i| args.get(i + 1)).map(String::as_str).unwrap_or("SPEC.md")) })),
+        ] {
+            match c.call(method, params) {
+                Ok(v) => println!("{what}: {}\n", shape(&v)),
+                Err(e) => println!("{what}: {e}\n"),
+            }
+        }
+        return;
+    }
     println!("narrator socket: {}", found.narrator.display());
     println!("delphi: {} · workspace: {} · roles: {}", found.info["version"].as_str().unwrap_or("not asked"), found.info["workspace_name"].as_str().unwrap_or("?"), found.info["roles"].as_object().map_or(0, |r| r.len()));
     let mut client = match Client::attach(&found.narrator, env!("CARGO_PKG_VERSION")) {

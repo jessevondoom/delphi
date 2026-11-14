@@ -134,6 +134,15 @@ button.menu-row:hover, button.menu-row.on { background: var(--sel); }
 .rich-mark { flex: none; min-width: 1em; color: var(--muted); }
 .rich code { font: 400 .92em var(--mono); background: var(--inset); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
 .rich pre.code { margin: 4px 0; white-space: pre; }
+.field { height: 44px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line2); background: var(--panel); color: var(--text); font: 400 14px var(--sans); width: 100%; }
+.field.large { height: 52px; padding: 0 16px; border-radius: 10px; font-size: 16px; }
+.results { flex: 1 1 340px; max-width: 440px; min-width: 0; padding: 24px 20px; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 14px; }
+.card.link { width: 100%; text-align: left; cursor: pointer; font: inherit; color: inherit; }
+.card.link:hover, .card.link.on { background: var(--sel); border-color: var(--line2); }
+.card.link.on { border-color: var(--text2); }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; padding: 14px 16px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); font-size: 13px; }
+.facts dt { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-bottom: 5px; }
 .empty { padding: 28px 20px; border: 1px dashed var(--line2); border-radius: 10px; color: var(--text2); font-size: 14px; line-height: 1.55; }
 
 /* Agents roster */

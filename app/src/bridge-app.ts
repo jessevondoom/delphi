@@ -1,7 +1,7 @@
 // The bridge inside the app (spec 111 §3.2): the Rust side's commands and the notifications it forwards.
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { Bridge, Listener } from './bridge.ts';
+import type { Bridge, KbReply, Listener } from './bridge.ts';
 import type { Conn, Envelope, Info, OState } from './types.ts';
 
 export function appBridge(): Bridge {
@@ -10,6 +10,7 @@ export function appBridge(): Bridge {
     info: () => invoke<Info>('info'),
     state: () => invoke<OState>('state'),
     snapshot: async () => (await invoke<{ events?: Envelope[] }>('snapshot')).events ?? [],
+    kb: (target: string) => invoke<KbReply>('kb', { target }),
     subscribe(l: Listener) {
       const offs = [
         listen<Envelope[]>('delphi://events', (m) => m.payload.forEach((e) => l.event(e))),
