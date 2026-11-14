@@ -955,7 +955,7 @@ The operator asked, in a host session on 2026-11-13, for a review of how Delphi'
 | :-- | :-- | :-- | :-- |
 | 098 | S6 follow-up | the socket outlasts the daemon's wait: `ask_family` (630 s), `council_brief` and `council_status` (80 s), one wait table with a test | built (pull request open) |
 | 104 | R0 | the spec | approved in advance 2026-11-13 |
-| 104 | R1 | `ask_family` as a job, `ask_result`, identity, cancel | not started |
+| 104 | R1 | `ask_family` as a job, `ask_result`, identity, cancel | built (local, not pushed): the daemon starts the seat as a background job and hands back its `ask_id` at once (amendment §12 A1), the MCP process holds the tool call up to 45 s polling `ask_result`, which reads the answer once for its own session; `cancel_job` stops it, and the answer carries the strategist's identity |
 | 104 | R3 | concurrent requests | not started |
 | 104 | R2 | progress notifications | not started |
 | 104 | R4 | `[seats] standing_tokens` | not started |

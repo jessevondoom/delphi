@@ -32,19 +32,46 @@ pub const DISABLED: &str = "disabled_by_operator: the operator has turned off De
 /// The socket wait for an ordinary `host.*` call: the daemon answers at once.
 const QUICK_WAIT: Duration = Duration::from_secs(20);
 /// For a call that waits in the daemon: on an agent's answer (a help request holds 45 s) or on a seat Delphi runs (a Panel
-/// `council_brief` or `council_status` holds 25 s, `specs/089` P7).
+/// `council_brief` or `council_status` holds 25 s, `specs/089` P7, and so does `ask_result` with `wait`).
 const SLOW_WAIT: Duration = Duration::from_secs(80);
-/// `ask_family` is answered inside the request by a seat whose own clock is `council_seat_timeout` (600 s by default): the socket
-/// waits a little longer, so an answer that was paid for is returned, never dropped (`specs/098` §6.2).
-const ASK_FAMILY_WAIT: Duration = Duration::from_secs(630);
 
 /// How long the socket waits for a `host.*` method. It must outlast the daemon's own wait for that method: a socket that gives up
 /// first reports an error to the host while the daemon carries on, and for a foreign seat goes on spending.
 fn socket_wait(method: &str) -> Duration {
     match method {
-        "host.ask_family" => ASK_FAMILY_WAIT,
-        "host.request_help" | "host.help_result" | "host.council_result" | "host.research_result" | "host.council_brief" | "host.council_status" => SLOW_WAIT,
+        // Spec 104 §2, §12 A1: `host.ask_family` hands back its id at once (the quick wait); `host.ask_result` may hold 25 s.
+        "host.ask_result" | "host.request_help" | "host.help_result" | "host.council_result" | "host.research_result" | "host.council_brief" | "host.council_status" => SLOW_WAIT,
         _ => QUICK_WAIT,
+    }
+}
+
+/// How long `ask_family` holds the host's request for the answer before handing back the working shape with its `ask_id`: the help
+/// wait (`specs/104` §2, as amended by §12 A1), held here in the MCP process rather than in the daemon.
+const ASK_HOLD: Duration = Duration::from_secs(45);
+/// How often, while it holds, the MCP process asks the daemon whether the answer is in. Each ask is a short call (the quick wait).
+const ASK_POLL: Duration = Duration::from_secs(1);
+
+/// `ask_family` as the host sees it (`specs/104` §2, §12 A1): the daemon starts the seat and hands back its `ask_id` at once; this
+/// polls `host.ask_result` in short calls until the answer is in or `hold` has passed, and returns the answer or the working shape (with
+/// the id). `on_id` is told the id the moment it exists, so the caller can stop the seat if the host goes away before it sees the id.
+/// `call` is one daemon call; a poll that fails returns the last working shape, which still carries the id.
+pub(crate) fn ask_polled(call: &dyn Fn(&str, &Value) -> Result<Value, String>, args: &Value, hold: Duration, step: Duration, on_id: &mut dyn FnMut(&str)) -> Result<Value, String> {
+    let first = call("host.ask_family", args)?;
+    let Some(id) = first["ask_id"].as_str().filter(|_| first["status"] == "working").map(String::from) else { return Ok(first) };
+    on_id(&id);
+    let deadline = std::time::Instant::now() + hold;
+    let mut last = first;
+    loop {
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            return Ok(last);
+        }
+        std::thread::sleep(step.min(deadline - now));
+        match call("host.ask_result", &json!({"ask_id": id})) {
+            Ok(v) if v["status"] == "working" => last = v,
+            Ok(v) => return Ok(v),
+            Err(_) => return Ok(last),
+        }
     }
 }
 
@@ -728,11 +755,11 @@ pub fn tools() -> Value {
         {
             "name": "cancel_job",
             "title": "Cancel a job you raised",
-            "description": "Stop a Council, Panel, help request or research job that this session raised and that is still running, so nothing more is spent on it, and say why. Give its id (the council_id, help_id or research_id) and a short reason. It refuses any job another session raised, one that has already ended, and an id that is nothing, all with the same words. It can only reduce what runs; it asks for no permission and grants none. Do not convene a second Council while the first still shows activity: a duplicate is not a retry. Cancel the first, or wait for it.",
+            "description": "Stop a Council, Panel, help request, ask_family question or research job that this session raised and that is still running, so nothing more is spent on it, and say why. Give its id (the council_id, help_id, ask_id or research_id) and a short reason. It refuses any job another session raised, one that has already ended, and an id that is nothing, all with the same words. It can only reduce what runs; it asks for no permission and grants none. Do not convene a second Council while the first still shows activity: a duplicate is not a retry. Cancel the first, or wait for it.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "id": {"type": "string", "minLength": 1, "maxLength": 64, "description": "The council_id, help_id or research_id."},
+                    "id": {"type": "string", "minLength": 1, "maxLength": 64, "description": "The council_id, help_id, ask_id or research_id."},
                     "reason": {"type": "string", "maxLength": 200, "description": "Why you are cancelling. Recorded as your own (host-reported)."}
                 },
                 "required": ["id"],
@@ -743,7 +770,7 @@ pub fn tools() -> Value {
         {
             "name": "ask_family",
             "title": "Ask another model family",
-            "description": "Ask ONE question of a model family other than your own, run by Delphi on the operator's Delphi tokens. The seat is read-only: no tools beyond the pointers you give it, it cannot dispatch anyone, and its answer is advice that binds nothing. The answer comes back WITH the daemon-written receipt (the served model and family, from Delphi's family table, not the one requested or your own claim). Counts against [seats] max_foreign_seats and max_foreign_tokens. Needs the operator's yes (operator_confirmed: true) and a running Delphi daemon; it never starts one.",
+            "description": "Ask ONE question of a model family other than your own, run by Delphi on the operator's Delphi tokens. The seat is read-only: no tools beyond the pointers you give it, it cannot dispatch anyone, and its answer is advice that binds nothing. The answer comes back WITH the daemon-written receipt (the served model and family, from Delphi's family table, not the one requested or your own claim). Counts against [seats] max_foreign_seats and max_foreign_tokens. Needs the operator's yes (operator_confirmed: true) and a running Delphi daemon; it never starts one. The call waits up to 45 seconds; a slower answer comes back as an ask_id with status working: fetch it with ask_result (it costs nothing more), or stop it with cancel_job. The answer carries a `display` line naming who answered.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -757,6 +784,18 @@ pub fn tools() -> Value {
                 "additionalProperties": false
             },
             "annotations": writes("Ask another model family")
+        },
+        {
+            "name": "ask_result",
+            "title": "Fetch the answer of another model family",
+            "description": "The answer to an earlier ask_family of this session that was still being answered. It does not ask again and spends nothing more. Pass wait: true to wait up to 25 seconds. While it is still being answered, the reply lists the `workers` (role, state, elapsed_s, idle_s, calls, last_call), a `tail` of the last few events and `stalled`: read those before you decide it is stuck. An answer is read once: after that, and for an id of another session or an id that is nothing, the reply is the same refusal.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"ask_id": {"type": "string", "minLength": 1, "maxLength": 64}, "wait": {"type": "boolean", "default": false}, "lines": {"type": "integer", "minimum": 1, "maximum": 20, "default": 8, "description": "How many lines of the tail to return."}},
+                "required": ["ask_id"],
+                "additionalProperties": false
+            },
+            "annotations": annotations("Fetch the answer of another model family")
         }
     ])
 }
@@ -926,7 +965,8 @@ impl Server {
             "research_status" => self.daemon("host.research_status", args),
             "research_result" => self.daemon("host.research_result", args),
             "cancel_job" => self.daemon("host.cancel_job", args),
-            "ask_family" => self.daemon("host.ask_family", args),
+            "ask_family" => self.ask_family(args),
+            "ask_result" => self.daemon("host.ask_result", args),
             _ => return None,
         })
     }
@@ -936,6 +976,12 @@ impl Server {
     fn daemon(&self, method: &str, args: &Value) -> Result<String, String> {
         let link = self.link.as_ref().ok_or_else(|| "no Delphi workspace resolved: run `delphi` to initialize one, or pass --workspace/--home".to_string())?;
         link.call_within(method, args, socket_wait(method)).map(|v| v.to_string())
+    }
+
+    /// `ask_family` (`specs/104` §2, §12 A1): the daemon hands back the id at once and this process holds the request while it polls.
+    fn ask_family(&self, args: &Value) -> Result<String, String> {
+        let link = self.link.as_ref().ok_or_else(|| "no Delphi workspace resolved: run `delphi` to initialize one, or pass --workspace/--home".to_string())?;
+        ask_polled(&|m, a| link.call_within(m, a, socket_wait(m)), args, ASK_HOLD, ASK_POLL, &mut |_| {}).map(|v| v.to_string())
     }
 
     /// `delphi route`'s dry run, by words only: no embedding model is loaded and nothing is dispatched. It ranks the canonical
@@ -1513,17 +1559,48 @@ mod tests {
     }
 
     /// `specs/098` §6.2, `specs/089` P7: the socket outlasts the daemon's own wait for every method that waits there. The daemon's
-    /// waits are 45 s (a help request), 25 s (a Panel brief or status, a result read with `wait`) and the seat clock (`ask_family`).
+    /// waits are 45 s (a help request) and 25 s (a Panel brief or status, a result read with `wait`, `ask_result`). `ask_family` hands
+    /// back its id at once (`specs/104` §12 A1), so it takes the quick wait.
     #[test]
     fn the_socket_outlasts_the_daemons_own_wait_for_every_method_that_waits() {
-        let seat = crate::engine::Settings::default().council_seat_timeout;
-        assert!(socket_wait("host.ask_family") > seat, "an answer that was paid for must come back");
-        for m in ["host.request_help", "host.help_result", "host.council_result", "host.research_result", "host.council_brief", "host.council_status"] {
+        for m in ["host.ask_result", "host.request_help", "host.help_result", "host.council_result", "host.research_result", "host.council_brief", "host.council_status"] {
             assert!(socket_wait(m) > Duration::from_secs(45), "{m}");
         }
-        for m in ["host.propose_note", "host.council_open", "host.council_submit", "host.request_council", "host.cancel_job"] {
+        for m in ["host.ask_family", "host.propose_note", "host.council_open", "host.council_submit", "host.request_council", "host.cancel_job"] {
             assert_eq!(socket_wait(m), QUICK_WAIT, "{m}");
         }
+    }
+
+    /// A fake daemon for [`ask_polled`]: `ask_family` hands back `t_0001` at once; `ask_result` says `working` `polls` times, then answers.
+    fn fake_ask(polls: usize, calls: &std::cell::RefCell<Vec<String>>) -> impl Fn(&str, &Value) -> Result<Value, String> + '_ {
+        move |m: &str, _a: &Value| {
+            calls.borrow_mut().push(m.to_string());
+            let reads = calls.borrow().iter().filter(|c| *c == "host.ask_result").count();
+            Ok(if m == "host.ask_family" || reads <= polls { json!({"ask_id": "t_0001", "status": "working"}) } else { json!({"ask_id": "t_0001", "status": "answered", "answer": "a table"}) })
+        }
+    }
+
+    /// Spec 104 §2 (§12 A1): an answer that comes within the hold is returned by the one tool call; the id is known before the first poll.
+    #[test]
+    fn ask_family_returns_the_answer_in_one_call_when_the_seat_answers_within_the_hold() {
+        let calls = std::cell::RefCell::new(Vec::new());
+        let mut seen = Vec::new();
+        let v = ask_polled(&fake_ask(2, &calls), &json!({"question": "q"}), Duration::from_secs(5), Duration::from_millis(5), &mut |id| seen.push(id.to_string())).unwrap();
+        assert_eq!((v["status"].as_str(), v["answer"].as_str()), (Some("answered"), Some("a table")), "{v}");
+        assert_eq!(seen, ["t_0001"], "the caller holds the id from the first moment");
+        assert_eq!(calls.borrow().as_slice(), ["host.ask_family", "host.ask_result", "host.ask_result", "host.ask_result"]);
+    }
+
+    /// Spec 104 §2 (§12 A1): a seat slower than the hold gives the working shape with its id, and the polling stops.
+    #[test]
+    fn a_seat_slower_than_the_hold_gives_the_working_shape_with_its_id() {
+        let calls = std::cell::RefCell::new(Vec::new());
+        let v = ask_polled(&fake_ask(usize::MAX, &calls), &json!({"question": "q"}), Duration::from_millis(60), Duration::from_millis(10), &mut |_| {}).unwrap();
+        assert_eq!((v["status"].as_str(), v["ask_id"].as_str()), (Some("working"), Some("t_0001")), "{v}");
+        assert!(calls.borrow().len() < 20, "short polls, bounded by the hold: {:?}", calls.borrow());
+        // A refusal before the id (the operator's yes missing, the budget) is the daemon's error, unchanged.
+        let refused = ask_polled(&|_: &str, _: &Value| Err("a foreign seat spends the operator's Delphi tokens".to_string()), &json!({}), Duration::from_secs(1), Duration::from_millis(5), &mut |_| panic!("no id")).unwrap_err();
+        assert!(refused.contains("operator's Delphi tokens"), "{refused}");
     }
 
     #[test]
@@ -1555,7 +1632,7 @@ mod tests {
         let r = call(&mut s, json!({"jsonrpc": "2.0", "id": 3, "method": "tools/list"}));
         let tools = r["result"]["tools"].as_array().unwrap();
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["search_kb", "list_roles", "delphi_roster", "get_agent", "list_skills", "get_skill", "specs_status", "specs_show", "specs_list", "scaffold_status", "search_project", "search_memory", "query_memory", "kb_retrieve", "consult_orchestrator", "spawn_agent_pack", "route", "propose_note", "request_test_authorization", "propose_kb_entry", "propose_council_record", "record_session_summary", "handoff_put", "handoff_get", "request_help", "help_result", "council_frame", "council_open", "council_brief", "council_submit", "council_choose", "request_council", "council_status", "council_result", "request_research", "research_status", "research_result", "cancel_job", "ask_family"]);
+        assert_eq!(names, ["search_kb", "list_roles", "delphi_roster", "get_agent", "list_skills", "get_skill", "specs_status", "specs_show", "specs_list", "scaffold_status", "search_project", "search_memory", "query_memory", "kb_retrieve", "consult_orchestrator", "spawn_agent_pack", "route", "propose_note", "request_test_authorization", "propose_kb_entry", "propose_council_record", "record_session_summary", "handoff_put", "handoff_get", "request_help", "help_result", "council_frame", "council_open", "council_brief", "council_submit", "council_choose", "request_council", "council_status", "council_result", "request_research", "research_status", "research_result", "cancel_job", "ask_family", "ask_result"]);
         for t in tools {
             let writes = ["propose_note", "request_test_authorization", "propose_kb_entry", "propose_council_record", "record_session_summary", "handoff_put", "request_help", "request_council", "request_research", "council_open", "council_submit", "council_choose", "cancel_job", "ask_family"].contains(&t["name"].as_str().unwrap());
             assert_eq!(t["annotations"]["readOnlyHint"], !writes, "{}", t["name"]);
@@ -1826,7 +1903,7 @@ mod tests {
             assert_eq!(r["result"]["isError"], true);
             assert!(r["result"]["content"][0]["text"].as_str().unwrap().starts_with("disabled_by_operator"));
         }
-        assert!(call(&mut s, json!({"jsonrpc": "2.0", "id": 9, "method": "tools/list"}))["result"]["tools"].as_array().unwrap().len() == 39);
+        assert!(call(&mut s, json!({"jsonrpc": "2.0", "id": 9, "method": "tools/list"}))["result"]["tools"].as_array().unwrap().len() == 40);
         std::fs::write(d.path().join("config.toml"), "[mcp]\nenabled = true\n").unwrap();
         assert_eq!(tool(&mut s, "no_such_tool")["error"]["code"], -32602);
         std::fs::write(d.path().join("config.toml"), "[mcp]\nenabled = false\n").unwrap();

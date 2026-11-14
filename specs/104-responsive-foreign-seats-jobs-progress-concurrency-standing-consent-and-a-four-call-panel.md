@@ -27,7 +27,7 @@ A host that asks Delphi for another model family should get the answer, see that
 
 | # | Observation (code on `main`, 2026-11-13) | Where |
 | :-- | :-- | :-- |
-| E-1 | `ask_family` answers inside one request that can take the seat clock (600 s), behind a 20 s socket. A slow answer is lost after it is paid for. | `mcp_host.rs` dispatch; `service.rs` `host_ask_family` |
+| E-1 | `ask_family` answers inside one request that can take the seat clock (600 s). The socket wait was 20 s before the 098 fix (a slow answer was lost after it was paid for) and is 630 s since it, which holds the host's call for up to ten minutes. | `mcp_host.rs` dispatch; `service.rs` `host_ask_family` |
 | E-2 | `ask_family` attaches no identity line, unlike help, Council and research answers. | `service.rs` `host_ask_family` |
 | E-3 | The server sends no progress. A host sees nothing between a request and its answer. | `mcp_host.rs` `initialize`; no `notifications/progress` anywhere |
 | E-4 | The stdio loop answers one request, then reads the next. A waiting call blocks every other call of the session, including a host's parallel subagents that share the connection. | `mcp_wire.rs` `serve_lines` |
@@ -52,12 +52,12 @@ It does **not** change what a foreign seat may do (read-only, advice), who decid
 
 ## 2. R1: `ask_family` is a job (E-1, E-2)
 
-1. `ask_family` starts the seat as a background task (as `request_help` does) and waits in the request for at most the help wait (45 s). If the seat has answered, the answer is returned as today. If not, the call returns `{"ask_id", "status": "working", "retry_after_seconds", "note"}` and the seat carries on.
+1. `ask_family` starts the seat as a background task (as `request_help` does) and waits in the request for at most the help wait (45 s). If the seat has answered, the answer is returned as today. If not, the call returns `{"ask_id", "status": "working", "retry_after_seconds", "note"}` and the seat carries on. *Amended by §12 A1:* the daemon's `host.ask_family` returns the `ask_id` at once; the 45 s wait is held by the MCP process, which polls `host.ask_result` in short calls.
 2. A new tool, **`ask_result`** `{ask_id, wait?: bool}`, returns the same working shape (with `workers`, `tail`, `stalled`, as `help_result` does) or the finished answer. With `wait: true` it holds at most 25 s. Only the session that asked may read it; the refusal for another session's id, a finished-and-read id and an unknown id is the same sentence (098 §19).
 3. The finished answer carries `display`, `signature` and `identity` for the role that answered (the `strategist`, run by Delphi on the served family), built the same way as a help answer, plus the receipt fields it has today. The `note` keeps saying the family shown is the served one.
 4. `cancel_job` accepts an `ask_id` of this session and stops the seat.
 5. The budget check (`[seats] max_foreign_seats`, `max_foreign_tokens`) is unchanged and still runs before anything is spent.
-6. `socket_wait("host.ask_family")` drops to the slow wait (80 s); `host.ask_result` takes the slow wait.
+6. `socket_wait("host.ask_family")` drops to the slow wait (80 s); `host.ask_result` takes the slow wait. *Amended by §12 A1:* `host.ask_family` answers at once and takes the quick wait (20 s); `host.ask_result` keeps the slow wait.
 
 **Tests.** A seat that answers within the wait returns the answer in one call. A seat that takes longer returns an `ask_id`, and `ask_result` returns `working` and then the answer with a `display` line. Another session's `ask_result` is refused with the shared sentence. `cancel_job` on an `ask_id` ends the task as `task.cancelled`. The golden tool list and the docs catalog are regenerated.
 
@@ -75,10 +75,10 @@ It does **not** change what a foreign seat may do (read-only, advice), who decid
 
 1. `delphi mcp` reads requests on one thread and runs each `tools/call`, `resources/read` and `prompts/get` on a worker, at most **8** at once; a ninth waits its turn. `initialize`, `ping`, `tools/list`, `prompts/list` and `resources/list` are answered on the reading thread, in order.
 2. Replies and notifications are written whole, one line at a time, under one lock. Reply order is completion order; the JSON-RPC `id` pairs them.
-3. `notifications/cancelled {requestId}` for a request still running stops this server waiting for it and sends no reply for it (MCP's rule). It does **not** cancel the job in the daemon: only `cancel_job` does, and the working answer already says so.
+3. `notifications/cancelled {requestId}` for a request still running stops this server waiting for it and sends no reply for it (MCP's rule). It does **not** cancel the job in the daemon: only `cancel_job` does, and the working answer already says so. *Amended by §12 A1:* the one exception is an `ask_family` whose `ask_id` has not yet been returned to the host; that seat is stopped (A1).
 4. The session's state (the pack ledger, the agent-name pool, the client name, the project) is shared under locks; no tool's answer may depend on the order of two requests in flight, except that a `spawn_agent_pack` cap is counted atomically.
 5. `delphi bundle serve` shares the wire and stays sequential.
-6. When the input closes, the server waits at most 2 s for workers, then exits.
+6. When the input closes, the server waits at most 2 s for workers, then exits. *Amended by §12 A1:* an `ask_family` still in flight when the input closes, whose id the host never received, is stopped first.
 
 **Tests.** Two calls in flight: a quick call sent after a waiting call is answered first. Nine waiting calls: eight run, the ninth starts when one ends. A cancelled request gets no reply and the server keeps serving. Replies are whole lines under load (a fuzz of 200 mixed requests parses line by line). The pack cap holds under 20 parallel `spawn_agent_pack` calls.
 
@@ -143,3 +143,10 @@ Nothing. Every item above is in workstream 6b of the plan approved on 2026-11-13
 - No host's handling of `notifications/progress` was observed: whether Claude Code, Copilot CLI, Codex or `agy` shows the message is to be recorded per host when R2 is built.
 - Whether a host's parallel subagents share the parent's MCP connection (which decides how much R3 helps a Panel) was not measured.
 - The 45 s and 25 s waits are today's constants, not tuned.
+
+## 12. Amendments from review (2026-11-13)
+
+From a cross-family review, passed on by the orchestrator within the approved plan.
+
+- **A1 (R1 and R3: no orphaned seat).** The host must always be able to stop a seat it started. The daemon's `host.ask_family` starts the seat and returns the `ask_id` at once, with no wait in the daemon call. The waiting moves into the MCP process: having the id, it polls `host.ask_result` in short calls until the answer is ready or 45 s have passed, then returns the answer or the working shape with the id. Because the MCP process holds the id from the first moment: when `notifications/cancelled` arrives for an `ask_family` request whose id has not yet been returned to the host, or the input closes while one is in flight, the MCP process calls `host.cancel_job` for that id (reason: "the host cancelled the request before it received the id"). A request whose id was already returned is not cancelled by `notifications/cancelled` (R3 item 3 stays for that case). This makes R2's polling the same mechanism as R1's. Tests: an answer within the hold comes back in one tool call; a slower seat returns the working shape with its id; a cancelled request before the id stops the seat; a closed input stops an in-flight ask.
+- **A7 (slip in §1).** E-1 now says the socket wait was 20 s before the 098 fix and is 630 s since it.

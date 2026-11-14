@@ -79,7 +79,7 @@ When an operator works in a host (Claude Code, Copilot CLI, Codex, `agy`) and ca
 
 ## 104-responsive-foreign-seats-jobs-progress-concurrency-standing-consent-and-a-four-call-panel
 
-**104: Responsive foreign seats: `ask_family` as a job, progress while a host waits, concurrent requests, an opt-in standing consent, and a Panel in four calls** · approved (per source at `a50655371c78`) · tier 0 · [source](../../specs/104-responsive-foreign-seats-jobs-progress-concurrency-standing-consent-and-a-four-call-panel.md)
+**104: Responsive foreign seats: `ask_family` as a job, progress while a host waits, concurrent requests, an opt-in standing consent, and a Panel in four calls** · approved (per source at `06e1a485bc75`) · tier 0 · [source](../../specs/104-responsive-foreign-seats-jobs-progress-concurrency-standing-consent-and-a-four-call-panel.md)
 
 **source excerpt, untrusted** · `specs/104-responsive-foreign-seats-jobs-progress-concurrency-standing-consent-and-a-four-call-panel.md` line 26
 
