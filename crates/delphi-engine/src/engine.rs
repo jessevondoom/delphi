@@ -3290,6 +3290,25 @@ mod tests {
         assert_eq!(alerts[0].agent.as_deref(), Some("architect"));
     }
 
+    #[tokio::test]
+    async fn a_finished_task_leaves_one_episode_stamped_from_its_spans_never_from_its_ceiling() {
+        let calls: Vec<Step> = (0..4).map(|i| Step::tool(&format!("c{}", i), "read_file", json!({"path": "missions/none.md"}))).chain(std::iter::once(Step::text("giving up"))).collect();
+        let f = setup(calls, 5.0, |_| {});
+        let out = f.engine.run_task(&f.m, "architect", "Look at the plan").await.unwrap();
+        assert_eq!(out.status, Status::Done);
+        f.m.harvest_settled();
+        let traces: Vec<_> = fs::read_dir(f.m.dir.join("traces")).unwrap().flatten().map(|e| e.path()).collect();
+        assert_eq!(traces.len(), 1, "{:?}", traces);
+        let text = fs::read_to_string(&traces[0]).unwrap();
+        let (fm, _) = crate::workspace::split_frontmatter(&text);
+        let fm = fm.unwrap();
+        assert_eq!((fm["role"].as_str(), fm["kind"].as_str(), fm["mission"].as_str(), fm["outcome"].as_str()), (Some("architect"), Some("episode"), Some("m1"), Some("resolved_after_failure")));
+        let lowest = events_of(&f, "span.taint").iter().filter_map(|e| e.payload["ceiling"].as_str().and_then(delphi_core::provenance::Tier::parse)).min();
+        let want = lowest.map(|t| t.min(delphi_core::provenance::Tier::L3)).unwrap_or(delphi_core::provenance::Tier::L0).name();
+        assert_eq!(fm["source_type"].as_str(), Some(want));
+        assert!(!matches!(want, "user_ratified" | "internal_empirical"));
+    }
+
     fn alternating_reads(n: usize) -> Vec<Step> {
         (0..n).map(|i| if i % 2 == 0 { Step::tool(&format!("c{}", i), "read_file", json!({"path": "missions/none.md"})) } else { Step::tool(&format!("c{}", i), "list_dir", json!({"path": "missions"})) }).collect()
     }

@@ -926,7 +926,8 @@ fn vec_scope(zone: &str, rel_path: &str) -> String {
     }
     if zone == "episodes" {
         if let Some(trace_file) = rel_path.rsplit("/traces/").next() {
-            if let Some(role) = trace_file.split('-').next().filter(|r| !r.is_empty()) {
+            // `<role>-<task>.md`: a task id has no hyphen, a role may (`red-team`), so the role is all before the last one.
+            if let Some(role) = trace_file.rsplit_once('-').map(|(r, _)| r).filter(|r| !r.is_empty()) {
                 return role.to_string();
             }
         }

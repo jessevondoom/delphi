@@ -101,7 +101,11 @@ impl Episode {
         let mut out = String::new();
         out.push_str("---\n");
         out.push_str(&format!("id: {}\n", self.id));
-        out.push_str(&format!("title: \"{}\"\n", self.title.replace('"', "\\\"")));
+        // Every free-text value is a JSON string (a valid YAML double-quoted scalar): tool output with a backslash, a
+        // bracket or a comma cannot break the frontmatter the index and the schema read.
+        let q = |s: &str| serde_json::to_string(s).expect("a string serializes");
+        let list = |v: &[String]| serde_json::to_string(v).expect("strings serialize");
+        out.push_str(&format!("title: {}\n", q(&self.title)));
         out.push_str(&format!("author: {}\n", self.author));
         out.push_str(&format!("role: {}\n", self.role));
         out.push_str(&format!("timestamp: {}\n", self.timestamp));
@@ -113,22 +117,17 @@ impl Episode {
             Some(v) => out.push_str(&format!("valid_until: {}\n", v)),
             None => out.push_str("valid_until: null\n"),
         }
-        out.push_str(&format!("mission: {}\n", self.mission));
-        out.push_str(&format!("session_id: {}\n", self.session_id));
-        out.push_str(&format!("task_id: {}\n", self.task_id));
+        out.push_str(&format!("mission: {}\n", q(&self.mission)));
+        out.push_str(&format!("session_id: {}\n", q(&self.session_id)));
+        out.push_str(&format!("task_id: {}\n", q(&self.task_id)));
 
-        out.push_str(&format!("skills_used: [{}]\n", self.skills_used.join(", ")));
-        out.push_str(&format!("tools_invoked: [{}]\n", self.tools_invoked.join(", ")));
+        out.push_str(&format!("skills_used: {}\n", list(&self.skills_used)));
+        out.push_str(&format!("tools_invoked: {}\n", list(&self.tools_invoked)));
         out.push_str(&format!("outcome: {}\n", self.outcome.as_str()));
-        
-        let escaped_errs: Vec<String> = self.error_fingerprints.iter().map(|e| format!("\"{}\"", e.replace('"', "\\\""))).collect();
-        out.push_str(&format!("error_fingerprints: [{}]\n", escaped_errs.join(", ")));
-
-        let escaped_files: Vec<String> = self.target_files.iter().map(|f| format!("\"{}\"", f.replace('"', "\\\""))).collect();
-        out.push_str(&format!("target_files: [{}]\n", escaped_files.join(", ")));
-
-        out.push_str(&format!("supersedes: [{}]\n", self.supersedes.join(", ")));
-        out.push_str(&format!("tags: [{}]\n", self.tags.join(", ")));
+        out.push_str(&format!("error_fingerprints: {}\n", list(&self.error_fingerprints)));
+        out.push_str(&format!("target_files: {}\n", list(&self.target_files)));
+        out.push_str(&format!("supersedes: {}\n", list(&self.supersedes)));
+        out.push_str(&format!("tags: {}\n", list(&self.tags)));
         out.push_str("---\n\n");
 
         out.push_str(&format!("# Episode: {}\n\n", self.title));
@@ -164,6 +163,8 @@ struct TaskAccumulator {
     had_error: bool,
     completed: bool,
     tool_call_count: usize,
+    /// At least one event of the task belongs to a span (a host mission's staging task has none).
+    has_span: bool,
 }
 
 /// Cleanly extract an error fingerprint from a tool result string or payload.
@@ -173,7 +174,9 @@ fn extract_error_fingerprint(text: &str) -> String {
         lower.contains("error") || lower.contains("failed") || lower.contains("denied") || lower.contains("fatal") || lower.contains("panic")
     }).unwrap_or_else(|| text.lines().next().unwrap_or("unknown error"));
     
-    let trimmed = line.trim();
+    // The fingerprint is shown inside an inline code span in the body (065 §4.1 item 4): no backtick may close it.
+    let cleaned = line.trim().replace('`', "'");
+    let trimmed = cleaned.as_str();
     if trimmed.chars().count() > 100 {
         format!("{}...", trimmed.chars().take(97).collect::<String>())
     } else {
@@ -181,8 +184,25 @@ fn extract_error_fingerprint(text: &str) -> String {
     }
 }
 
-/// Deterministically harvest episodes from recorded event stream (`specs/065` §4.1).
-pub fn harvest_episodes(mission_id: &str, events: &[EventEnvelope]) -> Vec<Episode> {
+/// The tier an episode is stamped with (`specs/108` A1): the lowest `span.taint` ceiling among the task's spans, never
+/// above `internal_generated` (an episode is the daemon's summary of what models did, not a measurement or a ratification).
+/// A task with no span, or whose spans recorded no taint event, is `external_untrusted`: no record of a clean read is not
+/// evidence of one. The task's own ceiling (the `SpanOutcome` a Council or a build finishes with) is never consulted.
+fn episode_tier(has_span: bool, lowest_span_taint: Option<Tier>) -> Tier {
+    match lowest_span_taint {
+        Some(t) if has_span => t.min(Tier::L3),
+        _ => Tier::L0,
+    }
+}
+
+/// A well-formed RFC 3339 date-time (or date) whose first ten characters are the day.
+fn valid_time(ts: &str) -> bool {
+    ts.is_char_boundary(10) && ts.len() >= 10 && crate::frontmatter::entry_date_ok(&ts[..10])
+}
+
+/// Deterministically harvest episodes from recorded event stream (`specs/065` §4.1). An episode is dated by its task's
+/// first well-formed event time; `now` (RFC 3339) dates one whose events carry none, so no episode carries a made-up date.
+pub fn harvest_episodes(mission_id: &str, events: &[EventEnvelope], now: &str) -> Vec<Episode> {
     let mut tasks: BTreeMap<String, TaskAccumulator> = BTreeMap::new();
 
     for ev in events {
@@ -193,9 +213,10 @@ pub fn harvest_episodes(mission_id: &str, events: &[EventEnvelope]) -> Vec<Episo
 
         let acc = tasks.entry(task_id).or_default();
 
-        if acc.timestamp.is_none() && !ev.timestamp.is_empty() {
+        if acc.timestamp.is_none() && valid_time(&ev.timestamp) {
             acc.timestamp = Some(ev.timestamp.clone());
         }
+        acc.has_span |= ev.span_id.as_deref().is_some_and(|s| !s.is_empty());
 
         if let Some(agent) = &ev.agent {
             if acc.role.is_none() && !agent.is_empty() {
@@ -236,9 +257,9 @@ pub fn harvest_episodes(mission_id: &str, events: &[EventEnvelope]) -> Vec<Episo
                     }
                 }
 
-                if let Some(file) = ev.payload["path"].as_str() {
-                    if !file.is_empty() && !acc.files.iter().any(|f| f == file) {
-                        acc.files.push(file.to_string());
+                if let Some(file) = ev.payload["path"].as_str().map(|f| f.replace('`', "'")) {
+                    if !file.is_empty() && !acc.files.contains(&file) {
+                        acc.files.push(file);
                     }
                 }
             }
@@ -292,17 +313,12 @@ pub fn harvest_episodes(mission_id: &str, events: &[EventEnvelope]) -> Vec<Episo
 
         let role = acc.role.unwrap_or_else(|| "orchestrator".to_string());
         let session_id = acc.session_id.unwrap_or_else(|| "s_0000".to_string());
-        let timestamp = acc.timestamp.unwrap_or_else(|| "2026-11-01T00:00:00Z".to_string());
-        
-        // Taint calculation: inherits lowest span taint, defaults to internal_empirical
-        let tier = acc.lowest_tier.unwrap_or(Tier::L4);
-        let source_type = tier.name().to_string();
-
-        let date_part = if timestamp.len() >= 10 {
-            &timestamp[0..10]
-        } else {
-            "2026-11-01"
-        };
+        if !acc.has_span {
+            continue; // nothing ran in a span (a host staging task): no episode (`specs/108` §5)
+        }
+        let Some(timestamp) = acc.timestamp.or_else(|| valid_time(now).then(|| now.to_string())) else { continue };
+        let source_type = episode_tier(acc.has_span, acc.lowest_tier).name().to_string();
+        let date_part = &timestamp[0..10];
 
         let id = format!("ep-{}-{}-{}", date_part, role, task_id.replace('_', "-"));
 
@@ -396,9 +412,71 @@ pub fn harvest_episodes(mission_id: &str, events: &[EventEnvelope]) -> Vec<Episo
     candidate_episodes
 }
 
+/// Where a task's episode is written, relative to the mission directory: `traces/<role>-<task>.md`, the name the
+/// index reads a vector's role from and `schemas/episode.schema.json` states.
+pub fn episode_file(role: &str, task_id: &str) -> String {
+    format!("traces/{}-{}.md", role, task_id)
+}
+
+/// A plain identifier (role or task id) that is safe as a file-name part.
+fn plain_id(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 64 && s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_') && s.starts_with(|c: char| c.is_ascii_lowercase())
+}
+
+/// The dedup key of an episode already on disk, read back from its frontmatter.
+fn dedup_key_of(text: &str) -> Option<String> {
+    let (fm, _) = crate::workspace::split_frontmatter(text);
+    let fm = fm?;
+    let first = |k: &str| fm.get(k).and_then(|v| v.as_sequence()).and_then(|s| s.first()).and_then(|v| v.as_str()).unwrap_or("none").to_string();
+    let role = fm.get("role")?.as_str()?.to_string();
+    Some(blake3::hash(format!("{}:{}:{}", role, first("tools_invoked"), first("error_fingerprints")).as_bytes()).to_hex().to_string())
+}
+
+/// Harvest one finished task of a mission and write its episode (`specs/108` M4, `specs/065` §4.1 and §6): at most one per
+/// task, at most [`MAX_EPISODES_PER_MISSION`] per mission, none that repeats an episode already written for the mission
+/// (same role, tool and error), and none for a task with no span events. `redact` is the daemon's secret filter, applied
+/// to the whole file. Returns the path written, or `None` when nothing was due. The `traces` directory is never followed
+/// through a symlink.
+pub fn write_task_episode(mission_dir: &std::path::Path, mission_id: &str, task_id: &str, events: &[EventEnvelope], now: &str, redact: impl Fn(&str) -> String) -> Result<Option<std::path::PathBuf>, String> {
+    if !plain_id(task_id) {
+        return Err(format!("task id `{}` is not a plain id", task_id));
+    }
+    let mine: Vec<EventEnvelope> = events.iter().filter(|e| e.task_id.as_deref() == Some(task_id)).cloned().collect();
+    let Some(ep) = harvest_episodes(mission_id, &mine, now).into_iter().next() else { return Ok(None) };
+    if !plain_id(&ep.role) {
+        return Err(format!("role `{}` is not a plain id", ep.role));
+    }
+    let dir = mission_dir.join("traces");
+    match std::fs::symlink_metadata(&dir) {
+        Ok(m) if m.file_type().is_symlink() || !m.is_dir() => return Err(format!("{} is not a plain directory", dir.display())),
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("{}: {}", dir.display(), e)),
+    }
+    let mut existing = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(&dir) {
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.ends_with(".md") && !name.starts_with('.') && e.file_type().is_ok_and(|t| t.is_file()) {
+                existing.push((name, std::fs::read_to_string(e.path()).unwrap_or_default()));
+            }
+        }
+    }
+    let suffix = format!("-{}.md", task_id);
+    let key = ep.dedup_key();
+    if existing.len() >= MAX_EPISODES_PER_MISSION || existing.iter().any(|(n, text)| n.ends_with(&suffix) || dedup_key_of(text).as_deref() == Some(key.as_str())) {
+        return Ok(None);
+    }
+    let path = mission_dir.join(episode_file(&ep.role, task_id));
+    delphi_core::lock::write_atomic(&path, redact(&ep.to_markdown()).as_bytes()).map_err(|e| format!("{}: {}", path.display(), e))?;
+    Ok(Some(path))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const NOW: &str = "2026-11-13T00:00:00Z";
 
     fn mock_envelope(seq: u64, task_id: Option<&str>, agent: Option<&str>, kind: &str, payload: Value) -> EventEnvelope {
         EventEnvelope {
@@ -434,14 +512,114 @@ mod tests {
             mock_envelope(3, Some("t_1"), Some("builder"), "task.completed", json!({})),
         ];
 
-        let episodes = harvest_episodes("m_test", &events);
+        let episodes = harvest_episodes("m_test", &events, NOW);
         assert_eq!(episodes.len(), 1);
         let ep = &episodes[0];
         assert_eq!(ep.role, "builder");
         assert_eq!(ep.outcome, EpisodeOutcome::ResolvedAfterFailure);
-        assert_eq!(ep.source_type, "internal_empirical");
+        assert_eq!(ep.source_type, "external_untrusted", "no span.taint event: nothing shows the reads were clean");
         assert!(ep.error_fingerprints[0].contains("Blocking waiting for file lock"));
         assert!(ep.to_markdown().contains("## Resolution & Pattern"));
+    }
+
+    fn resolved(task: &str, taint: &[&str]) -> Vec<EventEnvelope> {
+        let mut v: Vec<EventEnvelope> = taint.iter().enumerate().map(|(i, c)| mock_envelope(i as u64, Some(task), Some("builder"), "span.taint", json!({"ceiling": c}))).collect();
+        v.push(mock_envelope(10, Some(task), Some("builder"), "tool.result", json!({"name": "run_command", "is_error": true, "content": "error: x"})));
+        v.push(mock_envelope(11, Some(task), Some("builder"), "task.completed", json!({})));
+        v
+    }
+
+    #[test]
+    fn the_tier_is_the_lowest_span_taint_capped_at_internal_generated_and_never_defaults_upward() {
+        let tier = |taint: &[&str]| harvest_episodes("m", &resolved("t_1", taint), NOW)[0].source_type.clone();
+        assert_eq!(tier(&[]), "external_untrusted", "no taint event");
+        assert_eq!(tier(&["L5"]), "internal_generated", "a span at L5 is capped: an episode is never ratified or empirical");
+        assert_eq!(tier(&["L4"]), "internal_generated");
+        assert_eq!(tier(&["L5", "L2", "L4"]), "federated_verified", "the lowest of the spans");
+        assert_eq!(tier(&["L3", "L0"]), "external_untrusted");
+        // A task whose events carry no span (a host staging task) yields no episode at all.
+        let mut no_span = resolved("t_2", &["L5"]);
+        for e in &mut no_span {
+            e.span_id = None;
+        }
+        assert!(harvest_episodes("m", &no_span, NOW).is_empty());
+    }
+
+    #[test]
+    fn an_episode_is_dated_by_its_events_or_by_now_never_by_a_fixed_default() {
+        let ep = &harvest_episodes("m", &resolved("t_1", &["L3"]), NOW)[0];
+        assert_eq!(ep.timestamp, "2026-11-01T14:30:00Z", "the task's first event time");
+        let mut undated = resolved("t_1", &["L3"]);
+        for e in &mut undated {
+            e.timestamp = String::new();
+        }
+        let ep = &harvest_episodes("m", &undated, "2027-02-03T04:05:06Z")[0];
+        assert_eq!(ep.timestamp, "2027-02-03T04:05:06Z");
+        assert!(ep.id.starts_with("ep-2027-02-03-builder-"), "{}", ep.id);
+        for e in &mut undated {
+            e.timestamp = "garbage".into();
+        }
+        assert_eq!(harvest_episodes("m", &undated, "2027-02-03T04:05:06Z")[0].timestamp, "2027-02-03T04:05:06Z", "a malformed time is not used");
+        assert!(harvest_episodes("m", &undated, "").is_empty(), "no usable time at all: no episode rather than an invented date");
+    }
+
+    #[test]
+    fn frontmatter_stays_valid_yaml_whatever_the_tool_output_says() {
+        let mut ev = resolved("t_1", &["L3"]);
+        ev[1].payload = json!({"name": "run_command", "is_error": true, "content": "error: C:\\path [a, b] \"q\" `x`", "path": "src/a\\b.rs"});
+        let ep = &harvest_episodes("m", &ev, NOW)[0];
+        let md = ep.to_markdown();
+        let (fm, _) = crate::workspace::split_frontmatter(&md);
+        let fm = fm.expect("frontmatter parses");
+        assert_eq!(fm["error_fingerprints"][0].as_str(), Some("error: C:\\path [a, b] \"q\" 'x'"));
+        assert_eq!(fm["source_type"].as_str(), Some("internal_generated"));
+        assert_eq!(fm["kind"].as_str(), Some("episode"));
+    }
+
+    #[test]
+    fn a_task_episode_is_written_once_within_the_mission_quota_and_never_through_a_symlink() {
+        let t = tempfile::tempdir().unwrap();
+        let dir = t.path().join("m1");
+        std::fs::create_dir_all(&dir).unwrap();
+        let id = |s: &str| s.to_string();
+        let p = write_task_episode(&dir, "m1", "t_1", &resolved("t_1", &["L3"]), NOW, id).unwrap().expect("written");
+        assert_eq!(p, dir.join("traces/builder-t_1.md"));
+        assert!(write_task_episode(&dir, "m1", "t_1", &resolved("t_1", &["L3"]), NOW, id).unwrap().is_none(), "one per task");
+        // Same role, tool and error in another task: a repeat, not a new episode.
+        assert!(write_task_episode(&dir, "m1", "t_2", &resolved("t_2", &["L3"]), NOW, id).unwrap().is_none(), "deduplicated across the mission");
+        let distinct = |task: &str, err: &str| {
+            let mut v = resolved(task, &["L3"]);
+            v[1].payload["content"] = json!(err);
+            v
+        };
+        assert!(write_task_episode(&dir, "m1", "t_3", &distinct("t_3", "error: y"), NOW, id).unwrap().is_some());
+        assert!(write_task_episode(&dir, "m1", "t_4", &distinct("t_4", "error: z"), NOW, id).unwrap().is_some());
+        assert!(write_task_episode(&dir, "m1", "t_5", &distinct("t_5", "error: w"), NOW, id).unwrap().is_none(), "at most three per mission");
+        assert_eq!(std::fs::read_dir(dir.join("traces")).unwrap().count(), MAX_EPISODES_PER_MISSION);
+        // The redactor sees the whole file.
+        let other = t.path().join("m2");
+        std::fs::create_dir_all(&other).unwrap();
+        let p = write_task_episode(&other, "m2", "t_1", &distinct("t_1", "error: sk-SECRET"), NOW, |s| s.replace("sk-SECRET", "[REDACTED]")).unwrap().unwrap();
+        assert!(!std::fs::read_to_string(p).unwrap().contains("sk-SECRET"));
+        #[cfg(unix)]
+        {
+            let m3 = t.path().join("m3");
+            std::fs::create_dir_all(&m3).unwrap();
+            std::os::unix::fs::symlink(t.path(), m3.join("traces")).unwrap();
+            assert!(write_task_episode(&m3, "m3", "t_1", &resolved("t_1", &["L3"]), NOW, id).is_err());
+        }
+    }
+
+    #[test]
+    fn a_written_episode_is_indexed_in_the_episodes_zone_under_its_role() {
+        let t = tempfile::tempdir().unwrap();
+        let ws = t.path();
+        let dir = delphi_core::sessions::dir(ws, "m1");
+        std::fs::create_dir_all(&dir).unwrap();
+        write_task_episode(&dir, "m1", "t_1", &resolved("t_1", &["L3"]), NOW, |s| s.to_string()).unwrap().unwrap();
+        let files = crate::kb::sources(ws);
+        let f = files.iter().find(|f| f.rel_path == "missions/m1/traces/builder-t_1.md").expect("listed");
+        assert_eq!(f.zone, "episodes");
     }
 
     #[test]
@@ -452,7 +630,7 @@ mod tests {
             mock_envelope(3, Some("t_2"), Some("investigator"), "task.completed", json!({})),
         ];
 
-        let episodes = harvest_episodes("m_test", &events);
+        let episodes = harvest_episodes("m_test", &events, NOW);
         assert_eq!(episodes.len(), 1);
         let ep = &episodes[0];
         assert_eq!(ep.source_type, "external_untrusted");
@@ -467,7 +645,7 @@ mod tests {
             events.push(mock_envelope(i * 2 + 1, Some(&task), Some("builder"), "task.completed", json!({})));
         }
 
-        let episodes = harvest_episodes("m_test", &events);
+        let episodes = harvest_episodes("m_test", &events, NOW);
         assert_eq!(episodes.len(), MAX_EPISODES_PER_MISSION);
     }
 
@@ -480,7 +658,7 @@ mod tests {
             mock_envelope(4, Some("t_b"), Some("builder"), "task.completed", json!({})),
         ];
 
-        let episodes = harvest_episodes("m_test", &events);
+        let episodes = harvest_episodes("m_test", &events, NOW);
         assert_eq!(episodes.len(), 1, "flapping identical errors should deduplicate to 1 episode");
     }
 }

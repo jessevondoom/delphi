@@ -162,6 +162,10 @@ pub struct MissionState {
     stager: Mutex<crate::learn::Stager>,
     /// The project-history tap (`specs/102` S3): absent until the daemon sets it, and dormant while `[history] enabled` is off.
     history: Mutex<Option<Arc<crate::history_record::Tap>>>,
+    /// One episode harvest at a time per mission, so the per-mission quota holds (`specs/108` M4).
+    harvest_gate: Arc<Mutex<()>>,
+    /// Harvests started and not yet finished.
+    harvest_pending: Arc<AtomicU64>,
 }
 
 /// Highest trailing number among `prefix`-ed ids seen in `events` (so ids never repeat after a restart).
@@ -208,6 +212,8 @@ impl MissionState {
             held: Mutex::new(std::collections::HashMap::new()),
             stager: Mutex::new(crate::learn::Stager::replay(crate::learn::LearningSettings::default(), &events)),
             history: Mutex::new(None),
+            harvest_gate: Arc::new(Mutex::new(())),
+            harvest_pending: Arc::new(AtomicU64::new(0)),
         }))
     }
 
@@ -328,7 +334,52 @@ impl MissionState {
         if let Some(tap) = self.history_tap() {
             tap.on_events(&self.id, &stored);
         }
+        // Every task end (done, escalated, failed, cancelled) passes through here, whoever recorded it.
+        for e in &stored {
+            if matches!(e.kind.as_str(), "task.completed" | "task.failed" | "task.cancelled") {
+                if let Some(task) = e.task_id.clone() {
+                    self.harvest_episode(task);
+                }
+            }
+        }
         Ok(stored)
+    }
+
+    /// Write the episode of a task that just ended (`specs/108` M4, `specs/065` §4.1), off the task's path: the harvest
+    /// runs on a blocking thread the caller never waits for, and a failure is logged, never returned, so it can neither
+    /// fail nor delay the task. The write is the daemon's own, into `traces/` of this mission, through the secret filter.
+    fn harvest_episode(&self, task: String) {
+        let (dir, id, secrets, gate, pending) = (self.dir.clone(), self.id.clone(), self.secrets.clone(), self.harvest_gate.clone(), self.harvest_pending.clone());
+        pending.fetch_add(1, Ordering::SeqCst);
+        let run = move || {
+            struct Done(Arc<AtomicU64>);
+            impl Drop for Done {
+                fn drop(&mut self) {
+                    self.0.fetch_sub(1, Ordering::SeqCst);
+                }
+            }
+            let _done = Done(pending);
+            let _one = gate.lock().unwrap_or_else(|p| p.into_inner());
+            let result = replay(&dir).map_err(|e| e.to_string()).and_then(|events| crate::trace_miner::write_task_episode(&dir, &id, &task, &events, &delphi_core::time::now_rfc3339(), |s| secrets.redact(s)));
+            if let Err(e) = result {
+                delphi_core::elog::warn("engine", "episode_harvest", &e, serde_json::json!({"mission": id, "task": task}));
+            }
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(h) => drop(h.spawn_blocking(run)),
+            Err(_) => run(),
+        }
+    }
+
+    /// Wait until every episode harvest started so far has finished (tests only).
+    #[cfg(test)]
+    pub(crate) fn harvest_settled(&self) {
+        for _ in 0..1000 {
+            if self.harvest_pending.load(Ordering::SeqCst) == 0 {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
     }
 
     fn capture_event(&self, c: crate::learn::Capture) -> EventEnvelope {
@@ -420,6 +471,71 @@ mod tests {
         let mut e = EventEnvelope::new("m1", "approval.resolved", json!({"approval_id": "a1", "resolution": "denied", "reason": reason, "by": "console"}));
         e.task_id = Some(task.into());
         e
+    }
+
+    /// A span's tool error then the task's end, as the engine records them.
+    fn worked_after_failing(task: &str, end: &str) -> Vec<EventEnvelope> {
+        let at = |kind: &str, payload: serde_json::Value, span: bool| {
+            let mut e = EventEnvelope::new("m1", kind, payload);
+            e.task_id = Some(task.into());
+            if span {
+                (e.span_id, e.agent) = (Some("sp_builder_1".into()), Some("builder".into()));
+            }
+            e
+        };
+        vec![
+            at("span.taint", json!({"ceiling": "L3", "cause": "read_file"}), true),
+            at("tool.result", json!({"name": "run_command", "is_error": true, "content": "error: lock held"}), true),
+            at("tool.result", json!({"name": "run_command", "is_error": false, "content": "ok"}), true),
+            at(end, json!({"status": "done", "reason": "", "error": "x"}), false),
+        ]
+    }
+
+    #[tokio::test]
+    async fn a_task_that_ends_leaves_its_episode_and_a_staging_task_leaves_none() {
+        for end in ["task.completed", "task.failed", "task.cancelled"] {
+            let t = tempfile::tempdir().unwrap();
+            let (m, _, _) = open(t.path());
+            for e in worked_after_failing("t_0001", end) {
+                m.append(e).await.unwrap();
+            }
+            m.harvest_settled();
+            let traces: Vec<String> = std::fs::read_dir(t.path().join("traces")).map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect()).unwrap_or_default();
+            if end == "task.completed" {
+                assert_eq!(traces, vec!["builder-t_0001.md".to_string()], "{end}");
+                let text = std::fs::read_to_string(t.path().join("traces/builder-t_0001.md")).unwrap();
+                let (fm, _) = crate::workspace::split_frontmatter(&text);
+                let fm = fm.unwrap();
+                assert_eq!((fm["kind"].as_str(), fm["source_type"].as_str(), fm["outcome"].as_str(), fm["task_id"].as_str(), fm["mission"].as_str()), (Some("episode"), Some("internal_generated"), Some("resolved_after_failure"), Some("t_0001"), Some("m1")));
+            } else {
+                // A failed or cancelled task is harvested too; this one's error was retried, so it is an unresolved failure.
+                assert_eq!(traces.len(), 1, "{end}: {traces:?}");
+            }
+        }
+        // A host staging task: events with no span. Nothing is written.
+        let t = tempfile::tempdir().unwrap();
+        let (m, _, _) = open(t.path());
+        let mut staged = EventEnvelope::new("m1", "learn.staged", json!({"id": "n1", "trigger": "host_note", "tier": "L0"}));
+        staged.task_id = Some("t_0002".into());
+        m.append(staged).await.unwrap();
+        let mut done = EventEnvelope::new("m1", "task.completed", json!({"status": "done", "reason": ""}));
+        done.task_id = Some("t_0002".into());
+        m.append(done).await.unwrap();
+        m.harvest_settled();
+        assert!(!t.path().join("traces").exists());
+    }
+
+    #[tokio::test]
+    async fn a_harvest_that_cannot_write_never_fails_the_task() {
+        let t = tempfile::tempdir().unwrap();
+        let (m, _, _) = open(t.path());
+        std::fs::write(t.path().join("traces"), "not a directory").unwrap();
+        for e in worked_after_failing("t_0001", "task.completed") {
+            m.append(e).await.expect("the task's events are recorded whatever the harvest does");
+        }
+        m.harvest_settled();
+        assert_eq!(std::fs::read_to_string(t.path().join("traces")).unwrap(), "not a directory");
+        assert!(m.replay().unwrap().iter().any(|e| e.kind == "task.completed"));
     }
 
     #[tokio::test]

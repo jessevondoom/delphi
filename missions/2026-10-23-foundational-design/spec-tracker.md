@@ -537,10 +537,10 @@ Approved by the operator on 2026-11-01 after a four-seat adversarial council rev
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
-| E1 | `schemas/episode.schema.json`, `trace_miner.rs` event harvester, daemon taint stamping, deduplication, and schema verification in `docs.rs` | built (this PR) |
-| E2 | KB indexing (`zone: episodes`), tool/skill/error tokenization in `kb_fts_ident`, and role isolation in `kb.rs` | built (this PR) |
-| E3 | Agent tool `recall_memory` and engine wiring to unified retrieval service (`specs/064`) | built (this PR) |
-| E4 | Proactive retry-ladder bridge hint injection and `/retro` candidate supersession | built (this PR) |
+| E1 | `schemas/episode.schema.json`, `trace_miner.rs` event harvester, daemon taint stamping, deduplication, and schema verification in `docs.rs` | built, corrected 2026-11-13: the schema, the harvester and its tests were built, but nothing in the daemon called `harvest_episodes`, so no episode file was ever written. Spec 108 M4 (local, not pushed) wires it: every task end (done, escalated, failed, cancelled) writes `missions/<id>/traces/<role>-<task>.md` off the task's path, at most one per task and three per mission, deduplicated against the mission's episodes, through the secret filter. Its stamping was also wrong and is fixed: the tier is the lowest `span.taint` of the task's spans capped at `internal_generated`, and `external_untrusted` with no taint event (it was `internal_empirical`); a missing time no longer becomes a fixed date |
+| E2 | KB indexing (`zone: episodes`), tool/skill/error tokenization in `kb_fts_ident`, and role isolation in `kb.rs` | built; until spec 108 M4 it indexed only files a test wrote, since none were written. The vector scope now reads a hyphenated role (`red-team-t_0001.md`) whole |
+| E3 | Agent tool `recall_memory` and engine wiring to unified retrieval service (`specs/064`) | built; it had no episodes to return before spec 108 M4 |
+| E4 | Proactive retry-ladder bridge hint injection and `/retro` candidate supersession | built; as E3, inert until episodes were written (spec 108 M4) |
 
 
 ## Fleet expansion: Administrator, Assistant, and Advocate (spec 067, approved 2026-11-01)
@@ -976,7 +976,7 @@ The operator asked, in a host session on 2026-11-13, for a review of how Delphi'
 | 108 | M1 | `recall_sessions` | not started |
 | 108 | M2 | `delphi learn keep` | not started |
 | 108 | M3 | skill lines and daemon ingest | not started |
-| 108 | M4 | the trace harvester | not started |
+| 108 | M4 | the trace harvester | built (local, not pushed): every task end writes its episode to `missions/<id>/traces/<role>-<task>.md` off the task's path (a failure is logged, never returned), stamped per A1 from the spans' taint and never from the task's ceiling, within 065 §6's quotas, and indexed in the `episodes` zone, which stays off for hosts |
 | 108 | M5 | three conformance fixes | not started |
 | 109 | Q0 | the spec | approved in advance 2026-11-13 |
 | 109 | Q0a | the `query_memory` facet leak (review amendment A3) | not started |
