@@ -137,13 +137,15 @@ pub fn render_plan(p: &Plan) -> String {
         As::Rule => format!("a {} rule (every role)", p.scope),
     };
     format!(
-        "{}\n  note:     {}\n  evidence: {}\n  from:     {} (session {}), {}\n  tier:     {} now; written as user_ratified, by you\n\nwrite {} to {}:\n{}\n",
+        "{}\n  note:     {}\n  evidence: {}\n  from:     {} (session {}), {}\n  read:     {}\n  tier:     {} now; written as user_ratified, by you\n\nwrite {} to {}:\n{}\n",
         p.note.reference(),
         p.note.summary,
         if p.evidence.is_empty() { "—" } else { &p.evidence },
         p.source,
         p.note.mission,
         p.note.timestamp,
+        // `specs/109` §13.1 item 2: what the daemon computed the session had read before writing it; information, not a gate.
+        p.note.shown_words().unwrap_or_else(|| "not recorded (staged before the daemon counted what a session read)".to_string()),
         p.note.tier,
         what,
         p.file,
@@ -232,6 +234,9 @@ mod tests {
         for (id, summary) in [("h1", NOTE), ("h2", "[host:claude-code/opus] Prefer small commits (evidence: s)")] {
             let mut e = EventEnvelope::new("host-abc", "learn.staged", json!({"id": id, "trigger": "host_note", "summary": summary, "event_seqs": [], "tier": "L0", "source": "host:claude-code/opus", "evidence": "s"}));
             e.agent = Some("builder".into());
+            if id == "h1" {
+                e.payload["shown"] = json!({"count": 2, "lowest_checked": "validated", "any_third_party": false});
+            }
             log.append(e).unwrap();
         }
         Fx { _t: t, ws }
@@ -260,6 +265,8 @@ mod tests {
         assert!(!before.contains("regenerate docs/reference"));
         let p = plan(&f.ws.home, &f.ws.dir, &lesson("builder")).unwrap();
         assert!(render_plan(&p).contains("session 7") && p.preview.contains("- **T:** before a release"), "{}", render_plan(&p));
+        // `specs/109` §13.1 item 2: the operator sees what the daemon counted the session had read before writing the note.
+        assert!(render_plan(&p).contains("\n  read:     written after reading 2 results through Delphi's daemon, lowest: validated\n"), "{}", render_plan(&p));
         let said = apply(&f.ws.home, &f.ws.dir, &p).unwrap();
         assert!(said.contains("local/memory/agents/builder/lessons.md"), "{}", said);
 

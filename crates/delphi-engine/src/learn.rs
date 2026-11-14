@@ -97,9 +97,17 @@ pub struct LiveNote {
     pub event_seqs: Vec<u64>,
     /// The last day the note may be retrieved (`specs/050` ML-3); `None` for a note that does not expire.
     pub valid_until: Option<String>,
+    /// What the daemon computed a host session was shown through it before staging this (`specs/109` §13.1 item 2); `None` for a note
+    /// no host session staged, or one staged before the stamp existed.
+    pub shown: Option<crate::host_shown::Stamp>,
 }
 
 impl LiveNote {
+    /// The stamp in words, for a note that carries one.
+    pub fn shown_words(&self) -> Option<String> {
+        self.shown.as_ref().map(crate::host_shown::Stamp::words)
+    }
+
     /// `fact` or `episode`, from the capture trigger (`specs/050` ML-1).
     pub fn kind(&self) -> &'static str {
         crate::frontmatter::kind_for_trigger(&self.trigger)
@@ -111,8 +119,14 @@ impl LiveNote {
     }
 
     pub fn to_json(&self) -> serde_json::Value {
-        serde_json::json!({"ref": self.reference(), "mission": self.mission, "id": self.id, "trigger": self.trigger, "summary": self.summary, "tier": self.tier,
-                           "task_id": self.task_id, "role": self.role, "at": self.timestamp, "event_seqs": self.event_seqs, "valid_until": self.valid_until})
+        let mut v = serde_json::json!({"ref": self.reference(), "mission": self.mission, "id": self.id, "trigger": self.trigger, "summary": self.summary, "tier": self.tier,
+                           "task_id": self.task_id, "role": self.role, "at": self.timestamp, "event_seqs": self.event_seqs, "valid_until": self.valid_until});
+        if let Some(s) = &self.shown {
+            let mut stamp = s.to_json();
+            stamp["words"] = serde_json::json!(s.words());
+            v["shown"] = stamp;
+        }
+        v
     }
 }
 
@@ -134,6 +148,7 @@ pub fn live_notes(mission: &str, events: &[EventEnvelope]) -> Vec<LiveNote> {
                     timestamp: e.timestamp.clone(),
                     event_seqs: e.payload["event_seqs"].as_array().into_iter().flatten().filter_map(|v| v.as_u64()).collect(),
                     valid_until: e.payload["valid_until"].as_str().filter(|d| crate::frontmatter::entry_date_ok(d)).map(|d| d[..10].to_string()),
+                    shown: crate::host_shown::Stamp::from_payload(&e.payload),
                 });
             }
             // A note the operator kept (`delphi learn keep`, `specs/108` M2) is closed like a resolved proposal. Note ids

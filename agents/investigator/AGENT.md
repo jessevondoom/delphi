@@ -17,6 +17,7 @@ authorized_skills:
   - hypothesis-flipping
 memory_scope: "memory/agents/investigator/"
 max_turn_budget: 25
+search_use: verify
 ---
 
 # Agent: Investigator (`agents/investigator/AGENT.md`)

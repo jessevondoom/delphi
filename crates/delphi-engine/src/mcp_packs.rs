@@ -463,6 +463,11 @@ impl Packs {
         }
     }
 
+    /// The role's default `use` for a host's searches while it is adopted (`specs/109` §13.1 item 1), from the ratified manifest.
+    pub fn search_use(&self, role: &str) -> Result<crate::host_labels::Use, String> {
+        AgentManifest::parse(&self.role_text(role)?).map(|m| m.search_use).map_err(|e| e.to_string())
+    }
+
     /// The full pack as Claude Code is given it: the pack as it was before spec 106 (`get_agent` with `detail: "full"`).
     pub fn pack(&self, role: &str, include_profile: bool) -> Result<String, String> {
         self.pack_for(role, include_profile, Detail::Full, Some("claude-code"))
@@ -570,6 +575,7 @@ impl Packs {
              {detail_lines}\
              - delphi_version: {version}\n\
              - locus: {locus}{locus_note}\n\
+             - search_use: {search_use} (the default `use` of search_kb and kb_retrieve while this role is adopted; a call's own `use` wins)\n\
              - capabilities: {cap_line}\n\
              - host_adapter: {adapter_line}\n\
              - tuned_for: tier={tier}, profile={profile}\n\
@@ -581,6 +587,7 @@ impl Packs {
             hash = &hash(body.as_bytes())[..32],
             version = env!("CARGO_PKG_VERSION"),
             tier = manifest.tier(),
+            search_use = manifest.search_use.as_str(),
             profile = manifest.cognitive_profile,
             scopes = if scopes.is_empty() { "none".to_string() } else { scopes.join(", ") },
             profile_note = if include_profile { "included" } else { "omitted" },

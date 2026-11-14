@@ -42,6 +42,8 @@ pub struct EngineService {
     open_gate: tokio::sync::Mutex<()>,
     /// Serializes what a host stages, so its count and its write are one step (`host_rpc.rs`).
     host_gate: tokio::sync::Mutex<()>,
+    /// What each host session was shown through the daemon since it last staged something (`specs/109` §13.1 item 2). Memory only.
+    shown: Mutex<crate::host_shown::Tally>,
     /// Help requested by host sessions: the task's ID to who asked and, once it finishes, what it answered (`specs/062` §6).
     helps: Arc<Mutex<HashMap<String, HelpRun>>>,
     /// `ask_family` jobs (`specs/104` §2), by (host session, ask id): the answer once the seat has given it, read once.
@@ -361,7 +363,7 @@ impl EngineService {
     pub fn new(engine: Arc<Engine>, default_mission: &str) -> Arc<EngineService> {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(String, String, String)>();
         let _ = engine.research_ask.set(tx);
-        let svc = Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), host_aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), host_gate: tokio::sync::Mutex::new(()), helps: Arc::new(Mutex::new(HashMap::new())), asks: Arc::new(Mutex::new(HashMap::new())), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())), acquire_checked: Mutex::new(0), last_operator: Default::default(), background_checked: Default::default(), background_running: Default::default(), merge_checked: Default::default(), merge_offset: Mutex::new(None), research_jobs: crate::research_jobs::Jobs::default(), panels: Arc::new(Mutex::new(HashMap::new())) });
+        let svc = Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), host_aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), host_gate: tokio::sync::Mutex::new(()), shown: Mutex::new(crate::host_shown::Tally::default()), helps: Arc::new(Mutex::new(HashMap::new())), asks: Arc::new(Mutex::new(HashMap::new())), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())), acquire_checked: Mutex::new(0), last_operator: Default::default(), background_checked: Default::default(), background_running: Default::default(), merge_checked: Default::default(), merge_offset: Mutex::new(None), research_jobs: crate::research_jobs::Jobs::default(), panels: Arc::new(Mutex::new(HashMap::new())) });
         // An approved `request_research` card (`specs/058` §20): the mission's own scope decides where the pages go.
         if tokio::runtime::Handle::try_current().is_ok() {
             let weak = Arc::downgrade(&svc);
@@ -448,13 +450,14 @@ impl EngineService {
         crate::host_recall::stamp_cwd(&m.dir, &c.cwd); // specs/108 A5: a session with no project is recalled only in its own folder
         let events = m.replay().map_err(engine_err)?;
         let already = h::proposals_in(&events);
-        let e = build(already).map_err(host_err)?;
+        let mut e = build(already).map_err(host_err)?;
         // A note the operator dropped from this session is not staged again while it is unchanged (`specs/083` §5).
         if !summary && crate::learn::host_note_dismissed(&events, e.payload["summary"].as_str().unwrap_or(""), "L0", delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339())) {
             return Ok(json!({"staged": false, "reason": "the operator dropped this note earlier; it is offered again only with new evidence or after 90 days", "tier": "L0", "count": already}));
         }
         let id = e.payload["id"].as_str().unwrap_or("").to_string();
         let dup = h::duplicate_of(&events, &e); // specs/083 S4: this session's own mission log only
+        self.stamp_shown(&c.mission(), &mut e.payload); // specs/109 §13.1 item 2
         m.append(e).await.map_err(engine_err)?;
         let mut out = json!({"staged": true, "ref": format!("{}/{}", m.id, id), "tier": "L0", "count": already + 1});
         if let Some(d) = dup {
@@ -527,8 +530,9 @@ impl EngineService {
         let _gate = self.host_gate.lock().await;
         let m = self.mission_at(Some(&c.mission()), c.cwd.to_str()).await?;
         let events = m.replay().map_err(engine_err)?;
-        let e = h::kb_entry_event(&c, &p, h::proposals_in(&events), h::kb_entries_in(&events)).map_err(host_err)?;
+        let mut e = h::kb_entry_event(&c, &p, h::proposals_in(&events), h::kb_entries_in(&events)).map_err(host_err)?;
         let id = e.payload["id"].as_str().unwrap_or("").to_string();
+        self.stamp_shown(&c.mission(), &mut e.payload); // specs/109 §13.1 item 2
         m.append(e).await.map_err(engine_err)?;
         Ok(json!({"staged": true, "ref": format!("{}/{}", m.id, id), "tier": "L0", "searchable": false, "next": "the operator keeps or discards it with `delphi kb review`; until then it is not in kb_search"}))
     }
@@ -593,6 +597,7 @@ impl EngineService {
             "status": "noted", "taint": "external_untrusted", "private": private, "noted": {"topic": parsed.topic, "role": parsed.role, "rung": parsed.rung, "claims": facts, "origin": {"tool": c.tool, "session": c.session}}}));
         ev.agent = None;
         let reference = format!("{}/{}", m.id, id);
+        self.stamp_shown(&c.mission(), &mut ev.payload); // specs/109 §13.1 item 2
         m.append(ev).await.map_err(engine_err)?;
         // Write the note to its scope's staged files now, not at the next index refresh: the host's own `search_kb` reads them from there
         // (`specs/098` §7.2: searchable at once). A projection of the log, like `status.md`; a failure here is ignored, the log is the truth.
@@ -1708,7 +1713,32 @@ impl EngineService {
         if !private_seen.is_empty() {
             self.private_read_mark(&mark_key, &mark_cwd, &private_seen, "host.search_kb").await;
         }
+        // `specs/109` §13.1 item 2: what this answer showed the session counts toward the stamp on what it stages next.
+        let reads = crate::host_shown::reads_of_search(&out);
+        self.shown.lock().unwrap().record(&mark_key, reads.iter().map(|(i, c, a)| (i.as_str(), c.as_str(), a.as_str())));
         Ok(out)
+    }
+
+    /// `host.reads_seen` (`specs/109` §13.1 item 3): Delphi's MCP process says what its own tools (`kb_retrieve`, `search_project`,
+    /// `search_memory`, `query_memory`, `get_agent`'s task section) returned to this session, ids and labels only, so the tally covers
+    /// them. Labels outside the fixed vocabulary are dropped. It only adds to the tally; nothing is written anywhere else.
+    async fn host_reads_seen(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        use crate::host_rpc as h;
+        need_host(&ctx)?;
+        h::gate(&self.engine.ws.dir).map_err(host_err)?;
+        let c = h::Caller::parse(&p).map_err(host_err)?;
+        let reads = crate::host_shown::reported(&p);
+        self.shown.lock().unwrap().record(&c.mission(), reads.iter().map(|(i, c, a)| (i.as_str(), *c, *a)));
+        Ok(json!({"counted": reads.len()}))
+    }
+
+    /// Take (and reset) the tally of what host session `key` was shown, as the `shown` stamp of what it stages now. Whatever `shown` the
+    /// host put in its call is replaced: the stamp is the daemon's alone.
+    fn stamp_shown(&self, key: &str, payload: &mut Value) {
+        let stamp = self.shown.lock().unwrap().take(key);
+        if let Some(o) = payload.as_object_mut() {
+            o.insert("shown".into(), stamp.to_json());
+        }
     }
 
     /// Spec 103 M1: record that `key` was handed the text of these private entries (ids only), and log the first read of each. It changes
@@ -4107,6 +4137,7 @@ impl Extension for ServiceExt {
                 "host.record_session_summary" => svc.host_stage(params, ctx, true).await,
                 "host.handoff_put" => svc.host_handoff_put(params, ctx).await,
                 "host.route_decided" => svc.host_route_decided(params, ctx).await,
+                "host.reads_seen" => svc.host_reads_seen(params, ctx).await,
                 "host.handoff_get" => svc.host_handoff_get(params, ctx).await,
                 "host.ingest_transcript" => svc.host_ingest_transcript(params, ctx).await,
                 "host.recall_sessions" => svc.host_recall_sessions(params, ctx).await,
@@ -4577,6 +4608,77 @@ mod tests {
             assert!(!paths.is_empty(), "{mode:?}: the control finds something");
         }
         assert_eq!(rpc_code_of(&f, &s, json!({"query": "quokkacharter", "use": "trust me"})).await, Some(code::INVALID_PARAMS));
+    }
+
+    /// `specs/109` §13.1 item 2: what a host session stages is stamped with what the daemon computed it was shown since its last staging:
+    /// a note after no search carries a zero count; one after a search that returned third-party text says so; the tally resets at
+    /// staging; a `shown` the host sends is ignored; reads the MCP process reports count, with labels outside the vocabulary dropped; and
+    /// parallel reports all count. `recall_sessions` and the staged note show the stamp in words.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn what_a_host_session_stages_is_stamped_with_what_the_daemon_showed_it_and_the_host_cannot_set_the_stamp() {
+        let f = setup(vec![], 5.0, |_| {});
+        let s = serve(&f).await;
+        let (ws, home) = (f.engine.ws.dir.clone(), f.engine.ws.home.clone());
+        std::fs::create_dir_all(ws.join("local/knowledge")).unwrap();
+        std::fs::write(ws.join("local/knowledge/web-page.md"), "# Web page\n\nquokkastamp fetched words.\n").unwrap();
+        refresh_kb(&ws, &home).unwrap();
+        let role = crate::mcp_packs::Packs::new(f.engine.ws.clone()).roles().unwrap().into_iter().find(|r| r.servable).unwrap().id;
+        let (hsock, htok, cwd) = (s.host_sock.clone(), s.host.clone(), f.root.to_string_lossy().to_string());
+        let session = "abcdef0123456789";
+        blocking(move || {
+            let connect = || {
+                let mut c = Client::connect(&hsock).unwrap();
+                c.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+                c.hello(&htok).unwrap();
+                c
+            };
+            let with = |extra: Value| {
+                let mut b = json!({"session": session, "tool": "claude-code", "cwd": cwd});
+                for (k, v) in extra.as_object().unwrap() {
+                    b[k] = v.clone();
+                }
+                b
+            };
+            let mut c = connect();
+            let forged = json!({"count": 0, "lowest_checked": "ratified", "any_third_party": false});
+            c.call("host.propose_note", with(json!({"role": role, "text": "Nothing read yet.", "evidence": "e"}))).unwrap();
+            let found = c.call("host.search_kb", with(json!({"query": "quokkastamp"}))).unwrap();
+            assert!(found["third_party"].as_array().is_some_and(|a| !a.is_empty()), "the fixture returns third-party text: {found}");
+            c.call("host.propose_note", with(json!({"role": role, "text": "After the search.", "evidence": "e", "shown": forged}))).unwrap();
+            c.call("host.propose_note", with(json!({"role": role, "text": "Right after staging.", "evidence": "e"}))).unwrap();
+            let counted = c.call("host.reads_seen", with(json!({"via": "kb_retrieve", "reads": [{"id": "CHK-1", "checked": "ratified", "author": "release"}, {"id": "CHK-2", "checked": "gold", "author": "release"}, {"id": "CHK-3", "checked": "validated", "author": "nobody"}]}))).unwrap();
+            assert_eq!(counted["counted"], 1, "labels outside the vocabulary are dropped: {counted}");
+            c.call("host.record_session_summary", with(json!({"summary": "Did the thing", "shown": {"count": 99}}))).unwrap();
+            // Parallel reports from many connections all count.
+            let hs: Vec<_> = (0..8)
+                .map(|i| {
+                    let (mut c, p) = (connect(), with(json!({"via": "search_project", "reads": [{"id": format!("p{i}"), "checked": "not checked", "author": "operator"}]})));
+                    std::thread::spawn(move || c.call("host.reads_seen", p).unwrap()["counted"] == 1)
+                })
+                .collect();
+            assert!(hs.into_iter().all(|h| h.join().unwrap()));
+            c.call("host.propose_kb_entry", with(json!({"title": "Vault rotation", "body": "Keys rotate every 90 days.", "sources": ["https://wiki.example.com/v"], "shown": forged}))).unwrap();
+            // Another session of the same folder recalls this one and sees the stamp in words.
+            let recalled = c.call("host.recall_sessions", with(json!({"session": "zzzzzzzz01234567"}))).unwrap();
+            let first = &recalled["sessions"][0];
+            assert_eq!(first["session"], session, "{recalled}");
+            assert_eq!(first["summary"]["read"], "written after reading 1 result through Delphi's daemon, lowest: ratified", "{recalled}");
+            let notes = first["notes"].as_array().unwrap();
+            let read_of = |text: &str| notes.iter().find(|n| n["summary"].as_str().unwrap().contains(text)).map(|n| n["read"].clone()).unwrap_or_else(|| panic!("{text}: {recalled}"));
+            let n = crate::host_shown::reads_of_search(&found).len();
+            assert_eq!(read_of("After the search"), json!(format!("written after reading {n} result{} through Delphi's daemon, lowest: not checked, third-party text among them", if n == 1 { "" } else { "s" })));
+            assert_eq!(read_of("Nothing read yet"), json!("written after reading no results through Delphi's daemon"));
+            assert_eq!(read_of("Right after staging"), json!("written after reading no results through Delphi's daemon"), "the tally reset at staging");
+        })
+        .await;
+        let events = delphi_core::log::replay(&delphi_core::sessions::dir(&ws, &format!("host-{session}"))).unwrap();
+        let stamps: Vec<(String, Value)> = events.iter().filter(|e| e.kind == "learn.staged").map(|e| (e.payload["trigger"].as_str().unwrap_or("").to_string(), e.payload["shown"].clone())).collect();
+        assert_eq!(stamps.len(), 5, "{stamps:?}");
+        assert!(stamps[1].1["count"].as_u64().unwrap() >= 1 && stamps[1].1["any_third_party"] == true && stamps[1].1["lowest_checked"] == "not checked", "the host's forged stamp is ignored: {stamps:?}");
+        assert_eq!(stamps[3], ("host_summary".to_string(), json!({"count": 1, "lowest_checked": "ratified", "any_third_party": false})), "only the reported read counted, not the host's 99");
+        assert_eq!(stamps[4], ("host_kb_entry".to_string(), json!({"count": 8, "lowest_checked": "not checked", "any_third_party": false})), "every parallel report counted");
+        let notes = crate::learn::live_notes("host-x", &events);
+        assert!(notes.iter().all(|n| n.shown.is_some()) && notes[0].to_json()["shown"]["words"] == "written after reading no results through Delphi's daemon");
     }
 
     async fn rpc_code_of(f: &Fx, s: &Served, args: Value) -> Option<i64> {

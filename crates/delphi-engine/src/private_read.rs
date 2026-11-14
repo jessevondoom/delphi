@@ -130,7 +130,7 @@ const SEATS_CANNOT_READ: &str = "an answer written by seats that cannot read a n
 const MCP_OWN: &str = "runs in the MCP server's own process over files and the index; their file sets and zones exclude `staged` (`the_mcp_servers_own_readers_never_return_a_noted_entry`) and the index lists no private source";
 
 /// The methods of the host socket (`delphi_core::server::HOST_METHODS`).
-pub const HOST_SURFACE: [Surface; 27] = [
+pub const HOST_SURFACE: [Surface; 28] = [
     no_return("session.ping", "answers `pong`"),
     Surface { name: "host.search_kb", how: How::Marks },
     no_return("host.propose_note", WRITES),
@@ -156,6 +156,7 @@ pub const HOST_SURFACE: [Surface; 27] = [
     no_return("host.research_result", "the answer of a run over the indexed KB (no private source, no staged note) and pages the run fetched; a claim resting on a private source is counted and kept out of outbound queries; NOT VALIDATED beyond reading the run's callers"),
     no_return("host.cancel_job", WRITES),
     no_return("host.route_decided", WRITES),
+    no_return("host.reads_seen", "a write to the daemon's in-memory tally of what a host session was shown (`specs/109` §13.1 item 3): ids and labels in, a count out, never an entry's text"),
     no_return("host.ask_family", "the answer of another model family to the host's own question; it is handed no entry by the daemon"),
     no_return("host.ask_result", "see `host.ask_family`; while it runs, fixed-form progress (role, state, counts) and no model text"),
 ];
@@ -1478,7 +1479,10 @@ mod tests {
             }
         }
         let mcp = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/mcp_host.rs")).unwrap();
-        assert!(production(&mcp).contains("\"search_kb\" => query().and_then(|q| self.daemon(\"host.search_kb\""), "the MCP search_kb is the host method that marks");
+        // `specs/109` §13.1 item 1 put the choice of `use` before the call; the arm still asks the daemon's `host.search_kb` and nothing else.
+        let prod = production(&mcp);
+        let arm = prod.find("\"search_kb\" => query().and_then(|q| {").and_then(|at| prod[at..].find("\"propose_note\" =>").map(|end| &prod[at..at + end])).unwrap_or("");
+        assert!(arm.contains("self.daemon(\"host.search_kb\"") && arm.matches("self.daemon(").count() == 1, "the MCP search_kb is the host method that marks");
         // the findings, counted: the two names of the one handoff reader
         assert_eq!(HOST_SURFACE.iter().chain(MCP_SURFACE.iter()).filter(|s| matches!(s.how, How::Skips { .. })).count(), 2);
         assert_eq!(readers_skipping_the_mark(), 1, "READS has the one file-level finding (the handoff reader)");

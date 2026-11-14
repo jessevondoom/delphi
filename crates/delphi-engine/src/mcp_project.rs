@@ -874,7 +874,13 @@ impl Project {
     /// context, knowledge, library and bundles as `kb_retrieve` reads them. Each sits in `kb_retrieve`'s fence. With no index, no
     /// words to search on, nothing found or the deadline missed, the section is the heading and one line saying so.
     pub fn task_section(&self, task: &str, role: &str) -> String {
-        let line = |why: &str| format!("{}\n\n{}", TASK_HEADING, why);
+        self.task_section_with_reads(task, role).0
+    }
+
+    /// [`Project::task_section`], with the id, `checked` and `author` of each passage it carries (`specs/109` §13.1 item 3: what
+    /// `get_agent` reports to the daemon's tally).
+    pub fn task_section_with_reads(&self, task: &str, role: &str) -> (String, Vec<Value>) {
+        let line = |why: &str| (format!("{}\n\n{}", TASK_HEADING, why), Vec::new());
         let Some(ix) = self.index() else { return line("No passages: the knowledge index has not been built yet.") };
         let Some(query) = crate::retrieval::auto_query(task).or_else(|| Some(task.trim().to_string()).filter(|t| !words(t).is_empty())) else {
             return line("No passages: the task has no searchable words.");
@@ -905,6 +911,7 @@ impl Project {
         };
         let kb = crate::kb::Kb::open_readonly(&ix.db).ok();
         let (mut out, mut used, mut n) = (String::new(), 0usize, 0usize);
+        let mut reads: Vec<Value> = Vec::new();
         for h in found {
             // Memory and project paths are served only from what this session may read; any other path came from a core zone.
             if (h.rel_path.starts_with("memory/") || h.rel_path.starts_with("projects/")) && !allowed.contains(&h.rel_path) {
@@ -936,6 +943,8 @@ impl Project {
             }
             used += passage.chars().count();
             out.push_str(&format!("\n\n<!-- delphi:rag chunk_id=\"{}\" status=\"{}\" source=\"{}\" confidence=\"{}\" label=\"{}\" -->\n{}\n<!-- delphi:rag:end -->", chunk_id, status, h.pointer, confidence, h.label, passage));
+            let l = crate::host_labels::of_hit(&self.ws_dir, &h);
+            reads.push(json!({"id": chunk_id, "checked": l.checked, "author": l.author}));
             n += 1;
             if n == TASK_PASSAGES || used >= TASK_CHARS {
                 break;
@@ -944,7 +953,7 @@ impl Project {
         if n == 0 {
             return line("No passages cleared the relevance floor for this task.");
         }
-        format!("{}{}", TASK_HEADING, out)
+        (format!("{}{}", TASK_HEADING, out), reads)
     }
 }
 

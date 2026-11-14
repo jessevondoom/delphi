@@ -6,23 +6,25 @@ What a bundle can attach to. A bundle names a **host role** by its id (never a t
 
 `runs` is the manifest's `locus` (`specs/098` §3.2): `host` and `either` run where the host runs; `inside` runs only inside Delphi, where its audit trail is kept. Absent means `either`; a role with `host_servable: false` is `inside`.
 
+`search` is the manifest's `search_use` (`specs/109` §13.1): the default `use` of a host's `search_kb` and `kb_retrieve` while a host session has adopted the role with `get_agent`. `explore` shows everything visible, labelled; `verify` only validated text from ratified or empirical sources. Absent means `explore`; a call's own `use` always wins.
+
 ## Roles
 
-| id | job | default tier | runs | skills |
-| :-- | :-- | :-- | :-- | :-- |
-| `administrator` | Process Topology, Delivery Sequencer & Council Parliamentarian | workhorse | either | `work-breakdown-structures`, `critical-path-sequencing`, `council-parliamentarian`, `roadmap-sequencing`, `workspace-administration` |
-| `advocate` | User Experience Advocate, Behavioral Psychologist & Joy Specialist | workhorse | either | `persona-simulation`, `user-joy-heuristics`, `cognitive-walkthrough`, `tonal-calibration` |
-| `architect` | Systems Architect, Creative Designer & Spec Author | workhorse | either | `repo-cartography`, `ast-code-search`, `spec-authoring`, `diagram-generation`, `api-contract-design`, `trade-off-matrix`, `tui-design`, `oblique-strategies` |
-| `assistant` | Executive Assistant, Comms Triage & Operator Leverage Specialist | fast | either | `executive-briefing-distillation`, `transcript-action-extraction`, `tonal-calibration` |
-| `builder` | Lead Engineer, Builder & Verification Specialist | workhorse | either | `worktree-isolation`, `tdd-execution`, `safe-refactoring`, `git-pr-packaging`, `git-merge-and-conflict-resolution`, `ci-triage`, `spec-driven-build`, `tui-design`, `systems-pattern-catalog` |
-| `investigator` | Precision Researcher, Bug Tracker & Benchmark Specialist | fast | either | `ast-code-search`, `git-bisect-hunt`, `benchmark-profiling`, `primary-source-verification`, `competitive-swot-analysis`, `hypothesis-flipping` |
-| `messenger` | External Integrations, GitHub/API Operations & Protocol Bridge | fast | inside | `github-ops-sync`, `mcp-server-integration`, `external-comms-dispatch`, `protocol-schema-translation` |
-| `orchestrator` | Lead Orchestrator, Coach, Council Arbiter & Model Scaler | workhorse | either | `task-decomposition`, `dynamic-model-scaling`, `council-moderation`, `handoff-packaging`, `retrospective-facilitation`, `knowledge-compaction`, `review-md-distillation`, `contradiction-pruning`, `lesson-promotion`, `delphi-attribution` |
-| `red-team` | Red Team, Adversarial Critic, Threat Modeler & PR Security Auditor | workhorse | either | `review-md-audit`, `threat-modeling`, `adversarial-test-gen`, `assumption-stress-test`, `socratic-interrogation`, `spec-driven-build` |
-| `scout` | Broad Discovery, Repository Cartographer & Literature Scout | fast | either | `repo-cartography`, `literature-survey`, `multi-source-synthesis`, `dependency-audit`, `dual-horizon-search` |
-| `strategist` | Long-Horizon Strategist, Sequencer & Scope Auditor | workhorse | either | `roadmap-sequencing`, `pr-alignment-review`, `scope-creep-detection`, `risk-roi-analysis`, `strategic-pattern-matching`, `competitive-swot-analysis` |
-| `validator` | Fact-Checker, Source Assessor & Knowledge Gatekeeper | workhorse | either | `fact-validation`, `spec-driven-build` |
-| `writer` | Documentation Architect, Technical Writer & Clarity Synthesizer | workhorse | either | `documentation-architecture`, `clarity-synthesis`, `narrative-briefing`, `concision-audit`, `encyclopedia-synthesis`, `org-bundle-authoring`, `tonal-calibration` |
+| id | job | default tier | runs | search | skills |
+| :-- | :-- | :-- | :-- | :-- | :-- |
+| `administrator` | Process Topology, Delivery Sequencer & Council Parliamentarian | workhorse | either | explore | `work-breakdown-structures`, `critical-path-sequencing`, `council-parliamentarian`, `roadmap-sequencing`, `workspace-administration` |
+| `advocate` | User Experience Advocate, Behavioral Psychologist & Joy Specialist | workhorse | either | explore | `persona-simulation`, `user-joy-heuristics`, `cognitive-walkthrough`, `tonal-calibration` |
+| `architect` | Systems Architect, Creative Designer & Spec Author | workhorse | either | explore | `repo-cartography`, `ast-code-search`, `spec-authoring`, `diagram-generation`, `api-contract-design`, `trade-off-matrix`, `tui-design`, `oblique-strategies` |
+| `assistant` | Executive Assistant, Comms Triage & Operator Leverage Specialist | fast | either | explore | `executive-briefing-distillation`, `transcript-action-extraction`, `tonal-calibration` |
+| `builder` | Lead Engineer, Builder & Verification Specialist | workhorse | either | explore | `worktree-isolation`, `tdd-execution`, `safe-refactoring`, `git-pr-packaging`, `git-merge-and-conflict-resolution`, `ci-triage`, `spec-driven-build`, `tui-design`, `systems-pattern-catalog` |
+| `investigator` | Precision Researcher, Bug Tracker & Benchmark Specialist | fast | either | verify | `ast-code-search`, `git-bisect-hunt`, `benchmark-profiling`, `primary-source-verification`, `competitive-swot-analysis`, `hypothesis-flipping` |
+| `messenger` | External Integrations, GitHub/API Operations & Protocol Bridge | fast | inside | explore | `github-ops-sync`, `mcp-server-integration`, `external-comms-dispatch`, `protocol-schema-translation` |
+| `orchestrator` | Lead Orchestrator, Coach, Council Arbiter & Model Scaler | workhorse | either | explore | `task-decomposition`, `dynamic-model-scaling`, `council-moderation`, `handoff-packaging`, `retrospective-facilitation`, `knowledge-compaction`, `review-md-distillation`, `contradiction-pruning`, `lesson-promotion`, `delphi-attribution` |
+| `red-team` | Red Team, Adversarial Critic, Threat Modeler & PR Security Auditor | workhorse | either | explore | `review-md-audit`, `threat-modeling`, `adversarial-test-gen`, `assumption-stress-test`, `socratic-interrogation`, `spec-driven-build` |
+| `scout` | Broad Discovery, Repository Cartographer & Literature Scout | fast | either | explore | `repo-cartography`, `literature-survey`, `multi-source-synthesis`, `dependency-audit`, `dual-horizon-search` |
+| `strategist` | Long-Horizon Strategist, Sequencer & Scope Auditor | workhorse | either | explore | `roadmap-sequencing`, `pr-alignment-review`, `scope-creep-detection`, `risk-roi-analysis`, `strategic-pattern-matching`, `competitive-swot-analysis` |
+| `validator` | Fact-Checker, Source Assessor & Knowledge Gatekeeper | workhorse | either | verify | `fact-validation`, `spec-driven-build` |
+| `writer` | Documentation Architect, Technical Writer & Clarity Synthesizer | workhorse | either | explore | `documentation-architecture`, `clarity-synthesis`, `narrative-briefing`, `concision-audit`, `encyclopedia-synthesis`, `org-bundle-authoring`, `tonal-calibration` |
 
 ## Skills
 
