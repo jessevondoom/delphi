@@ -337,6 +337,102 @@ fn assemble(plain: Vec<String>, mut data: Vec<String>, pointer: Option<String>, 
     }
 }
 
+// ---- H2: the prompt resolves a mention (§4) ----
+
+/// How many `@word` tokens of a prompt are looked at (§4 item 1).
+pub const MAX_MENTIONS: usize = 3;
+
+/// §4 item 1: the first [`MAX_MENTIONS`] `@word` tokens of `text` at a word boundary, outside fenced code (```` ``` ```` or `~~~`
+/// lines) and inline code (backticks). A word is ASCII letters, digits, `-` and `_`. An `@` after a letter, a digit or one of
+/// `_.-+%@/\` (an email address, a path) is no mention, and neither is a word followed by `/` or `@` (a package scope, a handle
+/// with a host) or by `.` and a letter (a domain). Only the words are returned; nothing else of the prompt leaves this function.
+pub fn mentions(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut in_fence = false;
+    for line in text.lines() {
+        let t = line.trim_start();
+        if t.starts_with("```") || t.starts_with("~~~") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence {
+            continue;
+        }
+        let chars: Vec<char> = line.chars().collect();
+        let mut in_code = false;
+        let mut i = 0;
+        while i < chars.len() {
+            let c = chars[i];
+            if c == '`' {
+                in_code = !in_code;
+                i += 1;
+                continue;
+            }
+            let boundary = i == 0 || !(chars[i - 1].is_alphanumeric() || matches!(chars[i - 1], '_' | '.' | '-' | '+' | '%' | '@' | '/' | '\\'));
+            if c != '@' || in_code || !boundary {
+                i += 1;
+                continue;
+            }
+            let mut j = i + 1;
+            while j < chars.len() && (chars[j].is_ascii_alphanumeric() || chars[j] == '-' || chars[j] == '_') {
+                j += 1;
+            }
+            let ends = match chars.get(j) {
+                None => true,
+                Some('/') | Some('@') => false,
+                Some('.') => !chars.get(j + 1).is_some_and(|n| n.is_alphanumeric()),
+                Some(n) => !n.is_alphanumeric(),
+            };
+            if j > i + 1 && j - i - 1 <= 64 && ends {
+                out.push(chars[i + 1..j].iter().collect());
+                if out.len() == MAX_MENTIONS {
+                    return out;
+                }
+            }
+            i = j.max(i + 1);
+        }
+    }
+    out
+}
+
+/// Whether `get_agent` takes the operator's request as `task` (spec 109 Q4): read from the server's own tool table, so the line
+/// names the argument only once the server accepts it. Until then a `task` would be refused by the tool's schema.
+fn get_agent_takes_task() -> bool {
+    crate::mcp_host::tools().as_array().into_iter().flatten().find(|t| t["name"] == "get_agent").is_some_and(|t| t["inputSchema"]["properties"].get("task").is_some())
+}
+
+/// §4 item 2: one line per role the prompt addresses, built from ratified text and fixed words (the role's display line, its ID
+/// and the hash of the pack `get_agent` would serve). A word that resolves to no servable role prints nothing.
+pub fn mention_lines(ws_dir: &Path, text: &str, host: &str) -> Vec<String> {
+    let words = mentions(text);
+    if words.is_empty() {
+        return vec![];
+    }
+    let Some(packs) = packs_of(ws_dir) else { return vec![] };
+    let Ok(roles) = packs.roles() else { return vec![] };
+    let resolver = packs.theme_resolver();
+    let task = if get_agent_takes_task() { " and the operator's request as task" } else { "" };
+    let mut seen: Vec<String> = Vec::new();
+    let mut out = Vec::new();
+    for w in words {
+        let id = resolver.resolve(&w);
+        if seen.contains(&id) || !roles.iter().any(|r| r.id == id && r.servable) {
+            continue;
+        }
+        seen.push(id.clone());
+        let Ok(pack) = packs.pack(&id, false) else { continue };
+        let Some(hash) = pack.lines().find_map(|l| l.strip_prefix("- pack_hash: ")).map(String::from) else { continue };
+        // The plain form: an ANSI form would put escape codes into the model's context.
+        let display = packs.identity(&id, Some(host)).display("plain", false);
+        if id == "orchestrator" {
+            out.push(format!("The operator addressed {display} (role orchestrator). Call consult_orchestrator with the operator's request first; then, unless you already hold its pack (pack_hash {hash}), call get_agent with role \"orchestrator\"{task}, and print its display line before what you write as that role."));
+        } else {
+            out.push(format!("The operator addressed {display} (role {id}). Adopt it for this request: call get_agent with role \"{id}\"{task} unless you already hold its pack (pack_hash {hash}), and print its display line before what you write as that role."));
+        }
+    }
+    out
+}
+
 // ---- The plugin's hooks file (§6) ----
 
 /// Claude Code's hook events and the `delphi mcp --hook` event each runs.
@@ -545,6 +641,75 @@ mod tests {
         }
         let p = Pointer { ms: 0, tool: Some("evil\nline".into()), handoff: false, summary: Some(false) };
         assert_eq!(p.line(), format!("Last host session in this project: date unknown, tool unknown; it left no handoff; no summary was recorded; {POINTER_TAIL}"));
+    }
+
+    #[test]
+    fn mentions_are_at_a_word_boundary_outside_code_and_at_most_three() {
+        assert_eq!(mentions("@builder fix it, then @red-team review"), vec!["builder", "red-team"]);
+        assert_eq!(mentions("ask (@architect) and @scout."), vec!["architect", "scout"]);
+        assert!(mentions("mail me at dev@example.com").is_empty(), "an email address");
+        assert!(mentions("npm i @types/node").is_empty(), "a package scope");
+        assert!(mentions("see @user@github.com or @host.example").is_empty(), "a handle with a host, a domain");
+        assert!(mentions("run `@builder x` here").is_empty(), "inline code");
+        assert!(mentions("```\n@builder\n```\n~~~\n@scout\n~~~").is_empty(), "fenced code");
+        assert_eq!(mentions("```\n@scout\n```\n@writer"), vec!["writer"], "after the fence closes");
+        assert_eq!(mentions("@a @b @c @d @e"), vec!["a", "b", "c"], "at most three");
+        assert!(mentions("@ alone, @@x, @").is_empty());
+        assert!(mentions(&format!("@{}", "x".repeat(65))).is_empty(), "a word longer than a role ID can be");
+    }
+
+    #[test]
+    fn a_resolved_mention_names_the_role_its_pack_hash_and_never_echoes_the_prompt() {
+        let (_t, dir) = ws();
+        let packs = packs_of(&dir).unwrap();
+        let resolver = packs.theme_resolver();
+        let themed = resolver.display_name("builder");
+        assert_ne!(themed, "builder", "the default theme names the builder");
+        let prompt = format!("@{} please fix the SECRET-PROMPT-TEXT bug, and mail ops@example.com", themed.to_uppercase());
+        let lines = mention_lines(&dir, &prompt, "claude-code");
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        let hash = packs.pack("builder", false).unwrap().lines().find_map(|l| l.strip_prefix("- pack_hash: ").map(String::from)).unwrap();
+        assert!(lines[0].contains("(role builder)") && lines[0].contains("call get_agent with role \"builder\"") && lines[0].contains(&format!("pack_hash {hash}")), "{}", lines[0]);
+        assert!(lines[0].contains(&themed), "the display line names the role as the theme does");
+        assert!(!lines[0].contains("SECRET") && !lines[0].contains("example.com"), "nothing of the prompt is echoed");
+        assert!(!lines[0].contains('\u{1b}'), "no escape codes");
+        assert_eq!(lines[0].contains("as task"), get_agent_takes_task(), "`task` is named only when get_agent takes it");
+    }
+
+    #[test]
+    fn the_orchestrators_aliases_say_to_consult_it_first_and_unknown_or_kept_roles_print_nothing() {
+        let (_t, dir) = ws();
+        let packs = packs_of(&dir).unwrap();
+        let alias = packs.theme_resolver().display_name("orchestrator");
+        for w in ["@delphi", "@orchestrator", &format!("@{alias}")] {
+            let l = mention_lines(&dir, &format!("{w} who should do this?"), "claude-code");
+            assert_eq!(l.len(), 1, "{w}");
+            assert!(l[0].starts_with("The operator addressed ") && l[0].contains("Call consult_orchestrator with the operator's request first") && l[0].contains("role \"orchestrator\""), "{}", l[0]);
+        }
+        assert_eq!(mention_lines(&dir, "@delphi and @orchestrator", "claude-code").len(), 1, "one line per role");
+        assert!(mention_lines(&dir, "@nobody @types/node a@b.c", "claude-code").is_empty());
+        let kept: Vec<String> = packs.roles().unwrap().into_iter().filter(|r| !r.servable).map(|r| r.id).collect();
+        for k in kept {
+            assert!(mention_lines(&dir, &format!("@{k} hi"), "claude-code").is_empty(), "a role kept from hosts: {k}");
+        }
+    }
+
+    /// §2 budgets (400 ms for the brief, 150 ms for a prompt with a mention) are for a warm disk; a debug build under a loaded
+    /// test run is slower, so this asserts only the hard 2 s deadline and prints what it measured (`--nocapture`).
+    #[test]
+    fn the_brief_and_a_mention_finish_well_inside_the_deadline_on_a_warm_disk() {
+        let (_t, dir) = ws();
+        let _ = brief(&dir, Path::new("/"), None, N);
+        let _ = mention_lines(&dir, "@builder warm", "claude-code");
+        let t0 = std::time::Instant::now();
+        let b = brief(&dir, Path::new("/"), None, N);
+        let brief_ms = t0.elapsed().as_millis();
+        let t1 = std::time::Instant::now();
+        let m = mention_lines(&dir, "@builder fix it and @delphi decide", "claude-code");
+        let prompt_ms = t1.elapsed().as_millis();
+        println!("brief: {brief_ms} ms, prompt with two mentions: {prompt_ms} ms");
+        assert!(!b.is_empty() && m.len() == 2);
+        assert!(brief_ms < DEADLINE.as_millis() && prompt_ms < DEADLINE.as_millis());
     }
 
     #[test]
