@@ -89,7 +89,7 @@ A host that asks Delphi for another model family should get the answer, see that
 
 ## 105-session-hooks-for-hosts-a-brief-at-start-mention-routing-at-the-prompt-and-a-marker-at-the-end
 
-**105: Session hooks for hosts: a brief at session start, mention routing at the prompt, and a marker at the end** · approved (per source at `09e18b4d1be6`) · tier 0 · [source](../../specs/105-session-hooks-for-hosts-a-brief-at-start-mention-routing-at-the-prompt-and-a-marker-at-the-end.md)
+**105: Session hooks for hosts: a brief at session start, mention routing at the prompt, and a marker at the end** · approved (per source at `339b9f0a587e`) · tier 0 · [source](../../specs/105-session-hooks-for-hosts-a-brief-at-start-mention-routing-at-the-prompt-and-a-marker-at-the-end.md)
 
 **source excerpt, untrusted** · `specs/105-session-hooks-for-hosts-a-brief-at-start-mention-routing-at-the-prompt-and-a-marker-at-the-end.md` line 26
 

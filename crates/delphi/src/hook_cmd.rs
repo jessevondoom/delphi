@@ -1,0 +1,180 @@
+//! `delphi mcp --hook <event>` and `delphi mcp --hooks on|off|status` (`specs/105` §2, A2).
+//!
+//! `--hook` is what a host runs at its session events. It exits 0 always and prints nothing on any error, a missing workspace,
+//! the switch off, or when its 2 s deadline passes (§2). It never echoes the operator's prompt. `--hooks on` is the operator's
+//! act at a terminal: stdin must be a terminal and the operator types `yes`; there is no `--yes`.
+
+use crate::home;
+use delphi_engine::host_hooks;
+use std::io::{BufRead, IsTerminal, Write};
+use std::path::{Path, PathBuf};
+
+fn flag(args: &[String], name: &str) -> Option<String> {
+    args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
+}
+
+/// The workspace a hook serves, from the folder the host session runs in, quietly: `None` when there is none to serve.
+fn workspace_for(args: &[String], cwd: &Path) -> Option<PathBuf> {
+    let home = home::delphi_home(flag(args, "--home").as_deref());
+    let default = || home.join("workspaces").join(crate::start::DEFAULT_WORKSPACE).join("config.toml").exists().then(|| crate::start::DEFAULT_WORKSPACE.to_string());
+    let name = match home::resolve_workspace(&home, cwd, flag(args, "--workspace")) {
+        home::Resolve::Found(n) => Some(n),
+        home::Resolve::NoneRegistered(_) | home::Resolve::NotInGitRepo => default(),
+        home::Resolve::Ambiguous(_) | home::Resolve::NoSuchWorkspace(_) => None,
+    }?;
+    let dir = home.join("workspaces").join(name);
+    dir.join("config.toml").is_file().then_some(dir)
+}
+
+/// What one run of a hook prints, or `None` for nothing. Pure of the terminal: stdin is given.
+pub fn hook_output(args: &[String], event: &str, host: &str, stdin: impl std::io::Read) -> Option<String> {
+    let input = host_hooks::read_input(stdin)?;
+    let cwd = input.cwd.clone().or_else(|| std::env::current_dir().ok())?;
+    let ws = workspace_for(args, &cwd)?;
+    if !host_hooks::switch_on(&ws) {
+        return None;
+    }
+    let root = host_hooks::claude_projects_root();
+    let text = match event {
+        "session-start" => host_hooks::brief(&ws, &cwd, input.session_id.as_deref(), &host_hooks::nonce()),
+        "prompt" => {
+            // A4: the counter is the one workspace file besides the config a prompt with no `@` touches.
+            let mut lines: Vec<String> = host_hooks::count_prompt(&ws, &input, host, &cwd, root.as_deref()).map(String::from).into_iter().collect();
+            if input.prompt.as_deref().unwrap_or("").contains('@') {
+                lines.extend(host_hooks::mention_lines(&ws, input.prompt.as_deref().unwrap_or(""), host));
+            }
+            lines.join("\n")
+        }
+        _ => {
+            host_hooks::session_end(&ws, &input, host, &cwd, root.as_deref());
+            String::new()
+        }
+    };
+    host_hooks::host_output(host, event, &text)
+}
+
+/// `delphi mcp --hook <event> [--host <id>]`. Always 0.
+pub fn run_hook(args: &[String], event: Option<&str>) -> i32 {
+    let host = flag(args, "--host").unwrap_or_else(|| "claude-code".into());
+    let Some(event) = event.filter(|e| host_hooks::EVENTS.contains(e)).map(String::from) else { return 0 };
+    if !delphi_engine::mcp_hosts::HOSTS.contains(&host.as_str()) {
+        return 0;
+    }
+    let args = args.to_vec();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let out = std::panic::catch_unwind(|| hook_output(&args, &event, &host, std::io::stdin().lock())).ok().flatten();
+        let _ = tx.send(out);
+    });
+    // Past the deadline nothing is printed; the worker is ended with the process.
+    if let Ok(Some(out)) = rx.recv_timeout(host_hooks::DEADLINE) {
+        let mut so = std::io::stdout().lock();
+        let _ = so.write_all(out.as_bytes()).and_then(|_| so.write_all(b"\n")).and_then(|_| so.flush());
+    }
+    0
+}
+
+/// `delphi mcp --hooks on|off|status`.
+pub fn switch(what: Option<&str>, ws_dir: &Path) -> i32 {
+    match what {
+        Some("status") => {
+            let key = host_hooks::session_hooks_key(ws_dir);
+            let state = match key {
+                Some(true) if host_hooks::switch_on(ws_dir) => "on",
+                Some(true) => "on, but silenced: [mcp] enabled = false",
+                Some(false) => "off",
+                None => "unknown: config.toml or its [mcp] table cannot be read (the hooks print nothing)",
+            };
+            println!("session hooks: {state} ([mcp] session_hooks in {})", ws_dir.join("config.toml").display());
+            println!("hooks file: {}", hooks_file_line());
+            0
+        }
+        Some("off") => match host_hooks::set_switch(ws_dir, false) {
+            Ok(()) => {
+                println!("session hooks: off. The host's hooks print nothing from now on.");
+                0
+            }
+            Err(e) => {
+                eprintln!("delphi mcp --hooks off: {e}");
+                1
+            }
+        },
+        Some("on") => {
+            if crate::xenia_terminal::inside_an_agent_seat() {
+                eprintln!("delphi mcp --hooks on: turning the session hooks on is a human act and is refused inside an agent seat");
+                return 2;
+            }
+            if !std::io::stdin().is_terminal() {
+                eprintln!("delphi mcp --hooks on: this needs you at a terminal (stdin is not one), and there is no --yes");
+                return 2;
+            }
+            println!("At each session start, prompt and session end, your host will run `delphi mcp --hook <event>`. It reads Delphi's files, prints the team, how to address it, this project's spec names and statuses (as fenced data) and a pointer to the last session, resolves an @name you type, and at the end writes a marker of counts. It runs no model, asks the daemon nothing and approves nothing. `delphi mcp --hooks off` turns it off.");
+            print!("Type yes to turn the session hooks on: ");
+            let _ = std::io::stdout().flush();
+            let mut line = String::new();
+            if std::io::stdin().lock().read_line(&mut line).is_err() || line.trim() != "yes" {
+                eprintln!("delphi mcp --hooks on: not turned on (no yes)");
+                return 2;
+            }
+            match host_hooks::set_switch(ws_dir, true) {
+                Ok(()) => {
+                    println!("session hooks: on.");
+                    println!("hooks file: {}", hooks_file_line());
+                    0
+                }
+                Err(e) => {
+                    eprintln!("delphi mcp --hooks on: {e}");
+                    1
+                }
+            }
+        }
+        _ => {
+            eprintln!("usage: delphi mcp --hooks on|off|status");
+            2
+        }
+    }
+}
+
+/// Where the installed Claude Code plugin's hooks file is and whether it is this binary's (A7). Read-only.
+pub fn hooks_file_line() -> String {
+    let Some(h) = std::env::var("HOME").ok().filter(|h| Path::new(h).is_absolute()) else { return "unknown (HOME is unset)".into() };
+    match delphi_engine::mcp_check::check_claude_hooks(Path::new(&h), &host_hooks::claude_hooks_json()) {
+        Some((true, d)) => format!("ok: {d}"),
+        Some((false, d)) => format!("not current: {d}"),
+        None => "unknown (no Claude Code plugin folder of Delphi's could be read)".into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn a(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn a_hook_with_no_workspace_bad_input_or_an_unknown_event_prints_nothing_and_exits_zero() {
+        let t = tempfile::tempdir().unwrap();
+        let home = t.path().to_str().unwrap();
+        let input = format!("{{\"cwd\": \"{}\"}}", home);
+        assert_eq!(hook_output(&a(&["--home", home]), "session-start", "claude-code", input.as_bytes()), None, "no workspace");
+        assert_eq!(hook_output(&a(&["--home", home]), "session-start", "claude-code", &b"not json"[..]), None);
+        assert_eq!(run_hook(&a(&["--home", home]), Some("bogus")), 0);
+        assert_eq!(run_hook(&a(&["--home", home, "--host", "vim"]), Some("prompt")), 0);
+        assert_eq!(run_hook(&a(&["--home", home]), None), 0);
+    }
+
+    #[test]
+    fn hooks_on_is_refused_without_a_terminal_and_a_bad_word_is_usage() {
+        let t = tempfile::tempdir().unwrap();
+        std::fs::write(t.path().join("config.toml"), "").unwrap();
+        if !std::io::stdin().is_terminal() {
+            assert_eq!(switch(Some("on"), t.path()), 2);
+            assert!(!host_hooks::switch_on(t.path()), "nothing was written");
+        }
+        assert_eq!(switch(Some("maybe"), t.path()), 2);
+        assert_eq!(switch(Some("off"), t.path()), 0);
+        assert_eq!(host_hooks::session_hooks_key(t.path()), Some(false));
+    }
+}

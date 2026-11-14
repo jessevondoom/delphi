@@ -133,12 +133,9 @@ pub fn check_claude_code(home: &Path, binary_release: &str) -> Check {
     }
 }
 
-/// Spec 098 §4: does the host adapter shipped in the installed Claude Code plugin (`adapter.json`) match the one this binary writes
-/// into its pack headers? `Some((matches, detail))`, or `None` when the plugin's folder cannot be read safely: no plugin state, an
-/// install path outside `~/.claude/plugins` (the path comes from a file Claude Code writes, so it is read only below its own
-/// plugins folder, never through a symlink), or an unreadable file. Read-only and offline; it says nothing the release check
-/// (`check_claude_code`) has not, except that a plugin of the right release can still carry an adapter of another hash.
-pub fn check_claude_adapter(home: &Path, expected_json: &str) -> Option<(bool, String)> {
+/// The folder Claude Code installed the Delphi plugin into (user scope), read from `installed_plugins.json` and accepted only below
+/// `~/.claude/plugins` with no `..`; `None` when it cannot be read safely.
+fn claude_plugin_folder(home: &Path) -> Option<std::path::PathBuf> {
     let plugins = home.join(".claude").join("plugins");
     let installed = safe_read(&plugins.join("installed_plugins.json")).ok()??;
     let doc: serde_json::Value = serde_json::from_slice(&installed).ok()?;
@@ -150,6 +147,30 @@ pub fn check_claude_adapter(home: &Path, expected_json: &str) -> Option<(bool, S
     if !install.is_absolute() || !install.starts_with(&plugins) || install.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
         return None;
     }
+    Some(install.to_path_buf())
+}
+
+/// Spec 105 §6, A7: is the installed Claude Code plugin's `hooks/hooks.json` the one this binary generates? `Some((same, detail))`,
+/// with the file's path in the detail, or `None` when the plugin's folder cannot be read safely (as [`check_claude_adapter`]).
+pub fn check_claude_hooks(home: &Path, expected_json: &str) -> Option<(bool, String)> {
+    let install = claude_plugin_folder(home)?;
+    let path = install.join("hooks").join("hooks.json");
+    match safe_read(&path) {
+        Ok(Some(bytes)) if bytes == expected_json.as_bytes() => Some((true, format!("installed at {} (the three hooks this binary declares)", path.display()))),
+        Ok(Some(_)) => Some((false, format!("{} differs from the hooks this binary declares; update the plugin (`claude plugin update {PLUGIN_KEY}`)", path.display()))),
+        Ok(None) if install.is_dir() => Some((false, format!("the installed plugin has no hooks file (it predates spec 105; expected at {})", path.display()))),
+        _ => None,
+    }
+}
+
+/// Spec 098 §4: does the host adapter shipped in the installed Claude Code plugin (`adapter.json`) match the one this binary writes
+/// into its pack headers? `Some((matches, detail))`, or `None` when the plugin's folder cannot be read safely: no plugin state, an
+/// install path outside `~/.claude/plugins` (the path comes from a file Claude Code writes, so it is read only below its own
+/// plugins folder, never through a symlink), or an unreadable file. Read-only and offline; it says nothing the release check
+/// (`check_claude_code`) has not, except that a plugin of the right release can still carry an adapter of another hash.
+pub fn check_claude_adapter(home: &Path, expected_json: &str) -> Option<(bool, String)> {
+    let install = claude_plugin_folder(home)?;
+    let install = install.as_path();
     let ours = crate::mcp_hosts::adapter_hash(expected_json);
     match safe_read(&install.join("adapter.json")) {
         Ok(Some(bytes)) => {
@@ -384,6 +405,28 @@ mod tests {
         std::fs::remove_file(install.join("adapter.json")).unwrap();
         std::os::unix::fs::symlink(outside.join("adapter.json"), install.join("adapter.json")).unwrap();
         assert!(check_claude_adapter(t.path(), &want).is_none(), "a symlink is not followed");
+    }
+
+    #[test]
+    fn the_hooks_file_in_the_installed_plugin_is_compared_with_this_binarys_and_never_followed_through_a_symlink() {
+        let want = crate::host_hooks::claude_hooks_json();
+        let t = tempfile::tempdir().unwrap();
+        let install = t.path().join(".claude/plugins/cache/delphi/delphi/0.6.0");
+        write(t.path(), ".claude/plugins/installed_plugins.json", &format!(r#"{{"version":2,"plugins":{{"delphi@delphi":[{{"scope":"user","version":"0.6.0","installPath":{}}}]}}}}"#, serde_json::json!(install.to_str().unwrap())));
+        assert!(check_claude_hooks(t.path(), &want).is_none(), "no folder, nothing to say");
+        std::fs::create_dir_all(install.join("hooks")).unwrap();
+        let (ok, why) = check_claude_hooks(t.path(), &want).unwrap();
+        assert!(!ok && why.contains("no hooks file"), "{why}");
+        std::fs::write(install.join("hooks/hooks.json"), &want).unwrap();
+        let (ok, why) = check_claude_hooks(t.path(), &want).unwrap();
+        assert!(ok && why.contains("hooks/hooks.json"), "{why}");
+        std::fs::write(install.join("hooks/hooks.json"), want.replace("session-end", "x")).unwrap();
+        assert!(!check_claude_hooks(t.path(), &want).unwrap().0);
+        std::fs::remove_file(install.join("hooks/hooks.json")).unwrap();
+        let elsewhere = t.path().join("h.json");
+        std::fs::write(&elsewhere, &want).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, install.join("hooks/hooks.json")).unwrap();
+        assert!(check_claude_hooks(t.path(), &want).is_none(), "a symlink is not followed");
     }
 
     #[test]

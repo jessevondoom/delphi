@@ -1,0 +1,13 @@
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [ { "type": "command", "command": "delphi mcp --hook session-start --host claude-code" } ] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "delphi mcp --hook prompt --host claude-code" } ] }
+    ],
+    "SessionEnd": [
+      { "hooks": [ { "type": "command", "command": "delphi mcp --hook session-end --host claude-code" } ] }
+    ]
+  }
+}
