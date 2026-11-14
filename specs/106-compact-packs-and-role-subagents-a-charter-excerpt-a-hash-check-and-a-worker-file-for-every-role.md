@@ -151,3 +151,21 @@ The operator asked on 2026-11-14 for approaches to the gaps left after the first
 | :-- | :-- | --: |
 | G2 | the subagent-start hook, inlined packs for other hosts, `--check` staleness, one live run | 8-10 |
 | G1 | the markers, names-only skill index in compact, the bound asserted, §9 re-measured | 4-6 |
+
+## 12. Follow-up: a role's colour and weight in the host (operator, 2026-11-14)
+
+The operator asked on 2026-11-14 whether the console's treatment of an agent (its badge in its own colour, its name in the same colour and a slightly heavier weight) can reach the host. It can in three places, and not in a fourth. Colours come from the ratified theme, as the console's do; a theme still changes display only.
+
+**G6.**
+
+1. **Subagents carry the role's colour.** Where a host's agent file has a colour field (Claude Code's does), every generated seat and worker file sets it to the nearest name in that host's palette to the role's theme colour, by a fixed table from the theme's colour to the palette, so a role's subagent is shown in its colour by the host itself. A host with no such field gets none. Two roles may share a palette name when the palette is smaller than the roster; the table keeps the orchestrator, architect, builder and red-team distinct.
+2. **The status line names who is speaking, in colour.** `delphi mcp --statusline [--host <id>]` prints one line for a host's status line: the badge and name of the role the session most recently adopted, in that role's true colour and bold, by ANSI codes (plain when `NO_COLOR` is set or `[mcp] badge_style` is `plain`; `badge_mode` picks the dark or light pair, as today). It reads a small per-session file the `prompt` hook and `get_agent` keep (the role ID and a time, nothing else) and prints nothing when no role is adopted or the file is older than the session. It reads no workspace text and asks the daemon nothing. Delphi does not write the host's settings: the guide gives the one line an operator adds to use it, and `delphi mcp --check` says whether it is set.
+3. **The name is bold where text allows it.** With `[mcp] badge_style = "markdown"` the identity line a role prints is already bold. `delphi connect` and the guide say so, and the session brief's roster uses the same form when the style is `markdown`.
+4. **Not possible: colour inside the model's own text.** A host renders what the model writes as Markdown, which has no colour; an ANSI code there is shown as stray characters or dropped. So a role's line in the transcript can be bold and cannot be coloured. The `ansi` form stays for surfaces that render it (the status line, a terminal that prints a tool result raw).
+
+**Tests.** Each release role's colour maps to a palette name and the four named roles get four different names; a generated Claude Code seat and worker file carries the field and a host without one does not; the status line prints the adopted role in its colour, plain under `NO_COLOR`, and nothing with no role; it never prints text from a project or a session. One live check in Claude Code (at most six model calls) records in §9 whether the subagent colour and the status line show.
+
+| Slice | Content | Hours |
+| :-- | :-- | --: |
+| G6 | the colour field in agent files, `--statusline`, the guide lines, one live check | 6-8 |
+

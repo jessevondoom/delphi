@@ -85,12 +85,18 @@
       "line": 134,
       "number": "11",
       "title": "Follow-up: a worker that always has its pack, and an orchestrator pack inside its bound (operator, 2026-11-14)"
+    },
+    {
+      "level": 2,
+      "line": 155,
+      "number": "12",
+      "title": "Follow-up: a role's colour and weight in the host (operator, 2026-11-14)"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/106-compact-packs-and-role-subagents-a-charter-excerpt-a-hash-check-and-a-worker-file-for-every-role.md",
-    "sha256": "851c052dd381b5932d1fe56cbb8ce689e2ec7a6be5bee04d3aadd9329a926ec4"
+    "sha256": "d11a5529a250773754485bf7f80ebd6909c5a678d8ff072c4abb40aff16482c7"
   },
   "source_status_at_hash": {
     "line": {
@@ -103,7 +109,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-13, in a host session (\"approve all your plans and suggestions and go\"). The approval was given to the plan this spec carries out (workstream 2: a deterministic governance digest with the full charter by reference, `pack_hash` in `list_roles`, fetch-if-changed, agent files for every role) BEFORE this text was written; the operator has not read the text."
     },
-    "sha256": "851c052dd381b5932d1fe56cbb8ce689e2ec7a6be5bee04d3aadd9329a926ec4",
+    "sha256": "d11a5529a250773754485bf7f80ebd6909c5a678d8ff072c4abb40aff16482c7",
     "word": "approved"
   },
   "spec": {
