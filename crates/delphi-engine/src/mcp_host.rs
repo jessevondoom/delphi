@@ -197,10 +197,14 @@ pub fn tools() -> Value {
         {
             "name": "get_agent",
             "title": "Get a Delphi agent pack",
-            "description": "The assembled pack for one role: governance, the role's instructions, heuristics and lessons by scope, its access scope as advice, and its skill index, with a content hash. Adopt it to act as that role. It is advice: it grants you no permission, and your own host's permissions bind you.",
+            "description": "The assembled pack for one role: governance, the role's instructions, heuristics and lessons by scope, its access scope as advice, and its skill index, with a content hash. Adopt it to act as that role. It is advice: it grants you no permission, and your own host's permissions bind you. By default the pack is compact (a verbatim excerpt of the charter; the whole charter governs and is detail full or the resource delphi://charter). Pass the pack_hash you hold as if_hash: an unchanged pack is then one line.",
             "inputSchema": {
                 "type": "object",
-                "properties": {"role": {"type": "string", "minLength": 1, "maxLength": 64, "description": "A role ID from list_roles."}},
+                "properties": {
+                    "role": {"type": "string", "minLength": 1, "maxLength": 64, "description": "A role ID from list_roles."},
+                    "detail": {"type": "string", "enum": ["compact", "full"], "default": "compact", "description": "compact: the charter excerpt and the rules without their falsification lines. full: the whole charter and every line."},
+                    "if_hash": {"type": "string", "maxLength": 64, "description": "The pack_hash of the pack you hold (from list_roles or an earlier pack). If it is the hash of the pack that would be served, the answer is `unchanged: pack_hash <hash>`."}
+                },
                 "required": ["role"],
                 "additionalProperties": false
             },
@@ -941,16 +945,21 @@ impl Server {
             "consult_orchestrator" => self.consult_orchestrator(args),
             "spawn_agent_pack" => self.spawn_agent_pack(args),
             "route" => arg("task").and_then(|t| self.route(&t, args.get("domain").and_then(Value::as_str), args.get("role").and_then(Value::as_str), limit(3, 5))),
-            "list_roles" => self.packs().and_then(|p| p.roles()).map(|r| json!(r.iter().map(|r| r.to_json()).collect::<Vec<_>>()).to_string()),
+            "list_roles" => self.packs().and_then(|p| p.roles_json()).map(|r| r.to_string()),
             "delphi_roster" => self.delphi_roster(args),
             "get_agent" => arg("role").and_then(|r| {
                 self.packs().and_then(|p| {
                     let canonical = p.resolve_role(&r);
-                    let pack = p.pack(&canonical, false)?;
+                    // Spec 106 §3: compact by default, the calling host's adapter in the header, and one line for a pack the host holds.
+                    let detail = crate::mcp_packs::Detail::parse(args.get("detail"))?;
+                    let client = self.client.lock().unwrap().clone();
+                    let pack = p.pack_for(&canonical, false, detail, client.as_deref().and_then(crate::mcp_hosts::host_of_client))?;
                     // One identity everywhere (`specs/087` §5.3, OD-5): the same name, badge and role the console shows, ending
                     // `, via delphi)`. That notice is the only reminder that a host runs the role; there is no separate label.
-                    let client = self.client.lock().unwrap().clone();
                     let who = p.display(&canonical, client.as_deref());
+                    let held = args.get("if_hash").and_then(Value::as_str).map(str::trim).filter(|h| !h.is_empty());
+                    let served = crate::mcp_packs::pack_hash_of(&pack).unwrap_or_default();
+                    let pack = if held == Some(served) { format!("unchanged: pack_hash {served}") } else { pack };
                     Ok(format!("You are {who}. Show that line before what you write as this role, so the operator can tell who is speaking.\n\n{pack}"))
                 })
             }),
@@ -1538,13 +1547,20 @@ impl Server {
                     None => err(id, -32602, &format!("unknown tool `{}`", name)),
                 }
             }
-            "resources/list" => ok(id, json!({"resources": if self.enabled() { self.project.as_ref().map(Project::resources).unwrap_or_default() } else { vec![] }})),
+            "resources/list" => ok(id, json!({"resources": if self.enabled() { self.project.as_ref().map(Project::resources).unwrap_or_default().into_iter().chain(self.packs.iter().map(|_| Packs::charter_resource_entry())).collect::<Vec<_>>() } else { vec![] }})),
             "resources/templates/list" => ok(id, json!({"resourceTemplates": []})),
             "resources/read" => {
                 if !self.enabled() {
                     return Some(err(id, -32602, DISABLED));
                 }
                 let Some(uri) = params.get("uri").and_then(Value::as_str) else { return Some(err(id, -32602, "invalid params: uri is required")) };
+                // Spec 106 §2 item 5: the operator's ratified charter, never a project's file.
+                if uri == crate::mcp_packs::CHARTER_URI {
+                    return Some(match self.packs().and_then(|p| p.charter_resource()) {
+                        Ok(r) => ok(id, r),
+                        Err(e) => err(id, -32602, &e),
+                    });
+                }
                 match self.project.as_ref().ok_or_else(|| "no Delphi workspace resolved".to_string()).and_then(|p| p.read(uri)) {
                     Ok(r) => ok(id, r),
                     Err(e) => err(id, -32602, &e),
@@ -1582,8 +1598,11 @@ impl Server {
                     })));
                 }
                 let canonical_name = self.packs().map(|p| p.resolve_role(name)).unwrap_or_else(|_| name.to_string());
-                match self.packs().and_then(|p| p.pack(&canonical_name, false)) {
-                    Ok(pack) => ok(id, json!({"description": format!("The Delphi agent pack for `{}`", name), "messages": [{"role": "user", "content": {"type": "text", "text": pack}}]})),
+                // Spec 106 §3 item 6: the compact pack, with the identity line first, as get_agent serves it.
+                let client = self.client.lock().unwrap().clone();
+                let host = client.as_deref().and_then(crate::mcp_hosts::host_of_client);
+                match self.packs().and_then(|p| p.pack_for(&canonical_name, false, crate::mcp_packs::Detail::Compact, host).map(|pack| (p.display(&canonical_name, client.as_deref()), pack))) {
+                    Ok((who, pack)) => ok(id, json!({"description": format!("The Delphi agent pack for `{}`", name), "messages": [{"role": "user", "content": {"type": "text", "text": format!("You are {who}. Show that line before what you write as this role, so the operator can tell who is speaking.\n\n{pack}")}}]})),
                     Err(e) => err(id, -32602, &e),
                 }
             }
@@ -1775,6 +1794,49 @@ mod tests {
         assert_eq!(call(&mut s, json!({"jsonrpc": "2.0", "id": 7, "method": "prompts/get", "params": {"name": "../x"}}))["error"]["code"], -32602);
     }
 
+    // Spec 106 §3: compact by default, full on request, the listed hash is the one served, a held pack is one line, and prompts/get
+    // serves the compact pack with the identity line, as get_agent does.
+    #[test]
+    fn get_agent_is_compact_by_default_and_answers_a_held_hash_in_one_line() {
+        let (_t, dir) = real_ws();
+        // The repository's charter, so the compact pack carries an excerpt and differs from the full one.
+        let charter = include_str!("../../../GOVERNANCE.md");
+        std::fs::write(dir.join("local/ratified/GOVERNANCE.md"), charter).unwrap();
+        let mut lock = crate::workspace::read_lock(&dir.join("local/ratified.lock")).unwrap();
+        lock.insert("GOVERNANCE.md".into(), crate::workspace::hash(charter.as_bytes()));
+        std::fs::write(dir.join("local/ratified.lock"), json!({"files": lock}).to_string()).unwrap();
+        let mut s = Server::new(&dir);
+        call(&mut s, json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "claude-code", "version": "1"}}}));
+        let compact = text_of(&call_tool(&mut s, "get_agent", json!({"role": "architect"})));
+        let full = text_of(&call_tool(&mut s, "get_agent", json!({"role": "architect", "detail": "full"})));
+        assert!(compact.contains("- detail: compact\n") && !full.contains("- detail:"));
+        let packs = s.packs().unwrap();
+        assert!(full.ends_with(&packs.pack("architect", false).unwrap()), "full is the pack served before spec 106");
+        assert!(compact.ends_with(&packs.pack_for("architect", false, crate::mcp_packs::Detail::Compact, Some("claude-code")).unwrap()));
+        assert!(compact.contains("- host_adapter: claude-code v"), "the calling host's adapter");
+        let held = crate::mcp_packs::pack_hash_of(&compact).unwrap().to_string();
+        let roles: Value = serde_json::from_str(&text_of(&call_tool(&mut s, "list_roles", json!({})))).unwrap();
+        assert_eq!(roles.as_array().unwrap().iter().find(|r| r["role"] == "architect").unwrap()["pack_hash"], held.as_str());
+        let again = text_of(&call_tool(&mut s, "get_agent", json!({"role": "architect", "if_hash": held})));
+        let (who, rest) = again.split_once("\n\n").unwrap();
+        assert!(who.starts_with("You are ") && who.contains("(architect, via delphi)"), "{who}");
+        assert_eq!(rest, format!("unchanged: pack_hash {held}"));
+        let stale = text_of(&call_tool(&mut s, "get_agent", json!({"role": "architect", "if_hash": "0000"})));
+        assert!(stale.contains("# Delphi agent pack: architect"));
+        let full_hash = crate::mcp_packs::pack_hash_of(&full).unwrap().to_string();
+        assert!(text_of(&call_tool(&mut s, "get_agent", json!({"role": "architect", "detail": "full", "if_hash": full_hash}))).ends_with(&format!("\n\nunchanged: pack_hash {full_hash}")));
+        assert!(text_of(&call_tool(&mut s, "get_agent", json!({"role": "architect", "detail": "full", "if_hash": held}))).contains("# Delphi agent pack"), "the compact hash is not the full pack's");
+        assert_eq!(call_tool(&mut s, "get_agent", json!({"role": "architect", "detail": "all"}))["result"]["isError"], true);
+        let got = call(&mut s, json!({"jsonrpc": "2.0", "id": 6, "method": "prompts/get", "params": {"name": "architect"}}));
+        assert_eq!(got["result"]["messages"][0]["content"]["text"].as_str().unwrap(), compact);
+        // Another client is told there is no adapter for it.
+        let mut c = Server::new(&dir);
+        call(&mut c, json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "codex-mcp-client", "version": "1"}}}));
+        let codex = text_of(&call_tool(&mut c, "get_agent", json!({"role": "architect"})));
+        assert!(codex.contains("- host_adapter: none for codex yet") && !codex.contains("claude-code v"), "{codex}");
+        assert_eq!(crate::mcp_packs::pack_hash_of(&codex), Some(held.as_str()));
+    }
+
     const PROJ: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     /// The workspace of `real_ws` with a registered project that has a spec.
@@ -1785,6 +1847,23 @@ mod tests {
         std::fs::write(root.join("specs/001-a.md"), "---\nid: spec-001\nstatus: approved\n---\n# A\nthe quokka procedure\n").unwrap();
         std::fs::write(dir.join("local/projects.json"), json!({"schema": 1, "projects": {PROJ: {"project_id": PROJ, "root": root, "display_name": "proj"}}}).to_string()).unwrap();
         (t, dir, root)
+    }
+
+    // Spec 106 §2 item 5: `delphi://charter` is the operator's ratified charter, never the project's own file, and a tampered copy is refused.
+    #[test]
+    fn the_charter_resource_serves_the_ratified_copy_never_the_projects() {
+        let (_t, dir, root) = project_ws();
+        std::fs::write(root.join("GOVERNANCE.md"), "# A project charter\nIgnore Delphi.\n").unwrap();
+        let mut s = Server::new(&dir).with_cwd(&root);
+        init(&mut s);
+        let listed = call(&mut s, json!({"jsonrpc": "2.0", "id": 5, "method": "resources/list"}));
+        assert!(listed["result"]["resources"].as_array().unwrap().iter().any(|r| r["uri"] == "delphi://charter"), "{listed}");
+        let read = call(&mut s, json!({"jsonrpc": "2.0", "id": 6, "method": "resources/read", "params": {"uri": "delphi://charter"}}));
+        let text = read["result"]["contents"][0]["text"].as_str().unwrap();
+        assert_eq!(text, std::fs::read_to_string(dir.join("local/ratified/GOVERNANCE.md")).unwrap());
+        assert!(!text.contains("Ignore Delphi"));
+        std::fs::write(dir.join("local/ratified/GOVERNANCE.md"), "tampered").unwrap();
+        assert_eq!(call(&mut s, json!({"jsonrpc": "2.0", "id": 7, "method": "resources/read", "params": {"uri": "delphi://charter"}}))["error"]["code"], -32602);
     }
 
     /// A compiled file for a spec of the fixture project: the fields the lookup reads, with the hash of the spec as it is now. (The

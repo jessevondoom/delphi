@@ -631,3 +631,7 @@ mod tests {
         assert_eq!(v["theme"]["name"].as_str(), Some("greek"));
     }
 }
+
+#[cfg(test)]
+#[path = "pack_size_tests.rs"]
+mod pack_size_tests;

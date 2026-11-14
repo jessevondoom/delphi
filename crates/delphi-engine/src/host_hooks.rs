@@ -427,8 +427,8 @@ pub fn mention_lines(ws_dir: &Path, text: &str, host: &str) -> Vec<String> {
             continue;
         }
         seen.push(id.clone());
-        let Ok(pack) = packs.pack(&id, false) else { continue };
-        let Some(hash) = pack.lines().find_map(|l| l.strip_prefix("- pack_hash: ")).map(String::from) else { continue };
+        // Spec 106 §3 item 4: the hash of the compact pack, which is what get_agent serves by default.
+        let Ok(hash) = packs.compact_pack_hash(&id) else { continue };
         // The plain form: an ANSI form would put escape codes into the model's context.
         let display = packs.identity(&id, Some(host)).display("plain", false);
         if id == "orchestrator" {
@@ -937,7 +937,9 @@ mod tests {
         let prompt = format!("@{} please fix the SECRET-PROMPT-TEXT bug, and mail ops@example.com", themed.to_uppercase());
         let lines = mention_lines(&dir, &prompt, "claude-code");
         assert_eq!(lines.len(), 1, "{lines:?}");
-        let hash = packs.pack("builder", false).unwrap().lines().find_map(|l| l.strip_prefix("- pack_hash: ").map(String::from)).unwrap();
+        // Spec 106 §3 item 4: the hash a hook names is the hash of the pack get_agent serves by default (compact), not the full one's.
+        let served = packs.pack_for("builder", false, crate::mcp_packs::Detail::Compact, Some("claude-code")).unwrap();
+        let hash = crate::mcp_packs::pack_hash_of(&served).unwrap().to_string();
         assert!(lines[0].contains("(role builder)") && lines[0].contains("call get_agent with role \"builder\"") && lines[0].contains(&format!("pack_hash {hash}")), "{}", lines[0]);
         assert!(lines[0].contains(&themed), "the display line names the role as the theme does");
         assert!(!lines[0].contains("SECRET") && !lines[0].contains("example.com"), "nothing of the prompt is echoed");

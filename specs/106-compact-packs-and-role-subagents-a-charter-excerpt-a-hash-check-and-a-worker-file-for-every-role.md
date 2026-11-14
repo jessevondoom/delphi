@@ -99,7 +99,25 @@ Objectives: a host adopts a role with one call and a pack a third of today's siz
 
 ## 9. Measured sizes
 
-To be filled when P2 is built.
+Measured when P2 was built (2026-11-13, branch `build/106`), by `crates/delphi/src/pack_size_tests.rs` on a workspace `delphi init` seeds from the repository's own files, served to Claude Code with no operator profile. Bytes of the pack text, without `get_agent`'s identity line. The test pins each compact size plus 10 percent (A3).
+
+| Role | Full pack | Compact pack |
+| :-- | --: | --: |
+| `orchestrator` | 36,370 | 25,126 |
+| `architect` | 30,008 | 18,623 |
+| `builder` | 30,261 | 18,821 |
+| `scout` | 30,877 | 19,551 |
+| `investigator` | 31,474 | 20,108 |
+| `strategist` | 29,490 | 18,101 |
+| `red-team` | 31,840 | 20,528 |
+| `writer` | 29,112 | 17,731 |
+| `messenger` | not served (`host_servable: false`) | not served |
+| `validator` | 29,597 | 18,109 |
+| `administrator` | 29,453 | 17,969 |
+| `assistant` | 28,378 | 16,890 |
+| `advocate` | 28,812 | 17,323 |
+
+The charter is 21,239 bytes; the orchestrator's excerpt, with its closing note, is 10,451 bytes (under half, as A3 asks). The compact pack is 31 percent (orchestrator) to 41 percent smaller than the full one for every served role. **Not met:** A3's bound of 24 KiB (24,576 bytes) for the orchestrator's compact pack: it is 25,126 bytes. What remains is the orchestrator's manifest (about 8 KB in the pack), its skill index (about 2 KB) and the release heuristics, none of which the compact selection may cut; reaching the bound needs `inside-only` markers in the manifest or a shorter skill index, which A3 leaves to separate work under its own review. The size test does not assert the 24 KiB bound.
 
 ## 10. Amendments from review (2026-11-13)
 

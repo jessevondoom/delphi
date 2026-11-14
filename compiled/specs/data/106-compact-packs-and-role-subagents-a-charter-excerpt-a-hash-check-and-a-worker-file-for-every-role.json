@@ -76,7 +76,7 @@
     },
     {
       "level": 2,
-      "line": 104,
+      "line": 122,
       "number": "10",
       "title": "Amendments from review (2026-11-13)"
     }
@@ -84,7 +84,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/106-compact-packs-and-role-subagents-a-charter-excerpt-a-hash-check-and-a-worker-file-for-every-role.md",
-    "sha256": "2b96f4bf3cd595dcb70ab94546e95037416fd2cc672ac563e338ee994b4942b3"
+    "sha256": "d1b0140718045fe582979abc029cc5bb0bde9f5a20780921b0112ade8e29c4c5"
   },
   "source_status_at_hash": {
     "line": {
@@ -97,7 +97,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-13, in a host session (\"approve all your plans and suggestions and go\"). The approval was given to the plan this spec carries out (workstream 2: a deterministic governance digest with the full charter by reference, `pack_hash` in `list_roles`, fetch-if-changed, agent files for every role) BEFORE this text was written; the operator has not read the text."
     },
-    "sha256": "2b96f4bf3cd595dcb70ab94546e95037416fd2cc672ac563e338ee994b4942b3",
+    "sha256": "d1b0140718045fe582979abc029cc5bb0bde9f5a20780921b0112ade8e29c4c5",
     "word": "approved"
   },
   "spec": {

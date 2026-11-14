@@ -15,9 +15,15 @@ const MAX_PACK: usize = 256 * 1024;
 /// A skill body larger than this is cut, with a note.
 const MAX_SKILL: usize = 64 * 1024;
 const MAX_NAME: usize = 64;
+/// The resource that serves the operator's ratified charter (spec 106 §2 item 5).
+pub const CHARTER_URI: &str = "delphi://charter";
+
+/// The source fingerprint the cached compact pack hashes were computed at, and the hashes by role.
+type HashCache = (Vec<(std::path::PathBuf, Option<std::time::SystemTime>, u64)>, std::collections::HashMap<String, String>);
 
 pub struct Packs {
     ws: WorkspacePaths,
+    hashes: std::sync::Mutex<HashCache>,
 }
 
 /// What `list_roles` says about one role.
@@ -132,9 +138,122 @@ fn capability_means(c: &str) -> &'static str {
     }
 }
 
+/// How much of a pack `get_agent` serves (spec 106 §3 item 1). `Compact` is the default for hosts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Detail {
+    /// The charter excerpt, rules without their falsification lines, and the manifest without its inside-only blocks.
+    Compact,
+    /// The pack as served before spec 106, byte for byte.
+    Full,
+}
+
+impl Detail {
+    /// `detail` as a tool argument: absent means compact; anything other than the two words is refused.
+    pub fn parse(v: Option<&Value>) -> Result<Detail, String> {
+        match v {
+            None => Ok(Detail::Compact),
+            Some(v) => match v.as_str() {
+                Some("compact") => Ok(Detail::Compact),
+                Some("full") => Ok(Detail::Full),
+                _ => Err("invalid arguments: `detail` is \"compact\" or \"full\"".into()),
+            },
+        }
+    }
+}
+
+/// A rule set without its falsification lines (`- **F:** ...`): the trigger and directive lines stay (spec 106 §3 item 1).
+fn drop_falsification(rules: &str) -> String {
+    rules.lines().filter(|l| !l.trim_start().starts_with("- **F:**")).collect::<Vec<_>>().join("\n")
+}
+
+const INSIDE_ONLY: &str = "<!-- inside-only -->";
+const INSIDE_ONLY_END: &str = "<!-- /inside-only -->";
+
+/// A manifest body without the blocks between `<!-- inside-only -->` and `<!-- /inside-only -->` (a block that describes a Delphi tool
+/// a host does not have). An opening marker with no closing one leaves the rest as it is: less is never cut than was marked.
+fn drop_inside_only(body: &str) -> String {
+    let mut out = String::new();
+    let mut rest = body;
+    while let Some(i) = rest.find(INSIDE_ONLY) {
+        let Some(j) = rest[i..].find(INSIDE_ONLY_END) else { break };
+        out.push_str(&rest[..i]);
+        rest = &rest[i + j + INSIDE_ONLY_END.len()..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The `pack_hash` line of a pack's header.
+pub fn pack_hash_of(pack: &str) -> Option<&str> {
+    pack.lines().find_map(|l| l.strip_prefix("- pack_hash: "))
+}
+
+/// What a compact pack's hash depends on, as file modification times and sizes: the ratified copies and their locks, the release files,
+/// the team's files, the workspace configuration and the operator's ratified files. Bundle caches are content-addressed, so a changed
+/// bundle changes the configuration or a lock here too.
+fn sources_fingerprint(ws: &WorkspacePaths) -> Vec<(std::path::PathBuf, Option<std::time::SystemTime>, u64)> {
+    fn walk(dir: &std::path::Path, out: &mut Vec<(std::path::PathBuf, Option<std::time::SystemTime>, u64)>, depth: usize) {
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        let mut entries: Vec<_> = rd.flatten().collect();
+        entries.sort_by_key(|e| e.file_name());
+        for e in entries {
+            let Ok(md) = e.metadata() else { continue };
+            if md.is_dir() {
+                if depth < 8 {
+                    walk(&e.path(), out, depth + 1);
+                }
+            } else {
+                out.push((e.path(), md.modified().ok(), md.len()));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for f in [ws.dir.join("local/ratified.lock"), ws.dir.join("config.toml"), ws.home.join("operator/ratified.lock")] {
+        let md = std::fs::metadata(&f).ok();
+        out.push((f, md.as_ref().and_then(|m| m.modified().ok()), md.map(|m| m.len()).unwrap_or(0)));
+    }
+    for d in [ws.dir.join("local/ratified"), ws.dir.join("base"), ws.dir.join("team"), ws.home.join("operator/ratified")] {
+        walk(&d, &mut out, 0);
+    }
+    out
+}
+
 impl Packs {
     pub fn new(ws: WorkspacePaths) -> Packs {
-        Packs { ws }
+        Packs { ws, hashes: Default::default() }
+    }
+
+    /// The hash of the compact pack `get_agent` serves for `role` by default (spec 106 §3 item 4). Computed once per process and again
+    /// when a source file's modification time or size changes.
+    pub fn compact_pack_hash(&self, role: &str) -> Result<String, String> {
+        let print = sources_fingerprint(&self.ws);
+        let mut cache = self.hashes.lock().unwrap_or_else(|e| e.into_inner());
+        if cache.0 != print {
+            *cache = (print, std::collections::HashMap::new());
+        }
+        if let Some(h) = cache.1.get(role) {
+            return Ok(h.clone());
+        }
+        let pack = self.pack_for(role, false, Detail::Compact, None)?;
+        let h = pack_hash_of(&pack).unwrap_or_default().to_string();
+        cache.1.insert(role.to_string(), h.clone());
+        Ok(h)
+    }
+
+    /// `list_roles`: each role as [`RoleInfo::to_json`] says it, and for a servable role the hash of its compact pack (spec 106 §3 item 4).
+    pub fn roles_json(&self) -> Result<Value, String> {
+        let roles = self.roles()?;
+        let mut out = Vec::new();
+        for r in &roles {
+            let mut v = r.to_json();
+            if r.servable {
+                if let Ok(h) = self.compact_pack_hash(&r.id) {
+                    v["pack_hash"] = json!(h);
+                }
+            }
+            out.push(v);
+        }
+        Ok(json!(out))
     }
 
     pub fn workspace(&self) -> &WorkspacePaths {
@@ -315,14 +434,56 @@ impl Packs {
         crate::research_host::ascii_badges(&self.ws.dir)
     }
 
+    /// The operator's ratified charter (`local/ratified/GOVERNANCE.md`, checked against `local/ratified.lock`), exactly as ratified,
+    /// and the short hash a charter excerpt names (spec 106 §2 item 5). Never a project's own `GOVERNANCE.md`.
+    pub fn charter(&self) -> Result<(String, String), String> {
+        let text = self.ws.ratified_workspace("GOVERNANCE.md").map_err(|e| e.to_string())?;
+        let h = hash(text.as_bytes())[..16].to_string();
+        Ok((text, h))
+    }
+
+    /// The MCP resource `delphi://charter` as `resources/list` lists it.
+    pub fn charter_resource_entry() -> Value {
+        json!({"uri": CHARTER_URI, "name": "GOVERNANCE.md", "mimeType": "text/markdown", "description": "Delphi's charter: the operator's ratified copy, read-only. A charter excerpt in an agent pack names this file's hash.", "annotations": {"audience": ["assistant", "user"]}})
+    }
+
+    /// `resources/read` of `delphi://charter`.
+    pub fn charter_resource(&self) -> Result<Value, String> {
+        let (text, _) = self.charter()?;
+        Ok(json!({"contents": [{"uri": CHARTER_URI, "mimeType": "text/markdown", "text": text}]}))
+    }
+
+    /// The full pack as Claude Code is given it: the pack as it was before spec 106 (`get_agent` with `detail: "full"`).
     pub fn pack(&self, role: &str, include_profile: bool) -> Result<String, String> {
+        self.pack_for(role, include_profile, Detail::Full, Some("claude-code"))
+    }
+
+    /// The pack for `role` at `detail`, with the header's adapter line for `host` (a host ID of [`crate::mcp_hosts::HOSTS`], or `None`
+    /// for a client Delphi cannot name). The host changes only the header, never the body, so `pack_hash` does not depend on it.
+    pub fn pack_for(&self, role: &str, include_profile: bool, detail: Detail, host: Option<&str>) -> Result<String, String> {
         let text = self.role_text(role)?;
         let (fm, _) = split_frontmatter(&text);
         if !Packs::servable(&fm) {
             return Err(format!("not_servable: the role `{}` is not offered to host agents (`host_servable: false` in its manifest); the operator can change that in the workspace's agent override", role));
         }
         let manifest = AgentManifest::parse(&text).map_err(|e| e.to_string())?;
-        let snap = self.ws.load_snapshot_with(role, include_profile).map_err(|e| e.to_string())?;
+        let mut snap = self.ws.load_snapshot_with(role, include_profile).map_err(|e| e.to_string())?;
+        let mut role_body = manifest.body.clone();
+        // Spec 106 §3 item 1: the compact pack is a different selection of the same ratified text, never a rewording.
+        let mut charter_state = "full";
+        if detail == Detail::Compact {
+            let (_, charter_hash) = self.charter()?;
+            match crate::charter_excerpt::excerpt(&snap.governance, role, &charter_hash) {
+                Ok(ex) => {
+                    snap.governance = ex;
+                    charter_state = "excerpt";
+                }
+                Err(_) => charter_state = "full (excerpt unavailable)",
+            }
+            snap.heuristics = drop_falsification(&snap.heuristics);
+            snap.lessons = drop_falsification(&snap.lessons);
+            role_body = drop_inside_only(&role_body);
+        }
 
         let skills = self.skills().unwrap_or_default();
         let wanted: Vec<String> = self.roles()?.into_iter().find(|r| r.id == role).map(|r| r.skills).unwrap_or_default();
@@ -335,10 +496,10 @@ impl Packs {
             .collect::<Vec<_>>()
             .join("\n");
 
-        let nonce = hash(format!("{}\0{}\0{}\0{}\0{}", snap.governance, manifest.body, snap.heuristics, snap.lessons, snap.guidance).as_bytes())[..12].to_string();
+        let nonce = hash(format!("{}\0{}\0{}\0{}\0{}", snap.governance, role_body, snap.heuristics, snap.lessons, snap.guidance).as_bytes())[..12].to_string();
         let ipr = Ipr {
             governance: snap.governance.clone(),
-            role: manifest.body.clone(),
+            role: role_body,
             persona: None,
             guidance: (!snap.guidance.is_empty()).then(|| snap.guidance.clone()),
             heuristics: snap.heuristics.clone(),
@@ -360,7 +521,6 @@ impl Packs {
         // Spec 098 §4: the pack names capabilities, never Delphi's tool names. The host maps each to its own tool (the adapter line
         // in the header says how Claude Code does); a capability the adapter does not map is unavailable, and the role says so.
         let caps = capabilities(&manifest.read, &manifest.write, &manifest.execute);
-        let adapter = crate::mcp_hosts::claude_code_adapter();
         if !caps.is_empty() {
             body.push_str("\n## Capabilities this role expects (names, not Delphi tools)\nUse your host's own tool for each. If your host has none, say so and go on without it.\n");
             for c in &caps {
@@ -376,25 +536,40 @@ impl Packs {
         scopes.dedup();
         let locus = Packs::role_locus(&fm);
         let locus_note = if locus == "inside" { " (Delphi runs this role in its own environment, where its audit trail is kept: do not run it in your host)" } else { "" };
-        let adapter_json = crate::mcp_hosts::claude_code_adapter_json();
-        let cap_line = capability_line(&caps, &adapter);
+        // Spec 106 §3 item 5: the adapter line names the calling host's adapter; only Claude Code has one today (spec 110 adds others).
+        let (cap_line, adapter_line) = if host == Some("claude-code") {
+            let adapter_json = crate::mcp_hosts::claude_code_adapter_json();
+            (
+                capability_line(&caps, &crate::mcp_hosts::claude_code_adapter()),
+                format!("claude-code v{}, hash {} (another host maps the capability names to its own tools)", crate::mcp_hosts::ADAPTER_VERSION, crate::mcp_hosts::adapter_hash(&adapter_json)),
+            )
+        } else {
+            (
+                if caps.is_empty() { "none".to_string() } else { caps.join("; ") },
+                format!("none for {} yet: no adapter maps the capability names to your tools, so they stand alone (use your host's own tool for each)", host.unwrap_or("this host")),
+            )
+        };
+        let (detail_lines, fetch_line) = match detail {
+            // The full pack's header is the one served before spec 106, byte for byte (§3 item 1): it has no detail or charter line.
+            Detail::Full => (String::new(), "Fetch again only when pack_hash changes."),
+            Detail::Compact => (format!("- detail: compact\n- charter: {charter_state}\n"), "Fetch again only when pack_hash changes: pass the hash you hold as get_agent's if_hash, and an unchanged pack is one line."),
+        };
         let header = format!(
             "# Delphi agent pack: {role}\n\
              - pack_hash: {hash}\n\
+             {detail_lines}\
              - delphi_version: {version}\n\
              - locus: {locus}{locus_note}\n\
              - capabilities: {cap_line}\n\
-             - host_adapter: claude-code v{adapter_version}, hash {adapter_hash} (another host maps the capability names to its own tools)\n\
+             - host_adapter: {adapter_line}\n\
              - tuned_for: tier={tier}, profile={profile}\n\
              - scopes_included: {scopes}\n\
              - operator_profile: {profile_note}\n\
-             - Fetch again only when pack_hash changes. Lessons learned during your session belong in your own notes, not in this pack.\n\
+             - {fetch_line} Lessons learned during your session belong in your own notes, not in this pack.\n\
              - Delphi's loop machinery (turn budgets, circuit breakers, handoff contracts, Council behaviour) does not run here. Act as this role's judgement, inside your own host's permissions.\n\n",
             role = role,
             hash = &hash(body.as_bytes())[..32],
             version = env!("CARGO_PKG_VERSION"),
-            adapter_version = crate::mcp_hosts::ADAPTER_VERSION,
-            adapter_hash = crate::mcp_hosts::adapter_hash(&adapter_json),
             tier = manifest.tier(),
             profile = manifest.cognitive_profile,
             scopes = if scopes.is_empty() { "none".to_string() } else { scopes.join(", ") },
@@ -447,6 +622,125 @@ mod tests {
         assert!(pack.contains("advice, not a grant"));
         assert!(!pack.contains("Prefers Rust"), "the operator profile is not served to a host");
         assert!(p.pack("architect", true).unwrap().contains("Prefers Rust"));
+    }
+
+    /// The full pack of `role` on the fixture, with the release number replaced so a version bump is not a change.
+    fn full_pack_golden(p: &Packs, role: &str) -> String {
+        p.pack(role, false).unwrap().replace(&format!("- delphi_version: {}\n", env!("CARGO_PKG_VERSION")), "- delphi_version: {version}\n")
+    }
+
+    // Spec 106 §3 item 1: the full pack is the pack as served before spec 106, byte for byte. The goldens were written from the code
+    // before the compact pack existed; regenerate them (`DELPHI_BLESS_PACKS=1`) only for a change that is meant to alter the full pack.
+    #[test]
+    fn the_full_pack_is_the_pack_served_before_spec_106_byte_for_byte() {
+        let (_t, p) = fixture();
+        for role in ["architect", "builder", "orchestrator", "validator"] {
+            let got = full_pack_golden(&p, role);
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/packs/full-{role}.txt"));
+            if std::env::var_os("DELPHI_BLESS_PACKS").is_some() {
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(&path, &got).unwrap();
+            }
+            let want = fs::read_to_string(&path).unwrap_or_else(|_| panic!("{} is missing: run DELPHI_BLESS_PACKS=1 cargo test -p delphi-engine --lib full_pack", path.display()));
+            assert!(got == want, "the full pack of `{role}` changed: compare with {} (regenerate with DELPHI_BLESS_PACKS=1 only if that is intended)", path.display());
+        }
+    }
+
+    fn set_ratified(p: &Packs, logical: &str, text: &str) {
+        fs::write(p.ws.dir.join("local/ratified").join(logical), text).unwrap();
+        let mut lock = read_lock(&p.ws.dir.join("local/ratified.lock")).unwrap();
+        lock.insert(logical.into(), hash(text.as_bytes()));
+        fs::write(p.ws.dir.join("local/ratified.lock"), json!({"files": lock}).to_string()).unwrap();
+    }
+
+    fn set_operator_lesson(t: &tempfile::TempDir, role: &str, text: &str) {
+        let op = t.path().join("operator");
+        let rel = format!("memory/agents/{role}/lessons.md");
+        fs::create_dir_all(op.join("ratified").join(&rel).parent().unwrap()).unwrap();
+        fs::write(op.join("ratified").join(&rel), text).unwrap();
+        let mut lock = read_lock(&op.join("ratified.lock")).unwrap();
+        lock.insert(rel, hash(text.as_bytes()));
+        fs::write(op.join("ratified.lock"), json!({"files": lock}).to_string()).unwrap();
+    }
+
+    // Spec 106 §2 and §3 items 1-2: the compact pack carries the charter excerpt and says so; a charter the table no longer fits is
+    // served whole, and the header says the excerpt was unavailable.
+    #[test]
+    fn the_compact_pack_carries_the_excerpt_and_fails_closed_to_the_whole_charter() {
+        let (_t, p) = fixture();
+        let compact = |p: &Packs| p.pack_for("architect", false, Detail::Compact, Some("claude-code")).unwrap();
+        // The fixture's charter is not shaped like the real one: the whole of it is served.
+        let c = compact(&p);
+        assert!(c.contains("- detail: compact\n- charter: full (excerpt unavailable)\n") && c.contains("Never exceed your role's scope"), "{c}");
+        set_ratified(&p, "GOVERNANCE.md", include_str!("../../../GOVERNANCE.md"));
+        let full = p.pack("architect", false).unwrap();
+        let c = compact(&p);
+        assert!(c.contains("- detail: compact\n- charter: excerpt\n"), "{c}");
+        assert!(c.contains("| `architect` | Designs systems") && !c.contains("| `builder` |") && !c.contains("12. **An Advance Authorization"));
+        assert!(c.contains(crate::charter_excerpt::SECTION_5_12_NOTE));
+        let (_, charter_hash) = p.charter().unwrap();
+        assert!(c.contains(&format!("(hash {charter_hash})")), "the note names the ratified charter's hash");
+        assert!(full.contains("12. **An Advance Authorization") && !full.contains("- detail:") && !full.contains("- charter:"));
+        assert_eq!(c.matches("<governance").count(), 1, "the precedence wrapper and nonce are kept");
+        assert!(c.contains(delphi_adapter::ipr::GOVERNANCE_PRECEDENCE));
+        assert!(c.len() < full.len());
+        assert_ne!(pack_hash_of(&c), pack_hash_of(&full), "the two details have different hashes");
+        assert_eq!(c, compact(&p), "byte-stable");
+    }
+
+    // Spec 106 §3 item 1: a rule keeps its trigger and directive and drops its falsification line, in compact only.
+    #[test]
+    fn the_compact_pack_drops_falsification_lines_and_inside_only_blocks() {
+        let (t, p) = fixture();
+        set_operator_lesson(&t, "architect", "---\nid: l\n---\n### [L-1] Lesson\n- **T:** When a spec grows.\n- **D:** Cut it in two.\n- **F:** Long specs go unread.\n");
+        let c = p.pack_for("architect", false, Detail::Compact, Some("claude-code")).unwrap();
+        let f = p.pack("architect", false).unwrap();
+        assert!(c.contains("- **T:** When a spec grows.") && c.contains("- **D:** Cut it in two.") && !c.contains("Long specs go unread"));
+        assert!(f.contains("- **F:** Long specs go unread."));
+        assert_eq!(drop_inside_only("a\n<!-- inside-only -->\nuse council-barrier\n<!-- /inside-only -->\nb"), "a\n\nb");
+        assert_eq!(drop_inside_only("a <!-- inside-only --> x <!-- /inside-only --> b <!-- inside-only --> y <!-- /inside-only --> c"), "a  b  c");
+        assert_eq!(drop_inside_only("a <!-- inside-only --> no end"), "a <!-- inside-only --> no end", "an unclosed marker cuts nothing");
+        assert_eq!(drop_falsification("- **T:** t\n  - **F:** f\n- **D:** d"), "- **T:** t\n- **D:** d");
+        assert_eq!(Detail::parse(None), Ok(Detail::Compact));
+        assert_eq!(Detail::parse(Some(&json!("full"))), Ok(Detail::Full));
+        assert!(Detail::parse(Some(&json!("all"))).is_err() && Detail::parse(Some(&json!(1))).is_err());
+    }
+
+    // Spec 106 §3 item 5: the header names the calling host's adapter; a host with none is told so in one line and the capability
+    // names stand alone. The host never changes the body, so the hash is the same for every host.
+    #[test]
+    fn the_adapter_line_names_the_calling_hosts_adapter_or_says_there_is_none() {
+        let (_t, p) = fixture();
+        let at = |h: Option<&str>| p.pack_for("architect", false, Detail::Compact, h).unwrap();
+        let claude = at(Some("claude-code"));
+        assert!(claude.contains("- capabilities: read -> Read; search_code -> Grep; edit -> Edit\n") && claude.contains("- host_adapter: claude-code v"));
+        for (h, name) in [(Some("codex"), "codex"), (Some("copilot"), "copilot"), (Some("agy"), "agy"), (None, "this host")] {
+            let other = at(h);
+            assert!(other.contains("- capabilities: read; search_code; edit\n"), "{other}");
+            assert!(other.contains(&format!("- host_adapter: none for {name} yet: no adapter maps the capability names to your tools, so they stand alone")), "{other}");
+            assert!(!other.contains("claude-code v") && !other.contains("-> Read"));
+            assert_eq!(other.lines().filter(|l| l.starts_with("- host_adapter:")).count(), 1);
+            assert_eq!(pack_hash_of(&other), pack_hash_of(&claude), "{name}");
+        }
+        assert_eq!(crate::mcp_hosts::host_of_client("claude-code"), Some("claude-code"));
+        assert_eq!(crate::mcp_hosts::host_of_client("codex-mcp-client"), Some("codex"));
+        assert_eq!(crate::mcp_hosts::host_of_client("t"), None);
+    }
+
+    // Spec 106 §3 item 4: the listed hash is the compact pack's, it is cached, and a changed source changes it.
+    #[test]
+    fn list_roles_carries_the_compact_hash_and_a_changed_source_changes_it() {
+        let (t, p) = fixture();
+        let listed = |p: &Packs| p.roles_json().unwrap().as_array().unwrap().iter().find(|r| r["role"] == "architect").unwrap()["pack_hash"].as_str().unwrap().to_string();
+        let served = p.pack_for("architect", false, Detail::Compact, Some("claude-code")).unwrap();
+        let before = listed(&p);
+        assert_eq!(Some(before.as_str()), pack_hash_of(&served));
+        assert_eq!(listed(&p), before, "cached and stable");
+        set_operator_lesson(&t, "architect", "---\nid: l\n---\n### Lesson\n- a new lesson\n");
+        assert_ne!(listed(&p), before, "a changed lesson changes the listed hash");
+        set_role(&p, "strategist", "---\nid: strategist\ntitle: S\nrole: r\nhost_servable: false\ncognitive_profile: deep-reasoning\ndefault_access_scope:\n  read: ['*']\nauthorized_skills: []\n---\nBody\n");
+        let all = p.roles_json().unwrap();
+        assert!(all.as_array().unwrap().iter().find(|r| r["role"] == "strategist").unwrap().get("pack_hash").is_none(), "a role kept from hosts has no hash");
     }
 
     #[test]
