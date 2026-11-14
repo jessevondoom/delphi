@@ -130,12 +130,34 @@ pub struct Panel {
     pub kind: Option<String>,
     /// Handles to the background tasks that run the seats Delphi owns, so `cancel_job` can stop them (`specs/098` §19).
     aborts: Vec<tokio::task::AbortHandle>,
+    /// How each host stance arrived, by (round, seat): `single` (its own `council_submit`) or `batch` (in a moderator's `stances`,
+    /// `specs/104` §6, §12 A6). The server cannot tell who sent either; it records only the form.
+    submissions: BTreeMap<(u8, String), &'static str>,
+    /// One entry per Round 1 batch: the moderator's witness of independence (`specs/104` §12 A8), host-reported, or `None` without one.
+    round1_batches: Vec<Option<String>>,
+}
+
+/// The ruling's note for a Panel whose Round 1 arrived in a batch (`specs/104` §12 A3).
+pub const RELAYED_NOTE: &str = "Round 1 arrived in a moderator's batch: Delphi held the release barrier, but could not see whether the host kept its seats apart before submitting";
+
+/// Text for one front-matter line: no line breaks, no control characters.
+pub fn one_line(s: &str) -> String {
+    s.chars().map(|c| if c.is_control() { ' ' } else { c }).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// One stance of a batch (`specs/104` §6 item 2): a host seat's answer for the batch's round.
+#[derive(Debug, Clone)]
+pub struct BatchStance {
+    pub seat: String,
+    pub text: String,
+    pub abstain: Option<String>,
+    pub model: Option<String>,
 }
 
 impl Panel {
     pub fn new(proposition: &str) -> Panel {
         let seats: Vec<String> = PANEL_SEATS.iter().map(|s| s.to_string()).collect();
-        Panel { proposition: proposition.to_string(), barrier: Barrier::new(&seats), seats, released: None, answered: Vec::new(), round2: BTreeMap::new(), verdict: None, models: BTreeMap::new(), opened: std::time::Instant::now(), foreign: Vec::new(), rejections: BTreeMap::new(), blind: "unknown".into(), operator_confirmed: None, options_source: None, host_family: None, require_families: None, kind: None, aborts: Vec::new() }
+        Panel { proposition: proposition.to_string(), barrier: Barrier::new(&seats), seats, released: None, answered: Vec::new(), round2: BTreeMap::new(), verdict: None, models: BTreeMap::new(), opened: std::time::Instant::now(), foreign: Vec::new(), rejections: BTreeMap::new(), blind: "unknown".into(), operator_confirmed: None, options_source: None, host_family: None, require_families: None, kind: None, aborts: Vec::new(), submissions: BTreeMap::new(), round1_batches: Vec::new() }
     }
 
     /// Remember the task that runs one of Delphi's seats, so it can be stopped.
@@ -364,7 +386,106 @@ impl Panel {
         if self.reserved(seat) {
             return Err(PanelErr::Closed(format!("`{seat}` is run by Delphi on another model family: you do not brief or answer for it")));
         }
-        self.submit_inner(seat, round, text, abstain, model, true)
+        let step = self.submit_inner(seat, round, text, abstain, model, true)?;
+        if round < 3 {
+            self.submissions.insert((round, seat.to_string()), "single");
+        }
+        Ok(step)
+    }
+
+    /// Check a whole batch for `round` (`specs/104` §6 item 2, §12 A6) without storing anything: every seat a host seat of this Panel,
+    /// none twice, none already in, the round open for it, and every Round 2 stance in the required shape. The barrier cannot take a
+    /// stance back, so nothing is put until all of them pass. A Round 2 stance sent back for its shape counts against that seat's
+    /// retries, as a single submission does, and the error names that seat and the closing lines only, never any stance text.
+    fn check_batch(&mut self, round: u8, stances: &[BatchStance]) -> Result<(), PanelErr> {
+        if !(1..=2).contains(&round) {
+            return Err(PanelErr::BadRound(round));
+        }
+        if stances.is_empty() {
+            return Err(PanelErr::NotYet("`stances` is empty: give one stance per host seat of the round".into()));
+        }
+        let mut seen: Vec<&str> = Vec::new();
+        for st in stances {
+            let seat = st.seat.as_str();
+            self.check_seat(seat)?;
+            if self.reserved(seat) {
+                return Err(PanelErr::Closed(format!("`{seat}` is run by Delphi on another model family: you do not brief or answer for it, so it cannot be in a batch")));
+            }
+            if seen.contains(&seat) {
+                return Err(PanelErr::Closed(format!("`{seat}` is named twice in the batch: one stance per seat")));
+            }
+            seen.push(seat);
+            match round {
+                1 => {
+                    if self.released.is_some() {
+                        return Err(PanelErr::Closed("Round 1 is closed: every seat has answered".into()));
+                    }
+                    if self.barrier_has(seat) {
+                        return Err(PanelErr::Duplicate(seat.to_string()));
+                    }
+                }
+                _ => {
+                    if self.released.is_none() {
+                        return Err(PanelErr::NotYet(format!("Round 1 is not complete: waiting for {}", self.missing_round1().join(", "))));
+                    }
+                    if !self.round2_seats().iter().any(|s| s == seat) {
+                        return Err(PanelErr::Closed(format!("`{seat}` did not answer Round 1, so it has no Round 2")));
+                    }
+                    if self.round2.contains_key(seat) {
+                        return Err(PanelErr::Duplicate(seat.to_string()));
+                    }
+                }
+            }
+        }
+        if round == 2 {
+            for st in stances.iter().filter(|s| s.abstain.is_none()) {
+                if crate::council::parse_critique(&st.text).is_none() {
+                    let n = self.rejections.get(&st.seat).copied().unwrap_or(0);
+                    if n < MAX_SHAPE_REJECTIONS {
+                        self.rejections.insert(st.seat.clone(), n + 1);
+                        return Err(PanelErr::BadShape(format!("`{}`: {} Nothing of this batch was stored; resubmit the whole batch.", st.seat, round2_shape_message(&st.text, n + 1))));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// A batch of host stances for one round (`specs/104` §6 item 2): all checked first, then all stored, through the same path as a
+    /// single submission. The barrier is unchanged. `witness` is the moderator's statement that the seats ran apart (Round 1 only,
+    /// `specs/104` §12 A8). The step returned is the last one: the one that releases a round, when the batch completes it.
+    pub fn submit_batch(&mut self, round: u8, stances: &[BatchStance], witness: Option<String>) -> Result<Step, PanelErr> {
+        self.check_batch(round, stances)?;
+        let mut last = Step::Waiting(Vec::new());
+        for st in stances {
+            last = self.submit_inner(&st.seat, round, &st.text, st.abstain.as_deref(), st.model.as_deref(), false)?;
+            self.submissions.insert((round, st.seat.clone()), "batch");
+        }
+        if round == 1 {
+            self.round1_batches.push(witness);
+        }
+        Ok(last)
+    }
+
+    /// How a host stance arrived: `single` or `batch`; `None` for a seat Delphi runs or one not in.
+    pub fn submission(&self, round: u8, seat: &str) -> Option<&'static str> {
+        self.submissions.get(&(round, seat.to_string())).copied()
+    }
+
+    /// What the record and the card say about how Round 1 arrived (`specs/104` §12 A3, A8): `relayed` when any Round 1 stance came in a
+    /// batch; the independence line; and whether the Panel counts as an independent review (no Round 1 batch, or every one witnessed).
+    pub fn relay(&self) -> serde_json::Value {
+        let relayed = !self.round1_batches.is_empty();
+        let witnessed = relayed && self.round1_batches.iter().all(Option::is_some);
+        let independence = if !relayed {
+            None
+        } else if witnessed {
+            Some(format!("witnessed by the moderator (host-reported): {}", self.round1_batches.iter().flatten().cloned().collect::<Vec<_>>().join("; ")))
+        } else {
+            Some("not witnessed".to_string())
+        };
+        let submissions: BTreeMap<String, &str> = self.submissions.iter().filter(|((r, _), _)| *r == 1).map(|((_, s), how)| (s.clone(), *how)).collect();
+        serde_json::json!({"relayed": relayed, "submissions": submissions, "independence": independence, "counts_as_independent_review": !relayed || witnessed})
     }
 
     /// The answer of the seat Delphi runs itself. Only the daemon calls this.

@@ -312,6 +312,10 @@ pub struct Access {
     pub order: BTreeMap<String, Vec<String>>,
     #[serde(default)]
     pub allowed_endpoints: Option<Vec<String>>,
+    /// The operator's standing consent for read-only foreign seats, tokens per 24 hours (`specs/104` §5, §12 A4). Pinned with the rest of
+    /// `[access]`: only the ratified copy counts. 0 (the default) is off.
+    #[serde(default)]
+    pub standing_foreign_tokens: u64,
     /// Role → model family (`claude`, `gemini`, `openai` or `local`) for roles that should not use the default (`primary`).
     #[serde(default)]
     pub role_family: BTreeMap<String, String>,

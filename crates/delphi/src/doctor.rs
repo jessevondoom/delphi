@@ -196,6 +196,8 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
     check_pool(ws, home, &cfg, &mut r);
     // The family table (specs/091 SR-2): a file that does not parse, and entries past their expiry date.
     check_families(&ws.dir, &delphi_core::bundles::today(), &mut r);
+    // The standing consent for foreign seats (specs/104 §5 item 4): from the ratified copy, and what it used in the last 24 hours.
+    check_standing_consent(&ws.dir, &mut r);
 
     // 9. Sandbox (D-24): optional. Reported, never a warning unless the config asks for it and it is missing.
     let wanted = toml::from_str::<toml::Value>(&cfg).ok().and_then(|v| v.get("exec").and_then(|e| e.get("sandbox")).and_then(|s| s.as_str().map(String::from))).unwrap_or_else(|| "off".into());
@@ -772,6 +774,19 @@ fn check_families(ws_dir: &Path, today: &str, r: &mut Report) {
             }
         }
     }
+}
+
+/// `[access] standing_foreign_tokens` is read the way the daemon reads it: from the effective config, whose `[access]` is the ratified copy.
+fn check_standing_consent(ws_dir: &Path, r: &mut Report) {
+    let live = std::fs::read_to_string(ws_dir.join("config.toml")).unwrap_or_default();
+    let cap = delphi_engine::boot::effective_config(ws_dir, &live).ok().and_then(|(t, _)| toml::from_str::<toml::Value>(&t).ok()).map(|v| delphi_engine::boot::settings_from(&v).standing_foreign_tokens).unwrap_or(0);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    let msg = if cap == 0 {
+        "off ([access] standing_foreign_tokens = 0): every foreign seat needs the operator's yes for that call".to_string()
+    } else {
+        format!("[access] standing_foreign_tokens = {cap} (ratified): {} tokens used by standing-consent seats in the last 24 hours", delphi_engine::standing::used(ws_dir, now))
+    };
+    r.push(Level::Ok, "11 model families", "standing consent", msg);
 }
 
 fn check_pool(ws: &Workspace, home: &Path, cfg_text: &str, r: &mut Report) {

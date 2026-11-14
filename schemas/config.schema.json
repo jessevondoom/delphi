@@ -276,7 +276,8 @@
       "type": "object",
       "properties": {
         "order": { "type": "object", "additionalProperties": { "type": "array", "items": { "type": "string" } }, "description": "Family to endpoint IDs, in preference order." },
-        "allowed_endpoints": { "type": "array", "items": { "type": "string" } }
+        "allowed_endpoints": { "type": "array", "items": { "type": "string" } },
+        "standing_foreign_tokens": { "type": "integer", "minimum": 0, "description": "The operator's standing consent for read-only foreign seats: tokens per 24 hours they may spend without operator_confirmed on each call (specs/104 §5). 0, the default, is off. Pinned: only the ratified copy counts." }
       }
     },
     "auth": { "type": "object", "additionalProperties": { "$ref": "#/$defs/authBlock" } },

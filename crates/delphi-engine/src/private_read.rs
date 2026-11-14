@@ -129,7 +129,7 @@ const SEATS_CANNOT_READ: &str = "an answer written by seats that cannot read a n
 const MCP_OWN: &str = "runs in the MCP server's own process over files and the index; their file sets and zones exclude `staged` (`the_mcp_servers_own_readers_never_return_a_noted_entry`) and the index lists no private source";
 
 /// The methods of the host socket (`delphi_core::server::HOST_METHODS`).
-pub const HOST_SURFACE: [Surface; 24] = [
+pub const HOST_SURFACE: [Surface; 25] = [
     no_return("session.ping", "answers `pong`"),
     Surface { name: "host.search_kb", how: How::Marks },
     no_return("host.propose_note", WRITES),
@@ -154,10 +154,11 @@ pub const HOST_SURFACE: [Surface; 24] = [
     no_return("host.cancel_job", WRITES),
     no_return("host.route_decided", WRITES),
     no_return("host.ask_family", "the answer of another model family to the host's own question; it is handed no entry by the daemon"),
+    no_return("host.ask_result", "see `host.ask_family`; while it runs, fixed-form progress (role, state, counts) and no model text"),
 ];
 
 /// The tools of the MCP server (`mcp_host::tools()`).
-pub const MCP_SURFACE: [Surface; 39] = [
+pub const MCP_SURFACE: [Surface; 40] = [
     Surface { name: "search_kb", how: How::Marks },
     no_return("list_roles", PROJECT_FILES),
     no_return("delphi_roster", PROJECT_FILES),
@@ -197,6 +198,7 @@ pub const MCP_SURFACE: [Surface; 39] = [
     no_return("research_result", "see `host.research_result`"),
     no_return("cancel_job", WRITES),
     no_return("ask_family", "see `host.ask_family`"),
+    no_return("ask_result", "see `host.ask_result`"),
 ];
 
 /// The relay stream's event kinds that carry no text an agent wrote, and why. The kinds that do are `AGENT_TEXT_KINDS` (masked above). A

@@ -76,6 +76,8 @@ pub mod history_record;
 pub mod history_redact;
 pub mod history_report;
 pub mod history_view;
+pub mod mcp_serve;
+pub mod standing;
 pub mod mcp_wire;
 pub mod org_context;
 pub mod core_main;
