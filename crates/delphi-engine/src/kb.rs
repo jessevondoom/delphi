@@ -846,6 +846,14 @@ impl Kb {
         Ok((d as usize, c as usize))
     }
 
+    /// The logical path of every document the index holds that files made (the Xenia zone is left out): what a reader may ask the
+    /// index about, and what it must rank another way.
+    pub fn indexed_paths(&self) -> Result<HashSet<String>, KbError> {
+        let mut st = self.conn.prepare("SELECT rel_path FROM kb_documents WHERE zone != 'xenia'")?;
+        let rows = st.query_map([], |r| r.get::<_, String>(0))?;
+        Ok(rows.flatten().collect())
+    }
+
     /// Documents per zone, the knowledge base's own "topic area" (`missions`, `memory`, `context`, `library`, ...), by name.
     pub fn zone_counts(&self) -> Result<Vec<(String, usize)>, KbError> {
         let mut st = self.conn.prepare("SELECT zone, COUNT(*) FROM kb_documents GROUP BY zone ORDER BY zone")?;
@@ -1020,6 +1028,11 @@ fn allowed_sql(opts: &SearchOpts) -> String {
         XeniaView::Off => allowed.push_str(" AND d.zone != 'xenia'"),
         XeniaView::Agent => allowed.push_str(" AND d.zone = 'xenia' AND d.status = 'active' AND d.source_type = 'federated_verified'"),
         XeniaView::Quarantine => allowed.push_str(" AND d.zone = 'xenia' AND NOT (d.status = 'active' AND d.source_type = 'federated_verified')"),
+    }
+    if let Some(paths) = &opts.paths {
+        // Each path is quoted as an SQL string (a quote doubled), so a name cannot end the list or add a condition.
+        let list: Vec<String> = paths.iter().map(|p| format!("'{}'", p.replace('\'', "''"))).collect();
+        allowed.push_str(&if list.is_empty() { " AND 1=0".to_string() } else { format!(" AND d.rel_path IN ({})", list.join(",")) });
     }
     if let Some(b) = &opts.bundle {
         // `org` or `org/name`, plain ids only: anything else matches nothing, so it cannot widen the filter.
@@ -1356,6 +1369,9 @@ pub struct SearchOpts {
     pub zones: Option<Vec<&'static str>>,
     /// How to present summary results: as the .bib.md sidecar (default), as the .md summary page, or both (`specs/075`).
     pub summary_target: SummaryTarget,
+    /// Only documents at these logical paths (`specs/109` §2 item 1): a host tool's own corpus, listed by the tool. Narrows, never
+    /// widens; an empty list matches nothing.
+    pub paths: Option<Vec<String>>,
 }
 
 /// How summary hits are answered. Spec 068 defaults to Bibliography for agent safety;
@@ -1402,7 +1418,7 @@ pub enum Legs {
 
 impl Default for SearchOpts {
     fn default() -> Self {
-        SearchOpts { role: None, limit: 10, include_untrusted: false, include_attributed: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false, include_episodes: false, about: false, kinds: None, max_episodes: None, today: None, xenia: XeniaView::Off, zones: None, summary_target: SummaryTarget::Bibliography }
+        SearchOpts { role: None, limit: 10, include_untrusted: false, include_attributed: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false, include_episodes: false, about: false, kinds: None, max_episodes: None, today: None, xenia: XeniaView::Off, zones: None, summary_target: SummaryTarget::Bibliography, paths: None }
     }
 }
 

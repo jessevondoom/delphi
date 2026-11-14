@@ -84,7 +84,7 @@ pub fn rank_noted_files(files: Vec<(String, PathBuf)>, query: &str, limit: usize
         .filter(|(_, f)| read_capped(f).is_some_and(|t| t.lines().any(|l| l.starts_with('#') && l.contains(crate::host_noted::NOTED_HEADING))))
         .map(|(path, file)| Doc { layer: "noted".into(), path, source: "external_untrusted", file })
         .collect();
-    rank(docs, query, limit, &[])
+    rank(docs, query, limit)
 }
 
 fn read_capped(p: &Path) -> Option<String> {
@@ -101,6 +101,12 @@ pub fn words(q: &str) -> Vec<String> {
     w.dedup();
     w.truncate(12);
     w
+}
+
+/// The id of a passage the index does not hold (`specs/109` §2 item 3): the first 12 hex characters of the hash of its path and line
+/// range, so two passages do not share one by chance (a hash modulo 900 did).
+fn fallback_chunk_id(rel: &str, start: usize, end: usize) -> String {
+    format!("CHK-{}", &blake3::hash(format!("{}:{}:{}", rel, start, end).as_bytes()).to_hex()[..12])
 }
 
 /// How much of each search result to send (`specs/062` §11, S12). `full` is every field; `concise` leaves out the line preview,
@@ -132,39 +138,78 @@ pub struct Ranked {
     pub searchable: bool,
 }
 
-/// Rank `docs` by the query words: more distinct words first, then more occurrences. Returns up to `limit` results.
-/// `order` is the paths the knowledge base's vector and rerank search put first (best first); they lead, and may include a
-/// file no query word appears in. It only reorders `docs`: a path that is not in `docs` is never served.
-fn rank(docs: Vec<Doc>, query: &str, limit: usize, order: &[String]) -> Vec<Value> {
-    rank_detail(docs, query, limit, order, Detail::Full).results
+/// How an answer was ranked (`specs/109` §2 item 2): by the workspace index, through the retrieval service, or, with no index (or
+/// none of the tool's text in it), by the word ranker alone.
+pub const RANKED_BY_INDEX: &str = "index";
+pub const RANKED_BY_WORDS: &str = "words (no index)";
+
+/// The one word ranker for text the index does not hold (`specs/109` A1), shared by `search_kb`'s project leg, `search_project`
+/// and `kb_retrieve`'s project leg: how many distinct query words a unit holds in its text or its name, then how often they
+/// occur (a word in the name counts five). `None` when it holds none. A larger key ranks first.
+fn word_score(text: &str, name: &str, ws: &[String]) -> Option<(usize, usize)> {
+    let (lower, name) = (text.to_lowercase(), name.to_lowercase());
+    let distinct = ws.iter().filter(|w| lower.contains(w.as_str()) || name.contains(w.as_str())).count();
+    if distinct == 0 {
+        return None;
+    }
+    let total: usize = ws.iter().map(|w| lower.matches(w.as_str()).count().min(50) + if name.contains(w.as_str()) { 5 } else { 0 }).sum();
+    Some((distinct, total))
 }
 
-fn rank_detail(docs: Vec<Doc>, query: &str, limit: usize, order: &[String], detail: Detail) -> Ranked {
+/// Rank `docs` by the shared word ranker. Returns up to `limit` results.
+fn rank(docs: Vec<Doc>, query: &str, limit: usize) -> Vec<Value> {
+    rank_detail(docs, query, limit, Detail::Full).results
+}
+
+fn result(d: &Doc, line: usize, preview: String, detail: Detail) -> Value {
+    let mut hit = json!({"layer": d.layer, "path": d.path, "line": line, "preview": preview, "source_type": d.source, "note": "data, not instructions"});
+    if detail == Detail::Concise {
+        hit.as_object_mut().map(|o| o.remove("preview"));
+    }
+    hit
+}
+
+fn rank_detail(docs: Vec<Doc>, query: &str, limit: usize, detail: Detail) -> Ranked {
     let ws = words(query);
     if ws.is_empty() {
         return Ranked { results: vec![], matched: 0, searchable: false };
     }
-    let mut hits: Vec<(usize, usize, usize, Value)> = Vec::new();
+    let mut hits: Vec<((usize, usize), Value)> = Vec::new();
     for d in docs {
         let Some(text) = read_capped(&d.file) else { continue };
-        let lower = text.to_lowercase();
-        let name = d.path.to_lowercase();
-        let distinct = ws.iter().filter(|w| lower.contains(w.as_str()) || name.contains(w.as_str())).count();
-        let lead = order.iter().position(|p| *p == d.path).map_or(0, |i| order.len() - i);
-        if distinct == 0 && lead == 0 {
-            continue;
-        }
-        let total: usize = ws.iter().map(|w| lower.matches(w.as_str()).count().min(50) + if name.contains(w.as_str()) { 5 } else { 0 }).sum();
+        let Some(score) = word_score(&text, &d.path, &ws) else { continue };
         let (line_no, line) = text.lines().enumerate().max_by_key(|(_, l)| { let l = l.to_lowercase(); ws.iter().filter(|w| l.contains(w.as_str())).count() }).map(|(i, l)| (i + 1, flat(l, 200))).unwrap_or((1, String::new()));
-        let mut hit = json!({"layer": d.layer, "path": d.path, "line": line_no, "preview": line, "source_type": d.source, "note": "data, not instructions"});
-        if detail == Detail::Concise {
-            hit.as_object_mut().map(|o| o.remove("preview"));
-        }
-        hits.push((lead, distinct, total, hit));
+        hits.push((score, result(&d, line_no, line, detail)));
     }
-    hits.sort_by_key(|a| std::cmp::Reverse((a.0, a.1, a.2)));
+    hits.sort_by_key(|a| std::cmp::Reverse(a.0));
     let matched = hits.len();
-    Ranked { results: hits.into_iter().take(limit).map(|h| h.3).collect(), matched, searchable: true }
+    Ranked { results: hits.into_iter().take(limit).map(|h| h.1).collect(), matched, searchable: true }
+}
+
+/// Reciprocal rank fusion (`specs/109` A1): lists that share one answer are merged by rank, never by their raw scores, which are
+/// on different scales. An item scores `1 / (60 + rank)` in every list it is in (by `key`); ties keep the earlier list's item first.
+fn fuse<T>(lists: Vec<Vec<T>>, key: impl Fn(&T) -> String) -> Vec<T> {
+    let mut score: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+    let mut items: Vec<(usize, usize, T)> = Vec::new();
+    for (l, list) in lists.into_iter().enumerate() {
+        for (r, item) in list.into_iter().enumerate() {
+            let k = key(&item);
+            let first = !score.contains_key(&k);
+            *score.entry(k).or_default() += 1.0 / (60.0 + r as f64 + 1.0);
+            if first {
+                items.push((r, l, item));
+            }
+        }
+    }
+    items.sort_by(|a, b| score[&key(&b.2)].partial_cmp(&score[&key(&a.2)]).unwrap_or(std::cmp::Ordering::Equal).then((a.0, a.1).cmp(&(b.0, b.1))));
+    items.into_iter().map(|i| i.2).collect()
+}
+
+/// The workspace index as the MCP server reads it: opened read-only (no pragma that writes, no schema made), never written.
+struct Index {
+    home: PathBuf,
+    db: PathBuf,
+    paths: std::collections::HashSet<String>,
 }
 
 /// What a result list says about itself, so a caller can tell "nothing matched" from "more matched than I was shown", and knows
@@ -385,32 +430,58 @@ impl Project {
         }).to_string())
     }
 
-    /// Paths the knowledge base ranks for `query`, best first, read from `state.db` without writing anything. Empty when there is
-    /// no index, no installed model whose vectors the index holds, or nothing near: the keyword ranking then stands alone.
-    fn semantic_order(&self, query: &str) -> Vec<String> {
+    /// The workspace index, opened read-only, or `None` when there is none yet (no file, or a file without the index's tables).
+    fn index(&self) -> Option<Index> {
         let db = self.ws_dir.join("local/state.db");
-        let Some(home) = self.ws_dir.parent().and_then(Path::parent) else { return vec![] };
         if !db.is_file() {
-            return vec![];
+            return None;
         }
-        let Ok(mut kb) = crate::kb::Kb::open_readonly(&db) else { return vec![] };
-        if !crate::kb::attach_default_readonly(home, &mut kb) {
-            return vec![];
-        }
-        let opts = crate::kb::SearchOpts { limit: 50, include_untrusted: true, include_attributed: true, ..Default::default() };
-        let mut out: Vec<String> = Vec::new();
-        for h in kb.search(query, &opts).unwrap_or_default() {
-            if !out.contains(&h.rel_path) {
-                out.push(h.rel_path);
+        let paths = crate::kb::Kb::open_readonly(&db).ok()?.indexed_paths().ok()?;
+        let home = self.ws_dir.parent().and_then(Path::parent).unwrap_or(&self.ws_dir).to_path_buf();
+        Some(Index { home, db, paths })
+    }
+
+    /// Rank a tool's corpus `docs`, the very list it read before the index ranked anything (`specs/109` §2 item 1). The documents the
+    /// index holds (home layer) are ranked by the retrieval service with a filter naming exactly those paths and `zones`, so the index
+    /// can return nothing the tool would not; the rest by the shared word ranker; the two lists merged by rank. With no index, or none
+    /// of the corpus in it, the word ranker answers alone. The role check is the corpus's own (`memory_allowed`): the index's role
+    /// view would also hide the summaries the operator promoted for every role, which these tools have always served.
+    fn rank_corpus(&self, docs: Vec<Doc>, query: &str, limit: usize, detail: Detail, zones: Vec<&'static str>) -> (Ranked, &'static str) {
+        let ix = self.index();
+        let (indexed, rest): (Vec<Doc>, Vec<Doc>) = docs.into_iter().partition(|d| d.layer == "home" && ix.as_ref().is_some_and(|ix| ix.paths.contains(&d.path)));
+        let Some(ix) = ix.filter(|_| !indexed.is_empty() && !words(query).is_empty()) else {
+            let mut all = indexed;
+            all.extend(rest);
+            return (rank_detail(all, query, limit, detail), RANKED_BY_WORDS);
+        };
+        let opts = crate::kb::SearchOpts { role: None, limit: MAX_LIMIT, include_untrusted: true, include_attributed: true, zones: Some(zones), paths: Some(indexed.iter().map(|d| d.path.clone()).collect()), ..Default::default() };
+        let hits = match crate::retrieval::search(&ix.home, &ix.db, query, opts) {
+            Ok(r) => r.hits,
+            Err(_) => {
+                let mut all = indexed;
+                all.extend(rest);
+                return (rank_detail(all, query, limit, detail), RANKED_BY_WORDS);
+            }
+        };
+        let mut from_index: Vec<Value> = Vec::new();
+        for h in hits {
+            let Some(d) = indexed.iter().find(|d| d.path == h.rel_path) else { continue };
+            if !from_index.iter().any(|v| v["path"] == d.path.as_str()) {
+                from_index.push(result(d, h.start_line, flat(&h.preview, 200), detail));
             }
         }
-        out
+        let words = rank_detail(rest, query, usize::MAX, detail);
+        let matched = from_index.len() + words.matched;
+        let results: Vec<Value> = fuse(vec![from_index, words.results], |v| format!("{}\u{0}{}", v["layer"], v["path"])).into_iter().take(limit).collect();
+        (Ranked { results, matched, searchable: true }, RANKED_BY_INDEX)
     }
 
     pub fn search_project(&self, query: &str, limit: usize) -> Result<String, String> {
         self.search_project_detail(query, limit, Detail::Full)
     }
 
+    /// The project's own files and its layer's context and knowledge. None of it is in the workspace index, so the shared word
+    /// ranker answers (`specs/109` A1).
     pub fn search_project_detail(&self, query: &str, limit: usize, detail: Detail) -> Result<String, String> {
         let mut docs: Vec<Doc> = self.files().into_iter().map(|(rel, file)| Doc { layer: "project".into(), path: rel, source: UNTRUSTED, file }).collect();
         for s in scope::layered_sources(&self.ws_dir, &self.active) {
@@ -418,9 +489,10 @@ impl Project {
                 docs.push(Doc { layer: s.layer, path: s.file.rel_path, source: s.file.default_source, file: s.file.path });
             }
         }
-        let r = rank_detail(docs, query, limit, &self.semantic_order(query), detail);
+        let r = rank_detail(docs, query, limit, detail);
         let mut out = envelope(&r, limit);
         out.insert("project".into(), json!(self.describe()));
+        out.insert("ranking".into(), json!(RANKED_BY_WORDS));
         out.insert("results".into(), json!(r.results));
         Ok(Value::Object(out).to_string())
     }
@@ -437,7 +509,7 @@ impl Project {
                 docs.push(Doc { layer: s.layer, path: s.file.rel_path, source: s.file.default_source, file: s.file.path });
             }
         }
-        rank(docs, query, limit, &self.semantic_order(query))
+        rank(docs, query, limit)
     }
 
     pub fn search_memory(&self, query: &str, role: Option<&str>, limit: usize) -> Result<String, String> {
@@ -455,10 +527,11 @@ impl Project {
             .filter(|s| s.file.zone == "memory" && memory_allowed(&s.file.rel_path, role))
             .map(|s| Doc { layer: s.layer, path: s.file.rel_path, source: s.file.default_source, file: s.file.path })
             .collect();
-        let r = rank_detail(docs, query, limit, &self.semantic_order(query), detail);
+        let (r, ranking) = self.rank_corpus(docs, query, limit, detail, vec!["memory"]);
         let mut out = envelope(&r, limit);
         out.insert("project".into(), json!(self.describe()));
         out.insert("role".into(), json!(role));
+        out.insert("ranking".into(), json!(ranking));
         out.insert("results".into(), json!(r.results));
         Ok(Value::Object(out).to_string())
     }
@@ -519,8 +592,9 @@ impl Project {
             }
         }
 
-        let ranked = rank(docs, query, limit, &self.semantic_order(query));
+        let (ranked, ranking) = self.rank_corpus(docs, query, limit, Detail::Full, vec!["memory", "missions"]);
         let hits: Vec<Value> = ranked
+            .results
             .into_iter()
             .map(|mut h| {
                 let key = (h["layer"].as_str().unwrap_or_default().to_string(), h["path"].as_str().unwrap_or_default().to_string());
@@ -533,6 +607,7 @@ impl Project {
             "project": self.describe(),
             "facet": facet_filter,
             "role": role,
+            "ranking": ranking,
             "results": hits
         }).to_string())
     }
@@ -568,102 +643,78 @@ impl Project {
             source: String,
             confidence: &'static str,
             passage: String,
-            score: f64,
         }
+        let keep = |status: &str| match status_filter {
+            "validated_only" => status == "validated",
+            "propositions_included" => matches!(status, "validated" | "checking" | "noted" | "contested"),
+            "all" => true,
+            _ => false,
+        };
+        let confidence = |status: &str| match status {
+            "validated" => "high",
+            "checking" => "medium",
+            _ => "low",
+        };
+        let mut ranking = RANKED_BY_WORDS;
 
-        let mut candidates: Vec<Candidate> = Vec::new();
-        let mut seen_sources = std::collections::HashSet::new();
-
-        // 1. Core KB chunks if scope is "all" or "core_only"
+        // 1. The workspace corpus, by the retrieval service over the index opened read-only (`specs/109` §2): hybrid when the index
+        //    holds vectors of an installed model, keywords otherwise. With no index this leg is empty, as it always was.
+        let mut core: Vec<Candidate> = Vec::new();
         if scope == "all" || scope == "core_only" {
-            let db = self.ws_dir.join("local/state.db");
-            if let Ok(kb) = crate::kb::Kb::open(&db) {
+            if let Some(ix) = self.index() {
+                ranking = RANKED_BY_INDEX;
                 let opts = crate::kb::SearchOpts {
-                    limit: limit * 2,
+                    limit: (limit * 2).min(MAX_LIMIT),
                     include_untrusted: true,
                     include_attributed: true,
                     zones: Some(vec!["core", "specs", "context", "knowledge", "library", "bundles"]),
                     ..Default::default()
                 };
-                if let Ok(hits) = kb.search(query, &opts) {
-                    for h in hits {
-                        let status_str = match h.status {
-                            "validated" => "validated",
-                            "checking" => "checking",
-                            "contested" => "contested",
-                            _ => "noted",
-                        };
-                        let filter_match = match status_filter {
-                            "validated_only" => status_str == "validated",
-                            "propositions_included" => matches!(status_str, "validated" | "checking" | "noted" | "contested"),
-                            "all" => true,
-                            _ => false,
-                        };
-                        if !filter_match {
-                            continue;
-                        }
-
-                        let (chunk_id_num, raw_content) = match kb.chunk_content(&h.rel_path, h.start_line) {
-                            Some((id, content)) => (id, content),
-                            None => {
-                                let path = self.ws_dir.join(&h.rel_path);
-                                if let Some(text) = read_capped(&path) {
-                                    let lines: Vec<&str> = text.lines().collect();
-                                    if h.start_line >= 1 && h.start_line <= lines.len() && h.end_line <= lines.len() && h.start_line <= h.end_line {
-                                        (h.start_line as i64, lines[h.start_line - 1..h.end_line].join("\n"))
-                                    } else {
-                                        (h.start_line as i64, h.preview.clone())
-                                    }
-                                } else {
-                                    (h.start_line as i64, h.preview.clone())
-                                }
-                            }
-                        };
-
-                        let confidence = match status_str {
-                            "validated" => "high",
-                            "checking" => "medium",
-                            _ => "low",
-                        };
-                        let source = h.pointer.clone();
-                        if seen_sources.insert(source.clone()) {
-                            candidates.push(Candidate {
-                                chunk_id: format!("CHK-{}", chunk_id_num),
-                                status: status_str,
-                                source,
-                                confidence,
-                                passage: raw_content.trim().to_string(),
-                                score: h.score,
-                            });
-                        }
+                let hits = crate::retrieval::search(&ix.home, &ix.db, query, opts).map(|r| r.hits).unwrap_or_default();
+                let kb = crate::kb::Kb::open_readonly(&ix.db).ok();
+                for h in hits {
+                    let status = match h.status {
+                        "validated" => "validated",
+                        "checking" => "checking",
+                        "contested" => "contested",
+                        _ => "noted",
+                    };
+                    if !keep(status) || core.iter().any(|c| c.source == h.pointer) {
+                        continue;
                     }
+                    // The index's own chunk id; a chunk the index no longer holds (a sync ran in between) is served from its preview.
+                    let (chunk_id, passage) = match kb.as_ref().and_then(|kb| kb.chunk_content(&h.rel_path, h.start_line)) {
+                        Some((id, text)) => (format!("CHK-{}", id), text),
+                        None => (fallback_chunk_id(&h.rel_path, h.start_line, h.end_line), h.preview.clone()),
+                    };
+                    core.push(Candidate { chunk_id, status, source: h.pointer.clone(), confidence: confidence(status), passage: passage.trim().to_string() });
                 }
             }
         }
 
         // Spec 108 M5 (A6): entries the operator kept with `delphi kb review keep`, and only those, labelled; never "validated".
+        // Read through the same read-only index as the leg above (`specs/109` §2).
         if (scope == "all" || scope == "core_only") && status_filter != "validated_only" {
-            if let Ok(kb) = crate::kb::Kb::open(&self.ws_dir.join("local/state.db")) {
-                for h in kb.search(query, &crate::kb_import::kept_search_opts(limit * 2)).unwrap_or_default().into_iter().filter(|h| crate::kb_import::is_kept(&self.ws_dir, &h.rel_path)) {
-                    if seen_sources.insert(h.pointer.clone()) {
-                        candidates.push(Candidate { chunk_id: format!("CHK-{}", h.start_line), status: "kept by the operator, not validated", source: h.pointer.clone(), confidence: "low", passage: crate::host_noted::fence(crate::kb_import::KEPT_LABEL, &h.preview), score: h.score });
+            if let Some(ix) = self.index() {
+                let hits = crate::retrieval::search(&ix.home, &ix.db, query, crate::kb_import::kept_search_opts(limit * 2)).map(|r| r.hits).unwrap_or_default();
+                for h in hits.into_iter().filter(|h| crate::kb_import::is_kept(&self.ws_dir, &h.rel_path)) {
+                    if !core.iter().any(|c| c.source == h.pointer) {
+                        core.push(Candidate { chunk_id: fallback_chunk_id(&h.rel_path, h.start_line, h.end_line), status: "kept by the operator, not validated", source: h.pointer.clone(), confidence: "low", passage: crate::host_noted::fence(crate::kb_import::KEPT_LABEL, &h.preview) });
                     }
                 }
             }
         }
 
-        // 2. Project chunks if scope is "all" or "project_only"
+        // 2. The project's own files, chunked and ranked by the shared word ranker (they are not in the workspace index).
+        let mut project: Vec<((usize, usize), Candidate)> = Vec::new();
         if scope == "all" || scope == "project_only" {
-            let order = self.semantic_order(query);
             for (rel, file) in self.files() {
                 let Some(text) = read_capped(&file) else { continue };
                 let (fm, _) = split_frontmatter(&text);
                 let fm_status = fm.as_ref().and_then(|f| f.get("status")).and_then(|v| v.as_str()).unwrap_or("");
-                let status_str = if rel.starts_with("specs/") {
+                let status = if rel.starts_with("specs/") {
                     if fm_status == "approved" {
                         "validated"
-                    } else if fm_status == "draft" {
-                        "noted"
                     } else if matches!(fm_status, "retired" | "superseded") {
                         "retired"
                     } else {
@@ -672,63 +723,31 @@ impl Project {
                 } else {
                     "noted"
                 };
-
-                let filter_match = match status_filter {
-                    "validated_only" => status_str == "validated",
-                    "propositions_included" => matches!(status_str, "validated" | "checking" | "noted" | "contested"),
-                    "all" => true,
-                    _ => false,
-                };
-                if !filter_match {
+                if !keep(status) {
                     continue;
                 }
-
-                let lead = order.iter().position(|p| *p == rel).map_or(0, |i| order.len() - i);
-                let chunks = crate::kb::chunk_markdown(&text);
-                for c in chunks {
-                    let lower = c.raw.to_lowercase();
-                    let distinct = ws.iter().filter(|w| lower.contains(w.as_str())).count();
-                    if distinct == 0 && lead == 0 {
+                for c in crate::kb::chunk_markdown(&text) {
+                    let Some(score) = word_score(&c.raw, "", &ws) else { continue };
+                    let source = format!("{}#L{}-L{}", rel, c.start_line, c.end_line);
+                    if project.iter().any(|(_, p)| p.source == source) {
                         continue;
                     }
-                    let total: usize = ws.iter().map(|w| lower.matches(w.as_str()).count().min(50)).sum();
-                    let score = (lead as f64 * 20.0) + (distinct as f64 * 10.0) + (total as f64);
-                    let confidence = match status_str {
-                        "validated" => "high",
-                        "checking" => "medium",
-                        _ => "low",
-                    };
-                    let source = format!("{}#L{}-L{}", rel, c.start_line, c.end_line);
-                    if seen_sources.insert(source.clone()) {
-                        let hash = blake3::hash(format!("{}:{}:{}", rel, c.start_line, c.end_line).as_bytes());
-                        let chunk_num = (u16::from_be_bytes([hash.as_bytes()[0], hash.as_bytes()[1]]) as usize % 900) + 100;
-                        candidates.push(Candidate {
-                            chunk_id: format!("CHK-{}", chunk_num),
-                            status: status_str,
-                            source,
-                            confidence,
-                            passage: c.raw.trim().to_string(),
-                            score,
-                        });
-                    }
+                    project.push((score, Candidate { chunk_id: fallback_chunk_id(&rel, c.start_line, c.end_line), status, source, confidence: confidence(status), passage: c.raw.trim().to_string() }));
                 }
             }
         }
+        project.sort_by_key(|p| std::cmp::Reverse(p.0));
 
+        // One answer, two rankings on different scales: merged by rank (`specs/109` A1). A passage both legs found is served once.
+        let candidates = fuse(vec![core, project.into_iter().map(|p| p.1).collect()], |c| c.source.clone());
+        let mut out = format!("<!-- delphi:rag:meta ranking=\"{}\" -->", ranking);
         if candidates.is_empty() {
-            return Ok("No matching knowledge base passages found.".to_string());
+            out.push_str("\nNo matching knowledge base passages found.");
+            return Ok(out);
         }
-
-        candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-        candidates.truncate(limit);
-
-        let mut out = String::new();
-        for (i, c) in candidates.into_iter().enumerate() {
-            if i > 0 {
-                out.push_str("\n\n");
-            }
+        for c in candidates.into_iter().take(limit) {
             out.push_str(&format!(
-                "<!-- delphi:rag chunk_id=\"{}\" status=\"{}\" source=\"{}\" confidence=\"{}\" -->\n{}\n<!-- delphi:rag:end -->",
+                "\n\n<!-- delphi:rag chunk_id=\"{}\" status=\"{}\" source=\"{}\" confidence=\"{}\" -->\n{}\n<!-- delphi:rag:end -->",
                 c.chunk_id, c.status, c.source, c.confidence, c.passage
             ));
         }
@@ -782,18 +801,78 @@ mod tests {
     }
 
     #[test]
-    fn search_leads_with_the_index_but_serves_only_what_the_role_may_read() {
+    fn search_asks_the_index_but_serves_only_what_the_role_may_read() {
         let (_t, ws, root) = fixture();
+        fs::create_dir_all(ws.join("local/memory/agents/builder")).unwrap();
+        fs::write(ws.join("local/memory/agents/builder/lessons.md"), "builder quokka quokka quokka\n").unwrap();
+        fs::create_dir_all(ws.join("local/memory/agents/architect")).unwrap();
+        fs::write(ws.join("local/memory/agents/architect/lessons.md"), "architect quokka\n").unwrap();
         let p = Project::new(&ws, &root);
-        let allowed = texts(&p.search_memory("quokka", Some("architect"), 10).unwrap());
-        // The index puts another role's file first; it is not an allowed document, so it is never served.
-        let docs: Vec<Doc> = scope::layered_sources(&ws, &p.active).into_iter().filter(|s| s.file.zone == "memory" && memory_allowed(&s.file.rel_path, Some("architect"))).map(|s| Doc { layer: s.layer, path: s.file.rel_path, source: s.file.default_source, file: s.file.path }).collect();
-        let order = vec!["memory/agents/builder/lessons.md".to_string()];
-        let got: Vec<String> = rank(docs, "quokka", 10, &order).iter().map(|r| r["path"].as_str().unwrap().to_string()).collect();
-        assert_eq!(got, allowed);
-        assert!(got.iter().all(|g| !g.contains("builder")));
-        // With no index at all, search is the keyword search it was.
-        assert!(!ws.join("local/state.db").exists() && p.semantic_order("quokka").is_empty());
+        // With no index, the word ranker answers and says so.
+        let words = parsed(&p.search_memory("quokka", Some("architect"), 10).unwrap());
+        assert_eq!(words["ranking"], RANKED_BY_WORDS);
+        let mut kb = crate::kb::Kb::open(&ws.join("local/state.db")).unwrap();
+        kb.sync_lexical(&crate::kb::sources(&ws), "t").unwrap();
+        drop(kb);
+        // The index holds another role's file, which matches best; it is not in this role's corpus, so it is never served.
+        let indexed = parsed(&p.search_memory("quokka", Some("architect"), 10).unwrap());
+        assert_eq!(indexed["ranking"], RANKED_BY_INDEX);
+        let got = texts(&indexed.to_string());
+        assert!(got.contains(&"memory/agents/architect/lessons.md".to_string()) && got.iter().all(|g| !g.contains("builder")), "{got:?}");
+        let mut a = got.clone();
+        a.sort();
+        let mut b = texts(&words.to_string());
+        b.sort();
+        assert_eq!(a, b, "the same documents, ranked another way");
+    }
+
+    #[test]
+    fn the_mcp_server_opens_the_index_read_only() {
+        let (_t, ws, root) = fixture();
+        let db = ws.join("local/state.db");
+        let mut kb = crate::kb::Kb::open(&db).unwrap();
+        kb.sync_lexical(&crate::kb::sources(&ws), "t").unwrap();
+        drop(kb);
+        // A database file with no index in it is left as it is: no schema is made, no journal mode set.
+        let (_t2, ws2, root2) = fixture();
+        let empty = ws2.join("local/state.db");
+        rusqlite::Connection::open(&empty).unwrap().execute_batch("CREATE TABLE other(x)").unwrap();
+        let before = fs::read(&empty).unwrap();
+        let p2 = Project::new(&ws2, &root2);
+        assert!(p2.kb_retrieve("quokka", 5, "all", "all").unwrap().starts_with("<!-- delphi:rag:meta ranking=\"words (no index)\" -->"));
+        assert_eq!(fs::read(&empty).unwrap(), before, "the MCP server wrote nothing");
+        assert!(!ws2.join("local/state.db-wal").exists());
+        // An index is read, and the reader leaves its bytes as they were.
+        let before = fs::read(&db).unwrap();
+        let p = Project::new(&ws, &root);
+        assert!(p.kb_retrieve("quokka", 5, "all", "all").unwrap().starts_with("<!-- delphi:rag:meta ranking=\"index\" -->"));
+        p.search_memory("quokka", Some("architect"), 5).unwrap();
+        p.query_memory("quokka", Some("architect"), None, 5).unwrap();
+        assert_eq!(fs::read(&db).unwrap(), before);
+    }
+
+    #[test]
+    fn fused_lists_are_merged_by_rank_not_score() {
+        let a = vec![("a1", 1000.0), ("a2", 999.0), ("a3", 998.0)];
+        let b = vec![("b1", 0.01), ("b2", 0.001)];
+        let got: Vec<&str> = fuse(vec![a, b], |x| x.0.to_string()).into_iter().map(|x| x.0).collect();
+        assert_eq!(got, ["a1", "b1", "a2", "b2", "a3"], "the first of each list before the second of either, whatever the scores");
+        // A passage both lists hold is served once and gains from both.
+        let got: Vec<&str> = fuse(vec![vec!["x", "y"], vec!["y", "z"]], |x| x.to_string()).into_iter().collect();
+        assert_eq!(got, ["y", "x", "z"]);
+    }
+
+    #[test]
+    fn fallback_chunk_ids_are_twelve_hex_characters_of_the_path_and_line_range() {
+        let id = fallback_chunk_id("specs/001-a.md", 1, 7);
+        assert_eq!(id, format!("CHK-{}", &blake3::hash(b"specs/001-a.md:1:7").to_hex()[..12]));
+        assert_ne!(id, fallback_chunk_id("specs/001-a.md", 1, 8));
+        let (_t, ws, root) = fixture();
+        let out = Project::new(&ws, &root).kb_retrieve("quokka", 5, "all", "project_only").unwrap();
+        for part in out.split("chunk_id=\"").skip(1) {
+            let id = part.split('"').next().unwrap();
+            assert!(id.len() == 16 && id[4..].chars().all(|c| c.is_ascii_hexdigit()), "{id}");
+        }
     }
 
     fn parsed(s: &str) -> Value {
@@ -1052,6 +1131,83 @@ mod tests {
         for facet in ["all", "heuristics", "decisions", "reflections"] {
             let hits = facet_paths(&p, Some("architect"), facet);
             assert!(!hits.iter().any(|h| h.contains("knowledge/") || h.starts_with("specs/retro") || h.contains("staged/")), "{facet}: {hits:?}");
+        }
+    }
+
+    /// A workspace holding one file per place a search could look, each with the word `quokkapin`, and the registered project of
+    /// `fixture` plus a second project's layer. `indexed` builds the workspace index from it, as the daemon would.
+    fn corpus_fixture(indexed: bool) -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let (t, ws, root) = fixture();
+        let w = |p: PathBuf, name: &str| {
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, format!("quokkapin {}\n", name)).unwrap();
+        };
+        for rel in ["base/core-pin.md", "base/context/ctx-pin.md", "base/specs/spec-pin.md", "base/about/about-pin.md", "base/context/facts/fact-pin.md", "local/knowledge/know-pin.md", "local/memory/agents/architect/arch-pin.md", "local/memory/agents/builder/build-pin.md", "local/promoted/promo-pin.md", "local/staged/staged-pin.md", "local/sessions/m-mine/council-decision.md", "local/sessions/m-other/retro.md", "local/sessions/m-home/retro-summary.md", "local/sessions/m-home/traces/builder-t_1.md", "local/sessions/m-home/notes.md"] {
+            w(ws.join(rel), rel);
+        }
+        fs::write(ws.join("local/sessions/m-mine/scope"), ID).unwrap();
+        fs::write(ws.join("local/sessions/m-other/scope"), "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap();
+        for rel in ["plans/plan-pin.md", "research/research-pin.md", "context/pctx-pin.md", "src/src-pin.md", "work/work-pin.md", "specs/pspec-pin.md"] {
+            w(root.join(rel), rel);
+        }
+        let layer = ws.join("local/projects").join(ID);
+        for rel in ["context/lctx-pin.md", "knowledge/lknow-pin.md", "memory/agents/architect/larch-pin.md", "memory/agents/builder/lbuild-pin.md", "staged/lstaged-pin.md"] {
+            w(layer.join(rel), rel);
+        }
+        let other = ws.join("local/projects/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        for rel in ["context/octx-pin.md", "knowledge/oknow-pin.md", "memory/agents/architect/oarch-pin.md"] {
+            w(other.join(rel), rel);
+        }
+        if indexed {
+            let mut kb = crate::kb::Kb::open(&ws.join("local/state.db")).unwrap();
+            kb.sync_lexical(&crate::kb::sources(&ws), "t").unwrap();
+        }
+        (t, ws, root)
+    }
+
+    fn layered(v: &str) -> Vec<String> {
+        let mut out: Vec<String> = serde_json::from_str::<Value>(v).unwrap()["results"].as_array().unwrap().iter().map(|r| format!("{} {}", r["layer"].as_str().unwrap(), r["path"].as_str().unwrap())).collect();
+        out.sort();
+        out
+    }
+
+    fn passages(v: &str) -> Vec<String> {
+        let mut out: Vec<String> = v.split("source=\"").skip(1).map(|s| s.split('#').next().unwrap().to_string()).collect();
+        out.sort();
+        out
+    }
+
+    fn sorted(v: &[&str]) -> Vec<String> {
+        let mut v: Vec<String> = v.iter().map(|s| s.to_string()).collect();
+        v.sort();
+        v
+    }
+
+    /// `specs/109` §2 item 1: what each tool may read does not widen. Every file the fixture holds has the query word, so each tool's
+    /// answer is exactly its corpus; the lists below are what the tools served before the retrieval service ranked them, with and
+    /// without an index.
+    #[test]
+    fn each_tool_reads_exactly_its_own_corpus_with_or_without_an_index() {
+        let layer = format!("project:{}", ID);
+        let search_project = sorted(&["project plans/plan-pin.md", "project research/research-pin.md", "project context/pctx-pin.md", "project specs/pspec-pin.md", &format!("{layer} context/lctx-pin.md"), &format!("{layer} knowledge/lknow-pin.md")]);
+        let memory_architect = sorted(&["home memory/agents/architect/arch-pin.md", "home memory/promoted/promo-pin.md", &format!("{layer} memory/agents/architect/larch-pin.md")]);
+        let query_memory = sorted(&["home memory/agents/architect/arch-pin.md", "home memory/promoted/promo-pin.md", &format!("{layer} memory/agents/architect/larch-pin.md"), "home missions/m-mine/council-decision.md", "home missions/m-home/retro-summary.md", "project plans/plan-pin.md"]);
+        let core = sorted(&["core-pin.md", "context/ctx-pin.md", "specs/spec-pin.md", "knowledge/know-pin.md"]);
+        let project = sorted(&["plans/plan-pin.md", "research/research-pin.md", "context/pctx-pin.md", "specs/pspec-pin.md"]);
+        for indexed in [true, false] {
+            let (_t, ws, root) = corpus_fixture(indexed);
+            let p = Project::new(&ws, &root);
+            assert_eq!(layered(&p.search_project("quokkapin", 10).unwrap()), search_project, "search_project, indexed {indexed}");
+            assert_eq!(layered(&p.search_memory("quokkapin", Some("architect"), 10).unwrap()), memory_architect, "search_memory, indexed {indexed}");
+            assert_eq!(layered(&p.search_memory("quokkapin", None, 10).unwrap()), ["home memory/promoted/promo-pin.md"], "search_memory with no role, indexed {indexed}");
+            assert_eq!(layered(&p.query_memory("quokkapin", Some("architect"), Some("all"), 20).unwrap()), query_memory, "query_memory, indexed {indexed}");
+            let core_now: Vec<String> = if indexed { core.clone() } else { vec![] };
+            assert_eq!(passages(&p.kb_retrieve("quokkapin", 10, "all", "core_only").unwrap()), core_now, "kb_retrieve core, indexed {indexed}");
+            assert_eq!(passages(&p.kb_retrieve("quokkapin", 10, "all", "project_only").unwrap()), project, "kb_retrieve project, indexed {indexed}");
+            let mut all = core_now.clone();
+            all.extend(project.clone());
+            all.sort();
+            assert_eq!(passages(&p.kb_retrieve("quokkapin", 10, "all", "all").unwrap()), all, "kb_retrieve all, indexed {indexed}");
         }
     }
 
