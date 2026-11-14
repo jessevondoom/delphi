@@ -148,6 +148,7 @@ async fn panel_step(engine: Arc<Engine>, panels: Panels, m: Arc<MissionState>, i
             let answered = stances.values().filter(|s| s.text().is_some()).count();
             if answered < 2 {
                 panels.lock().unwrap().remove(&key);
+                crate::standing::settle(&engine.ws.dir, &format!("{}/{}", m.id, id), engine.panel_foreign_tokens(&m, &id), (engine.clock_unix)());
                 let why = format!("only {answered} seat(s) answered Round 1, too few to deliberate; nothing was decided");
                 engine.panel_escalate(&m, id.clone(), why.clone()).await.map_err(engine_err)?;
                 return Ok(json!({"council_id": id, "accepted": true, "state": "not_decided", "reason": why}));
@@ -160,6 +161,7 @@ async fn panel_step(engine: Arc<Engine>, panels: Panels, m: Arc<MissionState>, i
         }
         Step::RoundTwoDone => Ok(json!({"council_id": id, "accepted": true, "round_2": "complete", "next": "the moderator calls council_brief with seat orchestrator and round 3, writes the verdict in the shape it gives, and submits it as seat orchestrator, round 3"})),
         Step::Concluded => {
+            crate::standing::settle(&engine.ws.dir, &format!("{}/{}", m.id, id), engine.panel_foreign_tokens(&m, &id), (engine.clock_unix)());
             let panel = panels.lock().unwrap().remove(&key).ok_or_else(gone)?;
             if let Err(e) = engine.panel_conclude(&m, id.clone(), &panel).await {
                 // Keep the Panel (and its verdict) so the moderator can submit again; the barrier already released.
@@ -267,6 +269,9 @@ pub(crate) fn progress_line_of(v: &Value) -> String {
     };
     crate::mcp_serve::progress_text(&line)
 }
+
+/// What a foreign seat without the operator's yes is refused with (`specs/098` §6.2; `specs/104` §5 adds why the standing consent did not apply).
+const ASK_YES: &str = "a foreign seat spends the operator's Delphi tokens: ask the operator, and pass operator_confirmed: true only if they said yes";
 
 /// The answer of an `ask_family` job that is still running (`specs/104` §2 item 1).
 fn ask_working(id: &str) -> Value {
@@ -827,7 +832,9 @@ impl EngineService {
         if many && p["foreign_seat"].as_str().is_some_and(|r| !r.is_empty()) {
             return Err(err(code::INVALID_PARAMS, "ask for `foreign_seat` (one) or `foreign_seats` (a list), not both"));
         }
-        if (many || p["foreign_seat"].as_str().is_some_and(|r| !r.is_empty())) && operator_confirmed != Some(true) {
+        let asked_foreign = many || p["foreign_seat"].as_str().is_some_and(|r| !r.is_empty());
+        // Spec 104 §5 (§12 A4): without the operator's yes, only the ratified standing consent lets Delphi run a foreign seat.
+        if asked_foreign && operator_confirmed != Some(true) && self.engine.settings.standing_foreign_tokens == 0 {
             return Err(err(code::INVALID_PARAMS, "a foreign seat spends the operator's Delphi tokens: ask the operator, and pass operator_confirmed: true only if they said yes (or open the Panel without foreign_seat)"));
         }
         // SR-3 and SR-4: judged before anything is recorded or spent. Only the caller's own opt-in can refuse for families.
@@ -884,7 +891,8 @@ impl EngineService {
                 return Err(err(code::INVALID_PARAMS, "this session already has 4 Panels in progress: finish them, or wait for an unfinished one to expire (6 hours)"));
             }
             let task_id = m.next_task_id();
-            m.append(EventEnvelope::new(&m.id, h::COUNCIL_EVENT, json!({"task_id": task_id, "source": c.label(p["model"].as_str()), "venue": "panel"}))).await.map_err(engine_err)?;
+            let consent = if asked_foreign && !planned_foreign.is_empty() { Some(self.standing_consent(operator_confirmed == Some(true), &c.mission(), &format!("{}/{}", m.id, task_id), self.engine.panel_foreign_ceiling_tokens() * n_seats as u64)?) } else { None };
+            m.append(EventEnvelope::new(&m.id, h::COUNCIL_EVENT, json!({"task_id": task_id, "source": c.label(p["model"].as_str()), "venue": "panel", "consent": consent}))).await.map_err(engine_err)?;
             let mut created = EventEnvelope::new(&m.id, "task.created", json!({"prompt": proposition, "target": "council", "flow": "council", "venue": "panel"}));
             created.task_id = Some(task_id.clone());
             m.append(created).await.map_err(engine_err)?;
@@ -938,8 +946,11 @@ impl EngineService {
         h::gate(&ws.dir).map_err(host_err)?;
         let mut c = h::Caller::parse(&p).map_err(host_err)?;
         c.projects = self.engine.projects.clone();
-        if p["operator_confirmed"].as_bool() != Some(true) {
-            return Err(err(code::INVALID_PARAMS, "a foreign seat spends the operator's Delphi tokens: ask the operator, and pass operator_confirmed: true only if they said yes"));
+        // Spec 104 §5 (§12 A4): without the operator's yes for this call, only the ratified standing consent can let the seat run.
+        let confirmed = p["operator_confirmed"].as_bool() == Some(true);
+        let standing = self.engine.settings.standing_foreign_tokens;
+        if !confirmed && standing == 0 {
+            return Err(err(code::INVALID_PARAMS, ASK_YES));
         }
         let proposition = h::council_proposition(&c, &p).map_err(host_err)?;
         let host_family = crate::council_panel::host_family(p["model"].as_str(), &c.tool);
@@ -958,7 +969,9 @@ impl EngineService {
             self.mission_at(Some(&c.mission()), c.cwd.to_str()).await?
         };
         let task_id = m.next_task_id();
-        let mut created = EventEnvelope::new(&m.id, "task.created", json!({"prompt": proposition, "target": "ask_family", "flow": "council", "venue": "panel"}));
+        let ceiling = self.engine.panel_foreign_ceiling_tokens();
+        let consent = self.standing_consent(confirmed, &c.mission(), &format!("{}/{}", m.id, task_id), ceiling)?;
+        let mut created = EventEnvelope::new(&m.id, "task.created", json!({"prompt": proposition, "target": "ask_family", "flow": "council", "venue": "panel", "consent": consent}));
         created.task_id = Some(task_id.clone());
         m.append(created).await.map_err(engine_err)?;
         let key = (c.session.clone(), task_id.clone());
@@ -972,6 +985,7 @@ impl EngineService {
         // Spec 104 §2 (amended, §12 A1): the seat runs as a background job, as a help request does, and the call hands back its `ask_id` at
         // once. The wait is the MCP process's (it polls `host.ask_result`), so the host holds the id from the first moment and can always stop it.
         let (engine, asks, tid, mm, k, host_family) = (self.engine.clone(), self.asks.clone(), task_id.clone(), m.clone(), key.clone(), host_family.map(String::from));
+        let standing_id = format!("{}/{}", m.id, task_id);
         let job = tokio::spawn(async move {
             let stance = engine.panel_foreign_run_seat(&mm, &tid, brief, &proposition, role, &family, 1, None, true).await;
             let (answer, abstained) = match stance {
@@ -985,7 +999,16 @@ impl EngineService {
                 (Ok(_), Ok(events)) => {
                     let receipts: Vec<Value> = crate::seat::seat_summaries(&events, &tid).into_iter().map(|s| s.to_value()).collect();
                     let served = receipts.first().and_then(|r| r["family"].as_str()).unwrap_or("unknown").to_string();
+                    // A2: the reservation becomes what the seat really used; the note says how much of the standing amount is gone today.
+                    let now = (engine.clock_unix)();
+                    crate::standing::settle(&engine.ws.dir, &standing_id, crate::seat::served_for_task(&events, &tid).1, now);
+                    let consent_note = if consent == "standing" {
+                        format!(" Consent: standing (the operator's ratified [access] standing_foreign_tokens = {}): {} tokens used in the last 24 hours; tell the operator.", engine.settings.standing_foreign_tokens, crate::standing::used(&engine.ws.dir, now))
+                    } else {
+                        " Consent: the operator's yes for this call (host-reported).".to_string()
+                    };
                     json!({
+                        "consent": consent,
                         "id": tid,
                         "ask_id": tid,
                         "status": if answer.is_some() { "answered" } else { "unanswered" },
@@ -997,7 +1020,7 @@ impl EngineService {
                         "family_requested": family,
                         "family_served": served,
                         "host_family": host_family.map(|f| json!({"family": f, "source": "host-declared"})),
-                        "note": "advice to you: a foreign family answered read-only with no tools; it binds nothing. The family shown is the served one from the receipt, not the one requested."
+                        "note": format!("advice to you: a foreign family answered read-only with no tools; it binds nothing. The family shown is the served one from the receipt, not the one requested.{consent_note}")
                     })
                 }
                 (Err(e), _) => json!({"ask_id": tid, "status": "failed", "reason": engine.secrets.redact(&e.to_string())}),
@@ -1012,6 +1035,27 @@ impl EngineService {
         self.host_aborts.lock().unwrap().insert((m.id.clone(), task_id.clone()), job.abort_handle());
         let v = self.wait_ask(&key, Duration::ZERO).await;
         Ok(self.signed_ask(v))
+    }
+
+    /// Spec 104 §5 (§12 A2, A4): the consent a foreign seat runs under. With the operator's yes for this call it is `operator` and the
+    /// standing amount is not touched. Without it, the ratified `[access] standing_foreign_tokens` must be above 0, the session must not
+    /// carry a live private-read mark (spec 103: no host text goes to another vendor without a yes then), and `ceiling` must fit in the
+    /// last 24 hours' standing sum: checked and reserved in one step, before anything is spent.
+    fn standing_consent(&self, confirmed: bool, mission_key: &str, id: &str, ceiling: u64) -> Result<&'static str, RpcError> {
+        if confirmed {
+            return Ok("operator");
+        }
+        let cap = self.engine.settings.standing_foreign_tokens;
+        if cap == 0 {
+            return Err(err(code::INVALID_PARAMS, ASK_YES));
+        }
+        if crate::private_read::state(&self.engine.ws.dir, mission_key).would_affect_a_send() {
+            return Err(err(code::INVALID_PARAMS, format!("{ASK_YES}. The standing consent does not apply to a session that has read a private entry (spec 103): this call needs the operator's yes. Nothing was spent")));
+        }
+        match crate::standing::reserve(&self.engine.ws.dir, id, ceiling, cap, (self.engine.clock_unix)()) {
+            Ok(_) => Ok("standing"),
+            Err(used) => Err(err(code::INVALID_PARAMS, format!("{ASK_YES}. The standing consent ([access] standing_foreign_tokens = {cap}) has {used} tokens used in the last 24 hours, and this seat's ceiling of {ceiling} does not fit. Nothing was spent"))),
+        }
     }
 
     /// `host.ask_result` (`specs/104` §2): the answer of an `ask_family` job of this session, or `working` with what its seat is doing.
@@ -1254,6 +1298,8 @@ impl EngineService {
                 pn.abort_all();
             }
             self.engine.cancel_task_because(&m, &id, &format!("the host cancelled it: {reason}")).await.map_err(engine_err)?;
+            // Spec 104 §12 A2: a standing-consent reservation of this job becomes what it really used.
+            crate::standing::settle(&self.engine.ws.dir, &format!("{}/{}", m.id, id), self.engine.panel_foreign_tokens(&m, &id), (self.engine.clock_unix)());
             // Whatever the cancelled work still held is released, as `run_council` does at its end.
             let _ = m.release_blocks(&id).await;
             if raised_help {
@@ -1597,7 +1643,9 @@ impl EngineService {
             .filter_map(|(_, d)| delphi_core::log::replay(&d).ok())
             .map(|ev| ev.iter().filter(|e| e.kind == "learn.staged" && e.payload["trigger"].as_str().is_some_and(|t| crate::host_rpc::TRIGGERS.contains(&t))).count())
             .sum();
-        Ok(json!({"enabled": enabled, "host_lessons": waiting}))
+        // Spec 104 §5 item 4: the standing consent and what it has used today.
+        let standing = json!({"standing_foreign_tokens": self.engine.settings.standing_foreign_tokens, "used_24h": crate::standing::used(&ws.dir, (self.engine.clock_unix)())});
+        Ok(json!({"enabled": enabled, "host_lessons": waiting, "standing_consent": standing}))
     }
 
     /// `handoff.resume` (`specs/062` S10): the operator carries a host session's handoff into this Delphi mission as a task. Only
@@ -7956,6 +8004,103 @@ mod tests {
         assert!(!line.is_empty() && !line.contains("CANARY"), "a fixed-form line, never the question or the answer: {peek}");
         assert_eq!(marked["progress_line"], crate::private_read::RELAY_PHRASE, "{marked}");
         assert_eq!((done["status"].as_str(), done["answer"].as_str()), (Some("answered"), Some("ANSWER-CANARY")), "peek never took the answer: {done}");
+    }
+
+    /// A standing consent (`[access] standing_foreign_tokens`, `specs/104` §5) of two and a half foreign-seat ceilings.
+    fn standing_for_two(s: &mut crate::engine::Settings) {
+        roomy(s);
+        let ceiling = 2 * s.max_tokens + 2 * 12_000;
+        s.standing_foreign_tokens = ceiling * 5 / 2;
+    }
+
+    /// Spec 104 §5 (§12 A2): above 0 a seat runs without the flag and is recorded as standing; the reservation becomes what it used; a
+    /// call with the flag is the operator's consent and does not count against the standing amount.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_standing_consent_runs_a_seat_without_the_flag_and_the_flag_is_still_the_operators_consent() {
+        let f = setup(vec![], 50.0, standing_for_two);
+        let _seen = foreign_fx(&f, |_| Some("gemini-4-argon".to_string()));
+        let ws_dir = f.engine.ws.dir.clone();
+        let ceiling = f.engine.panel_foreign_ceiling_tokens();
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let (standing, operator) = blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            c.hello(&htok).unwrap();
+            let standing = ask(&mut c, pbody(&cwd, json!({"question": "Table or file?", "model": "claude-opus"})));
+            let operator = ask(&mut c, pbody(&cwd, json!({"question": "Table or file?", "model": "claude-opus", "operator_confirmed": true})));
+            (standing, operator)
+        })
+        .await;
+        assert_eq!((standing["status"].as_str(), standing["consent"].as_str()), (Some("answered"), Some("standing")), "{standing}");
+        assert!(standing["note"].as_str().unwrap().contains("Consent: standing") && standing["note"].as_str().unwrap().contains("tokens used in the last 24 hours"), "{standing}");
+        assert_eq!(operator["consent"], "operator", "{operator}");
+        let used = crate::standing::used(&ws_dir, (f.engine.clock_unix)());
+        assert!(used > 0 && used < ceiling, "the reservation became what the one standing seat used, and the operator's seat is not counted: {used}");
+        let events = replay_log(&delphi_core::sessions::dir(&ws_dir, "host-abcdef0123456789"));
+        let consents: Vec<&str> = events.iter().filter(|e| e.kind == "task.created" && e.payload["target"] == "ask_family").filter_map(|e| e.payload["consent"].as_str()).collect();
+        assert_eq!(consents, ["standing", "operator"], "the task event records the consent");
+    }
+
+    /// Spec 104 §12 A2: the check and the debit are one step: of five requests sent at once whose ceilings together pass the amount,
+    /// exactly the two that fit run and the rest are refused, naming the amount used.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn parallel_standing_requests_run_exactly_the_number_that_fit() {
+        let f = setup(vec![], 50.0, standing_for_two);
+        crate::council::tests::two_families(&f);
+        f.model.respond_with(|_| Step::Hang);
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let results = blocking(move || {
+            let handles: Vec<_> = (0..5)
+                .map(|_| {
+                    let (hsock, htok, cwd) = (hsock.clone(), htok.clone(), cwd.clone());
+                    std::thread::spawn(move || {
+                        let mut c = Client::connect(&hsock).unwrap();
+                        c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+                        c.hello(&htok).unwrap();
+                        c.call("host.ask_family", pbody(&cwd, json!({"question": "Table or file?", "model": "claude-opus"}))).map_err(|e| e.to_string())
+                    })
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect::<Vec<_>>()
+        })
+        .await;
+        assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 2, "{results:?}");
+        for e in results.iter().filter_map(|r| r.as_ref().err()) {
+            assert!(e.contains("operator_confirmed") && e.contains("standing_foreign_tokens") && e.contains("tokens used in the last 24 hours") && e.contains("Nothing was spent"), "{e}");
+        }
+    }
+
+    /// Spec 104 §12 A4: a session with a live private-read mark gets no standing consent, and a Panel's foreign seat may use it otherwise.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_marked_session_gets_no_standing_consent_and_a_panel_seat_can_use_it() {
+        let f = setup(vec![], 50.0, standing_for_two);
+        crate::council::tests::two_families(&f);
+        f.model.respond_with(|_| Step::Hang);
+        let ws_dir = f.engine.ws.dir.clone();
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let wd = ws_dir.clone();
+        let (panel, marked, with_yes) = blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            c.hello(&htok).unwrap();
+            let panel = c.call("host.council_open", pbody(&cwd, json!({"question": "Table or file?", "model": "claude-opus", "foreign_seat": "red-team"}))).unwrap();
+            crate::private_read::mark(&wd, "host-abcdef0123456789", "entry-1", 100).unwrap();
+            let marked = c.call("host.ask_family", pbody(&cwd, json!({"question": "Table or file?", "model": "claude-opus"}))).unwrap_err().to_string();
+            let with_yes = c.call("host.ask_family", pbody(&cwd, json!({"question": "Table or file?", "model": "claude-opus", "operator_confirmed": true}))).is_ok();
+            (panel, marked, with_yes)
+        })
+        .await;
+        assert_eq!(panel["foreign_seat"]["seat"], "red-team", "{panel}");
+        assert!(marked.contains("private entry") && marked.contains("operator_confirmed"), "{marked}");
+        assert!(with_yes, "the operator's yes for the call still works in a marked session");
+        let events = replay_log(&delphi_core::sessions::dir(&ws_dir, "host-abcdef0123456789"));
+        assert!(events.iter().any(|e| e.kind == crate::host_rpc::COUNCIL_EVENT && e.payload["consent"] == "standing"), "the Panel records its consent");
     }
 
     /// Spec 104 §2 item 4: `cancel_job` stops an ask of this session; the task ends as `task.cancelled`.

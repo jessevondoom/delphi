@@ -76,6 +76,10 @@ pub fn settings_from(root: &toml::Value) -> Settings {
             s.max_foreign_tokens = n as u64;
         }
     }
+    // Spec 104 §12 A4: `[access]` is one of the pinned blocks, so this is the ratified copy's value; a live edit does not count.
+    if let Some(n) = root.get("access").and_then(|a| a.get("standing_foreign_tokens")).and_then(|v| v.as_integer()).filter(|v| *v >= 0) {
+        s.standing_foreign_tokens = n as u64;
+    }
     if let Some(n) = root.get("council").and_then(|c| c.get("stall_secs")).and_then(|v| v.as_integer()).filter(|v| *v >= 0) {
         s.council_stall_secs = n.min(86_400) as u64;
     }
@@ -596,6 +600,14 @@ mod tests {
         assert_eq!((d.require_families, d.max_foreign_seats, d.max_foreign_tokens), (None, 1, 100_000), "unset never refuses");
         let s = settings_from(&toml::from_str("[seats]\nrequire_families = 2\nmax_foreign_seats = 0\nmax_foreign_tokens = 5000\n").unwrap());
         assert_eq!((s.require_families, s.max_foreign_seats, s.max_foreign_tokens), (Some(2), 0, 5000));
+        // Spec 104 §12 A4: the standing consent is an `[access]` key, off by default; a `[seats]` key of that name is not read.
+        assert_eq!(d.standing_foreign_tokens, 0);
+        assert_eq!(settings_from(&toml::from_str("[access]\nstanding_foreign_tokens = 40000\n").unwrap()).standing_foreign_tokens, 40_000);
+        assert_eq!(settings_from(&toml::from_str("[seats]\nstanding_tokens = 40000\nstanding_foreign_tokens = 40000\n").unwrap()).standing_foreign_tokens, 0);
+        // And it is pinned: with nothing ratified, a live `[access]` edit does not reach the settings.
+        let w = tempfile::tempdir().unwrap();
+        let (eff, _) = effective_config(w.path(), "[access]\nstanding_foreign_tokens = 40000\n").unwrap();
+        assert_eq!(settings_from(&toml::from_str(&eff).unwrap()).standing_foreign_tokens, 0, "an unratified edit counts for nothing");
         // `[research] thin_below` (specs/098 §7.5 item 4): default 3, a positive integer, capped at 50; anything else keeps the default.
         assert_eq!(settings_from(&toml::from_str("").unwrap()).thin_below, 3);
         assert_eq!(settings_from(&toml::from_str("[research]\nthin_below = 5\n").unwrap()).thin_below, 5);

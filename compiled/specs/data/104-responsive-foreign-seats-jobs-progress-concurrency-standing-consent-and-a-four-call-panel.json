@@ -70,25 +70,25 @@
     },
     {
       "level": 2,
-      "line": 129,
+      "line": 130,
       "number": "9",
       "title": "Decisions (taken as recommended, 2026-11-13)"
     },
     {
       "level": 2,
-      "line": 137,
+      "line": 138,
       "number": "10",
       "title": "Beyond the approved plan (waits for the operator)"
     },
     {
       "level": 2,
-      "line": 141,
+      "line": 142,
       "number": "11",
       "title": "Not verified"
     },
     {
       "level": 2,
-      "line": 147,
+      "line": 148,
       "number": "12",
       "title": "Amendments from review (2026-11-13)"
     }
@@ -96,7 +96,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/104-responsive-foreign-seats-jobs-progress-concurrency-standing-consent-and-a-four-call-panel.md",
-    "sha256": "65fdfbd325d1c9f1b65d4542642768069f2bb3a994588cff83693c7aba28af16"
+    "sha256": "3801941a449084ed5cb41ef09b06b2dad3617a6343bf9e94916d37d707429be4"
   },
   "source_status_at_hash": {
     "line": {
@@ -109,7 +109,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-13, in a host session (\"approve all your plans and suggestions and go\"). The approval was given to the plan this spec carries out (workstream 6b, with the decisions of §9 as recommended) BEFORE this text was written; the operator has not read the text. Anything here that goes beyond that plan is listed in §10 and waits for the operator."
     },
-    "sha256": "65fdfbd325d1c9f1b65d4542642768069f2bb3a994588cff83693c7aba28af16",
+    "sha256": "3801941a449084ed5cb41ef09b06b2dad3617a6343bf9e94916d37d707429be4",
     "word": "approved"
   },
   "spec": {

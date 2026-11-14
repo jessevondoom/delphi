@@ -112,6 +112,9 @@ pub struct Settings {
     /// `[seats] max_foreign_seats` and `max_foreign_tokens` (SR-4): per Council.
     pub max_foreign_seats: u32,
     pub max_foreign_tokens: u64,
+    /// `[access] standing_foreign_tokens` (`specs/104` §5, §12 A4): the operator's standing consent for read-only foreign seats, in tokens
+    /// per 24 hours. Read from the ratified copy only (`[access]` is pinned); 0, the default, is off.
+    pub standing_foreign_tokens: u64,
     /// `[research] thin_below` (`specs/098` §7.5 item 4): fewer kept, cited claims than this from the knowledge base and the trusted
     /// sources together make a research answer `coverage: thin`. Default 3.
     pub thin_below: usize,
@@ -208,6 +211,7 @@ impl Default for Settings {
             require_families: None,
             max_foreign_seats: 1,
             max_foreign_tokens: 100_000,
+            standing_foreign_tokens: 0,
             thin_below: 3,
             archive: Default::default(),
             chain: Default::default(),

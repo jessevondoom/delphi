@@ -57,7 +57,7 @@ Defaults are those of the template; "—" means no default.
 | `[council] stall_secs` | `120` | a status call flags a Council `stalled`, and names the seat idle longest, when every seat still working has been idle this many seconds. `0` turns the flag off (spec 098 section 19) |
 | `[seats] require_families` | unset | refuse a Panel that cannot show this many distinct known model families (the family of the model that was served, from the seat receipt; `unknown` never counts), before anything is spent. Unset never refuses: a result with fewer than two known families is labelled `homogeneous`. `council_open` also takes it per call ([`specs/091`](../../specs/091-seats-families-and-outside-launch.md) SR-3) |
 | `[seats] red_team_kind` | *removed* | removed (§13.2): `council_open` always accepts `kind: red_team` (a review that returns a findings list, advisory, never a ruling). Ignored if present; `delphi doctor` names it |
-| `[seats] max_foreign_seats`, `max_foreign_tokens` | `1`, `100000` | per Council: how many seats Delphi may run on another family for a Panel, and the tokens they may use. Over either, the foreign seat is refused before any spend, and the message names the cap (SR-4) |
+| `[seats] max_foreign_seats`, `max_foreign_tokens` | `1`, `100000` | per Council (or per `ask_family` call): how many seats Delphi may run on another family for a Panel, and the tokens they may use. Over either, the foreign seat is refused before any spend, and the message names the cap (SR-4) |
 | `[hitl] approval_timeout_sec` | `600` | an unanswered card is denied after this long |
 
 ## Model access ◆
@@ -65,7 +65,7 @@ Defaults are those of the template; "—" means no default.
 | Section | Meaning |
 | :-- | :-- |
 | `[[endpoints]]` | one per way of reaching a model: `id`, `family`, `path` (`api`, `cloud`, `gateway-native`, `gateway-compat`, `harness`), `credential`, and as the path needs `platform`, `region`, `project`, `base_url`, `models`, `headers`, `cost_model` (`subscription` or `local`), `harness` (`claude`, `agy`, `codex` or `copilot`), `betas`. `credential = "none"` is accepted only for a loopback `base_url` |
-| `[access]` | `order` (family to endpoint IDs, in preference order) and `allowed_endpoints` |
+| `[access]` | `order` (family to endpoint IDs, in preference order) and `allowed_endpoints`; `standing_foreign_tokens` (default `0`, off): tokens per 24 hours that read-only foreign seats (`ask_family`, a Panel's foreign seats) may spend without the operator's yes on each call, refused to a session that read a private entry; `delphi doctor` shows it and what it used (spec 104 §5) |
 | `[auth.<name>]` | an OAuth flow: `flow` (`device_code`, `client_credentials`, `loopback_pkce`), `client_id`, `issuer` or explicit URLs, `scopes`, `audience`, `client_secret` (a reference such as `keychain:…`), `redirect_port`, `authorization_params` |
 | `[harness.claude]`, `[harness.agy]`, `[harness.codex]`, `[harness.copilot]` | narrow a subscription CLI: `bridge`, `approvals` (`delegate` or `delphi`), `native_tools`, `claudeai_connectors`, `connector_reads`, `env_allow`, `quota_source` (copilot only: `"gh"` lets `delphi doctor` read the account's quota through your `gh` login; off by default), and CLI features such as `effort`, `max_turns`, `max_budget_usd`, `fallback_models` (see [`specs/021`](../../specs/021-harness-cli-features.md)). Unknown keys are refused |
 | `[harness] connector_settle_secs` | seconds a span waits for the account's connectors to load before its first turn |

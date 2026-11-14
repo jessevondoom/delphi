@@ -387,6 +387,8 @@ default_peer_trust_ceiling = "federated_peer"
 # [access]
 # order = { claude = ["bedrock-us"] }
 # allowed_endpoints = ["bedrock-us"]
+# standing_foreign_tokens = 0     # specs/104 §5: tokens per 24 hours that read-only foreign seats (ask_family, a Panel's foreign seats) may spend
+#                                  # without the operator's yes on each call; 0 (the default) is off. Counts only once ratified.
 #
 # [auth.corp-okta]
 # flow = "device_code"
