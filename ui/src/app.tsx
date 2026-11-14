@@ -112,7 +112,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
   const inboxRef = useRef(inbox);
   /** The daemon's list of everything the operator owes (specs/044), kept beside the cards. A failed call leaves the cards-only list. */
   const loadDecisions = () => {
-    cmd.call('learn.health', {}).then((r: any) => setLearn(r && (r.staged > 0 || r.review > 0) ? { staged: Number(r.staged) || 0, review: Number(r.review) || 0, ...(typeof r.oldest_at === 'string' ? { oldest: r.oldest_at } : {}) } : undefined)).catch(() => {});
+    cmd.call('learn.health', {}).then((r: any) => setLearn(r && (r.staged > 0 || r.review > 0 || r.host_notes > 0) ? { staged: Number(r.staged) || 0, review: Number(r.review) || 0, ...(r.host_notes > 0 ? { hostNotes: Number(r.host_notes) } : {}), ...(typeof r.oldest_at === 'string' ? { oldest: r.oldest_at } : {}) } : undefined)).catch(() => {});
     cmd.call('decision.list', { mission_id: mission }).then((r: any) => {
       const items = D.parse(r);
       const next = { ...inboxRef.current, items, loaded: true, pane: D.reconcile(inboxRef.current.pane, items) };

@@ -1875,7 +1875,10 @@ impl EngineService {
             .map(|ev| ev.iter().filter(|e| e.kind == "learn.staged" && e.payload["trigger"].as_str().is_some_and(|t| crate::host_rpc::TRIGGERS.contains(&t))).count())
             .sum();
         // Spec 104 §5 item 4: the standing consent and what it has used today.
-        let standing = json!({"standing_foreign_tokens": self.engine.settings.standing_foreign_tokens, "used_24h": crate::standing::used(&ws.dir, (self.engine.clock_unix)())});
+        // `used_24h` is the sum the amount is checked against (settled use plus the running seats' ceilings); `settled_24h` and `reserved` are its two parts (spec 104 §13 G4).
+        let now = (self.engine.clock_unix)();
+        let (settled, reserved) = crate::standing::split(&ws.dir, now);
+        let standing = json!({"standing_foreign_tokens": self.engine.settings.standing_foreign_tokens, "used_24h": crate::standing::used(&ws.dir, now), "settled_24h": settled, "reserved": reserved});
         Ok(json!({"enabled": enabled, "host_lessons": waiting, "standing_consent": standing}))
     }
 
@@ -5722,7 +5725,11 @@ mod tests {
             assert_eq!((r["session"].as_str(), r["role"].as_str()), (Some("abcdef0123456789"), Some("orchestrator")));
             let cfg = ws_dir.join("config.toml");
             std::fs::write(&cfg, "# my notes\n[other]\nx = 1  # keep\n").unwrap();
-            assert_eq!(c.call("mcp.get", json!({})).unwrap()["enabled"], true);
+            let got = c.call("mcp.get", json!({})).unwrap();
+            assert_eq!(got["enabled"], true);
+            // Spec 104 §13 G4: the standing amount, its settled use and what is reserved are all in the answer (nothing is used on a fresh workspace).
+            let st = &got["standing_consent"];
+            assert!(st["standing_foreign_tokens"].is_u64() && st["settled_24h"] == 0 && st["reserved"] == 0 && st["used_24h"] == 0, "{got}");
             assert_eq!(c.call("mcp.set", json!({"enabled": false})).unwrap()["enabled"], false);
             assert_eq!(rpc_code(h.call("host.handoff_get", json!({"session": "fedcba9876543210", "tool": "x", "cwd": cwd}))), Some(code::FORBIDDEN), "off means off");
             let off = std::fs::read_to_string(&cfg).unwrap();

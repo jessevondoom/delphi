@@ -3,6 +3,7 @@
 import { cardText, parseXenia, resultText, statusText } from './xenia.ts';
 import type { Rpc } from './rpc.ts';
 import { decisions } from './decisions.ts';
+import { standingLines } from './screen.ts';
 import { listMissions, renderMissions } from './missions.ts';
 import { openNarrator } from './narrator.ts';
 import type { Approval, State } from './fold.ts';
@@ -196,7 +197,7 @@ export async function runSlash(line: string, ctx: Ctx, now = Date.now()): Promis
       const word = rest[0]?.toLowerCase();
       if (word && !['on', 'off'].includes(word)) { ctx.post('/mcp [on | off] (no argument shows the state)'); return; }
       const v = await call(word ? 'mcp.set' : 'mcp.get', word ? { enabled: word === 'on' } : {});
-      if (v) ctx.post(`other coding tools: ${v.enabled ? 'allowed' : 'turned off'} · ${v.host_lessons ?? 0} lesson${v.host_lessons === 1 ? '' : 's'} they proposed or mined (\`delphi learn list\`) · /mcp ${v.enabled ? 'off' : 'on'} to flip`);
+      if (v) ctx.post([`other coding tools: ${v.enabled ? 'allowed' : 'turned off'} · ${v.host_lessons ?? 0} lesson${v.host_lessons === 1 ? '' : 's'} they proposed or mined (\`delphi learn list\`) · /mcp ${v.enabled ? 'off' : 'on'} to flip`, ...standingLines(v.standing_consent)].join('\n'));
       return;
     }
     case 'resume-host': {
@@ -332,8 +333,12 @@ async function retro(ctx: Ctx, args: string[]): Promise<string> {
     }
     if (act === 'list') {
       lastRetro = (await ctx.cmd.call('retro.list', {})) ?? [];
-      if (!lastRetro.length) return 'no proposals yet. The Orchestrator proposes rules after a mission; /retro run asks it to look at this one now.';
-      return [`${lastRetro.length} proposed rule(s). Nothing below is in any prompt until you accept it.`, ...lastRetro.map(line), '/retro show <n> · accept <n…> [workspace|operator] · reject <n…> · stale · recurring · run'].join('\n');
+      // Host notes waiting for `delphi learn keep` (spec 104 §13 G4): the daemon's count; a failed call leaves the line out.
+      const health: any = await ctx.cmd.call('learn.health', {}).catch(() => undefined);
+      const notes = typeof health?.host_notes === 'number' && health.host_notes > 0 ? `${health.host_notes} host note${health.host_notes === 1 ? '' : 's'} waiting` : '';
+      const kept = notes ? [`${notes}: ${typeof health.keep === 'string' ? sanitize(health.keep) : 'delphi learn keep <mission>/<id> --as lesson --role <role> | --as rule'}`] : [];
+      if (!lastRetro.length) return ['no proposals yet. The Orchestrator proposes rules after a mission; /retro run asks it to look at this one now.', ...kept].join('\n');
+      return [`${lastRetro.length} proposed rule(s). Nothing below is in any prompt until you accept it.`, ...lastRetro.map(line), '/retro show <n> · accept <n…> [workspace|operator] · reject <n…> · stale · recurring · run', ...kept].join('\n');
     }
     // Staged claims that more than one mission produced (`specs/083` §5): counts to read, never a rule.
     if (act === 'recurring') {

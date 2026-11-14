@@ -1,0 +1,4 @@
+1 proposed rule(s). Nothing below is in any prompt until you accept it.
+  1. [add · workspace] Pin the toolchain in CI images.
+/retro show <n> · accept <n…> [workspace|operator] · reject <n…> · stale · recurring · run
+2 host notes waiting: delphi learn keep <mission>/<id> --as lesson --role <role> | --as rule
