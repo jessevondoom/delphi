@@ -256,6 +256,23 @@ const ASK_RESULT_WAIT: Duration = Duration::from_secs(25);
 /// The one refusal of `host.ask_result` for another session's id, an answer already read and an id that is nothing (`specs/104` §2, `specs/098` §19).
 pub(crate) const ASK_UNKNOWN: &str = "no such ask for this session: an ask_id is read by the session that asked, once, until its answer has been read";
 
+/// The one line a host is sent while it waits (`specs/104` §3 item 2), from fields the daemon already computes for status: the `phase`,
+/// or each worker as `role state, elapsed`, or the state word. Never agent-written text; one line, at most 200 characters.
+pub(crate) fn progress_line_of(v: &Value) -> String {
+    let rows = v["workers"].as_array().or_else(|| v["seats"].as_array()).filter(|r| !r.is_empty());
+    let line = match (v["phase"].as_str().filter(|p| !p.trim().is_empty()), rows) {
+        (Some(p), _) => p.to_string(),
+        (None, Some(rows)) => rows.iter().map(|r| format!("{} {}, {} s", r["role"].as_str().unwrap_or("?"), r["state"].as_str().unwrap_or("?"), r["elapsed_s"].as_u64().unwrap_or(0))).collect::<Vec<_>>().join("; "),
+        (None, None) => v["status"].as_str().or_else(|| v["state"].as_str()).unwrap_or("working").to_string(),
+    };
+    crate::mcp_serve::progress_text(&line)
+}
+
+/// The answer of an `ask_family` job that is still running (`specs/104` §2 item 1).
+fn ask_working(id: &str) -> Value {
+    json!({"ask_id": id, "status": "working", "retry_after_seconds": 20, "note": "the other family is still answering: call ask_result with this ask_id (wait: true holds up to 25 seconds); reading it spends nothing more. cancel_job with the ask_id stops it."})
+}
+
 /// One `ask_family` job: `None` while the seat answers, then its answer, which is dropped once read.
 struct AskRun {
     result: Option<Value>,
@@ -717,7 +734,18 @@ impl EngineService {
                 }
             }
         }
-        Ok(v)
+        Ok(self.with_progress_line(&c.mission(), v))
+    }
+
+    /// Spec 104 §3 item 2: a job still running carries `progress_line`, the line the MCP process sends a host that waits. A session whose
+    /// mark (spec 103) is live gets the fixed phrase of 103 §4 instead.
+    fn with_progress_line(&self, mission_key: &str, mut v: Value) -> Value {
+        let running = matches!(v["status"].as_str(), Some("working" | "queued" | "running")) || matches!(v["state"].as_str(), Some("convening" | "deliberating"));
+        if running && v.is_object() {
+            let marked = crate::private_read::state(&self.engine.ws.dir, mission_key).would_affect_a_send();
+            v["progress_line"] = json!(if marked { crate::private_read::RELAY_PHRASE.to_string() } else { progress_line_of(&v) });
+        }
+        v
     }
 
     /// While a help request is still being answered, say what the agents working on it are doing and whether they have stalled
@@ -998,9 +1026,16 @@ impl EngineService {
             return Err(err(code::INVALID_PARAMS, ASK_UNKNOWN));
         }
         let wait = if p["wait"].as_bool() == Some(true) { ASK_RESULT_WAIT } else { Duration::ZERO };
-        let v = self.wait_ask(&key, wait).await;
+        // Spec 104 §12 A5: `peek` says how the job stands without taking the answer, which is read once.
+        let v = if p["peek"].as_bool() == Some(true) {
+            let done = self.asks.lock().unwrap().get(&key).is_some_and(|r| r.result.is_some());
+            if done { json!({"ask_id": key.1, "status": "ready", "note": "the answer is in: read it with ask_result"}) } else { ask_working(&key.1) }
+        } else {
+            self.wait_ask(&key, wait).await
+        };
         let m = self.mission_at(Some(&c.mission()), c.cwd.to_str()).await?;
         let v = self.with_help_progress(v, &m, &key.1, h::tail_lines(&p));
+        let v = self.with_progress_line(&c.mission(), v);
         Ok(self.signed_ask(v))
     }
 
@@ -1017,7 +1052,7 @@ impl EngineService {
                 }
             }
             if Instant::now() >= deadline {
-                return json!({"ask_id": key.1, "status": "working", "retry_after_seconds": 20, "note": "the other family is still answering: call ask_result with this ask_id (wait: true holds up to 25 seconds); reading it spends nothing more. cancel_job with the ask_id stops it."});
+                return ask_working(&key.1);
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
@@ -1173,7 +1208,7 @@ impl EngineService {
                 self.annotate_panel_status(&panel_key, &mut view);
             }
             if view["state"] != "deliberating" || Instant::now() >= deadline {
-                return Ok(self.signed_council(view));
+                return Ok(self.with_progress_line(&c.mission(), self.signed_council(view)));
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
@@ -1353,9 +1388,12 @@ impl EngineService {
         if !mine {
             return Err(err(code::INVALID_PARAMS, "no such help request for this session"));
         }
-        let v = self.wait_help(&id, Duration::from_secs(25)).await;
+        // Spec 104 §12 A5: `wait: false` reads the state at once, so the MCP process can say what is happening while a host waits.
+        let wait = if p["wait"].as_bool() == Some(false) { Duration::ZERO } else { Duration::from_secs(25) };
+        let v = self.wait_help(&id, wait).await;
         let m = self.mission_at(Some(&c.mission()), c.cwd.to_str()).await?;
         let v = self.with_help_progress(v, &m, &id, h::tail_lines(&p));
+        let v = self.with_progress_line(&c.mission(), v);
         Ok(self.signed_help(v, &id))
     }
 
@@ -7873,6 +7911,51 @@ mod tests {
         }
         let events = replay_log(&delphi_core::sessions::dir(&ws_dir, "host-abcdef0123456789"));
         assert_eq!(events.iter().filter(|e| e.kind == "task.completed").count(), 1, "the job finished its task once");
+    }
+
+    /// Spec 104 §3 item 2: the progress line is built from status fields only: the phase, the workers, or the state word.
+    #[test]
+    fn the_progress_line_is_built_from_status_fields_and_is_one_short_line() {
+        assert_eq!(progress_line_of(&json!({"state": "deliberating", "phase": "round 2 (cross-examination): 1 of 3 seat(s) have answered"})), "round 2 (cross-examination): 1 of 3 seat(s) have answered");
+        assert_eq!(progress_line_of(&json!({"status": "working", "workers": [{"role": "architect", "state": "thinking", "elapsed_s": 12}, {"role": "scout", "state": "reading", "elapsed_s": 3}]})), "architect thinking, 12 s; scout reading, 3 s");
+        assert_eq!(progress_line_of(&json!({"status": "queued"})), "queued");
+        let long = json!({"phase": format!("{}\nsecond line", "p".repeat(300))});
+        let line = progress_line_of(&long);
+        assert!(line.chars().count() == 200 && !line.contains('\n'), "{line}");
+    }
+
+    /// Spec 104 §3 item 2, §12 A5: a running ask carries a progress line with no question or answer text; `peek` reads it without taking
+    /// the answer; a session whose private-read mark is live gets the fixed phrase of spec 103 instead.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_running_ask_carries_a_fixed_form_progress_line_and_a_marked_session_gets_the_fixed_phrase() {
+        let f = setup(vec![], 50.0, roomy);
+        crate::council::tests::two_families(&f);
+        f.model.respond_with(|_| {
+            std::thread::sleep(Duration::from_millis(1500));
+            Step::text("ANSWER-CANARY")
+        });
+        let ws_dir = f.engine.ws.dir.clone();
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let (peek, marked, done) = blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            c.hello(&htok).unwrap();
+            let first = c.call("host.ask_family", pbody(&cwd, json!({"question": "QUESTION-CANARY: table or file?", "model": "claude-opus", "operator_confirmed": true}))).unwrap();
+            let id = first["ask_id"].clone();
+            let peek = c.call("host.ask_result", pbody(&cwd, json!({"ask_id": id, "peek": true}))).unwrap();
+            crate::private_read::mark(&ws_dir, "host-abcdef0123456789", "entry-1", 100).unwrap();
+            let marked = c.call("host.ask_result", pbody(&cwd, json!({"ask_id": id, "peek": true}))).unwrap();
+            let done = c.call("host.ask_result", pbody(&cwd, json!({"ask_id": id, "wait": true}))).unwrap();
+            (peek, marked, done)
+        })
+        .await;
+        assert_eq!(peek["status"], "working", "{peek}");
+        let line = peek["progress_line"].as_str().unwrap_or_default();
+        assert!(!line.is_empty() && !line.contains("CANARY"), "a fixed-form line, never the question or the answer: {peek}");
+        assert_eq!(marked["progress_line"], crate::private_read::RELAY_PHRASE, "{marked}");
+        assert_eq!((done["status"].as_str(), done["answer"].as_str()), (Some("answered"), Some("ANSWER-CANARY")), "peek never took the answer: {done}");
     }
 
     /// Spec 104 §2 item 4: `cancel_job` stops an ask of this session; the task ends as `task.cancelled`.

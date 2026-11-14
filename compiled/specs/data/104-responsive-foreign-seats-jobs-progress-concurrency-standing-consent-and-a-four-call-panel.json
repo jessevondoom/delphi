@@ -96,7 +96,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/104-responsive-foreign-seats-jobs-progress-concurrency-standing-consent-and-a-four-call-panel.md",
-    "sha256": "06e1a485bc7547250cdf692f3f3418e532a28fa21c0a620f122ff675b5676f63"
+    "sha256": "65fdfbd325d1c9f1b65d4542642768069f2bb3a994588cff83693c7aba28af16"
   },
   "source_status_at_hash": {
     "line": {
@@ -109,7 +109,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-13, in a host session (\"approve all your plans and suggestions and go\"). The approval was given to the plan this spec carries out (workstream 6b, with the decisions of §9 as recommended) BEFORE this text was written; the operator has not read the text. Anything here that goes beyond that plan is listed in §10 and waits for the operator."
     },
-    "sha256": "06e1a485bc7547250cdf692f3f3418e532a28fa21c0a620f122ff675b5676f63",
+    "sha256": "65fdfbd325d1c9f1b65d4542642768069f2bb3a994588cff83693c7aba28af16",
     "word": "approved"
   },
   "spec": {

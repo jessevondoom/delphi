@@ -81,6 +81,11 @@ impl Job {
         !cancelled
     }
 
+    /// The daemon job this request started, while the host does not have its id yet.
+    pub fn job_id(&self) -> Option<String> {
+        self.slot.as_ref().and_then(|s| s.lock().unwrap().job.clone())
+    }
+
     /// Whether the host has cancelled this request.
     pub fn cancelled(&self) -> bool {
         self.slot.as_ref().is_some_and(|s| s.lock().unwrap().cancelled)
@@ -96,6 +101,42 @@ impl Job {
         let mut w = out.lock().unwrap();
         write_line(&mut *w, v).is_ok()
     }
+}
+
+/// How often a waiting request is sent a progress line (`specs/104` §3 item 3).
+#[cfg(not(test))]
+pub const PROGRESS_EVERY: Duration = Duration::from_secs(5);
+#[cfg(test)]
+pub const PROGRESS_EVERY: Duration = Duration::from_millis(100);
+
+/// One progress line as the host is sent it: one line, no control characters, at most 200 characters (`specs/104` §3 item 2).
+pub fn progress_text(line: &str) -> String {
+    let flat: String = line.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    flat.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(200).collect()
+}
+
+/// Run `work` while a second thread sends `notifications/progress` for `token` every `every`, until `work` returns (`specs/104` §3,
+/// §12 A5). `progress` is the whole seconds waited, with no `total`; `message` is `line()`, which reads the daemon's own status line.
+/// Nothing is sent for a request that is not tracked, after the host cancelled it, or after `work` has returned: the ticker is joined
+/// before the caller writes the reply.
+pub fn with_progress<T>(job: &Job, token: &Value, every: Duration, line: &(dyn Fn() -> String + Sync), work: impl FnOnce() -> T) -> T {
+    if job.slot.is_none() {
+        return work();
+    }
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    let start = std::time::Instant::now();
+    std::thread::scope(|s| {
+        s.spawn(move || {
+            // Every `every` until `work` is done (the sender is dropped, which ends the wait at once).
+            while let Err(std::sync::mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(every) {
+                let message = progress_text(&line());
+                job.notify(&serde_json::json!({"jsonrpc": "2.0", "method": "notifications/progress", "params": {"progressToken": token, "progress": start.elapsed().as_secs(), "message": message}}));
+            }
+        });
+        let out = work();
+        drop(tx);
+        out
+    })
 }
 
 /// A counting gate: at most `n` holders at once.
@@ -316,7 +357,10 @@ mod tests {
         fn respond(&self, v: Value, job: &Job) -> Option<Value> {
             let id = v.get("id").cloned()?;
             let name = v["params"]["name"].as_str().unwrap_or("").to_string();
+            let token = v["params"]["_meta"]["progressToken"].clone();
             match name.as_str() {
+                "progress" if !token.is_null() => with_progress(job, &token, Duration::from_millis(50), &|| "architect thinking,\n1 s".to_string(), || std::thread::sleep(Duration::from_millis(450))),
+                "progress" => std::thread::sleep(Duration::from_millis(450)),
                 "slow" => std::thread::sleep(Duration::from_millis(400)),
                 "brief" => std::thread::sleep(Duration::from_millis(5)),
                 "hold" => {
@@ -355,6 +399,40 @@ mod tests {
 
     fn cancel(id: u64) -> Vec<u8> {
         format!("{}\n", json!({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": id}})).into_bytes()
+    }
+
+    fn wait_reply(sink: &Sink, id: u64) {
+        let t = std::time::Instant::now();
+        while !sink.lines().iter().any(|l| l["id"] == json!(id)) && t.elapsed() < Duration::from_secs(10) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Spec 104 §3: a waiting call that carries a progress token is sent progress lines before its reply and none after; a call
+    /// without a token gets none. The line is flattened to one line of at most 200 characters.
+    #[test]
+    fn a_waiting_call_with_a_token_gets_progress_before_its_reply_and_none_after() {
+        let (tx, sink, t) = start(Arc::new(Fake::default()));
+        tx.send(format!("{}\n", json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "progress", "_meta": {"progressToken": "tok-1"}}})).into_bytes()).unwrap();
+        wait_reply(&sink, 1);
+        std::thread::sleep(Duration::from_millis(400));
+        tx.send(req(2, "progress")).unwrap();
+        wait_reply(&sink, 2);
+        std::thread::sleep(Duration::from_millis(300));
+        drop(tx);
+        t.join().unwrap();
+        let lines = sink.lines();
+        let reply = lines.iter().position(|l| l["id"] == json!(1)).unwrap();
+        let notes: Vec<(usize, &Value)> = lines.iter().enumerate().filter(|(_, l)| l["method"] == "notifications/progress").collect();
+        assert!(!notes.is_empty(), "{lines:?}");
+        for (i, n) in &notes {
+            assert!(*i < reply, "no progress after the reply: {lines:?}");
+            assert_eq!(n["params"]["progressToken"], "tok-1");
+            assert!(n["params"]["progress"].is_u64() && n["params"].get("total").is_none(), "{n}");
+            assert_eq!(n["params"]["message"], "architect thinking, 1 s", "{n}");
+        }
+        assert_eq!(lines.iter().filter(|l| l["method"] == "notifications/progress").count(), notes.len(), "the call without a token got none");
+        assert_eq!(progress_text(&"x".repeat(300)).chars().count(), 200);
     }
 
     fn start(h: Arc<Fake>) -> (mpsc::Sender<Vec<u8>>, Sink, std::thread::JoinHandle<i32>) {

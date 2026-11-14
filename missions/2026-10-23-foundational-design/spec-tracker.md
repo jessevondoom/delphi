@@ -957,7 +957,7 @@ The operator asked, in a host session on 2026-11-13, for a review of how Delphi'
 | 104 | R0 | the spec | approved in advance 2026-11-13 |
 | 104 | R1 | `ask_family` as a job, `ask_result`, identity, cancel | built (local, not pushed): the daemon starts the seat as a background job and hands back its `ask_id` at once (amendment §12 A1), the MCP process holds the tool call up to 45 s polling `ask_result`, which reads the answer once for its own session; `cancel_job` stops it, and the answer carries the strategist's identity |
 | 104 | R3 | concurrent requests | built (local, not pushed): `mcp_serve.rs` reads on one thread and runs `tools/call`, `resources/read` and `prompts/get` on at most 8 workers, writes whole lines under one lock, drops the reply of a cancelled request, stops an `ask_family` seat whose id the host never received (on cancel or on close, §12 A1), waits 2 s on close, and the pack cap is reserved atomically |
-| 104 | R2 | progress notifications | not started |
+| 104 | R2 | progress notifications | built (local, not pushed): with a progress token, a ticker beside the long daemon call sends the daemon's `progress_line` every 5 s (amendment §12 A5); `help_result` takes `wait: false`, `ask_result` takes `peek: true`; a marked session gets the fixed phrase of 103 §4. No host's display of the line was observed |
 | 104 | R4 | `[seats] standing_tokens` | not started |
 | 104 | R5 | a Panel in four calls | not started |
 | 105 | H0 | the spec and the 071 amendment | approved in advance 2026-11-13 |
