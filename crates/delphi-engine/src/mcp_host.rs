@@ -936,7 +936,12 @@ impl Server {
             "specs_list" => self.project().and_then(|p| p.specs_list(args.get("group").and_then(Value::as_str), args.get("status").and_then(Value::as_str))),
             "scaffold_status" => self.project().and_then(|p| p.scaffold_status(&self.cwd)),
             "search_project" => query().and_then(|q| self.project()?.search_project_detail(&q, limit(5, mcp_project::MAX_LIMIT), mcp_project::Detail::parse(args.get("detail"))?)),
-            "search_memory" => query().and_then(|q| self.project()?.search_memory_detail(&q, args.get("role").and_then(Value::as_str), limit(5, mcp_project::MAX_LIMIT), mcp_project::Detail::parse(args.get("detail"))?)),
+            "search_memory" => query().and_then(|q| {
+                if let (Some(role), Ok(packs)) = (args.get("role").and_then(Value::as_str), self.packs()) {
+                    packs.check_servable(role)?;
+                }
+                self.project()?.search_memory_detail(&q, args.get("role").and_then(Value::as_str), limit(5, mcp_project::MAX_LIMIT), mcp_project::Detail::parse(args.get("detail"))?)
+            }),
             "query_memory" => {
                 if let Some(target_p) = args.get("project_id").or_else(|| args.get("project")).and_then(Value::as_str) {
                     let active_p = match self.project() {

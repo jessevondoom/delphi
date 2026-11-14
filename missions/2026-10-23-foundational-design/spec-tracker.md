@@ -979,7 +979,7 @@ The operator asked, in a host session on 2026-11-13, for a review of how Delphi'
 | 108 | M4 | the trace harvester | built (pull request open): every task end writes its episode to `missions/<id>/traces/<role>-<task>.md` off the task's path (a failure is logged, never returned), stamped per A1 from the spans' taint and never from the task's ceiling, within 065 §6's quotas, and indexed in the `episodes` zone, which stays off for hosts |
 | 108 | M5 | three conformance fixes | built (pull request open), as amended by A6: `delphi kb review keep` now adds a `kept_from:` frontmatter marker (none existed that told a kept host entry from an imported page) and `search_kb` (`kept` layer) and `kb_retrieve` return only pages carrying it, fenced and labelled `kept by the operator, not validated`; `propose_council_record` says it is saved under `missions/agendas/` and is in the memory write-path audit; `handoff_put` names its orchestrator default; `host_rpc::defuse` now spaces out a hyphen run of any length |
 | 109 | Q0 | the spec | approved in advance 2026-11-13 |
-| 109 | Q0a | the `query_memory` facet leak (review amendment A3) | not started |
+| 109 | Q0a | the `query_memory` facet leak (review amendment A3) | built (local, not pushed): both leaks reproduced and are closed, facets come from zone and location with the role-memory check, and `search_memory` refuses a role that is not servable |
 | 109 | Q1 | the workspace corpus on the retrieval service; one shared project ranker (re-scoped by review amendment A1) | not started |
 | 109 | Q1b | index registered projects as a per-project layer (the operator's decision of 2026-11-13) | not started |
 | 109 | Q2 | a fresh index | not started |

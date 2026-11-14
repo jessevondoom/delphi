@@ -200,11 +200,49 @@ fn memory_allowed(rel: &str, role: Option<&str>) -> bool {
     rel.starts_with("memory/promoted/") || role.is_some_and(|r| rel.starts_with(&format!("memory/agents/{}/", r)))
 }
 
+/// The facet of a file by its own name: `heuristics`, `decisions` (a decision or council record), `reflections` (a reflection,
+/// retro or summary), otherwise `lessons`. The name is the file's, never a folder's, so a role called `retro-bot` is no facet.
+fn name_facet(rel: &str) -> &'static str {
+    let name = rel.rsplit('/').next().unwrap_or(rel).to_lowercase();
+    if name.contains("heuristics") {
+        "heuristics"
+    } else if name.contains("decision") || name.contains("council") {
+        "decisions"
+    } else if name.contains("reflection") || name.contains("retro") || name.contains("summary") {
+        "reflections"
+    } else {
+        "lessons"
+    }
+}
+
+/// A memory file's facet: what the operator promoted is a summary shared by every role; a role's own files go by name.
+fn memory_facet(rel: &str) -> &'static str {
+    if rel.starts_with("memory/promoted/") {
+        "reflections"
+    } else {
+        name_facet(rel)
+    }
+}
+
 impl Project {
     pub fn new(ws_dir: &Path, cwd: &Path) -> Project {
         let active = scope::resolve(ws_dir, cwd);
         let root = active.project.as_ref().and_then(|id| scope::project_root(ws_dir, id)).and_then(|r| std::fs::canonicalize(r).ok()).filter(|r| r.is_dir());
         Project { ws_dir: ws_dir.to_path_buf(), active, root }
+    }
+
+    /// Whether a mission file may be returned: its mission (`<mission>/scope`) names no project or the active one. A mission
+    /// stamped with any other project, registered or not, belongs to that project's layer and is never served to this one.
+    fn mission_visible(&self, rel: &str, file: &Path) -> bool {
+        let depth = rel.split('/').count();
+        if depth < 3 {
+            return true;
+        }
+        let Some(dir) = file.ancestors().nth(depth - 2) else { return false };
+        match std::fs::read_to_string(dir.join("scope")) {
+            Ok(stamp) => self.active.project.as_ref().is_some_and(|id| id.as_str() == stamp.trim()),
+            Err(e) => e.kind() == std::io::ErrorKind::NotFound,
+        }
     }
 
     /// One line for the host: which scope this folder resolved to.
@@ -451,69 +489,45 @@ impl Project {
             ));
         }
 
+        // Each candidate gets one facet from its zone and location (`specs/109` §2 item 4), never from a word anywhere in its
+        // path. Memory passes the same role check `search_memory` applies; a mission file only if its mission belongs to no
+        // project or to the active one.
         let mut docs: Vec<Doc> = Vec::new();
+        let mut facets: std::collections::HashMap<(String, String), &'static str> = std::collections::HashMap::new();
+        let mut take = |layer: String, path: String, source: &'static str, file: PathBuf, facet: &'static str| {
+            if facet_filter == "all" || facet_filter == facet {
+                facets.insert((layer.clone(), path.clone()), facet);
+                docs.push(Doc { layer, path, source, file });
+            }
+        };
         for s in scope::layered_sources(&self.ws_dir, &self.active) {
             let rel = &s.file.rel_path;
-            let is_lesson = s.file.zone == "memory" && memory_allowed(rel, role);
-            let is_heuristic = rel.ends_with("heuristics.md") || rel.contains("heuristics");
-            let is_decision = rel.contains("decision") || rel.contains("council");
-            let is_reflection = rel.contains("reflection") || rel.contains("retro") || rel.contains("summary");
-
-            let matches = match facet_filter {
-                "lessons" => is_lesson,
-                "heuristics" => is_heuristic,
-                "decisions" => is_decision,
-                "reflections" => is_reflection,
-                "all" => is_lesson || is_heuristic || is_decision || is_reflection,
-                _ => false,
+            let facet = match s.file.zone {
+                "memory" if memory_allowed(rel, role) => memory_facet(rel),
+                "missions" if self.mission_visible(rel, &s.file.path) => match name_facet(rel) {
+                    f @ ("decisions" | "reflections") => f,
+                    _ => continue,
+                },
+                _ => continue,
             };
-            if matches {
-                docs.push(Doc {
-                    layer: s.layer,
-                    path: s.file.rel_path,
-                    source: s.file.default_source,
-                    file: s.file.path,
-                });
-            }
+            take(s.layer, s.file.rel_path, s.file.default_source, s.file.path, facet);
         }
-
-        if let Some(_root) = &self.root {
-            for (rel, file) in self.files() {
-                let is_decision = rel.starts_with("plans/") || rel.contains("decision") || rel.contains("council");
-                let is_reflection = rel.contains("reflection") || rel.contains("retro");
-                let matches = match facet_filter {
-                    "decisions" => is_decision,
-                    "reflections" => is_reflection,
-                    "all" => is_decision || is_reflection,
-                    _ => false,
-                };
-                if matches && !docs.iter().any(|d| d.path == rel) {
-                    docs.push(Doc {
-                        layer: "project".into(),
-                        path: rel,
-                        source: UNTRUSTED,
-                        file,
-                    });
-                }
+        for (rel, file) in self.files() {
+            let facet = if rel.starts_with("plans/") { "decisions" } else { name_facet(&rel) };
+            if matches!(facet, "decisions" | "reflections") {
+                take("project".into(), rel, UNTRUSTED, file, facet);
             }
         }
 
         let ranked = rank(docs, query, limit, &self.semantic_order(query));
-        let hits: Vec<Value> = ranked.into_iter().map(|mut h| {
-            if let Some(path) = h.get("path").and_then(Value::as_str) {
-                let facet = if path.ends_with("heuristics.md") || path.contains("heuristics") {
-                    "heuristics"
-                } else if path.contains("decision") || path.contains("council") || path.starts_with("plans/") {
-                    "decisions"
-                } else if path.contains("reflection") || path.contains("retro") || path.contains("summary") {
-                    "reflections"
-                } else {
-                    "lessons"
-                };
-                h["facet"] = json!(facet);
-            }
-            h
-        }).collect();
+        let hits: Vec<Value> = ranked
+            .into_iter()
+            .map(|mut h| {
+                let key = (h["layer"].as_str().unwrap_or_default().to_string(), h["path"].as_str().unwrap_or_default().to_string());
+                h["facet"] = json!(facets.get(&key).copied().unwrap_or("lessons"));
+                h
+            })
+            .collect();
 
         Ok(json!({
             "project": self.describe(),
@@ -973,6 +987,72 @@ mod tests {
         assert!(d_val["results"].as_array().unwrap().iter().all(|h| h["facet"] == "decisions"));
 
         assert!(p.query_memory("quokka", None, Some("invalid"), 10).is_err());
+    }
+
+    fn facet_paths(p: &Project, role: Option<&str>, facet: &str) -> Vec<String> {
+        texts(&p.query_memory("quokka", role, Some(facet), 20).unwrap())
+    }
+
+    #[test]
+    fn query_memory_never_returns_another_roles_memory_under_any_facet() {
+        let (_t, ws, root) = fixture();
+        let layer = ws.join("local/projects").join(ID);
+        for f in ["memory/agents/builder/heuristics.md", "memory/agents/builder/decisions.md", "memory/agents/builder/reflection.md"] {
+            fs::write(layer.join(f), "builder private quokka\n").unwrap();
+        }
+        fs::create_dir_all(ws.join("local/memory/agents/builder")).unwrap();
+        fs::write(ws.join("local/memory/agents/builder/retro-summary.md"), "home builder quokka\n").unwrap();
+        fs::write(layer.join("memory/agents/architect/heuristics.md"), "architect heuristic quokka\n").unwrap();
+        let p = Project::new(&ws, &root);
+        for role in [Some("architect"), None] {
+            for facet in ["all", "lessons", "heuristics", "decisions", "reflections"] {
+                let hits = facet_paths(&p, role, facet);
+                assert!(!hits.iter().any(|h| h.contains("agents/builder")), "{role:?} {facet}: {hits:?}");
+            }
+        }
+        assert_eq!(facet_paths(&p, Some("architect"), "heuristics"), ["memory/agents/architect/heuristics.md"]);
+        assert!(facet_paths(&p, None, "heuristics").is_empty(), "with no role, no role's heuristics");
+        assert!(facet_paths(&p, None, "reflections").contains(&"memory/promoted/shared.md".to_string()), "promoted summaries are shared");
+    }
+
+    #[test]
+    fn query_memory_never_returns_another_projects_mission_files() {
+        let (_t, ws, root) = fixture();
+        let other = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let w = |rel: &str, text: &str| {
+            let f = ws.join("local/sessions").join(rel);
+            fs::create_dir_all(f.parent().unwrap()).unwrap();
+            fs::write(f, text).unwrap();
+        };
+        w("m-other/scope", other);
+        w("m-other/council-decision.md", "other project quokka decision\n");
+        w("m-other/retro.md", "other project quokka retro\n");
+        w("m-mine/scope", ID);
+        w("m-mine/council-decision.md", "my quokka decision\n");
+        w("m-home/council-decision.md", "home-only quokka decision\n");
+        let p = Project::new(&ws, &root);
+        for facet in ["all", "decisions", "reflections"] {
+            let hits = facet_paths(&p, Some("architect"), facet);
+            assert!(!hits.iter().any(|h| h.contains("m-other")), "{facet}: {hits:?}");
+        }
+        let dec = facet_paths(&p, Some("architect"), "decisions");
+        assert!(dec.contains(&"missions/m-mine/council-decision.md".to_string()) && dec.contains(&"missions/m-home/council-decision.md".to_string()), "{dec:?}");
+    }
+
+    #[test]
+    fn query_memory_facets_come_from_zone_and_location_not_a_path_word() {
+        let (_t, ws, root) = fixture();
+        let layer = ws.join("local/projects").join(ID);
+        fs::create_dir_all(layer.join("knowledge")).unwrap();
+        fs::write(layer.join("knowledge/heuristics-decision-notes.md"), "quokka knowledge\n").unwrap();
+        fs::create_dir_all(ws.join("base/specs")).unwrap();
+        fs::write(ws.join("base/specs/retro-summary.md"), "quokka spec\n").unwrap();
+        fs::write(layer.join("staged/decision-summary.md"), "staged quokka\n").unwrap();
+        let p = Project::new(&ws, &root);
+        for facet in ["all", "heuristics", "decisions", "reflections"] {
+            let hits = facet_paths(&p, Some("architect"), facet);
+            assert!(!hits.iter().any(|h| h.contains("knowledge/") || h.starts_with("specs/retro") || h.contains("staged/")), "{facet}: {hits:?}");
+        }
     }
 
     #[test]
