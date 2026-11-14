@@ -1,8 +1,9 @@
 //! `delphi mcp --hook <event>` and `delphi mcp --hooks on|off|status` (`specs/105` §2, A2).
 //!
 //! `--hook` is what a host runs at its session events. It exits 0 always and prints nothing on any error, a missing workspace,
-//! the switch off, or when its 2 s deadline passes (§2). It never echoes the operator's prompt. `--hooks on` is the operator's
-//! act at a terminal: stdin must be a terminal and the operator types `yes`; there is no `--yes`.
+//! the switch off, or when its 2 s deadline passes (§2). It never echoes the operator's prompt. The hooks are on by default (§13);
+//! `--hooks on` (restoring the default after `--hooks off`) is the operator's act at a terminal: stdin must be a terminal and
+//! the operator types `yes`; there is no `--yes`. `--hooks off` needs neither.
 
 use crate::home;
 use delphi_engine::host_hooks;
@@ -135,7 +136,7 @@ pub fn switch(what: Option<&str>, ws_dir: &Path) -> i32 {
         }
         Some("off") => match host_hooks::set_switch(ws_dir, false) {
             Ok(()) => {
-                println!("session hooks: off. The host's hooks print nothing from now on.");
+                println!("session hooks: off. The host's hooks print nothing from now on. `delphi mcp --hooks on` turns them back on (on is the default).");
                 0
             }
             Err(e) => {
@@ -214,9 +215,7 @@ mod tests {
     fn the_subagent_start_hook_prints_a_workers_pack_only_with_the_switch_on_and_for_claude_code() {
         let t = tempfile::tempdir().unwrap();
         let ws = delphi_engine::workspace::make_test_workspace(t.path());
-        if !ws.dir.join("config.toml").exists() {
-            std::fs::write(ws.dir.join("config.toml"), "").unwrap();
-        }
+        std::fs::write(ws.dir.join("config.toml"), "[mcp]\nsession_hooks = false\n").unwrap();
         let home = t.path().to_str().unwrap();
         let args = a(&["--home", home, "--workspace", "w"]);
         let input = |agent: &str| format!("{{\"session_id\": \"s1\", \"cwd\": \"{home}\", \"hook_event_name\": \"SubagentStart\", \"agent_id\": \"x\", \"agent_type\": \"{agent}\"}}");
@@ -250,10 +249,33 @@ mod tests {
         assert_eq!(status("s2", false), None);
     }
 
+    /// Spec 105 §13: the hooks are on by default. A workspace whose config has no `session_hooks` key prints the brief;
+    /// `session_hooks = false`, `[mcp] enabled = false` and an `[mcp]` table that cannot be read print nothing.
+    #[test]
+    fn a_workspace_with_no_session_hooks_key_prints_the_brief_and_each_way_to_silence_it_prints_nothing() {
+        let t = tempfile::tempdir().unwrap();
+        let ws = delphi_engine::workspace::make_test_workspace(t.path());
+        let home = t.path().to_str().unwrap();
+        let args = a(&["--home", home, "--workspace", "w"]);
+        let input = format!("{{\"session_id\": \"s1\", \"cwd\": \"{home}\", \"hook_event_name\": \"SessionStart\"}}");
+        let run = |cfg: &str| {
+            std::fs::write(ws.dir.join("config.toml"), cfg).unwrap();
+            hook_output(&args, "session-start", "claude-code", input.as_bytes())
+        };
+        for cfg in ["", "[mcp]\n", "[mcp]\nbadge_ascii = false\n", "[mcp]\nsession_hooks = true\n"] {
+            let out = run(cfg).unwrap_or_else(|| panic!("the brief is printed for {cfg:?}"));
+            assert!(out.contains("Delphi"), "{out}");
+        }
+        assert_eq!(run("[mcp]\nsession_hooks = false\n"), None, "an explicit false is off");
+        assert_eq!(run("[mcp]\nenabled = false\n"), None, "[mcp] enabled = false silences the hooks although the default is on");
+        assert_eq!(run("[mcp]\nbadge_style = \"neon\"\n"), None, "an unreadable [mcp] is silent");
+        assert_eq!(run("[mcp\n"), None, "a config that cannot be parsed is silent");
+    }
+
     #[test]
     fn hooks_on_is_refused_without_a_terminal_and_a_bad_word_is_usage() {
         let t = tempfile::tempdir().unwrap();
-        std::fs::write(t.path().join("config.toml"), "").unwrap();
+        std::fs::write(t.path().join("config.toml"), "[mcp]\nsession_hooks = false\n").unwrap();
         if !std::io::stdin().is_terminal() {
             assert_eq!(switch(Some("on"), t.path()), 2);
             assert!(!host_hooks::switch_on(t.path()), "nothing was written");

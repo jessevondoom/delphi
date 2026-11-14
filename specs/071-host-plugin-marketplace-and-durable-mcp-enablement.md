@@ -48,6 +48,7 @@ Delphi is offered to four hosts (Claude Code, Codex, Antigravity/`agy`, Copilot 
 1. **One source of truth.** The files under `ecosystem/` are *generated* by the code in `crates/delphi-engine/src/mcp_hosts.rs` (the same code `--print-config` and `plugin export` use), checked in, and guarded by a drift test. They are never hand-edited. The repository rule for `docs/reference/` (AGENTS.md "Generated files") applies unchanged.
 2. **Host-native first.** Use each host's own install and marketplace mechanism. This spec never writes a host's config file.
 3. **The operator acts, Delphi never self-installs.** Nothing in this spec runs at `delphi` start-up, in the daemon, or in the MCP server. `doctor` and `--check` only read.
+   *Note, 2026-11-14: amended by [`specs/105`](105-session-hooks-for-hosts-a-brief-at-start-mention-routing-at-the-prompt-and-a-marker-at-the-end.md) §13: the fixed hook commands run for an operator who installed the plugin unless they turn them off.*
 4. **Fail closed, say so.** Where a state cannot be verified, the answer is `unknown` or `unverified`, never `ok` (§7).
 5. **The version is the release's.** The *release version* is `[package].version` in `crates/delphi/Cargo.toml` (there is no workspace version; engine crates carry their own). The CLI passes it into the generator; `mcp_hosts.rs` must not hard-code a plugin version (it does today: `0.1.0`). Plugin version, marketplace entry and release version must match; a mismatch fails the gate.
 

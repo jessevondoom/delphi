@@ -201,7 +201,7 @@ sandbox = "off"
 # badge_ascii = false               # true: the badge in an identity is plain ASCII ([0-0] for ⟦•─•⟧), for a host whose font cannot draw it; DELPHI_ASCII_BADGES=1 does the same where Delphi itself runs
 # max_packs_per_task = 5           # how many DIFFERENT generated packs (`spawn_agent_pack`) one named task may have; asking again for a pack already made costs nothing; 0 allows none (specs/098 section 9)
 # max_packs_per_session = 20       # how many different generated packs one server session may have in all, so cycling task names cannot spawn packs without end; 0 allows none
-# session_hooks = false            # true: the host's session hooks (`delphi mcp --hook <event>`) print a brief and mention routing into its context (specs/105); set it with `delphi mcp --hooks on` at a terminal
+# session_hooks = true             # on by default (specs/105 section 13): the host's session hooks (`delphi mcp --hook <event>`) print a brief and mention routing into its context; false turns them off (`delphi mcp --hooks off` sets it; `--hooks on` at a terminal turns them back on)
 
 # Model names for the council subagent files that `delphi mcp --install codex --agents` and `delphi plugin export` write (specs/086 section 6.3).
 # Only Copilot and Codex take a free name; Claude Code and agy use aliases Delphi picks. No entry: the file sets no model and the seat inherits.

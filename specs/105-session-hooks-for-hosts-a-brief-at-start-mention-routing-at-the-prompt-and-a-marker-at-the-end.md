@@ -16,7 +16,7 @@ tags: [spec, hosts, hooks, mcp, plugin, mentions, session]
 # Spec 105: Session hooks for hosts
 
 > **Status: approved in advance, 2026-11-13** (see the frontmatter).
-> **Amends:** [`specs/071`](071-host-plugin-marketplace-and-durable-mcp-enablement.md) principle 3 ("nothing runs at start-up"): with the operator's opt-in, three fixed commands run at three host events. Without the opt-in, 071 stands as written.
+> **Amends:** [`specs/071`](071-host-plugin-marketplace-and-durable-mcp-enablement.md) principle 3 ("nothing runs at start-up"): three fixed commands run at three host events, on by default (§13) for an operator who installed the plugin and until they turn them off. Where the operator has turned them off, 071 stands as written.
 > **Extends:** [`specs/077`](077-host-mention-routing-and-themed-alias-resolution.md) (mention routing), [`specs/062`](062-delphi-as-host-agent-mcp-server.md) §8 (handoffs and summaries), [`specs/098`](098-where-agents-run-host-first-locus-and-the-inside-exceptions.md) §11 (best-effort summaries).
 
 ---
@@ -40,7 +40,7 @@ Today everything that makes a host session a Delphi session depends on the host'
 
 ### 1.2 Simpler alternative considered
 
-*Put the same text in a generated `CLAUDE.md`.* Rejected as the whole answer: a static file cannot carry the spec status, a pointer to the last session or a resolved mention, and Delphi does not write the operator's instruction files, except a marked block the operator accepts at a terminal ([`specs/110`](110-other-hosts-adapters-instruction-files-and-install-paths.md); A5). A static section is still printed by `--print-claude-md` for an operator who wants no hooks.
+*Put the same text in a generated `CLAUDE.md`.* Rejected as the whole answer: a static file cannot carry the spec status, a pointer to the last session or a resolved mention, and Delphi does not write the operator's instruction files, except a marked block the operator accepts at a terminal ([`specs/110`](110-other-hosts-adapters-instruction-files-and-install-paths.md); A5). A static section is still printed by `--print-claude-md` for an operator who turns the hooks off.
 
 ---
 
@@ -48,7 +48,7 @@ Today everything that makes a host session a Delphi session depends on the host'
 
 `delphi mcp --hook <event> [--host <id>]` (A2), where `<event>` is `session-start`, `prompt` or `session-end`, and `--host` is a host ID of `mcp_hosts::HOSTS` (default `claude-code`). It reads the host's hook JSON on stdin (at most 256 KiB; anything else is ignored), prints what the host should add to the model's context, and exits **0 always**: on bad input, a missing workspace, a stopped daemon, or the switch off, it prints nothing.
 
-- **The switch.** `[mcp] session_hooks = false` (default; A2: not `[hooks]`, which is spec 018's ratified block). `delphi mcp --hooks on` and `delphi mcp --hooks off` set it; `--hooks on` needs stdin to be a terminal and a typed `yes`, with no `--yes` override, and is refused inside an agent seat. `delphi mcp --hooks status` prints it and where the plugin's hooks file is. With the switch off the command prints nothing and reads nothing but the config. `[mcp] enabled = false` also silences it.
+- **The switch.** `[mcp] session_hooks` (on by default (§13); A2: not `[hooks]`, which is spec 018's ratified block; `session_hooks = false` is off). `delphi mcp --hooks on` and `delphi mcp --hooks off` set it; `--hooks on` (a restore of the default once the hooks were turned off) needs stdin to be a terminal and a typed `yes`, with no `--yes` override, and is refused inside an agent seat. `delphi mcp --hooks status` prints it and where the plugin's hooks file is. With the switch off (`session_hooks = false`) the command prints nothing and reads nothing but the config. `[mcp] enabled = false` also silences it.
 - **Budget.** `session-start` finishes within 400 ms and `prompt` within 150 ms on a warm disk; each has a hard 2 s deadline after which it prints nothing. When the prompt holds no `@`, `prompt` opens no workspace file other than the config and its own per-session counter file (§5 item 4; A4).
 - **No daemon needed.** Roster, aliases and spec status are read from files. The last handoff and marker are read from files the daemon and this command wrote. Nothing is asked of the daemon by `session-start` and `prompt`, so they never wait on it; `session-end` may make one bounded call for transcript ingest when [`specs/108`](108-closing-the-learning-loop-for-host-sessions.md) M3 is built (A5).
 
@@ -93,11 +93,12 @@ For Claude Code the output is the hook's `additionalContext` JSON for `SessionSt
 | H2 | `prompt`: mention resolution | 4-6 |
 | H3 | `session-end` marker, the nudge, the brief's last-session line | 6-8 |
 | H4 | the guide, `--print-claude-md` static section, a live check in Claude Code (recorded in §11) | 3-4 |
+| H5 | the hooks are on by default (§13) | 1-2 |
 
 ## 8. Authority and trust
 
-- A hook is a command the operator's host runs as the operator. It is fixed code in the signed release, takes no argument from the model, and is off until the operator turns it on.
-- The limit, stated plainly (A2): the terminal-and-`yes` rule binds `delphi mcp --hooks on`, not the file. A process running as the operator can still edit `config.toml`. What the switch turns on is read-only and prints only ratified text, fenced project data and pointers.
+- A hook is a command the operator's host runs as the operator. It is fixed code in the signed release, takes no argument from the model, and is on by default (§13) until the operator turns it off.
+- The limit, stated plainly (A2): the terminal-and-`yes` rule binds `delphi mcp --hooks on`, not the file. A process running as the operator can still edit `config.toml`. What the switch controls is read-only and prints only ratified text, fenced project data and pointers.
 - A hook's output reaches a model's context, so it is an injection channel. Only ratified text is printed plain. Project text is fenced, flattened, cut and labelled as data (§3); text another session wrote is not printed at all (A1). The brief never carries a staged note, a lesson proposal, a handoff's or summary's text, or KB text.
 - A hook raises no trust, writes no proposal and touches no governed path. The marker is `external_untrusted` counts.
 - A hook cannot answer a card or change what a tool may do (charter §5.11 is about the daemon's own hooks and is not touched).
@@ -106,7 +107,7 @@ For Claude Code the output is the hook's `additionalContext` JSON for `SessionSt
 
 | # | Decision | Taken |
 | :-- | :-- | :-- |
-| OD-1 | Are hooks on by default? | **No.** `[mcp] session_hooks = false`; the operator runs `delphi mcp --hooks on` (A2). |
+| OD-1 | Are hooks on by default? | ~~**No.** `[mcp] session_hooks = false`; the operator runs `delphi mcp --hooks on` (A2).~~ **Reversed on 2026-11-14, see §13:** on by default. |
 | OD-2 | Does a hook ever block a stop to force a summary? | **No.** A one-line nudge at the next prompt. |
 | OD-3 | Does the brief carry memory or KB text? | **No**, until 108 and 109 say what and how. |
 
@@ -129,9 +130,27 @@ The plan said the end hook "writes the summary and handoff". A hook has no model
 From the red-team review of this spec, before any slice merged. They supersede the text above, which has been changed to match.
 
 - **A1 (P0, §3 item 5).** The brief prints no text another session wrote: no handoff objective, no open items, no summary. A handoff is `external_untrusted`, and the brief enters every new session without a choice, which would put unratified text in an always-loaded prompt (charter §7). Item 5 is a pointer built from fixed words and non-text fields: the date, the tool name (validated to the host-ID charset), whether a handoff exists, whether a summary was recorded, and "call handoff_get or recall_sessions to read what it left". Spec names and statuses from the project stay, fenced as specified.
-- **A2 (§2, the switch).** `[hooks]` is a ratified access block and belongs to spec 018's daemon hooks (`lock::ACCESS_KEYS`, `delphi hooks`); it is not used. The switch is `[mcp] session_hooks = false`. The commands live under `delphi mcp`: `delphi mcp --hook <event> [--host <id>]` runs a hook, `delphi mcp --hooks on|off|status` sets or shows the switch. `--hooks on` needs stdin to be a terminal and a typed `yes`, with no `--yes` override. §8 states the limit: a process running as the operator can still edit `config.toml`; what the switch turns on is read-only and prints only ratified text, fenced project data and pointers.
+- **A2 (§2, the switch).** `[hooks]` is a ratified access block and belongs to spec 018's daemon hooks (`lock::ACCESS_KEYS`, `delphi hooks`); it is not used. The switch is the key `[mcp] session_hooks` (its default became true on 2026-11-14, §13). The commands live under `delphi mcp`: `delphi mcp --hook <event> [--host <id>]` runs a hook, `delphi mcp --hooks on|off|status` sets or shows the switch. `--hooks on` needs stdin to be a terminal and a typed `yes`, with no `--yes` override. §8 states the limit: a process running as the operator can still edit `config.toml`; what the switch turns on is read-only and prints only ratified text, fenced project data and pointers.
 - **A3 (§5 item 1, untrusted hook input).** The `session_id` from stdin must match `[A-Za-z0-9_-]{1,64}` or nothing is written. `transcript_path` is used only when its canonical path (symlinks resolved, the final component not a symlink) is under the host's transcript root for this cwd; otherwise the counts are left out.
 - **A4 (§5 item 4, the nudge and the budget rule).** The `prompt` hook keeps its own counter file per session (`local/host-sessions/<tool>-<id>.count`, same id rule), incremented on every prompt whether or not it holds an `@`: the one workspace file besides the config it touches on the fast path, within the 150 ms budget. At the 8th prompt of a session, once only, it reads the transcript (A3's rule, within the 2 s deadline) and prints the nudge if the session made five or more Delphi tool calls and recorded no summary. §1.1 and §2 are amended to match.
 - **A5 (wording, against later specs).** §4 item 2: for the orchestrator's aliases the line says to call `consult_orchestrator` with the request first (spec 107), then adopt the orchestrator's pack if not held; for other roles it says to pass the operator's request as `task` to `get_agent` (spec 109 Q4). The hook itself still sends and stores nothing. §1.2: Delphi writes no operator instruction file except a marked block the operator accepts at a terminal (spec 110). §2: nothing is asked of the daemon by `session-start` and `prompt`; `session-end` may make one bounded call for transcript ingest when spec 108 M3 is built.
 - **A6 (§6).** The hooks file runs the launch command the plugin's `.mcp.json` uses today (bare `delphi`), and switches to the absolute launch path when 071 E1s is built.
 - **A7.** `delphi mcp --check claude-code` reports the hooks file and the `[mcp] session_hooks` value.
+
+## 13. Decision: the hooks are on by default (operator, 2026-11-14)
+
+The operator decided on 2026-11-14: "hooks should be on by default for the mcp server". Asked whether to make the change, the operator answered "yes please do".
+
+This reverses OD-1 of §9 (the row there says so and is kept). `[mcp] session_hooks` now defaults to `true`: an empty config, or an `[mcp]` table without the key, means on; `session_hooks = false` means off.
+
+**Why the reason for opt-in no longer holds.** OD-1 kept the hooks off because their text reaches a model's context without a choice. After amendment A1 the session-start brief prints only ratified text, the project's spec names and statuses inside the fence, and a pointer, and never another session's text. The hooks run in tens of milliseconds, exit 0 always and block nothing. Installing the plugin is already the operator's deliberate act.
+
+**Unchanged.**
+
+- `[mcp] enabled = false` still silences every hook.
+- An `[mcp]` table that cannot be read still fails closed: the hooks are silent. So does a config file that cannot be parsed.
+- `delphi mcp --hooks off` turns the hooks off and `delphi mcp --hooks on` turns them back on, under the rules of §2 and A2.
+- The transcript-ingest call at session end stays behind the per-project ingest opt-in of [`specs/108`](108-closing-the-learning-loop-for-host-sessions.md).
+- A hook still prints only ratified text, fixed words, validated identifiers and fenced project spec names.
+
+**Spec 071.** Principle 3 is amended accordingly: the three, now four, fixed hook commands run for an operator who installed the plugin unless they turn them off.

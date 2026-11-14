@@ -64,39 +64,45 @@
     },
     {
       "level": 2,
-      "line": 97,
+      "line": 98,
       "number": "8",
       "title": "Authority and trust"
     },
     {
       "level": 2,
-      "line": 105,
+      "line": 106,
       "number": "9",
       "title": "Decisions (taken as recommended, 2026-11-13)"
     },
     {
       "level": 2,
-      "line": 113,
+      "line": 114,
       "number": "10",
       "title": "Beyond the approved plan (waits for the operator)"
     },
     {
       "level": 2,
-      "line": 117,
+      "line": 118,
       "number": "11",
       "title": "Not verified"
     },
     {
       "level": 2,
-      "line": 127,
+      "line": 128,
       "number": "12",
       "title": "Amendments from review (2026-11-13)"
+    },
+    {
+      "level": 2,
+      "line": 140,
+      "number": "13",
+      "title": "Decision: the hooks are on by default (operator, 2026-11-14)"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/105-session-hooks-for-hosts-a-brief-at-start-mention-routing-at-the-prompt-and-a-marker-at-the-end.md",
-    "sha256": "8dbe3f7cdb5ed2f4d8cdfe89a8c6a05a401dc0f800bf9bf614c9e45a80dbdd8a"
+    "sha256": "6057454861d35f6beaace5e593c39f993ff14e6441e87d4c6754dc1a073a4563"
   },
   "source_status_at_hash": {
     "line": {
@@ -109,7 +115,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-13, in a host session (\"approve all your plans and suggestions and go\"). The approval was given to the plan this spec carries out (workstream 1, hooks opt-in, read-only at start, a summary and handoff at the end) BEFORE this text was written; the operator has not read the text. What goes beyond that plan is listed in §10."
     },
-    "sha256": "8dbe3f7cdb5ed2f4d8cdfe89a8c6a05a401dc0f800bf9bf614c9e45a80dbdd8a",
+    "sha256": "6057454861d35f6beaace5e593c39f993ff14e6441e87d4c6754dc1a073a4563",
     "word": "approved"
   },
   "spec": {
@@ -124,10 +130,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 2160,
+      "end": 2244,
       "end_line": 26,
       "line": 26,
-      "start": 1728
+      "start": 1812
     },
     "text": "Today everything that makes a host session a Delphi session depends on the host's model remembering to do it: look at the specs, know the roster, notice `@name`, leave a summary. This spec moves the parts that need no judgement into three hooks, so the model starts each session already knowing who is on the team, what the project's specs say and what the last session left, and so `@name` works without a skill having to match it."
   }
