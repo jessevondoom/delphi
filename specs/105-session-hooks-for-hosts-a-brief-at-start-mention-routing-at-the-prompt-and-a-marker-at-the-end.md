@@ -116,7 +116,12 @@ The plan said the end hook "writes the summary and handoff". A hook has no model
 
 ## 11. Not verified
 
-- The hook formats of Claude Code were taken from its documentation, not from a run. H4 records a live run.
+- ~~The hook formats of Claude Code were taken from its documentation, not from a run. H4 records a live run.~~ **H4 live run, 2026-11-14** (Claude Code 2.1.325, model `haiku`, run by `DELPHI_PROBE_MODE=final dev/hosts/claude-code.sh`: the generated plugin loaded with `--plugin-dir ecosystem/claude-code/delphi`, `--strict-mcp-config`, `--setting-sources project`, `--permission-prompts none`, `[mcp] session_hooks = true` in a temporary Delphi home, three prompts; details in [`specs/110`](110-other-hosts-adapters-instruction-files-and-install-paths.md) §8.2):
+  - **The session-start brief arrives: yes.** The SessionStart hook printed the brief (744 bytes) and the model reported seeing it.
+  - **A role mention is routed: yes.** For `@architect` the prompt hook printed its adopt line and the model called `get_agent` with `architect`, naming no tool itself.
+  - **The session-end marker is written: yes; with counts: no, until a fix.** Claude Code names the transcript folder with every character other than an ASCII letter or digit as `-` (the run's folder turned `_` into `-` too); `host_hooks::transcript_folder` turned only `/` and `.`, so under a path with `_` the transcript was refused and the counts left out. Fixed in the same commit as this record, with a test (`delphi learn ingest` now uses the same function). The run's three logged SessionEnd inputs, replayed to the fixed binary, wrote markers with counts.
+  - **A worker subagent file loads: yes.** `delphi:architect-worker` ran from the plugin; in this run it answered from its wrapper without calling `get_agent` (in the X4a probe the same file, as a project agent, did call it).
+  - The hook input carried `session_id`, `transcript_path`, `cwd`, `hook_event_name`, `reason` and `prompt_id`, as §5 assumes.
 - The 400 ms and 150 ms budgets are targets; H1 and H2 measure them.
 
 ## 12. Amendments from review (2026-11-13)
