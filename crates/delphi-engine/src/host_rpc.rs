@@ -336,7 +336,14 @@ pub fn summary_event(c: &Caller, p: &Value, already: usize) -> Result<EventEnvel
     if !open.is_empty() {
         text.push_str(&format!(" Open questions: {}.", open.join("; ")));
     }
-    Ok(staged(c, already, "host_summary", &label, text, "the host's own session summary", None))
+    let mut e = staged(c, already, "host_summary", &label, text, "the host's own session summary", None);
+    // Spec 108 M1: the three-line account, when given, is kept with the summary so a later session's recall can show it (fenced).
+    for k in ["asked", "did", "open"] {
+        if let Some(t) = p[k].as_str().filter(|t| !t.trim().is_empty()) {
+            e.payload[k] = json!(clean(k, t, MAX_ITEM)?);
+        }
+    }
+    Ok(e)
 }
 
 pub const MAX_NEED: usize = 1500;

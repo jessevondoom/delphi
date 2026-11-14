@@ -857,6 +857,8 @@ fn the_private_read_mark_is_named_only_where_it_is_set_observed_cleared_and_show
         "crates/delphi-engine/src/engine.rs",
         // the approval-refusal list names a payload key (`private_read_mark`) so a relay reply cannot approve a held card; it only widens what is refused
         "crates/delphi-engine/src/merge_class.rs",
+        // spec 108 M1: recall reads a session's mark only to leave everything of a marked session out; it only withholds
+        "crates/delphi-engine/src/host_recall.rs",
         "crates/delphi/src/doctor.rs",
         "crates/delphi/src/private_read_cmd.rs",
         "crates/delphi/src/main.rs",
