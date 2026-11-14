@@ -428,6 +428,26 @@ pub(crate) fn md_files(root: &Path, logical_prefix: &str, zone: &'static str, de
     }
 }
 
+/// Each registered project as its own layer of the index (`specs/109` §11): exactly the files the project tools read, `_index.md`
+/// and the Markdown under the root's `specs/`, `plans/`, `context/` and `research/` (as `projects/<id>/files/…`), and the context and
+/// knowledge of the project's layer (as `projects/<id>/layer/…`); never its source tree or `work/`. Zone `project`, indexed at
+/// `external_untrusted` whatever a file says (`upsert_with`). A project that is no longer registered is not listed, so the next sync
+/// drops its layer; an untrusted registry lists none.
+fn project_sources(ws: &Path, out: &mut Vec<SourceFile>) {
+    let Ok(ids) = crate::scope::registered_ids(ws) else { return };
+    for id in ids.iter().filter_map(|i| crate::scope::ProjectId::parse(i).ok()) {
+        let root = crate::scope::project_root(ws, &id).and_then(|r| std::fs::canonicalize(r).ok()).filter(|r| r.is_dir());
+        for (rel, path) in root.map(|r| crate::mcp_project::scaffold_files(&r)).unwrap_or_default() {
+            out.push(SourceFile { rel_path: format!("projects/{}/files/{}", id.as_str(), rel), zone: "project", path, default_source: UNTRUSTED, bundle: None, vouched_by: None });
+        }
+        if let Ok(layer) = crate::scope::layer_dir(ws, &id) {
+            for sub in ["context", "knowledge"] {
+                md_files(&layer.join(sub), &format!("projects/{}/layer/{}", id.as_str(), sub), "project", UNTRUSTED, out);
+            }
+        }
+    }
+}
+
 /// The Markdown a workspace indexes, by logical path. The team copy of a path wins over the built-in one.
 /// Operator-scope files are never listed; neither are live worktrees or source code.
 pub fn sources(ws: &Path) -> Vec<SourceFile> {
@@ -467,6 +487,7 @@ pub fn sources(ws: &Path) -> Vec<SourceFile> {
     md_files(&ws.join("local/staged"), "staged", "staged", UNTRUSTED, &mut all);
     bundle_files(ws, &mut all);
     library_files(ws, &mut all);
+    project_sources(ws, &mut all);
     // Later entries (team) override earlier ones (base) for the same logical path.
     let mut by_path: BTreeMap<String, SourceFile> = BTreeMap::new();
     for s in all {
@@ -607,7 +628,7 @@ impl Kb {
         }
         // An imported page is shown by default only when the daemon found it linking to a checked entry (`specs/068` §6.2); its
         // recorded taint stays in its own frontmatter, and the label never changes.
-        let source_type = if zone == "summaries" { (if frontmatter_flag(text, "index_worthy") { "internal_generated" } else { UNTRUSTED }).to_string() } else if bundle.is_some() || zone == "knowledge" || zone == "library" || zone == "about" { default_source.to_string() } else { frontmatter_field(text, "source_type").filter(|s| SOURCE_TYPES.contains(&s.as_str())).unwrap_or_else(|| default_source.to_string()) };
+        let source_type = if zone == "summaries" { (if frontmatter_flag(text, "index_worthy") { "internal_generated" } else { UNTRUSTED }).to_string() } else if bundle.is_some() || zone == "knowledge" || zone == "library" || zone == "about" || zone == "project" { default_source.to_string() } else { frontmatter_field(text, "source_type").filter(|s| SOURCE_TYPES.contains(&s.as_str())).unwrap_or_else(|| default_source.to_string()) };
         let from = bundle.map(|b| format!(" | Bundle: {}", b.label)).unwrap_or_default();
         let (author, confidence, status) = (frontmatter_field(text, "author").or_else(|| frontmatter_field(text, "role")), frontmatter_field(text, "confidence").unwrap_or_else(|| "low".into()), if zone == "about" { "active".into() } else { frontmatter_field(text, "status").unwrap_or_else(|| "active".into()) });
         let tx = self.conn.transaction()?;
@@ -932,6 +953,10 @@ fn vec_scope(zone: &str, rel_path: &str) -> String {
     if zone == "memory" {
         return rel_path.strip_prefix("memory/agents/").and_then(|r| r.split('/').next()).filter(|r| !r.is_empty()).map(String::from).unwrap_or_else(|| "~".into());
     }
+    if zone == "project" {
+        // A project layer's vectors are its own (`@<id>`), so a role's nearest-neighbour search does not spend its candidates on them.
+        return rel_path.strip_prefix("projects/").and_then(|r| r.split('/').next()).map(|id| format!("@{}", id)).unwrap_or_else(|| "~".into());
+    }
     if zone == "episodes" {
         if let Some(trace_file) = rel_path.rsplit("/traces/").next() {
             // `<role>-<task>.md`: a task id has no hyphen, a role may (`red-team`), so the role is all before the last one.
@@ -1028,6 +1053,12 @@ fn allowed_sql(opts: &SearchOpts) -> String {
         XeniaView::Off => allowed.push_str(" AND d.zone != 'xenia'"),
         XeniaView::Agent => allowed.push_str(" AND d.zone = 'xenia' AND d.status = 'active' AND d.source_type = 'federated_verified'"),
         XeniaView::Quarantine => allowed.push_str(" AND d.zone = 'xenia' AND NOT (d.status = 'active' AND d.source_type = 'federated_verified')"),
+    }
+    // A project's layer (`specs/109` §11.3) is read only by a session in that project, named here by a validated id (32 hex
+    // characters), so the clause holds no text from outside; with no project, no project layer at all.
+    match opts.project.as_deref().filter(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))) {
+        Some(id) => allowed.push_str(&format!(" AND (d.zone != 'project' OR d.rel_path LIKE 'projects/{}/%')", id)),
+        None => allowed.push_str(" AND d.zone != 'project'"),
     }
     if let Some(paths) = &opts.paths {
         // Each path is quoted as an SQL string (a quote doubled), so a name cannot end the list or add a condition.
@@ -1288,7 +1319,8 @@ impl Kb {
         }
         if let Some(r) = &opts.role {
             if valid_role(r) {
-                sql.push_str(&format!(" AND scope IN ('', '{}')", r));
+                let layer = opts.project.as_deref().filter(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit())).map(|id| format!(", '@{}'", id)).unwrap_or_default();
+                sql.push_str(&format!(" AND scope IN ('', '{}'{})", r, layer));
             } else {
                 sql.push_str(" AND scope = ''");
             }
@@ -1372,6 +1404,9 @@ pub struct SearchOpts {
     /// Only documents at these logical paths (`specs/109` §2 item 1): a host tool's own corpus, listed by the tool. Narrows, never
     /// widens; an empty list matches nothing.
     pub paths: Option<Vec<String>>,
+    /// The registered project whose layer the session may read (`specs/109` §11.3): zone `project` is visible only under
+    /// `projects/<id>/`, and not at all with `None`, which is what every search but a session's own project tools asks.
+    pub project: Option<String>,
 }
 
 /// How summary hits are answered. Spec 068 defaults to Bibliography for agent safety;
@@ -1418,7 +1453,7 @@ pub enum Legs {
 
 impl Default for SearchOpts {
     fn default() -> Self {
-        SearchOpts { role: None, limit: 10, include_untrusted: false, include_attributed: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false, include_episodes: false, about: false, kinds: None, max_episodes: None, today: None, xenia: XeniaView::Off, zones: None, summary_target: SummaryTarget::Bibliography, paths: None }
+        SearchOpts { role: None, limit: 10, include_untrusted: false, include_attributed: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false, include_episodes: false, about: false, kinds: None, max_episodes: None, today: None, xenia: XeniaView::Off, zones: None, summary_target: SummaryTarget::Bibliography, paths: None, project: None }
     }
 }
 

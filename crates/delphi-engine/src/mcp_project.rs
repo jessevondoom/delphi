@@ -9,7 +9,7 @@
 //! cannot raise its own trust). A path reaches the disk only after it matched a name this module enumerated itself, so a
 //! resource URI can never name anything outside the four scaffold folders and `_index.md`.
 
-use crate::scope::{self, Active};
+use crate::scope::{self, Active, ProjectId};
 use crate::spec_lookup;
 use crate::workspace::split_frontmatter;
 use serde_json::{json, Value};
@@ -85,6 +85,23 @@ pub fn rank_noted_files(files: Vec<(String, PathBuf)>, query: &str, limit: usize
         .map(|(path, file)| Doc { layer: "noted".into(), path, source: "external_untrusted", file })
         .collect();
     rank(docs, query, limit)
+}
+
+/// The files a project's tools read under `root` (`_index.md` and the Markdown under the four scaffold folders), as `(logical path,
+/// file)`; the same list is what the index holds of the project (`kb::sources`, `specs/109` §11.1).
+pub(crate) fn scaffold_files(root: &Path) -> Vec<(String, PathBuf)> {
+    let mut out = Vec::new();
+    let idx = root.join("_index.md");
+    if std::fs::symlink_metadata(&idx).map(|m| m.is_file() && m.len() <= MAX_FILE).unwrap_or(false) {
+        out.push(("_index.md".to_string(), idx));
+    }
+    for f in FOLDERS {
+        let dir = root.join(f);
+        if std::fs::symlink_metadata(&dir).map(|m| m.is_dir()).unwrap_or(false) {
+            walk(&dir, f, 0, &mut out);
+        }
+    }
+    out
 }
 
 fn read_capped(p: &Path) -> Option<String> {
@@ -301,19 +318,29 @@ impl Project {
 
     /// Project files the host may list and read: `_index.md` and the Markdown under the four scaffold folders.
     fn files(&self) -> Vec<(String, PathBuf)> {
-        let Some(root) = &self.root else { return vec![] };
-        let mut out = Vec::new();
-        let idx = root.join("_index.md");
-        if std::fs::symlink_metadata(&idx).map(|m| m.is_file() && m.len() <= MAX_FILE).unwrap_or(false) {
-            out.push(("_index.md".to_string(), idx));
+        self.root.as_deref().map(scaffold_files).unwrap_or_default()
+    }
+
+    /// The registered project whose layer of the index this session reads (`specs/109` §11.3): the active project when it has a
+    /// root. The default project and a session whose scope failed closed have none.
+    fn indexed_project(&self) -> Option<&str> {
+        self.root.as_ref().and(self.active.project.as_ref()).map(ProjectId::as_str).filter(|id| *id != scope::DEFAULT_PROJECT)
+    }
+
+    /// Where a document of a tool's corpus sits in the index, if it can: a home file by its own path, this project's files and layer
+    /// under `projects/<id>/` (`kb::sources`). Another layer (the default project's) is not indexed.
+    fn index_key(&self, d: &Doc) -> Option<String> {
+        if d.layer == "home" {
+            return Some(d.path.clone());
         }
-        for f in FOLDERS {
-            let dir = root.join(f);
-            if std::fs::symlink_metadata(&dir).map(|m| m.is_dir()).unwrap_or(false) {
-                walk(&dir, f, 0, &mut out);
-            }
+        let id = self.indexed_project()?;
+        if d.layer == "project" {
+            Some(format!("projects/{}/files/{}", id, d.path))
+        } else if self.active.project.as_ref().is_some_and(|p| p.label() == d.layer) {
+            Some(format!("projects/{}/layer/{}", id, d.path))
+        } else {
+            None
         }
-        out
     }
 
     pub fn resources(&self) -> Vec<Value> {
@@ -442,31 +469,41 @@ impl Project {
     }
 
     /// Rank a tool's corpus `docs`, the very list it read before the index ranked anything (`specs/109` §2 item 1). The documents the
-    /// index holds (home layer) are ranked by the retrieval service with a filter naming exactly those paths and `zones`, so the index
+    /// index holds (the home layer, and this project's layer, `index_key`) are ranked by the retrieval service with a filter naming
+    /// exactly those paths, `zones` and the session's project, so the index
     /// can return nothing the tool would not; the rest by the shared word ranker; the two lists merged by rank. With no index, or none
     /// of the corpus in it, the word ranker answers alone. The role check is the corpus's own (`memory_allowed`): the index's role
     /// view would also hide the summaries the operator promoted for every role, which these tools have always served.
-    fn rank_corpus(&self, docs: Vec<Doc>, query: &str, limit: usize, detail: Detail, zones: Vec<&'static str>) -> (Ranked, &'static str) {
+    fn rank_corpus(&self, docs: Vec<Doc>, query: &str, limit: usize, detail: Detail, mut zones: Vec<&'static str>) -> (Ranked, &'static str) {
         let ix = self.index();
-        let (indexed, rest): (Vec<Doc>, Vec<Doc>) = docs.into_iter().partition(|d| d.layer == "home" && ix.as_ref().is_some_and(|ix| ix.paths.contains(&d.path)));
+        let mut indexed: Vec<(String, Doc)> = Vec::new();
+        let mut rest: Vec<Doc> = Vec::new();
+        for d in docs {
+            match self.index_key(&d).filter(|k| ix.as_ref().is_some_and(|ix| ix.paths.contains(k))) {
+                Some(k) => indexed.push((k, d)),
+                None => rest.push(d),
+            }
+        }
         let Some(ix) = ix.filter(|_| !indexed.is_empty() && !words(query).is_empty()) else {
-            let mut all = indexed;
-            all.extend(rest);
-            return (rank_detail(all, query, limit, detail), RANKED_BY_WORDS);
+            rest.extend(indexed.into_iter().map(|(_, d)| d));
+            return (rank_detail(rest, query, limit, detail), RANKED_BY_WORDS);
         };
-        let opts = crate::kb::SearchOpts { role: None, limit: MAX_LIMIT, include_untrusted: true, include_attributed: true, zones: Some(zones), paths: Some(indexed.iter().map(|d| d.path.clone()).collect()), ..Default::default() };
+        // A project's layer is asked for explicitly, untrusted text and all, and only this session's project (`specs/109` §11.3, 11.4).
+        if indexed.iter().any(|(k, _)| k.starts_with("projects/")) {
+            zones.push("project");
+        }
+        let opts = crate::kb::SearchOpts { role: None, limit: MAX_LIMIT, include_untrusted: true, include_attributed: true, zones: Some(zones), paths: Some(indexed.iter().map(|(k, _)| k.clone()).collect()), project: self.indexed_project().map(String::from), ..Default::default() };
         let hits = match crate::retrieval::search(&ix.home, &ix.db, query, opts) {
             Ok(r) => r.hits,
             Err(_) => {
-                let mut all = indexed;
-                all.extend(rest);
-                return (rank_detail(all, query, limit, detail), RANKED_BY_WORDS);
+                rest.extend(indexed.into_iter().map(|(_, d)| d));
+                return (rank_detail(rest, query, limit, detail), RANKED_BY_WORDS);
             }
         };
         let mut from_index: Vec<Value> = Vec::new();
         for h in hits {
-            let Some(d) = indexed.iter().find(|d| d.path == h.rel_path) else { continue };
-            if !from_index.iter().any(|v| v["path"] == d.path.as_str()) {
+            let Some((_, d)) = indexed.iter().find(|(k, _)| *k == h.rel_path) else { continue };
+            if !from_index.iter().any(|v| v["layer"] == d.layer.as_str() && v["path"] == d.path.as_str()) {
                 from_index.push(result(d, h.start_line, flat(&h.preview, 200), detail));
             }
         }
@@ -480,8 +517,8 @@ impl Project {
         self.search_project_detail(query, limit, Detail::Full)
     }
 
-    /// The project's own files and its layer's context and knowledge. None of it is in the workspace index, so the shared word
-    /// ranker answers (`specs/109` A1).
+    /// The project's own files and its layer's context and knowledge: from the project's layer of the index when the daemon has built
+    /// it (`specs/109` §11.8), by the shared word ranker otherwise.
     pub fn search_project_detail(&self, query: &str, limit: usize, detail: Detail) -> Result<String, String> {
         let mut docs: Vec<Doc> = self.files().into_iter().map(|(rel, file)| Doc { layer: "project".into(), path: rel, source: UNTRUSTED, file }).collect();
         for s in scope::layered_sources(&self.ws_dir, &self.active) {
@@ -489,10 +526,10 @@ impl Project {
                 docs.push(Doc { layer: s.layer, path: s.file.rel_path, source: s.file.default_source, file: s.file.path });
             }
         }
-        let r = rank_detail(docs, query, limit, detail);
+        let (r, ranking) = self.rank_corpus(docs, query, limit, detail, vec![]);
         let mut out = envelope(&r, limit);
         out.insert("project".into(), json!(self.describe()));
-        out.insert("ranking".into(), json!(RANKED_BY_WORDS));
+        out.insert("ranking".into(), json!(ranking));
         out.insert("results".into(), json!(r.results));
         Ok(Value::Object(out).to_string())
     }
@@ -509,7 +546,7 @@ impl Project {
                 docs.push(Doc { layer: s.layer, path: s.file.rel_path, source: s.file.default_source, file: s.file.path });
             }
         }
-        rank(docs, query, limit)
+        self.rank_corpus(docs, query, limit, Detail::Full, vec![]).0.results
     }
 
     pub fn search_memory(&self, query: &str, role: Option<&str>, limit: usize) -> Result<String, String> {
@@ -705,9 +742,14 @@ impl Project {
             }
         }
 
-        // 2. The project's own files, chunked and ranked by the shared word ranker (they are not in the workspace index).
+        // 2. The project's own files: from the project's layer of the index when the daemon has built it (`specs/109` §11.8), asked
+        //    for explicitly with its untrusted text and for this session's project only; a file the layer does not hold yet is chunked
+        //    and ranked by the shared word ranker. Each keeps the label it had: a spec's own status, everything else `noted`.
+        let mut from_layer: Vec<Candidate> = Vec::new();
         let mut project: Vec<((usize, usize), Candidate)> = Vec::new();
         if scope == "all" || scope == "project_only" {
+            let ix = self.index();
+            let mut indexed: Vec<(String, String, &'static str)> = Vec::new();
             for (rel, file) in self.files() {
                 let Some(text) = read_capped(&file) else { continue };
                 let (fm, _) = split_frontmatter(&text);
@@ -726,6 +768,11 @@ impl Project {
                 if !keep(status) {
                     continue;
                 }
+                let key = self.index_key(&Doc { layer: "project".into(), path: rel.clone(), source: UNTRUSTED, file: file.clone() });
+                if let Some(k) = key.filter(|k| ix.as_ref().is_some_and(|ix| ix.paths.contains(k))) {
+                    indexed.push((k, rel, status));
+                    continue;
+                }
                 for c in crate::kb::chunk_markdown(&text) {
                     let Some(score) = word_score(&c.raw, "", &ws) else { continue };
                     let source = format!("{}#L{}-L{}", rel, c.start_line, c.end_line);
@@ -735,11 +782,29 @@ impl Project {
                     project.push((score, Candidate { chunk_id: fallback_chunk_id(&rel, c.start_line, c.end_line), status, source, confidence: confidence(status), passage: c.raw.trim().to_string() }));
                 }
             }
+            if let Some(ix) = ix.filter(|_| !indexed.is_empty()) {
+                ranking = RANKED_BY_INDEX;
+                let opts = crate::kb::SearchOpts { limit: MAX_LIMIT, include_untrusted: true, include_attributed: true, zones: Some(vec!["project"]), paths: Some(indexed.iter().map(|i| i.0.clone()).collect()), project: self.indexed_project().map(String::from), ..Default::default() };
+                let hits = crate::retrieval::search(&ix.home, &ix.db, query, opts).map(|r| r.hits).unwrap_or_default();
+                let kb = crate::kb::Kb::open_readonly(&ix.db).ok();
+                for h in hits {
+                    let Some((_, rel, status)) = indexed.iter().find(|i| i.0 == h.rel_path) else { continue };
+                    let source = format!("{}#L{}-L{}", rel, h.start_line, h.end_line);
+                    if from_layer.iter().any(|c| c.source == source) {
+                        continue;
+                    }
+                    let (chunk_id, passage) = match kb.as_ref().and_then(|kb| kb.chunk_content(&h.rel_path, h.start_line)) {
+                        Some((id, text)) => (format!("CHK-{}", id), text),
+                        None => (fallback_chunk_id(rel, h.start_line, h.end_line), h.preview.clone()),
+                    };
+                    from_layer.push(Candidate { chunk_id, status, source, confidence: confidence(status), passage: passage.trim().to_string() });
+                }
+            }
         }
         project.sort_by_key(|p| std::cmp::Reverse(p.0));
 
-        // One answer, two rankings on different scales: merged by rank (`specs/109` A1). A passage both legs found is served once.
-        let candidates = fuse(vec![core, project.into_iter().map(|p| p.1).collect()], |c| c.source.clone());
+        // One answer, rankings on different scales: merged by rank (`specs/109` A1). A passage two legs found is served once.
+        let candidates = fuse(vec![core, from_layer, project.into_iter().map(|p| p.1).collect()], |c| c.source.clone());
         let mut out = format!("<!-- delphi:rag:meta ranking=\"{}\" -->", ranking);
         if candidates.is_empty() {
             out.push_str("\nNo matching knowledge base passages found.");
@@ -1209,6 +1274,99 @@ mod tests {
             all.sort();
             assert_eq!(passages(&p.kb_retrieve("quokkapin", 10, "all", "all").unwrap()), all, "kb_retrieve all, indexed {indexed}");
         }
+    }
+
+    const ID_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    fn register(ws: &Path, projects: &[(&str, &Path)]) {
+        let mut all = serde_json::Map::new();
+        for (id, root) in projects {
+            all.insert(id.to_string(), json!({"project_id": id, "root": root, "display_name": id}));
+        }
+        fs::write(ws.join("local/projects.json"), json!({"schema": 1, "projects": all}).to_string()).unwrap();
+    }
+
+    fn sync(ws: &Path) {
+        let mut kb = crate::kb::Kb::open(&ws.join("local/state.db")).unwrap();
+        kb.sync_lexical(&crate::kb::sources(ws), "t").unwrap();
+    }
+
+    /// Two registered projects, A (`fixture`'s) and B, each with a spec, a context file and a layer, and the index built.
+    fn two_projects() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
+        let (t, ws, root) = fixture();
+        let rootb = fs::canonicalize(t.path()).unwrap().join("projb");
+        let w = |p: PathBuf, text: &str| {
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, text).unwrap();
+        };
+        w(root.join("specs/a1.md"), "---\nstatus: approved\n---\n# A1\nquokkalayer of project a\n");
+        w(root.join("context/actx.md"), "---\nsource_type: user_ratified\n---\nquokkalayer context of a\n");
+        w(root.join("src/asrc.md"), "quokkalayer source tree of a\n");
+        w(root.join("work/awork.md"), "quokkalayer work of a\n");
+        w(ws.join("local/projects").join(ID).join("knowledge/aknow.md"), "quokkalayer knowledge of a\n");
+        w(ws.join("local/projects").join(ID).join("staged/astaged.md"), "quokkalayer staged of a\n");
+        w(rootb.join("specs/b1.md"), "# B1\nquokkalayer of project b\n");
+        w(ws.join("local/projects").join(ID_B).join("context/bctx.md"), "quokkalayer context of b\n");
+        register(&ws, &[(ID, &root), (ID_B, &rootb)]);
+        sync(&ws);
+        (t, ws, root, rootb)
+    }
+
+    /// `specs/109` §11.3: a session reads only the layer of the project its folder belongs to, and a session with no project none.
+    #[test]
+    fn a_session_reads_only_its_own_projects_layer_of_the_index() {
+        let (t, ws, root, rootb) = two_projects();
+        let a = Project::new(&ws, &root);
+        let found = parsed(&a.search_project("quokkalayer", 10).unwrap());
+        assert_eq!(found["ranking"], RANKED_BY_INDEX, "{found}");
+        assert_eq!(layered(&found.to_string()), sorted(&["project specs/a1.md", "project context/actx.md", &format!("project:{ID} knowledge/aknow.md")]));
+        for r in found["results"].as_array().unwrap() {
+            assert_eq!(r["source_type"], "external_untrusted", "labelled as before: {r}");
+        }
+        let passages_a = a.kb_retrieve("quokkalayer", 10, "all", "project_only").unwrap();
+        assert!(passages_a.starts_with("<!-- delphi:rag:meta ranking=\"index\"") && passages_a.contains("specs/a1.md#") && passages_a.contains("status=\"validated\""), "{passages_a}");
+        assert!(!passages_a.contains("b1.md") && !passages_a.contains("bctx"), "{passages_a}");
+        assert!(a.search_kb_project("quokkalayer", 10).iter().all(|r| !r["path"].as_str().unwrap().contains("b")), "search_kb's project leg is A's alone");
+        let b = parsed(&Project::new(&ws, &rootb).search_project("quokkalayer", 10).unwrap());
+        assert_eq!(layered(&b.to_string()), sorted(&["project specs/b1.md", &format!("project:{ID_B} context/bctx.md")]));
+        // A folder in no project (the default project) reads no project layer, from the index or the files.
+        let outside = Project::new(&ws, t.path());
+        assert!(outside.indexed_project().is_none());
+        assert!(texts(&outside.search_project("quokkalayer", 10).unwrap()).is_empty());
+        // The filter is in the query itself: no project means none of the zone, a project means its own paths only.
+        let kb = crate::kb::Kb::open_readonly(&ws.join("local/state.db")).unwrap();
+        let ask = |project: Option<&str>, untrusted: bool| -> Vec<String> {
+            let opts = crate::kb::SearchOpts { project: project.map(String::from), include_untrusted: untrusted, ..Default::default() };
+            kb.search("quokkalayer", &opts).unwrap().into_iter().map(|h| h.rel_path).collect()
+        };
+        assert!(ask(None, true).is_empty(), "{:?}", ask(None, true));
+        assert!(!ask(Some(ID), true).is_empty() && ask(Some(ID), true).iter().all(|p| p.starts_with(&format!("projects/{ID}/"))));
+        assert!(ask(Some(ID), false).is_empty(), "untrusted project text stays out of a view that excludes untrusted text");
+        assert!(ask(Some("../bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"), true).is_empty() && ask(Some("%"), true).is_empty());
+    }
+
+    /// `specs/109` §11.1, 11.4, 11.5: exactly the scaffold folders and the layer's context and knowledge, at `external_untrusted`
+    /// whatever a file says, and a project that is no longer registered leaves the index at the next sync.
+    #[test]
+    fn a_project_layer_holds_only_the_scaffold_is_untrusted_and_leaves_with_its_registration() {
+        let (_t, ws, root, _rootb) = two_projects();
+        let paths = crate::kb::Kb::open_readonly(&ws.join("local/state.db")).unwrap().indexed_paths().unwrap();
+        let mut a: Vec<&String> = paths.iter().filter(|p| p.starts_with(&format!("projects/{ID}/"))).collect();
+        a.sort();
+        let want: Vec<String> = ["files/_index.md", "files/context/actx.md", "files/context/notes.md", "files/specs/001-a.md", "files/specs/002-b.md", "files/specs/a1.md", "layer/knowledge/aknow.md"].iter().map(|p| format!("projects/{ID}/{p}")).collect();
+        assert_eq!(a, want.iter().collect::<Vec<_>>(), "no source tree, no work/, no staged notes, no memory");
+        let kb = crate::kb::Kb::open_readonly(&ws.join("local/state.db")).unwrap();
+        let opts = crate::kb::SearchOpts { project: Some(ID.into()), include_untrusted: true, ..Default::default() };
+        let doc = kb.document(&format!("projects/{ID}/files/context/actx.md"), &opts).unwrap().unwrap();
+        assert_eq!((doc.zone.as_str(), doc.source_type.as_str()), ("project", "external_untrusted"), "a file's own frontmatter cannot raise its tier");
+        drop(kb);
+        register(&ws, &[(ID, &root)]);
+        sync(&ws);
+        let paths = crate::kb::Kb::open_readonly(&ws.join("local/state.db")).unwrap().indexed_paths().unwrap();
+        assert!(paths.iter().all(|p| !p.starts_with(&format!("projects/{ID_B}/"))), "unregistered, its layer is gone");
+        assert!(paths.iter().any(|p| p.starts_with(&format!("projects/{ID}/"))));
+        // The home layer of every other reader is unchanged: no project file is listed as home.
+        assert!(scope::layered_sources(&ws, &scope::resolve(&ws, &root)).iter().all(|s| s.file.zone != "project"));
     }
 
     #[test]
