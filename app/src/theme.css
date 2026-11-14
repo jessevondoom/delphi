@@ -106,6 +106,8 @@ h1, h2, h3, p, dl, dd, ol, ul { margin: 0; padding: 0; }
 .pill[aria-pressed='true'] { border-color: var(--primary-bg); background: var(--primary-bg); color: var(--primary-fg); font-weight: 600; }
 .btn { min-height: 44px; padding: 0 14px; border-radius: 8px; border: 1px solid var(--line2); background: transparent; font-size: 13px; font-weight: 600; cursor: pointer; }
 .btn:hover { background: var(--sel); }
+.btn.small { align-self: flex-start; min-height: 32px; padding: 0 10px; font-size: 12px; font-weight: 500; color: var(--text2); }
+.menu-row span { min-width: 0; overflow-wrap: anywhere; }
 
 /* A role-tinted card: `--c` is the role's colour. */
 .card { display: flex; flex-direction: column; gap: 8px; padding: 12px 16px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); }
@@ -123,6 +125,13 @@ h1, h2, h3, p, dl, dd, ol, ul { margin: 0; padding: 0; }
 .chip.ok { background: var(--ok-bg); color: var(--ok-fg); }
 .chip.warn { background: var(--warn-bg); color: var(--warn-fg); }
 .sealed { font-style: italic; color: var(--muted); }
+.rich { white-space: normal; display: flex; flex-direction: column; gap: 2px; }
+.rich-gap { height: .5em; }
+.rich-head { font-weight: 600; }
+.rich-item { display: flex; gap: 8px; }
+.rich-mark { flex: none; min-width: 1em; color: var(--muted); }
+.rich code { font: 400 .92em var(--mono); background: var(--inset); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+.rich pre.code { margin: 4px 0; white-space: pre; }
 .empty { padding: 28px 20px; border: 1px dashed var(--line2); border-radius: 10px; color: var(--text2); font-size: 14px; line-height: 1.55; }
 
 /* Agents roster */

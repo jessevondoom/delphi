@@ -1166,7 +1166,7 @@ pub(crate) fn ui_info(console: &Path, narrator: &Path, ws_dir: &Path, mission: O
 }
 
 /// `delphi daemon status|stop|restart`.
-pub fn daemon(home: &Path, ws_dir: &Path, action: &str) -> i32 {
+pub fn daemon(home: &Path, ws_dir: &Path, action: &str, names: &HashMap<String, String>) -> i32 {
     let l = match layout(home, ws_dir) {
         Ok(l) => l,
         Err(e) => {
@@ -1181,9 +1181,10 @@ pub fn daemon(home: &Path, ws_dir: &Path, action: &str) -> i32 {
         Ok((c, hello["binary_version"].as_str().unwrap_or("?").to_string()))
     };
     match action {
-        // For clients written in other languages: where the daemon's sockets are.
+        // For clients written in other languages: where the daemon's sockets are, and how roles look and are named (the
+        // active theme's names, as the console is given them: the desktop app shows these, spec 111 §4).
         "where" => {
-            println!("{}", ui_info(&l.sock, &l.narrator_sock, ws_dir, None, &HashMap::new()));
+            println!("{}", ui_info(&l.sock, &l.narrator_sock, ws_dir, None, names));
             0
         }
         "status" => match connect() {

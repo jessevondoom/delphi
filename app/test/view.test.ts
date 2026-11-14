@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import type { Envelope, OState } from '../src/types.ts';
-import { clock, entryOf, familyOf, roster, stream, waiting } from '../src/view.ts';
+import { clock, entryOf, familyOf, roster, stream, taskRoles, tilde, waiting } from '../src/view.ts';
 
 const sim = JSON.parse(readFileSync(new URL('../src/fixture/sim.json', import.meta.url), 'utf8')) as { state: OState; events: Envelope[] };
 
@@ -56,4 +56,27 @@ test('a tool call is one clipped line, and a block that is not a tool call is le
 test('a time is shown as hours and minutes', () => {
   assert.equal(clock(Date.UTC(2026, 10, 14, 14, 2, 30), 'UTC'), '14:02');
   assert.equal(clock(0), '');
+});
+
+test("a reply is the role's the task was given to, and what the operator asked is the operator's", () => {
+  // The shapes a real daemon sends: `task.created` names a source and a target; `task.output` names nobody.
+  const events: Envelope[] = [
+    { type: 'task.created', timestamp: '2026-11-13T22:33:21.477Z', seq: 1, task_id: 't_0001', payload: { prompt: 'what do you see?', source: 'operator', target: 'strategist' } },
+    { type: 'task.output', timestamp: '2026-11-13T22:33:36.854Z', seq: 14, task_id: 't_0001', payload: { status: 'done', text: 'One path.' } },
+    { type: 'task.output', timestamp: '2026-11-13T22:34:00.000Z', seq: 20, task_id: 't_0002', payload: { text: 'Built.' } },
+  ];
+  const state = { ...sim.state, tasks: { t_0002: { id: 't_0002', flow: 'build', prompt: 'p', status: 'done' } }, changes: [] };
+  assert.deepEqual([...taskRoles(events, state)], [['t_0002', 'build'], ['t_0001', 'strategist']]);
+  const s = stream(events, state, 200, (r) => ['strategist', 'orchestrator', 'operator'].includes(r));
+  const asked = s.find((e) => e.kind === 'asked')!;
+  assert.deepEqual([asked.role, asked.to, asked.text], ['operator', 'strategist', 'what do you see?']);
+  assert.equal(s.find((e) => e.text === 'One path.')!.role, 'strategist');
+  // A task given to a flow that is not a role is the orchestrator's to speak for.
+  assert.equal(s.find((e) => e.text === 'Built.')!.role, 'orchestrator');
+});
+
+test('a home folder is written as a tilde', () => {
+  assert.equal(tilde('/' + 'Users' + '/someone/delphi/project'), '~/delphi/project');
+  assert.equal(tilde('/' + 'home' + '/someone'), '~');
+  assert.equal(tilde('/opt/place'), '/opt/place');
 });

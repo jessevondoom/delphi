@@ -11,6 +11,18 @@ fn main() {
         println!("no Delphi home was found");
         std::process::exit(1);
     };
+    // `--json`: the state and the snapshot as the window's fixture format, for looking at real data in a browser. This prints
+    // agents' text; it is for the operator's own machine.
+    if std::env::args().any(|a| a == "--json") {
+        let mut c = Client::attach(&found.narrator, env!("CARGO_PKG_VERSION")).unwrap_or_else(|e| {
+            eprintln!("could not attach: {e}");
+            std::process::exit(1);
+        });
+        let state = c.call(Method::ObserveState, json!({})).unwrap_or_default();
+        let events = c.call(Method::ObserveSnapshot, json!({})).map(|mut s| s["events"].take()).unwrap_or_default();
+        println!("{}", json!({ "info": found.info, "state": state, "events": events }));
+        return;
+    }
     println!("narrator socket: {}", found.narrator.display());
     println!("delphi: {} · workspace: {} · roles: {}", found.info["version"].as_str().unwrap_or("not asked"), found.info["workspace_name"].as_str().unwrap_or("?"), found.info["roles"].as_object().map_or(0, |r| r.len()));
     let mut client = match Client::attach(&found.narrator, env!("CARGO_PKG_VERSION")) {

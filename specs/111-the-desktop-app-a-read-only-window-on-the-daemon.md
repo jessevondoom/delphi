@@ -124,9 +124,16 @@ The operator asked on 2026-11-14 that this be built locally, as specs 104 to 110
 - The app runs `delphi daemon where` and nothing else. It reads that command's output as data.
 - Merges stay as [`specs/094`](094-core-repo-merge-flow.md) says.
 
-## 8. Not verified (before building)
+## 8. Found while building
+
+- **A2, against a live daemon (2026-11-14).** The installed `delphi` 0.6.1 answers `delphi daemon where --workspace default` with the sockets, fourteen roles, the avatar table and the name pool, and the bridge attached to its narrator socket and read `observe.state` and `observe.snapshot` (one mission, five tasks, 43 events). Without `--workspace` the command resolves a workspace from the directory it runs in and fails outside a project, so the bridge always names one (`DELPHI_WORKSPACE`, else `default`).
+- **A3, names.** `delphi daemon where` sent each role's id as its name. From this slice it sends the active theme's names, as the console is given them. The app shows whatever it is sent, so with an older `delphi` it shows role ids.
+- **A3, who is speaking.** A `task.output` event names no agent. The stream takes the speaker from the task: the `target` its `task.created` named, else the flow the state records; a flow that is not a role (a build) is shown as the orchestrator's.
+- **A3, replies are Markdown.** The window draws bold, inline code, lists, headings and fenced code, by turning the text into data first and making elements from that, so §2.5 holds: a test puts markup in a reply and finds it escaped. A reply over 600 characters shows its start and a button for the rest.
+- **A7 early.** The unsigned app builds here with Tauri 2.12.5 (`Delphi.app`, 13.8 MiB), opens, and holds two connections to the daemon.
+
+## 9. Not verified (before building)
 
 - That the window framework (Tauri 2) builds and runs here unsigned, and how large the app is: slice A7.
 - The shapes of `observe.state`'s `tools`, `adoption`, `files` and `context`, and of `ratify.list`: read when a screen needs them.
 - Whether Work output can be drawn from the narrator socket alone: slice A6 says.
-- `delphi daemon where` sends each role's id as its name (it passes no theme names). Whether the app should show the theme's names, and how it gets them, is decided in slice A3.

@@ -39,17 +39,30 @@ export type Entry = {
   /** `said` an agent's words; `asked` what a task was given; `read` a tool call; `recorded` a change; `waiting`/`answered` an approval; `council` a council's step. */
   kind: 'said' | 'asked' | 'read' | 'recorded' | 'waiting' | 'answered' | 'council';
   text: string; code?: string; task?: string;
+  /** For `asked`: who was asked. */
+  to?: string;
 };
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
 const clip = (s: string, n: number): string => (s.length > n ? s.slice(0, n - 1) + '…' : s);
 
-/** One stream entry for an event, or nothing for a kind the stream leaves out (usage, budget, graph bookkeeping). */
-export function entryOf(e: Envelope, i: number): Entry | null {
+/** Which role each task was given to: what its `task.created` named, else the flow the state records for it. */
+export function taskRoles(events: Envelope[], state: OState | null): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const [id, t] of Object.entries(state?.tasks ?? {})) if (t.flow) m.set(id, t.flow);
+  for (const e of events) if (e.type === 'task.created' && e.task_id && str(e.payload?.target)) m.set(e.task_id, str(e.payload.target));
+  return m;
+}
+
+/**
+ * One stream entry for an event, or nothing for a kind the stream leaves out (usage, budget, graph bookkeeping).
+ * The daemon does not name the speaker on a task's output, so `roleOfTask` says who the task was given to.
+ */
+export function entryOf(e: Envelope, i: number, roleOfTask: (task?: string) => string | undefined = () => undefined): Entry | null {
   const p = e.payload ?? {};
-  const base = { key: `${e.seq ?? e.timestamp}-${i}`, at_ms: Date.parse(e.timestamp) || 0, role: str(p.role) || e.agent || 'orchestrator', slot: e.pool_slot, task: e.task_id };
+  const base = { key: `${e.seq ?? e.timestamp}-${i}`, at_ms: Date.parse(e.timestamp) || 0, role: str(p.role) || e.agent || roleOfTask(e.task_id) || 'orchestrator', slot: e.pool_slot, task: e.task_id };
   switch (e.type) {
-    case 'task.created': return { ...base, role: e.agent || 'operator', kind: 'asked', text: str(p.prompt) };
+    case 'task.created': return { ...base, role: str(p.source) || e.agent || 'operator', kind: 'asked', text: str(p.prompt), to: str(p.target) || undefined };
     case 'task.output': return str(p.text) ? { ...base, kind: 'said', text: str(p.text) } : null;
     case 'task.failed': return { ...base, kind: 'said', text: `Failed: ${str(p.error) || 'no reason given'}` };
     case 'change.recorded': {
@@ -71,9 +84,15 @@ export function entryOf(e: Envelope, i: number): Entry | null {
   }
 }
 
-/** The activity stream, newest first: the events worth reading, plus recorded changes the events no longer hold. */
-export function stream(events: Envelope[], state: OState | null, limit = 200): Entry[] {
-  const out = events.map(entryOf).filter((x): x is Entry => x !== null);
+/**
+ * The activity stream, newest first: the events worth reading, plus recorded changes the events no longer hold.
+ * `isRole` says whether a name is a role the window can draw; a task given to something else (a flow such as `build`) is the
+ * orchestrator's to speak for.
+ */
+export function stream(events: Envelope[], state: OState | null, limit = 200, isRole: (r: string) => boolean = () => true): Entry[] {
+  const roles = taskRoles(events, state);
+  const roleOfTask = (task?: string) => { const r = task ? roles.get(task) : undefined; return r && isRole(r) ? r : undefined; };
+  const out = events.map((e, i) => entryOf(e, i, roleOfTask)).filter((x): x is Entry => x !== null);
   const seen = new Set(out.filter((x) => x.kind === 'recorded').map((x) => `${x.role}|${x.text}`));
   for (const [i, c] of (state?.changes ?? []).entries()) {
     if (seen.has(`${c.role}|${c.summary}`)) continue;
@@ -81,6 +100,9 @@ export function stream(events: Envelope[], state: OState | null, limit = 200): E
   }
   return out.sort((a, b) => b.at_ms - a.at_ms).slice(0, limit);
 }
+
+/** A path with the home folder written as `~`, for a row that has little room. */
+export const tilde = (path: string): string => path.replace(/^\/(?:Users|home)\/[^/]+/, '~');
 
 /** `14:02`, in the operator's time zone unless one is given. */
 export function clock(ms: number, timeZone?: string): string {

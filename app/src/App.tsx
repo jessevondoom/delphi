@@ -4,7 +4,7 @@ import { openBridge, type Bridge } from './bridge.ts';
 import { load, save, type Prefs, type Screen } from './prefs.ts';
 import { Activity } from './screens/Activity.tsx';
 import type { Conn, Envelope, Info, OState } from './types.ts';
-import { waiting } from './view.ts';
+import { tilde, waiting } from './view.ts';
 
 const MAX_EVENTS = 4000;
 const REFETCH_MS = 300;
@@ -77,7 +77,7 @@ export function App() {
   };
   const fold = (key: string) => update({ folded: { ...prefs.folded, [key]: !prefs.folded[key] } });
   const sections: { key: string; title: string; rows: { label: string; note?: string; on?: boolean }[] }[] = [
-    { key: 'projects', title: 'Projects', rows: (info?.projects ?? []).map((p) => ({ label: p.name, note: p.home ? 'home workspace' : p.root })) },
+    { key: 'projects', title: 'Projects', rows: (info?.projects ?? []).map((p) => ({ label: p.name, note: p.home ? 'home workspace' : tilde(p.root) })) },
     { key: 'sessions', title: 'Console sessions', rows: (state?.sessions ?? []).slice(-5).reverse().map((s, i) => ({ label: s.id, note: `${s.turns} turns · ${s.reason}`, on: i === 0 })) },
   ].filter((s) => s.rows.length > 0);
 

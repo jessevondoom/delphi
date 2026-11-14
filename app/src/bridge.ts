@@ -22,11 +22,23 @@ export function fixtureInfo(): Info {
   return { workspace_name: 'default', version: 'fixture', roles, avatar: BUILT_IN, projects: [{ name: 'default', root: '~/.delphi/workspaces/default', home: true }] };
 }
 
+type Fixture = { info?: Info; state: OState; events: Envelope[] };
+
+/** `?data=./file.json` (same origin only): a dump from `cargo run --example probe -- --json`, to look at real data in a browser. */
+async function fixtureData(): Promise<Fixture> {
+  const named = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('data') : null;
+  if (named && /^\.?\/[\w./-]+\.json$/.test(named)) {
+    const got = await fetch(named);
+    if (got.ok) return (await got.json()) as Fixture;
+  }
+  return (await import('./fixture/sim.json', { with: { type: 'json' } })).default as unknown as Fixture;
+}
+
 export async function fixtureBridge(): Promise<Bridge> {
-  const sim = (await import('./fixture/sim.json', { with: { type: 'json' } })).default as unknown as { state: OState; events: Envelope[] };
+  const sim = await fixtureData();
   return {
     kind: 'fixture',
-    info: async () => fixtureInfo(),
+    info: async () => (sim.info?.roles && Object.keys(sim.info.roles).length ? sim.info : fixtureInfo()),
     state: async () => sim.state,
     snapshot: async () => sim.events,
     subscribe(l) {

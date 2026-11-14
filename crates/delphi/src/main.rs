@@ -1177,7 +1177,7 @@ fn cmd_daemon(args: &[String]) -> i32 {
         Ok(v) => v,
         Err(code) => return code,
     };
-    chat::daemon(&home, &ws.dir, action)
+    chat::daemon(&home, &ws.dir, action, &theme_names(&ws))
 }
 
 /// `delphi auth …` and `delphi endpoints …`, in this process.
