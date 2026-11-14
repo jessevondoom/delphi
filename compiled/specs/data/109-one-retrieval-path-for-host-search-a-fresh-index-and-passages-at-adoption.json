@@ -138,7 +138,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/109-one-retrieval-path-for-host-search-a-fresh-index-and-passages-at-adoption.md",
-    "sha256": "9f37a0422c31defc4a3a68586f01eb5880af37adcb518fae3b24ab41efb0bfae"
+    "sha256": "7b85b56094e5de7abafd420590ad1c6d70563a3fec2f2b7663eaf1a6329181e3"
   },
   "source_status_at_hash": {
     "line": {
@@ -151,7 +151,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-13, in a host session (\"approve all your plans and suggestions and go\"). The approval was given to the plan this spec carries out (workstream 5: one retrieval engine for all five search tools, automatic index refresh, a small retrieval at role adoption) BEFORE this text was written; the operator has not read the text."
     },
-    "sha256": "9f37a0422c31defc4a3a68586f01eb5880af37adcb518fae3b24ab41efb0bfae",
+    "sha256": "7b85b56094e5de7abafd420590ad1c6d70563a3fec2f2b7663eaf1a6329181e3",
     "word": "approved"
   },
   "spec": {
