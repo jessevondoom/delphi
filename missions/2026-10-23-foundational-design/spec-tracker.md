@@ -985,6 +985,7 @@ The operator asked, in a host session on 2026-11-13, for a review of how Delphi'
 | 109 | Q2 | a fresh index | built (local, not pushed): `host.search_kb` refreshes an index older than its sources (the sync's own modification-time and size test, read-only) within 2 s and otherwise answers `index: "stale"` with its age while the refresh finishes behind it, the local tools report `index` and `index_age_s` without writing, and a research run refreshes the index when it ends; with no index at all nothing is built (the hint to run `delphi kb index` stays) |
 | 109 | Q3 | the release reference measurement only (the tier rule was struck by review amendment A2) | built (local, not pushed): measured on a scratch home from this checkout and recorded in §9.2 (of 147 release documents in the core, context, specs and about zones a host's `search_kb` can return 17: the charter, rubric and `SPEC.md` index untrusted, and the 125 `user_ratified` about documents sit in a zone `search_kb` leaves off); four options for the operator, no tier changed |
 | 109 | Q4 | `task` on `get_agent` | not started |
+| 109 | Q5 | labels, not exclusion: the whole release searchable by hosts, every result labelled, an optional `use: verify`, and the `reading-labels` skill (the operator's decision of 2026-11-13, spec §12) | not started |
 | 110 | X0 | the spec | approved in advance 2026-11-13 |
 | 110 | X1 | host IDs and adapters | not started |
 | 110 | X2 | `delphi connect` for Codex and Gemini, the instruction section | not started |

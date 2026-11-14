@@ -204,7 +204,7 @@ The operator asked (2026-11-11) for Delphi to keep a history of what happened in
 
 ## 109-one-retrieval-path-for-host-search-a-fresh-index-and-passages-at-adoption
 
-**109: One retrieval path for host search, a fresh index, and passages at adoption** · approved (per source at `09e78e89a38d`) · tier 0 · [source](../../specs/109-one-retrieval-path-for-host-search-a-fresh-index-and-passages-at-adoption.md)
+**109: One retrieval path for host search, a fresh index, and passages at adoption** · approved (per source at `bbc6aa198cc0`) · tier 0 · [source](../../specs/109-one-retrieval-path-for-host-search-a-fresh-index-and-passages-at-adoption.md)
 
 **source excerpt, untrusted** · `specs/109-one-retrieval-path-for-host-search-a-fresh-index-and-passages-at-adoption.md` lines 25-31
 
