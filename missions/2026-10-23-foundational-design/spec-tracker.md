@@ -1012,5 +1012,7 @@ A red-team review of the seven specs ran on 2026-11-13 (one critic of the author
 | 106 | G6 | a role's colour and weight in the host: the colour field in agent files, a status line, bold names (spec 106 §12) | not started |
 | 109 | Q8 | three label defects the experiment found: the host-note label, the library tier gloss, no home path in a library pointer | built (local, not pushed) |
 
+| 104 | G4 | the console shows the standing amount and the host notes waiting (spec 104 §13) | not started |
+| 106 | G1 | the orchestrator's compact pack inside its bound (spec 106 §11) | built (local, not pushed): five `inside-only` blocks in the orchestrator's manifest, a names-only skill index in compact packs, and the 24 KiB bound asserted (the orchestrator's compact pack is 21,035 bytes) |
 | 104 | G5 | the witness rule on the card and in the lint (spec 104 §13) | not started |
 | 106 | G6 | a role's colour and weight in the host: the colour field in agent files, a status line, bold names (spec 106 §12) | not started |

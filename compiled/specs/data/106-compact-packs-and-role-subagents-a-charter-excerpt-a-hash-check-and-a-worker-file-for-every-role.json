@@ -96,7 +96,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/106-compact-packs-and-role-subagents-a-charter-excerpt-a-hash-check-and-a-worker-file-for-every-role.md",
-    "sha256": "d11a5529a250773754485bf7f80ebd6909c5a678d8ff072c4abb40aff16482c7"
+    "sha256": "c8bf822cf2139353de00d2fc5880d0055fefd0526df112b05f9fd1bd8e45ab38"
   },
   "source_status_at_hash": {
     "line": {
@@ -109,7 +109,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-13, in a host session (\"approve all your plans and suggestions and go\"). The approval was given to the plan this spec carries out (workstream 2: a deterministic governance digest with the full charter by reference, `pack_hash` in `list_roles`, fetch-if-changed, agent files for every role) BEFORE this text was written; the operator has not read the text."
     },
-    "sha256": "d11a5529a250773754485bf7f80ebd6909c5a678d8ff072c4abb40aff16482c7",
+    "sha256": "c8bf822cf2139353de00d2fc5880d0055fefd0526df112b05f9fd1bd8e45ab38",
     "word": "approved"
   },
   "spec": {

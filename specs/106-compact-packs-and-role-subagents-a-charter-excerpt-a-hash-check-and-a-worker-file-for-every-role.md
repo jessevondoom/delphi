@@ -99,25 +99,25 @@ Objectives: a host adopts a role with one call and a pack a third of today's siz
 
 ## 9. Measured sizes
 
-Measured when P2 was built (2026-11-13, branch `build/106`) and again when spec 109 Q6 added one header line (`search_use`, about 123 bytes per pack; 2026-11-14), by `crates/delphi/src/pack_size_tests.rs` on a workspace `delphi init` seeds from the repository's own files, served to Claude Code with no operator profile. Bytes of the pack text, without `get_agent`'s identity line. The test pins each compact size plus 10 percent (A3).
+Measured when P2 was built (2026-11-13, branch `build/106`) and again when spec 109 Q6 added one header line (`search_use`, about 123 bytes per pack; 2026-11-14), and a third time when G1 added the markers and the names-only skill index (2026-11-14), by `crates/delphi/src/pack_size_tests.rs` on a workspace `delphi init` seeds from the repository's own files, served to Claude Code with no operator profile. Bytes of the pack text, without `get_agent`'s identity line. The test pins each compact size plus 10 percent (A3).
 
 | Role | Full pack | Compact pack |
 | :-- | --: | --: |
-| `orchestrator` | 36,493 | 25,249 |
-| `architect` | 30,131 | 18,746 |
-| `builder` | 30,384 | 18,944 |
-| `scout` | 31,000 | 19,674 |
-| `investigator` | 31,596 | 20,230 |
-| `strategist` | 29,613 | 18,224 |
-| `red-team` | 31,963 | 20,651 |
-| `writer` | 29,235 | 17,854 |
+| `orchestrator` | 36,493 | 21,035 |
+| `architect` | 30,131 | 17,524 |
+| `builder` | 30,384 | 17,562 |
+| `scout` | 31,000 | 18,898 |
+| `investigator` | 31,596 | 19,291 |
+| `strategist` | 29,613 | 17,282 |
+| `red-team` | 31,963 | 19,676 |
+| `writer` | 29,235 | 16,744 |
 | `messenger` | not served (`host_servable: false`) | not served |
-| `validator` | 29,719 | 18,231 |
-| `administrator` | 29,576 | 18,092 |
-| `assistant` | 28,501 | 17,013 |
-| `advocate` | 28,935 | 17,446 |
+| `validator` | 29,719 | 17,923 |
+| `administrator` | 29,576 | 17,244 |
+| `assistant` | 28,501 | 16,471 |
+| `advocate` | 28,935 | 16,774 |
 
-The charter is 21,239 bytes; the orchestrator's excerpt, with its closing note, is 10,451 bytes (under half, as A3 asks). The compact pack is 31 percent (orchestrator) to 41 percent smaller than the full one for every served role. **Not met:** A3's bound of 24 KiB (24,576 bytes) for the orchestrator's compact pack: it is 25,249 bytes. What remains is the orchestrator's manifest (about 8 KB in the pack), its skill index (about 2 KB) and the release heuristics, none of which the compact selection may cut; reaching the bound needs `inside-only` markers in the manifest or a shorter skill index, which A3 leaves to separate work under its own review. The size test does not assert the 24 KiB bound.
+The charter is 21,239 bytes; the orchestrator's excerpt, with its closing note, is 10,451 bytes (under half, as A3 asks). G1 left every full pack unchanged. The compact pack is 38 to 42 percent smaller than the full one for every served role, and 2 to 17 percent smaller than before G1. A3's bound of 24 KiB (24,576 bytes) for the orchestrator's compact pack is **met**: it is 21,035 bytes, and the size test asserts it. G1's markers cover five blocks of the orchestrator's manifest (the `suggest_rule` argument detail, the timer item, the tool-inventory reading of seats, naming threads and system inspection); no other role's manifest carries a marker, so their compact packs shrank only by the names-only skill index.
 
 ## 10. Amendments from review (2026-11-13)
 

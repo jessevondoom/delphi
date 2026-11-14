@@ -72,8 +72,30 @@ pub struct AgentManifest {
     /// The default `use` of a host's `search_kb` and `kb_retrieve` while this role is adopted (`specs/109` §13.1 item 1): `explore`
     /// unless the manifest says `search_use: verify`. A call's own `use` always wins. Any other word is `explore`, the default.
     pub search_use: crate::host_labels::Use,
-    /// The instruction body (everything after the frontmatter).
+    /// The instruction body (everything after the frontmatter), with the `inside-only` marker lines removed and what they
+    /// surround kept: what Delphi's own agents read (`specs/106` §11 G1).
     pub body: String,
+    /// The same body with the markers still in it, for the host packs, whose compact form drops the marked blocks.
+    pub host_body: String,
+}
+
+const INSIDE_ONLY_MARKERS: [&str; 2] = ["<!-- inside-only -->", "<!-- /inside-only -->"];
+
+/// A manifest body without its `inside-only` markers: a line that is only a marker goes, a marker inside a line is cut out of it,
+/// and everything between the markers stays.
+pub fn strip_inside_only_markers(body: &str) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for l in body.split('\n') {
+        if INSIDE_ONLY_MARKERS.contains(&l.trim()) {
+            continue;
+        }
+        let mut l = l.to_string();
+        for m in INSIDE_ONLY_MARKERS {
+            l = l.replace(m, "");
+        }
+        lines.push(l);
+    }
+    lines.join("\n")
 }
 
 fn strings(v: Option<&Value>) -> Vec<String> {
@@ -94,7 +116,8 @@ impl AgentManifest {
             execute: strings(scope.and_then(|s| s.get("execute"))),
             max_turn_budget: fm.get("max_turn_budget").and_then(|v| v.as_u64()).unwrap_or(20) as u32,
             search_use: if fm.get("search_use").and_then(|v| v.as_str()) == Some("verify") { crate::host_labels::Use::Verify } else { crate::host_labels::Use::Explore },
-            body: body.trim().to_string(),
+            body: strip_inside_only_markers(body).trim().to_string(),
+            host_body: body.trim().to_string(),
         })
     }
 
@@ -440,6 +463,26 @@ pub(crate) mod tests {
         }
         let with = |extra: &str| AgentManifest::parse(&format!("---\nid: x\n{extra}---\n")).unwrap().search_use;
         assert_eq!((with(""), with("search_use: explore\n"), with("search_use: verify\n"), with("search_use: always\n")), (Use::Explore, Use::Explore, Use::Verify, Use::Explore));
+    }
+
+    // Spec 106 §11 G1: the orchestrator's manifest gained `inside-only` marker lines and nothing else, and Delphi's own agents read
+    // exactly the body they read before.
+    #[test]
+    fn the_orchestrators_markers_change_no_word_and_its_daemon_side_body_is_unchanged() {
+        let shipped = include_str!("../../../agents/orchestrator/AGENT.md");
+        let before = include_str!("../tests/fixtures/orchestrator-AGENT.before-g1.txt");
+        assert_ne!(shipped, before, "the manifest carries markers");
+        let markers = |s: &str| s.matches("<!-- inside-only -->").count() + s.matches("<!-- /inside-only -->").count();
+        assert_eq!(markers(shipped), 10, "five marked blocks");
+        assert_eq!(markers(before), 0);
+        // The manifest with its marker lines stripped is the base manifest, byte for byte.
+        assert_eq!(strip_inside_only_markers(shipped), before);
+        // What the daemon's own prompt assembly reads (`body`, used for the IPR) is the body before the change; the host's copy keeps the markers.
+        let (now, then) = (AgentManifest::parse(shipped).unwrap(), AgentManifest::parse(before).unwrap());
+        assert_eq!(now.body, then.body);
+        assert!(!now.body.contains("inside-only"));
+        assert!(now.host_body.contains("<!-- inside-only -->") && then.host_body == then.body);
+        assert_eq!(strip_inside_only_markers("a\n<!-- inside-only -->\nb\n<!-- /inside-only -->\nc x<!-- inside-only --> y<!-- /inside-only -->z"), "a\nb\nc x yz");
     }
 
     #[test]

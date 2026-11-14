@@ -99,7 +99,7 @@ Today everything that makes a host session a Delphi session depends on the host'
 
 ## 106-compact-packs-and-role-subagents-a-charter-excerpt-a-hash-check-and-a-worker-file-for-every-role
 
-**106: Compact packs and role subagents: a charter excerpt, a hash check, and a worker file for every servable role** · approved (per source at `d11a5529a250`) · tier 0 · [source](../../specs/106-compact-packs-and-role-subagents-a-charter-excerpt-a-hash-check-and-a-worker-file-for-every-role.md)
+**106: Compact packs and role subagents: a charter excerpt, a hash check, and a worker file for every servable role** · approved (per source at `c8bf822cf213`) · tier 0 · [source](../../specs/106-compact-packs-and-role-subagents-a-charter-excerpt-a-hash-check-and-a-worker-file-for-every-role.md)
 
 **source excerpt, untrusted** · `specs/106-compact-packs-and-role-subagents-a-charter-excerpt-a-hash-check-and-a-worker-file-for-every-role.md` lines 25-30
 

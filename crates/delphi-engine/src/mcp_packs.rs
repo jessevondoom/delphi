@@ -178,6 +178,12 @@ fn drop_inside_only(body: &str) -> String {
         let Some(j) = rest[i..].find(INSIDE_ONLY_END) else { break };
         out.push_str(&rest[..i]);
         rest = &rest[i + j + INSIDE_ONLY_END.len()..];
+        // A block that was whole lines leaves the blank lines on both sides of it: keep one blank line, not three.
+        let before = out.len() - out.trim_end_matches('\n').len();
+        let after = rest.len() - rest.trim_start_matches('\n').len();
+        if before > 0 && before + after > 2 {
+            rest = &rest[(before + after - 2).min(after)..];
+        }
     }
     out.push_str(rest);
     out
@@ -483,7 +489,10 @@ impl Packs {
         }
         let manifest = AgentManifest::parse(&text).map_err(|e| e.to_string())?;
         let mut snap = self.ws.load_snapshot_with(role, include_profile).map_err(|e| e.to_string())?;
-        let mut role_body = manifest.body.clone();
+        let mut role_body = manifest.host_body.clone();
+        if detail == Detail::Full {
+            role_body = manifest.body.clone(); // the full pack is the manifest as Delphi's own agents read it
+        }
         // Spec 106 §3 item 1: the compact pack is a different selection of the same ratified text, never a rewording.
         let mut charter_state = "full";
         if detail == Detail::Compact {
@@ -502,14 +511,18 @@ impl Packs {
 
         let skills = self.skills().unwrap_or_default();
         let wanted: Vec<String> = self.roles()?.into_iter().find(|r| r.id == role).map(|r| r.skills).unwrap_or_default();
-        let skill_index: String = wanted
+        // Spec 106 §11 G1: a compact pack lists skill names only and says where the descriptions are.
+        let mut skill_index: String = wanted
             .iter()
             .map(|n| match skills.iter().find(|(s, _)| s == n) {
-                Some((_, d)) if !d.is_empty() => format!("- {}: {}", n, d),
+                Some((_, d)) if !d.is_empty() && detail == Detail::Full => format!("- {}: {}", n, d),
                 _ => format!("- {}", n),
             })
             .collect::<Vec<_>>()
             .join("\n");
+        if detail == Detail::Compact && !skill_index.is_empty() {
+            skill_index.push_str("\n(`list_skills` gives each skill's description.)");
+        }
 
         let nonce = hash(format!("{}\0{}\0{}\0{}\0{}", snap.governance, role_body, snap.heuristics, snap.lessons, snap.guidance).as_bytes())[..12].to_string();
         let ipr = Ipr {
@@ -713,6 +726,7 @@ mod tests {
         assert!(c.contains("- **T:** When a spec grows.") && c.contains("- **D:** Cut it in two.") && !c.contains("Long specs go unread"));
         assert!(f.contains("- **F:** Long specs go unread."));
         assert_eq!(drop_inside_only("a\n<!-- inside-only -->\nuse council-barrier\n<!-- /inside-only -->\nb"), "a\n\nb");
+        assert_eq!(drop_inside_only("a\n\n<!-- inside-only -->\nx\n<!-- /inside-only -->\n\nb"), "a\n\nb", "a block of whole lines leaves one blank line, not three");
         assert_eq!(drop_inside_only("a <!-- inside-only --> x <!-- /inside-only --> b <!-- inside-only --> y <!-- /inside-only --> c"), "a  b  c");
         assert_eq!(drop_inside_only("a <!-- inside-only --> no end"), "a <!-- inside-only --> no end", "an unclosed marker cuts nothing");
         assert_eq!(drop_falsification("- **T:** t\n  - **F:** f\n- **D:** d"), "- **T:** t\n- **D:** d");
