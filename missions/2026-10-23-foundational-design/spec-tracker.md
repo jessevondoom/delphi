@@ -966,7 +966,7 @@ The operator asked, in a host session on 2026-11-13, for a review of how Delphi'
 | 105 | H3 | `session-end` marker, the nudge | built (pull request open): `delphi mcp --hook session-end` writes a 0600 marker of transcript counts (no text; id and transcript path checked per A3; 200 kept), the brief's pointer reads it, and the prompt hook's per-session counter gives the nudge once at the 8th prompt (A4) |
 | 105 | H4 | the guide and a live check | not started |
 | 106 | P0 | the spec | approved in advance 2026-11-13 |
-| 106 | P1 | the charter excerpt | not started |
+| 106 | P1 | the charter excerpt | built (local, not pushed): `charter_excerpt::excerpt` selects §1, §2's opening, table header and the role's row (none for a role the table lacks, A1), §3.1-2, §4.1 and 4.3, §5.1-5 and 5.7 and §7's opening verbatim by a fixed table, adds the one note (what was left out, the hash, the A2 §5.12 sentence) and fails closed when a selected part is not found once; `delphi://charter` serves the ratified copy; a golden pins today's full pack |
 | 106 | P2 | `detail`, `if_hash`, `pack_hash` in `list_roles` | not started |
 | 106 | P3 | worker files for every servable role | not started |
 | 107 | B0 | the spec | approved in advance 2026-11-13 |

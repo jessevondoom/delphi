@@ -15,6 +15,8 @@ const MAX_PACK: usize = 256 * 1024;
 /// A skill body larger than this is cut, with a note.
 const MAX_SKILL: usize = 64 * 1024;
 const MAX_NAME: usize = 64;
+/// The resource that serves the operator's ratified charter (spec 106 §2 item 5).
+pub const CHARTER_URI: &str = "delphi://charter";
 
 pub struct Packs {
     ws: WorkspacePaths,
@@ -315,6 +317,25 @@ impl Packs {
         crate::research_host::ascii_badges(&self.ws.dir)
     }
 
+    /// The operator's ratified charter (`local/ratified/GOVERNANCE.md`, checked against `local/ratified.lock`), exactly as ratified,
+    /// and the short hash a charter excerpt names (spec 106 §2 item 5). Never a project's own `GOVERNANCE.md`.
+    pub fn charter(&self) -> Result<(String, String), String> {
+        let text = self.ws.ratified_workspace("GOVERNANCE.md").map_err(|e| e.to_string())?;
+        let h = hash(text.as_bytes())[..16].to_string();
+        Ok((text, h))
+    }
+
+    /// The MCP resource `delphi://charter` as `resources/list` lists it.
+    pub fn charter_resource_entry() -> Value {
+        json!({"uri": CHARTER_URI, "name": "GOVERNANCE.md", "mimeType": "text/markdown", "description": "Delphi's charter: the operator's ratified copy, read-only. A charter excerpt in an agent pack names this file's hash.", "annotations": {"audience": ["assistant", "user"]}})
+    }
+
+    /// `resources/read` of `delphi://charter`.
+    pub fn charter_resource(&self) -> Result<Value, String> {
+        let (text, _) = self.charter()?;
+        Ok(json!({"contents": [{"uri": CHARTER_URI, "mimeType": "text/markdown", "text": text}]}))
+    }
+
     pub fn pack(&self, role: &str, include_profile: bool) -> Result<String, String> {
         let text = self.role_text(role)?;
         let (fm, _) = split_frontmatter(&text);
@@ -447,6 +468,28 @@ mod tests {
         assert!(pack.contains("advice, not a grant"));
         assert!(!pack.contains("Prefers Rust"), "the operator profile is not served to a host");
         assert!(p.pack("architect", true).unwrap().contains("Prefers Rust"));
+    }
+
+    /// The full pack of `role` on the fixture, with the release number replaced so a version bump is not a change.
+    fn full_pack_golden(p: &Packs, role: &str) -> String {
+        p.pack(role, false).unwrap().replace(&format!("- delphi_version: {}\n", env!("CARGO_PKG_VERSION")), "- delphi_version: {version}\n")
+    }
+
+    // Spec 106 §3 item 1: the full pack is the pack as served before spec 106, byte for byte. The goldens were written from the code
+    // before the compact pack existed; regenerate them (`DELPHI_BLESS_PACKS=1`) only for a change that is meant to alter the full pack.
+    #[test]
+    fn the_full_pack_is_the_pack_served_before_spec_106_byte_for_byte() {
+        let (_t, p) = fixture();
+        for role in ["architect", "builder", "orchestrator", "validator"] {
+            let got = full_pack_golden(&p, role);
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/packs/full-{role}.txt"));
+            if std::env::var_os("DELPHI_BLESS_PACKS").is_some() {
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(&path, &got).unwrap();
+            }
+            let want = fs::read_to_string(&path).unwrap_or_else(|_| panic!("{} is missing: run DELPHI_BLESS_PACKS=1 cargo test -p delphi-engine --lib full_pack", path.display()));
+            assert!(got == want, "the full pack of `{role}` changed: compare with {} (regenerate with DELPHI_BLESS_PACKS=1 only if that is intended)", path.display());
+        }
     }
 
     #[test]
