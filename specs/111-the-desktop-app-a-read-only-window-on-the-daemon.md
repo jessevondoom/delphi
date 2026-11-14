@@ -1,0 +1,132 @@
+---
+id: spec-111-the-desktop-app-a-read-only-window-on-the-daemon
+title: "111: The desktop app: a read-only window on the daemon for activity, councils, the knowledge base and work output"
+author: architect
+timestamp: 2026-11-14T00:00:00Z
+status: approved   # by the operator, 2026-11-14, in a host session: asked whether a spec could be written and built from on the plan, as specs 104 to 110 were, the operator answered "your default assumptions all sounds correct. go". The approval is to the plan this spec carries out; the operator has not read this text.
+approved_by: operator (2026-11-14, in advance, on the plan)
+governed_by: "GOVERNANCE.md"
+review_rubric: "REVIEW.md"
+source_type: internal_generated
+confidence: medium   # the daemon's read-only surface is read from the code on `host-experience` (af584d21); the window framework's behaviour is from its documentation until slice A7 runs it
+source_mission: 2026-11-13-host-experience
+tags: [spec, app, desktop, narrator, read-only, ui]
+---
+
+# Spec 111: The desktop app
+
+> **Status: approved in advance, 2026-11-14** (see the frontmatter).
+> **Builds on:** [`specs/005`](005-console-and-narrator-tui.md) §2.1 (the sockets and their scopes), [`specs/087`](087-agent-identity-badges-and-name-pool.md) (badges and the name pool), [`specs/106`](106-compact-packs-and-role-subagents-a-charter-excerpt-a-hash-check-and-a-worker-file-for-every-role.md) §12 (a role's colour outside the console).
+> **Leaves alone:** the full-screen console of [`specs/005e`](005e-console-ux-review-and-redesign.md). It is frozen as it is (its open slices 10 and 11 are not continued) and keeps working; `delphi chat --inline` and `delphi observe --once` remain the terminal's way in.
+
+---
+
+## 1. Scope and objectives
+
+| # | Observation (code on `host-experience`, 2026-11-14) |
+| :-- | :-- |
+| D-1 | The work moved to the hosts. The host-experience program (specs 104 to 110) put about 10,400 lines into the engine and about 110 into the console. A conversation with a role now happens in Claude Code, Codex, Gemini CLI or Copilot. |
+| D-2 | What no host shows is what an operator of a team needs: activity across sessions, a council's deliberation, the knowledge base, and what the team produced. These are documents, lists and graphs, which a character grid draws badly. |
+| D-3 | The console costs about 9,400 lines of TypeScript, 7,700 lines of tests and 114 golden screens, its own CI job on a pinned runtime, and a compile on four release targets. Its real-terminal checklist is blank for all nine terminals. |
+| D-4 | The daemon already serves a read-only client. The narrator socket issues its token to a client with no terminal, offers twelve read methods and refuses everything else, and `observe.state` is the folded state every client shows. |
+
+Objective: a desktop window that shows, and changes nothing. An operator opens it and sees who is working and on what, follows a council while it runs, searches and reads the knowledge base, and finds what the team made. Everything it shows comes over the narrator socket.
+
+### 1.1 Non-goals
+
+- **Nothing that acts.** No approvals, no settings, no edits to a skill or an agent, no starting or stopping work. The window says where to do each of those (the console). A window that acts needs its own scope and its own spec (§7).
+- **No daemon change in slices A1 to A5.** They use the narrator socket as it is.
+- **No conversation.** The hosts and the console carry it.
+- **No Windows build.** The daemon's sockets are Unix sockets.
+- **No signed or notarized build.** The operator has no Apple Developer ID and accepts the system's prompt for an unsigned app (2026-11-14).
+
+### 1.2 Simpler alternatives considered
+
+- *A page the daemon serves to a browser* ([`specs/005b`](005b-deck-navigation-and-visual-interface.md) §5 sketched a listener on `127.0.0.1`). Rejected for the first release: it opens a port, which needs its own authentication and cross-origin rules, and it has no window of its own. The frontend is built as a plain web page (§3.3), so this stays possible.
+- *More panes in the console.* Rejected: D-2 and D-3.
+
+---
+
+## 2. The boundary
+
+1. **One scope.** The app attaches to the narrator socket and only to it: `auth.issue` with scope `narrator`, then `hello` with protocol major 1. It never opens the console, relay or host socket and never asks for another scope.
+2. **The methods it calls** are a fixed list in the bridge, a subset of the daemon's narrator allowlist: `session.ping`, `events.subscribe`, `session.snapshot`, `observe.state`, `observe.snapshot`, `kb.search`, `kb.get`, `usage.get`, `approval.list`. The window's code cannot name a method: it calls the bridge's commands, and each command is one of these.
+3. **No listener.** The app opens no port and no socket of its own. The window talks to the bridge through the framework's in-process channel.
+4. **Nothing written.** The app writes no file under the Delphi home or a project. Its own preferences (theme, which sections are folded) are the window's local storage.
+5. **Model text is text.** Everything from the daemon is rendered as text nodes; no markup from an agent is interpreted, and the page's content policy allows no remote resource.
+
+## 3. How it is put together
+
+### 3.1 Where it lives
+
+`app/` in this repository, outside the Cargo workspace: `app/src` is the window (TypeScript and React), `app/src-tauri` the bridge (Rust). It has its own lock files. The workspace's dependency policy and CI do not cover it until a later spec brings it into a release.
+
+### 3.2 The bridge
+
+A small Rust program inside the app. It does four things.
+
+1. **Finds the daemon.** It runs `delphi daemon where` (the command the CLI keeps for clients in other languages), which prints the socket paths, the roles with their colours, the avatar table and the name pool. It looks for `delphi` in `DELPHI_EXE`, then `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, because a window started from the Finder has no shell `PATH`. If that fails it computes the narrator socket of the default workspace itself (`<home>/run/<hash>.narrator.sock`, the hash as `delphi_core::spawn::layout` makes it) and uses its built-in copy of the avatar table.
+2. **Attaches.** Two connections, as the console's observer keeps: one for calls, one for `events.subscribe`. Its own client, about a hundred lines of newline-delimited JSON-RPC; it does not depend on `delphi-core`, which would bring SQLite and an async runtime into a program that needs neither.
+3. **Passes things on.** Commands for the calls of §2.2; the daemon's notifications (`event`, `delta.frame`, `resync_required`) are forwarded to the window, coalesced.
+4. **Says when it is not connected.** It never starts a daemon (starting one attaches as the console, which needs a terminal). With no daemon the window says so and how to start one; the bridge retries, and re-attaches when the daemon restarts.
+
+### 3.3 The window
+
+It keeps no fold of its own. Like the console's observer it asks for `observe.state` at start and after a reconnect, asks again at most every 300 ms after an event, and uses `delta.frame` only for live text. The activity stream is `observe.snapshot` (the newest events of the kinds the daemon folds) plus what arrives live.
+
+All of it is a plain web page: with no bridge present it reads a fixture, so every screen runs in a browser and in tests without the app or a daemon.
+
+## 4. What it looks like
+
+Decided with the operator on 2026-11-14 from drawn screens.
+
+- **Colour.** Warm greys, dark by default, light when the system is; a role's colour is the only saturated colour on screen. Role colours are the console's (`delphi_core::research::role_look` and its light pair), sent by the daemon's CLI, never a table of the app's own.
+- **Badges.** The five cells of [`specs/087`](087-agent-identity-badges-and-name-pool.md) drawn in CSS: brackets as borders, each cell one character wide, eyes white on dark and slate on light, the mouth in the role's colour. Two forms: the bracket badge, with the role's name beside it in the role's colour, and a filled plate for dense lists. Faces and blink frames come from the avatar table. Motion stops under the system's reduce-motion setting.
+- **The mark.** Six small rounded bars in the colours of the orchestrator, strategist, architect, scout, red-team and builder, before the word `delphi`.
+- **The menu.** Items span the column, with a note (how many are live, how many wait) smaller and under the label. Sections with a capital heading fold. The whole menu hides behind one button.
+- **Names.** The app shows the names the daemon's CLI sends. It holds no theme's names.
+
+## 5. Screens
+
+1. **Activity.** A stream of what agents said, read and recorded, newest first, each entry tinted in its role's colour; the roster of agents with what each is doing and its model family; a card when something waits on the operator, saying to answer it in the console.
+2. **Council.** The question, the stages, one column per seat with its lens and family. While the council runs, an activity stream sits under the seats and can be narrowed to one seat. In the blind round a seat's words are not shown, in the stream or anywhere else: the window shows that it is working and what it reads. Once the verdict is in, the verdict and the dissent take the stream's place and the stream folds under them.
+3. **Knowledge base.** A start page (search, the shelf's layers, what waits for review, what was added) and a results page with a reader showing an entry's label, status and who vouched for it.
+4. **Work output.** What the team produced for a mission, led by whatever that project produces. Many projects are research and reports, not specifications and code, so the screen does not assume either: it groups by what is there, in a grid or a list, with where each item lives.
+5. **Agents and skills, Settings.** Read-only views.
+
+Screens 4 and 5 need data the narrator socket may not offer today (`observe.state` carries recorded changes and their files, not a list of a mission's documents; `projects.list` and the page methods are not on the narrator allowlist). Each of those slices starts by saying what is missing, and any new read method is added to the allowlist on purpose, in that slice, with its own test.
+
+## 6. Slices (one per commit, built locally)
+
+The operator asked on 2026-11-14 that this be built locally, as specs 104 to 110 were: a commit per slice on a local branch, each behind the local gates (the app's own checks; `cargo test`, clippy and `delphi lint` for anything in the workspace), with no push and no pull request until asked.
+
+| Slice | Content | Hours |
+| :-- | :-- | --: |
+| A0 | this spec | 1-2 |
+| A1 | the shell: `app/`, the themes, badges from the avatar table, the mark, the menu, the fixture mode, the dependency gate | 6-8 |
+| A2 | the bridge: find the daemon, attach on the narrator scope, calls and notifications, reconnect, the refusal test | 6-8 |
+| A3 | Activity on live data | 6-8 |
+| A4 | Council | 6-8 |
+| A5 | Knowledge base | 6-8 |
+| A6 | Work output | 8-10 |
+| A7 | an unsigned macOS app that runs, a local build script, one smoke test of the built app, the guide | 4-6 |
+| A8 | Agents and skills, Settings | 6-8 |
+
+**Tests.**
+- *The window* (run as a web page, no app): the dependency gate (every version exact and hashed, three production packages, no install script); the type check; unit tests of what turns the daemon's state into what a screen shows, on a fixture taken from the console's simulator; a badge is drawn from the avatar table for every role in every activity, with the mouth cell in the role's colour and the others as eyes; a blind round shows no seat's words.
+- *The bridge*: against a socket the test serves, it attaches with scope `narrator` and protocol major 1; a method outside §2.2 cannot be sent; a refusal from the daemon reaches the window as an error and not as a crash; it re-attaches after the socket closes; with no daemon it reports that and keeps trying.
+- *Together* (A7): the built app starts, attaches to a daemon in a temporary home, and shows its state.
+
+## 7. Authority and trust
+
+- The app can do what `delphi observe` can do, and no more. Every rule that keeps the narrator socket read-only is the daemon's and is unchanged.
+- The rule that a token for a scope that acts goes only to a client at a terminal ([`specs/005`](005-console-and-narrator-tui.md) §2.1; operator decision 2026-10-25) stands. A window has no terminal. If the app is ever to act, it gets a scope of its own that a terminal vouches for once and that can be revoked, designed in its own spec. It is never given a console token, and the rule is never relaxed for it.
+- The app runs `delphi daemon where` and nothing else. It reads that command's output as data.
+- Merges stay as [`specs/094`](094-core-repo-merge-flow.md) says.
+
+## 8. Not verified (before building)
+
+- That the window framework (Tauri 2) builds and runs here unsigned, and how large the app is: slice A7.
+- The shapes of `observe.state`'s `tools`, `adoption`, `files` and `context`, and of `ratify.list`: read when a screen needs them.
+- Whether Work output can be drawn from the narrator socket alone: slice A6 says.
+- `delphi daemon where` sends each role's id as its name (it passes no theme names). Whether the app should show the theme's names, and how it gets them, is decided in slice A3.

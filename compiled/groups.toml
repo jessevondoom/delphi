@@ -168,4 +168,5 @@ order = 9
 "108-closing-the-learning-loop-for-host-sessions" = "knowledge-and-memory"
 "109-one-retrieval-path-for-host-search-a-fresh-index-and-passages-at-adoption" = "knowledge-and-memory"
 "110-other-hosts-adapters-instruction-files-and-install-paths" = "hosts-and-mcp"
+"111-the-desktop-app-a-read-only-window-on-the-daemon" = "console"
 "ui-wireframes-and-blueprints" = "console"
