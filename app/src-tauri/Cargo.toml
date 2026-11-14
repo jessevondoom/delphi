@@ -1,0 +1,29 @@
+[package]
+name = "delphi-app"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Delphi desktop: a read-only window on the daemon (spec 111)"
+
+[lib]
+name = "delphi_app_lib"
+path = "src/lib.rs"
+
+[[bin]]
+name = "delphi-app"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+blake3 = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+# Outside the repository's Cargo workspace on purpose (spec 111 §3.1): its own lock file, its own dependency tree.
+[workspace]
