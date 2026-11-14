@@ -15,7 +15,7 @@ The plugin declares the MCP server (`delphi mcp`), two skills (one that says whe
 Installing the plugin grants Delphi nothing: it is not an approval.
 
 It also declares four session hooks (`hooks/hooks.json`, spec 105 and spec 106 §11): at session start, at each prompt, at session end and when a subagent starts Claude Code runs
-`delphi mcp --hook <event> --host claude-code` (the subagent-start hook prints a role's pack only for Delphi's own `<role>-worker` subagents). They print nothing until you run `delphi mcp --hooks on` at a terminal; `delphi mcp --hooks off` turns them off again.
+`delphi mcp --hook <event> --host claude-code` (the subagent-start hook prints a role's pack only for Delphi's own `<role>-worker` subagents). They are on by default once the plugin is installed (spec 105 §13); `delphi mcp --hooks off` turns them off, and `delphi mcp --hooks on` at a terminal turns them back on.
 
 Update with the host's own plugin update. Remove with `claude plugin uninstall delphi@delphi` and `claude plugin marketplace remove delphi`.
 To turn Delphi off without removing it, set `[mcp] enabled = false` in `config.toml` or use `/mcp off`.

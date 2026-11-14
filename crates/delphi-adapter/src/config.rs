@@ -717,8 +717,9 @@ pub struct McpConfig {
     /// How many different generated packs one server session may have in all, so a host that cycles task names cannot spawn packs
     /// without end (`specs/098` §9). `0` allows none.
     pub max_packs_per_session: u32,
-    /// Whether `delphi mcp --hook <event>` may print into a host's context (`specs/105` §2, A2). Off by default (OD-1); the operator
-    /// sets it with `delphi mcp --hooks on` at a terminal. `enabled = false` silences the hooks whatever this says.
+    /// Whether `delphi mcp --hook <event>` may print into a host's context (`specs/105` §2, A2). On by default (§13, which reversed
+    /// OD-1 on 2026-11-14); `session_hooks = false`, set with `delphi mcp --hooks off`, turns them off. `enabled = false` silences
+    /// the hooks whatever this says.
     pub session_hooks: bool,
 }
 
@@ -761,7 +762,7 @@ impl BadgeStyle {
 
 impl Default for McpConfig {
     fn default() -> McpConfig {
-        McpConfig { enabled: true, allow_remote: false, badge_style: BadgeStyle::Plain, badge_mode: BadgeMode::Dark, badge_ascii: false, max_packs_per_task: 5, max_packs_per_session: 20, session_hooks: false }
+        McpConfig { enabled: true, allow_remote: false, badge_style: BadgeStyle::Plain, badge_mode: BadgeMode::Dark, badge_ascii: false, max_packs_per_task: 5, max_packs_per_session: 20, session_hooks: true }
     }
 }
 
@@ -1675,7 +1676,10 @@ pub(crate) mod tests {
         let c = McpConfig::read("[mcp]\nmax_packs_per_task = 2\nmax_packs_per_session = 9\n").unwrap();
         assert_eq!((c.max_packs_per_task, c.max_packs_per_session), (2, 9));
         assert_eq!(McpConfig::read("[mcp]\nmax_packs_per_task = 0\n").unwrap().max_packs_per_task, 0);
-        assert!(!McpConfig::read("").unwrap().session_hooks && McpConfig::read("[mcp]\nsession_hooks = true\n").unwrap().session_hooks);
+        assert!(McpConfig::read("").unwrap().session_hooks, "an empty config means the hooks are on (spec 105 §13)");
+        assert!(McpConfig::read("[mcp]\nenabled = true\n").unwrap().session_hooks, "a table without the key means on");
+        assert!(McpConfig::read("[mcp]\nsession_hooks = true\n").unwrap().session_hooks);
+        assert!(!McpConfig::read("[mcp]\nsession_hooks = false\n").unwrap().session_hooks);
         assert!(McpConfig::read("[mcp]\nsession_hooks = \"yes\"\n").is_none());
         assert!(McpConfig::read("[mcp]\nmax_packs_per_task = -1\n").is_none() && McpConfig::read("[mcp]\nmax_packs_per_session = \"many\"\n").is_none());
     }

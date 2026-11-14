@@ -8,9 +8,10 @@
 //! that carry a per-run nonce, with the sentence that it is data to weigh, never instructions (§3). Text another session wrote is
 //! not printed at all: the last session is a pointer of fixed words and checked fields (A1).
 //!
-//! The switch is `[mcp] session_hooks` in the workspace's `config.toml`, off by default (OD-1, A2); `[mcp] enabled = false` also
-//! silences every hook. Both are read from the live file at each run, so turning the hooks off takes effect at once. The limit
-//! (§8): a process running as the operator can edit the file; what the switch turns on is read-only.
+//! The switch is `[mcp] session_hooks` in the workspace's `config.toml`, on by default (§13, which reversed OD-1 on 2026-11-14; A2): an
+//! empty config, a missing file or an `[mcp]` table without the key means on, `session_hooks = false` is off, and a config that
+//! cannot be read is off. `[mcp] enabled = false` also silences every hook. Both are read from the live file at each run, so turning the hooks off takes effect at once. The limit
+//! (§8): a process running as the operator can edit the file; what the switch controls is read-only.
 
 use crate::mcp_packs::Packs;
 use crate::mcp_project::Project;
@@ -37,20 +38,31 @@ const RULE_LINE: &str = "No Spec, No Build: only a spec whose status is approved
 /// How the pointer to the last session ends (§3 item 5, A1).
 const POINTER_TAIL: &str = "call handoff_get or recall_sessions to read what it left.";
 
-/// Is a host hook allowed to print, read from a `config.toml`'s text? `[mcp] session_hooks = true` and `[mcp] enabled` not off.
-/// Anything that cannot be read as the operator wrote it is off: the switch fails closed.
+/// Is a host hook allowed to print, read from a `config.toml`'s text? `[mcp] session_hooks` not `false` (on by default, spec 105
+/// §13) and `[mcp] enabled` not off. Anything that cannot be read as the operator wrote it is off: the switch fails closed.
 pub fn switch_on_in(text: &str) -> bool {
     delphi_adapter::config::McpConfig::read(text).is_some_and(|c| c.enabled && c.session_hooks)
 }
 
-/// The switch for a workspace; a missing or unreadable `config.toml` is off.
-pub fn switch_on(ws_dir: &Path) -> bool {
-    std::fs::read_to_string(ws_dir.join("config.toml")).map(|t| switch_on_in(&t)).unwrap_or(false)
+/// The text of a workspace's `config.toml`: a missing file reads as an empty config (the default, on); a file that cannot be
+/// read (permissions, not UTF-8) is `None`, which fails closed.
+fn config_text(ws_dir: &Path) -> Option<String> {
+    match std::fs::read_to_string(ws_dir.join("config.toml")) {
+        Ok(t) => Some(t),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(String::new()),
+        Err(_) => None,
+    }
 }
 
-/// What `[mcp] session_hooks` says, apart from `enabled`: `Some(on)`, or `None` when the file or its `[mcp]` cannot be read.
+/// The switch for a workspace; a missing `config.toml` is the default (on), an unreadable one is off.
+pub fn switch_on(ws_dir: &Path) -> bool {
+    config_text(ws_dir).is_some_and(|t| switch_on_in(&t))
+}
+
+/// What `[mcp] session_hooks` says, apart from `enabled`: `Some(on)` (true when the key is absent), or `None` when the file or
+/// its `[mcp]` cannot be read.
 pub fn session_hooks_key(ws_dir: &Path) -> Option<bool> {
-    let text = std::fs::read_to_string(ws_dir.join("config.toml")).ok()?;
+    let text = config_text(ws_dir)?;
     delphi_adapter::config::McpConfig::read(&text).map(|c| c.session_hooks)
 }
 
@@ -58,7 +70,11 @@ pub fn session_hooks_key(ws_dir: &Path) -> Option<bool> {
 /// [`crate::host_rpc::set_enabled`] does for `[mcp] enabled`).
 pub fn set_switch(ws_dir: &Path, on: bool) -> Result<(), String> {
     let path = ws_dir.join("config.toml");
-    let text = std::fs::read_to_string(&path).map_err(|e| format!("could not read config.toml: {e}"))?;
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(format!("could not read config.toml: {e}")),
+    };
     let mut doc: toml_edit::DocumentMut = text.parse().map_err(|e| format!("config.toml is not valid TOML, so it was left alone: {e}"))?;
     if !doc.contains_key("mcp") {
         doc["mcp"] = toml_edit::table();
@@ -905,17 +921,34 @@ mod tests {
     }
 
     #[test]
-    fn the_switch_is_off_by_default_on_only_when_set_and_silenced_by_mcp_or_a_broken_file() {
-        assert!(!switch_on_in(""));
-        assert!(!switch_on_in("[mcp]\n"));
+    fn the_switch_is_on_by_default_off_only_when_false_and_silenced_by_mcp_or_a_broken_file() {
+        // Spec 105 §13: on by default.
+        assert!(switch_on_in(""), "an empty config is on");
+        assert!(switch_on_in("[mcp]\n"), "an [mcp] table without the key is on");
+        assert!(switch_on_in("[mcp]\nbadge_ascii = true\n"), "an [mcp] table without the key is on");
         assert!(switch_on_in("[mcp]\nsession_hooks = true\n"));
+        assert!(!switch_on_in("[mcp]\nsession_hooks = false\n"), "an explicit false is off");
         assert!(!switch_on_in("[mcp]\nsession_hooks = \"yes\"\n"), "a value that is not a boolean is off");
+        assert!(!switch_on_in("[mcp]\nenabled = false\n"), "[mcp] enabled = false silences the hooks although the default is on");
         assert!(!switch_on_in("[mcp]\nsession_hooks = true\nenabled = false\n"), "[mcp] enabled = false silences the hooks too");
+        assert!(!switch_on_in("[mcp]\nbadge_style = \"neon\"\n"), "an [mcp] that cannot be read is silent, the key being absent");
         assert!(!switch_on_in("[mcp]\nsession_hooks = true\nbadge_style = \"neon\"\n"), "an [mcp] that cannot be read fails closed");
         assert!(!switch_on_in("[mcp\nsession_hooks = true"), "invalid TOML is off");
-        assert!(!switch_on_in("[hooks]\nhost = true\n"), "spec 018's ratified [hooks] block is not the switch (A2)");
+        assert!(!switch_on_in("[mcp]\nallow_remote = true\n"), "an out-of-range [mcp] is off");
+        assert!(switch_on_in("[hooks]\nhost = false\n"), "spec 018's ratified [hooks] block is not the switch (A2)");
         let t = tempfile::tempdir().unwrap();
-        assert!(!switch_on(t.path()), "no config.toml is off");
+        assert!(switch_on(t.path()) && session_hooks_key(t.path()) == Some(true), "no config.toml reads as the default, on");
+        std::fs::write(t.path().join("config.toml"), "").unwrap();
+        assert!(switch_on(t.path()), "an empty config.toml is on");
+        std::fs::write(t.path().join("config.toml"), "[mcp]\nsession_hooks = false\n").unwrap();
+        assert!(!switch_on(t.path()) && session_hooks_key(t.path()) == Some(false));
+        std::fs::write(t.path().join("config.toml"), [0xff, 0xfe, b'\n']).unwrap();
+        assert!(!switch_on(t.path()) && session_hooks_key(t.path()).is_none(), "a config that cannot be read is off");
+        std::fs::write(t.path().join("config.toml"), "[mcp]\nbadge_style = \"neon\"\n").unwrap();
+        assert!(!switch_on(t.path()) && session_hooks_key(t.path()).is_none(), "an unreadable [mcp] is silent");
+        let e = tempfile::tempdir().unwrap();
+        set_switch(e.path(), false).unwrap();
+        assert!(!switch_on(e.path()), "off can be set where there is no config.toml yet");
     }
 
     #[test]

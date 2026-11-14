@@ -37,7 +37,7 @@ An operator uses Delphi and also another coding tool (Claude Code, Copilot CLI, 
 
 ## 071-host-plugin-marketplace-and-durable-mcp-enablement
 
-**071: Host plugin marketplace and durable MCP enablement for Claude Code, Codex, Antigravity and Copilot** · approved (per source at `072c621a98ee`) · tier 0 · [source](../../specs/071-host-plugin-marketplace-and-durable-mcp-enablement.md)
+**071: Host plugin marketplace and durable MCP enablement for Claude Code, Codex, Antigravity and Copilot** · approved (per source at `47a3e22cb26c`) · tier 0 · [source](../../specs/071-host-plugin-marketplace-and-durable-mcp-enablement.md)
 
 _No standard scope section; open the spec._
 
@@ -89,7 +89,7 @@ A host that asks Delphi for another model family should get the answer, see that
 
 ## 105-session-hooks-for-hosts-a-brief-at-start-mention-routing-at-the-prompt-and-a-marker-at-the-end
 
-**105: Session hooks for hosts: a brief at session start, mention routing at the prompt, and a marker at the end** · approved (per source at `8dbe3f7cdb5e`) · tier 0 · [source](../../specs/105-session-hooks-for-hosts-a-brief-at-start-mention-routing-at-the-prompt-and-a-marker-at-the-end.md)
+**105: Session hooks for hosts: a brief at session start, mention routing at the prompt, and a marker at the end** · approved (per source at `6057454861d3`) · tier 0 · [source](../../specs/105-session-hooks-for-hosts-a-brief-at-start-mention-routing-at-the-prompt-and-a-marker-at-the-end.md)
 
 **source excerpt, untrusted** · `specs/105-session-hooks-for-hosts-a-brief-at-start-mention-routing-at-the-prompt-and-a-marker-at-the-end.md` line 26
 
