@@ -136,7 +136,9 @@ pub fn live_notes(mission: &str, events: &[EventEnvelope]) -> Vec<LiveNote> {
                     valid_until: e.payload["valid_until"].as_str().filter(|d| crate::frontmatter::entry_date_ok(d)).map(|d| d[..10].to_string()),
                 });
             }
-            "learn.dropped" => {
+            // A note the operator kept (`delphi learn keep`, `specs/108` M2) is closed like a resolved proposal. Note ids
+            // (`n…`, `h…`) and proposal ids (`p…`) never collide, so a proposal's resolution closes no note.
+            "learn.dropped" | "learn.proposal_resolved" => {
                 if let Some(id) = e.payload["id"].as_str() {
                     notes.retain(|n| n.id != id);
                 }
@@ -145,6 +147,11 @@ pub fn live_notes(mission: &str, events: &[EventEnvelope]) -> Vec<LiveNote> {
         }
     }
     notes
+}
+
+/// A host note's claim and its evidence, without the `[host:…]` label (`specs/108` M2: the text `learn keep` offers).
+pub fn host_claim(summary: &str) -> (String, String) {
+    host_parts(summary)
 }
 
 /// What `suggest_rule` may do and where: the vocabulary of `learn.proposed` (`specs/004` §4.2, `specs/031` §3.3).

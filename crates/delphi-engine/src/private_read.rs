@@ -81,7 +81,7 @@ pub struct Read {
 
 /// Every file of this crate that returns, or can return, the text of a private entry. The inventory test below checks the table against
 /// the accessors it scans for; a reader of private text that is not here fails it.
-pub const READS: [Read; 22] = [
+pub const READS: [Read; 23] = [
     Read { file: "service.rs", what: "`host.search_kb`: the `noted` layer returns entries a host left, with the preview; one the daemon stored private is private text handed to the host. (The same file's `kb.search` and `kb.get` serve the console and the narrator pane with `include_staged`: the operator's own view, not a seat; the per-method tables `HOST_SURFACE` and `MCP_SURFACE` name every method a host can call)", how: How::Marks },
     Read { file: "library_claims.rs", what: "`claim_slice`: opening `@library/claim/<id>`; also reads `source.md` and `excerpts` to check an anchor or a support count, which return counts and verdicts and no text", how: How::Withholds { proof_file: "delphi-engine/src/private_read.rs", proof_test: "a_claim_that_rests_on_a_private_source_is_withheld_from_the_seat_that_opens_it" } },
     Read { file: "engine.rs", what: "block 5 of a span: opens a claim pointer through `claim_slice` (above)", how: How::Withholds { proof_file: "delphi-engine/src/private_read.rs", proof_test: "a_claim_that_rests_on_a_private_source_is_withheld_from_the_seat_that_opens_it" } },
@@ -100,6 +100,7 @@ pub const READS: [Read; 22] = [
     Read { file: "kb.rs", what: "the index: `chunk_content` returns indexed text; `include_staged` opts in to staged notes (host-noted entries among them)", how: How::NoReturn { why: "the index lists only library sources that are not private (`Library::indexable`); staged notes are off unless a caller sets `include_staged`, and the callers are the `service.rs` row (host search, marks) and the console's `kb.search`" } },
     Read { file: "mcp_project.rs", what: "the MCP server's own readers (`search_project`, `search_memory`, `query_memory`, `kb_retrieve`): they run in the MCP server process, which has no daemon session to mark", how: How::NoReturn { why: "their file sets exclude the `staged` zone (`scope.rs` drops it) and their KB zone list names no `staged`; `local/staged` is never readable by a role (`pathguard`). The test `the_mcp_servers_own_readers_never_return_a_noted_entry` proves it with a canary" } },
     Read { file: "host_rpc.rs", what: "`read_handoff`: `host.handoff_get` returns the handoff another session of the same project put", how: How::Skips { exposure: "the text came from another session whose mark (if any) is its own: the reading session is unmarked, so a handoff that carries words from a private note reaches a fresh session with no mark and nothing held on its sends. Accepted for now by OD-5 (no inheritance); a decision, not a bug" } },
+    Read { file: "host_recall.rs", what: "`host.recall_sessions` (`specs/108` M1): returns the summaries, notes and handoffs earlier host sessions of the same project left", how: How::Withholds { proof_file: "delphi-engine/src/host_recall.rs", proof_test: "a_second_session_recalls_the_first_and_not_itself_another_project_a_dropped_note_or_a_marked_session" } },
     Read { file: "host_hooks.rs", what: "`read_handoff`: the `session-start` hook's brief asks whether a host session of the same project left a handoff (`specs/105` §3 item 5, A1)", how: How::NoReturn { why: "the brief prints only a pointer: the date, the tool name checked against the host-ID charset, and whether a handoff and a summary exist; no text of the handoff is printed (`the_last_session_is_a_pointer_and_none_of_its_text_reaches_the_brief`)" } },
     Read { file: concat!("history_", "record.rs"), what: "`for_prompt` returns a spec 102 record's prompt text; `read` returns the store", how: How::Withholds { proof_file: "delphi-engine/tests/history_egress.rs", proof_test: "nothing_but_the_history_module_calls_for_prompt_and_by_default_no_record_is_served" } },
     Read { file: concat!("history_", "view.rs"), what: "`history.view` shows the stored records' prompt text", how: How::OperatorOnly { why: "the `history.view` method needs the console scope (`history_view_is_for_the_console_only_reads_only_and_says_history_is_off_when_it_is`)" } },
@@ -129,7 +130,7 @@ const SEATS_CANNOT_READ: &str = "an answer written by seats that cannot read a n
 const MCP_OWN: &str = "runs in the MCP server's own process over files and the index; their file sets and zones exclude `staged` (`the_mcp_servers_own_readers_never_return_a_noted_entry`) and the index lists no private source";
 
 /// The methods of the host socket (`delphi_core::server::HOST_METHODS`).
-pub const HOST_SURFACE: [Surface; 25] = [
+pub const HOST_SURFACE: [Surface; 27] = [
     no_return("session.ping", "answers `pong`"),
     Surface { name: "host.search_kb", how: How::Marks },
     no_return("host.propose_note", WRITES),
@@ -137,6 +138,8 @@ pub const HOST_SURFACE: [Surface; 25] = [
     no_return("host.request_test_authorization", WRITES),
     no_return("host.record_session_summary", WRITES),
     no_return("host.handoff_put", WRITES),
+    no_return("host.ingest_transcript", "a write: it stages notes from the host's own transcript and returns counts and a mission id, never their text"),
+    Surface { name: "host.recall_sessions", how: How::Withholds { proof_file: "delphi-engine/src/host_recall.rs", proof_test: "a_second_session_recalls_the_first_and_not_itself_another_project_a_dropped_note_or_a_marked_session" } },
     Surface { name: "host.handoff_get", how: How::Skips { exposure: "returns the handoff another session put; that session's mark is its own and does not follow the text (OD-5)" } },
     no_return("host.request_help", WRITES),
     no_return("host.help_result", SEATS_CANNOT_READ),
@@ -158,7 +161,7 @@ pub const HOST_SURFACE: [Surface; 25] = [
 ];
 
 /// The tools of the MCP server (`mcp_host::tools()`).
-pub const MCP_SURFACE: [Surface; 40] = [
+pub const MCP_SURFACE: [Surface; 41] = [
     Surface { name: "search_kb", how: How::Marks },
     no_return("list_roles", PROJECT_FILES),
     no_return("delphi_roster", PROJECT_FILES),
@@ -183,6 +186,7 @@ pub const MCP_SURFACE: [Surface; 40] = [
     no_return("record_session_summary", WRITES),
     no_return("handoff_put", WRITES),
     Surface { name: "handoff_get", how: How::Skips { exposure: "see `host.handoff_get`" } },
+    Surface { name: "recall_sessions", how: How::Withholds { proof_file: "delphi-engine/src/host_recall.rs", proof_test: "a_second_session_recalls_the_first_and_not_itself_another_project_a_dropped_note_or_a_marked_session" } },
     no_return("request_help", WRITES),
     no_return("help_result", SEATS_CANNOT_READ),
     no_return("council_frame", "the static frame of a council: no entry"),

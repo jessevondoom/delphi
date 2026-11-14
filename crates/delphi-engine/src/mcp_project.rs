@@ -627,6 +627,17 @@ impl Project {
             }
         }
 
+        // Spec 108 M5 (A6): entries the operator kept with `delphi kb review keep`, and only those, labelled; never "validated".
+        if (scope == "all" || scope == "core_only") && status_filter != "validated_only" {
+            if let Ok(kb) = crate::kb::Kb::open(&self.ws_dir.join("local/state.db")) {
+                for h in kb.search(query, &crate::kb_import::kept_search_opts(limit * 2)).unwrap_or_default().into_iter().filter(|h| crate::kb_import::is_kept(&self.ws_dir, &h.rel_path)) {
+                    if seen_sources.insert(h.pointer.clone()) {
+                        candidates.push(Candidate { chunk_id: format!("CHK-{}", h.start_line), status: "kept by the operator, not validated", source: h.pointer.clone(), confidence: "low", passage: crate::host_noted::fence(crate::kb_import::KEPT_LABEL, &h.preview), score: h.score });
+                    }
+                }
+            }
+        }
+
         // 2. Project chunks if scope is "all" or "project_only"
         if scope == "all" || scope == "project_only" {
             let order = self.semantic_order(query);
@@ -977,6 +988,16 @@ mod tests {
         assert!(res.contains("the quokka procedure"), "expected passage content: {}", res);
         assert!(res.contains("<!-- delphi:rag:end -->"), "missing closing tag: {}", res);
         assert!(!res.contains("specs/002-b.md"), "draft spec should not appear in validated_only: {}", res);
+
+        // Spec 108 M5 (A6): a kept host entry is served, labelled; an imported page of the same zone is not, nor a kept one under validated_only.
+        let import = |text: &str| crate::kb_import::import(&ws, &crate::kb_import::Input { text, name_hint: "n.md", modified_secs: None, now_secs: 1_800_000_000, keep_id: None }, &|_| None).unwrap();
+        let kept = import("# Kept page\n\nThe platypus procedure, kept.\n");
+        import("# Imported page\n\nThe platypus procedure, imported from outside.\n");
+        crate::kb_import::mark_kept(&ws, &kept.id, "host-a/h1").unwrap();
+        crate::kb::Kb::open(&ws.join("local/state.db")).unwrap().refresh(&ws, "").unwrap();
+        let res = p.kb_retrieve("platypus", 5, "all", "core_only").unwrap();
+        assert!(res.contains("status=\"kept by the operator, not validated\"") && res.contains("kept.") && !res.contains("imported from outside"), "{res}");
+        assert!(!p.kb_retrieve("platypus", 5, "validated_only", "core_only").unwrap().contains("platypus procedure"));
 
         // Invalid options fail cleanly
         assert!(p.kb_retrieve("quokka", 5, "bogus_filter", "all").is_err());

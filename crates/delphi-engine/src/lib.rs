@@ -58,6 +58,7 @@ pub mod align_run;
 pub mod bundle_load;
 pub mod bundle_serve;
 pub mod host_hooks;
+pub mod host_recall;
 pub mod host_rpc;
 pub mod mcp_daemon;
 pub mod mcp_host;

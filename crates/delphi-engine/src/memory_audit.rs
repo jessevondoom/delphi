@@ -39,6 +39,7 @@ pub const SITES: &[Site] = &[
         events: &["learn.staged"],
         proofs: &[
             ("crates/delphi-engine/src/service.rs", "a_host_stages_untrusted_notes_in_its_own_session_and_the_switch_holds"),
+            ("crates/delphi-engine/src/service.rs", "a_transcript_is_ingested_through_the_daemon_once_redacted_and_only_for_an_opted_in_project"),
         ],
     },
     Site {
@@ -76,6 +77,16 @@ pub const SITES: &[Site] = &[
         ],
     },
     Site {
+        name: "`delphi learn keep` (`specs/108` M2): the operator's typed yes at a terminal keeps a host note as a lesson or a rule, through the pinned write and its checks",
+        files: &["crates/delphi/src/learn_keep.rs"],
+        events: &["learn.proposal_resolved"],
+        proofs: &[
+            ("crates/delphi/src/learn_keep.rs", "keep_as_lesson_writes_one_rule_with_provenance_resolves_the_note_and_the_next_pack_carries_it"),
+            ("crates/delphi/src/learn_keep.rs", "a_script_an_unknown_id_a_closed_note_an_unknown_role_and_a_relaxing_text_are_refused_with_nothing_written"),
+            ("crates/delphi/src/learn_keep.rs", "a_full_lessons_file_is_refused_with_the_three_ways_out_and_nothing_written"),
+        ],
+    },
+    Site {
         name: "the digest's `promote` (the operator's act: a candidate becomes a proposal for `/retro`; nothing loads)",
         files: &["crates/delphi-engine/src/digest.rs"],
         events: &["learn.proposed"],
@@ -95,6 +106,12 @@ pub const SITES: &[Site] = &[
             ("crates/delphi-engine/src/promote.rs", "withdrawing_retires_the_entry_with_an_audit_reference_and_deletes_nothing"),
             ("crates/delphi-engine/src/service.rs", "a_promotion_over_rpc_is_console_only_cas_protected_and_withdrawable"),
         ],
+    },
+    Site {
+        name: "`propose_council_record` (`specs/108` M5): a host's unaudited agenda, saved at L0 under `missions/agendas/` for the operator to read; never a Council record, never loaded",
+        files: &["crates/delphi-engine/src/mcp_host.rs"],
+        events: &[],
+        proofs: &[("crates/delphi-engine/src/mcp_host.rs", "propose_council_record_rejects_missing_minority_report_and_stages_valid_records")],
     },
     Site {
         name: "the checkpoint summary (`specs/030` §4.3): no model text for a task that read content that is not validated",

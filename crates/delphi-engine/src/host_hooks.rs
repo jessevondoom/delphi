@@ -147,11 +147,7 @@ fn cut_chars(s: &str, max: usize) -> String {
 /// of three hyphens (so it can never forge or close a marker line), no occurrence of the run's nonce, cut to `max` characters.
 pub fn flatten(s: &str, max: usize, nonce: &str) -> String {
     let cleaned: String = s.chars().filter(|c| *c != '<' && !invisible(*c)).map(|c| if c.is_control() { ' ' } else { c }).collect();
-    let mut one = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
-    // `host_rpc::defuse` replaces each `---` once, which leaves `---` in a run of five or more hyphens: repeat until none is left.
-    while one.contains("---") {
-        one = crate::host_rpc::defuse(&one);
-    }
+    let mut one = crate::host_rpc::defuse(&cleaned.split_whitespace().collect::<Vec<_>>().join(" "));
     if !nonce.is_empty() {
         one = one.replace(nonce, "");
     }
@@ -656,6 +652,23 @@ pub fn session_end(ws_dir: &Path, input: &Input, host: &str, cwd: &Path, root: O
     Some(path)
 }
 
+/// `specs/108` M3: the arguments of the one `host.ingest_transcript` call the `session-end` hook makes, or `None` when it makes none:
+/// the project must have opted in to transcript ingest and the transcript path must be one A3 accepts. The role is `orchestrator`
+/// unless the session's marker names exactly one adopted role.
+pub fn ingest_args(ws_dir: &Path, input: &Input, cwd: &Path, root: Option<&Path>, marker: Option<&Path>) -> Option<Value> {
+    let project = crate::scope::resolve(ws_dir, cwd).project?;
+    if !crate::transcript::opted_in(ws_dir, project.as_str()) {
+        return None;
+    }
+    let path = accepted_transcript(input.transcript_path.as_deref()?, cwd, root)?;
+    let adopted: Vec<String> = marker.and_then(|m| read_small(m, MAX_MARKER)).and_then(|b| serde_json::from_slice::<Value>(&b).ok()).and_then(|v| v["roles_adopted"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())).unwrap_or_default();
+    let role = match adopted.as_slice() {
+        [one] => one.clone(),
+        _ => "orchestrator".to_string(),
+    };
+    Some(json!({"role": role, "transcript_path": path.to_string_lossy()}))
+}
+
 /// The newest marker of another host session of this project, as a pointer (§3 item 5): ended_ms, the tool (checked), whether
 /// it called handoff_put, and whether it left a summary (unknown when its counts were left out).
 fn marker_pointer(ws_dir: &Path, project: Option<&str>, current: Option<&str>) -> Option<Pointer> {
@@ -1008,6 +1021,29 @@ mod tests {
 
     fn input(id: &str, transcript: Option<&Path>, cwd: &Path) -> Input {
         Input { session_id: Some(id.into()), transcript_path: transcript.map(Path::to_path_buf), cwd: Some(cwd.to_path_buf()), event: None, source: None, prompt: None, reason: Some("logout".into()) }
+    }
+
+    // specs/108 M3: the session-end hook asks for an ingest only for a project that opted in and a transcript A3 accepts, as the
+    // orchestrator unless the marker names exactly one adopted role.
+    #[test]
+    fn the_end_hook_asks_for_an_ingest_only_for_an_opted_in_project_and_names_one_role() {
+        let (t, dir) = ws();
+        let (cwd, _) = project(&t, &dir);
+        let (root, folder) = transcript_root(&t, &cwd);
+        let file = folder.join("s.jsonl");
+        std::fs::write(&file, sample_transcript(&[], 1)).unwrap();
+        let file = std::fs::canonicalize(&file).unwrap();
+        let i = input("abc", Some(&file), &cwd);
+        assert!(ingest_args(&dir, &i, &cwd, Some(&root), None).is_none(), "not opted in");
+        crate::transcript::opt_in(&dir, &"a".repeat(32)).unwrap();
+        let a = ingest_args(&dir, &i, &cwd, Some(&root), None).unwrap();
+        assert_eq!((a["role"].as_str(), a["transcript_path"].as_str()), (Some("orchestrator"), file.to_str()));
+        assert!(ingest_args(&dir, &input("abc", Some(&t.path().join("x.jsonl")), &cwd), &cwd, Some(&root), None).is_none(), "a path A3 refuses");
+        let marker = t.path().join("m.json");
+        std::fs::write(&marker, json!({"roles_adopted": ["builder"]}).to_string()).unwrap();
+        assert_eq!(ingest_args(&dir, &i, &cwd, Some(&root), Some(&marker)).unwrap()["role"], "builder");
+        std::fs::write(&marker, json!({"roles_adopted": ["builder", "architect"]}).to_string()).unwrap();
+        assert_eq!(ingest_args(&dir, &i, &cwd, Some(&root), Some(&marker)).unwrap()["role"], "orchestrator");
     }
 
     #[test]

@@ -537,10 +537,10 @@ Approved by the operator on 2026-11-01 after a four-seat adversarial council rev
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
-| E1 | `schemas/episode.schema.json`, `trace_miner.rs` event harvester, daemon taint stamping, deduplication, and schema verification in `docs.rs` | built (this PR) |
-| E2 | KB indexing (`zone: episodes`), tool/skill/error tokenization in `kb_fts_ident`, and role isolation in `kb.rs` | built (this PR) |
-| E3 | Agent tool `recall_memory` and engine wiring to unified retrieval service (`specs/064`) | built (this PR) |
-| E4 | Proactive retry-ladder bridge hint injection and `/retro` candidate supersession | built (this PR) |
+| E1 | `schemas/episode.schema.json`, `trace_miner.rs` event harvester, daemon taint stamping, deduplication, and schema verification in `docs.rs` | built, corrected 2026-11-13: the schema, the harvester and its tests were built, but nothing in the daemon called `harvest_episodes`, so no episode file was ever written. Spec 108 M4 (pull request open) wires it: every task end (done, escalated, failed, cancelled) writes `missions/<id>/traces/<role>-<task>.md` off the task's path, at most one per task and three per mission, deduplicated against the mission's episodes, through the secret filter. Its stamping was also wrong and is fixed: the tier is the lowest `span.taint` of the task's spans capped at `internal_generated`, and `external_untrusted` with no taint event (it was `internal_empirical`); a missing time no longer becomes a fixed date |
+| E2 | KB indexing (`zone: episodes`), tool/skill/error tokenization in `kb_fts_ident`, and role isolation in `kb.rs` | built; until spec 108 M4 it indexed only files a test wrote, since none were written. The vector scope now reads a hyphenated role (`red-team-t_0001.md`) whole |
+| E3 | Agent tool `recall_memory` and engine wiring to unified retrieval service (`specs/064`) | built; it had no episodes to return before spec 108 M4 |
+| E4 | Proactive retry-ladder bridge hint injection and `/retro` candidate supersession | built; as E3, inert until episodes were written (spec 108 M4) |
 
 
 ## Fleet expansion: Administrator, Assistant, and Advocate (spec 067, approved 2026-11-01)
@@ -973,11 +973,11 @@ The operator asked, in a host session on 2026-11-13, for a review of how Delphi'
 | 107 | B1 | the briefing | not started |
 | 107 | B2 | skill, hook line and wording | not started |
 | 108 | M0 | the spec | approved in advance 2026-11-13 |
-| 108 | M1 | `recall_sessions` | not started |
-| 108 | M2 | `delphi learn keep` | not started |
-| 108 | M3 | skill lines and daemon ingest | not started |
-| 108 | M4 | the trace harvester | not started |
-| 108 | M5 | three conformance fixes | not started |
+| 108 | M1 | `recall_sessions` | built (pull request open), as amended by A2 and A5: `host.recall_sessions` and the `recall_sessions` tool return the last host sessions of the caller's project (with no project, of the same canonical folder, recorded per session in `host_cwd`) newest first or ranked by an in-memory index over their texts, without the caller's own, dropped or kept notes, or a session with a live private-read mark, every text cut, flattened and fenced as noted entries are, at most 8 KiB, with one ids-only `host.sessions_recalled` event that `delphi doctor` counts; no brief line; a summary now keeps the host's `asked`/`did`/`open`; the handoff carries no open items, so `handoff.open` is not returned |
+| 108 | M2 | `delphi learn keep` | built (pull request open), as amended by A3: a terminal-only command with no daemon method and no `--yes` keeps a host note as a role's lesson (T/D/F lines, provenance in the file's `kept:` frontmatter) or a rule (through `customize rule`'s path, provenance on its Why line) via the pinned write, the no-relaxation test and the Rule of 25, closes the note with `learn.proposal_resolved`, and needs the daemon stopped; `learn list` marks recurring host notes with the command and `learn.health` counts them (the console does not show that count yet) |
+| 108 | M3 | skill lines and daemon ingest | built (pull request open), as amended by A4: the `delphi` skill asks for `propose_note`, `record_session_summary` and `recall_sessions`; `host.ingest_transcript` (host scope) derives the transcript folder from the project the daemon resolves (the project root, so a session started in a subfolder is refused), refuses a symlink at any component, a file over 32 MiB, a project that did not opt in and a role that is not servable, redacts every note and stages it at L0 in the same `host-ts<hash>` mission the CLI uses, de-duplicated; the `session-end` hook makes one 2 s call when hooks are on and the project opted in (role `orchestrator` unless the marker names one adopted role); `delphi learn ingest` still works with the daemon stopped |
+| 108 | M4 | the trace harvester | built (pull request open): every task end writes its episode to `missions/<id>/traces/<role>-<task>.md` off the task's path (a failure is logged, never returned), stamped per A1 from the spans' taint and never from the task's ceiling, within 065 §6's quotas, and indexed in the `episodes` zone, which stays off for hosts |
+| 108 | M5 | three conformance fixes | built (pull request open), as amended by A6: `delphi kb review keep` now adds a `kept_from:` frontmatter marker (none existed that told a kept host entry from an imported page) and `search_kb` (`kept` layer) and `kb_retrieve` return only pages carrying it, fenced and labelled `kept by the operator, not validated`; `propose_council_record` says it is saved under `missions/agendas/` and is in the memory write-path audit; `handoff_put` names its orchestrator default; `host_rpc::defuse` now spaces out a hyphen run of any length |
 | 109 | Q0 | the spec | approved in advance 2026-11-13 |
 | 109 | Q0a | the `query_memory` facet leak (review amendment A3) | not started |
 | 109 | Q1 | the workspace corpus on the retrieval service; one shared project ranker (re-scoped by review amendment A1) | not started |

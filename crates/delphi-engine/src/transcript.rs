@@ -170,22 +170,78 @@ pub struct Report {
     pub already: usize,
 }
 
-/// Mine one Claude Code log for the project `cwd` belongs to and stage what it finds for `role`, as L0 notes in the mission
-/// `host-ts<hash of the session>` (stamped with the project, so the notes stay in its scope). Reading again stages nothing twice.
-pub fn ingest_claude_code(ws: &WorkspacePaths, cwd: &Path, role: &str, text: &str) -> Result<Report, String> {
+/// The checks both ingest paths make before a transcript is read: the folder resolves to a project, the project opted in, and
+/// `role` is a servable role. Returns the project and the role.
+pub fn admit(ws: &WorkspacePaths, cwd: &Path, role: &str) -> Result<(crate::scope::ProjectId, String), String> {
     let project = crate::scope::resolve(&ws.dir, cwd).project.ok_or("this folder resolves to no project scope (the project registry cannot be read): nothing was ingested")?;
     if !opted_in(&ws.dir, project.as_str()) {
         return Err(format!("transcript ingest is off for project {}: turn it on with `delphi learn ingest --enable`", project.as_str()));
     }
     let role = servable_role(ws, role).map_err(|e| e.to_string())?;
-    let mined = read_claude_code(text)?;
+    Ok((project, role))
+}
+
+/// The staging identity of a mined transcript: the mission `host-ts<hash of the transcript's session>`, so both paths stage into one.
+pub fn caller_for(mined: &Mined, cwd: &Path) -> Caller {
     let hash = mined.session.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3));
-    let caller = Caller { session: format!("ts{hash:016x}"), tool: "claude-code-transcript".into(), cwd: cwd.to_path_buf(), projects: Vec::new() };
-    let dir = delphi_core::sessions::dir(&ws.dir, &caller.mission());
-    let have = replay(&dir).unwrap_or_default();
+    Caller { session: format!("ts{hash:016x}"), tool: "claude-code-transcript".into(), cwd: cwd.to_path_buf(), projects: Vec::new() }
+}
+
+/// The findings not yet staged in `have` (keyed by their evidence pointer), and how many were.
+pub fn fresh_of<'a>(mined: &'a Mined, have: &[delphi_core::event::EventEnvelope]) -> (Vec<&'a Finding>, usize) {
     let known: Vec<String> = have.iter().filter(|e| e.kind == "learn.staged").filter_map(|e| e.payload["evidence"].as_str().map(String::from)).collect();
     let fresh: Vec<&Finding> = mined.findings.iter().filter(|f| !known.contains(&f.evidence)).collect();
     let already = mined.findings.len() - fresh.len();
+    (fresh, already)
+}
+
+/// The largest transcript the daemon reads (`specs/108` §4 item 2).
+pub const MAX_DAEMON_BYTES: u64 = 32 * 1024 * 1024;
+
+/// The transcript the daemon may read for `host.ingest_transcript` (`specs/108` A4). The folder is derived from the project the
+/// daemon resolved, never from the caller: `<root>/<project root with / and . as ->`, where `root` is `~/.claude/projects`. The path
+/// is refused when any component of it is a symlink, when it is not a regular `.jsonl` file of this user of at most
+/// [`MAX_DAEMON_BYTES`], or when its canonical form is not directly inside the canonical folder.
+pub fn daemon_path(ws_dir: &Path, project: &crate::scope::ProjectId, path: &Path, root: Option<&Path>) -> Result<PathBuf, String> {
+    use std::os::unix::fs::MetadataExt;
+    let refused = |why: &str| Err(format!("refused: {why}; nothing was ingested"));
+    let Some(root) = root else { return refused("the host's transcript folder is not known (HOME is not set)") };
+    let Some(project_root) = crate::scope::project_root(ws_dir, project).and_then(|r| std::fs::canonicalize(r).ok()) else { return refused("the project's folder cannot be found") };
+    if !path.is_absolute() {
+        return refused("`transcript_path` must be an absolute path");
+    }
+    let mut at = PathBuf::new();
+    for c in path.components() {
+        at.push(c);
+        if std::fs::symlink_metadata(&at).is_ok_and(|m| m.file_type().is_symlink()) {
+            return refused("the transcript path goes through a symlink");
+        }
+    }
+    let m = std::fs::symlink_metadata(path).map_err(|_| "refused: the transcript cannot be read; nothing was ingested".to_string())?;
+    // SAFETY: geteuid has no preconditions.
+    if !m.is_file() || m.uid() != unsafe { libc::geteuid() } || path.extension().is_none_or(|x| x != "jsonl") {
+        return refused("the transcript is not a session log file of this user");
+    }
+    if m.len() > MAX_DAEMON_BYTES {
+        return refused(&format!("the transcript is over {} MiB", MAX_DAEMON_BYTES / (1024 * 1024)));
+    }
+    let folder = std::fs::canonicalize(crate::host_hooks::transcript_folder(root, &project_root)).map_err(|_| "refused: this project has no transcript folder; nothing was ingested".to_string())?;
+    let canon = std::fs::canonicalize(path).map_err(|e| e.to_string())?;
+    if canon.parent() != Some(folder.as_path()) {
+        return refused("the transcript is not in this project's transcript folder");
+    }
+    Ok(canon)
+}
+
+/// Mine one Claude Code log for the project `cwd` belongs to and stage what it finds for `role`, as L0 notes in the mission
+/// `host-ts<hash of the session>` (stamped with the project, so the notes stay in its scope). Reading again stages nothing twice.
+pub fn ingest_claude_code(ws: &WorkspacePaths, cwd: &Path, role: &str, text: &str) -> Result<Report, String> {
+    let (project, role) = admit(ws, cwd, role)?;
+    let mined = read_claude_code(text)?;
+    let caller = caller_for(&mined, cwd);
+    let dir = delphi_core::sessions::dir(&ws.dir, &caller.mission());
+    let have = replay(&dir).unwrap_or_default();
+    let (fresh, already) = fresh_of(&mined, &have);
     if !fresh.is_empty() {
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let stamp = dir.join("scope");
@@ -232,6 +288,42 @@ mod tests {
         assert_eq!(kinds, ["correction", "retry"], "{:?}", m.findings);
         assert!(m.findings[0].evidence.ends_with("line 6") && m.findings[1].evidence.ends_with("line 3"));
         assert!(m.findings.iter().all(|f| f.text.chars().count() <= MAX_NOTE && !f.text.contains('\n')));
+    }
+
+    #[test]
+    fn the_daemon_reads_only_a_plain_file_in_the_projects_own_transcript_folder() {
+        let t = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(t.path()).unwrap();
+        let ws = base.join("ws");
+        let id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let root = base.join("proj");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(ws.join("local")).unwrap();
+        std::fs::write(ws.join("local/projects.json"), json!({"schema": 1, "projects": {id: {"project_id": id, "root": root, "display_name": "proj"}}}).to_string()).unwrap();
+        let project = crate::scope::ProjectId::parse(id).unwrap();
+        let claude = base.join("claude-projects");
+        let folder = crate::host_hooks::transcript_folder(&claude, &root);
+        std::fs::create_dir_all(&folder).unwrap();
+        let log = folder.join("s.jsonl");
+        std::fs::write(&log, rec("user", json!("no, the other one"))).unwrap();
+        assert_eq!(daemon_path(&ws, &project, &log, Some(&claude)).unwrap(), log);
+        // Another folder, a symlink at the last component or above it, a relative path, another extension and no root are refused.
+        let other = claude.join("-elsewhere");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join("s.jsonl"), "x").unwrap();
+        assert!(daemon_path(&ws, &project, &other.join("s.jsonl"), Some(&claude)).unwrap_err().contains("not in this project's"));
+        std::os::unix::fs::symlink(&log, folder.join("l.jsonl")).unwrap();
+        assert!(daemon_path(&ws, &project, &folder.join("l.jsonl"), Some(&claude)).unwrap_err().contains("symlink"));
+        std::os::unix::fs::symlink(&claude, base.join("link")).unwrap();
+        let via = base.join("link").join(folder.file_name().unwrap()).join("s.jsonl");
+        assert!(daemon_path(&ws, &project, &via, Some(&claude)).unwrap_err().contains("symlink"));
+        assert!(daemon_path(&ws, &project, Path::new("s.jsonl"), Some(&claude)).is_err());
+        std::fs::write(folder.join("s.txt"), "x").unwrap();
+        assert!(daemon_path(&ws, &project, &folder.join("s.txt"), Some(&claude)).is_err());
+        assert!(daemon_path(&ws, &project, &log, None).is_err());
+        let big = folder.join("big.jsonl");
+        std::fs::File::create(&big).unwrap().set_len(MAX_DAEMON_BYTES + 1).unwrap();
+        assert!(daemon_path(&ws, &project, &big, Some(&claude)).unwrap_err().contains("32 MiB"));
     }
 
     #[test]
