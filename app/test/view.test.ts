@@ -1,0 +1,59 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { test } from 'node:test';
+import type { Envelope, OState } from '../src/types.ts';
+import { clock, entryOf, familyOf, roster, stream, waiting } from '../src/view.ts';
+
+const sim = JSON.parse(readFileSync(new URL('../src/fixture/sim.json', import.meta.url), 'utf8')) as { state: OState; events: Envelope[] };
+
+test('the roster lists the six roles of the mark first and says what each is doing', () => {
+  const r = roster(sim.state);
+  assert.deepEqual(r.map((a) => a.role), ['orchestrator', 'strategist', 'architect', 'scout', 'red-team', 'builder']);
+  const by = Object.fromEntries(r.map((a) => [a.role, a]));
+  assert.equal(by['red-team']!.activity, 'waiting_approval');
+  assert.equal(by['red-team']!.doing, 'Waiting on you');
+  assert.equal(by.builder!.doing, 'Add a retry queue to the claim loop');
+  assert.equal(by.builder!.family, 'claude');
+  assert.equal(by.orchestrator!.doing, 'Idle');
+  assert.equal(by.orchestrator!.family, '', 'an unknown model names no family');
+});
+
+test('a family comes from the provider the daemon names before the model id', () => {
+  const s = { ...sim.state, providers: [{ endpoint: 'e1', family: 'gemini', models: 1, cooling: 0, out: 0, back_ms: null }] };
+  assert.equal(familyOf(s, 'e1', 'claude-x'), 'gemini');
+  assert.equal(familyOf(s, 'other', 'gpt-5.6'), 'gpt');
+});
+
+test('what waits on the operator is listed oldest first', () => {
+  const w = waiting({ ...sim.state, approvals: { b: { role: 'builder', summary: 'two', since_ms: 20 }, a: { role: 'scout', summary: 'one', since_ms: 10 } } });
+  assert.deepEqual(w.map((x) => x.summary), ['one', 'two']);
+  assert.deepEqual(waiting({ ...sim.state, approvals: undefined }), []);
+});
+
+test('the stream is newest first, keeps what is worth reading and adds changes the events no longer hold', () => {
+  const s = stream(sim.events, sim.state);
+  assert.ok(s.length > 0);
+  for (let i = 1; i < s.length; i++) assert.ok(s[i - 1]!.at_ms >= s[i]!.at_ms);
+  assert.ok(!s.some((e) => e.text.includes('undefined')));
+  assert.ok(s.some((e) => e.kind === 'recorded' && e.code?.includes('specs/040-retry.md')));
+  assert.ok(s.some((e) => e.kind === 'waiting'));
+  // A change both in the events and in the state is shown once.
+  const texts = s.filter((e) => e.kind === 'recorded').map((e) => `${e.role}|${e.text}`);
+  assert.equal(new Set(texts).size, texts.length);
+  // Usage and bookkeeping events are left out.
+  assert.equal(entryOf({ type: 'agent.usage', timestamp: '2026-11-14T14:30:00Z', payload: {} }, 0), null);
+  assert.equal(stream([], null).length, 0);
+});
+
+test('a tool call is one clipped line, and a block that is not a tool call is left out', () => {
+  const call = entryOf({ type: 'agent.block.complete', timestamp: '2026-11-14T14:30:00Z', agent: 'scout', payload: { block: { type: 'tool_call', name: 'read_file', arguments: { path: 'x'.repeat(400) } } } }, 0)!;
+  assert.equal(call.kind, 'read');
+  assert.equal(call.role, 'scout');
+  assert.ok(call.code!.startsWith('read_file {"path"') && call.code!.length <= 240 && call.code!.endsWith('…'));
+  assert.equal(entryOf({ type: 'agent.block.complete', timestamp: '2026-11-14T14:30:00Z', payload: { block: { type: 'text' } } }, 0), null);
+});
+
+test('a time is shown as hours and minutes', () => {
+  assert.equal(clock(Date.UTC(2026, 10, 14, 14, 2, 30), 'UTC'), '14:02');
+  assert.equal(clock(0), '');
+});
