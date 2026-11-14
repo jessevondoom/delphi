@@ -530,6 +530,7 @@ impl Project {
         let mut out = envelope(&r, limit);
         out.insert("project".into(), json!(self.describe()));
         out.insert("ranking".into(), json!(ranking));
+        self.freshness_into(&mut out);
         out.insert("results".into(), json!(r.results));
         Ok(Value::Object(out).to_string())
     }
@@ -569,6 +570,7 @@ impl Project {
         out.insert("project".into(), json!(self.describe()));
         out.insert("role".into(), json!(role));
         out.insert("ranking".into(), json!(ranking));
+        self.freshness_into(&mut out);
         out.insert("results".into(), json!(r.results));
         Ok(Value::Object(out).to_string())
     }
@@ -640,13 +642,23 @@ impl Project {
             })
             .collect();
 
-        Ok(json!({
-            "project": self.describe(),
-            "facet": facet_filter,
-            "role": role,
-            "ranking": ranking,
-            "results": hits
-        }).to_string())
+        let mut out = serde_json::Map::new();
+        out.insert("project".into(), json!(self.describe()));
+        out.insert("facet".into(), json!(facet_filter));
+        out.insert("role".into(), json!(role));
+        out.insert("ranking".into(), json!(ranking));
+        self.freshness_into(&mut out);
+        out.insert("results".into(), json!(hits));
+        Ok(Value::Object(out).to_string())
+    }
+
+    /// How fresh the index this answer came from is (`specs/109` §3.2): `index` is `fresh`, `stale` (a source is newer than what the
+    /// index holds; only the daemon or `delphi kb index` brings it up to date, this process never writes it) or `none`, and
+    /// `index_age_s` the seconds since it was last synced.
+    fn freshness_into(&self, out: &mut serde_json::Map<String, Value>) {
+        let f = crate::kb::freshness(&self.ws_dir);
+        out.insert("index".into(), json!(f.map_or("none", |f| f.word())));
+        out.insert("index_age_s".into(), json!(f.and_then(|f| f.age_s)));
     }
 
     /// Retrieve chunked passages, sourced claims, and verified specifications from Delphi's knowledge base and project context (`specs/072` §5).
@@ -805,7 +817,9 @@ impl Project {
 
         // One answer, rankings on different scales: merged by rank (`specs/109` A1). A passage two legs found is served once.
         let candidates = fuse(vec![core, from_layer, project.into_iter().map(|p| p.1).collect()], |c| c.source.clone());
-        let mut out = format!("<!-- delphi:rag:meta ranking=\"{}\" -->", ranking);
+        let f = crate::kb::freshness(&self.ws_dir);
+        let age = f.and_then(|f| f.age_s).map(|a| format!(" index_age_s=\"{}\"", a)).unwrap_or_default();
+        let mut out = format!("<!-- delphi:rag:meta ranking=\"{}\" index=\"{}\"{} -->", ranking, f.map_or("none", |f| f.word()), age);
         if candidates.is_empty() {
             out.push_str("\nNo matching knowledge base passages found.");
             return Ok(out);
@@ -904,16 +918,46 @@ mod tests {
         rusqlite::Connection::open(&empty).unwrap().execute_batch("CREATE TABLE other(x)").unwrap();
         let before = fs::read(&empty).unwrap();
         let p2 = Project::new(&ws2, &root2);
-        assert!(p2.kb_retrieve("quokka", 5, "all", "all").unwrap().starts_with("<!-- delphi:rag:meta ranking=\"words (no index)\" -->"));
+        assert!(p2.kb_retrieve("quokka", 5, "all", "all").unwrap().starts_with("<!-- delphi:rag:meta ranking=\"words (no index)\" index=\"none\" -->"));
         assert_eq!(fs::read(&empty).unwrap(), before, "the MCP server wrote nothing");
         assert!(!ws2.join("local/state.db-wal").exists());
         // An index is read, and the reader leaves its bytes as they were.
         let before = fs::read(&db).unwrap();
         let p = Project::new(&ws, &root);
-        assert!(p.kb_retrieve("quokka", 5, "all", "all").unwrap().starts_with("<!-- delphi:rag:meta ranking=\"index\" -->"));
+        assert!(p.kb_retrieve("quokka", 5, "all", "all").unwrap().starts_with("<!-- delphi:rag:meta ranking=\"index\" index=\"fresh\" index_age_s="));
         p.search_memory("quokka", Some("architect"), 5).unwrap();
         p.query_memory("quokka", Some("architect"), None, 5).unwrap();
         assert_eq!(fs::read(&db).unwrap(), before);
+    }
+
+    /// `specs/109` §3.2: the local tools say how fresh the index is, `stale` once a source is newer than it, and never write it.
+    #[test]
+    fn the_local_tools_report_the_index_age_and_staleness_and_never_write() {
+        let (_t, ws, root) = fixture();
+        let p = Project::new(&ws, &root);
+        let none = parsed(&p.search_memory("quokka", Some("architect"), 5).unwrap());
+        assert_eq!((none["index"].as_str(), none["index_age_s"].is_null()), (Some("none"), true), "{none}");
+        sync(&ws);
+        for answer in [p.search_project("quokka", 5).unwrap(), p.search_memory("quokka", Some("architect"), 5).unwrap(), p.query_memory("quokka", Some("architect"), None, 5).unwrap()] {
+            let v = parsed(&answer);
+            assert!(v["index"] == "fresh" && v["index_age_s"].as_u64().is_some_and(|a| a < 600), "{v}");
+        }
+        let db = ws.join("local/state.db");
+        // A new project file, a new layer file, a removed file: each makes the index older than its sources.
+        fs::create_dir_all(ws.join("local/projects").join(ID).join("knowledge")).unwrap();
+        for change in 0..3 {
+            sync(&ws);
+            let before = fs::read(&db).unwrap();
+            match change {
+                0 => fs::write(root.join("specs/003-c.md"), "# C\nquokka\n").unwrap(),
+                1 => fs::write(ws.join("local/projects").join(ID).join("knowledge/k.md"), "quokka knowledge\n").unwrap(),
+                _ => fs::remove_file(root.join("specs/003-c.md")).unwrap(),
+            }
+            let v = parsed(&p.search_project("quokka", 5).unwrap());
+            assert_eq!(v["index"], "stale", "change {change}: {v}");
+            assert!(p.kb_retrieve("quokka", 5, "all", "all").unwrap().contains(" index=\"stale\""));
+            assert_eq!(fs::read(&db).unwrap(), before, "the MCP server never refreshes the index itself");
+        }
     }
 
     #[test]

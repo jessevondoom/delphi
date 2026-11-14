@@ -829,6 +829,9 @@ impl Kb {
         // Who vouches for what, from the lock's listing above and from nothing in a document: one `prefix<TAB>org` per line.
         let vouched: std::collections::BTreeSet<String> = files.iter().filter_map(|f| f.vouched_by.as_ref().map(|o| format!("{}\t{}", f.bundle.as_ref().map(|b| format!("bundles/{}/", b.id)).unwrap_or_else(|| f.rel_path.clone()), o))).collect();
         self.conn.execute("INSERT OR REPLACE INTO kb_meta(key, value) VALUES ('vouched', ?1)", [vouched.into_iter().collect::<Vec<_>>().join("\n")])?;
+        // When the index last matched the files, for the age a host is told (`specs/109` §3).
+        let synced = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        self.conn.execute("INSERT OR REPLACE INTO kb_meta(key, value) VALUES ('synced_unix', ?1)", [synced.to_string()])?;
         if rep.added + rep.updated + rep.removed > 0 {
             self.conn.execute("INSERT INTO kb_meta(key, value) VALUES ('index_generation', '1') ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1", [])?;
         }
@@ -875,12 +878,69 @@ impl Kb {
         Ok(rows.flatten().collect())
     }
 
+    /// When the index was last brought in line with the files, in seconds since the epoch (`synced_unix`, written by every sync), or
+    /// `None` for an index made before the stamp existed.
+    pub fn synced_unix(&self) -> Option<i64> {
+        self.conn.query_row("SELECT value FROM kb_meta WHERE key = 'synced_unix'", [], |r| r.get::<_, String>(0)).ok().and_then(|v| v.parse().ok())
+    }
+
+    /// Whether any of `files` is new, changed (by modification time or size, the test a sync makes before it reads a file) or gone
+    /// since the index read it (`specs/109` §3). It reads the index and stats the files; it writes nothing.
+    pub fn is_stale(&self, files: &[SourceFile]) -> Result<bool, KbError> {
+        let known: HashMap<String, (i64, i64)> = {
+            let mut st = self.conn.prepare("SELECT rel_path, mtime_ns, size FROM kb_documents WHERE zone != 'xenia'")?;
+            let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, (r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))))?;
+            rows.flatten().collect()
+        };
+        let mut seen = 0usize;
+        for f in files {
+            let Ok(meta) = std::fs::metadata(&f.path) else { continue };
+            let stamp = (meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_nanos() as i64).unwrap_or(0), meta.len() as i64);
+            match known.get(&f.rel_path) {
+                Some(k) if *k == stamp => seen += 1,
+                _ => return Ok(true),
+            }
+        }
+        Ok(seen != known.len())
+    }
+
     /// Documents per zone, the knowledge base's own "topic area" (`missions`, `memory`, `context`, `library`, ...), by name.
     pub fn zone_counts(&self) -> Result<Vec<(String, usize)>, KbError> {
         let mut st = self.conn.prepare("SELECT zone, COUNT(*) FROM kb_documents GROUP BY zone ORDER BY zone")?;
         let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
         Ok(rows.filter_map(Result::ok).map(|(z, n)| (z, n as usize)).collect())
     }
+}
+
+/// How fresh the workspace index is (`specs/109` §3): `stale` when a source is new, changed or gone since the index read it, and how
+/// many seconds ago it was last synced (`None` for an index made before that was recorded).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Freshness {
+    pub stale: bool,
+    pub age_s: Option<u64>,
+}
+
+impl Freshness {
+    /// The word a host is told: `stale` or `fresh`.
+    pub fn word(&self) -> &'static str {
+        if self.stale {
+            "stale"
+        } else {
+            "fresh"
+        }
+    }
+}
+
+/// The index's [`Freshness`], read without writing anything; `None` when there is no index yet.
+pub fn freshness(ws: &Path) -> Option<Freshness> {
+    let db = db_path(ws);
+    if !db.is_file() {
+        return None;
+    }
+    let kb = Kb::open_readonly(&db).ok()?;
+    let stale = kb.is_stale(&sources(ws)).ok()?;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    Some(Freshness { stale, age_s: kb.synced_unix().map(|t| now.saturating_sub(t).max(0) as u64) })
 }
 
 /// What the knowledge base holds, by zone, for `delphi doctor` (`specs/098` §7.5 item 9). Empty when there is no index yet.
