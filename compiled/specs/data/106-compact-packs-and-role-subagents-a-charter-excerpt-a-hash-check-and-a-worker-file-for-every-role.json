@@ -87,20 +87,26 @@
       "title": "G6: a role's colour in the host (2026-11-14)"
     },
     {
-      "level": 2,
+      "level": 3,
       "line": 140,
+      "number": "9.3",
+      "title": "The subagent line, seen live (2026-11-14)"
+    },
+    {
+      "level": 2,
+      "line": 144,
       "number": "10",
       "title": "Amendments from review (2026-11-13)"
     },
     {
       "level": 2,
-      "line": 152,
+      "line": 156,
       "number": "11",
       "title": "Follow-up: a worker that always has its pack, and an orchestrator pack inside its bound (operator, 2026-11-14)"
     },
     {
       "level": 2,
-      "line": 173,
+      "line": 177,
       "number": "12",
       "title": "Follow-up: a role's colour and weight in the host (operator, 2026-11-14)"
     }
@@ -108,7 +114,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/106-compact-packs-and-role-subagents-a-charter-excerpt-a-hash-check-and-a-worker-file-for-every-role.md",
-    "sha256": "f8ebe030065aae2f38571742b4b183c10a29bacd25eb0e7449d208ea22870eb6"
+    "sha256": "6fdc2a2ae13a12fd32c1f802e5800d363e6b6594061965cbc5bb3ab402f9e672"
   },
   "source_status_at_hash": {
     "line": {
@@ -121,7 +127,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-13, in a host session (\"approve all your plans and suggestions and go\"). The approval was given to the plan this spec carries out (workstream 2: a deterministic governance digest with the full charter by reference, `pack_hash` in `list_roles`, fetch-if-changed, agent files for every role) BEFORE this text was written; the operator has not read the text."
     },
-    "sha256": "f8ebe030065aae2f38571742b4b183c10a29bacd25eb0e7449d208ea22870eb6",
+    "sha256": "6fdc2a2ae13a12fd32c1f802e5800d363e6b6594061965cbc5bb3ab402f9e672",
     "word": "approved"
   },
   "spec": {

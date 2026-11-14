@@ -239,23 +239,47 @@ pub const WORKER_ROLES: &[(&str, bool)] = &[
 /// table (`red`, `blue`, `green`, `yellow`, `purple`, `orange`, `pink`, `cyan`), read from an agent file's `color` front-matter field.
 pub const CLAUDE_PALETTE: [&str; 8] = ["red", "blue", "green", "yellow", "purple", "orange", "pink", "cyan"];
 
-/// Each role's colour (`delphi_core::research::role_look`, the console's) mapped once, by hand, to the nearest name of
-/// [`CLAUDE_PALETTE`] by hue (spec 106 §12 G6 item 1). A test recomputes the nearest hue and holds the orchestrator, architect,
-/// builder and red-team to four different names.
+/// Each role's colour (`delphi_core::research::role_look`, the console's) mapped once, by hand, to a name of [`CLAUDE_PALETTE`]
+/// (spec 106 §12 G6 item 1, redrawn by G7): the nearest or second-nearest name by hue, chosen so the six roles a session meets most
+/// (orchestrator, strategist, architect, scout, red-team, builder) have six different names. A test recomputes the hues and holds that.
 pub const CLAUDE_COLORS: &[(&str, &str)] = &[
     ("orchestrator", "purple"),
-    ("architect", "cyan"),
-    ("builder", "orange"),
-    ("red-team", "red"),
     ("strategist", "cyan"),
+    ("architect", "blue"),
     ("scout", "yellow"),
+    ("red-team", "red"),
+    ("builder", "orange"),
+    ("validator", "green"),
+    ("advocate", "pink"),
     ("investigator", "blue"),
     ("writer", "yellow"),
-    ("validator", "green"),
     ("administrator", "blue"),
     ("assistant", "blue"),
-    ("advocate", "red"),
 ];
+
+/// The role whose own colour each palette name takes in Delphi's Claude Code theme (spec 106 §12 G7): the first role of
+/// [`CLAUDE_COLORS`] with that name, so each of the eight names has one owner and a role that shares a name is drawn in its owner's colour.
+pub fn claude_slot_owner(name: &str) -> Option<&'static str> {
+    CLAUDE_COLORS.iter().find(|(_, c)| *c == name).map(|(r, _)| *r)
+}
+
+/// The theme token Claude Code reads for one palette name (its custom-theme reference: `<color>_FOR_SUBAGENTS_ONLY`).
+pub fn claude_theme_token(name: &str) -> String {
+    format!("{name}_FOR_SUBAGENTS_ONLY")
+}
+
+/// The eight overrides of Delphi's Claude Code theme, in palette order: each name's token and its owner's colour, the dark pair or
+/// the light one (`delphi_core::research::role_look`, `role_look_light`). Nothing else of a theme is set (spec 106 §12 G7).
+pub fn claude_theme_overrides(light: bool) -> Vec<(String, &'static str)> {
+    CLAUDE_PALETTE
+        .iter()
+        .filter_map(|name| {
+            let role = claude_slot_owner(name)?;
+            let hex = if light { delphi_core::research::role_look_light(role).0 } else { delphi_core::research::role_look(role).1 };
+            Some((claude_theme_token(name), hex))
+        })
+        .collect()
+}
 
 /// The `color:` line of a Claude Code agent file for `role`, or nothing for a role with no entry.
 fn claude_color_line(role: &str) -> String {
@@ -842,11 +866,29 @@ mod tests {
         for (role, name) in CLAUDE_COLORS {
             assert!(CLAUDE_PALETTE.contains(name), "{role}: {name}");
             let h = hue(delphi_core::research::role_look(role).1);
-            let nearest = anchors.iter().min_by(|a, b| (a.1 - h).abs().partial_cmp(&(b.1 - h).abs()).unwrap()).unwrap().0;
-            assert_eq!(nearest, *name, "{role}: hue {h}");
+            let mut by: Vec<(&str, f64)> = anchors.iter().map(|a| (a.0, (a.1 - h).abs())).collect();
+            by.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+            let mut two: Vec<&str> = Vec::new();
+            for (n, _) in by {
+                if !two.contains(&n) && two.len() < 2 {
+                    two.push(n);
+                }
+            }
+            assert!(two.contains(name), "{role}: hue {h}, nearest two {two:?}, has {name}");
         }
-        let four: std::collections::BTreeSet<&str> = ["orchestrator", "architect", "builder", "red-team"].iter().map(|r| CLAUDE_COLORS.iter().find(|(x, _)| x == r).unwrap().1).collect();
-        assert_eq!(four.len(), 4);
+        let six: std::collections::BTreeSet<&str> = ["orchestrator", "strategist", "architect", "scout", "red-team", "builder"].iter().map(|r| CLAUDE_COLORS.iter().find(|(x, _)| x == r).unwrap().1).collect();
+        assert_eq!(six.len(), 6, "the six roles a session meets most have six names");
+        // G7: every palette name has one owner, the theme sets exactly the eight tokens, and an owner's token is its own colour.
+        let owners: std::collections::BTreeSet<&str> = CLAUDE_PALETTE.iter().map(|n| claude_slot_owner(n).unwrap()).collect();
+        assert_eq!(owners.len(), 8);
+        for light in [false, true] {
+            let o = claude_theme_overrides(light);
+            assert_eq!(o.len(), 8);
+            assert!(o.iter().all(|(t, hex)| t.ends_with("_FOR_SUBAGENTS_ONLY") && hex.len() == 7 && hex.starts_with('#')));
+        }
+        assert!(claude_theme_overrides(false).contains(&("purple_FOR_SUBAGENTS_ONLY".to_string(), "#a855f7")));
+        assert!(claude_theme_overrides(false).contains(&("blue_FOR_SUBAGENTS_ONLY".to_string(), "#38bdf8")));
+        assert!(claude_theme_overrides(true).contains(&("orange_FOR_SUBAGENTS_ONLY".to_string(), "#b45309")));
         let none = BTreeMap::new();
         for (role, _) in WORKER_ROLES {
             assert!(CLAUDE_COLORS.iter().any(|(r, _)| r == role), "{role} has a colour");
