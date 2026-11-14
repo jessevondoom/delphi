@@ -99,25 +99,43 @@ Objectives: a host adopts a role with one call and a pack a third of today's siz
 
 ## 9. Measured sizes
 
-Measured when P2 was built (2026-11-13, branch `build/106`) and again when spec 109 Q6 added one header line (`search_use`, about 123 bytes per pack; 2026-11-14), by `crates/delphi/src/pack_size_tests.rs` on a workspace `delphi init` seeds from the repository's own files, served to Claude Code with no operator profile. Bytes of the pack text, without `get_agent`'s identity line. The test pins each compact size plus 10 percent (A3).
+Measured when P2 was built (2026-11-13, branch `build/106`) and again when spec 109 Q6 added one header line (`search_use`, about 123 bytes per pack; 2026-11-14), and a third time when G1 added the markers and the names-only skill index (2026-11-14), by `crates/delphi/src/pack_size_tests.rs` on a workspace `delphi init` seeds from the repository's own files, served to Claude Code with no operator profile. Bytes of the pack text, without `get_agent`'s identity line. The test pins each compact size plus 10 percent (A3).
 
 | Role | Full pack | Compact pack |
 | :-- | --: | --: |
-| `orchestrator` | 36,493 | 25,249 |
-| `architect` | 30,131 | 18,746 |
-| `builder` | 30,384 | 18,944 |
-| `scout` | 31,000 | 19,674 |
-| `investigator` | 31,596 | 20,230 |
-| `strategist` | 29,613 | 18,224 |
-| `red-team` | 31,963 | 20,651 |
-| `writer` | 29,235 | 17,854 |
+| `orchestrator` | 36,493 | 21,035 |
+| `architect` | 30,131 | 17,524 |
+| `builder` | 30,384 | 17,562 |
+| `scout` | 31,000 | 18,898 |
+| `investigator` | 31,596 | 19,291 |
+| `strategist` | 29,613 | 17,282 |
+| `red-team` | 31,963 | 19,676 |
+| `writer` | 29,235 | 16,744 |
 | `messenger` | not served (`host_servable: false`) | not served |
-| `validator` | 29,719 | 18,231 |
-| `administrator` | 29,576 | 18,092 |
-| `assistant` | 28,501 | 17,013 |
-| `advocate` | 28,935 | 17,446 |
+| `validator` | 29,719 | 17,923 |
+| `administrator` | 29,576 | 17,244 |
+| `assistant` | 28,501 | 16,471 |
+| `advocate` | 28,935 | 16,774 |
 
-The charter is 21,239 bytes; the orchestrator's excerpt, with its closing note, is 10,451 bytes (under half, as A3 asks). The compact pack is 31 percent (orchestrator) to 41 percent smaller than the full one for every served role. **Not met:** A3's bound of 24 KiB (24,576 bytes) for the orchestrator's compact pack: it is 25,249 bytes. What remains is the orchestrator's manifest (about 8 KB in the pack), its skill index (about 2 KB) and the release heuristics, none of which the compact selection may cut; reaching the bound needs `inside-only` markers in the manifest or a shorter skill index, which A3 leaves to separate work under its own review. The size test does not assert the 24 KiB bound.
+The charter is 21,239 bytes; the orchestrator's excerpt, with its closing note, is 10,451 bytes (under half, as A3 asks). G1 left every full pack unchanged. The compact pack is 38 to 42 percent smaller than the full one for every served role, and 2 to 17 percent smaller than before G1. A3's bound of 24 KiB (24,576 bytes) for the orchestrator's compact pack is **met**: it is 21,035 bytes, and the size test asserts it. G1's markers cover five blocks of the orchestrator's manifest (the `suggest_rule` argument detail, the timer item, the tool-inventory reading of seats, naming threads and system inspection); no other role's manifest carries a marker, so their compact packs shrank only by the names-only skill index.
+
+### 9.1 G2: the subagent-start hook, established and run (2026-11-14)
+
+**What Claude Code 2.1.325 says of itself** (its own hook documentation, read from the installed binary with `strings`; nothing run): the event is `SubagentStart`, "When a subagent (Agent tool call) is started"; "Input to command is JSON with agent_id and agent_type"; "Exit code 0 - JSON additionalContext shown to subagent"; its matcher is `agent_type`; its `hookSpecificOutput` accepts `hookEventName: "SubagentStart"` and `additionalContext`. A plugin's agent is named `<plugin>:<name>`, so the plugin's worker is `delphi:architect-worker`; the hook accepts exactly `<role>-worker` or `delphi:<role>-worker` for a role of the release's worker table.
+
+**Live run** (`DELPHI_PROBE_MODE=g2 dev/hosts/claude-code.sh`, model `haiku`, the generated plugin by `--plugin-dir`, `[mcp] session_hooks = true` in a temporary home, one model call): the hook fired with input keys `agent_id, agent_type, cwd, hook_event_name, prompt_id, session_id, transcript_path` and `agent_type` `delphi:architect-worker`; it printed 18,975 bytes (the identity line and the compact pack); the worker, told to call no tool, quoted its identity line and the pack's `- pack_hash:` line, and no Delphi tool was called. **The hook adds context: yes.** So item 1 ships and item 3's fallback is not needed for Claude Code.
+
+**Item 2, Copilot CLI 1.0.111** (`DELPHI_PROBE_MODE=g2 dev/hosts/copilot.sh`, two model calls): `delphi plugin export --host copilot`, run with the temporary home, wrote worker files with the pack inlined (`delphi pack_hash: a019f43b...` on the first content line). In the first call the model refused the prompt (it asked the worker to quote its instructions); in the second the worker `delphi-architect-worker` started from the inlined file, called `get_agent` with `if_hash` set to the inlined hash, and got `unchanged`. That the inlined text itself reached the worker's context is not shown separately (the worker asked first, as its file says). Antigravity's inlined files were not run.
+
+### 9.2 G6: a role's colour in the host (2026-11-14)
+
+**Claude Code's agent colour field, from Claude Code 2.1.325 itself** (the installed binary, read with `strings`): a plugin agent's front matter is read with `{color, model}`, and the colour must be one of the keys of its subagent colour table, `red`, `blue`, `green`, `yellow`, `purple`, `orange`, `pink`, `cyan`. Delphi's table (`mcp_hosts::CLAUDE_COLORS`) maps each role to the nearest of these by hue: orchestrator purple, architect cyan, builder orange, red-team red (four different names), strategist cyan, scout yellow, investigator blue, writer yellow, validator green, administrator blue, assistant blue, advocate red. Copilot, Antigravity and Codex agent files get no colour line (no field established for them).
+
+**Where the colour comes from (drift from §12).** The theme pack (`themes/greek/theme.md`) defines names, keywords and faces, no colours. A role's colour is the console's own table (`delphi_core::research::role_look`, held equal to the console's avatar library by a test), so that is the source the table follows; a theme still changes display names only.
+
+**The status line's key.** The prompt hook writes `local/host-sessions/statusline-<host>-<host session id>.role` (the host's session id, validated as the markers are); `get_agent` cannot know the host's session id, so it writes `statusline-folder-<hash of the folder>.role`. `delphi mcp --statusline` reads the session id and folder from the status line's stdin (Claude Code sends `session_id`, `cwd` and `transcript_path`) and names the newer of the session's file and, only when it is no older than the session (the creation time of the session's transcript, under A3's path rule), the folder's. Each file holds a role ID and a time; a role not served to hosts is ignored. Colour is 24-bit (`ESC[1;38;2;r;g;bm`), plain under `NO_COLOR` or `badge_style = "plain"` (the default, so an operator who wants colour sets `ansi` or `markdown`).
+
+**Live check** (`DELPHI_PROBE_MODE=g6 dev/hosts/claude-code.sh`, `haiku`, the generated plugin, hooks on, `badge_style = "ansi"` in the temporary home, two model calls): `@architect` at the prompt wrote the session's role file under Claude Code's own session id, and `delphi mcp --statusline` run by the script with that id printed the architect's badge and name in bold `38;2;56;189;248` (its `#38bdf8`); the worker `delphi:architect-worker`, whose file now carries `color: cyan`, loaded and ran. **Not testable:** whether Claude Code draws the subagent in its colour and whether it shows the status line, because `claude -p` draws neither and an interactive run would need the operator's settings, which the rules forbid touching.
 
 ## 10. Amendments from review (2026-11-13)
 
@@ -130,3 +148,42 @@ A red-team review on 2026-11-13 (one critic, the author's own model family, so `
 | A3 | The 16 KiB budget cannot be met (the orchestrator's manifest is 8.8 KB and the excerpt about 8 KB), and "a third of today's size" is not reachable without trimming manifests. | The objective is: the compact pack is smaller than the full pack for every role, and the charter excerpt is under half the charter. P2's size test pins each release role's compact pack at its measured size plus 10 percent, and the orchestrator's at no more than 24 KiB. §9 records the sizes. Trimming a manifest with `inside-only` markers is separate work under its own review. |
 | A4 | A read-only tool list only for roles whose `write` is empty covers the validator alone; red-team, scout, investigator and strategist workers would inherit a shell and file writes, against charter §5.1. | Only roles whose manifest's write globs include the worktree (`@worktree/**`: builder and writer today) get a worker that inherits the session's tools. Every other worker gets the read-only list the seat files use plus Delphi's read tools. A drift test reads the manifests. |
 | A5 | §1 E-3 said four Panel seats; the builder has a seat file and is not a Panel seat. | Corrected here: four seat files, three Panel seats. |
+
+## 11. Follow-up: a worker that always has its pack, and an orchestrator pack inside its bound (operator, 2026-11-14)
+
+The operator asked on 2026-11-14 for approaches to the gaps left after the first build, was given options with a recommendation for each, and approved them: "yeah build all of your suggestions in the order you deem best."
+
+**G2: a worker always has its role's pack.** In the Claude Code live check a worker file loaded and the model did not call `get_agent`, so the worker ran without the role (110 §8). A request in a prompt is not enough.
+
+1. *Claude Code.* The plugin declares a fourth hook, on subagent start, running `delphi mcp --hook subagent-start --host claude-code`. When the starting subagent is one of Delphi's workers (its name is `<role>-worker`, matched exactly against the release's worker table; any other subagent prints nothing), the hook prints that role's compact pack with the identity line first, as `get_agent` would. It is governed by the same switch (`[mcp] session_hooks`), has the same budget and exit rule as the other hooks (105 §2), and prints only ratified text: a pack is the charter excerpt, the manifest, heuristics and lessons, and never retrieved or session text. The worker file keeps its `get_agent` line as the fallback for when the hook is off.
+2. *Hosts without that hook.* The worker file for such a host carries the role's compact pack inline, generated at install or export time from the operator's ratified files, with its `pack_hash` on the first line. `delphi mcp --check <host>` compares that hash with the current one and says `stale` when they differ, and the file tells the worker to call `get_agent` with `if_hash` first when the Delphi tools are available. A release-shipped file (the marketplace plugin) cannot carry an operator's pack, so inlining applies only to files `delphi connect` or `delphi plugin export` writes on the operator's machine.
+3. If the installed Claude Code does not fire a subagent-start hook that can add context (to be shown by one live run, at most six model calls), item 2's inlining is used for Claude Code too and §9 records the finding.
+
+**G1: the orchestrator's compact pack inside its bound.** It measured 25,126 bytes against 24,576 (§9).
+
+1. The orchestrator's manifest gains `<!-- inside-only -->` markers around the passages that describe a Delphi tool a host does not have: the timer (`timers`), naming threads (`name_thread`), system inspection (`inspect_system`), the `suggest_rule` call's argument detail, and the tool-inventory reading of seats. The text is unchanged; only the markers are added, so Delphi's own orchestrator reads exactly what it reads today (a test compares the manifest with the markers stripped against the manifest before this change). This is an edit to `agents/orchestrator/AGENT.md`, made in this slice's pull request, which is its review.
+2. In a compact pack the skill index lists names only, with one line saying `list_skills` gives the descriptions.
+3. The size test then asserts the bound the amended spec set: the orchestrator's compact pack is at most 24,576 bytes. §9 is re-measured for all roles.
+
+| Slice | Content | Hours |
+| :-- | :-- | --: |
+| G2 | the subagent-start hook, inlined packs for other hosts, `--check` staleness, one live run | 8-10 |
+| G1 | the markers, names-only skill index in compact, the bound asserted, §9 re-measured | 4-6 |
+
+## 12. Follow-up: a role's colour and weight in the host (operator, 2026-11-14)
+
+The operator asked on 2026-11-14 whether the console's treatment of an agent (its badge in its own colour, its name in the same colour and a slightly heavier weight) can reach the host. It can in three places, and not in a fourth. Colours come from the ratified theme, as the console's do; a theme still changes display only.
+
+**G6.**
+
+1. **Subagents carry the role's colour.** Where a host's agent file has a colour field (Claude Code's does), every generated seat and worker file sets it to the nearest name in that host's palette to the role's theme colour, by a fixed table from the theme's colour to the palette, so a role's subagent is shown in its colour by the host itself. A host with no such field gets none. Two roles may share a palette name when the palette is smaller than the roster; the table keeps the orchestrator, architect, builder and red-team distinct.
+2. **The status line names who is speaking, in colour.** `delphi mcp --statusline [--host <id>]` prints one line for a host's status line: the badge and name of the role the session most recently adopted, in that role's true colour and bold, by ANSI codes (plain when `NO_COLOR` is set or `[mcp] badge_style` is `plain`; `badge_mode` picks the dark or light pair, as today). It reads a small per-session file the `prompt` hook and `get_agent` keep (the role ID and a time, nothing else) and prints nothing when no role is adopted or the file is older than the session. It reads no workspace text and asks the daemon nothing. Delphi does not write the host's settings: the guide gives the one line an operator adds to use it, and `delphi mcp --check` says whether it is set.
+3. **The name is bold where text allows it.** With `[mcp] badge_style = "markdown"` the identity line a role prints is already bold. `delphi connect` and the guide say so, and the session brief's roster uses the same form when the style is `markdown`.
+4. **Not possible: colour inside the model's own text.** A host renders what the model writes as Markdown, which has no colour; an ANSI code there is shown as stray characters or dropped. So a role's line in the transcript can be bold and cannot be coloured. The `ansi` form stays for surfaces that render it (the status line, a terminal that prints a tool result raw).
+
+**Tests.** Each release role's colour maps to a palette name and the four named roles get four different names; a generated Claude Code seat and worker file carries the field and a host without one does not; the status line prints the adopted role in its colour, plain under `NO_COLOR`, and nothing with no role; it never prints text from a project or a session. One live check in Claude Code (at most six model calls) records in §9 whether the subagent colour and the status line show.
+
+| Slice | Content | Hours |
+| :-- | :-- | --: |
+| G6 | the colour field in agent files, `--statusline`, the guide lines, one live check | 6-8 |
+

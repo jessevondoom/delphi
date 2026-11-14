@@ -6,21 +6,21 @@ use super::{init, InitOptions};
 use delphi_engine::mcp_packs::{Detail, Packs};
 use delphi_engine::workspace::WorkspacePaths;
 
-/// Compact pack sizes in bytes, measured when spec 106 P2 was built and again after spec 109 Q6 added the `search_use` header line (spec 106 §9). `None`: the role is not served to hosts.
+/// Compact pack sizes in bytes, measured when spec 106 P2 was built, after spec 109 Q6 added the `search_use` header line, and after G1's markers and names-only skill index (spec 106 §9). `None`: the role is not served to hosts.
 const MEASURED: &[(&str, Option<usize>)] = &[
-    ("orchestrator", Some(25249)),
-    ("architect", Some(18746)),
-    ("builder", Some(18944)),
-    ("scout", Some(19674)),
-    ("investigator", Some(20230)),
-    ("strategist", Some(18224)),
-    ("red-team", Some(20651)),
-    ("writer", Some(17854)),
+    ("orchestrator", Some(21035)),
+    ("architect", Some(17524)),
+    ("builder", Some(17562)),
+    ("scout", Some(18898)),
+    ("investigator", Some(19291)),
+    ("strategist", Some(17282)),
+    ("red-team", Some(19676)),
+    ("writer", Some(16744)),
     ("messenger", None),
-    ("validator", Some(18231)),
-    ("administrator", Some(18092)),
-    ("assistant", Some(17013)),
-    ("advocate", Some(17446)),
+    ("validator", Some(17923)),
+    ("administrator", Some(17244)),
+    ("assistant", Some(16471)),
+    ("advocate", Some(16774)),
 ];
 
 #[test]
@@ -55,7 +55,18 @@ fn every_release_roles_compact_pack_is_smaller_than_its_full_pack_and_within_its
     eprintln!("{}", report.join("\n"));
     assert!(excerpt.len() < charter.len() / 2, "the excerpt is under half the charter (A3)");
     assert!(over.is_empty(), "{} (spec 106 §9; measure again and update MEASURED and §9 if the growth is intended)", over.join("; "));
-    // A3 also asks for the orchestrator's compact pack to be at most 24 KiB. Measured, it is 25,249 bytes (24.7 KiB) since spec 109 Q6: the selection the
-    // spec defines cannot reach that without trimming the orchestrator's manifest or skill index, which A3 leaves to separate work, so that
-    // bound is not asserted here; spec 106 §9 records the gap.
+    // A3 as amended by spec 106 §11 G1: the orchestrator's compact pack is at most 24 KiB.
+    let orchestrator = packs.pack_for("orchestrator", false, Detail::Compact, Some("claude-code")).unwrap();
+    // The marked blocks are gone from the compact pack and the host-facing "Outside runs" guidance stays; the full pack keeps all of it.
+    let full = packs.pack_for("orchestrator", false, Detail::Full, Some("claude-code")).unwrap();
+    for gone in ["name_thread", "inspect_system", "`timers`", "`rationale` says what happened", "<!-- inside-only", "<!-- /inside-only"] {
+        assert!(!orchestrator.contains(gone), "the compact pack still has `{gone}`");
+    }
+    assert!(!full.contains("<!-- inside-only") && !full.contains("<!-- /inside-only"), "the full pack carries no marker");
+    assert!(orchestrator.contains("**Outside runs**") && orchestrator.contains("`suggest_rule` tool, one call per rule. The operator ratifies each"));
+    assert!(full.contains("name_thread") && full.contains("`timers`") && full.contains("`rationale` says what happened"));
+    // Names only in a compact skill index, with the line that says where the descriptions are; the full pack's index is unchanged.
+    assert!(orchestrator.contains("- task-decomposition\n") && !orchestrator.contains("- task-decomposition:") && orchestrator.contains("(`list_skills` gives each skill's description.)"));
+    assert!(full.contains("- task-decomposition: ") && !full.contains("`list_skills` gives each"));
+    assert!(orchestrator.len() <= 24_576, "the orchestrator's compact pack is {} bytes, over 24,576 (spec 106 §11 G1)", orchestrator.len());
 }

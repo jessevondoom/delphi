@@ -29,7 +29,13 @@ EXTRA=""
 WORKER=delphi-architect-worker
 "$DELPHI_BIN" plugin export --host copilot --out "$S/export" >/dev/null
 mkdir -p "$P/.github/agents" "$P/.github/hooks"
-if [ "$MODE" = g3 ]; then
+if [ "$MODE" = g2 ]; then
+    # Spec 106 §11 G2 item 2: the worker files `delphi plugin export --host copilot` writes on the operator's machine, with the
+    # pack inlined from the temporary home (the export runs in the scratch project with --home).
+    rm -rf "$S/export"
+    (cd "$P" && "$DELPHI_BIN" plugin export --host copilot --out "$S/export" --home "$H" >/dev/null 2>"$LOG/export.err")
+    cp "$S"/export/agents/*.agent.md "$P/.github/agents/"
+elif [ "$MODE" = g3 ]; then
     # Spec 110 §10 G3a: the instruction section only (no hooks file), as `delphi plugin export --host copilot` writes it.
     cp "$S"/export/agents/*.agent.md "$P/.github/agents/"
     cat "$S/export/DELPHI.md" >>"$P/AGENTS.md"
@@ -71,6 +77,17 @@ run() {
     printf '    COPILOT_PLUGIN_DIR_ONLY=true COPILOT_AUTO_TIER=%s copilot -p <prompt %s> --model %s --additional-mcp-config @<scratch>/copilot-mcp.json --allow-tool delphi --trust-folder --disable-builtin-mcps --no-ask-user --no-auto-update --log-dir <scratch>/log --output-format json %s\n' \
         "$COPILOT_AUTO_TIER" "$n" "$MODEL" "$(echo "$EXTRA" | sed "s#$S#<scratch>#")" >>"$LOG/commands.txt"
 }
+
+if [ "$MODE" = g2 ]; then
+    # The run of 2026-11-14 with prompt_worker_pack was refused by the model as an extraction attempt; the worker is now asked
+    # only to do a task, and its file tells it to print the pack's display line first.
+    run 1 "$(prompt_worker "$WORKER")"
+    summarize_g2 "Copilot CLI" "$(copilot --version 2>/dev/null | head -1)"
+    row "the worker's answer, as the host reports it" "$(reply_line "$LOG/reply-1.json" "WORKER:")"
+    row "inlined pack_hash in the worker file" "$(grep -m1 -o 'delphi pack_hash: [0-9a-f]*' "$P/.github/agents/$WORKER.agent.md" || echo none)"
+    table_tail
+    exit 0
+fi
 
 if [ "$MODE" = g3 ]; then
     run 1 "$PROMPT_TOOLS"

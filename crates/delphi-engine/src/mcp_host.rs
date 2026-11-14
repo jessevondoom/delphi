@@ -7,7 +7,7 @@
 //! `record_session_summary`, `handoff_put`, `handoff_get`; S6 adds `request_help` and `help_result`; S7 adds `request_council`, `council_status` and `council_result`.
 //!
 //! Secure by construction, like `delphi bundle serve`:
-//! * **No file, no network, no process.** This module writes no file and opens no network socket; it reads `config.toml` and speaks
+//! * **One small file, no network, no process.** This module opens no network socket and writes one file only: `get_agent` records the adopted role ID and a time in the workspace's `local/host-sessions` for the status line (`specs/106` §12 G6); it reads `config.toml` and speaks
 //!   on its two streams. Anything that writes, dispatches or spends goes through the daemon's same-user host socket
 //!   (`mcp_daemon.rs`), which this module never starts; the daemon applies the rules.
 //! * **The operator's switch.** `[mcp] enabled` is read before every tool call, so turning the feature off takes effect at once.
@@ -1034,6 +1034,10 @@ impl Server {
                     // `specs/109` §13.1 item 1: this session now has this role, and its searches default to the role's `search_use`.
                     *self.host_session.adopted.lock().unwrap() = Some((canonical.clone(), p.search_use(&canonical).unwrap_or_default()));
                     let tail = task.map(|t| format!("\n\n{t}")).unwrap_or_default();
+                    // Spec 106 §12 G6 item 2: the role this folder's session adopted, for the status line (role ID and time only).
+                    if let Some(ws) = self.config_path.as_ref().and_then(|c| c.parent()) {
+                        crate::host_hooks::record_role(ws, &canonical, None, Some(&self.cwd));
+                    }
                     Ok(format!("You are {who}. Show that line before what you write as this role, so the operator can tell who is speaking.\n\n{pack}{tail}"))
                 })
             }),

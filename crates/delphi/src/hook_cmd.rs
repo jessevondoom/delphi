@@ -43,9 +43,17 @@ pub fn hook_output(args: &[String], event: &str, host: &str, stdin: impl std::io
             let mut lines: Vec<String> = host_hooks::count_prompt(&ws, &input, host, &cwd, root.as_deref()).map(String::from).into_iter().collect();
             if input.prompt.as_deref().unwrap_or("").contains('@') {
                 lines.extend(host_hooks::mention_lines(&ws, input.prompt.as_deref().unwrap_or(""), host));
+                // Spec 106 §12 G6 item 2: the role this session adopts, for the status line (the role ID and a time, nothing else).
+                if let (Some(role), Some(id)) = (host_hooks::mention_role(&ws, input.prompt.as_deref().unwrap_or("")), input.session_id.as_deref()) {
+                    host_hooks::record_role(&ws, &role, Some((host, id)), None);
+                }
             }
             lines.join("\n")
         }
+        // Spec 106 §11 G2: only a starting subagent whose type is exactly one of the release's worker names gets a pack; any other
+        // prints nothing. Claude Code is the one host whose subagent start can add context, so no other host is answered.
+        "subagent-start" if host == "claude-code" => host_hooks::subagent_pack(&ws, input.agent_type.as_deref()?, host)?,
+        "subagent-start" => return None,
         _ => {
             let marker = host_hooks::session_end(&ws, &input, host, &cwd, root.as_deref());
             // Spec 108 M3: one bounded call (2 s) to stage the transcript's notes when the project opted in; silent on any failure.
@@ -75,6 +83,34 @@ pub fn run_hook(args: &[String], event: Option<&str>) -> i32 {
         let _ = tx.send(out);
     });
     // Past the deadline nothing is printed; the worker is ended with the process.
+    if let Ok(Some(out)) = rx.recv_timeout(host_hooks::DEADLINE) {
+        let mut so = std::io::stdout().lock();
+        let _ = so.write_all(out.as_bytes()).and_then(|_| so.write_all(b"\n")).and_then(|_| so.flush());
+    }
+    0
+}
+
+/// What `delphi mcp --statusline` prints for the host's status-line input, or `None` (spec 106 §12 G6 item 2).
+pub fn statusline_output(args: &[String], host: &str, no_color: bool, stdin: impl std::io::Read) -> Option<String> {
+    let input = host_hooks::read_input(stdin)?;
+    let cwd = input.cwd.clone()?;
+    let ws = workspace_for(args, &cwd)?;
+    host_hooks::statusline(&ws, &input, host, no_color)
+}
+
+/// `delphi mcp --statusline [--host <id>]`: one line for a host's status line, or nothing. Exits 0 always; nothing after the deadline.
+pub fn run_statusline(args: &[String]) -> i32 {
+    let host = flag(args, "--host").unwrap_or_else(|| "claude-code".into());
+    if !delphi_engine::mcp_hosts::HOSTS.contains(&host.as_str()) {
+        return 0;
+    }
+    let no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
+    let args = args.to_vec();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let out = std::panic::catch_unwind(|| statusline_output(&args, &host, no_color, std::io::stdin().lock())).ok().flatten();
+        let _ = tx.send(out);
+    });
     if let Ok(Some(out)) = rx.recv_timeout(host_hooks::DEADLINE) {
         let mut so = std::io::stdout().lock();
         let _ = so.write_all(out.as_bytes()).and_then(|_| so.write_all(b"\n")).and_then(|_| so.flush());
@@ -171,6 +207,47 @@ mod tests {
         assert_eq!(run_hook(&a(&["--home", home]), Some("bogus")), 0);
         assert_eq!(run_hook(&a(&["--home", home, "--host", "vim"]), Some("prompt")), 0);
         assert_eq!(run_hook(&a(&["--home", home]), None), 0);
+    }
+
+    /// Spec 106 §11 G2: the subagent-start hook obeys the switch, answers only an exact worker name and only for Claude Code.
+    #[test]
+    fn the_subagent_start_hook_prints_a_workers_pack_only_with_the_switch_on_and_for_claude_code() {
+        let t = tempfile::tempdir().unwrap();
+        let ws = delphi_engine::workspace::make_test_workspace(t.path());
+        if !ws.dir.join("config.toml").exists() {
+            std::fs::write(ws.dir.join("config.toml"), "").unwrap();
+        }
+        let home = t.path().to_str().unwrap();
+        let args = a(&["--home", home, "--workspace", "w"]);
+        let input = |agent: &str| format!("{{\"session_id\": \"s1\", \"cwd\": \"{home}\", \"hook_event_name\": \"SubagentStart\", \"agent_id\": \"x\", \"agent_type\": \"{agent}\"}}");
+        assert_eq!(hook_output(&args, "subagent-start", "claude-code", input("delphi:architect-worker").as_bytes()), None, "the switch is off");
+        host_hooks::set_switch(&ws.dir, true).unwrap();
+        let out = hook_output(&args, "subagent-start", "claude-code", input("delphi:architect-worker").as_bytes()).expect("a worker's pack");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let ctx = v["hookSpecificOutput"]["additionalContext"].as_str().unwrap();
+        assert!(ctx.starts_with("You are ") && ctx.contains("# Delphi agent pack: architect"), "{}", &ctx[..200.min(ctx.len())]);
+        assert_eq!(hook_output(&args, "subagent-start", "claude-code", input("general-purpose").as_bytes()), None);
+        assert_eq!(hook_output(&args, "subagent-start", "claude-code", input("evil:architect-worker").as_bytes()), None);
+        assert_eq!(hook_output(&args, "subagent-start", "copilot", input("delphi-architect-worker").as_bytes()), None);
+        assert_eq!(hook_output(&args, "subagent-start", "claude-code", &b"{\"cwd\": 3}"[..]), None, "bad input prints nothing");
+    }
+
+    /// Spec 106 §12 G6: a mention at the prompt records the session's role and the status line names it; nothing for another session.
+    #[test]
+    fn a_mention_at_the_prompt_names_the_role_on_the_status_line() {
+        let t = tempfile::tempdir().unwrap();
+        let ws = delphi_engine::workspace::make_test_workspace(t.path());
+        std::fs::write(ws.dir.join("config.toml"), "[mcp]\nsession_hooks = true\nbadge_style = \"ansi\"\n").unwrap();
+        let home = t.path().to_str().unwrap();
+        let args = a(&["--home", home, "--workspace", "w"]);
+        let status = |id: &str, nc: bool| statusline_output(&args, "claude-code", nc, format!("{{\"session_id\": \"{id}\", \"cwd\": \"{home}\"}}").as_bytes());
+        assert_eq!(status("s1", false), None);
+        let prompt = format!("{{\"session_id\": \"s1\", \"cwd\": \"{home}\", \"prompt\": \"@builder SECRET-TEXT fix it\"}}");
+        let _ = hook_output(&args, "prompt", "claude-code", prompt.as_bytes());
+        let line = status("s1", false).expect("the adopted role");
+        assert!(line.starts_with("\u{1b}[1;38;2;245;158;11m") && line.ends_with("\u{1b}[0m") && !line.contains("SECRET"), "{line:?}");
+        assert!(!status("s1", true).unwrap().contains('\u{1b}'), "NO_COLOR");
+        assert_eq!(status("s2", false), None);
     }
 
     #[test]

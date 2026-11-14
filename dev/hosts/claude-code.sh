@@ -30,7 +30,7 @@ if [ "$MODE" = g3 ]; then
     # Spec 110 §10 G3a: no plugin and no hook; the CLAUDE.md section `delphi mcp --print-claude-md` prints, after the codeword.
     "$DELPHI_BIN" mcp --print-claude-md --home "$H" >>"$P/CLAUDE.md" 2>/dev/null
     PERSIST="--no-session-persistence"
-elif [ "$MODE" = final ]; then
+elif [ "$MODE" = final ] || [ "$MODE" = g2 ] || [ "$MODE" = g6 ]; then
     hooks_on_in_temp_home
     EXTRA="--plugin-dir $REPO/ecosystem/claude-code/delphi"
     WORKER=delphi:architect-worker
@@ -61,6 +61,36 @@ run() {
     printf '    claude -p <prompt %s> --model %s --strict-mcp-config --mcp-config <scratch>/mcp.json --setting-sources project --permission-prompts none --allowedTools <the Delphi read tools> Read Grep Glob Agent Task %s %s --output-format json\n' \
         "$n" "$MODEL" "$(echo "$EXTRA" | sed "s#$REPO/##")" "$PERSIST" >>"$LOG/commands.txt"
 }
+
+if [ "$MODE" = g6 ]; then
+    # Spec 106 §12 G6: an @mention records the session's role (prompt hook); the status line command is then run here, by the
+    # script, with the session id the host gave the hook (claude -p draws no status line). Then a worker whose file has `color:`.
+    python3 -I -c 'import sys; p = sys.argv[1]; t = open(p).read(); open(p, "w").write(t.replace("session_hooks = true\n", "session_hooks = true\nbadge_style = \"ansi\"\n", 1))' "$WS/config.toml"
+    run 1 "$PROMPT_MENTION"
+    run 2 "$(prompt_worker "$WORKER")"
+    table_head "Claude Code"
+    row "host and version" "$(claude --version 2>/dev/null | head -1)"
+    sid=$(python3 -I -c 'import glob,json,sys
+for f in sorted(glob.glob(sys.argv[1] + "/r1/hook-prompt-*.in")):
+    print(json.load(open(f)).get("session_id", "")); break' "$LOG")
+    row "call 1: session id the prompt hook got" "$sid"
+    row "role files written" "$(ls "$WS/local/host-sessions" | grep '\.role$' | tr '\n' ' ')"
+    line=$(printf '{"session_id":"%s","cwd":"%s"}' "$sid" "$P" | "$DELPHI_BIN" mcp --statusline --host claude-code --home "$H" | od -c | head -3 | tr -s ' ' | tr '\n' ' ')
+    row "delphi mcp --statusline for that session (bytes, od -c)" "$line"
+    row "call 2: worker subagent $WORKER (file carries color: cyan)" "$(reply_line "$LOG/reply-2.json" "WORKER:")"
+    row "call 2: Delphi tools called" "$(report_py r2 calls)"
+    row "hook events that fired" "$(report_py all hooks)"
+    table_tail
+    exit 0
+fi
+
+if [ "$MODE" = g2 ]; then
+    # Spec 106 §11 G2: the plugin's fourth hook, SubagentStart; one call.
+    run 1 "$(prompt_worker_pack "$WORKER")"
+    summarize_g2 "Claude Code" "$(claude --version 2>/dev/null | head -1)"
+    table_tail
+    exit 0
+fi
 
 if [ "$MODE" = g3 ]; then
     run 1 "$PROMPT_TOOLS"

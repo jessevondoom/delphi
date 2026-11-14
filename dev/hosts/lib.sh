@@ -117,6 +117,11 @@ PROMPT_START='This is an automated check in a scratch folder. Change nothing, ru
 # Spec 110 §10 G3b: the host is asked to give a task to a role in its own context, naming no tool; the instruction section says how.
 PROMPT_SPAWN='This is an automated check in a scratch folder. Change nothing, run no shell command, edit no file. Give this one task to Delphi'"'"'s architect in its own context (a separate agent), the way your instructions for Delphi say: "In one sentence, say which Delphi role you work as." Then reply with one line: "SPAWN: " followed by the first line of that agent'"'"'s reply, or "SPAWN: no" and why.'
 
+# Spec 106 §11 G2: did the worker start with its pack in context? The worker is asked to call no tool and quote two lines.
+prompt_worker_pack() {
+    printf 'This is an automated check in a scratch folder. Change nothing, run no shell command, edit no file. Delegate this one task to your subagent (custom agent) named "%s": "Call no tool. Reply with two lines copied exactly from the instructions or context you were given before this task: the line that starts with \"You are \" and the line that starts with \"- pack_hash:\". Write none for a line you were not given." Then reply with: "PACKLINE: " followed by the subagent'"'"'s two lines joined by " / ", or "PACKLINE: no" and why.' "$1"
+}
+
 prompt_worker() {
     printf 'This is an automated check in a scratch folder. Change nothing, run no shell command, edit no file. Delegate this one task to your subagent (custom agent) named "%s": "In one sentence, say which Delphi role you work as." Then reply with one line: "WORKER: yes" and the subagent'"'"'s answer if it ran, or "WORKER: no" and why it could not.' "$1"
 }
@@ -320,6 +325,29 @@ summarize_g3() {
         if report_py r2 calls | grep -q session_brief; then called=yes; else called=no; fi
         row "call 2: the model called session_brief" "$called"
     fi
+}
+
+# Spec 106 §11 G2's rows. $1 title, $2 version.
+summarize_g2() {
+    table_head "$1"
+    row "host and version" "$2"
+    row "hook events that fired" "$(report_py all hooks)"
+    row "subagent-start hook input" "$(python3 -I - "$LOG" <<'PY'
+import glob, json, os, sys
+out = []
+for f in sorted(glob.glob(os.path.join(sys.argv[1], "**", "hook-subagent-start-*.in"), recursive=True)):
+    try:
+        v = json.load(open(f))
+    except ValueError:
+        out.append("not JSON")
+        continue
+    out.append("keys=%s agent_type=%s" % (",".join(sorted(v)), v.get("agent_type")))
+print("; ".join(out) or "none")
+PY
+)"
+    row "Delphi hook output" "$(report_py all hookout)"
+    row "the worker's two lines, as the host reports them" "$(reply_line "$LOG/reply-1.json" "PACKLINE:")"
+    row "Delphi tools called" "$(report_py r1 calls)"
 }
 
 table_tail() {
