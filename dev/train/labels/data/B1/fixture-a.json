@@ -1,0 +1,13 @@
+{
+ "id": 2,
+ "jsonrpc": "2.0",
+ "result": {
+  "content": [
+   {
+    "text": "{\"claims\":[{\"private\":true,\"reason\":\"rung_missing_or_invalid\"}],\"note\":\"stored at once, labelled noted and not validated. An entry is public only when Delphi itself fetched your source_url and found your quote in the page. The daemon fetches trusted-list hosts and, when the operator has turned the wider fetch on, a URL that one of this session's research searches returned; anything else stays private to this install.\",\"noted\":true,\"private\":true,\"ref\":\"host-151c7de2958e2ed8/n1\",\"searchable\":true,\"status\":\"noted\",\"taint\":\"external_untrusted\"}",
+    "type": "text"
+   }
+  ],
+  "isError": false
+ }
+}

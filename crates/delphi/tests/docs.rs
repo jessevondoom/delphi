@@ -195,6 +195,19 @@ fn every_agent_and_skill_manifest_satisfies_its_schema() {
     assert!(agents >= 9 && skills >= 40, "found {} agents and {} skills", agents, skills);
 }
 
+/// `specs/109` §13.1 item 1: `search_use` is `explore` or `verify`; the two checking roles say `verify` and validate.
+#[test]
+fn search_use_is_explore_or_verify_and_the_two_checking_roles_validate_with_verify() {
+    for role in ["validator", "investigator"] {
+        let fm = frontmatter(&root().join("agents").join(role).join("AGENT.md"));
+        assert_eq!(fm["search_use"], json!("verify"), "{role}");
+        must_pass("agent-manifest.schema.json", role, &fm);
+        let mut bad = fm.clone();
+        bad["search_use"] = json!("always");
+        must_fail("agent-manifest.schema.json", "search_use: always", &bad);
+    }
+}
+
 #[test]
 fn research_results_follow_their_schema_and_refuse_control_characters_in_identity() {
     let ok = json!({

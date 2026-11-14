@@ -69,6 +69,9 @@ pub struct AgentManifest {
     pub write: Vec<String>,
     pub execute: Vec<String>,
     pub max_turn_budget: u32,
+    /// The default `use` of a host's `search_kb` and `kb_retrieve` while this role is adopted (`specs/109` §13.1 item 1): `explore`
+    /// unless the manifest says `search_use: verify`. A call's own `use` always wins. Any other word is `explore`, the default.
+    pub search_use: crate::host_labels::Use,
     /// The instruction body (everything after the frontmatter).
     pub body: String,
 }
@@ -90,6 +93,7 @@ impl AgentManifest {
             write: strings(scope.and_then(|s| s.get("write"))),
             execute: strings(scope.and_then(|s| s.get("execute"))),
             max_turn_budget: fm.get("max_turn_budget").and_then(|v| v.as_u64()).unwrap_or(20) as u32,
+            search_use: if fm.get("search_use").and_then(|v| v.as_str()) == Some("verify") { crate::host_labels::Use::Verify } else { crate::host_labels::Use::Explore },
             body: body.trim().to_string(),
         })
     }
@@ -411,6 +415,31 @@ pub(crate) mod tests {
         assert_eq!((bare("deep-reasoning", ""), bare("code-craft", ""), bare("high-context-discovery", ""), bare("fast-triage", "")), ("workhorse", "workhorse", "workhorse", "fast"));
         assert_eq!(bare("deep-reasoning", "default_tier: enormous\n"), "workhorse");
         assert_eq!(bare("deep-reasoning", "default_tier: frontier\n"), "frontier", "an operator's own override can");
+    }
+
+    // specs/109 §13.1 item 1: the two roles whose work is checking default a host's search to `verify`; every other shipped role, and a
+    // manifest that says nothing or something else, to `explore`.
+    #[test]
+    fn only_the_validator_and_the_investigator_default_a_host_search_to_verify() {
+        use crate::host_labels::Use;
+        let shipped = [
+            ("orchestrator", include_str!("../../../agents/orchestrator/AGENT.md")),
+            ("architect", include_str!("../../../agents/architect/AGENT.md")),
+            ("builder", include_str!("../../../agents/builder/AGENT.md")),
+            ("red-team", include_str!("../../../agents/red-team/AGENT.md")),
+            ("strategist", include_str!("../../../agents/strategist/AGENT.md")),
+            ("writer", include_str!("../../../agents/writer/AGENT.md")),
+            ("scout", include_str!("../../../agents/scout/AGENT.md")),
+            ("messenger", include_str!("../../../agents/messenger/AGENT.md")),
+            ("investigator", include_str!("../../../agents/investigator/AGENT.md")),
+            ("validator", include_str!("../../../agents/validator/AGENT.md")),
+        ];
+        for (role, text) in shipped {
+            let want = if matches!(role, "validator" | "investigator") { Use::Verify } else { Use::Explore };
+            assert_eq!(AgentManifest::parse(text).unwrap().search_use, want, "{role}");
+        }
+        let with = |extra: &str| AgentManifest::parse(&format!("---\nid: x\n{extra}---\n")).unwrap().search_use;
+        assert_eq!((with(""), with("search_use: explore\n"), with("search_use: verify\n"), with("search_use: always\n")), (Use::Explore, Use::Explore, Use::Verify, Use::Explore));
     }
 
     #[test]

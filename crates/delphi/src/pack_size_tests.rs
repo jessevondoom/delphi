@@ -6,21 +6,21 @@ use super::{init, InitOptions};
 use delphi_engine::mcp_packs::{Detail, Packs};
 use delphi_engine::workspace::WorkspacePaths;
 
-/// Compact pack sizes in bytes, measured when spec 106 P2 was built (spec 106 §9). `None`: the role is not served to hosts.
+/// Compact pack sizes in bytes, measured when spec 106 P2 was built and again after spec 109 Q6 added the `search_use` header line (spec 106 §9). `None`: the role is not served to hosts.
 const MEASURED: &[(&str, Option<usize>)] = &[
-    ("orchestrator", Some(25126)),
-    ("architect", Some(18623)),
-    ("builder", Some(18821)),
-    ("scout", Some(19551)),
-    ("investigator", Some(20108)),
-    ("strategist", Some(18101)),
-    ("red-team", Some(20528)),
-    ("writer", Some(17731)),
+    ("orchestrator", Some(25249)),
+    ("architect", Some(18746)),
+    ("builder", Some(18944)),
+    ("scout", Some(19674)),
+    ("investigator", Some(20230)),
+    ("strategist", Some(18224)),
+    ("red-team", Some(20651)),
+    ("writer", Some(17854)),
     ("messenger", None),
-    ("validator", Some(18109)),
-    ("administrator", Some(17969)),
-    ("assistant", Some(16890)),
-    ("advocate", Some(17323)),
+    ("validator", Some(18231)),
+    ("administrator", Some(18092)),
+    ("assistant", Some(17013)),
+    ("advocate", Some(17446)),
 ];
 
 #[test]
@@ -55,7 +55,7 @@ fn every_release_roles_compact_pack_is_smaller_than_its_full_pack_and_within_its
     eprintln!("{}", report.join("\n"));
     assert!(excerpt.len() < charter.len() / 2, "the excerpt is under half the charter (A3)");
     assert!(over.is_empty(), "{} (spec 106 §9; measure again and update MEASURED and §9 if the growth is intended)", over.join("; "));
-    // A3 also asks for the orchestrator's compact pack to be at most 24 KiB. Measured, it is 25,126 bytes (24.5 KiB): the selection the
+    // A3 also asks for the orchestrator's compact pack to be at most 24 KiB. Measured, it is 25,249 bytes (24.7 KiB) since spec 109 Q6: the selection the
     // spec defines cannot reach that without trimming the orchestrator's manifest or skill index, which A3 leaves to separate work, so that
     // bound is not asserted here; spec 106 §9 records the gap.
 }

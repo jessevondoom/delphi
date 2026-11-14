@@ -85,6 +85,18 @@ mod tests {
         assert_eq!(delphi_release::repo_manifest(&root).unwrap(), seed_manifest());
     }
 
+    /// `specs/109` §12.1 item 2: the hashes a host search compares release files with are those of the files compiled into this binary,
+    /// by the logical paths the index uses, and the charter, the rubric and `SPEC.md` are among them.
+    #[test]
+    fn the_release_files_a_search_labels_are_the_ones_this_binary_carries() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let files: std::collections::HashMap<String, &[u8]> = crate::release_files().into_iter().collect();
+        for p in ["GOVERNANCE.md", "REVIEW.md", "SPEC.md"] {
+            assert_eq!(files.get(p).copied(), Some(std::fs::read(root.join(p)).unwrap().as_slice()), "{p}");
+        }
+        assert!(files.keys().any(|k| k.starts_with("about/specs/")) && files.keys().any(|k| k.starts_with("context/")));
+    }
+
     #[test]
     fn a_checkout_is_unsigned_and_is_not_refused() {
         // The committed release.sig.json is `{}`; CI replaces it only in the build it signs.

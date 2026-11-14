@@ -189,7 +189,8 @@ fn project_files(ws_dir: &Path, active: &Active) -> (String, Vec<SourceFile>) {
 /// The home layer, then the active project's layer. A project file's `rel_path` is its logical path inside the layer,
 /// so the two layers are told apart by `layer`, never by a rewritten name.
 pub fn layered_sources(ws_dir: &Path, active: &Active) -> Vec<ScopedSource> {
-    let home = crate::kb::sources(ws_dir);
+    // The index's project layers (`specs/109` §11) are not home files: each project's own text is listed below, for its project only.
+    let home: Vec<SourceFile> = crate::kb::sources(ws_dir).into_iter().filter(|f| f.zone != "project").collect();
     let (label, project) = project_files(ws_dir, active);
     let home_paths: std::collections::BTreeSet<String> = home.iter().map(|f| f.rel_path.clone()).collect();
     let mut out: Vec<ScopedSource> = home.into_iter().map(|file| ScopedSource { layer: "home".into(), overrides: None, file }).collect();

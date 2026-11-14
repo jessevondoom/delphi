@@ -2,6 +2,7 @@
 - pack_hash: 189d63d03ab1d0a7d4ed50a3f5e7c555
 - delphi_version: {version}
 - locus: either
+- search_use: explore (the default `use` of search_kb and kb_retrieve while this role is adopted; a call's own `use` wins)
 - capabilities: read -> Read; search_code -> Grep; edit -> Edit; shell -> Bash; delegate -> Agent
 - host_adapter: claude-code v1, hash 2817033d91b71f91 (another host maps the capability names to its own tools)
 - tuned_for: tier=workhorse, profile=code-craft

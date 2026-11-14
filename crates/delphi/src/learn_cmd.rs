@@ -49,6 +49,10 @@ pub fn render_list_with(notes: &[LiveNote], r: &Recurrence) -> String {
         let count = r.count(&n.trigger, &n.summary);
         let seen = if count >= 2 { format!("  [{}]", count_label(&n.trigger, count)) } else { String::new() };
         out.push_str(&format!("{:<w$}  {:<17}  {}  {}{}\n", n.reference(), n.trigger, n.tier, n.summary, seen, w = width));
+        // What the daemon computed the session had read before writing it (`specs/109` §13.1 item 2): information, never a gate.
+        if let Some(words) = n.shown_words() {
+            out.push_str(&format!("{:<w$}  ({})\n", "", words, w = width));
+        }
         // A host note that recurred in two or more sessions is marked, with the one command that keeps it (`specs/108` M2).
         if count >= 2 && crate::learn_keep::KEEPABLE.contains(&n.trigger.as_str()) {
             out.push_str(&format!("{:<w$}  * recurring: keep it with `{}`\n", "", keep_command(n), w = width));
@@ -70,8 +74,9 @@ pub fn keep_command(n: &LiveNote) -> String {
 
 pub fn render_one(n: &LiveNote) -> String {
     let source = if n.tier == "L5" { "typed by the operator" } else if n.tier == "L3" { "composed by the daemon from the log" } else { "from a task that read content that is not validated" };
+    let shown = n.shown_words().map(|w| format!("  read:    {w}\n")).unwrap_or_default();
     format!(
-        "{}\n  trigger: {}\n  at:      {}\n  task:    {}\n  role:    {}\n  tier:    {} ({}); promotion needs L4 or above\n  events:  {}\n\n{}\n",
+        "{}\n  trigger: {}\n  at:      {}\n  task:    {}\n  role:    {}\n  tier:    {} ({}); promotion needs L4 or above\n  events:  {}\n{}\n{}\n",
         n.reference(),
         n.trigger,
         n.timestamp,
@@ -80,6 +85,7 @@ pub fn render_one(n: &LiveNote) -> String {
         n.tier,
         source,
         n.event_seqs.iter().map(|s| s.to_string()).collect::<Vec<_>>().join(", "),
+        shown,
         n.summary
     )
 }
@@ -291,6 +297,22 @@ mod tests {
 
     fn opts() -> Options {
         Options { mission: None, json: false }
+    }
+
+    /// `specs/109` §13.1 item 2: a host note's stamp is shown in words by `list` and `show`, and a note with none shows nothing new.
+    #[test]
+    fn list_and_show_say_what_the_daemon_counted_the_session_had_read() {
+        let t = tempfile::tempdir().unwrap();
+        let mut e = staged("host-abcdef01", "h1", "[host:claude-code/x] Prefer small commits.", "L0");
+        e.payload["shown"] = json!({"count": 4, "lowest_checked": "not checked", "any_third_party": true});
+        mission(t.path(), "host-abcdef01", vec![e, staged("host-abcdef01", "h2", "older note", "L0")]);
+        let words = "written after reading 4 results through Delphi's daemon, lowest: not checked, third-party text among them";
+        let listed = run_in(t.path(), "list", None, &opts()).unwrap();
+        assert_eq!(listed.matches(words).count(), 1, "{listed}");
+        assert!(run_in(t.path(), "show", Some("host-abcdef01/h1"), &opts()).unwrap().contains(&format!("  read:    {words}\n")));
+        assert!(!run_in(t.path(), "show", Some("host-abcdef01/h2"), &opts()).unwrap().contains("read:"));
+        let json: serde_json::Value = serde_json::from_str(&run_in(t.path(), "show", Some("host-abcdef01/h1"), &Options { mission: None, json: true }).unwrap()).unwrap();
+        assert_eq!((json["shown"]["count"].as_u64(), json["shown"]["words"].as_str()), (Some(4), Some(words)));
     }
 
     #[test]

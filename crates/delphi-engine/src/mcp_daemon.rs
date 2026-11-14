@@ -40,6 +40,11 @@ impl HostLink {
         HostLink { sock, session: new_session(), tool: std::sync::Mutex::new("unknown".into()), cwd: cwd.to_path_buf() }
     }
 
+    /// A copy of this link (the same socket, session, tool and folder) to hand to a thread of its own (`specs/109` §13.1 item 3).
+    pub fn detached(&self) -> HostLink {
+        HostLink { sock: self.sock.clone(), session: self.session.clone(), tool: std::sync::Mutex::new(self.tool.lock().unwrap().clone()), cwd: self.cwd.clone() }
+    }
+
     pub fn session(&self) -> &str {
         &self.session
     }

@@ -2062,6 +2062,25 @@ mod tests {
         }
     }
 
+    /// `specs/109` §12 item 6: labels, not exclusion, is about what a HOST is shown. A seat's own `kb_search` inside the daemon still
+    /// leaves out untrusted and draft text and the release's reference by default, so the daemon's taint handling is unchanged.
+    #[test]
+    fn an_internal_search_still_leaves_out_untrusted_text_by_default() {
+        let mut f = fx(&[]);
+        let mut kb = crate::kb::Kb::open(&f.root.join("local/state.db")).unwrap();
+        kb.upsert_from("context/untrusted.md", "context", "external_untrusted", "# Untrusted\n\nThe quokkataint page, untrusted.\n", "t").unwrap();
+        kb.upsert_from("context/draft.md", "context", "external_untrusted", "---\nsource_type: internal_generated\nstatus: draft\n---\n# Draft\n\nThe quokkataint draft.\n", "t").unwrap();
+        kb.upsert_from("about/specs/001-x.md", "about", "user_ratified", "# Spec\n\nThe quokkataint release spec.\n", "t").unwrap();
+        kb.upsert_from("context/trusted.md", "context", "external_untrusted", "---\nsource_type: internal_generated\n---\n# Trusted\n\nThe quokkataint trusted page.\n", "t").unwrap();
+        drop(kb);
+        let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "architect", mission_id: "m1", now_rfc3339: "t", stamps: vec![], events: vec![] };
+        let r = run(&mut ctx, "kb_search", &json!({"query": "quokkataint"}));
+        assert!(r.content.contains("context/trusted.md"), "the control is found: {}", r.content);
+        for hidden in ["context/untrusted.md", "context/draft.md", "about/specs/001-x.md"] {
+            assert!(!r.content.contains(hidden), "{hidden}: {}", r.content);
+        }
+    }
+
     #[test]
     fn any_role_stages_a_note_that_inherits_the_spans_taint() {
         let mut f = fx(&[]);

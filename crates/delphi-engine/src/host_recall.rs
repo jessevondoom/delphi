@@ -148,7 +148,8 @@ pub fn recall(ws_dir: &Path, caller: &Caller, project: Option<&str>, ask: &Ask) 
         let summary_note = live.iter().rev().find(|n| n.trigger == "host_summary");
         let summary = summary_note.map(|n| {
             let p = staged(&n.id).map(|e| e.payload.clone()).unwrap_or(Value::Null);
-            json!({"asked": fenced(p["asked"].as_str().unwrap_or(""), MAX_ITEM), "did": fenced(p["did"].as_str().unwrap_or(""), MAX_ITEM), "open": fenced(p["open"].as_str().unwrap_or(""), MAX_ITEM), "text": fenced(summary_text(&n.summary), MAX_SUMMARY)})
+            // `read` is the daemon's own stamp (`specs/109` §13.1 item 2), fixed words it computed, never the session's text.
+            json!({"asked": fenced(p["asked"].as_str().unwrap_or(""), MAX_ITEM), "did": fenced(p["did"].as_str().unwrap_or(""), MAX_ITEM), "open": fenced(p["open"].as_str().unwrap_or(""), MAX_ITEM), "text": fenced(summary_text(&n.summary), MAX_SUMMARY), "read": n.shown_words()})
         });
         let notes: Vec<(String, Value, String)> = live
             .iter()
@@ -156,7 +157,7 @@ pub fn recall(ws_dir: &Path, caller: &Caller, project: Option<&str>, ask: &Ask) 
             .filter(|n| n.trigger == "host_note")
             .map(|n| {
                 let (claim, evidence) = crate::learn::host_claim(&n.summary);
-                let v = json!({"id": n.id, "role": n.role.as_deref().unwrap_or(""), "summary": fenced(&claim, MAX_NOTE), "evidence": fenced(&evidence, MAX_EVIDENCE), "recurred": recurrence.count(&n.trigger, &n.summary)});
+                let v = json!({"id": n.id, "role": n.role.as_deref().unwrap_or(""), "summary": fenced(&claim, MAX_NOTE), "evidence": fenced(&evidence, MAX_EVIDENCE), "recurred": recurrence.count(&n.trigger, &n.summary), "read": n.shown_words()});
                 (n.id.clone(), v, claim)
             })
             .collect();

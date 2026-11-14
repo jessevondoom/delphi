@@ -453,6 +453,21 @@ impl Packs {
         Ok(json!({"contents": [{"uri": CHARTER_URI, "mimeType": "text/markdown", "text": text}]}))
     }
 
+    /// Whether `role` is a role this workspace has and offers to host agents; the refusal is the one `pack` makes.
+    pub fn check_servable(&self, role: &str) -> Result<(), String> {
+        let (fm, _) = split_frontmatter(&self.role_text(role)?);
+        if Packs::servable(&fm) {
+            Ok(())
+        } else {
+            Err(format!("not_servable: the role `{}` is not offered to host agents (`host_servable: false` in its manifest); the operator can change that in the workspace's agent override", role))
+        }
+    }
+
+    /// The role's default `use` for a host's searches while it is adopted (`specs/109` §13.1 item 1), from the ratified manifest.
+    pub fn search_use(&self, role: &str) -> Result<crate::host_labels::Use, String> {
+        AgentManifest::parse(&self.role_text(role)?).map(|m| m.search_use).map_err(|e| e.to_string())
+    }
+
     /// The full pack as Claude Code is given it: the pack as it was before spec 106 (`get_agent` with `detail: "full"`).
     pub fn pack(&self, role: &str, include_profile: bool) -> Result<String, String> {
         self.pack_for(role, include_profile, Detail::Full, Some("claude-code"))
@@ -560,6 +575,7 @@ impl Packs {
              {detail_lines}\
              - delphi_version: {version}\n\
              - locus: {locus}{locus_note}\n\
+             - search_use: {search_use} (the default `use` of search_kb and kb_retrieve while this role is adopted; a call's own `use` wins)\n\
              - capabilities: {cap_line}\n\
              - host_adapter: {adapter_line}\n\
              - tuned_for: tier={tier}, profile={profile}\n\
@@ -571,6 +587,7 @@ impl Packs {
             hash = &hash(body.as_bytes())[..32],
             version = env!("CARGO_PKG_VERSION"),
             tier = manifest.tier(),
+            search_use = manifest.search_use.as_str(),
             profile = manifest.cognitive_profile,
             scopes = if scopes.is_empty() { "none".to_string() } else { scopes.join(", ") },
             profile_note = if include_profile { "included" } else { "omitted" },
@@ -773,6 +790,8 @@ mod tests {
         let refuse = |v: &str| format!("---\nid: strategist\ntitle: S\nrole: r\nhost_servable: {}\ncognitive_profile: deep-reasoning\ndefault_access_scope:\n  read: ['*']\nauthorized_skills: []\n---\nBody\n", v);
         set_role(&p, "strategist", &refuse("false"));
         assert!(p.pack("strategist", false).unwrap_err().starts_with("not_servable"));
+        assert!(p.check_servable("strategist").unwrap_err().starts_with("not_servable") && p.check_servable("builder").is_ok());
+        assert!(p.check_servable("nobody").unwrap_err().starts_with("unknown role"));
         set_role(&p, "strategist", &refuse("\"yes\""));
         assert!(p.pack("strategist", false).unwrap_err().starts_with("not_servable"), "a value that is not a boolean refuses");
         let listed = p.roles().unwrap();

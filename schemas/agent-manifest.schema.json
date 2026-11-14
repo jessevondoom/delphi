@@ -25,7 +25,8 @@
     "memory_scope": { "type": "string" },
     "max_turn_budget": { "type": "integer", "minimum": 1 },
     "host_servable": { "type": "boolean", "description": "Whether the role may be served to a host agent over MCP (specs/062 §4.3). Absent means yes." },
-    "locus": { "enum": ["host", "inside", "either"], "description": "Where the role runs (specs/098 §3.2): in the host, inside Delphi, or either. Absent means either. A role with host_servable false is inside whatever this says." }
+    "locus": { "enum": ["host", "inside", "either"], "description": "Where the role runs (specs/098 §3.2): in the host, inside Delphi, or either. Absent means either. A role with host_servable false is inside whatever this says." },
+    "search_use": { "enum": ["explore", "verify"], "description": "The default `use` of a host's search_kb and kb_retrieve while a host session has adopted this role with get_agent (specs/109 §13.1): explore (everything visible, labelled) or verify (only validated text from ratified or empirical sources). Absent means explore. A call's own use always wins." }
   },
   "additionalProperties": true
 }

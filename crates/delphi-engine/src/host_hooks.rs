@@ -960,6 +960,8 @@ mod tests {
         assert!(!lines[0].contains("SECRET") && !lines[0].contains("example.com"), "nothing of the prompt is echoed");
         assert!(!lines[0].contains('\u{1b}'), "no escape codes");
         assert_eq!(lines[0].contains("as task"), get_agent_takes_task(), "`task` is named only when get_agent takes it");
+        // Spec 109 Q4: get_agent now takes `task`, so the line tells the host to pass the request as it.
+        assert!(get_agent_takes_task() && lines[0].contains("and the operator's request as task"), "{}", lines[0]);
     }
 
     #[test]

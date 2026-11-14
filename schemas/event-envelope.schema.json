@@ -33,7 +33,8 @@
     {
       "$comment": "specs/083 S3a: a staged note may carry the digest a later dismissal is matched against. Older logs have none.",
       "if": { "properties": { "type": { "const": "learn.staged" } }, "required": ["type"] },
-      "then": { "properties": { "payload": { "properties": { "source_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "SHA-256 (hex) of the note's normalized claim, its evidence (host notes) and its tier. A learn.dropped note is not staged again while this is unchanged, for 90 days (specs/083 §5)." } } } } }
+      "then": { "properties": { "payload": { "properties": { "source_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "SHA-256 (hex) of the note's normalized claim, its evidence (host notes) and its tier. A learn.dropped note is not staged again while this is unchanged, for 90 days (specs/083 §5)." },
+        "shown": { "type": "object", "description": "specs/109 §13.1: on a note, session summary or KB entry a host session staged, what the daemon computed that session was shown through it since its last staging; never what the host sent. Information only: it gates nothing. Older logs have none.", "required": ["count", "lowest_checked", "any_third_party"], "properties": { "count": { "type": "integer", "minimum": 0 }, "lowest_checked": { "enum": ["ratified", "validated", "checking", "contested", "not checked", "draft", null] }, "any_third_party": { "type": "boolean" } }, "additionalProperties": false } } } } }
     }
   ]
 }

@@ -2078,3 +2078,33 @@ mod page_search_cache {
         assert!(res.markdown.contains("![A tide chart](lib:"));
     }
 }
+
+// specs/109 §13.3 (defect 3): a source added from a local file is not named by its absolute path, so no home directory or user name is in
+// the id or the pointer a host is shown; an entry an earlier release made under the path-spelling id is still found, and shown redacted.
+#[test]
+fn a_local_file_source_id_does_not_spell_the_path_and_an_older_entry_is_still_found() {
+    let at = PathBuf::from(["", "home", "example-user", "docs", "Tide Notes.md"].join("/"));
+    let at = at.as_path();
+    let id = local_file_id(at);
+    assert!(id.starts_with("local-tide-notes-md-") && !id.contains("example-user") && !id.contains("home"), "{id}");
+    assert_eq!(id, local_file_id(at), "stable for one path");
+    assert_ne!(id, local_file_id(&PathBuf::from(["", "home", "other", "docs", "Tide Notes.md"].join("/"))), "the hash still tells two paths apart");
+    let old = source_id(&format!("file:{}", at.display()));
+    assert!(old.starts_with("file-home-example-user-docs"), "the fixture: the older scheme spelled the path: {old}");
+    let hash = old.rsplit_once('-').unwrap().1;
+    assert!(id.ends_with(hash), "the same hash suffix as before");
+    let shown = host_pointer(&format!("library/sources/{old}/source.md#L3"));
+    assert_eq!(shown, format!("library/sources/file-{hash}/source.md#L3"));
+    assert!(!shown.contains("example-user"));
+    let fresh = format!("library/sources/{id}/source.md#L3");
+    assert_eq!(host_pointer(&fresh), fresh, "a new id is shown as it is");
+    assert_eq!(host_pointer("about/specs/001-x.md#L1"), "about/specs/001-x.md#L1");
+    let (d, l) = lib();
+    let f = file(d.path(), "Tide Notes.md", "# Tides\n\nhigh water");
+    let first = l.add_file(&f, &open("own"), &Budgets::default()).unwrap().id;
+    assert!(first.starts_with("local-tide-notes-md-"), "{first}");
+    let legacy = source_id(&format!("file:{}", f.canonicalize().unwrap().display()));
+    std::fs::rename(l.source_dir(&first), l.source_dir(&legacy)).unwrap();
+    let again = l.add_file(&f, &open("own"), &Budgets::default()).unwrap();
+    assert_eq!((again.id, again.outcome), (legacy, Outcome::Unchanged), "found under the older id, not added again");
+}
