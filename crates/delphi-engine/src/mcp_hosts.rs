@@ -8,6 +8,23 @@ pub const HOSTS: &[&str] = &["claude-code", "copilot", "codex", "agy"];
 
 const SERVER: &str = "delphi";
 
+/// The host ID of [`HOSTS`] a client names itself as in `initialize`'s `clientInfo.name` (spec 106 §3 item 5), or `None` for a client
+/// Delphi cannot place. The names are the ones the hosts are documented or observed to send; spec 110 checks each against a live host.
+pub fn host_of_client(name: &str) -> Option<&'static str> {
+    let n = name.trim().to_ascii_lowercase();
+    if n == "claude-code" || n.starts_with("claude-code") || n == "claude code" {
+        Some("claude-code")
+    } else if n.contains("copilot") {
+        Some("copilot")
+    } else if n.contains("codex") {
+        Some("codex")
+    } else if n.contains("antigravity") || n == "agy" || n.starts_with("agy-") || n.starts_with("gemini") {
+        Some("agy")
+    } else {
+        None
+    }
+}
+
 /// Where a host reads its MCP servers from, and the snippet to put there. Runs a bare `delphi`, resolved by the host's own `PATH`.
 pub fn config_snippet(host: &str) -> Result<String, String> {
     config_snippet_with(host, "delphi")
