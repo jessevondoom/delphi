@@ -2,6 +2,8 @@
 
 # Delphi
 
+At the start of a session, call `session_brief` once (Delphi's tool, no arguments) unless a Delphi brief is already in your context: it names the team, this project's specs and what the last session left.
+
 ## Mentions
 
 - On `@delphi` or the orchestrator's alias, call `consult_orchestrator` with the task (one call), adopt the orchestrator's pack with `get_agent` if you do not hold it, and print its display line.

@@ -86,6 +86,13 @@ Every row is a claim to verify by the conformance probe in S0b (§9). Where a do
 | Nesting limit | 3 by default | n/a | not specified | 10 |
 | Slash entry | plugin `commands/` or skill | plugin `commands` field, or skill | skill | skills load with `/<skill-name>` |
 
+**Live checks, 2026-11-14 ([`specs/110`](110-other-hosts-adapters-instruction-files-and-install-paths.md) §8).** These cells are now settled by a run; the rest of the table is still from the vendor docs.
+
+- **Claude Code 2.1.325:** a project agent (`.claude/agents/`) and a plugin agent (`delphi:architect-worker`, from `--plugin-dir`) both load and run.
+- **Copilot CLI 1.0.111:** a project agent `.github/agents/<id>.agent.md` loads and runs in its own subagent (`task`), and Copilot picks it by its description (an `@architect` prompt was delegated to it). The tool allowlist *is* a field: `tools: ["read", "search", "delphi/<tool>"]` gave the subagent exactly that list, and a file with **no** list gets every tool (`["*"]`). MCP in a seat: the subagent called the parent's `delphi` server (inherited).
+- **Codex CLI 0.169.0:** in a project Codex does not trust, `.codex/agents/*.toml` is not loaded: `spawn_agent` started a generic agent (`agent_type` null). Trusting the project saves trust, which a check may not do, so whether a trusted project or `~/.codex/agents/` loads the files is still open.
+- **agy (Antigravity):** not run. **Gemini CLI** (a host of its own, not agy) could not be run: its sign-in is refused before any model call.
+
 **Consequences that shape the design**
 
 - **The skill is the common denominator.** All four load a skill; so the front door is a generated `delphi-council` skill (§5.1). Native role subagents are an accelerator, never a requirement.

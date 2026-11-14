@@ -75,7 +75,7 @@ The orchestrator briefs models outside Delphi in two ways: it dispatches to exte
 
 ## 086-outside-council-panel-and-host-subagents
 
-**086: The Council outside Delphi: a Panel run by host subagents, a server-held barrier, one front door, and a ruling card** · approved (per source at `34e77bf81756`) · tier 0 · [source](../../specs/086-outside-council-panel-and-host-subagents.md)
+**086: The Council outside Delphi: a Panel run by host subagents, a server-held barrier, one front door, and a ruling card** · approved (per source at `fc177b02f63b`) · tier 0 · [source](../../specs/086-outside-council-panel-and-host-subagents.md)
 
 **source excerpt, untrusted** · `specs/086-outside-council-panel-and-host-subagents.md` line 28
 

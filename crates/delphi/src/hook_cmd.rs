@@ -34,7 +34,8 @@ pub fn hook_output(args: &[String], event: &str, host: &str, stdin: impl std::io
     if !host_hooks::switch_on(&ws) {
         return None;
     }
-    let root = host_hooks::claude_projects_root();
+    // Spec 110 §4 item 3: counts only from a transcript format Delphi reads (Claude Code's); another host's marker has none.
+    let root = if host == "claude-code" { host_hooks::claude_projects_root() } else { None };
     let text = match event {
         "session-start" => host_hooks::brief(&ws, &cwd, input.session_id.as_deref(), &host_hooks::nonce()),
         "prompt" => {

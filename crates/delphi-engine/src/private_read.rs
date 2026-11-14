@@ -162,10 +162,11 @@ pub const HOST_SURFACE: [Surface; 28] = [
 ];
 
 /// The tools of the MCP server (`mcp_host::tools()`).
-pub const MCP_SURFACE: [Surface; 41] = [
+pub const MCP_SURFACE: [Surface; 42] = [
     Surface { name: "search_kb", how: How::Marks },
     no_return("list_roles", PROJECT_FILES),
     no_return("delphi_roster", PROJECT_FILES),
+    no_return("session_brief", "the session-start brief (spec 110 G3a): the ratified roster, fenced spec names and statuses, and a pointer of fixed words; no entry text"),
     no_return("get_agent", PROJECT_FILES),
     no_return("list_skills", PROJECT_FILES),
     no_return("get_skill", PROJECT_FILES),

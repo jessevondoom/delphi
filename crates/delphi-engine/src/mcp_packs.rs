@@ -551,13 +551,11 @@ impl Packs {
         scopes.dedup();
         let locus = Packs::role_locus(&fm);
         let locus_note = if locus == "inside" { " (Delphi runs this role in its own environment, where its audit trail is kept: do not run it in your host)" } else { "" };
-        // Spec 106 §3 item 5: the adapter line names the calling host's adapter; only Claude Code has one today (spec 110 adds others).
-        let (cap_line, adapter_line) = if host == Some("claude-code") {
-            let adapter_json = crate::mcp_hosts::claude_code_adapter_json();
-            (
-                capability_line(&caps, &crate::mcp_hosts::claude_code_adapter()),
-                format!("claude-code v{}, hash {} (another host maps the capability names to its own tools)", crate::mcp_hosts::ADAPTER_VERSION, crate::mcp_hosts::adapter_hash(&adapter_json)),
-            )
+        // Spec 106 §3 item 5 and spec 110 X1: the adapter line names the calling host's adapter, where a live check gave it one.
+        let adapter = host.and_then(|h| crate::mcp_hosts::adapter(h).map(|a| (h, a)));
+        let (cap_line, adapter_line) = if let Some((h, (version, map))) = adapter {
+            let adapter_json = crate::mcp_hosts::adapter_json(h).unwrap_or_default();
+            (capability_line(&caps, &map), format!("{h} v{version}, hash {} (another host maps the capability names to its own tools)", crate::mcp_hosts::adapter_hash(&adapter_json)))
         } else {
             (
                 if caps.is_empty() { "none".to_string() } else { caps.join("; ") },
@@ -731,7 +729,13 @@ mod tests {
         let at = |h: Option<&str>| p.pack_for("architect", false, Detail::Compact, h).unwrap();
         let claude = at(Some("claude-code"));
         assert!(claude.contains("- capabilities: read -> Read; search_code -> Grep; edit -> Edit\n") && claude.contains("- host_adapter: claude-code v"));
-        for (h, name) in [(Some("codex"), "codex"), (Some("copilot"), "copilot"), (Some("agy"), "agy"), (None, "this host")] {
+        // Spec 110 X1: Copilot and Codex have adapters from their live check; a capability one lacks is unavailable.
+        let copilot = at(Some("copilot"));
+        assert!(copilot.contains("- capabilities: read -> view; search_code -> rg; edit -> apply_patch\n") && copilot.contains("- host_adapter: copilot v1, hash "), "{copilot}");
+        let codex = at(Some("codex"));
+        assert!(codex.contains("- capabilities: read -> exec_command; search_code -> exec_command; edit -> apply_patch\n") && codex.contains("- host_adapter: codex v1, hash "), "{codex}");
+        assert_eq!((pack_hash_of(&copilot), pack_hash_of(&codex)), (pack_hash_of(&claude), pack_hash_of(&claude)));
+        for (h, name) in [(Some("agy"), "agy"), (Some("gemini"), "gemini"), (None, "this host")] {
             let other = at(h);
             assert!(other.contains("- capabilities: read; search_code; edit\n"), "{other}");
             assert!(other.contains(&format!("- host_adapter: none for {name} yet: no adapter maps the capability names to your tools, so they stand alone")), "{other}");
@@ -741,7 +745,12 @@ mod tests {
         }
         assert_eq!(crate::mcp_hosts::host_of_client("claude-code"), Some("claude-code"));
         assert_eq!(crate::mcp_hosts::host_of_client("codex-mcp-client"), Some("codex"));
+        assert_eq!(crate::mcp_hosts::host_of_client(" Copilot-CLI "), Some("copilot"));
         assert_eq!(crate::mcp_hosts::host_of_client("t"), None);
+        // Names no live check observed are not guessed (spec 110 X1).
+        for unseen in ["copilot", "codex", "gemini-cli", "antigravity", "agy", "claude-code-extra"] {
+            assert_eq!(crate::mcp_hosts::host_of_client(unseen), None, "{unseen}");
+        }
     }
 
     // Spec 106 §3 item 4: the listed hash is the compact pack's, it is cached, and a changed source changes it.

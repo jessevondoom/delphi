@@ -5,6 +5,8 @@ description: Triggers whenever the user mentions @delphi or a Delphi specialist 
 
 # Working with Delphi
 
+At the start of a session, call `session_brief` once (Delphi's tool, no arguments) unless a Delphi brief is already in your context: it names the team, this project's specs and what the last session left.
+
 Delphi is connected as the MCP server `delphi` (read-only, this machine only).
 
 ## Mention Routing & Specialist Personas

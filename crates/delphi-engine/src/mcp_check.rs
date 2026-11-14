@@ -290,6 +290,7 @@ pub fn check_host(host: &str, home: &Path, binary_release: &str) -> Result<Check
         "copilot" => Ok(check_copilot(home)),
         "codex" => Ok(check_codex(home, binary_release)),
         "agy" => Ok(Check { state: State::Unverified, detail: "no check exists for this host yet".into(), fix: None }),
+        "gemini" => Ok(Check { state: State::Unverified, detail: "Gemini CLI could not be run in a live check (spec 110 section 8); the lines below read what `delphi connect gemini` wrote".into(), fix: None }),
         other => Err(format!("unknown host `{other}`; one of {}", crate::mcp_hosts::HOSTS.join(", "))),
     }
 }

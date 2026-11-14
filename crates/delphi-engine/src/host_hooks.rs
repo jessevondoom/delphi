@@ -105,7 +105,9 @@ pub fn read_input(r: impl Read) -> Option<Input> {
 /// What the host should add to its model's context, in the host's own format, or `None` for nothing. Only Claude Code's
 /// format is built here; the other hosts are `specs/110`'s.
 pub fn host_output(host: &str, event: &str, text: &str) -> Option<String> {
-    if text.is_empty() || host != "claude-code" {
+    // Spec 110 X3: Copilot CLI runs Claude Code-shaped hook files and its events fire; no live check showed it giving this output
+    // to the model (spec 110 §8), so no Copilot hooks file is installed.
+    if text.is_empty() || !matches!(host, "claude-code" | "copilot") {
         return None;
     }
     let name = match event {
@@ -799,7 +801,10 @@ mod tests {
         assert_eq!(p["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit");
         assert!(host_output("claude-code", "session-start", "").is_none());
         assert!(host_output("claude-code", "session-end", "x").is_none(), "the end hook adds no context");
-        assert!(host_output("copilot", "session-start", "x").is_none(), "other hosts are spec 110's");
+        assert_eq!(host_output("copilot", "session-start", "hi"), host_output("claude-code", "session-start", "hi"), "Copilot runs the Claude Code shape (spec 110 X3)");
+        for h in ["codex", "gemini", "agy"] {
+            assert!(host_output(h, "session-start", "x").is_none(), "{h}: no hook a live check showed firing");
+        }
     }
 
     #[test]
@@ -915,6 +920,28 @@ mod tests {
         // Another project's handoff is never pointed to.
         let other = tempfile::tempdir().unwrap();
         assert!(!brief(&dir, other.path(), None, N).contains("Last host session"));
+    }
+
+    /// Spec 110 G3a: `session_brief` is the hook's brief for the same folder, byte for byte, with the switch on and off, and carries
+    /// no handoff or summary text.
+    #[test]
+    fn session_brief_is_the_hooks_brief_byte_for_byte_with_the_switch_on_or_off_and_no_session_text() {
+        let (t, dir) = ws();
+        let (root, id) = project(&t, &dir);
+        std::fs::write(root.join("specs/001-a.md"), "---\nstatus: approved\n---\n").unwrap();
+        put_handoff(&dir, "abcdef0123456789", &id, "host:claude-code/model", "CANARY-OBJECTIVE", &["CANARY-CONSTRAINT"]);
+        if !dir.join("config.toml").exists() {
+            std::fs::write(dir.join("config.toml"), "").unwrap();
+        }
+        let server = crate::mcp_host::Server::new(&dir).with_cwd(&root);
+        for on in [false, true] {
+            set_switch(&dir, on).unwrap();
+            let tool = server.session_brief(N).unwrap();
+            assert_eq!(tool, brief(&dir, &root, None, N), "switch {on}");
+            assert!(tool.starts_with(BRIEF_HEAD) && tool.contains("001-a (approved)") && tool.contains("it left a handoff"), "{tool}");
+            assert!(!tool.contains("CANARY"), "no text another session wrote: {tool}");
+        }
+        assert!(crate::mcp_host::Server::without_workspace().session_brief(N).is_err());
     }
 
     #[test]

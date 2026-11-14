@@ -137,6 +137,11 @@ count = 1
 class = "operator-cli"
 
 [[site]]
+file = "crates/delphi/src/connect_files.rs"
+count = 1
+class = "operator-cli"
+
+[[site]]
 file = "crates/delphi/src/doctor.rs"
 count = 2
 class = "probe"

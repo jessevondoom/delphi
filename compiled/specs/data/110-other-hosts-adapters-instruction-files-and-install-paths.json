@@ -69,16 +69,40 @@
       "title": "Live-check results"
     },
     {
-      "level": 2,
+      "level": 3,
       "line": 96,
+      "number": "8.1",
+      "title": "Probe (X4a, 2026-11-14): what each host does today, before X1 to X3"
+    },
+    {
+      "level": 3,
+      "line": 146,
+      "number": "8.2",
+      "title": "Final run (X4b, 2026-11-14): after X1 to X3"
+    },
+    {
+      "level": 3,
+      "line": 201,
+      "number": "8.3",
+      "title": "G3 run (2026-11-14): `session_brief` and the spawn prompt (§10)"
+    },
+    {
+      "level": 2,
+      "line": 216,
       "number": "9",
       "title": "Amendments from review (2026-11-13)"
+    },
+    {
+      "level": 2,
+      "line": 226,
+      "number": "10",
+      "title": "Follow-up: a brief and a role pack on hosts without the hooks (operator, 2026-11-14)"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/110-other-hosts-adapters-instruction-files-and-install-paths.md",
-    "sha256": "7d00f84c5429744c6a924ed1a29dd1dde1fc6c72ad39d6badc4617ca28c2bb4c"
+    "sha256": "c9dd338eb5fab61d4f2dd891727dd72cc1adc0df31fd108ff74d5d3542c5499a"
   },
   "source_status_at_hash": {
     "line": {
@@ -91,7 +115,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-13, in a host session (\"approve all your plans and suggestions and go\"). The approval was given to the plan this spec carries out (workstream 7: adapters, instruction files and install paths for Gemini, Codex and Copilot) BEFORE this text was written; the operator has not read the text. The operator said the same day that Copilot, agy (Gemini) and Codex are installed and signed in on this machine for the live checks."
     },
-    "sha256": "7d00f84c5429744c6a924ed1a29dd1dde1fc6c72ad39d6badc4617ca28c2bb4c",
+    "sha256": "c9dd338eb5fab61d4f2dd891727dd72cc1adc0df31fd108ff74d5d3542c5499a",
     "word": "approved"
   },
   "spec": {

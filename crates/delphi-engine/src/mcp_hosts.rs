@@ -4,25 +4,23 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-pub const HOSTS: &[&str] = &["claude-code", "copilot", "codex", "agy"];
+/// The hosts Delphi knows (spec 110 X1): `agy` is Antigravity and `gemini` is Gemini CLI, two hosts.
+pub const HOSTS: &[&str] = &["claude-code", "copilot", "codex", "agy", "gemini"];
+
+/// The hosts that get seat and worker files. Gemini CLI has none until a live check shows its agent files loading (spec 110 §8).
+pub const AGENT_HOSTS: &[&str] = &["claude-code", "copilot", "codex", "agy"];
 
 const SERVER: &str = "delphi";
 
-/// The host ID of [`HOSTS`] a client names itself as in `initialize`'s `clientInfo.name` (spec 106 §3 item 5), or `None` for a client
-/// Delphi cannot place. The names are the ones the hosts are documented or observed to send; spec 110 checks each against a live host.
+/// The client names hosts were OBSERVED to send in `initialize`'s `clientInfo.name` (spec 110 §8.1), and the host each is. A name
+/// not seen in a live check is not guessed: Antigravity and Gemini CLI stay unmapped until one is.
+pub const CLIENT_NAMES: &[(&str, &str)] = &[("claude-code", "claude-code"), ("copilot-cli", "copilot"), ("codex-mcp-client", "codex")];
+
+/// The host ID of [`HOSTS`] a client names itself as (spec 106 §3 item 5), from [`CLIENT_NAMES`], or `None` for a client Delphi
+/// cannot place. Matched whole, ignoring case and surrounding space.
 pub fn host_of_client(name: &str) -> Option<&'static str> {
     let n = name.trim().to_ascii_lowercase();
-    if n == "claude-code" || n.starts_with("claude-code") || n == "claude code" {
-        Some("claude-code")
-    } else if n.contains("copilot") {
-        Some("copilot")
-    } else if n.contains("codex") {
-        Some("codex")
-    } else if n.contains("antigravity") || n == "agy" || n.starts_with("agy-") || n.starts_with("gemini") {
-        Some("agy")
-    } else {
-        None
-    }
+    CLIENT_NAMES.iter().find(|(c, _)| *c == n).map(|(_, h)| *h)
 }
 
 /// Where a host reads its MCP servers from, and the snippet to put there. Runs a bare `delphi`, resolved by the host's own `PATH`.
@@ -36,9 +34,19 @@ pub fn config_snippet_with(host: &str, command: &str) -> Result<String, String> 
         "claude-code" => format!("# .mcp.json in the project, or: claude mcp add {SERVER} -- {command} mcp\n{{\n  \"mcpServers\": {{\n    \"{SERVER}\": {{ \"command\": \"{command}\", \"args\": [\"mcp\"] }}\n  }}\n}}\n"),
         "copilot" => format!("# ~/.copilot/mcp-config.json\n{{\n  \"mcpServers\": {{\n    \"{SERVER}\": {{ \"type\": \"local\", \"command\": \"{command}\", \"args\": [\"mcp\"], \"tools\": [\"*\"] }}\n  }}\n}}\n"),
         "codex" => format!("# ~/.codex/config.toml\n[mcp_servers.{SERVER}]\ncommand = \"{command}\"\nargs = [\"mcp\"]\n"),
-        "agy" => format!("# Antigravity / Gemini CLI: ~/.gemini/settings.json (not yet verified against a live host; spec 062 Q-5)\n{{\n  \"mcpServers\": {{\n    \"{SERVER}\": {{ \"command\": \"{command}\", \"args\": [\"mcp\"] }}\n  }}\n}}\n"),
-        other => return Err(format!("unknown host `{other}`; one of {}", HOSTS.join(", "))),
+        "agy" => format!("# Antigravity (agy): its MCP settings (not yet verified against a live host; spec 062 Q-5)\n{{\n  \"mcpServers\": {{\n    \"{SERVER}\": {{ \"command\": \"{command}\", \"args\": [\"mcp\"] }}\n  }}\n}}\n"),
+        "gemini" => format!("# Gemini CLI: ~/.gemini/settings.json, or `delphi connect gemini` (not verified against a live host; spec 110 §8)\n{{\n  \"mcpServers\": {{\n    \"{SERVER}\": {{ \"command\": \"{command}\", \"args\": [\"mcp\"] }}\n  }}\n}}\n"),
+        other => return Err(not_for(other)),
     })
+}
+
+/// Why a host has no file of this kind: Gemini CLI's agent files are left out until a live check shows them loading (spec 110 §8).
+fn not_for(host: &str) -> String {
+    if host == "gemini" {
+        "Gemini CLI gets no agent files: no live check has shown them loading (spec 110 section 8)".into()
+    } else {
+        format!("unknown host `{host}`; one of {}", HOSTS.join(", "))
+    }
 }
 
 /// The path a host should run for `--absolute` (spec 071 E1a). Refuses what would break or point at the wrong binary: a relative or
@@ -85,6 +93,8 @@ description: Triggers whenever the user mentions @delphi or a Delphi specialist 
 ---
 
 # Working with Delphi
+
+At the start of a session, call `session_brief` once (Delphi's tool, no arguments) unless a Delphi brief is already in your context: it names the team, this project's specs and what the last session left.
 
 Delphi is connected as the MCP server `delphi` (read-only, this machine only).
 
@@ -306,7 +316,8 @@ pub fn role_agent_file(host: &str, role: &str, models: &BTreeMap<String, String>
         }
         "copilot" => {
             let m = model.map(|m| format!("model: {}\n", quoted(&m))).unwrap_or_default();
-            (format!("agents/delphi-{role}.agent.md").into(), format!("---\nname: delphi-{role}\ndescription: {desc}\n{m}---\n\n{body}"))
+            let tools = copilot_tools(&["council_brief", "council_submit", "get_agent", "search_memory", "kb_retrieve"]);
+            (format!("agents/delphi-{role}.agent.md").into(), format!("---\nname: delphi-{role}\ndescription: {desc}\n{m}{tools}---\n\n{body}"))
         }
         "agy" => {
             let m = model.map(|m| format!("model: {m}\n")).unwrap_or_default();
@@ -319,7 +330,7 @@ pub fn role_agent_file(host: &str, role: &str, models: &BTreeMap<String, String>
             let m = model.map(|m| format!("model = {}\n", quoted(&m))).unwrap_or_default();
             (format!("delphi-{role}.toml").into(), format!("name = \"delphi-{role}\"\ndescription = {desc}\n{m}developer_instructions = \"\"\"\n{body}\"\"\"\n"))
         }
-        other => return Err(format!("unknown host `{other}`; one of {}", HOSTS.join(", "))),
+        other => return Err(not_for(other)),
     })
 }
 
@@ -337,6 +348,14 @@ pub fn role_agent_files(host: &str, models: &BTreeMap<String, String>) -> Result
 /// Delphi's read-only tools a read-only worker may call (spec 106 A4), beside the seats' read-only built-ins.
 const WORKER_READ_TOOLS: &[&str] = &["get_agent", "get_skill", "list_roles", "list_skills", "specs_status", "specs_show", "specs_list", "search_project", "search_memory", "query_memory", "kb_retrieve", "search_kb"];
 
+/// The `tools:` line of a read-only Copilot CLI file (spec 110 X3): Copilot's read and search tools and the named Delphi tools as
+/// `delphi/<tool>`, never its shell, edit or delegate tools.
+fn copilot_tools(delphi: &[&str]) -> String {
+    let mut all: Vec<String> = vec!["\"read\"".into(), "\"search\"".into()];
+    all.extend(delphi.iter().map(|t| format!("\"delphi/{t}\"")));
+    format!("tools: [{}]\n", all.join(", "))
+}
+
 /// The tool list of a read-only Claude Code worker: the seats' read-only built-ins and Delphi's read tools, under both server names.
 fn claude_worker_tools() -> String {
     let mut all: Vec<String> = vec!["Read".into(), "Grep".into(), "Glob".into()];
@@ -349,12 +368,15 @@ fn worker_description(role: &str) -> String {
     format!("Delphi {role} ({}). Use when the user addresses @{role} or its themed name, or when work fits this role and deserves its own context.", role_line(role).unwrap_or(role))
 }
 
-/// The worker's short wrapper (§4 item 2). No pack text is inlined, so a stale file cannot freeze old instructions.
-fn worker_body(role: &str, inherits_tools: bool) -> String {
+/// The worker's short wrapper (§4 item 2). No pack text is inlined, so a stale file cannot freeze old instructions. A read-only worker
+/// on Codex is told to read through `exec_command`, the only tool its live check listed for reading (spec 110 X3).
+fn worker_body(role: &str, inherits_tools: bool, host: &str) -> String {
     let scope = if inherits_tools {
-        "Do the task you were given, as this role, inside your host's permissions."
+        "Do the task you were given, as this role, inside your host's permissions.".to_string()
+    } else if host == "codex" {
+        "Do the task you were given, as this role. You work read-only: read and search files with `exec_command` only to read (for example `cat`, `rg`, `ls`), and change nothing: no `apply_patch`, no command that writes a file or changes state; say what should change instead.".to_string()
     } else {
-        "Do the task you were given, as this role. You work read-only: do not change files or run commands; say what should change instead."
+        "Do the task you were given, as this role. You work read-only: do not change files or run commands; say what should change instead.".to_string()
     };
     format!("{DISCLAIMER}
 
@@ -379,15 +401,17 @@ pub fn worker_file(host: &str, role: &str, models: &BTreeMap<String, String>) ->
     };
     let model = if matches!(host, "copilot" | "codex") { models.get(role).cloned() } else { None };
     let desc = quoted(&worker_description(role));
-    let body = worker_body(role, *inherits);
+    let body = worker_body(role, *inherits, host);
     Ok(match host {
         "claude-code" => {
             let tools = if *inherits { String::new() } else { format!("tools: {}\n", claude_worker_tools()) };
             (format!("agents/{role}-worker.md").into(), format!("---\nname: {role}-worker\ndescription: {desc}\n{tools}---\n\n{body}"))
         }
         "copilot" => {
+            // Spec 110 §8.1: a Copilot agent file with no tool list gets every tool, so a read-only worker names its tools (A4 of 106).
             let m = model.map(|m| format!("model: {}\n", quoted(&m))).unwrap_or_default();
-            (format!("agents/delphi-{role}-worker.agent.md").into(), format!("---\nname: delphi-{role}-worker\ndescription: {desc}\n{m}---\n\n{body}"))
+            let tools = if *inherits { String::new() } else { copilot_tools(WORKER_READ_TOOLS) };
+            (format!("agents/delphi-{role}-worker.agent.md").into(), format!("---\nname: delphi-{role}-worker\ndescription: {desc}\n{m}{tools}---\n\n{body}"))
         }
         "agy" => (
             format!("agents/delphi-{role}-worker.md").into(),
@@ -397,7 +421,7 @@ pub fn worker_file(host: &str, role: &str, models: &BTreeMap<String, String>) ->
             let m = model.map(|m| format!("model = {}\n", quoted(&m))).unwrap_or_default();
             (format!("delphi-{role}-worker.toml").into(), format!("name = \"delphi-{role}-worker\"\ndescription = {desc}\n{m}developer_instructions = \"\"\"\n{body}\"\"\"\n"))
         }
-        other => return Err(format!("unknown host `{other}`; one of {}", HOSTS.join(", "))),
+        other => return Err(not_for(other)),
     })
 }
 
@@ -490,8 +514,50 @@ pub fn claude_code_adapter() -> Vec<(&'static str, Option<&'static str>)> {
 
 /// The adapter as the file `adapter.json` of the Claude Code plugin: fixed key order, fixed text, so its hash is stable.
 pub fn claude_code_adapter_json() -> String {
-    let caps: Vec<String> = claude_code_adapter().iter().map(|(c, t)| format!("    \"{c}\": {}", t.map(|t| format!("\"{t}\"")).unwrap_or_else(|| "null".into()))).collect();
-    format!("{{\n  \"host\": \"claude-code\",\n  \"version\": {ADAPTER_VERSION},\n  \"capabilities\": {{\n{}\n  }}\n}}\n", caps.join(",\n"))
+    render_adapter("claude-code", ADAPTER_VERSION, &claude_code_adapter())
+}
+
+fn render_adapter(host: &str, version: u32, caps: &[(&str, Option<&str>)]) -> String {
+    let caps: Vec<String> = caps.iter().map(|(c, t)| format!("    \"{c}\": {}", t.map(|t| format!("\"{t}\"")).unwrap_or_else(|| "null".into()))).collect();
+    format!("{{\n  \"host\": \"{host}\",\n  \"version\": {version},\n  \"capabilities\": {{\n{}\n  }}\n}}\n", caps.join(",\n"))
+}
+
+/// Each capability of [`CAPABILITIES`] and the host tool that provides it, or `None` when the host lacks it.
+pub type AdapterMap = Vec<(&'static str, Option<&'static str>)>;
+
+/// Spec 110 X1: each host's adapter, taken from the tools its model listed in the live check (§8.1), with its version. Raise a host's
+/// version when its mapping changes. `None` for a host no live check has listed (Antigravity, Gemini CLI): its packs say there is none.
+/// - Copilot CLI 1.0.111 (with `gpt-6-luna`): `view`, `rg`, `web_fetch`, `apply_patch`, `bash`, `task`; it listed no web search tool.
+///   Copilot gives a model a tool set that can depend on the model; this is the set observed.
+/// - Codex CLI 0.169.0: no read, search or fetch tool (files are read and searched through `exec_command`), `apply_patch`, and
+///   `spawn_agent` to delegate; it listed no web search or fetch tool.
+pub fn adapter(host: &str) -> Option<(u32, AdapterMap)> {
+    match host {
+        "claude-code" => Some((ADAPTER_VERSION, claude_code_adapter())),
+        "copilot" => Some((1, vec![("read", Some("view")), ("search_code", Some("rg")), ("search_web", None), ("fetch", Some("web_fetch")), ("edit", Some("apply_patch")), ("shell", Some("bash")), ("delegate", Some("task"))])),
+        "codex" => Some((
+            1,
+            vec![("read", Some("exec_command")), ("search_code", Some("exec_command")), ("search_web", None), ("fetch", None), ("edit", Some("apply_patch")), ("shell", Some("exec_command")), ("delegate", Some("spawn_agent"))],
+        )),
+        _ => None,
+    }
+}
+
+/// A host's adapter as its `adapter.json` (the Claude Code plugin's for Claude Code), or `None` for a host with no adapter.
+pub fn adapter_json(host: &str) -> Option<String> {
+    adapter(host).map(|(v, caps)| render_adapter(host, v, &caps))
+}
+
+/// Whether a live check showed this host loading and running a generated worker file (spec 110 §8): Claude Code and Copilot CLI did;
+/// Codex did not (its project agent folder is not read in an untrusted project), and Antigravity and Gemini CLI were not shown.
+pub fn workers_verified(host: &str) -> bool {
+    matches!(host, "claude-code" | "copilot")
+}
+
+/// Whether a live check showed this host NOT loading a generated role file where one was expected (spec 110 §8, §10 G3b): Codex, whose
+/// `spawn_agent` started a generic agent. Its instruction section carries the spawn-prompt instruction instead of a worker sentence.
+pub fn workers_not_loading(host: &str) -> bool {
+    host == "codex"
 }
 
 /// The short hash of an adapter file's text, as a pack header and `delphi doctor` print it.
@@ -523,11 +589,15 @@ pub fn export_files_with(host: &str, version: &str, models: &BTreeMap<String, St
         // Other hosts load skills from their own folders; the export carries the file and the operator places it (spec 086 §5.1).
         _ => vec![
             ("mcp-config.txt".into(), snippet),
-            ("DELPHI.md".into(), skill.split_once("---\n\n").map(|(_, b)| b).unwrap_or(&skill).to_string()),
+            // Spec 110 §3 item 3: the instruction section, from the one source every host's copy is generated from.
+            ("DELPHI.md".into(), crate::host_install::delphi_md(host, version)),
             ("skills/delphi-council/SKILL.md".into(), council),
         ],
     };
-    if host != "codex" {
+    // Spec 110 X3 and §8: Copilot CLI runs Claude Code-shaped hook files and `delphi mcp --hook <event> --host copilot` answers
+    // them, but no live check showed their output reaching the model, so no hooks file is shipped for Copilot (nor for Codex,
+    // whose hooks need saved trust, or Gemini CLI, which could not be run).
+    if host != "codex" && AGENT_HOSTS.contains(&host) {
         files.extend(role_agent_files(host, models)?);
     }
     Ok(files)
@@ -767,7 +837,7 @@ mod tests {
         m.insert("architect".to_string(), "name-a".to_string());
         m.insert("red-team".to_string(), "name-b".to_string());
         let mut v = Vec::new();
-        for h in HOSTS {
+        for h in AGENT_HOSTS {
             for (p, t) in role_agent_files(h, &m).unwrap() {
                 v.push((h.to_string(), p, t));
             }
@@ -827,7 +897,9 @@ mod tests {
     #[test]
     fn each_host_gets_a_worker_file_per_role_with_its_documented_name_and_no_widening() {
         let resolver = delphi_core::theme_names::ThemeResolver::default();
-        for h in HOSTS {
+        assert!(worker_file("gemini", "architect", &none()).unwrap_err().contains("no live check"), "Gemini CLI's agent files are not shipped");
+        assert!(role_agent_files("gemini", &none()).is_err() && export_files("gemini", "1.0.0").unwrap().iter().all(|(p, _)| !p.starts_with("agents")));
+        for h in AGENT_HOSTS {
             for (role, inherits) in WORKER_ROLES {
                 let (p, t) = worker_file(h, role, &none()).unwrap();
                 let want = match *h {
@@ -987,6 +1059,54 @@ mod tests {
         assert_eq!(w, vec![f.clone()]);
         assert_eq!(std::fs::read_to_string(dir.join("delphi-architect.toml.delphi-bak")).unwrap(), "mine");
         assert!(std::fs::read_to_string(&f).unwrap().contains("council_brief"));
+    }
+
+    // Spec 110 X1: one adapter per host a live check listed, every capability once, versioned and hashed; the Claude Code adapter's
+    // text (and so its hash) is unchanged; a host no check listed has none.
+    #[test]
+    fn each_live_checked_host_has_an_adapter_and_the_others_have_none() {
+        assert_eq!(adapter_json("claude-code").unwrap(), claude_code_adapter_json());
+        assert_eq!(adapter_hash(&claude_code_adapter_json()), "2817033d91b71f91", "the hash spec 110 §8.1 recorded for Claude Code");
+        for h in ["claude-code", "copilot", "codex"] {
+            let j: serde_json::Value = serde_json::from_str(&adapter_json(h).unwrap()).unwrap();
+            assert_eq!(j["host"].as_str(), Some(h));
+            assert_eq!(j["capabilities"].as_object().unwrap().len(), CAPABILITIES.len(), "{h}");
+            assert!(CAPABILITIES.iter().all(|c| j["capabilities"].get(c).is_some()), "{h}");
+        }
+        assert_eq!(adapter("copilot").unwrap().1.iter().find(|(c, _)| *c == "search_web").unwrap().1, None, "Copilot listed no web search tool");
+        assert_eq!(adapter("codex").unwrap().1.iter().find(|(c, _)| *c == "delegate").unwrap().1, Some("spawn_agent"));
+        assert!(adapter("agy").is_none() && adapter("gemini").is_none() && adapter_json("gemini").is_none());
+        assert!(HOSTS.contains(&"gemini") && HOSTS.contains(&"agy"), "Gemini CLI and Antigravity are two hosts");
+        assert!(workers_verified("claude-code") && workers_verified("copilot") && !workers_verified("codex") && !workers_verified("gemini"));
+        assert!(config_snippet("gemini").unwrap().contains("Gemini CLI") && !config_snippet("agy").unwrap().contains("Gemini"));
+    }
+
+    // Spec 110 X3: role files in each host's own terms. A read-only Copilot file names Copilot's read and search tools and Delphi's
+    // read tools (a Copilot file without a list gets every tool, §8.1); a read-only Codex worker reads through exec_command only.
+    #[test]
+    fn role_files_use_each_hosts_tool_names_and_never_widen() {
+        for (role, inherits) in WORKER_ROLES {
+            let (_, t) = worker_file("copilot", role, &none()).unwrap();
+            let tools = t.lines().find(|l| l.starts_with("tools: "));
+            assert_eq!(tools.is_none(), *inherits, "{role}");
+            if let Some(tools) = tools {
+                assert!(tools.starts_with("tools: [\"read\", \"search\", \"delphi/get_agent\""), "{role}: {tools}");
+                for wide in ["bash", "shell", "edit", "apply_patch", "task", "\"*\"", "propose", "council_submit"] {
+                    assert!(!tools.contains(wide), "{role}: {wide}");
+                }
+            }
+            let (_, c) = worker_file("codex", role, &none()).unwrap();
+            assert_eq!(c.contains("with `exec_command` only to read") && c.contains("no `apply_patch`"), !inherits, "{role}");
+        }
+        for r in COUNCIL_ROLES {
+            let (_, t) = role_agent_file("copilot", r, &none()).unwrap();
+            assert!(t.contains("tools: [\"read\", \"search\", \"delphi/council_brief\", \"delphi/council_submit\""), "{t}");
+        }
+        assert_eq!(worker_file("claude-code", "architect", &none()).unwrap().1, worker_file("claude-code", "architect", &none()).unwrap().1);
+        assert!(!worker_file("claude-code", "architect", &none()).unwrap().1.contains("exec_command"), "Claude Code's files are unchanged");
+        for h in ["copilot", "codex", "agy", "gemini"] {
+            assert!(!export_files(h, "1.0.0").unwrap().iter().any(|(p, _)| p.starts_with("hooks")), "{h}: no hooks file, none was shown reaching the model");
+        }
     }
 
     #[test]
