@@ -91,12 +91,18 @@
       "line": 148,
       "number": "12",
       "title": "Amendments from review (2026-11-13)"
+    },
+    {
+      "level": 2,
+      "line": 161,
+      "number": "13",
+      "title": "Follow-up: the console shows it, and a relayed Panel is held to its witness where a review is claimed (operator, 2026-11-14)"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/104-responsive-foreign-seats-jobs-progress-concurrency-standing-consent-and-a-four-call-panel.md",
-    "sha256": "a82071fdfc5732bade0bf2908c6a33764edb6d77384da0000842c775ed7d8a7a"
+    "sha256": "565de5e365c68e4b324160f612fb2f6e96b7a35d55119617dee68580c1d3c2b1"
   },
   "source_status_at_hash": {
     "line": {
@@ -109,7 +115,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-13, in a host session (\"approve all your plans and suggestions and go\"). The approval was given to the plan this spec carries out (workstream 6b, with the decisions of §9 as recommended) BEFORE this text was written; the operator has not read the text. Anything here that goes beyond that plan is listed in §10 and waits for the operator."
     },
-    "sha256": "a82071fdfc5732bade0bf2908c6a33764edb6d77384da0000842c775ed7d8a7a",
+    "sha256": "565de5e365c68e4b324160f612fb2f6e96b7a35d55119617dee68580c1d3c2b1",
     "word": "approved"
   },
   "spec": {

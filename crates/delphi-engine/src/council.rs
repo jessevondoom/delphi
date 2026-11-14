@@ -1358,7 +1358,7 @@ impl Engine {
             },
         };
         let synthesis = panel.verdict().unwrap_or("(The moderator wrote no verdict; the structured record above and below is complete.)").to_string();
-        let mut front = format!("venue: panel\nblind: {}\n{}", panel.blind, foreign.map(|(r, f)| format!("foreign_seat: {r}\nforeign_family: {f}\n")).unwrap_or_default());
+        let mut front = format!("venue: panel\ncouncil_id: {task_id}\nblind: {}\n{}", panel.blind, foreign.map(|(r, f)| format!("foreign_seat: {r}\nforeign_family: {f}\n")).unwrap_or_default());
         if panel.foreign_seats().len() > 1 {
             front.push_str(&format!("foreign_seats: {}\n", panel.foreign_seats().iter().map(|s| format!("{}={}", s.role, s.family)).collect::<Vec<_>>().join(", ")));
         }
@@ -1568,7 +1568,7 @@ impl Engine {
                 synthesis = t;
             }
         }
-        self.conclude(m, task_id, proposition, &plan, &stances, &round2, &round2_text, &decision, lens_plan.as_ref(), "venue: daemon\n", synthesis).await
+        self.conclude(m, task_id, proposition, &plan, &stances, &round2, &round2_text, &decision, lens_plan.as_ref(), &format!("venue: daemon\ncouncil_id: {task_id}\n"), synthesis).await
     }
 
     /// From the deterministic decision to the record: the steps that follow, the Council record on disk, the `council.verdict` event

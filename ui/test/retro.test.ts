@@ -8,7 +8,7 @@ const info = { roles: {} } as unknown as Info;
 
 function ctx(reply: (m: string, p: any) => any) {
   const out: string[] = []; const calls: any[] = []; let started = 0;
-  const c: Ctx = { cmd: { call: async (m: string, p: any) => { calls.push([m, p]); return reply(m, p); } } as any, mission: 'm1', info, state: () => initial(0), post: (t) => out.push(t), started: () => { started++; } };
+  const c: Ctx = { cmd: { call: async (m: string, p: any) => { if (m !== 'learn.health') calls.push([m, p]); /* the host-notes count of `/retro` (spec 104 G4) is not what these tests are about */ return reply(m, p); } } as any, mission: 'm1', info, state: () => initial(0), post: (t) => out.push(t), started: () => { started++; } };
   return { c, out, calls, started: () => started };
 }
 

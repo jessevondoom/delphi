@@ -85,7 +85,24 @@ const modeLabel = (mode: string): string => (mode === 'mission-auto' ? T.auto('a
 export const libraryCounter = (noted: number, review: number): string => [noted ? `+${noted} noted` : '', review ? `${review} to review` : ''].filter(Boolean).join(' · ');
 
 /** The daemon's `learn.health` answer: counts, and the daemon-stamped time of the oldest waiting item (ISO) when it has one. */
-export type Learn = { staged: number; review: number; oldest?: string };
+export type Learn = { staged: number; review: number; oldest?: string; /** Host notes waiting (`learn.health`'s `host_notes`, spec 108 M2); a subset of the staged ones. */ hostNotes?: number };
+
+/** What waits for `delphi learn keep`: the count and the command, or nothing at zero (spec 104 §13 G4). */
+export const hostNotesWaiting = (n: number | undefined): string => (n && n > 0 ? `${n} host note${n === 1 ? '' : 's'} waiting (delphi learn keep)` : '');
+
+/** The daemon's `mcp.get` standing consent (`[access] standing_foreign_tokens`) and what seats used and reserved under it. */
+export type Standing = { standing_foreign_tokens: number; used_24h?: number; settled_24h?: number; reserved?: number };
+
+/**
+ * The `/mcp` lines for the standing consent (spec 104 §13 G4), all numbers from the daemon. At zero it says plainly that every foreign
+ * seat asks the operator first; above zero it gives the amount, what seats used in the last 24 hours and what running seats have reserved.
+ */
+export const standingLines = (s: Standing | undefined): string[] => {
+  if (!s || typeof s.standing_foreign_tokens !== 'number') return [];
+  const n = (x: number | undefined) => (Number.isFinite(x) ? String(x) : '0');
+  if (s.standing_foreign_tokens <= 0) return ['standing consent: 0 tokens, so every foreign seat asks you first ([access] standing_foreign_tokens)'];
+  return [`standing consent: ${s.standing_foreign_tokens} tokens in 24 hours ([access] standing_foreign_tokens) · used in the last 24 hours: ${n(s.settled_24h ?? s.used_24h)} · reserved by seats still running: ${n(s.reserved)}`];
+};
 
 /**
  * `learn: 3 staged · 1 to review · oldest 6d` (`specs/083` §4): counts and an age, nothing else. Empty when nothing is staged and
@@ -93,10 +110,10 @@ export type Learn = { staged: number; review: number; oldest?: string };
  * `now` (the model's clock), and is left out when that timestamp is absent or unreadable.
  */
 export const learnLine = (l: Learn | undefined, now: number): string => {
-  if (!l || (l.staged <= 0 && l.review <= 0)) return '';
+  if (!l || (l.staged <= 0 && l.review <= 0 && !(l.hostNotes && l.hostNotes > 0))) return '';
   const t = l.oldest ? Date.parse(l.oldest) : NaN;
   const age = Number.isFinite(t) && now > 0 ? `oldest ${Math.max(0, Math.floor((now - t) / 86_400_000))}d` : '';
-  return 'learn: ' + [l.staged > 0 ? `${l.staged} staged` : '', l.review > 0 ? `${l.review} to review` : '', age].filter(Boolean).join(' · ');
+  return 'learn: ' + [l.staged > 0 ? `${l.staged} staged` : '', l.review > 0 ? `${l.review} to review` : '', hostNotesWaiting(l.hostNotes), age].filter(Boolean).join(' · ');
 };
 
 export function footer(m: Model, w: number): string {

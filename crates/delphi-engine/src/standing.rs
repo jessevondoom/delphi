@@ -53,6 +53,16 @@ pub fn used(ws_dir: &Path, now: i64) -> u64 {
     load(ws_dir, now).iter().map(|e| e.tokens).sum()
 }
 
+/// The same sum in two parts for the console: the tokens seats have really used (settled) in the last 24 hours, and the ceilings
+/// still reserved by seats that are running. `used` is their total.
+pub fn split(ws_dir: &Path, now: i64) -> (u64, u64) {
+    let _g = GATE.lock().unwrap_or_else(|e| e.into_inner());
+    let list = load(ws_dir, now);
+    let reserved: u64 = list.iter().filter(|e| e.reserved).map(|e| e.tokens).sum();
+    let settled: u64 = list.iter().filter(|e| !e.reserved).map(|e| e.tokens).sum();
+    (settled, reserved)
+}
+
 /// Reserve `ceiling` tokens for the seat `id` under the standing amount `cap`, in one step. `Ok(used)` with the sum now (this seat
 /// included); `Err(used)` with the sum before it when the seat does not fit, and then nothing is recorded. A ledger that cannot be
 /// written refuses (`Err`), so a seat never runs on a reservation that was not kept.
@@ -97,6 +107,7 @@ mod tests {
         assert_eq!(used(d.path(), 1_000), 200);
         settle(d.path(), "a", 30, 1_001);
         assert_eq!(used(d.path(), 1_001), 130, "the ceiling is replaced by what the seat used");
+        assert_eq!(split(d.path(), 1_001), (30, 100), "what a seat used, and what a running seat has reserved");
         assert_eq!(reserve(d.path(), "c", 100, 250, 1_002), Ok(230));
         assert_eq!(used(d.path(), 1_000 + WINDOW_SECS + 5), 0, "the sum reaches back 24 hours");
     }

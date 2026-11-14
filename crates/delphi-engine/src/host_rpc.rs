@@ -933,6 +933,11 @@ pub fn ruling_card(v: &Value, tokens: u64) -> String {
     let text = |x: &Value| x.as_str().unwrap_or("").trim().to_string();
     let mut s = String::new();
     let homog = r["homogeneous"].as_bool().unwrap_or(false);
+    if v["venue"] == "panel" && v["counts_as_independent_review"] == false {
+        // Spec 104 section 13 G5: a Panel that does not count as an independent review says so first; one that counts, and every daemon Council, say nothing extra.
+        s.push_str(crate::council_panel::NOT_INDEPENDENT_REVIEW);
+        s.push_str("\n\n");
+    }
     if v["venue"] == "panel" {
         // A Panel's seats were run by the host: Delphi held the barrier and the rules, the rest is the host's word (spec 086 section 4.2).
         let models: std::collections::BTreeSet<&str> = r["seat_positions"].as_array().into_iter().flatten().filter_map(|p| p["model"].as_str()).collect();
