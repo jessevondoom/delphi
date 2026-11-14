@@ -204,9 +204,13 @@ pub fn plan(host: &str, root: &Path, version: &str, launch: &str, models: &BTree
     }
     let (add_server, remove_server) = match host {
         "codex" => {
-            // X3: the seats and workers, in Codex's agent folder under the `delphi-` prefix (spec 110 §3 item 2).
-            for (rel, text) in crate::mcp_hosts::role_agent_files("codex", models)? {
-                files.push((root.join("agents").join(rel), text));
+            // X3: the seats and workers, in Codex's agent folder under the `delphi-` prefix (spec 110 §3 item 2), only once a live
+            // check shows Codex loading them; the probe did not (§8.1), so today they are left out (`delphi mcp --install codex
+            // --agents` still writes them on request).
+            if crate::mcp_hosts::workers_verified("codex") {
+                for (rel, text) in crate::mcp_hosts::role_agent_files("codex", models)? {
+                    files.push((root.join("agents").join(rel), text));
+                }
             }
             (Some(vec!["codex".into(), "mcp".into(), "add".into(), "delphi".into(), "--".into(), launch.into(), "mcp".into()]), Some(vec!["codex".into(), "mcp".into(), "remove".into(), "delphi".into()]))
         }
@@ -245,7 +249,7 @@ pub fn render(plan: &Plan) -> String {
         o.push_str(block);
     }
     if !crate::mcp_hosts::workers_verified(&plan.host) {
-        o.push_str("Not shipped as working: this host's worker and seat files did not load in the live check (spec 110 §8); they are written for you to try, and the instruction section does not offer them.\n");
+        o.push_str("Left out: this host's seat and worker files, which no live check showed loading (spec 110 §8); the instruction section does not offer them.\n");
     }
     if plan.host == "gemini" {
         o.push_str("Unverified: Gemini CLI could not be run in the live check (spec 110 §8), so this extension is untested on a live host.\n");
@@ -381,6 +385,9 @@ pub fn check(host: &str, root: &Path, version: &str) -> Vec<(&'static str, Statu
     };
     out.push(("instruction section", section.0, section.1));
     let roles = match host {
+        "codex" if !crate::mcp_hosts::workers_verified("codex") => {
+            (Status::Absent, "not installed: Codex did not load a generated agent file in the live check (`delphi mcp --install codex --agents` writes them on request)".to_string())
+        }
         "codex" => {
             let files = crate::mcp_hosts::role_agent_files("codex", &BTreeMap::new()).unwrap_or_default();
             let states: Vec<Status> = files.iter().map(|(rel, text)| state_of(&root.join("agents").join(rel), text)).collect();
@@ -476,9 +483,9 @@ mod tests {
         let p = plan("codex", &root, "1.0.0", "/usr/local/bin/delphi", &BTreeMap::new()).unwrap();
         assert_eq!(p.add_server.as_ref().unwrap().join(" "), "codex mcp add delphi -- /usr/local/bin/delphi mcp");
         assert!(p.files.iter().all(|f| is_owned("codex", &root, &f.path)));
-        assert!(p.files.iter().any(|f| f.path.ends_with("agents/delphi-architect-worker.toml")));
+        assert!(!p.files.iter().any(|f| f.path.starts_with(root.join("agents"))), "X3: Codex's agent files are left out until a live check shows them loading");
         let shown = render(&p);
-        assert!(shown.contains("nothing has been run or written") && shown.contains("codex mcp add delphi") && shown.contains(BEGIN), "{shown}");
+        assert!(shown.contains("nothing has been run or written") && shown.contains("codex mcp add delphi") && shown.contains(BEGIN) && shown.contains("Left out"), "{shown}");
         let (w, s) = write_owned(&p).unwrap();
         assert_eq!((w.len(), s.len()), (p.files.len(), 0));
         assert_eq!(std::fs::read_to_string(root.join("AGENTS.md")).unwrap(), "# My rules\n", "the instruction file is not written without the yes");
@@ -486,12 +493,12 @@ mod tests {
         assert!(apply_block(&root.join("AGENTS.md"), &p.instruction.as_ref().unwrap().2).unwrap());
         let c = check("codex", &root, "1.0.0");
         let st = |item: &str| c.iter().find(|(i, _, _)| *i == item).unwrap().1;
-        assert_eq!((st("server"), st("instruction section"), st("role files"), st("hooks")), (Status::Absent, Status::Current, Status::Current, Status::Absent));
+        assert_eq!((st("server"), st("instruction section"), st("role files"), st("hooks")), (Status::Absent, Status::Current, Status::Absent, Status::Absent));
         assert_eq!(check("codex", &root, "2.0.0").iter().find(|(i, _, _)| *i == "instruction section").unwrap().1, Status::Stale);
         std::fs::write(root.join("config.toml"), "[mcp_servers.delphi]\ncommand = \"/usr/local/bin/delphi\"\nargs = [\"mcp\"]\n").unwrap();
         assert_eq!(check("codex", &root, "1.0.0")[0].1, Status::Installed);
         // A file the operator edited is kept and named; the rest goes.
-        let edited = root.join("agents/delphi-builder.toml");
+        let edited = root.join("delphi/adapter.json");
         std::fs::write(&edited, "edited").unwrap();
         let (removed, kept) = remove_owned("codex", &root);
         assert_eq!(kept, vec![edited.clone()]);
@@ -499,23 +506,23 @@ mod tests {
         assert!(remove_block(&root.join("AGENTS.md")).unwrap());
         assert_eq!(std::fs::read_to_string(root.join("AGENTS.md")).unwrap(), "# My rules\n");
         assert_eq!(std::fs::read_to_string(root.join("agents/mine.toml")).unwrap(), "mine");
-        assert!(!root.join("delphi").exists());
+        assert!(root.join("delphi").exists() && !root.join("delphi/DELPHI.md").exists(), "only the edited file stays");
     }
 
     #[test]
     fn an_install_never_overwrites_a_file_it_did_not_write() {
         let t = tempfile::tempdir().unwrap();
         let root = t.path().join(".codex");
-        std::fs::create_dir_all(root.join("agents")).unwrap();
-        std::fs::write(root.join("agents/delphi-architect.toml"), "the operator's own").unwrap();
+        std::fs::create_dir_all(root.join("delphi")).unwrap();
+        std::fs::write(root.join("delphi/adapter.json"), "the operator's own").unwrap();
         let p = plan("codex", &root, "1.0.0", "/usr/local/bin/delphi", &BTreeMap::new()).unwrap();
         let (_, skipped) = write_owned(&p).unwrap();
-        assert_eq!(skipped, vec![root.join("agents/delphi-architect.toml")]);
-        assert_eq!(std::fs::read_to_string(root.join("agents/delphi-architect.toml")).unwrap(), "the operator's own");
+        assert_eq!(skipped, vec![root.join("delphi/adapter.json")]);
+        assert_eq!(std::fs::read_to_string(root.join("delphi/adapter.json")).unwrap(), "the operator's own");
         // A newer release replaces what an older install wrote.
         let p2 = plan("codex", &root, "2.0.0", "/usr/local/bin/delphi", &BTreeMap::new()).unwrap();
         let (w2, s2) = write_owned(&p2).unwrap();
-        assert!(w2.contains(&root.join("delphi/DELPHI.md")) && s2 == vec![root.join("agents/delphi-architect.toml")]);
+        assert!(w2.contains(&root.join("delphi/DELPHI.md")) && s2 == vec![root.join("delphi/adapter.json")]);
     }
 
     #[test]

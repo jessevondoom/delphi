@@ -105,7 +105,9 @@ pub fn read_input(r: impl Read) -> Option<Input> {
 /// What the host should add to its model's context, in the host's own format, or `None` for nothing. Only Claude Code's
 /// format is built here; the other hosts are `specs/110`'s.
 pub fn host_output(host: &str, event: &str, text: &str) -> Option<String> {
-    if text.is_empty() || host != "claude-code" {
+    // Spec 110 X3: Copilot CLI runs Claude Code-shaped hook files and its events fire; no live check showed it giving this output
+    // to the model (spec 110 §8), so no Copilot hooks file is installed.
+    if text.is_empty() || !matches!(host, "claude-code" | "copilot") {
         return None;
     }
     let name = match event {
@@ -799,7 +801,10 @@ mod tests {
         assert_eq!(p["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit");
         assert!(host_output("claude-code", "session-start", "").is_none());
         assert!(host_output("claude-code", "session-end", "x").is_none(), "the end hook adds no context");
-        assert!(host_output("copilot", "session-start", "x").is_none(), "other hosts are spec 110's");
+        assert_eq!(host_output("copilot", "session-start", "hi"), host_output("claude-code", "session-start", "hi"), "Copilot runs the Claude Code shape (spec 110 X3)");
+        for h in ["codex", "gemini", "agy"] {
+            assert!(host_output(h, "session-start", "x").is_none(), "{h}: no hook a live check showed firing");
+        }
     }
 
     #[test]

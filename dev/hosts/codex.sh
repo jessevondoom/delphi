@@ -1,7 +1,8 @@
 #!/bin/sh
 # Spec 110 X4: a live check of Delphi in Codex CLI. Usage:
 #   dev/hosts/codex.sh                         probe: server by -c overrides, a worker file in the scratch project's .codex/agents
-#   DELPHI_PROBE_MODE=final dev/hosts/codex.sh final: the same, with the instruction section delphi connect codex writes
+#   DELPHI_PROBE_MODE=final dev/hosts/codex.sh final: the same, with the instruction section `delphi connect codex` writes,
+#                                              placed in the scratch project's AGENTS.md (never Codex's own)
 #
 # LIMIT (spec 110 A1): the Delphi server runs against a temporary Delphi home; Codex itself runs as the operator with the
 # operator's sign-in (CODEX_HOME is the operator's: Codex reads its credentials there and a scratch copy would mean copying
@@ -21,8 +22,8 @@ WORKER=delphi-architect-worker
 mkdir -p "$P/.codex/agents"
 (cd "$P" && "$DELPHI_BIN" mcp --install codex --agents --project --yes --home "$H" >"$LOG/install-agents.txt" 2>&1 </dev/null) || true
 if [ "$MODE" = final ]; then
-    hooks_on_in_temp_home
-    [ -n "${DELPHI_CODEX_INSTRUCTIONS:-}" ] && cat "$DELPHI_CODEX_INSTRUCTIONS" >>"$P/AGENTS.md"
+    # The instruction section `delphi connect codex` puts in Codex's AGENTS.md, here in the scratch project's AGENTS.md instead.
+    cat "$S/export/DELPHI.md" >>"$P/AGENTS.md"
 fi
 
 run() {

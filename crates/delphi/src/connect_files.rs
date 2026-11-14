@@ -236,12 +236,12 @@ mod tests {
         std::fs::write(root.join("AGENTS.md"), "# Mine\n").unwrap();
         let plan = hi::plan("codex", &root, "1.0.0", "/usr/local/bin/delphi", &BTreeMap::new()).unwrap();
         hi::write_owned(&plan).unwrap();
-        assert!(root.join("delphi/DELPHI.md").is_file() && root.join("agents/delphi-architect-worker.toml").is_file());
+        assert!(root.join("delphi/DELPHI.md").is_file() && root.join("delphi/adapter.json").is_file() && !root.join("agents").exists());
         assert_eq!(std::fs::read_to_string(root.join("AGENTS.md")).unwrap(), "# Mine\n");
         assert!(!root.join("config.toml").exists(), "no host command ran");
         let code = remove_cmd("codex", &root, t.path(), "1.0.0", false);
         assert_eq!(code, 0);
-        assert!(!root.join("delphi").exists() && !root.join("agents/delphi-architect-worker.toml").exists());
+        assert!(!root.join("delphi").exists());
         assert_eq!(std::fs::read_to_string(root.join("AGENTS.md")).unwrap(), "# Mine\n");
     }
 

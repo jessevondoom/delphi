@@ -279,6 +279,18 @@ summarize() {
     row "call 3: Delphi tools called" "$(report_py r3 calls)"
     row "progress notification" "$(report_py all progress); not testable: every waiting tool needs the daemon, which a check may not start"
     row "session markers in the temporary home" "$(ls "$WS/local/host-sessions" 2>/dev/null | tr '\n' ' ' || true)"
+    row "session-end markers: counts" "$(python3 -I - "$WS/local/host-sessions" <<'PY'
+import glob, json, os, sys
+out = []
+for f in sorted(glob.glob(os.path.join(sys.argv[1], "*.json"))):
+    m = json.load(open(f))
+    if "prompts" in m:
+        out.append("%s: prompts %s, delphi_calls %s, roles %s, transcript read" % (m.get("tool"), m["prompts"], json.dumps(m.get("delphi_calls")), m.get("roles_adopted")))
+    else:
+        out.append("%s: no counts (transcript not read)" % m.get("tool"))
+print("; ".join(out) or "none")
+PY
+)"
     row "model calls" "$CALLS"
     echo
     echo "Commands (the prompts are the fixed texts in dev/hosts/lib.sh; <scratch> is a new temporary directory):"

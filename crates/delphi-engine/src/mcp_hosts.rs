@@ -314,7 +314,8 @@ pub fn role_agent_file(host: &str, role: &str, models: &BTreeMap<String, String>
         }
         "copilot" => {
             let m = model.map(|m| format!("model: {}\n", quoted(&m))).unwrap_or_default();
-            (format!("agents/delphi-{role}.agent.md").into(), format!("---\nname: delphi-{role}\ndescription: {desc}\n{m}---\n\n{body}"))
+            let tools = copilot_tools(&["council_brief", "council_submit", "get_agent", "search_memory", "kb_retrieve"]);
+            (format!("agents/delphi-{role}.agent.md").into(), format!("---\nname: delphi-{role}\ndescription: {desc}\n{m}{tools}---\n\n{body}"))
         }
         "agy" => {
             let m = model.map(|m| format!("model: {m}\n")).unwrap_or_default();
@@ -345,6 +346,14 @@ pub fn role_agent_files(host: &str, models: &BTreeMap<String, String>) -> Result
 /// Delphi's read-only tools a read-only worker may call (spec 106 A4), beside the seats' read-only built-ins.
 const WORKER_READ_TOOLS: &[&str] = &["get_agent", "get_skill", "list_roles", "list_skills", "specs_status", "specs_show", "specs_list", "search_project", "search_memory", "query_memory", "kb_retrieve", "search_kb"];
 
+/// The `tools:` line of a read-only Copilot CLI file (spec 110 X3): Copilot's read and search tools and the named Delphi tools as
+/// `delphi/<tool>`, never its shell, edit or delegate tools.
+fn copilot_tools(delphi: &[&str]) -> String {
+    let mut all: Vec<String> = vec!["\"read\"".into(), "\"search\"".into()];
+    all.extend(delphi.iter().map(|t| format!("\"delphi/{t}\"")));
+    format!("tools: [{}]\n", all.join(", "))
+}
+
 /// The tool list of a read-only Claude Code worker: the seats' read-only built-ins and Delphi's read tools, under both server names.
 fn claude_worker_tools() -> String {
     let mut all: Vec<String> = vec!["Read".into(), "Grep".into(), "Glob".into()];
@@ -357,12 +366,15 @@ fn worker_description(role: &str) -> String {
     format!("Delphi {role} ({}). Use when the user addresses @{role} or its themed name, or when work fits this role and deserves its own context.", role_line(role).unwrap_or(role))
 }
 
-/// The worker's short wrapper (§4 item 2). No pack text is inlined, so a stale file cannot freeze old instructions.
-fn worker_body(role: &str, inherits_tools: bool) -> String {
+/// The worker's short wrapper (§4 item 2). No pack text is inlined, so a stale file cannot freeze old instructions. A read-only worker
+/// on Codex is told to read through `exec_command`, the only tool its live check listed for reading (spec 110 X3).
+fn worker_body(role: &str, inherits_tools: bool, host: &str) -> String {
     let scope = if inherits_tools {
-        "Do the task you were given, as this role, inside your host's permissions."
+        "Do the task you were given, as this role, inside your host's permissions.".to_string()
+    } else if host == "codex" {
+        "Do the task you were given, as this role. You work read-only: read and search files with `exec_command` only to read (for example `cat`, `rg`, `ls`), and change nothing: no `apply_patch`, no command that writes a file or changes state; say what should change instead.".to_string()
     } else {
-        "Do the task you were given, as this role. You work read-only: do not change files or run commands; say what should change instead."
+        "Do the task you were given, as this role. You work read-only: do not change files or run commands; say what should change instead.".to_string()
     };
     format!("{DISCLAIMER}
 
@@ -387,15 +399,17 @@ pub fn worker_file(host: &str, role: &str, models: &BTreeMap<String, String>) ->
     };
     let model = if matches!(host, "copilot" | "codex") { models.get(role).cloned() } else { None };
     let desc = quoted(&worker_description(role));
-    let body = worker_body(role, *inherits);
+    let body = worker_body(role, *inherits, host);
     Ok(match host {
         "claude-code" => {
             let tools = if *inherits { String::new() } else { format!("tools: {}\n", claude_worker_tools()) };
             (format!("agents/{role}-worker.md").into(), format!("---\nname: {role}-worker\ndescription: {desc}\n{tools}---\n\n{body}"))
         }
         "copilot" => {
+            // Spec 110 §8.1: a Copilot agent file with no tool list gets every tool, so a read-only worker names its tools (A4 of 106).
             let m = model.map(|m| format!("model: {}\n", quoted(&m))).unwrap_or_default();
-            (format!("agents/delphi-{role}-worker.agent.md").into(), format!("---\nname: delphi-{role}-worker\ndescription: {desc}\n{m}---\n\n{body}"))
+            let tools = if *inherits { String::new() } else { copilot_tools(WORKER_READ_TOOLS) };
+            (format!("agents/delphi-{role}-worker.agent.md").into(), format!("---\nname: delphi-{role}-worker\ndescription: {desc}\n{m}{tools}---\n\n{body}"))
         }
         "agy" => (
             format!("agents/delphi-{role}-worker.md").into(),
@@ -572,6 +586,9 @@ pub fn export_files_with(host: &str, version: &str, models: &BTreeMap<String, St
             ("skills/delphi-council/SKILL.md".into(), council),
         ],
     };
+    // Spec 110 X3 and §8: Copilot CLI runs Claude Code-shaped hook files and `delphi mcp --hook <event> --host copilot` answers
+    // them, but no live check showed their output reaching the model, so no hooks file is shipped for Copilot (nor for Codex,
+    // whose hooks need saved trust, or Gemini CLI, which could not be run).
     if host != "codex" && AGENT_HOSTS.contains(&host) {
         files.extend(role_agent_files(host, models)?);
     }
@@ -1054,6 +1071,34 @@ mod tests {
         assert!(HOSTS.contains(&"gemini") && HOSTS.contains(&"agy"), "Gemini CLI and Antigravity are two hosts");
         assert!(workers_verified("claude-code") && workers_verified("copilot") && !workers_verified("codex") && !workers_verified("gemini"));
         assert!(config_snippet("gemini").unwrap().contains("Gemini CLI") && !config_snippet("agy").unwrap().contains("Gemini"));
+    }
+
+    // Spec 110 X3: role files in each host's own terms. A read-only Copilot file names Copilot's read and search tools and Delphi's
+    // read tools (a Copilot file without a list gets every tool, §8.1); a read-only Codex worker reads through exec_command only.
+    #[test]
+    fn role_files_use_each_hosts_tool_names_and_never_widen() {
+        for (role, inherits) in WORKER_ROLES {
+            let (_, t) = worker_file("copilot", role, &none()).unwrap();
+            let tools = t.lines().find(|l| l.starts_with("tools: "));
+            assert_eq!(tools.is_none(), *inherits, "{role}");
+            if let Some(tools) = tools {
+                assert!(tools.starts_with("tools: [\"read\", \"search\", \"delphi/get_agent\""), "{role}: {tools}");
+                for wide in ["bash", "shell", "edit", "apply_patch", "task", "\"*\"", "propose", "council_submit"] {
+                    assert!(!tools.contains(wide), "{role}: {wide}");
+                }
+            }
+            let (_, c) = worker_file("codex", role, &none()).unwrap();
+            assert_eq!(c.contains("with `exec_command` only to read") && c.contains("no `apply_patch`"), !inherits, "{role}");
+        }
+        for r in COUNCIL_ROLES {
+            let (_, t) = role_agent_file("copilot", r, &none()).unwrap();
+            assert!(t.contains("tools: [\"read\", \"search\", \"delphi/council_brief\", \"delphi/council_submit\""), "{t}");
+        }
+        assert_eq!(worker_file("claude-code", "architect", &none()).unwrap().1, worker_file("claude-code", "architect", &none()).unwrap().1);
+        assert!(!worker_file("claude-code", "architect", &none()).unwrap().1.contains("exec_command"), "Claude Code's files are unchanged");
+        for h in ["copilot", "codex", "agy", "gemini"] {
+            assert!(!export_files(h, "1.0.0").unwrap().iter().any(|(p, _)| p.starts_with("hooks")), "{h}: no hooks file, none was shown reaching the model");
+        }
     }
 
     #[test]

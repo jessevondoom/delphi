@@ -2,7 +2,8 @@
 # Spec 110 X4: a live check of Delphi in GitHub Copilot CLI. Usage:
 #   dev/hosts/copilot.sh                       probe: server by --additional-mcp-config, probe hooks and a worker in the scratch project
 #   DELPHI_PROBE_MODE=final dev/hosts/copilot.sh
-#                                              final: the files `delphi connect copilot` installs, from a fake home, by --plugin-dir
+#                                              final: what `delphi plugin export --host copilot` writes (agents, hooks,
+#                                              DELPHI.md), placed in the scratch project's .github/ and AGENTS.md
 #
 # LIMIT (spec 110 A1): the Delphi server and hooks run against a temporary Delphi home; Copilot CLI itself runs as the operator
 # with the operator's sign-in (its own home keeps its session bookkeeping). It is configured only by flags and the scratch
@@ -26,13 +27,16 @@ write_instruction_canary AGENTS.md
 write_instruction_canary .github/copilot-instructions.md
 EXTRA=""
 WORKER=delphi-architect-worker
+"$DELPHI_BIN" plugin export --host copilot --out "$S/export" >/dev/null
+mkdir -p "$P/.github/agents" "$P/.github/hooks"
 if [ "$MODE" = final ]; then
+    # What `delphi plugin export --host copilot` writes, placed where Copilot reads a project's files: the seats and workers,
+    # the session hooks (`delphi mcp --hook <event> --host copilot`, through the wrapper), and DELPHI.md after the codeword.
     hooks_on_in_temp_home
-    [ -n "${DELPHI_COPILOT_PLUGIN:-}" ] || die "final mode: set DELPHI_COPILOT_PLUGIN to the plugin folder delphi connect copilot wrote"
-    EXTRA="--plugin-dir $DELPHI_COPILOT_PLUGIN"
+    cp "$S"/export/agents/*.agent.md "$P/.github/agents/"
+    [ -f "$S/export/hooks/delphi.json" ] && cp "$S/export/hooks/delphi.json" "$P/.github/hooks/"
+    cat "$S/export/DELPHI.md" >>"$P/AGENTS.md"
 else
-    "$DELPHI_BIN" plugin export --host copilot --out "$S/export" >/dev/null
-    mkdir -p "$P/.github/agents" "$P/.github/hooks"
     cp "$S/export/agents/delphi-architect-worker.agent.md" "$P/.github/agents/"
     # Both hook shapes: Copilot's documented one (camelCase events, `bash`) and Claude Code's (PascalCase, `command`).
     cat >"$P/.github/hooks/probe.json" <<EOF
