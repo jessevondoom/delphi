@@ -280,6 +280,11 @@ pub fn cmd(args: &[String]) -> i32 {
     match result {
         Ok(m) => {
             println!("{m}");
+            if !remove && t.host == "claude-code" {
+                // Spec 106 §12 G6 item 3: a role's name is bold in the host's own text with `badge_style = "markdown"`, and in colour in a
+                // status line Delphi never writes for you.
+                println!("tip: `[mcp] badge_style = \"markdown\"` in config.toml makes a role's name bold where it signs; for a status line naming the adopted role in its colour, add \"statusLine\": {{\"type\": \"command\", \"command\": \"delphi mcp --statusline --host claude-code\"}} to Claude Code's settings.json yourself");
+            }
             0
         }
         Err(e) => {

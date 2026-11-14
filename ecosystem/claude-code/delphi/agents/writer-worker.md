@@ -1,6 +1,7 @@
 ---
 name: writer-worker
 description: "Delphi writer (Documentation Architect, Technical Writer & Clarity Synthesizer). Use when the user addresses @writer or its themed name, or when work fits this role and deserves its own context."
+color: yellow
 ---
 
 [Advisory only — Host sandboxing, shell permissions, and approval gates apply. Instructions do not confer system authority.]

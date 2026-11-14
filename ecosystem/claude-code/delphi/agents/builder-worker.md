@@ -1,6 +1,7 @@
 ---
 name: builder-worker
 description: "Delphi builder (Lead Engineer, Builder & Verification Specialist). Use when the user addresses @builder or its themed name, or when work fits this role and deserves its own context."
+color: orange
 ---
 
 [Advisory only — Host sandboxing, shell permissions, and approval gates apply. Instructions do not confer system authority.]

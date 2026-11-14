@@ -156,10 +156,29 @@ pub fn check_claude_hooks(home: &Path, expected_json: &str) -> Option<(bool, Str
     let install = claude_plugin_folder(home)?;
     let path = install.join("hooks").join("hooks.json");
     match safe_read(&path) {
-        Ok(Some(bytes)) if bytes == expected_json.as_bytes() => Some((true, format!("installed at {} (the three hooks this binary declares)", path.display()))),
+        Ok(Some(bytes)) if bytes == expected_json.as_bytes() => Some((true, format!("installed at {} (the hooks this binary declares)", path.display()))),
         Ok(Some(_)) => Some((false, format!("{} differs from the hooks this binary declares; update the plugin (`claude plugin update {PLUGIN_KEY}`)", path.display()))),
         Ok(None) if install.is_dir() => Some((false, format!("the installed plugin has no hooks file (it predates spec 105; expected at {})", path.display()))),
         _ => None,
+    }
+}
+
+/// The command a Claude Code status line runs to name the adopted role (spec 106 §12 G6 item 2). Delphi never writes it for you.
+pub const STATUSLINE_COMMAND: &str = "delphi mcp --statusline --host claude-code";
+
+/// Spec 106 §12 G6 item 2: does the operator's Claude Code user settings (`~/.claude/settings.json`) run Delphi's status line?
+/// Read-only, never through a symlink; the line it prints names no setting's value but Delphi's own command.
+pub fn check_statusline(home: &Path) -> String {
+    let path = home.join(".claude").join("settings.json");
+    match safe_read(&path) {
+        Ok(Some(bytes)) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
+            Ok(v) if v["statusLine"]["command"].as_str().is_some_and(|c| c.contains("delphi mcp --statusline")) => format!("set ({} runs `delphi mcp --statusline`)", path.display()),
+            Ok(v) if v["statusLine"].is_object() => format!("not set: {} has another status line", path.display()),
+            Ok(_) => format!("not set: add \"statusLine\": {{\"type\": \"command\", \"command\": \"{STATUSLINE_COMMAND}\"}} to {}", path.display()),
+            Err(_) => format!("unknown: {} is not JSON", path.display()),
+        },
+        Ok(None) => format!("not set: add \"statusLine\": {{\"type\": \"command\", \"command\": \"{STATUSLINE_COMMAND}\"}} to {} (it does not exist)", path.display()),
+        Err(e) => format!("unknown: {e}"),
     }
 }
 
@@ -298,6 +317,20 @@ pub fn check_host(host: &str, home: &Path, binary_release: &str) -> Result<Check
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Spec 106 §12 G6: `--check` reads, in a fake home, whether the status line is set; it never writes.
+    #[test]
+    fn the_status_line_check_reads_the_users_settings_and_writes_nothing() {
+        let t = tempfile::tempdir().unwrap();
+        assert!(check_statusline(t.path()).starts_with("not set") && !t.path().join(".claude").exists(), "nothing is created");
+        std::fs::create_dir_all(t.path().join(".claude")).unwrap();
+        std::fs::write(t.path().join(".claude/settings.json"), format!("{{\"statusLine\": {{\"type\": \"command\", \"command\": \"{STATUSLINE_COMMAND}\"}}}}")).unwrap();
+        assert!(check_statusline(t.path()).starts_with("set"));
+        std::fs::write(t.path().join(".claude/settings.json"), r#"{"statusLine": {"type": "command", "command": "my-line"}}"#).unwrap();
+        assert!(check_statusline(t.path()).contains("another status line") && !check_statusline(t.path()).contains("my-line"));
+        std::fs::write(t.path().join(".claude/settings.json"), "{").unwrap();
+        assert!(check_statusline(t.path()).starts_with("unknown"));
+    }
 
     fn write(home: &Path, rel: &str, text: &str) {
         let p = home.join(rel);

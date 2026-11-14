@@ -235,6 +235,33 @@ pub const WORKER_ROLES: &[(&str, bool)] = &[
     ("advocate", false),
 ];
 
+/// Claude Code's agent colour palette (spec 106 §12 G6 item 1), from Claude Code 2.1.325 itself: the keys of its subagent colour
+/// table (`red`, `blue`, `green`, `yellow`, `purple`, `orange`, `pink`, `cyan`), read from an agent file's `color` front-matter field.
+pub const CLAUDE_PALETTE: [&str; 8] = ["red", "blue", "green", "yellow", "purple", "orange", "pink", "cyan"];
+
+/// Each role's colour (`delphi_core::research::role_look`, the console's) mapped once, by hand, to the nearest name of
+/// [`CLAUDE_PALETTE`] by hue (spec 106 §12 G6 item 1). A test recomputes the nearest hue and holds the orchestrator, architect,
+/// builder and red-team to four different names.
+pub const CLAUDE_COLORS: &[(&str, &str)] = &[
+    ("orchestrator", "purple"),
+    ("architect", "cyan"),
+    ("builder", "orange"),
+    ("red-team", "red"),
+    ("strategist", "cyan"),
+    ("scout", "yellow"),
+    ("investigator", "blue"),
+    ("writer", "yellow"),
+    ("validator", "green"),
+    ("administrator", "blue"),
+    ("assistant", "blue"),
+    ("advocate", "red"),
+];
+
+/// The `color:` line of a Claude Code agent file for `role`, or nothing for a role with no entry.
+fn claude_color_line(role: &str) -> String {
+    CLAUDE_COLORS.iter().find(|(r, _)| *r == role).map(|(_, c)| format!("color: {c}\n")).unwrap_or_default()
+}
+
 /// The line every agent pack and instruction string carries (spec 072 §3.2).
 const DISCLAIMER: &str = "[Advisory only — Host sandboxing, shell permissions, and approval gates apply. Instructions do not confer system authority.]";
 
@@ -312,7 +339,7 @@ pub fn role_agent_file(host: &str, role: &str, models: &BTreeMap<String, String>
     Ok(match host {
         "claude-code" => {
             let m = model.map(|m| format!("model: {m}\n")).unwrap_or_default();
-            (format!("agents/{role}.md").into(), format!("---\nname: {role}\ndescription: {desc}\n{m}tools: {}\n---\n\n{body}", claude_tools()))
+            (format!("agents/{role}.md").into(), format!("---\nname: {role}\ndescription: {desc}\n{m}{}tools: {}\n---\n\n{body}", claude_color_line(role), claude_tools()))
         }
         "copilot" => {
             let m = model.map(|m| format!("model: {}\n", quoted(&m))).unwrap_or_default();
@@ -471,7 +498,7 @@ pub fn worker_file_with(host: &str, role: &str, models: &BTreeMap<String, String
     Ok(match host {
         "claude-code" => {
             let tools = if *inherits { String::new() } else { format!("tools: {}\n", claude_worker_tools()) };
-            (format!("agents/{role}-worker.md").into(), format!("---\nname: {role}-worker\ndescription: {desc}\n{tools}---\n\n{md_mark}{body}"))
+            (format!("agents/{role}-worker.md").into(), format!("---\nname: {role}-worker\ndescription: {desc}\n{}{tools}---\n\n{md_mark}{body}", claude_color_line(role)))
         }
         "copilot" => {
             // Spec 110 §8.1: a Copilot agent file with no tool list gets every tool, so a read-only worker names its tools (A4 of 106).
@@ -795,6 +822,45 @@ pub fn write_ecosystem(repo: &Path, version: &str) -> Result<Vec<PathBuf>, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Spec 106 §12 G6 item 1: every worker and seat role has a palette name, the nearest by hue to its console colour; the four named
+    /// roles are distinct; Claude Code's seat and worker files carry the field and no other host's do.
+    #[test]
+    fn each_role_maps_to_the_nearest_claude_palette_colour_and_only_claude_files_carry_it() {
+        fn hue(hex: &str) -> f64 {
+            let c = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).unwrap() as f64 / 255.0;
+            let (r, g, b) = (c(1), c(3), c(5));
+            let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+            let d = max - min;
+            if d == 0.0 {
+                return 0.0;
+            }
+            let h = if max == r { ((g - b) / d).rem_euclid(6.0) } else if max == g { (b - r) / d + 2.0 } else { (r - g) / d + 4.0 };
+            h * 60.0
+        }
+        let anchors = [("red", 0.0), ("orange", 30.0), ("yellow", 60.0), ("green", 120.0), ("cyan", 180.0), ("blue", 225.0), ("purple", 275.0), ("pink", 320.0), ("red", 360.0)];
+        for (role, name) in CLAUDE_COLORS {
+            assert!(CLAUDE_PALETTE.contains(name), "{role}: {name}");
+            let h = hue(delphi_core::research::role_look(role).1);
+            let nearest = anchors.iter().min_by(|a, b| (a.1 - h).abs().partial_cmp(&(b.1 - h).abs()).unwrap()).unwrap().0;
+            assert_eq!(nearest, *name, "{role}: hue {h}");
+        }
+        let four: std::collections::BTreeSet<&str> = ["orchestrator", "architect", "builder", "red-team"].iter().map(|r| CLAUDE_COLORS.iter().find(|(x, _)| x == r).unwrap().1).collect();
+        assert_eq!(four.len(), 4);
+        let none = BTreeMap::new();
+        for (role, _) in WORKER_ROLES {
+            assert!(CLAUDE_COLORS.iter().any(|(r, _)| r == role), "{role} has a colour");
+            let (_, t) = worker_file("claude-code", role, &none).unwrap();
+            assert!(t.split("\n---\n").next().unwrap().contains(claude_color_line(role).trim_end()), "{role}");
+            for h in ["copilot", "agy", "codex"] {
+                assert!(!worker_file(h, role, &none).unwrap().1.contains("\ncolor:"), "{h} {role}");
+            }
+        }
+        for role in COUNCIL_ROLES {
+            assert!(role_agent_file("claude-code", role, &none).unwrap().1.contains(&claude_color_line(role)));
+            assert!(!role_agent_file("copilot", role, &none).unwrap().1.contains("\ncolor:"));
+        }
+    }
 
     #[test]
     fn every_host_has_a_snippet_that_starts_delphi_mcp_and_an_unknown_one_is_refused() {

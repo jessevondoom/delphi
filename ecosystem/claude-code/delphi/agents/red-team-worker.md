@@ -1,6 +1,7 @@
 ---
 name: red-team-worker
 description: "Delphi red-team (Red Team, Adversarial Critic, Threat Modeler & PR Security Auditor). Use when the user addresses @red-team or its themed name, or when work fits this role and deserves its own context."
+color: red
 tools: Read, Grep, Glob, mcp__plugin_delphi_delphi__get_agent, mcp__plugin_delphi_delphi__get_skill, mcp__plugin_delphi_delphi__list_roles, mcp__plugin_delphi_delphi__list_skills, mcp__plugin_delphi_delphi__specs_status, mcp__plugin_delphi_delphi__specs_show, mcp__plugin_delphi_delphi__specs_list, mcp__plugin_delphi_delphi__search_project, mcp__plugin_delphi_delphi__search_memory, mcp__plugin_delphi_delphi__query_memory, mcp__plugin_delphi_delphi__kb_retrieve, mcp__plugin_delphi_delphi__search_kb, mcp__delphi__get_agent, mcp__delphi__get_skill, mcp__delphi__list_roles, mcp__delphi__list_skills, mcp__delphi__specs_status, mcp__delphi__specs_show, mcp__delphi__specs_list, mcp__delphi__search_project, mcp__delphi__search_memory, mcp__delphi__query_memory, mcp__delphi__kb_retrieve, mcp__delphi__search_kb
 ---
 
