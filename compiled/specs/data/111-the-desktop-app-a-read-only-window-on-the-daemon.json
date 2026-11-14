@@ -88,15 +88,15 @@
     },
     {
       "level": 2,
-      "line": 139,
+      "line": 140,
       "number": "9",
-      "title": "Not verified (before building)"
+      "title": "Not verified"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/111-the-desktop-app-a-read-only-window-on-the-daemon.md",
-    "sha256": "7dd2dae789980d1bfd95591b3637b6e14f774b04b30cb6e3bde047e9a4a19047"
+    "sha256": "8955180562a04d58f0b46044d5d3605a38df74b97ad6a7f81ed51cac570bb789"
   },
   "source_status_at_hash": {
     "line": {
@@ -109,7 +109,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-14, in a host session: asked whether a spec could be written and built from on the plan, as specs 104 to 110 were, the operator answered \"your default assumptions all sounds correct. go\". The approval is to the plan this spec carries out; the operator has not read this text."
     },
-    "sha256": "7dd2dae789980d1bfd95591b3637b6e14f774b04b30cb6e3bde047e9a4a19047",
+    "sha256": "8955180562a04d58f0b46044d5d3605a38df74b97ad6a7f81ed51cac570bb789",
     "word": "approved"
   },
   "spec": {

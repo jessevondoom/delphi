@@ -17,6 +17,7 @@ Delphi is a team of AI agents for research, strategy and product work. The agent
 | run a task from a script or CI | [Headless runs and CI](guides/headless-and-ci.md) |
 | answer approval cards from my phone, or wake an agent later | [Away mode](guides/away-mode.md) |
 | use Delphi's roles, specs and memory from Claude Code, Copilot, Codex or agy | [Using Delphi from other tools](guides/using-delphi-from-other-tools.md) |
+| watch the team, a council, the knowledge base and what was produced in a window | [The desktop app](guides/desktop-app.md) |
 | share knowledge, skills and goals across a team | [Org bundles](guides/org-bundles.md) |
 | build a bundle with an agent and an operator | [Building a bundle with an operator](guides/building-a-bundle.md) |
 | join, run or troubleshoot the org's shared memory store (Xenia) | [Xenia operator guide](guides/xenia-operator.md), or `delphi xenia help` |
