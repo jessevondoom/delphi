@@ -986,6 +986,8 @@ The operator asked, in a host session on 2026-11-13, for a review of how Delphi'
 | 109 | Q3 | the release reference measurement only (the tier rule was struck by review amendment A2) | built (local, not pushed): measured on a scratch home from this checkout and recorded in §9.2 (of 147 release documents in the core, context, specs and about zones a host's `search_kb` can return 17: the charter, rubric and `SPEC.md` index untrusted, and the 125 `user_ratified` about documents sit in a zone `search_kb` leaves off); four options for the operator, no tier changed |
 | 109 | Q4 | `task` on `get_agent` | not started |
 | 109 | Q5 | labels, not exclusion: the whole release searchable by hosts, every result labelled, an optional `use: verify`, and the `reading-labels` skill (the operator's decision of 2026-11-13, spec §12) | not started |
+| 109 | Q6 | a role's default search mode (`search_use`), and the daemon's computed `shown` stamp on what a session stages (spec §13.1) | not started |
+| 109 | Q7 | a pre-registered experiment: do labels change what a host agent states as fact (spec §13.2) | not started |
 | 109 | Q4 | `task` on `get_agent` | built (local, not pushed): `get_agent` takes `task` (at most 500 characters) and ends with at most three fenced passages (1,500 characters) from the role's own memory, this project and the knowledge base through one read-only retrieval search, outside the pack and its hash; the prompt hook names `task` by itself |
 | 110 | X0 | the spec | approved in advance 2026-11-13 |
 | 110 | X1 | host IDs and adapters | not started |
