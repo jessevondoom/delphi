@@ -10,6 +10,7 @@ export function appBridge(): Bridge {
     info: () => invoke<Info>('info'),
     state: () => invoke<OState>('state'),
     snapshot: async () => (await invoke<{ events?: Envelope[] }>('snapshot')).events ?? [],
+    session: () => invoke<Record<string, unknown>>('session'),
     kb: (target: string) => invoke<KbReply>('kb', { target }),
     reveal: (path: string) => invoke<void>('reveal', { path }),
     subscribe(l: Listener) {

@@ -12,6 +12,8 @@ export interface Bridge {
   state(): Promise<OState>;
   /** The newest persisted events of the kinds the daemon folds, oldest first. */
   snapshot(): Promise<Envelope[]>;
+  /** `session.snapshot`: the daemon's mode, budget and which agents are on. */
+  session(): Promise<Record<string, unknown>>;
   /** One knowledge base read: `/v1/search`, `/v1/documents`, `/v1/doc`, `/v1/kinds` or `/v1/collections`, with its query. */
   kb(target: string): Promise<KbReply>;
   /** Show a workspace document in the Finder. Only the app has it; a browser has no Finder to show. */
@@ -59,6 +61,7 @@ export async function fixtureBridge(): Promise<Bridge> {
     info: async () => (sim.info?.roles && Object.keys(sim.info.roles).length ? sim.info : fixtureInfo()),
     state: async () => sim.state,
     snapshot: async () => sim.events,
+    session: async () => ({ mission_id: sim.state.mission_id, mode: 'default', budget: { cap_usd: 25, spent_usd: 3.4, reserved_usd: 0.5, available_usd: 21.1 }, solo_mode: false, running_tasks: [{}], pending_approvals: [{}], interactive_agents: ['orchestrator'], forbidden_agents: [] }),
     kb: fixtureKb,
     subscribe(l) {
       l.conn({ connected: true, detail: 'sample data, no daemon' });

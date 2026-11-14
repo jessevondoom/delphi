@@ -6,6 +6,8 @@ import { Activity } from './screens/Activity.tsx';
 import { Council } from './screens/Council.tsx';
 import { Knowledge } from './screens/Knowledge.tsx';
 import { Output } from './screens/Output.tsx';
+import { Settings } from './screens/Settings.tsx';
+import { Team } from './screens/Team.tsx';
 import type { Conn, Envelope, Info, OState } from './types.ts';
 import { defaultCouncil, isDecided, phaseNote, tilde, waiting } from './view.ts';
 
@@ -140,11 +142,10 @@ export function App() {
           <Knowledge bridge={bridge} info={info} state={state} light={light} />
         ) : prefs.screen === 'output' ? (
           <Output bridge={bridge} info={info} state={state} light={light} />
+        ) : prefs.screen === 'agents' ? (
+          <Team bridge={bridge} info={info} light={light} />
         ) : (
-          <main className="main">
-            <h1 className="title">{ITEMS.find((i) => i.key === prefs.screen)?.label}</h1>
-            <div className="empty">This screen is not built yet.</div>
-          </main>
+          <Settings bridge={bridge} info={info} conn={conn} prefs={prefs} update={update} />
         )}
       </div>
     </div>
