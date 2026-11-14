@@ -2004,11 +2004,11 @@ mod tests {
         assert_eq!(call_tool(&mut s, "get_agent", json!({"role": "architect", "detail": "all"}))["result"]["isError"], true);
         let got = call(&mut s, json!({"jsonrpc": "2.0", "id": 6, "method": "prompts/get", "params": {"name": "architect"}}));
         assert_eq!(got["result"]["messages"][0]["content"]["text"].as_str().unwrap(), compact);
-        // Another client is told there is no adapter for it.
+        // Another client gets its own adapter (spec 110 X1).
         let mut c = Server::new(&dir);
         call(&mut c, json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "codex-mcp-client", "version": "1"}}}));
         let codex = text_of(&call_tool(&mut c, "get_agent", json!({"role": "architect"})));
-        assert!(codex.contains("- host_adapter: none for codex yet") && !codex.contains("claude-code v"), "{codex}");
+        assert!(codex.contains("- host_adapter: codex v1") && !codex.contains("claude-code v"), "{codex}");
         assert_eq!(crate::mcp_packs::pack_hash_of(&codex), Some(held.as_str()));
     }
 
