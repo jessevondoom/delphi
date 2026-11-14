@@ -190,7 +190,7 @@ pub fn tools() -> Value {
         {
             "name": "delphi_roster",
             "title": "Delphi agent roster and mention aliases",
-            "description": "Returns the active Delphi agent roster, showing themed display names (e.g. Athena, Daedalus, Ares), canonical role IDs (orchestrator, architect, red-team), badges, aliases (@athena, @orchestrator, @delphi), and cognitive responsibilities. It opens with one roster line you may print or drop: who is in play. Pass `speaking` (role IDs or aliases) to name the agents that are talking now.",
+            "description": "Returns the active Delphi agent roster, showing each role's display name from the active theme, canonical role IDs (orchestrator, architect, red-team), badges, aliases (`@<name>`, `@<role>`, and `@delphi` for the orchestrator), and cognitive responsibilities. It opens with one roster line you may print or drop: who is in play. Pass `speaking` (role IDs or aliases) to name the agents that are talking now.",
             "inputSchema": {"type": "object", "properties": {"speaking": {"type": "array", "items": {"type": "string", "maxLength": 64}, "maxItems": 14, "description": "Roles (IDs or aliases) that are speaking now; the roster line then reads `Now speaking: ...`. Unknown names are ignored."}}, "additionalProperties": false},
             "annotations": annotations("Delphi agent roster and mention aliases")
         },
@@ -563,7 +563,7 @@ pub fn tools() -> Value {
         {
             "name": "request_help",
             "title": "Ask Delphi for help",
-            "description": "Ask Delphi's orchestrator for help when you are stuck or want a second opinion. It chooses who answers (a specialist, a Council seat, or itself) and you are told who. The answering agents run read-only: they advise, they do not change your project. It spends the operator's tokens as any task does; say what you need and what you already tried. If the answer takes long you get a help_id: fetch it with help_result.",
+            "description": "Ask Delphi's own orchestrator, run by Delphi on the operator's Delphi tokens: who should do this work and how (call it when consult_orchestrator's `next` names it, when the operator wants Delphi's view or a second opinion on the plan, or when you are unsure which role fits), or for help when the work leaves your expertise. It chooses who answers (a specialist, a Council seat, or itself) and you are told who; the answer is advice, signed by who answered. The answering agents run read-only: they advise, they do not change your project. It spends the operator's tokens as any task does; say what you need and what you already tried. If the answer takes long you get a help_id: fetch it with help_result.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1085,10 +1085,12 @@ impl Server {
         let ids: Vec<_> = shown.iter().map(|id| p.identity(id, None)).collect();
         let mut md = format!("{}\n\n", delphi_core::research::roster_line(label, &ids));
         md.push_str("# Delphi Agent Roster & Mention Routing\n\n");
-        md.push_str("Address any Delphi agent directly using `@<name>` or `@<role_id>`.\n\
-                     Mention `@delphi` to consult Athena (Lead Orchestrator) for problem triage, complexity escalation, and specialist summoning.\n\n\
+        // `specs/107` §3 item 5: the orchestrator's name is the active theme's, never a fixed one.
+        let lead = roles.iter().find(|r| r.id == "orchestrator").map(|r| r.display_name.clone()).filter(|n| !n.is_empty()).unwrap_or_else(|| "the orchestrator".into());
+        md.push_str(&format!("Address any Delphi agent directly using `@<name>` or `@<role_id>`.\n\
+                     Mention `@delphi` to consult {lead} (the orchestrator) for problem triage, complexity escalation, and specialist summoning.\n\n\
                      | Mention Aliases | Active Themed Name | Canonical Role ID | Badge | Primary Cognitive Focus |\n\
-                     | :--- | :--- | :--- | :---: | :--- |\n");
+                     | :--- | :--- | :--- | :---: | :--- |\n"));
         for r in roles {
             let alias_str = r.aliases.join(", ");
             md.push_str(&format!(
@@ -1097,6 +1099,17 @@ impl Server {
             ));
         }
         Ok(md)
+    }
+
+    /// [`tools`], with `delphi_roster`'s description naming the active theme's orchestrator (`specs/107` §3 item 5).
+    fn themed_tools(&self) -> Value {
+        let mut t = tools();
+        let lead = self.packs().ok().and_then(|p| p.roles().ok()).and_then(|r| r.into_iter().find(|r| r.id == "orchestrator")).map(|r| crate::host_hooks::flatten(&r.display_name, 40, "")).filter(|n| !n.is_empty());
+        if let (Some(lead), Some(roster)) = (lead, t.as_array_mut().and_then(|a| a.iter_mut().find(|x| x["name"] == "delphi_roster"))) {
+            let d = format!("{} In this workspace the orchestrator is {lead}.", roster["description"].as_str().unwrap_or(""));
+            roster["description"] = json!(d);
+        }
+        t
     }
 
     /// Consult the Lead Orchestrator on task decomposition, specialist roster selection, and execution strategy (`specs/072` §4.1).
@@ -1566,7 +1579,7 @@ impl Server {
                 }))
             }
             "ping" => ok(id, json!({})),
-            "tools/list" => ok(id, json!({"tools": tools()})),
+            "tools/list" => ok(id, json!({"tools": self.themed_tools()})),
             "tools/call" => {
                 if !self.enabled() {
                     // A Council asked for while the server is off gets the typed terminal answer (spec 098 §5); its first line is still
@@ -2899,6 +2912,13 @@ mod tests {
         init(&mut s2);
         let roster2 = text_of(&call_tool(&mut s2, "delphi_roster", json!({})));
         assert!(roster2.contains("| ⟦•─•⟧ |") && !roster2.contains("[0-0]"), "{roster2}");
+        // Spec 107 §3 item 5: the orchestrator is named by the active theme, in the roster's body and in the listed description.
+        let lead = s2.packs().unwrap().roles().unwrap().into_iter().find(|r| r.id == "orchestrator").unwrap().display_name;
+        assert!(roster2.contains(&format!("Mention `@delphi` to consult {lead} (the orchestrator)")), "{roster2}");
+        let listed = call(&mut s2, json!({"jsonrpc": "2.0", "id": 5, "method": "tools/list"}));
+        let d = listed["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == "delphi_roster").unwrap()["description"].as_str().unwrap().to_string();
+        assert!(d.ends_with(&format!("In this workspace the orchestrator is {lead}.")), "{d}");
+        assert!(!tools().to_string().contains(&lead), "the static list names no theme");
     }
 
     #[test]

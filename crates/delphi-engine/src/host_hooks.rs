@@ -428,7 +428,9 @@ pub fn mention_lines(ws_dir: &Path, text: &str, host: &str) -> Vec<String> {
         // The plain form: an ANSI form would put escape codes into the model's context.
         let display = packs.identity(&id, Some(host)).display("plain", false);
         if id == "orchestrator" {
-            out.push(format!("The operator addressed {display} (role orchestrator). Call consult_orchestrator with the operator's request first; then, unless you already hold its pack (pack_hash {hash}), call get_agent with role \"orchestrator\"{task}, and print its display line before what you write as that role."));
+            // `specs/107` §3 items 1, 2: the same two sentences as the skill, then the pack's hash and the argument to pass.
+            let [r0, r1] = crate::host_guidance::ROUTING;
+            out.push(format!("The operator addressed {display} (role orchestrator). {r0} The pack is get_agent with role \"orchestrator\"{task}; you hold it if you have pack_hash {hash}. Print the display line before what you write as that role. {r1}"));
         } else {
             out.push(format!("The operator addressed {display} (role {id}). Adopt it for this request: call get_agent with role \"{id}\"{task} unless you already hold its pack (pack_hash {hash}), and print its display line before what you write as that role."));
         }
@@ -968,7 +970,7 @@ mod tests {
         for w in ["@delphi", "@orchestrator", &format!("@{alias}")] {
             let l = mention_lines(&dir, &format!("{w} who should do this?"), "claude-code");
             assert_eq!(l.len(), 1, "{w}");
-            assert!(l[0].starts_with("The operator addressed ") && l[0].contains("Call consult_orchestrator with the operator's request first") && l[0].contains("role \"orchestrator\""), "{}", l[0]);
+            assert!(l[0].starts_with("The operator addressed ") && crate::host_guidance::ROUTING.iter().all(|r| l[0].contains(r)) && l[0].contains("role \"orchestrator\""), "{}", l[0]);
         }
         assert_eq!(mention_lines(&dir, "@delphi and @orchestrator", "claude-code").len(), 1, "one line per role");
         assert!(mention_lines(&dir, "@nobody @types/node a@b.c", "claude-code").is_empty());

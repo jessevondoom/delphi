@@ -2,6 +2,11 @@
 
 # Delphi
 
+## Mentions
+
+- On `@delphi` or the orchestrator's alias, call `consult_orchestrator` with the task (one call), adopt the orchestrator's pack with `get_agent` if you do not hold it, and print its display line.
+- Call `request_help` instead when the briefing's `next` names it, when the operator asks for Delphi's view or a second opinion on the plan, or when you are unsure which role should do the work: Delphi's own orchestrator answers, and its answer is advice, signed by who answered.
+
 ## Research sources (Delphi, spec 098 section 7)
 
 - **Explicit invocation** means an `@delphi` or `@<role>` mention, the `delphi` skill triggering, or the user saying "ask Delphi". Then run the role in your host on the source ladder (its pack lists the rungs) and make no offer.
