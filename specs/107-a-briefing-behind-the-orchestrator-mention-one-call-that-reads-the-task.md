@@ -88,6 +88,7 @@ The inputs `ambiguity` and `blast_radius` stay optional. Every existing argument
 ## 6. Not verified
 
 - The thresholds in §2 item 9 (0.05, the floor) are first values. B1 records how often each suggestion fires on the route evaluation set (`route_any`'s 20 cases).
+- Recorded by B1 (2026-11-13; `route_any::tests::how_often_each_briefing_suggestion_fires_on_the_labeled_set` holds the figures): the set has **40** cases, not 20. With no project (so `request_research`, which needs a project's pointers, is not counted) and the default adopt threshold 0.55: `request_help` fires on 1 case, `council_open` on 1, `request_council` on 0; the roster is one role on 20 cases and the orchestrator alone on 20. The 0.05 tie rule fired on none: no case had two roles at the threshold (confidence already discounts a close rival), so the one `request_help` came from a task that asks who or how. The floor B1 uses: a context pointer passes when its best line or its path holds one of the task's search words.
 
 ## 7. Amendments from review (2026-11-13)
 

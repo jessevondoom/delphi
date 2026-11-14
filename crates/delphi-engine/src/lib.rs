@@ -119,6 +119,7 @@ pub mod kb;
 pub mod kb_docs;
 pub mod kb_extract;
 pub mod kb_import;
+pub mod briefing;
 pub mod kbserve;
 pub mod retrieval;
 pub mod xenia_read;

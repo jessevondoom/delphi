@@ -327,6 +327,28 @@ mod tests {
         parse_labeled(include_str!("../tests/fixtures/route/labeled.json")).unwrap()
     }
 
+    /// `specs/107` §6: how often each `next` suggestion of the briefing fires on this labeled set, with the roster the briefing would
+    /// show. There is no project here, so `request_research` (which needs a project's pointers) is not counted; the figures are in the spec.
+    #[test]
+    fn how_often_each_briefing_suggestion_fires_on_the_labeled_set() {
+        let roles = real_roles();
+        let infos: Vec<crate::mcp_packs::RoleInfo> = roles.iter().map(|r| crate::mcp_packs::RoleInfo { id: r.id.clone(), title: r.title.clone(), purpose: r.purpose.clone(), servable: r.locus != "inside", locus: r.locus.clone(), skills: r.skills.clone(), display_name: String::new(), aliases: vec![], badge: String::new() }).collect();
+        let mut counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+        let cases = labeled();
+        for l in &cases {
+            let r = route(&[], &roles, &Query { text: &l.task, domain: None, role: None, limit: 10 }, DEFAULT_ADOPT_THRESHOLD, None);
+            let (seats, alone) = crate::briefing::roster(&r, &infos);
+            for n in crate::briefing::next(&l.task, &seats, alone, r.trigger, true) {
+                *counts.entry(n["tool"].as_str().unwrap().to_string()).or_default() += 1;
+            }
+            *counts.entry(if alone { "roster: orchestrator alone".into() } else { format!("roster: {} role(s)", seats.len()) }).or_default() += 1;
+        }
+        eprintln!("{} cases: {counts:?}", cases.len());
+        assert_eq!(format!("{} cases: {counts:?}", cases.len()), BRIEFING_COUNTS);
+    }
+
+    const BRIEFING_COUNTS: &str = "40 cases: {\"council_open\": 1, \"request_help\": 1, \"roster: 1 role(s)\": 20, \"roster: orchestrator alone\": 20}";
+
     fn q(text: &str) -> Query<'_> {
         Query { text, domain: None, role: None, limit: 3 }
     }

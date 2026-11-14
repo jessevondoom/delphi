@@ -176,7 +176,7 @@ pub const MCP_SURFACE: [Surface; 41] = [
     no_return("search_memory", MCP_OWN),
     no_return("query_memory", MCP_OWN),
     no_return("kb_retrieve", MCP_OWN),
-    no_return("consult_orchestrator", "advice from the role packs; no entry"),
+    no_return("consult_orchestrator", "advice from the role packs and the rankers of `route`, `search_project` and `search_memory`, which run in the MCP server's own process; their file sets and zones exclude `staged` (`the_mcp_servers_own_readers_never_return_a_noted_entry`)"),
     no_return("spawn_agent_pack", PROJECT_FILES),
     no_return("route", "ranks roles by words only"),
     no_return("propose_note", WRITES),
