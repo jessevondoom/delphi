@@ -46,6 +46,10 @@ pub fn hook_output(args: &[String], event: &str, host: &str, stdin: impl std::io
             }
             lines.join("\n")
         }
+        // Spec 106 §11 G2: only a starting subagent whose type is exactly one of the release's worker names gets a pack; any other
+        // prints nothing. Claude Code is the one host whose subagent start can add context, so no other host is answered.
+        "subagent-start" if host == "claude-code" => host_hooks::subagent_pack(&ws, input.agent_type.as_deref()?, host)?,
+        "subagent-start" => return None,
         _ => {
             let marker = host_hooks::session_end(&ws, &input, host, &cwd, root.as_deref());
             // Spec 108 M3: one bounded call (2 s) to stage the transcript's notes when the project opted in; silent on any failure.
@@ -171,6 +175,29 @@ mod tests {
         assert_eq!(run_hook(&a(&["--home", home]), Some("bogus")), 0);
         assert_eq!(run_hook(&a(&["--home", home, "--host", "vim"]), Some("prompt")), 0);
         assert_eq!(run_hook(&a(&["--home", home]), None), 0);
+    }
+
+    /// Spec 106 §11 G2: the subagent-start hook obeys the switch, answers only an exact worker name and only for Claude Code.
+    #[test]
+    fn the_subagent_start_hook_prints_a_workers_pack_only_with_the_switch_on_and_for_claude_code() {
+        let t = tempfile::tempdir().unwrap();
+        let ws = delphi_engine::workspace::make_test_workspace(t.path());
+        if !ws.dir.join("config.toml").exists() {
+            std::fs::write(ws.dir.join("config.toml"), "").unwrap();
+        }
+        let home = t.path().to_str().unwrap();
+        let args = a(&["--home", home, "--workspace", "w"]);
+        let input = |agent: &str| format!("{{\"session_id\": \"s1\", \"cwd\": \"{home}\", \"hook_event_name\": \"SubagentStart\", \"agent_id\": \"x\", \"agent_type\": \"{agent}\"}}");
+        assert_eq!(hook_output(&args, "subagent-start", "claude-code", input("delphi:architect-worker").as_bytes()), None, "the switch is off");
+        host_hooks::set_switch(&ws.dir, true).unwrap();
+        let out = hook_output(&args, "subagent-start", "claude-code", input("delphi:architect-worker").as_bytes()).expect("a worker's pack");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let ctx = v["hookSpecificOutput"]["additionalContext"].as_str().unwrap();
+        assert!(ctx.starts_with("You are ") && ctx.contains("# Delphi agent pack: architect"), "{}", &ctx[..200.min(ctx.len())]);
+        assert_eq!(hook_output(&args, "subagent-start", "claude-code", input("general-purpose").as_bytes()), None);
+        assert_eq!(hook_output(&args, "subagent-start", "claude-code", input("evil:architect-worker").as_bytes()), None);
+        assert_eq!(hook_output(&args, "subagent-start", "copilot", input("delphi-architect-worker").as_bytes()), None);
+        assert_eq!(hook_output(&args, "subagent-start", "claude-code", &b"{\"cwd\": 3}"[..]), None, "bad input prints nothing");
     }
 
     #[test]

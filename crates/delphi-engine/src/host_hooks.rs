@@ -20,7 +20,8 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 /// The events `delphi mcp --hook` answers (§2).
-pub const EVENTS: [&str; 3] = ["session-start", "prompt", "session-end"];
+/// `subagent-start` is spec 106 §11 G2: Claude Code's `SubagentStart`, which prints a Delphi worker's pack.
+pub const EVENTS: [&str; 4] = ["session-start", "prompt", "session-end", "subagent-start"];
 /// At most this much of the host's hook JSON is read; a larger payload is ignored whole (§2).
 pub const MAX_INPUT: usize = 256 * 1024;
 /// The brief's length limit, in characters (§3).
@@ -81,13 +82,15 @@ pub struct Input {
     pub prompt: Option<String>,
     /// SessionEnd: why it ended.
     pub reason: Option<String>,
+    /// SubagentStart (spec 106 §11 G2): the starting subagent's type, as Claude Code names it (`<plugin>:<name>` for a plugin's agent).
+    pub agent_type: Option<String>,
 }
 
 impl Input {
     pub fn parse(v: &Value) -> Input {
         let s = |k: &str| v.get(k).and_then(Value::as_str).map(String::from);
         let abs = |k: &str| s(k).map(PathBuf::from).filter(|p| p.is_absolute());
-        Input { session_id: s("session_id"), transcript_path: abs("transcript_path"), cwd: abs("cwd"), event: s("hook_event_name"), source: s("source"), prompt: s("prompt"), reason: s("reason") }
+        Input { session_id: s("session_id"), transcript_path: abs("transcript_path"), cwd: abs("cwd"), event: s("hook_event_name"), source: s("source"), prompt: s("prompt"), reason: s("reason"), agent_type: s("agent_type") }
     }
 }
 
@@ -113,6 +116,8 @@ pub fn host_output(host: &str, event: &str, text: &str) -> Option<String> {
     let name = match event {
         "session-start" => "SessionStart",
         "prompt" => "UserPromptSubmit",
+        // Spec 106 §11 G2: Claude Code 2.1.325 documents `SubagentStart` as "JSON additionalContext shown to subagent".
+        "subagent-start" if host == "claude-code" => "SubagentStart",
         _ => return None,
     };
     Some(json!({"hookSpecificOutput": {"hookEventName": name, "additionalContext": text}}).to_string())
@@ -440,6 +445,67 @@ pub fn mention_lines(ws_dir: &Path, text: &str, host: &str) -> Vec<String> {
     out
 }
 
+// ---- Spec 106 §11 G2: a Delphi worker gets its role's pack at subagent start ----
+
+/// The role a starting subagent works as, when (and only when) its type is exactly one of the release's worker names: `<role>-worker`
+/// of [`crate::mcp_hosts::WORKER_ROLES`], or the same name as Claude Code qualifies a plugin's agent, `delphi:<role>-worker`. Anything
+/// else (another plugin's agent, a built-in, a near miss) is `None`.
+pub fn worker_role(agent_type: &str) -> Option<&'static str> {
+    let name = agent_type.strip_prefix("delphi:").unwrap_or(agent_type);
+    crate::mcp_hosts::WORKER_ROLES.iter().map(|(r, _)| *r).find(|r| name.strip_suffix("-worker") == Some(*r))
+}
+
+/// What `subagent-start` prints for a Delphi worker: the role's identity line, as `get_agent` puts it first, then the role's compact
+/// pack (the charter excerpt, the manifest, heuristics and lessons: ratified text only, never retrieved or session text). `None` for
+/// any other subagent. The identity line is never ANSI (escape codes would reach the model's context).
+pub fn subagent_pack(ws_dir: &Path, agent_type: &str, host: &str) -> Option<String> {
+    let role = worker_role(agent_type)?;
+    let packs = packs_of(ws_dir)?;
+    packs.check_servable(role).ok()?;
+    let pack = packs.pack_for(role, false, crate::mcp_packs::Detail::Compact, Some(host)).ok()?;
+    Some(format!("{}\n\n{pack}", identity_preamble(&packs, ws_dir, role, host)))
+}
+
+/// The pack to inline in `role`'s worker file for `host` (spec 106 §11 G2 item 2): the same identity line and compact pack the hook
+/// prints, and that pack's hash. `None` for a role the workspace does not serve.
+pub fn inline_pack(packs: &Packs, role: &str, host: &str) -> Option<crate::mcp_hosts::InlinePack> {
+    packs.check_servable(role).ok()?;
+    let pack = packs.pack_for(role, false, crate::mcp_packs::Detail::Compact, Some(host)).ok()?;
+    let hash = crate::mcp_packs::pack_hash_of(&pack)?.to_string();
+    let text = format!("{}\n\n{pack}", identity_preamble(packs, &packs.workspace().dir, role, host));
+    Some(crate::mcp_hosts::InlinePack { hash, text })
+}
+
+/// The current `pack_hash` of `role`'s compact pack for `host`, as an inlined file names it.
+pub fn current_inline_hash(packs: &Packs, role: &str, host: &str) -> Option<String> {
+    let pack = packs.pack_for(role, false, crate::mcp_packs::Detail::Compact, Some(host)).ok()?;
+    crate::mcp_packs::pack_hash_of(&pack).map(String::from)
+}
+
+/// Spec 106 §11 G2 item 2: each Delphi worker file with an inlined pack in `dirs` and whether its `pack_hash` is the current one
+/// (`true`) or `stale`. Reads only; a file without the mark, a symlink or a file over 1 MiB is skipped.
+pub fn inlined_states(dirs: &[PathBuf], current: &dyn Fn(&str) -> Option<String>) -> Vec<(PathBuf, bool)> {
+    let mut out = Vec::new();
+    for d in dirs {
+        let Ok(rd) = std::fs::read_dir(d) else { continue };
+        let mut files: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("delphi-") || n.ends_with("-worker.md"))).collect();
+        files.sort();
+        for p in files {
+            let Some(bytes) = read_small(&p, 1024 * 1024) else { continue };
+            let Some((role, hash)) = crate::mcp_hosts::inlined_mark(&String::from_utf8_lossy(&bytes)) else { continue };
+            out.push((p, current(&role).as_deref() == Some(hash.as_str())));
+        }
+    }
+    out
+}
+
+/// The line `get_agent` puts before a pack, for a file or hook output (plain, or markdown when the operator chose it; never ANSI).
+pub fn identity_preamble(packs: &Packs, ws_dir: &Path, role: &str, host: &str) -> String {
+    let markdown = crate::host_rpc::gate(ws_dir).is_ok_and(|c| c.badge_style.as_str() == "markdown");
+    let who = packs.identity(role, Some(host)).display(if markdown { "markdown" } else { "plain" }, false);
+    format!("You are {who}. Show that line before what you write as this role, so the operator can tell who is speaking.")
+}
+
 // ---- H3: the marker at the end, the counter and the nudge (§5) ----
 
 /// At most this many markers (and as many counters) are kept per workspace; the oldest go first (§5 item 2).
@@ -723,7 +789,7 @@ pub fn count_prompt(ws_dir: &Path, input: &Input, host: &str, cwd: &Path, root: 
 // ---- The plugin's hooks file (§6) ----
 
 /// Claude Code's hook events and the `delphi mcp --hook` event each runs.
-pub const CLAUDE_EVENTS: [(&str, &str); 3] = [("SessionStart", "session-start"), ("UserPromptSubmit", "prompt"), ("SessionEnd", "session-end")];
+pub const CLAUDE_EVENTS: [(&str, &str); 4] = [("SessionStart", "session-start"), ("UserPromptSubmit", "prompt"), ("SessionEnd", "session-end"), ("SubagentStart", "subagent-start")];
 
 /// `hooks/hooks.json` of the Claude Code plugin: each event runs `delphi mcp --hook <event> --host claude-code`, with the launch
 /// command the plugin's `.mcp.json` uses (bare `delphi`, from the host's PATH) until 071 E1s gives a stable path (A6). Generated
@@ -1060,7 +1126,7 @@ mod tests {
     }
 
     fn input(id: &str, transcript: Option<&Path>, cwd: &Path) -> Input {
-        Input { session_id: Some(id.into()), transcript_path: transcript.map(Path::to_path_buf), cwd: Some(cwd.to_path_buf()), event: None, source: None, prompt: None, reason: Some("logout".into()) }
+        Input { session_id: Some(id.into()), transcript_path: transcript.map(Path::to_path_buf), cwd: Some(cwd.to_path_buf()), event: None, source: None, prompt: None, reason: Some("logout".into()), agent_type: None }
     }
 
     // specs/108 M3: the session-end hook asks for an ingest only for a project that opted in and a transcript A3 accepts, as the
@@ -1211,12 +1277,85 @@ mod tests {
     }
 
     #[test]
-    fn the_hooks_file_declares_the_three_events_with_the_fixed_command() {
+    fn the_hooks_file_declares_the_four_events_with_the_fixed_command() {
         let v: Value = serde_json::from_str(&claude_hooks_json()).unwrap();
         for (host_event, ours) in CLAUDE_EVENTS {
             let h = &v["hooks"][host_event][0]["hooks"][0];
             assert_eq!((h["type"].as_str(), h["command"].as_str()), (Some("command"), Some(format!("delphi mcp --hook {ours} --host claude-code").as_str())));
         }
-        assert_eq!(v["hooks"].as_object().unwrap().len(), 3);
+        assert_eq!(v["hooks"].as_object().unwrap().len(), 4);
+        assert!(v["hooks"]["SubagentStart"].is_array(), "spec 106 §11 G2");
+    }
+
+    /// Spec 106 §11 G2 item 2: an export on the operator's machine inlines the pack, with its hash first, only for a host without a
+    /// subagent-start hook; the release's plugin files never carry one; `--check`'s reader says current or stale.
+    #[test]
+    fn an_operator_export_inlines_packs_for_hosts_without_the_hook_and_the_check_sees_staleness() {
+        let (t, dir) = ws();
+        let packs = packs_of(&dir).unwrap();
+        let src = |role: &str| inline_pack(&packs, role, "copilot");
+        let files = crate::mcp_hosts::export_files_inlined("copilot", "1.0.0", &Default::default(), Some(&src)).unwrap();
+        let (_, worker) = files.iter().find(|(p, _)| p.ends_with("agents/delphi-architect-worker.agent.md")).unwrap();
+        let want = current_inline_hash(&packs, "architect", "copilot").unwrap();
+        assert_eq!(crate::mcp_hosts::inlined_mark(worker), Some(("architect".to_string(), want.clone())));
+        let first_content = worker.split("\n---\n").nth(1).unwrap().lines().find(|l| !l.is_empty()).unwrap();
+        assert!(first_content.contains(&format!("pack_hash: {want}")), "{first_content}");
+        assert!(worker.contains("# Delphi agent pack: architect") && worker.contains(&format!("`if_hash` \"{want}\"")));
+        let seat = files.iter().find(|(p, _)| p.ends_with("agents/delphi-architect.agent.md")).unwrap();
+        assert!(crate::mcp_hosts::inlined_mark(&seat.1).is_none(), "seat files are not workers");
+        // Claude Code has the hook: never inlined, and the release's plugin files never carry an operator's pack.
+        let claude = crate::mcp_hosts::export_files_inlined("claude-code", "1.0.0", &Default::default(), Some(&src)).unwrap();
+        assert!(claude.iter().all(|(_, t)| crate::mcp_hosts::inlined_mark(t).is_none()));
+        assert!(crate::mcp_hosts::ecosystem_files("1.0.0").iter().all(|(_, t)| !t.contains(crate::mcp_hosts::INLINE_MARK)));
+        // A Codex file stays valid TOML whatever the pack holds.
+        let tricky = crate::mcp_hosts::InlinePack { hash: "abc123".into(), text: "a \\ backslash and \"\"\" three quotes".into() };
+        let (_, toml_text) = crate::mcp_hosts::worker_file_with("codex", "architect", &Default::default(), Some(&tricky)).unwrap();
+        let v: toml::Table = toml_text.parse().unwrap();
+        assert!(v["developer_instructions"].as_str().unwrap().contains("a \\ backslash and \"\"\" three quotes"));
+        assert_eq!(crate::mcp_hosts::inlined_mark(&toml_text), Some(("architect".into(), "abc123".into())));
+        // The check: current, then stale once the file names another hash; a file without the mark is skipped.
+        let agents = t.path().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::write(agents.join("delphi-architect-worker.agent.md"), worker).unwrap();
+        std::fs::write(agents.join("delphi-builder.agent.md"), "---\nname: x\n---\n\nno mark\n").unwrap();
+        let cur = |role: &str| current_inline_hash(&packs, role, "copilot");
+        assert_eq!(inlined_states(std::slice::from_ref(&agents), &cur), vec![(agents.join("delphi-architect-worker.agent.md"), true)]);
+        std::fs::write(agents.join("delphi-architect-worker.agent.md"), worker.replace(&want, "0000000000000000")).unwrap();
+        assert_eq!(inlined_states(std::slice::from_ref(&agents), &cur), vec![(agents.join("delphi-architect-worker.agent.md"), false)]);
+        assert!(inlined_states(&[t.path().join("none")], &cur).is_empty());
+    }
+
+    /// Spec 106 §11 G2: only a subagent named exactly as one of the release's workers is a worker.
+    #[test]
+    fn only_an_exact_worker_name_is_a_worker() {
+        assert_eq!(worker_role("architect-worker"), Some("architect"));
+        assert_eq!(worker_role("delphi:red-team-worker"), Some("red-team"));
+        for bad in ["architect", "delphi:architect", "other:architect-worker", "Architect-worker", "architect-worker ", "messenger-worker", "delphi:delphi:builder-worker", "general-purpose", "", "x-worker", "architect-workerx", "delphi-architect-worker"] {
+            assert_eq!(worker_role(bad), None, "{bad:?}");
+        }
+        for (r, _) in crate::mcp_hosts::WORKER_ROLES {
+            assert_eq!(worker_role(&format!("delphi:{r}-worker")), Some(*r));
+        }
+    }
+
+    /// Spec 106 §11 G2: a worker's subagent start prints its identity line first and its compact pack; nothing for anything else, and
+    /// only Claude Code's output shape carries it.
+    #[test]
+    fn a_worker_gets_its_identity_line_and_compact_pack_and_anything_else_gets_nothing() {
+        let (_t, dir) = ws();
+        let out = subagent_pack(&dir, "delphi:architect-worker", "claude-code").unwrap();
+        let first = out.lines().next().unwrap();
+        assert!(first.starts_with("You are ") && first.contains("(architect, via delphi)") && !first.contains('\u{1b}'), "{first}");
+        let packs = packs_of(&dir).unwrap();
+        let pack = packs.pack_for("architect", false, crate::mcp_packs::Detail::Compact, Some("claude-code")).unwrap();
+        assert!(out.ends_with(&pack), "the compact pack, whole, after the identity line");
+        assert!(subagent_pack(&dir, "general-purpose", "claude-code").is_none());
+        assert!(subagent_pack(&dir, "delphi:architect", "claude-code").is_none());
+        let o: Value = serde_json::from_str(&host_output("claude-code", "subagent-start", &out).unwrap()).unwrap();
+        assert_eq!(o["hookSpecificOutput"]["hookEventName"], "SubagentStart");
+        assert_eq!(o["hookSpecificOutput"]["additionalContext"], out.as_str());
+        assert!(host_output("copilot", "subagent-start", "x").is_none() && host_output("codex", "subagent-start", "x").is_none());
+        let i = read_input(&br#"{"agent_type":"delphi:builder-worker","agent_id":"a1","session_id":"s"}"#[..]).unwrap();
+        assert_eq!(i.agent_type.as_deref(), Some("delphi:builder-worker"));
     }
 }

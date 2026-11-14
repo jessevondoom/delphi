@@ -30,7 +30,7 @@ if [ "$MODE" = g3 ]; then
     # Spec 110 §10 G3a: no plugin and no hook; the CLAUDE.md section `delphi mcp --print-claude-md` prints, after the codeword.
     "$DELPHI_BIN" mcp --print-claude-md --home "$H" >>"$P/CLAUDE.md" 2>/dev/null
     PERSIST="--no-session-persistence"
-elif [ "$MODE" = final ]; then
+elif [ "$MODE" = final ] || [ "$MODE" = g2 ]; then
     hooks_on_in_temp_home
     EXTRA="--plugin-dir $REPO/ecosystem/claude-code/delphi"
     WORKER=delphi:architect-worker
@@ -61,6 +61,14 @@ run() {
     printf '    claude -p <prompt %s> --model %s --strict-mcp-config --mcp-config <scratch>/mcp.json --setting-sources project --permission-prompts none --allowedTools <the Delphi read tools> Read Grep Glob Agent Task %s %s --output-format json\n' \
         "$n" "$MODEL" "$(echo "$EXTRA" | sed "s#$REPO/##")" "$PERSIST" >>"$LOG/commands.txt"
 }
+
+if [ "$MODE" = g2 ]; then
+    # Spec 106 §11 G2: the plugin's fourth hook, SubagentStart; one call.
+    run 1 "$(prompt_worker_pack "$WORKER")"
+    summarize_g2 "Claude Code" "$(claude --version 2>/dev/null | head -1)"
+    table_tail
+    exit 0
+fi
 
 if [ "$MODE" = g3 ]; then
     run 1 "$PROMPT_TOOLS"

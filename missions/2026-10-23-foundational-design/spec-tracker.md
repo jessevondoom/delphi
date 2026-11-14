@@ -1007,6 +1007,8 @@ A red-team review of the seven specs ran on 2026-11-13 (one critic of the author
 | 110 | G3 | `session_brief` and the instruction lines; the Codex probe and a role's pack in the spawn prompt (spec 110 §10) | built (local, not pushed): `session_brief` and the brief line ship, and Codex gets the spawn-prompt instruction because no agent format could be shown loading (§8.3) |
 | 106 | G2 | a worker always has its pack: the subagent-start hook, inlined packs elsewhere (spec 106 §11) | not started |
 | 104 | G4 | the console shows the standing amount and the host notes waiting (spec 104 §13) | built (local, not pushed): `/mcp` shows the standing amount, 24-hour use and reservations (`mcp.get` gained `settled_24h` and `reserved`), and the footer `learn:` line and `/retro` show the host notes waiting with the keep command |
+| 106 | G2 | a worker always has its pack: the subagent-start hook, inlined packs elsewhere (spec 106 §11) | built (local, not pushed): the SubagentStart hook was shown delivering the pack in Claude Code, and operator exports inline it for Copilot with `--check` staleness (§9.1) |
+| 104 | G4 | the console shows the standing amount and the host notes waiting (spec 104 §13) | not started |
 | 106 | G1 | the orchestrator's compact pack inside its bound (spec 106 §11) | not started |
 | 104 | G5 | the witness rule on the card and in the lint (spec 104 §13) | built (local, not pushed): an uncounted Panel's card and `council_result` open with the fixed line, records carry `council_id:`, and `delphi lint` checks `reviewed_by` citations against them |
 | 106 | G6 | a role's colour and weight in the host: the colour field in agent files, a status line, bold names (spec 106 §12) | not started |
