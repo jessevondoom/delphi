@@ -288,8 +288,15 @@ fn handoff_pointer(ws_dir: &Path, project: Option<&str>) -> Option<Pointer> {
 }
 
 /// The pointer for §3 item 5: the newest of what earlier host sessions of this project left.
-fn last_session(ws_dir: &Path, project: Option<&str>, _current: Option<&str>) -> Option<Pointer> {
-    handoff_pointer(ws_dir, project)
+/// The newer of the last marker (H3) of another session and the last handoff; a handoff newer than the marker's end says so.
+fn last_session(ws_dir: &Path, project: Option<&str>, current: Option<&str>) -> Option<Pointer> {
+    let marker = marker_pointer(ws_dir, project, current);
+    let handoff = handoff_pointer(ws_dir, project);
+    match (marker, handoff) {
+        (Some(m), Some(h)) if h.ms > m.ms => Some(h),
+        (Some(m), _) => Some(m),
+        (None, h) => h,
+    }
 }
 
 /// The brief `session-start` prints (§3), at most [`MAX_BRIEF`] characters, in the fixed order; a part with nothing to say is
@@ -431,6 +438,268 @@ pub fn mention_lines(ws_dir: &Path, text: &str, host: &str) -> Vec<String> {
         }
     }
     out
+}
+
+// ---- H3: the marker at the end, the counter and the nudge (§5) ----
+
+/// At most this many markers (and as many counters) are kept per workspace; the oldest go first (§5 item 2).
+pub const MAX_MARKERS: usize = 200;
+/// The prompt at which the nudge is considered, once (A4).
+pub const NUDGE_AT: u64 = 8;
+/// A session with at least this many Delphi tool calls and no summary is nudged (§5 item 4).
+pub const NUDGE_CALLS: u64 = 5;
+/// The nudge (§5 item 4).
+pub const NUDGE: &str = "Delphi: this session has left no summary. When this piece of work ends, call record_session_summary (and handoff_put if work is left open).";
+/// A transcript larger than this is not read (its counts are left out).
+const MAX_TRANSCRIPT: u64 = 64 * 1024 * 1024;
+/// A marker larger than this is not ours and is not read.
+const MAX_MARKER: u64 = 64 * 1024;
+
+/// A host session id from the hook's stdin, accepted only as `[A-Za-z0-9_-]{1,64}` (A3): nothing that could name a path.
+pub fn session_id(s: &str) -> Option<&str> {
+    ((1..=64).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')).then_some(s)
+}
+
+/// `<workspace>/local/host-sessions`, where the markers and counters are.
+pub fn sessions_dir(ws_dir: &Path) -> PathBuf {
+    ws_dir.join("local/host-sessions")
+}
+
+/// Write `bytes` to `path` with mode 0600, atomically (a temp file in the same directory, then a rename). The directory is made
+/// 0700 when it is new; a planted file at the temp name is removed, never followed.
+fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    let dir = path.parent().ok_or_else(|| std::io::Error::other("no parent"))?;
+    if std::fs::symlink_metadata(dir).map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+        return Err(std::io::Error::other("the sessions folder is a symlink"));
+    }
+    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+    let tmp = dir.join(format!(".{}.tmp-{}", path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default(), std::process::id()));
+    let _ = std::fs::remove_file(&tmp);
+    {
+        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).custom_flags(libc::O_NOFOLLOW).open(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, path)
+}
+
+/// Read a small regular file of ours, never through a symlink.
+fn read_small(path: &Path, max: u64) -> Option<Vec<u8>> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let f = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(path).ok()?;
+    let m = f.metadata().ok()?;
+    if !m.is_file() || m.len() > max {
+        return None;
+    }
+    let mut buf = Vec::new();
+    f.take(max + 1).read_to_end(&mut buf).ok()?;
+    Some(buf)
+}
+
+/// Keep the newest [`MAX_MARKERS`] files of each kind (`.json` markers, `.count` counters) in the sessions folder.
+fn prune(dir: &Path) {
+    for ext in ["json", "count"] {
+        let mut files: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.path().extension().is_some_and(|x| x == ext) && !e.file_name().to_string_lossy().starts_with('.'))
+            .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
+            .collect();
+        if files.len() <= MAX_MARKERS {
+            continue;
+        }
+        files.sort();
+        for (_, p) in files.iter().take(files.len() - MAX_MARKERS) {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
+
+/// The host's transcript root, `~/.claude/projects`, when `HOME` is an absolute path.
+pub fn claude_projects_root() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(PathBuf::from).filter(|h| h.is_absolute()).map(|h| h.join(".claude").join("projects"))
+}
+
+/// Claude Code's transcript folder for the session at `cwd`: `<root>/<cwd with every `/` and `.` as `-`>`, the folder
+/// `delphi learn ingest` reads. `root` is `~/.claude/projects`.
+pub fn transcript_folder(root: &Path, cwd: &Path) -> PathBuf {
+    root.join(cwd.to_string_lossy().chars().map(|c| if c == '/' || c == '.' { '-' } else { c }).collect::<String>())
+}
+
+/// A transcript path from the hook's stdin, accepted only when (A3) its last component is not a symlink, it is a regular file
+/// owned by this user, and its canonical path is directly inside the canonical transcript folder of this cwd. `None` otherwise.
+pub fn accepted_transcript(path: &Path, cwd: &Path, root: Option<&Path>) -> Option<PathBuf> {
+    use std::os::unix::fs::MetadataExt;
+    let root = root?;
+    let m = std::fs::symlink_metadata(path).ok()?;
+    // SAFETY: geteuid has no preconditions.
+    if m.file_type().is_symlink() || !m.is_file() || m.uid() != unsafe { libc::geteuid() } || m.len() > MAX_TRANSCRIPT {
+        return None;
+    }
+    if path.extension().is_none_or(|x| x != "jsonl") {
+        return None;
+    }
+    let canon = std::fs::canonicalize(path).ok()?;
+    let folder = std::fs::canonicalize(transcript_folder(root, cwd)).ok()?;
+    (canon.parent() == Some(folder.as_path())).then_some(canon)
+}
+
+/// What one pass over a host's transcript counted (§5 item 1): numbers, tool names and role IDs; no text.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Counts {
+    pub prompts: u64,
+    pub delphi_calls: std::collections::BTreeMap<String, u64>,
+    pub roles_adopted: Vec<String>,
+    pub summary_recorded: bool,
+}
+
+impl Counts {
+    pub fn calls(&self) -> u64 {
+        self.delphi_calls.values().sum()
+    }
+}
+
+/// The Delphi tool a host tool name calls, if it is one: `mcp__delphi__<tool>` or a plugin's `mcp__plugin_delphi_<server>__<tool>`,
+/// with a tool name of lowercase letters, digits and `_`.
+fn delphi_tool(name: &str) -> Option<&str> {
+    let (server, tool) = name.strip_prefix("mcp__")?.rsplit_once("__")?;
+    let ours = server == "delphi" || server.starts_with("plugin_delphi_");
+    (ours && (1..=64).contains(&tool.len()) && tool.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')).then_some(tool)
+}
+
+/// Count a Claude Code v2 transcript (`specs/062` §8.3's format): the operator's prompts, Delphi's tool calls by name, the roles
+/// named in `get_agent` calls (kept only when they resolve to a role ID of `roles`), and whether a summary or a handoff was left.
+/// `None` for a file this reader does not know (a line that is not a JSON object, or a Claude Code major other than 2).
+pub fn count_transcript(text: &str, resolve: &dyn Fn(&str) -> Option<String>) -> Option<Counts> {
+    let mut c = Counts::default();
+    let mut recognized = false;
+    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        let rec: Value = serde_json::from_str(line).ok()?;
+        if !rec.is_object() {
+            return None;
+        }
+        if let Some(v) = rec["version"].as_str() {
+            if v.split('.').next() != Some("2") {
+                return None;
+            }
+        }
+        match rec["type"].as_str() {
+            Some("user") => {
+                recognized = true;
+                if crate::transcript::typed_text(&rec).is_some() {
+                    c.prompts += 1;
+                }
+            }
+            Some("assistant") => {
+                recognized = true;
+                for p in rec["message"]["content"].as_array().into_iter().flatten().filter(|p| p["type"] == "tool_use") {
+                    let Some(tool) = p["name"].as_str().and_then(delphi_tool) else { continue };
+                    *c.delphi_calls.entry(tool.to_string()).or_default() += 1;
+                    if matches!(tool, "record_session_summary" | "handoff_put") {
+                        c.summary_recorded = true;
+                    }
+                    if tool == "get_agent" {
+                        if let Some(id) = p["input"]["role"].as_str().and_then(resolve) {
+                            if !c.roles_adopted.contains(&id) {
+                                c.roles_adopted.push(id);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    recognized.then_some(c)
+}
+
+/// The counts of the transcript the hook named, when A3 accepts its path; `None` leaves them out.
+fn counts_for(ws_dir: &Path, input: &Input, cwd: &Path, root: Option<&Path>) -> Option<Counts> {
+    let path = accepted_transcript(input.transcript_path.as_deref()?, cwd, root)?;
+    let bytes = read_small(&path, MAX_TRANSCRIPT)?;
+    let text = String::from_utf8_lossy(&bytes);
+    let packs = packs_of(ws_dir);
+    let roles: Vec<String> = packs.as_ref().and_then(|p| p.roles().ok()).map(|r| r.into_iter().map(|r| r.id).collect()).unwrap_or_default();
+    let resolver = packs.as_ref().map(|p| p.theme_resolver()).unwrap_or_default();
+    count_transcript(&text, &|r: &str| Some(resolver.resolve(r)).filter(|id| roles.contains(id)))
+}
+
+fn now_ms() -> i64 {
+    ms_of(std::time::SystemTime::now())
+}
+
+/// §5: `session-end` writes the marker `<tool>-<id>.json` (mode 0600, atomic) and keeps at most [`MAX_MARKERS`]. Nothing is
+/// written for an id A3 refuses. The counts are left out when the transcript is not one Delphi may read. `root` is the host's
+/// transcript root (`~/.claude/projects`).
+pub fn session_end(ws_dir: &Path, input: &Input, host: &str, cwd: &Path, root: Option<&Path>) -> Option<PathBuf> {
+    let id = session_id(input.session_id.as_deref()?)?;
+    let tool = tool_name(host)?;
+    let project = crate::scope::resolve(ws_dir, cwd).project.map(|p| p.as_str().to_string());
+    let reason = input.reason.as_deref().filter(|r| r.len() <= 40 && r.bytes().all(|b| b.is_ascii_lowercase() || b == b'_' || b == b'-')).unwrap_or("other");
+    let mut m = json!({"schema": 1, "tool": tool, "host_session": id, "cwd": cwd.to_string_lossy(), "project": project, "ended_ms": now_ms(), "reason": reason, "source": "external_untrusted"});
+    if let Some(path) = input.transcript_path.as_deref().and_then(|p| accepted_transcript(p, cwd, root)) {
+        m["transcript_path"] = json!(path.to_string_lossy());
+    }
+    if let Some(c) = counts_for(ws_dir, input, cwd, root) {
+        m["prompts"] = json!(c.prompts);
+        m["delphi_calls"] = json!(c.delphi_calls);
+        m["roles_adopted"] = json!(c.roles_adopted);
+        m["summary_recorded"] = json!(c.summary_recorded);
+    }
+    let dir = sessions_dir(ws_dir);
+    let path = dir.join(format!("{tool}-{id}.json"));
+    write_private(&path, serde_json::to_string_pretty(&m).ok()?.as_bytes()).ok()?;
+    prune(&dir);
+    Some(path)
+}
+
+/// The newest marker of another host session of this project, as a pointer (§3 item 5): ended_ms, the tool (checked), whether
+/// it called handoff_put, and whether it left a summary (unknown when its counts were left out).
+fn marker_pointer(ws_dir: &Path, project: Option<&str>, current: Option<&str>) -> Option<Pointer> {
+    let mut best: Option<Pointer> = None;
+    for e in std::fs::read_dir(sessions_dir(ws_dir)).into_iter().flatten().flatten() {
+        let p = e.path();
+        if p.extension().is_none_or(|x| x != "json") {
+            continue;
+        }
+        let Some(v) = read_small(&p, MAX_MARKER).and_then(|b| serde_json::from_slice::<Value>(&b).ok()) else { continue };
+        if v["schema"] != 1 || v["project"].as_str() != project || (current.is_some() && v["host_session"].as_str() == current) {
+            continue;
+        }
+        let Some(ms) = v["ended_ms"].as_i64() else { continue };
+        let ptr = Pointer {
+            ms,
+            tool: v["tool"].as_str().and_then(tool_name).map(String::from),
+            handoff: v["delphi_calls"]["handoff_put"].as_u64().is_some_and(|n| n > 0),
+            // Counted only when the transcript was read: otherwise not known.
+            summary: v["prompts"].is_u64().then(|| v["delphi_calls"]["record_session_summary"].as_u64().is_some_and(|n| n > 0)),
+        };
+        if best.as_ref().is_none_or(|b| ptr.ms > b.ms) {
+            best = Some(ptr);
+        }
+    }
+    best
+}
+
+/// A4: count this prompt in the session's counter file (`<tool>-<id>.count`). At the [`NUDGE_AT`]th prompt, once, read the
+/// transcript (A3's rule) and return the nudge when the session made [`NUDGE_CALLS`] or more Delphi calls and left no summary.
+pub fn count_prompt(ws_dir: &Path, input: &Input, host: &str, cwd: &Path, root: Option<&Path>) -> Option<&'static str> {
+    let id = session_id(input.session_id.as_deref()?)?;
+    let tool = tool_name(host)?;
+    let path = sessions_dir(ws_dir).join(format!("{tool}-{id}.count"));
+    let n = read_small(&path, 64).and_then(|b| String::from_utf8(b).ok()).and_then(|s| s.trim().parse::<u64>().ok()).unwrap_or(0) + 1;
+    write_private(&path, n.to_string().as_bytes()).ok()?;
+    if n == 1 {
+        prune(&sessions_dir(ws_dir));
+    }
+    if n != NUDGE_AT {
+        return None;
+    }
+    let c = counts_for(ws_dir, input, cwd, root)?;
+    (c.calls() >= NUDGE_CALLS && !c.summary_recorded).then_some(NUDGE)
 }
 
 // ---- The plugin's hooks file (§6) ----
@@ -710,6 +979,157 @@ mod tests {
         println!("brief: {brief_ms} ms, prompt with two mentions: {prompt_ms} ms");
         assert!(!b.is_empty() && m.len() == 2);
         assert!(brief_ms < DEADLINE.as_millis() && prompt_ms < DEADLINE.as_millis());
+    }
+
+    fn transcript_line(kind: &str, content: Value) -> String {
+        json!({"type": kind, "version": "2.1.314", "sessionId": "s", "message": {"role": kind, "content": content}}).to_string()
+    }
+
+    fn sample_transcript(calls: &[(&str, Value)], typed: usize) -> String {
+        let mut lines = Vec::new();
+        for i in 0..typed {
+            lines.push(transcript_line("user", json!(format!("SECRET-PROMPT {i}"))));
+        }
+        let uses: Vec<Value> = calls.iter().enumerate().map(|(i, (n, input))| json!({"type": "tool_use", "id": format!("t{i}"), "name": n, "input": input})).collect();
+        lines.push(transcript_line("assistant", Value::Array(uses)));
+        lines.push(transcript_line("user", json!([{"type": "tool_result", "tool_use_id": "t0", "content": "SECRET-RESULT"}])));
+        lines.join("\n")
+    }
+
+    /// A scratch transcript root and the folder Claude Code would use for `cwd`.
+    fn transcript_root(t: &tempfile::TempDir, cwd: &Path) -> (PathBuf, PathBuf) {
+        let root = t.path().join("claude-projects");
+        let folder = transcript_folder(&root, cwd);
+        std::fs::create_dir_all(&folder).unwrap();
+        (root, folder)
+    }
+
+    fn input(id: &str, transcript: Option<&Path>, cwd: &Path) -> Input {
+        Input { session_id: Some(id.into()), transcript_path: transcript.map(Path::to_path_buf), cwd: Some(cwd.to_path_buf()), event: None, source: None, prompt: None, reason: Some("logout".into()) }
+    }
+
+    #[test]
+    fn a_session_id_is_a_short_word_and_anything_that_could_name_a_path_is_refused() {
+        assert_eq!(session_id("0b5e-41_aF"), Some("0b5e-41_aF"));
+        for bad in ["", "../x", "a/b", "a.b", "..", "a b", "a\nb", &"a".repeat(65)] {
+            assert_eq!(session_id(bad), None, "{bad:?}");
+        }
+        let (t, dir) = ws();
+        let cwd = t.path().to_path_buf();
+        for bad in ["../../escape", "x/../../y", "..", "a\0b"] {
+            assert!(session_end(&dir, &input(bad, None, &cwd), "claude-code", &cwd, None).is_none(), "{bad:?}");
+            assert!(count_prompt(&dir, &input(bad, None, &cwd), "claude-code", &cwd, None).is_none());
+        }
+        assert!(!sessions_dir(&dir).exists() && !t.path().join("escape").exists(), "nothing was written");
+    }
+
+    #[test]
+    fn the_marker_holds_counts_and_no_text_with_mode_0600_and_the_transcript_rules_hold() {
+        use std::os::unix::fs::PermissionsExt;
+        let (t, dir) = ws();
+        let cwd = t.path().join("work.dir");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let (root, folder) = transcript_root(&t, &cwd);
+        let calls = [("mcp__plugin_delphi_delphi__get_agent", json!({"role": "builder"})), ("mcp__delphi__get_agent", json!({"role": "nobody; rm -rf"})), ("mcp__delphi__specs_status", json!({})), ("mcp__other__get_agent", json!({"role": "scout"})), ("Bash", json!({"command": "SECRET-ARG"}))];
+        let file = folder.join("s1.jsonl");
+        std::fs::write(&file, sample_transcript(&calls, 2)).unwrap();
+        let m = session_end(&dir, &input("s1", Some(&file), &cwd), "claude-code", &cwd, Some(&root)).unwrap();
+        assert_eq!(m, sessions_dir(&dir).join("claude-code-s1.json"));
+        assert_eq!(std::fs::metadata(&m).unwrap().permissions().mode() & 0o777, 0o600);
+        let text = std::fs::read_to_string(&m).unwrap();
+        let v: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!((v["schema"].as_u64(), v["tool"].as_str(), v["host_session"].as_str(), v["reason"].as_str()), (Some(1), Some("claude-code"), Some("s1"), Some("logout")));
+        assert_eq!(v["prompts"], 2, "typed prompts only, not tool results");
+        assert_eq!(v["delphi_calls"], json!({"get_agent": 2, "specs_status": 1}));
+        assert_eq!(v["roles_adopted"], json!(["builder"]), "a role that is no role ID is not kept");
+        assert_eq!(v["summary_recorded"], false);
+        assert!(v["ended_ms"].as_i64().unwrap() > 0 && v["transcript_path"].is_string());
+        assert!(!text.contains("SECRET") && !text.contains("rm -rf"), "no prompt, argument or result is copied: {text}");
+        // A symlinked transcript, a path outside the root, a sibling folder and a `..` path all leave the counts out.
+        let outside = t.path().join("elsewhere.jsonl");
+        std::fs::write(&outside, sample_transcript(&calls, 1)).unwrap();
+        let link = folder.join("link.jsonl");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        let sibling = root.join("-other");
+        std::fs::create_dir_all(&sibling).unwrap();
+        std::fs::write(sibling.join("s.jsonl"), sample_transcript(&calls, 1)).unwrap();
+        let dotdot = folder.join("../-other/s.jsonl");
+        for (i, p) in [link.clone(), outside.clone(), sibling.join("s.jsonl"), dotdot].iter().enumerate() {
+            let id = format!("bad{i}");
+            let m = session_end(&dir, &input(&id, Some(p), &cwd), "claude-code", &cwd, Some(&root)).unwrap();
+            let v: Value = serde_json::from_str(&std::fs::read_to_string(m).unwrap()).unwrap();
+            assert!(v.get("prompts").is_none() && v.get("transcript_path").is_none(), "{}: {v}", p.display());
+        }
+        // A symlinked directory in the path resolves outside the folder too.
+        let real = t.path().join("realdir");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::write(real.join("x.jsonl"), sample_transcript(&calls, 1)).unwrap();
+        std::os::unix::fs::symlink(&real, folder.join("sub")).unwrap();
+        assert!(accepted_transcript(&folder.join("sub/x.jsonl"), &cwd, Some(&root)).is_none());
+        assert!(accepted_transcript(&file, &cwd, None).is_none(), "no root, no transcript");
+        // A transcript of another major version is not counted.
+        std::fs::write(&file, transcript_line("user", json!("hi")).replace("2.1.314", "3.0.0")).unwrap();
+        assert!(count_transcript(&std::fs::read_to_string(&file).unwrap(), &|_| None).is_none());
+    }
+
+    #[test]
+    fn at_most_two_hundred_markers_are_kept_and_the_oldest_go_first() {
+        let (t, dir) = ws();
+        let cwd = t.path().to_path_buf();
+        let d = sessions_dir(&dir);
+        std::fs::create_dir_all(&d).unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(10_000);
+        for i in 0..MAX_MARKERS {
+            let p = d.join(format!("claude-code-old{i}.json"));
+            std::fs::write(&p, "{}").unwrap();
+            std::fs::File::options().write(true).open(&p).unwrap().set_modified(old + std::time::Duration::from_secs(i as u64)).unwrap();
+        }
+        session_end(&dir, &input("newest", None, &cwd), "claude-code", &cwd, None).unwrap();
+        let left: Vec<String> = std::fs::read_dir(&d).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.ends_with(".json")).collect();
+        assert_eq!(left.len(), MAX_MARKERS);
+        assert!(left.contains(&"claude-code-newest.json".to_string()) && !left.contains(&"claude-code-old0.json".to_string()));
+    }
+
+    #[test]
+    fn the_brief_points_to_the_last_marker_of_this_project_and_not_to_this_session_or_another_project() {
+        let (t, dir) = ws();
+        let (root, _id) = project(&t, &dir);
+        let (troot, folder) = transcript_root(&t, &root);
+        let file = folder.join("prev.jsonl");
+        std::fs::write(&file, sample_transcript(&[("mcp__delphi__handoff_put", json!({"objective": "CANARY"}))], 1)).unwrap();
+        session_end(&dir, &input("prev", Some(&file), &root), "claude-code", &root, Some(&troot)).unwrap();
+        let b = brief(&dir, &root, Some("now"), N);
+        let last = b.lines().last().unwrap();
+        assert!(last.contains(", claude-code; it left a handoff; no summary was recorded;"), "{last}");
+        assert!(!b.contains("CANARY"));
+        assert!(!brief(&dir, &root, Some("prev"), N).contains("Last host session"), "a resumed session is not its own last session");
+        let other = tempfile::tempdir().unwrap();
+        assert!(!brief(&dir, other.path(), None, N).contains("Last host session"), "another project's marker is never pointed to");
+    }
+
+    #[test]
+    fn the_nudge_comes_once_at_the_eighth_prompt_when_five_delphi_calls_left_no_summary() {
+        let (t, dir) = ws();
+        let cwd = t.path().join("w");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let (root, folder) = transcript_root(&t, &cwd);
+        let file = folder.join("n.jsonl");
+        let five: Vec<(&str, Value)> = (0..5).map(|_| ("mcp__delphi__search_kb", json!({"query": "x"}))).collect();
+        std::fs::write(&file, sample_transcript(&five, 3)).unwrap();
+        let inp = input("n", Some(&file), &cwd);
+        let said: Vec<Option<&str>> = (1..=12).map(|_| count_prompt(&dir, &inp, "claude-code", &cwd, Some(&root))).collect();
+        assert_eq!(said.iter().filter(|s| s.is_some()).count(), 1, "once");
+        assert_eq!(said[7], Some(NUDGE), "at the eighth prompt");
+        assert_eq!(std::fs::read_to_string(sessions_dir(&dir).join("claude-code-n.count")).unwrap(), "12");
+        // Four calls, or a summary, and there is no nudge.
+        let mut with_summary = five.clone();
+        with_summary.push(("mcp__delphi__record_session_summary", json!({})));
+        for (id, calls) in [("four", five[..4].to_vec()), ("summed", with_summary)] {
+            let f = folder.join(format!("{id}.jsonl"));
+            std::fs::write(&f, sample_transcript(&calls, 1)).unwrap();
+            let inp = input(id, Some(&f), &cwd);
+            assert!((1..=10).all(|_| count_prompt(&dir, &inp, "claude-code", &cwd, Some(&root)).is_none()), "{id}");
+        }
     }
 
     #[test]

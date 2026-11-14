@@ -29,19 +29,26 @@ fn workspace_for(args: &[String], cwd: &Path) -> Option<PathBuf> {
 /// What one run of a hook prints, or `None` for nothing. Pure of the terminal: stdin is given.
 pub fn hook_output(args: &[String], event: &str, host: &str, stdin: impl std::io::Read) -> Option<String> {
     let input = host_hooks::read_input(stdin)?;
-    // §2: a prompt with no `@` returns before any workspace file is opened.
-    if event == "prompt" && !input.prompt.as_deref().unwrap_or("").contains('@') {
-        return None;
-    }
     let cwd = input.cwd.clone().or_else(|| std::env::current_dir().ok())?;
     let ws = workspace_for(args, &cwd)?;
     if !host_hooks::switch_on(&ws) {
         return None;
     }
+    let root = host_hooks::claude_projects_root();
     let text = match event {
         "session-start" => host_hooks::brief(&ws, &cwd, input.session_id.as_deref(), &host_hooks::nonce()),
-        "prompt" => host_hooks::mention_lines(&ws, input.prompt.as_deref().unwrap_or(""), host).join("\n"),
-        _ => String::new(),
+        "prompt" => {
+            // A4: the counter is the one workspace file besides the config a prompt with no `@` touches.
+            let mut lines: Vec<String> = host_hooks::count_prompt(&ws, &input, host, &cwd, root.as_deref()).map(String::from).into_iter().collect();
+            if input.prompt.as_deref().unwrap_or("").contains('@') {
+                lines.extend(host_hooks::mention_lines(&ws, input.prompt.as_deref().unwrap_or(""), host));
+            }
+            lines.join("\n")
+        }
+        _ => {
+            host_hooks::session_end(&ws, &input, host, &cwd, root.as_deref());
+            String::new()
+        }
     };
     host_hooks::host_output(host, event, &text)
 }
