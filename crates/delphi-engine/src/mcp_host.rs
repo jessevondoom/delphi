@@ -16,6 +16,7 @@
 
 use crate::mcp_daemon::HostLink;
 use crate::mcp_packs::Packs;
+use crate::mcp_serve::{Handler, Job};
 use crate::mcp_project::{self, Project};
 use crate::mcp_wire::{err, ok, parse_request, tool_err, tool_result, Request, PROTOCOLS};
 use crate::workspace::WorkspacePaths;
@@ -53,12 +54,15 @@ const ASK_POLL: Duration = Duration::from_secs(1);
 
 /// `ask_family` as the host sees it (`specs/104` §2, §12 A1): the daemon starts the seat and hands back its `ask_id` at once; this
 /// polls `host.ask_result` in short calls until the answer is in or `hold` has passed, and returns the answer or the working shape (with
-/// the id). `on_id` is told the id the moment it exists, so the caller can stop the seat if the host goes away before it sees the id.
-/// `call` is one daemon call; a poll that fails returns the last working shape, which still carries the id.
-pub(crate) fn ask_polled(call: &dyn Fn(&str, &Value) -> Result<Value, String>, args: &Value, hold: Duration, step: Duration, on_id: &mut dyn FnMut(&str)) -> Result<Value, String> {
+/// the id). `on_step` sees the first working shape the moment the id exists (so the caller can stop the seat if the host goes away before
+/// it sees the id) and every working shape after it; it answers `false` to stop holding. `call` is one daemon call; a poll that fails
+/// returns the last working shape, which still carries the id.
+pub(crate) fn ask_polled(call: &dyn Fn(&str, &Value) -> Result<Value, String>, args: &Value, hold: Duration, step: Duration, on_step: &mut dyn FnMut(&Value) -> bool) -> Result<Value, String> {
     let first = call("host.ask_family", args)?;
     let Some(id) = first["ask_id"].as_str().filter(|_| first["status"] == "working").map(String::from) else { return Ok(first) };
-    on_id(&id);
+    if !on_step(&first) {
+        return Ok(first);
+    }
     let deadline = std::time::Instant::now() + hold;
     let mut last = first;
     loop {
@@ -68,7 +72,13 @@ pub(crate) fn ask_polled(call: &dyn Fn(&str, &Value) -> Result<Value, String>, a
         }
         std::thread::sleep(step.min(deadline - now));
         match call("host.ask_result", &json!({"ask_id": id})) {
-            Ok(v) if v["status"] == "working" => last = v,
+            Ok(v) if v["status"] == "working" => {
+                let go = on_step(&v);
+                last = v;
+                if !go {
+                    return Ok(last);
+                }
+            }
             Ok(v) => return Ok(v),
             Err(_) => return Ok(last),
         }
@@ -805,9 +815,10 @@ pub struct Server {
     packs: Option<Packs>,
     project: Option<Project>,
     link: Option<HostLink>,
-    initialized: bool,
+    /// Requests run on workers (`specs/104` §4), so the handshake's state is behind atomics and locks.
+    initialized: std::sync::atomic::AtomicBool,
     /// The host's own name from `initialize`, used only as a label in `get_agent`'s "via" line.
-    client: Option<String>,
+    client: std::sync::Mutex<Option<String>>,
     cwd: PathBuf,
     /// The one-off agents `spawn_agent_pack` has named in this session, so no two share a name (`specs/087` §4.3). Lives
     /// as long as the session; it is a label table, not a record of anything running.
@@ -844,7 +855,7 @@ impl Server {
         // A workspace directory is `<home>/workspaces/<name>`.
         let packs = ws.parent().and_then(Path::parent).zip(ws.file_name().and_then(|n| n.to_str())).map(|(home, name)| Packs::new(WorkspacePaths::new(home, name)));
         let cwd = std::env::current_dir().unwrap_or_else(|_| ws.to_path_buf());
-        Server { config_path: Some(ws.join("config.toml")), packs, project: Some(Project::new(ws, &cwd)), link: HostLink::for_workspace(ws, &cwd), initialized: false, client: None, cwd, pool_live: Default::default(), pack_ledger: Default::default() }
+        Server { config_path: Some(ws.join("config.toml")), packs, project: Some(Project::new(ws, &cwd)), link: HostLink::for_workspace(ws, &cwd), initialized: Default::default(), client: Default::default(), cwd, pool_live: Default::default(), pack_ledger: Default::default() }
     }
 
     /// Resolve the project from `cwd` instead of this process's working directory.
@@ -862,7 +873,7 @@ impl Server {
     /// No workspace resolved: the defaults, which are on.
     pub fn without_workspace() -> Server {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        Server { config_path: None, packs: None, project: None, link: None, initialized: false, client: None, cwd, pool_live: Default::default(), pack_ledger: Default::default() }
+        Server { config_path: None, packs: None, project: None, link: None, initialized: Default::default(), client: Default::default(), cwd, pool_live: Default::default(), pack_ledger: Default::default() }
     }
 
     /// Read at every tool call. A workspace with no `config.toml` yet has the defaults, which are on; a file that exists but
@@ -891,7 +902,7 @@ impl Server {
     }
 
     /// `None` for a tool this server does not have; otherwise its text or its error.
-    fn call(&self, name: &str, args: &Value) -> Option<Result<String, String>> {
+    fn call(&self, name: &str, args: &Value, job: &Job) -> Option<Result<String, String>> {
         let arg = |k: &str| args.get(k).and_then(Value::as_str).map(str::to_string).ok_or_else(|| format!("invalid arguments: `{}` is required and must be a string", k));
         let query = || arg("query").and_then(|q| if q.chars().count() > mcp_project::MAX_QUERY { Err(format!("invalid arguments: `query` is at most {} characters", mcp_project::MAX_QUERY)) } else { Ok(q) });
         let limit = |default: usize, max: usize| args.get("limit").and_then(Value::as_u64).map(|n| (n as usize).clamp(1, max)).unwrap_or(default);
@@ -933,7 +944,8 @@ impl Server {
                     let pack = p.pack(&canonical, false)?;
                     // One identity everywhere (`specs/087` §5.3, OD-5): the same name, badge and role the console shows, ending
                     // `, via delphi)`. That notice is the only reminder that a host runs the role; there is no separate label.
-                    let who = p.display(&canonical, self.client.as_deref());
+                    let client = self.client.lock().unwrap().clone();
+                    let who = p.display(&canonical, client.as_deref());
                     Ok(format!("You are {who}. Show that line before what you write as this role, so the operator can tell who is speaking.\n\n{pack}"))
                 })
             }),
@@ -965,7 +977,7 @@ impl Server {
             "research_status" => self.daemon("host.research_status", args),
             "research_result" => self.daemon("host.research_result", args),
             "cancel_job" => self.daemon("host.cancel_job", args),
-            "ask_family" => self.ask_family(args),
+            "ask_family" => self.ask_family(args, job),
             "ask_result" => self.daemon("host.ask_result", args),
             _ => return None,
         })
@@ -979,9 +991,18 @@ impl Server {
     }
 
     /// `ask_family` (`specs/104` §2, §12 A1): the daemon hands back the id at once and this process holds the request while it polls.
-    fn ask_family(&self, args: &Value) -> Result<String, String> {
+    /// The seat's id is handed to `job` the moment it exists (`specs/104` §12 A1): a host that cancels the request, or goes away, before
+    /// it has the id gets the seat stopped, and a cancelled request stops polling.
+    fn ask_family(&self, args: &Value, job: &Job) -> Result<String, String> {
         let link = self.link.as_ref().ok_or_else(|| "no Delphi workspace resolved: run `delphi` to initialize one, or pass --workspace/--home".to_string())?;
-        ask_polled(&|m, a| link.call_within(m, a, socket_wait(m)), args, ASK_HOLD, ASK_POLL, &mut |_| {}).map(|v| v.to_string())
+        let mut first = true;
+        let mut step = |v: &Value| {
+            if std::mem::take(&mut first) {
+                return v["ask_id"].as_str().is_none_or(|id| job.started(id));
+            }
+            !job.cancelled()
+        };
+        ask_polled(&|m, a| link.call_within(m, a, socket_wait(m)), args, ASK_HOLD, ASK_POLL, &mut step).map(|v| v.to_string())
     }
 
     /// `delphi route`'s dry run, by words only: no embedding model is loaded and nothing is dispatched. It ranks the canonical
@@ -1234,18 +1255,36 @@ impl Server {
         };
 
         // Spec 098 §9: a cap on DIFFERENT packs, per named task and per session. The key is the pack's inputs, so asking for the same
-        // pack again costs nothing. Judged here, before the pack is built; the ledger is only written once the pack has been built.
+        // pack again costs nothing. Judged and reserved in one step under the lock, so requests in flight together (`specs/104` §4 item 4)
+        // cannot pass the cap between them; a pack that then fails to build gives its reservation back.
         let key = format!("{}\u{0}{}\u{0}{}\u{0}{}", base_role, spec_line, focus_line, custom_heuristics.join("\u{1}"));
         let caps = self.mcp_config();
-        {
-            let ledger = self.pack_ledger.lock().map_err(|_| "the pack ledger is unavailable".to_string())?;
-            if !ledger.by_task.get(&task).is_some_and(|s| s.contains(&key)) && ledger.by_task.get(&task).map_or(0, |s| s.len()) >= caps.max_packs_per_task as usize {
+        let (new_in_task, new_in_session) = {
+            let mut ledger = self.pack_ledger.lock().map_err(|_| "the pack ledger is unavailable".to_string())?;
+            let new_in_task = !ledger.by_task.get(&task).is_some_and(|s| s.contains(&key));
+            if new_in_task && ledger.by_task.get(&task).map_or(0, |s| s.len()) >= caps.max_packs_per_task as usize {
                 return Err(pack_cap_refusal("task", caps.max_packs_per_task, "max_packs_per_task"));
             }
-            if !ledger.session.contains(&key) && ledger.session.len() >= caps.max_packs_per_session as usize {
+            let new_in_session = !ledger.session.contains(&key);
+            if new_in_session && ledger.session.len() >= caps.max_packs_per_session as usize {
                 return Err(pack_cap_refusal("session", caps.max_packs_per_session, "max_packs_per_session"));
             }
-        }
+            ledger.by_task.entry(task.clone()).or_default().insert(key.clone());
+            ledger.session.insert(key.clone());
+            (new_in_task, new_in_session)
+        };
+        let give_back = || {
+            if let Ok(mut ledger) = self.pack_ledger.lock() {
+                if new_in_task {
+                    if let Some(s) = ledger.by_task.get_mut(&task) {
+                        s.remove(&key);
+                    }
+                }
+                if new_in_session {
+                    ledger.session.remove(&key);
+                }
+            }
+        };
 
         // The name this one-off agent wears (`specs/087` §4.3); none when the theme has no pool.
         let identity = self.pool_identity(base_role, specialization, domain_focus);
@@ -1289,7 +1328,13 @@ impl Server {
         pack.push_str("## Base Archetype Profile: ");
         pack.push_str(base_role);
         pack.push_str("\n\n");
-        let base_pack = self.packs()?.pack(base_role, false)?;
+        let base_pack = match self.packs().and_then(|p| p.pack(base_role, false)) {
+            Ok(b) => b,
+            Err(e) => {
+                give_back();
+                return Err(e);
+            }
+        };
         pack.push_str(&base_pack);
         pack.push_str("\n\n");
 
@@ -1327,10 +1372,6 @@ impl Server {
             None => pack,
         };
 
-        if let Ok(mut ledger) = self.pack_ledger.lock() {
-            ledger.by_task.entry(task).or_default().insert(key.clone());
-            ledger.session.insert(key);
-        }
         Ok(pack)
     }
 
@@ -1424,19 +1465,25 @@ impl Server {
     }
 
     pub fn handle(&mut self, v: Value) -> Option<Value> {
+        self.respond(v, &Job::none())
+    }
+
+    /// One request's reply, as [`Server::handle`], for a request that may run beside others (`specs/104` §4).
+    pub fn respond(&self, v: Value, job: &Job) -> Option<Value> {
+        use std::sync::atomic::Ordering;
         let Request { id, method, params } = match parse_request(v) {
             Ok(r) => r,
             Err(reply) => return reply,
         };
-        if !self.initialized && !matches!(method.as_str(), "initialize" | "ping") {
+        if !self.initialized.load(Ordering::SeqCst) && !matches!(method.as_str(), "initialize" | "ping") {
             return Some(err(id, -32600, "the server is not initialized: send `initialize` first"));
         }
         Some(match method.as_str() {
             "initialize" => {
                 let Some(asked) = params.get("protocolVersion").and_then(Value::as_str) else { return Some(err(id, -32602, "invalid params: protocolVersion is required")) };
-                self.initialized = true;
-                self.client = params.get("clientInfo").and_then(|c| c.get("name")).and_then(Value::as_str).map(String::from);
-                if let Some(l) = self.link.as_mut() {
+                self.initialized.store(true, Ordering::SeqCst);
+                *self.client.lock().unwrap() = params.get("clientInfo").and_then(|c| c.get("name")).and_then(Value::as_str).map(String::from);
+                if let Some(l) = self.link.as_ref() {
                     l.set_tool(params.get("clientInfo").and_then(|c| c.get("name")).and_then(Value::as_str));
                 }
                 let version = PROTOCOLS.iter().find(|v| **v == asked).unwrap_or(&PROTOCOLS[0]);
@@ -1458,7 +1505,7 @@ impl Server {
                 }
                 let Some(name) = params.get("name").and_then(Value::as_str) else { return Some(err(id, -32602, "invalid params: name is required")) };
                 let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
-                match self.call(name, &args) {
+                match self.call(name, &args, job) {
                     Some(Ok(text)) => ok(id, tool_result(text, false)),
                     Some(Err(e)) => ok(id, tool_err(&e)),
                     None => err(id, -32602, &format!("unknown tool `{}`", name)),
@@ -1518,20 +1565,33 @@ impl Server {
     }
 }
 
-/// Serve until the input closes. Returns the exit code.
+/// Serve until the input closes, one request at a time. Returns the exit code. `delphi mcp` itself serves concurrently ([`run`]).
 pub fn serve<R: BufRead, W: Write>(server: &mut Server, input: R, output: W) -> i32 {
     crate::mcp_wire::serve_lines(input, output, &mut |b| server.handle_bytes(b))
 }
 
+/// `specs/104` §4: the concurrent server's view of this one. A job abandoned before the host had its id is stopped through the daemon.
+impl Handler for Server {
+    fn respond(&self, v: Value, job: &Job) -> Option<Value> {
+        Server::respond(self, v, job)
+    }
+
+    fn abandon(&self, id: &str) {
+        if let Some(link) = &self.link {
+            let _ = link.call("host.cancel_job", &json!({"id": id, "reason": crate::mcp_serve::ABANDONED}));
+        }
+    }
+}
+
 /// `delphi mcp`, on this process's stdin and stdout.
 pub fn run(ws: Option<&Path>) -> i32 {
-    let mut server = match ws {
+    let server = match ws {
         Some(w) => Server::new(w),
         None => Server::without_workspace(),
     };
     eprintln!("delphi mcp: {}, stdio; writes only through the daemon", if server.enabled() { "enabled" } else { "turned off by the operator ([mcp] enabled = false)" });
     let stdin = std::io::stdin();
-    serve(&mut server, stdin.lock(), std::io::stdout().lock())
+    crate::mcp_serve::serve(std::sync::Arc::new(server), stdin.lock(), std::io::stdout())
 }
 
 #[cfg(test)]
@@ -1585,9 +1645,13 @@ mod tests {
     fn ask_family_returns_the_answer_in_one_call_when_the_seat_answers_within_the_hold() {
         let calls = std::cell::RefCell::new(Vec::new());
         let mut seen = Vec::new();
-        let v = ask_polled(&fake_ask(2, &calls), &json!({"question": "q"}), Duration::from_secs(5), Duration::from_millis(5), &mut |id| seen.push(id.to_string())).unwrap();
+        let v = ask_polled(&fake_ask(2, &calls), &json!({"question": "q"}), Duration::from_secs(5), Duration::from_millis(5), &mut |v| {
+            seen.push(v["ask_id"].as_str().unwrap().to_string());
+            true
+        })
+        .unwrap();
         assert_eq!((v["status"].as_str(), v["answer"].as_str()), (Some("answered"), Some("a table")), "{v}");
-        assert_eq!(seen, ["t_0001"], "the caller holds the id from the first moment");
+        assert_eq!(seen, ["t_0001", "t_0001", "t_0001"], "the caller holds the id from the first moment, and sees each working poll");
         assert_eq!(calls.borrow().as_slice(), ["host.ask_family", "host.ask_result", "host.ask_result", "host.ask_result"]);
     }
 
@@ -1595,7 +1659,7 @@ mod tests {
     #[test]
     fn a_seat_slower_than_the_hold_gives_the_working_shape_with_its_id() {
         let calls = std::cell::RefCell::new(Vec::new());
-        let v = ask_polled(&fake_ask(usize::MAX, &calls), &json!({"question": "q"}), Duration::from_millis(60), Duration::from_millis(10), &mut |_| {}).unwrap();
+        let v = ask_polled(&fake_ask(usize::MAX, &calls), &json!({"question": "q"}), Duration::from_millis(60), Duration::from_millis(10), &mut |_| true).unwrap();
         assert_eq!((v["status"].as_str(), v["ask_id"].as_str()), (Some("working"), Some("t_0001")), "{v}");
         assert!(calls.borrow().len() < 20, "short polls, bounded by the hold: {:?}", calls.borrow());
         // A refusal before the id (the operator's yes missing, the budget) is the daemon's error, unchanged.
@@ -2306,6 +2370,25 @@ mod tests {
         assert!(a.contains("it is refused as a Council, Panel or red-team seat"), "the pack says what it may not be");
         assert!(crate::host_rpc::is_pack_id(&id), "the id is the shape the daemon refuses");
         assert!(a.starts_with("# Delphi Ephemeral Agent Pack: flaky-test-hunter (derived from investigator)"), "the header line is unchanged");
+    }
+
+    /// Spec 104 §4 item 4: requests now run side by side, and the pack cap is still counted atomically.
+    #[test]
+    fn the_pack_cap_holds_under_twenty_parallel_spawn_agent_pack_calls() {
+        let (_t, dir, root) = project_ws();
+        std::fs::write(dir.join("config.toml"), "[mcp]\nmax_packs_per_task = 50\nmax_packs_per_session = 5\n").unwrap();
+        let mut s = Server::new(&dir).with_cwd(&root);
+        init(&mut s);
+        let s = std::sync::Arc::new(s);
+        let handles: Vec<_> = (0..20)
+            .map(|i| {
+                let s = s.clone();
+                std::thread::spawn(move || s.call("spawn_agent_pack", &json!({"base_role": "scout", "specialization": format!("spec{i}")}), &Job::none()).unwrap().is_ok())
+            })
+            .collect();
+        let made = handles.into_iter().map(|h| h.join().unwrap()).filter(|ok| *ok).count();
+        assert_eq!(made, 5, "exactly the cap, however the twenty interleave");
+        assert_eq!(s.pack_ledger.lock().unwrap().session.len(), 5);
     }
 
     #[test]
