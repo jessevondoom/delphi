@@ -85,12 +85,18 @@
       "line": 201,
       "number": "9",
       "title": "Amendments from review (2026-11-13)"
+    },
+    {
+      "level": 2,
+      "line": 211,
+      "number": "10",
+      "title": "Follow-up: a brief and a role pack on hosts without the hooks (operator, 2026-11-14)"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/110-other-hosts-adapters-instruction-files-and-install-paths.md",
-    "sha256": "021cdf03e7c4c2ab613b90e549db605a19cd275898cff60e579baaaaca1665fa"
+    "sha256": "ffe28bedb3dbad0c1755c255560b8e709f00c93d1903db8c8a5ce69853bf4c9e"
   },
   "source_status_at_hash": {
     "line": {
@@ -103,7 +109,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-13, in a host session (\"approve all your plans and suggestions and go\"). The approval was given to the plan this spec carries out (workstream 7: adapters, instruction files and install paths for Gemini, Codex and Copilot) BEFORE this text was written; the operator has not read the text. The operator said the same day that Copilot, agy (Gemini) and Codex are installed and signed in on this machine for the live checks."
     },
-    "sha256": "021cdf03e7c4c2ab613b90e549db605a19cd275898cff60e579baaaaca1665fa",
+    "sha256": "ffe28bedb3dbad0c1755c255560b8e709f00c93d1903db8c8a5ce69853bf4c9e",
     "word": "approved"
   },
   "spec": {
