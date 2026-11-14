@@ -705,6 +705,7 @@ impl Project {
             author: &'static str,
             checked: &'static str,
             label: String,
+            source_type_note: Option<&'static str>,
         }
         let keep = |status: &str| match status_filter {
             "validated_only" => status == "validated",
@@ -734,7 +735,7 @@ impl Project {
                 for (group, hits) in [(&mut core, found.as_ref().map(|f| &f.rest)), (&mut release, found.as_ref().map(|f| &f.release)), (&mut third_party, found.as_ref().map(|f| &f.third_party))] {
                     for h in hits.into_iter().flatten() {
                         let l = hl::of_hit(&self.ws_dir, h);
-                        if !keep(l.status) || group.iter().any(|c| c.source == h.pointer) {
+                        if !keep(l.status) || group.iter().any(|c| c.source == crate::library::host_pointer(&h.pointer)) {
                             continue;
                         }
                         // The index's own chunk id; a chunk the index no longer holds (a sync ran in between) is served from its preview.
@@ -743,7 +744,7 @@ impl Project {
                             None => (fallback_chunk_id(&h.rel_path, h.start_line, h.end_line), h.preview.clone()),
                         };
                         let passage = hl::shown(l.author, &l.source_type, &l.label, passage.trim());
-                        group.push(Candidate { chunk_id, status: l.status, source: h.pointer.clone(), confidence: confidence(l.status), passage, source_type: l.source_type, origin: l.origin, author: l.author, checked: l.checked, label: l.label });
+                        group.push(Candidate { chunk_id, status: l.status, source: crate::library::host_pointer(&h.pointer), confidence: confidence(l.status), passage, source_type: l.source_type, origin: l.origin, author: l.author, checked: l.checked, label: l.label, source_type_note: l.source_type_note });
                     }
                 }
             }
@@ -758,7 +759,7 @@ impl Project {
                 let hits = crate::retrieval::search(&ix.home, &ix.db, query, crate::kb_import::kept_search_opts(limit * 2)).map(|r| r.hits).unwrap_or_default();
                 for h in hits.into_iter().filter(|h| crate::kb_import::is_kept(&self.ws_dir, &h.rel_path)) {
                     if !core.iter().any(|c| c.source == h.pointer) {
-                        core.push(Candidate { chunk_id: fallback_chunk_id(&h.rel_path, h.start_line, h.end_line), status: "kept by the operator, not validated", source: h.pointer.clone(), confidence: "low", passage: crate::host_noted::fence(crate::kb_import::KEPT_LABEL, &h.preview), source_type: h.source_type.clone(), origin: "kept", author: "host_session", checked: "not checked", label: crate::kb_import::KEPT_LABEL.to_string() });
+                        core.push(Candidate { chunk_id: fallback_chunk_id(&h.rel_path, h.start_line, h.end_line), status: "kept by the operator, not validated", source: h.pointer.clone(), confidence: "low", passage: crate::host_noted::fence(crate::kb_import::KEPT_LABEL, &h.preview), source_type: h.source_type.clone(), origin: "kept", author: "host_session", checked: "not checked", label: crate::kb_import::KEPT_LABEL.to_string(), source_type_note: None });
                     }
                 }
             }
@@ -774,7 +775,7 @@ impl Project {
             // A project spec the operator approved reads `validated` here, as it always has; its tier stays untrusted.
             let checked = if status == "retired" { "not checked" } else { hl::checked(status, UNTRUSTED) };
             let label = if status == "validated" { "operator's text, approved spec".to_string() } else { hl::label_of("operator", checked, status, hl::Shipped::Unknown) };
-            Candidate { chunk_id, status, source, confidence: confidence(status), passage: hl::shown("operator", UNTRUSTED, &label, passage.trim()), source_type: UNTRUSTED.to_string(), origin: "project", author: "operator", checked, label }
+            Candidate { chunk_id, status, source, confidence: confidence(status), passage: hl::shown("operator", UNTRUSTED, &label, passage.trim()), source_type: UNTRUSTED.to_string(), origin: "project", author: "operator", checked, label, source_type_note: None }
         };
         if (scope == "all" || scope == "project_only") && use_ == hl::Use::Explore {
             let ix = self.index();
@@ -852,8 +853,18 @@ impl Project {
                 out.push_str("\n\n<!-- delphi:rag:group third_party -->");
             }
             out.push_str(&format!(
-                "\n\n<!-- delphi:rag chunk_id=\"{}\" status=\"{}\" source=\"{}\" confidence=\"{}\" source_type=\"{}\" origin=\"{}\" author=\"{}\" checked=\"{}\" label=\"{}\" -->\n{}\n<!-- delphi:rag:end -->",
-                c.chunk_id, c.status, c.source, c.confidence, c.source_type, c.origin, c.author, c.checked, c.label.replace('"', ""), c.passage
+                "\n\n<!-- delphi:rag chunk_id=\"{}\" status=\"{}\" source=\"{}\" confidence=\"{}\" source_type=\"{}\"{} origin=\"{}\" author=\"{}\" checked=\"{}\" label=\"{}\" -->\n{}\n<!-- delphi:rag:end -->",
+                c.chunk_id,
+                c.status,
+                c.source,
+                c.confidence,
+                c.source_type,
+                c.source_type_note.map(|n| format!(" source_type_note=\"{n}\"")).unwrap_or_default(),
+                c.origin,
+                c.author,
+                c.checked,
+                c.label.replace('"', ""),
+                c.passage
             ));
         }
         out.push_str(&format!("\n\n{}", hl::POINTER));
@@ -932,7 +943,7 @@ impl Project {
                 Some((id, text)) => (format!("CHK-{}", id), text),
                 None => (fallback_chunk_id(&h.rel_path, h.start_line, h.end_line), h.preview.clone()),
             };
-            if out.contains(&format!("source=\"{}\"", h.pointer)) {
+            if out.contains(&format!("source=\"{}\"", crate::library::host_pointer(&h.pointer))) {
                 continue;
             }
             let room = (TASK_CHARS - used).min(TASK_CHARS / TASK_PASSAGES);
@@ -942,7 +953,7 @@ impl Project {
                 passage = passage.chars().take(room.saturating_sub(1)).collect::<String>() + "\u{2026}";
             }
             used += passage.chars().count();
-            out.push_str(&format!("\n\n<!-- delphi:rag chunk_id=\"{}\" status=\"{}\" source=\"{}\" confidence=\"{}\" label=\"{}\" -->\n{}\n<!-- delphi:rag:end -->", chunk_id, status, h.pointer, confidence, h.label, passage));
+            out.push_str(&format!("\n\n<!-- delphi:rag chunk_id=\"{}\" status=\"{}\" source=\"{}\" confidence=\"{}\" label=\"{}\" -->\n{}\n<!-- delphi:rag:end -->", chunk_id, status, crate::library::host_pointer(&h.pointer), confidence, h.label, passage));
             let l = crate::host_labels::of_hit(&self.ws_dir, &h);
             reads.push(json!({"id": chunk_id, "checked": l.checked, "author": l.author}));
             n += 1;
@@ -1461,6 +1472,41 @@ mod tests {
         let v = p.kb_retrieve_use("quokkapin", 10, "all", "all", crate::host_labels::Use::Verify).unwrap();
         assert_eq!(passages(&v), ["about/about-pin.md"], "{v}");
         assert!(v.ends_with(crate::host_labels::POINTER));
+    }
+
+    /// `specs/109` §13.3 (defects 2 and 3): a library passage carries the gloss for its fixed tier beside `source_type`, agrees with its
+    /// label, and its `source` names no home directory or user, whether the source got a new id or an older one that spelled the path.
+    #[test]
+    fn kb_retrieve_glosses_a_library_tier_and_never_shows_a_home_path() {
+        let (t, ws, root) = corpus_fixture(true);
+        let docs = t.path().join("home/example-user/docs");
+        fs::create_dir_all(&docs).unwrap();
+        let (new_page, old_page) = (docs.join("Tide Notes.md"), docs.join("Old Notes.md"));
+        fs::write(&new_page, "# Tide\n\nThe quokkapin tide table, a third-party claim.\n").unwrap();
+        fs::write(&old_page, "# Old\n\nThe quokkapin old table, a third-party claim.\n").unwrap();
+        let lib = crate::library::Library::in_home(t.path());
+        let opts = crate::library::AddOpts { licence: Some("CC0-1.0".into()), ..Default::default() };
+        lib.add_file(&new_page, &opts, &crate::library::Budgets::default()).unwrap();
+        // A source an earlier release added: its id spells the absolute path. Moved to that id, it is still found, not added twice.
+        let first = lib.add_file(&old_page, &opts, &crate::library::Budgets::default()).unwrap().id;
+        let canon = old_page.canonicalize().unwrap();
+        let legacy = crate::library::source_id(&format!("file:{}", canon.display()));
+        fs::rename(lib.source_dir(&first), lib.source_dir(&legacy)).unwrap();
+        assert!(legacy.starts_with("file-") && legacy != first, "the fixture: the old id is the path's slug: {legacy}");
+        let again = lib.add_file(&old_page, &opts, &crate::library::Budgets::default()).unwrap();
+        assert_eq!((again.id.as_str(), again.outcome), (legacy.as_str(), crate::library::Outcome::Unchanged), "the older entry is found");
+        let mut kb = crate::kb::Kb::open(&ws.join("local/state.db")).unwrap();
+        kb.sync_lexical(&crate::kb::sources(&ws), "t").unwrap();
+        let out = Project::new(&ws, &root).kb_retrieve("quokkapin", 20, "all", "all").unwrap();
+        let lib_passages: Vec<&str> = out.split("<!-- delphi:rag chunk_id").filter(|c| c.contains("source=\"library/sources/")).collect();
+        assert_eq!(lib_passages.len(), 2, "{out}");
+        for c in &lib_passages {
+            assert!(c.contains("source_type=\"federated_verified\" source_type_note=\"the library's fixed tier: fetched and stored by Delphi; the page's content is third-party and not checked\""), "{c}");
+            assert!(c.contains("author=\"third_party\" checked=\"not checked\" label=\"third-party page, not checked\""), "{c}");
+            assert!(c.contains("<noted-entry label=\"third-party page, not checked\">"), "{c}");
+        }
+        assert!(!out.contains("example-user") && !out.contains("home/"), "no home path or user name: {out}");
+        assert!(out.contains("source=\"library/sources/file-") && out.contains("source=\"library/sources/local-tide-notes-md-"), "{out}");
     }
 
     const ID_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";

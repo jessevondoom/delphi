@@ -74,7 +74,7 @@ impl Library {
         let name = canon.file_name().and_then(|n| n.to_str()).unwrap_or("file");
         let title = text.lines().find_map(|l| l.strip_prefix("# ")).map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).unwrap_or_else(|| name.to_string());
         let opts = AddOpts { licence: Some("internal".into()), level: Some(Level::Full), title: Some(title), ..Default::default() };
-        let id = source_id(&format!("file:{}", canon.display()));
+        let id = self.id_for_local_file(&canon);
         let mut meta = Self::base_meta(&opts, "document", name);
         meta.insert("retrieved".into(), json!(delphi_core::time::now_rfc3339()));
         meta.insert("content_hash".into(), json!(format!("sha256:{}", sha256_hex(&bytes))));

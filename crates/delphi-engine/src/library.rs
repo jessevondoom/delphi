@@ -229,6 +229,48 @@ pub fn source_id(canonical: &str) -> String {
     if slug.is_empty() { format!("src-{}", &h[..8]) } else { format!("{}-{}", slug, &h[..8]) }
 }
 
+/// The id a source added from the local file `canon` is given (`specs/109` §13.3, defect 3): `local-<base name>-<hash>`, where the
+/// hash is the one the older scheme used, of `file:<absolute path>`. The path itself is never spelled in the id, so a pointer a host
+/// is shown cannot carry the operator's home directory or user name. Stable for one path.
+pub fn local_file_id(canon: &Path) -> String {
+    let h = sha256_hex(format!("file:{}", canon.display()).as_bytes());
+    let name = canon.file_name().and_then(|n| n.to_str()).unwrap_or("file");
+    let slug: String = name.to_ascii_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+    let slug: String = slug.split('-').filter(|s| !s.is_empty()).collect::<Vec<_>>().join("-").chars().take(40).collect();
+    let slug = slug.trim_end_matches('-');
+    if slug.is_empty() { format!("local-{}", &h[..8]) } else { format!("local-{}-{}", slug, &h[..8]) }
+}
+
+/// The id the same file got before [`local_file_id`]: a slug of its absolute path. Kept only to find a source already in a library.
+fn legacy_file_id(canon: &Path) -> String {
+    source_id(&format!("file:{}", canon.display()))
+}
+
+/// What a host is shown for a library pointer or path. A source added from a local file before [`local_file_id`] has an id that
+/// spells the file's absolute path (`file-<path slug>-<hash>`); in what a host sees that segment becomes `file-<hash>`. Everything
+/// else is returned as it was. The stored id and the index are untouched.
+pub fn host_pointer(pointer: &str) -> String {
+    const PREFIX: &str = "library/sources/";
+    let Some(rest) = pointer.strip_prefix(PREFIX) else { return pointer.to_string() };
+    let (id, tail) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, ""),
+    };
+    match id.strip_prefix("file-").and_then(|r| r.rsplit_once('-')) {
+        Some((_, hash)) => format!("{PREFIX}file-{hash}{tail}"),
+        None => pointer.to_string(),
+    }
+}
+
+impl Library {
+    /// The id for a source added from the local file `canon`: the one an earlier release gave it when that source is already here (so
+    /// it is found, not added twice), else [`local_file_id`].
+    pub(crate) fn id_for_local_file(&self, canon: &Path) -> String {
+        let old = legacy_file_id(canon);
+        if self.source_dir(&old).is_dir() { old } else { local_file_id(canon) }
+    }
+}
+
 pub(crate) fn sha256_hex(b: &[u8]) -> String {
     Sha256::digest(b).iter().map(|x| format!("{:02x}", x)).collect()
 }
@@ -709,7 +751,7 @@ impl Library {
             let t = String::from_utf8(bytes.clone()).map_err(|_| "not a UTF-8 text or Markdown file".to_string())?;
             (Some(t), opts.level, Vec::new())
         };
-        let id = source_id(&format!("file:{}", canon.display()));
+        let id = self.id_for_local_file(&canon);
         let mut meta = Self::base_meta(opts, "document", name);
         meta.insert("retrieved".into(), json!(delphi_core::time::now_rfc3339()));
         if len <= b.text {

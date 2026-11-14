@@ -1642,7 +1642,7 @@ impl EngineService {
             };
             let labelled = |layer: &str, h: &crate::kb::Hit| {
                 let l = crate::host_labels::of_hit(&ws.dir, h);
-                let mut v = json!({"layer": layer, "pointer": h.pointer, "path": h.rel_path, "heading": h.heading_path, "preview": crate::host_labels::shown(l.author, &l.source_type, &l.label, &h.preview)});
+                let mut v = json!({"layer": layer, "pointer": crate::library::host_pointer(&h.pointer), "path": crate::library::host_pointer(&h.rel_path), "heading": h.heading_path, "preview": crate::host_labels::shown(l.author, &l.source_type, &l.label, &h.preview)});
                 if let Some(o) = v.as_object_mut() {
                     l.into_fields(o);
                 }
@@ -1664,7 +1664,7 @@ impl EngineService {
                 let hits = crate::retrieval::search(&ws.home, &db, &query, opts).map(|r| r.hits).unwrap_or_default();
                 let kept: Vec<_> = hits.iter().filter(|h| h.heading_path.contains(crate::host_noted::NOTED_HEADING)).take(limit).collect();
                 private_seen = crate::private_read::private_noted_in(&ws.dir, kept.iter().map(|h| h.rel_path.as_str()));
-                kept.iter().map(|h| json!({"layer": "noted", "pointer": h.pointer, "heading": h.heading_path, "preview": crate::host_noted::fence(&h.shown_label(), &h.preview), "label": h.shown_label(), "status": "noted", "source_type": h.source_type, "origin": "session", "author": "host_session", "checked": "not checked"})).collect()
+                kept.iter().map(|h| json!({"layer": "noted", "pointer": h.pointer, "heading": h.heading_path, "preview": crate::host_noted::fence(&crate::host_labels::noted_label(), &h.preview), "label": crate::host_labels::noted_label(), "status": "noted", "source_type": h.source_type, "origin": "session", "author": "host_session", "checked": "not checked"})).collect()
             } else {
                 vec![]
             };
@@ -1685,7 +1685,7 @@ impl EngineService {
                             continue;
                         }
                         let line = hit["line"].as_u64().unwrap_or(1);
-                        noted.push(json!({"layer": "noted", "pointer": format!("{path}#L{line}"), "heading": crate::host_noted::NOTED_HEADING, "preview": crate::host_noted::fence("not validated", hit["preview"].as_str().unwrap_or("")), "label": "not validated", "status": "noted", "source_type": "external_untrusted", "origin": "session", "author": "host_session", "checked": "not checked"}));
+                        noted.push(json!({"layer": "noted", "pointer": format!("{path}#L{line}"), "heading": crate::host_noted::NOTED_HEADING, "preview": crate::host_noted::fence(&crate::host_labels::noted_label(), hit["preview"].as_str().unwrap_or("")), "label": crate::host_labels::noted_label(), "status": "noted", "source_type": "external_untrusted", "origin": "session", "author": "host_session", "checked": "not checked"}));
                         kept_paths.push(path);
                     }
                     for entry in crate::private_read::private_noted_in(&ws.dir, kept_paths.iter().map(String::as_str)) {
@@ -4866,6 +4866,31 @@ mod tests {
     const PROJ_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const PROJ_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
+    /// `specs/109` §13.3 (the experiment's defects 2 and 3): a library page says what its fixed `federated_verified` tier means beside
+    /// `source_type`, its fence and fields agree with its label, and a source added from a file under a home directory has a pointer that
+    /// names neither the home directory nor the user. The tier and the index are unchanged.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_library_page_is_glossed_beside_its_tier_and_its_pointer_names_no_home_directory() {
+        let f = setup(vec![], 5.0, |_| {});
+        let s = serve(&f).await;
+        let (ws, home) = (f.engine.ws.dir.clone(), f.engine.ws.home.clone());
+        let docs = f.root.parent().unwrap().join("home/example-user/docs");
+        std::fs::create_dir_all(&docs).unwrap();
+        let page = docs.join("Tide Notes.md");
+        std::fs::write(&page, "# Tide notes\n\nThe quokkatide table is third-party text.\n").unwrap();
+        let lib = crate::library::Library::in_home(&home);
+        let stored = lib.add_file(&page, &crate::library::AddOpts { licence: Some("CC0-1.0".into()), ..Default::default() }, &crate::library::Budgets::default()).unwrap();
+        refresh_kb(&ws, &home).unwrap();
+        let r = host_search_args(&f, &s, json!({"query": "quokkatide", "limit": 10})).await;
+        let hit = r["third_party"].as_array().unwrap().iter().find(|h| h["path"].as_str().is_some_and(|p| p.starts_with("library/sources/"))).cloned().unwrap_or_else(|| panic!("the library page is found: {r}"));
+        assert_eq!(hit["source_type"], "federated_verified", "no tier changed: {hit}");
+        assert_eq!(hit["source_type_note"], crate::host_labels::LIBRARY_TIER_NOTE, "{hit}");
+        assert_eq!((hit["author"].as_str(), hit["checked"].as_str(), hit["label"].as_str()), (Some("third_party"), Some("not checked"), Some("third-party page, not checked")), "{hit}");
+        assert!(hit["preview"].as_str().unwrap().starts_with("<noted-entry label=\"third-party page, not checked\">"), "the fence says what the fields say: {hit}");
+        let shown = r.to_string();
+        assert!(stored.id.starts_with("local-tide-notes-md-") && !shown.contains("example-user") && !shown.contains("home/"), "no home path or user name in what a host is shown: {shown}");
+    }
+
     fn noted_count(r: &Value) -> usize {
         r["noted"].as_array().map_or(0, |a| a.len())
     }
@@ -4883,7 +4908,9 @@ mod tests {
         let r = host_search_as(&s, "abcdef0123456789", &f.root, "quokkaregistry").await;
         assert_eq!(noted_count(&r), 1, "the entry the host just stored, and was told is searchable, is not found: {r}");
         let hit = &r["noted"][0];
-        assert_eq!((hit["layer"].as_str(), hit["label"].as_str()), (Some("noted"), Some("not validated")), "{hit}");
+        assert_eq!((hit["layer"].as_str(), hit["label"].as_str()), (Some("noted"), Some("host session note, not checked")), "{hit}");
+        assert_eq!((hit["author"].as_str(), hit["checked"].as_str(), hit["status"].as_str()), (Some("host_session"), Some("not checked"), Some("noted")), "{hit}");
+        assert!(hit["preview"].as_str().unwrap().starts_with("<noted-entry label=\"host session note, not checked\">"), "{hit}");
         let preview = hit["preview"].as_str().unwrap();
         assert!(preview.starts_with("<noted-entry label=") && preview.contains("quokkaregistry"), "the text is fenced as data: {hit}");
         assert!(hit["pointer"].as_str().unwrap().starts_with("staged/host-abcdef0123456789/n1.md"), "{hit}");
