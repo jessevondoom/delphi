@@ -10,7 +10,7 @@ claude plugin marketplace add jessevondoom/delphi
 claude plugin install delphi@delphi
 ```
 
-The plugin declares the MCP server (`delphi mcp`), two skills (one that says when to consult Delphi, and `delphi-council`, which runs a Panel of your own subagents or a formal Council, spec 086) and four seat subagents (`delphi:architect`, `delphi:red-team`, `delphi:strategist`, `delphi:builder`; each a short wrapper that fetches its brief from Delphi). It carries no binary: install `delphi` with
+The plugin declares the MCP server (`delphi mcp`), two skills (one that says when to consult Delphi, and `delphi-council`, which runs a Panel of your own subagents or a formal Council, spec 086) and four seat subagents (`delphi:architect`, `delphi:red-team`, `delphi:strategist`, `delphi:builder`; each a short wrapper that fetches its brief from Delphi), and a worker subagent for every role served to hosts (`delphi:<role>-worker`, spec 106: a wrapper that adopts the role with `get_agent` in its own context; only the builder's and the writer's inherit the session's tools, the others are read-only). It carries no binary: install `delphi` with
 `install.sh` or Homebrew first. The declaration runs `delphi` from the host's `PATH`; for an absolute path use `delphi mcp --print-config claude-code --absolute`.
 Installing the plugin grants Delphi nothing: it is not an approval.
 
