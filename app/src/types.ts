@@ -48,6 +48,7 @@ export type OState = {
   nodes: Record<string, Node>;
   tasks: Record<string, Task>;
   councils: Council[];
+  builds?: { task_id: string; branch: string; sha: string; merge: string }[];
   changes?: Change[];
   approvals?: Record<string, { role: string; summary: string; since_ms: number }>;
   since_you?: { since_ms: number; changes: number; done: number; failed: number; approvals: number };

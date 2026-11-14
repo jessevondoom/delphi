@@ -1,9 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { Badge, Who } from '../Badge.tsx';
-import { Rich } from '../Rich.tsx';
-import { spec } from '../avatar.ts';
+import { DocView } from '../DocView.tsx';
 import type { Bridge } from '../bridge.ts';
-import { dayOf, docTarget, frontmatter, headingOf, listTarget, searchTarget, sourceWords, titleOf, type Collection, type Doc, type DocRow, type Hit, type SearchBody } from '../kb.ts';
+import { dayOf, headingOf, listTarget, searchTarget, sourceWords, titleOf, type Collection, type DocRow, type Hit, type SearchBody } from '../kb.ts';
 import type { Info, OState } from '../types.ts';
 
 type Props = { bridge: Bridge | null; info: Info | null; state: OState | null; light: boolean };
@@ -24,7 +22,6 @@ export function Knowledge({ bridge, info, state, light }: Props) {
   const [kind, setKind] = useState('');
   const [found, setFound] = useState<SearchBody | null>(null);
   const [open, setOpen] = useState<{ path: string; hit?: Hit } | null>(null);
-  const [doc, setDoc] = useState<Doc | null>(null);
   const [shelf, setShelf] = useState<Collection[]>([]);
   const [recent, setRecent] = useState<DocRow[]>([]);
   const [problem, setProblem] = useState('');
@@ -47,14 +44,6 @@ export function Knowledge({ bridge, info, state, light }: Props) {
     return () => { gone = true; };
   }, [bridge, query, kind]);
 
-  useEffect(() => {
-    if (!bridge || !open) { setDoc(null); return; }
-    let gone = false;
-    setDoc(null);
-    read<Doc>(bridge, docTarget(open.path)).then((d) => { if (!gone) setDoc(d); }).catch((e: unknown) => { if (!gone) setProblem(e instanceof Error ? e.message : String(e)); });
-    return () => { gone = true; };
-  }, [bridge, open]);
-
   const submit = (e: FormEvent) => { e.preventDefault(); const q = text.trim(); if (q) { setOpen(null); setKind(''); setQuery(q); } };
   const home = () => { setQuery(''); setFound(null); setOpen(null); setText(''); setProblem(''); };
   const search = (large: boolean) => (
@@ -66,31 +55,7 @@ export function Knowledge({ bridge, info, state, light }: Props) {
 
   const reader = open && (
     <article className="main" style={{ flex: '999 1 420px' }} aria-label="Document">
-      {!doc ? <div className="empty">{problem || 'Opening the document.'}</div> : (() => {
-        const { meta, body } = frontmatter(doc.text);
-        const author = meta.author && meta.author in spec(info).roles ? meta.author : '';
-        return (
-          <>
-            <div className="row" style={{ fontSize: 12 }}>
-              <span className="chip line">{doc.collection}</span>
-              {open.hit && <span className={open.hit.label === 'validated' ? 'chip ok' : 'chip warn'}>{open.hit.label}</span>}
-              {doc.stale && <span className="chip warn">changed since it was indexed</span>}
-              <span className="time" style={{ overflowWrap: 'anywhere' }}>{open.hit?.pointer ?? doc.path}</span>
-            </div>
-            <h1 className="question" style={{ fontSize: 26 }}>{titleOf(doc.path, doc.text)}</h1>
-            <dl className="facts">
-              {(author || meta.author) && <div><dt>Author</dt><dd>{author ? <><Badge info={info} role={author} light={light} size={13} /> <Who info={info} role={author} light={light} /></> : meta.author}</dd></div>}
-              {meta.source_type && <div><dt>Source</dt><dd>{sourceWords(meta.source_type)}</dd></div>}
-              {meta.confidence && <div><dt>Confidence</dt><dd>{meta.confidence}</dd></div>}
-              <div><dt>Status</dt><dd>{meta.status ?? doc.status}</dd></div>
-              {dayOf(meta.timestamp) && <div><dt>Written</dt><dd>{dayOf(meta.timestamp)}</dd></div>}
-              {open.hit?.vouched_by && <div><dt>Vouched for by</dt><dd>{open.hit.vouched_by}</dd></div>}
-            </dl>
-            {open.hit && <div className="card" style={{ background: 'var(--sel)', fontSize: 14 }}><div className="caps">Matched passage</div><div className="said"><Rich text={open.hit.preview} /></div>{open.hit.note && <div className="muted" style={{ fontSize: 12 }}>{open.hit.note}</div>}</div>}
-            <div className="said" style={{ fontSize: 15, lineHeight: 1.65, maxWidth: 760 }}><Rich text={body} /></div>
-          </>
-        );
-      })()}
+      <DocView bridge={bridge} info={info} light={light} path={open.path} hit={open.hit} />
     </article>
   );
 

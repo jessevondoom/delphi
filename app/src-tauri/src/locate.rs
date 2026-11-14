@@ -78,9 +78,35 @@ pub fn locate() -> Option<Located> {
     Some(Located { info: json!({ "narrator_socket": narrator, "workspace": ws_dir, "workspace_name": workspace, "home": home, "roles": {} }), narrator })
 }
 
+/// A document's place on disk: `rel` (a path the daemon gave, relative to the workspace) under `root`, only when it names a
+/// file that really is inside `root` once links are followed. Anything absolute, with `..`, or leading outside is refused.
+pub fn inside(root: &Path, rel: &str) -> Option<PathBuf> {
+    let rel = Path::new(rel);
+    if rel.as_os_str().is_empty() || rel.components().any(|c| !matches!(c, std::path::Component::Normal(_))) {
+        return None;
+    }
+    let root = std::fs::canonicalize(root).ok()?;
+    let full = std::fs::canonicalize(root.join(rel)).ok()?;
+    (full.starts_with(&root) && full.is_file()).then_some(full)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_file_inside_the_workspace_can_be_shown() {
+        let t = tempfile::tempdir().unwrap();
+        let ws = t.path().join("ws");
+        std::fs::create_dir_all(ws.join("missions/m")).unwrap();
+        std::fs::write(ws.join("missions/m/report.md"), "x").unwrap();
+        std::fs::write(t.path().join("outside.md"), "x").unwrap();
+        std::os::unix::fs::symlink(t.path().join("outside.md"), ws.join("link.md")).unwrap();
+        assert!(inside(&ws, "missions/m/report.md").unwrap().ends_with("missions/m/report.md"));
+        for bad in ["../outside.md", "missions/../../outside.md", "/etc/hosts", "", "missions/m", "missions/m/none.md", "link.md", "./missions/m/report.md"] {
+            assert!(inside(&ws, bad).is_none(), "{bad}");
+        }
+    }
 
     #[test]
     fn the_socket_is_named_as_the_daemon_names_it() {

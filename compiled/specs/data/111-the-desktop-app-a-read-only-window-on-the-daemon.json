@@ -34,61 +34,61 @@
     },
     {
       "level": 2,
-      "line": 58,
+      "line": 59,
       "number": "3",
       "title": "How it is put together"
     },
     {
       "level": 3,
-      "line": 60,
+      "line": 61,
       "number": "3.1",
       "title": "Where it lives"
     },
     {
       "level": 3,
-      "line": 64,
+      "line": 65,
       "number": "3.2",
       "title": "The bridge"
     },
     {
       "level": 3,
-      "line": 73,
+      "line": 74,
       "number": "3.3",
       "title": "The window"
     },
     {
       "level": 2,
-      "line": 79,
+      "line": 80,
       "number": "4",
       "title": "What it looks like"
     },
     {
       "level": 2,
-      "line": 89,
+      "line": 90,
       "number": "5",
       "title": "Screens"
     },
     {
       "level": 2,
-      "line": 99,
+      "line": 100,
       "number": "6",
       "title": "Slices (one per commit, built locally)"
     },
     {
       "level": 2,
-      "line": 120,
+      "line": 121,
       "number": "7",
       "title": "Authority and trust"
     },
     {
       "level": 2,
-      "line": 127,
+      "line": 128,
       "number": "8",
       "title": "Found while building"
     },
     {
       "level": 2,
-      "line": 136,
+      "line": 138,
       "number": "9",
       "title": "Not verified (before building)"
     }
@@ -96,7 +96,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/111-the-desktop-app-a-read-only-window-on-the-daemon.md",
-    "sha256": "8e4d65c2d5df1e29ccc38624e647337d52e231cbbbeceb17a58ffb1ed70937c5"
+    "sha256": "8be8b3b048a2eee899e436b95e3721f1bdeaae15bd904b5c3d9b2a8355cffee6"
   },
   "source_status_at_hash": {
     "line": {
@@ -109,7 +109,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-14, in a host session: asked whether a spec could be written and built from on the plan, as specs 104 to 110 were, the operator answered \"your default assumptions all sounds correct. go\". The approval is to the plan this spec carries out; the operator has not read this text."
     },
-    "sha256": "8e4d65c2d5df1e29ccc38624e647337d52e231cbbbeceb17a58ffb1ed70937c5",
+    "sha256": "8be8b3b048a2eee899e436b95e3721f1bdeaae15bd904b5c3d9b2a8355cffee6",
     "word": "approved"
   },
   "spec": {

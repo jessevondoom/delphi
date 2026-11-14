@@ -14,6 +14,8 @@ export interface Bridge {
   snapshot(): Promise<Envelope[]>;
   /** One knowledge base read: `/v1/search`, `/v1/documents`, `/v1/doc`, `/v1/kinds` or `/v1/collections`, with its query. */
   kb(target: string): Promise<KbReply>;
+  /** Show a workspace document in the Finder. Only the app has it; a browser has no Finder to show. */
+  reveal?(path: string): Promise<void>;
   subscribe(l: Listener): () => void;
 }
 /** What the daemon's retrieval service answered: its status and its body. */

@@ -97,6 +97,14 @@ button.menu-row:hover, button.menu-row.on { background: var(--sel); }
 /* Screens */
 .main { flex: 999 1 480px; min-width: 0; padding: 24px 28px 32px; display: flex; flex-direction: column; gap: 18px; }
 .aside { flex: 1 1 280px; max-width: 340px; min-width: 0; padding: 24px 20px; border-left: 1px solid var(--line); display: flex; flex-direction: column; gap: 20px; }
+.aside.wide { flex: 1 1 360px; max-width: 520px; background: var(--side); gap: 14px; }
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.table { width: 100%; min-width: 720px; border-collapse: collapse; font-size: 13px; text-align: left; }
+.table th { padding: 10px 12px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.table td { padding: 6px 12px; border-top: 1px solid var(--line); vertical-align: middle; }
+.table tr.on td { background: var(--sel); }
+.cell-btn { display: block; width: 100%; min-height: 40px; padding: 4px 0; border: none; background: transparent; text-align: left; font-weight: 600; cursor: pointer; }
+.cell-btn:hover { text-decoration: underline; }
 .head-row { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 .title { font-size: 22px; font-weight: 600; }
 .sub { font: 400 12px/1.4 var(--mono); color: var(--muted); }

@@ -11,6 +11,7 @@ export function appBridge(): Bridge {
     state: () => invoke<OState>('state'),
     snapshot: async () => (await invoke<{ events?: Envelope[] }>('snapshot')).events ?? [],
     kb: (target: string) => invoke<KbReply>('kb', { target }),
+    reveal: (path: string) => invoke<void>('reveal', { path }),
     subscribe(l: Listener) {
       const offs = [
         listen<Envelope[]>('delphi://events', (m) => m.payload.forEach((e) => l.event(e))),

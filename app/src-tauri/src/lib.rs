@@ -62,6 +62,24 @@ fn kb(bridge: State<'_, Arc<Bridge>>, target: String) -> Result<Value, String> {
     bridge.call(Method::KbGet, json!({ "target": target }))
 }
 
+/// Show a workspace document in the Finder (spec 111 §2.6). The path is one the daemon listed, relative to the workspace; it is
+/// shown only when it is a file inside the workspace, and it is revealed, never opened or run.
+#[tauri::command(async)]
+fn reveal(bridge: State<'_, Arc<Bridge>>, path: String) -> Result<(), String> {
+    let workspace = bridge.info()["workspace"].as_str().map(std::path::PathBuf::from).ok_or("the workspace is not known yet")?;
+    let file = locate::inside(&workspace, &path).ok_or("that is not a file in the workspace")?;
+    let shown = if cfg!(target_os = "macos") {
+        std::process::Command::new("/usr/bin/open").arg("-R").arg(&file).status()
+    } else {
+        // Elsewhere: the folder that holds it.
+        std::process::Command::new("xdg-open").arg(file.parent().unwrap_or(&file)).status()
+    };
+    match shown {
+        Ok(s) if s.success() => Ok(()),
+        _ => Err("the file could not be shown".into()),
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
@@ -71,7 +89,7 @@ pub fn run() {
             std::thread::spawn(move || bridge.run(sink));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![info, conn, state, snapshot, kb])
+        .invoke_handler(tauri::generate_handler![info, conn, state, snapshot, kb, reveal])
         .run(tauri::generate_context!())
         .expect("the Delphi window could not start");
 }
