@@ -130,3 +130,24 @@ A red-team review on 2026-11-13 (one critic, the author's own model family, so `
 | A3 | The 16 KiB budget cannot be met (the orchestrator's manifest is 8.8 KB and the excerpt about 8 KB), and "a third of today's size" is not reachable without trimming manifests. | The objective is: the compact pack is smaller than the full pack for every role, and the charter excerpt is under half the charter. P2's size test pins each release role's compact pack at its measured size plus 10 percent, and the orchestrator's at no more than 24 KiB. §9 records the sizes. Trimming a manifest with `inside-only` markers is separate work under its own review. |
 | A4 | A read-only tool list only for roles whose `write` is empty covers the validator alone; red-team, scout, investigator and strategist workers would inherit a shell and file writes, against charter §5.1. | Only roles whose manifest's write globs include the worktree (`@worktree/**`: builder and writer today) get a worker that inherits the session's tools. Every other worker gets the read-only list the seat files use plus Delphi's read tools. A drift test reads the manifests. |
 | A5 | §1 E-3 said four Panel seats; the builder has a seat file and is not a Panel seat. | Corrected here: four seat files, three Panel seats. |
+
+## 11. Follow-up: a worker that always has its pack, and an orchestrator pack inside its bound (operator, 2026-11-14)
+
+The operator asked on 2026-11-14 for approaches to the gaps left after the first build, was given options with a recommendation for each, and approved them: "yeah build all of your suggestions in the order you deem best."
+
+**G2: a worker always has its role's pack.** In the Claude Code live check a worker file loaded and the model did not call `get_agent`, so the worker ran without the role (110 §8). A request in a prompt is not enough.
+
+1. *Claude Code.* The plugin declares a fourth hook, on subagent start, running `delphi mcp --hook subagent-start --host claude-code`. When the starting subagent is one of Delphi's workers (its name is `<role>-worker`, matched exactly against the release's worker table; any other subagent prints nothing), the hook prints that role's compact pack with the identity line first, as `get_agent` would. It is governed by the same switch (`[mcp] session_hooks`), has the same budget and exit rule as the other hooks (105 §2), and prints only ratified text: a pack is the charter excerpt, the manifest, heuristics and lessons, and never retrieved or session text. The worker file keeps its `get_agent` line as the fallback for when the hook is off.
+2. *Hosts without that hook.* The worker file for such a host carries the role's compact pack inline, generated at install or export time from the operator's ratified files, with its `pack_hash` on the first line. `delphi mcp --check <host>` compares that hash with the current one and says `stale` when they differ, and the file tells the worker to call `get_agent` with `if_hash` first when the Delphi tools are available. A release-shipped file (the marketplace plugin) cannot carry an operator's pack, so inlining applies only to files `delphi connect` or `delphi plugin export` writes on the operator's machine.
+3. If the installed Claude Code does not fire a subagent-start hook that can add context (to be shown by one live run, at most six model calls), item 2's inlining is used for Claude Code too and §9 records the finding.
+
+**G1: the orchestrator's compact pack inside its bound.** It measured 25,126 bytes against 24,576 (§9).
+
+1. The orchestrator's manifest gains `<!-- inside-only -->` markers around the passages that describe a Delphi tool a host does not have: the timer (`timers`), naming threads (`name_thread`), system inspection (`inspect_system`), the `suggest_rule` call's argument detail, and the tool-inventory reading of seats. The text is unchanged; only the markers are added, so Delphi's own orchestrator reads exactly what it reads today (a test compares the manifest with the markers stripped against the manifest before this change). This is an edit to `agents/orchestrator/AGENT.md`, made in this slice's pull request, which is its review.
+2. In a compact pack the skill index lists names only, with one line saying `list_skills` gives the descriptions.
+3. The size test then asserts the bound the amended spec set: the orchestrator's compact pack is at most 24,576 bytes. §9 is re-measured for all roles.
+
+| Slice | Content | Hours |
+| :-- | :-- | --: |
+| G2 | the subagent-start hook, inlined packs for other hosts, `--check` staleness, one live run | 8-10 |
+| G1 | the markers, names-only skill index in compact, the bound asserted, §9 re-measured | 4-6 |
