@@ -129,7 +129,7 @@ Today everything that makes a host session a Delphi session depends on the host'
 
 ## 110-other-hosts-adapters-instruction-files-and-install-paths
 
-**110: Other hosts: adapters, instruction files, hooks and install paths for Copilot CLI, Codex and Gemini CLI, each with a recorded live check** · approved (per source at `7d00f84c5429`) · tier 0 · [source](../../specs/110-other-hosts-adapters-instruction-files-and-install-paths.md)
+**110: Other hosts: adapters, instruction files, hooks and install paths for Copilot CLI, Codex and Gemini CLI, each with a recorded live check** · approved (per source at `2f8f3c8f3250`) · tier 0 · [source](../../specs/110-other-hosts-adapters-instruction-files-and-install-paths.md)
 
 **source excerpt, untrusted** · `specs/110-other-hosts-adapters-instruction-files-and-install-paths.md` lines 25-30
 

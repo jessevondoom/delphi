@@ -992,7 +992,7 @@ The operator asked, in a host session on 2026-11-13, for a review of how Delphi'
 | 110 | X1 | host IDs and adapters | not started |
 | 110 | X2 | `delphi connect` for Codex and Gemini, the instruction section | not started |
 | 110 | X3 | role files and hooks per host | not started |
-| 110 | X4 | live-check scripts and results | not started |
+| 110 | X4 | live-check scripts and results | probe built (local, not pushed): `dev/hosts/<host>.sh` run each host against a temporary Delphi home with a logging wrapper; the first run is recorded in §8.1 (Claude Code, Copilot and Codex connect and name themselves `claude-code`, `copilot-cli`, `codex-mcp-client`; Gemini CLI is not testable, its sign-in is ineligible) |
 
 A red-team review of the seven specs ran on 2026-11-13 (one critic of the author's own family, so `homogeneous`), and one foreign seat (`ask_family`, served by the gemini family) reviewed spec 104. Their findings are recorded as an amendments section in each spec; two were P0 (an unratified handoff line in the session brief, and the trace harvester stamping episodes above their tier) and both were amended before the affected slice was built.
 

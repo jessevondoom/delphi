@@ -91,7 +91,57 @@ X4 runs first for each host as a probe (what does this host do today?), and agai
 
 ## 8. Live-check results
 
-To be filled by X4, one table per host.
+Run by the scripts in `dev/hosts/` (`claude-code.sh`, `copilot.sh`, `codex.sh`, `gemini.sh`, sharing `lib.sh`). Each script makes a scratch directory with a temporary Delphi home (`delphi init --non-interactive --home <temp>`, `DELPHI_HOME` set), a scratch project and a `delphi` wrapper first on `PATH` that lets through only `delphi mcp` and `delphi mcp --hook ...`, always with `--home <temp>`, and logs both directions of the stream (that log gives the client name, the tool count and each tool call). It sends three fixed prompts (in `lib.sh`): call 1 asks for `list_roles` and `get_agent` and for four lines (the tools the model can call, the pack's adapter line, the codewords it was given, whether it saw a Delphi brief); call 2 is `@architect` and a question, naming no tool; call 3 asks the host to delegate to the architect's worker. **Limit (A1):** Delphi is isolated; the host is not. It runs as the operator with the operator's sign-in and keeps its own session bookkeeping in its own home; nothing was installed into, added to or changed in any host's configuration (each host was configured by flags and files in the scratch directory only; the commands are under each table).
+
+### 8.1 Probe (X4a, 2026-11-14): what each host does today, before X1 to X3
+
+**Claude Code 2.1.325** (`haiku`). `claude -p <prompt> --model haiku --strict-mcp-config --mcp-config <scratch>/mcp.json --setting-sources project --permission-prompts none --allowedTools <Delphi read tools> Read Grep Glob Agent Task --no-session-persistence --output-format json`, in the scratch project, which held `CLAUDE.md` (a codeword), `.claude/settings.json` (probe hooks for SessionStart, UserPromptSubmit, SessionEnd) and `.claude/agents/architect-worker.md` (the generated worker).
+
+| Check | Result |
+| :-- | :-- |
+| server connects, lists its tools | yes (40) |
+| client name at `initialize` | `claude-code` (version 2.1.325) |
+| `get_agent` returns a pack with this host's adapter line | yes: `claude-code v1, hash 2817033d91b71f91` |
+| host's tool names (model's own list) | Read, Grep, Glob, WebSearch, WebFetch, Edit, Write, Bash, Agent, and others (Skill, ToolSearch, NotebookEdit, ...) |
+| instruction file reaches the model | yes (the `CLAUDE.md` codeword) |
+| project hooks fire | no: none of the three probe hooks in the scratch project's `.claude/settings.json` ran under `--setting-sources project` |
+| role mention reaches the model (`@architect`, no plugin, no hook) | no: no Delphi tool was called |
+| worker file loads and runs | yes: `architect-worker` called `get_agent` and printed the display line |
+| session-start brief | not testable in the probe (no Delphi hook installed) |
+| progress line shown | not testable: every waiting tool needs the daemon, which a check may not start |
+
+**Copilot CLI 1.0.111** (`--model auto`, `COPILOT_AUTO_TIER=efficiency`; it chose `gpt-6-luna`). `COPILOT_PLUGIN_DIR_ONLY=true copilot -p <prompt> --model auto --additional-mcp-config @<scratch>/copilot-mcp.json --allow-tool delphi --trust-folder --disable-builtin-mcps --no-ask-user --no-auto-update --log-dir <scratch>/log --output-format json`, in the scratch project, which held `AGENTS.md` and `.github/copilot-instructions.md` (codewords), `.github/agents/delphi-architect-worker.agent.md` (from `delphi plugin export --host copilot`) and two probe hook files in `.github/hooks/`: Copilot's documented shape (camelCase events, `bash`) and Claude Code's (PascalCase events, `command`).
+
+| Check | Result |
+| :-- | :-- |
+| server connects, lists its tools | yes (40) |
+| client name at `initialize` | `copilot-cli` (version 1.0.111) |
+| `get_agent` adapter line | the pack said `none for copilot yet` (correct before X1) |
+| host's tool names (model's own list, with this model) | `view`, `rg`, `glob`, `web_fetch`, `apply_patch`, `bash` (with `read_bash`, `stop_bash`, `list_bash`), `task`, `read_agent`, `list_agents`, `skill`, `sql`; no web search tool. Delphi's tools appear as `delphi-<tool>` |
+| instruction file reaches the model | not determined: the model declined to list the codewords (the prompt read as an extraction attempt); the prompt was reworded for the final run |
+| hooks fire | yes, both shapes, all three events, every call. The Claude-shaped file gets snake_case input (`hook_event_name`, `session_id`, `cwd`, `prompt`, `reason`, `initial_prompt`); the Copilot-shaped one camelCase (`sessionId`, ...). No input carries a `transcript_path` |
+| hook output reaches the model | not determined (same refusal) |
+| role mention reaches the model | yes, through the worker file: `@architect` made Copilot delegate (`task`) to `delphi-architect-worker`, whose description names `@architect`; the worker called `get_agent` |
+| worker file loads and runs | yes (`subagent.started` `delphi-architect-worker`, `get_agent` called). It ran with `tools: ["*"]`: a Copilot agent file without a tool list gets every tool |
+| progress line shown | not testable (daemon) |
+
+**Codex CLI 0.169.0** (`gpt-5.6-luna`, reasoning effort low). `codex exec --ephemeral --ignore-user-config --skip-git-repo-check -s read-only -C <scratch>/proj_x.y -m gpt-5.6-luna -c model_reasoning_effort="low" -c mcp_servers.delphi.command="<scratch>/bin/delphi" -c mcp_servers.delphi.args=["mcp"] --json <prompt>`; the scratch project held `AGENTS.md` (a codeword) and `.codex/agents/` from `delphi mcp --install codex --agents --project --yes --home <temp>`.
+
+| Check | Result |
+| :-- | :-- |
+| server connects, lists its tools | yes (40) |
+| client name at `initialize` | `codex-mcp-client` (version 0.169.0) |
+| `get_agent` adapter line | `none for codex yet` (correct before X1) |
+| host's tool names (model's own list) | `exec_command`, `apply_patch`, `list_mcp_resources`, `list_mcp_resource_templates`, goal tools and the `codex_apps` connector tools; call 3 also used `spawn_agent` and `wait`. No read, search, web search or fetch tool: files are read and searched through `exec_command` |
+| instruction file reaches the model | yes (the `AGENTS.md` codeword) |
+| hooks fire | not testable: Codex runs a hook only after its trust is persisted in Codex's config, or with `--dangerously-bypass-hook-trust`; both are outside the rules |
+| role mention reaches the model | no: no Delphi tool was called |
+| worker file loads and runs | no: `spawn_agent` started a generic agent told to act as `delphi-architect-worker`; the project's `.codex/agents/` file was not loaded (the project is not trusted, and trusting it persists) and no `get_agent` call was made |
+| progress line shown | not testable (daemon) |
+
+**Gemini CLI 0.64.0**: **not testable.** Every run stops before any model call with `IneligibleTierError: Your current account is not eligible for Gemini Code Assist for individuals` (reason `RESTRICTED_DASHER_USER`), even `gemini -l`. The operator's sign-in is Antigravity's (`agy`), a different host. No other sign-in was tried: it would mean a credential the operator did not give for this.
+
+Model calls spent in the probe: Claude Code 3, Copilot 3, Codex 3, Gemini 0.
 
 ## 9. Amendments from review (2026-11-13)
 
