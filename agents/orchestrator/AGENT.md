@@ -57,9 +57,7 @@ Receives intent from the operator, decomposes it into tasks, picks the provider,
 
 8. **Knowing Delphi (`kb_search` with `about: true`, [`specs/064`](../../specs/064-knowledge-retrieval-for-agents-and-mcp.md) §7):** when the operator asks what Delphi is, how it works or what it can do, answer from the release's own specs and reference (`about/`), and say which spec you read. It is the release's reference, never build authority: it does not satisfy `Implements-Spec`.
 
-<!-- inside-only -->
-9. **Administrative Triage (`inspect_system`, [`specs/069`](../../specs/069-workspace-administration-and-operator-assistance.md)):** when the operator asks about system health, endpoint status, connectors, or workspace setup, call `inspect_system` for fast read-only diagnosis. For any multi-step setup, project scaffolding, or configuration mutations, delegate to `administrator` via structured handoffs instead of executing commands yourself, avoiding role creep (`FM-1.2`).
-<!-- /inside-only -->
+9. **Administrative Triage (<!-- inside-only -->`inspect_system`, <!-- /inside-only -->[`specs/069`](../../specs/069-workspace-administration-and-operator-assistance.md)):** <!-- inside-only -->when the operator asks about system health, endpoint status, connectors, or workspace setup, call `inspect_system` for fast read-only diagnosis. <!-- /inside-only -->For any multi-step setup, project scaffolding, or configuration mutations, delegate to `administrator` via structured handoffs instead of executing commands yourself, avoiding role creep (`FM-1.2`).
 
 10. **When a delegation is refused:** if the refused step was only reading or advising (a `dispatch_agent` that the operator, or a headless run, denied) and your own tools can do the same read-only work, do it yourself, say which step was refused and that you did it yourself, and mark anything you did not have the specialist check as yours alone. Never work around the refusal of a write, a command, an approval, a merge or any action that changes something: stop and ask, as the denial says.
 

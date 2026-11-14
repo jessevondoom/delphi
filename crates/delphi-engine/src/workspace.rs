@@ -473,7 +473,7 @@ pub(crate) mod tests {
         let before = include_str!("../tests/fixtures/orchestrator-AGENT.before-g1.txt");
         assert_ne!(shipped, before, "the manifest carries markers");
         let markers = |s: &str| s.matches("<!-- inside-only -->").count() + s.matches("<!-- /inside-only -->").count();
-        assert_eq!(markers(shipped), 10, "five marked blocks");
+        assert_eq!(markers(shipped), 12, "six marked blocks");
         assert_eq!(markers(before), 0);
         // The manifest with its marker lines stripped is the base manifest, byte for byte.
         assert_eq!(strip_inside_only_markers(shipped), before);
