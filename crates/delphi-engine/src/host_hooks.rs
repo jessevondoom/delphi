@@ -147,11 +147,7 @@ fn cut_chars(s: &str, max: usize) -> String {
 /// of three hyphens (so it can never forge or close a marker line), no occurrence of the run's nonce, cut to `max` characters.
 pub fn flatten(s: &str, max: usize, nonce: &str) -> String {
     let cleaned: String = s.chars().filter(|c| *c != '<' && !invisible(*c)).map(|c| if c.is_control() { ' ' } else { c }).collect();
-    let mut one = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
-    // `host_rpc::defuse` replaces each `---` once, which leaves `---` in a run of five or more hyphens: repeat until none is left.
-    while one.contains("---") {
-        one = crate::host_rpc::defuse(&one);
-    }
+    let mut one = crate::host_rpc::defuse(&cleaned.split_whitespace().collect::<Vec<_>>().join(" "));
     if !nonce.is_empty() {
         one = one.replace(nonce, "");
     }

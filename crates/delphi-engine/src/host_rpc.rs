@@ -176,10 +176,27 @@ pub fn set_enabled(ws_dir: &Path, on: bool) -> Result<(), String> {
     std::fs::write(&tmp, doc.to_string()).and_then(|_| std::fs::rename(&tmp, &path)).map_err(|e| format!("could not write config.toml: {e}"))
 }
 
-/// Host text can never contain the `---` of a fence marker, so it cannot close the fence it sits in: every run of three hyphens
-/// becomes `- - -` (which holds none, however the pieces are arranged).
+/// Host text can never contain the `---` of a fence marker, so it cannot close the fence it sits in: every run of three or more
+/// hyphens has its hyphens spaced apart (`-----` becomes `- - - - -`), so the result holds no `---` however long the run was.
 pub fn defuse(s: &str) -> String {
-    s.replace("---", "- - -")
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] != '-' {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+        let run = chars[i..].iter().take_while(|c| **c == '-').count();
+        if run >= 3 {
+            out.push_str(&vec!["-"; run].join(" "));
+        } else {
+            out.extend(std::iter::repeat_n('-', run));
+        }
+        i += run;
+    }
+    out
 }
 
 /// One line of text of at most `max` characters: control characters become spaces, and a fence marker is defused.
@@ -1196,6 +1213,18 @@ mod tests {
         assert_eq!(m, "`question` is at most 2000 characters: put detail in project files and pass them as `context_pointers`");
         let HostErr::Invalid(m) = clean("title", &long, 10).unwrap_err() else { panic!("not Invalid") };
         assert_eq!(m, "`title` is at most 10 characters");
+    }
+
+    #[test]
+    fn a_run_of_any_length_of_hyphens_is_defused_and_short_runs_are_kept() {
+        for n in 3..12 {
+            let out = defuse(&format!("a{}b", "-".repeat(n)));
+            assert!(!out.contains("---"), "{n}: {out}");
+            assert_eq!(out.matches('-').count(), n, "{n}: every hyphen is kept");
+        }
+        assert_eq!(defuse("a-b--c"), "a-b--c");
+        assert_eq!(defuse("---"), "- - -");
+        assert_eq!(defuse(&defuse("-----")), "- - - - -", "defusing twice changes nothing more");
     }
 
     #[test]

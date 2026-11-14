@@ -523,7 +523,7 @@ pub fn tools() -> Value {
                 "type": "object",
                 "properties": {
                     "objective": {"type": "string", "minLength": 1, "maxLength": 500},
-                    "target_agent": {"type": "string", "maxLength": 64, "description": "A servable role ID; default the builder."},
+                    "target_agent": {"type": "string", "maxLength": 64, "description": "A servable role ID; default the orchestrator."},
                     "context_pointers": {"type": "array", "maxItems": 20, "items": {"type": "object", "properties": {"uri": {"type": "string", "maxLength": 200}, "reason": {"type": "string", "maxLength": 200}}, "required": ["uri", "reason"], "additionalProperties": false}},
                     "constraints": {"type": "array", "maxItems": 10, "items": {"type": "string", "maxLength": 200}},
                     "conversation": {"type": "string", "maxLength": 4000},
@@ -1485,7 +1485,7 @@ impl Server {
             "kind": "unaudited_agenda",
             "barrier": "none",
             "source": "host-reported",
-            "rule": "An unaudited agenda, staged as an import under tier L0. It is not a Council record; review at next /retro."
+            "rule": "An unaudited agenda, saved as an import at tier L0 under missions/agendas/ in the workspace, where the operator reads it. It is not a Council record, and nothing lists it for review or loads it into a prompt."
         }).to_string())
     }
 
@@ -2665,6 +2665,9 @@ mod tests {
         assert!(!content.to_lowercase().contains("council_format") && !content.contains("venue: daemon") && !content.contains("# Council"), "{content}");
         assert!(file_path.to_string_lossy().contains("missions/agendas/") && !file_path.to_string_lossy().contains("missions/councils/"), "{}", file_path.display());
         assert_eq!((v["kind"].as_str(), v["barrier"].as_str(), v["source"].as_str()), (Some("unaudited_agenda"), Some("none"), Some("host-reported")));
+        // Spec 108 M5: the answer says where it went and who reads it, and promises no review it does not get.
+        let rule = v["rule"].as_str().unwrap();
+        assert!(rule.contains("missions/agendas/") && rule.contains("the operator reads it") && !rule.contains("retro"), "{rule}");
     }
 
     #[test]

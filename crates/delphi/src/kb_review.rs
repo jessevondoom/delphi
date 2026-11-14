@@ -107,9 +107,15 @@ pub fn run_in(home: &Path, ws_dir: &Path, args: &[String]) -> Result<String, Str
             let mut out = String::new();
             for e in pick(&entries, &rest)? {
                 let r = delphi_engine::kb::import_text(ws_dir, &format!("{}.md", e.title), &page_of(e))?;
+                // Spec 108 M5 (A6): the marker that lets host search serve this page, and no imported page, as kept.
+                delphi_engine::kb_import::mark_kept(ws_dir, &r.id, &e.note.reference())?;
                 crate::learn_cmd::drop_note(ws_dir, &e.note)?;
                 delphi_engine::kb::link_sources(home, ws_dir, &r.id);
                 out.push_str(&r.receipt());
+            }
+            // Searchable at once (`specs/068` §3): the index takes the kept pages now. A failure leaves them for the next refresh.
+            if let Ok(mut kb) = delphi_engine::kb::Kb::open(&ws_dir.join("local/state.db")) {
+                let _ = kb.refresh(ws_dir, "");
             }
             Ok(out)
         }
@@ -149,6 +155,18 @@ mod tests {
         log.append(EventEnvelope::new(mission, "learn.staged", json!({"id": id, "trigger": TRIGGER, "summary": format!("[claude-code/x] KB entry: {title}"), "event_seqs": [], "tier": "L0",
             "kb_entry": {"title": title, "body": "Rotation is every 90 days. See https://wiki.example.com/v", "sources": ["https://wiki.example.com/v"], "confidence": "low"}}))).unwrap();
         log.append(EventEnvelope::new(mission, "learn.staged", json!({"id": "h9", "trigger": "host_note", "summary": "a lesson", "event_seqs": [], "tier": "L0"}))).unwrap();
+    }
+
+    #[test]
+    fn a_kept_entry_carries_the_kept_marker_and_is_indexed_at_once() {
+        let t = tempfile::tempdir().unwrap();
+        stage(t.path(), "host-a", "h1", "Vault rotation");
+        run_in(t.path(), t.path(), &["keep".into(), "host-a/h1".into()]).unwrap();
+        let page = std::fs::read_dir(t.path().join(delphi_engine::kb_import::DIR)).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).find(|n| n.ends_with(".md") && !n.ends_with(".bib.md")).unwrap();
+        assert!(delphi_engine::kb_import::is_kept(t.path(), &format!("summaries/{page}")), "{page}");
+        let kb = delphi_engine::kb::Kb::open(&t.path().join("local/state.db")).unwrap();
+        let hits = kb.search("rotation", &delphi_engine::kb_import::kept_search_opts(5)).unwrap();
+        assert!(hits.iter().any(|h| h.rel_path == format!("summaries/{page}")), "searchable at once");
     }
 
     #[test]

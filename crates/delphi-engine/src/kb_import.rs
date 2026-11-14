@@ -230,6 +230,47 @@ pub struct Input<'a> {
     pub keep_id: Option<&'a str>,
 }
 
+/// The frontmatter key `delphi kb review keep` adds to the page of a host entry it keeps (`specs/108` M5, A6): the reference of the
+/// staged entry. An imported external page never carries it (an import writes every frontmatter field itself, whatever the file
+/// says), so it is the one thing that tells a kept host entry from an imported page in the `summaries` zone.
+pub const KEPT_KEY: &str = "kept_from";
+/// The label host search shows on a kept entry: the operator chose to keep it, which grants inclusion, never validity.
+pub const KEPT_LABEL: &str = "kept by the operator, not validated";
+
+/// Mark the page `id` as a kept host entry, from the staged entry `from` (`<mission>/<id>`). Idempotent; nothing else changes.
+pub fn mark_kept(ws: &Path, id: &str, from: &str) -> Result<(), String> {
+    if !valid_id(id) || from.is_empty() || from.len() > 100 || !from.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '/')) {
+        return Err(format!("cannot mark `{id}` as kept from `{from}`"));
+    }
+    let page = ws.join(DIR).join(format!("{id}.md"));
+    let text = std::fs::read_to_string(&page).map_err(|e| format!("cannot read {}: {e}", page.display()))?;
+    if is_kept_text(&text) {
+        return Ok(());
+    }
+    let end = text.strip_prefix("---\n").and_then(|r| r.find("\n---\n")).ok_or_else(|| format!("{} has no frontmatter", page.display()))?;
+    let at = 4 + end + 1;
+    let marked = format!("{}{KEPT_KEY}: {from}\n{}", &text[..at], &text[at..]);
+    let tmp = page.with_extension("md.tmp");
+    std::fs::write(&tmp, marked).and_then(|_| std::fs::rename(&tmp, &page)).map_err(|e| format!("cannot write {}: {e}", page.display()))
+}
+
+fn is_kept_text(text: &str) -> bool {
+    crate::workspace::split_frontmatter(text).0.is_some_and(|f| f.get(KEPT_KEY).and_then(|v| v.as_str()).is_some_and(|v| !v.is_empty()))
+}
+
+/// Is the indexed `summaries/<id>.md` a page `delphi kb review keep` wrote? Read from the file itself, so an index entry cannot
+/// claim it. A bibliography, any other path, and a page without the marker are not.
+pub fn is_kept(ws: &Path, rel_path: &str) -> bool {
+    let Some(id) = rel_path.strip_prefix("summaries/").and_then(|r| r.strip_suffix(".md")) else { return false };
+    valid_id(id) && std::fs::read_to_string(ws.join(DIR).join(format!("{id}.md"))).is_ok_and(|t| is_kept_text(&t))
+}
+
+/// The search options that find kept host entries: the `summaries` zone, untrusted included (a kept entry is untrusted), answered
+/// with the page itself. Callers keep only the hits [`is_kept`] accepts, so the untrusted filter still holds for every other page.
+pub fn kept_search_opts(limit: usize) -> crate::kb::SearchOpts {
+    crate::kb::SearchOpts { role: None, limit, zones: Some(vec!["summaries"]), include_untrusted: true, summary_target: crate::kb::SummaryTarget::SummaryPage, ..Default::default() }
+}
+
 /// The bare import counter (`specs/068` §9): imported pages, and how many of them show in default search.
 pub fn counts(ws: &Path) -> (usize, usize) {
     let (mut pages, mut shown) = (0, 0);
@@ -524,6 +565,24 @@ mod tests {
     }
     fn none(_: &str) -> Option<String> {
         None
+    }
+
+    #[test]
+    fn only_a_page_marked_at_keep_time_is_kept_and_a_file_cannot_claim_the_marker() {
+        let t = tempfile::tempdir().unwrap();
+        let kept = run(t.path(), "# Kept\n\nBody one.\n", &none);
+        let claimed = run(t.path(), "---\nkept_from: host-x/h1\n---\n# Claimed\n\nBody two.\n", &none);
+        assert!(!is_kept(t.path(), &format!("summaries/{}.md", kept.id)), "not before the keep");
+        mark_kept(t.path(), &kept.id, "host-abc/h1").unwrap();
+        mark_kept(t.path(), &kept.id, "host-abc/h1").unwrap();
+        let text = std::fs::read_to_string(&kept.page).unwrap();
+        assert_eq!(text.matches("kept_from: host-abc/h1").count(), 1, "{text}");
+        assert!(text.ends_with("Body one.\n"), "the body is untouched: {text}");
+        assert!(is_kept(t.path(), &format!("summaries/{}.md", kept.id)));
+        assert!(!is_kept(t.path(), &format!("summaries/{}.bib.md", kept.id)), "a bibliography is never kept");
+        assert!(!is_kept(t.path(), &format!("summaries/{}.md", claimed.id)), "an imported file's own frontmatter is dropped");
+        assert!(!is_kept(t.path(), "summaries/../x.md") && !is_kept(t.path(), "context/x.md"));
+        assert!(mark_kept(t.path(), &kept.id, "a b").is_err() && mark_kept(t.path(), "../x", "host-a/h1").is_err());
     }
 
     #[test]

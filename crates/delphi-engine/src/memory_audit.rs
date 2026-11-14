@@ -107,6 +107,12 @@ pub const SITES: &[Site] = &[
         ],
     },
     Site {
+        name: "`propose_council_record` (`specs/108` M5): a host's unaudited agenda, saved at L0 under `missions/agendas/` for the operator to read; never a Council record, never loaded",
+        files: &["crates/delphi-engine/src/mcp_host.rs"],
+        events: &[],
+        proofs: &[("crates/delphi-engine/src/mcp_host.rs", "propose_council_record_rejects_missing_minority_report_and_stages_valid_records")],
+    },
+    Site {
         name: "the checkpoint summary (`specs/030` §4.3): no model text for a task that read content that is not validated",
         files: &["crates/delphi-engine/src/checkpoint.rs"],
         events: &[],
