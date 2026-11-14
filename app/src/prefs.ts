@@ -24,8 +24,16 @@ export function parse(raw: string | null): Prefs {
   };
 }
 
+/** A screen named in the address (`#council`) opens first: a link to one screen, for a browser and for tests of the page. */
+export function fromHash(p: Prefs, hash: string): Prefs {
+  const named = hash.replace(/^#/, '') as Screen;
+  return SCREENS.includes(named) ? { ...p, screen: named } : p;
+}
+
 export function load(): Prefs {
-  try { return parse(globalThis.localStorage?.getItem(KEY) ?? null); } catch { return { ...DEFAULTS }; }
+  let p: Prefs;
+  try { p = parse(globalThis.localStorage?.getItem(KEY) ?? null); } catch { p = { ...DEFAULTS }; }
+  return fromHash(p, globalThis.location?.hash ?? '');
 }
 
 export function save(p: Prefs): void {

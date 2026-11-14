@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import type { Envelope, OState } from '../src/types.ts';
-import { clock, entryOf, familyOf, roster, stream, taskRoles, tilde, waiting } from '../src/view.ts';
+import { STAGES, clock, councilEntries, defaultCouncil, entryOf, familyOf, isBlind, isDecided, phaseNote, roster, seatsOf, stageOf, stream, taskRoles, tilde, waiting } from '../src/view.ts';
+import type { Council } from '../src/types.ts';
 
 const sim = JSON.parse(readFileSync(new URL('../src/fixture/sim.json', import.meta.url), 'utf8')) as { state: OState; events: Envelope[] };
 
@@ -79,4 +80,48 @@ test('a home folder is written as a tilde', () => {
   assert.equal(tilde('/' + 'Users' + '/someone/delphi/project'), '~/delphi/project');
   assert.equal(tilde('/' + 'home' + '/someone'), '~');
   assert.equal(tilde('/opt/place'), '/opt/place');
+});
+
+const running = sim.state.councils[1]!;
+const blindOf = (c: Council): Council => ({ ...c, phase: 'round 1', critiques: [], stances: c.stances.slice(0, 2) });
+
+test('a council names its stage, and the one shown first is one still running', () => {
+  assert.equal(STAGES.length, 5);
+  assert.deepEqual([stageOf(blindOf(running)), stageOf(running), stageOf(sim.state.councils[0]!), stageOf({ ...running, phase: 'escalated' })], [1, 3, 4, 4]);
+  assert.deepEqual([isBlind(blindOf(running)), isBlind(running), isDecided(running), isDecided(sim.state.councils[0]!), isDecided({ ...running, phase: 'escalated' })], [true, false, false, true, true]);
+  assert.equal(defaultCouncil(sim.state), 1);
+  assert.equal(defaultCouncil({ ...sim.state, councils: [sim.state.councils[0]!] }), 0);
+  assert.equal(phaseNote({ ...running, phase: 'escalated' }), 'needs your decision');
+});
+
+test('after the barrier a seat shows its position, lens and critique', () => {
+  const seats = seatsOf(running);
+  assert.deepEqual(seats.map((x) => x.role), ['strategist', 'red-team', 'architect']);
+  assert.ok(seats.every((x) => x.position.state === 'shown' && x.position.text.length > 0));
+  assert.equal(seats[0]!.lens, 'what finishes soonest');
+  assert.equal(seats[1]!.critique!.recommendation, 'hand on');
+  assert.deepEqual(seats[1]!.critique!.findings, [['major', 'a retry in place can loop']]);
+  assert.equal(seats[0]!.critique, null);
+});
+
+test('in the blind round no seat\'s words reach the screen, from the state or from the events', () => {
+  const blind = blindOf(running);
+  const seats = seatsOf(blind);
+  assert.deepEqual(seats.map((x) => x.position.state), ['sealed', 'sealed', 'writing']);
+  const words = [...running.stances.map((x) => x.text), ...running.critiques.map((x) => x.text)];
+  const said = JSON.stringify(seats) + JSON.stringify(councilEntries(sim.events, blind));
+  for (const w of words) assert.ok(!said.includes(w), `a sealed sentence leaked: ${w}`);
+  // What a seat read is still shown, and that it answered.
+  const entries = councilEntries(sim.events, blind);
+  assert.ok(entries.some((e) => e.kind === 'read' && e.code!.includes('read_file')));
+  assert.ok(entries.some((e) => e.sealed && e.text === ''));
+});
+
+test('a council\'s activity is its own events, newest first', () => {
+  const entries = councilEntries(sim.events, running);
+  assert.equal(entries.length, 9);
+  for (let i = 1; i < entries.length; i++) assert.ok(entries[i - 1]!.at_ms >= entries[i]!.at_ms);
+  assert.ok(entries[0]!.text.startsWith('Critique, recommending hand on:'));
+  assert.ok(entries.some((e) => e.text.startsWith('Position: Hand it to another worker')));
+  assert.equal(councilEntries(sim.events, sim.state.councils[0]!).length, 0, 'another council\'s events are not this one\'s');
 });

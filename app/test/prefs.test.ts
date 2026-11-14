@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { DEFAULTS, load, parse, save } from '../src/prefs.ts';
+import { DEFAULTS, fromHash, load, parse, save } from '../src/prefs.ts';
 
 test('stored preferences are read back, and anything damaged or unknown falls back to its default', () => {
   assert.deepEqual(parse(null), DEFAULTS);
@@ -14,4 +14,10 @@ test('stored preferences are read back, and anything damaged or unknown falls ba
 test('with no storage at all, loading gives the defaults and saving does nothing', () => {
   assert.deepEqual(load(), DEFAULTS);
   save(DEFAULTS);
+});
+
+test('a screen named in the address opens first, and any other word is ignored', () => {
+  assert.equal(fromHash(DEFAULTS, '#council').screen, 'council');
+  assert.equal(fromHash(DEFAULTS, '#nowhere').screen, 'activity');
+  assert.equal(fromHash({ ...DEFAULTS, screen: 'output' }, '').screen, 'output');
 });

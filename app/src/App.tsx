@@ -3,8 +3,9 @@ import { MARK_ROLES, colorOf } from './avatar.ts';
 import { openBridge, type Bridge } from './bridge.ts';
 import { load, save, type Prefs, type Screen } from './prefs.ts';
 import { Activity } from './screens/Activity.tsx';
+import { Council } from './screens/Council.tsx';
 import type { Conn, Envelope, Info, OState } from './types.ts';
-import { tilde, waiting } from './view.ts';
+import { defaultCouncil, isDecided, phaseNote, tilde, waiting } from './view.ts';
 
 const MAX_EVENTS = 4000;
 const REFETCH_MS = 300;
@@ -40,6 +41,7 @@ export function App() {
   const [state, setState] = useState<OState | null>(null);
   const [events, setEvents] = useState<Envelope[]>([]);
   const [conn, setConn] = useState<Conn>({ connected: false, detail: 'looking for the daemon' });
+  const [councilPick, setCouncilPick] = useState<number | null>(null);
   const light = useLight(prefs.theme);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -69,14 +71,17 @@ export function App() {
   }, []);
 
   const waits = state ? waiting(state).length : 0;
-  const live = state?.councils.filter((c) => c.phase.startsWith('round')).length ?? 0;
+  const live = state?.councils.filter((c) => !isDecided(c)).length ?? 0;
   const notes: Partial<Record<Screen, string>> = {
     activity: waits ? `${waits} waiting on you` : '',
     council: live ? `${live} live` : '',
     knowledge: state?.pending_proposals ? `${state.pending_proposals} pending review` : '',
   };
   const fold = (key: string) => update({ folded: { ...prefs.folded, [key]: !prefs.folded[key] } });
-  const sections: { key: string; title: string; rows: { label: string; note?: string; on?: boolean }[] }[] = [
+  const council = state && state.councils.length ? Math.min(councilPick ?? defaultCouncil(state), state.councils.length - 1) : 0;
+  const clipped = (t: string) => (t.length > 64 ? t.slice(0, 63) + '…' : t);
+  const sections: { key: string; title: string; rows: { label: string; note?: string; on?: boolean; pick?: () => void }[] }[] = [
+    { key: 'councils', title: 'Councils', rows: (state?.councils ?? []).map((c, i) => ({ label: clipped(c.proposition), note: phaseNote(c), on: prefs.screen === 'council' && i === council, pick: () => { setCouncilPick(i); update({ screen: 'council' }); } })).reverse() },
     { key: 'projects', title: 'Projects', rows: (info?.projects ?? []).map((p) => ({ label: p.name, note: p.home ? 'home workspace' : tilde(p.root) })) },
     { key: 'sessions', title: 'Console sessions', rows: (state?.sessions ?? []).slice(-5).reverse().map((s, i) => ({ label: s.id, note: `${s.turns} turns · ${s.reason}`, on: i === 0 })) },
   ].filter((s) => s.rows.length > 0);
@@ -111,9 +116,11 @@ export function App() {
                 <button type="button" className="menu-head caps" aria-expanded={!prefs.folded[s.key]} onClick={() => fold(s.key)}>
                   <span>{s.title}</span><span aria-hidden="true">{prefs.folded[s.key] ? '▸' : '▾'}</span>
                 </button>
-                {!prefs.folded[s.key] && s.rows.map((r) => (
+                {!prefs.folded[s.key] && s.rows.map((r) => (r.pick ? (
+                  <button key={r.label} type="button" className={r.on ? 'menu-row on' : 'menu-row'} aria-current={r.on ? 'true' : undefined} onClick={r.pick}><span>{r.label}{r.note && <small>{r.note}</small>}</span></button>
+                ) : (
                   <div key={r.label} className={r.on ? 'menu-row on' : 'menu-row'}><span>{r.label}{r.note && <small>{r.note}</small>}</span></div>
-                ))}
+                )))}
               </div>
             ))}
           </nav>
@@ -125,6 +132,8 @@ export function App() {
           </main>
         ) : prefs.screen === 'activity' ? (
           <Activity info={info} state={state} events={events} light={light} />
+        ) : prefs.screen === 'council' ? (
+          <Council key={council} info={info} state={state} events={events} light={light} pick={council} />
         ) : (
           <main className="main">
             <h1 className="title">{ITEMS.find((i) => i.key === prefs.screen)?.label}</h1>

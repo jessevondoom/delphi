@@ -89,6 +89,8 @@ h1, h2, h3, p, dl, dd, ol, ul { margin: 0; padding: 0; }
 .menu-head:hover { background: var(--sel); }
 .menu-row { display: flex; align-items: flex-start; gap: 8px; padding: 7px 10px; border-radius: 6px; font-size: 13px; line-height: 1.3; }
 .menu-row.on { background: var(--sel); }
+button.menu-row { width: 100%; border: none; background: transparent; text-align: left; cursor: pointer; }
+button.menu-row:hover, button.menu-row.on { background: var(--sel); }
 .menu-row small { display: block; margin-top: 2px; font-size: 11px; color: var(--muted); }
 .swatch { flex: none; width: 10px; height: 10px; margin-top: 3px; border-radius: 2px; }
 

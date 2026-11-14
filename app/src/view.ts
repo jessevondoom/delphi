@@ -1,6 +1,6 @@
 // What each screen shows, computed from the daemon's state and events (spec 111 §3.3, §5). Pure: state in, rows out.
 import { MARK_ROLES, activityOf } from './avatar.ts';
-import type { Envelope, OState } from './types.ts';
+import type { Council, Envelope, OState } from './types.ts';
 
 /** A model's family, for the roster's seat label: the provider the daemon names, else what the model id says. */
 export function familyOf(state: OState, endpoint: string, model: string): string {
@@ -41,6 +41,8 @@ export type Entry = {
   text: string; code?: string; task?: string;
   /** For `asked`: who was asked. */
   to?: string;
+  /** A seat's words in a council's blind round: the entry says the seat answered, and `text` is empty. */
+  sealed?: boolean;
 };
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
@@ -108,4 +110,65 @@ export const tilde = (path: string): string => path.replace(/^\/(?:Users|home)\/
 export function clock(ms: number, timeZone?: string): string {
   if (!ms) return '';
   return new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone }).format(new Date(ms));
+}
+
+// ---- Council (spec 111 §5.2) ----
+
+export const STAGES = ['Framed', 'Round 1 · blind', 'Barrier released', 'Round 2 · critique', 'Verdict'];
+/** Which stage a council is at, as an index into [`STAGES`]. */
+export const stageOf = (c: Council): number => (c.phase === 'round 1' ? 1 : c.phase === 'round 2' ? 3 : 4);
+export const isBlind = (c: Council): boolean => c.phase === 'round 1';
+export const isDecided = (c: Council): boolean => c.phase !== 'round 1' && c.phase !== 'round 2';
+export const phaseNote = (c: Council): string => (c.phase === 'round 1' ? 'live · round 1, blind' : c.phase === 'round 2' ? 'live · round 2' : c.phase === 'escalated' ? 'needs your decision' : 'verdict in');
+
+export type SeatView = {
+  role: string; family: string; lens: string;
+  /** `writing`: nothing in yet; `sealed`: answered, words hidden while the round is blind; `shown`: the words. */
+  position: { state: 'writing' | 'sealed' | 'shown'; text: string };
+  critique: { recommendation: string; concur: boolean | null; findings: [string, string][]; text: string } | null;
+};
+
+/** One column per seat. In the blind round a seat's words are not in what this returns, so no caller can show them. */
+export function seatsOf(c: Council): SeatView[] {
+  const blind = isBlind(c);
+  return c.seats.map((seat) => {
+    const stance = c.stances.find((x) => x.role === seat.role);
+    const cr = c.critiques.find((x) => x.role === seat.role);
+    return {
+      role: seat.role, family: seat.family, lens: c.lenses.find((l) => l[0] === seat.role)?.[1] ?? '',
+      position: !stance?.answered ? { state: 'writing', text: '' } : blind ? { state: 'sealed', text: '' } : { state: 'shown', text: stance.text },
+      critique: cr && !blind ? { recommendation: cr.recommendation, concur: cr.concur, findings: cr.findings, text: cr.text } : null,
+    };
+  });
+}
+
+/** A council's own activity, newest first: its steps, what its seats said and read. Blind-round words are sealed. */
+export function councilEntries(events: Envelope[], c: Council): Entry[] {
+  const blind = isBlind(c);
+  const out: Entry[] = [];
+  events.forEach((e, i) => {
+    if (e.task_id !== c.task_id) return;
+    const p = e.payload ?? {};
+    const base = { key: `${e.seq ?? e.timestamp}-${i}`, at_ms: Date.parse(e.timestamp) || 0, role: str(p.role) || e.agent || 'orchestrator', slot: e.pool_slot, task: e.task_id };
+    switch (e.type) {
+      case 'council.started': out.push({ ...base, role: 'orchestrator', kind: 'council', text: 'Framed the question and seated the council.' }); break;
+      case 'council.lens_assigned': out.push({ ...base, role: 'orchestrator', kind: 'council', text: str(p.note) || 'Gave each seat a lens.' }); break;
+      case 'council.stance':
+        if (p.status === 'answered') out.push(blind ? { ...base, kind: 'said', text: '', sealed: true } : { ...base, kind: 'said', text: `Position: ${str(p.text)}` });
+        break;
+      case 'council.barrier.released': out.push({ ...base, role: 'orchestrator', kind: 'council', text: 'Every seat has answered. The barrier is released; each seat now critiques another.' }); break;
+      // No critique exists before the barrier; if one arrives while the phase still says blind, it is sealed like a stance.
+      case 'council.critique': out.push(blind ? { ...base, kind: 'said', text: '', sealed: true } : { ...base, kind: 'said', text: `Critique${str(p.recommendation) ? `, recommending ${str(p.recommendation)}` : ''}: ${str(p.text)}` }); break;
+      case 'council.verdict': out.push({ ...base, role: 'orchestrator', kind: 'council', text: str(p.escalated) ? 'The seats did not settle it. The decision is yours.' : 'Verdict framed.' }); break;
+      case 'agent.block.complete': { const t = entryOf(e, i); if (t) out.push(t); break; }
+      default: break;
+    }
+  });
+  return out.sort((a, b) => b.at_ms - a.at_ms);
+}
+
+/** The council to show first: one still running, else the newest. */
+export function defaultCouncil(state: OState): number {
+  const live = state.councils.findIndex((c) => !isDecided(c));
+  return live >= 0 ? live : state.councils.length - 1;
 }
