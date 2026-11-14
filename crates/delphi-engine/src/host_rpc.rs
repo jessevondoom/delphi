@@ -724,6 +724,16 @@ pub fn council_view(events: &[delphi_core::event::EventEnvelope], mission_dir: &
     if let Some(b) = started.and_then(|e| e.payload["blind"].as_str()) {
         v["blind"] = json!(b);
     }
+    // Spec 104 §12 A3, A8: how Round 1 arrived, the moderator's witness (host-reported), and whether it counts as an independent review.
+    if let Some(r) = started.map(|e| &e.payload["relay"]).filter(|r| r["relayed"] == true) {
+        v["isolation"] = json!("host-reported, relayed");
+        v["blind_round_1"] = json!("host-reported");
+        v["independence"] = r["independence"].clone();
+        v["relay_note"] = json!(crate::council_panel::RELAYED_NOTE);
+    }
+    if panel {
+        v["counts_as_independent_review"] = json!(started.map(|e| e.payload["counts_as_independent_review"] != false).unwrap_or(true));
+    }
     // Host-reported claims, shown as such on the card; they raise no trust and satisfy no gate (spec 089 F2).
     if let Some(o) = started.map(|e| e.payload["operator_confirmed"].clone()).filter(|o| o.is_boolean()) {
         v["operator_confirmed"] = o;
@@ -924,12 +934,16 @@ pub fn ruling_card(v: &Value, tokens: u64) -> String {
             _ => "1 family reported".to_string(),
         };
         s.push_str(&format!(
-            "**Panel ruling** · host seats · barrier: held by Delphi · isolation: host-reported · {blind} · {families} · {}\n\n",
+            "**Panel ruling** · host seats · barrier: held by Delphi · isolation: {} · {blind} · {families} · {}\n\n",
+            if v["isolation"].is_string() { "host-reported, relayed · blind_round_1: host-reported" } else { "host-reported" },
             match models.len() {
                 0 => "models: not reported".to_string(),
                 n => format!("{n} model(s): {}", models.into_iter().collect::<Vec<_>>().join(", ")),
             }
         ));
+        if let Some(ind) = v["independence"].as_str() {
+            s.push_str(&format!("**independence:** {} · {}\n\n", crate::council_panel::one_line(ind), crate::council_panel::RELAYED_NOTE));
+        }
         s.push_str(&format!("**Options:** {options_line} (host-reported)\n\n"));
         if let (Some(n), Some(false)) = (r["require_families"].as_u64(), r["require_families_met"].as_bool()) {
             s.push_str(&format!("**require_families = {n} was NOT met** by the receipts; this ruling is labelled homogeneous.\n\n"));

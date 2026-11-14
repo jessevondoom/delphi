@@ -120,7 +120,6 @@ enum Who {
 /// the barrier releases; the verdict writes the record. Used by the host call and by Delphi's own seat, so both pass the same rules.
 #[allow(clippy::too_many_arguments)]
 async fn panel_step(engine: Arc<Engine>, panels: Panels, m: Arc<MissionState>, id: String, who: Who, round: u8, text: String, abstain: Option<String>, model: Option<String>) -> Result<Value, RpcError> {
-    use crate::council_panel::Step;
     let key = (m.id.clone(), id.clone());
     let gone = || err(code::INVALID_PARAMS, "no such Panel in progress for this session");
     let step = {
@@ -132,19 +131,39 @@ async fn panel_step(engine: Arc<Engine>, panels: Panels, m: Arc<MissionState>, i
         }
         .map_err(|e| err(code::INVALID_PARAMS, e.to_string()))?
     };
+    panel_after(engine, panels, m, id, round, step).await
+}
+
+/// A moderator's batch of host stances for one round (`specs/104` §6 item 2): checked whole, stored whole, then the same step a single
+/// submission takes.
+async fn panel_batch(engine: Arc<Engine>, panels: Panels, m: Arc<MissionState>, id: String, round: u8, stances: Vec<crate::council_panel::BatchStance>, witness: Option<String>) -> Result<Value, RpcError> {
+    let key = (m.id.clone(), id.clone());
+    let step = {
+        let mut g = panels.lock().unwrap();
+        let panel = g.get_mut(&key).ok_or_else(|| err(code::INVALID_PARAMS, "no such Panel in progress for this session"))?;
+        panel.submit_batch(round, &stances, witness).map_err(|e| err(code::INVALID_PARAMS, e.to_string()))?
+    };
+    panel_after(engine, panels, m, id, round, step).await
+}
+
+/// What a stored submission leads to: the barrier's release (and the Round 2 of the seats Delphi runs), the end of Round 2, or the record.
+async fn panel_after(engine: Arc<Engine>, panels: Panels, m: Arc<MissionState>, id: String, round: u8, step: crate::council_panel::Step) -> Result<Value, RpcError> {
+    use crate::council_panel::Step;
+    let key = (m.id.clone(), id.clone());
+    let gone = || err(code::INVALID_PARAMS, "no such Panel in progress for this session");
     match step {
         Step::Waiting(missing) => Ok(json!({"council_id": id, "accepted": true, "round": round, "waiting_for": missing})),
         Step::Released(stances) => {
-            let (prop, models, foreign, blind, claims, host) = {
+            let (prop, models, foreign, blind, claims, host, relay) = {
                 let g = panels.lock().unwrap();
                 let panel = g.get(&key).ok_or_else(gone)?;
-                (panel.proposition.clone(), panel.models.clone(), panel.foreign_seats().iter().map(|s| (s.role.clone(), s.family.clone())).collect::<Vec<_>>(), panel.blind.clone(), (panel.operator_confirmed, panel.options_source.clone()), (panel.host_family.clone(), panel.require_families, panel.kind.clone()))
+                (panel.proposition.clone(), panel.models.clone(), panel.foreign_seats().iter().map(|s| (s.role.clone(), s.family.clone())).collect::<Vec<_>>(), panel.blind.clone(), (panel.operator_confirmed, panel.options_source.clone()), (panel.host_family.clone(), panel.require_families, panel.kind.clone()), panel.relay())
             };
             let hashes: std::collections::BTreeMap<String, String> = {
                 let g = panels.lock().unwrap();
                 g.get(&key).map(|pn| stances.keys().filter_map(|r| pn.brief_hash(r, 1).map(|h| (r.clone(), h))).collect()).unwrap_or_default()
             };
-            engine.panel_released(&m, &id, &prop, &stances, &models, &foreign, &blind, (claims.0, claims.1.as_deref()), &hashes, host).await.map_err(engine_err)?;
+            engine.panel_released(&m, &id, &prop, &stances, &models, &foreign, &blind, (claims.0, claims.1.as_deref()), &hashes, host, &relay).await.map_err(engine_err)?;
             let answered = stances.values().filter(|s| s.text().is_some()).count();
             if answered < 2 {
                 panels.lock().unwrap().remove(&key);
@@ -238,6 +257,12 @@ fn waiting_on_delphi(id: &str, seat: &str) -> Value {
 /// A Panel round from raw params: 1 to 3, or 0 (which the Panel refuses by name); never wrapped into range by a cast.
 fn round_of(p: &Value) -> u8 {
     p["round"].as_u64().filter(|r| (1..=3).contains(r)).unwrap_or(0) as u8
+}
+
+/// The brief of every seat the host runs for `round` (`specs/104` §6 items 1 and 3): `[{seat, round, brief, brief_hash}]`. A seat
+/// Delphi runs, or one with no brief for that round, is left out.
+fn host_briefs(panel: &crate::council_panel::Panel, round: u8) -> Vec<Value> {
+    panel.seats().iter().filter_map(|s| panel.brief(s, round).ok().map(|b| json!({"seat": s, "round": round, "brief_hash": blake3::hash(b.as_bytes()).to_hex().to_string(), "brief": b}))).collect()
 }
 
 fn need_host(ctx: &CallContext) -> Result<(), RpcError> {
@@ -875,6 +900,7 @@ impl EngineService {
             }
         }
         let has_options = p.get("options").and_then(Value::as_array).is_some_and(|a| !a.is_empty());
+        let briefs: Vec<Value>;
         let (task_id, m) = {
             let _gate = self.host_gate.lock().await;
             let m = self.mission_at(Some(&c.mission()), c.cwd.to_str()).await?;
@@ -914,6 +940,8 @@ impl EngineService {
             for seat in &planned_foreign {
                 panel.reserve_seat(seat.clone()).map_err(|e| err(code::INVALID_PARAMS, e.to_string()))?;
             }
+            // Spec 104 §6 item 1: the Round 1 brief of every host seat, so a host can start its seats at once.
+            briefs = host_briefs(&panel, 1);
             self.panels.lock().unwrap().insert((m.id.clone(), task_id.clone()), panel);
             (task_id, m)
         };
@@ -931,6 +959,7 @@ impl EngineService {
             "foreign_seats": foreign_seats_note,
             "kind": kind,
             "council_id": task_id, "tier": "panel", "seats": crate::council_panel::PANEL_SEATS, "moderator": crate::council_panel::MODERATOR,
+            "briefs": briefs,
             "next": "start one isolated subagent per seat, in parallel; each calls council_brief (round 1), answers, and calls council_submit. Round 2 opens when every seat has answered. The moderator then fetches council_brief for seat orchestrator, round 3, writes the verdict, and submits it as seat orchestrator, round 3. If a foreign seat was asked for, Delphi runs it in the background (minutes): when a response says it is waiting on Delphi's seat, keep calling council_status (wait) until the state changes; never end your turn and never write the verdict early. Read the ruling with council_result.",
             "honest_limits": "Delphi holds the barrier and the deterministic rules; whether each seat really ran in a separate context, and on which model, is host-reported and is recorded as such."
         }))
@@ -1191,6 +1220,9 @@ impl EngineService {
         h::gate(&self.engine.ws.dir).map_err(host_err)?;
         let c = h::Caller::parse(&p).map_err(host_err)?;
         let (id, seat, round) = (p["council_id"].as_str().unwrap_or("").to_string(), p["seat"].as_str().unwrap_or("").to_string(), round_of(&p));
+        if p.get("stances").is_some_and(|s| !s.is_null()) {
+            return self.host_council_batch(&p, &c, id, round).await;
+        }
         let abstain = match p["abstain"].as_str().filter(|a| !a.trim().is_empty()) {
             Some(a) => Some(h::clean("abstain", a, 200).map_err(host_err)?),
             None => None,
@@ -1198,7 +1230,89 @@ impl EngineService {
         let text = if abstain.is_some() { String::new() } else { h::clean_body("text", p["text"].as_str().unwrap_or(""), 20_000).map_err(host_err)? };
         let model = p["model"].as_str().map(|m| h::clean("model", m, 64)).transpose().map_err(host_err)?;
         let m = self.mission_at(Some(&c.mission()), c.cwd.to_str()).await?;
-        panel_step(self.engine.clone(), self.panels.clone(), m, id, Who::Host(seat), round, text, abstain, model).await
+        let mut v = panel_step(self.engine.clone(), self.panels.clone(), m.clone(), id.clone(), Who::Host(seat), round, text, abstain, model).await?;
+        // Spec 104 §6 item 3: the submission that writes the record answers with the ruling, as `council_result` returns it.
+        if v["state"] == "decided" {
+            v["result"] = self.council_result_now(&m, &id)?;
+        }
+        Ok(v)
+    }
+
+    /// The ruling of a Council that has just been decided, as `council_result` returns it.
+    fn council_result_now(&self, m: &MissionState, id: &str) -> Result<Value, RpcError> {
+        use crate::host_rpc as h;
+        let view = h::council_view_at(&m.replay().map_err(engine_err)?, &m.dir, id, h::now_ms(), self.engine.settings.council_stall_secs, 8).ok_or_else(|| err(code::INVALID_PARAMS, "no such Council for this session"))?;
+        Ok(self.signed_council(view))
+    }
+
+    /// `council_submit` with `stances` (`specs/104` §6 item 2, §12 A3, A6, A8): a moderator's batch for one round. Every stance passes the
+    /// checks of a single submission before any is stored. The answer carries `next`: the next round's briefs, the moderator's brief, or
+    /// `waiting_on_delphi_seat` when only a seat Delphi runs is outstanding after the wait a brief has. A Round 1 batch may carry the
+    /// moderator's `witness` that the seats ran apart; a malformed one is refused, and nothing of the batch is stored.
+    async fn host_council_batch(&self, p: &Value, c: &crate::host_rpc::Caller, id: String, round: u8) -> RpcOutcome {
+        use crate::host_rpc as h;
+        let list = p["stances"].as_array().ok_or_else(|| err(code::INVALID_PARAMS, "`stances` is a list of {seat, text | abstain, model?}"))?;
+        if list.len() > crate::council_panel::PANEL_SEATS.len() {
+            return Err(err(code::INVALID_PARAMS, "`stances` holds at most one stance per host seat"));
+        }
+        let mut stances = Vec::new();
+        for st in list {
+            let seat = h::clean("seat", st["seat"].as_str().unwrap_or(""), 32).map_err(host_err)?;
+            let abstain = match st["abstain"].as_str().filter(|a| !a.trim().is_empty()) {
+                Some(a) => Some(h::clean("abstain", a, 200).map_err(host_err)?),
+                None => None,
+            };
+            let text = if abstain.is_some() { String::new() } else { h::clean_body("text", st["text"].as_str().unwrap_or(""), 20_000).map_err(host_err)? };
+            let model = st["model"].as_str().map(|m| h::clean("model", m, 64)).transpose().map_err(host_err)?;
+            stances.push(crate::council_panel::BatchStance { seat, text, abstain, model });
+        }
+        // Spec 104 §12 A8: the witness is the moderator's statement, host-reported; anything but `{independent: true, how: "<words>"}` is refused.
+        let witness = match p.get("witness") {
+            None | Some(Value::Null) => None,
+            Some(w) => {
+                let how = w["how"].as_str().map(|s| s.chars().take(200).collect::<String>()).and_then(|s| h::clean("how", &s, 200).ok());
+                match (round, w["independent"].as_bool(), how) {
+                    (1, Some(true), Some(how)) => Some(how),
+                    _ => return Err(err(code::INVALID_PARAMS, "the witness is malformed: it is `{independent: true, how: \"<how the seats were run, at most 200 characters>\"}`, on a Round 1 batch only. The witness was not recorded and nothing of this batch was stored: resubmit with a correct witness, or without one (the Panel is then recorded as not witnessed)")),
+                }
+            }
+        };
+        let m = self.mission_at(Some(&c.mission()), c.cwd.to_str()).await?;
+        let mut v = panel_batch(self.engine.clone(), self.panels.clone(), m.clone(), id.clone(), round, stances, witness).await?;
+        // What comes next: wait, as a brief does, while only a seat Delphi runs is outstanding (`specs/089` P7).
+        let key = (m.id.clone(), id.clone());
+        let deadline = Instant::now() + PANEL_WAIT;
+        loop {
+            let (next, pending) = {
+                let g = self.panels.lock().unwrap();
+                match g.get(&key) {
+                    None => (None, None),
+                    Some(panel) => {
+                        let next = match round {
+                            1 => panel.stances().map(|_| json!({"round": 2, "briefs": host_briefs(panel, 2)})),
+                            _ => panel.brief(crate::council_panel::MODERATOR, 3).ok().map(|b| json!({"round": 3, "seat": crate::council_panel::MODERATOR, "brief_hash": blake3::hash(b.as_bytes()).to_hex().to_string(), "brief": b, "answer_with": "council_submit with seat orchestrator and round 3"})),
+                        };
+                        (next, panel.pending_on_delphi(round))
+                    }
+                }
+            };
+            match (next, pending) {
+                (Some(n), _) => {
+                    v["next"] = n;
+                    break;
+                }
+                (None, Some(seat)) if Instant::now() < deadline => {
+                    let _ = seat;
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
+                (None, Some(seat)) => {
+                    v["next"] = waiting_on_delphi(&id, &seat);
+                    break;
+                }
+                (None, None) => break,
+            }
+        }
+        Ok(v)
     }
 
     /// `host.council_choose`: the option the operator picked after an escalation, as the host reports it. Returns that option's steps as advice;
@@ -8004,6 +8118,136 @@ mod tests {
         assert!(!line.is_empty() && !line.contains("CANARY"), "a fixed-form line, never the question or the answer: {peek}");
         assert_eq!(marked["progress_line"], crate::private_read::RELAY_PHRASE, "{marked}");
         assert_eq!((done["status"].as_str(), done["answer"].as_str()), (Some("answered"), Some("ANSWER-CANARY")), "peek never took the answer: {done}");
+    }
+
+    /// Spec 104 §6, the four-call path: `council_open` (briefs), a Round 1 batch (`next`: Round 2 briefs), a Round 2 batch (`next`: the
+    /// moderator's brief) and the verdict (the ruling as `result`). Returns (the Round 1 batch answer, the ruling).
+    fn four_calls(c: &mut Client, cwd: &str, witness: Option<Value>) -> (Value, Value) {
+        let open = c.call("host.council_open", pbody(cwd, json!({"question": "Table or file?", "model": "claude-opus"}))).unwrap();
+        let briefs = open["briefs"].as_array().unwrap().clone();
+        assert_eq!(briefs.len(), 3, "a brief for every host seat: {open}");
+        assert!(briefs.iter().all(|b| b["round"] == 1 && b["brief"].is_string() && b["brief_hash"].is_string()), "{open}");
+        let id = open["council_id"].clone();
+        let r1: Vec<Value> = briefs.iter().map(|b| json!({"seat": b["seat"], "text": "OPTION: file\nPEER-MARKER-77", "model": "opus"})).collect();
+        let mut b1 = json!({"council_id": id, "round": 1, "stances": r1});
+        if let Some(w) = witness {
+            b1["witness"] = w;
+        }
+        let one = c.call("host.council_submit", pbody(cwd, b1)).unwrap();
+        assert_eq!((one["next"]["round"].as_u64(), one["next"]["briefs"].as_array().map(Vec::len)), (Some(2), Some(3)), "{one}");
+        let r2: Vec<Value> = one["next"]["briefs"].as_array().unwrap().iter().map(|b| json!({"seat": b["seat"], "text": R2_GOOD})).collect();
+        let two = c.call("host.council_submit", pbody(cwd, json!({"council_id": id, "round": 2, "stances": r2}))).unwrap();
+        assert_eq!((two["next"]["round"].as_u64(), two["next"]["seat"].as_str()), (Some(3), Some("orchestrator")), "{two}");
+        assert!(two["next"]["brief"].is_string(), "{two}");
+        let three = c.call("host.council_submit", pbody(cwd, json!({"council_id": id, "seat": "orchestrator", "round": 3, "text": "DECISION: use a table\nNEXT builder: write the table"}))).unwrap();
+        (one, three["result"].clone())
+    }
+
+    /// Spec 104 §6, §12 A3, A6, A8: a three-seat Panel completes in four calls with the ruling the per-seat path gives; a batch Panel is
+    /// labelled relayed, counts as an independent review only with the moderator's witness, and a per-seat Panel is unchanged.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_three_seat_panel_completes_in_four_calls_and_only_a_witnessed_batch_counts_as_independent() {
+        let f = setup(vec![], 50.0, roomy);
+        let ws_dir = f.engine.ws.dir.clone();
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let (single, batch, unwitnessed) = blocking(move || {
+            let (_, single) = drive_panel(hsock.clone(), htok.clone(), cwd.clone(), json!({"question": "Table or file?", "model": "claude-opus"}), &["architect", "red-team", "strategist"]).unwrap();
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            c.hello(&htok).unwrap();
+            let (_, batch) = four_calls(&mut c, &cwd, Some(json!({"independent": true, "how": "three subagents in parallel,\neach with only its brief"})));
+            let (_, unwitnessed) = four_calls(&mut c, &cwd, None);
+            (single, batch, unwitnessed)
+        })
+        .await;
+        for k in ["decision", "dissent", "escalated", "unresolved"] {
+            assert_eq!(batch["ruling"][k], single["ruling"][k], "{k}: the record equals the per-seat path's");
+        }
+        let positions = |v: &Value| v["ruling"]["seat_positions"].as_array().unwrap().iter().map(|p| (p["seat"].clone(), p["position"].clone())).collect::<Vec<_>>();
+        assert_eq!(positions(&batch), positions(&single));
+        // The per-seat path is unchanged: not relayed, and it counts.
+        assert!(single["isolation"].is_null() && single["independence"].is_null(), "{single}");
+        assert_eq!(single["counts_as_independent_review"], true);
+        // A witnessed batch: relayed, the witness shown as host-reported (one flat line), and it counts.
+        assert_eq!((batch["isolation"].as_str(), batch["blind_round_1"].as_str()), (Some("host-reported, relayed"), Some("host-reported")), "{batch}");
+        assert_eq!(batch["independence"], "witnessed by the moderator (host-reported): three subagents in parallel, each with only its brief");
+        assert_eq!(batch["counts_as_independent_review"], true);
+        let card = batch["display"].as_str().unwrap();
+        assert!(card.contains("isolation: host-reported, relayed · blind_round_1: host-reported") && card.contains("**independence:** witnessed by the moderator") && card.contains("could not see whether the host kept its seats apart"), "{card}");
+        // Without the witness: not witnessed, and it does not count.
+        assert_eq!((unwitnessed["independence"].as_str(), unwitnessed["counts_as_independent_review"].clone()), (Some("not witnessed"), json!(false)), "{unwitnessed}");
+        // The record says how each stance arrived.
+        let events = replay_log(&delphi_core::sessions::dir(&ws_dir, "host-abcdef0123456789"));
+        let subs: Vec<&str> = events.iter().filter(|e| e.kind == "council.stance" || e.kind == "council.critique").filter_map(|e| e.payload["submission"].as_str()).collect();
+        assert!(subs.contains(&"single") && subs.contains(&"batch"), "{subs:?}");
+        let record = std::fs::read_to_string(ws_dir.join(batch["ruling"]["record"].as_str().unwrap())).unwrap_or_default();
+        assert!(record.is_empty() || (record.contains("isolation: host-reported, relayed") && record.contains("counts_as_independent_review: true")), "{record}");
+    }
+
+    /// Spec 104 §6 item 2, §12 A3 (b), A6, A8: a batch is checked whole. A seat named twice, a seat Delphi runs, a malformed witness and
+    /// one Round 2 stance out of shape are each refused with nothing stored, and the shape error names the seat and never quotes a stance.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_batch_with_one_bad_stance_stores_nothing_and_says_which_seat_without_quoting_it() {
+        let f = setup(vec![], 50.0, roomy);
+        let _seen = foreign_fx(&f, |_| Some("gemini-4-argon".to_string()));
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            c.hello(&htok).unwrap();
+            let open = c.call("host.council_open", pbody(&cwd, json!({"question": "Table or file?", "model": "claude-opus", "foreign_seat": "red-team", "operator_confirmed": true}))).unwrap();
+            let id = open["council_id"].clone();
+            assert_eq!(open["briefs"].as_array().unwrap().len(), 2, "no brief for the seat Delphi runs: {open}");
+            let st = |seat: &str, text: &str| json!({"seat": seat, "text": text});
+            let twice = c.call("host.council_submit", pbody(&cwd, json!({"council_id": id, "round": 1, "stances": [st("architect", "A"), st("architect", "B")]}))).unwrap_err().to_string();
+            assert!(twice.contains("named twice"), "{twice}");
+            let delphis = c.call("host.council_submit", pbody(&cwd, json!({"council_id": id, "round": 1, "stances": [st("architect", "A"), st("red-team", "R")]}))).unwrap_err().to_string();
+            assert!(delphis.contains("run by Delphi"), "{delphis}");
+            let bad_witness = c.call("host.council_submit", pbody(&cwd, json!({"council_id": id, "round": 1, "stances": [st("architect", "OPTION: file"), st("strategist", "OPTION: file")], "witness": {"independent": false, "how": "x"}}))).unwrap_err().to_string();
+            assert!(bad_witness.contains("witness was not recorded"), "{bad_witness}");
+            // Nothing of those was stored: the same seats are accepted now, and the answer waits for the seat Delphi runs, then opens Round 2.
+            let one = c.call("host.council_submit", pbody(&cwd, json!({"council_id": id, "round": 1, "stances": [st("architect", "OPTION: file"), st("strategist", "OPTION: file")]}))).unwrap();
+            assert!(one["next"]["round"] == 2 || one["next"]["state"] == "waiting_on_delphi_seat", "{one}");
+            let opened = (0..100).any(|_| {
+                let ok = c.call("host.council_brief", pbody(&cwd, json!({"council_id": id, "seat": "architect", "round": 2}))).is_ok_and(|b| b["brief"].is_string());
+                if !ok {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                ok
+            });
+            assert!(opened, "Round 2 opened once the seat Delphi runs was in");
+            let shape = c.call("host.council_submit", pbody(&cwd, json!({"council_id": id, "round": 2, "stances": [st("architect", R2_GOOD), st("strategist", "SECRET-STANCE-TEXT with no closing lines")]}))).unwrap_err().to_string();
+            assert!(shape.contains("`strategist`") && shape.contains("ROUND 2 COMPLETE") && !shape.contains("SECRET-STANCE-TEXT") && !shape.contains("`architect`"), "{shape}");
+            // The good stance of that batch was not stored either: the architect can still submit its Round 2.
+            let alone = c.call("host.council_submit", pbody(&cwd, json!({"council_id": id, "seat": "architect", "round": 2, "text": R2_GOOD}))).unwrap();
+            assert_eq!(alone["accepted"], true, "{alone}");
+        })
+        .await;
+    }
+
+    /// Spec 104 §6 item 3: with a foreign seat outstanding, a batch answer waits as a brief does, then says `waiting_on_delphi_seat`.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_batch_answer_waits_for_the_seat_delphi_runs_then_says_waiting_on_delphi_seat() {
+        let f = setup(vec![], 50.0, roomy);
+        crate::council::tests::two_families(&f);
+        f.model.respond_with(|_| Step::Hang);
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let one = blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            c.hello(&htok).unwrap();
+            let open = c.call("host.council_open", pbody(&cwd, json!({"question": "Table or file?", "model": "claude-opus", "foreign_seat": "red-team", "operator_confirmed": true}))).unwrap();
+            c.call("host.council_submit", pbody(&cwd, json!({"council_id": open["council_id"], "round": 1, "stances": [{"seat": "architect", "text": "OPTION: file"}, {"seat": "strategist", "text": "OPTION: table"}]}))).unwrap()
+        })
+        .await;
+        assert_eq!(one["accepted"], true, "{one}");
+        assert_eq!((one["next"]["state"].as_str(), one["next"]["do_not_end_your_turn"].clone()), (Some("waiting_on_delphi_seat"), json!(true)), "{one}");
     }
 
     /// A standing consent (`[access] standing_foreign_tokens`, `specs/104` §5) of two and a half foreign-seat ceilings.

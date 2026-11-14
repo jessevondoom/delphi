@@ -1292,7 +1292,7 @@ impl Engine {
     /// A host Panel's Round 1 has released (`specs/086` §4): the stances join the log as a daemon Council's do, and the plan is recorded
     /// as host-reported (the daemon cannot know the family or prove the isolation of a seat a host ran itself).
     #[allow(clippy::too_many_arguments)]
-    pub async fn panel_released(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, proposition: &str, stances: &BTreeMap<String, Stance>, models: &BTreeMap<String, String>, foreign: &[(String, String)], blind: &str, claims: (Option<bool>, Option<&str>), brief_hashes: &BTreeMap<String, String>, host: (Option<String>, Option<u32>, Option<String>)) -> Result<(), EngineError> {
+    pub async fn panel_released(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, proposition: &str, stances: &BTreeMap<String, Stance>, models: &BTreeMap<String, String>, foreign: &[(String, String)], blind: &str, claims: (Option<bool>, Option<&str>), brief_hashes: &BTreeMap<String, String>, host: (Option<String>, Option<u32>, Option<String>), relay: &Value) -> Result<(), EngineError> {
         let emit = |kind: &str, payload: Value| {
             let mut e = EventEnvelope::new(&m.id, kind, payload);
             e.task_id = Some(task_id.to_string());
@@ -1312,13 +1312,18 @@ impl Engine {
         if foreign.len() > 1 {
             started["foreign_seats"] = json!(foreign.iter().map(|(r, f)| json!({"role": r, "family": f})).collect::<Vec<_>>());
         }
+        // Spec 104 §12 A3, A8: how Round 1 arrived, and whether the Panel counts as an independent review.
+        started["counts_as_independent_review"] = relay["counts_as_independent_review"].clone();
+        if relay["relayed"] == true {
+            started["relay"] = relay.clone();
+        }
         m.append(emit("council.started", started)).await?;
         for (role, st) in stances {
             let (status, text) = match st {
                 Stance::Said(t) => ("answered", t.clone()),
                 Stance::Abstained(w) => ("abstained", w.clone()),
             };
-            m.append(emit("council.stance", json!({"round": 1, "role": role, "status": status, "text": self.secrets.redact(&text), "model": models.get(role), "brief_hash": brief_hashes.get(role), "parsed": st.text().map(crate::refusal::round1_parsed), "declined": st.text().is_some_and(|t| crate::refusal::declines(t).is_some())}))).await?;
+            m.append(emit("council.stance", json!({"round": 1, "role": role, "status": status, "text": self.secrets.redact(&text), "model": models.get(role), "brief_hash": brief_hashes.get(role), "submission": relay["submissions"].get(role), "parsed": st.text().map(crate::refusal::round1_parsed), "declined": st.text().is_some_and(|t| crate::refusal::declines(t).is_some())}))).await?;
         }
         Ok(())
     }
@@ -1335,7 +1340,7 @@ impl Engine {
         let (round2, round2_text) = panel.parsed_round2();
         for (role, c) in &round2 {
             let st = round2_standing(round2_text.get(role).map(String::as_str));
-            let mut e = EventEnvelope::new(&m.id, "council.critique", json!({"round": 2, "role": role, "cause": st.cause.map(Round2Cause::name), "kept": st.kept, "readable": c.is_some(), "declined": round2_text.get(role).is_some_and(|t| crate::refusal::declines(t).is_some()), "recommendation": c.as_ref().map(|c| c.recommendation.label()), "concur": c.as_ref().and_then(|c| c.concur), "findings": c.as_ref().map(|c| c.findings.iter().map(|(s, t)| json!({"severity": s, "title": t})).collect::<Vec<_>>()).unwrap_or_default(), "text": round2_text.get(role).map(|t| self.secrets.redact(t)), "brief_hash": panel.brief_hash(role, 2), "format_retries": panel.format_retries(role), "trailer": trailer_json(round2_text.get(role))}));
+            let mut e = EventEnvelope::new(&m.id, "council.critique", json!({"round": 2, "role": role, "cause": st.cause.map(Round2Cause::name), "kept": st.kept, "readable": c.is_some(), "declined": round2_text.get(role).is_some_and(|t| crate::refusal::declines(t).is_some()), "recommendation": c.as_ref().map(|c| c.recommendation.label()), "concur": c.as_ref().and_then(|c| c.concur), "findings": c.as_ref().map(|c| c.findings.iter().map(|(s, t)| json!({"severity": s, "title": t})).collect::<Vec<_>>()).unwrap_or_default(), "text": round2_text.get(role).map(|t| self.secrets.redact(t)), "brief_hash": panel.brief_hash(role, 2), "format_retries": panel.format_retries(role), "submission": panel.submission(2, role), "trailer": trailer_json(round2_text.get(role))}));
             e.task_id = Some(task_id.clone());
             m.append(e).await?;
         }
@@ -1344,13 +1349,25 @@ impl Engine {
         let plan = Assignment {
             seats: panel.seats().iter().map(|r| SeatPlan { role: r.clone(), family: panel.foreign_seats().iter().find(|s| &s.role == r).map(|s| s.family.clone()).unwrap_or_else(|| "host-reported".into()), avoid: vec![], tier: None }).collect(),
             homogeneous: self.panel_diversity(m, &task_id, panel.host_family.as_deref()).homogeneous(),
-            notes: vec!["a host Panel: isolation and model names are host-reported".into()],
+            notes: {
+                let mut n = vec!["a host Panel: isolation and model names are host-reported".to_string()];
+                if panel.relay()["relayed"] == true {
+                    n.push(crate::council_panel::RELAYED_NOTE.to_string());
+                }
+                n
+            },
         };
         let synthesis = panel.verdict().unwrap_or("(The moderator wrote no verdict; the structured record above and below is complete.)").to_string();
         let mut front = format!("venue: panel\nblind: {}\n{}", panel.blind, foreign.map(|(r, f)| format!("foreign_seat: {r}\nforeign_family: {f}\n")).unwrap_or_default());
         if panel.foreign_seats().len() > 1 {
             front.push_str(&format!("foreign_seats: {}\n", panel.foreign_seats().iter().map(|s| format!("{}={}", s.role, s.family)).collect::<Vec<_>>().join(", ")));
         }
+        // Spec 104 §12 A3, A8: a Panel whose Round 1 arrived in a batch says so, with the moderator's witness (host-reported) or its lack.
+        let relay = panel.relay();
+        if relay["relayed"] == true {
+            front.push_str(&format!("isolation: host-reported, relayed\nblind_round_1: host-reported\nindependence: {}\n", crate::council_panel::one_line(relay["independence"].as_str().unwrap_or("not witnessed"))));
+        }
+        front.push_str(&format!("counts_as_independent_review: {}\n", relay["counts_as_independent_review"] == true));
         // The label travels with the verdict (`specs/086` §7): seats whose receipts show no tool that could read the repo.
         let unverified: Vec<String> = m.replay().map(|evs| crate::seat::seat_summaries(&evs, &task_id)).unwrap_or_default().into_iter().filter(|s| s.unverified_against_repo).map(|s| s.role).collect();
         if !unverified.is_empty() {
