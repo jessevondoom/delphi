@@ -178,6 +178,26 @@ Unchanged in all ten: `search_kb` (its core leg already used the retrieval servi
 | search_memory | memory/lessons | memory/lessons (ranking index) |
 | query_memory | p:specs/086-outside-council-panel-and-host; p:specs/068-research-capture-and-summary-p; p:specs/044-decisions-pane; p:specs/003-collaboration-and-council; p:specs/015-provisional-decisions | memory/lessons; p:specs/086-outside-council-panel-and-host; p:specs/068-research-capture-and-summary-p; p:specs/044-decisions-pane; p:specs/003-collaboration-and-council (ranking index) |
 
+### 9.2 Q3: what of the release's own reference `search_kb` can return (2026-11-13)
+
+How it was measured: a scratch home initialized by a binary built from this checkout (`build/109` after Q2), indexed with `delphi kb index` (385 documents, 5,599 chunks, of which 141 are the registered copy's project layer), counted in `local/state.db` opened read-only, and checked with five live `search_kb` calls through a daemon in that home. "Can return" applies `search_kb`'s core filter as the code has it: zones `core`, `context`, `specs`, `knowledge`, `library`, `bundles`; `about` off; `status = active`; no `external_untrusted` or `federated_peer`; no `context/facts/`.
+
+| Zone | Documents | By `source_type` (status) | `search_kb` can return |
+| :-- | --: | :-- | --: |
+| core (`base/*.md`) | 3 | `external_untrusted` (active) 3: `GOVERNANCE.md`, `REVIEW.md`, `SPEC.md` | 0 |
+| context (`base/context`) | 19 | `internal_generated` 8, `internal_empirical` 7, `user_ratified` 2 (active); `internal_empirical` 1 and `external_untrusted` 1 (draft) | 17 |
+| specs (`base/specs`) | 0 | none: the release installs its specs under `base/about/specs`, not here | 0 |
+| about (`base/about`) | 125 | `user_ratified` (active) 125: 117 specs and 8 reference pages | 0 (the zone is off for `search_kb`) |
+
+So E-4 holds in part, and not for the reason it gave. The charter, the review rubric and `SPEC.md` index as untrusted (their frontmatter names no tier) and no host search returns them: live queries for "No Spec No Build", "Rule of 25" and "review rubric severity" returned context and project files and none of the three. The release's specs and reference are already at `user_ratified` (A2), but the `about` zone is off unless a search asks for it, and `host.search_kb` never does, so none of the 125 is returned either ("release reference not build authority", the about zone's own label, found none). Of 147 release documents in these four zones, a host's `search_kb` can return 17.
+
+Options for the operator (nothing is changed; no tier is raised):
+
+1. **Leave it.** A host reads the charter and the specs from the repository or with `specs_show` (which reads the project's specs, not the release's); `search_kb` stays a search of the knowledge base proper.
+2. **Turn the `about` zone on for host search.** `host.search_kb` would set `about: true`, returning the release's specs and reference with their label `release reference, not build authority`. No tier changes; the risk is that 125 documents crowd the user's own corpus in the ranking, which is why 064 §7 left it off.
+3. **Give the three core files a tier in their own frontmatter** (`source_type: user_ratified`), as the context files already carry. A file naming its own tier is how the index works today, but it is the release's text raising its own tier, so it is the operator's call, and A2's point (the manifest is not a signature) applies.
+4. **Install the three core files under `base/about`** with the rest of the release reference, so option 2 covers them as well.
+
 ## 10. Amendments from review (2026-11-13)
 
 A red-team review on 2026-11-13 (one critic, the author's own model family, so `homogeneous`; checked against the code) found the defects below. Each amendment **supersedes** the text above where they differ. The review ran after the advance approval; the operator has not read these either.

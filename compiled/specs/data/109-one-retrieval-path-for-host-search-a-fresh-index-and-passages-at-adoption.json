@@ -81,14 +81,20 @@
       "title": "Q1: ten questions, before and after (2026-11-13)"
     },
     {
-      "level": 2,
+      "level": 3,
       "line": 181,
+      "number": "9.2",
+      "title": "Q3: what of the release's own reference `search_kb` can return (2026-11-13)"
+    },
+    {
+      "level": 2,
+      "line": 201,
       "number": "10",
       "title": "Amendments from review (2026-11-13)"
     },
     {
       "level": 2,
-      "line": 191,
+      "line": 211,
       "number": "11",
       "title": "Decision: index registered projects (operator, 2026-11-13: \"index projects — yes please\")"
     }
@@ -96,7 +102,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/109-one-retrieval-path-for-host-search-a-fresh-index-and-passages-at-adoption.md",
-    "sha256": "b940dc3933651f26822326ac077dd4bef830c9c417be8c170f0c536f05c61ea1"
+    "sha256": "09e78e89a38db8c31571b8db64dac717413ec67bfe613cc852794cac109c5498"
   },
   "source_status_at_hash": {
     "line": {
@@ -109,7 +115,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-13, in a host session (\"approve all your plans and suggestions and go\"). The approval was given to the plan this spec carries out (workstream 5: one retrieval engine for all five search tools, automatic index refresh, a small retrieval at role adoption) BEFORE this text was written; the operator has not read the text."
     },
-    "sha256": "b940dc3933651f26822326ac077dd4bef830c9c417be8c170f0c536f05c61ea1",
+    "sha256": "09e78e89a38db8c31571b8db64dac717413ec67bfe613cc852794cac109c5498",
     "word": "approved"
   },
   "spec": {
