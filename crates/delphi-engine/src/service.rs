@@ -1765,6 +1765,45 @@ impl EngineService {
         Ok(out)
     }
 
+    /// `host.ingest_transcript` (`specs/108` M3, A4): run the two transcript rules over the host's own Claude Code log for this project
+    /// and stage what they find at L0, de-duplicated against what is staged. Refused unless the project opted in; the transcript folder
+    /// is derived from the project the daemon resolves, the path may not pass through a symlink, the file is at most 32 MiB, `role`
+    /// must be servable, and every note passes the secret redactor before it is staged.
+    async fn host_ingest_transcript(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        use crate::{host_rpc as h, transcript as t};
+        need_host(&ctx)?;
+        let ws = self.engine.ws.clone();
+        h::gate(&ws.dir).map_err(host_err)?;
+        let c = h::Caller::parse(&p).map_err(host_err)?;
+        let role = p["role"].as_str().filter(|r| !r.is_empty()).ok_or_else(|| err(code::INVALID_PARAMS, "`role` is required: the servable role the notes are for"))?.to_string();
+        let path = std::path::PathBuf::from(p["transcript_path"].as_str().unwrap_or(""));
+        let (cwd, root) = (c.cwd.clone(), transcript_root());
+        let mined = tokio::task::spawn_blocking(move || -> Result<(String, t::Mined), String> {
+            let (project, role) = t::admit(&ws, &cwd, &role)?;
+            let file = t::daemon_path(&ws.dir, &project, &path, root.as_deref())?;
+            let text = std::fs::read_to_string(&file).map_err(|_| "refused: the transcript is not text; nothing was ingested".to_string())?;
+            Ok((role, t::read_claude_code(&text)?))
+        })
+        .await
+        .map_err(|e| err(-32000, e.to_string()))?
+        .map_err(|e| err(code::INVALID_PARAMS, e))?;
+        let (role, mut mined) = mined;
+        for f in &mut mined.findings {
+            f.text = self.engine.secrets.redact(&f.text);
+            f.evidence = self.engine.secrets.redact(&f.evidence);
+        }
+        let who = t::caller_for(&mined, &c.cwd);
+        let _gate = self.host_gate.lock().await;
+        let m = self.mission_at(Some(&who.mission()), c.cwd.to_str()).await?;
+        let have = m.replay().map_err(engine_err)?;
+        let (fresh, already) = t::fresh_of(&mined, &have);
+        let base = h::proposals_in(&have);
+        for (i, f) in fresh.iter().enumerate() {
+            m.append(h::transcript_event(&who, base + i, &role, &f.text, &f.evidence)).await.map_err(engine_err)?;
+        }
+        Ok(json!({"staged": fresh.len(), "already": already, "mission": m.id, "tier": "L0", "next": "the operator reviews them with `delphi learn list`; staged notes are never loaded into a prompt"}))
+    }
+
     /// `mcp.get` / `mcp.set` (`specs/062` §9): the operator's switch for host tools, and how many host lessons wait for review.
     async fn mcp_switch(&self, p: Value, ctx: CallContext, set: bool) -> RpcOutcome {
         need_console(&ctx)?;
@@ -3962,6 +4001,19 @@ fn run_pass(ws: &std::path::Path, home: &std::path::Path, held: &crate::research
 /// The handle the daemon holds (a newtype, since `Extension` and `Arc` are both foreign to this crate).
 pub struct ServiceExt(pub Arc<EngineService>);
 
+/// A test's stand-in for `~/.claude/projects` (the daemon reads `HOME` otherwise, which a test must not change for the process).
+#[cfg(test)]
+pub(crate) static TRANSCRIPT_ROOT: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
+
+/// The host's transcript root for `host.ingest_transcript`.
+fn transcript_root() -> Option<std::path::PathBuf> {
+    #[cfg(test)]
+    if let Some(r) = TRANSCRIPT_ROOT.lock().unwrap().clone() {
+        return Some(r);
+    }
+    crate::host_hooks::claude_projects_root()
+}
+
 impl EngineService {
     pub fn extension(self: &Arc<Self>) -> Arc<dyn Extension> {
         Arc::new(ServiceExt(self.clone()))
@@ -4001,6 +4053,7 @@ impl Extension for ServiceExt {
                 "host.handoff_put" => svc.host_handoff_put(params, ctx).await,
                 "host.route_decided" => svc.host_route_decided(params, ctx).await,
                 "host.handoff_get" => svc.host_handoff_get(params, ctx).await,
+                "host.ingest_transcript" => svc.host_ingest_transcript(params, ctx).await,
                 "host.recall_sessions" => svc.host_recall_sessions(params, ctx).await,
                 "host.search_kb" => svc.host_search_kb(params, ctx).await,
                 "host.request_help" => svc.host_request_help(params, ctx).await,
@@ -4414,6 +4467,60 @@ mod tests {
         assert!(!logged[0].payload.to_string().contains("formatter"), "ids only: {}", logged[0].payload);
         assert!(logged[0].payload["ids"].as_array().unwrap().iter().any(|i| i == &json!(format!("host-{first}"))));
         assert_eq!(crate::host_recall::usage_in(&f.engine.ws.dir), (2, 2));
+    }
+
+    // Spec 108 M3 (A4): a transcript with a correction stages one note through the daemon, redacted; a second run stages none; a
+    // project that did not opt in, a missing role, a path outside the project's transcript folder and an oversized file are refused.
+    fn rpc_message(r: Result<Value, ClientError>) -> String {
+        match r {
+            Err(ClientError::Rpc { message, .. }) => message,
+            other => format!("not an RPC error: {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_transcript_is_ingested_through_the_daemon_once_redacted_and_only_for_an_opted_in_project() {
+        let f = setup(vec![], 5.0, |_| {});
+        let s = serve(&f).await;
+        let base = std::fs::canonicalize(&f.root).unwrap();
+        let proj = base.join("proj");
+        register_projects(&f.engine.ws.dir, &[(PROJ_A, proj.as_path())]);
+        let claude = base.join("claude-projects");
+        *TRANSCRIPT_ROOT.lock().unwrap() = Some(claude.clone());
+        let folder = crate::host_hooks::transcript_folder(&claude, &proj);
+        std::fs::create_dir_all(&folder).unwrap();
+        let rec = |t: &str| json!({"type": "user", "sessionId": "s-1", "version": "2.1.0", "message": {"role": "user", "content": t}}).to_string();
+        let log = folder.join("s-1.jsonl");
+        std::fs::write(&log, [rec("hello"), rec("No, use the key sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123 instead.")].join("\n")).unwrap();
+        let outside = base.join("elsewhere.jsonl");
+        std::fs::write(&outside, rec("No, wrong.")).unwrap();
+        let big = folder.join("big.jsonl");
+        std::fs::File::create(&big).unwrap().set_len(crate::transcript::MAX_DAEMON_BYTES + 1).unwrap();
+        let role = crate::mcp_packs::Packs::new(f.engine.ws.clone()).roles().unwrap().into_iter().find(|r| r.servable).unwrap().id;
+        let (hsock, htok, ws_dir) = (s.host_sock.clone(), s.host.clone(), f.engine.ws.dir.clone());
+        let cwd = proj.to_string_lossy().to_string();
+        let (first, again) = blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+            c.hello(&htok).unwrap();
+            let call = |c: &mut Client, path: &std::path::Path, role: &str| c.call("host.ingest_transcript", json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cwd, "role": role, "transcript_path": path.to_string_lossy()}));
+            assert!(rpc_message(call(&mut c, &log, &role)).contains("is off for project"), "off until the project opts in");
+            crate::transcript::opt_in(&ws_dir, PROJ_A).unwrap();
+            assert_eq!(rpc_code(call(&mut c, &log, "")), Some(code::INVALID_PARAMS));
+            assert_eq!(rpc_code(call(&mut c, &log, "nobody")), Some(code::INVALID_PARAMS));
+            assert!(rpc_message(call(&mut c, &outside, &role)).contains("not in this project's"));
+            assert!(rpc_message(call(&mut c, &big, &role)).contains("32 MiB"));
+            (call(&mut c, &log, &role).unwrap(), call(&mut c, &log, &role).unwrap())
+        })
+        .await;
+        *TRANSCRIPT_ROOT.lock().unwrap() = None;
+        assert_eq!((first["staged"].as_u64(), first["already"].as_u64(), first["tier"].as_str()), (Some(1), Some(0), Some("L0")), "{first}");
+        assert_eq!((again["staged"].as_u64(), again["already"].as_u64()), (Some(0), Some(1)), "{again}");
+        let events = replay_log(&delphi_core::sessions::dir(&f.engine.ws.dir, first["mission"].as_str().unwrap()));
+        let staged: Vec<&EventEnvelope> = events.iter().filter(|e| e.kind == "learn.staged").collect();
+        assert_eq!(staged.len(), 1);
+        let text = staged[0].payload.to_string();
+        assert!(!text.contains("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123") && staged[0].payload["trigger"] == "host_transcript" && staged[0].payload["tier"] == "L0", "{text}");
     }
 
     /// One `host.propose_kb_entry` (a noted entry, no rung so the daemon holds it private) as the host of `session` working in `cwd`.

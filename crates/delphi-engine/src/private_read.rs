@@ -130,7 +130,7 @@ const SEATS_CANNOT_READ: &str = "an answer written by seats that cannot read a n
 const MCP_OWN: &str = "runs in the MCP server's own process over files and the index; their file sets and zones exclude `staged` (`the_mcp_servers_own_readers_never_return_a_noted_entry`) and the index lists no private source";
 
 /// The methods of the host socket (`delphi_core::server::HOST_METHODS`).
-pub const HOST_SURFACE: [Surface; 26] = [
+pub const HOST_SURFACE: [Surface; 27] = [
     no_return("session.ping", "answers `pong`"),
     Surface { name: "host.search_kb", how: How::Marks },
     no_return("host.propose_note", WRITES),
@@ -138,6 +138,7 @@ pub const HOST_SURFACE: [Surface; 26] = [
     no_return("host.request_test_authorization", WRITES),
     no_return("host.record_session_summary", WRITES),
     no_return("host.handoff_put", WRITES),
+    no_return("host.ingest_transcript", "a write: it stages notes from the host's own transcript and returns counts and a mission id, never their text"),
     Surface { name: "host.recall_sessions", how: How::Withholds { proof_file: "delphi-engine/src/host_recall.rs", proof_test: "a_second_session_recalls_the_first_and_not_itself_another_project_a_dropped_note_or_a_marked_session" } },
     Surface { name: "host.handoff_get", how: How::Skips { exposure: "returns the handoff another session put; that session's mark is its own and does not follow the text (OD-5)" } },
     no_return("host.request_help", WRITES),

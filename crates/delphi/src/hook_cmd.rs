@@ -46,7 +46,14 @@ pub fn hook_output(args: &[String], event: &str, host: &str, stdin: impl std::io
             lines.join("\n")
         }
         _ => {
-            host_hooks::session_end(&ws, &input, host, &cwd, root.as_deref());
+            let marker = host_hooks::session_end(&ws, &input, host, &cwd, root.as_deref());
+            // Spec 108 M3: one bounded call (2 s) to stage the transcript's notes when the project opted in; silent on any failure.
+            if let Some(args) = host_hooks::ingest_args(&ws, &input, &cwd, root.as_deref(), marker.as_deref()) {
+                if let Some(link) = delphi_engine::mcp_daemon::HostLink::for_workspace(&ws, &cwd) {
+                    link.set_tool(Some(host));
+                    let _ = link.call_within("host.ingest_transcript", &args, std::time::Duration::from_secs(2));
+                }
+            }
             String::new()
         }
     };
@@ -108,7 +115,7 @@ pub fn switch(what: Option<&str>, ws_dir: &Path) -> i32 {
                 eprintln!("delphi mcp --hooks on: this needs you at a terminal (stdin is not one), and there is no --yes");
                 return 2;
             }
-            println!("At each session start, prompt and session end, your host will run `delphi mcp --hook <event>`. It reads Delphi's files, prints the team, how to address it, this project's spec names and statuses (as fenced data) and a pointer to the last session, resolves an @name you type, and at the end writes a marker of counts. It runs no model, asks the daemon nothing and approves nothing. `delphi mcp --hooks off` turns it off.");
+            println!("At each session start, prompt and session end, your host will run `delphi mcp --hook <event>`. It reads Delphi's files, prints the team, how to address it, this project's spec names and statuses (as fenced data) and a pointer to the last session, resolves an @name you type, and at the end writes a marker of counts. It runs no model and approves nothing; at session end, for a project you opted in to transcript ingest (`delphi learn ingest --enable`), it asks the running daemon once to stage notes from the transcript at L0. `delphi mcp --hooks off` turns it off.");
             print!("Type yes to turn the session hooks on: ");
             let _ = std::io::stdout().flush();
             let mut line = String::new();

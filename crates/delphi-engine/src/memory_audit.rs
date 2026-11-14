@@ -39,6 +39,7 @@ pub const SITES: &[Site] = &[
         events: &["learn.staged"],
         proofs: &[
             ("crates/delphi-engine/src/service.rs", "a_host_stages_untrusted_notes_in_its_own_session_and_the_switch_holds"),
+            ("crates/delphi-engine/src/service.rs", "a_transcript_is_ingested_through_the_daemon_once_redacted_and_only_for_an_opted_in_project"),
         ],
     },
     Site {
