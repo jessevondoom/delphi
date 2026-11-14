@@ -523,10 +523,11 @@ pub fn claude_projects_root() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from).filter(|h| h.is_absolute()).map(|h| h.join(".claude").join("projects"))
 }
 
-/// Claude Code's transcript folder for the session at `cwd`: `<root>/<cwd with every `/` and `.` as `-`>`, the folder
-/// `delphi learn ingest` reads. `root` is `~/.claude/projects`.
+/// Claude Code's transcript folder for the session at `cwd`: `<root>/<cwd with every character other than an ASCII letter or digit
+/// as `-`>`, the folder `delphi learn ingest` reads too. `root` is `~/.claude/projects`. Spec 105 H4's live run (Claude Code
+/// 2.1.325) showed `_` turned into `-` as well as `/` and `.`; the old rule kept `_`, so a transcript under such a path was refused.
 pub fn transcript_folder(root: &Path, cwd: &Path) -> PathBuf {
-    root.join(cwd.to_string_lossy().chars().map(|c| if c == '/' || c == '.' { '-' } else { c }).collect::<String>())
+    root.join(cwd.to_string_lossy().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect::<String>())
 }
 
 /// A transcript path from the hook's stdin, accepted only when (A3) its last component is not a symlink, it is a regular file
@@ -1048,6 +1049,14 @@ mod tests {
         let folder = transcript_folder(&root, cwd);
         std::fs::create_dir_all(&folder).unwrap();
         (root, folder)
+    }
+
+    // Spec 105 H4: the folder name Claude Code 2.1.325 used in the live run, for a cwd with `/`, `.` and `_` in it.
+    #[test]
+    fn the_transcript_folder_is_named_as_claude_code_names_it() {
+        let cwd = Path::new("/private/var/folders/ab/c_d/T/delphi-host-claude-code.qbwIgE/proj_x.y");
+        assert_eq!(transcript_folder(Path::new("/r"), cwd), Path::new("/r/-private-var-folders-ab-c-d-T-delphi-host-claude-code-qbwIgE-proj-x-y"));
+        assert_eq!(transcript_folder(Path::new("/r"), Path::new("/srv/my repo/a+b")), Path::new("/r/-srv-my-repo-a-b"));
     }
 
     fn input(id: &str, transcript: Option<&Path>, cwd: &Path) -> Input {

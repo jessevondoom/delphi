@@ -190,11 +190,11 @@ pub struct Ingest {
     pub enable: bool,
 }
 
-/// Where Claude Code keeps the session logs of the project at `cwd`: `~/.claude/projects/<cwd with `/` and `.` as `-`>`.
+/// Where Claude Code keeps the session logs of the project at `cwd`: `~/.claude/projects/<cwd with every character other than an
+/// ASCII letter or digit as `-`>`, the one rule the session-end hook uses too (spec 105 H4 found `_` was missed).
 fn claude_logs_for(cwd: &Path) -> Option<std::path::PathBuf> {
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from)?;
-    let folder: String = cwd.to_string_lossy().chars().map(|c| if c == '/' || c == '.' { '-' } else { c }).collect();
-    Some(home.join(".claude/projects").join(folder))
+    Some(delphi_engine::host_hooks::transcript_folder(&home.join(".claude/projects"), cwd))
 }
 
 pub fn ingest_run(ws: &delphi_engine::workspace::WorkspacePaths, cwd: &Path, a: &Ingest) -> Result<String, String> {

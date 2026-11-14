@@ -88,7 +88,7 @@
     },
     {
       "level": 2,
-      "line": 122,
+      "line": 127,
       "number": "12",
       "title": "Amendments from review (2026-11-13)"
     }
@@ -96,7 +96,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/105-session-hooks-for-hosts-a-brief-at-start-mention-routing-at-the-prompt-and-a-marker-at-the-end.md",
-    "sha256": "339b9f0a587e3b65ac3d137519c7ee00d8a8ef87b35831ec126ff53707c557b1"
+    "sha256": "8dbe3f7cdb5ed2f4d8cdfe89a8c6a05a401dc0f800bf9bf614c9e45a80dbdd8a"
   },
   "source_status_at_hash": {
     "line": {
@@ -109,7 +109,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-13, in a host session (\"approve all your plans and suggestions and go\"). The approval was given to the plan this spec carries out (workstream 1, hooks opt-in, read-only at start, a summary and handoff at the end) BEFORE this text was written; the operator has not read the text. What goes beyond that plan is listed in §10."
     },
-    "sha256": "339b9f0a587e3b65ac3d137519c7ee00d8a8ef87b35831ec126ff53707c557b1",
+    "sha256": "8dbe3f7cdb5ed2f4d8cdfe89a8c6a05a401dc0f800bf9bf614c9e45a80dbdd8a",
     "word": "approved"
   },
   "spec": {
