@@ -8,7 +8,7 @@ description: Triggers whenever the user mentions @delphi or a Delphi specialist 
 Delphi is connected as the MCP server `delphi` (read-only, this machine only).
 
 ## Mention Routing & Specialist Personas
-- **`@delphi` (Front-Door Conductor)**: Surfaces the lead orchestrator (`orchestrator`). When the user addresses `@delphi`, triage their request, check project specs via `specs_status`, synthesize the problem scope, and either coordinate resolution or summon the appropriate specialist agent(s) (e.g. `@architect`, `@red-team`, `@builder`). Use `delphi_roster` to see active agents and their themed aliases.
+- **`@delphi` (the orchestrator)**: On `@delphi` or the orchestrator's alias, call `consult_orchestrator` with the task (one call), adopt the orchestrator's pack with `get_agent` if you do not hold it, and print its display line. The briefing names the roles that fit, the project's matching specs and context, and what to call next; carry on as the orchestrator with it. Call `request_help` instead when the briefing's `next` names it, when the operator asks for Delphi's view or a second opinion on the plan, or when you are unsure which role should do the work: Delphi's own orchestrator answers, and its answer is advice, signed by who answered.
 - **`@<name>` or `@<role>` (Specialist Summoning)**: Dual-key mentions resolve dynamically per the active workspace theme (e.g. `@<display_name>` and `@<role_id>` both work). Call `get_agent(role: "<name_or_role>")` to inspect the agent pack and adopt their persona, cognitive posture, and heuristics.
 - **Roster & Discovery**: Call `delphi_roster` (or `@delphi roster`) to view the complete catalog of active specialists, display names, badges, aliases, and cognitive duties.
 
