@@ -961,7 +961,7 @@ The operator asked, in a host session on 2026-11-13, for a review of how Delphi'
 | 104 | R4 | `[seats] standing_tokens` | not started |
 | 104 | R5 | a Panel in four calls | not started |
 | 105 | H0 | the spec and the 071 amendment | approved in advance 2026-11-13 |
-| 105 | H1 | `delphi hook`, the switch, `session-start`, the plugin's hooks file | not started |
+| 105 | H1 | `delphi mcp --hook`/`--hooks`, the switch, `session-start`, the plugin's hooks file | built (local, not pushed): `delphi mcp --hook session-start` prints the brief (roster, address line, fenced spec statuses, a pointer to the last handoff with none of its text) behind `[mcp] session_hooks`, set by `delphi mcp --hooks on` at a terminal; the plugin ships `hooks/hooks.json`; `--check claude-code` reports both (spec amended A1-A7) |
 | 105 | H2 | `prompt`: mention resolution | not started |
 | 105 | H3 | `session-end` marker, the nudge | not started |
 | 105 | H4 | the guide and a live check | not started |

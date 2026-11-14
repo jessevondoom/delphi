@@ -70,27 +70,33 @@
     },
     {
       "level": 2,
-      "line": 104,
+      "line": 105,
       "number": "9",
       "title": "Decisions (taken as recommended, 2026-11-13)"
     },
     {
       "level": 2,
-      "line": 112,
+      "line": 113,
       "number": "10",
       "title": "Beyond the approved plan (waits for the operator)"
     },
     {
       "level": 2,
-      "line": 116,
+      "line": 117,
       "number": "11",
       "title": "Not verified"
+    },
+    {
+      "level": 2,
+      "line": 122,
+      "number": "12",
+      "title": "Amendments from review (2026-11-13)"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/105-session-hooks-for-hosts-a-brief-at-start-mention-routing-at-the-prompt-and-a-marker-at-the-end.md",
-    "sha256": "09e18b4d1be6342732f558d7b120a2c3daada79df6aa097d59279a938ddfd8c0"
+    "sha256": "339b9f0a587e3b65ac3d137519c7ee00d8a8ef87b35831ec126ff53707c557b1"
   },
   "source_status_at_hash": {
     "line": {
@@ -103,7 +109,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-13, in a host session (\"approve all your plans and suggestions and go\"). The approval was given to the plan this spec carries out (workstream 1, hooks opt-in, read-only at start, a summary and handoff at the end) BEFORE this text was written; the operator has not read the text. What goes beyond that plan is listed in §10."
     },
-    "sha256": "09e18b4d1be6342732f558d7b120a2c3daada79df6aa097d59279a938ddfd8c0",
+    "sha256": "339b9f0a587e3b65ac3d137519c7ee00d8a8ef87b35831ec126ff53707c557b1",
     "word": "approved"
   },
   "spec": {

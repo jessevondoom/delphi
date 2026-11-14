@@ -388,6 +388,8 @@ pub fn export_files_with(host: &str, version: &str, models: &BTreeMap<String, St
             ("adapter.json".into(), claude_code_adapter_json()),
             ("skills/delphi/SKILL.md".into(), skill),
             ("skills/delphi-council/SKILL.md".into(), council),
+            // Spec 105 §6: the three session hooks. They print nothing until the operator runs `delphi mcp --hooks on`.
+            ("hooks/hooks.json".into(), crate::host_hooks::claude_hooks_json()),
         ],
         // Other hosts load skills from their own folders; the export carries the file and the operator places it (spec 086 §5.1).
         _ => vec![
@@ -442,6 +444,9 @@ claude plugin install delphi@delphi
 The plugin declares the MCP server (`delphi mcp`), two skills (one that says when to consult Delphi, and `delphi-council`, which runs a Panel of your own subagents or a formal Council, spec 086) and four seat subagents (`delphi:architect`, `delphi:red-team`, `delphi:strategist`, `delphi:builder`; each a short wrapper that fetches its brief from Delphi). It carries no binary: install `delphi` with
 `install.sh` or Homebrew first. The declaration runs `delphi` from the host's `PATH`; for an absolute path use `delphi mcp --print-config claude-code --absolute`.
 Installing the plugin grants Delphi nothing: it is not an approval.
+
+It also declares three session hooks (`hooks/hooks.json`, spec 105): at session start, at each prompt and at session end Claude Code runs
+`delphi mcp --hook <event> --host claude-code`. They print nothing until you run `delphi mcp --hooks on` at a terminal; `delphi mcp --hooks off` turns them off again.
 
 Update with the host's own plugin update. Remove with `claude plugin uninstall delphi@delphi` and `claude plugin marketplace remove delphi`.
 To turn Delphi off without removing it, set `[mcp] enabled = false` in `config.toml` or use `/mcp off`.
@@ -565,7 +570,8 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         let out = t.path().join("p");
         let w = write_export("claude-code", &out, "9.9.9").unwrap();
-        assert_eq!(w.len(), 9, "plugin.json, .mcp.json, the adapter, two skills and four seat agents");
+        assert_eq!(w.len(), 10, "plugin.json, .mcp.json, the adapter, two skills, the hooks file and four seat agents");
+        assert_eq!(std::fs::read_to_string(out.join("hooks/hooks.json")).unwrap(), crate::host_hooks::claude_hooks_json());
         // Spec 098 §4: the host adapter ships with the plugin, byte for byte what a pack header hashes.
         assert_eq!(std::fs::read_to_string(out.join("adapter.json")).unwrap(), claude_code_adapter_json());
         let adapter: serde_json::Value = serde_json::from_str(&claude_code_adapter_json()).unwrap();

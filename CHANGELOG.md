@@ -8,6 +8,11 @@ This file starts with the work after v0.2.7. For earlier releases, the history i
 
 ## Unreleased
 
+- `delphi learn keep <mission>/<id> --as lesson --role <role> | --as rule` keeps a note a host staged: it shows the note and what it will write, and writes only after you type yes at a terminal. A lesson goes into that role's `lessons.md` (workspace scope, or `--scope operator`) and needs a trigger and a directive (`--text "T: … D: …"`); a rule goes into `heuristics.md` the way `delphi customize rule` writes one. Both pass the no-relaxation test and the Rule of 25, record where they came from, and close the note; the command needs the daemon stopped. `delphi learn list` marks host notes reported by two or more sessions and prints the command (spec 108, slice M2).
+- The trace harvester now runs: when a daemon task ends, its episode is written to `missions/<id>/traces/<role>-<task>.md` (at most one per task and three per mission) and indexed in the `episodes` zone, which host tools do not search. An episode is stamped from the lowest taint of the task's spans, never above `internal_generated`, and `external_untrusted` when no taint was recorded; before, the harvester was never called and would have stamped `internal_empirical` (spec 108, slice M4).
+- `query_memory` no longer returns another role's memory file or another project's mission file: its facets now come from where a file lives (memory, mission, plans) and every result passes the role check `search_memory` applies; `search_memory` refuses a role that is not servable (spec 109, slice Q0a).
+- Session hooks for Claude Code (spec 105 H1): the plugin now declares three hooks (`hooks/hooks.json`) that run `delphi mcp --hook <event>`. They print nothing until you run `delphi mcp --hooks on` at a terminal (`[mcp] session_hooks`, off by default). At session start the hook prints a short brief: the team and how to address it, the project's spec names and statuses fenced as data, and a pointer to the last host session with none of its text. `delphi mcp --hooks status` and `delphi mcp --check claude-code` report the hooks file and the switch.
+
 ## 0.6.1 — 2026-11-13
 
 A summary by spec; the pull requests are listed on the releases page. Nothing in specs 098 to 103 below has been run against a real host, Council, Telegram bot or mailbox yet: the tests use fakes and scratch homes.
