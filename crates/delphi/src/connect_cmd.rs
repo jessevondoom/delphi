@@ -185,7 +185,7 @@ pub fn confirmation(host: &str, plan: &str) -> String {
 }
 
 fn usage() -> i32 {
-    eprintln!("usage: delphi connect claude-code|copilot [--dry-run | --status | --remove]");
+    eprintln!("usage: delphi connect claude-code|copilot|codex|gemini [--dry-run | --status | --remove]");
     2
 }
 
@@ -195,8 +195,16 @@ pub fn cmd(args: &[String]) -> i32 {
     let dry = rest.contains(&"--dry-run");
     let remove = rest.contains(&"--remove");
     let Some(host) = rest.iter().find(|a| !a.starts_with("--")) else { return usage() };
+    // Spec 110 X2: Codex and Gemini CLI install Delphi's own files, not a marketplace plugin. `--remove --dry-run` previews a removal.
+    if crate::connect_files::handles(host) {
+        if [status, dry, remove].iter().filter(|x| **x).count() > 1 && !(dry && remove && !status) || rest.iter().any(|a| a.starts_with("--") && !matches!(*a, "--status" | "--dry-run" | "--remove")) {
+            return usage();
+        }
+        let models = crate::host_models(args, host).unwrap_or_default();
+        return crate::connect_files::cmd(host, status, dry, remove, &models);
+    }
     let Some(t) = template(host) else {
-        eprintln!("delphi connect: `{}` is not a host connect supports (claude-code, copilot); use the manual commands from `delphi mcp --print-config {}`", sanitize(host), sanitize(host));
+        eprintln!("delphi connect: `{}` is not a host connect supports (claude-code, copilot, codex, gemini); use the manual commands from `delphi mcp --print-config {}`", sanitize(host), sanitize(host));
         return 2;
     };
     if [status, dry, remove].iter().filter(|x| **x).count() > 1 || rest.iter().any(|a| a.starts_with("--") && !matches!(*a, "--status" | "--dry-run" | "--remove")) {
@@ -364,7 +372,8 @@ mod tests {
         let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(cmd(&a(&["claude-code"])), 2);
         assert_eq!(cmd(&a(&["copilot"])), 2);
-        assert_eq!(cmd(&a(&["codex", "--dry-run"])), 2);
+        assert_eq!(cmd(&a(&["vim", "--dry-run"])), 2);
+        assert_eq!(cmd(&a(&["codex", "--status", "--remove"])), 2, "codex flags are exclusive too");
         assert_eq!(cmd(&a(&["claude-code", "--dry-run", "--status"])), 2);
         assert_eq!(cmd(&a(&[])), 2);
     }

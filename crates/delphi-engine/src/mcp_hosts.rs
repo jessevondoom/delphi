@@ -567,7 +567,8 @@ pub fn export_files_with(host: &str, version: &str, models: &BTreeMap<String, St
         // Other hosts load skills from their own folders; the export carries the file and the operator places it (spec 086 §5.1).
         _ => vec![
             ("mcp-config.txt".into(), snippet),
-            ("DELPHI.md".into(), skill.split_once("---\n\n").map(|(_, b)| b).unwrap_or(&skill).to_string()),
+            // Spec 110 §3 item 3: the instruction section, from the one source every host's copy is generated from.
+            ("DELPHI.md".into(), crate::host_install::delphi_md(host, version)),
             ("skills/delphi-council/SKILL.md".into(), council),
         ],
     };

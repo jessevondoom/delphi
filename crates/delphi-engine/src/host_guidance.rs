@@ -40,7 +40,8 @@ pub const ROUTING: [&str; 2] = [
     "Call `request_help` instead when the briefing's `next` names it, when the operator asks for Delphi's view or a second opinion on the plan, or when you are unsure which role should do the work: Delphi's own orchestrator answers, and its answer is advice, signed by who answered.",
 ];
 
-const REFLEX: &str = "## Research sources (Delphi, spec 098 section 7)
+/// The research reflex, shared by the `CLAUDE.md` template and every host's instruction section (spec 110 §3 item 3).
+pub const REFLEX: &str ="## Research sources (Delphi, spec 098 section 7)
 
 - **Explicit invocation** means an `@delphi` or `@<role>` mention, the `delphi` skill triggering, or the user saying \"ask Delphi\". Then run the role in your host on the source ladder (its pack lists the rungs) and make no offer.
 - **Not explicit.** When the request is research or investigation and Delphi was not invoked explicitly, adopt the Scout (or the Investigator) yourself: call `route` with the task to see which role fits, work the ladder, and make **one** offer to run the same question through Delphi (`request_research`) for sourced, kept results. Carry on in your host unless the user accepts.
