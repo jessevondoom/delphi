@@ -104,7 +104,54 @@ pub fn run(tree: &Tree) -> Report {
     check_memory_writes(tree, &mut r);
     check_spec_numbers(tree, &mut r);
     check_spec_group_lines(tree, &mut r);
+    check_reviewed_by(tree, &mut r);
     r
+}
+
+// ── a review a spec cites (specs/104 section 13 G5) ──────────────────────────
+
+/// A spec may cite the review it rests on: `reviewed_by: [panel:<council id>, council:<council id>]`. Each id must resolve to a
+/// Council or Panel record under `missions/*/councils/` in this repo (the record's `council_id:` line), and a cited Panel whose record
+/// says `counts_as_independent_review: false` fails: the moderator did not witness that its seats ran apart. A spec with no
+/// `reviewed_by` is not touched, and nothing here requires a review. Source repo only.
+fn check_reviewed_by(tree: &Tree, r: &mut Report) {
+    if tree.mode != Mode::Repo {
+        return;
+    }
+    let mut cited: Vec<(String, Vec<Value>)> = Vec::new();
+    for path in tree.files.keys().filter(|p| p.strip_prefix("specs/").is_some_and(|n| !n.contains('/') && n.ends_with(".md"))) {
+        let Some(fm) = tree.read(path).as_deref().and_then(frontmatter_of) else { continue };
+        match fm.get(Value::String("reviewed_by".into())) {
+            None => {}
+            Some(Value::Sequence(s)) => cited.push((path.clone(), s.clone())),
+            Some(_) => r.fail("reviewed-by", path.clone(), "`reviewed_by` must be a list such as `[panel:<council id>, council:<council id>]`"),
+        }
+    }
+    if cited.is_empty() {
+        return;
+    }
+    // council id -> (venue, counts as an independent review), from the records under missions/.
+    let record = Regex::new(r"^missions/[^/]+/councils/\d{3}-[^/]+\.md$").unwrap();
+    let mut records: BTreeMap<String, (String, bool)> = BTreeMap::new();
+    for path in tree.with_ext(&[".md"]).filter(|p| record.is_match(p)) {
+        let Some(fm) = tree.read(path).as_deref().and_then(frontmatter_of) else { continue };
+        let Some(id) = get_str(&fm, "council_id") else { continue };
+        let counts = fm.get(Value::String("counts_as_independent_review".into())) != Some(&Value::Bool(false));
+        records.insert(id.to_string(), (get_str(&fm, "venue").unwrap_or("").to_string(), counts));
+    }
+    for (path, items) in cited {
+        for item in items {
+            let Some((kind, id)) = item.as_str().and_then(|s| s.split_once(':')).filter(|(k, id)| matches!(*k, "panel" | "council") && !id.trim().is_empty() && !id.contains(char::is_whitespace)) else {
+                r.fail("reviewed-by", path.clone(), format!("`reviewed_by` entry {item:?} is malformed: write `panel:<council id>` or `council:<council id>`"));
+                continue;
+            };
+            match records.get(id) {
+                None => r.fail("reviewed-by", path.clone(), format!("`reviewed_by` cites `{kind}:{id}`, which resolves to no Council or Panel record under missions/")),
+                Some((venue, false)) if venue == "panel" => r.fail("reviewed-by", path.clone(), format!("`reviewed_by` cites `{kind}:{id}`, a Panel whose record says it does not count as an independent review (its seats' first answers were submitted together and the moderator did not witness that they ran apart)")),
+                Some(_) => {}
+            }
+        }
+    }
 }
 
 // ── a group named in a spec (specs/088 section 4.1) ───────────────────────────
@@ -1127,6 +1174,36 @@ mod tests {
         // Historical records (no `council_format`) are verbatim and exempt.
         let (_t, tree) = tree_of(&[("missions/m/councils/001-old.md", "# old\nno section")]);
         assert_eq!(bad(&tree), 0);
+    }
+
+    /// Spec 104 section 13 G5: a cited counted Panel and a daemon Council pass; an uncounted Panel, an unknown id and a malformed entry
+    /// fail; a spec with no `reviewed_by` is untouched.
+    #[test]
+    fn a_spec_citing_a_review_is_held_to_its_record() {
+        let rec = |id: &str, venue: &str, counts: &str| format!("---\nid: x\nvenue: {venue}\ncouncil_id: {id}\n{counts}council_format: 1\n---\n\n# Council\n");
+        let spec = |by: &str| format!("---\nid: s\n{by}---\n\nbody\n");
+        let records = [
+            ("missions/m/councils/001-a.md", rec("t-yes", "panel", "counts_as_independent_review: true\n")),
+            ("missions/m/councils/002-b.md", rec("t-no", "panel", "counts_as_independent_review: false\n")),
+            ("missions/m/councils/003-c.md", rec("t-daemon", "daemon", "")),
+        ];
+        let with = |by: &str| {
+            let s = spec(by);
+            let mut files: Vec<(&str, &str)> = records.iter().map(|(p, t)| (*p, t.as_str())).collect();
+            files.push(("specs/200-x.md", s.as_str()));
+            let (_t, tree) = tree_of(&files);
+            fails(&tree, "reviewed-by")
+        };
+        assert!(with("reviewed_by: [panel:t-yes, council:t-daemon]\n").is_empty());
+        assert!(with("").is_empty(), "a spec that cites no review is not affected");
+        let f = with("reviewed_by: [panel:t-no]\n");
+        assert!(f.len() == 1 && f[0].contains("does not count as an independent review"), "{f:?}");
+        let f = with("reviewed_by: [panel:t-nope]\n");
+        assert!(f.len() == 1 && f[0].contains("resolves to no Council or Panel record"), "{f:?}");
+        let f = with("reviewed_by: [panel:t-yes, \"t-yes\", 7]\n");
+        assert!(f.len() == 2 && f.iter().all(|m| m.contains("malformed")), "{f:?}");
+        let f = with("reviewed_by: panel:t-yes\n");
+        assert!(f.len() == 1 && f[0].contains("must be a list"), "{f:?}");
     }
 
     // REV-ARCH-05: case-insensitive, no "theme" substring exemption, only missions/*/councils/ exempt

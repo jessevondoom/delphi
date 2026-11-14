@@ -138,6 +138,9 @@ pub struct Panel {
 }
 
 /// The ruling's note for a Panel whose Round 1 arrived in a batch (`specs/104` §12 A3).
+/// The one line a Panel that does not count as an independent review opens its ruling card and `council_result` with (`specs/104` §13 G5).
+pub const NOT_INDEPENDENT_REVIEW: &str = "This Panel does not count as an independent review: its seats' first answers were submitted together and the moderator did not witness that they ran apart.";
+
 pub const RELAYED_NOTE: &str = "Round 1 arrived in a moderator's batch: Delphi held the release barrier, but could not see whether the host kept its seats apart before submitting";
 
 /// Text for one front-matter line: no line breaks, no control characters.

@@ -8698,6 +8698,12 @@ mod tests {
         assert_eq!((batch["isolation"].as_str(), batch["blind_round_1"].as_str()), (Some("host-reported, relayed"), Some("host-reported")), "{batch}");
         assert_eq!(batch["independence"], "witnessed by the moderator (host-reported): three subagents in parallel, each with only its brief");
         assert_eq!(batch["counts_as_independent_review"], true);
+        // Spec 104 section 13 G5: only the uncounted Panel's card opens with the fixed line.
+        let line = "This Panel does not count as an independent review: its seats' first answers were submitted together and the moderator did not witness that they ran apart.";
+        assert!(single["display"].as_str().is_some_and(|c| !c.contains("does not count as an independent review")), "{single}");
+        assert!(batch["display"].as_str().is_some_and(|c| !c.contains("does not count as an independent review")), "{batch}");
+        // It opens the card: the identity line, then this line, then the ruling.
+        assert!(unwitnessed["display"].as_str().is_some_and(|c| c.matches(line).count() == 1 && c.find(line) < c.find("**Panel ruling**") && c.split("\n\n").nth(1) == Some(line)), "{unwitnessed}");
         let card = batch["display"].as_str().unwrap();
         assert!(card.contains("isolation: host-reported, relayed · blind_round_1: host-reported") && card.contains("**independence:** witnessed by the moderator") && card.contains("could not see whether the host kept its seats apart"), "{card}");
         // Without the witness: not witnessed, and it does not count.
@@ -8708,6 +8714,9 @@ mod tests {
         assert!(subs.contains(&"single") && subs.contains(&"batch"), "{subs:?}");
         let record = std::fs::read_to_string(ws_dir.join(batch["ruling"]["record"].as_str().unwrap())).unwrap_or_default();
         assert!(record.is_empty() || (record.contains("isolation: host-reported, relayed") && record.contains("counts_as_independent_review: true")), "{record}");
+        // The record carries the council id the lint resolves a `reviewed_by` citation by.
+        let id = batch["council_id"].as_str().unwrap();
+        assert!(record.is_empty() || record.contains(&format!("\ncouncil_id: {id}\n")), "{record}");
     }
 
     /// Spec 104 §6 item 2, §12 A3 (b), A6, A8: a batch is checked whole. A seat named twice, a seat Delphi runs, a malformed witness and
