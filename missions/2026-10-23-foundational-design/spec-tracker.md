@@ -974,7 +974,7 @@ The operator asked, in a host session on 2026-11-13, for a review of how Delphi'
 | 107 | B2 | skill, hook line and wording | not started |
 | 108 | M0 | the spec | approved in advance 2026-11-13 |
 | 108 | M1 | `recall_sessions` | not started |
-| 108 | M2 | `delphi learn keep` | not started |
+| 108 | M2 | `delphi learn keep` | built (local, not pushed), as amended by A3: a terminal-only command with no daemon method and no `--yes` keeps a host note as a role's lesson (T/D/F lines, provenance in the file's `kept:` frontmatter) or a rule (through `customize rule`'s path, provenance on its Why line) via the pinned write, the no-relaxation test and the Rule of 25, closes the note with `learn.proposal_resolved`, and needs the daemon stopped; `learn list` marks recurring host notes with the command and `learn.health` counts them (the console does not show that count yet) |
 | 108 | M3 | skill lines and daemon ingest | not started |
 | 108 | M4 | the trace harvester | built (local, not pushed): every task end writes its episode to `missions/<id>/traces/<role>-<task>.md` off the task's path (a failure is logged, never returned), stamped per A1 from the spans' taint and never from the task's ceiling, within 065 §6's quotas, and indexed in the `episodes` zone, which stays off for hosts |
 | 108 | M5 | three conformance fixes | not started |

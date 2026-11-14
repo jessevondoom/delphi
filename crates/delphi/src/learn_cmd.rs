@@ -49,9 +49,23 @@ pub fn render_list_with(notes: &[LiveNote], r: &Recurrence) -> String {
         let count = r.count(&n.trigger, &n.summary);
         let seen = if count >= 2 { format!("  [{}]", count_label(&n.trigger, count)) } else { String::new() };
         out.push_str(&format!("{:<w$}  {:<17}  {}  {}{}\n", n.reference(), n.trigger, n.tier, n.summary, seen, w = width));
+        // A host note that recurred in two or more sessions is marked, with the one command that keeps it (`specs/108` M2).
+        if count >= 2 && crate::learn_keep::KEEPABLE.contains(&n.trigger.as_str()) {
+            out.push_str(&format!("{:<w$}  * recurring: keep it with `{}`\n", "", keep_command(n), w = width));
+        }
     }
     out.push_str(&format!("{} note(s). Staged notes are never loaded into a prompt; `delphi learn show <ref>` for one, `delphi learn drop <ref>` to discard it.\n", notes.len()));
     out
+}
+
+/// The `learn keep` command for a host note: a lesson for the role the host named, or a rule when it named none.
+pub fn keep_command(n: &LiveNote) -> String {
+    match n.role.as_deref().filter(|r| !r.is_empty() && r.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')) {
+        // A note already worded as `T: … D: …` is kept as it stands; any other needs its trigger said.
+        Some(role) if delphi_engine::customize::parse_lesson(&delphi_engine::learn::host_claim(&n.summary).0).is_ok() => format!("delphi learn keep {} --as lesson --role {}", n.reference(), role),
+        Some(role) => format!("delphi learn keep {} --as lesson --role {} --text \"T: <when it applies> D: <what to do>\"", n.reference(), role),
+        None => format!("delphi learn keep {} --as rule", n.reference()),
+    }
 }
 
 pub fn render_one(n: &LiveNote) -> String {
@@ -126,14 +140,14 @@ pub fn run_in(ws_dir: &Path, verb: &str, reference: Option<&str>, opts: &Options
             drop_note(ws_dir, n)?;
             Ok(format!("dropped {} (the event stays in the log; the note no longer lists)\n", n.reference()))
         }
-        other => Err(format!("`{}` is not a learn verb (list, show, drop)", other)),
+        other => Err(format!("`{}` is not a learn verb (list, show, drop, keep, ingest)", other)),
     }
 }
 
 pub fn cli(ws_dir: &Path, args: &[String], opts: &Options) -> i32 {
     let positional: Vec<&str> = args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && (*i == 0 || !["--mission", "--workspace", "--home"].contains(&args[*i - 1].as_str()))).map(|(_, a)| a.as_str()).collect();
     let Some(verb) = positional.first() else {
-        eprintln!("delphi learn: list | show <mission>/<id> | drop <mission>/<id>");
+        eprintln!("delphi learn: list | show <mission>/<id> | drop <mission>/<id> | keep <mission>/<id> --as lesson --role <role> | --as rule");
         return 2;
     };
     match run_in(ws_dir, verb, positional.get(1).copied(), opts) {
@@ -143,6 +157,21 @@ pub fn cli(ws_dir: &Path, args: &[String], opts: &Options) -> i32 {
         }
         Err(e) => {
             eprintln!("delphi learn: {}", e);
+            1
+        }
+    }
+}
+
+/// `delphi learn keep` (see `learn_keep.rs`): a terminal command only.
+pub fn keep_cli(home: &Path, ws_dir: &Path, args: &[String]) -> i32 {
+    let positional: Vec<&str> = args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && (*i == 0 || !["--as", "--role", "--scope", "--text", "--workspace", "--home"].contains(&args[*i - 1].as_str()))).map(|(_, a)| a.as_str()).collect();
+    match crate::learn_keep::run(home, ws_dir, args, positional.get(1).copied()) {
+        Ok(text) => {
+            print!("{}", text);
+            0
+        }
+        Err(e) => {
+            eprintln!("delphi learn keep: {}", e);
             1
         }
     }
@@ -301,6 +330,8 @@ mod tests {
         }
         let listed = run_in(t.path(), "list", None, &opts()).unwrap();
         assert!(listed.contains("[3 missions]") && listed.contains("[reported by 4 host sessions]"), "{}", listed);
+        assert!(listed.contains("* recurring: keep it with `delphi learn keep host-0000000000000000/h1 --as lesson --role builder --text"), "a recurring host note is marked with its keep command: {}", listed);
+        assert_eq!(listed.matches("* recurring").count(), 4, "one per host note, none for the operator's own: {}", listed);
         let first_host = listed.find("host-").unwrap();
         let last_daemon = listed.rfind("m_c/n3").unwrap().max(listed.rfind("m_a/n3").unwrap());
         assert!(last_daemon < first_host, "host notes sort after the operator's own: {}", listed);

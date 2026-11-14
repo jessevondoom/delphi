@@ -138,13 +138,15 @@ pub fn act(mission_id: &str, n: &LiveNote, action: &str) -> Result<Vec<EventEnve
 pub struct Health {
     pub staged: usize,
     pub review: usize,
+    /// Of the staged notes, those a host wrote that `delphi learn keep` can keep (`specs/108` M2).
+    pub host_notes: usize,
     /// The daemon's own timestamp of the oldest waiting item; `None` when nothing waits or no timestamp parses.
     pub oldest: Option<String>,
 }
 
 impl Health {
     pub fn to_json(&self) -> Value {
-        json!({"staged": self.staged, "review": self.review, "oldest_at": self.oldest})
+        json!({"staged": self.staged, "review": self.review, "host_notes": self.host_notes, "keep": "delphi learn keep <mission>/<id> --as lesson --role <role> | --as rule", "oldest_at": self.oldest})
     }
 }
 
@@ -162,6 +164,7 @@ pub fn health_of(missions: &[(String, Vec<EventEnvelope>)]) -> Health {
     for (id, events) in missions {
         let notes = live_notes(id, events);
         h.staged += notes.len();
+        h.host_notes += notes.iter().filter(|n| matches!(n.trigger.as_str(), "host_note" | "host_transcript")).count();
         notes.iter().for_each(|n| see(&n.timestamp));
         let proposals = crate::learn::live_proposals(id, events);
         h.review += proposals.len();
@@ -273,5 +276,18 @@ mod tests {
         undated.timestamp = "not a time".into();
         let h = health_of(&[("m2".into(), vec![undated])]);
         assert_eq!((h.review, h.oldest), (1, None), "no usable timestamp: counted, but no age");
+    }
+
+    #[test]
+    fn health_counts_the_host_notes_waiting_and_a_kept_one_leaves_the_count() {
+        let host = vec![staged(1, "h1", "host_note", "L0", NOW), staged(2, "h2", "host_note", "L0", NOW), staged(3, "n3", "agent_note", "L2", NOW)];
+        let h = health_of(&[("host-a".into(), host.clone())]);
+        assert_eq!((h.staged, h.host_notes), (3, 2));
+        assert_eq!(h.to_json()["host_notes"], 2);
+        let mut kept = EventEnvelope::new("host-a", "learn.proposal_resolved", json!({"id": "h1", "resolution": "accepted"}));
+        kept.seq = 4;
+        let mut after = host;
+        after.push(kept);
+        assert_eq!(health_of(&[("host-a".into(), after)]).host_notes, 1);
     }
 }

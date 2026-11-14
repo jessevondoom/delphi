@@ -465,11 +465,13 @@ notes staged from denials, corrections, retries and escalations.
   delphi learn list [\-\-mission <id>] [\-\-json]
   delphi learn show <mission>/<id> [\-\-json]
   delphi learn drop <mission>/<id>
+  delphi learn keep <mission>/<id> \-\-as lesson \-\-role <role> | \-\-as rule
+    [\-\-scope workspace|operator] [\-\-text "T: <when> D: <what to do> [F: <what would refute it>]"]
   delphi learn ingest \-\-from claude\-code \-\-role <role> [\-\-path <file|dir>] [\-\-enable]
     [\-\-workspace <name>] [\-\-home <dir>]
 .fi
 .PP
-Staged notes are never loaded into a prompt; they wait for review. `drop` needs the daemon stopped. Capture is set in [learning] in config.toml. `ingest` reads a coding tool's own session logs after the fact and stages what fixed rules find (your corrections, failures that were retried) as L0 notes for one role; it is off for a project until you run it once with `\-\-enable` from inside that project, reads the current folder's logs unless `\-\-path` says otherwise, and needs the daemon stopped.
+Staged notes are never loaded into a prompt; they wait for review. `drop` needs the daemon stopped. `keep` turns a host's note into a lesson for one role (its `lessons.md`, workspace scope unless `\-\-scope operator`) or a shared rule (`heuristics.md`), recorded as user_ratified with where it came from: it shows what it will write and writes only after you type yes at a terminal (there is no \-\-yes), refuses text the no\-relaxation test or the Rule of 25 refuses, and needs the daemon stopped, because the note is closed in its session's log. A lesson needs a trigger and a directive (`T: … D: …`); `list` marks a host note reported by two or more sessions and prints its `keep` command. Capture is set in [learning] in config.toml. `ingest` reads a coding tool's own session logs after the fact and stages what fixed rules find (your corrections, failures that were retried) as L0 notes for one role; it is off for a project until you run it once with `\-\-enable` from inside that project, reads the current folder's logs unless `\-\-path` says otherwise, and needs the daemon stopped.
 .SS delphi capabilities
 what each model CLI here can use: connectors, skills, models.
 .PP

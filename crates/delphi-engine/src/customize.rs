@@ -145,6 +145,231 @@ fn explain(e: RatifyError) -> String {
     }
 }
 
+// ── Keeping a host note (`specs/108` M2, as amended by A3) ─────────────────────────────────────────────────────────
+
+/// The lesson the operator keeps: the Rule of 25's trigger and directive, and the falsification when one was given.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Lesson {
+    pub trigger: String,
+    pub directive: String,
+    pub falsification: Option<String>,
+}
+
+/// Where a kept entry came from, recorded with it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Provenance {
+    /// `<mission>/<id>` of the staged note.
+    pub ratified_from: String,
+    /// The note's tier before the operator kept it.
+    pub original_tier: String,
+    /// The host that staged it (`host:<tool>/<model>`).
+    pub tool: String,
+    /// `YYYY-MM-DD`.
+    pub date: String,
+}
+
+impl Provenance {
+    /// The rationale line of a kept rule: the place the heuristics format already gives a rule's provenance (`- **Why:**`).
+    pub fn why(&self) -> String {
+        format!("kept from {} (a {} host note from {}) on {}; source_type: user_ratified", self.ratified_from, self.original_tier, self.tool, self.date)
+    }
+}
+
+/// What a keep wrote: the entry's id (a lesson's; empty for a rule), the file as the operator names it, and the new pin.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Kept {
+    pub id: String,
+    pub file: String,
+    pub pin: String,
+}
+
+const LESSON_FULL: &str = "the role's lessons file is full (the Rule of 25: 25 rules, 6 KB). Make room first, in one of three ways: merge two lessons into one, demote one to `context/domains/`, or promote one into a deterministic script; nothing was written";
+
+/// A role ID this workspace has a ratified manifest for.
+pub fn check_role(home: &Path, ws_dir: &Path, role: &str) -> Result<(), String> {
+    let plain = !role.is_empty() && role.len() <= 64 && role.starts_with(|c: char| c.is_ascii_lowercase()) && role.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    let ws = crate::workspace::WorkspacePaths { home: home.to_path_buf(), dir: ws_dir.to_path_buf() };
+    if !plain || ws.load_manifest(role).is_err() {
+        return Err(format!("no role `{}` in this workspace (see `delphi catalog`); nothing was written", role.chars().filter(|c| !c.is_control()).take(64).collect::<String>()));
+    }
+    Ok(())
+}
+
+/// Read `T: <trigger> D: <directive> [F: <falsification>]` (the letters of the Rule of 25's lines). A trigger and a
+/// directive are required: a lesson is loaded into every prompt of its role, so it says when it applies.
+pub fn parse_lesson(text: &str) -> Result<Lesson, String> {
+    let text = text.trim();
+    if text.chars().any(char::is_control) {
+        return Err("a lesson is plain text on one line: no control characters".into());
+    }
+    let mut marks: Vec<(usize, char)> = Vec::new();
+    for (i, _) in text.char_indices() {
+        let rest = &text[i..];
+        let boundary = i == 0 || text[..i].ends_with([' ', ';', ',']);
+        if let Some(c) = ['T', 'D', 'F'].into_iter().find(|c| boundary && rest.starts_with(&format!("{c}: "))) {
+            if marks.iter().any(|(_, m)| *m == c) {
+                return Err(format!("`{c}:` appears twice; give each of T:, D: and F: once"));
+            }
+            marks.push((i, c));
+        }
+    }
+    let part = |c: char| -> Option<String> {
+        let at = marks.iter().position(|(_, m)| *m == c)?;
+        let start = marks[at].0 + 3;
+        let end = marks.get(at + 1).map_or(text.len(), |(i, _)| *i);
+        Some(text[start..end].trim().trim_end_matches(';').trim().to_string()).filter(|s| !s.is_empty())
+    };
+    let hint = "a lesson needs a trigger and a directive: --text \"T: <when it applies> D: <what to do> [F: <what would show it wrong>]\"";
+    if marks.first().is_some_and(|(i, _)| *i != 0) {
+        return Err(format!("{hint} (the text starts before its T:)"));
+    }
+    match (part('T'), part('D')) {
+        (Some(trigger), Some(directive)) => Ok(Lesson { trigger, directive, falsification: part('F') }),
+        _ => Err(hint.into()),
+    }
+}
+
+/// `memory/agents/<role>/lessons.md`, as the scope's pin names it.
+fn lesson_logical(role: &str) -> String {
+    format!("memory/agents/{}/lessons.md", role)
+}
+
+/// The file as the operator reads its name.
+pub fn lesson_file(scope: &str, role: &str) -> String {
+    if scope == "operator" {
+        format!("operator/{}", lesson_logical(role))
+    } else {
+        format!("local/{}", lesson_logical(role))
+    }
+}
+
+fn lesson_stub(scope: &str, role: &str) -> String {
+    format!("---\nid: {scope}-lessons-{role}\ntitle: \"Lessons: {role} ({scope})\"\nauthor: operator\ntimestamp: {}\nsource_type: user_ratified\nconfidence: high\nstatus: active\nmax_rules: 25\nmax_bytes: 6144\nmax_rule_chars: 350\nactive_rules: 0\ntags: [lessons, {role}]\n---\n\n# Lessons: `{role}`\n", delphi_core::time::now_rfc3339())
+}
+
+/// The `### ` blocks of a rules or lessons file, each with its ID (bracketed, with or without backticks).
+fn blocks(body: &str) -> Vec<retro::Rule> {
+    let mut out: Vec<retro::Rule> = Vec::new();
+    for line in body.split_inclusive('\n') {
+        if line.starts_with("### ") {
+            let id = crate::workspace::rule_ids(line).into_iter().next().unwrap_or_default();
+            out.push(retro::Rule { id, block: String::new() });
+        } else if line.starts_with('#') {
+            out.push(retro::Rule { id: String::new(), block: String::new() });
+            continue;
+        }
+        if let Some(r) = out.last_mut().filter(|r| !r.id.is_empty()) {
+            r.block.push_str(line);
+        }
+    }
+    out.retain(|r| !r.id.is_empty());
+    out
+}
+
+fn render_lesson(id: &str, l: &Lesson) -> String {
+    let title: String = l.directive.split_whitespace().take(7).collect::<Vec<_>>().join(" ").trim_end_matches(['.', ',', ';', ':']).chars().filter(|c| *c != '`' && *c != '[' && *c != ']').take(60).collect();
+    format!("### `[{}]` {}\n- **T:** {}\n- **D:** {}\n- **F:** {}\n", id, title, l.trigger, l.directive, l.falsification.as_deref().unwrap_or("none stated when it was kept"))
+}
+
+/// Put `item` (one flow-mapping line) at the end of the frontmatter's `kept:` list, and set `active_rules`.
+fn with_meta(text: &str, item: &str, active: usize) -> Result<String, String> {
+    let rest = text.strip_prefix("---\n").ok_or("the lessons file has no frontmatter; fix it by hand and ratify it first")?;
+    let end = rest.find("\n---\n").ok_or("the lessons file's frontmatter is not closed; fix it by hand and ratify it first")?;
+    let (fm, body) = (&rest[..end], &rest[end + 1..]);
+    let mut lines: Vec<String> = fm.lines().map(String::from).collect();
+    match lines.iter().position(|l| l.starts_with("active_rules:")) {
+        Some(i) => lines[i] = format!("active_rules: {}", active),
+        None => lines.push(format!("active_rules: {}", active)),
+    }
+    match lines.iter().position(|l| l.trim_end() == "kept:") {
+        Some(i) => {
+            let mut j = i + 1;
+            while j < lines.len() && (lines[j].starts_with("  ") || lines[j].starts_with("- ")) {
+                j += 1;
+            }
+            lines.insert(j, format!("  - {}", item));
+        }
+        None if lines.iter().any(|l| l.starts_with("kept:")) => return Err("the lessons file's `kept:` list is not in the form this command writes; fix it by hand and ratify it first".into()),
+        None => lines.extend(["kept:".to_string(), format!("  - {}", item)]),
+    }
+    Ok(format!("---\n{}\n{}", lines.join("\n"), body))
+}
+
+/// The lessons file after `l` is added. Every check is here, so a direct write and a preview refuse alike: the
+/// no-relaxation test, the operator scope's privacy rules and the near-duplicate test (those of a ratified rule), then
+/// the Rule of 25 on the whole file as `delphi lint` reads it. Returns the new text and the lesson's id.
+pub fn lesson_edited(current: Option<&str>, ws_dir: &Path, scope: &str, role: &str, l: &Lesson, prov: &Provenance) -> Result<(String, String), String> {
+    let cur = current.map(String::from).unwrap_or_else(|| lesson_stub(scope, role));
+    let (_, body) = crate::workspace::split_frontmatter(&cur);
+    let rules = blocks(body);
+    if rules.len() >= retro::MAX_RULES {
+        return Err(LESSON_FULL.into());
+    }
+    let prefix = if scope == "operator" { "L-O-" } else { "L-W-" };
+    let next = rules.iter().filter_map(|r| r.id.strip_prefix(prefix)?.parse::<u32>().ok()).max().unwrap_or(0) + 1;
+    let id = format!("{}{:03}", prefix, next);
+    let block = render_lesson(&id, l);
+    let lines = format!("- **T:** {}\n- **D:** {}\n- **F:** {}", l.trigger, l.directive, l.falsification.as_deref().unwrap_or(""));
+    let as_rule = LiveProposal { mission: String::new(), id: "keep".into(), op: "add".into(), scope: scope.into(), text: lines.clone(), rationale: prov.why(), target: String::new(), tier: "L5".into(), task_id: None, timestamp: String::new(), supersedes: vec![] };
+    let found: Vec<String> = retro::problems(&as_rule, &crate::distill::privacy(ws_dir), &rules).into_iter().filter(|p| !p.contains("the cap")).collect();
+    if !found.is_empty() {
+        return Err(found.join("; "));
+    }
+    let q = |s: &str| serde_json::to_string(s).expect("a string serializes");
+    let item = format!("{{rule: {}, source_type: user_ratified, ratified_from: {}, original_tier: {}, tool: {}, date: {}}}", q(&id), q(&prov.ratified_from), q(&prov.original_tier), q(&prov.tool), q(&prov.date));
+    let grown = format!("{}\n\n{}", cur.trim_end(), block);
+    let new = with_meta(&grown, &item, rules.len() + 1)?;
+    let caps = crate::checks::cap_errors(&new);
+    if caps.iter().any(|c| c.contains("-byte cap") || c.contains("Rule of")) {
+        return Err(LESSON_FULL.into());
+    }
+    if !caps.is_empty() {
+        return Err(format!("the lessons file would not pass the Rule of 25 check: {}; nothing was written", caps.join("; ")));
+    }
+    let (fm, _) = crate::workspace::split_frontmatter(&new);
+    let recorded = fm.as_ref().and_then(|f| f.get("kept")).and_then(|k| k.as_sequence()).and_then(|s| s.last()).and_then(|v| v.get("rule")).and_then(|v| v.as_str()) == Some(id.as_str());
+    if !recorded {
+        return Err("the lesson's provenance could not be recorded in the file's frontmatter; nothing was written".into());
+    }
+    Ok((new, id))
+}
+
+fn scope_of(scope: &str) -> Scope {
+    if scope == "operator" {
+        Scope::Operator
+    } else {
+        Scope::Workspace
+    }
+}
+
+/// The lesson's id and block as they would be written now, against the ratified copy. Writes nothing.
+pub fn lesson_preview(home: &Path, ws_dir: &Path, scope: &str, role: &str, l: &Lesson, prov: &Provenance) -> Result<(String, String), String> {
+    let ratified = if scope == "operator" { home.join("operator/ratified") } else { ws_dir.join("local/ratified") }.join(lesson_logical(role));
+    let current = std::fs::read_to_string(ratified).ok();
+    let (_, id) = lesson_edited(current.as_deref(), ws_dir, scope, role, l, prov)?;
+    Ok((id.clone(), render_lesson(&id, l)))
+}
+
+/// Add the lesson to the role's `lessons.md` at `scope`: live file, ratified copy and pin together, under the scope's lock,
+/// refused when the live file has edits that were never ratified ([`ratify::edit_pinned`], as [`apply_rule`] does).
+pub fn apply_lesson(home: &Path, ws_dir: &Path, scope: &str, role: &str, l: &Lesson, prov: &Provenance) -> Result<Kept, String> {
+    if !["workspace", "operator"].contains(&scope) {
+        return Err("`--scope` is workspace or operator".into());
+    }
+    check_role(home, ws_dir, role)?;
+    let mut id = String::new();
+    let pin = ratify::edit_pinned(home, ws_dir, scope_of(scope), &lesson_logical(role), |cur| {
+        let (new, made) = lesson_edited(cur, ws_dir, scope, role, l, prov)?;
+        id = made;
+        Ok(new)
+    })
+    .map_err(|e| match e {
+        RatifyError::Stale { .. } => format!("{} has edits that were never ratified; review them with /ratify first; nothing was written", lesson_file(scope, role)),
+        other => other.to_string(),
+    })?;
+    Ok(Kept { id, file: lesson_file(scope, role), pin })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,6 +425,16 @@ mod tests {
         assert!(lock["files"]["skills/triage/SKILL.md"].is_string() && lock["files"]["skills/triage/references/a.md"].is_string());
         assert!(install_skill(h.path(), &ws, "triage", "x", &[]).unwrap_err().contains("already exists"));
         assert!(install_skill(h.path(), &ws, "../x", "x", &[]).is_err());
+    }
+
+    #[test]
+    fn a_kept_lesson_needs_a_trigger_and_a_directive_and_reads_an_optional_falsification() {
+        let l = parse_lesson("T: before a release; D: regenerate the docs F: the docs test passes without it").unwrap();
+        assert_eq!((l.trigger.as_str(), l.directive.as_str(), l.falsification.as_deref()), ("before a release", "regenerate the docs", Some("the docs test passes without it")));
+        assert!(parse_lesson("T: x D: use the DB: it is faster").is_ok(), "a later `B: ` inside a word is not a mark");
+        for bad in ["regenerate the docs", "T: only a trigger", "D: only a directive", "note T: x D: y", "T: a D: b D: c", "T: a\nD: b"] {
+            assert!(parse_lesson(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]
