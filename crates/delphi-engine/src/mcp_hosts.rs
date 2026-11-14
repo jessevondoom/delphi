@@ -94,6 +94,8 @@ description: Triggers whenever the user mentions @delphi or a Delphi specialist 
 
 # Working with Delphi
 
+At the start of a session, call `session_brief` once (Delphi's tool, no arguments) unless a Delphi brief is already in your context: it names the team, this project's specs and what the last session left.
+
 Delphi is connected as the MCP server `delphi` (read-only, this machine only).
 
 ## Mention Routing & Specialist Personas
@@ -550,6 +552,12 @@ pub fn adapter_json(host: &str) -> Option<String> {
 /// Codex did not (its project agent folder is not read in an untrusted project), and Antigravity and Gemini CLI were not shown.
 pub fn workers_verified(host: &str) -> bool {
     matches!(host, "claude-code" | "copilot")
+}
+
+/// Whether a live check showed this host NOT loading a generated role file where one was expected (spec 110 §8, §10 G3b): Codex, whose
+/// `spawn_agent` started a generic agent. Its instruction section carries the spawn-prompt instruction instead of a worker sentence.
+pub fn workers_not_loading(host: &str) -> bool {
+    host == "codex"
 }
 
 /// The short hash of an adapter file's text, as a pack header and `delphi doctor` print it.

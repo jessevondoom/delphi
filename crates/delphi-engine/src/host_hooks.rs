@@ -922,6 +922,28 @@ mod tests {
         assert!(!brief(&dir, other.path(), None, N).contains("Last host session"));
     }
 
+    /// Spec 110 G3a: `session_brief` is the hook's brief for the same folder, byte for byte, with the switch on and off, and carries
+    /// no handoff or summary text.
+    #[test]
+    fn session_brief_is_the_hooks_brief_byte_for_byte_with_the_switch_on_or_off_and_no_session_text() {
+        let (t, dir) = ws();
+        let (root, id) = project(&t, &dir);
+        std::fs::write(root.join("specs/001-a.md"), "---\nstatus: approved\n---\n").unwrap();
+        put_handoff(&dir, "abcdef0123456789", &id, "host:claude-code/model", "CANARY-OBJECTIVE", &["CANARY-CONSTRAINT"]);
+        if !dir.join("config.toml").exists() {
+            std::fs::write(dir.join("config.toml"), "").unwrap();
+        }
+        let server = crate::mcp_host::Server::new(&dir).with_cwd(&root);
+        for on in [false, true] {
+            set_switch(&dir, on).unwrap();
+            let tool = server.session_brief(N).unwrap();
+            assert_eq!(tool, brief(&dir, &root, None, N), "switch {on}");
+            assert!(tool.starts_with(BRIEF_HEAD) && tool.contains("001-a (approved)") && tool.contains("it left a handoff"), "{tool}");
+            assert!(!tool.contains("CANARY"), "no text another session wrote: {tool}");
+        }
+        assert!(crate::mcp_host::Server::without_workspace().session_brief(N).is_err());
+    }
+
     #[test]
     fn a_pointers_tool_is_a_host_id_or_nothing() {
         assert_eq!(tool_name("claude-code"), Some("claude-code"));

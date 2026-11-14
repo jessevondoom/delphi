@@ -29,7 +29,11 @@ EXTRA=""
 WORKER=delphi-architect-worker
 "$DELPHI_BIN" plugin export --host copilot --out "$S/export" >/dev/null
 mkdir -p "$P/.github/agents" "$P/.github/hooks"
-if [ "$MODE" = final ]; then
+if [ "$MODE" = g3 ]; then
+    # Spec 110 §10 G3a: the instruction section only (no hooks file), as `delphi plugin export --host copilot` writes it.
+    cp "$S"/export/agents/*.agent.md "$P/.github/agents/"
+    cat "$S/export/DELPHI.md" >>"$P/AGENTS.md"
+elif [ "$MODE" = final ]; then
     # What `delphi plugin export --host copilot` writes, placed where Copilot reads a project's files: the seats and workers,
     # the session hooks (`delphi mcp --hook <event> --host copilot`, through the wrapper), and DELPHI.md after the codeword.
     hooks_on_in_temp_home
@@ -67,6 +71,15 @@ run() {
     printf '    COPILOT_PLUGIN_DIR_ONLY=true COPILOT_AUTO_TIER=%s copilot -p <prompt %s> --model %s --additional-mcp-config @<scratch>/copilot-mcp.json --allow-tool delphi --trust-folder --disable-builtin-mcps --no-ask-user --no-auto-update --log-dir <scratch>/log --output-format json %s\n' \
         "$COPILOT_AUTO_TIER" "$n" "$MODEL" "$(echo "$EXTRA" | sed "s#$S#<scratch>#")" >>"$LOG/commands.txt"
 }
+
+if [ "$MODE" = g3 ]; then
+    run 1 "$PROMPT_TOOLS"
+    G3_START=1
+    run 2 "$PROMPT_START"
+    summarize_g3 "Copilot CLI" "$(copilot --version 2>/dev/null | head -1)"
+    table_tail
+    exit 0
+fi
 
 run 1 "$PROMPT_TOOLS"
 run 2 "$PROMPT_MENTION"

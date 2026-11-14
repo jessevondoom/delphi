@@ -14,6 +14,8 @@ HOSTS_DIR=$(cd "$(dirname "$0")" && pwd -P)
 REPO=$(cd "$HOSTS_DIR/../.." && pwd -P)
 DELPHI_BIN=${DELPHI_BIN:-$REPO/target/debug/delphi}
 # probe: today's install, Delphi's files absent (X4a). final: the files `delphi plugin export` and `delphi connect` produce (X4b).
+# g3: spec 110 §10's two rows (did the model call session_brief; did a role started through the spawn prompt print its display
+# line) and, for Codex, one more probe for the agent format it loads. g2: spec 106 §11's subagent-start hook (Claude Code).
 MODE=${DELPHI_PROBE_MODE:-probe}
 MAX_CALLS=6
 CALLS=0
@@ -108,6 +110,12 @@ model_call() {
 PROMPT_TOOLS='This is an automated check of the Delphi MCP server in a scratch folder. Change nothing, run no shell command, edit no file. Do only this: (1) call the Delphi MCP tool list_roles; (2) call the Delphi MCP tool get_agent with role "architect"; (3) then reply with exactly four lines and nothing else: a line starting "TOOLS: " followed by the exact names of every tool you can call in this session (built-in and MCP), comma-separated, as you would call them; a line starting "ADAPTER: " followed by the line of the get_agent result that starts with "- host_adapter:"; a line starting "CANARY: " followed by every project or session codeword you were given (they start with CANARY-), or "none"; a line starting "BRIEF: " followed by "yes" if you were given a Delphi brief (a note that starts "Delphi brief") before this message, else "no".'
 
 PROMPT_MENTION='@architect In one sentence: what makes a spec ready to build? Change nothing, run no shell command, edit no file.'
+
+# Spec 110 §10 G3a: a session start that names no tool, so only the instruction section can ask for session_brief.
+PROMPT_START='This is an automated check in a scratch folder. Change nothing, run no shell command, edit no file. Start this session the way your project instructions say a session should start, then reply with one line: "READY" followed by the names of the tools you called, or "none".'
+
+# Spec 110 §10 G3b: the host is asked to give a task to a role in its own context, naming no tool; the instruction section says how.
+PROMPT_SPAWN='This is an automated check in a scratch folder. Change nothing, run no shell command, edit no file. Give this one task to Delphi'"'"'s architect in its own context (a separate agent), the way your instructions for Delphi say: "In one sentence, say which Delphi role you work as." Then reply with one line: "SPAWN: " followed by the first line of that agent'"'"'s reply, or "SPAWN: no" and why.'
 
 prompt_worker() {
     printf 'This is an automated check in a scratch folder. Change nothing, run no shell command, edit no file. Delegate this one task to your subagent (custom agent) named "%s": "In one sentence, say which Delphi role you work as." Then reply with one line: "WORKER: yes" and the subagent'"'"'s answer if it ran, or "WORKER: no" and why it could not.' "$1"
@@ -291,6 +299,30 @@ for f in sorted(glob.glob(os.path.join(sys.argv[1], "*.json"))):
 print("; ".join(out) or "none")
 PY
 )"
+    row "model calls" "$CALLS"
+    echo
+    echo "Commands (the prompts are the fixed texts in dev/hosts/lib.sh; <scratch> is a new temporary directory):"
+    cat "$LOG/commands.txt"
+    echo "Scratch directory (logs, replies): $S"
+}
+
+# Spec 110 §10's rows, for a g3 run. $1 title, $2 version.
+summarize_g3() {
+    table_head "$1"
+    row "host and version" "$2"
+    row "server connects; tools listed (count)" "$(report_py all tools)"
+    row "call 1: Delphi tools called" "$(report_py r1 calls)"
+    if report_py r1 calls | grep -q session_brief; then called=yes; else called=no; fi
+    row "call 1: the model called session_brief" "$called"
+    row "call 1: Delphi brief seen by the model (its own words)" "$(reply_line "$LOG/reply-1.json" "BRIEF:")"
+    if [ -d "$LOG/r2" ] && [ "${G3_START:-}" = 1 ]; then
+        row "call 2 (session start, no tool named): Delphi tools called" "$(report_py r2 calls)"
+        if report_py r2 calls | grep -q session_brief; then called=yes; else called=no; fi
+        row "call 2: the model called session_brief" "$called"
+    fi
+}
+
+table_tail() {
     row "model calls" "$CALLS"
     echo
     echo "Commands (the prompts are the fixed texts in dev/hosts/lib.sh; <scratch> is a new temporary directory):"

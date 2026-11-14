@@ -198,6 +198,21 @@ Model calls spent in all: Claude Code 6 (two runs), Copilot 6 (two runs), Codex 
 
 **Unverified, and so left out of the install:** Copilot's and Codex's hooks, Codex's and Gemini CLI's agent files, everything of Gemini CLI on a live host, Antigravity (not run), progress lines on every host, and whether a Copilot tool set differs with another model.
 
+### 8.3 G3 run (2026-11-14): `session_brief` and the spawn prompt (§10)
+
+`DELPHI_PROBE_MODE=g3` of the same scripts. Claude Code: no plugin and no hook, the section `delphi mcp --print-claude-md` prints appended to the scratch `CLAUDE.md`. Copilot: the files `delphi plugin export --host copilot` writes (agents in `.github/agents/`, `DELPHI.md` appended to `AGENTS.md`), no hooks file. Codex: `DELPHI.md` appended to the scratch `AGENTS.md`. Call 1 is the fixed tools prompt of §8 (it says "Do only this"); call 2 (Claude Code, Copilot) is a session start that names no tool; Codex's call 2 is the spawn prompt and call 3 the agent-format probe.
+
+| Check | Claude Code 2.1.325 (`haiku`) | Copilot CLI 1.0.111 (auto, efficiency) | Codex CLI 0.169.0 (`gpt-5.6-luna`, low) |
+| :-- | :-- | :-- | :-- |
+| server lists its tools | yes (42) | yes (42) | yes (42) |
+| the model called `session_brief` (call 1, "do only this") | no | no | yes (`session_brief`, then `list_roles`, `get_agent`) |
+| the model called `session_brief` (session start, no tool named) | yes, on the second try: the first run's `--allowedTools` left the new tool out and Claude Code denied the call; with it listed, `session_brief` was called | yes | not run |
+| a role started through the spawn prompt printed its display line | not applicable (workers load) | not applicable (workers load) | **not testable**: Codex answered the spawn prompt's first message, then stopped with "You've hit your usage limit" (the operator's Codex quota, until 2026-11-27) |
+
+**The Codex agent-format probe.** `codex --help` names no agent command; the installed binary's own config schema and messages (read with `strings`, nothing run) name agent roles: `[agents.<name>]` with `description`, `config_file` and `nickname_candidates`, and role files that must define `name`, `description` and `developer_instructions`, "discovered" per config layer (an untrusted project's layer is not loaded, which is why §8.1's `.codex/agents/` file was ignored). The format Delphi generates (`name`, `description`, `developer_instructions`) is that one. Call 3 declared the generated worker for the run only (`-c agents.delphi-architect-worker.description=...` and `-c agents.delphi-architect-worker.config_file=<scratch>/codex-roles/delphi-architect-worker.toml`); Codex accepted the configuration (no error) and then stopped on the same usage limit before any model output. **Not testable** whether the role runs. Whether Codex discovers `$CODEX_HOME/agents/` (where `delphi connect codex` would put the files) cannot be checked without writing to the operator's Codex home, which the rules forbid. So no agent format was shown loading, and **the spawn-prompt instruction is what ships**: `delphi connect codex` still leaves the agent files out, and the Codex instruction section says to call `get_agent` for the role (with the request as `task`) and put the pack at the top of the agent's prompt.
+
+Model calls spent in G3: Claude Code 5 (three runs: 1, 2, 2), Copilot 3 (two runs), Codex 3 (two of them ended on the usage limit).
+
 ## 9. Amendments from review (2026-11-13)
 
 A red-team review on 2026-11-13 (one critic, the author's own model family, so `homogeneous`; checked against the code) found the defects below. Each amendment **supersedes** the text above where they differ. The review ran after the advance approval; the operator has not read these either.

@@ -21,12 +21,16 @@ EOF
 write_instruction_canary CLAUDE.md
 TOOLS=""
 for p in mcp__delphi__ mcp__plugin_delphi_delphi__; do
-    for t in list_roles get_agent get_skill list_skills search_memory kb_retrieve search_kb specs_status specs_show specs_list search_project query_memory consult_orchestrator; do
+    for t in session_brief list_roles get_agent get_skill list_skills search_memory kb_retrieve search_kb specs_status specs_show specs_list search_project query_memory consult_orchestrator; do
         TOOLS="$TOOLS ${p}$t"
     done
 done
 EXTRA=""
-if [ "$MODE" = final ]; then
+if [ "$MODE" = g3 ]; then
+    # Spec 110 §10 G3a: no plugin and no hook; the CLAUDE.md section `delphi mcp --print-claude-md` prints, after the codeword.
+    "$DELPHI_BIN" mcp --print-claude-md --home "$H" >>"$P/CLAUDE.md" 2>/dev/null
+    PERSIST="--no-session-persistence"
+elif [ "$MODE" = final ]; then
     hooks_on_in_temp_home
     EXTRA="--plugin-dir $REPO/ecosystem/claude-code/delphi"
     WORKER=delphi:architect-worker
@@ -57,6 +61,15 @@ run() {
     printf '    claude -p <prompt %s> --model %s --strict-mcp-config --mcp-config <scratch>/mcp.json --setting-sources project --permission-prompts none --allowedTools <the Delphi read tools> Read Grep Glob Agent Task %s %s --output-format json\n' \
         "$n" "$MODEL" "$(echo "$EXTRA" | sed "s#$REPO/##")" "$PERSIST" >>"$LOG/commands.txt"
 }
+
+if [ "$MODE" = g3 ]; then
+    run 1 "$PROMPT_TOOLS"
+    G3_START=1
+    run 2 "$PROMPT_START"
+    summarize_g3 "Claude Code" "$(claude --version 2>/dev/null | head -1)"
+    table_tail
+    exit 0
+fi
 
 run 1 "$PROMPT_TOOLS"
 run 2 "$PROMPT_MENTION"
