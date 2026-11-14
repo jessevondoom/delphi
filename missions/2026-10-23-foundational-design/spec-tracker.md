@@ -1001,3 +1001,11 @@ A red-team review of the seven specs ran on 2026-11-13 (one critic of the author
 | Spec | Slice | Content | State |
 | :-- | :-- | :-- | :-- |
 | 109 | Q8 | three label defects the experiment found: the host-note label, the library tier gloss, no home path in a library pointer | built (pull request open) |
+| 110 | G3 | `session_brief` and the instruction lines; the Codex probe and a role's pack in the spawn prompt (spec 110 §10) | not started |
+| 106 | G2 | a worker always has its pack: the subagent-start hook, inlined packs elsewhere (spec 106 §11) | not started |
+| 104 | G4 | the console shows the standing amount and the host notes waiting (spec 104 §13) | not started |
+| 106 | G1 | the orchestrator's compact pack inside its bound (spec 106 §11) | not started |
+| 104 | G5 | the witness rule on the card and in the lint (spec 104 §13) | not started |
+| 106 | G6 | a role's colour and weight in the host: the colour field in agent files, a status line, bold names (spec 106 §12) | not started |
+| 109 | Q8 | three label defects the experiment found: the host-note label, the library tier gloss, no home path in a library pointer | built (local, not pushed) |
+
