@@ -1,0 +1,128 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 108: Closing the learning loop for host sessions"
+    },
+    {
+      "level": 2,
+      "line": 23,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 3,
+      "line": 39,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 45,
+      "number": "1.2",
+      "title": "Simpler alternative considered"
+    },
+    {
+      "level": 2,
+      "line": 51,
+      "number": "2",
+      "title": "M1: `recall_sessions`"
+    },
+    {
+      "level": 2,
+      "line": 63,
+      "number": "3",
+      "title": "M2: keep a host note in one step"
+    },
+    {
+      "level": 2,
+      "line": 74,
+      "number": "4",
+      "title": "M3: the skill asks for notes, and ingest runs with the daemon up"
+    },
+    {
+      "level": 2,
+      "line": 82,
+      "number": "5",
+      "title": "M4: the trace harvester runs"
+    },
+    {
+      "level": 2,
+      "line": 90,
+      "number": "6",
+      "title": "M5: three conformance fixes"
+    },
+    {
+      "level": 2,
+      "line": 96,
+      "number": "7",
+      "title": "Slices (one per pull request)"
+    },
+    {
+      "level": 2,
+      "line": 107,
+      "number": "8",
+      "title": "Authority and trust"
+    },
+    {
+      "level": 2,
+      "line": 113,
+      "number": "9",
+      "title": "Beyond the approved plan (waits for the operator)"
+    },
+    {
+      "level": 2,
+      "line": 117,
+      "number": "10",
+      "title": "Not verified"
+    },
+    {
+      "level": 2,
+      "line": 121,
+      "number": "11",
+      "title": "Amendments from review (2026-11-13)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/108-closing-the-learning-loop-for-host-sessions.md",
+    "sha256": "42132dbf867d75e0b6753585e0e87bef3cd48cfc0babfd2082d5bcd2c611ac44"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 791,
+        "end_line": 6,
+        "line": 6,
+        "start": 312
+      },
+      "text": "status: approved   # by the operator, 2026-11-13, in a host session (\"approve all your plans and suggestions and go\"). The approval was given to the plan this spec carries out (workstream 4: the next session can read prior notes and summaries, labelled not validated and never in a pack without ratification; a one-step ratify for host notes; wire the trace harvester) BEFORE this text was written; the operator has not read the text. What goes beyond that plan is listed in §9."
+    },
+    "sha256": "42132dbf867d75e0b6753585e0e87bef3cd48cfc0babfd2082d5bcd2c611ac44",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "knowledge-and-memory",
+    "number": "108",
+    "stem": "108-closing-the-learning-loop-for-host-sessions",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "108: Closing the learning loop for host sessions: recall what the last sessions left, keep a host note in one step, ingest transcripts without stopping the daemon, and run the trace harvester"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2807,
+      "end_line": 33,
+      "line": 25,
+      "start": 1771
+    },
+    "text": "| # | Observation (code on `main`, 2026-11-13) |\n| :-- | :-- |\n| E-1 | `propose_note` and `record_session_summary` stage at L0 where no host tool can read them. The only thing a new host session can recover from an earlier one is one handoff file. |\n| E-2 | No command turns a staged host note into a rule or a lesson. The operator retypes it with `delphi customize rule`, which writes shared heuristics, never a role's `lessons.md`; no command writes a role's lessons at all. |\n| E-3 | The shipped `delphi` skill never mentions `propose_note`. |\n| E-4 | Transcript ingest is a manual command that needs the daemon stopped. |\n| E-5 | `harvest_episodes` (065 §4.1) has no production caller; no episode file is ever written. The tracker says built. |\n| E-6 | An entry the operator kept with `delphi kb review keep` lands in the `summaries` zone, which no host search reads, though 068 §3 says a kept entry is searchable at once. |\n| E-7 | `propose_council_record` says it will be reviewed at the next `/retro`; nothing lists it there. |"
+  }
+}

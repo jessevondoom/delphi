@@ -1,0 +1,128 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 105: Session hooks for hosts"
+    },
+    {
+      "level": 2,
+      "line": 24,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 3,
+      "line": 35,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 41,
+      "number": "1.2",
+      "title": "Simpler alternative considered"
+    },
+    {
+      "level": 2,
+      "line": 47,
+      "number": "2",
+      "title": "The command"
+    },
+    {
+      "level": 2,
+      "line": 55,
+      "number": "3",
+      "title": "H1: `session-start` prints a brief"
+    },
+    {
+      "level": 2,
+      "line": 69,
+      "number": "4",
+      "title": "H2: `prompt` resolves a mention"
+    },
+    {
+      "level": 2,
+      "line": 76,
+      "number": "5",
+      "title": "H3: `session-end` writes a marker"
+    },
+    {
+      "level": 2,
+      "line": 83,
+      "number": "6",
+      "title": "The plugin"
+    },
+    {
+      "level": 2,
+      "line": 87,
+      "number": "7",
+      "title": "Slices (one per pull request)"
+    },
+    {
+      "level": 2,
+      "line": 97,
+      "number": "8",
+      "title": "Authority and trust"
+    },
+    {
+      "level": 2,
+      "line": 104,
+      "number": "9",
+      "title": "Decisions (taken as recommended, 2026-11-13)"
+    },
+    {
+      "level": 2,
+      "line": 112,
+      "number": "10",
+      "title": "Beyond the approved plan (waits for the operator)"
+    },
+    {
+      "level": 2,
+      "line": 116,
+      "number": "11",
+      "title": "Not verified"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/105-session-hooks-for-hosts-a-brief-at-start-mention-routing-at-the-prompt-and-a-marker-at-the-end.md",
+    "sha256": "09e18b4d1be6342732f558d7b120a2c3daada79df6aa097d59279a938ddfd8c0"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 652,
+        "end_line": 6,
+        "line": 6,
+        "start": 282
+      },
+      "text": "status: approved   # by the operator, 2026-11-13, in a host session (\"approve all your plans and suggestions and go\"). The approval was given to the plan this spec carries out (workstream 1, hooks opt-in, read-only at start, a summary and handoff at the end) BEFORE this text was written; the operator has not read the text. What goes beyond that plan is listed in §10."
+    },
+    "sha256": "09e18b4d1be6342732f558d7b120a2c3daada79df6aa097d59279a938ddfd8c0",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "hosts-and-mcp",
+    "number": "105",
+    "stem": "105-session-hooks-for-hosts-a-brief-at-start-mention-routing-at-the-prompt-and-a-marker-at-the-end",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "105: Session hooks for hosts: a brief at session start, mention routing at the prompt, and a marker at the end"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2160,
+      "end_line": 26,
+      "line": 26,
+      "start": 1728
+    },
+    "text": "Today everything that makes a host session a Delphi session depends on the host's model remembering to do it: look at the specs, know the roster, notice `@name`, leave a summary. This spec moves the parts that need no judgement into three hooks, so the model starts each session already knowing who is on the team, what the project's specs say and what the last session left, and so `@name` works without a skill having to match it."
+  }
+}

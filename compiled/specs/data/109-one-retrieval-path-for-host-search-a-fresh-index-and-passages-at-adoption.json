@@ -1,0 +1,128 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 109: One retrieval path for host search"
+    },
+    {
+      "level": 2,
+      "line": 23,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 3,
+      "line": 35,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 40,
+      "number": "1.2",
+      "title": "Simpler alternative considered"
+    },
+    {
+      "level": 2,
+      "line": 46,
+      "number": "2",
+      "title": "Q1: every tool asks the retrieval service"
+    },
+    {
+      "level": 2,
+      "line": 54,
+      "number": "3",
+      "title": "Q2: a fresh index"
+    },
+    {
+      "level": 2,
+      "line": 60,
+      "number": "4",
+      "title": "Q3: the release's own reference is visible"
+    },
+    {
+      "level": 2,
+      "line": 66,
+      "number": "5",
+      "title": "Q4: passages at adoption"
+    },
+    {
+      "level": 2,
+      "line": 73,
+      "number": "6",
+      "title": "Slices (one per pull request)"
+    },
+    {
+      "level": 2,
+      "line": 83,
+      "number": "7",
+      "title": "Authority and trust"
+    },
+    {
+      "level": 2,
+      "line": 89,
+      "number": "8",
+      "title": "Not verified"
+    },
+    {
+      "level": 2,
+      "line": 93,
+      "number": "9",
+      "title": "Measurements"
+    },
+    {
+      "level": 2,
+      "line": 97,
+      "number": "10",
+      "title": "Amendments from review (2026-11-13)"
+    },
+    {
+      "level": 2,
+      "line": 107,
+      "number": "11",
+      "title": "Decision: index registered projects (operator, 2026-11-13: \"index projects — yes please\")"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/109-one-retrieval-path-for-host-search-a-fresh-index-and-passages-at-adoption.md",
+    "sha256": "d7ba501a0aab664536dff465a336ebbf72088ed1c83e3a03fcf99ed027f233d1"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 596,
+        "end_line": 6,
+        "line": 6,
+        "start": 231
+      },
+      "text": "status: approved   # by the operator, 2026-11-13, in a host session (\"approve all your plans and suggestions and go\"). The approval was given to the plan this spec carries out (workstream 5: one retrieval engine for all five search tools, automatic index refresh, a small retrieval at role adoption) BEFORE this text was written; the operator has not read the text."
+    },
+    "sha256": "d7ba501a0aab664536dff465a336ebbf72088ed1c83e3a03fcf99ed027f233d1",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "knowledge-and-memory",
+    "number": "109",
+    "stem": "109-one-retrieval-path-for-host-search-a-fresh-index-and-passages-at-adoption",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "109: One retrieval path for host search, a fresh index, and passages at adoption"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2548,
+      "end_line": 31,
+      "line": 25,
+      "start": 1396
+    },
+    "text": "| # | Observation (code on `main`, 2026-11-13) |\n| :-- | :-- |\n| E-1 | Five host search tools use three rankings: `search_kb` uses the retrieval service; `kb_retrieve` uses keyword tables with no embedder for core text and a word count for project text, and sorts the two score scales together; `search_project`, `search_memory` and `query_memory` use a per-file word count that the index may only reorder. A question in ordinary words about host friction returned an adapter diagram and none of the specs on the subject. |\n| E-2 | `kb_retrieve` opens the index with a call that sets the journal mode and creates the schema, though readers are meant to write nothing. Its project chunk ids are a hash modulo 900 and can collide. |\n| E-3 | `search_kb` never refreshes the index; the console's search does. |\n| E-4 | Core, context and spec files without a tier in their frontmatter index as `external_untrusted`, and `search_kb` excludes untrusted documents, so much of the release's own reference may be invisible to a host. |\n| E-5 | Nothing is retrieved for a host unless it asks. Delphi's own agents get up to three passages at the start of a span. |"
+  }
+}

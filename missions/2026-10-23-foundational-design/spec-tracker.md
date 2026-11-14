@@ -945,3 +945,50 @@ Drafted at the operator's request (2026-11-12, "the span-mark egress design in p
 | M4 | a red-team pass, invariant map, live check | 4-6 | built, draft PR (2026-11-12, an independent pass by an agent that did not write M1 to M3). **Audited:** the reader table widened from 3 accessors to 11 (adds the raw `source.md` and `excerpts.json` files, the excerpt reader, the staged-note opt-in, the handoff reader, the indexed chunk reader and the history prompt text) and from 8 file rows to 21; two new name tables, `HOST_SURFACE` (all 24 host-socket methods) and `MCP_SURFACE` (all 39 MCP tools), fail on a method or tool that is not classified; the relay stream's event kinds and the relay socket's 5 methods are classified the same way; a fixture test proves the scan catches a new unclassified reader. **Result of the table:** of the 21 file rows: 1 marks (`host.search_kb`), 4 withhold by rule (claim slice twice, bundle export, history prompt), 4 `NotYetMarked` (the three page readers and the excerpt helper), 1 SKIPS (the handoff reader: another session's words reach a fresh unmarked session), 9 return no entry text (writers, counts, ids) and 2 serve only the operator's console. Of the 63 host and MCP names, 2 mark (one reader under two names), 2 skip (the same handoff reader), 59 write only or return no entry text. **Attacks (fake fixtures):** paraphrase (withheld with everything else a marked task wrote; the same words from an unmarked task are not: the mark is not content-based), child task (does not inherit: succeeds, OD-5), second MCP session of the same host (succeeds, own unit), mission-level mark against the Outbound and Connector check (succeeds: they read `<mission>/<task>` only; small exposure because host-started tasks are read-only at ceiling L0), key collisions and odd keys (over-hold only), a task that renames itself (no effect), a card with a damaged mark and no mission (**was fail-open, fixed**), a relay that reconnects after the card was raised with the mark on the mission (**was fail-open, fixed**: the engine now notes each raised card's mission), a clear mid-flight (the withheld card stays withheld, the next one is free), an Outbound ask nobody answers (denied), nothing reaches the clear but the console (and `local/` is never readable by a role). **Fixed:** the two relay fail-opens above (`private_read.rs`, one line in `engine.rs`). **Not fixed, for the operator:** the handoff reader, child and session inheritance (OD-5), the host mark not holding helper-task Outbound and Connector, the research job's web queries, the page and excerpt readers (kept `NotYetMarked` on purpose: marking a Delphi task would start the Outbound and Connector asks for research workflows), an index that lags a source made private. Invariant map (098 item 16) and spec 055 §10.1 reading updated. **Live check:** see the PR body (a scratch home and the real daemon binary; what could not run live is listed there). **Does M4 pass?** The relay and mail channels and the two acting senders do what M2 and M3 said for a marked task; the gaps are decisions and are listed. S8 is NOT marked ready and no default changed. |
 | M5 | the quoting rule for `slack`, `email` and `private-doc` documents (§7.1 OD-6) | not estimated | design first; not started |
 | M6 | OD-5: a child holds what its parent holds within a session (the operator, 2026-11-12: "the child should have the same scope as the parent in a given session") | 6-10 (estimate) | built, draft PR (stacked on nothing: main already carried M1 to M4). **Built:** one lookup, `private_read::task_scope`, used by the Outbound sender, the Connector sender and the relay filter (so Relay and Mail agree), over a task's own key, its recorded ancestors (at most 8 steps, a cycle ends the walk) and its session's key (a host session's mark, kept under `host-<session>`, now holds every task that session started on Outbound and Connector as well as on the relay, which M4 had pinned as a gap). **Links** between separate tasks are daemon-written (never a tool argument): the only such link Delphi creates is a timer's wake, noted when a role sets the timer and linked before the wake starts; an operator-set timer makes none; a task with no link behaves as before. **Counted:** `held_by_inheritance` (in `delphi doctor` and `private_read.status`) says how many holds came only by inheritance, which is what the rule costs research. **Fail-closed:** an unreadable mark or link on the chain holds the four channels, found by file name so a damaged record cannot hide. M4's two pinned non-inheritance tests are flipped on purpose; the different-session test stays. **Not done:** the handoff reader still skips the mark (not part of this decision); the page and excerpt readers stay `NotYetMarked` (so nothing in production marks a Delphi task yet and the new holds fire only for the host-session mark and for tasks whose mark a future reader sets); a card that names no mission and has none noted (a daemon restart after the card was raised) is found through the task id only, so a host-session mark is not found for it. Nothing ran against a live host. |
+
+
+## Host experience program: specs 104 to 110 (2026-11-13, approved in advance)
+
+The operator asked, in a host session on 2026-11-13, for a review of how Delphi's agents behave in a host, approved the plan that came out of it ("approve all your plans and suggestions and go") and asked for the work to be built locally first ("build as much locally as possible so we don't get slowed down by merges up front"). The seven specs were written after that approval, so each says in its frontmatter that the plan was approved and the text was not read. It was built on a local branch first and then split into pull requests, one spec at a time, on 2026-11-14.
+
+| Spec | Slice | Content | State |
+| :-- | :-- | :-- | :-- |
+| 098 | S6 follow-up | the socket outlasts the daemon's wait: `ask_family` (630 s), `council_brief` and `council_status` (80 s), one wait table with a test | built (pull request open) |
+| 104 | R0 | the spec | approved in advance 2026-11-13 |
+| 104 | R1 | `ask_family` as a job, `ask_result`, identity, cancel | not started |
+| 104 | R3 | concurrent requests | not started |
+| 104 | R2 | progress notifications | not started |
+| 104 | R4 | `[seats] standing_tokens` | not started |
+| 104 | R5 | a Panel in four calls | not started |
+| 105 | H0 | the spec and the 071 amendment | approved in advance 2026-11-13 |
+| 105 | H1 | `delphi hook`, the switch, `session-start`, the plugin's hooks file | not started |
+| 105 | H2 | `prompt`: mention resolution | not started |
+| 105 | H3 | `session-end` marker, the nudge | not started |
+| 105 | H4 | the guide and a live check | not started |
+| 106 | P0 | the spec | approved in advance 2026-11-13 |
+| 106 | P1 | the charter excerpt | not started |
+| 106 | P2 | `detail`, `if_hash`, `pack_hash` in `list_roles` | not started |
+| 106 | P3 | worker files for every servable role | not started |
+| 107 | B0 | the spec | approved in advance 2026-11-13 |
+| 107 | B1 | the briefing | not started |
+| 107 | B2 | skill, hook line and wording | not started |
+| 108 | M0 | the spec | approved in advance 2026-11-13 |
+| 108 | M1 | `recall_sessions` | not started |
+| 108 | M2 | `delphi learn keep` | not started |
+| 108 | M3 | skill lines and daemon ingest | not started |
+| 108 | M4 | the trace harvester | not started |
+| 108 | M5 | three conformance fixes | not started |
+| 109 | Q0 | the spec | approved in advance 2026-11-13 |
+| 109 | Q0a | the `query_memory` facet leak (review amendment A3) | not started |
+| 109 | Q1 | the workspace corpus on the retrieval service; one shared project ranker (re-scoped by review amendment A1) | not started |
+| 109 | Q1b | index registered projects as a per-project layer (the operator's decision of 2026-11-13) | not started |
+| 109 | Q2 | a fresh index | not started |
+| 109 | Q3 | the release reference measurement only (the tier rule was struck by review amendment A2) | not started |
+| 109 | Q4 | `task` on `get_agent` | not started |
+| 110 | X0 | the spec | approved in advance 2026-11-13 |
+| 110 | X1 | host IDs and adapters | not started |
+| 110 | X2 | `delphi connect` for Codex and Gemini, the instruction section | not started |
+| 110 | X3 | role files and hooks per host | not started |
+| 110 | X4 | live-check scripts and results | not started |
+
+A red-team review of the seven specs ran on 2026-11-13 (one critic of the author's own family, so `homogeneous`), and one foreign seat (`ask_family`, served by the gemini family) reviewed spec 104. Their findings are recorded as an amendments section in each spec; two were P0 (an unratified handoff line in the session brief, and the trace harvester stamping episodes above their tier) and both were amended before the affected slice was built.
