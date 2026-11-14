@@ -164,6 +164,11 @@ The seven kinds that judge one document (`dag`, `handoff`, `provenance`, `rules`
 | `user-joy-heuristics` | Audit software interfaces, TUI screens, and CLI interactions against emotional design levels, Kahneman's Peak-End Rule, and Nielsen's heuristics to maximize user joy and eliminate friction. | instructions |
 | `cognitive-walkthrough` | Perform structured 4-question cognitive walkthroughs on CLI commands, TUI screens, and user workflows to identify mental model mismatches. | instructions |
 
+### Any role (loaded on demand; in no role's manifest)
+| Skill | Purpose | Backing |
+| :--- | :--- | :--- |
+| `reading-labels` | How far to rely on a search result from its label (who wrote it, whether it was checked), by task; leads with the claim rule (`specs/109` §12). | instructions |
+
 ---
 
 ## 3. Growing a Skill

@@ -269,7 +269,15 @@ fn print_help(cmd: Option<&str>) -> i32 {
     }
 }
 
+/// The release files this binary carries, by logical path (the paths the index uses for `core`, `context` and `about`).
+fn release_files() -> Vec<(String, &'static [u8])> {
+    seed::files().into_iter().map(|f| (f.logical, f.bytes)).collect()
+}
+
 fn main() {
+    // `specs/109` §12.1 item 2: the release files compiled into this binary, so a host search can say whether a release file is the
+    // text this binary shipped. Hashed only when a search first asks; it changes a label, never a tier.
+    delphi_engine::host_labels::set_release_files(release_files);
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(|s| s.as_str()) != Some("__core") {
         if let Some(code) = help_requested(&args) {

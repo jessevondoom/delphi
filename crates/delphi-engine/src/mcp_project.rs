@@ -663,6 +663,13 @@ impl Project {
 
     /// Retrieve chunked passages, sourced claims, and verified specifications from Delphi's knowledge base and project context (`specs/072` §5).
     pub fn kb_retrieve(&self, query: &str, limit: usize, status_filter: &str, scope: &str) -> Result<String, String> {
+        self.kb_retrieve_use(query, limit, status_filter, scope, crate::host_labels::Use::Explore)
+    }
+
+    /// `kb_retrieve` with `use` (`specs/109` §12): every visible passage labelled, the release's own in its own group; `verify` is
+    /// `validated_only` plus the tier rule (ratified or empirical sources only).
+    pub fn kb_retrieve_use(&self, query: &str, limit: usize, status_filter: &str, scope: &str, use_: crate::host_labels::Use) -> Result<String, String> {
+        use crate::host_labels as hl;
         if query.trim().is_empty() || query.chars().count() > MAX_QUERY {
             return Err(format!("invalid arguments: `query` must be between 1 and {} characters", MAX_QUERY));
         }
@@ -683,8 +690,9 @@ impl Project {
         let limit = limit.clamp(1, MAX_LIMIT);
         let ws = words(query);
         if ws.is_empty() {
-            return Ok("No matching knowledge base passages found.".to_string());
+            return Ok(format!("No matching knowledge base passages found.\n\n{}", hl::POINTER));
         }
+        let status_filter = if use_ == hl::Use::Verify { "validated_only" } else { status_filter };
 
         struct Candidate {
             chunk_id: String,
@@ -692,10 +700,15 @@ impl Project {
             source: String,
             confidence: &'static str,
             passage: String,
+            source_type: String,
+            origin: &'static str,
+            author: &'static str,
+            checked: &'static str,
+            label: String,
         }
         let keep = |status: &str| match status_filter {
             "validated_only" => status == "validated",
-            "propositions_included" => matches!(status, "validated" | "checking" | "noted" | "contested"),
+            "propositions_included" => matches!(status, "validated" | "checking" | "noted" | "contested" | "draft"),
             "all" => true,
             _ => false,
         };
@@ -708,38 +721,35 @@ impl Project {
 
         // 1. The workspace corpus, by the retrieval service over the index opened read-only (`specs/109` §2): hybrid when the index
         //    holds vectors of an installed model, keywords otherwise. With no index this leg is empty, as it always was.
+        //    `specs/109` §12: a visible passage is served whatever its tier or draft state, labelled; the release's own files are
+        //    their own group (`release`) with their own limit.
         let mut core: Vec<Candidate> = Vec::new();
+        let mut release: Vec<Candidate> = Vec::new();
+        let mut third_party: Vec<Candidate> = Vec::new();
         if scope == "all" || scope == "core_only" {
             if let Some(ix) = self.index() {
                 ranking = RANKED_BY_INDEX;
-                let opts = crate::kb::SearchOpts {
-                    limit: (limit * 2).min(MAX_LIMIT),
-                    include_untrusted: true,
-                    include_attributed: true,
-                    zones: Some(vec!["core", "specs", "context", "knowledge", "library", "bundles"]),
-                    ..Default::default()
-                };
-                let hits = crate::retrieval::search(&ix.home, &ix.db, query, opts).map(|r| r.hits).unwrap_or_default();
+                let found = hl::search(&ix.home, &ix.db, &self.ws_dir, query, vec!["core", "specs", "context", "knowledge", "library", "bundles"], (limit * 2).min(MAX_LIMIT), use_, true).ok();
                 let kb = crate::kb::Kb::open_readonly(&ix.db).ok();
-                for h in hits {
-                    let status = match h.status {
-                        "validated" => "validated",
-                        "checking" => "checking",
-                        "contested" => "contested",
-                        _ => "noted",
-                    };
-                    if !keep(status) || core.iter().any(|c| c.source == h.pointer) {
-                        continue;
+                for (group, hits) in [(&mut core, found.as_ref().map(|f| &f.rest)), (&mut release, found.as_ref().map(|f| &f.release)), (&mut third_party, found.as_ref().map(|f| &f.third_party))] {
+                    for h in hits.into_iter().flatten() {
+                        let l = hl::of_hit(&self.ws_dir, h);
+                        if !keep(l.status) || group.iter().any(|c| c.source == h.pointer) {
+                            continue;
+                        }
+                        // The index's own chunk id; a chunk the index no longer holds (a sync ran in between) is served from its preview.
+                        let (chunk_id, passage) = match kb.as_ref().and_then(|kb| kb.chunk_content(&h.rel_path, h.start_line)) {
+                            Some((id, text)) => (format!("CHK-{}", id), text),
+                            None => (fallback_chunk_id(&h.rel_path, h.start_line, h.end_line), h.preview.clone()),
+                        };
+                        let passage = hl::shown(l.author, &l.source_type, &l.label, passage.trim());
+                        group.push(Candidate { chunk_id, status: l.status, source: h.pointer.clone(), confidence: confidence(l.status), passage, source_type: l.source_type, origin: l.origin, author: l.author, checked: l.checked, label: l.label });
                     }
-                    // The index's own chunk id; a chunk the index no longer holds (a sync ran in between) is served from its preview.
-                    let (chunk_id, passage) = match kb.as_ref().and_then(|kb| kb.chunk_content(&h.rel_path, h.start_line)) {
-                        Some((id, text)) => (format!("CHK-{}", id), text),
-                        None => (fallback_chunk_id(&h.rel_path, h.start_line, h.end_line), h.preview.clone()),
-                    };
-                    core.push(Candidate { chunk_id, status, source: h.pointer.clone(), confidence: confidence(status), passage: passage.trim().to_string() });
                 }
             }
         }
+        release.truncate(limit.min(hl::RELEASE_LIMIT));
+        third_party.truncate(limit.min(hl::RELEASE_LIMIT));
 
         // Spec 108 M5 (A6): entries the operator kept with `delphi kb review keep`, and only those, labelled; never "validated".
         // Read through the same read-only index as the leg above (`specs/109` §2).
@@ -748,7 +758,7 @@ impl Project {
                 let hits = crate::retrieval::search(&ix.home, &ix.db, query, crate::kb_import::kept_search_opts(limit * 2)).map(|r| r.hits).unwrap_or_default();
                 for h in hits.into_iter().filter(|h| crate::kb_import::is_kept(&self.ws_dir, &h.rel_path)) {
                     if !core.iter().any(|c| c.source == h.pointer) {
-                        core.push(Candidate { chunk_id: fallback_chunk_id(&h.rel_path, h.start_line, h.end_line), status: "kept by the operator, not validated", source: h.pointer.clone(), confidence: "low", passage: crate::host_noted::fence(crate::kb_import::KEPT_LABEL, &h.preview) });
+                        core.push(Candidate { chunk_id: fallback_chunk_id(&h.rel_path, h.start_line, h.end_line), status: "kept by the operator, not validated", source: h.pointer.clone(), confidence: "low", passage: crate::host_noted::fence(crate::kb_import::KEPT_LABEL, &h.preview), source_type: h.source_type.clone(), origin: "kept", author: "host_session", checked: "not checked", label: crate::kb_import::KEPT_LABEL.to_string() });
                     }
                 }
             }
@@ -759,7 +769,14 @@ impl Project {
         //    and ranked by the shared word ranker. Each keeps the label it had: a spec's own status, everything else `noted`.
         let mut from_layer: Vec<Candidate> = Vec::new();
         let mut project: Vec<((usize, usize), Candidate)> = Vec::new();
-        if scope == "all" || scope == "project_only" {
+        // A project file is `external_untrusted` (`specs/058` §4.1), so `verify` serves none of it.
+        let project_candidate = |chunk_id: String, status: &'static str, source: String, passage: &str| {
+            // A project spec the operator approved reads `validated` here, as it always has; its tier stays untrusted.
+            let checked = if status == "retired" { "not checked" } else { hl::checked(status, UNTRUSTED) };
+            let label = if status == "validated" { "operator's text, approved spec".to_string() } else { hl::label_of("operator", checked, status, hl::Shipped::Unknown) };
+            Candidate { chunk_id, status, source, confidence: confidence(status), passage: hl::shown("operator", UNTRUSTED, &label, passage.trim()), source_type: UNTRUSTED.to_string(), origin: "project", author: "operator", checked, label }
+        };
+        if (scope == "all" || scope == "project_only") && use_ == hl::Use::Explore {
             let ix = self.index();
             let mut indexed: Vec<(String, String, &'static str)> = Vec::new();
             for (rel, file) in self.files() {
@@ -791,7 +808,7 @@ impl Project {
                     if project.iter().any(|(_, p)| p.source == source) {
                         continue;
                     }
-                    project.push((score, Candidate { chunk_id: fallback_chunk_id(&rel, c.start_line, c.end_line), status, source, confidence: confidence(status), passage: c.raw.trim().to_string() }));
+                    project.push((score, project_candidate(fallback_chunk_id(&rel, c.start_line, c.end_line), status, source, &c.raw)));
                 }
             }
             if let Some(ix) = ix.filter(|_| !indexed.is_empty()) {
@@ -809,7 +826,7 @@ impl Project {
                         Some((id, text)) => (format!("CHK-{}", id), text),
                         None => (fallback_chunk_id(rel, h.start_line, h.end_line), h.preview.clone()),
                     };
-                    from_layer.push(Candidate { chunk_id, status, source, confidence: confidence(status), passage: passage.trim().to_string() });
+                    from_layer.push(project_candidate(chunk_id, status, source, &passage));
                 }
             }
         }
@@ -820,17 +837,26 @@ impl Project {
         let f = crate::kb::freshness(&self.ws_dir);
         let age = f.and_then(|f| f.age_s).map(|a| format!(" index_age_s=\"{}\"", a)).unwrap_or_default();
         let mut out = format!("<!-- delphi:rag:meta ranking=\"{}\" index=\"{}\"{} -->", ranking, f.map_or("none", |f| f.word()), age);
-        if candidates.is_empty() {
-            out.push_str("\nNo matching knowledge base passages found.");
+        if candidates.is_empty() && release.is_empty() && third_party.is_empty() {
+            out.push_str(&format!("\nNo matching knowledge base passages found.\n\n{}", hl::POINTER));
             return Ok(out);
         }
-        for c in candidates.into_iter().take(limit) {
+        // The release's own group, then third-party text last (`specs/109` §12 item 3, §12.1 item 1), each under its marker.
+        let release_at = candidates.len().min(limit);
+        let third_at = release_at + release.len();
+        for (i, c) in candidates.into_iter().take(limit).chain(release).chain(third_party).enumerate() {
+            if i == release_at && c.origin == "release" {
+                out.push_str("\n\n<!-- delphi:rag:group release -->");
+            }
+            if i == third_at {
+                out.push_str("\n\n<!-- delphi:rag:group third_party -->");
+            }
             out.push_str(&format!(
-                "\n\n<!-- delphi:rag chunk_id=\"{}\" status=\"{}\" source=\"{}\" confidence=\"{}\" -->\n{}\n<!-- delphi:rag:end -->",
-                c.chunk_id, c.status, c.source, c.confidence, c.passage
+                "\n\n<!-- delphi:rag chunk_id=\"{}\" status=\"{}\" source=\"{}\" confidence=\"{}\" source_type=\"{}\" origin=\"{}\" author=\"{}\" checked=\"{}\" label=\"{}\" -->\n{}\n<!-- delphi:rag:end -->",
+                c.chunk_id, c.status, c.source, c.confidence, c.source_type, c.origin, c.author, c.checked, c.label.replace('"', ""), c.passage
             ));
         }
-
+        out.push_str(&format!("\n\n{}", hl::POINTER));
         Ok(out)
     }
 }
@@ -1388,7 +1414,9 @@ mod tests {
         let search_project = sorted(&["project plans/plan-pin.md", "project research/research-pin.md", "project context/pctx-pin.md", "project specs/pspec-pin.md", &format!("{layer} context/lctx-pin.md"), &format!("{layer} knowledge/lknow-pin.md")]);
         let memory_architect = sorted(&["home memory/agents/architect/arch-pin.md", "home memory/promoted/promo-pin.md", &format!("{layer} memory/agents/architect/larch-pin.md")]);
         let query_memory = sorted(&["home memory/agents/architect/arch-pin.md", "home memory/promoted/promo-pin.md", &format!("{layer} memory/agents/architect/larch-pin.md"), "home missions/m-mine/council-decision.md", "home missions/m-home/retro-summary.md", "project plans/plan-pin.md"]);
-        let core = sorted(&["core-pin.md", "context/ctx-pin.md", "specs/spec-pin.md", "knowledge/know-pin.md"]);
+        // `specs/109` §12 item 1: the release's own reference (`about`) is served too, in its own group; nothing of memory, staged or
+        // another project is.
+        let core = sorted(&["core-pin.md", "context/ctx-pin.md", "specs/spec-pin.md", "knowledge/know-pin.md", "about/about-pin.md"]);
         let project = sorted(&["plans/plan-pin.md", "research/research-pin.md", "context/pctx-pin.md", "specs/pspec-pin.md"]);
         for indexed in [true, false] {
             let (_t, ws, root) = corpus_fixture(indexed);
@@ -1405,6 +1433,25 @@ mod tests {
             all.sort();
             assert_eq!(passages(&p.kb_retrieve("quokkapin", 10, "all", "all").unwrap()), all, "kb_retrieve all, indexed {indexed}");
         }
+    }
+
+    /// `specs/109` §12, §12.1: every passage says who wrote it and whether it was checked; the release's own passages are their own
+    /// group and third-party text comes last, fenced; `verify` keeps only validated text from ratified or empirical sources; every
+    /// answer ends with the pointer line.
+    #[test]
+    fn kb_retrieve_labels_every_passage_groups_the_release_and_third_party_text_and_verify_narrows() {
+        let (_t, ws, root) = corpus_fixture(true);
+        let p = Project::new(&ws, &root);
+        let out = p.kb_retrieve("quokkapin", 10, "all", "all").unwrap();
+        let (rel, third) = (out.find("<!-- delphi:rag:group release -->").expect(&out), out.find("<!-- delphi:rag:group third_party -->").expect(&out));
+        assert!(rel < third && out[rel..third].contains("source=\"about/about-pin.md") && out[rel..third].contains("source=\"core-pin.md"), "{out}");
+        assert!(out[third..].contains("source=\"knowledge/know-pin.md") && out[third..].contains("author=\"third_party\""), "{out}");
+        assert!(out[..rel].contains("origin=\"project\" author=\"operator\" checked=\"not checked\""), "{out}");
+        assert!(out.contains("author=\"release\" checked=\"not checked\" label=\"release text, tier not stated in the file; not build authority\""), "no hashes in a library test: the zone label: {out}");
+        assert!(out.ends_with(crate::host_labels::POINTER), "{out}");
+        let v = p.kb_retrieve_use("quokkapin", 10, "all", "all", crate::host_labels::Use::Verify).unwrap();
+        assert_eq!(passages(&v), ["about/about-pin.md"], "{v}");
+        assert!(v.ends_with(crate::host_labels::POINTER));
     }
 
     const ID_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";

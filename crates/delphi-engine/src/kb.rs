@@ -878,6 +878,17 @@ impl Kb {
         Ok(rows.flatten().collect())
     }
 
+    /// `(logical path, zone)` of every document the index holds in `zones` (fixed zone names from code).
+    pub fn paths_in_zones(&self, zones: &[&str]) -> Result<Vec<(String, String)>, KbError> {
+        let list: Vec<String> = zones.iter().filter(|z| z.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')).map(|z| format!("'{}'", z)).collect();
+        if list.is_empty() {
+            return Ok(vec![]);
+        }
+        let mut st = self.conn.prepare(&format!("SELECT rel_path, zone FROM kb_documents WHERE zone IN ({})", list.join(",")))?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        Ok(rows.flatten().collect())
+    }
+
     /// When the index was last brought in line with the files, in seconds since the epoch (`synced_unix`, written by every sync), or
     /// `None` for an index made before the stamp existed.
     pub fn synced_unix(&self) -> Option<i64> {
@@ -1119,6 +1130,15 @@ fn allowed_sql(opts: &SearchOpts) -> String {
     match opts.project.as_deref().filter(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))) {
         Some(id) => allowed.push_str(&format!(" AND (d.zone != 'project' OR d.rel_path LIKE 'projects/{}/%')", id)),
         None => allowed.push_str(" AND d.zone != 'project'"),
+    }
+    if let Some(tiers) = &opts.source_types {
+        // Fixed tier names from code (`&'static str`), so the list holds no text from outside.
+        let list: Vec<String> = tiers.iter().filter(|t| t.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')).map(|t| format!("'{}'", t)).collect();
+        allowed.push_str(&if list.is_empty() { " AND 1=0".to_string() } else { format!(" AND d.source_type IN ({})", list.join(",")) });
+    }
+    if let Some(paths) = opts.exclude_paths.as_ref().filter(|p| !p.is_empty()) {
+        let list: Vec<String> = paths.iter().map(|p| format!("'{}'", p.replace('\'', "''"))).collect();
+        allowed.push_str(&format!(" AND d.rel_path NOT IN ({})", list.join(",")));
     }
     if let Some(paths) = &opts.paths {
         // Each path is quoted as an SQL string (a quote doubled), so a name cannot end the list or add a condition.
@@ -1467,6 +1487,11 @@ pub struct SearchOpts {
     /// The registered project whose layer the session may read (`specs/109` §11.3): zone `project` is visible only under
     /// `projects/<id>/`, and not at all with `None`, which is what every search but a session's own project tools asks.
     pub project: Option<String>,
+    /// Only documents of these tiers (`specs/109` §12 item 4, `use: "verify"`). Narrows, never widens; fixed names from code only.
+    pub source_types: Option<Vec<&'static str>>,
+    /// Leave out documents at these logical paths (`specs/109` §12 item 3: the release's own files are searched as their own group).
+    /// Narrows, never widens.
+    pub exclude_paths: Option<Vec<String>>,
 }
 
 /// How summary hits are answered. Spec 068 defaults to Bibliography for agent safety;
@@ -1513,7 +1538,7 @@ pub enum Legs {
 
 impl Default for SearchOpts {
     fn default() -> Self {
-        SearchOpts { role: None, limit: 10, include_untrusted: false, include_attributed: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false, include_episodes: false, about: false, kinds: None, max_episodes: None, today: None, xenia: XeniaView::Off, zones: None, summary_target: SummaryTarget::Bibliography, paths: None, project: None }
+        SearchOpts { role: None, limit: 10, include_untrusted: false, include_attributed: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false, include_episodes: false, about: false, kinds: None, max_episodes: None, today: None, xenia: XeniaView::Off, zones: None, summary_target: SummaryTarget::Bibliography, paths: None, project: None, source_types: None, exclude_paths: None }
     }
 }
 
@@ -1536,6 +1561,13 @@ pub struct Hit {
     pub label: &'static str,
     /// The org whose lock entry vouches for a bundle document or an imported source (`specs/052` §3.1), if one does.
     pub vouched_by: Option<String>,
+    /// The zone, the tier the index computed (`source_type`) and the document's own lifecycle `status` field, as the index holds
+    /// them (`specs/109` §12 item 2: what a host's label is built from). Read only; nothing here changes a tier.
+    pub zone: String,
+    pub source_type: String,
+    pub doc_status: String,
+    /// The frontmatter `author` (or `role`) the index recorded, if any.
+    pub doc_author: Option<String>,
 }
 
 impl Hit {
@@ -1712,8 +1744,8 @@ impl Kb {
                     }
                 }
             }
-            let row = self.conn.query_row("SELECT c.rel_path, c.start_line, c.end_line, c.heading_path, c.raw_content, d.content_blake3, d.zone, d.source_type, d.status, d.web_corroborated FROM kb_chunks c JOIN kb_documents d ON d.doc_id = c.doc_id WHERE c.chunk_id = ?1", [id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?, r.get::<_, String>(7)?, r.get::<_, String>(8)?, r.get::<_, i64>(9)? != 0)));
-            let Ok((rel_path, a, b, heading_path, raw, blake3, zone, tier_name, doc_status, web_corroborated)) = row else { continue };
+            let row = self.conn.query_row("SELECT c.rel_path, c.start_line, c.end_line, c.heading_path, c.raw_content, d.content_blake3, d.zone, d.source_type, d.status, d.web_corroborated, d.author FROM kb_chunks c JOIN kb_documents d ON d.doc_id = c.doc_id WHERE c.chunk_id = ?1", [id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?, r.get::<_, String>(7)?, r.get::<_, String>(8)?, r.get::<_, i64>(9)? != 0, r.get::<_, Option<String>>(10)?)));
+            let Ok((rel_path, a, b, heading_path, raw, blake3, zone, tier_name, doc_status, web_corroborated, doc_author)) = row else { continue };
             // For imported summary pages, presentation depends on `opts.summary_target` (`specs/068` §6.7, `specs/075`):
             // - `Bibliography` (default): hits on an imported page's body are answered with its .bib.md sidecar metadata.
             // - `SummaryPage`: hits answer with the summary .md page and prose, suppressing .bib.md.
@@ -1784,7 +1816,8 @@ impl Kb {
             let vouched_by = vouched.iter().find(|(p, _)| rel_path == *p || (p.ends_with('/') && rel_path.starts_with(p.as_str()))).map(|(_, o)| o.clone());
             let ks = if rel_path.starts_with("context/facts/") { delphi_core::knowledge_status::derive_fact(&tier_name, &doc_status, web_corroborated) } else { delphi_core::knowledge_status::derive(&zone, &tier_name, &doc_status, vouched_by.as_deref()) };
             let vouched_by = vouched_by.filter(|_| ks == delphi_core::knowledge_status::Status::Validated);
-            hits.push(Hit { pointer, rel_path, start_line: a as usize, end_line: b as usize, heading_path, blake3, preview, score: s, note, status: ks.as_str(), label: if zone == "about" { "release reference, not build authority" } else if zone == "summaries" { SUMMARY_LABEL } else { ks.label() }, vouched_by });
+            let label = if zone == "about" { "release reference, not build authority" } else if zone == "summaries" { SUMMARY_LABEL } else { ks.label() };
+            hits.push(Hit { pointer, rel_path, start_line: a as usize, end_line: b as usize, heading_path, blake3, preview, score: s, note, status: ks.as_str(), label, vouched_by, zone, source_type: tier_name, doc_status, doc_author });
         }
         Ok((hits, best_rerank))
     }
