@@ -75,8 +75,14 @@
       "title": "Probe (X4a, 2026-11-14): what each host does today, before X1 to X3"
     },
     {
-      "level": 2,
+      "level": 3,
       "line": 146,
+      "number": "8.2",
+      "title": "Final run (X4b, 2026-11-14): after X1 to X3"
+    },
+    {
+      "level": 2,
+      "line": 201,
       "number": "9",
       "title": "Amendments from review (2026-11-13)"
     }
@@ -84,7 +90,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/110-other-hosts-adapters-instruction-files-and-install-paths.md",
-    "sha256": "2f8f3c8f3250568d8953059d6dfe55f1b386ca8f86c7e972671505fcbdae99fd"
+    "sha256": "021cdf03e7c4c2ab613b90e549db605a19cd275898cff60e579baaaaca1665fa"
   },
   "source_status_at_hash": {
     "line": {
@@ -97,7 +103,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-13, in a host session (\"approve all your plans and suggestions and go\"). The approval was given to the plan this spec carries out (workstream 7: adapters, instruction files and install paths for Gemini, Codex and Copilot) BEFORE this text was written; the operator has not read the text. The operator said the same day that Copilot, agy (Gemini) and Codex are installed and signed in on this machine for the live checks."
     },
-    "sha256": "2f8f3c8f3250568d8953059d6dfe55f1b386ca8f86c7e972671505fcbdae99fd",
+    "sha256": "021cdf03e7c4c2ab613b90e549db605a19cd275898cff60e579baaaaca1665fa",
     "word": "approved"
   },
   "spec": {

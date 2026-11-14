@@ -143,6 +143,61 @@ Run by the scripts in `dev/hosts/` (`claude-code.sh`, `copilot.sh`, `codex.sh`, 
 
 Model calls spent in the probe: Claude Code 3, Copilot 3, Codex 3, Gemini 0.
 
+### 8.2 Final run (X4b, 2026-11-14): after X1 to X3
+
+The same scripts with `DELPHI_PROBE_MODE=final`. Each row is yes, no or not testable.
+
+**Claude Code 2.1.325** (`haiku`), with the generated plugin and the session hooks on in the temporary home (this run is also spec 105 H4). `claude -p <prompt> --model haiku --strict-mcp-config --mcp-config <scratch>/mcp.json --setting-sources project --permission-prompts none --allowedTools <Delphi read tools> Read Grep Glob Agent Task --plugin-dir ecosystem/claude-code/delphi --output-format json`; session persistence on, because the session-end marker counts from the transcript.
+
+| Check | Result |
+| :-- | :-- |
+| server connects, lists its tools | yes (40) |
+| `get_agent` pack with this host's adapter line | yes: `claude-code v1, hash 2817033d91b71f91` |
+| instruction file reaches the model | yes (`CLAUDE.md`) |
+| session-start brief arrives | yes: the SessionStart hook printed the brief (744 bytes) and the model reported it |
+| role mention reaches the model | yes, by hook: for `@architect` the prompt hook printed its adopt line and the model called `get_agent` with `architect` |
+| session-end marker written | yes, one per call (`claude-code-<session>.json`) |
+| marker counts | **no in the run, fixed after it**: Claude Code named the transcript folder with every `/`, `.` and `_` as `-`; Delphi's rule kept `_`, so the transcript (under a temporary path with `_`) was refused and the counts left out. `transcript_folder` now turns every character other than an ASCII letter or digit into `-` (test added; `delphi learn ingest` uses the same function now). The three logged SessionEnd inputs, replayed to the fixed binary, wrote markers with counts (for example `prompts 1, get_agent 1, roles_adopted [architect]`). |
+| worker file loads and runs | yes: `delphi:architect-worker` ran (its reply restated the wrapper's read-only rule); it did not call `get_agent` in this run |
+| progress line shown | not testable (daemon) |
+
+**Copilot CLI 1.0.111** (`--model auto`, efficiency; it chose `gpt-6-luna`). What `delphi plugin export --host copilot` wrote after X3, placed in the scratch project: the seat and worker files in `.github/agents/`, `DELPHI.md` appended to `AGENTS.md`, and, for this check only, a hooks file in Claude Code's shape running `delphi mcp --hook <event> --host copilot` in `.github/hooks/`. Same command as §8.1.
+
+| Check | Result |
+| :-- | :-- |
+| server connects, lists its tools | yes (40) |
+| `get_agent` pack with this host's adapter line | yes: `copilot v1, hash 1dc046f4a1ebd850` |
+| instruction section reaches the model | yes (both codewords; the section was in `AGENTS.md`) |
+| hooks fire | yes: session-start, prompt and session-end, every call |
+| session-start brief arrives | **no**: the hook printed the brief (744 to 924 bytes) and the model said it saw none; the user message Copilot recorded carried no added context |
+| role mention reaches the model | yes, by instruction: `@architect` made the main agent call `get_agent` (the prompt hook also printed its line; that Copilot passed it on is not shown) |
+| session-end marker written | yes, without counts (Copilot's hook input has no `transcript_path`, and Delphi reads no Copilot transcript) |
+| worker file loads and runs | yes: `delphi-architect-worker` ran with exactly the X3 tool list (`read`, `search`, `delphi/get_agent`, ...) and called `get_agent` |
+| progress line shown | not testable (daemon) |
+
+So Copilot's hooks fire but their output was not shown reaching the model: no Copilot hooks file is shipped, and the instruction section carries the mention routing as a sentence.
+
+**Codex CLI 0.169.0** (`gpt-5.6-luna`, low). The scratch project's `AGENTS.md` held the section `delphi connect codex` writes; agent files as in §8.1. Same command as §8.1.
+
+| Check | Result |
+| :-- | :-- |
+| server connects, lists its tools | yes (40) |
+| `get_agent` pack with this host's adapter line | yes: `codex v1, hash 5c08b19e8ba1d42d` |
+| instruction section reaches the model | yes |
+| hooks fire | not testable (trust must be saved in Codex's config) |
+| session-start brief | not testable (no hook) |
+| role mention reaches the model | yes, by instruction: `list_roles`, then `get_agent` for `architect` (in the probe, without the section: no) |
+| worker file loads and runs | no: `spawn_agent` started a generic agent (`agent_type` null) told to play the worker; no `get_agent` call |
+| progress line shown | not testable (daemon) |
+
+So `delphi connect codex` leaves Codex's agent files out (`delphi mcp --install codex --agents` still writes them on request).
+
+**Gemini CLI 0.64.0**: not testable, as in §8.1; it was not run again. Its extension is installed by `delphi connect gemini` marked unverified, with no agent files and no hooks.
+
+Model calls spent in all: Claude Code 6 (two runs), Copilot 6 (two runs), Codex 6 (two runs), Gemini CLI 0. Each script printed the scratch directory with its logs; nothing of them is committed.
+
+**Unverified, and so left out of the install:** Copilot's and Codex's hooks, Codex's and Gemini CLI's agent files, everything of Gemini CLI on a live host, Antigravity (not run), progress lines on every host, and whether a Copilot tool set differs with another model.
+
 ## 9. Amendments from review (2026-11-13)
 
 A red-team review on 2026-11-13 (one critic, the author's own model family, so `homogeneous`; checked against the code) found the defects below. Each amendment **supersedes** the text above where they differ. The review ran after the advance approval; the operator has not read these either.

@@ -529,10 +529,10 @@ The gates before each commit are those of `AGENTS.md`: `cargo test --workspace -
 - Whether `delphi lint` or CI already check an `Implements-Spec` trailer against an approved spec (§10).
 - Which skills should be `inside` (§3.2), beyond the Council ones.
 - Whether `spawn_agent_pack` already has a per-task cap; I read its argument checks only.
-- The host adapter's coverage for hosts other than Claude Code.
+- ~~The host adapter's coverage for hosts other than Claude Code.~~ Settled for Copilot CLI and Codex by the live checks of [`specs/110`](110-other-hosts-adapters-instruction-files-and-install-paths.md) §8 (2026-11-14): each has an adapter taken from the tools its model listed, and neither listed a web search tool, so `search_web` is unavailable on both (Codex also has no fetch tool and reads files through `exec_command`). Antigravity and Gemini CLI have no adapter: no check covered them.
 - Which connectors (team chat, meeting transcripts, email, shared documents) each host actually offers, and how its permission system names them. §7.2 assumes only that a host can search what it is connected to and the operator approved.
 - How a host's settings should record "approved search paths and sources" beyond a section of `CLAUDE.md`; a host-native setting may be better and is the host's to define.
-- No live run of any host path in this spec.
+- ~~No live run of any host path in this spec.~~ Partly settled by [`specs/110`](110-other-hosts-adapters-instruction-files-and-install-paths.md) §8: Claude Code, Copilot CLI and Codex connect, serve packs with their own adapter line, and adopt a role from an `@` mention (Claude Code by hook, Copilot and Codex by the instruction section). The research reflex, the source ladder and the inside exceptions were not exercised by those runs.
 - Councils `t_0004` and `t_0005` read the full draft, but the red-team seat's Round 2 critique was unreadable in both (§15.2). A Round 2 from a red-team seat that completes is still owed before approval.
 - The shape of `propose_kb_entry`'s fields, what a single-family panel means by "foreign", and the barrier's behavior when the host disconnects mid-run. The slices pin these.
 - Every numeric value in §18 is a proposal for the slice to calibrate; none has been measured.

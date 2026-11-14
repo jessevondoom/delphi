@@ -40,157 +40,157 @@
     },
     {
       "level": 2,
-      "line": 98,
+      "line": 105,
       "number": "4",
       "title": "The Panel protocol (server-held)"
     },
     {
       "level": 3,
-      "line": 100,
+      "line": 107,
       "number": "4.1",
       "title": "Tools (all advice; none writes outside Delphi's own log)"
     },
     {
       "level": 3,
-      "line": 113,
+      "line": 120,
       "number": "4.2",
       "title": "What the server enforces, and what it cannot"
     },
     {
       "level": 3,
-      "line": 121,
+      "line": 128,
       "number": "4.3",
       "title": "Inputs are fenced"
     },
     {
       "level": 3,
-      "line": 127,
+      "line": 134,
       "number": "4.4",
       "title": "Degraded forms, always labelled"
     },
     {
       "level": 3,
-      "line": 136,
+      "line": 143,
       "number": "4.5",
       "title": "Which tier: the Panel is always allowed (OD-1, 2026-11-06)"
     },
     {
       "level": 2,
-      "line": 144,
+      "line": 151,
       "number": "5",
       "title": "The front door"
     },
     {
       "level": 3,
-      "line": 146,
+      "line": 153,
       "number": "5.1",
       "title": "The `delphi-council` skill (all hosts)"
     },
     {
       "level": 3,
-      "line": 158,
+      "line": 165,
       "number": "5.2",
       "title": "Native role subagents (accelerator)"
     },
     {
       "level": 2,
-      "line": 170,
+      "line": 177,
       "number": "6",
       "title": "Model diversity in single-family hosts"
     },
     {
       "level": 3,
-      "line": 174,
+      "line": 181,
       "number": "6.1",
       "title": "Three measured quantities, never conflated"
     },
     {
       "level": 3,
-      "line": 178,
+      "line": 185,
       "number": "6.2",
       "title": "Assignment rule"
     },
     {
       "level": 3,
-      "line": 182,
+      "line": 189,
       "number": "6.3",
       "title": "No stale pins"
     },
     {
       "level": 3,
-      "line": 186,
+      "line": 193,
       "number": "6.4",
       "title": "Foreign seats (S4 built for one; N seats approved by the operator, 2026-11-07, built as C3a)"
     },
     {
       "level": 2,
-      "line": 198,
+      "line": 205,
       "number": "7",
       "title": "The ruling card"
     },
     {
       "level": 2,
-      "line": 215,
+      "line": 222,
       "number": "8",
       "title": "Fixes to the daemon Council that the outside path exposed (S0a)"
     },
     {
       "level": 2,
-      "line": 227,
+      "line": 234,
       "number": "9",
       "title": "Slices (one per pull request; S1 first for visible value)"
     },
     {
       "level": 2,
-      "line": 244,
+      "line": 251,
       "number": "10",
       "title": "Measurement and the default"
     },
     {
       "level": 2,
-      "line": 250,
+      "line": 257,
       "number": "11",
       "title": "Authority and trust"
     },
     {
       "level": 2,
-      "line": 257,
+      "line": 264,
       "number": "12",
       "title": "Verification"
     },
     {
       "level": 2,
-      "line": 266,
+      "line": 273,
       "number": "13",
       "title": "Decisions for the operator"
     },
     {
       "level": 2,
-      "line": 275,
+      "line": 282,
       "number": null,
       "title": "14a. Relation to spec 084 S2 (not a conflict; ordering rules)"
     },
     {
       "level": 2,
-      "line": 284,
+      "line": 291,
       "number": "14",
       "title": "Not verified"
     },
     {
       "level": 2,
-      "line": 294,
+      "line": 301,
       "number": "15",
       "title": "Council review (OD-6, run 2026-11-06)"
     },
     {
       "level": 3,
-      "line": 323,
+      "line": 330,
       "number": "15.1",
       "title": "Author's triage against the built code (not the Council's words)"
     },
     {
       "level": 3,
-      "line": 337,
+      "line": 344,
       "number": "15.2",
       "title": "Decision for the operator"
     }
@@ -198,7 +198,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/086-outside-council-panel-and-host-subagents.md",
-    "sha256": "34e77bf81756b1604c4978e50ed44df9d1371c8b12534cce65ac059bb317ee18"
+    "sha256": "fc177b02f63ba9dff8b6a34d6cf6a564b56cfcc30a8234ff3be6e3c687c9b151"
   },
   "source_status_at_hash": {
     "line": {
@@ -211,7 +211,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-06 (\"go\"); OD-1 and OD-6 answered, OD-2 to OD-5 take the recommendations"
     },
-    "sha256": "34e77bf81756b1604c4978e50ed44df9d1371c8b12534cce65ac059bb317ee18",
+    "sha256": "fc177b02f63ba9dff8b6a34d6cf6a564b56cfcc30a8234ff3be6e3c687c9b151",
     "word": "approved"
   },
   "spec": {

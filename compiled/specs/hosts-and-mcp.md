@@ -69,7 +69,7 @@ When developers work outside the native Delphi terminal TUI—in external harnes
 
 ## 098-where-agents-run-host-first-locus-and-the-inside-exceptions
 
-**098: Where agents run: host first, the inside exceptions (Council, panel seats, red team), a locus declaration, routing for any query, and a research path that works the first time** · approved (per source at `0dce4527c3ee`) · tier 0 · [source](../../specs/098-where-agents-run-host-first-locus-and-the-inside-exceptions.md)
+**098: Where agents run: host first, the inside exceptions (Council, panel seats, red team), a locus declaration, routing for any query, and a research path that works the first time** · approved (per source at `284aca72c31c`) · tier 0 · [source](../../specs/098-where-agents-run-host-first-locus-and-the-inside-exceptions.md)
 
 **source excerpt, untrusted** · `specs/098-where-agents-run-host-first-locus-and-the-inside-exceptions.md` line 22
 
@@ -129,7 +129,7 @@ Today everything that makes a host session a Delphi session depends on the host'
 
 ## 110-other-hosts-adapters-instruction-files-and-install-paths
 
-**110: Other hosts: adapters, instruction files, hooks and install paths for Copilot CLI, Codex and Gemini CLI, each with a recorded live check** · approved (per source at `2f8f3c8f3250`) · tier 0 · [source](../../specs/110-other-hosts-adapters-instruction-files-and-install-paths.md)
+**110: Other hosts: adapters, instruction files, hooks and install paths for Copilot CLI, Codex and Gemini CLI, each with a recorded live check** · approved (per source at `021cdf03e7c4`) · tier 0 · [source](../../specs/110-other-hosts-adapters-instruction-files-and-install-paths.md)
 
 **source excerpt, untrusted** · `specs/110-other-hosts-adapters-instruction-files-and-install-paths.md` lines 25-30
 
