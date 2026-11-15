@@ -121,6 +121,8 @@ E1 keeps `command: "delphi"` for Claude Code, the same command every 062 snippet
 2. **The cure is an absolute path.** For hand-placed configs, `--print-config --absolute` (E1a). For the plugin, a stable executable path needs a spec-006 amendment (E1s): `install.sh --dir`, Homebrew and self-update do not today maintain `~/.local/bin/delphi`, and Claude Code expands `${HOME}` in a plugin `command` (verified, §13), so the declaration could then be `${HOME}/.local/bin/delphi`. Until then this spec ships no stable-path claim.
 3. **Launcher: rejected.** No executable file is generated or shipped by this spec.
 
+*Note, 2026-11-14: amended by [`specs/074`](074-stable-launch-path-and-delphi-connect.md) §10. E1s is built there (§10.1): the plugin's command is `${HOME}/.local/bin/delphi`, proven on Claude Code and Copilot CLI, and `launchable` (§7) is read from that path instead of being a fixed `unknown`. D-5(B)'s release-tag channel is realised as the `stable` branch (§10.4), and the install commands in §4 and §5.3 name `jessevondoom/delphi#stable`.*
+
 ### 5.3 Per-host connect commands (vendor docs, 2026-11-03; research only)
 
 Not implemented or approved by this spec. Each host's own command is recorded to scope the later slices; anything that causes a host to write its configuration is a Red-tier host-config write (§6, §12).

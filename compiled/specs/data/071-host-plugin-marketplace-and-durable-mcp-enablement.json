@@ -64,67 +64,67 @@
     },
     {
       "level": 3,
-      "line": 124,
+      "line": 126,
       "number": "5.3",
       "title": "Per-host connect commands (vendor docs, 2026-11-03; research only)"
     },
     {
       "level": 3,
-      "line": 136,
+      "line": 138,
       "number": "5.4",
       "title": "Operator experience (read-only, no host writes)"
     },
     {
       "level": 2,
-      "line": 146,
+      "line": 148,
       "number": "6",
       "title": "Deferred installer"
     },
     {
       "level": 2,
-      "line": 150,
+      "line": 152,
       "number": "7",
       "title": "Status check: `delphi doctor` and `delphi mcp --check`"
     },
     {
       "level": 2,
-      "line": 158,
+      "line": 160,
       "number": "8",
       "title": "Generation, versioning and gates"
     },
     {
       "level": 2,
-      "line": 167,
+      "line": 169,
       "number": "9",
       "title": "Security and trust"
     },
     {
       "level": 2,
-      "line": 175,
+      "line": 177,
       "number": "10",
       "title": "Slices (one per pull request; none starts before approval)"
     },
     {
       "level": 2,
-      "line": 193,
+      "line": 195,
       "number": "11",
       "title": "Testing"
     },
     {
       "level": 2,
-      "line": 200,
+      "line": 202,
       "number": "12",
       "title": "Decisions for the operator"
     },
     {
       "level": 2,
-      "line": 218,
+      "line": 220,
       "number": "13",
       "title": "Open questions"
     },
     {
       "level": 2,
-      "line": 229,
+      "line": 231,
       "number": "14",
       "title": "Acceptance criteria"
     }
@@ -132,7 +132,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/071-host-plugin-marketplace-and-durable-mcp-enablement.md",
-    "sha256": "47a3e22cb26c85e9d19ace474e879d08d8de492756c8575d0e0fe8fdaf40dbe6"
+    "sha256": "8e6a107a7327fb4e5321c4e1cd1c12c2682d717ee85e8ab13ab0e5e8346f005a"
   },
   "source_status_at_hash": {
     "line": {
@@ -145,7 +145,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-04 (\"yeah build as much as possible\"), after three Council reviews: approves E1a, E1, E1b, E2 (Q-8 answered) and, by the amendment of 2026-11-04 (\"build all the rest\", \"don't pin a version update\"), E4a and E4c as documentation and hints only (Q-1 answered: no new host directories). E1s, E3, E4b, E4d and E5 are not approved (§10)."
     },
-    "sha256": "47a3e22cb26c85e9d19ace474e879d08d8de492756c8575d0e0fe8fdaf40dbe6",
+    "sha256": "8e6a107a7327fb4e5321c4e1cd1c12c2682d717ee85e8ab13ab0e5e8346f005a",
     "word": "approved"
   },
   "spec": {

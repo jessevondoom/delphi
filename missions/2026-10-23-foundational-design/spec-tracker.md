@@ -612,6 +612,10 @@ Approved by the operator on 2026-11-04 after a three-seat Copilot Council, two r
 | C2 | exec path, Claude Code only, with `--remove` | built (this PR); GitHub-source proof recorded in spec 074 §8 |
 | C3 | Copilot | built (this PR); Council re-review and proof recorded in spec 074 §9 |
 | C3b | Codex | next; needs bound release identity (Council amendment) |
+| S1 | §10.1: the plugin launches `~/.local/bin/delphi`; `launchable` from the filesystem; the stable link (071 E1s) | approved 2026-11-14 (amendment §10, on a summary, no Council) |
+| U1 | §10.2: `delphi update` names a stale host plugin; `delphi connect <host> --update` | approved 2026-11-14 |
+| U2 | §10.3: the stale hint recorded as proven; the auto-update tip | approved 2026-11-14 |
+| R1 | §10.4: the `stable` release channel | approved 2026-11-14 |
 
 ## Host cognitive parity and external orchestration (spec 072, approved 2026-11-03)
 

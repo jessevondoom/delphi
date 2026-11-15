@@ -37,7 +37,7 @@ An operator uses Delphi and also another coding tool (Claude Code, Copilot CLI, 
 
 ## 071-host-plugin-marketplace-and-durable-mcp-enablement
 
-**071: Host plugin marketplace and durable MCP enablement for Claude Code, Codex, Antigravity and Copilot** · approved (per source at `47a3e22cb26c`) · tier 0 · [source](../../specs/071-host-plugin-marketplace-and-durable-mcp-enablement.md)
+**071: Host plugin marketplace and durable MCP enablement for Claude Code, Codex, Antigravity and Copilot** · approved (per source at `8e6a107a7327`) · tier 0 · [source](../../specs/071-host-plugin-marketplace-and-durable-mcp-enablement.md)
 
 _No standard scope section; open the spec._
 
@@ -53,7 +53,7 @@ An operator works inside Delphi's TUI and also across external host harnesses (C
 
 ## 074-stable-launch-path-and-delphi-connect
 
-**074: A stable launch path for host plugins, and `delphi connect`** · approved (per source at `c5caaa85e056`) · tier 0 · [source](../../specs/074-stable-launch-path-and-delphi-connect.md)
+**074: A stable launch path for host plugins, and `delphi connect`** · approved (per source at `b02ea013c1b3`) · tier 0 · [source](../../specs/074-stable-launch-path-and-delphi-connect.md)
 
 _No standard scope section; open the spec._
 
