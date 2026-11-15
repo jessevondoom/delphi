@@ -173,7 +173,7 @@
       "additionalProperties": false
     },
     "claims": { "type": "array", "items": { "type": "string", "maxLength": 80 }, "description": "The ids of the claims the topic's runs produced, once each." },
-    "gaps": { "type": "array", "items": { "type": "string", "maxLength": 300 }, "description": "What the newest finished run reports it did not find: fixed phrases read from its coverage report." },
+    "gaps": { "type": "array", "items": { "type": "string", "maxLength": 300 }, "description": "What the newest finished run reports it did not find, which is what a continued run starts from. For a run that had a plan of sub-questions (specs/114 section 4): the sub-questions it left uncovered, in the scout's words. For a run on the fixed plan: fixed phrases read from its coverage report." },
     "usage": {
       "type": "object",
       "required": ["steps", "check_steps", "ms", "tokens"],
@@ -207,7 +207,9 @@
           "error": { "type": "string", "maxLength": 300 },
           "continued": { "type": "boolean", "description": "True on a run that continued the topic (specs/112 section 5): it began from the record's gaps." },
           "note": { "type": "string", "maxLength": 120, "description": "The one line a continued run was given to narrow its search. Data, like the question." },
-          "unchanged": { "type": "integer", "minimum": 0, "description": "On a continued run: pages the record already held that were fetched, found unchanged and not read again." }
+          "unchanged": { "type": "integer", "minimum": 0, "description": "On a continued run: pages the record already held that were fetched, found unchanged and not read again." },
+          "stopped": { "enum": ["covered", "no_new_claims", "step_budget", "page_budget", "no_more_queries", "plan_done"], "description": "Why the run stopped sending queries (specs/114 section 4 item 5): every sub-question was covered, two rounds in a row added no claim, a budget ran out, no uncovered sub-question had a query left, or (the fixed plan, which has no sub-questions) the planned queries were sent." },
+          "rounds": { "type": "integer", "minimum": 0, "description": "How many rounds of queries the run sent." }
         },
         "additionalProperties": false
       }

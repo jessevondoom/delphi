@@ -14,7 +14,7 @@
 use crate::corroboration::{self, Cite, Params, Support};
 use crate::research_chain::{ChainPlan, Direction};
 use crate::research_jobs::{Egress, Finish, JobCtx};
-use crate::research_method::{Known, KnownFirst, PlanKind, SubQuestion, SubStatus};
+use crate::research_method::{coverage, next_query, read_class, reading_order, subs_report, url_date, Asked, Known, KnownFirst, PlanKind, Stop, SubQuestion, SubStatus};
 use crate::research_plan::{canonical_url, clean_query, claim_fingerprint, widen_to_web, Added, ClaimSet, QueryKind, Seen};
 use crate::search_log::{HostSearch, Purpose, SearchLog, Source};
 use delphi_adapter::research::search::Row;
@@ -148,6 +148,11 @@ pub trait Library: Send + Sync {
     }
     /// Is the source private? A claim that rests on a private source is never put in an outbound query (`specs/098` §7.5 item 5).
     fn is_private(&self, _source_id: &str) -> bool {
+        false
+    }
+    /// Is this address on a host the validator's source lists class as primary (`fact_sources::Class::Primary`)? Only the order
+    /// results are read in asks (`specs/114` §4 item 6): a primary page is not trusted more for it. The default says no.
+    fn is_primary(&self, _url: &str) -> bool {
         false
     }
     /// The page at this address as the library already holds it, when it may stand in for a fetch (`specs/114` §3 item 4): the
@@ -286,6 +291,10 @@ pub struct Resume {
     pub held: std::collections::BTreeMap<String, String>,
     /// A few words that narrow the continued search. Cleaned and guarded like the question before any query is built.
     pub note: Option<String>,
+    /// The sub-questions the topic's newest run left uncovered (`specs/114` §4), when that run had a plan of sub-questions: the
+    /// continued run takes them as its own and searches for each. They are a model's words read back from the record: data,
+    /// cleaned and guarded like the question before any is put in a query. Empty for a record with the fixed phrases of before.
+    pub open: Vec<String>,
 }
 
 impl Resume {
@@ -492,8 +501,7 @@ fn coverage_report(r: &Rungs, kb: usize, trusted_claims: usize, web_claims: usiz
 ///
 /// Each claim is tagged with the sub-question the scout named for it; where it named none the plan has, the claim takes the
 /// sub-question the page's query was sent for (`tag.sub`), which is 0 for a query of the whole question (`specs/114` §4 item 3).
-#[allow(clippy::too_many_arguments)]
-async fn ingest(deps: &Deps<'_>, question: &str, page: &Page, trusted: bool, retrieved: &str, held: Option<&str>, tag: Tag, subs: &[SubQuestion], set: &mut ClaimSet, claims: &mut Vec<ClaimRec>) -> Option<Vec<String>> {
+async fn ingest(deps: &Deps<'_>, question: &str, page: &Page, trusted: bool, held: Option<&str>, tag: Tag, st: &mut State) -> Option<Vec<String>> {
     let source_id = match held {
         Some(id) => id.to_string(),
         None => match deps.library.capture(&page.url, &page.text, trusted).await {
@@ -512,14 +520,20 @@ async fn ingest(deps: &Deps<'_>, question: &str, page: &Page, trusted: bool, ret
         note(deps, |r| r.kept(&page.url, &level, &outcome));
     }
     let mut anchored = Vec::new();
-    let Ok(found) = deps.scout.extract(question, page, subs).await else { return Some(anchored) };
+    let Ok(found) = deps.scout.extract(question, page, &st.subs).await else { return Some(anchored) };
     for x in found {
         let fp = claim_fingerprint(&x.subject, &x.predicate, &x.object, &x.scope, &x.time);
-        let sub = if subs.iter().any(|q| q.n == x.sub) { x.sub } else { tag.sub };
-        match set.add(&fp, &source_id) {
-            // The library already holds this claim: it gains an anchor into this page and the run's topic, and no second claim.
-            Added::Known => anchored.extend(deps.library.anchor_known(&fp, &x, &source_id, &page.url)),
-            Added::New => claims.push(ClaimRec {
+        let sub = if st.subs.iter().any(|q| q.n == x.sub) { x.sub } else { tag.sub };
+        match st.set.add(&fp, &source_id) {
+            // The library already holds this claim: it gains an anchor into this page and the run's topic, and no second claim. It
+            // still answers the sub-question it is tagged to, from this page's origin.
+            Added::Known => {
+                if let Some(id) = deps.library.anchor_known(&fp, &x, &source_id, &page.url) {
+                    anchored.push(id);
+                    st.found_again.push((sub, vec![host(&page.url)]));
+                }
+            }
+            Added::New => st.claims.push(ClaimRec {
                 quotes: vec![x.quote.clone()],
                 id: fp[..12].to_string(),
                 group: claim_fingerprint(&x.subject, &x.predicate, "", &x.scope, &x.time),
@@ -529,14 +543,14 @@ async fn ingest(deps: &Deps<'_>, question: &str, page: &Page, trusted: bool, ret
                 source_urls: vec![page.url.clone()],
                 from_trusted: trusted,
                 state: ClaimState::Captured,
-                retrieved: retrieved.to_string(),
+                retrieved: st.retrieved.clone(),
                 support: Support::default(),
                 contested: false,
                 sub,
                 counter: tag.counter,
             }),
             Added::Merged => {
-                if let Some(c) = claims.iter_mut().find(|c| c.fingerprint == fp) {
+                if let Some(c) = st.claims.iter_mut().find(|c| c.fingerprint == fp) {
                     if c.sub == 0 {
                         c.sub = sub;
                     }
@@ -832,6 +846,93 @@ struct State {
     from_library: Vec<String>,
     /// The plan's sub-questions; empty under the fixed plan.
     subs: Vec<SubQuestion>,
+    /// Claims the library already held that a page of this run states again: the sub-question each is tagged to and the page's
+    /// origin. They are not the run's own claims, and they count toward coverage as a kept claim does.
+    found_again: Vec<(usize, Vec<String>)>,
+}
+
+/// The sub-question each kept claim is tagged to and the origins that state it: what coverage is counted from.
+fn tagged(st: &State) -> Vec<(usize, Vec<String>)> {
+    st.claims.iter().map(|c| (c.sub, c.source_urls.iter().map(|u| host(u)).collect())).chain(st.found_again.iter().cloned()).collect()
+}
+
+/// One round's queries, from the sub-questions still uncovered (`specs/114` §4 item 4): for each, the next query it gets
+/// (`research_method::next_query`), cleaned and guarded like the question. `note` is a continued run's narrowing words. Returns
+/// the queries to send, how many the identifier guard withheld, and how many sub-questions were offered a query at all.
+fn gap_round(ctx: &JobCtx, deps: &Deps<'_>, st: &State, asked: &mut [Asked], note: Option<&str>) -> (Vec<Sending>, usize, usize) {
+    let tagged = tagged(st);
+    let cov = coverage(&st.subs, &tagged);
+    let (mut out, mut withheld, mut tried) = (Vec::<Sending>::new(), 0usize, 0usize);
+    for ((sub, c), a) in st.subs.iter().zip(&cov).zip(asked.iter_mut()) {
+        let origin = tagged.iter().filter(|(n, _)| *n == sub.n).flat_map(|(_, o)| o.iter()).find(|o| !o.is_empty()).cloned();
+        let Some((raw, _)) = next_query(sub, c, a, origin.as_deref()) else { continue };
+        tried += 1;
+        let raw = match note {
+            Some(n) => format!("{raw} {n}"),
+            None => raw,
+        };
+        match sendable(ctx, deps.redactor, &raw) {
+            Ok(Some(text)) if !out.iter().any(|q| q.text == text) => out.push(Sending { kind: QueryKind::Sub, text, tag: Tag { sub: sub.n, counter: false } }),
+            Err(()) => withheld += 1,
+            _ => {}
+        }
+    }
+    (out, withheld, tried)
+}
+
+/// Send one round's queries and read what they return. Within one search's results pages are read trusted and primary first, then
+/// trusted, then those on a host a kept claim's source is on, then the rest, newer first where the address states a date
+/// (`specs/114` §4 item 6). `Some` when sending must stop: the step budget or the page cap.
+async fn send_round(ctx: &JobCtx, deps: &Deps<'_>, question: &str, depth: Depth, st: &mut State, round: &[Sending]) -> Option<Stop> {
+    for q in round {
+        // The wider web is searched for the whole question only when the trusted sources answered too little (`specs/066` §5). A
+        // sub-question's own query is always sent: it is what the plan found missing.
+        if matches!(q.kind, QueryKind::Topic | QueryKind::Gap) && !widen_to_web(st.trusted_kept) {
+            continue;
+        }
+        if ctx.egress("scout", Egress::Search, &q.text).is_err() {
+            st.spent = true;
+            return Some(Stop::StepBudget);
+        }
+        if q.kind != QueryKind::Trusted {
+            st.cov.web_searched = true;
+        }
+        let (rows, via) = match deps.web.search_via(&q.text) {
+            Ok(found) => {
+                st.cov.answered += 1;
+                found
+            }
+            Err(e) => {
+                let why = failure_reason(&e);
+                st.cov.failure.get_or_insert(why);
+                let (rung, source, purpose) = log_source(q.kind, None);
+                let li = st.log.begin(rung, source, purpose, &q.text, None);
+                st.log.failed(li, why);
+                note(deps, |r| r.query(&q.text, kind_word(q.kind), None, Err(why)));
+                continue;
+            }
+        };
+        note(deps, |r| r.query(&q.text, kind_word(q.kind), via.as_deref(), Ok(rows.len())));
+        if via.is_some() {
+            st.last_provider = via.clone();
+        }
+        let (rung, source, purpose) = log_source(q.kind, via.as_deref());
+        let li = st.log.begin(rung, source, purpose, &q.text, via.as_deref());
+        st.log.rows(li, rows.len());
+        let cited: BTreeSet<String> = st.claims.iter().flat_map(|c| c.source_urls.iter().map(|u| host(u))).filter(|h| !h.is_empty()).collect();
+        let rows = reading_order(rows, |r| read_class(deps.web.is_trusted(&r.url), deps.library.is_primary(&r.url), cited.contains(&host(&r.url))), |r| url_date(&r.url));
+        let total = rows.len();
+        for (i, row) in rows.into_iter().enumerate() {
+            if st.pages_read >= deps.limits.pages_at(depth) {
+                st.log.dropped(li, "page_cap", total - i);
+                return Some(Stop::PageBudget);
+            }
+            if read_row(ctx, deps, question, st, li, &row, true, total - i, q.tag).await {
+                return Some(Stop::StepBudget);
+            }
+        }
+    }
+    None
 }
 
 /// What the query that returned a page says about the claims read on it: the sub-question it was sent for (0 for a query of the
@@ -951,7 +1052,7 @@ async fn read_row(ctx: &JobCtx, deps: &Deps<'_>, question: &str, st: &mut State,
             st.trusted_kept += 1;
         }
     }
-    match ingest(deps, question, &page, trusted, &st.retrieved, held.as_deref(), tag, &st.subs, &mut st.set, &mut st.claims).await {
+    match ingest(deps, question, &page, trusted, held.as_deref(), tag, st).await {
         Some(anchored) => {
             st.log.kept(li);
             if held.is_some() {
@@ -987,10 +1088,14 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     if deps.known.is_some() {
         note(deps, |r| r.known(&known.to_json()));
     }
-    // The plan (`specs/114` §4 items 1 and 2): one call as the scout, given the question and the `known` list and no page text,
-    // returns three to five sub-questions. A call that fails or returns nothing usable leaves the fixed plan, and the record says
-    // so. A continued run plans from its record, and a question whose every query is withheld sends nothing, so neither asks.
-    let (plan_kind, subs): (PlanKind, Vec<SubQuestion>) = if deps.resume.is_some() || planned.queries.is_empty() {
+    // The plan (`specs/114` §4 items 1 and 2). A run that continues a topic whose newest run left sub-questions uncovered takes
+    // those as its plan. Otherwise one call as the scout, given the question and the `known` list and no page text, returns three
+    // to five sub-questions; a call that fails or returns nothing usable leaves the fixed plan, and the record says so. A continued
+    // run with no open sub-question plans as before, and a question whose every query is withheld sends nothing, so neither asks.
+    let open: Vec<SubQuestion> = deps.resume.map(|r| r.open.iter().filter(|t| !t.trim().is_empty()).take(crate::research_method::MAX_SUBS).enumerate().map(|(i, text)| SubQuestion { n: i + 1, text: text.trim().to_string(), status: SubStatus::Open, queries: Vec::new() }).collect()).unwrap_or_default();
+    let (plan_kind, subs): (PlanKind, Vec<SubQuestion>) = if !open.is_empty() {
+        (PlanKind::Continued, open)
+    } else if deps.resume.is_some() || planned.queries.is_empty() {
         (PlanKind::Fixed, Vec::new())
     } else {
         match deps.scout.plan(question, &known).await {
@@ -998,35 +1103,7 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
             _ => (PlanKind::Fixed, Vec::new()),
         }
     };
-    // What is sent. Under the fixed plan: the planned queries, the trusted one first. Under the scout's plan: the trusted query of
-    // the whole question, then the first usable query of each sub-question that is not known, then the contradiction query. Every
-    // query the scout wrote is cleaned and guarded like the question before it is used; one the guard withholds is not sent, and
-    // the search log lists it without text.
-    let mut sends: Vec<Sending> = Vec::new();
-    let mut withheld_subs = 0usize;
-    let fixed = |kind: QueryKind| planned.queries.iter().find(|q| q.kind == kind).map(|q| Sending { kind: q.kind, text: q.text.clone(), tag: Tag { sub: 0, counter: q.kind == QueryKind::Gap } });
-    match plan_kind {
-        PlanKind::Scout => {
-            sends.extend(fixed(QueryKind::Trusted));
-            for sub in subs.iter().filter(|q| q.status != SubStatus::Known) {
-                // A sub-question the plan gave no query is searched by its own words.
-                let candidates: Vec<&str> = if sub.queries.is_empty() { vec![sub.text.as_str()] } else { sub.queries.iter().map(String::as_str).collect() };
-                match candidates.iter().map(|q| sendable(ctx, deps.redactor, q)).find(|r| !matches!(r, Ok(None))) {
-                    Some(Ok(Some(text))) if !sends.iter().any(|q| q.text == text) => sends.push(Sending { kind: QueryKind::Sub, text, tag: Tag { sub: sub.n, counter: false } }),
-                    Some(Err(())) => withheld_subs += 1,
-                    _ => {}
-                }
-            }
-            sends.extend(fixed(QueryKind::Gap));
-        }
-        PlanKind::Fixed | PlanKind::Continued => {
-            sends.extend(planned.queries.iter().map(|q| Sending { kind: q.kind, text: q.text.clone(), tag: Tag { sub: 0, counter: q.kind == QueryKind::Gap } }));
-            sends.sort_by_key(|q| q.kind != QueryKind::Trusted);
-        }
-    }
-    note(deps, |r| r.plan(&sends.iter().map(|q| (kind_word(q.kind), q.text.as_str())).collect::<Vec<_>>()));
-    note(deps, |r| r.planned(plan_kind.as_str(), &crate::research_method::subs_json(&subs)));
-    let mut st = State { set: ClaimSet::new(deps.library.known_fingerprints()), seen: Seen::default(), claims: Vec::new(), read: Vec::new(), library_claims: Vec::new(), pages_read: 0, trusted_kept: 0, cov: Rungs::default(), log: SearchLog::new(), last_provider: None, spent: false, retrieved: day(), from_library: Vec::new(), subs };
+    let mut st = State { set: ClaimSet::new(deps.library.known_fingerprints()), seen: Seen::default(), claims: Vec::new(), read: Vec::new(), library_claims: Vec::new(), pages_read: 0, trusted_kept: 0, cov: Rungs::default(), log: SearchLog::new(), last_provider: None, spent: false, retrieved: day(), from_library: Vec::new(), subs, found_again: Vec::new() };
     // The search log (`specs/101` §3): the host's declared searches first (they happened before the request), then every search the
     // daemon runs. It only records; no branch below reads it.
     for h in deps.host_searches {
@@ -1036,59 +1113,73 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
         let (rung, source, purpose) = log_source(*kind, None);
         st.log.withheld_identifier(rung, source, purpose);
     }
-    for _ in 0..withheld_subs {
-        let (rung, source, purpose) = log_source(QueryKind::Sub, None);
-        st.log.withheld_identifier(rung, source, purpose);
-    }
-
-    'queries: for q in &sends {
-        // The wider web is searched for the whole question only when the trusted sources answered too little (`specs/066` §5). A
-        // sub-question's own query is always sent: it is what the plan found missing.
-        if matches!(q.kind, QueryKind::Topic | QueryKind::Gap) && !widen_to_web(st.trusted_kept) {
-            continue;
+    let withheld_sub = |st: &mut State, n: usize| {
+        for _ in 0..n {
+            let (rung, source, purpose) = log_source(QueryKind::Sub, None);
+            st.log.withheld_identifier(rung, source, purpose);
         }
-        if ctx.egress("scout", Egress::Search, &q.text).is_err() {
-            st.spent = true;
-            break;
-        }
-        if q.kind != QueryKind::Trusted {
-            st.cov.web_searched = true;
-        }
-        let (rows, via) = match deps.web.search_via(&q.text) {
-            Ok(found) => {
-                st.cov.answered += 1;
-                found
+    };
+    // The first round. Under the fixed plan: the planned queries, the trusted one first. Under the scout's plan: the trusted query
+    // of the whole question, then the first query of each sub-question that is not known, then the contradiction query, once
+    // (`specs/114` §4 item 7). A continued run sends only what its open sub-questions call for. Every query made from the scout's
+    // words is cleaned and guarded like the question; one the guard withholds is not sent, and the search log lists it without text.
+    let mut asked: Vec<Asked> = st.subs.iter().map(|_| Asked::default()).collect();
+    let narrowing: Option<String> = if plan_kind == PlanKind::Continued { deps.resume.and_then(|r| r.note.as_deref()).and_then(|n| n.lines().next()).map(str::trim).filter(|n| !n.is_empty()).map(String::from) } else { None };
+    let fixed = |kind: QueryKind| planned.queries.iter().find(|q| q.kind == kind).map(|q| Sending { kind: q.kind, text: q.text.clone(), tag: Tag { sub: 0, counter: q.kind == QueryKind::Gap } });
+    let mut round: Vec<Sending> = Vec::new();
+    match plan_kind {
+        PlanKind::Scout | PlanKind::Continued => {
+            if plan_kind == PlanKind::Scout {
+                round.extend(fixed(QueryKind::Trusted));
             }
-            Err(e) => {
-                let why = failure_reason(&e);
-                st.cov.failure.get_or_insert(why);
-                let (rung, source, purpose) = log_source(q.kind, None);
-                let li = st.log.begin(rung, source, purpose, &q.text, None);
-                st.log.failed(li, why);
-                note(deps, |r| r.query(&q.text, kind_word(q.kind), None, Err(why)));
-                continue;
+            let (subs_round, withheld, _) = gap_round(ctx, deps, &st, &mut asked, narrowing.as_deref());
+            withheld_sub(&mut st, withheld);
+            round.extend(subs_round);
+            if plan_kind == PlanKind::Scout {
+                round.extend(fixed(QueryKind::Gap));
+            }
+        }
+        PlanKind::Fixed => {
+            round.extend(planned.queries.iter().map(|q| Sending { kind: q.kind, text: q.text.clone(), tag: Tag { sub: 0, counter: q.kind == QueryKind::Gap } }));
+            round.sort_by_key(|q| q.kind != QueryKind::Trusted);
+        }
+    }
+    note(deps, |r| r.plan(&round.iter().map(|q| (kind_word(q.kind), q.text.as_str())).collect::<Vec<_>>()));
+    note(deps, |r| r.planned(plan_kind.as_str(), &crate::research_method::subs_json(&st.subs)));
+
+    // Rounds (`specs/114` §4 items 3 to 5). After each round code recomputes coverage; the next round's queries come from the
+    // sub-questions still uncovered. The run stops sending when every sub-question is covered, when two rounds in a row added no
+    // claim, when no uncovered sub-question has a query left, or on a budget. The fixed plan has no sub-questions and one round.
+    let (mut rounds, mut barren) = (0usize, 0usize);
+    let stopped: Stop = loop {
+        rounds += 1;
+        let before = st.claims.len() + st.found_again.len();
+        if let Some(stop) = send_round(ctx, deps, question, depth, &mut st, &round).await {
+            break stop;
+        }
+        if st.subs.is_empty() {
+            break Stop::PlanDone;
+        }
+        if coverage(&st.subs, &tagged(&st)).iter().all(|c| c.covered) {
+            break Stop::Covered;
+        }
+        barren = if st.claims.len() + st.found_again.len() == before { barren + 1 } else { 0 };
+        if barren >= 2 {
+            break Stop::NoNewClaims;
+        }
+        // A sub-question whose next query cannot be sent (withheld, or nothing usable left of it) is offered the one after it.
+        let next = loop {
+            let (next, withheld, tried) = gap_round(ctx, deps, &st, &mut asked, narrowing.as_deref());
+            withheld_sub(&mut st, withheld);
+            if !next.is_empty() || tried == 0 {
+                break next;
             }
         };
-        note(deps, |r| r.query(&q.text, kind_word(q.kind), via.as_deref(), Ok(rows.len())));
-        if via.is_some() {
-            st.last_provider = via.clone();
+        if next.is_empty() {
+            break Stop::NoMoreQueries;
         }
-        let (rung, source, purpose) = log_source(q.kind, via.as_deref());
-        let li = st.log.begin(rung, source, purpose, &q.text, via.as_deref());
-        st.log.rows(li, rows.len());
-        let (mut trusted_rows, mut other): (Vec<Row>, Vec<Row>) = rows.into_iter().partition(|r| deps.web.is_trusted(&r.url));
-        trusted_rows.append(&mut other);
-        let total = trusted_rows.len();
-        for (i, row) in trusted_rows.into_iter().enumerate() {
-            if st.pages_read >= deps.limits.pages_at(depth) {
-                st.log.dropped(li, "page_cap", total - i);
-                break 'queries;
-            }
-            if read_row(ctx, deps, question, &mut st, li, &row, true, total - i, q.tag).await {
-                break 'queries;
-            }
-        }
-    }
+        round = next;
+    };
 
     // The corroboration pass (`specs/098` §7.5 item 5): for a survey or a deep run, each central PUBLIC claim with fewer than three
     // independent origins gets one query for independent support and one for contradiction. A claim that rests on a private source is
@@ -1163,7 +1254,9 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
             }
         }
     }
-    let State { set, mut seen, mut claims, read, mut library_claims, mut cov, mut log, mut spent, retrieved, from_library, subs, .. } = st;
+    // Coverage as the run ends, the pass's claims included: what the result and the record report, and what a later run continues from.
+    let sub_report = subs_report(&st.subs, &coverage(&st.subs, &tagged(&st)));
+    let State { set, mut seen, mut claims, read, mut library_claims, mut cov, mut log, mut spent, retrieved, from_library, .. } = st;
 
     // Citation chaining (`specs/101` §6): off unless the run was given an index. After the pass and before the validator, inside the same
     // step budget; it keeps leads and moves no claim.
@@ -1231,7 +1324,7 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
         "source_ids": source_ids, "kb_hits": set.kb_hits(), "new_claims": set.new_claims(), "contradictions": conflicts,
         "library_claims": library_claims,
         "known_before": known.to_json(), "read_from_library": from_library,
-        "plan": plan_kind.as_str(), "sub_questions": crate::research_method::subs_json(&subs),
+        "plan": plan_kind.as_str(), "sub_questions": sub_report, "stopped": stopped.as_str(), "rounds": rounds,
         "freshness": {"retrieved": retrieved, "last_checked": retrieved},
         "budget_used": {"steps": ctx.steps(), "check_steps": ctx.check_steps()},
         "answered_by": "scout", "consulted": ["scout", "validator"],
@@ -1387,6 +1480,8 @@ mod tests {
         says_kept: bool,
         /// Pages the library already holds fresh, by address: the source's id and its kept text (`specs/114` §3 item 4).
         fresh: BTreeMap<String, (String, String)>,
+        /// Hosts the validator's source lists class as primary.
+        primary: BTreeSet<String>,
     }
     impl Library for FakeLib {
         /// As the live library does: a private source gives no seed, and neither does one that names no DOI.
@@ -1459,6 +1554,9 @@ mod tests {
         }
         fn held_fresh(&self, url: &str) -> Option<HeldPage> {
             self.fresh.get(url).map(|(source_id, text)| HeldPage { source_id: source_id.clone(), text: text.clone() })
+        }
+        fn is_primary(&self, url: &str) -> bool {
+            self.primary.contains(&host(url))
         }
         fn kept(&self, source_id: &str) -> Option<(String, String)> {
             self.says_kept.then(|| (if source_id.ends_with("who.int") { "full" } else { "pointer" }.to_string(), "added".to_string()))
@@ -2746,7 +2844,7 @@ mod tests {
             ("https://nih.gov/b".to_string(), ("src-nih.gov".to_string(), "a newer nih text".to_string())),
         ]);
         let held = [("https://who.int/a".to_string(), "sha256:of-src-who.int".to_string()), ("https://nih.gov/b".to_string(), "sha256:an-older-version".to_string()), ("https://blog.example/a".to_string(), "h:blog text".to_string())];
-        f.resume = Some(Resume { gaps: vec![], held: held.into_iter().collect(), note: None });
+        f.resume = Some(Resume { held: held.into_iter().collect(), ..Default::default() });
         let (_, v) = value(run_research(&ctx(Depth::Deep), "does aspirin reduce fever", Depth::Deep, &f.deps()).await.unwrap());
         let told = f.record.as_ref().unwrap().0.lock().unwrap().clone();
         assert_eq!(*f.web.fetched.lock().unwrap(), ["https://blog.example/a"], "only the page the library does not hold fresh is fetched, once");
@@ -2846,7 +2944,8 @@ mod tests {
         }
         assert!(!f.web.fetched.lock().unwrap().is_empty(), "the run did read pages afterwards");
         assert_eq!((v["plan"].as_str(), v["sub_questions"].as_array().unwrap().len()), (Some("scout"), 3), "{v}");
-        assert_eq!(v["sub_questions"][1], json!({"n": 2, "text": "Is aspirin safe for children with a fever?", "status": "partly"}));
+        let second = &v["sub_questions"][1];
+        assert_eq!((second["n"].as_u64(), second["text"].as_str(), second["status"].as_str()), (Some(2), Some("Is aspirin safe for children with a fever?"), Some("partly")), "{v}");
     }
 
     /// `specs/114` §4 items 1 and 3: under the scout's plan the run sends the trusted query of the whole question, then the first
@@ -2867,7 +2966,7 @@ mod tests {
         assert!(!tagging.is_empty() && tagging.iter().all(|(_, subs)| subs == &[1, 2, 3]), "each page-reading call is handed the sub-questions: {tagging:?}");
         let told = f.record.as_ref().unwrap().0.lock().unwrap().clone();
         assert!(told.contains(&"plan trusted,sub,sub,sub,gap".to_string()), "{told:?}");
-        assert!(told.iter().filter(|l| l.starts_with("query [sub]")).count() == 3, "{told:?}");
+        assert!(told.iter().filter(|l| l.starts_with("query [sub]")).count() >= 3, "{told:?}");
         assert_balanced(&v);
 
         // A sub-question the plan marks known is not searched.
@@ -2925,11 +3024,232 @@ mod tests {
         assert!(searched.iter().all(|q| !q.to_lowercase().contains("heron") && !q.contains("/etc/shadow") && !q.contains("ghp_")), "{searched:?}");
         assert!(searched.contains(&"aspirin fever dose".to_string()), "sent without the identifier: {searched:?}");
         assert!(searched.contains(&"aspirin fever risks".to_string()), "sent without the path and the credential: {searched:?}");
-        assert!(!searched.iter().any(|q| q.contains("children")), "too little was left of the second: {searched:?}");
+        assert!(!searched.iter().any(|q| q == "children"), "too little was left of the second's planned query: {searched:?}");
+        assert!(searched.contains(&"aspirin safe children fever".to_string()), "a later round asks the sub-question in its own words, which name no identifier: {searched:?}");
         let withheld: Vec<Value> = log_lines(&v).into_iter().filter(|l| l["withheld"] == "identifier").collect();
         assert_eq!(withheld.len(), 1, "{v}");
         assert!(withheld[0].get("query").is_none(), "a withheld line holds no text: {withheld:?}");
         assert!(!v["search_log"].to_string().to_lowercase().contains("heron"), "{}", v["search_log"]);
+        assert_balanced(&v);
+    }
+
+    // ---- `specs/114` M4: coverage, queries from the gaps, stopping, reading order ----
+
+    fn stopped(v: &Value) -> (&str, u64) {
+        (v["stopped"].as_str().unwrap_or("?"), v["rounds"].as_u64().unwrap_or(0))
+    }
+
+    fn sub_state(v: &Value) -> Vec<(u64, bool, u64, u64)> {
+        v["sub_questions"].as_array().unwrap().iter().map(|q| (q["n"].as_u64().unwrap(), q["covered"].as_bool().unwrap(), q["claims"].as_u64().unwrap(), q["origins"].as_u64().unwrap())).collect()
+    }
+
+    /// Three sub-questions. The web answers the first two from two origins each and cannot answer the third at all.
+    fn two_answerable_one_not() -> Fixture {
+        let mut f = planned();
+        f.web.extra = vec![("fever dose", vec![row("https://dose.example/a"), row("https://dose-two.example/a")]), ("fever children", vec![row("https://kids.example/b"), row("https://kids-two.example/b")])];
+        f.web.pages = HashMap::new();
+        for (u, t) in [("https://dose.example/a", "dose one"), ("https://dose-two.example/a", "dose two"), ("https://kids.example/b", "kids one"), ("https://kids-two.example/b", "kids two")] {
+            f.web.pages.insert(u.into(), t.into());
+        }
+        f.scout.0 = HashMap::from([
+            ("https://dose.example/a".to_string(), vec![tagged("fever at 500 mg", 1)]),
+            ("https://dose-two.example/a".to_string(), vec![tagged("fever at 1000 mg", 1)]),
+            ("https://kids.example/b".to_string(), vec![tagged("fever in children", 2)]),
+            // The same claim again, on a second origin: one claim, two origins.
+            ("https://kids-two.example/b".to_string(), vec![tagged("fever in children", 2)]),
+        ]);
+        f.scout.1.plan.as_mut().unwrap()[2].queries = vec!["aspirin fever risks".into(), "aspirin side effects when feverish".into()];
+        f
+    }
+
+    /// AC-3: three sub-questions, one of which the web cannot answer. The run ends with two covered and one open, and its
+    /// second-round queries concern the open one and no other. The result and the record's gaps say which is open.
+    #[tokio::test]
+    async fn two_sub_questions_are_covered_one_stays_open_and_the_second_round_asks_only_about_the_open_one() {
+        let f = two_answerable_one_not();
+        let c = ctx(Depth::Deep);
+        let (partial, v) = value(run_research(&c, "does aspirin reduce fever", Depth::Deep, &f.deps()).await.unwrap());
+        assert!(!partial, "{v}");
+        assert_eq!(sub_state(&v), [(1, true, 2, 2), (2, true, 1, 2), (3, false, 0, 0)], "two covered, one open: {v}");
+        let told = f.record.as_ref().unwrap().0.lock().unwrap().clone();
+        let sub_queries: Vec<&str> = told.iter().filter(|l| l.starts_with("query [sub]")).map(|l| l.split(" via ").next().unwrap().trim_start_matches("query [sub] ")).collect();
+        assert_eq!(sub_queries[..3], ["aspirin fever dose", "aspirin fever children", "aspirin fever risks"], "the first round asks each sub-question once");
+        assert_eq!(sub_queries[3..], ["aspirin side effects when feverish"], "the second round asks about the open sub-question, reworded, and about no other: {told:?}");
+        assert_eq!(stopped(&v), ("no_more_queries", 2), "the open sub-question has had its one rewording: {v}");
+        assert_eq!(v["plan"], "scout");
+        // The gaps a continued run reads are the uncovered sub-questions.
+        assert_eq!(crate::research_record::gaps_of(&v, "done"), ["What are the risks of aspirin for a fever?"]);
+        assert_balanced(&v);
+    }
+
+    /// `specs/114` §4 item 4: a sub-question with claims from one origin only is asked once more, for a second origin, with a
+    /// query that leaves out the host that already answered; when that finds one, the sub-question is covered and the run stops.
+    #[tokio::test]
+    async fn a_sub_question_with_one_origin_is_asked_for_a_second_and_the_run_stops_when_all_are_covered() {
+        let mut f = planned();
+        // Each sub-question's second-origin query (it names the host to leave out) finds a second page.
+        f.web.extra.extend([("-site:dose.example", vec![row("https://dose-two.example/a")]), ("-site:kids.example", vec![row("https://kids-two.example/b")]), ("-site:risk.example", vec![row("https://risk-two.example/c")])]);
+        for (u, object, sub) in [("https://dose-two.example/a", "fever at 1000 mg", 1), ("https://kids-two.example/b", "fever in teenagers", 2), ("https://risk-two.example/c", "stomach bleeding", 3)] {
+            f.web.pages.insert(u.into(), format!("text of {u}"));
+            f.scout.0.insert(u.to_string(), vec![tagged(object, sub)]);
+        }
+        let (_, v) = value(run_research(&ctx(Depth::Deep), "does aspirin reduce fever", Depth::Deep, &f.deps()).await.unwrap());
+        let searched = f.web.searched.lock().unwrap().clone();
+        for q in ["aspirin fever dose -site:dose.example", "aspirin fever children -site:kids.example", "aspirin fever risks -site:risk.example"] {
+            assert_eq!(searched.iter().filter(|s| s.as_str() == q).count(), 1, "`{q}` once: {searched:?}");
+        }
+        assert!(!searched.iter().any(|q| q == "aspirin dose in milligrams"), "a sub-question with a claim is not reworded: {searched:?}");
+        assert_eq!(sub_state(&v), [(1, true, 2, 2), (2, true, 2, 2), (3, true, 2, 2)], "{v}");
+        assert_eq!(stopped(&v), ("covered", 2), "{v}");
+        assert!(crate::research_record::gaps_of(&v, "done").is_empty());
+        assert_balanced(&v);
+    }
+
+    /// AC-4: a run whose pages give no claim stops after two rounds, before its page budget and its step budget, and says why.
+    #[tokio::test]
+    async fn a_run_stops_after_two_rounds_that_add_no_claim_before_its_page_budget() {
+        let mut f = planned();
+        // Every query finds a page of its own, and no page states anything.
+        f.web.extra = vec![("fever dose", vec![row("https://one.example/1")]), ("dose in milligrams", vec![row("https://one.example/2")]), ("fever children", vec![row("https://two.example/1")]), ("safe children", vec![row("https://two.example/2")]), ("fever risks", vec![row("https://three.example/1")]), ("risks aspirin", vec![row("https://three.example/2")])];
+        f.web.pages = (1..=2).flat_map(|i| ["one", "two", "three"].map(|h| (format!("https://{h}.example/{i}"), format!("{h} page {i} says nothing about it")))).collect();
+        f.scout.0 = HashMap::new();
+        let c = ctx(Depth::Deep);
+        let (partial, v) = value(run_research(&c, "does aspirin reduce fever", Depth::Deep, &f.deps()).await.unwrap());
+        assert_eq!(stopped(&v), ("no_new_claims", 2), "{v}");
+        assert!(!partial, "it stopped by its own rule, not on a budget: {v}");
+        let read = f.web.fetched.lock().unwrap().len();
+        assert_eq!(read, 6, "three pages a round, two rounds: {:?}", f.web.fetched.lock().unwrap());
+        assert!(read < f.limits.pages_at(Depth::Deep) && c.steps() < Depth::Deep.max_steps(), "before the page budget ({}) and the step budget: {} steps", f.limits.pages_at(Depth::Deep), c.steps());
+        assert_eq!(sub_state(&v), [(1, false, 0, 0), (2, false, 0, 0), (3, false, 0, 0)]);
+        // A third rewording was there to send for no sub-question, and none was: each is reworded once.
+        let searched = f.web.searched.lock().unwrap().clone();
+        assert_eq!(searched.iter().filter(|q| q.contains("milligrams")).count(), 1, "{searched:?}");
+        assert_balanced(&v);
+    }
+
+    /// `specs/114` §4 item 5: the result says which rule stopped the run. A budget is one of them: the step budget and the page
+    /// cap each have their own word, and the fixed plan, which has no sub-questions, says its queries were sent.
+    #[tokio::test]
+    async fn the_result_says_which_rule_stopped_the_run() {
+        // The step budget: enough for the first search and little else.
+        let f = two_answerable_one_not();
+        let (partial, v) = value(run_research(&JobCtx::with_budget(3), "does aspirin reduce fever", Depth::Deep, &f.deps()).await.unwrap());
+        assert!(partial);
+        assert_eq!(stopped(&v).0, "step_budget", "{v}");
+        // The page cap.
+        let mut f = two_answerable_one_not();
+        f.limits.pages = [1, 1, 1];
+        let (_, v) = value(run_research(&ctx(Depth::Deep), "does aspirin reduce fever", Depth::Deep, &f.deps()).await.unwrap());
+        assert_eq!(stopped(&v), ("page_budget", 1), "{v}");
+        // The fixed plan.
+        let f = Fixture::new(Verdict::Inconclusive);
+        let (_, v) = value(run_research(&ctx(Depth::Survey), "does aspirin reduce fever", Depth::Survey, &f.deps()).await.unwrap());
+        assert_eq!((stopped(&v), v["plan"].as_str(), v["sub_questions"].clone()), (("plan_done", 1), Some("fixed"), json!([])), "{v}");
+        // Every sub-question known: nothing is searched for them and the run says they are covered.
+        let mut f = planned();
+        f.known = Some(FakeKnown { found: Known { claims: vec![crate::research_method::KnownClaim { id: "c-000000000001".into(), status: "noted".into(), text: "a held claim".into() }], ..Default::default() }, asked: Default::default() });
+        for q in f.scout.1.plan.as_mut().unwrap() {
+            q.status = SubStatus::Known;
+            q.queries.clear();
+        }
+        let (_, v) = value(run_research(&ctx(Depth::Survey), "does aspirin reduce fever", Depth::Survey, &f.deps()).await.unwrap());
+        assert_eq!(stopped(&v), ("covered", 1), "{v}");
+        assert!(!f.web.searched.lock().unwrap().iter().any(|q| q.contains("dose") || q.contains("children") || q.contains("risks")), "{:?}", f.web.searched.lock().unwrap());
+    }
+
+    /// `specs/114` §4 item 3: a claim the library already held that a page of the run states again counts toward coverage, from
+    /// that page's origin, though it is not one of the run's own claims.
+    #[tokio::test]
+    async fn a_held_claim_a_page_states_again_counts_toward_coverage() {
+        let mut f = two_answerable_one_not();
+        f.lib.known.insert(claim_fingerprint("aspirin", "reduces", "fever at 500 mg", "adults", ""));
+        f.lib.known.insert(claim_fingerprint("aspirin", "reduces", "fever at 1000 mg", "adults", ""));
+        let (_, v) = value(run_research(&ctx(Depth::Deep), "does aspirin reduce fever", Depth::Deep, &f.deps()).await.unwrap());
+        assert_eq!(sub_state(&v)[0], (1, true, 2, 2), "{v}");
+        assert!(!v["claims"].as_array().unwrap().iter().any(|c| c["assertion"].as_str().unwrap().contains("mg")), "they are the library's, not the run's own: {v}");
+    }
+
+    /// `specs/114` §4 item 7: the contradiction query is sent once in a run, and a claim first read on a page it returned is
+    /// marked as counter-evidence; a claim read on any other page is not.
+    #[tokio::test]
+    async fn the_contradiction_query_is_sent_once_and_its_claims_are_counter_evidence() {
+        let mut f = planned();
+        f.web.extra.push(("limitations OR criticism OR disputed", vec![row("https://critic.example/z")]));
+        f.web.pages.insert("https://critic.example/z".into(), "a critical review".into());
+        f.scout.0.insert("https://critic.example/z".into(), vec![tagged("nothing in a 2019 trial", 1)]);
+        let (_, v) = value(run_research(&ctx(Depth::Deep), "does aspirin reduce fever", Depth::Deep, &f.deps()).await.unwrap());
+        let searched = f.web.searched.lock().unwrap().clone();
+        assert_eq!(searched.iter().filter(|q| q.contains("limitations OR criticism OR disputed")).count(), 1, "once per run, whatever the rounds: {searched:?}");
+        assert!(stopped(&v).1 >= 2, "the run had more than one round: {v}");
+        assert_eq!(sub_of(&v, "2019 trial")["counter_evidence"], true, "{v}");
+        assert_eq!(sub_of(&v, "2019 trial")["sub_question"], 1);
+        assert!(sub_of(&v, "500 mg").get("counter_evidence").is_none() && sub_of(&v, "children").get("counter_evidence").is_none(), "{v}");
+        // Under the fixed plan the same query's claims carry the same mark.
+        let mut g = Fixture::new(Verdict::Inconclusive);
+        g.web.rows = vec![];
+        g.web.extra = vec![("limitations OR criticism OR disputed", vec![row("https://critic.example/z")])];
+        g.web.pages.insert("https://critic.example/z".into(), "a critical review".into());
+        g.scout.0.insert("https://critic.example/z".into(), vec![x("chills")]);
+        let (_, w) = value(run_research(&ctx(Depth::Deep), "does aspirin reduce fever", Depth::Deep, &g.deps()).await.unwrap());
+        assert_eq!(sub_of(&w, "chills")["counter_evidence"], true, "{w}");
+    }
+
+    /// `specs/114` §4 item 6: within one search's results, pages are read trusted and primary first, then trusted, then on a host
+    /// a kept claim's source is already on, then the rest; within a group newer first where the address states a date.
+    #[tokio::test]
+    async fn results_are_read_trusted_and_primary_first_then_trusted_then_cited_then_the_rest_newer_first() {
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        f.web.trusted = vec!["who.int", "nih.gov"];
+        f.lib.primary.insert("nih.gov".into());
+        f.limits.pages = [10, 10, 10];
+        // The trusted query returns these, in the provider's order.
+        f.web.rows = vec![row("https://rest.example/2020/01/old"), row("https://who.int/a"), row("https://rest.example/undated"), row("https://nih.gov/b"), row("https://rest.example/2024/06/new")];
+        // A later query returns two more: one on a host a kept claim already cites (blog.example, after the first round), one not.
+        f.web.extra = vec![("limitations OR criticism OR disputed", vec![row("https://other.example/x"), row("https://blog.example/second")])];
+        f.web.rows.push(row("https://blog.example/a"));
+        for u in ["https://rest.example/2020/01/old", "https://rest.example/undated", "https://rest.example/2024/06/new", "https://other.example/x", "https://blog.example/second"] {
+            f.web.pages.insert(u.into(), format!("text of {u}"));
+        }
+        run_research(&ctx(Depth::Deep), "does aspirin reduce fever", Depth::Deep, &f.deps()).await.unwrap();
+        let fetched = f.web.fetched.lock().unwrap().clone();
+        assert_eq!(
+            fetched[..6],
+            [
+                "https://nih.gov/b",                 // trusted and primary
+                "https://who.int/a",                 // trusted
+                "https://rest.example/2024/06/new",  // the rest: the dated ones newer first, the undated one in its place
+                "https://rest.example/undated",
+                "https://rest.example/2020/01/old",
+                "https://blog.example/a",
+            ],
+            "{fetched:?}"
+        );
+        // By the contradiction query, blog.example is a host a kept claim's source is on: its page is read before the other's.
+        let (second, other) = (fetched.iter().position(|u| u == "https://blog.example/second").unwrap(), fetched.iter().position(|u| u == "https://other.example/x").unwrap());
+        assert!(second < other, "{fetched:?}");
+    }
+
+    /// `specs/112` §5.1 with `specs/114` §4: a run that continues a topic whose newest run left sub-questions uncovered searches
+    /// for those and for nothing else: no plan call, no query of the whole question, and its note narrows each query. The open
+    /// sub-questions are data read back from the record, cleaned and guarded like the question.
+    #[tokio::test]
+    async fn a_continued_run_searches_for_the_sub_questions_its_record_left_open() {
+        let mut f = planned();
+        f.resume = Some(Resume { open: vec!["What are the risks of aspirin for a fever?".into(), "Does Project-Heron cover fever risks in adults?".into(), "see /etc/shadow".into()], note: Some("in adults".into()), ..Default::default() });
+        f.web.extra = vec![("risks of aspirin", vec![row("https://risk.example/c")])];
+        let c = ctx(Depth::Survey);
+        c.set_identifiers(vec!["heron".into()]);
+        let (_, v) = value(run_research(&c, "does aspirin reduce fever", Depth::Survey, &f.deps()).await.unwrap());
+        assert!(f.scout.1.plan_calls.lock().unwrap().is_empty(), "a continued run asks for no plan");
+        let searched = f.web.searched.lock().unwrap().clone();
+        assert_eq!(searched[0], "What are the risks of aspirin for a fever? in adults", "{searched:?}");
+        assert!(searched.iter().all(|q| !q.contains("site:who.int") && !q.contains("limitations OR criticism")), "nothing of the whole question is sent: {searched:?}");
+        assert!(searched.iter().all(|q| !q.to_lowercase().contains("heron") && !q.contains("/etc/shadow")), "{searched:?}");
+        assert!(searched.iter().any(|q| q.starts_with("Does cover fever risks in adults?")), "the identifier is taken out and the rest is sent: {searched:?}");
+        assert_eq!((v["plan"].as_str(), v["sub_questions"].as_array().unwrap().len()), (Some("continued"), 3), "{v}");
+        assert_eq!(sub_of(&v, "bleeding")["sub_question"], 1, "a claim takes the open sub-question its query was sent for: {v}");
+        let told = f.record.as_ref().unwrap().0.lock().unwrap().clone();
+        assert!(told.contains(&"planned continued 3".to_string()), "{told:?}");
         assert_balanced(&v);
     }
 
@@ -2943,7 +3263,7 @@ mod tests {
         f.record = Some(Told::default());
         // The record holds the two trusted pages: one as it still is, one that has changed since.
         let held = [("https://who.int/a".to_string(), "h:who text".to_string()), ("https://nih.gov/b".to_string(), "h:an older nih text".to_string())];
-        f.resume = Some(Resume { gaps: vec!["kb: kb_empty".into(), "trusted: no_results".into()], held: held.into_iter().collect(), note: None });
+        f.resume = Some(Resume { gaps: vec!["kb: kb_empty".into(), "trusted: no_results".into()], held: held.into_iter().collect(), ..Default::default() });
         let (_, v) = value(run_research(&ctx(Depth::Survey), "does aspirin reduce fever", Depth::Survey, &f.deps()).await.unwrap());
         let told = f.record.as_ref().unwrap().0.lock().unwrap().clone();
         assert_eq!(told[0], "plan trusted", "the plan is the gap's queries: {told:?}");

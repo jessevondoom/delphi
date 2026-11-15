@@ -41,6 +41,8 @@ pub const KEPT_OUTCOMES: [&str; 4] = ["added", "new_version", "unchanged", "kept
 const TEXT_CAP: usize = 300;
 /// Who made a run's plan (`Topic::planned`).
 pub const PLAN_KINDS: [&str; 3] = ["scout", "fixed", "continued"];
+/// Why a run stopped sending queries (`research_method::Stop`).
+pub const STOPS: [&str; 6] = ["covered", "no_new_claims", "step_budget", "page_budget", "no_more_queries", "plan_done"];
 /// The statuses a sub-question of a plan carries.
 pub const SUB_STATUSES: [&str; 3] = ["known", "partly", "open"];
 /// A plan has five sub-questions at most; a record keeps no more than this of whatever it is handed.
@@ -418,11 +420,17 @@ impl Topic {
 
     /// What a run that continues this topic starts from: the record's gaps and, for each page it holds, the content hash of what
     /// was read. A page with no hash is not listed, so it is read again.
+    ///
+    /// When the topic's newest run had a plan of sub-questions (`specs/114` §4), its gaps are the sub-questions it left
+    /// uncovered: they are handed over as `open`, for the continued run to search for each, and not as the fixed phrases that
+    /// choose among planned queries. They are read from `sub_questions`, which code wrote with each one's coverage, never parsed
+    /// out of a phrase.
     pub fn resume(&self, note: Option<&str>) -> Result<crate::research_run::Resume, String> {
         let rec = self.read()?;
-        let gaps = rec["gaps"].as_array().into_iter().flatten().filter_map(|g| g.as_str().map(String::from)).collect();
+        let open: Vec<String> = if matches!(rec["plan_kind"].as_str(), Some("scout" | "continued")) { open_sub_questions(&rec["sub_questions"]) } else { Vec::new() };
+        let gaps = if open.is_empty() { rec["gaps"].as_array().into_iter().flatten().filter_map(|g| g.as_str().map(String::from)).collect() } else { Vec::new() };
         let held = rec["pages"].as_array().into_iter().flatten().filter_map(|p| Some((p["url"].as_str()?.to_string(), p["content_hash"].as_str()?.to_string()))).collect();
-        Ok(crate::research_run::Resume { gaps, held, note: note.map(|n| clip(n.lines().next().unwrap_or("").trim(), NOTE_CAP)).filter(|n| !n.is_empty()) })
+        Ok(crate::research_run::Resume { gaps, held, note: note.map(|n| clip(n.lines().next().unwrap_or("").trim(), NOTE_CAP)).filter(|n| !n.is_empty()), open })
     }
 
     /// A continued run fetched a page the record holds and found it unchanged: counted on the run, and nothing else changes.
@@ -503,7 +511,17 @@ impl Topic {
                 if let Some(e) = error {
                     run["error"] = json!(clip(e, TEXT_CAP));
                 }
+                // Why the run stopped sending queries, and after how many rounds (`specs/114` §4 item 5): one of the fixed words.
+                if let Some(why) = result.and_then(|r| r["stopped"].as_str()).filter(|w| STOPS.contains(w)) {
+                    run["stopped"] = json!(why);
+                    run["rounds"] = json!(result.and_then(|r| r["rounds"].as_u64()).unwrap_or(0));
+                }
             });
+            // The plan's sub-questions as the run left them, each with its coverage: what the gaps are read from.
+            if let Some(r) = result.filter(|r| r["sub_questions"].is_array() && r["plan"].as_str().is_some_and(|k| PLAN_KINDS.contains(&k))) {
+                rec["plan_kind"] = r["plan"].clone();
+                rec["sub_questions"] = json!(r["sub_questions"].as_array().into_iter().flatten().take(SUBS_CAP).filter_map(sub_question).collect::<Vec<_>>());
+            }
             let total = |rec: &Value, k: &str| rec["runs"].as_array().map(|runs| runs.iter().filter_map(|r| r[k].as_u64()).sum::<u64>()).unwrap_or(0);
             rec["usage"] = json!({"steps": total(rec, "steps"), "check_steps": total(rec, "check_steps"), "ms": total(rec, "ms"), "tokens": null});
             if let Some(r) = result {
@@ -528,9 +546,21 @@ impl Topic {
     }
 }
 
-/// The gaps a run reports, read by code from its coverage report: each rung that was searched and found nothing (with the fixed
-/// reason the report gives), and thin coverage. Fixed phrases; no page or model text.
+/// The texts of the sub-questions in `subs` (a run's `sub_questions`, with coverage) that the run left uncovered.
+fn open_sub_questions(subs: &Value) -> Vec<String> {
+    subs.as_array().into_iter().flatten().filter(|q| q["covered"] == false).filter_map(|q| q["text"].as_str()).map(|t| clip(t, SUB_TEXT_CAP)).filter(|t| !t.is_empty()).take(SUBS_CAP).collect()
+}
+
+/// The gaps a run reports (`specs/114` §4): for a run that had a plan of sub-questions, the sub-questions it left uncovered,
+/// which is what a continued run searches for. They are the scout's words: data, like the question.
+///
+/// For a run on the fixed plan, which has no sub-questions, the gaps are read by code from its coverage report, as before:
+/// each rung that was searched and found nothing (with the fixed reason the report gives), and thin coverage. Fixed phrases;
+/// no page or model text.
 pub fn gaps_of(result: &Value, state: &str) -> Vec<String> {
+    if matches!(result["plan"].as_str(), Some("scout" | "continued")) {
+        return open_sub_questions(&result["sub_questions"]);
+    }
     let mut out = Vec::new();
     for r in result["coverage_report"]["rungs"].as_array().into_iter().flatten() {
         if let (Some(name), Some(reason), true) = (r["rung"].as_str(), r["reason"].as_str(), r["searched"] == true) {
@@ -961,6 +991,57 @@ mod tests {
         assert!(t.planned("model synthesis", &json!([])).is_err());
         t.plan(&[("trusted", "aspirin fever site:who.int"), ("sub", "aspirin fever dose")]).unwrap();
         assert_eq!(t.read().unwrap()["plan"][1], json!({"kind": "sub", "query": "aspirin fever dose"}));
+    }
+
+    /// `specs/114` §4: the gaps of a run that had a plan of sub-questions are the ones it left uncovered, and a run that continues
+    /// the topic is handed those to search for. A run on the fixed plan keeps the fixed phrases of before. The record says why the
+    /// run stopped, in one of the fixed words.
+    #[test]
+    fn a_planned_runs_gaps_are_its_uncovered_sub_questions_and_a_continued_run_is_handed_them() {
+        let ws = tempfile::tempdir().unwrap();
+        let t = Topic::begin(ws.path(), &begin("Does aspirin reduce fever?", "r-t-1")).unwrap();
+        let mut r = result("an answer");
+        r["plan"] = json!("scout");
+        r["stopped"] = json!("no_more_queries");
+        r["rounds"] = json!(2);
+        r["sub_questions"] = json!([
+            {"n": 1, "text": "What dose lowers a fever?", "status": "open", "covered": true, "claims": 2, "origins": 2},
+            {"n": 2, "text": "Is it safe for children?", "status": "partly", "covered": false, "claims": 1, "origins": 1},
+            {"n": 3, "text": "What are the risks?", "status": "open", "covered": false, "claims": 0, "origins": 0},
+        ]);
+        t.finish("r-t-1", "done", Some(&r), &[], None, 5).unwrap();
+        let rec = t.read().unwrap();
+        assert_eq!(rec["gaps"], json!(["Is it safe for children?", "What are the risks?"]), "the uncovered sub-questions, and no fixed phrase beside them: {rec}");
+        assert_eq!((rec["plan_kind"].as_str(), rec["sub_questions"][1].clone()), (Some("scout"), json!({"n": 2, "text": "Is it safe for children?", "status": "partly", "covered": false, "claims": 1, "origins": 1})));
+        assert_eq!((rec["runs"][0]["stopped"].as_str(), rec["runs"][0]["rounds"].as_u64()), (Some("no_more_queries"), Some(2)), "{rec}");
+        let resume = t.resume(Some("in adults")).unwrap();
+        assert_eq!(resume.open, ["Is it safe for children?", "What are the risks?"]);
+        assert!(resume.gaps.is_empty(), "sub-questions are searched for; they do not choose among the fixed queries: {:?}", resume.gaps);
+        assert_eq!(resume.note.as_deref(), Some("in adults"));
+
+        // A continued run that covers the rest leaves no gap, and the next run of the topic is a refresh as before.
+        t.continue_run(Asker::operator(), Depth::Survey, "r-t-2", None).unwrap();
+        r["plan"] = json!("continued");
+        r["stopped"] = json!("covered");
+        r["sub_questions"] = json!([{"n": 1, "text": "Is it safe for children?", "status": "open", "covered": true, "claims": 2, "origins": 2}, {"n": 2, "text": "What are the risks?", "status": "open", "covered": true, "claims": 2, "origins": 3}]);
+        t.finish("r-t-2", "done", Some(&r), &[], None, 5).unwrap();
+        let rec = t.read().unwrap();
+        assert_eq!((rec["gaps"].clone(), rec["plan_kind"].as_str(), rec["runs"][1]["stopped"].as_str()), (json!([]), Some("continued"), Some("covered")), "{rec}");
+        let resume = t.resume(None).unwrap();
+        assert!(resume.open.is_empty() && resume.gaps.is_empty());
+
+        // The fixed plan: the gaps are the fixed phrases read from the coverage report, and they are handed over as such.
+        let fixed = Topic::begin(ws.path(), &begin("Does ibuprofen reduce fever?", "r-f-1")).unwrap();
+        let mut r = result("another answer");
+        r["plan"] = json!("fixed");
+        r["stopped"] = json!("because the page said so");
+        r["sub_questions"] = json!([]);
+        fixed.finish("r-f-1", "done", Some(&r), &[], None, 5).unwrap();
+        let rec = fixed.read().unwrap();
+        assert!(rec["gaps"].as_array().unwrap().iter().any(|g| g == "kb: kb_empty") && rec["gaps"].as_array().unwrap().iter().any(|g| g.as_str().unwrap().starts_with("coverage is thin")), "{rec}");
+        assert!(rec["runs"][0].get("stopped").is_none(), "a word that is not one of the fixed ones is not written: {rec}");
+        let resume = fixed.resume(None).unwrap();
+        assert!(resume.open.is_empty() && resume.gaps.len() == 2, "{resume:?}");
     }
 
     /// §2.4: each step is on disk when it returns, the record is whole at every moment, and no temporary file is left behind.

@@ -608,6 +608,12 @@ impl Library for LiveLibrary {
         Some(crate::research_run::HeldPage { source_id, text })
     }
 
+    /// A host the validator's source lists class as primary (`[validator.sources]`), for the order results are read in
+    /// (`specs/114` §4 item 6). Without the keep step's rules nothing is primary. It changes no status and keeps nothing.
+    fn is_primary(&self, url: &str) -> bool {
+        self.keep.rules.as_ref().is_some_and(|r| r.classes.classify(url).class == crate::fact_sources::Class::Primary)
+    }
+
     /// The citation the corroboration count reads for a source this run captured: the same description the library gives a claim's
     /// anchor (`Library::cites_of`), taken as of now, with the trusted-list entry frozen when the page was captured.
     fn cite_info(&self, source_id: &str, claim_text: &str) -> Option<crate::corroboration::Cite> {
@@ -1219,6 +1225,11 @@ mod tests {
             m.as_object_mut().unwrap().remove("last_checked");
             m.as_object_mut().unwrap().remove("retrieved");
         }), "a record that does not say when it was checked");
+        // `specs/114` §4 item 6: the reading order asks whether a host is primary by the validator's lists; without the keep
+        // step's rules nothing is.
+        assert!(lib.is_primary("https://www.rfc-editor.org/rfc/rfc2324") && !lib.is_primary("https://listed-weak.example/x") && !lib.is_primary("not a url"));
+        let bare = LiveLibrary { home: home.path().to_path_buf(), ledger: home.path().join("l.jsonl"), label: "t".into(), retractions: crate::retractions::Policy::off(), held: None, topic: None, project: None, keep: Default::default() };
+        assert!(!bare.is_primary("https://www.rfc-editor.org/rfc/rfc2324"));
         assert_eq!(l.checked_age(&wiki, now + 3 * 86_400), Some((3, true)));
         assert_eq!(l.checked_age(&wiki, now + 40 * 86_400), Some((40, false)));
     }

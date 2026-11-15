@@ -294,6 +294,195 @@ pub fn subs_json(subs: &[SubQuestion]) -> Value {
 pub fn subs_for_tagging(subs: &[SubQuestion]) -> String {
     subs.iter().map(|q| format!("{}. {}\n", q.n, clip(&q.text, SUB_TEXT))).collect()
 }
+
+// ── coverage, queries from the gaps, stopping, reading order (`specs/114` §4 items 3 to 7) ─────────────────────────────────────
+
+/// A sub-question is covered when the claims tagged to it are stated by this many origins.
+pub const COVER_ORIGINS: usize = 2;
+
+/// How far one sub-question is answered by the claims kept so far.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Coverage {
+    /// Kept claims tagged to it.
+    pub claims: usize,
+    /// Distinct origins those claims' sources are on.
+    pub origins: usize,
+    pub covered: bool,
+}
+
+/// Coverage of each sub-question, in the plan's order, recomputed by code after every round (`specs/114` §4 item 3). `tagged` is
+/// one entry per kept claim: the sub-question it is tagged to and the origins (hosts) of the sources that state it. A sub-question
+/// is covered when the claims tagged to it are stated by at least [`COVER_ORIGINS`] origins: two claims from two origins, or one
+/// claim that two origins state (the runner merges a claim found twice into one, so the origins are what is counted). One the
+/// plan marked `known` is covered by what is held and is not searched.
+pub fn coverage(subs: &[SubQuestion], tagged: &[(usize, Vec<String>)]) -> Vec<Coverage> {
+    subs.iter()
+        .map(|q| {
+            let mine: Vec<&(usize, Vec<String>)> = tagged.iter().filter(|(n, _)| *n == q.n).collect();
+            let origins: std::collections::BTreeSet<&str> = mine.iter().flat_map(|(_, o)| o.iter().map(String::as_str)).filter(|o| !o.is_empty()).collect();
+            Coverage { claims: mine.len(), origins: origins.len(), covered: q.status == SubStatus::Known || origins.len() >= COVER_ORIGINS }
+        })
+        .collect()
+}
+
+/// The sub-questions with their coverage, as the result and the record list them when a run ends.
+pub fn subs_report(subs: &[SubQuestion], cov: &[Coverage]) -> Value {
+    Value::Array(subs.iter().zip(cov).map(|(q, c)| json!({"n": q.n, "text": clip(&q.text, SUB_TEXT), "status": q.status.as_str(), "covered": c.covered, "claims": c.claims, "origins": c.origins})).collect())
+}
+
+/// What one sub-question has been asked so far. The runner keeps one per sub-question.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Asked {
+    /// The queries chosen for it, as they were chosen (before cleaning).
+    pub sent: Vec<String>,
+    /// It has had its query for a second origin.
+    pub second_origin: bool,
+    /// It has had its one rewording.
+    pub reworded: bool,
+}
+
+/// Why a round's query for a sub-question is the one it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Why {
+    /// The plan's first query for it (or its own words, when the plan gave none).
+    Planned,
+    /// It has claims from one origin only: the query asks for a second.
+    SecondOrigin,
+    /// It has no claim: the query is reworded, once.
+    Reworded,
+}
+
+/// The next query for a sub-question that is still uncovered (`specs/114` §4 item 4), or `None` when it is covered or has had
+/// every query it gets. In order: its first query; then, with claims from one origin only, one query for a second origin (the
+/// first query again, without the host that already answered: `origin`); with no claim, one rewording (the plan's second query,
+/// or the sub-question's own content words). So a sub-question is asked at most three times. The text is the scout's or built
+/// from the scout's words: the runner cleans and guards it like the question before it is sent.
+pub fn next_query(sub: &SubQuestion, cov: &Coverage, asked: &mut Asked, origin: Option<&str>) -> Option<(String, Why)> {
+    if cov.covered {
+        return None;
+    }
+    let unused = |asked: &Asked| sub.queries.iter().find(|q| !asked.sent.iter().any(|s| s.eq_ignore_ascii_case(q))).cloned();
+    let (text, why) = if asked.sent.is_empty() {
+        (unused(asked).unwrap_or_else(|| sub.text.clone()), Why::Planned)
+    } else if cov.origins == 1 {
+        if asked.second_origin {
+            return None;
+        }
+        asked.second_origin = true;
+        let host = origin.map(str::trim).filter(|h| !h.is_empty() && !h.contains(char::is_whitespace))?;
+        (format!("{} -site:{}", asked.sent[0], host), Why::SecondOrigin)
+    } else {
+        if asked.reworded {
+            return None;
+        }
+        asked.reworded = true;
+        let own = content_words(&sub.text).join(" ");
+        let reworded = unused(asked).or_else(|| (!own.is_empty() && !asked.sent.iter().any(|s| s.eq_ignore_ascii_case(&own))).then_some(own))?;
+        (reworded, Why::Reworded)
+    };
+    asked.sent.push(text.clone());
+    Some((text, why))
+}
+
+/// Why a run stopped sending queries (`specs/114` §4 item 5). The record and the result say which.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stop {
+    /// Every sub-question is covered.
+    Covered,
+    /// Two rounds in a row added no claim.
+    NoNewClaims,
+    /// The step budget of the run's depth ran out.
+    StepBudget,
+    /// The page cap of the run's depth was reached.
+    PageBudget,
+    /// Every uncovered sub-question has had every query it gets.
+    NoMoreQueries,
+    /// The fixed plan has no sub-questions: its queries were sent and that is all.
+    PlanDone,
+}
+
+impl Stop {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Stop::Covered => "covered",
+            Stop::NoNewClaims => "no_new_claims",
+            Stop::StepBudget => "step_budget",
+            Stop::PageBudget => "page_budget",
+            Stop::NoMoreQueries => "no_more_queries",
+            Stop::PlanDone => "plan_done",
+        }
+    }
+}
+
+/// The group a search result is read in (`specs/114` §4 item 6): 0 trusted and primary, 1 trusted, 2 on a host a kept claim's
+/// source is already on, 3 the rest.
+pub fn read_class(trusted: bool, primary: bool, cited: bool) -> u8 {
+    match (trusted, primary, cited) {
+        (true, true, _) => 0,
+        (true, false, _) => 1,
+        (false, _, true) => 2,
+        (false, _, false) => 3,
+    }
+}
+
+/// The date an address states in its path, as `yyyymmdd` (a part the path does not give is 00): `/2024/05/17/`, `/2024/05/`,
+/// `/2024-05-17-title`, `/20240517/`. `None` when the path names no year from 1990 to 2099. A search result carries no date of
+/// its own, so this is the only date the reading order knows.
+pub fn url_date(url: &str) -> Option<u32> {
+    let path = url.split("://").nth(1)?.split_once('/')?.1.split(['?', '#']).next()?;
+    let num = |s: &str, lo: u32, hi: u32| -> Option<u32> { (!s.is_empty() && s.len() <= 4 && s.bytes().all(|b| b.is_ascii_digit())).then(|| s.parse::<u32>().ok()).flatten().filter(|n| (lo..=hi).contains(n)) };
+    let parts: Vec<&str> = path.split('/').collect();
+    for (i, part) in parts.iter().enumerate() {
+        // `2024-05-17…` or `20240517`
+        let digits: String = part.chars().take_while(|c| c.is_ascii_digit() || *c == '-').collect();
+        let fields: Vec<&str> = digits.split('-').filter(|f| !f.is_empty()).collect();
+        if let [y, m, d, ..] = fields.as_slice() {
+            if let (Some(y), Some(m), Some(d)) = (num(y, 1990, 2099).filter(|_| y.len() == 4), num(m, 1, 12), num(d, 1, 31)) {
+                return Some(y * 10_000 + m * 100 + d);
+            }
+        }
+        if part.len() == 8 && part.bytes().all(|b| b.is_ascii_digit()) {
+            if let (Some(y), Some(m), Some(d)) = (num(&part[..4], 1990, 2099), num(&part[4..6], 1, 12), num(&part[6..], 1, 31)) {
+                return Some(y * 10_000 + m * 100 + d);
+            }
+        }
+        // `/2024/05/17/`, `/2024/05/`, `/2024/`
+        if part.len() == 4 {
+            if let Some(y) = num(part, 1990, 2099) {
+                let m = parts.get(i + 1).and_then(|p| num(p, 1, 12).filter(|_| p.len() <= 2));
+                let d = m.and_then(|_| parts.get(i + 2)).and_then(|p| num(p, 1, 31).filter(|_| p.len() <= 2));
+                return Some(y * 10_000 + m.unwrap_or(0) * 100 + d.unwrap_or(0));
+            }
+        }
+    }
+    None
+}
+
+/// One search's results in the order they are read (`specs/114` §4 item 6): by group ([`read_class`]), each group in the order
+/// the provider gave, except that the results of a group whose date is known are read newer first among themselves; a result
+/// with no known date keeps its place.
+pub fn reading_order<T>(rows: Vec<T>, class: impl Fn(&T) -> u8, date: impl Fn(&T) -> Option<u32>) -> Vec<T> {
+    let mut keyed: Vec<(u8, Option<u32>, T)> = rows.into_iter().map(|r| (class(&r), date(&r), r)).collect();
+    keyed.sort_by_key(|(c, _, _)| *c);
+    let n = keyed.len();
+    let mut order: Vec<usize> = (0..n).collect();
+    let mut start = 0;
+    while start < n {
+        let mut end = start;
+        while end < n && keyed[end].0 == keyed[start].0 {
+            end += 1;
+        }
+        let slots: Vec<usize> = (start..end).filter(|i| keyed[*i].1.is_some()).collect();
+        let mut newest_first = slots.clone();
+        newest_first.sort_by(|a, b| keyed[*b].1.cmp(&keyed[*a].1));
+        for (slot, from) in slots.iter().zip(newest_first) {
+            order[*slot] = from;
+        }
+        start = end;
+    }
+    let mut items: Vec<Option<T>> = keyed.into_iter().map(|(_, _, r)| Some(r)).collect();
+    order.into_iter().filter_map(|i| items[i].take()).collect()
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -390,6 +579,110 @@ mod tests {
         assert_eq!(subs_json(&parse_plan(raw, &held()).unwrap())[1], json!({"n": 2, "text": "What do quollfish eat?", "status": "partly"}));
         assert_eq!(subs_for_tagging(&parse_plan(&many, &Known::default()).unwrap()), "1. part 1\n2. part 2\n3. part 3\n4. part 4\n5. part 5\n");
         assert_eq!((PlanKind::Scout.as_str(), PlanKind::Fixed.as_str(), PlanKind::Continued.as_str()), ("scout", "fixed", "continued"));
+    }
+
+    fn part(n: usize, status: SubStatus, queries: &[&str]) -> SubQuestion {
+        SubQuestion { n, text: format!("What is part {n} of the quollfish question?"), status, queries: queries.iter().map(|q| q.to_string()).collect() }
+    }
+
+    fn from(sub: usize, origins: &[&str]) -> (usize, Vec<String>) {
+        (sub, origins.iter().map(|o| o.to_string()).collect())
+    }
+
+    // specs/114 §4 item 3: a sub-question is covered by claims that two origins state. Two claims on one origin do not cover it,
+    // a claim tagged to another sub-question counts for that one only, and one the plan marked known is covered by what is held.
+    #[test]
+    fn a_sub_question_is_covered_by_claims_from_two_origins() {
+        let subs = [part(1, SubStatus::Open, &[]), part(2, SubStatus::Open, &[]), part(3, SubStatus::Partly, &[]), part(4, SubStatus::Known, &[]), part(5, SubStatus::Open, &[])];
+        let tagged = [from(1, &["a.example"]), from(1, &["b.example"]), from(2, &["a.example"]), from(2, &["a.example"]), from(3, &["a.example", "c.example"]), from(0, &["x.example", "y.example"]), from(9, &["x.example", "y.example"]), from(5, &[""])];
+        let cov = coverage(&subs, &tagged);
+        assert_eq!(cov[0], Coverage { claims: 2, origins: 2, covered: true }, "two claims from two origins");
+        assert_eq!(cov[1], Coverage { claims: 2, origins: 1, covered: false }, "two claims on one origin are one origin");
+        assert_eq!(cov[2], Coverage { claims: 1, origins: 2, covered: true }, "one claim that two origins state");
+        assert_eq!(cov[3], Coverage { claims: 0, origins: 0, covered: true }, "marked known by the plan");
+        assert_eq!(cov[4], Coverage { claims: 1, origins: 0, covered: false }, "a claim with no origin covers nothing");
+        assert_eq!(subs_report(&subs, &cov)[1], json!({"n": 2, "text": "What is part 2 of the quollfish question?", "status": "open", "covered": false, "claims": 2, "origins": 1}));
+    }
+
+    // specs/114 §4 item 4: an uncovered sub-question is asked its first query, then, with one origin, once for a second origin,
+    // or, with no claim, once reworded; then nothing more. A covered one is asked nothing.
+    #[test]
+    fn the_next_query_comes_from_what_a_sub_question_still_lacks() {
+        let none = Coverage { claims: 0, origins: 0, covered: false };
+        let one = Coverage { claims: 1, origins: 1, covered: false };
+        let done = Coverage { claims: 2, origins: 2, covered: true };
+        // No claim: the first query, then the plan's second as the rewording, then nothing.
+        let two = part(1, SubStatus::Open, &["quollfish diet", "what quollfish eat"]);
+        let mut asked = Asked::default();
+        assert_eq!(next_query(&two, &none, &mut asked, None), Some(("quollfish diet".into(), Why::Planned)));
+        assert_eq!(next_query(&two, &none, &mut asked, None), Some(("what quollfish eat".into(), Why::Reworded)));
+        assert_eq!(next_query(&two, &none, &mut asked, None), None, "reworded once");
+        // One origin: a query for a second, naming the host that already answered, once.
+        let mut asked = Asked::default();
+        assert_eq!(next_query(&two, &none, &mut asked, None).unwrap().1, Why::Planned);
+        assert_eq!(next_query(&two, &one, &mut asked, Some("fish.example")), Some(("quollfish diet -site:fish.example".into(), Why::SecondOrigin)));
+        assert_eq!(next_query(&two, &one, &mut asked, Some("fish.example")), None, "asked for a second origin once");
+        // After its second-origin query it may still lose every claim's origin count? No: with no claim it gets its one rewording.
+        assert_eq!(next_query(&two, &none, &mut asked, None), Some(("what quollfish eat".into(), Why::Reworded)));
+        assert_eq!(next_query(&two, &none, &mut asked, None), None);
+        // A plan that gave one query: the rewording is the sub-question's own content words; one that gave none starts with them.
+        let single = part(2, SubStatus::Open, &["quollfish tank size"]);
+        let mut asked = Asked::default();
+        next_query(&single, &none, &mut asked, None);
+        assert_eq!(next_query(&single, &none, &mut asked, None), Some(("part quollfish question".into(), Why::Reworded)));
+        let bare = part(3, SubStatus::Open, &[]);
+        let mut asked = Asked::default();
+        assert_eq!(next_query(&bare, &none, &mut asked, None), Some(("What is part 3 of the quollfish question?".into(), Why::Planned)));
+        assert_eq!(next_query(&bare, &none, &mut asked, None), Some(("part quollfish question".into(), Why::Reworded)));
+        // Covered: nothing, whatever was asked.
+        assert_eq!(next_query(&two, &done, &mut Asked::default(), None), None);
+        // A host that is not one word is never put in a query.
+        let mut asked = Asked { sent: vec!["quollfish diet".into()], ..Default::default() };
+        assert_eq!(next_query(&two, &one, &mut asked, Some("evil.example OR secret")), None);
+        assert_eq!([Stop::Covered, Stop::NoNewClaims, Stop::StepBudget, Stop::PageBudget, Stop::NoMoreQueries, Stop::PlanDone].map(Stop::as_str), ["covered", "no_new_claims", "step_budget", "page_budget", "no_more_queries", "plan_done"]);
+    }
+
+    // specs/114 §4 item 6: trusted and primary, then trusted, then a host a kept claim's source is on, then the rest; within a
+    // group the provider's order, except that results whose date is known are read newer first among themselves.
+    #[test]
+    fn results_are_read_trusted_and_primary_first_and_newer_first_where_the_date_is_known() {
+        assert_eq!([read_class(true, true, false), read_class(true, false, true), read_class(false, true, true), read_class(false, false, false)], [0, 1, 2, 3]);
+        assert_eq!(url_date("https://news.example/2024/05/17/aspirin"), Some(20240517));
+        assert_eq!(url_date("https://news.example/2023/11/"), Some(20231100));
+        assert_eq!(url_date("https://news.example/archive/2019/"), Some(20190000));
+        assert_eq!(url_date("https://blog.example/2022-03-09-fever-notes?x=2031-01-01"), Some(20220309));
+        assert_eq!(url_date("https://blog.example/posts/20210704/"), Some(20210704));
+        for undated in ["https://who.int/a", "https://shop.example/item/1234", "https://x.example/1850/01/", "https://x.example/2024/13/40", "not a url", "https://2024.example/"] {
+            assert!(url_date(undated).is_none_or(|d| d == 20240000 && undated.contains("/2024/13")), "{undated}: {:?}", url_date(undated));
+        }
+        // (url, trusted, primary, cited)
+        let rows = vec![
+            ("https://rest.example/2020/01/a", false, false, false),
+            ("https://cited.example/b", false, false, true),
+            ("https://trusted.example/2021/06/c", true, false, false),
+            ("https://rest.example/d", false, false, false),
+            ("https://primary.example/e", true, true, false),
+            ("https://trusted.example/2024/02/f", true, false, false),
+            ("https://rest.example/2025/03/g", false, false, false),
+            ("https://trusted.example/h", true, false, false),
+        ];
+        let read: Vec<&str> = reading_order(rows, |r| read_class(r.1, r.2, r.3), |r| url_date(r.0)).into_iter().map(|r| r.0).collect();
+        assert_eq!(
+            read,
+            [
+                "https://primary.example/e",
+                // trusted: the two dated ones swap, newer first; the undated one keeps its place after them
+                "https://trusted.example/2024/02/f",
+                "https://trusted.example/2021/06/c",
+                "https://trusted.example/h",
+                "https://cited.example/b",
+                // the rest: 2025 before 2020 in the dated slots, the undated one where it was
+                "https://rest.example/2025/03/g",
+                "https://rest.example/d",
+                "https://rest.example/2020/01/a",
+            ]
+        );
+        assert!(reading_order(Vec::<u8>::new(), |_| 0, |_| None).is_empty());
     }
     #[test]
     fn what_is_known_is_capped_and_holds_one_clean_line_each() {
