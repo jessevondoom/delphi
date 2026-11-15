@@ -610,7 +610,7 @@ mod tests {
         let db = f.ws.join("local/state.db");
         // A mission of project B: its span's start passages.
         put(delphi_core::sessions::dir(&f.ws, "m-beta").join("scope"), B);
-        let start = crate::retrieval::span_start(&f.home, &db, "m-beta", "Where is the dunnartkey kept under the third stone?", "builder", crate::retrieval::StartBudget { passages: 6, chars: 4000 }, false);
+        let start = crate::retrieval::span_start(&f.home, &db, "m-beta", "Where is the dunnartkey kept under the third stone?", "builder", crate::retrieval::StartBudget { passages: 6, chars: 4000, ..Default::default() }, false);
         assert!(start.is_none_or(|s| !s.text.contains("dunnartkey")), "a span of B starts with nothing of A's");
         // The same question as an agent's `kb_search` asks it (a role, nothing untrusted, findings scoped to B).
         let kb = Kb::open_readonly(&db).unwrap();

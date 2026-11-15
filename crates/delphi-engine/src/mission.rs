@@ -162,6 +162,8 @@ pub struct MissionState {
     stager: Mutex<crate::learn::Stager>,
     /// The project-history tap (`specs/102` S3): absent until the daemon sets it, and dormant while `[history] enabled` is off.
     history: Mutex<Option<Arc<crate::history_record::Tap>>>,
+    /// The provisional tier (`specs/116` §2): absent until the daemon sets it, and dormant while `[memory] provisional` is off.
+    notes: Mutex<Option<Arc<crate::provisional_notes::Tap>>>,
     /// One episode harvest at a time per mission, so the per-mission quota holds (`specs/108` M4).
     harvest_gate: Arc<Mutex<()>>,
     /// Harvests started and not yet finished.
@@ -212,6 +214,7 @@ impl MissionState {
             held: Mutex::new(std::collections::HashMap::new()),
             stager: Mutex::new(crate::learn::Stager::replay(crate::learn::LearningSettings::default(), &events)),
             history: Mutex::new(None),
+            notes: Mutex::new(None),
             harvest_gate: Arc::new(Mutex::new(())),
             harvest_pending: Arc::new(AtomicU64::new(0)),
         }))
@@ -224,6 +227,48 @@ impl MissionState {
 
     fn history_tap(&self) -> Option<Arc<crate::history_record::Tap>> {
         self.history.lock().unwrap().clone()
+    }
+
+    /// Install the provisional tier's tap (`specs/116` §2). Without one, or with `[memory] provisional` off, a note stages as it
+    /// did before the tier and no file is written.
+    pub fn set_provisional_notes(&self, tap: crate::provisional_notes::Tap) {
+        *self.notes.lock().unwrap() = Some(Arc::new(tap));
+    }
+
+    fn notes_tap(&self) -> Option<Arc<crate::provisional_notes::Tap>> {
+        self.notes.lock().unwrap().clone().filter(|t| t.on())
+    }
+
+    /// Keep the notes just staged in the provisional tier, and record each one kept (`learn.provisional`) under the same gate.
+    /// The file write is off the async path; a failure keeps nothing and the note stays staged.
+    async fn keep_provisional(&self, staged: Vec<EventEnvelope>) -> Result<(), EngineError> {
+        // (The switch is a file read, so it is asked only when a note was staged.)
+        if staged.is_empty() {
+            return Ok(());
+        }
+        let Some(tap) = self.notes_tap() else { return Ok(()) };
+        let dir = self.dir.clone();
+        let kept = tokio::task::spawn_blocking(move || tap.keep_staged(&dir, &staged)).await.map_err(|e| EngineError::Join(e.to_string()))?;
+        if kept.is_empty() {
+            return Ok(());
+        }
+        let stored = self.write_and_apply(kept).await?;
+        let mut stager = self.stager.lock().unwrap();
+        for e in &stored {
+            stager.observe(e);
+        }
+        Ok(())
+    }
+
+    /// Count the uses a finished task earned for the notes its spans retrieved (`specs/116` §2 item 6), off the task's path.
+    fn count_note_uses(&self, task: String) {
+        let Some(tap) = self.notes_tap() else { return };
+        let dir = self.dir.clone();
+        let run = move || tap.task_ended(&dir, &task);
+        match tokio::runtime::Handle::try_current() {
+            Ok(h) => drop(h.spawn_blocking(run)),
+            Err(_) => run(),
+        }
     }
 
     /// The daemon saw an operator start a task with this prompt (`Engine::start_task`).
@@ -326,9 +371,10 @@ impl MissionState {
             let mut stager = self.stager.lock().unwrap();
             stored.iter().flat_map(|e| stager.observe(e)).map(|c| self.capture_event(c)).collect()
         };
-        if !learned.is_empty() {
-            self.write_and_apply(learned).await?;
-        }
+        let learned = if learned.is_empty() { learned } else { self.write_and_apply(learned).await? };
+        // The provisional tier (`specs/116` §2): a note staged just now, by the capture above or by a host (`host_stage` appends its
+        // own `learn.staged`), is also kept as a file when the tier takes its trigger.
+        self.keep_provisional(stored.iter().chain(&learned).filter(|e| e.kind == "learn.staged").cloned().collect()).await?;
         // The project history (`specs/102` S3): a trigger the daemon observed concludes the operator's prompt. Dormant unless
         // `[history] enabled`; a failure to write a record never fails the mission (the tap reports it and moves on).
         if let Some(tap) = self.history_tap() {
@@ -338,6 +384,9 @@ impl MissionState {
         for e in &stored {
             if matches!(e.kind.as_str(), "task.completed" | "task.failed" | "task.cancelled") {
                 if let Some(task) = e.task_id.clone() {
+                    if e.kind == "task.completed" {
+                        self.count_note_uses(task.clone());
+                    }
                     self.harvest_episode(task);
                 }
             }

@@ -593,6 +593,8 @@ pub struct Config {
     pub retrieval: RetrievalConfig,
     /// `[projects]`: research recall across the workspace's projects (`specs/115` §2).
     pub projects: ProjectsConfig,
+    /// `[memory]`: the provisional tier and the digest's daily limit (`specs/116` §2 item 7, §3 item 4).
+    pub memory: MemoryConfig,
     /// `[agents]`: operator direct interaction, fleet accessibility, and quarantine (`specs/063` §3.1).
     pub agents: AgentsConfig,
     /// `[host.models.<host>]`: the model name each council role's subagent file asks for on a host that takes free names (`specs/086` §6.3).
@@ -725,6 +727,39 @@ pub const RESEARCH_SHARING: [&str; 2] = ["project", "workspace"];
 impl Default for ProjectsConfig {
     fn default() -> ProjectsConfig {
         ProjectsConfig { research_sharing: "workspace".into(), own_project_boost: 0.001 }
+    }
+}
+
+/// `[memory]` (`specs/116` §2 item 7, §3 item 4). `provisional`: an agent's note is kept in the provisional tier, where a later span
+/// of the same role may retrieve it as an unreviewed passage of data; off, a note stages as it did before the tier. On by default
+/// (the operator, 2026-11-14). `digest_daily`: how many items the digest shows a day (10 by default, at most 100; zero shows none).
+/// Neither key loads anything into a system prompt.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MemoryConfig {
+    pub provisional: bool,
+    pub digest_daily: usize,
+}
+
+/// The most `[memory] digest_daily` may be.
+pub const MAX_DIGEST_DAILY: usize = 100;
+
+impl Default for MemoryConfig {
+    fn default() -> MemoryConfig {
+        MemoryConfig { provisional: true, digest_daily: 10 }
+    }
+}
+
+impl MemoryConfig {
+    /// The `[memory]` settings in a `config.toml`'s text, or `None` when they cannot be read as written or are out of range. The
+    /// daemon reads the file at each use, so turning the tier off takes effect at once; `None` is treated as off (fail closed).
+    pub fn read(text: &str) -> Option<MemoryConfig> {
+        let root = toml::from_str::<toml::Value>(text).ok()?;
+        let c = match root.get("memory") {
+            None => MemoryConfig::default(),
+            Some(v) => v.clone().try_into::<MemoryConfig>().ok()?,
+        };
+        (c.digest_daily <= MAX_DIGEST_DAILY).then_some(c)
     }
 }
 
@@ -1145,6 +1180,13 @@ impl Config {
                 Ok(v) if !(v.own_project_boost.is_finite() && (0.0..=MAX_OWN_PROJECT_BOOST).contains(&v.own_project_boost)) => errs.push(format!("[projects] own_project_boost: a number from 0 to {} (specs/115 §3)", MAX_OWN_PROJECT_BOOST)),
                 Ok(v) => cfg.projects = v,
                 Err(e) => errs.push(format!("[projects]: {}", e)),
+            }
+        }
+        if let Some(v) = root.get("memory") {
+            match v.clone().try_into::<MemoryConfig>() {
+                Ok(v) if v.digest_daily > MAX_DIGEST_DAILY => errs.push(format!("[memory]: digest_daily is at most {} (specs/116 §3 item 4)", MAX_DIGEST_DAILY)),
+                Ok(v) => cfg.memory = v,
+                Err(e) => errs.push(format!("[memory]: {}", e)),
             }
         }
         if let Some(v) = root.get("host") {
@@ -1753,6 +1795,23 @@ pub(crate) mod tests {
         for bad in ["start_passages = 11", "start_chars = 16001", "start_passages = -1", "start_pasages = 3"] {
             assert!(Config::parse(&format!("[retrieval]\n{bad}\n")).is_err(), "{bad}");
         }
+    }
+
+    /// `specs/116` §2 item 7 and §3 item 4: the provisional tier is on unless the operator turns it off, and the digest shows ten a day.
+    #[test]
+    fn the_provisional_tier_is_on_by_default_and_the_digest_limit_is_ten_and_bounded() {
+        let d = Config::parse("").unwrap().memory;
+        assert_eq!((d.provisional, d.digest_daily), (true, 10));
+        let set = Config::parse("[memory]\nprovisional = false\ndigest_daily = 25\n").unwrap().memory;
+        assert_eq!((set.provisional, set.digest_daily), (false, 25));
+        assert_eq!(Config::parse("[memory]\ndigest_daily = 0\n").unwrap().memory.digest_daily, 0, "zero shows none");
+        for bad in ["provisional = \"yes\"", "digest_daily = 101", "digest_daily = -1", "provisonal = true"] {
+            assert!(Config::parse(&format!("[memory]\n{bad}\n")).is_err(), "{bad}");
+            assert!(MemoryConfig::read(&format!("[memory]\n{bad}\n")).is_none(), "the daemon's own read fails closed: {bad}");
+        }
+        assert!(MemoryConfig::read("").unwrap().provisional && MemoryConfig::read("[mcp]\nenabled = true\n").unwrap().provisional);
+        assert!(!MemoryConfig::read("[memory]\nprovisional = false\n").unwrap().provisional);
+        assert!(MemoryConfig::read("not toml [").is_none());
     }
 
     #[test]

@@ -143,7 +143,9 @@ pub fn recall(ws_dir: &Path, caller: &Caller, project: Option<&str>, ask: &Ask) 
     }
     let mut sessions: Vec<Session> = Vec::new();
     for (name, _dir, events) in &candidates {
-        let live = crate::learn::live_notes(name, events);
+        // A session's notes are recalled whether they are staged or kept in the provisional tier (`specs/116` §2); one the operator
+        // marked wrong or kept, or that expired, is no longer recalled.
+        let live = crate::learn::live_notes_anywhere(ws_dir, name, events);
         let staged = |id: &str| events.iter().rev().find(|e| e.kind == "learn.staged" && e.payload["id"].as_str() == Some(id));
         let summary_note = live.iter().rev().find(|n| n.trigger == "host_summary");
         let summary = summary_note.map(|n| {

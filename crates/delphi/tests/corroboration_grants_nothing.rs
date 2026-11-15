@@ -859,6 +859,9 @@ fn the_private_read_mark_is_named_only_where_it_is_set_observed_cleared_and_show
         "crates/delphi-engine/src/merge_class.rs",
         // spec 108 M1: recall reads a session's mark only to leave everything of a marked session out; it only withholds
         "crates/delphi-engine/src/host_recall.rs",
+        // spec 116 G1: the provisional tier reads a session's or a task's mark only to keep none of its notes where a later span could
+        // be given them (they stay staged); it only withholds
+        "crates/delphi-engine/src/provisional_notes.rs",
         "crates/delphi/src/doctor.rs",
         "crates/delphi/src/private_read_cmd.rs",
         "crates/delphi/src/main.rs",

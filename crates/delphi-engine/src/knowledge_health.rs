@@ -157,7 +157,8 @@ pub fn gather(home: &Path, ws_dir: &Path, now: i64) -> Health {
     }
     let provisional = ws_dir.join("local/memory/provisional");
     if provisional.is_dir() {
-        let notes = files_under(&provisional, ".md", &["expired", "rejected"]);
+        // The shelves a note leaves the tier for (`provisional_notes::SHELVES`: expired, rejected, kept) do not wait.
+        let notes = files_under(&provisional, ".md", &crate::provisional_notes::SHELVES);
         h.provisional = Some((notes.len(), notes.iter().min().map(|t| day_of(*t))));
     }
     h

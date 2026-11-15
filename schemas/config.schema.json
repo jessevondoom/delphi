@@ -400,6 +400,15 @@
         "own_project_boost": { "type": "number", "minimum": 0, "maximum": 0.1, "default": 0.001, "description": "Added to the score of a result of the session's own project, so it ranks ahead of another project's research at equal score (specs/115 section 3)." }
       }
     },
+    "memory": {
+      "type": "object",
+      "description": "Memory that grows (specs/116 sections 2 and 3): the provisional tier and the digest's daily limit. Neither key loads anything into a system prompt.",
+      "additionalProperties": false,
+      "properties": {
+        "provisional": { "type": "boolean", "default": true, "description": "An agent's note is kept in the provisional tier (local/memory/provisional/<role>/), where a later span of the same role may be given it as a passage of data labelled unreviewed; a note written after reading untrusted content, or by a host, is never given automatically. false: notes stage as before and no provisional note is kept, indexed or retrieved. Read at each use, so it takes effect at once; a config.toml that cannot be read as written also turns it off." },
+        "digest_daily": { "type": "integer", "minimum": 0, "maximum": 100, "default": 10, "description": "How many items the digest shows a day (specs/116 section 3 item 4). 0 shows none." }
+      }
+    },
     "hooks": { "type": "object", "description": "`[[hooks.observe]]` and `[[hooks.deny]]` (specs/018): commands that can only watch or refuse." }
   },
   "additionalProperties": true,

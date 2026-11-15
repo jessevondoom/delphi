@@ -144,6 +144,7 @@ pub mod progress;
 pub mod quota;
 pub mod probe;
 pub mod provisional;
+pub mod provisional_notes;
 pub mod decision_model;
 pub mod digest;
 pub mod digest_review;

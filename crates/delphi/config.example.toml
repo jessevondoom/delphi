@@ -220,6 +220,16 @@ sandbox = "off"
 # research_sharing = "workspace"     # workspace (default): a session may read the research of this workspace's other projects, labelled with the project, and nothing else of them. project: a project's research stays in that project. `delphi project private <name> on` keeps one project out either way
 # own_project_boost = 0.001          # added to the score of a result of the session's own project, so it ranks ahead of another project's at equal score (0 to 0.1)
 
+# Memory that grows (specs/116 sections 2 and 3). A note an agent keeps (the `note` tool, a host's propose_note or session summary, a
+# capture on contact) is also filed under local/memory/provisional/<role>/. It is never an instruction and never part of a system prompt:
+# a later span of the same role may be given it as a passage of data labelled "unreviewed note by <role>, <date>" (at most two of the
+# passages it starts with), any role may be given a note of kind `fact`, and a note written after reading untrusted content, or by a
+# host, is never given automatically. A note expires after 30 days (three uses extend it once by 90); you promote one with
+# `delphi learn keep` and reject one with `delphi learn wrong`.
+# [memory]
+# provisional = true                 # false: notes stage as before and no provisional note is kept, indexed or retrieved; read at each use
+# digest_daily = 10                  # items the digest shows a day (0 to 100)
+
 # Fact validator (specs/040 section 15.1). off: no fetch of any kind. advisory (default): the full fact path as a dry run; it uses the
 # network, records what it would ratify and writes nothing validated. ratify: real writes, allowed only while the daemon's latch and the
 # PROMOTE conditions permit; the effective mode is the lower of this value and the latch.

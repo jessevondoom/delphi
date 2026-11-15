@@ -488,6 +488,8 @@ pub fn sources(ws: &Path) -> Vec<SourceFile> {
     md_files(&ws.join("local/promoted"), "memory/promoted", "memory", UNTRUSTED, &mut all);
     // Staged notes (`learn::project_staged` writes them): each file names its own source_type from its tier.
     md_files(&ws.join("local/staged"), "staged", "staged", UNTRUSTED, &mut all);
+    // The provisional tier (`specs/116` §2): each live note names the taint of the span that wrote it; the shelves are not listed.
+    crate::provisional_notes::files(ws, &mut all);
     bundle_files(ws, &mut all);
     library_files(ws, &mut all);
     // Zone `research` (`specs/112` §3.5): the workspace's topic records and answers, and the library's claims, at the library's tier.
@@ -653,7 +655,11 @@ impl Kb {
         let web_corroborated = rel_path.starts_with("context/facts/") && frontmatter_flag(text, "web_corroborated") && frontmatter_field(text, "ratified_by").as_deref() == Some("validator") && frontmatter_field(text, "kind").as_deref() == Some("fact");
         // Only a staged note or episode carries a validity date and a kind the search acts on (`specs/050` ML-3, ML-4, `specs/065`); anywhere else
         // the fields are ignored here, so a rule or a library page cannot be hidden by one.
-        let (kind, valid_until) = if zone == "staged" || zone == "episodes" { (frontmatter_field(text, "kind").filter(|k| crate::frontmatter::KINDS.contains(&k.as_str()) || k == "episode"), frontmatter_field(text, "valid_until").filter(|d| crate::frontmatter::entry_date_ok(d)).map(|d| d[..10].to_string())) } else if zone == crate::research_index::ZONE && (rel_path.starts_with("research/claims/") || rel_path.starts_with("research/projects/")) {
+        let (kind, valid_until) = if zone == "staged" || zone == "episodes" { (frontmatter_field(text, "kind").filter(|k| crate::frontmatter::KINDS.contains(&k.as_str()) || k == "episode"), frontmatter_field(text, "valid_until").filter(|d| crate::frontmatter::entry_date_ok(d)).map(|d| d[..10].to_string())) } else if zone == crate::provisional_notes::ZONE {
+            // A provisional note (`specs/116` §2): its kind decides who may retrieve it, and its date when it stops being retrieved. A
+            // note with no readable date is indexed as already expired, so a damaged file is never retrieved.
+            (frontmatter_field(text, "kind").filter(|k| crate::provisional_notes::KINDS.contains(&k.as_str())), Some(frontmatter_field(text, "valid_until").filter(|d| crate::frontmatter::entry_date_ok(d)).map(|d| d[..10].to_string()).unwrap_or_else(|| "0000-00-00".to_string())))
+        } else if zone == crate::research_index::ZONE && (rel_path.starts_with("research/claims/") || rel_path.starts_with("research/projects/")) {
             // Zone `research` (`specs/112` §3.5): a library claim's derived status, as `research_index::claim_text` computed it from the
             // claim's own record. Kept for the label a hit shows; only a word of the fixed list, and only for a claim's document.
             (frontmatter_field(text, "claim_status").filter(|s| crate::research_index::STATUSES.contains(&s.as_str())), None)
@@ -776,6 +782,8 @@ impl Kb {
 
     pub fn refresh(&mut self, ws: &Path, now: &str) -> Result<IndexReport, KbError> {
         crate::learn::project_staged(ws);
+        // A provisional note past its `valid_until` moves to `expired/`, which is not indexed (`specs/116` §2 item 6).
+        crate::provisional_notes::sweep(ws, &delphi_core::bundles::today());
         let rep = self.sync_lexical(&sources(ws), now)?;
         if self.embedder.is_some() {
             self.apply_seed_vectors()?;
@@ -1233,6 +1241,40 @@ fn allowed_sql(opts: &SearchOpts) -> String {
             allowed.push_str(&if ok.is_empty() { " AND d.zone != 'staged'".to_string() } else { format!(" AND (d.zone != 'staged' OR d.kind IN ({}))", ok.join(",")) });
         }
     }
+    // The provisional tier (`specs/116` §2): out of every search that does not ask for it. One that asks sees a live note only
+    // (through its `valid_until`), of the home layer and its own project, and for a role only that role's own notes and any
+    // role's `fact`. A span's start adds the rule of §2 item 4: nothing written after reading untrusted content, whatever else
+    // the search was allowed. The role and the project are checked to be plain ids, so nothing else reaches the query text.
+    match &opts.provisional {
+        ProvisionalView::Off => allowed.push_str(" AND d.zone != 'provisional'"),
+        view => {
+            let today = opts.today.clone().filter(|d| crate::frontmatter::entry_date_ok(d)).map(|d| d[..10].to_string()).unwrap_or_else(delphi_core::bundles::today);
+            let mut c = format!("d.valid_until IS NOT NULL AND d.valid_until >= '{}'", today);
+            let scope = match view {
+                ProvisionalView::Start(s) | ProvisionalView::Search(s) => Some(s.as_str()),
+                _ => None,
+            };
+            let project = scope.filter(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
+            if scope.is_some() {
+                c.push_str(&match project {
+                    Some(id) => format!(" AND (d.rel_path LIKE 'provisional/%' OR d.rel_path LIKE 'projects/{}/provisional/%')", id),
+                    None => " AND d.rel_path LIKE 'provisional/%'".to_string(),
+                });
+            }
+            if let Some(r) = &opts.role {
+                c.push_str(&match (valid_role(r), scope, project) {
+                    (false, _, _) => " AND 1=0".to_string(),
+                    (true, Some(_), Some(id)) => format!(" AND (d.kind = 'fact' OR d.rel_path LIKE 'provisional/{r}/%' OR d.rel_path LIKE 'projects/{id}/provisional/{r}/%')"),
+                    (true, Some(_), None) => format!(" AND (d.kind = 'fact' OR d.rel_path LIKE 'provisional/{r}/%')"),
+                    (true, None, _) => format!(" AND (d.kind = 'fact' OR d.rel_path LIKE 'provisional/{r}/%' OR d.rel_path LIKE 'projects/%/provisional/{r}/%')"),
+                });
+            }
+            if matches!(view, ProvisionalView::Start(_)) {
+                c.push_str(" AND d.status = 'active' AND d.source_type IN ('internal_generated', 'internal_empirical', 'user_ratified')");
+            }
+            allowed.push_str(&format!(" AND (d.zone != 'provisional' OR ({}))", c));
+        }
+    }
     if !opts.include_episodes && !opts.zones.as_ref().is_some_and(|zs| zs.contains(&"episodes")) {
         allowed.push_str(" AND d.zone != 'episodes'");
     } else {
@@ -1640,6 +1682,9 @@ pub struct SearchOpts {
     /// The other projects whose research the search may also return (`specs/115` §3). `None`, the default, is none: every search
     /// that does not ask stays as isolated as before. This is the only field that widens what a search reads.
     pub shared: Option<SharedResearch>,
+    /// Whether the search may return provisional notes (zone `provisional`, `specs/116` §2), and whose. Off by default, so no
+    /// search returns an unreviewed note unless it was built to.
+    pub provisional: ProvisionalView,
 }
 
 /// Which other projects' research a search may return, and how (`specs/115` §3). Built by `shared_research::view` from the
@@ -1666,6 +1711,23 @@ pub struct Found {
     pub hits: Vec<Hit>,
     pub best_rerank: Option<f32>,
     pub withheld: usize,
+}
+
+/// Which provisional notes a search may return (`specs/116` §2 items 3 to 5). Every view but `Off` returns live notes only. The
+/// string is the mission's scope, as for [`FindingsView::Scope`]: a registered project's id, or empty for a home-only mission.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ProvisionalView {
+    /// None: every search that was not built to return them.
+    #[default]
+    Off,
+    /// What a span starts with: the role's own notes and any role's `fact`, of home and of this project, and never one written
+    /// after reading untrusted content, whatever `include_untrusted` says.
+    Start(String),
+    /// An agent's own search: the same notes; the search's other rules decide what else is left out (it returns nothing untrusted
+    /// unless it asked for untrusted text).
+    Search(String),
+    /// Every layer: the operator's own search. A role, if one is named, still sees only its own notes and facts.
+    All,
 }
 
 /// Whose findings a search may return (`specs/116` §5.3). A finding belongs to the project its mission was stamped with; one from a
@@ -1724,7 +1786,7 @@ pub enum Legs {
 
 impl Default for SearchOpts {
     fn default() -> Self {
-        SearchOpts { role: None, limit: 10, include_untrusted: false, include_attributed: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false, include_episodes: false, about: false, kinds: None, max_episodes: None, today: None, xenia: XeniaView::Off, zones: None, summary_target: SummaryTarget::Bibliography, paths: None, project: None, source_types: None, exclude_paths: None, findings: FindingsView::All, shared: None }
+        SearchOpts { role: None, limit: 10, include_untrusted: false, include_attributed: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false, include_episodes: false, about: false, kinds: None, max_episodes: None, today: None, xenia: XeniaView::Off, zones: None, summary_target: SummaryTarget::Bibliography, paths: None, project: None, source_types: None, exclude_paths: None, findings: FindingsView::All, shared: None, provisional: ProvisionalView::Off }
     }
 }
 
@@ -1766,6 +1828,11 @@ pub struct Hit {
 impl Hit {
     /// What to print for the status: `validated · vouched by <org>` for vouched bundle content, else the three words.
     pub fn shown_label(&self) -> String {
+        // A provisional note says whose it is, when it was written and whether it came after untrusted content (`specs/116` §2
+        // items 3 and 4), from where the index filed it and the tier it holds.
+        if self.zone == crate::provisional_notes::ZONE {
+            return crate::provisional_notes::label(&self.rel_path, &self.source_type).unwrap_or_else(|| self.label.to_string());
+        }
         match &self.vouched_by {
             Some(org) if self.status == "validated" => format!("validated · vouched by {}", org),
             _ => self.label.to_string(),
@@ -2096,6 +2163,9 @@ impl Kb {
             } else if zone == crate::finding_record::ZONE && ks == delphi_core::knowledge_status::Status::Noted {
                 // A finding says what it is (`specs/116` §5.2); one that was superseded keeps the status's own word.
                 crate::finding_record::label_for(&tier_name)
+            } else if zone == crate::provisional_notes::ZONE {
+                // The short form; `Hit::shown_label` adds the role and the date.
+                if crate::retrieval::tier_of(&tier_name).is_external() { "unreviewed note, from untrusted content" } else { "unreviewed note" }
             } else {
                 ks.label()
             };
@@ -2328,6 +2398,7 @@ pub fn miss_counts(ws: &Path) -> (usize, usize) {
 pub fn sync_workspace(ws: &Path) -> Result<IndexReport, KbError> {
     let mut kb = Kb::open(&db_path(ws))?;
     crate::learn::project_staged(ws);
+    crate::provisional_notes::sweep(ws, &delphi_core::bundles::today());
     kb.sync_lexical(&sources(ws), &now())
 }
 
@@ -2984,7 +3055,7 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                 let bundle = args.iter().position(|a| a == "--bundle" || a == "--org").and_then(|i| args.get(i + 1)).cloned();
                 let query: Vec<&str> = query.into_iter().filter(|a| Some(*a) != role.as_deref() && Some(*a) != bundle.as_deref()).collect();
                 if query.is_empty() {
-                    eprintln!("usage: delphi kb search <query> [--role <role>] [--untrusted] [--lexical] [--no-rerank] [--about] [--staged [--kind fact|episode]] [--bundle <org/name> | --org <org> | --no-bundles] [--summaries|--bibs]");
+                    eprintln!("usage: delphi kb search <query> [--role <role>] [--untrusted] [--lexical] [--no-rerank] [--about] [--staged [--kind fact|episode]] [--unreviewed] [--bundle <org/name> | --org <org> | --no-bundles] [--summaries|--bibs]");
                     return Ok(2);
                 }
                 let mut kb = open()?;
@@ -3009,6 +3080,11 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                 let mut opts = SearchOpts { role, include_untrusted: args.iter().any(|a| a == "--untrusted" || a == "--all"), legs, bundle, no_bundles: args.iter().any(|a| a == "--no-bundles"), include_staged: args.iter().any(|a| a == "--staged"), include_episodes: args.iter().any(|a| a == "--episodes"), about: args.iter().any(|a| a == "--about"), kinds: flag_value(args, "--kind").map(|k| k.split(',').map(|x| x.trim().to_string()).collect()), summary_target, ..Default::default() };
                 if args.iter().any(|a| a == "--no-rerank") {
                     opts.rerank_weight = 0.0;
+                }
+                // The explicit search of the provisional tier (`specs/116` §2 item 4): with `--untrusted` it also returns the notes
+                // written after reading untrusted content, labelled as such.
+                if args.iter().any(|a| a == "--unreviewed") {
+                    opts.provisional = ProvisionalView::All;
                 }
                 let hits = kb.search(&query.join(" "), &opts)?;
                 log_search(ws, &query.join(" "), opts.role.as_deref(), hits.len());

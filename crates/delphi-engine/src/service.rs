@@ -430,6 +430,7 @@ impl EngineService {
         }
         let m = MissionState::open(&mission_dir, id, e.hub.clone(), e.ledger.clone(), e.secrets.clone(), e.settings.mission_budget_usd).map_err(engine_err)?;
         m.set_learning(e.settings.learning.clone());
+        m.set_provisional_notes(crate::provisional_notes::Tap::new(e.ws.dir.clone())); // specs/116 §2: dormant while `[memory] provisional` is off
         m.set_history(crate::history_record::Tap::new(e.ws.dir.clone(), e.settings.history.clone(), &crate::history_record::Tap::project_of(&mission_dir)));
         // The daemon has restarted since this mission was last open, so what was said before it is a past session (`specs/030`).
         if let Err(e) = self.begin_session(&m, "restart").await {
@@ -4824,10 +4825,26 @@ mod tests {
         })
         .await;
         let events = replay_log(&delphi_core::sessions::dir(&ws_dir, "host-abcdef0123456789"));
-        let live = crate::learn::live_notes("host-abcdef0123456789", &events);
+        // Staged, or kept in the provisional tier (`specs/116` §2 item 2: a host's note and its session summary are sources).
+        let live = crate::learn::live_notes_anywhere(&ws_dir, "host-abcdef0123456789", &events);
         assert_eq!(live.len(), 27, "{live:?}");
         assert!(live.iter().all(|n| n.tier == "L0" && n.summary.starts_with("[host:claude-code/")), "{live:?}");
         assert_eq!(live[0].role.as_deref(), Some(role.as_str()));
+        // What the tier kept of them is stored untrusted, so no span is ever given it automatically: a host cannot place text in
+        // front of a later agent by proposing a note. An explicit search that asks for untrusted text finds it, labelled.
+        let kept: Vec<_> = crate::provisional_notes::list(&ws_dir).into_iter().filter(|n| n.mission == "host-abcdef0123456789").collect();
+        assert!(!kept.is_empty() && kept.iter().all(|n| n.tainted() && n.tier == delphi_core::provenance::Tier::L0 && n.label().ends_with(", from untrusted content")), "{kept:?}");
+        assert!(kept.iter().any(|n| n.trigger == "host_note" && n.role == role) && kept.iter().all(|n| matches!(n.trigger.as_str(), "host_note" | "host_summary")), "{kept:?}");
+        let mut kb = crate::kb::Kb::open(&ws_dir.join("local/state.db")).unwrap();
+        let mut files = Vec::new();
+        crate::provisional_notes::files(&ws_dir, &mut files);
+        for file in &files {
+            kb.upsert_from(&file.rel_path, file.zone, file.default_source, &std::fs::read_to_string(&file.path).unwrap(), "t").unwrap();
+        }
+        let word = kept[0].claim().split_whitespace().max_by_key(|w| w.len()).unwrap_or("").to_string();
+        let ask = |view: crate::kb::ProvisionalView, untrusted: bool| kb.search(&word, &crate::kb::SearchOpts { role: Some(kept[0].role.clone()), provisional: view, include_untrusted: untrusted, legs: crate::kb::Legs::LexicalOnly, zones: Some(vec![crate::provisional_notes::ZONE]), ..Default::default() }).unwrap();
+        assert!(ask(crate::kb::ProvisionalView::Start(String::new()), true).is_empty() && ask(crate::kb::ProvisionalView::Search(String::new()), false).is_empty(), "never at a span's start, never in an agent's own search");
+        assert!(ask(crate::kb::ProvisionalView::Search(String::new()), true).iter().any(|h| h.shown_label().ends_with(", from untrusted content")), "only where untrusted text was asked for");
     }
 
     /// One `propose_kb_entry` claims call over the host socket for the S1d tests: `(first claim's private flag, its reason)` for each URL.
@@ -5143,7 +5160,8 @@ mod tests {
         assert!(stamps[1].1["count"].as_u64().unwrap() >= 1 && stamps[1].1["any_third_party"] == true && stamps[1].1["lowest_checked"] == "not checked", "the host's forged stamp is ignored: {stamps:?}");
         assert_eq!(stamps[3], ("host_summary".to_string(), json!({"count": 1, "lowest_checked": "ratified", "any_third_party": false})), "only the reported read counted, not the host's 99");
         assert_eq!(stamps[4], ("host_kb_entry".to_string(), json!({"count": 8, "lowest_checked": "not checked", "any_third_party": false})), "every parallel report counted");
-        let notes = crate::learn::live_notes("host-x", &events);
+        // (Staged or kept in the provisional tier, `specs/116` §2: the stamp is on the staged event either way.)
+        let notes = crate::learn::live_notes_anywhere(&ws, &format!("host-{session}"), &events);
         assert!(notes.iter().all(|n| n.shown.is_some()) && notes[0].to_json()["shown"]["words"] == "written after reading no results through Delphi's daemon");
     }
 
