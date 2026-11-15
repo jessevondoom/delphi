@@ -5,13 +5,13 @@ import { daemonFacts, skillRows, teamRows } from '../src/team.ts';
 
 const row = (rel_path: string, source_type = 'user_ratified'): DocRow => ({ rel_path, zone: rel_path.split('/')[0]!, kind: 'other', status: 'active', source_type, updated_at: '2026-11-01T00:00:00Z' });
 
-test('each role with a manifest is one row, the six of the mark first, flagged from what the daemon says', () => {
+test('each role with a manifest is one row, the six of the mark first, and only a forbidden role is marked', () => {
   const docs = [row('agents/writer/AGENT.md'), row('agents/builder/notes.md'), row('agents/builder/AGENT.md'), row('agents/orchestrator/AGENT.md'), row('agents/scout/checklist.md'), row('skills/x/SKILL.md'), row('agents/deep/er/AGENT.md')];
   const rows = teamRows(docs, { interactive_agents: ['orchestrator'], forbidden_agents: ['writer'], enabled_agents: ['orchestrator', 'writer', 'scout'] });
   assert.deepEqual(rows.map((r) => [r.role, r.path, r.flag]), [
-    ['orchestrator', 'agents/orchestrator/AGENT.md', 'you can address it'],
+    ['orchestrator', 'agents/orchestrator/AGENT.md', ''],
     ['scout', 'agents/scout/checklist.md', ''],
-    ['builder', 'agents/builder/AGENT.md', 'switched off'],
+    ['builder', 'agents/builder/AGENT.md', ''],
     ['writer', 'agents/writer/AGENT.md', 'not allowed'],
   ]);
   // A daemon that says nothing about agents flags nothing.

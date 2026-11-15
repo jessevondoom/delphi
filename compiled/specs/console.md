@@ -170,7 +170,7 @@ _No standard scope section; open the spec._
 
 ## 111-the-desktop-app-a-read-only-window-on-the-daemon
 
-**111: The desktop app: a read-only window on the daemon for activity, councils, the knowledge base and work output** · approved (per source at `4d476fae3406`) · tier 0 · [source](../../specs/111-the-desktop-app-a-read-only-window-on-the-daemon.md)
+**111: The desktop app: a read-only window on the daemon for activity, councils, the knowledge base and work output** · approved (per source at `25896e11acfe`) · tier 0 · [source](../../specs/111-the-desktop-app-a-read-only-window-on-the-daemon.md)
 
 **source excerpt, untrusted** · `specs/111-the-desktop-app-a-read-only-window-on-the-daemon.md` lines 26-31
 

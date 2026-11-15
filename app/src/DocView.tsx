@@ -6,7 +6,10 @@ import type { Bridge } from './bridge.ts';
 import { dayOf, docTarget, frontmatter, sourceWords, titleOf, type Doc, type Hit } from './kb.ts';
 import type { Info } from './types.ts';
 
-type Props = { bridge: Bridge | null; info: Info | null; light: boolean; path: string; hit?: Hit; lead?: ReactNode; over?: ReactNode };
+type Props = { bridge: Bridge | null; info: Info | null; light: boolean; path: string; hit?: Hit; lead?: ReactNode; over?: ReactNode;
+  /** Where this document was opened from: the words on the button that goes back there. */
+  back?: { label: string; go: () => void };
+};
 
 // Front matter the facts already show, or that only repeats the title.
 const SHOWN = new Set(['title', 'name', 'author', 'source_type', 'confidence', 'status', 'timestamp', 'tags', 'id']);
@@ -17,7 +20,7 @@ const tagsOf = (v?: string): string[] => (v ? v.replace(/^\[|\]$/g, '').split(',
  * drawn in full. A link to another document opens it here, with a way back; a link to a page, a deck, a picture or a recording
  * opens outside the window. Read-only.
  */
-export function DocView({ bridge, info, light, path, hit, lead, over }: Props) {
+export function DocView({ bridge, info, light, path, hit, lead, over, back: from }: Props) {
   const [trail, setTrail] = useState<string[]>([]);
   const [doc, setDoc] = useState<Doc | null>(null);
   const [problem, setProblem] = useState('');
@@ -37,8 +40,11 @@ export function DocView({ bridge, info, light, path, hit, lead, over }: Props) {
     return () => { gone = true; };
   }, [bridge, at]);
 
-  const back = trail.length > 0 && <button type="button" className="btn small" onClick={() => setTrail(trail.slice(0, -1))}>Back</button>;
-  if (!doc) return <>{back}<div className="empty">{problem || 'Opening the document.'}</div></>;
+  // One clear way back, beside the document's context: to the document a link was followed from, else to where this was opened.
+  const back = trail.length > 0
+    ? <button type="button" className="btn back" onClick={() => setTrail(trail.slice(0, -1))}><span aria-hidden="true">←</span> Back to the previous document</button>
+    : from && <button type="button" className="btn back" onClick={from.go}><span aria-hidden="true">←</span> {from.label}</button>;
+  if (!doc) return <><div className="row">{back}</div><div className="empty">{problem || 'Opening the document.'}</div></>;
   const { meta, body } = frontmatter(doc.text);
   const author = meta.author && meta.author in spec(info).roles ? meta.author : '';
   const shownHit = trail.length === 0 ? hit : undefined;

@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { DocView } from '../DocView.tsx';
 import type { Bridge } from '../bridge.ts';
-import { dayOf, headingOf, listTarget, searchTarget, sourceWords, titleOf, type Collection, type DocRow, type Hit, type SearchBody } from '../kb.ts';
+import { dayOf, docInAddress, headingOf, listTarget, searchTarget, sourceWords, titleOf, type Collection, type DocRow, type Hit, type SearchBody } from '../kb.ts';
 import type { Info, OState } from '../types.ts';
 
 type Props = { bridge: Bridge | null; info: Info | null; state: OState | null; light: boolean };
@@ -13,7 +13,10 @@ async function read<T>(bridge: Bridge, target: string): Promise<T> {
   return r.body as T;
 }
 
-/** Screen 3 (spec 111 §5.3): a start page (search, what is on the shelf, what changed last), results, and a reader. */
+/**
+ * Screen 3 (spec 111 §5.3): a start page (search, what is on the shelf, what changed last), a page of results, and a document
+ * across the full width with a way back. One of the three shows at a time; there is no column beside a document.
+ */
 export function Knowledge({ bridge, info, state, light }: Props) {
   // A search named in the address (`?q=`) runs at once: a link to a search, for a browser and for looking at the page.
   const asked = typeof location !== 'undefined' ? (new URLSearchParams(location.search).get('q') ?? '').trim() : '';
@@ -21,7 +24,7 @@ export function Knowledge({ bridge, info, state, light }: Props) {
   const [query, setQuery] = useState(asked);
   const [kind, setKind] = useState('');
   const [found, setFound] = useState<SearchBody | null>(null);
-  const [open, setOpen] = useState<{ path: string; hit?: Hit } | null>(null);
+  const [open, setOpen] = useState<{ path: string; hit?: Hit } | null>(() => { const p = typeof location !== 'undefined' ? docInAddress(location.search) : ''; return p ? { path: p } : null; });
   const [shelf, setShelf] = useState<Collection[]>([]);
   const [recent, setRecent] = useState<DocRow[]>([]);
   const [problem, setProblem] = useState('');
@@ -39,7 +42,7 @@ export function Knowledge({ bridge, info, state, light }: Props) {
     let gone = false;
     setProblem('');
     read<SearchBody>(bridge, searchTarget(query, kind || undefined))
-      .then((b) => { if (gone) return; setFound(b); setOpen((cur) => cur ?? (b.results[0] ? { path: b.results[0].path, hit: b.results[0] } : null)); })
+      .then((b) => { if (!gone) setFound(b); })
       .catch((e: unknown) => { if (!gone) { setFound(null); setProblem(e instanceof Error ? e.message : String(e)); } });
     return () => { gone = true; };
   }, [bridge, query, kind]);
@@ -53,13 +56,15 @@ export function Knowledge({ bridge, info, state, light }: Props) {
     </form>
   );
 
-  const reader = open && (
-    <article className="main" style={{ flex: '999 1 420px' }} aria-label="Document">
-      <DocView bridge={bridge} info={info} light={light} path={open.path} hit={open.hit} />
-    </article>
-  );
+  if (open) {
+    return (
+      <main className="main page">
+        <DocView bridge={bridge} info={info} light={light} path={open.path} hit={open.hit} back={{ label: query ? `Back to results for “${query}”` : 'Back to the knowledge base', go: () => setOpen(null) }} />
+      </main>
+    );
+  }
 
-  if (!query && !open) {
+  if (!query) {
     return (
       <main className="main" style={{ alignItems: 'center', paddingTop: 40 }}>
         <div className="stack" style={{ width: '100%', maxWidth: 920, gap: 28 }}>
@@ -99,38 +104,32 @@ export function Knowledge({ bridge, info, state, light }: Props) {
 
   const facets = Object.entries(found?.facets ?? {}).sort((a, b) => b[1] - a[1]);
   return (
-    <>
-      <section className="results" aria-label="Search results">
-        <button type="button" className="btn small" onClick={home}>Knowledge base</button>
+    <main className="main" style={{ alignItems: 'center' }}>
+      <div className="stack" style={{ width: '100%', maxWidth: 920, gap: 16 }}>
+        <div className="row"><button type="button" className="btn back" onClick={home}><span aria-hidden="true">←</span> Knowledge base</button></div>
         {search(false)}
-        {query && (
-          <>
-            <div className="sub">{found ? `${found.results.length} results${found.capped ? ' (more matched)' : ''} for “${found.query}”` : problem || 'Searching.'}</div>
-            {facets.length > 1 && (
-              <div className="pills" role="group" aria-label="Kind">
-                <button type="button" className="pill" aria-pressed={kind === ''} onClick={() => setKind('')}>All</button>
-                {facets.map(([k, n]) => <button key={k} type="button" className="pill" aria-pressed={kind === k} onClick={() => setKind(k)}>{k} {n}</button>)}
-              </div>
-            )}
-            <div className="stack" style={{ gap: 8 }}>
-              {found?.results.length === 0 && <div className="empty">Nothing matched. Agents who come up short ask the scout to research it; nothing here does that for you.</div>}
-              {found?.results.map((h) => {
-                const { title, above } = headingOf(h.heading);
-                return (
-                  <button key={h.pointer} type="button" className={open?.hit?.pointer === h.pointer ? 'card link on' : 'card link'} aria-pressed={open?.hit?.pointer === h.pointer} onClick={() => setOpen({ path: h.path, hit: h })}>
-                    <span className="row" style={{ fontSize: 11 }}><span className="chip line">{h.collection}</span><span className={h.label === 'validated' ? 'chip ok' : 'chip warn'}>{h.label}</span>{h.status !== 'active' && <span className="chip">{h.status}</span>}</span>
-                    <span style={{ fontWeight: 600, lineHeight: 1.35 }}>{title}</span>
-                    {above && <span className="muted" style={{ fontSize: 12 }}>{above}</span>}
-                    <span style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.5 }}>{h.preview.replace(/[#*`]/g, '').slice(0, 220)}</span>
-                    <span className="time" style={{ overflowWrap: 'anywhere' }}>{h.pointer}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </>
+        <div className="sub">{found ? `${found.results.length} results${found.capped ? ' (more matched)' : ''} for “${found.query}”` : problem || 'Searching.'}</div>
+        {facets.length > 1 && (
+          <div className="pills" role="group" aria-label="Kind">
+            <button type="button" className="pill" aria-pressed={kind === ''} onClick={() => setKind('')}>All</button>
+            {facets.map(([k, n]) => <button key={k} type="button" className="pill" aria-pressed={kind === k} onClick={() => setKind(k)}>{k} {n}</button>)}
+          </div>
         )}
-      </section>
-      {reader || <main className="main"><div className="empty">Choose a result to read it.</div></main>}
-    </>
+        <div className="stack" style={{ gap: 8 }}>
+          {found?.results.length === 0 && <div className="empty">Nothing matched. Agents who come up short ask the scout to research it; nothing here does that for you.</div>}
+          {found?.results.map((h) => {
+            const { title, above } = headingOf(h.heading);
+            return (
+              <button key={h.pointer} type="button" className="card link" onClick={() => setOpen({ path: h.path, hit: h })}>
+                <span className="row" style={{ fontSize: 11 }}><span className="chip line">{h.collection}</span><span className={h.label === 'validated' ? 'chip ok' : 'chip warn'}>{h.label}</span>{h.status !== 'active' && <span className="chip">{h.status}</span>}<span className="time push" style={{ overflowWrap: 'anywhere' }}>{h.pointer}</span></span>
+                <span style={{ fontWeight: 600, fontSize: 15, lineHeight: 1.35 }}>{title}</span>
+                {above && <span className="muted" style={{ fontSize: 12 }}>{above}</span>}
+                <span style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.5 }}>{h.preview.replace(/[#*`]/g, '').slice(0, 320)}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </main>
   );
 }

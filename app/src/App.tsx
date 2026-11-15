@@ -46,6 +46,8 @@ export function App() {
   const [events, setEvents] = useState<Envelope[]>([]);
   const [conn, setConn] = useState<Conn>({ connected: false, detail: 'looking for the daemon' });
   const [councilPick, setCouncilPick] = useState<number | null>(null);
+  // Counts the times a menu item was chosen: a screen showing a document goes back to its start when its item is chosen again.
+  const [visit, setVisit] = useState(0);
   const light = useLight(prefs.theme);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -109,7 +111,7 @@ export function App() {
           <nav className="menu" aria-label="Sections">
             <div className="menu-items">
               {ITEMS.map((it) => (
-                <button key={it.key} type="button" className="menu-item" aria-current={prefs.screen === it.key ? 'page' : undefined} onClick={() => update({ screen: it.key })}>
+                <button key={it.key} type="button" className="menu-item" aria-current={prefs.screen === it.key ? 'page' : undefined} onClick={() => { setVisit((v) => v + 1); update({ screen: it.key }); }}>
                   <span>{it.label}</span>
                   {notes[it.key] && <small>{notes[it.key]}</small>}
                 </button>
@@ -139,11 +141,11 @@ export function App() {
         ) : prefs.screen === 'council' ? (
           <Council key={council} info={info} state={state} events={events} light={light} pick={council} />
         ) : prefs.screen === 'knowledge' ? (
-          <Knowledge bridge={bridge} info={info} state={state} light={light} />
+          <Knowledge key={visit} bridge={bridge} info={info} state={state} light={light} />
         ) : prefs.screen === 'output' ? (
-          <Output bridge={bridge} info={info} state={state} light={light} />
+          <Output key={visit} bridge={bridge} info={info} state={state} light={light} />
         ) : prefs.screen === 'agents' ? (
-          <Team bridge={bridge} info={info} light={light} />
+          <Team key={visit} bridge={bridge} info={info} light={light} />
         ) : (
           <Settings bridge={bridge} info={info} conn={conn} prefs={prefs} update={update} />
         )}

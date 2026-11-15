@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { fixtureBridge } from '../src/bridge.ts';
-import { dayOf, docTarget, frontmatter, headingOf, listTarget, searchTarget, sourceWords, titleOf, type Doc, type SearchBody } from '../src/kb.ts';
+import { dayOf, docInAddress, docTarget, frontmatter, headingOf, listTarget, searchTarget, sourceWords, titleOf, type Doc, type SearchBody } from '../src/kb.ts';
 
 test('a read is addressed the way the daemon expects, with the query encoded', () => {
   assert.equal(searchTarget('  narrator socket & more  '), '/v1/search?q=narrator%20socket%20%26%20more&limit=20&facets=1');
@@ -47,4 +47,10 @@ test('the fixture answers the five reads in the daemon\'s shapes, and nothing el
   assert.equal((await b.kb(listTarget(8))).status, 200);
   assert.equal((await b.kb(docTarget('no/such.md'))).status, 404);
   assert.equal((await b.kb('/v1/image?path=x')).status, 404);
+});
+
+test('a document named in the address must be a plain path inside the workspace', () => {
+  assert.equal(docInAddress('?doc=missions/m/report.md'), 'missions/m/report.md');
+  assert.equal(docInAddress('?q=x&doc=agents%2Fscout%2FAGENT.md'), 'agents/scout/AGENT.md');
+  for (const bad of ['?doc=../secrets.md', '?doc=/etc/hosts', '?doc=a/../../b.md', '?doc=https://example.com/x.md', '?doc=', '']) assert.equal(docInAddress(bad), '', bad);
 });

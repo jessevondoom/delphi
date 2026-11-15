@@ -18,6 +18,12 @@ export const searchTarget = (q: string, kind?: string, limit = 20): string =>
 export const docTarget = (path: string): string => `/v1/doc?path=${encodeURIComponent(path)}`;
 export const listTarget = (limit = 50, kind?: string): string => `/v1/documents?limit=${limit}${kind ? `&kind=${encodeURIComponent(kind)}` : ''}`;
 
+/** A document named in the address (`?doc=missions/m/report.md`): a link straight to its page. Only a plain relative path. */
+export function docInAddress(search: string): string {
+  const p = (new URLSearchParams(search).get('doc') ?? '').trim();
+  return /^[\w][\w ./-]*$/.test(p) && !p.split('/').includes('..') ? p : '';
+}
+
 /** A heading path (`A > B > C`) as its last part and the parts above it. */
 export function headingOf(heading: string): { title: string; above: string } {
   const parts = heading.split(' > ').map((p) => p.trim()).filter(Boolean);

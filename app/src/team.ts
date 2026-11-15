@@ -2,12 +2,13 @@
 import { MARK_ROLES } from './avatar.ts';
 import { sourceWords, type DocRow } from './kb.ts';
 
-export type AgentRow = { role: string; path: string; flag: '' | 'you can address it' | 'not allowed' | 'switched off' };
+/** `flag` marks a role the operator has forbidden; nothing else about a role's standing is shown (operator, 2026-11-14). */
+export type AgentRow = { role: string; path: string; flag: '' | 'not allowed' };
 export type SkillRow = { name: string; path: string; source: string };
 
 const names = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
 
-/** One row per role with a manifest under `agents/<role>/`, the six of the mark first; flags from the session snapshot. */
+/** One row per role with a manifest under `agents/<role>/`, the six of the mark first. */
 export function teamRows(docs: DocRow[], session: Record<string, unknown>): AgentRow[] {
   const byRole = new Map<string, string>();
   for (const d of docs) {
@@ -16,12 +17,11 @@ export function teamRows(docs: DocRow[], session: Record<string, unknown>): Agen
     // The manifest is `AGENT.md`; another file there is listed only when the role has no manifest.
     if (!byRole.has(m[1]!) || m[2] === 'AGENT.md') byRole.set(m[1]!, d.rel_path);
   }
-  const forbidden = names(session.forbidden_agents), interactive = names(session.interactive_agents);
-  const enabled = Array.isArray(session.enabled_agents) ? names(session.enabled_agents) : null;
+  const forbidden = names(session.forbidden_agents);
   const rank = (r: string) => { const i = MARK_ROLES.indexOf(r); return i < 0 ? MARK_ROLES.length : i; };
   return [...byRole].sort((a, b) => rank(a[0]) - rank(b[0]) || a[0].localeCompare(b[0])).map(([role, path]) => ({
     role, path,
-    flag: forbidden.includes(role) ? 'not allowed' : enabled && !enabled.includes(role) ? 'switched off' : interactive.includes(role) ? 'you can address it' : '',
+    flag: forbidden.includes(role) ? 'not allowed' : '',
   }));
 }
 

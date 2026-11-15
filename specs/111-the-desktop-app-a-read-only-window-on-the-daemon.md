@@ -96,7 +96,9 @@ Decided with the operator on 2026-11-14 from drawn screens.
 
 1. **Activity.** A stream of what agents said, read and recorded, newest first, each entry tinted in its role's colour; the roster of agents with what each is doing and its model family; a card when something waits on the operator, saying to answer it in the console.
 2. **Council.** The question, the stages, one column per seat with its lens and family. While the council runs, an activity stream sits under the seats and can be narrowed to one seat. In the blind round a seat's words are not shown, in the stream or anywhere else: the window shows that it is working and what it reads. Once the verdict is in, the verdict and the dissent take the stream's place and the stream folds under them.
-3. **Knowledge base.** A start page (search, the shelf's layers, what waits for review, what was added) and a results page with a reader showing an entry's label, status and who vouched for it.
+3. **Knowledge base.** A start page (search, the shelf's layers, what waits for review, what was added), a page of results, and a document's own page showing its label, status and who vouched for it.
+
+   **A document is read on a page of its own** (operator, 2026-11-14: a column beside a list is not legible). Wherever a document or an item is chosen (a search result, a work output item, an agent's or a skill's manifest) it takes the full width of the content, with one clear button back to where it was opened from beside its context; choosing the screen's menu item goes back too. The app shows at most the menu and one column of content beside it, plus the roster on Activity.
 4. **Work output.** What the team produced for a mission, led by whatever that project produces. Many projects are research and reports, not specifications and code, so the screen does not assume either: it groups by what is there, in a grid or a list, with where each item lives.
 5. **Agents and skills, Settings.** Read-only views.
 
