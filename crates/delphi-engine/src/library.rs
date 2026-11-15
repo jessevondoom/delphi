@@ -668,6 +668,36 @@ impl Library {
         self.store_snapshot(id, meta, &canonical, snap, opts, &b, snap.size as u64)
     }
 
+    /// Keep the pictures a research run saved for a source whose text is kept (`specs/112` §4 item 1; the picture step is
+    /// `research_images`, which decided each picture's licence by code and wrote the files into `dir`). The files go to the
+    /// source's `assets/`, where pages find them, and each one's record (file, address, licence, author, attribution line) goes into
+    /// the source's own record as `images`: what the console job's entry kept in its frontmatter. Only a source held in full, not
+    /// purged, takes pictures; a file whose name is not a plain picture name is left out; the per-source and library budgets hold.
+    /// Returns how many pictures the source now lists.
+    pub fn attach_pictures(&self, id: &str, dir: &Path, records: &[Value], budgets: &Budgets) -> Result<usize, String> {
+        let mut meta = self.read_meta(id).ok_or("no such source")?;
+        if meta["capture_level"] != "full" || !meta["purged"].is_null() {
+            return Err("pictures are kept only with a source whose text is kept".into());
+        }
+        let plain = |name: &str| !name.is_empty() && name.len() <= 100 && !name.starts_with('.') && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '.') && matches!(name.rsplit_once('.').map(|(_, e)| e), Some("png" | "jpg" | "gif"));
+        let kept: Vec<&Value> = records.iter().filter(|r| r["file"].as_str().is_some_and(|f| plain(f) && dir.join(f).is_file())).collect();
+        let bytes: u64 = kept.iter().filter_map(|r| std::fs::metadata(dir.join(r["file"].as_str()?)).ok()).map(|m| m.len()).sum();
+        let held = dir_bytes(&self.source_dir(id));
+        if held + bytes > budgets.source || self.used_bytes() + bytes > budgets.library {
+            return Err("the pictures would pass the source's or the library's budget; none was kept".into());
+        }
+        let assets = self.source_dir(id).join("assets");
+        std::fs::create_dir_all(&assets).map_err(|e| e.to_string())?;
+        for r in &kept {
+            let f = r["file"].as_str().unwrap_or_default();
+            std::fs::copy(dir.join(f), assets.join(f)).map_err(|e| format!("{}: {}", f, e))?;
+        }
+        meta["images"] = Value::Array(kept.iter().map(|r| (*r).clone()).collect());
+        self.write_json(&self.source_dir(id).join("meta.json"), &meta)?;
+        self.log("pictures", json!({"id": id, "count": kept.len(), "bytes": bytes}));
+        Ok(kept.len())
+    }
+
     /// Keep one snapshot as a source. `limit` is the byte cap the snapshot was fetched under, for the note a truncated page gets.
     #[allow(clippy::too_many_arguments)]
     fn store_snapshot(&self, id: String, mut meta: Map<String, Value>, canonical: &str, snap: &crate::fact_fetch::Snapshot, opts: &AddOpts, b: &Budgets, limit: u64) -> Result<Stored, String> {

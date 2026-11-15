@@ -387,9 +387,9 @@ async function research(ctx: Ctx, args: string[]): Promise<string> {
     }
     const topic = args.join(' ').trim();
     if (!topic) return 'usage: /research <topic> · /research status · /research cancel';
-    await ctx.cmd.call('research.start', { topic, cwd: ctx.info.cwd });
+    const started = await ctx.cmd.call('research.start', { topic, cwd: ctx.info.cwd });
     void watchResearch(ctx);
-    return `researching ${sanitize(topic)}. Trusted sources enter the knowledge base (inside a registered project, its research folder instead); others are held for /validate. /research status · /research cancel`;
+    return `researching ${sanitize(topic)}${topicNote(started?.topic_id, ' as topic ')}. Trusted sources are read first; what is kept goes to the library and its claims are noted, not validated (inside a registered project the record stays in the project). /research status · /research cancel`;
   } catch (e) { return errText(e); }
 }
 
@@ -402,9 +402,15 @@ async function watchResearch(ctx: Ctx): Promise<void> {
     const phase = String(s?.phase);
     if (!['done', 'failed', 'cancelled'].includes(phase)) continue;
     const counts = `${Number(s?.found ?? 0)} found, ${Number(s?.read ?? 0)} read, ${Number(s?.skipped ?? 0)} skipped`;
-    ctx.post(phase === 'done' ? `research on ${sanitize(String(s?.topic ?? ''))} finished: ${counts}. /validate lists anything held back.` : `research ${phase}${s?.error ? ': ' + sanitize(String(s.error)) : ''} (${counts})`, phase === 'done' ? 'ok' : 'error');
+    const claims = Number(s?.report?.claims ?? 0);
+    ctx.post(phase === 'done' ? `research on ${sanitize(String(s?.topic ?? ''))} finished: ${counts}, ${claims} claim${claims === 1 ? '' : 's'} noted${topicNote(s?.topic_id, '. Its record is topic ')}${s?.topic_id ? ` (delphi research show ${topicNote(s?.topic_id, '')})` : ''}. /validate lists research held back before.` : `research ${phase}${s?.error ? ': ' + sanitize(String(s.error)) : ''} (${counts})`, phase === 'done' ? 'ok' : 'error');
     return;
   }
+}
+
+/** A research topic id from the daemon, shown only when it is one (a slug and eight hex characters; specs/112 §2). */
+function topicNote(id: unknown, lead: string): string {
+  return typeof id === 'string' && /^[a-z0-9]+(-[a-z0-9]+)*-[0-9a-f]{8}$/.test(id) ? lead + id : '';
 }
 
 /** `/validate`: research held back from the knowledge base (`specs/058` §14). Ratifying puts one entry in the index as noted, not validated. */

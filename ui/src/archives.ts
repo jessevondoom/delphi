@@ -20,9 +20,9 @@ export type Shelf = {
 };
 /** One document in the reader, with where the operator is in it. */
 export type Entry = { path: string; collection: string; trust: string; /** The status the result it was opened from carried (specs/052), and when it last changed. */ knowledge?: string; vouched?: string; status?: string; updated?: string; stale: boolean; text: string; scroll: number; focus: number | null; /** The pictures fetched for it, by the file they were written as; null where one could not be drawn. */ images?: Record<string, Raster | null>; /** The lines a pointer cited, when the document was opened by one. */ range?: { from: number; to: number }; /** Which outside addresses in it are on the operator's lists (`/v1/doc` `links`); one not named here is treated as not listed. */ listed?: Record<string, boolean> };
-/** One entry the research job wrote (`delphi-engine/src/research.rs`). */
+/** One source the research job kept (`delphi-engine/src/research_console.rs`): `form` is `full` when its text is in the library, `pointer` when only its address and claims are. */
 export type Made = { path: string; title: string; publisher: string; url: string; form: string; licence: string };
-export type Report = { new: Made[]; updated: Made[]; unchanged: number; notKept: [string, string][]; unlisted: string[]; provider: string | null; tokens: number; stopped: string | null };
+export type Report = { new: Made[]; updated: Made[]; unchanged: number; notKept: [string, string][]; unlisted: string[]; provider: string | null; tokens: number; stopped: string | null; /** The research topic the run's record is kept under (specs/112 §2), and how many library claims it noted. */ topicId: string | null; claims: number };
 /** The research job as the pane shows it (spec 028-A1 §10.6): progress while it runs, the report when it ends. */
 /** One page of the job: queued, being read, written (with its form and licence), not readable, or read and not kept (specs/043 §3.7). */
 export type Source = { url: string; host: string; status: 'queued' | 'reading' | 'done' | 'skipped' | 'not kept'; form: string | null; licence: string | null; why: string | null };
@@ -217,7 +217,7 @@ export function gotResearch(a: Arch, body: any): Arch {
   const r = a.research;
   if (!r || String(body?.topic ?? '') !== r.topic) return a;
   const rep = body.report;
-  const report: Report | null = rep ? { new: (rep.new ?? []).map(asMade), updated: (rep.updated ?? []).map(asMade), unchanged: Number(rep.unchanged ?? 0), notKept: (rep.not_kept ?? []).map((p: any) => [String(p[0]), sanitize(String(p[1]))]), unlisted: (rep.unlisted_hosts ?? []).map(String), provider: rep.provider ?? null, tokens: Number(rep.tokens ?? 0), stopped: rep.stopped ?? null } : null;
+  const report: Report | null = rep ? { new: (rep.new ?? []).map(asMade), updated: (rep.updated ?? []).map(asMade), unchanged: Number(rep.unchanged ?? 0), notKept: (rep.not_kept ?? []).map((p: any) => [String(p[0]), sanitize(String(p[1]))]), unlisted: (rep.unlisted_hosts ?? []).map(String), provider: rep.provider ?? null, tokens: Number(rep.tokens ?? 0), stopped: rep.stopped ?? null, topicId: /^[a-z0-9-]{1,57}$/.test(String(rep.topic_id ?? '')) ? String(rep.topic_id) : null, claims: Number(rep.claims ?? 0) } : null;
   const phase = (['searching', 'reading', 'done', 'failed', 'cancelled'] as const).find((p) => p === body.phase) ?? r.phase;
   return { ...a, research: { ...r, phase, found: Number(body.found ?? 0), read: Number(body.read ?? 0), skipped: Number(body.skipped ?? 0), hosts: (body.hosts ?? []).map(String), sources: (body.sources ?? []).map(asSource), tokens: Number(body.tokens ?? 0), error: body.error ? sanitize(String(body.error)) : null, report } };
 }
@@ -544,9 +544,9 @@ export function banner(r: Research): string {
   return n === 0 ? 'no new entries: the archive already covers this' : `the archive has been expanded to include ${plural(n, 'new entry', 'new entries')}`;
 }
 
-const FORM_WORD: Record<string, string> = { full: 'full text', summary: 'summary and facts' };
-/** The licence as the page says it: unknown licences are summary-only sources. */
-const licenceWord = (licence: string | null, form: string | null) => (!licence || licence === 'unknown' ? (form === 'summary' ? 'summary-only source' : 'licence unknown') : licence);
+const FORM_WORD: Record<string, string> = { full: 'full text', summary: 'summary and facts', pointer: 'address and claims' };
+/** The licence as the page says it: unknown licences are summary-only sources, and a pointer's text is not kept. */
+const licenceWord = (licence: string | null, form: string | null) => (!licence || licence === 'unknown' ? (form === 'summary' ? 'summary-only source' : form === 'pointer' ? 'text not kept' : 'licence unknown') : licence);
 
 /** The clean page's top, kept while a job runs and after it: the title, the scout's label and the box holding the topic (specs/043 §3.7). */
 function expandTop(a: Arch, w: number, info: T.Info | undefined, pal: T.Pal, topic: string): string[] {
@@ -575,7 +575,7 @@ function researchView(a: Arch, w: number, h: number, info: T.Info | undefined, p
     }
     if (queued.length) out.push(T.dim(T.clip(`${ind}○ ${queued.map((x) => x.host).join(' · ')}`, w)));
     if (a.note) out.push('', T.dim(ind + a.note));
-    return pad(out, h - 1).concat(hint('esc cancel · entries already written stay · nothing leaves the trusted list'));
+    return pad(out, h - 1).concat(hint('esc cancel · sources already kept stay · trusted sources are read first'));
   }
   if (r.phase === 'failed' || !r.report) {
     out.push(ind + T.alert(`research failed: ${r.error ?? 'no answer from the daemon'}`));
@@ -588,6 +588,8 @@ function researchView(a: Arch, w: number, h: number, info: T.Info | undefined, p
   if (rep.unchanged) extra.push(`${rep.unchanged} already there`);
   if (rep.stopped) extra.push(`stopped: ${rep.stopped}`);
   if (extra.length) out.push(T.dim(ind + extra.join(' · ')));
+  // The run's record (specs/112 §2): the topic it is kept under, and the claims it noted in the library.
+  if (rep.topicId) out.push(T.dim(T.clip(`${ind}topic ${rep.topicId} · ${plural(rep.claims, 'claim', 'claims')} noted, not validated · delphi research show ${rep.topicId}`, w)));
   out.push('');
   if (made.length) {
     const pw = Math.max(20, Math.min(Math.max(...made.map((m) => m.path.length)), w - 38));

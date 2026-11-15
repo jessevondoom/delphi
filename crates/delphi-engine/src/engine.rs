@@ -130,6 +130,9 @@ pub struct Settings {
     /// of the run returned (and a host's claim URL that an earlier search of its session returned), inside two caps. Always on since the
     /// `ladder` flag was pulled (§13.2); the caps are hypotheses.
     pub wider_fetch: crate::research_observed::WiderFetch,
+    /// `[research.limits]` (`specs/112` §4 item 6): the one limits table of a research run, whoever asked. The defaults are the host
+    /// runner's figures of before the table.
+    pub research_limits: crate::research_run::Limits,
     /// `[research] retractions` (`specs/101` §4, §8): check a source's DOI against the local Retraction Watch snapshot at capture and re-check.
     /// Default off until slice B's exit criterion passes; off is spec 098 as merged. Nothing is ever sent to a service.
     pub retractions: bool,
@@ -216,6 +219,7 @@ impl Default for Settings {
             archive: Default::default(),
             chain: Default::default(),
             wider_fetch: Default::default(),
+            research_limits: Default::default(),
             retractions: false,
             retractions_stale_days: crate::retractions::DEFAULT_STALE_DAYS,
             support: crate::corroboration::Params::default(),

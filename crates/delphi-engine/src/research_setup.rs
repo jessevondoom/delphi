@@ -1,13 +1,10 @@
-//! What the research job needs from the workspace (`specs/028` §10): the two trusted-source lists, the configured search engines with
-//! their keys, a transport and the scout. Reading files and resolving keys can block (a keychain, a helper command), so the caller runs
-//! [`deps`] on a blocking thread.
+//! What a research run needs from the workspace (`specs/028` §10): the two trusted-source lists and the configured search engines
+//! with their keys. Reading files and resolving keys can block (a keychain, a helper command), so the caller reads them on a
+//! blocking thread (`EngineService::load_run_web`).
 
 use crate::engine::Engine;
-use crate::fact_sources::SourceList;
-use crate::research::{Deps, EngineJudge, Limits, Scope};
 use delphi_adapter::credential::{CredentialRef, Resolved, Resolver};
 use delphi_adapter::research::search::ProviderSpec;
-use delphi_adapter::research::transport::HttpTransport;
 use delphi_adapter::research::trusted::TrustedList;
 use std::path::Path;
 use std::sync::Arc;
@@ -77,27 +74,6 @@ pub fn engines(engine: &Engine) -> Vec<ProviderSpec> {
             ProviderSpec { provider: *p, key, base_url: s.url, cx: s.cx }
         })
         .collect()
-}
-
-pub fn deps(engine: &Arc<Engine>, ws: &Path, home: &Path, scope: Scope) -> Result<Deps, String> {
-    if engine_state(&engine.cfg.get().search) == EngineState::None {
-        return Err(no_engine_message());
-    }
-    let list = lists(ws, home)?;
-    let date = (engine.clock)().get(..10).unwrap_or("").to_string();
-    Ok(Deps {
-        transport: Arc::new(HttpTransport::new()?),
-        judge: Arc::new(EngineJudge(engine.clone())),
-        list: Arc::new(list),
-        engines: engines(engine),
-        ws_dir: ws.to_path_buf(),
-        scope,
-        validator: Arc::new(SourceList::new(engine.cfg.get().validator.sources.clone())),
-        weak_sources: engine.cfg.get().validator.weak_sources,
-        date,
-        limits: Limits::default(),
-        identifiers: crate::query_guard::identifiers(ws),
-    })
 }
 
 #[cfg(test)]

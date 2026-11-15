@@ -138,6 +138,38 @@ pub fn settings_from(root: &toml::Value) -> Settings {
             s.wider_fetch.per_run = n as usize;
         }
     }
+    // `[research.limits]` (`specs/112` §4 item 6): the one limits table of a research run. Each key is a count inside its range; a
+    // value outside it, or of the wrong kind, keeps the default (the host runner's figure of before the table).
+    if let Some(t) = root.get("research").and_then(|r| r.get("limits")) {
+        let l = &mut s.research_limits;
+        let count = |k: &str, lo: i64, hi: i64| t.get(k).and_then(|v| v.as_integer()).filter(|v| (lo..=hi).contains(v));
+        for (i, d) in ["quick", "survey", "deep"].iter().enumerate() {
+            if let Some(n) = count(&format!("pages_{d}"), 1, 40) {
+                l.pages[i] = n as usize;
+            }
+            if let Some(n) = count(&format!("steps_{d}"), 1, 200) {
+                l.steps[i] = n as u32;
+            }
+        }
+        if let Some(n) = count("job_secs", 30, 3600) {
+            l.job_secs = n as u64;
+        }
+        if let Some(n) = count("concurrent", 1, 8) {
+            l.concurrent = n as usize;
+        }
+        if let Some(n) = count("page_chars", 1000, 200_000) {
+            l.page_chars = n as usize;
+        }
+        if let Some(d) = t.get("depth").and_then(|v| v.as_str()).and_then(delphi_core::research::Depth::parse) {
+            l.depth = d;
+        }
+        if let Some(n) = count("pictures_per_source", 0, 50) {
+            l.pictures_per_source = n as usize;
+        }
+        if let Some(n) = count("pictures_per_run", 0, 200) {
+            l.pictures_per_run = n as usize;
+        }
+    }
     // `[research] retractions` and `retractions_stale_days` (`specs/101` §4, §8): a boolean, off unless exactly `true`; the age is 1 to 3650
     // days. A value of the wrong kind keeps the default.
     if let Some(b) = root.get("research").and_then(|r| r.get("retractions")).and_then(|v| v.as_bool()) {
@@ -534,6 +566,24 @@ mod tests {
         for old in ["ladder = true", "ladder = false", "ladder = \"yes\""] {
             let s = settings_from(&toml::from_str(&format!("[research]\n{old}\n")).unwrap());
             assert_eq!((s.wider_fetch, s.thin_below), (WiderFetch::default(), 3), "{old}");
+        }
+    }
+
+    // `specs/112` §4 item 6: the limits of the two runners are one table, and its defaults are the host runner's figures.
+    #[test]
+    fn the_research_limits_are_one_table_whose_defaults_are_the_host_runners_and_a_bad_value_keeps_the_default() {
+        use crate::research_run::Limits;
+        use delphi_core::research::Depth;
+        let d = settings_from(&toml::from_str("").unwrap()).research_limits;
+        assert_eq!(d, Limits::default());
+        assert_eq!((d.pages, d.steps, d.job_secs, d.concurrent, d.page_chars, d.depth), ([3, 6, 10], [5, 15, 30], 600, 2, 24_000, Depth::Survey), "what the host runner had before the table");
+        assert_eq!((d.job_secs, d.concurrent), (crate::research_jobs::JOB_TIMEOUT.as_secs(), crate::research_jobs::MAX_CONCURRENT));
+        assert_eq!((d.pictures_per_source, d.pictures_per_run), (6, 24), "the console job's picture caps: the host runner kept none");
+        let set = settings_from(&toml::from_str("[research.limits]\npages_quick = 2\npages_deep = 20\nsteps_survey = 40\njob_secs = 900\nconcurrent = 1\npage_chars = 8000\ndepth = \"deep\"\npictures_per_source = 0\npictures_per_run = 3\n").unwrap()).research_limits;
+        assert_eq!((set.pages, set.steps, set.job_secs, set.concurrent, set.page_chars, set.depth, set.pictures_per_source, set.pictures_per_run), ([2, 6, 20], [5, 40, 30], 900, 1, 8000, Depth::Deep, 0, 3));
+        assert_eq!((set.pages_at(Depth::Deep), set.steps_at(Depth::Survey)), (20, 40));
+        for bad in ["pages_quick = 0", "pages_deep = 500", "steps_quick = \"many\"", "job_secs = 5", "concurrent = 0", "concurrent = 99", "page_chars = 10", "depth = \"forever\"", "pictures_per_run = -1"] {
+            assert_eq!(settings_from(&toml::from_str(&format!("[research.limits]\n{bad}\n")).unwrap()).research_limits, Limits::default(), "{bad}");
         }
     }
 

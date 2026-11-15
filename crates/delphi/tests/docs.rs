@@ -229,7 +229,12 @@ fn the_research_record_the_program_writes_follows_its_schema() {
     t.query("r-t-1", "aspirin reduces fever disputed OR incorrect OR false", "contradiction", Some("brave"), Ok(0)).unwrap();
     t.page("r-t-1", "https://who.int/a", "s-abc", Some("sha256:00")).unwrap();
     t.page("r-t-1", "https://nih.gov/b", "s-def", None).unwrap();
-    for why in ["not_fetchable", "refused", "fetch_failed", "capture_failed"] {
+    // The keep step (`specs/112` §4 item 1): what the library kept of a page, in fixed words; anything else is not written.
+    t.kept("https://who.int/a", "full", "added").unwrap();
+    t.kept("https://nih.gov/b", "pointer", "unchanged").unwrap();
+    assert!(t.kept("https://nih.gov/b", "everything", "added").is_err() && t.kept("https://nih.gov/b", "full", "validated").is_err());
+    assert_eq!((read(&t)["pages"][0]["kept"].as_str(), read(&t)["pages"][1]["outcome"].as_str()), (Some("full"), Some("unchanged")));
+    for why in ["not_fetchable", "refused", "fetch_failed", "capture_failed", "weak_source", "excluded_source"] {
         t.refused("r-t-1", "https://blog.example/x", why).unwrap();
     }
     must_pass("research-record.schema.json", "a record of a run that is going", &read(&t));

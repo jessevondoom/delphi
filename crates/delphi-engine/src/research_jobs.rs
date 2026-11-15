@@ -258,6 +258,8 @@ pub struct Jobs {
     jobs: Arc<Mutex<HashMap<String, Job>>>,
     permits: Arc<Semaphore>,
     timeout: Duration,
+    /// The step budget at each depth (`[research.limits]`, `specs/112` §4 item 6).
+    limits: Arc<crate::research_run::Limits>,
 }
 
 impl Default for Jobs {
@@ -268,7 +270,13 @@ impl Default for Jobs {
 
 impl Jobs {
     pub fn new(max_concurrent: usize, timeout: Duration) -> Jobs {
-        Jobs { jobs: Default::default(), permits: Arc::new(Semaphore::new(max_concurrent)), timeout }
+        Jobs { jobs: Default::default(), permits: Arc::new(Semaphore::new(max_concurrent)), timeout, limits: Default::default() }
+    }
+
+    /// The queue under the one limits table (`specs/112` §4 item 6): how many jobs run at once, how long one may run, and the
+    /// step budget of each depth. One queue serves every caller: a host, the console and an inside agent.
+    pub fn with_limits(limits: &crate::research_run::Limits) -> Jobs {
+        Jobs { jobs: Default::default(), permits: Arc::new(Semaphore::new(limits.concurrent.max(1))), timeout: Duration::from_secs(limits.job_secs), limits: Arc::new(limits.clone()) }
     }
 
     /// Queue a job and return at once. `run` starts when one of the running slots is free.
@@ -289,7 +297,7 @@ impl Jobs {
         Fut: Future<Output = Result<Finish, String>> + Send + 'static,
         E: FnOnce(&Ended<'_>) + Send + 'static,
     {
-        let ctx = Arc::new(JobCtx::with_budget(depth.max_steps()));
+        let ctx = Arc::new(JobCtx::with_budget(self.limits.steps_at(depth)));
         let cancel = Arc::new(Notify::new());
         {
             let mut jobs = self.jobs.lock().unwrap();
@@ -363,7 +371,7 @@ impl Jobs {
         let ahead = if j.state == State::Queued { jobs.values().filter(|o| o.state == State::Queued && o.queued < j.queued).count() } else { 0 };
         Some(json!({
             "research_id": id, "status": j.state.as_str(), "depth": j.depth, "queued_ahead": ahead,
-            "steps": j.ctx.steps(), "max_steps": j.depth.max_steps(), "check_steps": j.ctx.check_steps(), "max_check_steps": j.ctx.max_check_steps(),
+            "steps": j.ctx.steps(), "max_steps": j.ctx.max_steps, "check_steps": j.ctx.check_steps(), "max_check_steps": j.ctx.max_check_steps(),
             "queries": t.queries, "fetched": t.fetched, "refused": t.refused,
             "fetched_via": t.fetched_via.iter().map(|(u, v)| json!({"url": u, "via": v})).collect::<Vec<_>>(),
             "error": j.error,

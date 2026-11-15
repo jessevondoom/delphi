@@ -6,7 +6,7 @@
 //! * `record.json`: the question as asked, who asked, the project, the depth, the state, the plan, every query with its provider and
 //!   count of results, every page read with its source id and content hash, the pages refused and why, the claim ids, the gaps, the
 //!   step and time use, and `runs`, one entry per time the topic was run (`schemas/research-record.schema.json`);
-//! * `answer.md`: the written answer of the newest finished run;
+//! * `answer.md`: the written answer of the newest run that drew claims, with what earlier runs wrote below it;
 //! * `search-log.json`: the search log of `specs/101` §3 for that run, moved here from `research/search-logs/`.
 //!
 //! **Written as the run goes.** Every change is read, applied and written whole to a temporary file that is then renamed over the
@@ -35,6 +35,9 @@ pub const RUNNERS: [&str; 3] = ["daemon", "host", "ingest"];
 pub const TAINT: &str = "external_untrusted";
 /// What a list in the record holds at most. Past it nothing more is added; the counts in `runs` still say how much there was.
 const LIST_CAP: usize = 500;
+/// What the library kept of a page, and what the capture did (`Topic::kept`).
+pub const KEPT_LEVELS: [&str; 3] = ["full", "excerpts", "pointer"];
+pub const KEPT_OUTCOMES: [&str; 4] = ["added", "new_version", "unchanged", "kept_richer"];
 const TEXT_CAP: usize = 300;
 const SLUG_CAP: usize = 48;
 
@@ -347,6 +350,22 @@ impl Topic {
         })
     }
 
+    /// What the library kept of a page already in the record (`specs/112` §4 item 1): `kept` is the level (`full` when the
+    /// source's text is kept, `excerpts`, `pointer`) and `outcome` what the capture did (`added`, `new_version`, `unchanged`,
+    /// `kept_richer`). Words outside those sets are not written.
+    pub fn kept(&self, url: &str, level: &str, outcome: &str) -> Result<(), String> {
+        if !KEPT_LEVELS.contains(&level) || !KEPT_OUTCOMES.contains(&outcome) {
+            return Err("not a capture level and outcome".into());
+        }
+        self.update(|rec| {
+            let url = clip(url, TEXT_CAP);
+            if let Some(p) = rec["pages"].as_array_mut().and_then(|pages| pages.iter_mut().find(|p| p["url"].as_str() == Some(url.as_str()))) {
+                p["kept"] = json!(level);
+                p["outcome"] = json!(outcome);
+            }
+        })
+    }
+
     /// One page the run did not read, and the fixed word for why.
     pub fn refused(&self, run_id: &str, url: &str, why: &str) -> Result<(), String> {
         self.update(|rec| Self::push(rec, "refused", json!({"run": run_id, "url": clip(url, TEXT_CAP), "reason": clip(why, 40)})))
@@ -362,7 +381,14 @@ impl Topic {
         let question = self.read()?["question"].as_str().unwrap_or("").to_string();
         if let Some(r) = result {
             if let Some(answer) = r["answer"].as_str() {
-                write_atomic(&self.answer_path(), answer_file(&self.id, &question, run_id, answer).as_bytes())?;
+                // A topic's answer is not lost to a later run of it. A run that drew no claim of its own (every claim it met was
+                // already the library's, or it read nothing new) leaves the answer as it was; one that drew some puts its answer
+                // first and what the earlier runs wrote below it.
+                let earlier = self.answer();
+                let drew_none = r["claims"].as_array().is_some_and(Vec::is_empty);
+                if earlier.is_empty() || !drew_none {
+                    write_atomic(&self.answer_path(), answer_file(&self.id, &question, run_id, &with_earlier(answer, &earlier)).as_bytes())?;
+                }
             }
             if r["search_log"].is_object() {
                 write_atomic(&self.search_log_path(), &serde_json::to_vec_pretty(&r["search_log"]).map_err(|e| e.to_string())?)?;
@@ -422,6 +448,22 @@ pub fn gaps_of(result: &Value, state: &str) -> Vec<String> {
         out.push("a step budget ran out before the run finished".into());
     }
     out
+}
+
+/// The line that separates a run's answer from what earlier runs of the topic wrote.
+const EARLIER: &str = "From earlier runs of this topic:";
+/// What `answer.md` holds at most, in characters, as the runner caps one answer.
+const ANSWER_CAP: usize = 7900;
+
+/// A run's answer with the topic's earlier answer below it, under one heading however many runs came before. The same text twice
+/// is written once.
+fn with_earlier(answer: &str, earlier: &str) -> String {
+    let earlier: String = earlier.lines().filter(|l| l.trim() != EARLIER).collect::<Vec<_>>().join("\n");
+    let earlier = earlier.trim();
+    if earlier.is_empty() || earlier == answer.trim() {
+        return answer.to_string();
+    }
+    format!("{}\n\n{}\n{}", answer.trim_end(), EARLIER, earlier).chars().take(ANSWER_CAP).collect()
 }
 
 /// `answer.md`: a few lines of frontmatter that say what it is (not validated, from outside), the question as a heading, the answer.
@@ -675,6 +717,10 @@ impl crate::research_run::Recorder for RunRecorder {
         let _ = self.topic.page(&self.run_id, url, source_id, content_hash);
     }
 
+    fn kept(&self, url: &str, level: &str, outcome: &str) {
+        let _ = self.topic.kept(url, level, outcome);
+    }
+
     fn refused(&self, url: &str, why: &str) {
         let _ = self.topic.refused(&self.run_id, url, why);
     }
@@ -783,12 +829,26 @@ mod tests {
         assert_eq!(status_of(&t, "r-t-1", false).unwrap()["status"], "partial");
         assert!(result_of(&t, "r-other").is_none() && status_of(&t, "r-other", false).is_none());
         assert!(t.finish("r-t-1", "running", None, &[], None, 0).is_err() && t.finish("r-t-1", "bogus", None, &[], None, 0).is_err());
-        // A second run of the topic replaces the answer; the first run's id then says so instead of returning the newer result.
+        // A second run of the topic that drew claims puts its answer first and keeps what the first wrote below it; the first run's
+        // id then says it was superseded instead of returning the newer result.
+        let first = t.answer();
         Topic::begin(ws.path(), &begin("Does aspirin reduce fever?", "r-t-2")).unwrap();
         t.finish("r-t-2", "done", Some(&result("a newer answer")), &["abc123abc123".to_string(), "def456def456".to_string()], None, 10).unwrap();
-        assert_eq!(result_of(&t, "r-t-2").unwrap()["answer"], "a newer answer");
+        let second = result_of(&t, "r-t-2").unwrap()["answer"].as_str().unwrap().to_string();
+        assert_eq!(second, format!("a newer answer\n\nFrom earlier runs of this topic:\n{first}"));
+        // A run that drew no claim of its own leaves the topic's answer as it was, and one more with claims does not nest headings.
+        Topic::begin(ws.path(), &begin("Does aspirin reduce fever?", "r-t-2b")).unwrap();
+        let mut none = result("No claim could be drawn from the sources read. (not validated)");
+        none["claims"] = json!([]);
+        t.finish("r-t-2b", "done", Some(&none), &[], None, 0).unwrap();
+        assert_eq!(result_of(&t, "r-t-2b").unwrap()["answer"], second.as_str(), "the answer is not lost to a run that found nothing new");
+        Topic::begin(ws.path(), &begin("Does aspirin reduce fever?", "r-t-2c")).unwrap();
+        t.finish("r-t-2c", "done", Some(&result("a third answer")), &[], None, 0).unwrap();
+        assert_eq!(t.answer().matches("From earlier runs of this topic:").count(), 1, "{}", t.answer());
+        assert!(t.answer().starts_with("a third answer\n\nFrom earlier runs of this topic:\na newer answer\n"), "{}", t.answer());
+        let last = t.answer();
         let old = result_of(&t, "r-t-1").unwrap();
-        assert_eq!((old["status"].as_str(), old["superseded_by"].as_str(), old.get("answer").is_none()), (Some("partial"), Some("r-t-2"), true));
+        assert_eq!((old["status"].as_str(), old["superseded_by"].as_str(), old.get("answer").is_none()), (Some("partial"), Some("r-t-2c"), true));
         let rec = t.read().unwrap();
         assert_eq!(rec["claims"], json!(["abc123abc123", "def456def456"]), "claim ids gather across runs, once each");
         assert_eq!(rec["usage"]["ms"], 1244);
@@ -797,7 +857,7 @@ mod tests {
         t.finish("r-t-3", "failed", None, &[], Some("the job ran out of time"), 5).unwrap();
         let failed = result_of(&t, "r-t-3").unwrap();
         assert_eq!((failed["status"].as_str(), failed["error"].as_str()), (Some("failed"), Some("the job ran out of time")));
-        assert_eq!(t.answer(), "a newer answer", "a failed run leaves the last answer in place");
+        assert_eq!(t.answer(), last, "a failed run leaves the last answer in place");
     }
 
     #[test]

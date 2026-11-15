@@ -123,6 +123,12 @@ pub trait Library: Send + Sync {
     fn content_hash(&self, _source_id: &str) -> Option<String> {
         None
     }
+    /// What the library kept of a source this run captured, as `(level, outcome)`: the level is `full` (the text is kept), `excerpts`
+    /// or `pointer`; the outcome is `added`, `new_version`, `unchanged` or `kept_richer` (`specs/112` §4 item 1, the keep step). For
+    /// the run's record only; `None` when the library cannot say.
+    fn kept(&self, _source_id: &str) -> Option<(String, String)> {
+        None
+    }
     /// Is the source private? A claim that rests on a private source is never put in an outbound query (`specs/098` §7.5 item 5).
     fn is_private(&self, _source_id: &str) -> bool {
         false
@@ -146,8 +152,58 @@ pub trait Recorder: Send + Sync {
     fn query(&self, _query: &str, _purpose: &str, _provider: Option<&str>, _results: Result<usize, &str>) {}
     /// One page that was read and kept as a source, with the hash of what was read when the library gives it.
     fn page(&self, _url: &str, _source_id: &str, _content_hash: Option<&str>) {}
+    /// What the library kept of a page the run just reported with [`page`](Recorder::page): the level and the outcome
+    /// (`Library::kept`).
+    fn kept(&self, _url: &str, _level: &str, _outcome: &str) {}
     /// One page that was not read, and a fixed word for why.
     fn refused(&self, _url: &str, _why: &str) {}
+}
+
+/// The limits of a research run: one table for every caller, the console, an inside agent and a host (`specs/112` §4 item 6,
+/// `[research.limits]`). The defaults are the host runner's figures of before the table; the two picture caps are the console
+/// job's, the only runner that kept pictures.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Limits {
+    /// Pages read at each depth: quick, survey, deep.
+    pub pages: [usize; 3],
+    /// The step budget at each depth: quick, survey, deep. The check has a quarter of it on top (`research_jobs::check_budget`).
+    pub steps: [u32; 3],
+    /// A running job is stopped after this long and reports `failed`.
+    pub job_secs: u64,
+    /// Jobs that run at once; the rest wait in order.
+    pub concurrent: usize,
+    /// How much of one page the scout reads, in characters.
+    pub page_chars: usize,
+    /// The depth of a run started from the console or by an inside agent, which name none.
+    pub depth: Depth,
+    /// Pictures kept with one source whose text is kept, and in one run. Only a run from the console or an inside agent keeps
+    /// pictures; zero keeps none.
+    pub pictures_per_source: usize,
+    pub pictures_per_run: usize,
+}
+
+impl Default for Limits {
+    fn default() -> Limits {
+        Limits { pages: [3, 6, 10], steps: [Depth::Quick.max_steps(), Depth::Survey.max_steps(), Depth::Deep.max_steps()], job_secs: 600, concurrent: 2, page_chars: 24_000, depth: Depth::Survey, pictures_per_source: 6, pictures_per_run: 24 }
+    }
+}
+
+fn depth_index(depth: Depth) -> usize {
+    match depth {
+        Depth::Quick => 0,
+        Depth::Survey => 1,
+        Depth::Deep => 2,
+    }
+}
+
+impl Limits {
+    pub fn pages_at(&self, depth: Depth) -> usize {
+        self.pages[depth_index(depth)]
+    }
+
+    pub fn steps_at(&self, depth: Depth) -> u32 {
+        self.steps[depth_index(depth)]
+    }
 }
 
 pub struct Deps<'a> {
@@ -173,6 +229,8 @@ pub struct Deps<'a> {
     pub chain: Option<ChainPlan<'a>>,
     /// The run's record on disk (`specs/112` §2), written as the run goes. `None` keeps no record.
     pub record: Option<&'a dyn Recorder>,
+    /// The one limits table (`specs/112` §4 item 6).
+    pub limits: &'a Limits,
 }
 
 #[derive(Debug, Clone)]
@@ -192,15 +250,6 @@ pub struct ClaimRec {
     pub support: Support,
     /// Another claim about the same thing disagrees (`contradictions`), set before the claim is staged.
     pub contested: bool,
-}
-
-/// How many pages a job reads at each depth.
-pub fn page_cap(depth: Depth) -> usize {
-    match depth {
-        Depth::Quick => 3,
-        Depth::Survey => 6,
-        Depth::Deep => 10,
-    }
 }
 
 /// The host of a URL, for a refusal that names it; empty when the URL has none.
@@ -363,11 +412,17 @@ fn coverage_report(r: &Rungs, kb: usize, trusted_claims: usize, web_claims: usiz
 /// way the run's record is told (`specs/112` §2.2). What `Some` holds is the ids of the library claims that were already held and
 /// gained an anchor from this page (§3.3).
 async fn ingest(deps: &Deps<'_>, question: &str, page: &Page, trusted: bool, retrieved: &str, set: &mut ClaimSet, claims: &mut Vec<ClaimRec>) -> Option<Vec<String>> {
-    let Ok(source_id) = deps.library.capture(&page.url, &page.text, trusted).await else {
-        note(deps, |r| r.refused(&page.url, "capture_failed"));
-        return None;
+    let source_id = match deps.library.capture(&page.url, &page.text, trusted).await {
+        Ok(id) => id,
+        Err(e) => {
+            note(deps, |r| r.refused(&page.url, refusal_word(&e)));
+            return None;
+        }
     };
     note(deps, |r| r.page(&page.url, &source_id, deps.library.content_hash(&source_id).as_deref()));
+    if let Some((level, outcome)) = deps.library.kept(&source_id) {
+        note(deps, |r| r.kept(&page.url, &level, &outcome));
+    }
     let mut anchored = Vec::new();
     let Ok(found) = deps.scout.extract(question, page).await else { return Some(anchored) };
     for x in found {
@@ -402,6 +457,21 @@ async fn ingest(deps: &Deps<'_>, question: &str, page: &Page, trusted: bool, ret
         }
     }
     Some(anchored)
+}
+
+/// The two source rules of the keep step (`specs/112` §4 item 1): a library that refuses a page under one of them says so with
+/// this word, and the record keeps it.
+pub const WEAK_SOURCE: &str = "weak_source";
+pub const EXCLUDED_SOURCE: &str = "excluded_source";
+
+/// The fixed word the record keeps for a capture the library refused: one of the two source rules, or `capture_failed`. No text
+/// of the library's error is kept.
+fn refusal_word(e: &str) -> &'static str {
+    match e {
+        WEAK_SOURCE => WEAK_SOURCE,
+        EXCLUDED_SOURCE => EXCLUDED_SOURCE,
+        _ => "capture_failed",
+    }
 }
 
 /// Tell the run's record something, when the run has one.
@@ -716,7 +786,7 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
         trusted_rows.append(&mut other);
         let total = trusted_rows.len();
         for (i, row) in trusted_rows.into_iter().enumerate() {
-            if pages_read >= page_cap(depth) {
+            if pages_read >= deps.limits.pages_at(depth) {
                 log.dropped(li, "page_cap", total - i);
                 break 'queries;
             }
@@ -1082,6 +1152,10 @@ mod tests {
         dois: BTreeMap<String, String>,
         /// Hosts whose capture fails, as the fetcher refusing a cross-origin redirect or a cloaked page would.
         capture_fails: BTreeSet<String>,
+        /// Hosts the keep step refuses, with the word it gives (`weak_source`, `excluded_source`).
+        refuses: BTreeMap<String, &'static str>,
+        /// Say what was kept of each captured source, as the live library does.
+        says_kept: bool,
     }
     impl Library for FakeLib {
         /// As the live library does: a private source gives no seed, and neither does one that names no DOI.
@@ -1126,6 +1200,9 @@ mod tests {
                 if self.capture_fails.contains(&host(url)) {
                     return Err("the fetcher refused".into());
                 }
+                if let Some(word) = self.refuses.get(&host(url)) {
+                    return Err(word.to_string());
+                }
                 Ok(format!("src-{}", host(url)))
             })
         }
@@ -1144,6 +1221,9 @@ mod tests {
         }
         fn content_hash(&self, source_id: &str) -> Option<String> {
             Some(format!("sha256:of-{source_id}"))
+        }
+        fn kept(&self, source_id: &str) -> Option<(String, String)> {
+            self.says_kept.then(|| (if source_id.ends_with("who.int") { "full" } else { "pointer" }.to_string(), "added".to_string()))
         }
     }
 
@@ -1202,6 +1282,9 @@ mod tests {
         fn refused(&self, url: &str, why: &str) {
             self.0.lock().unwrap().push(format!("refused {url} {why}"));
         }
+        fn kept(&self, url: &str, level: &str, outcome: &str) {
+            self.0.lock().unwrap().push(format!("kept {url} {level} {outcome}"));
+        }
     }
 
     struct Fixture {
@@ -1222,6 +1305,7 @@ mod tests {
         thin_below: usize,
         support: Params,
         host_searches: Vec<HostSearch>,
+        limits: Limits,
     }
 
     impl Fixture {
@@ -1236,10 +1320,10 @@ mod tests {
                 ("https://nih.gov/b".to_string(), vec![x("fever")]),
                 ("https://blog.example/a".to_string(), vec![x("headaches")]),
             ]));
-            Fixture { record: None, retractions: None, cites: None, bounds: (1, 2, 10, 30), pages: 0, web, scout, validator: FakeValidator { verdict, asked: Default::default(), handed: Default::default() }, lib: FakeLib::default(), redactor: Redactor::new(), sites: vec!["who.int".into(), "nih.gov".into()], thin_below: 3, support: Params::default(), host_searches: Vec::new() }
+            Fixture { record: None, retractions: None, cites: None, bounds: (1, 2, 10, 30), pages: 0, web, scout, validator: FakeValidator { verdict, asked: Default::default(), handed: Default::default() }, lib: FakeLib::default(), redactor: Redactor::new(), sites: vec!["who.int".into(), "nih.gov".into()], thin_below: 3, support: Params::default(), host_searches: Vec::new(), limits: Limits::default() }
         }
         fn deps(&self) -> Deps<'_> {
-            Deps { web: &self.web, scout: &self.scout, validator: &self.validator, library: &self.lib, redactor: &self.redactor, sites: &self.sites, thin_below: self.thin_below, support: &self.support, host_searches: &self.host_searches, retractions: self.retractions, chain: self.cites.as_ref().map(|c| ChainPlan { cites: c, depth: self.bounds.0, fanout: self.bounds.1, max_per_seed: self.bounds.2, max_calls: self.bounds.3, max_pages: self.pages }), record: self.record.as_ref().map(|r| r as &dyn Recorder) }
+            Deps { web: &self.web, scout: &self.scout, validator: &self.validator, library: &self.lib, redactor: &self.redactor, sites: &self.sites, thin_below: self.thin_below, support: &self.support, host_searches: &self.host_searches, retractions: self.retractions, chain: self.cites.as_ref().map(|c| ChainPlan { cites: c, depth: self.bounds.0, fanout: self.bounds.1, max_per_seed: self.bounds.2, max_calls: self.bounds.3, max_pages: self.pages }), record: self.record.as_ref().map(|r| r as &dyn Recorder), limits: &self.limits }
         }
     }
 
@@ -1252,6 +1336,36 @@ mod tests {
             Finish::Done(v) => (false, v),
             Finish::Partial(v) => (true, v),
         }
+    }
+
+    /// `specs/112` §4 items 1 and 6: the pages a run reads come from the one limits table; the record is told what the library
+    /// kept of each page, and a page the keep step refused is listed with the step's own word, never the library's text.
+    #[tokio::test]
+    async fn the_page_cap_is_the_limits_table_and_the_record_is_told_what_the_keep_step_did() {
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        f.web.rows = (0..5).map(|i| row(&format!("https://who.int/p{i}"))).collect();
+        for i in 0..5 {
+            f.web.pages.insert(format!("https://who.int/p{i}"), format!("text {i}"));
+        }
+        f.limits.pages = [2, 2, 2];
+        let c = ctx(Depth::Deep);
+        run_research(&c, "does aspirin reduce fever", Depth::Deep, &f.deps()).await.unwrap();
+        assert_eq!(f.lib.captured.lock().unwrap().len(), 2, "two pages, by the table, where the depth's default is ten");
+        assert_eq!((Limits::default().pages_at(Depth::Quick), Limits::default().pages_at(Depth::Survey), Limits::default().pages_at(Depth::Deep)), (3, 6, 10), "the defaults are the host runner's");
+
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        f.record = Some(Told::default());
+        f.lib.says_kept = true;
+        f.lib.refuses = BTreeMap::from([("blog.example".to_string(), WEAK_SOURCE), ("nih.gov".to_string(), "the library said something long and private")]);
+        let c = ctx(Depth::Survey);
+        let (_, v) = value(run_research(&c, "does aspirin reduce fever", Depth::Survey, &f.deps()).await.unwrap());
+        let told = f.record.as_ref().unwrap().0.lock().unwrap().clone();
+        assert!(told.contains(&"kept https://who.int/a full added".to_string()), "{told:?}");
+        assert!(told.contains(&"refused https://blog.example/a weak_source".to_string()), "{told:?}");
+        assert!(told.contains(&"refused https://nih.gov/b capture_failed".to_string()), "any other refusal is one fixed word: {told:?}");
+        assert!(!told.iter().any(|l| l.contains("long and private")));
+        assert_eq!(v["claims"].as_array().unwrap().len(), 1, "a page that was not kept gives no claim: {v}");
+        assert_eq!((refusal_word(EXCLUDED_SOURCE), refusal_word("excluded_source and more")), (EXCLUDED_SOURCE, "capture_failed"));
     }
 
     #[tokio::test]

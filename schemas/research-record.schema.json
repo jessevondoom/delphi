@@ -55,7 +55,9 @@
           "run": { "$ref": "#/$defs/run_id" },
           "url": { "type": "string", "maxLength": 300 },
           "source_id": { "type": "string", "maxLength": 80, "description": "The library source the page became." },
-          "content_hash": { "type": ["string", "null"], "maxLength": 80, "description": "`sha256:<hex>` of what was read, as the library holds it." }
+          "content_hash": { "type": ["string", "null"], "maxLength": 80, "description": "`sha256:<hex>` of what was read, as the library holds it." },
+          "kept": { "enum": ["full", "excerpts", "pointer"], "description": "What the library kept of the page (specs/112 section 4 item 1): `full` when the licence allowed the text to be kept, else excerpts or a pointer." },
+          "outcome": { "enum": ["added", "new_version", "unchanged", "kept_richer"], "description": "What the capture did: a new source, a new version of one, nothing (the same content), or nothing because the stored capture holds more." }
         },
         "additionalProperties": false
       }
@@ -69,7 +71,7 @@
         "properties": {
           "run": { "$ref": "#/$defs/run_id" },
           "url": { "type": "string", "maxLength": 300 },
-          "reason": { "enum": ["not_fetchable", "refused", "fetch_failed", "capture_failed"] }
+          "reason": { "enum": ["not_fetchable", "refused", "fetch_failed", "capture_failed", "weak_source", "excluded_source"] }
         },
         "additionalProperties": false
       }

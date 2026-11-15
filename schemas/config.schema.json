@@ -176,6 +176,25 @@
         "search_log": { "type": "boolean", "deprecated": true, "description": "Removed (specs/098 section 13.2): ignored. Every host research result carries its search log (specs/101 section 3). The key stays here so an old config still validates; delphi doctor names it." },
         "retractions": { "type": "boolean", "description": "Check a source's DOI against the local Retraction Watch snapshot at capture, at re-check and on import (specs/101 section 4). A retracted work, or one under an expression of concern, stops counting as an origin; a claim only a retracted source supports becomes contested; a correction is a label. Nothing is deleted and nothing is sent to a service. Default false." },
         "retractions_stale_days": { "type": "integer", "minimum": 1, "maximum": 3650, "description": "A snapshot imported more than this many days ago is called stale in the coverage report and by delphi doctor. Default 90." },
+        "limits": {
+          "type": "object",
+          "description": "The limits of a research run, one table for every caller: the console's /research, an inside agent's request_research and a host's (specs/112 section 4 item 6). The defaults are the host runner's figures of before the table. A value outside its range keeps the default.",
+          "additionalProperties": false,
+          "properties": {
+            "pages_quick": { "type": "integer", "minimum": 1, "maximum": 40, "description": "Pages read by a quick run. Default 3." },
+            "pages_survey": { "type": "integer", "minimum": 1, "maximum": 40, "description": "Pages read by a survey run. Default 6." },
+            "pages_deep": { "type": "integer", "minimum": 1, "maximum": 40, "description": "Pages read by a deep run. Default 10." },
+            "steps_quick": { "type": "integer", "minimum": 1, "maximum": 200, "description": "The step budget (searches and fetches) of a quick run; the check has a quarter of it on top, at least two. A run that reaches it returns partial. Default 5." },
+            "steps_survey": { "type": "integer", "minimum": 1, "maximum": 200, "description": "The step budget of a survey run. Default 15." },
+            "steps_deep": { "type": "integer", "minimum": 1, "maximum": 200, "description": "The step budget of a deep run. Default 30." },
+            "job_secs": { "type": "integer", "minimum": 30, "maximum": 3600, "description": "A running job is stopped after this many seconds and reports failed. Default 600." },
+            "concurrent": { "type": "integer", "minimum": 1, "maximum": 8, "description": "Research jobs that run at once, whoever asked; the rest wait in order. Default 2." },
+            "page_chars": { "type": "integer", "minimum": 1000, "maximum": 200000, "description": "How much of one page the scout reads, in characters. Default 24000." },
+            "depth": { "enum": ["quick", "survey", "deep"], "description": "The depth of a run started from the console or by an inside agent, which name none. Default survey." },
+            "pictures_per_source": { "type": "integer", "minimum": 0, "maximum": 50, "description": "Pictures kept with one source whose text is kept, in a run from the console or an inside agent (a host's run keeps none). 0 keeps none. Default 6." },
+            "pictures_per_run": { "type": "integer", "minimum": 0, "maximum": 200, "description": "Pictures fetched in one such run. Default 24." }
+          }
+        },
         "tiers": {
           "type": "object",
           "description": "The confidence ladder (specs/100 section 3.2): when a claim reads corroborated, substantiated or vetted. Derived by code from tags; each rung reads not validated (vetted reads vetted) and is weaker than validated; none grants anything. Numbers are defaults to calibrate.",
