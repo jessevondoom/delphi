@@ -1,0 +1,140 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 120: The app scope"
+    },
+    {
+      "level": 2,
+      "line": 23,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 3,
+      "line": 33,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 40,
+      "number": "1.2",
+      "title": "Simpler alternative considered"
+    },
+    {
+      "level": 2,
+      "line": 46,
+      "number": "2",
+      "title": "Pairing: a terminal starts the app"
+    },
+    {
+      "level": 2,
+      "line": 57,
+      "number": "3",
+      "title": "Every connection proves the key"
+    },
+    {
+      "level": 2,
+      "line": 65,
+      "number": "4",
+      "title": "Grants"
+    },
+    {
+      "level": 3,
+      "line": 69,
+      "number": "4.1",
+      "title": "`read`"
+    },
+    {
+      "level": 3,
+      "line": 73,
+      "number": "4.2",
+      "title": "`request` (the first acting grant, built by this spec)"
+    },
+    {
+      "level": 2,
+      "line": 92,
+      "number": "5",
+      "title": "Widening, one grant at a time"
+    },
+    {
+      "level": 2,
+      "line": 107,
+      "number": "6",
+      "title": "What the app shows"
+    },
+    {
+      "level": 2,
+      "line": 113,
+      "number": "7",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 127,
+      "number": "8",
+      "title": "Authority and trust"
+    },
+    {
+      "level": 2,
+      "line": 136,
+      "number": "9",
+      "title": "Verification plan"
+    },
+    {
+      "level": 2,
+      "line": 144,
+      "number": "10",
+      "title": "Slices"
+    },
+    {
+      "level": 2,
+      "line": 159,
+      "number": "11",
+      "title": "Open questions (the operator decides)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/120-the-app-scope-a-key-paired-from-a-terminal-and-grants-that-widen-one-at-a-time.md",
+    "sha256": "740ebf7cd5d628a55cbf3f60e103f0a632b84a697bf5eb48276f5054851bb779"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 887,
+        "end_line": 6,
+        "line": 6,
+        "start": 241
+      },
+      "text": "status: approved   # by the operator, 2026-11-14, in a host session: \"approve 120. add to the build plan\". The spec was written from the operator's direction earlier that day (\"shouldn't we be able to launch in a secure scope even without user involvement by spawning the app from a terminal with a signed key exchange or similar? i agree to narrowing scope but i think we start narrow and expand explicitly in order to maintain secure operations and support a wide feature set in the app.\"). The operator was shown a summary of the design and its open questions, not every line. It amends an operator decision (2026-10-25, spec 005 section 2.1)."
+    },
+    "sha256": "740ebf7cd5d628a55cbf3f60e103f0a632b84a697bf5eb48276f5054851bb779",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "console",
+    "number": "120",
+    "stem": "120-the-app-scope-a-key-paired-from-a-terminal-and-grants-that-widen-one-at-a-time",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "120: The app scope: a key paired from a terminal, and grants that widen one at a time"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2719,
+      "end_line": 29,
+      "line": 25,
+      "start": 2056
+    },
+    "text": "| # | Observation (2026-11-14) |\n| :-- | :-- |\n| E-1 | The app attaches on the narrator socket and can only read. Anything the operator wants to do from a page (ask a follow-up, have a section researched further, rebuild a page, dispute a statement) is a command copied to the clipboard (117 §6). |\n| E-2 | The daemon gives a scope by the socket a client connects to, checks the peer's user id, and issues an acting token only to a client at a terminal. A window has no terminal, so the app cannot be given one. |\n| E-3 | The operator wants the app to carry a wide set of features over time, each added on purpose, without loosening what keeps the daemon safe. |"
+  }
+}
