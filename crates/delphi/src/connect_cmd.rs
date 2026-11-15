@@ -11,12 +11,48 @@ use delphi_engine::mcp_check;
 
 use crate::connect_run;
 
-/// The GitHub repository that holds Delphi's marketplace: the identity every check compares.
-pub const SOURCE: &str = "jessevondoom/delphi";
-/// Spec 074 §10.4: the branch a host follows. The release workflow moves it to each release tag's commit; `main` moves in between.
-pub const CHANNEL: &str = "stable";
-/// What a host is told to add: the repository at the release channel. Both hosts with a row record the ref (`source.ref`).
-pub const ADD_SOURCE: &str = "jessevondoom/delphi#stable";
+/// The marketplace repository this build installs from by default (spec 074 §11): Delphi's own, or a fork's when it was built
+/// with `DELPHI_MARKETPLACE_REPO`.
+pub const SOURCE: &str = delphi_engine::mcp_hosts::MARKETPLACE_REPO;
+/// Where a template's add row takes the source the operator consented to.
+const SOURCE_SLOT: &str = "{source}";
+/// Spec 074 §10.4: the branch a host follows by default.
+pub const CHANNEL: &str = delphi_engine::mcp_hosts::CHANNEL;
+
+/// The marketplace a connect installs from, or expects the host to have: a GitHub repository and, optionally, a branch.
+/// It comes from this build's default, from `--source` typed on the command line, or from the record of an earlier connect.
+/// Never from the environment or a file an agent could write (spec 074 §11 item 2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Source {
+    pub repo: String,
+    pub reference: Option<String>,
+}
+
+impl Default for Source {
+    fn default() -> Self {
+        // This build's repository at the release channel.
+        Source { repo: SOURCE.to_string(), reference: Some(CHANNEL.to_string()) }
+    }
+}
+
+impl Source {
+    pub fn parse(s: &str) -> Result<Source, String> {
+        delphi_engine::mcp_hosts::parse_source(s).map(|(repo, reference)| Source { repo, reference })
+    }
+
+    /// The one argv element a host is given: `owner/repo` or `owner/repo#branch`.
+    pub fn arg(&self) -> String {
+        match &self.reference {
+            Some(r) => format!("{}#{r}", self.repo),
+            None => self.repo.clone(),
+        }
+    }
+
+    /// Whether this is the repository the build installs from by default.
+    pub fn is_builtin(&self) -> bool {
+        self.repo == SOURCE
+    }
+}
 const MAX_EXE: u64 = 1024 * 1024 * 1024;
 
 /// One host's fixed commands (spec 074 C3 table). Every element is a constant: nothing from the operator, an agent, the environment or a file.
@@ -34,7 +70,6 @@ pub struct Template {
     /// Spec 074 §10.2: the host's own update of an installed plugin. Empty for a host with no proven row.
     pub update: &'static [&'static [&'static str]],
     pub writes: &'static str,
-    pub manual_add: &'static str,
     pub manual_remove: &'static str,
     pub manual_update: &'static str,
 }
@@ -49,10 +84,9 @@ pub const TEMPLATES: [Template; 2] = [
         proven_on: "Claude Code 2.1.325, with the branch `main` (the branch `stable` did not exist when it was run)",
         proven_update: "Claude Code 2.1.325",
         dirs: &[".local/bin", ".claude/local", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"],
-        add: [&["plugin", "marketplace", "add", ADD_SOURCE], &["plugin", "install", "delphi@delphi"]],
+        add: [&["plugin", "marketplace", "add", SOURCE_SLOT], &["plugin", "install", "delphi@delphi"]],
         remove: [&["plugin", "uninstall", "delphi@delphi"], &["plugin", "marketplace", "remove", "delphi"]],
         writes: "~/.claude/plugins/ (marketplace and plugin files), ~/.claude/settings.json (enabledPlugins, extraKnownMarketplaces)",
-        manual_add: "claude plugin marketplace add jessevondoom/delphi#stable && claude plugin install delphi@delphi",
         manual_remove: "claude plugin uninstall delphi@delphi && claude plugin marketplace remove delphi",
         // Proven on Claude Code 2.1.325 to refresh a stale marketplace clone by itself (spec 074 §10.5).
         update: &[&["plugin", "update", "delphi@delphi"]],
@@ -65,16 +99,22 @@ pub const TEMPLATES: [Template; 2] = [
         proven_on: "Copilot CLI 1.0.111, with the branch `main` (the branch `stable` did not exist when it was run)",
         proven_update: "Copilot CLI 1.0.111",
         dirs: &[".local/bin", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"],
-        add: [&["plugin", "marketplace", "add", ADD_SOURCE], &["plugin", "install", "delphi@delphi"]],
+        add: [&["plugin", "marketplace", "add", SOURCE_SLOT], &["plugin", "install", "delphi@delphi"]],
         remove: [&["plugin", "uninstall", "delphi@delphi"], &["plugin", "marketplace", "remove", "delphi"]],
         writes: "~/.copilot/ (settings.json: enabledPlugins, extraKnownMarketplaces; installed-plugins/)",
-        manual_add: "copilot plugin marketplace add jessevondoom/delphi#stable && copilot plugin install delphi@delphi",
         manual_remove: "copilot plugin uninstall delphi@delphi && copilot plugin marketplace remove delphi",
         // Both proven to run on Copilot CLI 1.0.111; whether the second refreshes the catalog alone was not established.
         update: &[&["plugin", "marketplace", "update", "delphi"], &["plugin", "update", "delphi@delphi"]],
         manual_update: "copilot plugin marketplace update delphi && copilot plugin update delphi@delphi",
     },
 ];
+
+impl Template {
+    /// The two commands an operator would type to do by hand what an add does, for `source`.
+    pub fn manual_add(&self, source: &Source) -> String {
+        format!("{} plugin marketplace add {} && {} plugin install delphi@delphi", self.exe, source.arg(), self.exe)
+    }
+}
 
 pub fn template(host: &str) -> Option<&'static Template> {
     TEMPLATES.iter().find(|t| t.host == host)
@@ -173,19 +213,42 @@ pub fn argv(exe: &Path, steps: &[&[&str]]) -> Vec<Vec<String>> {
     steps.iter().map(|st| std::iter::once(exe.display().to_string()).chain(st.iter().map(|x| x.to_string())).collect()).collect()
 }
 
-/// The plan text: everything the operator would consent to. Dynamic values are sanitised.
+/// The argv of an add for `source`: the template's rows with the source slot filled. The source was parsed as a GitHub
+/// `owner/repo[#branch]`, so it is one element that no host CLI can read as a flag.
+pub fn add_argv(exe: &Path, t: &Template, source: &Source) -> Vec<Vec<String>> {
+    let mut steps = argv(exe, &t.add);
+    for step in &mut steps {
+        for x in step.iter_mut().filter(|x| *x == SOURCE_SLOT) {
+            *x = source.arg();
+        }
+    }
+    steps
+}
+
+/// [`render_plan_from`] for this build's own repository.
+#[cfg(test)]
 pub fn render_plan(t: &Template, exe: &HostExe, pre: &mcp_check::Check, addable: bool, link: &connect_run::Link, home: &Path) -> String {
+    render_plan_from(t, exe, pre, addable, link, home, &Source::default())
+}
+
+/// The plan text: everything the operator would consent to. Dynamic values are sanitised.
+pub fn render_plan_from(t: &Template, exe: &HostExe, pre: &mcp_check::Check, addable: bool, link: &connect_run::Link, home: &Path, source: &Source) -> String {
     let mut o = String::new();
     o.push_str(&format!("delphi connect {}: plan (nothing has been run or written)\n", t.host));
     o.push_str(&format!("host CLI: {} (resolves to {})\n", sanitize(&exe.listed.display().to_string()), sanitize(&exe.canonical.display().to_string())));
     o.push_str(&format!("  owner uid {}, mode {:o}, sha256 {}\n", exe.uid, exe.mode, exe.sha256));
     o.push_str(&format!("  the host version is not probed (that would run a program you have not consented to); the argv below was proven on {}\n", t.proven_on));
-    for (i, a) in argv(&exe.canonical, &t.add).iter().enumerate() {
+    for (i, a) in add_argv(&exe.canonical, t, source).iter().enumerate() {
         o.push_str(&format!("step {}: {}\n", i + 1, a.iter().map(|x| sanitize(x)).collect::<Vec<_>>().join(" ")));
     }
     o.push_str("working directory: a private temporary directory made at run time\n");
     o.push_str("environment: only a fixed safe PATH, HOME, LANG and LC_*, TERM and a private TMPDIR; proxy, token, loader, Git, npm, Python, Ruby and XDG variables are dropped\n");
-    o.push_str(&format!("source: {SOURCE}, a GitHub repository, at its branch `{CHANNEL}`, fetched by {} at connect time. The release workflow moves `{CHANNEL}` to each release, so the host then follows Delphi's releases and not `main` (no commit or version is pinned: spec 071 D-5(B))\n", t.exe));
+    let follows = source.reference.as_deref().map_or_else(|| "its default branch".to_string(), |r| format!("its branch `{}`", sanitize(r)));
+    let channel = if source.reference.as_deref() == Some(CHANNEL) { format!(" `{CHANNEL}` is the release channel: the release workflow moves it to each release, so the host follows releases and not `main`.") } else { String::new() };
+    o.push_str(&format!("source: {}, a GitHub repository ({follows}), fetched by {} at connect time; the host then tracks it (no commit or version is pinned: spec 071 D-5(B)).{channel}\n", sanitize(&source.repo), t.exe));
+    if !source.is_builtin() {
+        o.push_str(&format!("WARNING: {} is not the repository this build of Delphi installs from ({SOURCE}). The skill text, hooks and server declaration that steer {} will come from it, now and at every update. Go on only if you trust everyone who can push there\n", sanitize(&source.repo), t.exe));
+    }
     o.push_str(&format!("expected writes: {}\n", t.writes));
     o.push_str(&connect_run::link_line(link, home));
     o.push_str("network: github.com, as the host decides\n");
@@ -241,8 +304,17 @@ pub fn update_pointer(host: &str, state: mcp_check::State) -> Option<String> {
 /// route for a marketplace the operator added, so Delphi neither sets nor reads the setting.
 pub const AUTO_UPDATE_TIP: &str = "tip: Claude Code does not auto-update a marketplace you added yourself. To let it keep the Delphi plugin current, run `/plugin` in a session, open Marketplaces, select `delphi` and choose Enable auto-update. Until then, `delphi update` tells you when the plugin falls behind";
 
+/// A fix the read-only check printed names this build's repository; for a host connected to another source, name that one.
+pub fn localize(fix: &str, source: &Source) -> String {
+    if *source == Source::default() {
+        fix.to_string()
+    } else {
+        fix.replace(&format!("marketplace add {SOURCE}#{CHANNEL}"), &format!("marketplace add {}", source.arg()))
+    }
+}
+
 fn usage() -> i32 {
-    eprintln!("usage: delphi connect claude-code|copilot|codex|gemini [--dry-run | --status | --remove]\n       delphi connect claude-code|copilot --update [--dry-run]\n       delphi connect claude-code --theme [--dry-run | --remove] [--light | --dark]");
+    eprintln!("usage: delphi connect claude-code|copilot|codex|gemini [--dry-run | --status | --remove]\n       delphi connect claude-code|copilot --update [--dry-run]\n       delphi connect claude-code|copilot [--dry-run | --update | --status] --source owner/repo[#branch]\n       delphi connect claude-code --theme [--dry-run | --remove] [--light | --dark]");
     2
 }
 
@@ -252,9 +324,32 @@ pub fn cmd(args: &[String]) -> i32 {
     let dry = rest.contains(&"--dry-run");
     let remove = rest.contains(&"--remove");
     let update = rest.contains(&"--update");
+    // Spec 074 §11: `--source owner/repo[#branch]`, typed here and nowhere else. Its value is taken out before a host is looked for.
+    let mut rest = rest;
+    let named = match rest.iter().position(|a| *a == "--source") {
+        Some(i) => {
+            let Some(value) = rest.get(i + 1).copied().filter(|v| !v.starts_with("--")) else {
+                eprintln!("delphi connect: `--source` needs a GitHub repository: owner/repo, or owner/repo#branch");
+                return 2;
+            };
+            rest.drain(i..=i + 1);
+            match Source::parse(value) {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    eprintln!("delphi connect: {e}");
+                    return 2;
+                }
+            }
+        }
+        None => None,
+    };
     let Some(host) = rest.iter().find(|a| !a.starts_with("--")) else { return usage() };
     // Spec 110 X2: Codex and Gemini CLI install Delphi's own files, not a marketplace plugin. `--remove --dry-run` previews a removal.
     if crate::connect_files::handles(host) {
+        if named.is_some() {
+            eprintln!("delphi connect: `--source` is for the hosts that install the Delphi plugin from a marketplace (claude-code, copilot); {host} gets Delphi's own files");
+            return 2;
+        }
         if update {
             // Spec 074 §10.2 item 6: these hosts have no marketplace plugin that connect manages.
             eprintln!("delphi connect: `--update` is for the hosts that install the Delphi plugin (claude-code, copilot). For {host}, `delphi connect {host} --status` says what is stale and `delphi connect {host}` writes Delphi's files again");
@@ -296,6 +391,9 @@ pub fn cmd(args: &[String]) -> i32 {
     };
     let home = Path::new(&home);
     let release = env!("CARGO_PKG_VERSION");
+    let delphi_home = crate::home::delphi_home(None);
+    // The source: what was typed, else what an earlier connect recorded for this host, else this build's own repository.
+    let source = named.clone().or_else(|| connect_run::recorded_source(&delphi_home, t.host)).unwrap_or_default();
     let pre = match mcp_check::check_host(t.host, home, release) {
         Ok(c) => c,
         Err(e) => {
@@ -307,10 +405,11 @@ pub fn cmd(args: &[String]) -> i32 {
         println!("{}: {}: {}", t.host, pre.state.name(), sanitize(&pre.detail));
         println!("{}: launchable: {}", t.host, sanitize(&crate::launchable_now(home).line()));
         println!("{}: launch path: {}", t.host, crate::launch_path_line(home));
+        println!("{}: source: {}", t.host, sanitize(&connect_run::source_line(t, home, &source)));
         if let Some(c) = connect_run::channel_line(t, home) {
             println!("{}: channel: {}", t.host, sanitize(&c));
         }
-        println!("next: {}", pre.fix.as_deref().map(sanitize).unwrap_or_else(|| "nothing to do".into()));
+        println!("next: {}", pre.fix.as_deref().map(|f| sanitize(&localize(f, &source))).unwrap_or_else(|| "nothing to do".into()));
         if let Some(p) = update_pointer(t.host, pre.state) {
             println!("or:   {p} (the same update, run for you after you confirm its plan)");
         }
@@ -327,29 +426,28 @@ pub fn cmd(args: &[String]) -> i32 {
     let exe = match find_host(&search_dirs(t, home), t.exe) {
         Ok(exe) => exe,
         Err(e) => {
-            eprintln!("delphi connect: {e}. Manual commands: {}", if remove { t.manual_remove } else if update { t.manual_update } else { t.manual_add });
+            eprintln!("delphi connect: {e}. Manual commands: {}", if remove { t.manual_remove.to_string() } else if update { t.manual_update.to_string() } else { t.manual_add(&source) });
             return 1;
         }
     };
     if update {
-        if let Err(e) = connect_run::updatable(t, home) {
+        if let Err(e) = connect_run::updatable_from(t, home, &source) {
             eprintln!("delphi connect: {e}");
             return 2;
         }
     }
     if dry && update {
-        let plan = connect_run::update_plan(t, &exe, &pre, &link, home);
+        let plan = connect_run::update_plan_from(t, &exe, &pre, &link, home, &source);
         print!("{plan}");
         println!("confirmation that `delphi connect {} --update` will require for exactly this plan: {}", t.host, connect_run::update_confirmation(t.host, &plan));
         return 0;
     }
     if dry {
-        let plan = render_plan(t, &exe, &pre, addable, &link, home);
+        let plan = render_plan_from(t, &exe, &pre, addable, &link, home, &source);
         print!("{plan}");
         println!("confirmation that `delphi connect {}` will require for exactly this plan: {}", t.host, confirmation(t.host, &plan));
         return 0;
     }
-    let delphi_home = crate::home::delphi_home(None);
     let (plan, expect) = if remove {
         if let Err(e) = connect_run::removable(t, home, &delphi_home) {
             eprintln!("delphi connect: {e}");
@@ -359,19 +457,19 @@ pub fn cmd(args: &[String]) -> i32 {
         let expect = connect_run::remove_confirmation(t.host, &plan);
         (plan, expect)
     } else if update {
-        let plan = connect_run::update_plan(t, &exe, &pre, &link, home);
+        let plan = connect_run::update_plan_from(t, &exe, &pre, &link, home, &source);
         let expect = connect_run::update_confirmation(t.host, &plan);
         (plan, expect)
     } else {
         if !addable {
             eprintln!("delphi connect: something of Delphi's is already present, and connect only adds what is absent: {}: {}", pre.state.name(), sanitize(&pre.detail));
-            eprintln!("next: {}", pre.fix.as_deref().map(sanitize).unwrap_or_else(|| format!("see `delphi connect {} --status`", t.host)));
+            eprintln!("next: {}", pre.fix.as_deref().map(|f| sanitize(&localize(f, &source))).unwrap_or_else(|| format!("see `delphi connect {} --status`", t.host)));
             if let Some(p) = update_pointer(t.host, pre.state) {
                 eprintln!("or:   {p}");
             }
             return 2;
         }
-        let plan = render_plan(t, &exe, &pre, true, &link, home);
+        let plan = render_plan_from(t, &exe, &pre, true, &link, home, &source);
         let expect = confirmation(t.host, &plan);
         (plan, expect)
     };
@@ -385,9 +483,9 @@ pub fn cmd(args: &[String]) -> i32 {
     let result = if remove {
         connect_run::remove(t, &proof, &exe, home, &delphi_home)
     } else if update {
-        connect_run::update(t, &proof, &exe, home, &delphi_home, release, &link)
+        connect_run::update_from(t, &proof, &exe, home, &delphi_home, release, &link, &source)
     } else {
-        connect_run::connect(t, &proof, &exe, home, &delphi_home, release, &link)
+        connect_run::connect_from(t, &proof, &exe, home, &delphi_home, release, &link, &source)
     };
     match result {
         Ok(m) => {
@@ -479,13 +577,28 @@ mod tests {
         let pre = mcp_check::Check { state: mcp_check::State::Missing, detail: "not installed\nFORGED: yes".into(), fix: None };
         let none = connect_run::Link::Unavailable;
         let plan = render_plan(template("copilot").unwrap(), &h, &pre, true, &none, t.path());
-        assert!(plan.contains("plugin marketplace add jessevondoom/delphi#stable\n") && plan.contains("plugin install delphi@delphi"));
-        assert!(plan.contains("at its branch `stable`"), "the plan names the channel: {plan}");
-        assert_eq!(ADD_SOURCE, format!("{SOURCE}#{CHANNEL}"));
+        assert!(plan.contains(&format!("plugin marketplace add {SOURCE}#{CHANNEL}\n")) && plan.contains("plugin install delphi@delphi"));
+        assert!(plan.contains("(its branch `stable`)") && plan.contains("`stable` is the release channel"), "the plan names the channel: {plan}");
+        assert_eq!(Source::default().arg(), format!("{SOURCE}#{CHANNEL}"));
         for tm in &TEMPLATES {
-            assert_eq!(tm.add[0], ["plugin", "marketplace", "add", ADD_SOURCE], "{}", tm.host);
-            assert!(tm.manual_add.contains(ADD_SOURCE), "{}", tm.host);
+            assert!(tm.manual_add(&Source::default()).contains(&format!("{SOURCE}#{CHANNEL}")), "{}", tm.host);
         }
+        assert!(!plan.contains("WARNING: "), "this build's own repository needs no warning: {plan}");
+
+        // Spec 074 §11: a source the operator named is the one argv element, is warned about, and changes the confirmation.
+        let fork = Source::parse("fastly/delphi#stable").unwrap();
+        let forked = render_plan_from(template("copilot").unwrap(), &h, &pre, true, &none, t.path(), &fork);
+        assert!(forked.contains("plugin marketplace add fastly/delphi#stable\n") && !forked.contains(SOURCE_SLOT), "{forked}");
+        assert!(forked.contains("source: fastly/delphi, a GitHub repository (its branch `stable`)") && forked.contains("WARNING: fastly/delphi is not the repository this build"), "{forked}");
+        assert_ne!(confirmation("copilot", &forked), confirmation("copilot", &plan), "another source is another plan");
+        assert_eq!(add_argv(Path::new("/x/copilot"), template("copilot").unwrap(), &fork)[0], ["/x/copilot", "plugin", "marketplace", "add", "fastly/delphi#stable"]);
+        assert_eq!(add_argv(Path::new("/x/claude"), template("claude-code").unwrap(), &Source::default())[0][4], format!("{SOURCE}#{CHANNEL}"));
+        // A source named without a branch follows that repository's default branch, and the plan does not call it the channel.
+        let plain = render_plan_from(template("copilot").unwrap(), &h, &pre, true, &none, t.path(), &Source::parse("fastly/delphi").unwrap());
+        assert!(plain.contains("plugin marketplace add fastly/delphi\n") && plain.contains("(its default branch)") && !plain.contains("is the release channel"), "{plain}");
+        assert_eq!(template("claude-code").unwrap().manual_add(&fork), "claude plugin marketplace add fastly/delphi#stable && claude plugin install delphi@delphi");
+        assert_eq!(localize(&format!("claude plugin marketplace add {SOURCE}#{CHANNEL} && claude plugin install delphi@delphi"), &fork), "claude plugin marketplace add fastly/delphi#stable && claude plugin install delphi@delphi");
+        assert_eq!(localize("claude plugin update delphi@delphi", &fork), "claude plugin update delphi@delphi");
         assert!(plan.contains("launch path: the plugin runs") && plan.contains("no link is made"), "the plan says what happens to the launch path: {plan}");
         let made = render_plan(template("copilot").unwrap(), &h, &pre, true, &connect_run::Link::Make("/opt/homebrew/bin/delphi".into()), t.path());
         assert!(made.contains("this would make it a link to /opt/homebrew/bin/delphi"));
@@ -559,6 +672,13 @@ mod tests {
         assert_eq!(cmd(&a(&["claude-code", "--update", "--status"])), 2);
         assert_eq!(cmd(&a(&["codex", "--update"])), 2, "codex has no marketplace plugin that connect manages");
         assert_eq!(cmd(&a(&["gemini", "--update", "--dry-run"])), 2);
+        // Spec 074 §11: a source is a GitHub owner/repo and nothing else, and only for the hosts with a marketplace.
+        assert_eq!(cmd(&a(&["claude-code", "--dry-run", "--source"])), 2, "a value is needed");
+        assert_eq!(cmd(&a(&["claude-code", "--dry-run", "--source", "--status"])), 2, "a flag is not a value");
+        assert_eq!(cmd(&a(&["claude-code", "--dry-run", "--source", "https://example.com/x.git"])), 2);
+        assert_eq!(cmd(&a(&["claude-code", "--dry-run", "--source", "fastly/delphi; rm -rf"])), 2);
+        assert_eq!(cmd(&a(&["codex", "--source", "fastly/delphi"])), 2, "codex has no marketplace that connect manages");
+        assert_eq!(cmd(&a(&["--source", "fastly/delphi"])), 2, "the value of --source is never taken for a host");
         assert_eq!(cmd(&a(&[])), 2);
     }
 }

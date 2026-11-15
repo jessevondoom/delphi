@@ -10,7 +10,7 @@ use std::process::{Command, Stdio};
 use delphi_engine::mcp_check::{self, State};
 use serde_json::{json, Value};
 
-use crate::connect_cmd::{self, sanitize, HostExe, Template, CHANNEL, SOURCE};
+use crate::connect_cmd::{self, sanitize, HostExe, Source, Template, CHANNEL, SOURCE};
 
 const MAX_RECORD: u64 = 64 * 1024;
 const SAFE_PATH: &str = "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin";
@@ -141,10 +141,10 @@ pub fn channel_line(t: &Template, home: &Path) -> Option<String> {
     Some(match marketplace_source(t.host, home)? {
         Some(repo) if repo == SOURCE => match marketplace_ref(t.host, home).as_deref() {
             Some(r) if r == CHANNEL => format!("{CHANNEL} (the branch the release workflow moves to each release)"),
-            Some(other) => format!("`{other}`, not the release channel `{CHANNEL}`. To follow releases: {} && {}", t.manual_remove, t.manual_add),
+            Some(other) => format!("`{other}`, not the release channel `{CHANNEL}`. To follow releases: {} && {}", t.manual_remove, t.manual_add(&Source::default())),
             None => format!(
                 "the default branch, which moves between releases (this marketplace was added before the release channel `{CHANNEL}`). To follow releases only: `delphi connect {} --remove` then `delphi connect {}`, or by hand: {} && {}",
-                t.host, t.host, t.manual_remove, t.manual_add
+                t.host, t.host, t.manual_remove, t.manual_add(&Source::default())
             ),
         },
         _ => format!("a `delphi` marketplace that is not {SOURCE}"),
@@ -374,8 +374,38 @@ pub fn read_record(delphi_home: &Path, host: &str) -> Result<Option<Value>, Stri
     }
 }
 
-/// Add the marketplace and the plugin. The caller has already shown the plan and obtained `proof`.
+/// The source an earlier connect recorded for this host (spec 074 §11 item 3): the operator consented to it then, so
+/// `--update`, `--remove` and `--status` take it without `--source` being typed again. `None` when there is no readable record.
+pub fn recorded_source(delphi_home: &Path, host: &str) -> Option<Source> {
+    let rec = read_record(delphi_home, host).ok()??;
+    let repo = rec["marketplace"]["source"].as_str()?;
+    let arg = match rec["marketplace"]["ref"].as_str() {
+        Some(r) => format!("{repo}#{r}"),
+        None => repo.to_string(),
+    };
+    Source::parse(&arg).ok()
+}
+
+/// `--status`: the repository the host's `delphi` marketplace names, against the one expected.
+pub fn source_line(t: &Template, home: &Path, expected: &Source) -> String {
+    match marketplace_source(t.host, home) {
+        None => format!("no `delphi` marketplace in {}; a connect would add {}", t.host, expected.arg()),
+        Some(Some(repo)) if repo == expected.repo && expected.is_builtin() => repo,
+        Some(Some(repo)) if repo == expected.repo => format!("{repo} (not this build's own repository, {})", connect_cmd::SOURCE),
+        Some(Some(repo)) => format!("{repo}, where {} was expected; name it with `--source {repo}` if it is the one you mean", expected.repo),
+        Some(None) => "a `delphi` marketplace that is not a GitHub repository".to_string(),
+    }
+}
+
+/// [`connect_from`] for this build's own repository.
+#[cfg(test)]
 pub fn connect(t: &Template, proof: &ConsentProof, exe: &HostExe, home: &Path, delphi_home: &Path, release: &str, link: &Link) -> Result<String, Refusal> {
+    connect_from(t, proof, exe, home, delphi_home, release, link, &Source::default())
+}
+
+/// Add the marketplace and the plugin. The caller has already shown the plan and obtained `proof`.
+#[allow(clippy::too_many_arguments)]
+pub fn connect_from(t: &Template, proof: &ConsentProof, exe: &HostExe, home: &Path, delphi_home: &Path, release: &str, link: &Link, source: &Source) -> Result<String, Refusal> {
     let pre = mcp_check::check_host(t.host, home, release).map_err(Refusal::Failed)?;
     if !addable(t, &pre, home) {
         return Err(Refusal::NotAllowed("something of Delphi's is already present, and connect only adds what is absent; see `delphi connect claude-code --status`".into()));
@@ -385,7 +415,7 @@ pub fn connect(t: &Template, proof: &ConsentProof, exe: &HostExe, home: &Path, d
     let kept = if linked { " The link at ~/.local/bin/delphi was made and stays." } else { "" };
     let tmp = run_dir(delphi_home).map_err(Refusal::Failed)?;
     let r = Run { exe, home, tmp: &tmp };
-    let steps = connect_cmd::argv(&exe.canonical, &t.add);
+    let steps = connect_cmd::add_argv(&exe.canonical, t, source);
     let mut done = 0;
     let mut err = None;
     for s in &steps {
@@ -400,7 +430,7 @@ pub fn connect(t: &Template, proof: &ConsentProof, exe: &HostExe, home: &Path, d
     let _ = std::fs::remove_dir_all(&tmp);
     if let Some(e) = err {
         let (kind, msg) = if done == 0 {
-            ("failed", format!("{e}. No marketplace or plugin was added.{kept} Manual commands: {}", t.manual_add))
+            ("failed", format!("{e}. No marketplace or plugin was added.{kept} Manual commands: {}", t.manual_add(source)))
         } else {
             ("partial", format!("partial: the marketplace was added but the plugin was not installed ({e}).{kept} Cure: claude plugin install delphi@delphi (or undo with: claude plugin marketplace remove delphi)"))
         };
@@ -413,7 +443,12 @@ pub fn connect(t: &Template, proof: &ConsentProof, exe: &HostExe, home: &Path, d
         return Err(Refusal::Partial(format!("the commands ran, but the check reads {}: {}. {}", post.state.name(), sanitize(&post.detail), post.fix.as_deref().unwrap_or("see `delphi connect claude-code --status`"))));
     }
     let plugin_release = installed_release(t.host, home).unwrap_or_default();
-    let source = marketplace_source(t.host, home).flatten().unwrap_or_default();
+    // What the host recorded must be what the operator consented to; otherwise nothing is recorded and removal stays manual.
+    let recorded = marketplace_source(t.host, home).flatten().unwrap_or_default();
+    if recorded != source.repo {
+        return Err(Refusal::Partial(format!("the commands ran, but the host's `delphi` marketplace names another repository than the plan did; no record was written. Manual commands to undo: {}", t.manual_remove)));
+    }
+    let source = recorded;
     let channel = marketplace_ref(t.host, home);
     let content = copilot_installed(home).filter(|_| t.host == "copilot").map(|(_, d)| d);
     update_record(delphi_home, |d| {
@@ -429,7 +464,8 @@ pub fn removable(t: &Template, home: &Path, delphi_home: &Path) -> Result<(), St
     let rec = read_record(delphi_home, t.host)?.ok_or_else(|| format!("delphi has no record of connecting {}, so it will not remove anything. Manual commands: {}", t.host, t.manual_remove))?;
     let recorded = rec["marketplace"]["source"].as_str().unwrap_or_default();
     match marketplace_source(t.host, home) {
-        Some(Some(s)) if s == recorded && s == SOURCE => {}
+        // The record was written after the operator confirmed a plan naming this source, so the record is the identity.
+        Some(Some(s)) if !recorded.is_empty() && s == recorded => {}
         _ => return Err(format!("the host's `delphi` marketplace no longer matches the record. Manual commands: {}", t.manual_remove)),
     }
     // Spec 074 §10.4: the channel is part of what connect added. A record from before the channel has no ref and matches none.
@@ -453,7 +489,13 @@ pub fn removable(t: &Template, home: &Path, delphi_home: &Path) -> Result<(), St
 
 /// Spec 074 §10.2 item 3: whether an update may run. The plugin must be installed and the host's `delphi` marketplace must be
 /// ours. No connection record is asked for: an update removes nothing, and a plugin installed by hand is the common case.
+#[cfg(test)]
 pub fn updatable(t: &Template, home: &Path) -> Result<(), String> {
+    updatable_from(t, home, &Source::default())
+}
+
+/// [`updatable`] against the source the operator named, an earlier connect recorded, or this build's own.
+pub fn updatable_from(t: &Template, home: &Path, source: &Source) -> Result<(), String> {
     if t.update.is_empty() {
         return Err(format!("no update commands are recorded for {}", t.host));
     }
@@ -461,8 +503,16 @@ pub fn updatable(t: &Template, home: &Path) -> Result<(), String> {
         return Err(format!("the Delphi plugin is not installed in {}, so there is nothing to update; `delphi connect {}` adds it", t.host, t.host));
     }
     match marketplace_source(t.host, home) {
-        Some(Some(s)) if s == SOURCE => Ok(()),
-        _ => Err(format!("the host's `delphi` marketplace is not {SOURCE}, so connect will not update from it. Manual commands: {}", t.manual_update)),
+        Some(Some(s)) if s == source.repo => Ok(()),
+        Some(Some(s)) => Err(format!(
+            "the host's `delphi` marketplace is {}, not {}, so connect will not update from it. If that is the repository you mean to follow, say so: `delphi connect {} --update --source {}`. Manual commands: {}",
+            sanitize(&s),
+            sanitize(&source.repo),
+            t.host,
+            sanitize(&s),
+            t.manual_update
+        )),
+        _ => Err(format!("the host's `delphi` marketplace is not a GitHub repository, so connect will not update from it. Manual commands: {}", t.manual_update)),
     }
 }
 
@@ -477,7 +527,12 @@ fn record_describes_installed(t: &Template, rec: &Value, home: &Path) -> bool {
 }
 
 /// The plan of an update: everything the operator would consent to.
+#[cfg(test)]
 pub fn update_plan(t: &Template, exe: &HostExe, pre: &mcp_check::Check, link: &Link, home: &Path) -> String {
+    update_plan_from(t, exe, pre, link, home, &Source::default())
+}
+
+pub fn update_plan_from(t: &Template, exe: &HostExe, pre: &mcp_check::Check, link: &Link, home: &Path, source: &Source) -> String {
     let mut o = format!("delphi connect {} --update: plan (nothing has been run or written)\n", t.host);
     o.push_str(&format!("host CLI: {} (resolves to {})\n", sanitize(&exe.listed.display().to_string()), sanitize(&exe.canonical.display().to_string())));
     o.push_str(&format!("  owner uid {}, mode {:o}, sha256 {}\n", exe.uid, exe.mode, exe.sha256));
@@ -491,10 +546,14 @@ pub fn update_plan(t: &Template, exe: &HostExe, pre: &mcp_check::Check, link: &L
         Some(r) => format!("its branch `{}`", sanitize(&r)),
         None => "its default branch, which moves between releases".to_string(),
     };
-    o.push_str(&format!("source: the host's own `delphi` marketplace ({SOURCE}, a GitHub repository, following {follows}), fetched by {} now; what that branch publishes is what gets installed (no commit or version is pinned: spec 071 D-5(B))\n", t.exe));
-    // Panel t_0001: an update on a marketplace that is not on the release channel is allowed, and the plan warns.
-    if marketplace_ref(t.host, home).as_deref() != Some(CHANNEL) {
-        o.push_str(&format!("WARNING: this marketplace does not follow the release channel `{CHANNEL}`, so this update installs whatever that other branch holds now, which may be newer than any release. To follow releases: {} && {}\n", t.manual_remove, t.manual_add));
+    o.push_str(&format!("source: the host's own `delphi` marketplace ({}, a GitHub repository, following {follows}), fetched by {} now; what that branch publishes is what gets installed (no commit or version is pinned: spec 071 D-5(B))\n", sanitize(&source.repo), t.exe));
+    if !source.is_builtin() {
+        o.push_str(&format!("WARNING: {} is not the repository this build of Delphi installs from ({}). The skill text, hooks and server declaration that steer {} come from it. Go on only if you trust everyone who can push there\n", sanitize(&source.repo), connect_cmd::SOURCE, t.exe));
+    }
+    // Panel t_0001: an update on this build's own repository off the release channel is allowed, and the plan warns. A
+    // repository the operator named follows whatever branch they chose.
+    if source.is_builtin() && marketplace_ref(t.host, home).as_deref() != Some(CHANNEL) {
+        o.push_str(&format!("WARNING: this marketplace does not follow the release channel `{CHANNEL}`, so this update installs whatever that other branch holds now, which may be newer than any release. To follow releases: {} && {}\n", t.manual_remove, t.manual_add(&Source::default())));
     }
     o.push_str(&format!("expected writes: {}\n", t.writes));
     o.push_str(&link_line(link, home));
@@ -511,8 +570,15 @@ pub fn update_confirmation(host: &str, plan: &str) -> String {
 }
 
 /// Run the host's own update of the installed plugin (spec 074 §10.2). The caller has shown the plan and obtained `proof`.
+#[cfg(test)]
 pub fn update(t: &Template, proof: &ConsentProof, exe: &HostExe, home: &Path, delphi_home: &Path, release: &str, link: &Link) -> Result<String, Refusal> {
-    updatable(t, home).map_err(Refusal::NotAllowed)?;
+    update_from(t, proof, exe, home, delphi_home, release, link, &Source::default())
+}
+
+/// [`update`] against a named source (spec 074 §11).
+#[allow(clippy::too_many_arguments)]
+pub fn update_from(t: &Template, proof: &ConsentProof, exe: &HostExe, home: &Path, delphi_home: &Path, release: &str, link: &Link, source: &Source) -> Result<String, Refusal> {
+    updatable_from(t, home, source).map_err(Refusal::NotAllowed)?;
     // Read before anything runs: the record may follow the update only if it described the copy that was installed (the
     // removal binding of §9). A record that is unreadable stops here, with the host untouched.
     let record = read_record(delphi_home, t.host).map_err(|e| Refusal::NotAllowed(format!("the connection record is unreadable ({e}); nothing was run")))?;
@@ -853,7 +919,12 @@ mod tests {
         std::fs::write(home.join(".claude/plugins/installed_plugins.json"), r#"{"version":2,"plugins":{"delphi@delphi":[{"scope":"user","version":"0.0.1"}]}}"#).unwrap();
         std::fs::write(home.join(".claude/plugins/known_marketplaces.json"), r#"{"delphi":{"source":{"source":"github","repo":"someone/else"}}}"#).unwrap();
         let e = update(claude(), &consent::for_test(), &exe, &home, &dh, release, &Link::Unavailable).unwrap_err();
-        assert!(matches!(e, Refusal::NotAllowed(_)) && e.message().contains("is not jessevondoom/delphi"), "{}", e.message());
+        assert!(matches!(e, Refusal::NotAllowed(_)) && e.message().contains("is someone/else, not") && e.message().contains("--update --source someone/else"), "{}", e.message());
+        // Spec 074 §11: the same marketplace is updatable once the operator names it.
+        assert!(updatable_from(claude(), &home, &Source::parse("someone/else").unwrap()).is_ok());
+        let pre = mcp_check::check_host("claude-code", &home, release).unwrap();
+        let plan = update_plan_from(claude(), &exe, &pre, &Link::Unavailable, &home, &Source::parse("someone/else").unwrap());
+        assert!(plan.contains("WARNING: someone/else is not the repository this build"), "{plan}");
         std::fs::write(home.join(".claude/plugins/known_marketplaces.json"), r#"{"delphi":{"source":{"source":"directory","path":"/somewhere"}}}"#).unwrap();
         assert!(updatable(claude(), &home).is_err(), "a marketplace that is not a GitHub source is not ours either");
         assert!(!home.join("argv.log").exists(), "the host CLI was never run");
@@ -928,6 +999,69 @@ mod tests {
         .unwrap();
         assert!(removable(claude(), &home, &dh).is_ok(), "no ref recorded and none on the marketplace: they match");
         assert_eq!(marketplace_ref("vim", &home), None);
+    }
+
+    /// Spec 074 §11: a connect from a source the operator named runs that one source, records it, and the record then
+    /// stands for it in an update and a removal without the flag.
+    #[test]
+    fn a_named_source_is_what_runs_is_recorded_and_is_what_update_and_remove_then_expect() {
+        let t = tempfile::tempdir().unwrap();
+        let (home, dh) = homes(&t);
+        let release = env!("CARGO_PKG_VERSION");
+        // A fake host that records whatever source it was given, as the real ones do.
+        let dir = t.path().join("bin");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let script = r##"#!/bin/sh
+echo "$@" >> "$HOME/argv.log"
+mkdir -p "$HOME/.claude/plugins"
+case "$*" in
+  "plugin marketplace add "*)
+    repo="${4%%#*}"
+    printf '{"delphi":{"source":{"source":"github","repo":"%s"}}}\n' "$repo" > "$HOME/.claude/plugins/known_marketplaces.json";;
+  "plugin install delphi@delphi"|"plugin update delphi@delphi")
+    echo '{"version":2,"plugins":{"delphi@delphi":[{"scope":"user","version":"@REL@"}]}}' > "$HOME/.claude/plugins/installed_plugins.json"
+    echo '{"enabledPlugins":{"delphi@delphi":true}}' > "$HOME/.claude/settings.json";;
+  "plugin uninstall delphi@delphi")
+    echo '{"version":2,"plugins":{}}' > "$HOME/.claude/plugins/installed_plugins.json";;
+  "plugin marketplace remove delphi")
+    echo '{}' > "$HOME/.claude/plugins/known_marketplaces.json";;
+esac
+exit 0
+"##
+        .replace("@REL@", release);
+        std::fs::write(dir.join("claude"), &script).unwrap();
+        std::fs::set_permissions(dir.join("claude"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let exe = connect_cmd::find_host_above(&[dir], "claude", Some(&root(&t))).unwrap();
+
+        let fork = Source::parse("fastly/delphi#stable").unwrap();
+        let out = connect_from(claude(), &consent::for_test(), &exe, &home, &dh, release, &Link::Present(String::new()), &fork).unwrap();
+        assert!(out.contains("installed from fastly/delphi"), "{out}");
+        assert_eq!(std::fs::read_to_string(home.join("argv.log")).unwrap(), "plugin marketplace add fastly/delphi#stable\nplugin install delphi@delphi\n");
+        assert_eq!(read_record(&dh, "claude-code").unwrap().unwrap()["marketplace"]["source"], "fastly/delphi");
+        assert_eq!(recorded_source(&dh, "claude-code").map(|s| s.repo).as_deref(), Some("fastly/delphi"), "the record stands for the source from now on");
+        assert!(source_line(claude(), &home, &recorded_source(&dh, "claude-code").unwrap()).starts_with("fastly/delphi (not this build's own repository"));
+
+        // Without the record's source, this build's own repository is expected, and the fork is refused by name.
+        assert!(updatable(claude(), &home).unwrap_err().contains("--update --source fastly/delphi"));
+        let rec = recorded_source(&dh, "claude-code").unwrap();
+        assert!(update_from(claude(), &consent::for_test(), &exe, &home, &dh, release, &Link::Present(String::new()), &rec).is_ok());
+        assert!(removable(claude(), &home, &dh).is_ok(), "removal goes by the record, whatever repository it names");
+        assert!(remove(claude(), &consent::for_test(), &exe, &home, &dh).unwrap().starts_with("removed"));
+        assert_eq!(recorded_source(&dh, "claude-code"), None);
+
+        // A host that records another repository than the one consented to gets no record.
+        let t2 = tempfile::tempdir().unwrap();
+        let (home2, dh2) = homes(&t2);
+        let dir2 = t2.path().join("bin");
+        std::fs::create_dir_all(&dir2).unwrap();
+        std::fs::set_permissions(&dir2, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(dir2.join("claude"), script.replace(r#"repo="${4%%#*}""#, r#"repo="other/place""#)).unwrap();
+        std::fs::set_permissions(dir2.join("claude"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let exe2 = connect_cmd::find_host_above(&[dir2], "claude", Some(&root(&t2))).unwrap();
+        let e = connect_from(claude(), &consent::for_test(), &exe2, &home2, &dh2, release, &Link::Present(String::new()), &fork).unwrap_err();
+        assert!(matches!(e, Refusal::Partial(_)) && e.message().contains("names another repository than the plan did"), "{}", e.message());
+        assert!(read_record(&dh2, "claude-code").unwrap().is_none());
     }
 
     #[test]

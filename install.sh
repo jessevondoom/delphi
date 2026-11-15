@@ -9,6 +9,8 @@
 #   --dir DIR          (DELPHI_INSTALL_DIR)  install into DIR (default: ~/.local/bin)
 #   --no-setup                               do not offer to run `delphi setup` afterwards
 # Maintainers / mirrors: DELPHI_API (releases API base) and DELPHI_DOWNLOAD (asset base URL) override the defaults.
+# A fork: DELPHI_REPO=owner/repo installs that GitHub repository's releases instead (specs/074 section 11). The checksum and
+# the build attestation are then that repository's, so you are trusting it and not the project.
 #
 # A private repository needs the `gh` CLI signed in (or GH_TOKEN set): it supplies the credentials for the lookup and the
 # download. The token is never printed and never sent to a DELPHI_API / DELPHI_DOWNLOAD mirror.
@@ -19,7 +21,13 @@
 # checksum alone.
 set -eu
 
-REPO="jessevondoom/delphi"
+PROJECT_REPO="jessevondoom/delphi"
+REPO="${DELPHI_REPO:-$PROJECT_REPO}"
+if [ "$REPO" != "$PROJECT_REPO" ]; then
+  # owner/repo and nothing else: it is used in URLs and handed to gh.
+  printf '%s' "$REPO" | grep -Eq '^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}/[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$' || { printf 'install.sh: DELPHI_REPO must be a GitHub owner/repo\n' >&2; exit 1; }
+  printf 'install.sh: WARNING: installing from %s (DELPHI_REPO), not from %s. Its releases, checksums and attestations are that repository'"'"'s own\n' "$REPO" "$PROJECT_REPO" >&2
+fi
 API="${DELPHI_API:-https://api.github.com/repos/$REPO}"
 DOWNLOAD="${DELPHI_DOWNLOAD:-https://github.com/$REPO/releases/download}"
 # Every request is HTTPS-only. A mirror override must be HTTPS too (plain http only with DELPHI_INSECURE_TEST=1,

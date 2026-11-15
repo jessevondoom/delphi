@@ -495,7 +495,10 @@ mod tests {
 
     #[test]
     fn the_project_repository_is_named_the_same_in_the_updater_and_the_installer() {
-        let repo = include_str!("../../../install.sh").lines().find_map(|l| l.strip_prefix("REPO=\"")?.strip_suffix('"')).expect("install.sh names REPO");
+        // The project's own repository; `DELPHI_REPO` may name a fork's for one install (specs/074 section 11).
+        let script = include_str!("../../../install.sh");
+        let repo = script.lines().find_map(|l| l.strip_prefix("PROJECT_REPO=\"")?.strip_suffix('"')).expect("install.sh names PROJECT_REPO");
+        assert!(script.lines().any(|l| l == "REPO=\"${DELPHI_REPO:-$PROJECT_REPO}\""), "the installer falls back to the project's repository");
         for url in [DEFAULT_API, ORIGIN_DOWNLOADS, ORIGIN_ASSET_API] {
             assert!(url.contains(&format!("/{repo}/")), "{url} is not for {repo}");
         }

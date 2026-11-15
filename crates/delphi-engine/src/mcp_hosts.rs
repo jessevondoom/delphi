@@ -76,8 +76,42 @@ pub fn absolute_command(exe: &Path, home: Option<&str>) -> Result<String, String
     Ok(text.to_string())
 }
 
+/// The GitHub repository that holds Delphi's plugin marketplace (spec 074 §11). A fork that publishes its own sets
+/// `DELPHI_MARKETPLACE_REPO=owner/repo` when it builds; an operator names another one for a single install with
+/// `delphi connect <host> --source owner/repo`. Every printed install command and every generated file takes it from here.
+pub const MARKETPLACE_REPO: &str = match option_env!("DELPHI_MARKETPLACE_REPO") {
+    Some(repo) => repo,
+    None => "jessevondoom/delphi",
+};
+
+/// The branch a host follows (spec 074 §10.4): the release workflow moves it to each release tag's commit; `main` moves in between.
+pub const CHANNEL: &str = "stable";
+
+/// A marketplace source an operator may name: `owner/repo`, optionally `#ref`. GitHub names only, so nothing in it can be
+/// read as a flag, a path or a URL by a host CLI. Returns the repository and the ref.
+pub fn parse_source(s: &str) -> Result<(String, Option<String>), String> {
+    let name = |x: &str| !x.is_empty() && x.len() <= 100 && !x.starts_with(['.', '-']) && x.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+    let (repo, reference) = match s.split_once('#') {
+        Some((r, f)) => (r, Some(f)),
+        None => (s, None),
+    };
+    let ok_repo = repo.split_once('/').is_some_and(|(owner, project)| name(owner) && name(project));
+    let ok_ref = reference.is_none_or(|f| {
+        !f.is_empty() && f.len() <= 100 && !f.starts_with(['-', '/', '.']) && !f.contains("..") && f.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/'))
+    });
+    if ok_repo && ok_ref {
+        Ok((repo.to_string(), reference.map(str::to_string)))
+    } else {
+        Err(format!("`{}` is not a GitHub source of the form owner/repo or owner/repo#branch", s.chars().filter(|c| !c.is_control()).take(120).collect::<String>()))
+    }
+}
+
 /// The host's own documented command that installs the Delphi plugin, for hosts whose slice is built (spec 071 §5.4). Printed, never run.
-pub fn install_hint(host: &str) -> Option<&'static str> {
+pub fn install_hint(host: &str) -> Option<String> {
+    install_hint_for(host).map(|h| h.replace("jessevondoom/delphi", MARKETPLACE_REPO))
+}
+
+fn install_hint_for(host: &str) -> Option<&'static str> {
     match host {
         "claude-code" => Some("# Or install the Delphi plugin (it runs ~/.local/bin/delphi; `delphi mcp --check claude-code` says whether that path is ready):\n#   claude plugin marketplace add jessevondoom/delphi#stable\n#   claude plugin install delphi@delphi\n# Remove it again: claude plugin uninstall delphi@delphi\n"),
         "copilot" => Some("# Or install the Delphi plugin (it runs ~/.local/bin/delphi; `delphi mcp --check copilot` says whether that path is ready):\n#   copilot plugin marketplace add jessevondoom/delphi#stable\n#   copilot plugin install delphi@delphi\n# Remove it again: copilot plugin uninstall delphi@delphi\n"),
@@ -800,7 +834,9 @@ To turn Delphi off without removing it, set `[mcp] enabled = false` in `config.t
 /// Every generated file of the ecosystem tree and the root marketplace manifest (spec 071 §3-4), relative to the repository root.
 pub fn ecosystem_files(version: &str) -> Vec<(PathBuf, String)> {
     let marketplace = format!("{{\n  \"name\": \"delphi\",\n  \"description\": \"Delphi for host agents: roles, project knowledge, Councils and memory over MCP\",\n  \"owner\": {{ \"name\": \"jessevondoom\" }},\n  \"plugins\": [\n    {{\n      \"name\": \"delphi\",\n      \"source\": \"./{PLUGIN_DIR}\",\n      \"description\": \"Delphi's roles, skills, project specs and memory, over MCP\",\n      \"version\": \"{version}\"\n    }}\n  ]\n}}\n");
-    let mut out: Vec<(PathBuf, String)> = vec![(".claude-plugin/marketplace.json".into(), marketplace), ("ecosystem/README.md".into(), ECOSYSTEM_README.into())];
+    let owner = MARKETPLACE_REPO.split('/').next().unwrap_or_default();
+    let marketplace = marketplace.replace("{ \"name\": \"jessevondoom\" }", &format!("{{ \"name\": \"{owner}\" }}"));
+    let mut out: Vec<(PathBuf, String)> = vec![(".claude-plugin/marketplace.json".into(), marketplace), ("ecosystem/README.md".into(), ECOSYSTEM_README.replace("jessevondoom/delphi", MARKETPLACE_REPO))];
     for (rel, text) in export_files("claude-code", version).unwrap_or_default() {
         out.push((Path::new(PLUGIN_DIR).join(rel), text));
     }
@@ -1310,6 +1346,19 @@ mod tests {
         for h in ["copilot", "codex", "agy", "gemini"] {
             assert!(!export_files(h, "1.0.0").unwrap().iter().any(|(p, _)| p.starts_with("hooks")), "{h}: no hooks file, none was shown reaching the model");
         }
+    }
+
+    #[test]
+    fn a_source_is_a_github_repository_and_an_optional_branch_and_nothing_else() {
+        assert_eq!(parse_source("fastly/delphi").unwrap(), ("fastly/delphi".to_string(), None));
+        assert_eq!(parse_source("fastly/delphi#stable").unwrap(), ("fastly/delphi".to_string(), Some("stable".to_string())));
+        assert_eq!(parse_source("a-b/c.d_e#release/1.0").unwrap().1.as_deref(), Some("release/1.0"));
+        for bad in ["", "delphi", "/delphi", "fastly/", "fastly/delphi/extra", "--flag/x", "fastly/-x", ".x/y", "https://github.com/fastly/delphi", "git@github.com:fastly/delphi", "fastly/delphi#", "fastly/delphi#-x", "fastly/delphi#a..b", "fastly/del phi", "fastly/delphi#a b", "fastly/delphi\n", "../x/y", "fastly/delphi#/abs"] {
+            assert!(parse_source(bad).is_err(), "{bad:?} must be refused");
+        }
+        assert!(!parse_source("x/y\u{1b}[31m").unwrap_err().contains('\u{1b}'), "a control character is never echoed");
+        assert!(parse_source(MARKETPLACE_REPO).is_ok(), "the built-in repository is itself a valid source");
+        assert!(ecosystem_files("1.0.0").iter().any(|(p, text)| p.ends_with("marketplace.json") && text.contains(&format!("\"name\": \"{}\"", MARKETPLACE_REPO.split('/').next().unwrap()))));
     }
 
     #[test]
