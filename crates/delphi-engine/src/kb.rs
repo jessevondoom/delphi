@@ -420,6 +420,9 @@ pub(crate) fn md_files(root: &Path, logical_prefix: &str, zone: &'static str, de
         } else if ft.is_file() && name.ends_with(".md") && e.metadata().map(|m| m.len() <= MAX_FILE_BYTES).unwrap_or(false) {
             let actual_zone = if rel.contains("/traces/") && (zone == "missions" || rel.starts_with("missions/")) {
                 "episodes"
+            } else if zone == "missions" && crate::finding_record::is_finding_path(&rel) {
+                // What `record_finding` wrote (`specs/116` §5.3): a zone of its own, so a search can name it and scope it.
+                crate::finding_record::ZONE
             } else {
                 zone
             };
@@ -837,6 +840,17 @@ impl Kb {
         // Who vouches for what, from the lock's listing above and from nothing in a document: one `prefix<TAB>org` per line.
         let vouched: std::collections::BTreeSet<String> = files.iter().filter_map(|f| f.vouched_by.as_ref().map(|o| format!("{}\t{}", f.bundle.as_ref().map(|b| format!("bundles/{}/", b.id)).unwrap_or_else(|| f.rel_path.clone()), o))).collect();
         self.conn.execute("INSERT OR REPLACE INTO kb_meta(key, value) VALUES ('vouched', ?1)", [vouched.into_iter().collect::<Vec<_>>().join("\n")])?;
+        // Which project each mission's findings belong to (`specs/116` §5.3), from the scope the daemon stamped the mission's folder
+        // with and from nothing a finding says: one `missions/<id>/<TAB>project` per line. A home mission has no line.
+        let finding_scopes: std::collections::BTreeSet<String> = files
+            .iter()
+            .filter(|f| f.zone == crate::finding_record::ZONE)
+            .filter_map(|f| {
+                let scope = crate::finding_record::scope_of_dir(f.path.parent()?.parent()?);
+                (!scope.is_empty()).then(|| format!("{}/\t{}", f.rel_path.split('/').take(2).collect::<Vec<_>>().join("/"), scope))
+            })
+            .collect();
+        self.conn.execute("INSERT OR REPLACE INTO kb_meta(key, value) VALUES ('finding_scopes', ?1)", [finding_scopes.into_iter().collect::<Vec<_>>().join("\n")])?;
         // When the index last matched the files, for the age a host is told (`specs/109` §3).
         let synced = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         self.conn.execute("INSERT OR REPLACE INTO kb_meta(key, value) VALUES ('synced_unix', ?1)", [synced.to_string()])?;
@@ -1500,6 +1514,20 @@ pub struct SearchOpts {
     /// Leave out documents at these logical paths (`specs/109` §12 item 3: the release's own files are searched as their own group).
     /// Narrows, never widens.
     pub exclude_paths: Option<Vec<String>>,
+    /// Whose findings (zone `findings`, `specs/116` §5.3) the search may return. Narrows, never widens.
+    pub findings: FindingsView,
+}
+
+/// Whose findings a search may return (`specs/116` §5.3). A finding belongs to the project its mission was stamped with; one from a
+/// home mission belongs to the home layer, which every project reads. Sharing between projects is `specs/115`, not this.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum FindingsView {
+    /// Every finding the other rules allow: the operator's own search.
+    #[default]
+    All,
+    /// The home layer's findings and those of this project: a registered project's id, or the empty string for a home-only mission
+    /// or session ([`crate::finding_record::scope_of_dir`]). What an agent or a host session is given.
+    Scope(String),
 }
 
 /// How summary hits are answered. Spec 068 defaults to Bibliography for agent safety;
@@ -1546,7 +1574,7 @@ pub enum Legs {
 
 impl Default for SearchOpts {
     fn default() -> Self {
-        SearchOpts { role: None, limit: 10, include_untrusted: false, include_attributed: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false, include_episodes: false, about: false, kinds: None, max_episodes: None, today: None, xenia: XeniaView::Off, zones: None, summary_target: SummaryTarget::Bibliography, paths: None, project: None, source_types: None, exclude_paths: None }
+        SearchOpts { role: None, limit: 10, include_untrusted: false, include_attributed: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false, include_episodes: false, about: false, kinds: None, max_episodes: None, today: None, xenia: XeniaView::Off, zones: None, summary_target: SummaryTarget::Bibliography, paths: None, project: None, source_types: None, exclude_paths: None, findings: FindingsView::All }
     }
 }
 
@@ -1736,6 +1764,11 @@ impl Kb {
             }
         }
         let vouched: Vec<(String, String)> = self.conn.query_row("SELECT value FROM kb_meta WHERE key = 'vouched'", [], |r| r.get::<_, String>(0)).ok().map(|v| v.lines().filter_map(|l| l.split_once('\t')).map(|(p, o)| (p.to_string(), o.to_string())).collect()).unwrap_or_default();
+        // The project of each mission that holds findings (`sync_lexical` wrote it), read only when the search is scoped.
+        let finding_scopes: Vec<(String, String)> = match &opts.findings {
+            FindingsView::All => Vec::new(),
+            FindingsView::Scope(_) => self.conn.query_row("SELECT value FROM kb_meta WHERE key = 'finding_scopes'", [], |r| r.get::<_, String>(0)).ok().map(|v| v.lines().filter_map(|l| l.split_once('\t')).map(|(p, s)| (p.to_string(), s.to_string())).collect()).unwrap_or_default(),
+        };
         let mut hits = Vec::new();
         let mut readiness: HashMap<String, Option<String>> = HashMap::new();
         let mut episodes = 0usize;
@@ -1754,6 +1787,13 @@ impl Kb {
             }
             let row = self.conn.query_row("SELECT c.rel_path, c.start_line, c.end_line, c.heading_path, c.raw_content, d.content_blake3, d.zone, d.source_type, d.status, d.web_corroborated, d.author FROM kb_chunks c JOIN kb_documents d ON d.doc_id = c.doc_id WHERE c.chunk_id = ?1", [id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?, r.get::<_, String>(7)?, r.get::<_, String>(8)?, r.get::<_, i64>(9)? != 0, r.get::<_, Option<String>>(10)?)));
             let Ok((rel_path, a, b, heading_path, raw, blake3, zone, tier_name, doc_status, web_corroborated, doc_author)) = row else { continue };
+            // A finding of another project is not this search's to return (`specs/116` §5.3); a home finding is everyone's.
+            if let (true, FindingsView::Scope(mine)) = (zone == crate::finding_record::ZONE, &opts.findings) {
+                let theirs = finding_scopes.iter().find(|(p, _)| rel_path.starts_with(p.as_str())).map(|(_, s)| s.as_str()).unwrap_or("");
+                if !theirs.is_empty() && theirs != mine {
+                    continue;
+                }
+            }
             // For imported summary pages, presentation depends on `opts.summary_target` (`specs/068` §6.7, `specs/075`):
             // - `Bibliography` (default): hits on an imported page's body are answered with its .bib.md sidecar metadata.
             // - `SummaryPage`: hits answer with the summary .md page and prose, suppressing .bib.md.
@@ -1828,7 +1868,16 @@ impl Kb {
                 crate::research_index::status_of(word.as_deref())
             } else if rel_path.starts_with("context/facts/") { delphi_core::knowledge_status::derive_fact(&tier_name, &doc_status, web_corroborated) } else { delphi_core::knowledge_status::derive(&zone, &tier_name, &doc_status, vouched_by.as_deref()) };
             let vouched_by = vouched_by.filter(|_| ks == delphi_core::knowledge_status::Status::Validated);
-            let label = if zone == "about" { "release reference, not build authority" } else if zone == "summaries" { SUMMARY_LABEL } else { ks.label() };
+            let label = if zone == "about" {
+                "release reference, not build authority"
+            } else if zone == "summaries" {
+                SUMMARY_LABEL
+            } else if zone == crate::finding_record::ZONE && ks == delphi_core::knowledge_status::Status::Noted {
+                // A finding says what it is (`specs/116` §5.2); one that was superseded keeps the status's own word.
+                crate::finding_record::label_for(&tier_name)
+            } else {
+                ks.label()
+            };
             hits.push(Hit { pointer, rel_path, start_line: a as usize, end_line: b as usize, heading_path, blake3, preview, score: s, note, status: ks.as_str(), label, vouched_by, zone, source_type: tier_name, doc_status, doc_author });
         }
         Ok((hits, best_rerank))

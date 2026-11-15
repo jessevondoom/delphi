@@ -18,8 +18,10 @@ use serde_json::{json, Value};
 /// (read at each use, so a mode change needs no restart) is not `off`.
 pub const NAMES: [&str; 2] = ["ratify_fact", "validate_claims"];
 
-/// Roles that may ask for a check. The role comes from the daemon's tool context, never from an argument.
-const CALLERS: [&str; 3] = ["validator", "scout", "orchestrator"];
+/// Roles that may ask for a check. The role comes from the daemon's tool context, never from an argument. The investigator asks so it
+/// can have one upstream claim checked against independent sources (`specs/116` §8.2 item 3); like the scout it only asks:
+/// `ratify_fact` stays the validator's.
+const CALLERS: [&str; 4] = ["validator", "scout", "orchestrator", "investigator"];
 
 fn classify(tool: &str, args: &Value) -> Result<Classified, ToolError> {
     Ok(Classified { tool: tool.into(), tier: ToolTier::Green, kind: ActionKind::Read, summary: tool.into(), payload: args.clone(), pattern: tool.into() })
@@ -147,5 +149,17 @@ mod tests {
             assert!(r.is_error && ev.is_empty());
         }
         assert!(call("builder", "validate_claims", json!({"claims": ["X is Y."]})).0.is_error);
+    }
+
+    /// `specs/116` §8.2 item 3: the investigator may ask for a claim to be checked, is told a status and an id only, and cannot ratify.
+    #[test]
+    fn the_investigator_may_ask_for_a_check_and_cannot_ratify() {
+        let (r, ev) = call("investigator", "validate_claims", json!({"claims": ["Harry Nilsson wrote the song 'One' (1968)."]}));
+        assert!(!r.is_error, "{}", r.content);
+        assert_eq!((ev[0].0.as_str(), &ev[0].1["caller"]), ("validator.request", &json!("investigator")));
+        let v: Value = serde_json::from_str(&r.content).unwrap();
+        assert_eq!(v[0].as_object().unwrap().keys().collect::<Vec<_>>(), ["fact_id", "status"]);
+        let (r, ev) = call("investigator", "ratify_fact", json!({"claim": "Harry Nilsson wrote the song 'One' (1968).", "needed_for": "q", "urls": ["https://example.org/a"]}));
+        assert!(r.is_error && ev.is_empty(), "only the validator: {}", r.content);
     }
 }

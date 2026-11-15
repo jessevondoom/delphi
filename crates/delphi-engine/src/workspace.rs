@@ -426,13 +426,17 @@ pub(crate) mod tests {
             ("writer", include_str!("../../../agents/writer/AGENT.md"), "workhorse"),
             ("scout", include_str!("../../../agents/scout/AGENT.md"), "fast"),
             ("messenger", include_str!("../../../agents/messenger/AGENT.md"), "fast"),
-            ("investigator", include_str!("../../../agents/investigator/AGENT.md"), "fast"),
+            // `specs/116` §8.3 item 1: the builder's tier, in place of `fast`.
+            ("investigator", include_str!("../../../agents/investigator/AGENT.md"), "workhorse"),
             ("validator", include_str!("../../../agents/validator/AGENT.md"), "workhorse"),
         ];
         for (role, text, want) in shipped {
             let m = AgentManifest::parse(text).unwrap();
             assert_eq!((m.tier(), m.default_tier.as_deref()), (want, Some(want)), "{}", role);
         }
+        // `specs/116` §8.3 item 1: the investigator has the builder's turns as well as its tier.
+        let turns = |text: &str| AgentManifest::parse(text).unwrap().max_turn_budget;
+        assert_eq!((turns(include_str!("../../../agents/investigator/AGENT.md")), turns(include_str!("../../../agents/builder/AGENT.md"))), (40, 40));
         // Without a `default_tier` no profile gives the top tier either, and an unknown word is ignored.
         let bare = |profile: &str, extra: &str| AgentManifest::parse(&format!("---\nid: x\ncognitive_profile: {}\n{}---\n", profile, extra)).unwrap().tier();
         assert_eq!((bare("deep-reasoning", ""), bare("code-craft", ""), bare("high-context-discovery", ""), bare("fast-triage", "")), ("workhorse", "workhorse", "workhorse", "fast"));
@@ -440,10 +444,11 @@ pub(crate) mod tests {
         assert_eq!(bare("deep-reasoning", "default_tier: frontier\n"), "frontier", "an operator's own override can");
     }
 
-    // specs/109 §13.1 item 1: the two roles whose work is checking default a host's search to `verify`; every other shipped role, and a
-    // manifest that says nothing or something else, to `explore`.
+    // specs/109 §13.1 item 1, as changed by specs/116 §8.4: every shipped role defaults a host's search to `explore`, the two checking
+    // roles included (their ladder's first rung reads unvalidated research); a manifest that says `verify` still means it, and one
+    // that says nothing or something else is `explore`.
     #[test]
-    fn only_the_validator_and_the_investigator_default_a_host_search_to_verify() {
+    fn every_shipped_role_defaults_a_host_search_to_explore_and_a_manifest_may_still_say_verify() {
         use crate::host_labels::Use;
         let shipped = [
             ("orchestrator", include_str!("../../../agents/orchestrator/AGENT.md")),
@@ -458,8 +463,7 @@ pub(crate) mod tests {
             ("validator", include_str!("../../../agents/validator/AGENT.md")),
         ];
         for (role, text) in shipped {
-            let want = if matches!(role, "validator" | "investigator") { Use::Verify } else { Use::Explore };
-            assert_eq!(AgentManifest::parse(text).unwrap().search_use, want, "{role}");
+            assert_eq!(AgentManifest::parse(text).unwrap().search_use, Use::Explore, "{role}");
         }
         let with = |extra: &str| AgentManifest::parse(&format!("---\nid: x\n{extra}---\n")).unwrap().search_use;
         assert_eq!((with(""), with("search_use: explore\n"), with("search_use: verify\n"), with("search_use: always\n")), (Use::Explore, Use::Explore, Use::Verify, Use::Explore));

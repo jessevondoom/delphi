@@ -162,6 +162,12 @@ pub fn should_pushback(role: &str, result_exhausted_or_failed: bool, already_pus
     role == "investigator" && result_exhausted_or_failed && !already_pushed_back
 }
 
+/// Whether this task has already had its one pushback (`specs/116` §8.3 item 2): the mission's log holds a [`TENACITY_EVENT`] for the
+/// task. Read from the log, so the answer survives a restart and covers every dispatch of the task, not one call.
+pub fn already_pushed_back(events: &[EventEnvelope], task_id: &str) -> bool {
+    events.iter().any(|e| e.kind == TENACITY_EVENT && e.task_id.as_deref() == Some(task_id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,5 +210,13 @@ mod tests {
         assert!(!should_pushback("investigator", true, true));
         assert!(!should_pushback("investigator", false, false));
         assert!(!should_pushback("scout", true, false));
+    }
+
+    #[test]
+    fn a_pushback_is_remembered_for_its_task_only() {
+        let events = vec![ev("task.created", "t1", json!({})), ev(TENACITY_EVENT, "t1", json!({"role": "investigator"}))];
+        assert!(already_pushed_back(&events, "t1"));
+        assert!(!already_pushed_back(&events, "t2"), "another task has its own retry");
+        assert!(!already_pushed_back(&events[..1], "t1"));
     }
 }

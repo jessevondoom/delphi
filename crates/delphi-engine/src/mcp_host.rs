@@ -486,6 +486,13 @@ pub fn tools() -> Value {
             "annotations": writes("Propose a research entry to Delphi")
         },
         {
+            "name": crate::finding_record::TOOL,
+            "title": "Record what an investigation concluded",
+            "description": crate::finding_record::host_description(),
+            "inputSchema": crate::finding_record::host_input_schema(),
+            "annotations": writes("Record an investigation's finding in Delphi")
+        },
+        {
             "name": "propose_council_record",
             "title": "Stage an unaudited agenda (import)",
             "description": "Stage the outcome of an agenda you ran yourself as an import: barrier none, source host-reported. It is not a Council record, and anything you send that is labelled one (council_format, venue: daemon, a Council kind) is refused.",
@@ -1050,6 +1057,7 @@ impl Server {
             }),
             "propose_note" => self.daemon("host.propose_note", args),
             "propose_kb_entry" => self.daemon("host.propose_kb_entry", args),
+            "record_finding" => self.daemon("host.record_finding", args),
             "request_test_authorization" => self.daemon("host.request_test_authorization", args),
             "propose_council_record" => self.propose_council_record(args),
             "record_session_summary" => self.daemon("host.record_session_summary", args),
@@ -1102,7 +1110,7 @@ impl Server {
             return Ok((Use::parse(args.get("use"))?, "asked for".to_string()));
         }
         Ok(match self.host_session.adopted.lock().unwrap().clone() {
-            Some((role, u)) => (u, format!("the default for {role}")),
+            Some((role, u)) => (u, crate::host_labels::default_reason(&role, u)),
             None => (Use::Explore, "the default".to_string()),
         })
     }
@@ -1899,10 +1907,10 @@ mod tests {
         let r = call(&mut s, json!({"jsonrpc": "2.0", "id": 3, "method": "tools/list"}));
         let tools = r["result"]["tools"].as_array().unwrap();
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["search_kb", "list_roles", "delphi_roster", "session_brief", "get_agent", "list_skills", "get_skill", "specs_status", "specs_show", "specs_list", "scaffold_status", "search_project", "search_memory", "query_memory", "kb_retrieve", "consult_orchestrator", "spawn_agent_pack", "route", "propose_note", "request_test_authorization", "propose_kb_entry", "propose_council_record", "record_session_summary", "handoff_put", "handoff_get", "recall_sessions", "request_help", "help_result", "council_frame", "council_open", "council_brief", "council_submit", "council_choose", "request_council", "council_status", "council_result", "request_research", "research_status", "research_result", "cancel_job", "ask_family", "ask_result"]);
+        assert_eq!(names, ["search_kb", "list_roles", "delphi_roster", "session_brief", "get_agent", "list_skills", "get_skill", "specs_status", "specs_show", "specs_list", "scaffold_status", "search_project", "search_memory", "query_memory", "kb_retrieve", "consult_orchestrator", "spawn_agent_pack", "route", "propose_note", "request_test_authorization", "propose_kb_entry", "record_finding", "propose_council_record", "record_session_summary", "handoff_put", "handoff_get", "recall_sessions", "request_help", "help_result", "council_frame", "council_open", "council_brief", "council_submit", "council_choose", "request_council", "council_status", "council_result", "request_research", "research_status", "research_result", "cancel_job", "ask_family", "ask_result"]);
         assert_eq!(socket_wait("host.recall_sessions"), QUICK_WAIT, "recall is a quick read");
         for t in tools {
-            let writes = ["propose_note", "request_test_authorization", "propose_kb_entry", "propose_council_record", "record_session_summary", "handoff_put", "request_help", "request_council", "request_research", "council_open", "council_submit", "council_choose", "cancel_job", "ask_family"].contains(&t["name"].as_str().unwrap());
+            let writes = ["propose_note", "request_test_authorization", "propose_kb_entry", "record_finding", "propose_council_record", "record_session_summary", "handoff_put", "request_help", "request_council", "request_research", "council_open", "council_submit", "council_choose", "cancel_job", "ask_family"].contains(&t["name"].as_str().unwrap());
             assert_eq!(t["annotations"]["readOnlyHint"], !writes, "{}", t["name"]);
             assert_eq!(t["annotations"]["destructiveHint"], false, "{}", t["name"]);
             assert_eq!(t["annotations"]["openWorldHint"], t["name"] == "request_research", "{}", t["name"]);
@@ -2785,18 +2793,26 @@ mod tests {
         assert!(reads.iter().all(|r| r.as_object().unwrap().keys().all(|k| ["id", "checked", "author"].contains(&k.as_str()))), "ids and labels only: {reads:?}");
         assert!(reads.iter().any(|r| r["author"] == "operator" && r["checked"] == "validated"), "{reads:?}");
 
+        // `specs/116` §8.4: the two checking roles explore by default too, and are told what they are reading; `verify` when they ask.
         assert!(!text_of(&call_tool(&mut s, "get_agent", json!({"role": "validator"}))).is_empty());
         let v = kb(&mut s, json!({"query": "quokka procedure"}));
-        assert!(v.contains("use: \"verify\" (the default for validator)") && !v.contains("the quokka procedure"), "verify serves no project file: {v}");
-        let asked = kb(&mut s, json!({"query": "quokka procedure", "use": "explore"}));
-        assert!(asked.contains("use: \"explore\" (asked for)") && asked.contains("the quokka procedure"), "an explicit use wins: {asked}");
-        assert!(kb(&mut s, json!({"query": "quokka procedure", "use": null})).contains("(the default for validator)"), "a null use is no use");
+        assert!(v.contains("use: \"explore\" (the default for validator: unvalidated text is included and labelled as such; pass use \"verify\" for validated text only)") && v.contains("the quokka procedure"), "the explore default: {v}");
+        let asked = kb(&mut s, json!({"query": "quokka procedure", "use": "verify"}));
+        assert!(asked.contains("use: \"verify\" (asked for)") && !asked.contains("the quokka procedure"), "verify serves no project file: {asked}");
+        assert!(kb(&mut s, json!({"query": "quokka procedure", "use": null})).contains("(the default for validator: "), "a null use is no use");
 
         // A failed get_agent adopts nothing; the next role adopted replaces the last.
         assert_eq!(call_tool(&mut s, "get_agent", json!({"role": "nobody"}))["result"]["isError"], true);
-        assert!(kb(&mut s, json!({"query": "quokka procedure"})).contains("(the default for validator)"));
+        assert!(kb(&mut s, json!({"query": "quokka procedure"})).contains("(the default for validator: "));
         call_tool(&mut s, "get_agent", json!({"role": "investigator"}));
-        assert!(kb(&mut s, json!({"query": "quokka procedure"})).contains("use: \"verify\" (the default for investigator)"));
+        let i = kb(&mut s, json!({"query": "quokka procedure"}));
+        assert!(i.contains("use: \"explore\" (the default for investigator: unvalidated text is included and labelled as such;") && i.contains("the quokka procedure"), "{i}");
+        let asked = kb(&mut s, json!({"query": "quokka procedure", "use": "verify"}));
+        assert!(asked.contains("use: \"verify\" (asked for)") && !asked.contains("the quokka procedure"), "the investigator verifies when it asks: {asked}");
+        // A role whose manifest says `verify` keeps that default: the key is unchanged, the release no longer sets it for any role.
+        *s.host_session.adopted.lock().unwrap() = Some(("validator".into(), crate::host_labels::Use::Verify));
+        let st = kb(&mut s, json!({"query": "quokka procedure"}));
+        assert!(st.contains("use: \"verify\" (the default for validator)") && !st.contains("the quokka procedure"), "{st}");
         call_tool(&mut s, "get_agent", json!({"role": "architect"}));
         let a = kb(&mut s, json!({"query": "quokka procedure"}));
         assert!(a.contains("use: \"explore\" (the default for architect)"), "{a}");
@@ -2805,7 +2821,7 @@ mod tests {
         assert_eq!(call_tool(&mut s, "kb_retrieve", json!({"query": "quokka", "use": "trust me"}))["result"]["isError"], true);
 
         // The pack says its role's default in one line.
-        assert!(text_of(&call_tool(&mut s, "get_agent", json!({"role": "validator"}))).contains("\n- search_use: verify (the default `use` of search_kb and kb_retrieve while this role is adopted; a call's own `use` wins)\n"));
+        assert!(text_of(&call_tool(&mut s, "get_agent", json!({"role": "validator"}))).contains("\n- search_use: explore (the default `use` of search_kb and kb_retrieve while this role is adopted; a call's own `use` wins)\n"));
         assert!(text_of(&call_tool(&mut s, "get_agent", json!({"role": "architect"}))).contains("\n- search_use: explore ("));
 
         // The local readers report what they returned too.
@@ -2832,8 +2848,9 @@ mod tests {
                     let role = if i % 2 == 0 { "validator" } else { "architect" };
                     let a = s.call("get_agent", &json!({"role": role}), &Job::none()).unwrap();
                     let k = s.call("kb_retrieve", &json!({"query": "quokka procedure"}), &Job::none()).unwrap().unwrap();
-                    let explore = k.contains("use: \"explore\" (the default for architect)");
-                    (a.is_ok() && (explore || k.contains("use: \"verify\" (the default for validator)")), explore)
+                    // Both roles explore by default since `specs/116` §8.4; the answer still names exactly one adopted role.
+                    let explore = k.contains("use: \"explore\" (the default for ");
+                    (a.is_ok() && explore && (k.contains("(the default for architect)") != k.contains("(the default for validator: ")), explore)
                 })
             })
             .collect();
@@ -2842,7 +2859,7 @@ mod tests {
         let explored = got.iter().filter(|(_, e)| *e).count();
         assert_eq!(s.host_session.reported.lock().unwrap().iter().filter(|(v, _)| v == "kb_retrieve").count(), explored, "each explore answer, and only those, carried a passage to report");
         s.call("get_agent", &json!({"role": "investigator"}), &Job::none()).unwrap().unwrap();
-        assert_eq!(s.host_session.adopted.lock().unwrap().clone(), Some(("investigator".to_string(), crate::host_labels::Use::Verify)));
+        assert_eq!(s.host_session.adopted.lock().unwrap().clone(), Some(("investigator".to_string(), crate::host_labels::Use::Explore)));
     }
 
     #[test]

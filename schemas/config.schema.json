@@ -364,7 +364,9 @@
       "description": "Knowledge retrieval for agents (specs/064 section 4).",
       "additionalProperties": false,
       "properties": {
-        "auto": { "type": "boolean", "default": true, "description": "A root span starts with at most three passages (1 500 characters) from the knowledge base, labelled and tainted. false: agents search only when they call kb_search." }
+        "auto": { "type": "boolean", "default": true, "description": "A span (a root span, and a child span on its first turn) starts with passages from the knowledge base, labelled and tainted. false: agents search only when they call kb_search." },
+        "start_passages": { "type": "integer", "minimum": 0, "maximum": 10, "default": 6, "description": "How many passages a span starts with (specs/116 section 4.2); at most two from one document. 0 gives none." },
+        "start_chars": { "type": "integer", "minimum": 0, "maximum": 16000, "default": 4000, "description": "How many characters the start passages may take in all (specs/116 section 4.2)." }
       }
     },
     "hooks": { "type": "object", "description": "`[[hooks.observe]]` and `[[hooks.deny]]` (specs/018): commands that can only watch or refuse." }

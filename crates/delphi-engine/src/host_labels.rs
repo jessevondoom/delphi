@@ -80,6 +80,20 @@ pub enum Use {
     Verify,
 }
 
+/// The two roles whose work is checking. Their default is `explore` too (`specs/116` §8.4): the first rung of their ladder reads
+/// everything Delphi holds, unvalidated research included, labelled; they ask for `verify` when a claim must rest on what they read.
+pub const CHECKING_ROLES: [&str; 2] = ["investigator", "validator"];
+
+/// Why a search ran in the adopted role's default mode, for the answer's `use:` line. A checking role exploring is told, in the
+/// answer itself, that what it was shown includes unvalidated text and how to ask for validated text only.
+pub fn default_reason(role: &str, use_: Use) -> String {
+    if use_ == Use::Explore && CHECKING_ROLES.contains(&role) {
+        format!("the default for {role}: unvalidated text is included and labelled as such; pass use \"verify\" for validated text only")
+    } else {
+        format!("the default for {role}")
+    }
+}
+
 impl Use {
     /// The `use` argument of a tool call: absent means `explore`.
     pub fn parse(v: Option<&Value>) -> Result<Use, String> {
@@ -135,6 +149,8 @@ pub fn author(origin: &str, zone: &str, source_type: &str, doc_author: Option<&s
         "kept" | "session" => "host_session",
         _ if matches!(zone, "library" | "bundles" | "xenia") || matches!(source_type, "federated_peer" | "federated_verified") => "third_party",
         _ if rel_path.starts_with("staged/host-") => "host_session",
+        // A finding a host session recorded (`specs/116` §5): its mission is the session's own, `host-<session>`.
+        _ if zone == crate::finding_record::ZONE && rel_path.starts_with("missions/host-") => "host_session",
         _ if by_role => "agent",
         _ => "operator",
     }
@@ -273,6 +289,10 @@ pub fn of_hit_with(ws_dir: &Path, h: &Hit, hashes: Option<&HashMap<String, Strin
     let checked = checked(status, &h.source_type);
     let shipped = if author == "release" { shipped(hashes, &h.rel_path, &h.blake3) } else { Shipped::Unknown };
     let mut label = label_of(author, checked, status, shipped);
+    // A finding says what it is (`specs/116` §5.2), with who recorded it; a retired one keeps the table's words.
+    if h.zone == crate::finding_record::ZONE && status == "noted" {
+        label = format!("{}{}", crate::finding_record::label_for(&h.source_type), if author == "host_session" { ", recorded by a host session" } else { "" });
+    }
     if let (Some(org), "validated") = (&h.vouched_by, status) {
         label.push_str(&format!(" · vouched by {org}"));
     }
@@ -395,6 +415,17 @@ mod tests {
         assert_eq!(Use::parse(None), Ok(Use::Explore));
         assert_eq!(Use::parse(Some(&Value::String("verify".into()))), Ok(Use::Verify));
         assert!(Use::parse(Some(&Value::String("trust me".into()))).is_err());
+    }
+
+    /// `specs/116` §8.4: a checking role exploring is told what it is reading; any other role, and `verify`, get the plain reason.
+    #[test]
+    fn a_checking_role_exploring_is_told_the_text_is_unvalidated_and_how_to_verify() {
+        for role in CHECKING_ROLES {
+            let why = default_reason(role, Use::Explore);
+            assert!(why.starts_with(&format!("the default for {role}")) && why.contains("unvalidated text is included and labelled") && why.contains("\"verify\""), "{why}");
+            assert_eq!(default_reason(role, Use::Verify), format!("the default for {role}"));
+        }
+        assert_eq!(default_reason("architect", Use::Explore), "the default for architect");
     }
 
     /// `specs/109` §12.1 item 3: the rule is keyed to the claim and comes first, in the skill, the pointer line and the host skill.

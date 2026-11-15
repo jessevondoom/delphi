@@ -177,6 +177,12 @@ fn never_writable(key: &str) -> Option<String> {
     if key.starts_with("about/") || key == "about" {
         return Some("about/ is the release's own reference (read-only)".into());
     }
+    // `missions/<id>/findings/**` (`specs/116` §5.2): only the daemon's `record_finding` writes a finding, after it has checked the
+    // evidence, so a file there is never one an agent's file tools made.
+    let mut seg = key.split('/');
+    if (seg.next(), seg.nth(1)) == (Some("missions"), Some("findings")) {
+        return Some("findings are written by the daemon (use `record_finding`)".into());
+    }
     if let Some(rest) = key.strip_prefix("scratch/") {
         if let Some(why) = scratch_refused(rest) {
             return Some(why);
@@ -616,6 +622,18 @@ mod tests {
             assert!(never_readable("context/facts/x.md", role).is_some() && never_writable("context/facts/x.md").is_some());
         }
         assert!(never_readable("context/domains/x.md", "scout").is_none());
+    }
+
+    /// `specs/116` §5.2: a mission's findings folder is the daemon's to write and every role's to read.
+    #[test]
+    fn a_missions_findings_are_read_by_every_role_and_written_by_none() {
+        for k in ["missions/m1/findings/x.md", "missions/m1/findings", "missions/m1/findings/deep/x.md"] {
+            assert!(never_writable(k).is_some_and(|why| why.contains("record_finding")), "{k}");
+            assert!(never_readable(k, "builder").is_none() && never_readable(k, "scout").is_none(), "{k}");
+        }
+        for k in ["missions/m1/research/findings/x.md", "missions/m1/research/x.md", "missions/findings/x.md", "context/findings/x.md"] {
+            assert!(never_writable(k).is_none(), "{k}");
+        }
     }
 
     /// `specs/098` §12 item 13: entries a host or the web left in the knowledge base live under `local/staged/`, which no role may read

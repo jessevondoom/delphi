@@ -211,7 +211,9 @@ sandbox = "off"
 
 # Knowledge retrieval for agents (specs/064).
 # [retrieval]
-# auto = true                        # a root span starts with at most 3 passages from the knowledge base; false: only when an agent calls kb_search
+# auto = true                        # a span (a task, and each agent it dispatches) starts with passages from the knowledge base; false: only when an agent calls kb_search
+# start_passages = 6                 # how many passages a span starts with (at most 10; at most 2 from one document; 0: none)
+# start_chars = 4000                 # how many characters they may take in all (at most 16000)
 
 # Fact validator (specs/040 section 15.1). off: no fetch of any kind. advisory (default): the full fact path as a dry run; it uses the
 # network, records what it would ratify and writes nothing validated. ratify: real writes, allowed only while the daemon's latch and the
