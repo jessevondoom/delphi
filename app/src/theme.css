@@ -71,7 +71,9 @@ h1, h2, h3, p, dl, dd, ol, ul { margin: 0; padding: 0; }
 .mark { display: inline-flex; align-items: center; gap: 2px; }
 .mark span { width: 13px; height: 7px; border-radius: 2px; }
 .brand { display: inline-flex; align-items: center; gap: 10px; font: 700 14px/1 var(--mono); }
-.where { font: 400 12px/1 var(--mono); color: var(--muted); }
+.where { display: inline-flex; align-items: baseline; gap: 12px; min-width: 0; white-space: nowrap; font: 400 12px/1 var(--mono); color: var(--muted); }
+.where b { font: 600 13px/1 var(--sans); color: var(--text); }
+.where span { overflow: hidden; text-overflow: ellipsis; }
 .spacer { flex: 1 1 120px; }
 .conn { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }

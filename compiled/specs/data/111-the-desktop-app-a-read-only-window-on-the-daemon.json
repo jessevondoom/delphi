@@ -88,13 +88,13 @@
     },
     {
       "level": 2,
-      "line": 148,
+      "line": 149,
       "number": "10",
       "title": "The terminal narrator is retired (operator, 2026-11-14)"
     },
     {
       "level": 2,
-      "line": 168,
+      "line": 169,
       "number": "9",
       "title": "Not verified"
     }
@@ -102,7 +102,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/111-the-desktop-app-a-read-only-window-on-the-daemon.md",
-    "sha256": "282d549a6dada2b95b479ead157de2c18d1eb1a994d1a429aa90f75d82beedfe"
+    "sha256": "b052afc92bf513b92834cbd14f8e87ef3b7e9b458a8048d7db810bb1a87fe4b5"
   },
   "source_status_at_hash": {
     "line": {
@@ -115,7 +115,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-14, in a host session: asked whether a spec could be written and built from on the plan, as specs 104 to 110 were, the operator answered \"your default assumptions all sounds correct. go\". The approval is to the plan this spec carries out; the operator has not read this text."
     },
-    "sha256": "282d549a6dada2b95b479ead157de2c18d1eb1a994d1a429aa90f75d82beedfe",
+    "sha256": "b052afc92bf513b92834cbd14f8e87ef3b7e9b458a8048d7db810bb1a87fe4b5",
     "word": "approved"
   },
   "spec": {

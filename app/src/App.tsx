@@ -102,7 +102,12 @@ export function App() {
           <span className="mark" role="img" aria-label="Delphi">{MARK_ROLES.map((r) => <span key={r} style={{ background: fillOf(info, r, light) }} />)}</span>
           delphi
         </span>
-        <span className="where">{[info?.workspace_name && `${info.workspace_name} workspace`, info?.version && `delphi ${info.version}`].filter(Boolean).join(' · ')}</span>
+        {/* Display only: the daemon serves one workspace and no read call takes a project, so there is nothing to switch (spec 111 §8). */}
+        <span className="where">
+          {info?.workspace_name && <b>{info.workspace_name}</b>}
+          {info?.workspace && <span>{tilde(info.workspace)}</span>}
+          {info?.version && <span>delphi {info.version}</span>}
+        </span>
         <span className="spacer" />
         <span className="conn"><span className={conn.connected ? 'dot on' : 'dot off'} />{conn.connected ? (bridge?.kind === 'fixture' ? conn.detail : 'daemon connected · read-only') : conn.detail}</span>
       </header>
