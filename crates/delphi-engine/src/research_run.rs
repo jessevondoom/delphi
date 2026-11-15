@@ -84,17 +84,29 @@ pub enum Verdict {
 }
 
 pub trait Validator: Send + Sync {
-    /// Check `claim` against the sources named in it. Fetches go through `ctx` under the validator's scope. The verdict is all it returns.
-    fn check<'a>(&'a self, ctx: &'a JobCtx, claim: &'a ClaimRec) -> BoxFut<'a, Result<Verdict, String>>;
+    /// Check `claim` against `pages`: the pages this run read for the claim's sources, with the text the scout read (`specs/112` §4.3).
+    /// The check fetches nothing: a page is fetched once per run, and what was read is what is checked. Its steps are counted through
+    /// `ctx` against the check's own budget (`JobCtx::check_step`, §4.4). The verdict is all it returns.
+    fn check<'a>(&'a self, ctx: &'a JobCtx, claim: &'a ClaimRec, pages: &'a [&'a Page]) -> BoxFut<'a, Result<Verdict, String>>;
 }
 
 pub trait Library: Send + Sync {
     /// Fingerprints of claims the library already holds.
     fn known_fingerprints(&self) -> BTreeSet<String>;
     /// Keep a fetched page as a source, `not validated`; returns its source id. `trusted` is provenance for the capture policy.
+    /// `text` is the text the run read, and it is that text which is kept and hashed: the library does not fetch the page again
+    /// (`specs/112` §4.3). An empty `text` is a page the run never read (a chained work's landing address, `specs/101` §6 item 8); the
+    /// library fetches that one itself, once.
     fn capture<'a>(&'a self, url: &'a str, text: &'a str, trusted: bool) -> BoxFut<'a, Result<String, String>>;
-    /// Stage a claim by capture on contact (`specs/052`): `noted` unless a check is queued.
-    fn stage_claim(&self, claim: &ClaimRec) -> Result<(), String>;
+    /// Stage a claim by capture on contact (`specs/052`): `noted` unless a check is queued. The claim is written as a library claim
+    /// (`specs/112` §3.1) and its id there is returned; `None` when the library kept no claim for it.
+    fn stage_claim(&self, claim: &ClaimRec) -> Result<Option<String>, String>;
+    /// A page of this run states a claim the library already holds (its fingerprint is in [`known_fingerprints`](Library::known_fingerprints)):
+    /// the claim gains an anchor into the page's source and the run's topic instead of a second claim being made (`specs/112` §3.3).
+    /// Returns the library claim's id, or `None` when the library has no claim to add to. The default adds nothing.
+    fn anchor_known(&self, _fingerprint: &str, _x: &Extracted, _source_id: &str, _url: &str) -> Option<String> {
+        None
+    }
     /// Keep a search result the fetcher will not reach as a `noted` lead: its address, title and snippet, dated, with where it came
     /// from, and nothing more (`specs/098` §7.5 item 1). It is never validated and is not a page. The default keeps nothing.
     fn note_lead(&self, _row: &Row) -> Result<(), String> {
@@ -104,6 +116,11 @@ pub trait Library: Send + Sync {
     /// whether the class is weak only by default, its text, and whether the operator's trusted list covered it inside the topic scope of
     /// the claim (`claim_text`). `None` when the library cannot describe it; such a source does not count.
     fn cite_info(&self, _source_id: &str, _claim_text: &str) -> Option<Cite> {
+        None
+    }
+    /// The content hash the library holds for a source this run captured (`sha256:<hex>` of what was read), for the run's record
+    /// (`specs/112` §2.2). `None` when the library cannot say.
+    fn content_hash(&self, _source_id: &str) -> Option<String> {
         None
     }
     /// Is the source private? A claim that rests on a private source is never put in an outbound query (`specs/098` §7.5 item 5).
@@ -116,6 +133,21 @@ pub trait Library: Send + Sync {
     fn chainable_doi(&self, _source_id: &str) -> Option<String> {
         None
     }
+}
+
+/// What a run tells its record as it goes (`specs/112` §2.4): the plan, each query sent, each page read and kept, each page it did
+/// not read. The runner only reports; nothing here is read back, and no branch of the run depends on it. Every method defaults to
+/// doing nothing.
+pub trait Recorder: Send + Sync {
+    /// The queries the run planned, as `(kind, query)`, before any is sent.
+    fn plan(&self, _queries: &[(&str, &str)]) {}
+    /// One query that was sent: its text, its purpose, the provider that answered when known, and the number of results or the fixed
+    /// reason it failed.
+    fn query(&self, _query: &str, _purpose: &str, _provider: Option<&str>, _results: Result<usize, &str>) {}
+    /// One page that was read and kept as a source, with the hash of what was read when the library gives it.
+    fn page(&self, _url: &str, _source_id: &str, _content_hash: Option<&str>) {}
+    /// One page that was not read, and a fixed word for why.
+    fn refused(&self, _url: &str, _why: &str) {}
 }
 
 pub struct Deps<'a> {
@@ -139,6 +171,8 @@ pub struct Deps<'a> {
     /// `[research] citation_chaining` (`specs/101` §6): the citation index and the bounds. `None` is the switch off: the run is what
     /// spec 098 gives and nothing is sent to an index.
     pub chain: Option<ChainPlan<'a>>,
+    /// The run's record on disk (`specs/112` §2), written as the run goes. `None` keeps no record.
+    pub record: Option<&'a dyn Recorder>,
 }
 
 #[derive(Debug, Clone)]
@@ -149,6 +183,8 @@ pub struct ClaimRec {
     pub x: Extracted,
     pub source_ids: Vec<String>,
     pub source_urls: Vec<String>,
+    /// The quote found in each source's text, in the order of `source_ids`: what each of the claim's anchors keeps (`specs/112` §3.2).
+    pub quotes: Vec<String>,
     pub from_trusted: bool,
     pub state: ClaimState,
     pub retrieved: String,
@@ -165,6 +201,11 @@ pub fn page_cap(depth: Depth) -> usize {
         Depth::Survey => 6,
         Depth::Deep => 10,
     }
+}
+
+/// The host of a URL, for a refusal that names it; empty when the URL has none.
+pub(crate) fn host_of(url: &str) -> String {
+    host(url)
 }
 
 fn host(url: &str) -> String {
@@ -195,7 +236,7 @@ pub fn validation_order(claims: &[ClaimRec]) -> Vec<usize> {
     first
 }
 
-fn claim_json(c: &ClaimRec, contested: bool) -> Value {
+fn claim_json(c: &ClaimRec, contested: bool, library_id: Option<&str>) -> Value {
     let base: Status = if contested && c.state != ClaimState::Refuted { claim_status(ClaimState::Contradicted) } else { claim_status(c.state) };
     // Three or more independent origins lift a `noted` claim to `corroborated`; contested, checking, validated and disproved all win
     // over a count (`specs/098` §7.6). The count and the trusted-source flag are shown, never read as a reason to trust anything.
@@ -203,12 +244,22 @@ fn claim_json(c: &ClaimRec, contested: bool) -> Value {
     let tags = Tags { origins: c.support.origins, trusted_sources: c.support.trusted_sources, would_ratify: false, protected: false };
     let status = raise_for_tags(base, &tags, &tier_params());
     let detail = if let Some(d) = tier_detail(status, c.support.origins, c.support.trusted_sources) { d } else { format!("{} independent origin(s) · trusted_sources: {}", c.support.origins, c.support.trusted_sources) };
-    json!({
-        "id": c.id, "assertion": format!("{} {} {}", c.x.subject, c.x.predicate, c.x.object).split_whitespace().collect::<Vec<_>>().join(" "),
+    let mut v = json!({
+        "id": c.id, "assertion": assertion(&c.x),
         "source_ids": c.source_ids, "quote": c.x.quote, "locator": c.x.locator, "retrieved": c.retrieved, "licence": "unknown",
         "knowledge_status": status.as_str(), "contested": contested, "from_trusted_source": c.from_trusted,
         "corroboration": {"origins": c.support.origins, "trusted_sources": c.support.trusted_sources, "detail": detail},
-    })
+    });
+    // The library claim this one became (`specs/112` §3.1). An id, and nothing that changes how the claim reads here.
+    if let Some(id) = library_id {
+        v["claim_id"] = json!(id);
+    }
+    v
+}
+
+/// A claim as one line: its subject, predicate and object. The text a library claim is written with.
+pub fn assertion(x: &Extracted) -> String {
+    format!("{} {} {}", x.subject, x.predicate, x.object).split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// The corroboration of one claim from the sources the run captured for it: its citations are pages the daemon fetched itself, and the
@@ -304,15 +355,24 @@ fn coverage_report(r: &Rungs, kb: usize, trusted_claims: usize, web_claims: usiz
 
 /// Read one page into the claim set: keep it as a source, extract its claims, and merge a claim already known into the claim that holds
 /// it (a second citation) or start a new one. The scout's quote was found in the page's text by code, so each citation is quote-verified.
-/// `true` when the page was kept as a source (whether or not any claim came out of it), `false` when the library refused it.
-async fn ingest(deps: &Deps<'_>, question: &str, page: &Page, trusted: bool, retrieved: &str, set: &mut ClaimSet, claims: &mut Vec<ClaimRec>) -> bool {
-    let Ok(source_id) = deps.library.capture(&page.url, &page.text, trusted).await else { return false };
-    let Ok(found) = deps.scout.extract(question, page).await else { return true };
+/// `Some` when the page was kept as a source (whether or not any claim came out of it), `None` when the library refused it. Either
+/// way the run's record is told (`specs/112` §2.2). What `Some` holds is the ids of the library claims that were already held and
+/// gained an anchor from this page (§3.3).
+async fn ingest(deps: &Deps<'_>, question: &str, page: &Page, trusted: bool, retrieved: &str, set: &mut ClaimSet, claims: &mut Vec<ClaimRec>) -> Option<Vec<String>> {
+    let Ok(source_id) = deps.library.capture(&page.url, &page.text, trusted).await else {
+        note(deps, |r| r.refused(&page.url, "capture_failed"));
+        return None;
+    };
+    note(deps, |r| r.page(&page.url, &source_id, deps.library.content_hash(&source_id).as_deref()));
+    let mut anchored = Vec::new();
+    let Ok(found) = deps.scout.extract(question, page).await else { return Some(anchored) };
     for x in found {
         let fp = claim_fingerprint(&x.subject, &x.predicate, &x.object, &x.scope, &x.time);
         match set.add(&fp, &source_id) {
-            Added::Known => {}
+            // The library already holds this claim: it gains an anchor into this page and the run's topic, and no second claim.
+            Added::Known => anchored.extend(deps.library.anchor_known(&fp, &x, &source_id, &page.url)),
             Added::New => claims.push(ClaimRec {
+                quotes: vec![x.quote.clone()],
                 id: fp[..12].to_string(),
                 group: claim_fingerprint(&x.subject, &x.predicate, "", &x.scope, &x.time),
                 fingerprint: fp,
@@ -330,13 +390,30 @@ async fn ingest(deps: &Deps<'_>, question: &str, page: &Page, trusted: bool, ret
                     if !c.source_ids.contains(&source_id) {
                         c.source_ids.push(source_id.clone());
                         c.source_urls.push(page.url.clone());
+                        c.quotes.push(x.quote.clone());
                     }
                     c.from_trusted |= trusted;
                 }
             }
         }
     }
-    true
+    Some(anchored)
+}
+
+/// Tell the run's record something, when the run has one.
+fn note(deps: &Deps<'_>, f: impl FnOnce(&dyn Recorder)) {
+    if let Some(r) = deps.record {
+        f(r);
+    }
+}
+
+/// The word the record uses for a planned query's kind.
+fn kind_word(kind: QueryKind) -> &'static str {
+    match kind {
+        QueryKind::Trusted => "trusted",
+        QueryKind::Topic => "topic",
+        QueryKind::Gap => "gap",
+    }
 }
 
 /// The source a search belongs to in the search log (`specs/101` §3 item 1): the trusted-list search is `trusted`; every other search
@@ -449,10 +526,12 @@ async fn chain_pass(ctx: &JobCtx, deps: &Deps<'_>, claims: &[ClaimRec], seen: &m
                     Ok(w) => w,
                     Err(_) => {
                         log.failed(li, "no_results");
+                        note(deps, |r| r.query(&what, "chain", Some(crate::research_chain::PROVIDER_ID), Err("no_results")));
                         stats.failed += 1;
                         continue;
                     }
                 };
+                note(deps, |r| r.query(&what, "chain", Some(crate::research_chain::PROVIDER_ID), Ok(works.len())));
                 answered = true;
                 listed |= !works.is_empty();
                 log.rows(li, works.len());
@@ -550,13 +629,15 @@ async fn read_chained(ctx: &JobCtx, deps: &Deps<'_>, plan: &crate::research_chai
         return true;
     }
     match deps.library.capture(&landing, "", false).await {
-        Ok(_) => {
+        Ok(source_id) => {
             log.kept(li);
             stats.pages += 1;
+            note(deps, |r| r.page(&landing, &source_id, deps.library.content_hash(&source_id).as_deref()));
         }
         Err(_) => {
             log.dropped(li, "capture_failed", 1);
             stats.unresolved += 1;
+            note(deps, |r| r.refused(&landing, "capture_failed"));
         }
     }
     false
@@ -569,8 +650,13 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
         return Err("the question has no usable search query once private details are removed: ask it without paths, hosts or credentials".into());
     }
     queries.sort_by_key(|q| q.kind != QueryKind::Trusted);
+    note(deps, |r| r.plan(&queries.iter().map(|q| (kind_word(q.kind), q.text.as_str())).collect::<Vec<_>>()));
     let mut set = ClaimSet::new(deps.library.known_fingerprints());
     let (mut seen, mut claims, mut spent) = (Seen::default(), Vec::<ClaimRec>::new(), false);
+    // Every page the run read, with the text it read: the check works from these and fetches nothing (`specs/112` §4.3).
+    let mut read: Vec<Page> = Vec::new();
+    // The library claims this run wrote or added an anchor to (`specs/112` §3): what its record lists as its claims.
+    let mut library_claims: Vec<String> = Vec::new();
     let (mut pages_read, mut trusted_kept) = (0usize, 0usize);
     let retrieved = day();
     let mut cov = Rungs::default();
@@ -604,9 +690,11 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
                 let (rung, source, purpose) = log_source(q.kind, None);
                 let li = log.begin(rung, source, purpose, &q.text, None);
                 log.failed(li, why);
+                note(deps, |r| r.query(&q.text, kind_word(q.kind), None, Err(why)));
                 continue;
             }
         };
+        note(deps, |r| r.query(&q.text, kind_word(q.kind), via.as_deref(), Ok(rows.len())));
         if via.is_some() {
             last_provider = via.clone();
         }
@@ -634,6 +722,7 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
             // A result the fetcher will not reach is kept as a lead, not dropped, and costs no step (`specs/098` §7.5 item 1).
             if !deps.web.can_fetch(&row.url) {
                 ctx.refused(&row.url);
+                note(deps, |r| r.refused(&row.url, "not_fetchable"));
                 if deps.library.note_lead(&row).is_ok() {
                     cov.leads += 1;
                     log.kept(li);
@@ -649,10 +738,12 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
                     break 'queries;
                 }
                 log.dropped(li, "refused", 1);
+                note(deps, |r| r.refused(&row.url, "refused"));
                 continue;
             }
             let Ok(page) = deps.web.fetch(&row.url) else {
                 ctx.refused(&row.url);
+                note(deps, |r| r.refused(&row.url, "fetch_failed"));
                 if !from_trusted_host && deps.library.note_lead(&row).is_ok() {
                     cov.leads += 1;
                     log.kept(li);
@@ -672,8 +763,10 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
             if trusted {
                 trusted_kept += 1;
             }
-            if ingest(deps, question, &page, trusted, &retrieved, &mut set, &mut claims).await {
+            if let Some(anchored) = ingest(deps, question, &page, trusted, &retrieved, &mut set, &mut claims).await {
                 log.kept(li);
+                read.push(page);
+                library_claims.extend(anchored);
             } else {
                 log.dropped(li, "capture_failed", 1);
             }
@@ -721,9 +814,11 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
                     Err(e) => {
                         let li = log.begin("web", Source::Search("unknown".into()), purpose, &q, None);
                         log.failed(li, failure_reason(&e));
+                        note(deps, |r| r.query(&q, kind, None, Err(failure_reason(&e))));
                         continue;
                     }
                 };
+                note(deps, |r| r.query(&q, kind, via.as_deref(), Ok(rows.len())));
                 let provider = via.as_deref().and_then(crate::search_log::clean_id).unwrap_or_else(|| "unknown".into());
                 let li = log.begin("web", Source::Search(provider), purpose, &q, None);
                 log.rows(li, rows.len());
@@ -737,6 +832,7 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
                     }
                     if !deps.web.can_fetch(&row.url) {
                         ctx.refused(&row.url);
+                        note(deps, |r| r.refused(&row.url, "not_fetchable"));
                         if deps.library.note_lead(&row).is_ok() {
                             cov.leads += 1;
                             log.kept(li);
@@ -752,10 +848,12 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
                             break 'pass;
                         }
                         log.dropped(li, "refused", 1);
+                        note(deps, |r| r.refused(&row.url, "refused"));
                         continue;
                     }
                     let Ok(page) = deps.web.fetch(&row.url) else {
                         ctx.refused(&row.url);
+                        note(deps, |r| r.refused(&row.url, "fetch_failed"));
                         log.dropped(li, "fetch_failed", 1);
                         continue;
                     };
@@ -764,8 +862,10 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
                         continue;
                     }
                     let trusted = deps.web.is_trusted(&page.url);
-                    if ingest(deps, question, &page, trusted, &retrieved, &mut set, &mut claims).await {
+                    if let Some(anchored) = ingest(deps, question, &page, trusted, &retrieved, &mut set, &mut claims).await {
                         log.kept(li);
+                        read.push(page);
+                        library_claims.extend(anchored);
                     } else {
                         log.dropped(li, "capture_failed", 1);
                     }
@@ -778,17 +878,21 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     // step budget; it keeps leads and moves no claim.
     let chain_stats = if deps.chain.is_some() && !spent { chain_pass(ctx, deps, &claims, &mut seen, &mut cov, &mut log, &mut spent).await } else { None };
 
-    // The validator works through the queue, trusted sources first, until the budget says stop.
+    // The validator works through the queue, trusted sources first, until the check's own budget says stop (`specs/112` §4.4): a quarter
+    // of the run's steps, at least two, counted apart from the search, so a search that spent every step still leaves the check its own.
+    // It is handed the pages this run read for the claim and fetches nothing (§4.3).
+    let mut check_spent = false;
     for i in validation_order(&claims) {
-        if spent {
+        if check_spent {
             break;
         }
         claims[i].state = ClaimState::Queued;
-        match deps.validator.check(ctx, &claims[i]).await {
+        let pages: Vec<&Page> = read.iter().filter(|p| claims[i].source_urls.contains(&p.url)).collect();
+        match deps.validator.check(ctx, &claims[i], &pages).await {
             Ok(Verdict::Supports) if independent(&claims[i]) => claims[i].state = ClaimState::Confirmed,
             Ok(Verdict::Contradicts) => claims[i].state = ClaimState::Refuted,
             Ok(_) => {}
-            Err(e) if e.contains("budget") => spent = true,
+            Err(e) if e.contains("budget") => check_spent = true,
             Err(_) => {}
         }
     }
@@ -801,10 +905,12 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
         c.support = support_of(c, deps);
         c.contested = contested.contains(&c.id);
     }
-    for c in &claims {
-        let _ = deps.library.stage_claim(c);
-    }
-    let claim_values: Vec<Value> = claims.iter().map(|c| claim_json(c, c.contested)).collect();
+    // Each kept claim becomes a library claim (`specs/112` §3.1); the library's id for it goes on the claim in the result.
+    let staged: Vec<Option<String>> = claims.iter().map(|c| deps.library.stage_claim(c).ok().flatten()).collect();
+    library_claims.extend(staged.iter().flatten().cloned());
+    let mut once = BTreeSet::new();
+    library_claims.retain(|id| once.insert(id.clone()));
+    let claim_values: Vec<Value> = claims.iter().zip(&staged).map(|(c, id)| claim_json(c, c.contested, id.as_deref())).collect();
     let answer = match deps.scout.answer(question, &claims).await {
         Ok(a) => a.chars().take(7900).collect::<String>(),
         Err(_) => String::new(),
@@ -832,12 +938,13 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
         "answer": if answer.is_empty() { "No claim could be drawn from the sources read. (not validated)".to_string() } else { format!("{} (not validated: model synthesis)", answer) },
         "claims": claim_values, "citations": claims.iter().flat_map(|c| c.source_urls.iter().cloned()).collect::<BTreeSet<_>>(),
         "source_ids": source_ids, "kb_hits": set.kb_hits(), "new_claims": set.new_claims(), "contradictions": conflicts,
+        "library_claims": library_claims,
         "freshness": {"retrieved": retrieved, "last_checked": retrieved},
-        "budget_used": {"steps": ctx.steps()},
+        "budget_used": {"steps": ctx.steps(), "check_steps": ctx.check_steps()},
         "answered_by": "scout", "consulted": ["scout", "validator"],
     });
     result["search_log"] = log.to_json();
-    Ok(if spent { Finish::Partial(result) } else { Finish::Done(result) })
+    Ok(if spent || check_spent { Finish::Partial(result) } else { Finish::Done(result) })
 }
 
 #[cfg(test)]
@@ -910,25 +1017,38 @@ mod tests {
         }
     }
 
+    /// A claim's id and the pages the check was handed for it, as `(url, text)`.
+    type Handed = (String, Vec<(String, String)>);
+
     struct FakeValidator {
         verdict: Verdict,
         asked: Mutex<Vec<String>>,
+        /// For each claim checked: the pages the runner handed over, as `(url, text)`.
+        handed: Mutex<Vec<Handed>>,
     }
     impl Validator for FakeValidator {
-        fn check<'a>(&'a self, ctx: &'a JobCtx, claim: &'a ClaimRec) -> BoxFut<'a, Result<Verdict, String>> {
+        fn check<'a>(&'a self, ctx: &'a JobCtx, claim: &'a ClaimRec, pages: &'a [&'a Page]) -> BoxFut<'a, Result<Verdict, String>> {
             Box::pin(async move {
-                ctx.egress("validator", Egress::Fetch, &claim.source_urls[0])?;
+                ctx.check_step().map_err(|_| "the step budget for the check is spent".to_string())?;
                 self.asked.lock().unwrap().push(claim.id.clone());
+                self.handed.lock().unwrap().push((claim.id.clone(), pages.iter().map(|p| (p.url.clone(), p.text.clone())).collect()));
                 Ok(self.verdict)
             })
         }
     }
+
+    /// A staged claim's id, its source ids, and the quote found in each source.
+    type Staged = (String, Vec<String>, Vec<String>);
 
     #[derive(Default)]
     struct FakeLib {
         known: BTreeSet<String>,
         captured: Mutex<Vec<(String, bool)>>,
         staged: Mutex<Vec<String>>,
+        /// For each staged claim: its id, its sources and the quote found in each.
+        staged_quotes: Mutex<Vec<Staged>>,
+        /// Each anchor a known claim gained: its fingerprint, the source, the quote.
+        anchored: Mutex<Vec<(String, String, String)>>,
         leads: Mutex<Vec<String>>,
         /// Describe each captured source for the corroboration count (the real library always does).
         describe: bool,
@@ -987,9 +1107,21 @@ mod tests {
                 Ok(format!("src-{}", host(url)))
             })
         }
-        fn stage_claim(&self, c: &ClaimRec) -> Result<(), String> {
+        fn stage_claim(&self, c: &ClaimRec) -> Result<Option<String>, String> {
             self.staged.lock().unwrap().push(c.id.clone());
-            Ok(())
+            self.staged_quotes.lock().unwrap().push((c.id.clone(), c.source_ids.clone(), c.quotes.clone()));
+            Ok(Some(format!("c-{}", c.id)))
+        }
+        /// As the live library does: a claim it holds gains an anchor; one it does not hold has nothing to add to.
+        fn anchor_known(&self, fingerprint: &str, x: &Extracted, source_id: &str, _url: &str) -> Option<String> {
+            if !self.known.contains(fingerprint) {
+                return None;
+            }
+            self.anchored.lock().unwrap().push((fingerprint.to_string(), source_id.to_string(), x.quote.clone()));
+            Some(format!("c-{}", &fingerprint[..12]))
+        }
+        fn content_hash(&self, source_id: &str) -> Option<String> {
+            Some(format!("sha256:of-{source_id}"))
         }
     }
 
@@ -1032,7 +1164,27 @@ mod tests {
         crate::research_chain::Work { doi: doi.into(), year: None }
     }
 
+    /// A recorder that keeps what the run told it, in order, as one line each.
+    #[derive(Default)]
+    struct Told(Mutex<Vec<String>>);
+    impl Recorder for Told {
+        fn plan(&self, queries: &[(&str, &str)]) {
+            self.0.lock().unwrap().push(format!("plan {}", queries.iter().map(|(k, _)| *k).collect::<Vec<_>>().join(",")));
+        }
+        fn query(&self, query: &str, purpose: &str, provider: Option<&str>, results: Result<usize, &str>) {
+            self.0.lock().unwrap().push(format!("query [{purpose}] {query} via {} -> {results:?}", provider.unwrap_or("-")));
+        }
+        fn page(&self, url: &str, source_id: &str, content_hash: Option<&str>) {
+            self.0.lock().unwrap().push(format!("page {url} {source_id} {}", content_hash.unwrap_or("-")));
+        }
+        fn refused(&self, url: &str, why: &str) {
+            self.0.lock().unwrap().push(format!("refused {url} {why}"));
+        }
+    }
+
     struct Fixture {
+        /// The run's record, when the test wants one.
+        record: Option<Told>,
         retractions: Option<&'static str>,
         /// The citation index, when chaining is on, and the bounds (depth, fanout, max per seed, max calls).
         cites: Option<FakeCites>,
@@ -1062,10 +1214,10 @@ mod tests {
                 ("https://nih.gov/b".to_string(), vec![x("fever")]),
                 ("https://blog.example/a".to_string(), vec![x("headaches")]),
             ]));
-            Fixture { retractions: None, cites: None, bounds: (1, 2, 10, 30), pages: 0, web, scout, validator: FakeValidator { verdict, asked: Default::default() }, lib: FakeLib::default(), redactor: Redactor::new(), sites: vec!["who.int".into(), "nih.gov".into()], thin_below: 3, support: Params::default(), host_searches: Vec::new() }
+            Fixture { record: None, retractions: None, cites: None, bounds: (1, 2, 10, 30), pages: 0, web, scout, validator: FakeValidator { verdict, asked: Default::default(), handed: Default::default() }, lib: FakeLib::default(), redactor: Redactor::new(), sites: vec!["who.int".into(), "nih.gov".into()], thin_below: 3, support: Params::default(), host_searches: Vec::new() }
         }
         fn deps(&self) -> Deps<'_> {
-            Deps { web: &self.web, scout: &self.scout, validator: &self.validator, library: &self.lib, redactor: &self.redactor, sites: &self.sites, thin_below: self.thin_below, support: &self.support, host_searches: &self.host_searches, retractions: self.retractions, chain: self.cites.as_ref().map(|c| ChainPlan { cites: c, depth: self.bounds.0, fanout: self.bounds.1, max_per_seed: self.bounds.2, max_calls: self.bounds.3, max_pages: self.pages }) }
+            Deps { web: &self.web, scout: &self.scout, validator: &self.validator, library: &self.lib, redactor: &self.redactor, sites: &self.sites, thin_below: self.thin_below, support: &self.support, host_searches: &self.host_searches, retractions: self.retractions, chain: self.cites.as_ref().map(|c| ChainPlan { cites: c, depth: self.bounds.0, fanout: self.bounds.1, max_per_seed: self.bounds.2, max_calls: self.bounds.3, max_pages: self.pages }), record: self.record.as_ref().map(|r| r as &dyn Recorder) }
         }
     }
 
@@ -1155,8 +1307,8 @@ mod tests {
         assert_eq!(v["kb_hits"].as_array().unwrap().len(), 1);
         assert_eq!(f.lib.staged.lock().unwrap().len(), 1, "only the new claim is staged");
         let recs = [
-            ClaimRec { id: "a".into(), fingerprint: "a".into(), group: "g".into(), x: x("o"), source_ids: vec![], source_urls: vec![], from_trusted: false, state: ClaimState::Captured, retrieved: "".into(), support: Support::default(), contested: false },
-            ClaimRec { id: "b".into(), fingerprint: "b".into(), group: "g2".into(), x: x("o"), source_ids: vec![], source_urls: vec![], from_trusted: true, state: ClaimState::Captured, retrieved: "".into(), support: Support::default(), contested: false },
+            ClaimRec { id: "a".into(), fingerprint: "a".into(), group: "g".into(), x: x("o"), source_ids: vec![], source_urls: vec![], quotes: vec![], from_trusted: false, state: ClaimState::Captured, retrieved: "".into(), support: Support::default(), contested: false },
+            ClaimRec { id: "b".into(), fingerprint: "b".into(), group: "g2".into(), x: x("o"), source_ids: vec![], source_urls: vec![], quotes: vec![], from_trusted: true, state: ClaimState::Captured, retrieved: "".into(), support: Support::default(), contested: false },
         ];
         assert_eq!(validation_order(&recs), [1, 0]);
     }
@@ -1623,7 +1775,7 @@ mod tests {
     #[tokio::test]
     async fn the_validator_queue_ignores_the_count() {
         // The count is display: the order the validator works in is decided by the trusted fast lane alone (`specs/098` §12 item 17).
-        let rich = ClaimRec { id: "a".into(), fingerprint: "a".into(), group: "g".into(), x: x("o"), source_ids: vec![], source_urls: vec![], from_trusted: false, state: ClaimState::Captured, retrieved: "".into(), support: Support { origins: 9, trusted_sources: 9, ..Default::default() }, contested: false };
+        let rich = ClaimRec { id: "a".into(), fingerprint: "a".into(), group: "g".into(), x: x("o"), source_ids: vec![], source_urls: vec![], quotes: vec![], from_trusted: false, state: ClaimState::Captured, retrieved: "".into(), support: Support { origins: 9, trusted_sources: 9, ..Default::default() }, contested: false };
         let poor = ClaimRec { id: "b".into(), from_trusted: true, support: Support::default(), ..rich.clone() };
         assert_eq!(validation_order(&[rich, poor]), [1, 0]);
     }
@@ -1922,5 +2074,169 @@ mod tests {
         let (_, v) = value(run_research(&ctx(Depth::Quick), "does aspirin reduce fever", Depth::Quick, &f.deps()).await.unwrap());
         assert!(v["search_log"]["flow"]["not_kept"]["page_cap"].as_u64().unwrap_or(0) > 0, "a quick run reads a handful of pages: {}", v["search_log"]);
         assert_balanced(&v);
+    }
+
+    // ---- `specs/112` R3: one fetch per page, the check's own budget, a result of the run's own search is fetched ----
+
+    /// AC-6: every page is asked of the web once in a run, the corroboration pass and the check included, and the check is handed the
+    /// very text the run read for each of the claim's sources.
+    #[tokio::test]
+    async fn a_page_is_fetched_once_per_run_and_the_check_is_handed_the_text_that_was_read() {
+        let mut f = three_origins();
+        f.validator.verdict = Verdict::Supports;
+        let c = ctx(Depth::Deep);
+        let (_, v) = value(run_research(&c, "does aspirin reduce fever", Depth::Deep, &f.deps()).await.unwrap());
+        let fetched = f.web.fetched.lock().unwrap().clone();
+        let once: BTreeSet<&String> = fetched.iter().collect();
+        assert!(!fetched.is_empty() && once.len() == fetched.len(), "a page was fetched twice: {fetched:?}");
+        let handed = f.validator.handed.lock().unwrap().clone();
+        assert!(!handed.is_empty(), "{v}");
+        for (claim, pages) in &handed {
+            assert!(!pages.is_empty(), "claim {claim} was checked against nothing");
+            for (url, text) in pages {
+                assert_eq!(f.web.pages.get(url), Some(text), "the check read something other than what the run read at {url}");
+            }
+        }
+        // the pages handed over are the claim's own sources and no others
+        let fever = fever(&v);
+        let (_, pages) = handed.iter().find(|(id, _)| Some(id.as_str()) == fever["id"].as_str()).expect("the fever claim was checked");
+        assert_eq!(pages.len(), fever["source_ids"].as_array().unwrap().len(), "{pages:?}");
+        assert_eq!(c.check_steps() as usize, handed.len(), "each check is one step of the check's own budget");
+        assert_eq!(v["budget_used"]["check_steps"].as_u64(), Some(c.check_steps() as u64));
+    }
+
+    /// `specs/112` §4.4: the check does not take from the search and the search does not take from the check.
+    #[tokio::test]
+    async fn the_check_has_its_own_steps_whatever_the_search_spent() {
+        // The search spends every step of a small budget: the check still runs, on its own.
+        let f = Fixture::new(Verdict::Inconclusive);
+        let c = JobCtx::with_budget(3);
+        let (partial, v) = value(run_research(&c, "does aspirin reduce fever", Depth::Deep, &f.deps()).await.unwrap());
+        assert!(partial, "{v}");
+        assert_eq!(c.steps(), 3, "the search spent its budget");
+        assert!(!f.validator.asked.lock().unwrap().is_empty(), "the check ran although the search had no step left");
+        // Many claims: the check stops at its own budget, the search's count is untouched by it, and the run says it is partial.
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        f.scout.0.insert("https://who.int/a".into(), ["fever", "pain", "swelling", "clotting", "inflammation", "aches"].map(x).to_vec());
+        let c = ctx(Depth::Quick);
+        let before_check = {
+            let probe = ctx(Depth::Quick);
+            let g = Fixture::new(Verdict::Inconclusive);
+            run_research(&probe, "does aspirin reduce fever", Depth::Quick, &g.deps()).await.unwrap();
+            probe.steps()
+        };
+        let (partial, v) = value(run_research(&c, "does aspirin reduce fever", Depth::Quick, &f.deps()).await.unwrap());
+        assert_eq!(f.validator.asked.lock().unwrap().len() as u32, c.max_check_steps(), "the check stops at a quarter of the run's steps, at least two");
+        assert_eq!(c.max_check_steps(), 2);
+        assert_eq!(c.steps(), before_check, "checking more claims costs the search nothing");
+        assert!(partial, "claims were left unchecked: {v}");
+    }
+
+    /// AC-5, through the runner and the live web: a search of this run returns one address off the trusted list and the runner fetches
+    /// it (`specs/098` §7.5 item 7a now takes effect, because `search_via` remembers); an address no search of the run returned is
+    /// never fetched, and is not reachable from the next run either.
+    #[tokio::test]
+    async fn the_runner_fetches_an_off_list_result_of_its_own_search_and_nothing_no_search_returned() {
+        use crate::research_host::{canned, LiveWeb};
+        use crate::research_observed::WiderFetch;
+        let (returned, never) = ("https://r3-run-returned.example/study", "https://r3-run-never.example/study");
+        for (u, t) in [(returned, "off-list page text"), (never, "would be read if the gate were missing")] {
+            canned::PAGES.lock().unwrap().push((u.to_string(), t.to_string()));
+        }
+        let list = || std::sync::Arc::new(delphi_adapter::research::trusted::TrustedList::parse("[[source]]\nhost = \"who.int\"\nreuse = \"full\"\n", None).unwrap());
+        let live = LiveWeb::new(Arc::new(canned::Engine(vec![returned.to_string()])), list(), vec![canned::engine_spec()], WiderFetch { per_host: 2, per_run: 10 });
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        f.scout.0.insert(returned.into(), vec![x("fever")]);
+        f.scout.0.insert(never.into(), vec![x("chills")]);
+        let c = ctx(Depth::Survey);
+        let (_, v) = value(run_research(&c, "does aspirin reduce fever", Depth::Survey, &Deps { web: &live, ..f.deps() }).await.unwrap());
+        assert_eq!(canned::served(returned), 1, "the runner fetched the result of its own search, once: {v}");
+        assert!(f.lib.captured.lock().unwrap().iter().any(|(u, trusted)| u == returned && !trusted), "captured, and not as a trusted page");
+        assert!(c.fetched_via_list().iter().any(|(u, via)| u == returned && via.starts_with("search:searxng#")), "{:?}", c.fetched_via_list());
+        assert_eq!(v["claims"].as_array().unwrap().len(), 1, "{v}");
+        assert!(["noted", "checking"].contains(&v["claims"][0]["knowledge_status"].as_str().unwrap()), "an off-list page's claim is never more than noted or being checked: {v}");
+        assert_eq!(rung_of(&v, "web")["kept"], 1);
+        assert!(!live.observed.snapshot().is_empty(), "the run has something for its `research.observed` event");
+        assert_eq!(canned::served(never), 0);
+        // The other direction: a run whose search did not return that address does not fetch it; it is not even a result.
+        let other = LiveWeb::new(Arc::new(canned::Engine(vec![])), list(), vec![canned::engine_spec()], WiderFetch { per_host: 2, per_run: 10 });
+        let g = Fixture::new(Verdict::Inconclusive);
+        let (_, v) = value(run_research(&ctx(Depth::Survey), "does aspirin reduce fever", Depth::Survey, &Deps { web: &other, ..g.deps() }).await.unwrap());
+        assert!(v["claims"].as_array().unwrap().is_empty() && g.lib.captured.lock().unwrap().is_empty(), "{v}");
+        assert!(!other.can_fetch(returned) && !other.can_fetch(never));
+        assert_eq!((canned::served(returned), canned::served(never)), (1, 0));
+    }
+
+    // ---- `specs/112` R1: the run tells its record what it does, as it does it ----
+
+    #[tokio::test]
+    async fn the_run_reports_its_plan_each_query_each_page_kept_and_each_page_it_did_not_read() {
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        f.record = Some(Told::default());
+        f.web.provider = Some("brave");
+        f.web.rows.push(row("https://unreachable.example/x"));
+        f.web.rows.push(row("https://refuses.example/y"));
+        f.web.pages.insert("https://refuses.example/y".into(), "a page the library will not keep".into());
+        f.lib.capture_fails.insert("refuses.example".into());
+        let (_, v) = value(run_research(&ctx(Depth::Deep), "does aspirin reduce fever", Depth::Deep, &f.deps()).await.unwrap());
+        let told = f.record.as_ref().unwrap().0.lock().unwrap().clone();
+        assert!(told[0].starts_with("plan trusted"), "the plan is written before anything is sent: {told:?}");
+        let queries: Vec<&String> = told.iter().filter(|l| l.starts_with("query ")).collect();
+        assert_eq!(queries.len(), f.web.searched.lock().unwrap().len(), "every search that was sent is in the record: {told:?}");
+        assert!(queries[0].contains("[trusted]") && queries[0].contains("via brave") && queries[0].ends_with("-> Ok(5)"), "{queries:?}");
+        for u in ["https://who.int/a", "https://nih.gov/b", "https://blog.example/a"] {
+            let h = host(u);
+            assert!(told.contains(&format!("page {u} src-{h} sha256:of-src-{h}")), "{u}: {told:?}");
+        }
+        assert!(told.contains(&"refused https://unreachable.example/x not_fetchable".to_string()), "{told:?}");
+        assert!(told.contains(&"refused https://refuses.example/y capture_failed".to_string()), "{told:?}");
+        assert_eq!(told.iter().filter(|l| l.starts_with("page ")).count(), v["source_ids"].as_array().unwrap().len(), "{told:?}");
+        // A search that fails is a line with its fixed reason, and a run with no record does the same work.
+        let mut g = Fixture::new(Verdict::Inconclusive);
+        g.record = Some(Told::default());
+        g.web.fail = Some("no_search_provider");
+        run_research(&ctx(Depth::Quick), "does aspirin reduce fever", Depth::Quick, &g.deps()).await.unwrap();
+        let told = g.record.as_ref().unwrap().0.lock().unwrap().clone();
+        assert!(told.iter().any(|l| l.starts_with("query ") && l.ends_with("-> Err(\"no_search_provider\")")), "{told:?}");
+        let plain = Fixture::new(Verdict::Inconclusive);
+        let (_, w) = value(run_research(&ctx(Depth::Deep), "does aspirin reduce fever", Depth::Deep, &plain.deps()).await.unwrap());
+        assert_eq!(w["claims"].as_array().unwrap().len(), 2, "{w}");
+    }
+
+    // ---- `specs/112` R2: kept claims become library claims; a claim the library holds gains an anchor ----
+
+    #[tokio::test]
+    async fn each_kept_claim_is_staged_with_the_quote_found_in_each_of_its_sources_and_carries_its_library_id() {
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        let quoted = |object: &str, quote: &str| Extracted { quote: quote.into(), ..x(object) };
+        f.scout.0.insert("https://who.int/a".into(), vec![quoted("fever", "the who's own words")]);
+        f.scout.0.insert("https://nih.gov/b".into(), vec![quoted("fever", "the nih's own words")]);
+        let (_, v) = value(run_research(&ctx(Depth::Deep), "does aspirin reduce fever", Depth::Deep, &f.deps()).await.unwrap());
+        let staged = f.lib.staged_quotes.lock().unwrap().clone();
+        let fever = fever(&v);
+        let (_, sources, quotes) = staged.iter().find(|(id, _, _)| Some(id.as_str()) == fever["id"].as_str()).expect("the fever claim was staged");
+        assert_eq!(sources, &["src-who.int", "src-nih.gov"]);
+        assert_eq!(quotes, &["the who's own words", "the nih's own words"], "one quote per source, each the words found in that source");
+        assert_eq!(fever["claim_id"].as_str(), Some(format!("c-{}", fever["id"].as_str().unwrap()).as_str()), "{fever}");
+        let ids: Vec<&str> = v["library_claims"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        assert_eq!(ids.len(), v["claims"].as_array().unwrap().len(), "every kept claim is a library claim: {v}");
+        assert!(v["claims"].as_array().unwrap().iter().all(|c| ids.contains(&c["claim_id"].as_str().unwrap())));
+    }
+
+    /// `specs/112` §3.3, the runner's half of AC-4: a claim the library already holds is not made a second time; it gains an anchor
+    /// into the page that states it, and the run's record lists it.
+    #[tokio::test]
+    async fn a_claim_the_library_already_holds_gains_an_anchor_instead_of_a_second_claim() {
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        let held = claim_fingerprint("aspirin", "reduces", "fever", "adults", "");
+        f.lib.known.insert(held.clone());
+        let (_, v) = value(run_research(&ctx(Depth::Deep), "does aspirin reduce fever", Depth::Deep, &f.deps()).await.unwrap());
+        let anchored = f.lib.anchored.lock().unwrap().clone();
+        assert_eq!(anchored.iter().map(|(fp, src, _)| (fp.as_str(), src.as_str())).collect::<Vec<_>>(), [(held.as_str(), "src-who.int"), (held.as_str(), "src-nih.gov")], "an anchor for each page that states it");
+        assert!(!f.lib.staged.lock().unwrap().iter().any(|id| held.starts_with(id.as_str())), "no second claim is staged");
+        assert_eq!(v["claims"].as_array().unwrap().len(), 1, "only the claim that is new to the library is one of the run's own: {v}");
+        let ids: Vec<&str> = v["library_claims"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        assert_eq!(ids.iter().filter(|id| **id == format!("c-{}", &held[..12])).count(), 1, "listed once, though two pages stated it: {ids:?}");
+        assert_eq!(ids.len(), 2, "the held claim that gained anchors and the new claim: {ids:?}");
     }
 }

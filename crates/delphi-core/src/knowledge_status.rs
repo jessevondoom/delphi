@@ -227,6 +227,12 @@ pub fn support_detail(origins: usize, trusted_sources: usize) -> String {
 }
 
 impl Status {
+    /// The status a stored word names: the inverse of [`Status::as_str`]. `None` for any other word, so a word that is not a status
+    /// never becomes one.
+    pub fn from_word(word: &str) -> Option<Status> {
+        [Status::Noted, Status::Corroborated, Status::Substantiated, Status::Vetted, Status::Checking, Status::Validated, Status::Contested, Status::Disproved, Status::Retired].into_iter().find(|s| s.as_str() == word)
+    }
+
     pub fn as_str(&self) -> &'static str {
         match self {
             Status::Noted => "noted",

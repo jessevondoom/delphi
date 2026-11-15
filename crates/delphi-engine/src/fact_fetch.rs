@@ -207,6 +207,20 @@ pub(crate) fn test_snapshot(url: &str, title: &str, paragraphs: &[&str]) -> Snap
     build(Raw { final_url: Url::parse(url).unwrap(), status: 200, headers: vec![], content_type: "text/html".into(), body: body.into_bytes(), truncated: false, redirects: vec![] }, false)
 }
 
+/// A plain-text snapshot of `text` at `url`, for tests that stand a canned page in for the network. The address is kept as given.
+#[cfg(test)]
+pub(crate) fn test_text_snapshot(url: &str, text: &str) -> Snapshot {
+    let mut snap = build(Raw { final_url: Url::parse(url).unwrap(), status: 200, headers: vec![], content_type: "text/plain".into(), body: text.as_bytes().to_vec(), truncated: false, redirects: vec![] }, false);
+    snap.final_url = Tainted(url.to_string());
+    snap
+}
+
+/// The refusal the fetcher gives a redirect from `from` to `to` on another origin, for tests of a caller that takes the hop up itself.
+#[cfg(test)]
+pub(crate) fn test_cross_origin_refusal(from: &str, to: &str) -> FetchError {
+    FetchError { refusal: Refusal::CrossOriginRedirect, redirects: Tainted(vec![Redirect { from: from.to_string(), to: to.to_string(), status: 302, followed: false }]) }
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes).iter().map(|b| format!("{:02x}", b)).collect()
 }

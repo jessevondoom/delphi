@@ -245,6 +245,12 @@ mod tests {
     /// right after the provider returned its rows) and restored only from the `research.observed` events the daemon's own research job
     /// wrote. A host, a model, a claim's `source_url`, a declared search or a page's links have no way in. A new caller fails here, and a
     /// reviewer has to ask whether it can put entry text into a fetched URL.
+    ///
+    /// Changed on purpose by `specs/112` §4.5 (slice R3). The one `remember` call used to sit in `Web::search`, and `Web::search_via` ran
+    /// the same provider search without it; the research runner calls `search_via`, so no result of a run's own search was ever
+    /// remembered and the rule of `specs/098` §7.5 item 7a never took effect. Both now go through `LiveWeb::provider_search`, which holds
+    /// the only provider search in the file and the only `remember`. The intent is unchanged and stated more tightly: results are
+    /// remembered in exactly the places that run a real search, which is one place, and no real search runs without remembering.
     #[test]
     fn only_the_daemons_own_search_adds_to_the_observed_set() {
         let re = |p: &str| regex::Regex::new(p).unwrap();
@@ -261,7 +267,7 @@ mod tests {
             }
         }
         let want: std::collections::BTreeMap<String, (usize, usize, usize, usize)> = [
-            // the provider search: one `observe` in `remember`, which is called once, in `search`, after the provider answered; one set per `LiveWeb`
+            // the provider search: one `observe` in `remember`, which is called once, in `provider_search`, after the provider answered; one set per `LiveWeb`
             ("delphi-engine/src/research_host.rs".to_string(), (1, 0, 1, 1)),
             // the daemon restores the set for a host's claim from the `research.observed` events its own research job wrote
             ("delphi-engine/src/service.rs".to_string(), (0, 1, 0, 0)),
@@ -269,10 +275,19 @@ mod tests {
         .into_iter()
         .collect();
         assert_eq!(seen, want, "something new fills the observed set: it must come only from the daemon's own provider search");
-        // and the one `remember` call sits in `search`, right after the provider's answer
+        // and the one `remember` call sits in `provider_search`, right after the provider's answer
         let host = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/research_host.rs")).unwrap();
+        let host: String = production(&host).lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
         let at = host.find("self.remember(n, &found);").expect("the one remember call");
-        assert!(host[..at].rsplit("fn search(&self").next().is_some_and(|b| b.contains("search(self.transport")), "`remember` must follow the provider search in `search`");
+        assert!(host[..at].rsplit("fn provider_search(&self").next().is_some_and(|b| b.contains("search(self.transport")), "`remember` must follow the provider search in `provider_search`");
+        // that provider search is the only one in the file, so there is no search whose results are not remembered ...
+        assert_eq!(host.matches("search(self.transport").count(), 1, "a second provider search in research_host.rs: it must go through `provider_search`, or its results are not remembered");
+        // ... and both of the runner's ways in (`Web::search`, `Web::search_via`) are that one call and nothing else
+        assert_eq!(host.matches("self.provider_search(query)").count(), 2, "`search` and `search_via` must both run `provider_search`");
+        for f in ["fn search(&self, query: &str)", "fn search_via(&self, query: &str)"] {
+            let body = host.split(f).nth(1).and_then(|b| b.split("\n    }\n").next()).unwrap_or_else(|| panic!("{f} is gone"));
+            assert!(body.contains("self.provider_search(query)"), "{f} must run the provider search that remembers");
+        }
     }
 
     /// Both senders of a Xenia publish (the daemon's `service_xenia.rs` and the `delphi xenia` command) look at the named file before the action

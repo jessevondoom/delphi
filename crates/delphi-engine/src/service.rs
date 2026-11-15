@@ -698,6 +698,20 @@ impl EngineService {
             id
         };
         let label = c.label(p["model"].as_str());
+        // `specs/112` §2: the run's record on disk, in the project's folder when the host works inside a registered project and in the
+        // workspace otherwise. It is made now, `queued`, and written as the run goes; `research_status` and `research_result` read it, so
+        // the result outlives the job and a restart. A record that cannot be made does not stop the research: the job then answers
+        // from memory, as before.
+        let project = self.host_project(&c.cwd);
+        let record_root = project.as_ref().map(|(_, root)| root.clone()).unwrap_or_else(|| ws.dir.clone());
+        let project_name = project.as_ref().map(|(name, _)| name.as_str());
+        let topic = crate::research_record::Topic::begin(&record_root, &crate::research_record::Begin { question: &question, asked_by: crate::research_record::Asker::host(&label), project: project_name, depth, run_id: &research_id }).ok();
+        if let Some(t) = &topic {
+            let _ = crate::research_record::point_run(&ws.dir, &c.session, &research_id, t, project_name);
+        }
+        let recorder = topic.clone().map(|topic| crate::research_record::RunRecorder { topic, run_id: research_id.clone() });
+        // `specs/112` §3.2: the claims the run keeps name its topic, and its project when it has one.
+        let (claims_topic, claims_project) = (topic.as_ref().map(|t| t.id.clone()), project.as_ref().map(|(name, _)| name.clone()));
         let (engine, wsd, home, q) = (self.engine.clone(), ws.dir.clone(), ws.home.clone(), question.clone());
         // The wider fetch (`specs/098` §7.5 item 7a, slice S1d): the URLs this run's searches returned are written to the session's log when
         // the run ends, so a claim the host later proposes with one of them as its source can be refetched by the daemon.
@@ -706,15 +720,19 @@ impl EngineService {
         // Spec 101 §3: searches the host says it ran. Only `tool`, `query` and `hits` are read; they are logged as declared and count as nothing.
         let host_searches = crate::search_log::parse_declared(&p["host_searches"]);
         let rid = research_id.clone();
-        self.research_jobs.submit(&research_id, &c.session, depth, move |jc| async move {
+        let ended_rid = research_id.clone();
+        let run = move |jc: Arc<crate::research_jobs::JobCtx>| async move {
+            if let Some(r) = &recorder {
+                let _ = r.topic.running(&r.run_id);
+            }
             let web = Arc::new(crate::research_host::LiveWeb::new(Arc::new(transport), Arc::new(list), engines, wider.clone()));
             let sites = web.list.site_filters();
             let scout = crate::research_host::LiveScout(engine.clone());
-            let validator = crate::research_host::LiveValidator { web: web.clone() };
+            let validator = crate::research_host::LiveValidator;
             let retractions = crate::retractions::Policy::load(&home.join("library"), engine.settings.retractions);
             let retractions_line = engine.settings.retractions.then(|| retractions.status_line(&delphi_core::time::now_rfc3339(), engine.settings.retractions_stale_days));
             let refresh_home = home.clone();
-            let library = crate::research_host::LiveLibrary { home, ledger: wsd.join("research/host-claims.jsonl"), label, retractions };
+            let library = crate::research_host::LiveLibrary { home, ledger: wsd.join("research/host-claims.jsonl"), label, retractions, held: Some(web.held.clone()), topic: claims_topic, project: claims_project };
             let redactor = delphi_core::redact::Redactor::new();
             // Citation chaining (`specs/101` §6): the index exists only when the switch is on; off, nothing is ever sent to it.
             let cites = engine.settings.chain.enabled.then(|| crate::research_host::LiveCites::new(crate::fact_fetch::FetchPolicy::default(), engine.settings.chain.endpoint.clone()).with_doi_endpoint(engine.settings.chain.doi_endpoint.clone()));
@@ -722,7 +740,7 @@ impl EngineService {
                 let b = &engine.settings.chain;
                 crate::research_chain::ChainPlan { cites: c, depth: b.depth, fanout: b.fanout, max_per_seed: b.max_per_seed, max_calls: b.max_calls, max_pages: b.max_pages }
             });
-            let deps = crate::research_run::Deps { web: web.as_ref(), scout: &scout, validator: &validator, library: &library, redactor: &redactor, sites: &sites, thin_below: engine.settings.thin_below, support: &engine.settings.support, host_searches: &host_searches, retractions: retractions_line.as_deref(), chain };
+            let deps = crate::research_run::Deps { web: web.as_ref(), scout: &scout, validator: &validator, library: &library, redactor: &redactor, sites: &sites, thin_below: engine.settings.thin_below, support: &engine.settings.support, host_searches: &host_searches, retractions: retractions_line.as_deref(), chain, record: recorder.as_ref().map(|r| r as &dyn crate::research_run::Recorder) };
             let out = crate::research_run::run_research(&jc, &q, depth, &deps).await;
             if let Some(m) = &mission {
                 let urls: Vec<Value> = web.observed.snapshot().into_iter().map(|(url, via)| json!({"url": url, "via": via})).collect();
@@ -730,38 +748,68 @@ impl EngineService {
                     let _ = m.append(EventEnvelope::new(&m.id, crate::research_observed::OBSERVED_EVENT, json!({"research_id": rid, "urls": urls}))).await;
                 }
             }
-            // Spec 101 §3: keep the log beside the result so `delphi research log <id>` can print it after the job is gone.
-            if let Ok(crate::research_jobs::Finish::Done(v) | crate::research_jobs::Finish::Partial(v)) = &out {
-                if v.get("search_log").is_some_and(|l| l.is_object()) {
-                    let _ = crate::search_log::persist(&wsd, &rid, &v["search_log"]);
-                }
+            // Spec 101 §3: the search log is kept with the result so `delphi research log <id>` can print it after the job is gone. Since
+            // `specs/112` §2.3 it is written into the topic's folder when the job ends (`record_end`, below), not into `research/search-logs/`.
+            if let Ok(crate::research_jobs::Finish::Done(_) | crate::research_jobs::Finish::Partial(_)) = &out {
                 // `specs/109` §3.3: the pages the run kept are indexed now, so the next `search_kb` finds them. A failure is not the run's.
                 let (w, h) = (wsd.clone(), refresh_home);
                 let _ = tokio::task::spawn_blocking(move || refresh_kb(&w, &h)).await;
             }
             out
+        };
+        // However the job ends (done, partial, failed, out of time, cancelled), its record learns it before the job reads as finished.
+        self.research_jobs.submit_with(&research_id, &c.session, depth, run, move |ended| {
+            if let Some(t) = &topic {
+                crate::research_record::record_end(t, &ended_rid, ended);
+            }
         });
         Ok(json!({"research_id": research_id, "status": "queued", "depth": depth, "note": "research runs in the background, trusted sources first: read it with research_status, then research_result. Everything it returns is not validated unless a claim says otherwise. The result carries a coverage report per rung; `coverage: thin` means the knowledge base and the trusted sources gave little, and your own tools and connectors can search further."}))
     }
 
-    /// `host.research_status` and `host.research_result`: only the session that asked can read a job.
+    /// The registered project a host's folder belongs to, as `(name, root)`; `None` for a folder outside every registered project
+    /// and when the registry cannot be trusted. A research run asked from inside a project belongs to it (`specs/112` §2.1).
+    fn host_project(&self, cwd: &std::path::Path) -> Option<(String, std::path::PathBuf)> {
+        let ws = &self.engine.ws.dir;
+        let id = crate::scope::resolve(ws, cwd).project.filter(|id| id.as_str() != crate::scope::DEFAULT_PROJECT)?;
+        let root = crate::scope::project_root(ws, &id)?;
+        crate::scope::project_list(ws).into_iter().find(|(_, r)| *r == root)
+    }
+
+    /// `host.research_status` and `host.research_result`: only the session that asked can read a job. A run that has ended is read
+    /// from its record on disk (`specs/112` §2.5), so its result is there for as long as the record is, after the hour the job is held
+    /// in memory and after a restart of the daemon. A run that is still going is read from the job, which knows what its worker is
+    /// doing; a run with no record (it could not be written) is read from the job, as before.
     async fn host_research_read(&self, p: Value, ctx: CallContext, result: bool) -> RpcOutcome {
         use crate::host_rpc as h;
+        use crate::research_record as rr;
         need_host(&ctx)?;
         let ws = &self.engine.ws;
         h::gate(&ws.dir).map_err(host_err)?;
         let c = h::Caller::parse(&p).map_err(host_err)?;
         let id = p["research_id"].as_str().unwrap_or("").to_string();
         let unknown = || err(code::INVALID_PARAMS, "no such research job for this session");
-        let mut v = if result {
+        // The pointer is named by the session that asked, so another session's run is not found.
+        let topic = rr::find_run(&ws.dir, &c.session, &id);
+        let waited = if result {
             let wait = if p["wait"].as_bool() == Some(true) { Duration::from_secs(25) } else { Duration::ZERO };
-            match self.research_jobs.wait(&id, &c.session, wait).await {
-                Some(v) => v,
-                None => self.research_jobs.status(&id, &c.session).ok_or_else(unknown)?,
-            }
+            self.research_jobs.wait(&id, &c.session, wait).await
         } else {
-            self.research_jobs.status(&id, &c.session).ok_or_else(unknown)?
+            None
         };
+        let live = self.research_jobs.status(&id, &c.session);
+        let going = live.as_ref().is_some_and(|s| matches!(s["status"].as_str(), Some("queued" | "running")));
+        let from_disk = match (&topic, going, result) {
+            (Some(t), false, true) => rr::result_of(t, &id).or_else(|| if live.is_none() { rr::status_of(t, &id, false) } else { None }),
+            (Some(t), false, false) => rr::status_of(t, &id, false),
+            _ => None,
+        };
+        let mut v = match from_disk {
+            Some(v) => v,
+            None => waited.or(live).ok_or_else(unknown)?,
+        };
+        if let (Some(t), true) = (&topic, v.is_object()) {
+            v["topic_id"] = json!(t.id);
+        }
         if v["answered_by"].as_str().is_some() {
             let id = crate::research_host::identity(&ws.dir, &ws.home, "scout", None);
             crate::research_host::attach_identity(&mut v, &id, self.badge_style(), self.badge_mode(), Some("the research you asked for"));
@@ -1629,7 +1677,9 @@ impl EngineService {
             // `specs/109` §12: labels, not exclusion. A visible document is returned whatever its tier or draft state, labelled; the
             // release's own files come back in their own `release` group with their own limit.
             let (core, release, third_party, mode) = if db.is_file() {
-                match crate::host_labels::search(&ws.home, &db, &ws.dir, &query, vec!["core", "context", "specs", "knowledge", "library", "bundles"], limit, use_, false) {
+                // Zone `research` (`specs/112` §3.5): topic records, answers and library claims, under the library's rules; they are
+                // third-party text, so they come back in the `third_party` group, fenced, each with its label.
+                match crate::host_labels::search(&ws.home, &db, &ws.dir, &query, vec!["core", "context", "specs", "knowledge", "library", "bundles", crate::research_index::ZONE], limit, use_, false) {
                     Ok(r) => (r.rest, r.release, r.third_party, r.mode.as_str()),
                     Err(e) if e.to_string().contains("no such table") => {
                         unindexed = true;
@@ -4857,6 +4907,152 @@ mod tests {
             c.call("host.search_kb", json!({"session": session, "tool": "claude-code", "cwd": cwd, "query": query})).unwrap()
         })
         .await
+    }
+
+    /// `specs/112` AC-2, the host's half: after a run kept a claim, `search_kb` returns it labelled `noted`, with the topic's answer,
+    /// as third-party text; a claim that rests on a private source is not returned at all.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_hosts_search_kb_returns_a_runs_claim_labelled_noted_and_never_one_that_rests_on_a_private_source() {
+        use crate::library::claims::{AnchorSpec, ResearchClaim};
+        use crate::library::{AddOpts, Budgets, Level, Library};
+        use crate::research_record as rr;
+        let f = setup(vec![], 5.0, |_| {});
+        let s = serve(&f).await;
+        let (ws_dir, home) = (f.engine.ws.dir.clone(), f.engine.ws.home.clone());
+        let lib = Library::in_home(&home);
+        let files = tempfile::tempdir().unwrap();
+        let source = |name: &str, text: &str, private: bool| {
+            let p = files.path().join(format!("{name}.md"));
+            std::fs::write(&p, text).unwrap();
+            lib.add_file(&p, &AddOpts { licence: Some("CC0-1.0".into()), level: Some(Level::Full), private, ..Default::default() }, &Budgets::default()).unwrap().id
+        };
+        let (open, secret) = (source("open", "Numbatfish tanks are held at 28 degrees, the guide says.", false), source("secret", "The numbatfish vault code is 4417.", true));
+        let topic = rr::Topic::begin(&ws_dir, &rr::Begin { question: "What temperature do numbatfish tanks need?", asked_by: rr::Asker::host("host:claude-code/unknown"), project: None, depth: delphi_core::research::Depth::Quick, run_id: "r-t-1" }).unwrap();
+        let claim = |text: &str, fp: &str, source: &str, quote: &str| {
+            let anchors = [AnchorSpec { source_id: source.to_string(), locator: Some("https://example.org/numbatfish".into()), quote: quote.into(), prefix: None, suffix: None }];
+            lib.add_research_claim(&ResearchClaim { text, fingerprint: fp, project: None, topic: Some(&topic.id), anchors: &anchors }).unwrap().0["id"].as_str().unwrap().to_string()
+        };
+        let kept = claim("numbatfish tanks need 28 degrees", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", &open, "tanks are held at 28 degrees");
+        let hidden = claim("the numbatfish vault code is 4417", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", &secret, "vault code is 4417");
+        topic.finish("r-t-1", "done", Some(&json!({"answer": "Sources read say:\n- numbatfish tanks need 28 degrees (not validated: model synthesis)", "budget_used": {"steps": 2, "check_steps": 1}, "search_log": {"version": 1, "private": false, "lines": [], "flow": {}}})), std::slice::from_ref(&kept), None, 5).unwrap();
+        // The index exists (the console or `delphi kb index` made it); a host's search then brings it up to date before it searches.
+        assert_eq!(home.join("workspaces").join(ws_dir.file_name().unwrap()), ws_dir, "the fixture's workspace sits under its home, as the index expects");
+        drop(crate::kb::Kb::open(&ws_dir.join("local/state.db")).unwrap());
+        let found = host_search_as(&s, "abcdef0123456789", &f.root, "numbatfish tanks degrees").await;
+        let third: Vec<&Value> = found["third_party"].as_array().unwrap().iter().collect();
+        let of = |needle: &str| third.iter().find(|r| r["path"].as_str().is_some_and(|p| p.contains(needle))).copied();
+        let c = of(&format!("research/claims/{kept}.json")).unwrap_or_else(|| panic!("the kept claim is not in the answer: {found}"));
+        assert_eq!((c["status"].as_str(), c["checked"].as_str(), c["author"].as_str(), c["source_type"].as_str()), (Some("noted"), Some("not checked"), Some("third_party"), Some("federated_verified")), "{c}");
+        assert_eq!(c["label"], "third-party page, not checked");
+        assert!(c["source_type_note"].as_str().is_some_and(|n| n.contains("not checked")), "the tier's name is glossed so `verified` is not read as checked: {c}");
+        assert!(c["preview"].as_str().unwrap().contains("numbatfish tanks need 28 degrees"), "{c}");
+        assert!(of(&format!("research/topics/{}/", topic.id)).is_some(), "the topic's record or answer is found too: {found}");
+        let all = found.to_string();
+        assert!(!all.contains(&hidden) && !all.contains("4417") && !all.contains("vault code is"), "a claim that rests on a private source reached a host: {all}");
+        // Asked for by its own words, the private claim is still not there: it was never listed for the index.
+        let asked = host_search_as(&s, "abcdef0123456789", &f.root, "numbatfish vault code").await.to_string();
+        assert!(!asked.contains(&hidden) && !asked.contains("4417") && !asked.contains("vault code is"), "a claim that rests on a private source reached a host: {asked}");
+        let conn = rusqlite::Connection::open(ws_dir.join("local/state.db")).unwrap();
+        let indexed: i64 = conn.query_row("SELECT COUNT(*) FROM kb_documents WHERE rel_path LIKE ?1", [format!("%{hidden}%")], |r| r.get(0)).unwrap();
+        assert_eq!(indexed, 0, "the private claim is not in the index at all");
+        let kept_rows: i64 = conn.query_row("SELECT COUNT(*) FROM kb_documents WHERE zone = 'research' AND rel_path LIKE ?1", [format!("%{kept}%")], |r| r.get(0)).unwrap();
+        assert_eq!(kept_rows, 1, "the kept claim is");
+        // `use: verify` serves only checked text of a ratified or empirical tier: nothing of the zone.
+        let (hsock, htok, cwd) = (s.host_sock.clone(), s.host.clone(), f.root.to_string_lossy().to_string());
+        let verify = blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+            c.hello(&htok).unwrap();
+            c.call("host.search_kb", json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cwd, "query": "numbatfish tanks degrees", "use": "verify"})).unwrap()
+        })
+        .await;
+        assert!(!verify.to_string().contains("research/claims/"), "{verify}");
+    }
+
+    /// `host.research_status` or `host.research_result` as the host of `session` working in `cwd`.
+    async fn host_research_as(s: &Served, session: &str, cwd: &std::path::Path, method: &'static str, research_id: &str) -> Result<Value, ClientError> {
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let (session, cwd, research_id) = (session.to_string(), cwd.to_string_lossy().to_string(), research_id.to_string());
+        blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+            c.hello(&htok).unwrap();
+            c.call(method, json!({"session": session, "tool": "claude-code", "cwd": cwd, "research_id": research_id, "wait": true}))
+        })
+        .await
+    }
+
+    /// `specs/112` AC-3 (run, restart, read the result): a finished run's answer is read from its record on disk by a daemon that
+    /// never held the job, and only by the session that asked. The runner is canned (the web is not this test's subject); the job, its
+    /// record, its pointer and the write at its end are the daemon's own.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_finished_runs_result_is_read_from_its_record_after_the_daemon_restarts() {
+        use crate::research_record as rr;
+        let f = setup(vec![], 5.0, |_| {});
+        let ws_dir = f.engine.ws.dir.clone();
+        let (session, rid) = ("abcdef0123456789", "r-t-1");
+        let answer = "Sources read say:\n- aspirin reduces fever (\"lowers fever in adults\") (not validated: model synthesis)";
+        let result = json!({
+            "coverage": "ok", "coverage_report": {"thin_below": 1, "counted": 1, "rungs": [], "host_rungs": [], "leads_kept": 0},
+            "answer": answer, "claims": [{"id": "abc123abc123", "assertion": "aspirin reduces fever", "source_ids": ["s-1"], "quote": "lowers fever in adults", "locator": "https://who.int/a", "retrieved": "2026-11-14", "licence": "unknown", "knowledge_status": "noted", "contested": false, "from_trusted_source": true}],
+            "source_ids": ["s-1"], "kb_hits": [], "new_claims": 1, "budget_used": {"steps": 2, "check_steps": 1}, "answered_by": "scout", "consulted": ["scout", "validator"],
+            "search_log": {"version": 1, "private": false, "lines": [], "flow": {"found": 0, "duplicates": 0, "kept": 0, "not_kept": {}, "searches": 0, "withheld": 0, "declared": 0}},
+        });
+        let first = serve(&f).await;
+        let topic = rr::Topic::begin(&ws_dir, &rr::Begin { question: "Does aspirin reduce fever?", asked_by: rr::Asker::host("host:claude-code/unknown"), project: None, depth: delphi_core::research::Depth::Quick, run_id: rid }).unwrap();
+        rr::point_run(&ws_dir, session, rid, &topic, None).unwrap();
+        let (canned, at_end) = (result.clone(), topic.clone());
+        first.svc.research_jobs.submit_with(rid, session, delphi_core::research::Depth::Quick, move |_| async move { Ok(crate::research_jobs::Finish::Done(canned)) }, move |ended| rr::record_end(&at_end, rid, ended));
+        let before = host_research_as(&first, session, &f.root, "host.research_result", rid).await.unwrap();
+        assert_eq!((before["status"].as_str(), before["answer"].as_str()), (Some("done"), Some(answer)), "{before}");
+        // The restart: a new daemon and a new service on the same workspace. It holds no job at all.
+        drop(first);
+        let second = serve(&f).await;
+        assert!(second.svc.research_jobs.status(rid, session).is_none(), "the restarted daemon never held the job");
+        let after = host_research_as(&second, session, &f.root, "host.research_result", rid).await.unwrap();
+        assert_eq!((after["status"].as_str(), after["answer"].as_str(), after["topic_id"].as_str()), (Some("done"), Some(answer), Some(topic.id.as_str())), "{after}");
+        assert_eq!(after["claims"], result["claims"], "the claims are read back as the run returned them");
+        assert_eq!(after["search_log"]["version"], 1);
+        assert!(after["signature"].as_str().is_some_and(|s| s.contains("(scout, via delphi)")), "a result from disk carries the scout's identity as any result does: {after}");
+        for k in ["status", "answer", "claims", "source_ids", "kb_hits", "new_claims", "budget_used", "answered_by", "identity", "signature"] {
+            assert!(after.get(k).is_some(), "the result from disk is missing `{k}`");
+        }
+        let status = host_research_as(&second, session, &f.root, "host.research_status", rid).await.unwrap();
+        assert_eq!((status["status"].as_str(), status["research_id"].as_str()), (Some("done"), Some(rid)), "{status}");
+        // Only the session that asked reads it, before a restart and after one; an id that was never a job is unknown.
+        assert_eq!(rpc_code(host_research_as(&second, "0123456789abcdef", &f.root, "host.research_result", rid).await), Some(code::INVALID_PARAMS));
+        assert_eq!(rpc_code(host_research_as(&second, session, &f.root, "host.research_result", "r-t-99").await), Some(code::INVALID_PARAMS));
+        // The files are where the spec says, and the old search-log folder is not written any more.
+        for name in ["record.json", "answer.md", "search-log.json"] {
+            assert!(ws_dir.join("research/topics").join(&topic.id).join(name).is_file(), "{name}");
+        }
+        assert!(!ws_dir.join("research/search-logs").exists());
+        assert_eq!(crate::search_log::read(&ws_dir, rid).unwrap()["version"], 1, "`delphi research log <research-id>` still finds the log");
+        assert_eq!(crate::search_log::read(&ws_dir, &topic.id).unwrap()["version"], 1, "and by the topic's id");
+        // A run that was going when the daemon stopped is reported failed, with what its record holds, and the record is not rewritten.
+        let stopped = rr::Topic::begin(&ws_dir, &rr::Begin { question: "What is a quokka?", asked_by: rr::Asker::host("host:claude-code/unknown"), project: None, depth: delphi_core::research::Depth::Quick, run_id: "r-t-2" }).unwrap();
+        rr::point_run(&ws_dir, session, "r-t-2", &stopped, None).unwrap();
+        stopped.running("r-t-2").unwrap();
+        stopped.query("r-t-2", "quokka", "topic", Some("brave"), Ok(2)).unwrap();
+        let gone = host_research_as(&second, session, &f.root, "host.research_result", "r-t-2").await.unwrap();
+        assert_eq!((gone["status"].as_str(), gone["queries"][0].as_str()), (Some("failed"), Some("quokka")), "{gone}");
+        assert!(gone["error"].as_str().unwrap().contains("stopped before it finished"));
+        assert_eq!(stopped.read().unwrap()["state"], "running");
+    }
+
+    /// `specs/112` §2.1: a run asked from inside a registered project keeps its record in that project's folder; from anywhere else, in
+    /// the workspace.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_host_inside_a_registered_project_is_given_that_project_for_its_record() {
+        let f = setup(vec![], 5.0, |_| {});
+        let s = serve(&f).await;
+        let (inside, outside) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let root = inside.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        register_projects(&f.engine.ws.dir, &[("0123456789abcdef0123456789abcdef", &root)]);
+        let got = s.svc.host_project(&root.join("src")).expect("a folder inside the project");
+        assert_eq!(got.1, root);
+        assert!(s.svc.host_project(&outside.path().canonicalize().unwrap()).is_none(), "a folder outside every project has none");
     }
 
     /// Register `(id, root)` projects in the workspace's registry (`scope::registry`), with canonical roots.
