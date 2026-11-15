@@ -1283,8 +1283,16 @@ impl Library {
     /// Does the claim rest on a private or internal source ([`is_internal_source`])? The one question the guards of `specs/115`
     /// §2 item 3 ask: such a claim is indexed apart (`research_index::INTERNAL_DIR`), labelled as from an internal source, and
     /// marks the session that is given it.
+    ///
+    /// A claim a host reported that has no anchor at all (the daemon did not find its quote, `specs/113` §2 item 3) rests on
+    /// the host's word alone. It is treated as internal too, so it never crosses to another project as ordinary research
+    /// without the host-reported label and the mark.
     pub fn rests_on_internal(&self, c: &Value) -> bool {
-        anchors_of(c).iter().filter_map(|a| a["source_id"].as_str()).filter_map(|s| self.read_meta(s)).any(|m| is_internal_source(&m))
+        let anchors = anchors_of(c);
+        if anchors.is_empty() && c["host_reported"].as_array().is_some_and(|m| !m.is_empty()) {
+            return true;
+        }
+        anchors.iter().filter_map(|a| a["source_id"].as_str()).filter_map(|s| self.read_meta(s)).any(|m| is_internal_source(&m))
     }
 
     /// Claims for a mission, by pointer (`specs/055` §5): selected by the words of the prompt and by the mission's project,

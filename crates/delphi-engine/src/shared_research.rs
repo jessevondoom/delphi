@@ -492,6 +492,11 @@ mod tests {
         assert_eq!(mark_entry(&hit.rel_path), Some(format!("shared-claim/{hid}")));
         // No origin: a private pointer is never a cite.
         assert!(lib.rests_on_internal(&hosted) && lib.cites_of(&hosted).is_empty());
+        // A host-reported claim with no anchor (its quote was not found) rests on the host's word alone: internal too, and no origin.
+        let bare = lib.add_host_claim(&ResearchClaim { text: "the wombatferry docks at pier twelve", fingerprint: "ddddddddddddddddddddddddddddddd3", project: Some("alpha"), topic: Some(&t.id), anchors: &[] }, mark).unwrap();
+        assert!(lib.rests_on_internal(&bare) && lib.cites_of(&bare).is_empty());
+        // An ordinary claim with no anchor and no host mark is not made internal by this rule.
+        assert!(!lib.rests_on_internal(&json!({"anchors": []})));
         assert_eq!(lib.refresh_support(&hid).unwrap()["support"]["origins"].as_u64().unwrap_or(0), 0);
         // The pointer's own record does not cross: it is in no index, so no result of any project is that record.
         let all = Kb::open_readonly(&f.ws.join("local/state.db")).unwrap().indexed_paths().unwrap();
