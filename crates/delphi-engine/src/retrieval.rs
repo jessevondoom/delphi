@@ -116,9 +116,14 @@ pub const START_PER_DOC: usize = 2;
 pub const MAX_START_PASSAGES: usize = delphi_adapter::config::MAX_START_PASSAGES;
 pub const MAX_START_CHARS: usize = delphi_adapter::config::MAX_START_CHARS;
 
-/// The zones a span starts from (`specs/116` §4.3). Adding a zone is one entry here; what a role may see of it is still the
+/// The zones a span starts from (`specs/116` §4 item 3). Adding a zone is one entry here; what a role may see of it is still the
 /// index's own rule (`kb::allowed_sql`), so a zone named here can never show another role's memory or untrusted text.
-pub const START_ZONES: [&str; 8] = ["core", "context", "specs", "knowledge", "library", "bundles", crate::finding_record::ZONE, crate::provisional_notes::ZONE];
+///
+/// Zone `research` (`specs/112` §3 item 5: topic records, their answers and library claims) is read as the library is: at the
+/// library's one tier, each passage labelled by its own status (*not validated* unless a claim's derived status says more), and
+/// the span that is given one starts at that tier. The start search names no project and no shared list, so no project's
+/// claims arrive this way, its own included, and nothing private is in the zone at all (`research_index::files`).
+pub const START_ZONES: [&str; 9] = ["core", "context", "specs", "knowledge", "library", "bundles", crate::research_index::ZONE, crate::finding_record::ZONE, crate::provisional_notes::ZONE];
 
 /// How much a span starts with: `[retrieval] start_passages` and `start_chars`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

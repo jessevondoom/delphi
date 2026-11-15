@@ -320,6 +320,37 @@ mod tests {
         assert!(!hits.iter().any(|h| h.rel_path.contains(seen.as_str())), "{:?}", hits.iter().map(|h| &h.rel_path).collect::<Vec<_>>());
     }
 
+    /// `specs/116` §4 item 3: the zone is among those a span starts from. A mission whose objective matches a topic's answer is
+    /// given a passage of it, with its pointer and its label, and starts at the library's tier as it would for library text. A
+    /// private topic's answer and a claim that rests on a private source are not in the zone, so neither arrives.
+    #[test]
+    fn a_span_starts_with_a_labelled_passage_of_a_matching_topics_answer_and_nothing_of_a_private_one() {
+        use crate::retrieval::{span_start, StartBudget, START_ZONES};
+        use delphi_core::provenance::Tier;
+        assert!(START_ZONES.contains(&ZONE));
+        let f = fx();
+        let lib = Library::in_home(&f.home);
+        let open = finished_topic(&f.ws, "Where do numbats shelter overnight?", "Numbats shelter overnight in hollow logs lined with shredded bark.", &[], false);
+        let closed = finished_topic(&f.ws, "What is the code of the gate where numbats shelter overnight?", "Numbats shelter overnight in hollow logs behind the gate whose code is 4417.", &[], true);
+        let secret = source(&lib, &f.home, "keeper", "Numbats shelter overnight in hollow logs that the keeper locks with key 9931.", true);
+        let hidden = research_claim(&lib, "numbats shelter overnight in hollow logs locked with key 9931", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", None, None, &secret, "the keeper locks with key 9931");
+        let db = f.ws.join("local/state.db");
+        Kb::open(&db).unwrap().refresh(&f.ws, "").unwrap();
+        let objective = "Numbats shelter overnight in hollow logs";
+        let start = span_start(&f.home, &db, "m-numbat", objective, "builder", StartBudget::default(), false).expect("the answer is found at the span's start");
+        let line = start.text.lines().find(|l| l.contains(&format!("research/topics/{}/answer.md#L", open.id))).unwrap_or_else(|| panic!("no passage of the answer:\n{}", start.text));
+        assert!(line.starts_with("- research/topics/") && line.contains(" [not validated]: ") && line.contains("hollow logs lined with shredded bark"), "its pointer, its label, its text: {line}");
+        assert_eq!(start.tier, Tier::L2, "the span starts at the library's tier ({}), the lowest among its passages", crate::research::TIER);
+        assert_eq!(crate::retrieval::tier_of(crate::research::TIER), Tier::L2);
+        for needle in ["4417", "9931", closed.id.as_str(), hidden.as_str()] {
+            assert!(!start.text.contains(needle), "`{needle}` reached a span's start:\n{}", start.text);
+        }
+        assert!(start.provisional.is_empty());
+        // Every role is given it under the same label; a root span asks once per mission.
+        let again = span_start(&f.home, &db, "m-numbat-2", objective, "architect", StartBudget::default(), true).expect("a root span");
+        assert!(again.text.contains(&format!("research/topics/{}/answer.md#L", open.id)) && again.text.contains("[not validated]") && !again.text.contains("4417"), "{}", again.text);
+    }
+
     #[test]
     fn the_text_the_index_holds_is_built_from_the_files_own_fields_and_carries_no_control_characters() {
         let c = json!({"id": "c-0123456789ab", "text": "aspirin lowers fever\u{1b}[31m", "kind": "fact", "scope": "team", "topics": ["does-aspirin-lower-fever-deadbeef"], "support": {"origins": 2, "trusted_sources": 1},
