@@ -24,7 +24,7 @@ pub struct Options {
     pub json: bool,
 }
 
-const USAGE: &str = "usage: delphi research topics [--json] [--home <dir>] [--workspace <name>]\n       delphi research migrate [--apply] [--json] [--home <dir>] [--workspace <name>]\n       delphi research ingest <path>... | --all [--apply] [--json] [--home <dir>] [--workspace <name>]\n       delphi research show <topic-id> [--json] [--home <dir>] [--workspace <name>]\n       delphi research log <topic-id | research-id> [--json] [--home <dir>] [--workspace <name>]\n       delphi research retractions import <file> [--home <dir>] [--workspace <name>]\n       delphi research retractions status [--home <dir>] [--workspace <name>]\n       delphi research setup [--engine <name>] [--credential <env:NAME|keychain:name>] [--url <instance>] [--cx <id>] [--no-test] [--home <dir>] [--workspace <name>]";
+const USAGE: &str = "usage: delphi research topics [--json] [--home <dir>] [--workspace <name>]\n       delphi research migrate [--apply] [--json] [--home <dir>] [--workspace <name>]\n       delphi research ingest <path>... | --all [--apply] [--fetch] [--json] [--home <dir>] [--workspace <name>]\n       delphi research show <topic-id> [--json] [--home <dir>] [--workspace <name>]\n       delphi research log <topic-id | research-id> [--json] [--home <dir>] [--workspace <name>]\n       delphi research retractions import <file> [--home <dir>] [--workspace <name>]\n       delphi research retractions status [--home <dir>] [--workspace <name>]\n       delphi research setup [--engine <name>] [--credential <env:NAME|keychain:name>] [--url <instance>] [--cx <id>] [--no-test] [--home <dir>] [--workspace <name>]";
 
 /// `args` is what follows the command name: `log <id> [flags]` or `retractions import|status [<file>] [flags]`.
 pub fn cli(home: &Path, ws_dir: &Path, args: &[String], o: &Options) -> i32 {
@@ -154,8 +154,35 @@ fn ingest(home: &Path, ws_dir: &Path, args: &[String], o: &Options) -> i32 {
     let mut items = ri::plan(ws_dir, &paths);
     let mut failed = 0;
     if apply {
+        let identifiers = delphi_engine::query_guard::identifiers(ws_dir);
+        // `--fetch` (§3 item 3): a listed URL is read by the daemon's own fetcher, and only on the trusted lists: an address a file names
+        // is no search result of Delphi's, so the wider fetch does not reach it. Without the flag nothing is fetched.
+        let web = if args.iter().any(|a| a == "--fetch") {
+            let built = (|| -> Result<_, String> {
+                let transport = delphi_adapter::research::transport::HttpTransport::new()?;
+                let lists = delphi_engine::research_setup::lists(ws_dir, home)?;
+                Ok(delphi_engine::research_host::LiveWeb::new(std::sync::Arc::new(transport), std::sync::Arc::new(lists), vec![], Default::default()))
+            })();
+            match built {
+                Ok(w) => Some(w),
+                Err(e) => {
+                    eprintln!("delphi research ingest --fetch: {e}");
+                    return 1;
+                }
+            }
+        } else {
+            None
+        };
+        let fetch = |u: &str| -> Result<delphi_engine::host_research::Fetched, String> {
+            use delphi_engine::research_run::Web;
+            let w = web.as_ref().ok_or_else(|| "not fetched".to_string())?;
+            let page = w.fetch(u)?;
+            let snap = w.held.read_as(&page.url, &page.text).ok_or_else(|| "fetch_failed".to_string())?;
+            Ok((page.url, snap))
+        };
+        let fetch_ref: Option<delphi_engine::host_research::FetchFn<'_>> = if web.is_some() { Some(&fetch) } else { None };
         for (n, item) in items.iter_mut().enumerate() {
-            if let Err(e) = ri::apply(home, item, &ri::run_id(n)) {
+            if let Err(e) = ri::apply(home, item, &ri::run_id(n), &identifiers, fetch_ref) {
                 eprintln!("delphi research ingest: {}: {e}", item.path.display());
                 item.action = ri::Action::Refused(format!("not written: {e}"));
                 failed += 1;

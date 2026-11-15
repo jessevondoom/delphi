@@ -216,6 +216,8 @@ pub fn quote_in(page: &str, quote: &str) -> bool {
 
 /// A fetched page: the address the text was read at and the daemon's snapshot of it.
 pub type Fetched = (String, crate::fact_fetch::Snapshot);
+/// A fetcher: the daemon's own (`research_host::LiveWeb`), or a test's fake web.
+pub type FetchFn<'a> = &'a dyn Fn(&str) -> Result<Fetched, String>;
 
 /// Where and for whom a call is recorded.
 pub struct Ctx<'a> {

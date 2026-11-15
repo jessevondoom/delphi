@@ -30,6 +30,17 @@ pub struct Extracted {
     pub rejected: Vec<(usize, String)>,
 }
 
+/// The sentences of a page that can stand as a claim, as `delphi kb extract --auto` takes them: each line cut at `.`, `!` and `?`,
+/// list and heading marks taken off, six words or more, at most 300 bytes, and no link. No model is called. Each lies on one line of
+/// the page, which is how `delphi research ingest` anchors it to a line (`specs/113` §3 item 2).
+pub fn sentences(page_body: &str) -> Vec<String> {
+    page_body
+        .split(['\n', '.', '!', '?'])
+        .map(|l| l.trim().trim_start_matches(['-', '*', '>', '#', ' ']).trim().to_string())
+        .filter(|l| l.split_whitespace().count() >= 6 && l.len() <= 300 && !l.contains("](") && !l.contains("http"))
+        .collect()
+}
+
 fn origin_of(page_id: &str) -> String {
     format!("page:{}", page_id)
 }
@@ -44,11 +55,7 @@ impl Library {
     /// Candidates with no model: each sentence of the page that appears word for word in a source the library holds whole.
     /// The sentence is both the claim and its quote, so the daemon's guard accepts only what a source really says.
     pub fn auto_candidates(&self, page_body: &str) -> Vec<Candidate> {
-        let sentences: Vec<String> = page_body
-            .split(['\n', '.', '!', '?'])
-            .map(|l| l.trim().trim_start_matches(['-', '*', '>', '#', ' ']).trim().to_string())
-            .filter(|l| l.split_whitespace().count() >= 6 && l.len() <= 300 && !l.contains("](") && !l.contains("http"))
-            .collect();
+        let sentences = sentences(page_body);
         let mut out = Vec::new();
         for (id, meta) in self.list() {
             if !meta["purged"].is_null() {

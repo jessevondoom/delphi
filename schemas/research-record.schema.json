@@ -88,6 +88,8 @@
         "additionalProperties": false
       }
     },
+    "pointers": { "type": "array", "items": { "type": "string", "maxLength": 300 }, "description": "The URLs an ingested file lists (specs/113 section 3 item 3): source pointers, fetched only with `--fetch`." },
+    "flags": { "type": "array", "items": { "enum": ["no sources listed"] }, "description": "Fixed flags on an ingested topic: `no sources listed` for a file that names no source (specs/113 section 3 item 6)." },
     "ingest": {
       "type": "object",
       "description": "A topic `delphi research ingest` wrote (specs/113 section 3): the file it rests on, read in place, and every content hash it was ingested at. A file whose hash is listed is skipped.",

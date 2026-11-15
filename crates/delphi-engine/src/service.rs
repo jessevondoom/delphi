@@ -1802,6 +1802,10 @@ impl EngineService {
                 if let Some(o) = v.as_object_mut() {
                     l.into_fields(o);
                 }
+                // `specs/113` §3 item 6: an imported summary that lists no source says so.
+                if let Some(flag) = crate::research_ingest::search_flag(&ws.dir, &h.rel_path) {
+                    v["flag"] = json!(flag);
+                }
                 v
             };
             let core: Vec<Value> = core.iter().map(|h| labelled("core", h)).collect();

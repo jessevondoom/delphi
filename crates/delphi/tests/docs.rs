@@ -303,9 +303,9 @@ fn an_ingested_research_topic_follows_the_record_schema() {
     let file = ws.join("note.md");
     std::fs::write(&file, "# Tank notes\n\nZebrafish tanks are kept at about 28 degrees in most labs.\n").unwrap();
     let p = ri::plan(&ws, std::slice::from_ref(&file));
-    let done = ri::apply(home.path(), &p[0], "i-1").unwrap().unwrap();
+    let done = ri::apply(home.path(), &p[0], "i-1", &[], None).unwrap().unwrap();
     std::fs::write(&file, "# Tank notes\n\nZebrafish tanks are kept at about 27 degrees in some labs.\n").unwrap();
-    ri::apply(home.path(), &ri::plan(&ws, std::slice::from_ref(&file))[0], "i-2").unwrap().unwrap();
+    ri::apply(home.path(), &ri::plan(&ws, std::slice::from_ref(&file))[0], "i-2", &[], None).unwrap().unwrap();
     let topic = delphi_engine::research_record::Topic::at(&ws, done["topic_id"].as_str().unwrap()).unwrap();
     must_pass("research-record.schema.json", "an ingested topic with two runs", &topic.read().unwrap());
 }

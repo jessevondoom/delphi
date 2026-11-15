@@ -45,6 +45,78 @@ pub struct Item {
     pub action: Action,
     /// The body, below any frontmatter (read once, never stored).
     pub body: String,
+    /// The claims taken from the file (§3 item 2): each sentence and the line of the file it is on, at most [`MAX_CLAIMS`].
+    pub claims: Vec<(String, usize)>,
+    /// The URLs the file lists (§3 item 3), at most [`MAX_URLS`].
+    pub urls: Vec<String>,
+    /// The file lists no source: no URL, and no `sources` in its frontmatter (§3 item 6).
+    pub no_sources: bool,
+}
+
+/// Claims taken from one file at most (§3 item 2).
+pub const MAX_CLAIMS: usize = 20;
+/// URLs kept as source pointers from one file at most.
+pub const MAX_URLS: usize = 40;
+/// The flag a file that lists no source carries, in its record and in search results (§3 item 6).
+pub const NO_SOURCES: &str = "no sources listed";
+/// The mark an ingested claim carries: the file said it, nothing checked it.
+pub const INGESTED: &str = "ingested from a file";
+
+/// The claims of a file: the sentences `delphi kb extract --auto` would take (`library::extract::sentences`), each with the line
+/// (counting from 1, frontmatter included) it stands on, once each, at most [`MAX_CLAIMS`].
+pub fn claims_of(text: &str) -> Vec<(String, usize)> {
+    let body_start = text.len() - crate::workspace::split_frontmatter(text).1.len();
+    let first_body_line = text[..body_start].lines().count() + 1;
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out: Vec<(String, usize)> = Vec::new();
+    for s in crate::library::extract::sentences(crate::workspace::split_frontmatter(text).1) {
+        if out.iter().any(|(t, _)| *t == s) {
+            continue;
+        }
+        if let Some(i) = lines.iter().enumerate().skip(first_body_line - 1).find(|(_, l)| l.contains(s.as_str())).map(|(i, _)| i) {
+            out.push((s, i + 1));
+        }
+        if out.len() >= MAX_CLAIMS {
+            break;
+        }
+    }
+    out
+}
+
+/// The http(s) URLs a file lists, in order, once each, at most [`MAX_URLS`]: in its text and in a frontmatter `sources` list.
+pub fn urls_of(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for (at, _) in text.match_indices("http") {
+        let rest = &text[at..];
+        if !(rest.starts_with("https://") || rest.starts_with("http://")) || text[..at].chars().next_back().is_some_and(char::is_alphanumeric) {
+            continue;
+        }
+        let end = rest.find(|c: char| c.is_whitespace() || matches!(c, ')' | '>' | ']' | '"' | '\'' | '<' | '`')).unwrap_or(rest.len());
+        let url = rest[..end].trim_end_matches(['.', ',', ';', ':', '!', '?']).to_string();
+        if url.len() > 10 && url.len() <= 300 && !out.contains(&url) {
+            out.push(url);
+        }
+        if out.len() >= MAX_URLS {
+            break;
+        }
+    }
+    out
+}
+
+/// Does the file list a source: a URL anywhere, or a non-empty `sources` list in its frontmatter?
+fn lists_sources(text: &str) -> bool {
+    let fm_sources = crate::workspace::split_frontmatter(text).0.as_ref().and_then(|v| v.get("sources")).and_then(|s| s.as_sequence()).is_some_and(|s| !s.is_empty());
+    fm_sources || !urls_of(text).is_empty()
+}
+
+/// The flag a search result for an imported summary carries (§3 item 6): `summaries/<id>.md` whose file lists no source.
+pub fn search_flag(ws: &Path, rel_path: &str) -> Option<&'static str> {
+    let id = rel_path.strip_prefix("summaries/")?.strip_suffix(".md")?;
+    if id.is_empty() || id.contains('/') || id.contains("..") {
+        return None;
+    }
+    let text = std::fs::read_to_string(ws.join(crate::kb_import::DIR).join(format!("{id}.md"))).ok()?;
+    (!lists_sources(&text)).then_some(NO_SOURCES)
 }
 
 fn sha256_hex(b: &[u8]) -> String {
@@ -122,7 +194,7 @@ pub fn all_paths(ws: &Path) -> Vec<PathBuf> {
 pub fn plan(ws: &Path, paths: &[PathBuf]) -> Vec<Item> {
     let mut out: Vec<Item> = Vec::new();
     for p in paths {
-        let refused = |why: &str| Item { path: p.clone(), hash: String::new(), root: ws.to_path_buf(), project: None, question: String::new(), action: Action::Refused(why.to_string()), body: String::new() };
+        let refused = |why: &str| Item { path: p.clone(), hash: String::new(), root: ws.to_path_buf(), project: None, question: String::new(), action: Action::Refused(why.to_string()), body: String::new(), claims: vec![], urls: vec![], no_sources: false };
         let Ok(path) = p.canonicalize() else {
             out.push(refused("no such file"));
             continue;
@@ -172,7 +244,7 @@ pub fn plan(ws: &Path, paths: &[PathBuf]) -> Vec<Item> {
             }
         }
         let body = crate::workspace::split_frontmatter(&text).1.to_string();
-        out.push(Item { path, hash, root, project, question, action, body });
+        out.push(Item { path, hash, root, project, question, action, body, claims: claims_of(&text), urls: urls_of(&text), no_sources: !lists_sources(&text) });
     }
     out
 }
@@ -183,7 +255,14 @@ fn answer_reference(item: &Item) -> String {
 }
 
 /// Write one file of the plan (§3 item 1). Nothing for a file that is unchanged or refused.
-pub fn apply(home: &Path, item: &Item, run_id: &str) -> Result<Option<Value>, String> {
+///
+/// Claims (§3 item 2): each sentence [`claims_of`] took is a library claim anchored to its line of the file (`<path>#L<n>-L<n>`), kept
+/// as `ingested from a file`, private to the file's project (or this install), and counting as no origin. URLs (§3 item 3): each is
+/// a source pointer in the record. With `fetch` (the command's `--fetch`), each public one is read by the daemon's own fetcher, kept in
+/// the library, and a claim whose sentence is on that page gains a second anchor there; without it nothing is fetched. A file that lists
+/// no source is flagged `no sources listed` (§3 item 6). The workspace's privacy identifiers are masked in the claims.
+pub fn apply(home: &Path, item: &Item, run_id: &str, identifiers: &[String], fetch: Option<crate::host_research::FetchFn<'_>>) -> Result<Option<Value>, String> {
+    use crate::library::claims::{AnchorSpec, ResearchClaim};
     if matches!(item.action, Action::Unchanged(_) | Action::Refused(_)) {
         return Ok(None);
     }
@@ -195,17 +274,62 @@ pub fn apply(home: &Path, item: &Item, run_id: &str) -> Result<Option<Value>, St
     topic.runner(run_id, "ingest")?;
     topic.running(run_id)?;
     topic.private_source(run_id, &source, "file")?;
-    let result = json!({"runner": "ingest", "answer": answer_reference(item), "source_id": source, "content_hash": item.hash, "knowledge_status": "noted", "note": "not validated"});
-    topic.finish(run_id, "done", Some(&result), &[], None, started.elapsed().as_millis() as u64)?;
+    // The claims, each anchored to its line of the file.
+    let mut claims: Vec<(String, String)> = Vec::new(); // (claim id, the sentence as it is on the page)
+    for (sentence, line) in &item.claims {
+        let text = crate::host_research::mask(sentence, identifiers);
+        let fp = blake3::hash(format!("ingest\0{}", crate::host_noted::fingerprint(&text)).as_bytes()).to_hex()[..32].to_string();
+        let anchors = [AnchorSpec { source_id: source.clone(), locator: Some(format!("{shown}#L{line}-L{line}")), quote: text.clone(), prefix: None, suffix: None }];
+        if let Ok(c) = lib.add_host_claim(&ResearchClaim { text: &text, fingerprint: &fp, project: item.project.as_deref(), topic: Some(&topic.id), anchors: &anchors }, INGESTED) {
+            if let Some(id) = c["id"].as_str() {
+                claims.push((id.to_string(), sentence.clone()));
+            }
+        }
+    }
+    // The URLs: pointers, and with `fetch` a public page the daemon reads and keeps, where the claims' sentences gain a second anchor.
+    let mut pages = 0usize;
+    if let Some(fetch) = fetch {
+        for url in item.urls.iter().filter(|u| crate::host_noted::https_host(u).is_some() && crate::host_research::mask(u, identifiers) == **u) {
+            let got = fetch(url).and_then(|(at, snap)| {
+                let text = snap.text.for_daemon().clone();
+                let stored = lib.add_fetched(&at, &snap, &crate::library::AddOpts::default(), &crate::library::Budgets::default()).map_err(|_| "capture_failed".to_string())?;
+                Ok((stored.id, at, text))
+            });
+            match got {
+                Ok((sid, at, text)) => {
+                    pages += 1;
+                    let hash = lib.read_meta(&sid).and_then(|m| m["content_hash"].as_str().map(String::from));
+                    topic.page(run_id, &at, &sid, hash.as_deref())?;
+                    for (id, sentence) in &claims {
+                        if !text.contains(sentence.as_str()) {
+                            continue;
+                        }
+                        let Some(c) = lib.claim(id) else { continue };
+                        let Some(fp) = c["fingerprints"][0].as_str() else { continue };
+                        let anchors = [AnchorSpec { source_id: sid.clone(), locator: Some(at.clone()), quote: sentence.clone(), prefix: None, suffix: None }];
+                        let _ = lib.add_research_claim(&ResearchClaim { text: c["text"].as_str().unwrap_or(""), fingerprint: fp, project: item.project.as_deref(), topic: Some(&topic.id), anchors: &anchors });
+                    }
+                }
+                Err(e) => topic.refused(run_id, url, if e == "capture_failed" { "capture_failed" } else if e.contains("OffList") { "not_fetchable" } else { "fetch_failed" })?,
+            }
+        }
+    }
+    let ids: Vec<String> = claims.iter().map(|(id, _)| id.clone()).collect();
+    let result = json!({"runner": "ingest", "answer": answer_reference(item), "source_id": source, "content_hash": item.hash, "knowledge_status": "noted", "note": "not validated", "library_claims": ids, "pages_fetched": pages});
+    topic.finish(run_id, "done", Some(&result), &ids, None, started.elapsed().as_millis() as u64)?;
     let (path, hash) = (shown.clone(), item.hash.clone());
+    let pointers: Vec<String> = item.urls.iter().map(|u| crate::host_research::mask(u, identifiers)).collect();
+    let no_sources = item.no_sources;
     topic.amend(|rec| {
+        rec["pointers"] = json!(pointers);
+        rec["flags"] = json!(if no_sources { vec![NO_SOURCES] } else { vec![] });
         let mut hashes: Vec<Value> = rec["ingest"]["hashes"].as_array().cloned().unwrap_or_default();
         if !hashes.iter().any(|h| h == hash.as_str()) {
             hashes.push(json!(hash));
         }
         rec["ingest"] = json!({"path": path, "content_hash": hash, "source_id": source, "hashes": hashes});
     })?;
-    Ok(Some(json!({"topic_id": topic.id, "run_id": run_id})))
+    Ok(Some(json!({"topic_id": topic.id, "run_id": run_id, "claims": ids.len(), "pointers": item.urls.len(), "pages_fetched": pages, "no_sources": no_sources})))
 }
 
 /// A run id for one file of an apply: `i-<time>-<n>`.
@@ -227,6 +351,9 @@ pub fn render(items: &[Item], applied: bool) -> String {
             Action::Refused(why) => format!("skipped: {why}"),
         };
         out.push_str(&format!("{}\n    {what}\n", i.path.display()));
+        if matches!(i.action, Action::New | Action::Changed(_)) {
+            out.push_str(&format!("    {} claim(s) anchored to lines of the file, {} source URL(s){}\n", i.claims.len(), i.urls.len(), if i.no_sources { "; flagged: no sources listed" } else { "" }));
+        }
     }
     if !applied {
         out.push_str("\nNothing was written: pass --apply to write these topics.\n");
@@ -243,7 +370,7 @@ pub fn to_json(items: &[Item], applied: bool) -> Value {
             Action::Unchanged(id) => ("unchanged", Some(id.clone())),
             Action::Refused(_) => ("refused", None),
         };
-        json!({"path": i.path, "action": action, "topic_id": topic, "content_hash": i.hash, "question": i.question, "reason": if let Action::Refused(w) = &i.action { json!(w) } else { Value::Null }})
+        json!({"path": i.path, "action": action, "topic_id": topic, "content_hash": i.hash, "question": i.question, "claims": i.claims.len(), "urls": i.urls, "no_sources": i.no_sources, "reason": if let Action::Refused(w) = &i.action { json!(w) } else { Value::Null }})
     }).collect::<Vec<_>>()})
 }
 
@@ -295,7 +422,7 @@ mod tests {
         assert_eq!(p[0].action, Action::New);
         assert!(render(&p, false).contains("Nothing was written"));
         assert_eq!(tree(&f.home), before, "a dry run changes nothing");
-        let done = apply(&f.home, &p[0], "i-1").unwrap().unwrap();
+        let done = apply(&f.home, &p[0], "i-1", &[], None).unwrap().unwrap();
         let topic = Topic::at(&f.ws, done["topic_id"].as_str().unwrap()).unwrap();
         let rec = topic.read().unwrap();
         assert_eq!((rec["runner"].as_str(), rec["question"].as_str(), rec["private"].as_bool()), (Some("ingest"), Some("Zebrafish husbandry notes"), Some(true)));
@@ -311,15 +438,85 @@ mod tests {
         let again = plan(&f.ws, std::slice::from_ref(&file));
         assert_eq!(again[0].action, Action::Unchanged(topic.id.clone()));
         let before = tree(&f.home);
-        assert!(apply(&f.home, &again[0], "i-2").unwrap().is_none());
+        assert!(apply(&f.home, &again[0], "i-2", &[], None).unwrap().is_none());
         assert_eq!(tree(&f.home), before);
         // A changed file adds a run to its topic.
         std::fs::write(&file, format!("{NOTE}\nLarvae are fed paramecia during the first week.\n")).unwrap();
         let changed = plan(&f.ws, std::slice::from_ref(&file));
         assert_eq!(changed[0].action, Action::Changed(topic.id.clone()));
-        apply(&f.home, &changed[0], "i-3").unwrap().unwrap();
+        apply(&f.home, &changed[0], "i-3", &[], None).unwrap().unwrap();
         let rec = topic.read().unwrap();
         assert_eq!((rec["runs"].as_array().unwrap().len(), rec["ingest"]["hashes"].as_array().unwrap().len()), (2, 2));
+    }
+
+    const SOURCED: &str = "# Tank temperature\n\nSee https://fish.example.org/a and https://offlist.example.net/b for more.\n\nZebrafish tanks are kept at about 28 degrees in most labs.\nThe heron facility changes the water once every single week.\n";
+
+    /// AC-4 (second half): claims are taken from the file, each anchored to its line; the URLs are pointers; without --fetch nothing is
+    /// fetched, with it a public page is kept and a sentence it holds gains a second anchor there.
+    #[test]
+    fn claims_are_anchored_to_lines_urls_are_pointers_and_fetch_adds_a_second_anchor() {
+        let f = fx();
+        let file = f.ws.join("tank.md");
+        std::fs::write(&file, SOURCED).unwrap();
+        let p = plan(&f.ws, std::slice::from_ref(&file));
+        assert_eq!(p[0].claims, vec![("Zebrafish tanks are kept at about 28 degrees in most labs".to_string(), 5), ("The heron facility changes the water once every single week".to_string(), 6)]);
+        assert_eq!(p[0].urls, vec!["https://fish.example.org/a".to_string(), "https://offlist.example.net/b".to_string()]);
+        assert!(!p[0].no_sources);
+        // Without --fetch: nothing fetched, the claims are anchored to their lines of the file.
+        let ids = vec!["heron".to_string()];
+        let done = apply(&f.home, &p[0], "i-1", &ids, None).unwrap().unwrap();
+        assert_eq!((done["claims"].as_u64(), done["pages_fetched"].as_u64()), (Some(2), Some(0)));
+        let lib = Library::in_home(&f.home);
+        let topic = Topic::at(&f.ws, done["topic_id"].as_str().unwrap()).unwrap();
+        let rec = topic.read().unwrap();
+        assert_eq!((rec["pointers"].as_array().unwrap().len(), rec["pages"].as_array().unwrap().len(), rec["claims"].as_array().unwrap().len()), (2, 0, 2));
+        assert_eq!(rec["flags"], json!([]));
+        let path = file.canonicalize().unwrap().display().to_string();
+        for c in lib.claims() {
+            assert_eq!((c["host_reported"].clone(), c["scope"].as_str(), c["support"]["origins"].as_u64().unwrap_or(0)), (json!([INGESTED]), Some("personal"), 0), "{c}");
+            let loc = c["anchors"][0]["locator"].as_str().unwrap();
+            assert!(loc == format!("{path}#L5-L5") || loc == format!("{path}#L6-L6"), "{loc}");
+            assert!(!c["text"].as_str().unwrap().to_lowercase().contains("heron"), "identifiers are masked: {c}");
+        }
+        // With --fetch, on a changed file: the public page is read, kept, and the sentence it holds gains a second anchor there.
+        std::fs::write(&file, format!("{SOURCED}\nLarvae are fed paramecia during their first week of life.\n")).unwrap();
+        let asked = std::cell::RefCell::new(Vec::new());
+        let web = |u: &str| -> Result<crate::host_research::Fetched, String> {
+            asked.borrow_mut().push(u.to_string());
+            match u {
+                "https://fish.example.org/a" => Ok((u.to_string(), crate::fact_fetch::test_text_snapshot(u, "In short, Zebrafish tanks are kept at about 28 degrees in most labs. Nothing else."))),
+                _ => Err("OffList".into()),
+            }
+        };
+        let p = plan(&f.ws, std::slice::from_ref(&file));
+        let done = apply(&f.home, &p[0], "i-2", &ids, Some(&web)).unwrap().unwrap();
+        assert_eq!(asked.borrow().len(), 2, "each URL is asked for once");
+        assert_eq!(done["pages_fetched"].as_u64(), Some(1));
+        let rec = topic.read().unwrap();
+        assert_eq!((rec["pages"].as_array().unwrap().len(), rec["refused"][0]["reason"].as_str()), (1, Some("not_fetchable")));
+        let warm = lib.claims().into_iter().find(|c| c["text"] == "Zebrafish tanks are kept at about 28 degrees in most labs").unwrap();
+        assert_eq!(warm["anchors"].as_array().unwrap().len(), 2, "a second anchor, on the page: {warm}");
+        assert_eq!(warm["scope"], "personal", "the second anchor does not widen who is offered the claim");
+    }
+
+    /// §3 item 6: a summary that lists no source is ingested, flagged in its record and in search results.
+    #[test]
+    fn a_summary_with_no_sources_is_ingested_and_flagged() {
+        let f = fx();
+        let dir = f.ws.join(crate::kb_import::DIR);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("s1.md"), "---\ntitle: Vendor overview\n---\n\nThe vendor ships a quarterly release to every customer.\n").unwrap();
+        std::fs::write(dir.join("s2.md"), "---\ntitle: Sourced overview\nsources:\n  - a report\n---\n\nThe vendor ships a quarterly release to every customer.\n").unwrap();
+        let p = plan(&f.ws, &all_paths(&f.ws));
+        assert_eq!((p[0].no_sources, p[1].no_sources), (true, false));
+        assert!(render(&p, false).contains("flagged: no sources listed"));
+        let done = apply(&f.home, &p[0], "i-1", &[], None).unwrap().unwrap();
+        let rec = Topic::at(&f.ws, done["topic_id"].as_str().unwrap()).unwrap().read().unwrap();
+        assert_eq!(rec["flags"], json!([NO_SOURCES]));
+        assert_eq!(search_flag(&f.ws, "summaries/s1.md"), Some(NO_SOURCES));
+        assert_eq!(search_flag(&f.ws, "summaries/s2.md"), None);
+        assert_eq!(search_flag(&f.ws, "summaries/../x.md"), None);
+        assert_eq!(search_flag(&f.ws, "context/s1.md"), None);
     }
 
     #[test]
