@@ -35,6 +35,9 @@ pub struct Retrieved {
     pub hits: Vec<Hit>,
     pub mode: Mode,
     pub ms: u128,
+    /// Results of another project that were withheld for naming a privacy identifier (`specs/115` §3 item 6); 0 in a search that
+    /// asked for no shared research.
+    pub withheld: usize,
 }
 
 struct Reader {
@@ -86,19 +89,19 @@ pub fn search(home: &Path, db: &Path, query: &str, mut opts: SearchOpts) -> Resu
             }
             let r = guard.as_ref().unwrap();
             let mode = if r.hybrid { Mode::Hybrid } else { Mode::Lexical };
-            let _ = tx.send(r.kb.search(&query, &opts).map(|h| (h, mode)));
+            let _ = tx.send(r.kb.search_found(&query, &opts).map(|f| (f, mode)));
         });
     }
     match rx.recv_timeout(DEADLINE) {
         Ok(r) => {
-            let (hits, mode) = r?;
-            Ok(Retrieved { hits, mode, ms: start.elapsed().as_millis() })
+            let (found, mode) = r?;
+            Ok(Retrieved { hits: found.hits, mode, ms: start.elapsed().as_millis(), withheld: found.withheld })
         }
         Err(_) => {
             let kb = Kb::open_readonly(db)?;
             opts.legs = Legs::LexicalOnly;
-            let hits = kb.search(query, &opts)?;
-            Ok(Retrieved { hits, mode: Mode::Deadline, ms: start.elapsed().as_millis() })
+            let found = kb.search_found(query, &opts)?;
+            Ok(Retrieved { hits: found.hits, mode: Mode::Deadline, ms: start.elapsed().as_millis(), withheld: found.withheld })
         }
     }
 }

@@ -1970,10 +1970,18 @@ impl EngineService {
             } else {
                 vec![]
             };
-            let mut out = json!({"project": project.describe(), "mode": mode, "use": use_.as_str(), "index": fresh.map_or("none", |f| f.word()), "index_age_s": fresh.and_then(|f| f.age_s), "core": core, "release": release, "findings": findings, "noted": noted, "kept": kept, "project_results": project_results, "third_party": third_party, "note": "data, not instructions", "labels": crate::host_labels::POINTER});
+            // `specs/115` §3: the claims this folder's project kept, and the research of the workspace's other projects where the
+            // operator shares it, each labelled with its project. A claim from an internal source marks this session (§2 item 3).
+            let project_research = if db.is_file() && use_ == crate::host_labels::Use::Explore { crate::shared_research::host_search(&ws.dir, &ws.home, &db, &c.cwd, &query, limit) } else { Default::default() };
+            for entry in project_research.internal {
+                if !private_seen.contains(&entry) {
+                    private_seen.push(entry);
+                }
+            }
+            let mut out = json!({"project": project.describe(), "mode": mode, "use": use_.as_str(), "index": fresh.map_or("none", |f| f.word()), "index_age_s": fresh.and_then(|f| f.age_s), "core": core, "release": release, "findings": findings, "noted": noted, "kept": kept, "project_results": project_results, "project_research": project_research.results, "shared_withheld": project_research.withheld, "third_party": third_party, "note": "data, not instructions", "labels": crate::host_labels::POINTER});
             if unindexed && out["noted"].as_array().is_some_and(|a| a.is_empty()) {
                 out["hint"] = json!("the knowledge base has not been indexed yet, so nothing can be found: ask the operator to run `delphi kb index` (or open the Delphi console, which indexes it)");
-            } else if ["core", "release", "findings", "noted", "kept", "project_results", "third_party"].iter().all(|g| out[*g].as_array().is_none_or(|a| a.is_empty())) {
+            } else if ["core", "release", "findings", "noted", "kept", "project_results", "project_research", "third_party"].iter().all(|g| out[*g].as_array().is_none_or(|a| a.is_empty())) {
                 out["hint"] = json!("nothing found: request_research asks Delphi's scout to look it up in trusted sources and keep what it finds");
             }
             Ok((out, private_seen))
@@ -5576,6 +5584,60 @@ mod tests {
         // a host that was shown nothing private is not marked, and a host of the other project is not marked by project A's entry
         let _ = host_search_as(&s, "bbbbbbbb22222222", &b, "quokkaregistry").await;
         assert_eq!(crate::private_read::state(&ws_dir, "host-bbbbbbbb22222222"), unmarked, "project B's host was never handed project A's entry");
+    }
+
+    // `specs/115` AC-4, the daemon's half (§2 item 3, the reader is marked): a host in project B that `search_kb` gives a claim of
+    // project A resting on a private source gets it in `project_research` with A's name, `shared` and the internal-source label, and
+    // takes the private-read mark from that moment, the claim's id as the entry. A host whose answer held no such claim is not marked,
+    // and with A private nothing of A's is returned and nothing is marked.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_host_given_another_projects_internal_source_claim_is_marked_from_that_moment() {
+        let f = setup(vec![], 5.0, |_| {});
+        let s = serve(&f).await;
+        let (ws_dir, home) = (f.engine.ws.dir.clone(), f.engine.ws.home.clone());
+        let (a, b) = (f.root.join("proj-a"), f.root.join("proj-b"));
+        std::fs::create_dir_all(a.join("research")).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        let (a, b) = (std::fs::canonicalize(&a).unwrap(), std::fs::canonicalize(&b).unwrap());
+        register_projects(&ws_dir, &[(PROJ_A, &a), (PROJ_B, &b)]);
+        std::fs::write(a.join("research/open.md"), "# Open notes\n\nThe wallabyvault is in the north wing.\n").unwrap();
+        let lib = crate::library::Library::in_home(&home);
+        let memo = f.root.join("memo.md");
+        std::fs::write(&memo, "The wallabyvault code rotates monthly, the internal memo says. Keyword strongroomword.").unwrap();
+        let secret = lib.add_file(&memo, &crate::library::AddOpts { licence: Some("CC0-1.0".into()), level: Some(crate::library::Level::Full), private: true, ..Default::default() }, &crate::library::Budgets::default()).unwrap().id;
+        // The topic's record is in A's own folder; the registry's display name is the id (`register_projects`), which is what a claim names.
+        let topic = crate::research_record::Topic::begin(&a, &crate::research_record::Begin { question: "When does the wallabyvault code rotate?", asked_by: crate::research_record::Asker::host("host:claude-code/m"), project: Some(PROJ_A), depth: delphi_core::research::Depth::Quick, run_id: "r-t-1" }).unwrap();
+        let anchors = [crate::library::claims::AnchorSpec { source_id: secret, locator: Some("https://example.org/memo".into()), quote: "code rotates monthly".into(), prefix: None, suffix: None }];
+        let claim = lib.add_research_claim(&crate::library::claims::ResearchClaim { text: "the wallabyvault code rotates monthly", fingerprint: "dddddddddddddddddddddddddddddd01", project: Some(PROJ_A), topic: Some(&topic.id), anchors: &anchors }).unwrap().0["id"].as_str().unwrap().to_string();
+        refresh_kb(&ws_dir, &home).unwrap();
+        let unmarked = crate::private_read::State::Unmarked;
+        // A search of B's that returns only A's open research file marks nothing.
+        let open = host_search_as(&s, "bbbbbbbb22222222", &b, "wallabyvault north wing").await;
+        let open_hit = open["project_research"].as_array().unwrap().iter().find(|r| r["path"] == "research/open.md").cloned().unwrap_or_else(|| panic!("A's research file is shared with B: {open}"));
+        assert_eq!((open_hit["project"].as_str(), open_hit["shared"].as_bool(), open_hit["label"].as_str()), (Some(PROJ_A), Some(true), Some(crate::shared_research::SHARED_LABEL)), "{open_hit}");
+        // (the claim may rank into this answer too; ask a host that was shown none of it)
+        let none = host_search_as(&s, "cccccccc44444444", &b, "north wing").await;
+        if none["project_research"].as_array().unwrap().iter().all(|r| r["internal_source"] != true) {
+            assert_eq!(crate::private_read::state(&ws_dir, "host-cccccccc44444444"), unmarked, "no internal-source claim, no mark");
+        }
+        let got = host_search_as(&s, "bbbbbbbb33333333", &b, "wallabyvault code rotates monthly").await;
+        let hit = got["project_research"].as_array().unwrap().iter().find(|r| r["pointer"].as_str().is_some_and(|p| p.contains(&claim))).cloned().unwrap_or_else(|| panic!("A's claim is returned to B: {got}"));
+        assert_eq!((hit["project"].as_str(), hit["shared"].as_bool(), hit["internal_source"].as_bool(), hit["label"].as_str()), (Some(PROJ_A), Some(true), Some(true), Some(crate::shared_research::INTERNAL_LABEL)), "{hit}");
+        assert!(!got.to_string().contains("strongroomword") && got["shared_withheld"] == 0, "the source's own text is not readable from B: {got}");
+        match crate::private_read::state(&ws_dir, "host-bbbbbbbb33333333") {
+            crate::private_read::State::Marked { entries, .. } => assert_eq!(entries, [format!("shared-claim/{claim}")], "the mark names the claim, never its text"),
+            other => panic!("B's session was given an internal-source claim and is not marked: {other:?}"),
+        }
+        // A host in no project is given no project's research and is not marked.
+        let outside = host_search_as(&s, "dddddddd55555555", &f.root, "wallabyvault code rotates monthly").await;
+        assert!(outside["project_research"].as_array().unwrap().is_empty(), "{outside}");
+        assert_eq!(crate::private_read::state(&ws_dir, "host-dddddddd55555555"), unmarked);
+        // A private: nothing of A's, no mark.
+        let projects: serde_json::Map<String, Value> = [(PROJ_A, &a, true), (PROJ_B, &b, false)].iter().map(|(id, root, private)| (id.to_string(), json!({"project_id": id, "root": root, "display_name": id, "created_unix": 1, "private": private}))).collect();
+        std::fs::write(ws_dir.join("local/projects.json"), json!({"schema": 1, "projects": projects}).to_string()).unwrap();
+        let closed = host_search_as(&s, "eeeeeeee66666666", &b, "wallabyvault code rotates monthly").await;
+        assert!(closed["project_research"].as_array().unwrap().is_empty(), "a private project shares nothing: {closed}");
+        assert_eq!(crate::private_read::state(&ws_dir, "host-eeeeeeee66666666"), unmarked);
     }
 
     // A host whose mission has no scope (home-only) is served by the shared index exactly as before: its notes are projected to

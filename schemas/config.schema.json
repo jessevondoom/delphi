@@ -396,7 +396,8 @@
       "description": "Research recall across the workspace's projects (specs/115 section 2). The operator's setting: no agent can write it.",
       "additionalProperties": false,
       "properties": {
-        "research_sharing": { "enum": ["project", "workspace"], "default": "workspace", "description": "workspace: a session may read the research of the workspace's other projects that are not private, labelled with the project and as not checked; nothing else of another project is readable. project: a project's research is read by that project only. Read at each search, so a change needs no restart." }
+        "research_sharing": { "enum": ["project", "workspace"], "default": "workspace", "description": "workspace: a session may read the research of the workspace's other projects that are not private, labelled with the project and as not checked; nothing else of another project is readable. project: a project's research is read by that project only. Read at each search, so a change needs no restart." },
+        "own_project_boost": { "type": "number", "minimum": 0, "maximum": 0.1, "default": 0.001, "description": "Added to the score of a result of the session's own project, so it ranks ahead of another project's research at equal score (specs/115 section 3)." }
       }
     },
     "hooks": { "type": "object", "description": "`[[hooks.observe]]` and `[[hooks.deny]]` (specs/018): commands that can only watch or refuse." }

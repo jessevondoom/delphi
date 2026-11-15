@@ -652,7 +652,7 @@ impl Kb {
         let web_corroborated = rel_path.starts_with("context/facts/") && frontmatter_flag(text, "web_corroborated") && frontmatter_field(text, "ratified_by").as_deref() == Some("validator") && frontmatter_field(text, "kind").as_deref() == Some("fact");
         // Only a staged note or episode carries a validity date and a kind the search acts on (`specs/050` ML-3, ML-4, `specs/065`); anywhere else
         // the fields are ignored here, so a rule or a library page cannot be hidden by one.
-        let (kind, valid_until) = if zone == "staged" || zone == "episodes" { (frontmatter_field(text, "kind").filter(|k| crate::frontmatter::KINDS.contains(&k.as_str()) || k == "episode"), frontmatter_field(text, "valid_until").filter(|d| crate::frontmatter::entry_date_ok(d)).map(|d| d[..10].to_string())) } else if zone == crate::research_index::ZONE && rel_path.starts_with("research/claims/") {
+        let (kind, valid_until) = if zone == "staged" || zone == "episodes" { (frontmatter_field(text, "kind").filter(|k| crate::frontmatter::KINDS.contains(&k.as_str()) || k == "episode"), frontmatter_field(text, "valid_until").filter(|d| crate::frontmatter::entry_date_ok(d)).map(|d| d[..10].to_string())) } else if zone == crate::research_index::ZONE && (rel_path.starts_with("research/claims/") || rel_path.starts_with("research/projects/")) {
             // Zone `research` (`specs/112` §3.5): a library claim's derived status, as `research_index::claim_text` computed it from the
             // claim's own record. Kept for the label a hit shows; only a word of the fixed list, and only for a claim's document.
             (frontmatter_field(text, "claim_status").filter(|s| crate::research_index::STATUSES.contains(&s.as_str())), None)
@@ -851,6 +851,24 @@ impl Kb {
             })
             .collect();
         self.conn.execute("INSERT OR REPLACE INTO kb_meta(key, value) VALUES ('finding_scopes', ?1)", [finding_scopes.into_iter().collect::<Vec<_>>().join("\n")])?;
+        // The research topics of a project whose record is private (`specs/115` §2 item 3: a private record crosses as nothing): one
+        // path prefix per line, from the record on disk beside the file and from nothing the file says. A record that cannot be read
+        // counts as private. A search never shows another project a file under one of these.
+        let private_research: std::collections::BTreeSet<String> = files
+            .iter()
+            .filter(|f| f.zone == "project")
+            .filter_map(|f| {
+                let parts: Vec<&str> = f.rel_path.split('/').collect();
+                let in_topic = parts.len() >= 7 && parts[0] == "projects" && parts[2] == "files" && parts[3] == "research" && parts[4] == "topics";
+                let record = in_topic.then(|| f.path.ancestors().nth(parts.len() - 6).map(|d| d.join("record.json"))).flatten()?;
+                let private = match std::fs::read(&record) {
+                    Ok(b) => serde_json::from_slice::<serde_json::Value>(&b).map_or(true, |v| v["private"] != false),
+                    Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+                };
+                private.then(|| format!("{}/", parts[..6].join("/")))
+            })
+            .collect();
+        self.conn.execute("INSERT OR REPLACE INTO kb_meta(key, value) VALUES ('private_research', ?1)", [private_research.into_iter().collect::<Vec<_>>().join("\n")])?;
         // When the index last matched the files, for the age a host is told (`specs/109` §3).
         let synced = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         self.conn.execute("INSERT OR REPLACE INTO kb_meta(key, value) VALUES ('synced_unix', ?1)", [synced.to_string()])?;
@@ -1074,6 +1092,18 @@ fn embed_text(rel_path: &str, heading_path: &str, piece: &str) -> String {
     }
 }
 
+/// A registered project's id as it may enter a query: 32 lowercase hex characters, so it holds no text from outside.
+fn project_id_ok(id: &str) -> bool {
+    id.len() == 32 && id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// The other projects whose research `opts` may return (`specs/115` §3 item 1): the caller's list, without ids that are not ids
+/// and without the session's own project.
+fn shared_ids(opts: &SearchOpts) -> Vec<&str> {
+    let own = opts.project.as_deref();
+    opts.shared.iter().flat_map(|s| s.projects.iter()).map(|(id, _)| id.as_str()).filter(|id| project_id_ok(id) && Some(*id) != own).collect()
+}
+
 /// The SQL condition (over `kb_documents d`) for the documents `opts` may see: nothing untrusted or inactive unless
 /// asked, and a role sees only its own private memory. Search, listing and reading all use this one filter.
 fn allowed_sql(opts: &SearchOpts) -> String {
@@ -1149,9 +1179,27 @@ fn allowed_sql(opts: &SearchOpts) -> String {
     }
     // A project's layer (`specs/109` §11.3) is read only by a session in that project, named here by a validated id (32 hex
     // characters), so the clause holds no text from outside; with no project, no project layer at all.
-    match opts.project.as_deref().filter(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))) {
-        Some(id) => allowed.push_str(&format!(" AND (d.zone != 'project' OR d.rel_path LIKE 'projects/{}/%')", id)),
-        None => allowed.push_str(" AND d.zone != 'project'"),
+    //
+    // `specs/115` §3 item 1 is the one place another project's rows are admitted, and only these: the files under its `research/`
+    // folder (`projects/<id>/files/research/…`, never its specs, plans, context or layer) and the claims its research kept (zone
+    // `research`, `research/projects/<id>/…`). Which projects is the caller's list (`shared_research::view`: the setting, the
+    // private flags), each id checked here to be 32 hex characters. A project's own claims are its own to read; with no project
+    // and no list, none of either zone's project rows.
+    let own = opts.project.as_deref().filter(|id| project_id_ok(id));
+    let shared = shared_ids(opts);
+    let mut project_rows: Vec<String> = own.iter().map(|id| format!("d.rel_path LIKE 'projects/{}/%'", id)).collect();
+    project_rows.extend(shared.iter().map(|id| format!("d.rel_path LIKE 'projects/{}/files/research/%'", id)));
+    let mut research_rows: Vec<String> = own.iter().chain(shared.iter()).map(|id| format!("d.rel_path LIKE 'research/projects/{}/%'", id)).collect();
+    let none = |rows: &[String]| if rows.is_empty() { "1=0".to_string() } else { rows.join(" OR ") };
+    if opts.shared.as_ref().is_some_and(|s| s.only) {
+        // The dedicated leg: nothing but project research, so nothing of the home layer rides along. Findings are judged per row
+        // in the search (their project is the mission's stamp, not their path).
+        let own_files = own.map(|id| format!(" AND d.rel_path NOT LIKE 'projects/{}/%'", id)).unwrap_or_default();
+        allowed.push_str(&format!(" AND ((d.zone = 'project' AND ({}){}) OR (d.zone = 'research' AND ({})) OR d.zone = '{}')", none(&project_rows), own_files, none(&research_rows), crate::finding_record::ZONE));
+    } else {
+        allowed.push_str(&format!(" AND (d.zone != 'project' OR {})", none(&project_rows)));
+        research_rows.insert(0, "d.rel_path NOT LIKE 'research/projects/%'".to_string());
+        allowed.push_str(&format!(" AND (d.zone != 'research' OR {})", research_rows.join(" OR ")));
     }
     if let Some(tiers) = &opts.source_types {
         // Fixed tier names from code (`&'static str`), so the list holds no text from outside.
@@ -1516,6 +1564,35 @@ pub struct SearchOpts {
     pub exclude_paths: Option<Vec<String>>,
     /// Whose findings (zone `findings`, `specs/116` §5.3) the search may return. Narrows, never widens.
     pub findings: FindingsView,
+    /// The other projects whose research the search may also return (`specs/115` §3). `None`, the default, is none: every search
+    /// that does not ask stays as isolated as before. This is the only field that widens what a search reads.
+    pub shared: Option<SharedResearch>,
+}
+
+/// Which other projects' research a search may return, and how (`specs/115` §3). Built by `shared_research::view` from the
+/// operator's setting and the projects' private flags; the index applies it and decides nothing itself.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SharedResearch {
+    /// `(id, display name)` of each other project whose research may be returned. An id that is not 32 hex characters, or that is
+    /// the session's own project, is ignored.
+    pub projects: Vec<(String, String)>,
+    /// Return project research only: the claims of the session's own project and the research of `projects`, and nothing of the
+    /// home layer or of the session's own project files.
+    pub only: bool,
+    /// Added to the score of a result of the session's own project, so it ranks ahead of a shared one at equal score (item 3).
+    pub own_boost: f64,
+    /// The workspace's `[privacy] identifiers` (`query_guard::identifiers`): a shared result that names one is withheld and counted
+    /// (item 6).
+    pub identifiers: Vec<String>,
+}
+
+/// What a search found: the hits, the best score the reranker gave (when it ran), and how many results of another project were
+/// withheld because they name one of the workspace's privacy identifiers (`specs/115` §3 item 6).
+#[derive(Debug, Clone, Default)]
+pub struct Found {
+    pub hits: Vec<Hit>,
+    pub best_rerank: Option<f32>,
+    pub withheld: usize,
 }
 
 /// Whose findings a search may return (`specs/116` §5.3). A finding belongs to the project its mission was stamped with; one from a
@@ -1574,7 +1651,7 @@ pub enum Legs {
 
 impl Default for SearchOpts {
     fn default() -> Self {
-        SearchOpts { role: None, limit: 10, include_untrusted: false, include_attributed: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false, include_episodes: false, about: false, kinds: None, max_episodes: None, today: None, xenia: XeniaView::Off, zones: None, summary_target: SummaryTarget::Bibliography, paths: None, project: None, source_types: None, exclude_paths: None, findings: FindingsView::All }
+        SearchOpts { role: None, limit: 10, include_untrusted: false, include_attributed: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false, include_episodes: false, about: false, kinds: None, max_episodes: None, today: None, xenia: XeniaView::Off, zones: None, summary_target: SummaryTarget::Bibliography, paths: None, project: None, source_types: None, exclude_paths: None, findings: FindingsView::All, shared: None }
     }
 }
 
@@ -1604,6 +1681,13 @@ pub struct Hit {
     pub doc_status: String,
     /// The frontmatter `author` (or `role`) the index recorded, if any.
     pub doc_author: Option<String>,
+    /// `specs/115` §3 item 2: the display name of the other project this result came from, and that it is shared. `None` and
+    /// `false` for everything of the home layer and of the session's own project.
+    pub project: Option<String>,
+    pub shared: bool,
+    /// A project's claim that rests on a private or internal source (`specs/115` §2 item 3), the session's own project's or
+    /// another's. **Whoever hands this hit to a session marks that session** (`private_read::mark`).
+    pub internal: bool,
 }
 
 impl Hit {
@@ -1687,9 +1771,14 @@ impl Kb {
 
     /// `search`, and the best score the reranker gave any result it read (`None` when it did not run).
     pub fn search_scored(&self, query: &str, opts: &SearchOpts) -> Result<(Vec<Hit>, Option<f32>), KbError> {
+        self.search_found(query, opts).map(|f| (f.hits, f.best_rerank))
+    }
+
+    /// `search_scored`, and how many results of another project were withheld for naming a privacy identifier (`specs/115` §3 item 6).
+    pub fn search_found(&self, query: &str, opts: &SearchOpts) -> Result<Found, KbError> {
         let terms = match_terms(query);
         if terms.is_empty() {
-            return Ok((vec![], None));
+            return Ok(Found::default());
         }
         let allowed = allowed_sql(opts);
         let mut score: HashMap<i64, f64> = HashMap::new();
@@ -1769,6 +1858,35 @@ impl Kb {
             FindingsView::All => Vec::new(),
             FindingsView::Scope(_) => self.conn.query_row("SELECT value FROM kb_meta WHERE key = 'finding_scopes'", [], |r| r.get::<_, String>(0)).ok().map(|v| v.lines().filter_map(|l| l.split_once('\t')).map(|(p, s)| (p.to_string(), s.to_string())).collect()).unwrap_or_default(),
         };
+        // `specs/115` §3: which project a row belongs to, when it is a project's. A file or a claim by its path; a finding by its
+        // mission's stamp (only in a scoped search, where the stamps were read).
+        let own_project = opts.project.as_deref().filter(|id| project_id_ok(id)).or(match &opts.findings {
+            FindingsView::Scope(mine) if project_id_ok(mine) => Some(mine.as_str()),
+            _ => None,
+        });
+        let shared_names: Vec<(&str, &str)> = opts.shared.iter().flat_map(|s| s.projects.iter()).map(|(id, name)| (id.as_str(), name.as_str())).filter(|(id, _)| project_id_ok(id) && Some(*id) != own_project).collect();
+        let project_of = |zone: &str, rel_path: &str| -> Option<String> {
+            if zone == crate::finding_record::ZONE {
+                return finding_scopes.iter().find(|(p, _)| rel_path.starts_with(p.as_str())).map(|(_, s)| s.clone()).filter(|s| !s.is_empty());
+            }
+            let rest = if zone == "project" { rel_path.strip_prefix("projects/") } else if zone == crate::research_index::ZONE { rel_path.strip_prefix("research/projects/") } else { None };
+            rest.and_then(|r| r.split('/').next()).filter(|id| project_id_ok(id)).map(String::from)
+        };
+        // Item 3: a result of the session's own project ranks ahead of a shared one at equal score.
+        if let Some((boost, own)) = opts.shared.as_ref().map(|s| s.own_boost).filter(|b| b.is_finite() && *b > 0.0).zip(own_project) {
+            for (id, s) in order.iter_mut() {
+                let row: Option<(String, String)> = self.conn.query_row("SELECT d.zone, c.rel_path FROM kb_chunks c JOIN kb_documents d ON d.doc_id = c.doc_id WHERE c.chunk_id = ?1", [*id], |r| Ok((r.get(0)?, r.get(1)?))).ok();
+                if row.and_then(|(zone, rel)| project_of(&zone, &rel)).as_deref() == Some(own) {
+                    *s += boost;
+                }
+            }
+            order.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then(a.0.cmp(&b.0)));
+        }
+        // The research topics another project may not be shown (`sync_lexical` wrote the list). An index that has no list yet
+        // (one synced before this rule) shows no other project's topic file at all.
+        let private_research: Option<Vec<String>> = if shared_names.is_empty() { Some(Vec::new()) } else { self.conn.query_row("SELECT value FROM kb_meta WHERE key = 'private_research'", [], |r| r.get::<_, String>(0)).ok().map(|v| v.lines().filter(|l| !l.is_empty()).map(String::from).collect()) };
+        let only_shared = opts.shared.as_ref().is_some_and(|s| s.only);
+        let mut withheld = 0usize;
         let mut hits = Vec::new();
         let mut readiness: HashMap<String, Option<String>> = HashMap::new();
         let mut episodes = 0usize;
@@ -1788,12 +1906,34 @@ impl Kb {
             let row = self.conn.query_row("SELECT c.rel_path, c.start_line, c.end_line, c.heading_path, c.raw_content, d.content_blake3, d.zone, d.source_type, d.status, d.web_corroborated, d.author FROM kb_chunks c JOIN kb_documents d ON d.doc_id = c.doc_id WHERE c.chunk_id = ?1", [id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?, r.get::<_, String>(7)?, r.get::<_, String>(8)?, r.get::<_, i64>(9)? != 0, r.get::<_, Option<String>>(10)?)));
             let Ok((rel_path, a, b, heading_path, raw, blake3, zone, tier_name, doc_status, web_corroborated, doc_author)) = row else { continue };
             // A finding of another project is not this search's to return (`specs/116` §5.3); a home finding is everyone's.
+            // `specs/115` §3 item 1: unless the operator shares research and that project is in the caller's list.
+            let theirs = project_of(&zone, &rel_path);
+            let shared_from: Option<&str> = theirs.as_deref().and_then(|t| shared_names.iter().find(|(id, _)| *id == t).map(|(_, name)| *name));
             if let (true, FindingsView::Scope(mine)) = (zone == crate::finding_record::ZONE, &opts.findings) {
-                let theirs = finding_scopes.iter().find(|(p, _)| rel_path.starts_with(p.as_str())).map(|(_, s)| s.as_str()).unwrap_or("");
-                if !theirs.is_empty() && theirs != mine {
+                if theirs.as_deref().is_some_and(|t| t != mine) && shared_from.is_none() {
                     continue;
                 }
             }
+            // The dedicated leg returns project research only: a finding of the home layer or of the session's own project is the
+            // findings leg's to return.
+            if only_shared && zone == crate::finding_record::ZONE && shared_from.is_none() {
+                continue;
+            }
+            if shared_from.is_some() {
+                // A private topic's record crosses as nothing (§2 item 3), its answer and its other files with it.
+                let in_topic = zone == "project" && rel_path.split('/').nth(4) == Some("topics");
+                if in_topic && private_research.as_ref().is_none_or(|list| list.iter().any(|p| rel_path.starts_with(p.as_str()))) {
+                    continue;
+                }
+                // Item 6: a result that names one of the workspace's privacy identifiers is withheld from other projects, and counted.
+                let named = opts.shared.as_ref().is_some_and(|s| crate::query_guard::names_identifier(&format!("{}\n{}", heading_path, raw), &s.identifiers));
+                if named {
+                    withheld += 1;
+                    continue;
+                }
+            }
+            let shared_from: Option<String> = shared_from.map(String::from);
+            let internal = zone == crate::research_index::ZONE && rel_path.strip_prefix("research/projects/").is_some_and(|r| r.split('/').nth(1) == Some(crate::research_index::INTERNAL_DIR));
             // For imported summary pages, presentation depends on `opts.summary_target` (`specs/068` §6.7, `specs/075`):
             // - `Bibliography` (default): hits on an imported page's body are answered with its .bib.md sidecar metadata.
             // - `SummaryPage`: hits answer with the summary .md page and prose, suppressing .bib.md.
@@ -1868,7 +2008,15 @@ impl Kb {
                 crate::research_index::status_of(word.as_deref())
             } else if rel_path.starts_with("context/facts/") { delphi_core::knowledge_status::derive_fact(&tier_name, &doc_status, web_corroborated) } else { delphi_core::knowledge_status::derive(&zone, &tier_name, &doc_status, vouched_by.as_deref()) };
             let vouched_by = vouched_by.filter(|_| ks == delphi_core::knowledge_status::Status::Validated);
-            let label = if zone == "about" {
+            let label = if internal && shared_from.is_some() {
+                // `specs/115` §2 item 3: the label wins over every status.
+                crate::shared_research::INTERNAL_LABEL
+            } else if internal {
+                crate::shared_research::OWN_INTERNAL_LABEL
+            } else if shared_from.is_some() && ks == delphi_core::knowledge_status::Status::Noted {
+                // §3 item 2: another project's research, unless its claim status says more.
+                crate::shared_research::SHARED_LABEL
+            } else if zone == "about" {
                 "release reference, not build authority"
             } else if zone == "summaries" {
                 SUMMARY_LABEL
@@ -1878,9 +2026,9 @@ impl Kb {
             } else {
                 ks.label()
             };
-            hits.push(Hit { pointer, rel_path, start_line: a as usize, end_line: b as usize, heading_path, blake3, preview, score: s, note, status: ks.as_str(), label, vouched_by, zone, source_type: tier_name, doc_status, doc_author });
+            hits.push(Hit { pointer, rel_path, start_line: a as usize, end_line: b as usize, heading_path, blake3, preview, score: s, note, status: ks.as_str(), label, vouched_by, zone, source_type: tier_name, doc_status, doc_author, shared: shared_from.is_some(), project: shared_from, internal });
         }
-        Ok((hits, best_rerank))
+        Ok(Found { hits, best_rerank, withheld })
     }
 }
 

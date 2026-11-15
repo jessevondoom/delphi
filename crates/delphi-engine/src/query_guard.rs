@@ -83,6 +83,12 @@ fn bare(word: &str) -> String {
     word.to_lowercase().trim_matches(|c: char| !c.is_alphanumeric()).to_string()
 }
 
+/// Does `text` name one of `identifiers`, by the matching rule of [`guard`]? What `specs/115` §3 item 6 asks of a result that would
+/// be shown to another project: one that does is withheld whole.
+pub fn names_identifier(text: &str, identifiers: &[String]) -> bool {
+    !identifiers.is_empty() && guard(text, identifiers) != Guarded::Clean
+}
+
 /// Check `query` against `identifiers` (as [`identifiers`] returns them).
 pub fn guard(query: &str, identifiers: &[String]) -> Guarded {
     let words: Vec<&str> = query.split_whitespace().collect();

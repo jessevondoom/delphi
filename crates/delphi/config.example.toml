@@ -218,6 +218,7 @@ sandbox = "off"
 # Research recall across projects (specs/115). Yours to set: no agent can write this file.
 # [projects]
 # research_sharing = "workspace"     # workspace (default): a session may read the research of this workspace's other projects, labelled with the project, and nothing else of them. project: a project's research stays in that project. `delphi project private <name> on` keeps one project out either way
+# own_project_boost = 0.001          # added to the score of a result of the session's own project, so it ranks ahead of another project's at equal score (0 to 0.1)
 
 # Fact validator (specs/040 section 15.1). off: no fetch of any kind. advisory (default): the full fact path as a dry run; it uses the
 # network, records what it would ratify and writes nothing validated. ratify: real writes, allowed only while the daemon's latch and the

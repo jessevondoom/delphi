@@ -66,6 +66,21 @@ pub struct ResearchClaim<'a> {
     pub anchors: &'a [AnchorSpec],
 }
 
+/// Is this source (its `meta.json`) a private or internal one, for the guards of `specs/115` §2 item 3? **The one predicate.**
+/// It is true for exactly two things: a source the library treats as private (`is_private`), and a private pointer of `specs/113`
+/// §2 item 4 and §3 item 1 ([`is_private_pointer`]: what a host read through its own tools, a file ingested by reference, a person,
+/// or a source a host marked private). Nothing else. The label, the mark, the index listing and the origin count follow from it.
+pub fn is_internal_source(meta: &Value) -> bool {
+    is_private(meta) || is_private_pointer(meta)
+}
+
+/// Is this the record of a private pointer (`Library::add_private_pointer`, ids `private-<hash>`)? Such a record says the host
+/// reported it and names a locator instead of holding a body. The library stores every one as private, so `is_private` is true of
+/// it as well; this asks the record itself, so a pointer whose `private` word was lost is still an internal source.
+fn is_private_pointer(meta: &Value) -> bool {
+    meta["fetch_mode"] == "host_reported" && meta["locator"].is_string() && meta["source_kind"].is_string()
+}
+
 /// May a run of `project` (or of no project) add to this claim? A claim scoped to a project belongs to that project alone, as
 /// `Library::pull` has it: it is offered to no other project and to no run outside one, so neither may add to it.
 fn open_to(claim: &Value, project: Option<&str>) -> bool {
@@ -980,6 +995,11 @@ impl Library {
             if !live_origin(&meta) {
                 continue;
             }
+            // `specs/115` §2 item 3: a private or internal source is never an origin for corroboration, in any project. The claim's
+            // other anchors still count.
+            if is_internal_source(&meta) {
+                continue;
+            }
             // An archived copy is a locator, not a source (`specs/101` §5 item 6): while the current version of a source is a copy taken
             // from a web archive it adds no origin and no trusted source, however many copies there are. A live re-check that succeeds
             // stores a version without the mark, and the source counts again.
@@ -1258,6 +1278,13 @@ impl Library {
 
     pub fn rests_on_private(&self, c: &Value) -> bool {
         anchors_of(c).iter().filter_map(|a| a["source_id"].as_str()).filter_map(|s| self.read_meta(s)).any(|m| is_private(&m))
+    }
+
+    /// Does the claim rest on a private or internal source ([`is_internal_source`])? The one question the guards of `specs/115`
+    /// §2 item 3 ask: such a claim is indexed apart (`research_index::INTERNAL_DIR`), labelled as from an internal source, and
+    /// marks the session that is given it.
+    pub fn rests_on_internal(&self, c: &Value) -> bool {
+        anchors_of(c).iter().filter_map(|a| a["source_id"].as_str()).filter_map(|s| self.read_meta(s)).any(|m| is_internal_source(&m))
     }
 
     /// Claims for a mission, by pointer (`specs/055` §5): selected by the words of the prompt and by the mission's project,

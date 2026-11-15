@@ -293,6 +293,12 @@ pub fn of_hit_with(ws_dir: &Path, h: &Hit, hashes: Option<&HashMap<String, Strin
     if h.zone == crate::finding_record::ZONE && status == "noted" {
         label = format!("{}{}", crate::finding_record::label_for(&h.source_type), if author == "host_session" { ", recorded by a host session" } else { "" });
     }
+    // `specs/115` §3 item 2, §2 item 3: another project's research says so, and a claim from an internal source says that first.
+    if h.internal {
+        label = h.label.to_string();
+    } else if h.shared {
+        label = if matches!(status, "noted" | "draft") { crate::shared_research::SHARED_LABEL.to_string() } else { format!("another project's research, {}", h.label) };
+    }
     if let (Some(org), "validated") = (&h.vouched_by, status) {
         label.push_str(&format!(" · vouched by {org}"));
     }

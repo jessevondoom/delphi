@@ -12,8 +12,11 @@
 //!
 //! **What stays out.** Nothing private is listed, so no search, serve or export path can carry it: a claim that rests on a private
 //! source (`Library::rests_on_private`), and a topic whose record is private (one of its claims rests on a private source), with
-//! its answer. A claim scoped to a project is not listed either: it is offered only to its own project today (`Library::pull`), and
-//! this index is the workspace's. Nor is a claim scoped `personal` (a host's claim Delphi could not check, `specs/113`). A topic that lives in a project's folder is that project's file and is read under the project's
+//! its answer. A claim scoped to a project is listed under that project (`research/projects/<id>/claims/`), and one of those that
+//! rests on a private or internal source apart (`research/projects/<id>/internal/`): the index's filter shows them to their own
+//! project and, where the operator shares research (`specs/115`), to the workspace's other projects, the second kind only to a
+//! reader that marks its session. A claim scoped `personal` (a host's claim Delphi could not check, `specs/113`) is not listed
+//! at all. A topic that lives in a project's folder is that project's file and is read under the project's
 //! rules (the project layer of the index), not here.
 //!
 //! The records and the claims are JSON; the index holds Markdown. [`text_of`] writes the Markdown the index holds for one, by
@@ -71,16 +74,51 @@ pub fn files(ws: &Path, out: &mut Vec<SourceFile>) {
     }
     let Some(home) = ws.parent().and_then(Path::parent) else { return };
     let lib = crate::library::Library::in_home(home);
+    let projects = crate::scope::project_entries(ws);
     for c in lib.claims() {
         let Some(id) = c["id"].as_str() else { continue };
-        // A `personal` claim is this install's alone: a host-reported claim the daemon could not check (`specs/113` §2 items 3, 4).
-        if c["scope"] == "project" || c["scope"] == "personal" || lib.rests_on_private(&c) {
+        let path = lib.claims_dir().join(format!("{id}.json"));
+        if !small(&path) {
             continue;
         }
-        let path = lib.claims_dir().join(format!("{id}.json"));
-        if small(&path) {
-            out.push(doc(format!("research/claims/{id}.json"), path));
+        // A `personal` claim is this install's alone: a host-reported claim the daemon could not check (`specs/113` §2 items 3, 4).
+        // It belongs to no project, so it is listed nowhere and shared with none.
+        if c["scope"] == "personal" {
+            continue;
         }
+        if c["scope"] == "project" {
+            // `specs/115` §3 item 4: a project's claim is listed under its project, for that project's own search and, where the
+            // operator shares research, for the others (`kb::allowed_sql` decides who reads it; nothing here does).
+            if let Some(project) = claim_project(&projects, &c) {
+                let dir = if lib.rests_on_internal(&c) { INTERNAL_DIR } else { CLAIMS_DIR };
+                out.push(doc(format!("research/projects/{}/{dir}/{id}.json", project.as_str()), path));
+            }
+            continue;
+        }
+        if lib.rests_on_private(&c) {
+            continue;
+        }
+        out.push(doc(format!("research/claims/{id}.json"), path));
+    }
+}
+
+/// Under `research/projects/<id>/`: a project's claims, and apart from them those that rest on a private or internal source
+/// (`Library::rests_on_internal`). The directory is the index's record of which is which: it is chosen here, by code, from the
+/// library's own source records, and a reader that is given a row of [`INTERNAL_DIR`] marks its session (`specs/115` §2 item 3).
+pub const CLAIMS_DIR: &str = "claims";
+pub const INTERNAL_DIR: &str = "internal";
+
+/// The project of THIS workspace a project-scoped claim belongs to, or `None`. The library is one per install and a claim names
+/// its project by display name, which another workspace's project may share, so the name alone decides nothing: the claim must
+/// also name a research topic whose record is on disk under that project's own `research/topics/`. A claim that names no such
+/// topic (one the operator added by hand, one of another workspace) is not listed.
+fn claim_project(projects: &[crate::scope::ProjectEntry], c: &Value) -> Option<crate::scope::ProjectId> {
+    let name = c["project"].as_str().map(str::trim).filter(|n| !n.is_empty())?;
+    let topics: Vec<&str> = c["topics"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+    let mut found = projects.iter().filter(|p| p.name.eq_ignore_ascii_case(name) && topics.iter().any(|t| crate::research_record::Topic::at(&p.root, t).is_some_and(|t| t.read().is_ok())));
+    match (found.next(), found.next()) {
+        (Some(p), None) => Some(p.id.clone()),
+        _ => None,
     }
 }
 

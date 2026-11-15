@@ -711,14 +711,20 @@ impl Default for RetrievalConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct ProjectsConfig {
     pub research_sharing: String,
+    /// What is added to the score of a result of the session's own project, so it ranks ahead of another project's at equal score
+    /// (`specs/115` §3 item 3). Between 0 and [`MAX_OWN_PROJECT_BOOST`].
+    pub own_project_boost: f64,
 }
+
+/// The most `[projects] own_project_boost` may be.
+pub const MAX_OWN_PROJECT_BOOST: f64 = 0.1;
 
 /// The two values of `[projects] research_sharing`.
 pub const RESEARCH_SHARING: [&str; 2] = ["project", "workspace"];
 
 impl Default for ProjectsConfig {
     fn default() -> ProjectsConfig {
-        ProjectsConfig { research_sharing: "workspace".into() }
+        ProjectsConfig { research_sharing: "workspace".into(), own_project_boost: 0.001 }
     }
 }
 
@@ -1136,6 +1142,7 @@ impl Config {
         if let Some(v) = root.get("projects") {
             match v.clone().try_into::<ProjectsConfig>() {
                 Ok(v) if !RESEARCH_SHARING.contains(&v.research_sharing.as_str()) => errs.push("[projects] research_sharing: \"project\" or \"workspace\" (specs/115 §2)".to_string()),
+                Ok(v) if !(v.own_project_boost.is_finite() && (0.0..=MAX_OWN_PROJECT_BOOST).contains(&v.own_project_boost)) => errs.push(format!("[projects] own_project_boost: a number from 0 to {} (specs/115 §3)", MAX_OWN_PROJECT_BOOST)),
                 Ok(v) => cfg.projects = v,
                 Err(e) => errs.push(format!("[projects]: {}", e)),
             }
@@ -1728,7 +1735,9 @@ pub(crate) mod tests {
         for word in RESEARCH_SHARING {
             assert_eq!(Config::parse(&format!("[projects]\nresearch_sharing = \"{word}\"\n")).unwrap().projects.research_sharing, word);
         }
-        for bad in ["research_sharing = \"all\"", "research_sharing = true", "research_sharing = \"Workspace\"", "research_sharin = \"project\""] {
+        assert_eq!(Config::parse("").unwrap().projects.own_project_boost, 0.001);
+        assert_eq!(Config::parse("[projects]\nown_project_boost = 0.0\n").unwrap().projects.own_project_boost, 0.0);
+        for bad in ["research_sharing = \"all\"", "research_sharing = true", "research_sharing = \"Workspace\"", "research_sharin = \"project\"", "own_project_boost = 0.5", "own_project_boost = -0.001", "own_project_boost = \"big\""] {
             assert!(Config::parse(&format!("[projects]\n{bad}\n")).is_err(), "{bad}");
         }
     }
