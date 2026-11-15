@@ -13,8 +13,10 @@
 //! Everything that touches the world goes through [`Ui`], [`Env`] and [`Net`], so the flow is tested with scripted answers, a fake
 //! keychain and a fake engine.
 //!
-//! Not here yet (later slices, asked after the engine is chosen and before the summary): the question about how much text of a
-//! source of unknown licence is kept (§3, B2) and the defaults of §4 (B3).
+//! After the engine and before the summary, at a terminal only, it asks one question about how much text of a page of unknown
+//! licence research keeps (§2 item 5, §3; slice B2). The answer is written as `[library] unknown_licence` only when it changes it.
+//!
+//! Not here yet (a later slice, asked after the engine is chosen and before the summary): the defaults of §4 (B3).
 
 use crate::setup::{Env, Ui};
 use anyhow::{anyhow, bail, Result};
@@ -120,6 +122,37 @@ fn write_search(doc: &mut DocumentMut, p: Provider, credential: Option<&str>, ur
         }
         for (k, v) in settings {
             search[p.name()][k] = value(v);
+        }
+    }
+}
+
+/// Set `[table] key = v` in `doc`, making the table when it is missing.
+fn set_key(doc: &mut DocumentMut, table: &str, key: &str, v: toml_edit::Value) {
+    if !doc.get(table).is_some_and(|t| t.is_table()) {
+        doc[table] = Item::Table(Table::new());
+    }
+    doc[table][key] = Item::Value(v);
+}
+
+/// §2 item 5 and §3: how much of a page whose licence is unknown research keeps. One question; the operator chose `excerpts` as the
+/// default (2026-11-14). Written only when the answer changes what `config.toml` says. Returns whether `doc` changed.
+fn ask_kept_text(ui: &mut dyn Ui, doc: &mut DocumentMut) -> bool {
+    use delphi_adapter::config::UnknownLicence;
+    let now = UnknownLicence::read(&doc.to_string());
+    ui.say("\nMost web pages do not say what licence they are under. How much of such a page should research keep?");
+    ui.say("  excerpts      the passages it quotes, at most 300 characters each with a little context (the default)");
+    ui.say("  pointer       the address and title only; nothing can be searched or quoted later");
+    ui.say("  private_text  the whole page, kept privately: never exported, quoted at most 300 characters at a time");
+    loop {
+        let answer = ui.line("Keep", now.as_str()).trim().to_lowercase();
+        match UnknownLicence::parse(&answer) {
+            Some(a) if a == now => return false,
+            Some(a) => {
+                set_key(doc, "library", "unknown_licence", a.as_str().into());
+                ui.say(&format!("  [library] unknown_licence = \"{}\"", a.as_str()));
+                return true;
+            }
+            None => ui.say("  One of: excerpts, pointer, private_text."),
         }
     }
 }
@@ -291,7 +324,11 @@ pub fn run(ui: &mut dyn Ui, env: &dyn Env, net: Option<&Net>, o: &Opts) -> Resul
         }
     }
 
-    // (§2 item 5, slices B2 and B3: the questions about kept text and the reviewed defaults go here.)
+    // §2 item 5: the question about kept text (B2). At a terminal only; written to the file only when an answer changes it.
+    if !o.from_flags && ask_kept_text(ui, &mut doc) {
+        std::fs::write(&cfg_path, doc.to_string())?;
+    }
+    // (§2 item 5, slice B3: the reviewed defaults go here.)
 
     // 8. The access change, for the operator to ratify.
     out.ratified = ratify(ui, &o.home, &o.ws_dir, !o.from_flags);
@@ -466,6 +503,34 @@ mod tests {
         let live = std::fs::read_to_string(o.ws_dir.join("config.toml")).unwrap();
         let (text, _) = delphi_engine::boot::effective_config(&o.ws_dir, &live).unwrap();
         delphi_adapter::config::Config::parse(&text).unwrap().search
+    }
+
+    // specs/119 §2 item 5 and §3: one question about kept text; the default answer changes nothing, another is written, a wrong word
+    // is asked again; without a terminal nothing is asked.
+    #[test]
+    fn setup_asks_once_how_much_of_a_page_of_unknown_licence_to_keep_and_writes_only_a_change() {
+        use delphi_adapter::config::UnknownLicence;
+        let kept = |o: &Opts| UnknownLicence::read(&std::fs::read_to_string(o.ws_dir.join("config.toml")).unwrap());
+        let (_t, o) = workspace();
+        let before = std::fs::read_to_string(o.ws_dir.join("config.toml")).unwrap();
+        let mut ui = Script { lines: ["searxng", "https://searx.example", "excerpts"].map(String::from).into(), ..Default::default() };
+        run(&mut ui, &Keychain::default(), None, &o).unwrap();
+        assert!(ui.said.iter().any(|l| l == "? Keep"), "{:?}", ui.said);
+        assert_eq!(kept(&o), UnknownLicence::Excerpts);
+        let after = std::fs::read_to_string(o.ws_dir.join("config.toml")).unwrap();
+        assert!(!after.lines().any(|l| l.trim_start().starts_with("unknown_licence")) && before != after, "the default answer writes nothing: {after}");
+        let (_t, o) = workspace();
+        let mut ui = Script { lines: ["searxng", "https://searx.example", "everything", "private_text"].map(String::from).into(), ..Default::default() };
+        run(&mut ui, &Keychain::default(), None, &o).unwrap();
+        assert_eq!(ui.said.iter().filter(|l| *l == "? Keep").count(), 2, "a wrong word is asked again");
+        assert_eq!(kept(&o), UnknownLicence::PrivateText);
+        let (_t, mut o) = workspace();
+        o.from_flags = true;
+        o.engine = Some("searxng".into());
+        o.url = Some("https://searx.example".into());
+        let mut ui = Script::default();
+        run(&mut ui, &Keychain::default(), None, &o).unwrap();
+        assert!(!ui.said.iter().any(|l| l == "? Keep"), "without a terminal nothing is asked");
     }
 
     // specs/119 AC-1: on a fresh home, setup with a test engine writes [search], keeps the key outside the config file, and the

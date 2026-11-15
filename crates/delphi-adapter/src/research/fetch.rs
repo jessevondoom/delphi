@@ -145,14 +145,20 @@ pub fn decide_form(source: &Source, html: &str) -> Form {
     if source.reuse != Reuse::Full || source.licence.eq_ignore_ascii_case("unknown") {
         return Form::Summary;
     }
-    let t = html.to_ascii_lowercase();
-    let permissive = t.contains("creativecommons.org") || t.contains("public domain") || t.contains("opensource.org") || t.contains("apache.org/licenses");
-    let reserved = t.contains("all rights reserved") || t.contains("no part of this") || t.contains("may not be reproduced") || t.contains("do not copy");
-    if reserved && !permissive {
+    if shows_rights_notice(html) {
         Form::Summary
     } else {
         Form::Full
     }
+}
+
+/// Does the page show a stricter notice: a rights-reserved line without a Creative Commons or public-domain marker beside it? The
+/// notice `decide_form` reads, also used by the keep step's `private_text` rule (`specs/119` §3 item 3).
+pub fn shows_rights_notice(html: &str) -> bool {
+    let t = html.to_ascii_lowercase();
+    let permissive = t.contains("creativecommons.org") || t.contains("public domain") || t.contains("opensource.org") || t.contains("apache.org/licenses");
+    let reserved = t.contains("all rights reserved") || t.contains("no part of this") || t.contains("may not be reproduced") || t.contains("do not copy");
+    reserved && !permissive
 }
 
 #[cfg(test)]

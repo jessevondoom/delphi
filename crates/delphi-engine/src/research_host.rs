@@ -62,6 +62,11 @@ impl Held {
         self.inner.lock().unwrap().get(url).filter(|s| s.text.for_daemon() == text).cloned()
     }
 
+    /// The text this run read at `url`, for the context of a quoted passage (`specs/119` §3 item 6).
+    pub fn text_of(&self, url: &str) -> Option<String> {
+        self.inner.lock().unwrap().get(url).map(|s| s.text.for_daemon().clone())
+    }
+
     pub fn len(&self) -> usize {
         self.inner.lock().unwrap().len()
     }
@@ -431,6 +436,11 @@ impl crate::research_chain::Cites for LiveCites {
 pub struct KeepStep {
     pub rules: Option<KeepRules>,
     pub pictures: Option<Pictures>,
+    /// `[library] unknown_licence` (`specs/119` §3): how much of a page no licence lets the library keep whole is kept. The default is
+    /// `excerpts`: the passages the run quoted, with their context, and an ordinary anchor into each.
+    pub unknown_licence: delphi_adapter::config::UnknownLicence,
+    /// `[library] private_text_max_mib`, in bytes: under `private_text`, past it the oldest privately kept text is removed first.
+    pub private_text_max: Option<u64>,
     /// What the library kept of each source this run captured: `(level, outcome)` by source id.
     kept: std::sync::Mutex<BTreeMap<String, (String, String)>>,
 }
@@ -451,13 +461,31 @@ pub struct Pictures {
 
 impl KeepStep {
     pub fn new(rules: KeepRules, pictures: Option<Pictures>) -> KeepStep {
-        KeepStep { rules: Some(rules), pictures, kept: Default::default() }
+        KeepStep { rules: Some(rules), pictures, ..Default::default() }
+    }
+
+    /// The operator's `[library] unknown_licence` and `private_text_max_mib` (`specs/119` §3).
+    pub fn with_unknown_licence(mut self, setting: delphi_adapter::config::UnknownLicence, private_text_max_mib: u64) -> KeepStep {
+        self.unknown_licence = setting;
+        self.private_text_max = Some(private_text_max_mib.saturating_mul(1024 * 1024));
+        self
+    }
+
+    /// Under `private_text`: may this page be kept whole as a private source? Not when it shows a rights notice the code detects, nor
+    /// when its trusted-list entry allows a summary only (`specs/119` §3 item 3): such a page is kept as excerpts.
+    fn private_whole(&self, snap: &crate::fact_fetch::Snapshot) -> bool {
+        use delphi_adapter::research::trusted::Reuse;
+        if self.unknown_licence != delphi_adapter::config::UnknownLicence::PrivateText {
+            return false;
+        }
+        let summary_only = self.rules.as_ref().and_then(|r| r.list.allows_url(snap.final_url.for_daemon())).is_some_and(|e| e.reuse != Reuse::Full);
+        !summary_only && !delphi_adapter::research::fetch::shows_rights_notice(&String::from_utf8_lossy(snap.body_for_daemon()))
     }
 
     /// The options one page is captured with, or the fixed word for why it is not kept.
     fn opts(&self, snap: &crate::fact_fetch::Snapshot) -> Result<crate::library::AddOpts, String> {
         use crate::fact_sources::Class;
-        let mut opts = crate::library::AddOpts::default();
+        let mut opts = crate::library::AddOpts { keep_closed_privately: self.private_whole(snap), ..Default::default() };
         let Some(r) = &self.rules else { return Ok(opts) };
         let url = snap.final_url.for_daemon();
         let class = r.classes.classify(url).class;
@@ -469,6 +497,7 @@ impl KeepStep {
                 return Err(crate::research_run::WEAK_SOURCE.into());
             }
             opts.level = Some(crate::library::Level::Pointer);
+            opts.keep_closed_privately = false;
             return Ok(opts);
         }
         if let Some(entry) = r.list.allows_url(url) {
@@ -552,8 +581,12 @@ impl LiveLibrary {
     }
 
     /// The anchor of a claim into one source: the source, the quote found in that source's text, and the page's address as locator.
-    fn anchor(source_id: &str, quote: &str, url: &str) -> crate::library::claims::AnchorSpec {
-        crate::library::claims::AnchorSpec { source_id: source_id.to_string(), locator: Some(url.to_string()), quote: quote.to_string(), prefix: None, suffix: None }
+    /// Unless `[library] unknown_licence = "pointer"`, it also carries the text the run read on either side of the quote, so a source
+    /// the library does not hold whole keeps the quoted passage as an excerpt (`specs/119` §3 item 6).
+    fn anchor(&self, source_id: &str, quote: &str, url: &str) -> crate::library::claims::AnchorSpec {
+        let around = (self.keep.unknown_licence != delphi_adapter::config::UnknownLicence::Pointer).then(|| self.held.as_ref().and_then(|h| h.text_of(url))).flatten().and_then(|t| crate::library::claims::context_of(&t, quote));
+        let (prefix, suffix) = around.map_or((None, None), |(b, a)| (Some(b), Some(a)));
+        crate::library::claims::AnchorSpec { source_id: source_id.to_string(), locator: Some(url.to_string()), quote: quote.to_string(), prefix, suffix }
     }
 }
 
@@ -574,7 +607,7 @@ impl Library for LiveLibrary {
         let lib = self.library();
         lib.claim_by_fingerprint(fingerprint)?;
         let text = crate::research_run::assertion(x);
-        let anchors = [Self::anchor(source_id, &x.quote, url)];
+        let anchors = [self.anchor(source_id, &x.quote, url)];
         let (claim, _) = lib.add_research_claim(&crate::library::claims::ResearchClaim { text: &text, fingerprint, project: self.project.as_deref(), topic: self.topic.as_deref(), anchors: &anchors }).ok()?;
         claim["id"].as_str().map(String::from)
     }
@@ -594,6 +627,14 @@ impl Library for LiveLibrary {
             let opts = self.keep.opts(&snap)?;
             let stored = lib.add_fetched(url, &snap, &opts, &budgets)?;
             self.keep.remember(&stored);
+            // `specs/119` §3: anchors an earlier run wrote with the quote alone gain the passage now that the page is read again; and under
+            // `private_text` the privately kept text stays under its cap, oldest first, never the page just kept.
+            if self.keep.unknown_licence != delphi_adapter::config::UnknownLicence::Pointer && stored.level != crate::library::Level::Full {
+                lib.upgrade_quote_anchors(&stored.id, text);
+            }
+            if let Some(max) = self.keep.private_text_max.filter(|_| lib.read_meta(&stored.id).is_some_and(|m| m["kept_privately"].is_string())) {
+                lib.cap_private_text(max, &stored.id);
+            }
             if stored.level == crate::library::Level::Full && matches!(stored.outcome, crate::library::Outcome::Added | crate::library::Outcome::NewVersion(_)) {
                 self.keep.pictures(&lib, &stored.id, &snap);
             }
@@ -699,7 +740,7 @@ impl Library for LiveLibrary {
         let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&self.ledger).map_err(|e| e.to_string())?;
         writeln!(f, "{line}").map_err(|e| e.to_string())?;
         let text = crate::research_run::assertion(&c.x);
-        let anchors: Vec<crate::library::claims::AnchorSpec> = c.source_ids.iter().enumerate().filter_map(|(i, s)| Some(Self::anchor(s, c.quotes.get(i)?, c.source_urls.get(i).map_or(c.x.locator.as_str(), String::as_str)))).collect();
+        let anchors: Vec<crate::library::claims::AnchorSpec> = c.source_ids.iter().enumerate().filter_map(|(i, s)| Some(self.anchor(s, c.quotes.get(i)?, c.source_urls.get(i).map_or(c.x.locator.as_str(), String::as_str)))).collect();
         let written = lib.add_research_claim(&crate::library::claims::ResearchClaim { text: &text, fingerprint: &c.fingerprint, project: self.project.as_deref(), topic: self.topic.as_deref(), anchors: &anchors });
         Ok(written.ok().and_then(|(claim, _)| claim["id"].as_str().map(String::from)))
     }
@@ -1396,11 +1437,17 @@ mod tests {
     /// One run's worth of the live path for one page: the run's own search returns `url`, the page is fetched once and captured, and
     /// the claim `x` it states is staged, or, when the library already holds it, anchored. Returns the library claim's id.
     async fn run_keeps(home: &std::path::Path, topic: &str, project: Option<&str>, url: &str, text: &str, x: &Extracted, state: delphi_core::research::ClaimState) -> Option<String> {
+        run_keeps_with(home, topic, project, url, text, x, state, KeepStep::default()).await
+    }
+
+    /// [`run_keeps`] with the keep step given, for `[library] unknown_licence` (`specs/119` §3).
+    #[allow(clippy::too_many_arguments)]
+    async fn run_keeps_with(home: &std::path::Path, topic: &str, project: Option<&str>, url: &str, text: &str, x: &Extracted, state: delphi_core::research::ClaimState, keep: KeepStep) -> Option<String> {
         canned(url, text);
         let w = searching(&[url]);
         w.search_via("a question").unwrap();
         let page = w.fetch(url).unwrap();
-        let lib = LiveLibrary { home: home.to_path_buf(), ledger: home.join("ws/research/host-claims.jsonl"), label: "host:test/m".into(), retractions: crate::retractions::Policy::off(), held: Some(w.held.clone()), topic: Some(topic.to_string()), project: project.map(String::from), keep: Default::default() };
+        let lib = LiveLibrary { home: home.to_path_buf(), ledger: home.join("ws/research/host-claims.jsonl"), label: "host:test/m".into(), retractions: crate::retractions::Policy::off(), held: Some(w.held.clone()), topic: Some(topic.to_string()), project: project.map(String::from), keep };
         let source_id = lib.capture(&page.url, &page.text, false).await.unwrap();
         let fp = crate::research_plan::claim_fingerprint(&x.subject, &x.predicate, &x.object, &x.scope, &x.time);
         if lib.known_fingerprints().contains(&fp) {
@@ -1451,7 +1498,10 @@ mod tests {
         assert_eq!(c["topics"], json!([t1]));
         assert_eq!(c["anchors"].as_array().unwrap().len(), 1);
         let a = &c["anchors"][0];
-        assert_eq!((a["quote"].as_str(), a["locator"].as_str(), a["state"].as_str(), a["via"].as_str()), (Some("lowers fever in adults"), Some("https://r2-origin-a.example/study"), Some("active"), Some("research")), "{a}");
+        // `specs/119` §3 item 6: the page's licence is unknown, so the quoted passage is kept as an excerpt and the anchor is an ordinary
+        // one into it, with the page's text before and after.
+        assert_eq!((a["quote"].as_str(), a["locator"].as_str(), a["state"].as_str(), a["via"].as_str()), (Some("lowers fever in adults"), Some("https://r2-origin-a.example/study"), Some("active"), None), "{a}");
+        assert!(a["prefix"].as_str().unwrap().ends_with("The trial found aspirin "), "{a}");
         assert_eq!(crate::library::claims::status(&c).as_str(), "noted", "a research claim starts noted");
         // AC-2, first half: the claim is in `library/claims/`, and a page search on the topic gathers it.
         assert!(home.path().join("library/claims").join(format!("{first}.json")).is_file());
@@ -1480,6 +1530,120 @@ mod tests {
         let ledger = std::fs::read_to_string(home.path().join("ws/research/host-claims.jsonl")).unwrap();
         assert_eq!(ledger.lines().count(), 1, "{ledger}");
         assert!(ledger.contains(&format!("\"topic\":\"{t1}\"")), "{ledger}");
+    }
+
+    /// `specs/119` §3 item 6 and AC-3: with no setting, a page of unknown licence keeps the passage the run quoted (and up to 200
+    /// characters of the page on either side), no other text; the passage is searchable; the claim's anchor is an ordinary one into it.
+    /// With `unknown_licence = "pointer"` nothing of the page is kept and the anchor holds the quote alone, as before.
+    #[tokio::test]
+    async fn a_page_of_unknown_licence_keeps_the_quoted_passage_by_default_and_nothing_under_pointer() {
+        use delphi_adapter::config::UnknownLicence;
+        use delphi_core::research::ClaimState;
+        let filler = "Unrelated words about the weather in spring and the price of bread. ".repeat(12);
+        let page = format!("{filler}The trial found aspirin lowers fever in adults. {filler}");
+        let home = tempfile::tempdir().unwrap();
+        let topic = crate::research_record::topic_id("does aspirin lower fever");
+        let id = run_keeps(home.path(), &topic, None, "https://b2-excerpts.example/study", &page, &fever_claim(), ClaimState::Captured).await.unwrap();
+        let l = crate::library::Library::in_home(home.path());
+        let c = l.claim(&id).unwrap();
+        let a = &c["anchors"][0];
+        let sid = a["source_id"].as_str().unwrap();
+        let meta = l.read_meta(sid).unwrap();
+        assert_eq!((meta["capture_level"].as_str(), meta["licence"].as_str(), meta["private"].as_bool()), (Some("excerpts"), Some("unknown"), None), "{meta}");
+        assert!(!l.source_dir(sid).join("source.md").exists(), "no whole text is kept");
+        let ex = l.excerpts(sid);
+        assert_eq!(ex.len(), 1, "{ex:?}");
+        assert_eq!(ex[0]["text"], "lowers fever in adults");
+        let (before, after) = (ex[0]["context_before"].as_str().unwrap(), ex[0]["context_after"].as_str().unwrap());
+        assert!(before.chars().count() == 200 && after.chars().count() == 200 && before.ends_with("The trial found aspirin ") && after.starts_with('.'), "{before:?} {after:?}");
+        let kept: usize = std::fs::read_dir(l.source_dir(sid)).unwrap().flatten().filter(|e| e.path().is_file()).map(|e| std::fs::read_to_string(e.path()).unwrap_or_default().matches("price of bread").count()).sum();
+        assert!(kept <= 6, "only the context around the passage is kept, never the page: {kept}");
+        assert!(a["via"].is_null() && a["prefix"].as_str().unwrap().ends_with("aspirin ") && a["start"].is_null(), "{a}");
+        // The passage is indexed (its excerpts.md), never its context, and a search finds it.
+        let md = std::fs::read_to_string(l.source_dir(sid).join("excerpts.md")).unwrap();
+        assert!(md.contains("> lowers fever in adults") && !md.contains("price of bread"), "{md}");
+        assert!(l.indexable_excerpts().iter().any(|(i, _)| i == sid) && l.indexable().is_empty());
+        let ws = home.path().join("workspaces/w");
+        std::fs::create_dir_all(ws.join("local")).unwrap();
+        let mut kb = crate::kb::Kb::open(&ws.join("local/state.db")).unwrap();
+        kb.refresh(&ws, "").unwrap();
+        let hits = kb.search("lowers fever adults", &crate::kb::SearchOpts { include_untrusted: true, ..Default::default() }).unwrap();
+        assert!(hits.iter().any(|h| h.rel_path == format!("library/sources/{sid}/excerpts.md")), "{:?}", hits.iter().map(|h| &h.rel_path).collect::<Vec<_>>());
+        // The same page read again: the same capture, the same passage, no second excerpt.
+        run_keeps(home.path(), &topic, None, "https://b2-excerpts.example/study", &page, &fever_claim(), ClaimState::Captured).await.unwrap();
+        assert_eq!((l.excerpts(sid).len(), l.claim(&id).unwrap()["anchors"].as_array().unwrap().len(), l.read_meta(sid).unwrap()["version"].as_str()), (1, 1, Some("1")));
+
+        // `pointer`: no text at all, and the quote-only anchor of 112 R2.
+        let home = tempfile::tempdir().unwrap();
+        let keep = KeepStep { unknown_licence: UnknownLicence::Pointer, ..Default::default() };
+        let id = run_keeps_with(home.path(), &topic, None, "https://b2-pointer.example/study", &page, &fever_claim(), ClaimState::Captured, keep).await.unwrap();
+        let l = crate::library::Library::in_home(home.path());
+        let a = l.claim(&id).unwrap()["anchors"][0].clone();
+        let sid = a["source_id"].as_str().unwrap();
+        assert_eq!((a["via"].as_str(), a["prefix"].as_str(), l.read_meta(sid).unwrap()["capture_level"].as_str()), (Some("research"), Some(""), Some("pointer")), "{a}");
+        assert!(l.excerpts(sid).is_empty() && !l.source_dir(sid).join("excerpts.md").exists() && l.indexable_excerpts().is_empty());
+    }
+
+    /// `specs/119` §3 item 6, anchors already written: a quote-only anchor of 112 R2 (written under `pointer`, or before this slice)
+    /// stays readable as it is; the next time a run reads that page under `excerpts` it gains the passage and becomes an ordinary
+    /// anchor, in place, for every claim citing the page whose quote is on it. Nothing is fetched for this alone.
+    #[tokio::test]
+    async fn a_quote_only_anchor_written_earlier_becomes_an_ordinary_one_when_a_run_reads_its_page_again() {
+        use delphi_adapter::config::UnknownLicence;
+        use delphi_core::research::ClaimState;
+        let home = tempfile::tempdir().unwrap();
+        let topic = crate::research_record::topic_id("does aspirin lower fever");
+        let url = "https://b2-upgrade.example/study";
+        let page = "The trial found aspirin lowers fever in adults. It also found paracetamol eases pain in children.";
+        let pointer = || KeepStep { unknown_licence: UnknownLicence::Pointer, ..Default::default() };
+        let first = run_keeps_with(home.path(), &topic, None, url, page, &fever_claim(), ClaimState::Captured, pointer()).await.unwrap();
+        let pain = Extracted { subject: "paracetamol".into(), predicate: "eases".into(), object: "pain".into(), scope: "children".into(), time: String::new(), quote: "paracetamol eases pain in children".into(), locator: String::new(), sub: 0 };
+        let second = run_keeps_with(home.path(), &topic, None, url, page, &pain, ClaimState::Captured, pointer()).await.unwrap();
+        let l = crate::library::Library::in_home(home.path());
+        for id in [&first, &second] {
+            assert_eq!(l.claim(id).unwrap()["anchors"][0]["via"], "research", "written quote-only");
+        }
+        // A later run under the default reads the page again for the fever claim only; both claims' anchors gain their passages.
+        run_keeps(home.path(), &topic, None, url, page, &fever_claim(), ClaimState::Captured).await.unwrap();
+        for (id, quote) in [(&first, "lowers fever in adults"), (&second, "paracetamol eases pain in children")] {
+            let c = l.claim(id).unwrap();
+            let anchors = c["anchors"].as_array().unwrap();
+            assert_eq!(anchors.len(), 1, "upgraded in place, not added: {c}");
+            assert!(anchors[0]["via"].is_null() && anchors[0]["quote"] == quote && !anchors[0]["prefix"].as_str().unwrap().is_empty(), "{c}");
+        }
+        let sid = l.claim(&first).unwrap()["anchors"][0]["source_id"].as_str().unwrap().to_string();
+        assert_eq!(l.excerpts(&sid).len(), 2);
+    }
+
+    /// `specs/119` §3 items 2, 3 and 5, AC-4 and AC-5: under `private_text` a page of unknown licence is kept whole as a private source,
+    /// marked `kept_privately`, and never indexed; a page that shows a rights notice is not kept whole (it is kept as excerpts, which a
+    /// claim's quote then adds); past the cap the oldest privately kept text goes first, never the page just kept.
+    #[tokio::test]
+    async fn private_text_keeps_a_page_whole_and_private_unless_it_shows_a_rights_notice_and_the_cap_removes_the_oldest() {
+        use delphi_adapter::config::UnknownLicence;
+        let home = tempfile::tempdir().unwrap();
+        let keep = |max: u64| KeepStep { unknown_licence: UnknownLicence::PrivateText, private_text_max: Some(max), ..Default::default() };
+        let (lib, url, text) = kept_library(home.path(), keep(1 << 20), "https://b2-private.example/a", &[KEEP_PROSE]);
+        let id = lib.capture(&url, &text, false).await.unwrap();
+        let l = crate::library::Library::in_home(home.path());
+        let m = l.read_meta(&id).unwrap();
+        assert_eq!((m["capture_level"].as_str(), m["private"].as_bool(), m["kept_privately"].as_str()), (Some("full"), Some(true), Some("unknown_licence")), "{m}");
+        assert!(l.indexable().is_empty() && l.indexable_excerpts().is_empty(), "a private source is never indexed");
+        assert_eq!(l.private_texts().iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), vec![id.as_str()]);
+        // A rights notice: not whole, not private.
+        let notice = "Copyright 2026 Example Press. All rights reserved.";
+        let (lib2, url2, text2) = kept_library(home.path(), keep(1 << 20), "https://b2-notice.example/a", &[KEEP_PROSE, notice]);
+        let id2 = lib2.capture(&url2, &text2, false).await.unwrap();
+        let m2 = l.read_meta(&id2).unwrap();
+        assert_eq!((m2["capture_level"].as_str(), m2["private"].as_bool()), (Some("pointer"), None), "{m2}");
+        // The cap: a third page past it removes the first, oldest, and keeps itself.
+        let bytes = l.private_texts()[0].bytes;
+        let (lib3, url3, text3) = kept_library(home.path(), keep(bytes + bytes / 2), "https://b2-private.example/b", &[KEEP_PROSE, "and one more sentence of its own"]);
+        let id3 = lib3.capture(&url3, &text3, false).await.unwrap();
+        let held: Vec<String> = l.private_texts().into_iter().map(|p| p.id).collect();
+        assert_eq!(held, vec![id3.clone()], "the oldest went first");
+        let first = l.read_meta(&id).unwrap();
+        assert!(!first["purged"].is_null() && first["kept_privately"].is_string() && !l.source_dir(&id).join("source.md").exists(), "its text went and its pointer stays: {first}");
     }
 
     /// `specs/112` §3.1, §3.2 and §9: a run's claim is scoped to the run's project; the run's own verdict and counts are not copied
