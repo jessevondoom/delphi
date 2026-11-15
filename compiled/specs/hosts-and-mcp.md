@@ -53,7 +53,7 @@ An operator works inside Delphi's TUI and also across external host harnesses (C
 
 ## 074-stable-launch-path-and-delphi-connect
 
-**074: A stable launch path for host plugins, and `delphi connect`** · approved (per source at `b02ea013c1b3`) · tier 0 · [source](../../specs/074-stable-launch-path-and-delphi-connect.md)
+**074: A stable launch path for host plugins, and `delphi connect`** · approved (per source at `f02274b98971`) · tier 0 · [source](../../specs/074-stable-launch-path-and-delphi-connect.md)
 
 _No standard scope section; open the spec._
 

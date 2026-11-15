@@ -822,7 +822,7 @@ pub(crate) fn launchable_now(home: &std::path::Path) -> delphi_engine::mcp_check
     let install = std::env::var_os("DELPHI_INSTALL_DIR").map(std::path::PathBuf::from);
     match std::env::current_exe() {
         Ok(exe) => delphi_engine::mcp_check::launchable(home, install.as_deref(), &exe),
-        Err(_) => delphi_engine::mcp_check::Launchable { ok: false, detail: "this binary's path cannot be read".into() },
+        Err(_) => delphi_engine::mcp_check::Launchable { ok: false, this_binary: false, detail: "this binary's path cannot be read".into() },
     }
 }
 

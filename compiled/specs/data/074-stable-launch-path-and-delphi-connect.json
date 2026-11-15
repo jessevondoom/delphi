@@ -109,12 +109,18 @@
       "line": 183,
       "number": "10.6",
       "title": "Tests"
+    },
+    {
+      "level": 3,
+      "line": 187,
+      "number": "10.7",
+      "title": "Panel review and what changed (2026-11-14)"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/074-stable-launch-path-and-delphi-connect.md",
-    "sha256": "b02ea013c1b3c53521b3b21aaa0bcb6ecf4798be98ad547f6164665a4ca8bfdf"
+    "sha256": "f02274b98971f1512410525cd1ea53cc44ed5b3d070b9dc1784da3c984ec32c6"
   },
   "source_status_at_hash": {
     "line": {
@@ -127,7 +133,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-04 (\"approve 074\"), after a Council (3 seats, 2 rounds, all APPROVE-WITH-AMENDMENTS, amendments folded in): approves L0, L1 and C1. C2 was gated on the recorded GitHub-source proof (requirement 7), recorded in §8 on 2026-11-04, and is built; C3 stays gated on its own proof and a Council re-review. Amended 2026-11-14 (§10, \"do all 4. make any needed spec adjustments.\"): approves S1, U1, U2 and R1, on a summary and without a Council."
     },
-    "sha256": "b02ea013c1b3c53521b3b21aaa0bcb6ecf4798be98ad547f6164665a4ca8bfdf",
+    "sha256": "f02274b98971f1512410525cd1ea53cc44ed5b3d070b9dc1784da3c984ec32c6",
     "word": "approved"
   },
   "spec": {

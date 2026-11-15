@@ -59,6 +59,9 @@ pub const MACHINE_DIRS: [&str; 2] = ["/opt/homebrew/bin", "/usr/local/bin"];
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Launchable {
     pub ok: bool,
+    /// Whether the file a plugin would launch is the binary doing the check. False with `ok` means two installs: the plugin
+    /// runs the other one.
+    pub this_binary: bool,
     pub detail: String,
 }
 
@@ -107,6 +110,12 @@ fn caution(resolved: &Path) -> Option<String> {
     None
 }
 
+/// What someone else could do to `path` once it is resolved (spec 074 §10.1): `None` when every component belongs to the user
+/// or root and none is writable by group or others, or when the path does not resolve.
+pub fn path_caution(path: &Path) -> Option<String> {
+    std::fs::canonicalize(path).ok().and_then(|r| caution(&r))
+}
+
 /// [`Launchable`] for the plugin of this release, which launches `~/.local/bin/delphi`. `exe` is this binary, `install_dir` is
 /// `$DELPHI_INSTALL_DIR` if set.
 pub fn launchable(home: &Path, install_dir: Option<&Path>, exe: &Path) -> Launchable {
@@ -116,7 +125,7 @@ pub fn launchable(home: &Path, install_dir: Option<&Path>, exe: &Path) -> Launch
 fn launchable_in(home: &Path, install_dir: Option<&Path>, machine_dirs: &[std::path::PathBuf], exe: &Path) -> Launchable {
     use std::os::unix::fs::MetadataExt;
     let stable = home.join(STABLE_REL);
-    let no = |detail: String| Launchable { ok: false, detail };
+    let no = |detail: String| Launchable { ok: false, this_binary: false, detail };
     let cure = || match stable_target_in(home, install_dir, machine_dirs, exe) {
         Some(t) => format!(
             "link it: `mkdir -p {} && ln -s {} {}` (or `delphi connect <host>`, which shows the link in its plan and asks first)",
@@ -134,15 +143,16 @@ fn launchable_in(home: &Path, install_dir: Option<&Path>, machine_dirs: &[std::p
     if !m.is_file() || m.mode() & 0o111 == 0 {
         return no(format!("{} is not an executable file", stable.display()));
     }
-    let mut detail = if same_file(&stable, exe) {
+    let this_binary = same_file(&stable, exe);
+    let mut detail = if this_binary {
         format!("{} is this binary", stable.display())
     } else {
         format!("{} is a different `delphi` from the one running this check; the plugin runs that one", stable.display())
     };
-    if let Some(c) = std::fs::canonicalize(&stable).ok().and_then(|r| caution(&r)) {
+    if let Some(c) = path_caution(&stable) {
         detail.push_str(&format!("; caution: {c}"));
     }
-    Launchable { ok: true, detail }
+    Launchable { ok: true, this_binary, detail }
 }
 
 const FIX_INSTALL: &str = "claude plugin marketplace add jessevondoom/delphi && claude plugin install delphi@delphi";
@@ -485,11 +495,16 @@ mod tests {
         let l = look(&exe);
         assert!(l.ok && l.detail.contains("is this binary"), "{}", l.line());
         // The same path seen from another binary: yes, and it says which one a plugin runs.
-        assert!(look(&stray).detail.contains("a different `delphi`"));
+        let other = look(&stray);
+        assert!(other.ok && !other.this_binary && other.detail.contains("a different `delphi`"), "{}", other.line());
+        assert!(look(&exe).this_binary);
+        assert_eq!(path_caution(&stable), None);
+        assert_eq!(path_caution(&home.join("nothing-here")), None, "a path that does not resolve has nothing to say");
         // A parent that group or others can write earns a caution, not a refusal.
         std::fs::set_permissions(&brew, std::fs::Permissions::from_mode(0o775)).unwrap();
         let l = look(&exe);
         assert!(l.ok && l.detail.contains("caution") && l.detail.contains("writable by group or others"), "{}", l.line());
+        assert!(path_caution(&exe).unwrap().contains("writable by group or others"), "the same finding is there to show before a link is made");
         std::fs::set_permissions(&brew, std::fs::Permissions::from_mode(0o755)).unwrap();
 
         // A dangling link and a file that is not executable: no.

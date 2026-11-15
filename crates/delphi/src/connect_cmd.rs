@@ -19,7 +19,10 @@ pub struct Template {
     pub host: &'static str,
     pub exe: &'static str,
     pub id: &'static str,
+    /// The host version the add and remove rows were run on.
     pub proven_on: &'static str,
+    /// The host version the update rows were run on (spec 074 §10.5): its own proof, not the add row's.
+    pub proven_update: &'static str,
     pub dirs: &'static [&'static str],
     pub add: [&'static [&'static str]; 2],
     pub remove: [&'static [&'static str]; 2],
@@ -35,8 +38,10 @@ pub const TEMPLATES: [Template; 2] = [
     Template {
         host: "claude-code",
         exe: "claude",
-        id: "claude-v1",
+        // v2: the update row was added (spec 074 §10.2), so an audit line tells the two sets of rows apart.
+        id: "claude-v2",
         proven_on: "Claude Code 2.1.314",
+        proven_update: "Claude Code 2.1.325",
         dirs: &[".local/bin", ".claude/local", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"],
         add: [&["plugin", "marketplace", "add", SOURCE], &["plugin", "install", "delphi@delphi"]],
         remove: [&["plugin", "uninstall", "delphi@delphi"], &["plugin", "marketplace", "remove", "delphi"]],
@@ -50,8 +55,9 @@ pub const TEMPLATES: [Template; 2] = [
     Template {
         host: "copilot",
         exe: "copilot",
-        id: "copilot-v1",
+        id: "copilot-v2",
         proven_on: "Copilot CLI 1.0.105",
+        proven_update: "Copilot CLI 1.0.111",
         dirs: &[".local/bin", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"],
         add: [&["plugin", "marketplace", "add", SOURCE], &["plugin", "install", "delphi@delphi"]],
         remove: [&["plugin", "uninstall", "delphi@delphi"], &["plugin", "marketplace", "remove", "delphi"]],
@@ -213,7 +219,8 @@ pub fn host_plugin_notes(home: &Path, release: &str, launch: &mcp_check::Launcha
         };
         out.push(format!("{host}: the Delphi plugin there was not updated with the program: {}. Update it: {cure}", sanitize(&c.detail)));
     }
-    if installed && !launch.ok {
+    // Not launchable, or launchable as another install: either way the plugin does not run the program just updated.
+    if installed && (!launch.ok || !launch.this_binary) {
         out.push(format!("host plugins: launchable: {}", sanitize(&launch.line())));
     }
     out
@@ -483,8 +490,9 @@ mod tests {
     fn update_names_a_stale_plugin_with_its_cure_and_says_nothing_for_a_host_without_one() {
         let t = tempfile::tempdir().unwrap();
         let home = t.path();
-        let ok = mcp_check::Launchable { ok: true, detail: "x".into() };
-        let no = mcp_check::Launchable { ok: false, detail: "nothing at the launch path".into() };
+        let ok = mcp_check::Launchable { ok: true, this_binary: true, detail: "x".into() };
+        let no = mcp_check::Launchable { ok: false, this_binary: false, detail: "nothing at the launch path".into() };
+        let other = mcp_check::Launchable { ok: true, this_binary: false, detail: "a different `delphi`".into() };
         assert!(host_plugin_notes(home, "0.6.2", &no).is_empty(), "no plugin anywhere: nothing to say, even about the launch path");
         std::fs::create_dir_all(home.join(".claude/plugins")).unwrap();
         std::fs::write(home.join(".claude/plugins/installed_plugins.json"), r#"{"version":2,"plugins":{"delphi@delphi":[{"scope":"user","version":"0.5.4"}]}}"#).unwrap();
@@ -495,8 +503,13 @@ mod tests {
         assert!(notes[0].contains("`delphi connect claude-code --update`") && notes[0].contains("`claude plugin update delphi@delphi`"), "{notes:?}");
         let notes = host_plugin_notes(home, "0.6.2", &no);
         assert!(notes.len() == 2 && notes[1].starts_with("host plugins: launchable: no (nothing at the launch path)"), "{notes:?}");
-        // Current: silent about the release, and still says when it cannot be launched.
+        // Current: silent about the release, and still says when it cannot be launched or when the plugin runs another install.
         assert!(host_plugin_notes(home, "0.5.4", &ok).is_empty());
+        let skew = host_plugin_notes(home, "0.5.4", &other);
+        assert!(skew.len() == 1 && skew[0].contains("launchable: yes (a different `delphi`)"), "{skew:?}");
+        for tm in &TEMPLATES {
+            assert!(tm.id.ends_with("-v2") && tm.proven_update != tm.proven_on, "{}: the update rows carry their own proof", tm.host);
+        }
         assert_eq!(host_plugin_notes(home, "0.5.4", &no).len(), 1);
         // Codex has no update row: its own fix is printed.
         std::fs::create_dir_all(home.join(".codex/plugins/cache/delphi/delphi/0.5.4")).unwrap();
