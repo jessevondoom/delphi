@@ -39,6 +39,8 @@ const LIST_CAP: usize = 500;
 pub const KEPT_LEVELS: [&str; 3] = ["full", "excerpts", "pointer"];
 pub const KEPT_OUTCOMES: [&str; 4] = ["added", "new_version", "unchanged", "kept_richer"];
 const TEXT_CAP: usize = 300;
+/// A continued run's note: one line, at most this long.
+pub const NOTE_CAP: usize = 120;
 const SLUG_CAP: usize = 48;
 
 /// One process writes a record at a time: each change is a read, an edit and a rename, and two runs may share a topic.
@@ -364,6 +366,44 @@ impl Topic {
                 p["outcome"] = json!(outcome);
             }
         })
+    }
+
+    /// Start a run that continues this topic (`specs/112` §5.1): one more entry in `runs`, marked `continued`, with the note that
+    /// was given. The question, the pages, the claims and the answer of earlier runs stay. `Err` when the topic has no record.
+    pub fn continue_run(&self, asked_by: Asker, depth: Depth, run_id: &str, note: Option<&str>) -> Result<(), String> {
+        if !valid_run_id(run_id) {
+            return Err("not a research id".into());
+        }
+        self.update(|rec| {
+            let at = now();
+            rec["depth"] = json!(depth_word(depth));
+            rec["state"] = json!("queued");
+            let mut run = json!({"run_id": run_id, "asked_by": asked_by.to_json(), "depth": depth_word(depth), "state": "queued", "started": at, "ended": null, "steps": 0, "check_steps": 0, "ms": 0, "continued": true, "unchanged": 0});
+            if let Some(n) = note.map(|n| clip(n.lines().next().unwrap_or("").trim(), NOTE_CAP)).filter(|n| !n.is_empty()) {
+                run["note"] = json!(n);
+            }
+            match rec["runs"].as_array_mut() {
+                Some(runs) => {
+                    runs.retain(|r| r["run_id"].as_str() != Some(run_id));
+                    runs.push(run);
+                }
+                None => rec["runs"] = json!([run]),
+            }
+        })
+    }
+
+    /// What a run that continues this topic starts from: the record's gaps and, for each page it holds, the content hash of what
+    /// was read. A page with no hash is not listed, so it is read again.
+    pub fn resume(&self, note: Option<&str>) -> Result<crate::research_run::Resume, String> {
+        let rec = self.read()?;
+        let gaps = rec["gaps"].as_array().into_iter().flatten().filter_map(|g| g.as_str().map(String::from)).collect();
+        let held = rec["pages"].as_array().into_iter().flatten().filter_map(|p| Some((p["url"].as_str()?.to_string(), p["content_hash"].as_str()?.to_string()))).collect();
+        Ok(crate::research_run::Resume { gaps, held, note: note.map(|n| clip(n.lines().next().unwrap_or("").trim(), NOTE_CAP)).filter(|n| !n.is_empty()) })
+    }
+
+    /// A continued run fetched a page the record holds and found it unchanged: counted on the run, and nothing else changes.
+    pub fn unchanged(&self, run_id: &str) -> Result<(), String> {
+        self.update(|rec| Self::set_run(rec, run_id, |run| run["unchanged"] = json!(run["unchanged"].as_u64().unwrap_or(0) + 1)))
     }
 
     /// One page the run did not read, and the fixed word for why.
@@ -724,6 +764,79 @@ impl crate::research_run::Recorder for RunRecorder {
     fn refused(&self, url: &str, why: &str) {
         let _ = self.topic.refused(&self.run_id, url, why);
     }
+
+    fn unchanged(&self, _url: &str) {
+        let _ = self.topic.unchanged(&self.run_id);
+    }
+}
+
+// ── due topics (`specs/112` §5.2) ─────────────────────────────────────────────────────────────────────────────────────────
+
+/// `[research] refresh_days` and its bounds: how old a topic's newest run may be before the topic is due.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Refresh {
+    /// A topic whose record names no `refresh_days` of its own.
+    pub days: u64,
+    /// What a record's own `refresh_days` is clamped to.
+    pub min: u64,
+    pub max: u64,
+}
+
+impl Default for Refresh {
+    fn default() -> Refresh {
+        Refresh { days: 90, min: 7, max: 730 }
+    }
+}
+
+impl Refresh {
+    /// The days a record is refreshed after: its own `refresh_days` inside the bounds, else the default.
+    pub fn days_of(&self, rec: &Value) -> u64 {
+        rec["refresh_days"].as_u64().map_or(self.days, |d| d.clamp(self.min, self.max.max(self.min)))
+    }
+}
+
+/// Why a topic is due, in fixed words; `None` when it is not. A topic is due when its newest finished run is older than its
+/// refresh days, or when a source it rests on has changed or been retracted since the record read it. `source` gives a
+/// source's own record in the library (`Library::read_meta`). A topic with a run going, or with no finished run, is not due.
+/// This only reads: nothing is run again without the operator or an agent asking.
+pub fn due(rec: &Value, now_unix: i64, refresh: &Refresh, source: &dyn Fn(&str) -> Option<Value>) -> Option<String> {
+    if matches!(rec["state"].as_str(), Some("queued" | "running")) {
+        return None;
+    }
+    let newest = rec["runs"].as_array()?.iter().filter(|r| matches!(r["state"].as_str(), Some("done" | "partial"))).filter_map(|r| delphi_core::time::parse_rfc3339(r["ended"].as_str()?)).max()?;
+    for p in rec["pages"].as_array().into_iter().flatten() {
+        let Some(meta) = p["source_id"].as_str().and_then(source) else { continue };
+        if meta["retraction"]["kind"].as_str() == Some("retracted") {
+            return Some("a source it rests on was retracted".into());
+        }
+        if let (Some(read), Some(held)) = (p["content_hash"].as_str(), meta["content_hash"].as_str()) {
+            if read != held {
+                return Some("a source it rests on has changed".into());
+            }
+        }
+    }
+    let (days, age) = (refresh.days_of(rec), (now_unix - newest).max(0) / 86_400);
+    (age as u64 > days).then(|| format!("its newest run is {age} day(s) old, over its {days}"))
+}
+
+/// The topics that are due, with why, in the order of [`list`].
+pub fn due_topics(ws: &Path, home: &Path, refresh: &Refresh) -> Vec<(Topic, Value, String)> {
+    let lib = crate::library::Library::in_home(home);
+    let now_unix = delphi_core::time::parse_rfc3339(&now()).unwrap_or(0);
+    list(ws).into_iter().filter_map(|(t, rec)| due(&rec, now_unix, refresh, &|id| lib.read_meta(id)).map(|why| (t, rec, why))).collect()
+}
+
+/// One line per due topic, for `delphi research topics --due` and the digest.
+pub fn render_due(due: &[(Topic, Value, String)]) -> String {
+    if due.is_empty() {
+        return "no research topic is due\n".into();
+    }
+    let mut out = String::new();
+    for (t, rec, why) in due {
+        out.push_str(&format!("{}  due: {}\n    {}\n", t.id, why, clip(rec["question"].as_str().unwrap_or(""), 160)));
+    }
+    out.push_str("nothing is run again by itself: `delphi research continue <topic-id>` starts a run (it spends tokens and reaches the network)\n");
+    out
 }
 
 #[cfg(test)]
@@ -900,5 +1013,79 @@ mod tests {
         assert!(shown.contains("question   Does aspirin reduce fever?") && shown.contains("state      done") && shown.contains("abc123abc123"), "{shown}");
         assert!(shown.contains("answer (not validated") && shown.contains("An answer."), "{shown}");
         assert!(!shown.contains('\u{1b}'), "control characters in the answer are not printed");
+    }
+
+    // ---- `specs/112` R6: continue and due ----
+
+    #[test]
+    fn a_continued_run_is_one_more_run_of_the_record_and_starts_from_its_gaps_and_the_pages_it_holds() {
+        let ws = tempfile::tempdir().unwrap();
+        let t = Topic::begin(ws.path(), &begin("Does aspirin reduce fever?", "r-t-1")).unwrap();
+        t.page("r-t-1", "https://who.int/a", "src-who", Some("sha256:aa")).unwrap();
+        t.page("r-t-1", "https://nohash.example/b", "src-b", None).unwrap();
+        t.finish("r-t-1", "done", Some(&result("An answer.")), &["abc123abc123".to_string()], None, 7).unwrap();
+        let resume = t.resume(Some("  in children \n second line")).unwrap();
+        assert_eq!(resume.gaps, ["kb: kb_empty", "coverage is thin: 1 kept, cited claim(s) from the knowledge base and the trusted sources, under 3"]);
+        assert_eq!(resume.held.iter().collect::<Vec<_>>(), [(&"https://who.int/a".to_string(), &"sha256:aa".to_string())], "a page with no hash is read again");
+        assert_eq!(resume.note.as_deref(), Some("in children"), "one line");
+        t.continue_run(Asker::operator(), Depth::Quick, "r-t-2", Some("in children\u{1b}[2J\nmore")).unwrap();
+        t.unchanged("r-t-2").unwrap();
+        t.unchanged("r-t-2").unwrap();
+        let rec = t.read().unwrap();
+        let run = &rec["runs"][1];
+        assert_eq!((rec["runs"].as_array().unwrap().len(), run["continued"].as_bool(), run["note"].as_str(), run["unchanged"].as_u64(), run["state"].as_str(), run["depth"].as_str()), (2, Some(true), Some("in children[2J"), Some(2), Some("queued"), Some("quick")), "{rec}");
+        assert_eq!((rec["question"].as_str(), rec["pages"].as_array().unwrap().len(), rec["claims"].as_array().unwrap().len(), t.answer().as_str()), (Some("Does aspirin reduce fever?"), 2, 1, "An answer."), "what earlier runs wrote stays");
+        assert!(t.continue_run(Asker::operator(), Depth::Quick, "../x", None).is_err());
+        let none = Topic::at(ws.path(), "no-such-topic-0123abcd").unwrap();
+        assert!(none.continue_run(Asker::operator(), Depth::Quick, "r-t-9", None).is_err() && none.resume(None).is_err(), "a topic with no record is not continued");
+    }
+
+    #[test]
+    fn a_topic_is_due_when_its_newest_run_is_old_or_a_source_changed_or_was_retracted_and_never_while_it_runs() {
+        let day = 86_400;
+        let ended = delphi_core::time::parse_rfc3339("2026-01-01T00:00:00Z").unwrap();
+        let rec = |state: &str, runs: Value| json!({"state": state, "runs": runs, "pages": [{"url": "https://who.int/a", "source_id": "src-who", "content_hash": "sha256:aa"}]});
+        let done = rec("done", json!([{"state": "failed", "ended": "2026-06-01T00:00:00Z"}, {"state": "done", "ended": "2026-01-01T00:00:00Z"}]));
+        let r = Refresh::default();
+        let same = |_: &str| Some(json!({"content_hash": "sha256:aa"}));
+        assert_eq!(due(&done, ended + 90 * day, &r, &same), None, "ninety days is not over ninety");
+        assert_eq!(due(&done, ended + 91 * day, &r, &same).as_deref(), Some("its newest run is 91 day(s) old, over its 90"), "a failed run is not the newest run");
+        assert_eq!(due(&done, ended + 91 * day, &r, &|_| None), due(&done, ended + 91 * day, &r, &same), "a source the library no longer holds changes nothing");
+        // A source it rests on changed, or was retracted: due at once, whatever the age.
+        assert_eq!(due(&done, ended + day, &r, &|_| Some(json!({"content_hash": "sha256:bb"}))).as_deref(), Some("a source it rests on has changed"));
+        assert_eq!(due(&done, ended + day, &r, &|_| Some(json!({"content_hash": "sha256:aa", "retraction": {"kind": "retracted"}}))).as_deref(), Some("a source it rests on was retracted"));
+        assert_eq!(due(&done, ended + day, &r, &|_| Some(json!({"content_hash": "sha256:aa", "retraction": {"kind": "corrected"}}))), None, "a correction is not a retraction");
+        assert_eq!(due(&done, ended + day, &r, &|_| Some(json!({}))), None, "a source with no hash cannot be said to have changed");
+        // The record's own figure, held inside the bounds; the config's default otherwise.
+        let mut own = done.clone();
+        own["refresh_days"] = json!(30);
+        assert!(due(&own, ended + 31 * day, &r, &same).is_some() && due(&own, ended + 30 * day, &r, &same).is_none());
+        own["refresh_days"] = json!(1);
+        assert_eq!((r.days_of(&own), due(&own, ended + 7 * day, &r, &same)), (7, None), "held to the least");
+        own["refresh_days"] = json!(100_000);
+        assert_eq!(r.days_of(&own), 730, "held to the most");
+        assert!(due(&done, ended + 11 * day, &Refresh { days: 10, min: 7, max: 730 }, &same).is_some());
+        // Never while a run is going, and never with no finished run.
+        assert_eq!(due(&rec("running", done["runs"].clone()), ended + 500 * day, &r, &same), None);
+        assert_eq!(due(&rec("failed", json!([{"state": "failed", "ended": "2026-01-01T00:00:00Z"}])), ended + 500 * day, &r, &same), None);
+        assert_eq!(due(&rec("cancelled", json!([])), ended + 500 * day, &r, &same), None);
+    }
+
+    #[test]
+    fn due_topics_are_listed_from_disk_with_why_and_the_list_says_nothing_is_run() {
+        let (ws, home) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let t = Topic::begin(ws.path(), &begin("Does aspirin reduce fever?", "r-t-1")).unwrap();
+        t.finish("r-t-1", "done", Some(&result("An answer.")), &[], None, 7).unwrap();
+        let r = Refresh::default();
+        assert!(due_topics(ws.path(), home.path(), &r).is_empty(), "a run of a moment ago is not old");
+        assert!(render_due(&[]).contains("no research topic is due"));
+        // The same record with its run a year back.
+        let mut rec = t.read().unwrap();
+        rec["runs"][0]["ended"] = json!("2025-01-01T00:00:00Z");
+        t.write(&rec).unwrap();
+        let listed = due_topics(ws.path(), home.path(), &r);
+        assert_eq!(listed.len(), 1);
+        let text = render_due(&listed);
+        assert!(text.contains(&t.id) && text.contains("due: its newest run is") && text.contains("Does aspirin reduce fever?") && text.contains("nothing is run again by itself"), "{text}");
     }
 }

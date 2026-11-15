@@ -714,7 +714,36 @@ impl EngineService {
         let ws = &self.engine.ws;
         h::gate(&ws.dir).map_err(host_err)?;
         let c = h::Caller::parse(&p).map_err(host_err)?;
-        let (question, depth) = h::research_args(&p).map_err(host_err)?;
+        // `specs/112` §5.1: with `topic_id` the request continues a topic. The question is the record's own, never the host's
+        // words, and the topic is one the host could have asked itself: the workspace's, or the project it is working in. A
+        // private record is not continued for a host.
+        let again = match p.get("topic_id").filter(|v| !v.is_null()) {
+            None => None,
+            Some(v) => {
+                let id = v.as_str().filter(|id| crate::research_record::valid_topic_id(id)).ok_or_else(|| err(code::INVALID_PARAMS, "`topic_id` is a research topic's id, as an earlier research_result gave it"))?;
+                let note = match p["note"].as_str().map(str::trim).filter(|n| !n.is_empty()) {
+                    Some(n) if n.chars().count() > crate::research_record::NOTE_CAP || n.chars().any(char::is_control) => return Err(err(code::INVALID_PARAMS, format!("`note` is one line of at most {} characters", crate::research_record::NOTE_CAP))),
+                    n => n.map(|n| self.engine.secrets.redact(n)),
+                };
+                let mut roots: Vec<std::path::PathBuf> = self.host_project(&c.cwd).map(|(_, root)| root).into_iter().collect();
+                roots.push(ws.dir.clone());
+                let found = roots.iter().filter_map(|r| crate::research_record::Topic::at(r, id)).find_map(|t| t.read().ok().map(|rec| (t, rec)));
+                let Some((topic, rec)) = found else { return Err(err(code::INVALID_PARAMS, "no research topic has that id here")) };
+                if rec["private"] == true {
+                    return Err(err(code::INVALID_PARAMS, "that research topic is private: it stays on this machine, and the operator continues it"));
+                }
+                let question = rec["question"].as_str().unwrap_or("").to_string();
+                Some((topic, note, question))
+            }
+        };
+        let (question, depth) = match &again {
+            Some((_, _, question)) => {
+                let mut asked = p.clone();
+                asked["question"] = json!(question);
+                h::research_args(&asked).map_err(host_err)?
+            }
+            None => h::research_args(&p).map_err(host_err)?,
+        };
         let question = self.engine.secrets.redact(&question);
         // Spec 119 §2 item 4: with no engine the request is refused with the command that sets one up, and the refusal is counted, so that
         // the doctor and the next session-start brief can say research was asked for and could not run.
@@ -749,7 +778,21 @@ impl EngineService {
         let project = self.host_project(&c.cwd);
         let record_root = project.as_ref().map(|(_, root)| root.clone()).unwrap_or_else(|| ws.dir.clone());
         let project_name = project.as_ref().map(|(name, _)| name.as_str());
-        let topic = crate::research_record::Topic::begin(&record_root, &crate::research_record::Begin { question: &question, asked_by: crate::research_record::Asker::host(&label), project: project_name, depth, run_id: &research_id }).ok();
+        let asker = crate::research_record::Asker::host(&label);
+        let (topic, resume) = match again {
+            // A continued run needs its record: the gaps and the pages held are what it starts from.
+            Some((t, note, _)) => {
+                let resume = t.resume(note.as_deref()).map_err(|m| err(-32000, m))?;
+                t.continue_run(asker, depth, &research_id, note.as_deref()).map_err(|m| err(-32000, m))?;
+                (Some(t), Some(resume))
+            }
+            None => (crate::research_record::Topic::begin(&record_root, &crate::research_record::Begin { question: &question, asked_by: asker, project: project_name, depth, run_id: &research_id }).ok(), None),
+        };
+        // The project the claims are scoped to is the folder the record is in: a workspace topic continued from inside a project
+        // stays the workspace's.
+        let in_project = topic.as_ref().is_some_and(|t| t.dir.starts_with(&record_root)) && project.is_some();
+        let project = project.filter(|_| in_project);
+        let project_name = project.as_ref().map(|(name, _)| name.as_str());
         if let Some(t) = &topic {
             let _ = crate::research_record::point_run(&ws.dir, &c.session, &research_id, t, project_name);
         }
@@ -759,7 +802,7 @@ impl EngineService {
         // Spec 101 §3: searches the host says it ran. Only `tool`, `query` and `hits` are read; they are logged as declared and count as nothing.
         let host_searches = crate::search_log::parse_declared(&p["host_searches"]);
         let web = self.run_web(RunWeb { list, engines, transport: Arc::new(transport), identifiers });
-        self.queue_run(RunAsk { question, depth, run_id: research_id.clone(), session: c.session.clone(), label, topic, project: project.map(|(name, _)| name), host_searches, mission, pictures: false, after: None }, web);
+        self.queue_run(RunAsk { question, depth, run_id: research_id.clone(), session: c.session.clone(), label, topic, project: project.map(|(name, _)| name), host_searches, mission, pictures: false, after: None, resume }, web);
         Ok(json!({"research_id": research_id, "status": "queued", "depth": depth, "note": "research runs in the background, trusted sources first: read it with research_status, then research_result. Everything it returns is not validated unless a claim says otherwise. The result carries a coverage report per rung; `coverage: thin` means the knowledge base and the trusted sources gave little, and your own tools and connectors can search further."}))
     }
 
@@ -789,7 +832,7 @@ impl EngineService {
     /// record and the same claims in the library. The job waits for one of the running slots of the one queue.
     fn queue_run(&self, ask: RunAsk, web: RunWeb) {
         let ws = &self.engine.ws;
-        let RunAsk { question: q, depth, run_id: research_id, session, label, topic, project, host_searches, mission, pictures, after } = ask;
+        let RunAsk { question: q, depth, run_id: research_id, session, label, topic, project, host_searches, mission, pictures, after, resume } = ask;
         let RunWeb { list, engines, transport, identifiers } = web;
         let recorder = topic.clone().map(|topic| crate::research_record::RunRecorder { topic, run_id: research_id.clone() });
         // `specs/112` §3.2: the claims the run keeps name its topic, and its project when it has one.
@@ -824,7 +867,7 @@ impl EngineService {
                 let b = &engine.settings.chain;
                 crate::research_chain::ChainPlan { cites: c, depth: b.depth, fanout: b.fanout, max_per_seed: b.max_per_seed, max_calls: b.max_calls, max_pages: b.max_pages }
             });
-            let deps = crate::research_run::Deps { web: web.as_ref(), scout: &scout, validator: &validator, library: &library, redactor: &redactor, sites: &sites, thin_below: engine.settings.thin_below, support: &engine.settings.support, host_searches: &host_searches, retractions: retractions_line.as_deref(), chain, record: recorder.as_ref().map(|r| r as &dyn crate::research_run::Recorder), limits };
+            let deps = crate::research_run::Deps { web: web.as_ref(), scout: &scout, validator: &validator, library: &library, redactor: &redactor, sites: &sites, thin_below: engine.settings.thin_below, support: &engine.settings.support, host_searches: &host_searches, retractions: retractions_line.as_deref(), chain, record: recorder.as_ref().map(|r| r as &dyn crate::research_run::Recorder), limits, resume: resume.as_ref() };
             let out = crate::research_run::run_research(&jc, &q, depth, &deps).await;
             if let Some(m) = &mission {
                 let urls: Vec<Value> = web.observed.snapshot().into_iter().map(|(url, via)| json!({"url": url, "via": via})).collect();
@@ -3411,10 +3454,13 @@ impl EngineService {
         let (ws, home) = (self.engine.ws.dir.clone(), self.engine.ws.home.clone());
         let sources = crate::fact_sources::SourceList::new(self.engine.cfg.get().validator.sources.clone());
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let refresh = self.engine.settings.research_refresh;
         let due = tokio::task::spawn_blocking(move || {
             // Held pages the operator's list now trusts go in first (the automatic pass, default scope only), so they are not counted as waiting.
             let _ = run_pass(&ws, &home, &crate::research_pending::Held::Pending, &sources);
-            let d = crate::research_digest::collect(&ws);
+            let mut d = crate::research_digest::collect(&ws);
+            // Research topics that are due (`specs/112` §5.2) are said in the same message. They are only listed: nothing is run.
+            d.due_topics = crate::research_record::due_topics(&ws, &home, &refresh).len();
             crate::research_digest::due(&ws, &d, now).then(|| {
                 crate::research_digest::mark(&ws, now);
                 d
@@ -3425,7 +3471,7 @@ impl EngineService {
         .flatten();
         let Some(d) = due else { return };
         let projects: Vec<Value> = d.projects.iter().map(|(n, c)| json!({"name": n, "pages": c})).collect();
-        let mut ev = EventEnvelope::new(&m.id, "research.digest", json!({"held": d.held, "projects": projects, "weak": d.weak, "text": crate::research_digest::text(&d)}));
+        let mut ev = EventEnvelope::new(&m.id, "research.digest", json!({"held": d.held, "projects": projects, "weak": d.weak, "due_topics": d.due_topics, "text": crate::research_digest::text(&d)}));
         ev.agent = Some("orchestrator".into());
         let _ = m.append(ev).await;
     }
@@ -3525,7 +3571,35 @@ impl EngineService {
                 crate::scope::project_root(&self.engine.ws.dir, &id)
             }),
         };
-        self.launch_research(topic, named, None).await
+        self.launch_research(topic, named, None, None).await
+    }
+
+    /// `research.continue {topic_id, note?}` (`specs/112` §5.1): a new run on a topic that has a record. It begins from the
+    /// record's gaps and does not read again a page the record holds unchanged. Console only, and one console run at a time, as
+    /// `research.start`: it sends queries to a search engine and spends tokens, so nothing calls it but the operator's own command.
+    async fn research_continue(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let id = p["topic_id"].as_str().unwrap_or("");
+        if !crate::research_record::valid_topic_id(id) {
+            return Err(err(code::INVALID_PARAMS, "`topic_id` is a research topic's id, as `delphi research topics` lists them"));
+        }
+        let note = match p["note"].as_str().map(str::trim).filter(|n| !n.is_empty()) {
+            Some(n) if n.chars().count() > crate::research_record::NOTE_CAP || n.chars().any(char::is_control) => return Err(err(code::INVALID_PARAMS, format!("`note` is one line of at most {} characters", crate::research_record::NOTE_CAP))),
+            n => n.map(String::from),
+        };
+        let wsd = self.engine.ws.dir.clone();
+        let id = id.to_string();
+        let found = tokio::task::spawn_blocking(move || {
+            let topic = crate::research_record::find(&wsd, &id)?;
+            let rec = topic.read().ok()?;
+            // The project is the folder the record is in, when that folder is a registered project's.
+            let root = crate::scope::project_list(&wsd).into_iter().map(|(_, root)| root).find(|root| crate::research_record::topics_dir(root).join(&topic.id) == topic.dir);
+            Some((rec["question"].as_str()?.to_string(), root, topic))
+        })
+        .await
+        .map_err(|e| err(-32000, e.to_string()))?;
+        let Some((question, root, topic)) = found else { return Err(err(code::NOT_FOUND, "no research topic has that id: `delphi research topics` lists them")) };
+        self.launch_research(question, root, None, Some((topic, note))).await
     }
 
     /// An approved `request_research` (`specs/058` §20): the job runs in the scope the mission was stamped with, and the log says what happened.
@@ -3533,7 +3607,7 @@ impl EngineService {
     async fn agent_research(&self, mission: &str, topic: &str, by: &str) {
         let ws = &self.engine.ws.dir;
         let root = crate::scope::mission_scope(ws, &ws.join("local/missions").join(mission)).and_then(|id| crate::scope::project_root(ws, &id));
-        let outcome = self.launch_research(topic.to_string(), root, Some((mission.to_string(), by.to_string()))).await;
+        let outcome = self.launch_research(topic.to_string(), root, Some((mission.to_string(), by.to_string())), None).await;
         if let Ok(m) = self.mission_at(Some(mission), None).await {
             let (kind, payload) = match outcome {
                 Ok(_) => ("research.started", json!({"topic": topic, "by": by})),
@@ -3549,7 +3623,8 @@ impl EngineService {
     /// the depth the limits table gives a run that names none. `project` is the root of the registered project the run belongs to:
     /// its record is then kept in the project's folder and its claims are scoped to the project (what `Dest::Project` was).
     /// One console run at a time: `research.status` and `research.cancel` name no job, and the console draws one.
-    async fn launch_research(&self, topic: String, project: Option<std::path::PathBuf>, report_to: Option<(String, String)>) -> RpcOutcome {
+    /// `again` is the topic a run continues, with its note (`specs/112` §5.1); `topic` is then that record's question.
+    async fn launch_research(&self, topic: String, project: Option<std::path::PathBuf>, report_to: Option<(String, String)>, again: Option<(crate::research_record::Topic, Option<String>)>) -> RpcOutcome {
         use crate::research_console as rc;
         use crate::research_record as rr;
         if self.console_run_going() {
@@ -3578,18 +3653,26 @@ impl EngineService {
             Some(role) => (rr::Asker::role(role), format!("role:{role}")),
             None => (rr::Asker::operator(), "operator".to_string()),
         };
-        let run = {
+        let (run, resume) = {
             let mut cur = self.research.lock().unwrap();
             if cur.as_ref().is_some_and(|r| self.run_going(r)) {
                 return Err(err(-32000, "a research job is already running"));
             }
-            let record = rr::Topic::begin(&record_root, &rr::Begin { question: &question, asked_by: asker, project: project_name, depth, run_id: &run_id }).ok();
+            let (record, resume) = match &again {
+                // A continued run needs its record: the gaps and the pages held are what it starts from.
+                Some((t, note)) => {
+                    let resume = t.resume(note.as_deref()).map_err(|m| err(-32000, m))?;
+                    t.continue_run(asker, depth, &run_id, note.as_deref()).map_err(|m| err(-32000, m))?;
+                    (Some(t.clone()), Some(resume))
+                }
+                None => (rr::Topic::begin(&record_root, &rr::Begin { question: &question, asked_by: asker, project: project_name, depth, run_id: &run_id }).ok(), None),
+            };
             if let Some(t) = &record {
                 let _ = rr::point_run(&ws.dir, rc::SESSION, &run_id, t, project_name);
             }
             let run = rc::Run { question: topic.clone(), run_id: run_id.clone(), topic: record, project: project.is_some() };
             *cur = Some(run.clone());
-            run
+            (run, resume)
         };
         let topic_id = run.topic.as_ref().map(|t| t.id.clone());
         // The run is marked in the mission log so the daemon can stage a `noted` candidate for it (`specs/052` KS-2) and, for an agent's
@@ -3606,8 +3689,8 @@ impl EngineService {
                 }
             }
         });
-        self.queue_run(RunAsk { question, depth, run_id: run_id.clone(), session: rc::SESSION.to_string(), label, topic: run.topic.clone(), project: project.map(|(name, _)| name), host_searches: Vec::new(), mission: observed_in, pictures: true, after: Some(after) }, web);
-        Ok(json!({"started": true, "research_id": run_id, "topic_id": topic_id}))
+        self.queue_run(RunAsk { question, depth, run_id: run_id.clone(), session: rc::SESSION.to_string(), label, topic: run.topic.clone(), project: project.map(|(name, _)| name), host_searches: Vec::new(), mission: observed_in, pictures: true, after: Some(after), resume }, web);
+        Ok(json!({"started": true, "research_id": run_id, "topic_id": topic_id, "topic": topic, "continued": again.is_some()}))
     }
 
     /// Is this console run still queued or running in the one queue?
@@ -4323,6 +4406,8 @@ struct RunAsk {
     pictures: bool,
     /// Called once when the job ends, after its record has learned how.
     after: Option<AfterRun>,
+    /// The run continues its topic (`specs/112` §5.1): the record's gaps, the pages it holds, and the note.
+    resume: Option<crate::research_run::Resume>,
 }
 
 /// Tests only: a transport, the engines to ask through it, and the text of the trusted list.
@@ -4485,6 +4570,7 @@ impl Extension for ServiceExt {
                 "build.start" => svc.build_start(params, ctx).await,
                 "build.merge" => svc.build_merge(params, ctx).await,
                 "research.start" => svc.research_start(params, ctx).await,
+                "research.continue" => svc.research_continue(params, ctx).await,
                 "projects.list" => svc.projects_list(ctx).await,
                 "history.view" => svc.history_view(params, ctx).await,
                 "history.notice" => svc.history_notice(params, ctx).await,
@@ -8278,7 +8364,7 @@ mod tests {
         let lib = crate::library::Library::in_home(&home);
         let proj = std::fs::canonicalize(tempfile::tempdir().unwrap().keep()).unwrap();
         std::fs::write(ws.join("local/projects.json"), json!({"schema": 1, "projects": {"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {"project_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "root": proj, "display_name": "proj"}}}).to_string()).unwrap();
-        let started = svc.launch_research("does aspirin lower fever".to_string(), Some(proj.clone()), None).await.unwrap();
+        let started = svc.launch_research("does aspirin lower fever".to_string(), Some(proj.clone()), None, None).await.unwrap();
         let st = r4_console_done(&svc).await;
         let id = started["topic_id"].as_str().unwrap();
         let rec: Value = serde_json::from_str(&std::fs::read_to_string(proj.join("research/topics").join(id).join("record.json")).expect("the project's own record")).unwrap();
@@ -8288,6 +8374,93 @@ mod tests {
         let scoped: Vec<Value> = lib.claims().into_iter().filter(|c| c["project"] == "proj").collect();
         assert_eq!(scoped.len(), 1, "the project's run kept its claim scoped to the project: {:?}", lib.claims());
         assert!(!proj.join("research/web").exists(), "no page is written to the project's old research folder");
+    }
+
+    // ---- `specs/112` R6: continue ----
+
+    /// `specs/112` AC-7, the daemon's half: `research.continue` starts a new run on the topic's record. The page the record holds
+    /// is fetched once, found unchanged and not read again; the record gains a run marked `continued` and keeps its page, its
+    /// claim and its answer. A host continues a topic with `request_research` and `topic_id`. Only a console calls
+    /// `research.continue`, and only with an id of a topic that exists.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn research_continue_starts_a_run_on_the_record_that_reads_no_unchanged_page_and_a_host_continues_with_topic_id() {
+        use crate::research_record as rr;
+        let f = setup((0..12).map(|_| Step::text(R4_CLAIM)).collect(), 5.0, |_| {});
+        let s = serve(&f).await;
+        let svc = s.svc.clone();
+        svc.adopt(f.m.clone());
+        let page = "https://r6-continue.example/study";
+        r4_web(&svc, &[page]);
+        let console = CallContext { scope: Scope::Console, client_id: 2 };
+        let question = "does aspirin lower fever in adults over sixty";
+        let started = svc.research_start(json!({"topic": question}), console).await.unwrap();
+        r4_console_done(&svc).await;
+        let id = started["topic_id"].as_str().unwrap().to_string();
+        let topic = rr::find(&f.engine.ws.dir, &id).unwrap();
+        let first = topic.read().unwrap();
+        let (first_run, answer) = (first["runs"][0]["run_id"].as_str().unwrap().to_string(), topic.answer());
+        assert!(answer.contains("aspirin lowers fever"), "{answer}");
+        let fetched_before = crate::research_host::canned::served(page);
+
+        // Who may call it, and with what.
+        assert!(svc.research_continue(json!({"topic_id": id}), CallContext { scope: Scope::Narrator, client_id: 1 }).await.is_err(), "the narrator is read-only");
+        assert_eq!(svc.research_continue(json!({"topic_id": "../../etc/passwd"}), console).await.unwrap_err().code, code::INVALID_PARAMS);
+        assert_eq!(svc.research_continue(json!({"topic_id": "no-such-topic-0123abcd"}), console).await.unwrap_err().code, code::NOT_FOUND);
+        assert_eq!(svc.research_continue(json!({"topic_id": id, "note": "x".repeat(200)}), console).await.unwrap_err().code, code::INVALID_PARAMS);
+        assert_eq!(topic.read().unwrap()["runs"].as_array().unwrap().len(), 1, "a refused continue starts nothing");
+
+        let again = svc.research_continue(json!({"topic_id": id, "note": "in winter"}), console).await.unwrap();
+        assert_eq!((again["topic_id"].as_str(), again["topic"].as_str(), again["continued"].as_bool()), (Some(id.as_str()), Some(question), Some(true)), "{again}");
+        let st = r4_console_done(&svc).await;
+        assert_eq!((st["phase"].as_str(), st["topic"].as_str()), (Some("done"), Some(question)), "{st}");
+        let rec = topic.read().unwrap();
+        let runs = rec["runs"].as_array().unwrap();
+        assert_eq!(runs.len(), 2, "{rec}");
+        assert_eq!((runs[1]["continued"].as_bool(), runs[1]["note"].as_str(), runs[1]["unchanged"].as_u64(), runs[1]["state"].as_str()), (Some(true), Some("in winter"), Some(1), Some("done")), "{rec}");
+        assert_eq!(runs[1]["asked_by"], json!({"kind": "operator", "label": "operator"}));
+        let second_run = runs[1]["run_id"].as_str().unwrap();
+        assert!(rec["queries"].as_array().unwrap().iter().any(|q| q["run"] == second_run && q["query"].as_str().unwrap().contains("in winter")), "the continued run searched, with its note: {rec}");
+        let pages = rec["pages"].as_array().unwrap();
+        assert_eq!((pages.len(), pages[0]["run"].as_str()), (1, Some(first_run.as_str())), "the page is still the first run's: it was not read again: {rec}");
+        assert_eq!(crate::research_host::canned::served(page), fetched_before + 1, "the continued run fetched the page once, to see that it had not changed");
+        assert_eq!(rec["claims"].as_array().unwrap().len(), 1, "{rec}");
+        assert_eq!(topic.answer(), answer, "a run that read nothing new leaves the topic's answer as it was");
+        let schema: Value = serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../schemas/research-record.schema.json")).unwrap()).unwrap();
+        follows(&schema, &schema, &rec, "record").unwrap_or_else(|e| panic!("{e}\n{rec}"));
+
+        // A host continues the same topic: the question is the record's, and the run is the host session's to read.
+        let (hsock, htok, cwd, tid) = (s.host_sock.clone(), s.host.clone(), f.root.to_string_lossy().to_string(), id.clone());
+        let (done, refused) = blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(40))).unwrap();
+            c.hello(&htok).unwrap();
+            let p = json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cwd});
+            let with = |extra: Value| {
+                let mut b = p.clone();
+                for (k, v) in extra.as_object().unwrap() {
+                    b[k] = v.clone();
+                }
+                b
+            };
+            let refused = [rpc_code(c.call("host.request_research", with(json!({"topic_id": "no-such-topic-0123abcd"})))), rpc_code(c.call("host.request_research", with(json!({"topic_id": "../x"}))))];
+            let r = c.call("host.request_research", with(json!({"topic_id": tid, "depth": "quick"}))).unwrap();
+            let ask = with(json!({"research_id": r["research_id"], "wait": true}));
+            let mut done = c.call("host.research_result", ask.clone()).unwrap();
+            for _ in 0..20 {
+                if done["status"] == "done" {
+                    break;
+                }
+                done = c.call("host.research_result", ask.clone()).unwrap();
+            }
+            (done, refused)
+        })
+        .await;
+        assert_eq!(refused, [Some(code::INVALID_PARAMS), Some(code::INVALID_PARAMS)]);
+        assert_eq!((done["status"].as_str(), done["topic_id"].as_str()), (Some("done"), Some(id.as_str())), "{done}");
+        let rec = topic.read().unwrap();
+        let runs = rec["runs"].as_array().unwrap();
+        assert_eq!((runs.len(), runs[2]["continued"].as_bool(), runs[2]["asked_by"]["kind"].as_str(), runs[2]["depth"].as_str(), runs[2]["unchanged"].as_u64()), (3, Some(true), Some("host"), Some("quick"), Some(1)), "{rec}");
+        assert_eq!(rec["question"], question, "the question stays the record's");
     }
 
     #[tokio::test(flavor = "multi_thread")]

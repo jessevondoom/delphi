@@ -19,6 +19,7 @@ const READERS: &[(&str, &str)] = &[
     ("crates/delphi-engine/src/digest_review.rs", "offers the operator a line saying a source was marked; keep or dismiss, nothing else"),
     ("crates/delphi-engine/src/research_run.rs", "prints the snapshot's state in the coverage report"),
     ("crates/delphi-engine/src/research_host.rs", "gives the daemon's capture the policy"),
+    ("crates/delphi-engine/src/research_record.rs", "lists a research topic as due when a source it rests on carries the mark (`specs/112` §5.2); a line the operator reads, and nothing is run or changed by it"),
     ("crates/delphi-engine/src/service.rs", "loads the policy from the setting and passes the report line"),
     ("crates/delphi-engine/src/engine.rs", "holds the two settings"),
     ("crates/delphi-engine/src/boot.rs", "parses the two settings"),

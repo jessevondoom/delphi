@@ -133,6 +133,9 @@ pub struct Settings {
     /// `[research.limits]` (`specs/112` §4 item 6): the one limits table of a research run, whoever asked. The defaults are the host
     /// runner's figures of before the table.
     pub research_limits: crate::research_run::Limits,
+    /// `[research] refresh_days`, `refresh_days_min`, `refresh_days_max` (`specs/112` §5.2): how old a research topic's newest run
+    /// may be before the topic is listed as due. Listing only; nothing is run again by itself.
+    pub research_refresh: crate::research_record::Refresh,
     /// `[research] retractions` (`specs/101` §4, §8): check a source's DOI against the local Retraction Watch snapshot at capture and re-check.
     /// Default off until slice B's exit criterion passes; off is spec 098 as merged. Nothing is ever sent to a service.
     pub retractions: bool,
@@ -220,6 +223,7 @@ impl Default for Settings {
             chain: Default::default(),
             wider_fetch: Default::default(),
             research_limits: Default::default(),
+            research_refresh: Default::default(),
             retractions: false,
             retractions_stale_days: crate::retractions::DEFAULT_STALE_DAYS,
             support: crate::corroboration::Params::default(),

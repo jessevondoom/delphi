@@ -125,6 +125,30 @@ fn plan_topic(topic: String, depth: Depth, sites: &[String]) -> Vec<PlannedQuery
     out
 }
 
+/// The queries of a plan that a continued run sends (`specs/112` §5.1): those its record's gaps ask for. A gap is one of the fixed
+/// phrases of `research_record::gaps_of` and only chooses among `planned`; no word of it enters a query. The trusted rung found
+/// nothing: the trusted query. The web rung found nothing: the topic and gap queries. Thin coverage or a spent budget: all of
+/// them. The knowledge-base rung is searched on this machine and asks for no query. With no gap that asks for one (a refresh of
+/// a topic that had none), the whole plan is sent.
+pub fn for_gaps(planned: Vec<PlannedQuery>, gaps: &[String]) -> Vec<PlannedQuery> {
+    let (mut trusted, mut web) = (false, false);
+    for g in gaps {
+        if g.starts_with("trusted:") {
+            trusted = true;
+        } else if g.starts_with("web:") {
+            web = true;
+        } else if g.starts_with("coverage is thin") || g.starts_with("a step budget ran out") {
+            (trusted, web) = (true, true);
+        }
+    }
+    let chosen: Vec<PlannedQuery> = planned.iter().filter(|q| if q.kind == QueryKind::Trusted { trusted } else { web }).cloned().collect();
+    if chosen.is_empty() {
+        planned
+    } else {
+        chosen
+    }
+}
+
 /// Search the wider web too? Only when the trusted domains answered too little.
 pub fn widen_to_web(trusted_kept: usize) -> bool {
     trusted_kept < TRUSTED_ENOUGH

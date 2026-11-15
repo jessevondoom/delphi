@@ -136,13 +136,17 @@
           "check_steps": { "type": "integer", "minimum": 0 },
           "ms": { "type": "integer", "minimum": 0 },
           "runner": { "$ref": "#/$defs/runner" },
-          "error": { "type": "string", "maxLength": 300 }
+          "error": { "type": "string", "maxLength": 300 },
+          "continued": { "type": "boolean", "description": "True on a run that continued the topic (specs/112 section 5): it began from the record's gaps." },
+          "note": { "type": "string", "maxLength": 120, "description": "The one line a continued run was given to narrow its search. Data, like the question." },
+          "unchanged": { "type": "integer", "minimum": 0, "description": "On a continued run: pages the record already held that were fetched, found unchanged and not read again." }
         },
         "additionalProperties": false
       }
     },
     "result": { "type": "object", "description": "What the newest finished run returned, without its `answer` (kept in `answer.md`) and its `search_log` (kept in `search-log.json`); `research_result` is answered from the three together (schemas/research-result.schema.json)." },
-    "result_run": { "$ref": "#/$defs/run_id", "description": "The run `result` belongs to." }
+    "result_run": { "$ref": "#/$defs/run_id", "description": "The run `result` belongs to." },
+    "refresh_days": { "type": "integer", "minimum": 1, "maximum": 3650, "description": "Optional. The days after which this topic's newest run is old and the topic is listed as due (specs/112 section 5). Held between `[research] refresh_days_min` and `refresh_days_max`; without it the topic uses `[research] refresh_days`." }
   },
   "additionalProperties": false,
   "$defs": {

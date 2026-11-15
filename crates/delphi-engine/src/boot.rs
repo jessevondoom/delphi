@@ -86,6 +86,17 @@ pub fn settings_from(root: &toml::Value) -> Settings {
     if let Some(n) = root.get("research").and_then(|r| r.get("thin_below")).and_then(|v| v.as_integer()).filter(|v| *v >= 1) {
         s.thin_below = n.min(50) as usize;
     }
+    // Due topics (`specs/112` §5.2): the days after which a topic's newest run is old, and the bounds a record's own figure is
+    // held to. Each is 1 to 3650 days; anything else keeps the default, and bounds the wrong way round keep both defaults.
+    if let Some(r) = root.get("research") {
+        let days = |k: &str| r.get(k).and_then(|v| v.as_integer()).filter(|v| (1..=3650).contains(v)).map(|v| v as u64);
+        let d = crate::research_record::Refresh::default();
+        let (min, max) = match (days("refresh_days_min").unwrap_or(d.min), days("refresh_days_max").unwrap_or(d.max)) {
+            (min, max) if min <= max => (min, max),
+            _ => (d.min, d.max),
+        };
+        s.research_refresh = crate::research_record::Refresh { days: days("refresh_days").unwrap_or(d.days), min, max };
+    }
     // Archived copies (`specs/101` §5, §8): a boolean, off unless it is exactly `true`; the endpoint must be an https URL, else the pinned
     // default stays. Any other value of either keeps the default.
     if let Some(r) = root.get("research") {
@@ -585,6 +596,20 @@ mod tests {
         for bad in ["pages_quick = 0", "pages_deep = 500", "steps_quick = \"many\"", "job_secs = 5", "concurrent = 0", "concurrent = 99", "page_chars = 10", "depth = \"forever\"", "pictures_per_run = -1"] {
             assert_eq!(settings_from(&toml::from_str(&format!("[research.limits]\n{bad}\n")).unwrap()).research_limits, Limits::default(), "{bad}");
         }
+    }
+
+    // `specs/112` §5.2: when a research topic is due. Ninety days unless set; a bad value keeps the default.
+    #[test]
+    fn a_topic_is_refreshed_after_ninety_days_unless_set_and_a_bad_value_keeps_the_default() {
+        use crate::research_record::Refresh;
+        let of = |text: &str| settings_from(&toml::from_str(text).unwrap()).research_refresh;
+        assert_eq!((of(""), Refresh::default()), (Refresh { days: 90, min: 7, max: 730 }, Refresh { days: 90, min: 7, max: 730 }));
+        assert_eq!(of("[research]\nrefresh_days = 30\nrefresh_days_min = 1\nrefresh_days_max = 365\n"), Refresh { days: 30, min: 1, max: 365 });
+        assert_eq!(of("[research]\nthin_below = 4\nrefresh_days = 180\n"), Refresh { days: 180, min: 7, max: 730 });
+        for bad in ["refresh_days = 0", "refresh_days = -5", "refresh_days = 99999", "refresh_days = \"often\"", "refresh_days_min = 0", "refresh_days_max = 99999"] {
+            assert_eq!(of(&format!("[research]\n{bad}\n")), Refresh::default(), "{bad}");
+        }
+        assert_eq!(of("[research]\nrefresh_days_min = 400\nrefresh_days_max = 30\n"), Refresh::default(), "bounds the wrong way round keep both defaults");
     }
 
     #[test]

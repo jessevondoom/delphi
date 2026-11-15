@@ -23,6 +23,8 @@ pub struct Digest {
     pub projects: Vec<(String, usize)>,
     /// Of all of them, the pages from weak sources (they would be labelled, never counted as corroboration).
     pub weak: usize,
+    /// Research topics that are due (`specs/112` §5.2): the caller counts them (`research_record::due_topics`). Listed, never run.
+    pub due_topics: usize,
 }
 
 impl Digest {
@@ -52,9 +54,10 @@ fn last_nudge(ws: &Path) -> Option<u64> {
     v["last_unix"].as_u64()
 }
 
-/// Is a nudge due: enough is waiting, and none was made in the last week (a clock set back counts as a nudge just made).
+/// Is a nudge due: enough pages are waiting or a research topic is due, and none was made in the last week (a clock set back
+/// counts as a nudge just made).
 pub fn due(ws: &Path, d: &Digest, now: u64) -> bool {
-    d.total() >= THRESHOLD && last_nudge(ws).is_none_or(|t| now >= t && now - t >= EVERY_SECS)
+    (d.total() >= THRESHOLD || d.due_topics > 0) && last_nudge(ws).is_none_or(|t| now >= t && now - t >= EVERY_SECS)
 }
 
 /// Record that a nudge was made now.
@@ -72,12 +75,23 @@ pub fn text(d: &Digest) -> String {
         parts.push(format!("{} in project {}", n, crate::observe::sanitize(name)));
     }
     let weak = if d.weak > 0 { format!(" {} come from weak sources and would be labelled unverified.", d.weak) } else { String::new() };
-    format!(
-        "{} research pages are waiting outside the knowledge base: {}.{} /validate lists them (/validate project=<name> for a project); nothing is added until you ratify it.",
-        d.total(),
-        parts.join(", "),
-        weak
-    )
+    let mut out = Vec::new();
+    if d.total() > 0 {
+        out.push(format!(
+            "{} research pages are waiting outside the knowledge base: {}.{} /validate lists them (/validate project=<name> for a project); nothing is added until you ratify it.",
+            d.total(),
+            parts.join(", "),
+            weak
+        ));
+    }
+    if d.due_topics > 0 {
+        out.push(format!(
+            "{} research topic{} due (the newest run is old, or a source changed or was retracted). `delphi research topics --due` lists them; nothing is run again until you ask (`/research continue <topic-id>`).",
+            d.due_topics,
+            if d.due_topics == 1 { " is" } else { "s are" }
+        ));
+    }
+    out.join(" ")
 }
 
 #[cfg(test)]
@@ -117,5 +131,12 @@ mod tests {
         assert!(!due(&ws, &d, 10), "a clock set back is not a new week");
         let few = Digest { held: THRESHOLD - 1, ..Digest::default() };
         assert!(!due(&ws, &few, 9_000_000_000), "below the threshold nothing is said");
+        // `specs/112` §5.2: a due research topic is said in the digest, with or without waiting pages, and still once a week.
+        let topics = Digest { due_topics: 2, ..Digest::default() };
+        assert!(due(&ws, &topics, 9_000_000_000) && !due(&ws, &topics, 1_000_000 + 5));
+        let said = super::text(&topics);
+        assert!(said.starts_with("2 research topics are due") && said.contains("delphi research topics --due") && said.contains("nothing is run again until you ask") && !said.contains("research pages"), "{said}");
+        let both = super::text(&Digest { due_topics: 1, ..collect(&ws) });
+        assert!(both.contains("5 research pages") && both.contains("1 research topic is due"), "{both}");
     }
 }

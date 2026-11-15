@@ -254,6 +254,16 @@ fn the_research_record_the_program_writes_follows_its_schema() {
     let rec = read(&t);
     must_pass("research-record.schema.json", "a record with three runs", &rec);
     assert_eq!(rec["runs"].as_array().unwrap().len(), 3);
+    // `specs/112` §5: a run that continued the topic, with its note and the pages it found unchanged; a record's own refresh days.
+    t.continue_run(Asker::operator(), delphi_core::research::Depth::Quick, "r-t-4", Some("in children")).unwrap();
+    t.unchanged("r-t-4").unwrap();
+    let mut continued = read(&t);
+    must_pass("research-record.schema.json", "a record with a continued run", &continued);
+    assert_eq!((continued["runs"][3]["continued"].as_bool(), continued["runs"][3]["unchanged"].as_u64()), (Some(true), Some(1)));
+    continued["refresh_days"] = json!(30);
+    must_pass("research-record.schema.json", "a record with refresh days of its own", &continued);
+    continued["refresh_days"] = json!(0);
+    must_fail("research-record.schema.json", "refresh days of zero", &continued);
     // What the schema refuses: a state, a taint, a reason or an asker outside the fixed sets, a topic id that is not one, a missing field.
     let mut bad = rec.clone();
     bad["state"] = json!("validated");

@@ -385,8 +385,16 @@ async function research(ctx: Ctx, args: string[]): Promise<string> {
       const s = await ctx.cmd.call('research.status', {});
       return `research on ${sanitize(String(s?.topic ?? ''))}: ${sanitize(String(s?.phase ?? 'unknown'))} · ${Number(s?.found ?? 0)} found, ${Number(s?.read ?? 0)} read, ${Number(s?.skipped ?? 0)} skipped`;
     }
+    // `/research continue <topic-id> [note]` (specs/112 §5): a new run on a topic that has a record. Only an id as the daemon makes
+    // them is one; `continue` followed by anything else is a topic to research like any other.
+    if (args[0] === 'continue' && topicNote(args[1], '')) {
+      const note = args.slice(2).join(' ').trim();
+      const v = await ctx.cmd.call('research.continue', { topic_id: args[1], note: note || undefined });
+      void watchResearch(ctx);
+      return `continuing research topic ${topicNote(v?.topic_id, '') || args[1]}: ${sanitize(String(v?.topic ?? ''))}. The run begins from what the record did not find and does not read again a page that has not changed. /research status · /research cancel`;
+    }
     const topic = args.join(' ').trim();
-    if (!topic) return 'usage: /research <topic> · /research status · /research cancel';
+    if (!topic) return 'usage: /research <topic> · /research continue <topic-id> [note] · /research status · /research cancel';
     const started = await ctx.cmd.call('research.start', { topic, cwd: ctx.info.cwd });
     void watchResearch(ctx);
     return `researching ${sanitize(topic)}${topicNote(started?.topic_id, ' as topic ')}. Trusted sources are read first; what is kept goes to the library and its claims are noted, not validated (inside a registered project the record stays in the project). /research status · /research cancel`;

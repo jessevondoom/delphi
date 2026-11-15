@@ -584,6 +584,12 @@ impl Library for LiveLibrary {
         crate::library::Library::in_home(&self.home).read_meta(source_id).is_some_and(|m| crate::library::is_private(&m))
     }
 
+    /// The hash a capture of the page this run read would record (`Library::store_snapshot`), for a continued run's comparison
+    /// with its record (`specs/112` §5.1). Only for a page this run read with this text.
+    fn hash_as_read(&self, url: &str, text: &str) -> Option<String> {
+        self.held.as_ref()?.read_as(url, text).map(|snap| format!("sha256:{}", snap.id))
+    }
+
     /// The hash the source's own record holds, for the run's record (`specs/112` §2.2).
     fn content_hash(&self, source_id: &str) -> Option<String> {
         crate::library::Library::in_home(&self.home).read_meta(source_id)?["content_hash"].as_str().map(String::from)

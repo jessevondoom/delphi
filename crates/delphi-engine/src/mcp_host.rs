@@ -755,7 +755,9 @@ pub fn tools() -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "question": {"type": "string", "minLength": 1, "maxLength": 2000, "description": "What to find out, in general terms."},
+                    "question": {"type": "string", "minLength": 1, "maxLength": 2000, "description": "What to find out, in general terms. Required unless topic_id is given."},
+                    "topic_id": {"type": "string", "maxLength": 57, "pattern": "^[a-z0-9]+(-[a-z0-9]+)*-[0-9a-f]{8}$", "description": "Continue a research topic instead of asking a new question: the topic_id an earlier research_result gave. The new run asks the topic's own question, begins from what the earlier runs did not find, and does not read again a page whose content has not changed. Give question or topic_id."},
+                    "note": {"type": "string", "maxLength": 120, "description": "With topic_id only: one line, in general terms, that narrows the continued search."},
                     "depth": {"type": "string", "enum": ["quick", "survey", "deep"], "default": "survey"},
                     "model": {"type": "string", "maxLength": 64, "description": "Your model name, self-reported."},
                     "host_searches": {
@@ -773,7 +775,6 @@ pub fn tools() -> Value {
                         }
                     }
                 },
-                "required": ["question"],
                 "additionalProperties": false
             },
             "annotations": {"title": "Ask Delphi to research", "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true}

@@ -359,6 +359,15 @@ sandbox = "off"
 # depth = "survey"                    # the depth of a run from the console or an inside agent: quick | survey | deep
 # pictures_per_source = 6             # pictures kept with a source whose text is kept, in a console or inside-agent run (0 keeps none)
 # pictures_per_run = 24
+#
+# Due research topics (specs/112 section 5). A topic is due when its newest run is older than refresh_days, or when a source it rests
+# on has changed or been retracted. Due topics are only listed (`delphi research topics --due`, the weekly digest): nothing is run
+# again until you or an agent asks (`delphi research continue <topic-id>`), because a run spends tokens and reaches the network.
+# A record may carry a refresh_days of its own; it is held between refresh_days_min and refresh_days_max. Each is 1 to 3650 days.
+# [research]
+# refresh_days = 90
+# refresh_days_min = 7
+# refresh_days_max = 730
 
 # Library acquisition (specs/055 section 8): once a day, the library scout proposes public-domain and research sources that match your projects
 # and these interests, as ONE batch in the digest. Nothing is fetched until you accept (or a standing rule covers it). Ratified, because it
