@@ -895,6 +895,10 @@ fn cmd_mcp(args: &[String]) -> i32 {
                 if let Some(fix) = c.fix {
                     println!("fix: {fix}");
                 }
+                // Spec 074 §10.3: the same update, run for the operator after they confirm its plan.
+                if let Some(p) = connect_cmd::update_pointer(host, c.state) {
+                    println!("or:  {p}");
+                }
                 i32::from(c.state != delphi_engine::mcp_check::State::Configured)
             }
             Err(e) => {

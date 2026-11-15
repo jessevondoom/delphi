@@ -614,7 +614,7 @@ Approved by the operator on 2026-11-04 after a three-seat Copilot Council, two r
 | C3b | Codex | next; needs bound release identity (Council amendment) |
 | S1 | §10.1: the plugin launches `~/.local/bin/delphi`; `launchable` from the filesystem; the stable link (071 E1s) | built; proven live on Claude Code 2.1.325 and Copilot CLI 1.0.111 (spec 074 §10.5); Codex unproven until its usage limit resets; hooks not run live under a reduced PATH |
 | U1 | §10.2: `delphi update` names a stale host plugin; `delphi connect <host> --update` | built (Claude Code and Copilot rows; fake-host tests, and the real commands in throwaway host configuration, spec 074 §10.5); not yet run by a person at a terminal; no Council re-review of the two new argv rows |
-| U2 | §10.3: the stale hint recorded as proven; the auto-update tip | approved 2026-11-14 |
+| U2 | §10.3: the stale hint recorded as proven; the auto-update tip | built (the hint is unchanged: `claude plugin update` alone refreshed a stale clone on Claude Code 2.1.325) |
 | R1 | §10.4: the `stable` release channel | approved 2026-11-14 |
 
 ## Host cognitive parity and external orchestration (spec 072, approved 2026-11-03)

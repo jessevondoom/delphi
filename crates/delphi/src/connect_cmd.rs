@@ -219,6 +219,15 @@ pub fn host_plugin_notes(home: &Path, release: &str, launch: &mcp_check::Launcha
     out
 }
 
+/// Spec 074 §10.3 item 1: beside the host's own command, the consented way to cure a stale plugin, for a host with an update row.
+pub fn update_pointer(host: &str, state: mcp_check::State) -> Option<String> {
+    (state == mcp_check::State::Stale && template(host).is_some_and(|t| !t.update.is_empty())).then(|| format!("delphi connect {host} --update"))
+}
+
+/// Spec 074 §10.3 item 2: how to let Claude Code keep the plugin current by itself. Claude Code documents only this interactive
+/// route for a marketplace the operator added, so Delphi neither sets nor reads the setting.
+pub const AUTO_UPDATE_TIP: &str = "tip: Claude Code does not auto-update a marketplace you added yourself. To let it keep the Delphi plugin current, run `/plugin` in a session, open Marketplaces, select `delphi` and choose Enable auto-update. Until then, `delphi update` tells you when the plugin falls behind";
+
 fn usage() -> i32 {
     eprintln!("usage: delphi connect claude-code|copilot|codex|gemini [--dry-run | --status | --remove]\n       delphi connect claude-code|copilot --update [--dry-run]\n       delphi connect claude-code --theme [--dry-run | --remove] [--light | --dark]");
     2
@@ -286,6 +295,9 @@ pub fn cmd(args: &[String]) -> i32 {
         println!("{}: launchable: {}", t.host, sanitize(&crate::launchable_now(home).line()));
         println!("{}: launch path: {}", t.host, crate::launch_path_line(home));
         println!("next: {}", pre.fix.as_deref().map(sanitize).unwrap_or_else(|| "nothing to do".into()));
+        if let Some(p) = update_pointer(t.host, pre.state) {
+            println!("or:   {p} (the same update, run for you after you confirm its plan)");
+        }
         return 0;
     }
     if !dry {
@@ -338,6 +350,9 @@ pub fn cmd(args: &[String]) -> i32 {
         if !addable {
             eprintln!("delphi connect: something of Delphi's is already present, and connect only adds what is absent: {}: {}", pre.state.name(), sanitize(&pre.detail));
             eprintln!("next: {}", pre.fix.as_deref().map(sanitize).unwrap_or_else(|| format!("see `delphi connect {} --status`", t.host)));
+            if let Some(p) = update_pointer(t.host, pre.state) {
+                eprintln!("or:   {p}");
+            }
             return 2;
         }
         let plan = render_plan(t, &exe, &pre, true, &link, home);
@@ -361,6 +376,9 @@ pub fn cmd(args: &[String]) -> i32 {
     match result {
         Ok(m) => {
             println!("{m}");
+            if !remove && t.host == "claude-code" {
+                println!("{AUTO_UPDATE_TIP}");
+            }
             if !remove && !update && t.host == "claude-code" {
                 // Spec 106 §12 G6 item 3: a role's name is bold in the host's own text with `badge_style = "markdown"`, and in colour in a
                 // status line Delphi never writes for you.
@@ -485,6 +503,19 @@ mod tests {
         std::fs::write(home.join(".codex/config.toml"), "[plugins.\"delphi@delphi\"]\nenabled = true\n").unwrap();
         let notes = host_plugin_notes(home, "0.6.2", &ok);
         assert!(notes.iter().any(|n| n.starts_with("codex: ") && n.contains("`codex plugin add delphi@delphi`") && !n.contains("--update")), "{notes:?}");
+    }
+
+    /// Spec 074 §10.3: the consented update is named beside the host's own command only where it exists and only for a stale plugin.
+    #[test]
+    fn the_update_pointer_is_for_a_stale_plugin_on_a_host_with_an_update_row() {
+        use mcp_check::State;
+        assert_eq!(update_pointer("claude-code", State::Stale).as_deref(), Some("delphi connect claude-code --update"));
+        assert_eq!(update_pointer("copilot", State::Stale).as_deref(), Some("delphi connect copilot --update"));
+        assert_eq!(update_pointer("codex", State::Stale), None, "codex has no row");
+        for s in [State::Configured, State::Missing, State::Incompatible, State::Unknown, State::Unverified] {
+            assert_eq!(update_pointer("claude-code", s), None);
+        }
+        assert!(AUTO_UPDATE_TIP.contains("/plugin") && AUTO_UPDATE_TIP.contains("Enable auto-update") && !AUTO_UPDATE_TIP.contains('\n'));
     }
 
     #[test]

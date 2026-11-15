@@ -470,7 +470,8 @@ fn check_host_plugin(home: &Path, ws: &Workspace, r: &mut Report) {
     let mut checks = Vec::new();
     for host in ["claude-code", "copilot", "codex"] {
         let Ok(c) = delphi_engine::mcp_check::check_host(host, Path::new(&h), env!("CARGO_PKG_VERSION")) else { continue };
-        let msg = format!("{}: {}. Launchable: {}{}", c.state.name(), c.detail, launch.line(), c.fix.as_ref().map(|f| format!(". Fix: `{f}`")).unwrap_or_default());
+        let or = crate::connect_cmd::update_pointer(host, c.state).map(|p| format!(", or `{p}`")).unwrap_or_default();
+        let msg = format!("{}: {}. Launchable: {}{}{or}", c.state.name(), c.detail, launch.line(), c.fix.as_ref().map(|f| format!(". Fix: `{f}`")).unwrap_or_default());
         match c.state {
             delphi_engine::mcp_check::State::Configured if !launch.ok => r.warn("15 host-plugin", host, msg),
             delphi_engine::mcp_check::State::Configured => r.push(Level::Ok, "15 host-plugin", host, msg),

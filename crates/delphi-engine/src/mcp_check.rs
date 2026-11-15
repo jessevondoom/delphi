@@ -217,6 +217,7 @@ pub fn check_claude_code(home: &Path, binary_release: &str) -> Check {
     }
     match (Some(plugin_release), parse_release(binary_release)) {
         (Some(p), Some(b)) if p == b => Check { state: State::Configured, detail: format!("plugin {release} is installed and enabled"), fix: None },
+        // The fix is one command: `claude plugin update` refreshes the marketplace clone itself (proven on 2.1.325, spec 074 §10.5).
         (Some(p), Some(b)) if p < b => Check { state: State::Stale, detail: format!("plugin {release} is older than this binary ({})", show(b)), fix: Some(format!("claude plugin update {PLUGIN_KEY}")) },
         (Some(_), Some(b)) => Check {
             state: State::Incompatible,
