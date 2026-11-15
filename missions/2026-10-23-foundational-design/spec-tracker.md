@@ -1009,3 +1009,23 @@ A red-team review of the seven specs ran on 2026-11-13 (one critic of the author
 | 106 | G1 | the orchestrator's compact pack inside its bound (spec 106 §11) | built (pull request open): five `inside-only` blocks in the orchestrator's manifest, a names-only skill index in compact packs, and the 24 KiB bound asserted (the orchestrator's compact pack is 21,035 bytes) |
 | 106 | G6 | a role's colour and weight in the host: the colour field in agent files, a status line, bold names (spec 106 §12) | built (pull request open): colour fields, `--statusline` and the markdown roster ship; whether Claude Code draws them was not testable in `claude -p` (§9.2) |
 | 106 | G7 | a role's exact colour in Claude Code: a theme Delphi installs with consent (spec 106 §12) | built (pull request open): `delphi connect claude-code --theme` shows a plan, asks `[Y/n]` at a terminal, writes `~/.claude/themes/delphi.json` on the preset already in use and sets `theme` to `custom:delphi`, changing nothing else in the settings file; `--dry-run` and `--remove` undo or preview it; the agent files' `color:` fields are remapped so each of Claude Code's eight slots belongs to one role. Seen live on 2026-11-14 after the operator selected the theme; with scratch agents, not Delphi's own role subagents |
+
+## The desktop app: spec 111 (2026-11-14, approved on the plan)
+
+The operator asked on 2026-11-14 whether a desktop app should replace the terminal's narrator, approved the plan and its defaults ("your default assumptions all sounds correct. go"), and asked for it to be built locally, slice by slice, before any pull request. The spec text was brought up to date with the app as built at the operator's word the same day.
+
+| Spec | Slice | Content | State |
+| :-- | :-- | :-- | :-- |
+| 111 | A0 | the spec | approved on the plan 2026-11-14 |
+| 111 | A1 | the shell: `app/`, themes, chips from the avatar table, the mark, the menu, the fixture mode, the dependency gate | built (pull request open) |
+| 111 | A2 | the bridge: finds the daemon, attaches on the narrator scope, nine reads, reconnects, refuses anything else | built (pull request open): held two connections to a live daemon's narrator socket on 2026-11-14 |
+| 111 | A3 | Activity on live data | built (pull request open) |
+| 111 | A4 | Council, with the blind round sealed | built (pull request open) |
+| 111 | A5 | Knowledge base, through `kb.get` only | built (pull request open) |
+| 111 | A6 | Work output, grouped by what is there | built (pull request open) |
+| 111 | A8 | Agents and skills, Settings | built (pull request open) |
+| 111 | A7 | an unsigned macOS app, the local build script, the smoke test of the built app, the guide | built (pull request open): built and smoke-tested on one machine; not signed, not in a release, not built on Linux |
+| 111 | after A8 | the operator's changes from drawn screens: two light colours per role, chip then name then role, full Markdown, opening outside, expressions and blinks, a document on a page of its own, the title row | built (pull request open): no person has yet checked the window against the spec screen by screen (§9); live text (`delta.frame`) is not drawn |
+| 111 | §10 | the terminal narrator is retired: `delphi observe`, `/observe`, the narrator's views and tests | built (pull request open): CI's end-to-end step still names a filter that now matches no test; the workflow file is left for a pull request of its own |
+| 005g | all | epic threads in the narrator | superseded by spec 111 §10 (2026-11-14) |
+| 034 | all | narrator monitoring panes | superseded by spec 111 §10 (2026-11-14) |
