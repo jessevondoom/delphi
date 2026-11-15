@@ -84,7 +84,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/118-pictures-and-figures-stored-licence-capture-in-research-full-size-and-agent-made-figures.md",
-    "sha256": "d8e18322923fdc5a377391e790fec96af1a7d3378dd625b02b7fc0239417eee4"
+    "sha256": "38655f832e6f165d0a9212dce57a304df3d5b90baa877563f953640a950119fd"
   },
   "source_status_at_hash": {
     "line": {
@@ -97,7 +97,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-14, in a host session: \"all other specs are approved\", after the drafts and their slice tables were shown."
     },
-    "sha256": "d8e18322923fdc5a377391e790fec96af1a7d3378dd625b02b7fc0239417eee4",
+    "sha256": "38655f832e6f165d0a9212dce57a304df3d5b90baa877563f953640a950119fd",
     "word": "approved"
   },
   "spec": {

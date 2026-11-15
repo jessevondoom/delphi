@@ -286,7 +286,7 @@ The operator asked (2026-11-11) for Delphi to keep a history of what happened in
 
 ## 116-memory-that-grows-a-provisional-tier-findings-consolidation-and-a-larger-start-context
 
-**116: Memory that grows: a provisional tier, findings, consolidation, and a larger start context** · approved (per source at `799c56a9fe67`) · tier 0 · [source](../../specs/116-memory-that-grows-a-provisional-tier-findings-consolidation-and-a-larger-start-context.md)
+**116: Memory that grows: a provisional tier, findings, consolidation, and a larger start context** · approved (per source at `441456c5d815`) · tier 0 · [source](../../specs/116-memory-that-grows-a-provisional-tier-findings-consolidation-and-a-larger-start-context.md)
 
 **source excerpt, untrusted** · `specs/116-memory-that-grows-a-provisional-tier-findings-consolidation-and-a-larger-start-context.md` lines 25-35
 
@@ -298,7 +298,7 @@ The operator asked (2026-11-11) for Delphi to keep a history of what happened in
 | E-3 | A staged note is never loaded into a prompt and is not searched by inside agents. |
 | E-4 | An investigation leaves a transcript, a mechanical episode (tools, files, the first error; at most three a mission), and a note in the mission folder only if the model chose to write one. That note defaults to `status: draft`, which the inside search leaves out. A later investigation cannot reliably find an earlier root cause. |
 | E-5 | At the start of a root span an agent is given at most three passages, 1,500 characters in all. That retrieval is skipped whenever the handoff already holds a pointer, and the claim pull just before it adds pointers (`engine.rs`, the span-start condition), so one word-overlap claim removes the passages. Child spans get none. |
-| E-6 | The inside `kb_search` returns pointers, not text, except for validated facts; 064 §4.1 asks for passages. |
+| E-6 | The inside `kb_search` returns pointers, not text, except for validated facts; 064 §4 item 1 asks for passages. |
 | E-7 | Nothing merges, de-duplicates or reconciles memory. Episodes are written with no expiry and supersede nothing. |
 | E-8 | Use changes nothing: read counts are logged and not reported (080), agent searches that find nothing are not logged, and no agent can say "this was wrong". Stored `confidence` is not read by ranking. |
 | E-9 | The investigator's skills (bisect, benchmarks, code search by script) need a shell scope its manifest lacks; inside the daemon and as a host worker it can only read. While it is adopted, host search defaults to validated text only, which hides the unvalidated research its own charter tells it to read first. |
@@ -324,7 +324,7 @@ The operator asked (2026-11-11) for Delphi to keep a history of what happened in
 
 ## 118-pictures-and-figures-stored-licence-capture-in-research-full-size-and-agent-made-figures
 
-**118: Pictures and figures: a stored licence, capture in research, full size, and figures agents make** · approved (per source at `d8e18322923f`) · tier 0 · [source](../../specs/118-pictures-and-figures-stored-licence-capture-in-research-full-size-and-agent-made-figures.md)
+**118: Pictures and figures: a stored licence, capture in research, full size, and figures agents make** · approved (per source at `38655f832e6f`) · tier 0 · [source](../../specs/118-pictures-and-figures-stored-licence-capture-in-research-full-size-and-agent-made-figures.md)
 
 **source excerpt, untrusted** · `specs/118-pictures-and-figures-stored-licence-capture-in-research-full-size-and-agent-made-figures.md` lines 26-34
 

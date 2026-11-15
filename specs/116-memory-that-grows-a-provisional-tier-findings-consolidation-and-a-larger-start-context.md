@@ -29,7 +29,7 @@ tags: [spec, memory, lessons, investigator, retrieval, learning]
 | E-3 | A staged note is never loaded into a prompt and is not searched by inside agents. |
 | E-4 | An investigation leaves a transcript, a mechanical episode (tools, files, the first error; at most three a mission), and a note in the mission folder only if the model chose to write one. That note defaults to `status: draft`, which the inside search leaves out. A later investigation cannot reliably find an earlier root cause. |
 | E-5 | At the start of a root span an agent is given at most three passages, 1,500 characters in all. That retrieval is skipped whenever the handoff already holds a pointer, and the claim pull just before it adds pointers (`engine.rs`, the span-start condition), so one word-overlap claim removes the passages. Child spans get none. |
-| E-6 | The inside `kb_search` returns pointers, not text, except for validated facts; 064 §4.1 asks for passages. |
+| E-6 | The inside `kb_search` returns pointers, not text, except for validated facts; 064 §4 item 1 asks for passages. |
 | E-7 | Nothing merges, de-duplicates or reconciles memory. Episodes are written with no expiry and supersede nothing. |
 | E-8 | Use changes nothing: read counts are logged and not reported (080), agent searches that find nothing are not logged, and no agent can say "this was wrong". Stored `confidence` is not read by ranking. |
 | E-9 | The investigator's skills (bisect, benchmarks, code search by script) need a shell scope its manifest lacks; inside the daemon and as a host worker it can only read. While it is adopted, host search defaults to validated text only, which hides the unvalidated research its own charter tells it to read first. |
@@ -71,7 +71,7 @@ Objective: what agents learn is kept without waiting for the operator, clearly m
 2. Budget: six passages and 4,000 characters by default (`[retrieval] start_passages`, `start_chars`), at most two per document.
 3. Zones: those of today, plus the `research` zone of [`specs/112`](112-one-research-record-a-single-runner-topics-that-persist-and-claims-that-reach-the-library.md), findings (§5), and the role's provisional notes. At most two of the six may be provisional.
 4. Each passage keeps its label; untrusted and unreviewed passages are framed as data, as retrieved text is today.
-5. `kb_search` (inside) returns the passage text for each hit, within a per-call character budget, as 064 §4.1 says. `recall_memory` is unchanged.
+5. `kb_search` (inside) returns the passage text for each hit, within a per-call character budget, as 064 §4 item 1 says. `recall_memory` is unchanged.
 6. The inside search refreshes the index when a source is newer than it, bounded as 109 §3 bounds the host's.
 
 ## 5. Findings: what an investigation concluded
