@@ -11,11 +11,13 @@ It reads files, opens no network port, runs nothing, and serves this machine and
 Install `delphi` first (`install.sh` or Homebrew), then use Claude Code's own marketplace commands. Installing the plugin grants Delphi nothing; your approvals are unchanged.
 
 ```sh
-claude plugin marketplace add jessevondoom/delphi
+claude plugin marketplace add jessevondoom/delphi#stable
 claude plugin install delphi@delphi
 ```
 
-The plugin and its hooks run `~/.local/bin/delphi` (written `${HOME}/.local/bin/delphi`), not a `delphi` from the host's `PATH`, so a Claude Code started from the Dock or by a service finds it too ([`specs/074`](../../specs/074-stable-launch-path-and-delphi-connect.md) §10.1). An `install.sh` install is that file. A Homebrew or custom-directory install needs a link there: `delphi connect claude-code` shows it in its plan and makes it when you confirm, and `delphi mcp --check claude-code` prints the `ln -s` command on its `launchable:` line if you would rather do it yourself. Nothing else ever creates or replaces that path. It follows the latest release tag, so the host's normal plugin update brings the new skill text and declaration (spec 071 §4). Its files are generated into [`ecosystem/`](../../ecosystem/README.md) and checked by `delphi docs ecosystem --check`.
+`#stable` is the release channel ([`specs/074`](../../specs/074-stable-launch-path-and-delphi-connect.md) §10.4): a branch the release workflow moves to each release's commit. Added without it, the marketplace follows `main`, which moves between releases. `delphi connect claude-code --status` prints which one yours follows (`channel:`); to switch an older install, remove it and add it again (Claude Code has no command that changes a marketplace's branch in place).
+
+The plugin and its hooks run `~/.local/bin/delphi` (written `${HOME}/.local/bin/delphi`), not a `delphi` from the host's `PATH`, so a Claude Code started from the Dock or by a service finds it too ([`specs/074`](../../specs/074-stable-launch-path-and-delphi-connect.md) §10.1). An `install.sh` install is that file. A Homebrew or custom-directory install needs a link there: `delphi connect claude-code` shows it in its plan and makes it when you confirm, and `delphi mcp --check claude-code` prints the `ln -s` command on its `launchable:` line if you would rather do it yourself. Nothing else ever creates or replaces that path. It follows the `stable` branch, which moves once per release, so the host's plugin update brings the new skill text and declaration at each release (spec 071 §4, as refined by spec 074 §10.4). Its files are generated into [`ecosystem/`](../../ecosystem/README.md) and checked by `delphi docs ecosystem --check`.
 
 Check it any time with `delphi mcp --check claude-code` (or `copilot`, `codex`; see line 15 of `delphi doctor`): it reads the host's plugin files, runs nothing, and says `configured`, `missing`, `stale` or `incompatible` with the command that fixes it. Its `launchable:` line says whether the plugin can start Delphi: `yes` when `~/.local/bin/delphi` is an executable file (and whether it is this binary or another `delphi`), `no` with the cure otherwise. It reads that from the filesystem and never runs the binary. Tested on Claude Code 2.1.314, Copilot CLI 1.0.105 and Codex 0.166.0. Copilot records no plugin release, so it is `configured` or `missing` only.
 
@@ -34,9 +36,11 @@ To preview the Claude Code setup without running anything, use `delphi connect c
 Both read this repository's `.claude-plugin/marketplace.json` and install the same plugin (tested on Copilot CLI 1.0.105 and Codex 0.166.0):
 
 ```sh
-copilot plugin marketplace add jessevondoom/delphi && copilot plugin install delphi@delphi
-codex plugin marketplace add jessevondoom/delphi && codex plugin add delphi@delphi
+copilot plugin marketplace add jessevondoom/delphi#stable && copilot plugin install delphi@delphi
+codex plugin marketplace add jessevondoom/delphi@stable && codex plugin add delphi@delphi
 ```
+
+For Codex, prefer `delphi connect codex` (next section), which registers the server at an absolute path. The plugin's server command is `${HOME}/.local/bin/delphi`; Claude Code and Copilot CLI expand it (both run live), and Codex has not been shown to. Codex's `owner/repo@branch` form was run and records the branch.
 
 Remove with `copilot plugin uninstall delphi@delphi` or `codex plugin remove delphi@delphi`. `delphi mcp --check copilot` and `--check codex` read them. The Gemini CLI rejects this plugin directory and Antigravity is not yet documented; use `delphi connect gemini` or the snippet below for them.
 

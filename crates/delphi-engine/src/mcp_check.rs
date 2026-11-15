@@ -155,7 +155,8 @@ fn launchable_in(home: &Path, install_dir: Option<&Path>, machine_dirs: &[std::p
     Launchable { ok: true, this_binary, detail }
 }
 
-const FIX_INSTALL: &str = "claude plugin marketplace add jessevondoom/delphi && claude plugin install delphi@delphi";
+// Spec 074 §10.4: every install command names the release channel, the branch `stable`.
+const FIX_INSTALL: &str = "claude plugin marketplace add jessevondoom/delphi#stable && claude plugin install delphi@delphi";
 
 /// Read a small regular file the user owns, without following a symlink or blocking on a FIFO.
 fn safe_read(path: &Path) -> Result<Option<Vec<u8>>, String> {
@@ -351,7 +352,7 @@ pub fn check_copilot(home: &Path) -> Check {
         Err(e) => return unknown(format!("settings.json {e}")),
     };
     let Ok(settings) = serde_json::from_slice::<serde_json::Value>(&settings) else { return unknown("settings.json is not valid JSON") };
-    let fix = "copilot plugin marketplace add jessevondoom/delphi && copilot plugin install delphi@delphi";
+    let fix = "copilot plugin marketplace add jessevondoom/delphi#stable && copilot plugin install delphi@delphi";
     match settings["enabledPlugins"].get(PLUGIN_KEY).and_then(|v| v.as_bool()) {
         Some(true) => Check { state: State::Configured, detail: "the Delphi plugin is installed and enabled (Copilot CLI records no release, so it is not compared)".into(), fix: None },
         Some(false) => Check { state: State::Missing, detail: "the Delphi plugin is installed but disabled".into(), fix: Some(format!("copilot plugin install {PLUGIN_KEY}")) },
@@ -368,7 +369,7 @@ pub fn check_codex(home: &Path, binary_release: &str) -> Check {
         Err(e) => return unknown(format!("config.toml {e}")),
     };
     let Ok(cfg) = String::from_utf8(cfg).map_err(|_| ()).and_then(|t| t.parse::<toml::Table>().map_err(|_| ())) else { return unknown("config.toml is not valid TOML") };
-    let fix = "codex plugin marketplace add jessevondoom/delphi && codex plugin add delphi@delphi";
+    let fix = "codex plugin marketplace add jessevondoom/delphi@stable && codex plugin add delphi@delphi";
     let enabled = cfg.get("plugins").and_then(|p| p.as_table()).and_then(|p| p.get(PLUGIN_KEY)).and_then(|p| p.as_table()).map(|p| p.get("enabled").and_then(|e| e.as_bool()));
     match enabled {
         None => return Check { state: State::Missing, detail: "the Delphi plugin is not installed".into(), fix: Some(fix.into()) },

@@ -11,7 +11,12 @@ use delphi_engine::mcp_check;
 
 use crate::connect_run;
 
+/// The GitHub repository that holds Delphi's marketplace: the identity every check compares.
 pub const SOURCE: &str = "jessevondoom/delphi";
+/// Spec 074 §10.4: the branch a host follows. The release workflow moves it to each release tag's commit; `main` moves in between.
+pub const CHANNEL: &str = "stable";
+/// What a host is told to add: the repository at the release channel. Both hosts with a row record the ref (`source.ref`).
+pub const ADD_SOURCE: &str = "jessevondoom/delphi#stable";
 const MAX_EXE: u64 = 1024 * 1024 * 1024;
 
 /// One host's fixed commands (spec 074 C3 table). Every element is a constant: nothing from the operator, an agent, the environment or a file.
@@ -38,15 +43,16 @@ pub const TEMPLATES: [Template; 2] = [
     Template {
         host: "claude-code",
         exe: "claude",
-        // v2: the update row was added (spec 074 §10.2), so an audit line tells the two sets of rows apart.
-        id: "claude-v2",
-        proven_on: "Claude Code 2.1.314",
+        // v2: the update row was added (spec 074 §10.2). v3: the add row names the release channel (§10.4). An audit line
+        // tells the sets of rows apart.
+        id: "claude-v3",
+        proven_on: "Claude Code 2.1.325, with the branch `main` (the branch `stable` did not exist when it was run)",
         proven_update: "Claude Code 2.1.325",
         dirs: &[".local/bin", ".claude/local", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"],
-        add: [&["plugin", "marketplace", "add", SOURCE], &["plugin", "install", "delphi@delphi"]],
+        add: [&["plugin", "marketplace", "add", ADD_SOURCE], &["plugin", "install", "delphi@delphi"]],
         remove: [&["plugin", "uninstall", "delphi@delphi"], &["plugin", "marketplace", "remove", "delphi"]],
         writes: "~/.claude/plugins/ (marketplace and plugin files), ~/.claude/settings.json (enabledPlugins, extraKnownMarketplaces)",
-        manual_add: "claude plugin marketplace add jessevondoom/delphi && claude plugin install delphi@delphi",
+        manual_add: "claude plugin marketplace add jessevondoom/delphi#stable && claude plugin install delphi@delphi",
         manual_remove: "claude plugin uninstall delphi@delphi && claude plugin marketplace remove delphi",
         // Proven on Claude Code 2.1.325 to refresh a stale marketplace clone by itself (spec 074 §10.5).
         update: &[&["plugin", "update", "delphi@delphi"]],
@@ -55,14 +61,14 @@ pub const TEMPLATES: [Template; 2] = [
     Template {
         host: "copilot",
         exe: "copilot",
-        id: "copilot-v2",
-        proven_on: "Copilot CLI 1.0.105",
+        id: "copilot-v3",
+        proven_on: "Copilot CLI 1.0.111, with the branch `main` (the branch `stable` did not exist when it was run)",
         proven_update: "Copilot CLI 1.0.111",
         dirs: &[".local/bin", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"],
-        add: [&["plugin", "marketplace", "add", SOURCE], &["plugin", "install", "delphi@delphi"]],
+        add: [&["plugin", "marketplace", "add", ADD_SOURCE], &["plugin", "install", "delphi@delphi"]],
         remove: [&["plugin", "uninstall", "delphi@delphi"], &["plugin", "marketplace", "remove", "delphi"]],
         writes: "~/.copilot/ (settings.json: enabledPlugins, extraKnownMarketplaces; installed-plugins/)",
-        manual_add: "copilot plugin marketplace add jessevondoom/delphi && copilot plugin install delphi@delphi",
+        manual_add: "copilot plugin marketplace add jessevondoom/delphi#stable && copilot plugin install delphi@delphi",
         manual_remove: "copilot plugin uninstall delphi@delphi && copilot plugin marketplace remove delphi",
         // Both proven to run on Copilot CLI 1.0.111; whether the second refreshes the catalog alone was not established.
         update: &[&["plugin", "marketplace", "update", "delphi"], &["plugin", "update", "delphi@delphi"]],
@@ -179,7 +185,7 @@ pub fn render_plan(t: &Template, exe: &HostExe, pre: &mcp_check::Check, addable:
     }
     o.push_str("working directory: a private temporary directory made at run time\n");
     o.push_str("environment: only a fixed safe PATH, HOME, LANG and LC_*, TERM and a private TMPDIR; proxy, token, loader, Git, npm, Python, Ruby and XDG variables are dropped\n");
-    o.push_str(&format!("source: {SOURCE}, a GitHub repository, fetched by {} at connect time; it then tracks Delphi's releases (no commit or version is pinned: spec 071 D-5(B))\n", t.exe));
+    o.push_str(&format!("source: {SOURCE}, a GitHub repository, at its branch `{CHANNEL}`, fetched by {} at connect time. The release workflow moves `{CHANNEL}` to each release, so the host then follows Delphi's releases and not `main` (no commit or version is pinned: spec 071 D-5(B))\n", t.exe));
     o.push_str(&format!("expected writes: {}\n", t.writes));
     o.push_str(&connect_run::link_line(link, home));
     o.push_str("network: github.com, as the host decides\n");
@@ -301,6 +307,9 @@ pub fn cmd(args: &[String]) -> i32 {
         println!("{}: {}: {}", t.host, pre.state.name(), sanitize(&pre.detail));
         println!("{}: launchable: {}", t.host, sanitize(&crate::launchable_now(home).line()));
         println!("{}: launch path: {}", t.host, crate::launch_path_line(home));
+        if let Some(c) = connect_run::channel_line(t, home) {
+            println!("{}: channel: {}", t.host, sanitize(&c));
+        }
         println!("next: {}", pre.fix.as_deref().map(sanitize).unwrap_or_else(|| "nothing to do".into()));
         if let Some(p) = update_pointer(t.host, pre.state) {
             println!("or:   {p} (the same update, run for you after you confirm its plan)");
@@ -470,7 +479,13 @@ mod tests {
         let pre = mcp_check::Check { state: mcp_check::State::Missing, detail: "not installed\nFORGED: yes".into(), fix: None };
         let none = connect_run::Link::Unavailable;
         let plan = render_plan(template("copilot").unwrap(), &h, &pre, true, &none, t.path());
-        assert!(plan.contains("plugin marketplace add jessevondoom/delphi") && plan.contains("plugin install delphi@delphi"));
+        assert!(plan.contains("plugin marketplace add jessevondoom/delphi#stable\n") && plan.contains("plugin install delphi@delphi"));
+        assert!(plan.contains("at its branch `stable`"), "the plan names the channel: {plan}");
+        assert_eq!(ADD_SOURCE, format!("{SOURCE}#{CHANNEL}"));
+        for tm in &TEMPLATES {
+            assert_eq!(tm.add[0], ["plugin", "marketplace", "add", ADD_SOURCE], "{}", tm.host);
+            assert!(tm.manual_add.contains(ADD_SOURCE), "{}", tm.host);
+        }
         assert!(plan.contains("launch path: the plugin runs") && plan.contains("no link is made"), "the plan says what happens to the launch path: {plan}");
         let made = render_plan(template("copilot").unwrap(), &h, &pre, true, &connect_run::Link::Make("/opt/homebrew/bin/delphi".into()), t.path());
         assert!(made.contains("this would make it a link to /opt/homebrew/bin/delphi"));
@@ -508,7 +523,8 @@ mod tests {
         let skew = host_plugin_notes(home, "0.5.4", &other);
         assert!(skew.len() == 1 && skew[0].contains("launchable: yes (a different `delphi`)"), "{skew:?}");
         for tm in &TEMPLATES {
-            assert!(tm.id.ends_with("-v2") && tm.proven_update != tm.proven_on, "{}: the update rows carry their own proof", tm.host);
+            assert!(tm.id.ends_with("-v3") && tm.proven_update != tm.proven_on, "{}: the update rows carry their own proof", tm.host);
+            assert!(tm.proven_on.contains("with the branch `main`"), "{}: the add row says which ref form was actually run", tm.host);
         }
         assert_eq!(host_plugin_notes(home, "0.5.4", &no).len(), 1);
         // Codex has no update row: its own fix is printed.

@@ -142,9 +142,8 @@ Delphi builds software only from a written, approved spec ("No Spec, No Build"),
 If you already work in another agent tool, bring the team to it. Install `delphi` first, then add the plugin with the tool's own commands:
 
 ```sh
-claude plugin marketplace add jessevondoom/delphi && claude plugin install delphi@delphi
-copilot plugin marketplace add jessevondoom/delphi && copilot plugin install delphi@delphi
-codex plugin marketplace add jessevondoom/delphi && codex plugin add delphi@delphi
+claude plugin marketplace add jessevondoom/delphi#stable && claude plugin install delphi@delphi
+copilot plugin marketplace add jessevondoom/delphi#stable && copilot plugin install delphi@delphi
 ```
 
 Or let Delphi run the two commands for you:
@@ -152,7 +151,9 @@ Or let Delphi run the two commands for you:
 ```sh
 delphi connect claude-code --dry-run    # show the exact commands, the host binary and its checksum; run nothing
 delphi connect claude-code              # or `copilot`: show the plan, then run it after you type a confirmation phrase
+delphi connect claude-code --update     # later: bring the plugin up to the release you run
 delphi connect claude-code --remove     # undo only what Delphi installed
+delphi connect codex                    # Codex and Gemini CLI: Delphi writes its own files, with an absolute path
 ```
 
 Then, in that tool:
@@ -166,7 +167,7 @@ Then, in that tool:
 
 Answers arrive under the agent's own name and badge, marked `via delphi`, with their sources and the status of each claim.
 
-`connect` needs a terminal and refuses to run from inside an agent. Codex uses the manual commands for now. Installing the plugin grants Delphi nothing and changes none of your approvals. It follows the latest release, and the tool's normal plugin update brings new versions. Check the connection with `delphi mcp --check claude-code` (or `copilot`, `codex`). Antigravity and the Gemini CLI use a printed config snippet instead. Details, removal and the full tool list: [Using Delphi from other tools](docs/guides/using-delphi-from-other-tools.md).
+`connect` needs a terminal and refuses to run from inside an agent. Installing the plugin grants Delphi nothing and changes none of your approvals. `#stable` is the release channel: a branch that moves once per release, so the plugin follows releases and not `main`. The plugin is updated by the tool, not by `delphi update`, and Claude Code does not auto-update a marketplace you added yourself: `delphi update` tells you when the plugin has fallen behind, and `delphi connect <tool> --update` brings it up. The plugin runs `~/.local/bin/delphi`; with a Homebrew install, `connect` offers to link that path. Check the connection with `delphi mcp --check claude-code` (or `copilot`, `codex`). Antigravity and the Gemini CLI use a printed config snippet instead. Details, removal and the full tool list: [Using Delphi from other tools](docs/guides/using-delphi-from-other-tools.md).
 
 ## How safety works
 
