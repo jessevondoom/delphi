@@ -23,9 +23,12 @@ pub struct Template {
     pub dirs: &'static [&'static str],
     pub add: [&'static [&'static str]; 2],
     pub remove: [&'static [&'static str]; 2],
+    /// Spec 074 §10.2: the host's own update of an installed plugin. Empty for a host with no proven row.
+    pub update: &'static [&'static [&'static str]],
     pub writes: &'static str,
     pub manual_add: &'static str,
     pub manual_remove: &'static str,
+    pub manual_update: &'static str,
 }
 
 pub const TEMPLATES: [Template; 2] = [
@@ -40,6 +43,9 @@ pub const TEMPLATES: [Template; 2] = [
         writes: "~/.claude/plugins/ (marketplace and plugin files), ~/.claude/settings.json (enabledPlugins, extraKnownMarketplaces)",
         manual_add: "claude plugin marketplace add jessevondoom/delphi && claude plugin install delphi@delphi",
         manual_remove: "claude plugin uninstall delphi@delphi && claude plugin marketplace remove delphi",
+        // Proven on Claude Code 2.1.325 to refresh a stale marketplace clone by itself (spec 074 §10.5).
+        update: &[&["plugin", "update", "delphi@delphi"]],
+        manual_update: "claude plugin update delphi@delphi",
     },
     Template {
         host: "copilot",
@@ -52,6 +58,9 @@ pub const TEMPLATES: [Template; 2] = [
         writes: "~/.copilot/ (settings.json: enabledPlugins, extraKnownMarketplaces; installed-plugins/)",
         manual_add: "copilot plugin marketplace add jessevondoom/delphi && copilot plugin install delphi@delphi",
         manual_remove: "copilot plugin uninstall delphi@delphi && copilot plugin marketplace remove delphi",
+        // Both proven to run on Copilot CLI 1.0.111; whether the second refreshes the catalog alone was not established.
+        update: &[&["plugin", "marketplace", "update", "delphi"], &["plugin", "update", "delphi@delphi"]],
+        manual_update: "copilot plugin marketplace update delphi && copilot plugin update delphi@delphi",
     },
 ];
 
@@ -147,8 +156,8 @@ pub fn find_host_above(dirs: &[PathBuf], name: &str, floor: Option<&Path>) -> Re
     Err(format!("`{name}` was not found in {}", dirs.iter().map(|d| sanitize(&d.display().to_string())).collect::<Vec<_>>().join(", ")))
 }
 
-/// The fixed argv of the two steps (no shell; every element is a constant).
-pub fn argv(exe: &Path, steps: &[&[&str]; 2]) -> Vec<Vec<String>> {
+/// The fixed argv of each step (no shell; every element is a constant).
+pub fn argv(exe: &Path, steps: &[&[&str]]) -> Vec<Vec<String>> {
     steps.iter().map(|st| std::iter::once(exe.display().to_string()).chain(st.iter().map(|x| x.to_string())).collect()).collect()
 }
 
@@ -185,8 +194,33 @@ pub fn confirmation(host: &str, plan: &str) -> String {
     format!("CONNECT {host} {h}")
 }
 
+/// Spec 074 §10.2 item 1: what `delphi update` says about the host plugins once the program is current. One line for each host
+/// whose Delphi plugin is older than this release, with the cure, and one when a plugin is installed and cannot be launched.
+/// Read-only: it runs no host CLI and writes nothing.
+pub fn host_plugin_notes(home: &Path, release: &str, launch: &mcp_check::Launchable) -> Vec<String> {
+    use mcp_check::State;
+    let mut out = Vec::new();
+    let mut installed = false;
+    for host in ["claude-code", "copilot", "codex"] {
+        let Ok(c) = mcp_check::check_host(host, home, release) else { continue };
+        installed |= matches!(c.state, State::Configured | State::Stale | State::Incompatible);
+        if c.state != State::Stale {
+            continue;
+        }
+        let cure = match template(host).filter(|t| !t.update.is_empty()) {
+            Some(t) => format!("`delphi connect {host} --update` (or `{}`)", t.manual_update),
+            None => c.fix.as_deref().map_or_else(|| format!("see `delphi mcp --check {host}`"), |f| format!("`{}`", sanitize(f))),
+        };
+        out.push(format!("{host}: the Delphi plugin there was not updated with the program: {}. Update it: {cure}", sanitize(&c.detail)));
+    }
+    if installed && !launch.ok {
+        out.push(format!("host plugins: launchable: {}", sanitize(&launch.line())));
+    }
+    out
+}
+
 fn usage() -> i32 {
-    eprintln!("usage: delphi connect claude-code|copilot|codex|gemini [--dry-run | --status | --remove]\n       delphi connect claude-code --theme [--dry-run | --remove] [--light | --dark]");
+    eprintln!("usage: delphi connect claude-code|copilot|codex|gemini [--dry-run | --status | --remove]\n       delphi connect claude-code|copilot --update [--dry-run]\n       delphi connect claude-code --theme [--dry-run | --remove] [--light | --dark]");
     2
 }
 
@@ -195,9 +229,15 @@ pub fn cmd(args: &[String]) -> i32 {
     let status = rest.contains(&"--status");
     let dry = rest.contains(&"--dry-run");
     let remove = rest.contains(&"--remove");
+    let update = rest.contains(&"--update");
     let Some(host) = rest.iter().find(|a| !a.starts_with("--")) else { return usage() };
     // Spec 110 X2: Codex and Gemini CLI install Delphi's own files, not a marketplace plugin. `--remove --dry-run` previews a removal.
     if crate::connect_files::handles(host) {
+        if update {
+            // Spec 074 §10.2 item 6: these hosts have no marketplace plugin that connect manages.
+            eprintln!("delphi connect: `--update` is for the hosts that install the Delphi plugin (claude-code, copilot). For {host}, `delphi connect {host} --status` says what is stale and `delphi connect {host}` writes Delphi's files again");
+            return 2;
+        }
         if [status, dry, remove].iter().filter(|x| **x).count() > 1 && !(dry && remove && !status) || rest.iter().any(|a| a.starts_with("--") && !matches!(*a, "--status" | "--dry-run" | "--remove")) {
             return usage();
         }
@@ -224,7 +264,8 @@ pub fn cmd(args: &[String]) -> i32 {
         eprintln!("delphi connect: `{}` is not a host connect supports (claude-code, copilot, codex, gemini); use the manual commands from `delphi mcp --print-config {}`", sanitize(host), sanitize(host));
         return 2;
     };
-    if [status, dry, remove].iter().filter(|x| **x).count() > 1 || rest.iter().any(|a| a.starts_with("--") && !matches!(*a, "--status" | "--dry-run" | "--remove")) {
+    // One mode at a time; `--update --dry-run` previews an update.
+    if [status, dry, remove, update].iter().filter(|x| **x).count() > 1 && !(update && dry && !status && !remove) || rest.iter().any(|a| a.starts_with("--") && !matches!(*a, "--status" | "--dry-run" | "--remove" | "--update")) {
         return usage();
     }
     let Some(home) = std::env::var("HOME").ok().filter(|h| Path::new(h).is_absolute()) else {
@@ -258,10 +299,22 @@ pub fn cmd(args: &[String]) -> i32 {
     let exe = match find_host(&search_dirs(t, home), t.exe) {
         Ok(exe) => exe,
         Err(e) => {
-            eprintln!("delphi connect: {e}. Manual commands: {}", if remove { t.manual_remove } else { t.manual_add });
+            eprintln!("delphi connect: {e}. Manual commands: {}", if remove { t.manual_remove } else if update { t.manual_update } else { t.manual_add });
             return 1;
         }
     };
+    if update {
+        if let Err(e) = connect_run::updatable(t, home) {
+            eprintln!("delphi connect: {e}");
+            return 2;
+        }
+    }
+    if dry && update {
+        let plan = connect_run::update_plan(t, &exe, &pre, &link, home);
+        print!("{plan}");
+        println!("confirmation that `delphi connect {} --update` will require for exactly this plan: {}", t.host, connect_run::update_confirmation(t.host, &plan));
+        return 0;
+    }
     if dry {
         let plan = render_plan(t, &exe, &pre, addable, &link, home);
         print!("{plan}");
@@ -276,6 +329,10 @@ pub fn cmd(args: &[String]) -> i32 {
         }
         let plan = connect_run::remove_plan(t, &exe);
         let expect = connect_run::remove_confirmation(t.host, &plan);
+        (plan, expect)
+    } else if update {
+        let plan = connect_run::update_plan(t, &exe, &pre, &link, home);
+        let expect = connect_run::update_confirmation(t.host, &plan);
         (plan, expect)
     } else {
         if !addable {
@@ -294,11 +351,17 @@ pub fn cmd(args: &[String]) -> i32 {
             return 2;
         }
     };
-    let result = if remove { connect_run::remove(t, &proof, &exe, home, &delphi_home) } else { connect_run::connect(t, &proof, &exe, home, &delphi_home, release, &link) };
+    let result = if remove {
+        connect_run::remove(t, &proof, &exe, home, &delphi_home)
+    } else if update {
+        connect_run::update(t, &proof, &exe, home, &delphi_home, release, &link)
+    } else {
+        connect_run::connect(t, &proof, &exe, home, &delphi_home, release, &link)
+    };
     match result {
         Ok(m) => {
             println!("{m}");
-            if !remove && t.host == "claude-code" {
+            if !remove && !update && t.host == "claude-code" {
                 // Spec 106 §12 G6 item 3: a role's name is bold in the host's own text with `badge_style = "markdown"`, and in colour in a
                 // status line Delphi never writes for you.
                 println!("tip: `[mcp] badge_style = \"markdown\"` in config.toml makes a role's name bold where it signs; for a status line naming the adopted role in its colour, add \"statusLine\": {{\"type\": \"command\", \"command\": \"delphi mcp --statusline --host claude-code\"}} to Claude Code's settings.json yourself");
@@ -397,6 +460,33 @@ mod tests {
         assert!(render_plan(template("copilot").unwrap(), &h, &present, false, &none, t.path()).contains("connect would refuse"));
     }
 
+    /// Spec 074 §10.2 item 1: `delphi update` names a plugin the program has outrun, and stays silent otherwise.
+    #[test]
+    fn update_names_a_stale_plugin_with_its_cure_and_says_nothing_for_a_host_without_one() {
+        let t = tempfile::tempdir().unwrap();
+        let home = t.path();
+        let ok = mcp_check::Launchable { ok: true, detail: "x".into() };
+        let no = mcp_check::Launchable { ok: false, detail: "nothing at the launch path".into() };
+        assert!(host_plugin_notes(home, "0.6.2", &no).is_empty(), "no plugin anywhere: nothing to say, even about the launch path");
+        std::fs::create_dir_all(home.join(".claude/plugins")).unwrap();
+        std::fs::write(home.join(".claude/plugins/installed_plugins.json"), r#"{"version":2,"plugins":{"delphi@delphi":[{"scope":"user","version":"0.5.4"}]}}"#).unwrap();
+        std::fs::write(home.join(".claude/settings.json"), r#"{"enabledPlugins":{"delphi@delphi":true}}"#).unwrap();
+        let notes = host_plugin_notes(home, "0.6.2", &ok);
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes[0].starts_with("claude-code: ") && notes[0].contains("plugin 0.5.4 is older than this binary (0.6.2)"), "{notes:?}");
+        assert!(notes[0].contains("`delphi connect claude-code --update`") && notes[0].contains("`claude plugin update delphi@delphi`"), "{notes:?}");
+        let notes = host_plugin_notes(home, "0.6.2", &no);
+        assert!(notes.len() == 2 && notes[1].starts_with("host plugins: launchable: no (nothing at the launch path)"), "{notes:?}");
+        // Current: silent about the release, and still says when it cannot be launched.
+        assert!(host_plugin_notes(home, "0.5.4", &ok).is_empty());
+        assert_eq!(host_plugin_notes(home, "0.5.4", &no).len(), 1);
+        // Codex has no update row: its own fix is printed.
+        std::fs::create_dir_all(home.join(".codex/plugins/cache/delphi/delphi/0.5.4")).unwrap();
+        std::fs::write(home.join(".codex/config.toml"), "[plugins.\"delphi@delphi\"]\nenabled = true\n").unwrap();
+        let notes = host_plugin_notes(home, "0.6.2", &ok);
+        assert!(notes.iter().any(|n| n.starts_with("codex: ") && n.contains("`codex plugin add delphi@delphi`") && !n.contains("--update")), "{notes:?}");
+    }
+
     #[test]
     fn nothing_executes_without_a_terminal_and_flags_are_exclusive() {
         let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
@@ -405,6 +495,10 @@ mod tests {
         assert_eq!(cmd(&a(&["vim", "--dry-run"])), 2);
         assert_eq!(cmd(&a(&["codex", "--status", "--remove"])), 2, "codex flags are exclusive too");
         assert_eq!(cmd(&a(&["claude-code", "--dry-run", "--status"])), 2);
+        assert_eq!(cmd(&a(&["claude-code", "--update", "--remove"])), 2, "one mode at a time");
+        assert_eq!(cmd(&a(&["claude-code", "--update", "--status"])), 2);
+        assert_eq!(cmd(&a(&["codex", "--update"])), 2, "codex has no marketplace plugin that connect manages");
+        assert_eq!(cmd(&a(&["gemini", "--update", "--dry-run"])), 2);
         assert_eq!(cmd(&a(&[])), 2);
     }
 }
