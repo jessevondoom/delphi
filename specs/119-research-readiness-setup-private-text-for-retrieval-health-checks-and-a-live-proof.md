@@ -3,7 +3,7 @@ id: spec-119-research-readiness-setup-private-text-for-retrieval-health-checks-a
 title: "119: Research readiness: setup, private text for retrieval, health checks, and a live proof"
 author: architect
 timestamp: 2026-11-14T00:00:00Z
-status: approved   # by the operator, 2026-11-14, in a host session: "119: let's make excerpts the default between pointers and full private text". Section 3 was changed to that default after those words. Later the same day, on search engines: "your choices sound good, but also add the host default tools as well, like claud's ewb search in a claude environment, etc." (the operator's words as typed: Claude's web search); section 2.1 was written after those words and has not been read.
+status: approved   # by the operator, 2026-11-14, in a host session: "119: let's make excerpts the default between pointers and full private text". Section 3 was changed to that default after those words. Later the same day, on search engines: "your choices sound good, but also add the host default tools as well, like claud's ewb search in a claude environment, etc." (the operator's words as typed: Claude's web search); section 2.1 was written after those words and has not been read. Section 13 (2026-11-15) is an amendment written from the operator's words of that day; it takes effect when the operator merges its pull request.
 approved_by: operator (2026-11-14)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
@@ -194,3 +194,35 @@ Hours are build hours for one builder with tests, as in earlier specs' slice tab
 1. *Decided 2026-11-14:* `unknown_licence` defaults to `excerpts`.
 2. Which defaults of §4 are on?
 3. *Decided 2026-11-14:* Brave first, Mojeek second, and the host's own search tools ahead of both in a host session. Still to check before a key is entered: each engine's current price and data-retention terms, and whether the operator's employer names an approved vendor.
+
+## 13. Amendment (operator, 2026-11-15): the host first, research never refused, Parallel then Brave
+
+The operator's words, in a host session on 2026-11-15: "decisions: live proof use brave. i'll supply a key. but default should always go to the host tools and scout should default to running in the host if invoked from the host (plugin or MCP.)" and "research should never be refused"; then, after being told what Parallel is: "does it work without a key? if so, change it to default with brave a nice second option. then we'll always have a working search table." The operator approves this section by merging the pull request that adds it.
+
+Found before writing this: Parallel's hosted search server answered a keyless call from this program's own request on 2026-11-15. Its public pages say it needs no account or key and has "generous rate limits for hobby use and personal agents", publish no number for those limits, and say nothing about how long queries are kept or whether they are used for training; its documentation says a session id is used "for free-tier rate limiting and log correlation".
+
+### 13.1 In a host session, the host's tools do the research
+
+1. This replaces the order of §2.1 item 1 for a run raised in a host session, through the plugin or the MCP server. The host's own search and fetch tools are the default web source, and the scout's work runs in the host: Delphi plans (what is held, the sub-questions and the queries of [`specs/114`](114-a-methodical-scout-known-first-a-plan-from-the-gaps-the-role-in-every-call-and-a-written-synthesis.md) §3 and §4), the host searches and reads with its own tools, and Delphi checks and writes what comes back (§2.1 items 4 and 5; `record_research` of [`specs/113`](113-host-led-research-ingest-a-record-tool-and-workers-that-can-capture.md) §2), then writes the answer (114 §5).
+2. `request_research` in such a host answers with the plan at once (§2.1 item 3) whenever the host's table row (§2.1 item 2) names a search tool. The host may ask for Delphi's own runner instead with `runner: "daemon"`.
+3. The daemon's engines are asked in a host session only when the host has no search tool, when the request asks for the daemon's runner, or for sub-questions the host's results left uncovered when the run's budget allows (§2.1 item 7).
+4. The rule that keeps a host from steering the daemon's fetcher is unchanged (§2.1 item 5): the daemon reads a fed address only when it is on the trusted list; anything else is a lead the host reads and hands over as host-reported.
+5. A run raised in the console or by an inside agent has no host, and the engines of `[search]` remain its web source.
+
+### 13.2 Research is never refused for want of a source
+
+6. This replaces §2 item 4 and §2.1 item 6. A research request is not refused because no web source is available. It runs with the best source it has, in this order: the host's tools (13.1), the engines of `[search]`, and when neither may be used, Delphi's own holdings and the sites on the trusted list read by their addresses, with no query sent to any engine. The record says which (`sources: host | engines | local`), and an answer that used no web search says so in its label.
+7. `providers = []` keeps its meaning of no engine, and so the operator's way of keeping queries on this machine: a run then uses the host's tools when it is in a host session, and is local otherwise. The private-read mark of [`specs/103`](103-the-private-read-mark-closing-the-four-unaudited-egress-channels.md) and the identifier guard of §2 item 7 are unchanged: a marked session's run is local, and a withheld query is still withheld.
+8. Other limits still stop a run part way and say so: the step and time budgets, an inside agent's request waiting for its card, a page off the trusted list. None of them is a refusal of the request.
+9. The brief's line of §2 item 4 becomes, in fixed words and a number: research ran N times with no web search; the operator can run `delphi research setup` at a terminal. The doctor's warning of §2 item 3 follows the same count.
+
+### 13.3 Parallel first, Brave second
+
+10. This replaces §2 item 6 and the engine part of §12 item 3. The engine Delphi asks by default is Parallel's keyless engine, and setup offers it first: it needs no key, so a workspace always has a working search table. Brave is offered second, with a key, and is the engine of the live proof (B6, item 13). Mojeek and the other supported engines can still be chosen.
+11. `delphi init` and `delphi research setup` write `[search] providers = ["parallel"]`, or `["parallel", "brave"]` once a Brave key is given, so the table names its engines in full. The order is the fallback order: a Parallel error or rate limit passes the query to Brave, as the code already does. Before the first query to Parallel setup prints the line of §2 item 6, naming Parallel and saying that its retention terms are not published.
+12. The validator's background contradiction search sends claim text, so it was never run on an engine the operator had not chosen. Parallel written by setup does not change that: the background search uses Parallel only when the operator turns it on (§4, background validation), and uses Brave when Brave is configured and background validation is on.
+13. B6 runs with Brave and the key the operator supplies, and also records one run through Parallel and one through the host's tools.
+
+### 13.4 Slices
+
+14. **B9**, never refused and Parallel then Brave (13.2 and 13.3), 4 to 6 hours, built before B7. B7 and B8 build 13.1 with §2.1. B6 closes the program as before.
