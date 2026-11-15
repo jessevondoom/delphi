@@ -654,6 +654,10 @@ fn kb_search(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
         hits.extend(crate::retrieval::search(&home, &db, query, notes).map(|r| r.hits).unwrap_or_default());
     }
     if hits.is_empty() {
+        // `specs/114` §6 item 2: logged with the console's misses, marked with the role that searched. Nothing is researched from it.
+        if let Some(ws) = ctx.guard.zones.local.parent() {
+            crate::kb::log_miss(ws, query, crate::kb::Searcher::Agent(ctx.role), 0);
+        }
         return ToolResult::ok(match stale {
             Some(s) => format!("nothing found\n{s}"),
             None => "nothing found".to_string(),
@@ -2135,6 +2139,23 @@ mod tests {
     /// `specs/116` §4.5 (`specs/064` §4.1): the agent's search returns each hit's passage text, labelled, inside a per-call character
     /// budget; nothing in a passage can close its element; untrusted text is still left out; reading a federated passage is federated
     /// input, as reading its file would be.
+    #[test]
+    fn kb_search_that_finds_nothing_is_logged_with_the_consoles_misses_by_the_role_that_searched() {
+        let mut f = fx(&[]);
+        let mut kb = crate::kb::Kb::open(&f.root.join("local/state.db")).unwrap();
+        kb.upsert_from("context/a.md", "context", "user_ratified", "---\nsource_type: user_ratified\nstatus: active\n---\n# Pumps\n\nThe pump runs at night.\n", "t").unwrap();
+        drop(kb);
+        let found = run_tool_as(&mut f, "scout", "kb_search", json!({"query": "pump"}));
+        assert!(!found.content.starts_with("nothing found"), "{}", found.content);
+        assert!(!f.root.join("local/kb-misses.jsonl").exists(), "a search that found something is not a miss");
+        let r = run_tool_as(&mut f, "scout", "kb_search", json!({"query": "tank salinity"}));
+        assert!(r.content.starts_with("nothing found"), "{}", r.content);
+        let rows: Vec<Value> = fs::read_to_string(f.root.join("local/kb-misses.jsonl")).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert_eq!(rows.len(), 1);
+        assert_eq!((rows[0]["query"].as_str(), rows[0]["by"].as_str(), rows[0]["role"].as_str(), rows[0]["confirmed"].as_bool()), (Some("tank salinity"), Some("agent"), Some("scout"), Some(false)));
+        assert_eq!(crate::kb::unanswered(&f.root)[0].3, vec!["agent:scout".to_string()]);
+    }
+
     #[test]
     fn kb_search_returns_the_passage_text_of_each_hit_inside_the_call_budget() {
         let mut f = fx(&[]);

@@ -513,7 +513,10 @@ fn coverage_report(r: &Rungs, kb: usize, trusted_claims: usize, web_claims: usiz
 ///
 /// Each claim is tagged with the sub-question the scout named for it; where it named none the plan has, the claim takes the
 /// sub-question the page's query was sent for (`tag.sub`), which is 0 for a query of the whole question (`specs/114` §4 item 3).
-async fn ingest(deps: &Deps<'_>, question: &str, page: &Page, trusted: bool, held: Option<&str>, tag: Tag, st: &mut State) -> Option<Vec<String>> {
+///
+/// `li` is the search-log line whose query led to the page: what the page yields is counted against it for the run note (§6 item 1).
+#[allow(clippy::too_many_arguments)]
+async fn ingest(deps: &Deps<'_>, question: &str, page: &Page, trusted: bool, held: Option<&str>, tag: Tag, li: usize, st: &mut State) -> Option<Vec<String>> {
     let source_id = match held {
         Some(id) => id.to_string(),
         None => match deps.library.capture(&page.url, &page.text, trusted).await {
@@ -532,7 +535,13 @@ async fn ingest(deps: &Deps<'_>, question: &str, page: &Page, trusted: bool, hel
         note(deps, |r| r.kept(&page.url, &level, &outcome));
     }
     let mut anchored = Vec::new();
-    let Ok(found) = deps.scout.extract(question, page, &st.subs).await else { return Some(anchored) };
+    let private = deps.library.is_private(&source_id);
+    let Ok(found) = deps.scout.extract(question, page, &st.subs).await else {
+        st.yields.push(PageYield { line: li, url: page.url.clone(), private, claims: 0 });
+        return Some(anchored);
+    };
+    // The claims this page states that the run keeps: new, merged into one already found, or held by the library already.
+    let mut stated = 0usize;
     for x in found {
         let fp = claim_fingerprint(&x.subject, &x.predicate, &x.object, &x.scope, &x.time);
         let sub = if st.subs.iter().any(|q| q.n == x.sub) { x.sub } else { tag.sub };
@@ -543,9 +552,12 @@ async fn ingest(deps: &Deps<'_>, question: &str, page: &Page, trusted: bool, hel
                 if let Some(id) = deps.library.anchor_known(&fp, &x, &source_id, &page.url) {
                     st.found_again.push(Again { id: id.clone(), text: assertion(&x), sub, origin: host(&page.url) });
                     anchored.push(id);
+                    stated += 1;
                 }
             }
-            Added::New => st.claims.push(ClaimRec {
+            Added::New => {
+                stated += 1;
+                st.claims.push(ClaimRec {
                 quotes: vec![x.quote.clone()],
                 id: fp[..12].to_string(),
                 group: claim_fingerprint(&x.subject, &x.predicate, "", &x.scope, &x.time),
@@ -560,9 +572,11 @@ async fn ingest(deps: &Deps<'_>, question: &str, page: &Page, trusted: bool, hel
                 contested: false,
                 sub,
                 counter: tag.counter,
-            }),
+                })
+            }
             Added::Merged => {
                 if let Some(c) = st.claims.iter_mut().find(|c| c.fingerprint == fp) {
+                    stated += 1;
                     if c.sub == 0 {
                         c.sub = sub;
                     }
@@ -576,6 +590,7 @@ async fn ingest(deps: &Deps<'_>, question: &str, page: &Page, trusted: bool, hel
             }
         }
     }
+    st.yields.push(PageYield { line: li, url: page.url.clone(), private, claims: stated });
     Some(anchored)
 }
 
@@ -861,6 +876,51 @@ struct State {
     /// Claims the library already held that a page of this run states again. They are not the run's own claims; they count toward
     /// coverage as a kept claim does, and the answer is written from them too.
     found_again: Vec<Again>,
+    /// What each page the run kept as a source yielded, for the run note (`specs/114` §6 item 1).
+    yields: Vec<PageYield>,
+}
+
+/// One page the run kept as a source: the search-log line whose query led to it, its address, whether its source is private, and
+/// how many of the claims the run keeps it states (new, merged or already held by the library).
+#[derive(Debug, Clone)]
+struct PageYield {
+    line: usize,
+    url: String,
+    private: bool,
+    claims: usize,
+}
+
+/// What a run teaches (`specs/114` §6 item 1), counted by code from the run's own search log and pages, in the order the run met
+/// them: for each query the daemon sent, and for each host whose page was kept, how many kept claims those pages state; zero
+/// is a query or a host that produced none. A page on a private source is left out, a withheld query has no text to name, and a
+/// search the host declared or the knowledge-base line is not the run's search. Nothing here is a model's word but the queries
+/// the scout's plan made, which were cleaned and guarded before they were sent.
+fn teaches(log: &SearchLog, yields: &[PageYield]) -> Value {
+    let public: Vec<&PageYield> = yields.iter().filter(|y| !y.private).collect();
+    let mut queries: Vec<(String, usize)> = Vec::new();
+    for (i, l) in log.lines().iter().enumerate() {
+        let Some(q) = l.query.as_ref().filter(|_| !l.declared && !l.withheld && matches!(l.source, Source::Search(_) | Source::Trusted)) else { continue };
+        let n: usize = public.iter().filter(|y| y.line == i).map(|y| y.claims).sum();
+        match queries.iter_mut().find(|(t, _)| t == q) {
+            Some(e) => e.1 += n,
+            None => queries.push((q.clone(), n)),
+        }
+    }
+    let mut hosts: Vec<(String, usize)> = Vec::new();
+    for y in public {
+        let h = host(&y.url);
+        if h.is_empty() {
+            continue;
+        }
+        match hosts.iter_mut().find(|(t, _)| *t == h) {
+            Some(e) => e.1 += y.claims,
+            None => hosts.push((h, y.claims)),
+        }
+    }
+    json!({
+        "queries": queries.iter().map(|(q, n)| json!({"query": q, "claims": n})).collect::<Vec<_>>(),
+        "hosts": hosts.iter().map(|(h, n)| json!({"host": h, "claims": n})).collect::<Vec<_>>(),
+    })
 }
 
 /// A claim the library already held, stated again by a page of this run: its library id, its one-line statement as the page
@@ -1074,7 +1134,7 @@ async fn read_row(ctx: &JobCtx, deps: &Deps<'_>, question: &str, st: &mut State,
             st.trusted_kept += 1;
         }
     }
-    match ingest(deps, question, &page, trusted, held.as_deref(), tag, st).await {
+    match ingest(deps, question, &page, trusted, held.as_deref(), tag, li, st).await {
         Some(anchored) => {
             st.log.kept(li);
             if held.is_some() {
@@ -1119,6 +1179,10 @@ async fn write_the_answer(deps: &Deps<'_>, question: &str, subs: &[SubQuestion],
     (format!("{list}\n\n{LIST_LABEL}"), json!({"by": "list", "claims": given.len(), "attempts": attempts, "rejected": rejected, "label": LIST_LABEL}))
 }
 
+/// The field of a run's result that holds what the run teaches (`teaches`): `{queries: [{query, claims}], hosts: [{host, claims}]}`.
+/// The service takes it out of the result and stages it as the run note (`research_note`); no reader of a result sees it.
+pub const RUN_NOTE: &str = "run_note";
+
 /// Run one research job. `Finish::Partial` when the step budget ran out; an `Err` only when nothing could be done at all.
 pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Deps<'_>) -> Result<Finish, String> {
     // The identifier guard (`specs/119` §2 item 7): a question naming one of the workspace's privacy identifiers is planned without it,
@@ -1156,7 +1220,7 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
             _ => (PlanKind::Fixed, Vec::new()),
         }
     };
-    let mut st = State { set: ClaimSet::new(deps.library.known_fingerprints()), seen: Seen::default(), claims: Vec::new(), read: Vec::new(), library_claims: Vec::new(), pages_read: 0, trusted_kept: 0, cov: Rungs::default(), log: SearchLog::new(), last_provider: None, spent: false, retrieved: day(), from_library: Vec::new(), subs, found_again: Vec::new() };
+    let mut st = State { set: ClaimSet::new(deps.library.known_fingerprints()), seen: Seen::default(), claims: Vec::new(), read: Vec::new(), library_claims: Vec::new(), pages_read: 0, trusted_kept: 0, cov: Rungs::default(), log: SearchLog::new(), last_provider: None, spent: false, retrieved: day(), from_library: Vec::new(), subs, found_again: Vec::new(), yields: Vec::new() };
     // The search log (`specs/101` §3): the host's declared searches first (they happened before the request), then every search the
     // daemon runs. It only records; no branch below reads it.
     for h in deps.host_searches {
@@ -1309,7 +1373,7 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     }
     // Coverage as the run ends, the pass's claims included: what the result and the record report, and what a later run continues from.
     let sub_report = subs_report(&st.subs, &coverage(&st.subs, &tagged(&st)));
-    let State { set, mut seen, mut claims, read, mut library_claims, mut cov, mut log, mut spent, retrieved, from_library, subs, found_again, .. } = st;
+    let State { set, mut seen, mut claims, read, mut library_claims, mut cov, mut log, mut spent, retrieved, from_library, subs, found_again, yields, .. } = st;
 
     // Citation chaining (`specs/101` §6): off unless the run was given an index. After the pass and before the validator, inside the same
     // step budget; it keeps leads and moves no claim.
@@ -1380,6 +1444,9 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     // The search log (`specs/101` §3): it inherits the strictest `private` flag of the claims the run produced, shows the knowledge-base
     // line first, and is linked from the coverage report. It is in every result since the `search_log` flag was pulled (`specs/098` §13.2).
     log.private = claims.iter().any(|c| c.source_ids.iter().any(|s| deps.library.is_private(s)));
+    // What the run teaches (`specs/114` §6 item 1), counted while the log's lines still have the numbers the pages were read under:
+    // the knowledge-base line below goes first. The caller stages it as one note for the scout and takes it out of the result.
+    let taught = teaches(&log, &yields);
     log.kb(clean_query(question, deps.redactor).as_deref(), set.kb_hits().len());
     let flow = log.flow();
     report["search_log"] = json!({"lines": log.lines().len(), "found": flow.found, "kept": flow.kept, "searches": flow.searches, "withheld": flow.withheld, "declared": flow.declared, "see": "search_log"});
@@ -1397,6 +1464,7 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
         "answered_by": "scout", "consulted": ["scout", "validator"],
     });
     result["search_log"] = log.to_json();
+    result[RUN_NOTE] = taught;
     Ok(if spent || check_spent { Finish::Partial(result) } else { Finish::Done(result) })
 }
 
@@ -1408,6 +1476,25 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
+
+    // `specs/114` §6 item 1: what the run teaches is counted by query and by host from the run's own log and pages; a host's declared
+    // search, a withheld query, the knowledge-base line and a page on a private source are not named.
+    #[test]
+    fn what_a_run_teaches_counts_kept_claims_by_query_and_host_and_names_nothing_private_withheld_or_declared() {
+        let mut log = SearchLog::new();
+        log.declare(&HostSearch { tool: "web".into(), query: "the host's own words".into(), hits: 4 }, &Redactor::new());
+        let a = log.begin("web", Source::Search("brave".into()), Purpose::Topic, "tokio runtime", None);
+        let b = log.begin("trusted", Source::Trusted, Purpose::Trusted, "tokio docs", Some("brave"));
+        let c = log.begin("web", Source::Search("brave".into()), Purpose::Gap, "tokio maintainers", None);
+        log.withheld_identifier("web", Source::Search("brave".into()), Purpose::Topic);
+        let again = log.begin("web", Source::Search("brave".into()), Purpose::Topic, "tokio runtime", None);
+        let y = |line: usize, url: &str, private: bool, claims: usize| PageYield { line, url: url.into(), private, claims };
+        let yields = [y(a, "https://docs.rs/tokio", false, 2), y(b, "https://tokio.rs/guide", false, 0), y(c, "https://internal.example/notes", true, 4), y(again, "https://docs.rs/tokio/rt", false, 1)];
+        let t = teaches(&log, &yields);
+        assert_eq!(t["queries"], json!([{"query": "tokio runtime", "claims": 3}, {"query": "tokio docs", "claims": 0}, {"query": "tokio maintainers", "claims": 0}]), "{t}");
+        assert_eq!(t["hosts"], json!([{"host": "docs.rs", "claims": 3}, {"host": "tokio.rs", "claims": 0}]), "{t}");
+        assert!(!t.to_string().contains("host's own words") && !t.to_string().contains("internal.example"), "{t}");
+    }
 
     #[derive(Default)]
     struct FakeWeb {

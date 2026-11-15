@@ -2381,6 +2381,79 @@ pub fn log_search(ws: &Path, query: &str, role: Option<&str>, results: usize) {
     }
 }
 
+/// Who made a search of the knowledge base that is not the console's (`specs/114` §6 item 2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Searcher<'a> {
+    /// An inside agent, by its role.
+    Agent(&'a str),
+    /// A host session, by its label (`host:<tool>/<model>`).
+    Host(&'a str),
+}
+
+/// A search by an inside agent or a host that found nothing, logged with the console's in the same file (`specs/114` §6 item 2),
+/// marked with who searched. The query is someone else's text: secrets the redactor knows are masked, control characters are
+/// removed, and it is cut to 200 characters, so a row is one line and a reader prints it as data.
+pub fn log_miss(ws: &Path, query: &str, by: Searcher<'_>, results: usize) {
+    if results > 0 {
+        return;
+    }
+    let clean = |s: &str, max: usize| -> String {
+        let (s, _) = delphi_core::redact::Redactor::new().redact_str(s);
+        s.chars().map(|c| if c.is_control() { ' ' } else { c }).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ").chars().take(max).collect()
+    };
+    let query = clean(query, 200);
+    if query.is_empty() {
+        return;
+    }
+    let row = match by {
+        Searcher::Agent(role) => serde_json::json!({"t": now(), "query": query, "by": "agent", "role": clean(role, 64), "results": 0, "confirmed": false}),
+        Searcher::Host(label) => serde_json::json!({"t": now(), "query": query, "by": "host", "host": clean(label, 120), "results": 0, "confirmed": false}),
+    };
+    append_line(&misses_path(ws), &row);
+}
+
+/// The questions most often asked of the knowledge base and not answered (`specs/114` §6 item 2): the unconfirmed misses of
+/// [`log_search`] and [`log_miss`], grouped by their words (case and spacing aside), the most asked first and then the newest. A
+/// question the operator confirmed as a miss (`delphi kb miss`: it was there under other words) is left out.
+/// Each is `(query as last asked, times, newest time in seconds, who asked: console, agent:<role>, host:<label>)`. Reading only.
+pub fn unanswered(ws: &Path) -> Vec<(String, usize, i64, Vec<String>)> {
+    let text = std::fs::read_to_string(misses_path(ws)).unwrap_or_default();
+    let rows: Vec<serde_json::Value> = text.lines().filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok()).collect();
+    // One line of what was typed, control characters out, and its key: the words, lower-cased.
+    let words = |row: &serde_json::Value| -> Option<(String, String)> {
+        let q = row["query"].as_str()?.chars().map(|c| if c.is_control() { ' ' } else { c }).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ");
+        (!q.is_empty()).then(|| (q.to_lowercase(), q))
+    };
+    // A miss the operator confirmed (`delphi kb miss`) was answered under other words: its question is not listed.
+    let answered: Vec<String> = rows.iter().filter(|r| r["confirmed"] == true).filter_map(|r| words(r).map(|(k, _)| k)).collect();
+    let mut groups: Vec<(String, String, usize, i64, Vec<String>)> = Vec::new();
+    for row in rows.iter().filter(|r| r["confirmed"] != true) {
+        let Some((key, query)) = words(row).filter(|(k, _)| !answered.contains(k)) else { continue };
+        let t = row["t"].as_str().and_then(|t| t.parse::<i64>().ok()).unwrap_or(0);
+        let who = match row["by"].as_str() {
+            Some("agent") => format!("agent:{}", row["role"].as_str().unwrap_or("?")),
+            Some("host") => row["host"].as_str().unwrap_or("host").to_string(),
+            _ => "console".to_string(),
+        };
+        let who: String = who.chars().filter(|c| !c.is_control()).take(120).collect();
+        match groups.iter_mut().find(|g| g.0 == key) {
+            Some(g) => {
+                g.2 += 1;
+                if t >= g.3 {
+                    g.3 = t;
+                    g.1 = query;
+                }
+                if !g.4.contains(&who) {
+                    g.4.push(who);
+                }
+            }
+            None => groups.push((key, query, 1, t, vec![who])),
+        }
+    }
+    groups.sort_by(|a, b| b.2.cmp(&a.2).then(b.3.cmp(&a.3)));
+    groups.into_iter().map(|(_, q, n, t, who)| (q, n, t, who)).collect()
+}
+
 /// The operator says a search should have found something that uses different words (`delphi kb miss`).
 pub fn confirm_miss(ws: &Path, query: &str, note: &str) {
     append_line(&misses_path(ws), &serde_json::json!({"t": now(), "query": query.chars().take(200).collect::<String>(), "note": note.chars().take(300).collect::<String>(), "confirmed": true}));
@@ -3873,6 +3946,37 @@ mod tests {
         // Searches that found something are not recorded at all.
         log_search(d.path(), "found it", None, 3);
         assert_eq!(miss_counts(d.path()), (1, 1));
+    }
+
+    // `specs/114` §6 item 2: an agent's and a host's empty searches are logged with the console's, marked with who searched, and the
+    // questions most asked and not answered are grouped by their words, the most asked first, then the newest.
+    #[test]
+    fn agent_and_host_misses_are_logged_with_the_consoles_and_grouped_most_asked_first() {
+        let d = tempfile::tempdir().unwrap();
+        log_search(d.path(), "Tank salinity", None, 0);
+        log_miss(d.path(), "tank  salinity", Searcher::Agent("scout"), 0);
+        log_miss(d.path(), "tank salinity\n\u{1b}[31mred", Searcher::Host("host:claude-code/opus"), 0);
+        log_miss(d.path(), "found it", Searcher::Agent("scout"), 2);
+        log_miss(d.path(), "pump noise", Searcher::Host("host:claude-code/opus"), 0);
+        confirm_miss(d.path(), "pump noise", "filed under impeller");
+        assert_eq!(miss_counts(d.path()), (4, 1), "a search that found something is not logged");
+        let rows: Vec<serde_json::Value> = std::fs::read_to_string(misses_path(d.path())).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert_eq!((rows[1]["by"].as_str(), rows[1]["role"].as_str()), (Some("agent"), Some("scout")));
+        assert_eq!((rows[2]["by"].as_str(), rows[2]["host"].as_str()), (Some("host"), Some("host:claude-code/opus")));
+        assert!(!rows[2]["query"].as_str().unwrap().chars().any(char::is_control), "{}", rows[2]["query"]);
+        // The two salinity searches are one question; the host's has other words after it, so it is its own; `pump noise` was
+        // confirmed as there under other words, so it is not listed.
+        let u = unanswered(d.path());
+        assert_eq!(u.len(), 2, "{u:?}");
+        assert_eq!((u[0].0.as_str(), u[0].1, u[0].3.clone()), ("tank salinity", 2, vec!["console".to_string(), "agent:scout".to_string()]), "{u:?}");
+        assert_eq!((u[1].0.as_str(), u[1].1, u[1].3.clone()), ("tank salinity [31mred", 1, vec!["host:claude-code/opus".to_string()]), "{u:?}");
+        let mut more = std::fs::OpenOptions::new().append(true).open(misses_path(d.path())).unwrap();
+        use std::io::Write;
+        for _ in 0..3 {
+            writeln!(more, "{}", serde_json::json!({"t": "9999999999", "query": "pump curve", "by": "agent", "role": "builder", "results": 0, "confirmed": false})).unwrap();
+        }
+        let u = unanswered(d.path());
+        assert_eq!((u[0].0.as_str(), u[0].1, u[0].2), ("pump curve", 3, 9_999_999_999), "now the most asked: {u:?}");
     }
 
     #[test]
