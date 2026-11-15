@@ -363,6 +363,63 @@ mod tests {
         }
     }
 
+    // specs/114 §3 item 3: which topic a new question continues. The same question asked again in the same place, or a topic
+    // the asker's own search returned that overlaps over both bars. Never a private topic, one whose newest run did not finish,
+    // one a host or an ingested file wrote, or one the asker's search did not return.
+    #[test]
+    fn a_question_continues_the_same_topic_or_one_that_overlaps_and_never_a_private_or_unfinished_one() {
+        use crate::research_method::ContinueBar;
+        let f = fx();
+        let bar = ContinueBar::default();
+        let elsewhere = Caller::Host { cwd: f.home.join("elsewhere") };
+        let t = topic(&f.ws, None, "What temperature do quollfish tanks need?", "Quollfish tanks need twenty-eight degrees.", false);
+        // The same question, whatever its case and spacing: its topic id is the one a new run would write into.
+        let same = topic_to_continue(&Known::default(), &f.ws, &f.ws, "  what temperature do   QUOLLFISH tanks need? ", &bar);
+        assert_eq!(same.map(|(t, q)| (t.id, q)), Some((t.id.clone(), "What temperature do quollfish tanks need?".to_string())));
+        // A question most of whose words the topic has, which the asker's search finds.
+        let near = "which temperature do quollfish tanks need in winter";
+        let known = as_caller(&f, elsewhere.clone(), near);
+        assert_eq!(topic_to_continue(&known, &f.ws, &f.ws, near, &bar).map(|(t, _)| t.id), Some(t.id.clone()), "{known:?}");
+        assert!(topic_to_continue(&known, &f.ws, &f.ws, near, &ContinueBar { overlap: 0.95, score: 0.0 }).is_none(), "under the overlap bar");
+        assert!(topic_to_continue(&known, &f.ws, &f.ws, near, &ContinueBar { overlap: 0.5, score: 0.9 }).is_none(), "under the score bar");
+        // The same words, but the asker's search did not return the topic: nothing is offered.
+        assert!(topic_to_continue(&Known::default(), &f.ws, &f.ws, near, &bar).is_none());
+        // An unrelated question.
+        let other = "how are numbat burrows dug";
+        assert!(topic_to_continue(&as_caller(&f, elsewhere.clone(), other), &f.ws, &f.ws, other, &bar).is_none());
+
+        // A private topic is never continued, by the same question or by overlap: it is not in the index, and its record says so.
+        let private = topic(&f.ws, None, "How deep is the numbatshelf cable landing?", "Ninety-five metres.", true);
+        assert!(topic_to_continue(&Known::default(), &f.ws, &f.ws, "How deep is the numbatshelf cable landing?", &bar).is_none());
+        let asked = "how deep is the numbatshelf cable landing at low tide";
+        let known = as_caller(&f, elsewhere.clone(), asked);
+        assert!(known.topics.iter().all(|k| k.id != private.id) && topic_to_continue(&known, &f.ws, &f.ws, asked, &bar).is_none(), "{known:?}");
+        // Even handed a list that names it (which no search returns), the record's own flag refuses it.
+        let forged = Known { topics: vec![KnownTopic { id: private.id.clone(), question: "How deep is the numbatshelf cable landing?".into(), overlap: 1.0, score: Some(1.0), workspace: true }], ..Default::default() };
+        assert!(topic_to_continue(&forged, &f.ws, &f.ws, asked, &bar).is_none());
+
+        // A topic whose run has not finished, and one a host recorded with its own tools, are not continued by the daemon's runner.
+        Topic::begin(&f.ws, &Begin { question: "How long do quollfish live?", asked_by: Asker::operator(), project: None, depth: Depth::Quick, run_id: "r-q-1" }).unwrap();
+        assert!(topic_to_continue(&Known::default(), &f.ws, &f.ws, "How long do quollfish live?", &bar).is_none(), "queued, not finished");
+        let by_host = topic(&f.ws, None, "What do quollfish eat?", "Brine shrimp.", false);
+        by_host.runner("r-t-1", "host").unwrap();
+        assert!(topic_to_continue(&Known::default(), &f.ws, &f.ws, "What do quollfish eat?", &bar).is_none(), "a host's own research is not the daemon's to continue");
+
+        // In a project: the same question continues the project's own topic, and another project's is not found there.
+        let in_a = topic(&f.a, Some("alpha"), "What salinity do quollfish need?", "Brackish.", false);
+        assert_eq!(topic_to_continue(&Known::default(), &f.ws, &f.a, "what salinity do quollfish need?", &bar).map(|(t, _)| t.dir), Some(in_a.dir.clone()));
+        assert!(topic_to_continue(&Known::default(), &f.ws, &f.b, "what salinity do quollfish need?", &bar).is_none(), "project B does not continue project A's topic");
+        // Nor by overlap: another project's topic is not a row a host is told of, so it cannot be the one that is offered.
+        let from_b = as_caller(&f, Caller::Host { cwd: f.b.clone() }, "what salinity do quollfish need in summer");
+        assert!(from_b.topics.iter().all(|k| k.id != in_a.id), "{from_b:?}");
+        assert!(topic_to_continue(&from_b, &f.ws, &f.b, "what salinity do quollfish need in summer", &bar).is_none_or(|(t, _)| t.dir != in_a.dir && t.dir.starts_with(&f.ws)));
+        // The default bars are the spec's: half of the question's content words. A question that shares half its words with a
+        // workspace topic continues it, though it asks something else; `new: true` and `[research] continue_overlap` are the ways out.
+        let half = topic_to_continue(&from_b, &f.ws, &f.b, "what salinity do quollfish need in summer", &bar);
+        assert_eq!(half.map(|(t, _)| t.id), Some(t.id.clone()), "{from_b:?}");
+        assert!(topic_to_continue(&from_b, &f.ws, &f.b, "what salinity do quollfish need in summer", &ContinueBar { overlap: 0.75, score: bar.score }).is_none());
+    }
+
     #[test]
     fn a_row_is_what_its_path_says_and_nothing_else() {
         assert!(matches!(row_of("research/claims/c-0123456789ab.json"), Row::Claim("c-0123456789ab")));
