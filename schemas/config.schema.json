@@ -234,6 +234,24 @@
             "token_share_percent": { "type": "integer", "minimum": 0, "maximum": 10, "default": 5, "description": "The scout's share of the install's tokens over the trailing week (specs/040 section 20.2). 0 keeps the job model-free." },
             "interests": { "type": "array", "maxItems": 50, "items": { "type": "string", "minLength": 1, "maxLength": 80 }, "description": "Topics you want, beside the workspace's project names." }
           }
+        },
+        "unknown_licence": { "enum": ["pointer", "excerpts", "private_text"], "default": "excerpts", "description": "How much of a web page whose licence is unknown or closed a research run keeps (specs/119 section 3): excerpts keeps each quoted passage (at most 300 characters, with up to 200 on either side) as a searched, anchored excerpt; pointer keeps no text; private_text keeps the whole text as a private source that never leaves the install and is quoted at most 300 characters at a time." },
+        "private_text_max_mib": { "type": "integer", "minimum": 1, "default": 500, "description": "The most text private_text keeps, in MiB; past it the oldest is removed first (the pointer and claims stay)." },
+        "private_to_models": { "enum": ["deny", "allow"], "default": "deny", "description": "Whether a private entry may be placed in the prompt of a model of the host's own family (specs/098 section 7.2). A private entry is never placed in a foreign-family seat's prompt, whatever this says. `delphi doctor` warns when it is `allow` and private entries exist." },
+        "pages": {
+          "type": "object",
+          "description": "Generated search pages (specs/057 sections 5 and 6). A page is always labelled generated and not authoritative.",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": true, "description": "false: no page is written; searches still list the library's results." },
+            "external": { "enum": ["ask", "off", "on"], "default": "ask", "description": "ask: external search only when the operator asks (--external, or the console's key). off: never. on: every page also searches the web, unless --internal. Private sources never leave the install." },
+            "max_tokens": { "type": "integer", "minimum": 200, "default": 3000, "description": "The longest page the writer may write, in tokens." },
+            "external_ttl": { "type": ["string", "integer"], "default": "7d", "description": "How long a page that used external search stays fresh: a number of days, or a duration such as 12h or 7d." },
+            "per_day": { "type": "integer", "minimum": 0, "default": 20, "description": "Pages the daemon builds in one day (a cache hit is free). Their validator tokens also count against the validator's share (specs/040 section 20)." },
+            "min_ttl_days": { "type": "integer", "minimum": 1, "default": 1, "description": "The shortest cache lifetime, in days, the daemon accepts for a page the writer proposed one for (specs/097)." },
+            "max_ttl_days": { "type": "integer", "minimum": 1, "default": 365, "description": "The longest cache lifetime, in days, the daemon accepts for a page the writer proposed one for (specs/097)." },
+            "auto_rebuild": { "type": "boolean", "default": true, "description": "Topic pages that are due (a claim or source they cite changed, a new claim carries their topic, or their lifetime passed) are rebuilt by the daemon while it is idle, within per_day (specs/117 section 2 item 3). false: only `delphi pages rebuild` rebuilds them." }
+          }
         }
       }
     },
@@ -253,29 +271,6 @@
             "primary": { "type": "array", "items": { "type": "string" } },
             "reputable": { "type": "array", "items": { "type": "string" } },
             "weak": { "type": "array", "items": { "type": "string" } }
-          }
-        }
-      }
-    },
-    "library": {
-      "type": "object",
-      "description": "The central library (specs/055).",
-      "additionalProperties": false,
-      "properties": {
-        "private_to_models": { "enum": ["deny", "allow"], "default": "deny", "description": "Whether a private entry may be placed in the prompt of a model of the host's own family (specs/098 section 7.2). A private entry is never placed in a foreign-family seat's prompt, whatever this says. `delphi doctor` warns when it is `allow` and private entries exist." },
-        "pages": {
-          "type": "object",
-          "description": "Generated search pages (specs/057 sections 5 and 6). A page is always labelled generated and not authoritative.",
-          "additionalProperties": false,
-          "properties": {
-            "enabled": { "type": "boolean", "default": true, "description": "false: no page is written; searches still list the library's results." },
-            "external": { "enum": ["ask", "off", "on"], "default": "ask", "description": "ask: external search only when the operator asks (--external, or the console's key). off: never. on: every page also searches the web, unless --internal. Private sources never leave the install." },
-            "max_tokens": { "type": "integer", "minimum": 200, "default": 3000, "description": "The longest page the writer may write, in tokens." },
-            "external_ttl": { "type": ["string", "integer"], "default": "7d", "description": "How long a page that used external search stays fresh: a number of days, or a duration such as 12h or 7d." },
-            "per_day": { "type": "integer", "minimum": 0, "default": 20, "description": "Pages the daemon builds in one day (a cache hit is free). Their validator tokens also count against the validator's share (specs/040 section 20)." },
-            "min_ttl_days": { "type": "integer", "minimum": 1, "default": 1, "description": "The shortest cache lifetime, in days, the daemon accepts for a page the writer proposed one for (specs/097)." },
-            "max_ttl_days": { "type": "integer", "minimum": 1, "default": 365, "description": "The longest cache lifetime, in days, the daemon accepts for a page the writer proposed one for (specs/097)." },
-            "auto_rebuild": { "type": "boolean", "default": true, "description": "Topic pages that are due (a claim or source they cite changed, a new claim carries their topic, or their lifetime passed) are rebuilt by the daemon while it is idle, within per_day (specs/117 section 2 item 3). false: only `delphi pages rebuild` rebuilds them." }
           }
         }
       }

@@ -859,11 +859,76 @@ impl McpConfig {
 }
 
 /// `[library]`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LibraryConfig {
     pub pages: PagesConfig,
     pub acquire: AcquireConfig,
+    /// How much of a web page whose licence is unknown (or closed) a research run keeps (`specs/119` §3). The default is `excerpts`.
+    #[serde(deserialize_with = "de_unknown_licence")]
+    pub unknown_licence: UnknownLicence,
+    /// The most text kept under `unknown_licence = "private_text"`, in MiB (`specs/119` §3 item 5); past it the oldest is removed first.
+    pub private_text_max_mib: u64,
+    /// `deny` (the default) or `allow` (`specs/098` §7.2). Read by the doctor and the seat check from the file itself; named here so
+    /// that `[library]` with it parses.
+    #[serde(deserialize_with = "de_private_to_models")]
+    pub private_to_models: String,
+}
+
+impl Default for LibraryConfig {
+    fn default() -> Self {
+        LibraryConfig { pages: PagesConfig::default(), acquire: AcquireConfig::default(), unknown_licence: UnknownLicence::default(), private_text_max_mib: 500, private_to_models: "deny".into() }
+    }
+}
+
+/// `[library] unknown_licence` (`specs/119` §3 item 1; the operator chose `excerpts` as the default on 2026-11-14).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UnknownLicence {
+    /// The behaviour before spec 119: an address, a title and a hash; no text. A claim's anchor keeps its quote alone.
+    Pointer,
+    /// The passages a run quoted, each at most 300 characters with up to 200 on either side, as kept excerpts.
+    #[default]
+    Excerpts,
+    /// The whole text, kept as a private source: indexed for nothing that leaves the install, quoted at most 300 characters at a time.
+    PrivateText,
+}
+
+impl UnknownLicence {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            UnknownLicence::Pointer => "pointer",
+            UnknownLicence::Excerpts => "excerpts",
+            UnknownLicence::PrivateText => "private_text",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<UnknownLicence> {
+        match s {
+            "pointer" => Some(UnknownLicence::Pointer),
+            "excerpts" => Some(UnknownLicence::Excerpts),
+            "private_text" => Some(UnknownLicence::PrivateText),
+            _ => None,
+        }
+    }
+
+    /// The setting as `config.toml` says it, for a reader that has only the file (the daemon's research run reads it at each run). A file
+    /// that cannot be read, or a value that is not one of the three, keeps the default.
+    pub fn read(config_toml: &str) -> UnknownLicence {
+        toml::from_str::<toml::Value>(config_toml).ok().and_then(|v| v.get("library")?.get("unknown_licence")?.as_str().and_then(UnknownLicence::parse)).unwrap_or_default()
+    }
+}
+
+fn de_unknown_licence<'de, D: serde::Deserializer<'de>>(d: D) -> Result<UnknownLicence, D::Error> {
+    let s = <String as serde::Deserialize>::deserialize(d)?;
+    UnknownLicence::parse(&s).ok_or_else(|| serde::de::Error::custom(format!("unknown_licence `{}` is not one of pointer, excerpts, private_text", s)))
+}
+
+fn de_private_to_models<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    let s = <String as serde::Deserialize>::deserialize(d)?;
+    match s.as_str() {
+        "deny" | "allow" => Ok(s),
+        _ => Err(serde::de::Error::custom(format!("private_to_models `{}` is not one of deny, allow", s))),
+    }
 }
 
 /// Whether a page may use external search: `ask` (the default) needs `--external` or the console's key each time.
@@ -1150,6 +1215,7 @@ impl Config {
         }
         if let Some(v) = root.get("library") {
             match v.clone().try_into::<LibraryConfig>() {
+                Ok(v) if v.private_text_max_mib == 0 => errs.push("[library]: private_text_max_mib is at least 1".into()),
                 Ok(v) => match v.acquire.check() {
                     Ok(()) => cfg.library = v,
                     Err(e) => errs.push(format!("[library.acquire]: {}", e)),
@@ -2189,6 +2255,25 @@ tools = { search = "read", note = "draft", send = "write" }
             let errs = Config::parse(&format!("{}\n[library.acquire]\n{}\n", SAMPLE, bad)).unwrap_err().join("\n");
             assert!(errs.contains(why), "{}: {}", bad, errs);
         }
+    }
+
+    /// `specs/119` §3 item 1: excerpts by default; `pointer` and `private_text` only when set; any other word is a problem the doctor
+    /// names. `private_to_models` parses beside it (it was refused as an unknown field of `[library]` before).
+    #[test]
+    fn unknown_licence_defaults_to_excerpts_and_its_neighbours_parse() {
+        let def = Config::parse(SAMPLE).unwrap().library;
+        assert_eq!((def.unknown_licence, def.private_text_max_mib, def.private_to_models.as_str()), (UnknownLicence::Excerpts, 500, "deny"));
+        for (word, want) in [("pointer", UnknownLicence::Pointer), ("excerpts", UnknownLicence::Excerpts), ("private_text", UnknownLicence::PrivateText)] {
+            let c = Config::parse(&format!("{}\n[library]\nunknown_licence = \"{}\"\nprivate_to_models = \"allow\"\nprivate_text_max_mib = 20\n", SAMPLE, word)).unwrap().library;
+            assert_eq!((c.unknown_licence, c.private_text_max_mib, c.private_to_models.as_str()), (want, 20, "allow"));
+            assert_eq!(UnknownLicence::read(&format!("[library]\nunknown_licence = \"{}\"\n", word)), want);
+        }
+        for (bad, why) in [("unknown_licence = \"full\"", "unknown_licence"), ("private_text_max_mib = 0", "private_text_max_mib"), ("private_to_models = \"maybe\"", "private_to_models")] {
+            let errs = Config::parse(&format!("{}\n[library]\n{}\n", SAMPLE, bad)).unwrap_err().join("\n");
+            assert!(errs.contains(why), "{}: {}", bad, errs);
+        }
+        assert_eq!(UnknownLicence::read("[library]\nunknown_licence = \"full\"\n"), UnknownLicence::Excerpts, "a wrong word keeps the default");
+        assert_eq!(UnknownLicence::read("not toml ["), UnknownLicence::Excerpts);
     }
 
     #[test]

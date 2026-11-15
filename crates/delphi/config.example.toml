@@ -242,6 +242,15 @@ sandbox = "off"
 # reputable = []
 # weak = []
 
+# What a research run keeps of a web page whose licence is unknown or closed (specs/119 section 3). "excerpts" (the default): the
+# passages it quoted, at most 300 characters each with up to 200 either side, searched and anchored. "pointer": no text. "private_text":
+# the whole text as a private source that never leaves this install and is quoted at most 300 characters at a time; `delphi sources
+# private list|purge` shows and removes it. private_to_models: "allow" lets a model of the host's own family read private entries.
+# [library]
+# unknown_licence = "excerpts"     # pointer | excerpts | private_text
+# private_text_max_mib = 500       # past it the oldest privately kept text is removed first
+# private_to_models = "deny"       # deny | allow
+
 # Generated search pages (specs/057). `delphi pages search "<question>"` has the writer role write a page from the library and checks it
 # with the validator; a page is always labelled generated and not authoritative. external = "ask" searches the web only when you ask
 # (--external); private sources never leave the install. A cache hit costs nothing; per_day caps the pages built in a day.

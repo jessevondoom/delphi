@@ -66,6 +66,38 @@ pub struct ResearchClaim<'a> {
     pub anchors: &'a [AnchorSpec],
 }
 
+/// The page's text on either side of the first place `quote` is found, at most [`super::excerpts::PASSAGE_CONTEXT`] characters each, for
+/// a research passage (`specs/119` §3 item 6). `None` when the quote is not on the page.
+pub fn context_of(page_text: &str, quote: &str) -> Option<(String, String)> {
+    let quote = quote.trim();
+    if quote.is_empty() {
+        return None;
+    }
+    let at = page_text.find(quote)?;
+    let n = super::excerpts::PASSAGE_CONTEXT;
+    let before: String = page_text[..at].chars().rev().take(n).collect::<Vec<_>>().into_iter().rev().collect();
+    let after: String = page_text[at + quote.len()..].chars().take(n).collect();
+    Some((before, after))
+}
+
+/// Replace a quote-only research anchor of `claim` with `new`, an ordinary anchor into a kept passage of the same source whose quote
+/// is the old one's (or its first 300 characters). The anchor keeps its place in the list. False when `new` is itself quote-only, or
+/// no such anchor is there.
+fn upgrade_quote_only(claim: &mut Value, new: &Value) -> bool {
+    if new["via"] == "research" {
+        return false;
+    }
+    let (Some(sid), Some(q)) = (new["source_id"].as_str(), new["quote"].as_str()) else { return false };
+    let Some(all) = claim["anchors"].as_array_mut() else { return false };
+    match all.iter_mut().find(|x| x["source_id"] == sid && x["via"] == "research" && x["start"].is_null() && x["state"] == "active" && x["quote"].as_str().is_some_and(|old| old.starts_with(q))) {
+        Some(slot) => {
+            *slot = new.clone();
+            true
+        }
+        None => false,
+    }
+}
+
 /// Is this source (its `meta.json`) a private or internal one, for the guards of `specs/115` §2 item 3? **The one predicate.**
 /// It is true for exactly two things: a source the library treats as private (`is_private`), and a private pointer of `specs/113`
 /// §2 item 4 and §3 item 1 ([`is_private_pointer`]: what a host read through its own tools, a file ingested by reference, a person,
@@ -463,6 +495,11 @@ impl Library {
         let mut cited: Vec<&str> = Vec::new();
         for spec in rc.anchors {
             let Ok(a) = self.research_anchor(spec) else { continue };
+            // A quote-only anchor of an earlier run (`specs/112` R2) into the same source becomes the ordinary anchor into the passage
+            // this run kept (`specs/119` §3 item 6).
+            if upgrade_quote_only(&mut claim, &a) {
+                continue;
+            }
             let held = claim["anchors"].as_array().is_some_and(|all| all.iter().any(|x| x["source_id"] == a["source_id"] && x["quote_hash"] == a["quote_hash"]));
             if !held {
                 match claim["anchors"].as_array_mut() {
@@ -540,6 +577,34 @@ impl Library {
         Ok(self.refresh_support(&id).unwrap_or(claim))
     }
 
+    /// Anchors already written that hold a quote alone (`specs/112` R2: a research anchor into a source kept as a pointer, `via:
+    /// research`) gain the passage when a run reads the source's page again (`specs/119` §3 item 6): for each claim citing `source_id`
+    /// with such an anchor whose quote is in `page_text` (the text the run read; nothing is fetched here), the passage and its context
+    /// are kept as an excerpt and the anchor becomes the ordinary anchor into it. Under `[library] unknown_licence = "pointer"` the caller
+    /// does not call this, and an anchor whose quote is not on the page, or past the excerpt bound, stays as it was. Returns how many
+    /// anchors changed.
+    pub fn upgrade_quote_anchors(&self, source_id: &str, page_text: &str) -> usize {
+        let mut changed = 0;
+        for mut c in self.citing(source_id) {
+            let mut touched = false;
+            let quotes: Vec<(String, String)> = anchors_of(&c).iter().filter(|a| a["source_id"] == source_id && a["via"] == "research" && a["state"] == "active" && a["start"].is_null()).filter_map(|a| Some((a["quote"].as_str()?.to_string(), a["locator"].as_str().unwrap_or("").to_string()))).collect();
+            for (quote, locator) in quotes {
+                let Some((before, after)) = context_of(page_text, &quote) else { continue };
+                let spec = AnchorSpec { source_id: source_id.to_string(), locator: Some(locator), quote, prefix: Some(before), suffix: Some(after) };
+                if let Ok(a) = self.research_anchor(&spec) {
+                    if upgrade_quote_only(&mut c, &a) {
+                        touched = true;
+                        changed += 1;
+                    }
+                }
+            }
+            if touched && self.save_claim(&c).is_ok() {
+                self.log("claim_anchor_upgraded", json!({"id": c["id"], "source": source_id}));
+            }
+        }
+        changed
+    }
+
     /// Whether the library holds the source's text and `quote` is in it letter for letter. A yes or a no; no text is returned.
     pub fn holds_quote(&self, source_id: &str, quote: &str) -> bool {
         !quote.trim().is_empty() && std::fs::read_to_string(self.source_dir(source_id).join("source.md")).is_ok_and(|t| t.contains(quote))
@@ -548,8 +613,13 @@ impl Library {
     /// The anchor of a research claim into one of its sources (`specs/112` §3.2): the source id, the quote and the locator. The
     /// quote is the one the daemon found in the page's text by code when the run read the page, at most [`RESEARCH_QUOTE_MAX`]
     /// characters: what a run already keeps of a page in `host-claims.jsonl`, and nothing more of it. When the source is held whole
-    /// and the quote is in its text letter for letter, the anchor also has its range; otherwise it has the quote alone, so a
-    /// research anchor never needs more of a work to be kept than the capture level allows.
+    /// and the quote is in its text letter for letter, the anchor also has its range.
+    ///
+    /// When it is not held whole and the caller gives the page's text around the quote as `prefix` and `suffix` (a run under
+    /// `[library] unknown_licence = "excerpts"`, `specs/119` §3 item 6), the quoted passage, cut to 300 characters, is kept as an excerpt
+    /// with that context and the anchor is an ordinary one into it. Otherwise (`pointer`, a passage past the excerpt bound, a private
+    /// source) it has the quote alone and `via: research`, so a research anchor never needs more of a work to be kept than the setting
+    /// allows.
     fn research_anchor(&self, spec: &AnchorSpec) -> Result<Value, String> {
         let meta = self.read_meta(&spec.source_id).ok_or_else(|| format!("no source `{}`", spec.source_id))?;
         if !meta["purged"].is_null() {
@@ -562,11 +632,23 @@ impl Library {
         }
         let version = meta["version"].as_str().unwrap_or("1").to_string();
         let held = std::fs::read_to_string(self.source_dir(&spec.source_id).join("source.md")).ok();
-        let anchor = match held.as_deref().and_then(|t| Anchor::new(&spec.source_id, &version, &locator, &quote, Some(t), None, None).ok()) {
-            Some(a) => a,
-            None => Anchor::new(&spec.source_id, &version, &locator, &quote, None, None, None)?,
-        };
-        let mut v = serde_json::to_value(anchor).map_err(|e| e.to_string())?;
+        if let Some(a) = held.as_deref().and_then(|t| Anchor::new(&spec.source_id, &version, &locator, &quote, Some(t), None, None).ok()) {
+            let mut v = serde_json::to_value(a).map_err(|e| e.to_string())?;
+            v["state"] = json!("active");
+            v["via"] = json!("research");
+            return Ok(v);
+        }
+        if let (None, Some(before), Some(after)) = (&held, &spec.prefix, &spec.suffix) {
+            let passage: String = quote.chars().take(super::excerpts::PASSAGE_MAX).collect();
+            // A quote cut at 300 characters: what was cut is the start of the text after the passage.
+            let after = format!("{}{}", &quote[passage.len()..], after);
+            if let Ok(a) = self.keep_research_passage(&spec.source_id, &passage, before, &after, &locator) {
+                let mut v = serde_json::to_value(a).map_err(|e| e.to_string())?;
+                v["state"] = json!("active");
+                return Ok(v);
+            }
+        }
+        let mut v = serde_json::to_value(Anchor::new(&spec.source_id, &version, &locator, &quote, None, None, None)?).map_err(|e| e.to_string())?;
         v["state"] = json!("active");
         v["via"] = json!("research");
         Ok(v)

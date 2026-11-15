@@ -914,11 +914,12 @@ impl EngineService {
             let retractions_line = engine.settings.retractions.then(|| retractions.status_line(&delphi_core::time::now_rfc3339(), engine.settings.retractions_stale_days));
             let refresh_home = home.clone();
             // The keep step (`specs/112` §4 item 1): the trusted list's licence decides whether a page's text is kept, the validator's
-            // lists decide what a weak or excluded source is, and a run from the console or an inside agent keeps pictures.
+            // lists decide what a weak or excluded source is, and a run from the console or an inside agent keeps pictures. A page no
+            // licence lets the library keep whole is kept as `[library] unknown_licence` says (`specs/119` §3).
             let limits = &engine.settings.research_limits;
             let rules = crate::research_host::KeepRules { list: web.list.clone(), classes: crate::fact_sources::SourceList::new(engine.cfg.get().validator.sources.clone()), weak: engine.cfg.get().validator.weak_sources };
             let pics = pictures.then(|| crate::research_host::Pictures { transport: transport.clone(), per_source: limits.pictures_per_source, left: std::sync::atomic::AtomicUsize::new(limits.pictures_per_run) });
-            let library = crate::research_host::LiveLibrary { home, ledger: wsd.join("research/host-claims.jsonl"), label, retractions, held: Some(web.held.clone()), topic: claims_topic, project: claims_project, keep: crate::research_host::KeepStep::new(rules, pics) };
+            let library = crate::research_host::LiveLibrary { home, ledger: wsd.join("research/host-claims.jsonl"), label, retractions, held: Some(web.held.clone()), topic: claims_topic, project: claims_project, keep: crate::research_host::KeepStep::new(rules, pics).with_unknown_licence(engine.cfg.get().library.unknown_licence, engine.cfg.get().library.private_text_max_mib).with_archive(engine.settings.archive.clone()) };
             let redactor = delphi_core::redact::Redactor::new();
             // Citation chaining (`specs/101` §6): the index exists only when the switch is on; off, nothing is ever sent to it.
             let cites = engine.settings.chain.enabled.then(|| crate::research_host::LiveCites::new(crate::fact_fetch::FetchPolicy::default(), engine.settings.chain.endpoint.clone()).with_doi_endpoint(engine.settings.chain.doi_endpoint.clone()));
@@ -8631,7 +8632,9 @@ mod tests {
             assert_eq!(run["state"], "done", "{who}: {rec}");
             let id = run["run_id"].as_str().unwrap();
             assert!(rec["queries"].as_array().unwrap().iter().any(|q| q["run"] == id), "{who}: the run's queries are in its record: {rec}");
-            assert!(rec["pages"].as_array().unwrap().iter().any(|p| p["run"] == id && p["url"] == page && p["kept"] == "pointer"), "{who}: the page it read is in its record: {rec}");
+            // A page of unknown licence is captured as a pointer and gains the quoted passage (`specs/119` §3 item 6): a later run
+            // finds it held as excerpts.
+            assert!(rec["pages"].as_array().unwrap().iter().any(|p| p["run"] == id && p["url"] == page && matches!(p["kept"].as_str(), Some("pointer" | "excerpts"))), "{who}: the page it read is in its record: {rec}");
             assert_eq!(rec["claims"].as_array().unwrap().len(), 1, "{who}: the claim it kept is listed once: {rec}");
             assert!(topic.search_log().is_some_and(|l| l["lines"].as_array().is_some_and(|a| !a.is_empty())), "{who}: the run has a search log");
             assert!(topic.answer().contains("aspirin lowers fever"), "{who}: {}", topic.answer());

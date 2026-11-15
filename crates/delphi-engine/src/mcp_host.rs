@@ -1827,6 +1827,22 @@ pub fn run(ws: Option<&Path>) -> i32 {
 }
 
 #[cfg(test)]
+mod b5_tests {
+    /// `specs/119` §6 item 2, the second of its two choices: `want` and `context_pointers` (`specs/066` §3) are not in
+    /// `request_research`'s input schema, which takes no key it does not list, so a host cannot send what nothing reads.
+    #[test]
+    fn request_research_takes_neither_want_nor_context_pointers() {
+        let tools = super::tools();
+        let t = tools.as_array().unwrap().iter().find(|t| t["name"] == "request_research").expect("request_research is listed");
+        let schema = &t["inputSchema"];
+        assert_eq!(schema["additionalProperties"], false);
+        for k in ["want", "context_pointers"] {
+            assert!(schema["properties"].get(k).is_none(), "{k}: {schema}");
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

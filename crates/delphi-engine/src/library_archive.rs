@@ -181,6 +181,23 @@ impl Library {
         self.capture_archived(policy, cfg, id, &original, Some(meta), None, budgets).await
     }
 
+    /// A research run found the page at `url` gone (`specs/119` §4: "on for sources a claim rests on; the run asks for the copy"):
+    /// `error` is the fetcher's word for it, and only `http status 404` or `410` is gone. When the library holds that address as a source
+    /// a claim rests on (`cited_by`), it looks for an archived copy exactly as a re-check would ([`Library::add_archived_copy`] with
+    /// `automatic`, so `[research] archive_fallback` must be on, and a private source, a purged one and one whose text is held send
+    /// nothing). Returns the source id when a copy was kept.
+    pub async fn archive_gone_page(&self, policy: &FetchPolicy, cfg: &ArchiveConfig, url: &str, error: &str, budgets: &Budgets) -> Option<String> {
+        let gone = error.trim_end().ends_with("http status 404") || error.trim_end().ends_with("http status 410");
+        if !cfg.enabled || !gone {
+            return None;
+        }
+        let (id, _) = self.list().into_iter().find(|(_, m)| m["canonical_url"].as_str() == Some(url) && m["cited_by"].as_array().is_some_and(|c| !c.is_empty()))?;
+        match self.add_archived_copy(policy, cfg, &id, budgets, true).await {
+            ArchiveOutcome::Captured { .. } => Some(id),
+            _ => None,
+        }
+    }
+
     /// Capture a copy of a public URL the operator names, as a new source (or the next version of the one already held, when that one
     /// has no readable text). The operator's own act: nothing here is looked up on its own.
     pub async fn add_archived_url(&self, policy: &FetchPolicy, cfg: &ArchiveConfig, url: &str, opts: &AddOpts, budgets: &Budgets) -> ArchiveOutcome {
@@ -417,6 +434,29 @@ mod tests {
         assert!(matches!(o, ArchiveOutcome::Refused(_)));
         assert!(matches!(rt().block_on(l.add_archived_url(&policy, &cfg, "http://intranet/wiki", &AddOpts::default(), &Budgets::default())), ArchiveOutcome::Refused(_)));
         assert!(seen.lock().unwrap().is_empty());
+    }
+
+    /// `specs/119` §4: a run that finds a page gone asks for an archived copy, only with the switch on, only for a 404 or a 410, and
+    /// only for a source a claim rests on.
+    #[test]
+    fn a_page_a_run_finds_gone_that_a_claim_rests_on_is_looked_up_once_with_the_switch_on() {
+        let (d, l) = lib();
+        let id = pointer_source(&l, d.path(), false);
+        let url = "https://old.example.org/harbour";
+        let (_, seen, policy, mut cfg) = archive(true);
+        let gone = |l: &Library, cfg: &ArchiveConfig, e: &str| rt().block_on(l.archive_gone_page(&policy, cfg, url, e, &Budgets::default()));
+        assert_eq!(gone(&l, &cfg, "http status 404"), None, "no claim rests on it yet");
+        let mut m = l.read_meta(&id).unwrap();
+        m["cited_by"] = json!(["c-000000000001"]);
+        std::fs::write(l.source_dir(&id).join("meta.json"), m.to_string()).unwrap();
+        assert_eq!(gone(&l, &cfg, "network error or timeout"), None, "a page that did not answer is not gone");
+        cfg.enabled = false;
+        assert_eq!(gone(&l, &cfg, "http status 410"), None, "off looks for nothing");
+        assert!(seen.lock().unwrap().is_empty(), "nothing was sent so far");
+        cfg.enabled = true;
+        assert_eq!(gone(&l, &cfg, "http status 410"), Some(id.clone()));
+        assert!(seen.lock().unwrap().iter().any(|p| p.starts_with("/wayback/available")));
+        assert!(l.read_meta(&id).unwrap()["archived_copy"].is_object());
     }
 
     #[test]

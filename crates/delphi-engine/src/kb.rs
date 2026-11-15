@@ -372,7 +372,8 @@ fn bundle_files(ws: &Path, out: &mut Vec<SourceFile>) {
 /// The full-text sources of the install's central library (`specs/055` §2), by logical path
 /// `library/sources/<id>/source.md`, zone `library`, at one fixed tier whatever the text's own frontmatter says (as research pages are), which reads *not validated*:
 /// being in the library lifts nothing.
-/// A private source is never listed (`library::Library::indexable`), and a text over the indexer's file cap is not either.
+/// A private source is never listed (`library::Library::indexable`), and a text over the indexer's file cap is not either. A source
+/// kept as excerpts is listed by its passages, `library/sources/<id>/excerpts.md` (`Library::indexable_excerpts`).
 fn library_files(ws: &Path, out: &mut Vec<SourceFile>) {
     let Some(home) = ws.parent().and_then(Path::parent) else { return };
     let lib = crate::library::Library::in_home(home);
@@ -381,6 +382,12 @@ fn library_files(ws: &Path, out: &mut Vec<SourceFile>) {
         if std::fs::metadata(&path).is_ok_and(|m| m.len() <= MAX_FILE_BYTES) {
             let vouched_by = lib.read_meta(&id).and_then(|m| lib.vouched_by(&m, &entries));
             out.push(SourceFile { rel_path: format!("library/sources/{}/source.md", id), zone: "library", path, default_source: crate::research::TIER, bundle: None, vouched_by });
+        }
+    }
+    // A source kept as excerpts (`specs/119` §3 item 6): its passages, at the same tier, never a private one.
+    for (id, path) in lib.indexable_excerpts() {
+        if std::fs::metadata(&path).is_ok_and(|m| m.len() <= MAX_FILE_BYTES) {
+            out.push(SourceFile { rel_path: format!("library/sources/{}/excerpts.md", id), zone: "library", path, default_source: crate::research::TIER, bundle: None, vouched_by: None });
         }
     }
 }
