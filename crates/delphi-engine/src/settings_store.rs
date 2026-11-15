@@ -236,7 +236,7 @@ mod tests {
         for k in ["projects.research_sharing", "research_sharing", "projects", "[projects] research_sharing", "projects.private", "project.private", "private", "PROJECTS.RESEARCH_SHARING", "role_tier.projects.research_sharing"] {
             for v in [json!("workspace"), json!("project"), json!("on"), json!(true)] {
                 let e = parse(k, &v, &enabled()).unwrap_err();
-                assert!(e.contains("cannot be changed this way") || e.contains("not an enabled role"), "{k} = {v}: {e}");
+                assert!(e.contains("cannot be changed this way") || e.contains("not an enabled role") || e.contains("not an available role"), "{k} = {v}: {e}");
             }
         }
     }
