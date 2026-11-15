@@ -194,7 +194,7 @@ This Panel is the review §4 asks of a new argv row, for the two update rows of 
 
 | Finding (severity as the seats gave it) | Disposition |
 | :-- | :-- |
-| P0, all seats: R1 names `#stable` before the branch exists or any workflow moves it | R1 is held: it is its own commit on its own branch, on top of S1, U1 and U2, and does not merge until the workflow change is merged and the branch exists (§10.4 item 4) |
+| P0, all seats: R1 names `#stable` before the branch exists or any workflow moves it | R1 was held on its own branch until both were true. On 2026-11-15 the operator created and protected `stable` at the v0.6.2 commit and merged the workflow change (#715); R1 merged after that. The seats also asked for one release to have moved the branch first: that has not happened, so the workflow job's first run is at the next release |
 | P0 red-team, P1 architect and strategist: `update()` rewrote the record without checking the copy installed before, and before the post-state check | fixed (§10.2 item 4): rewritten only when the record was true before the update and the host settled |
 | P1, all seats: the link was not audited, and a failed step said nothing was added | fixed (§10.1 item 2): audited, the plans say it stays, the failure text is correct. Not recorded and not removed, as the strategist argued: the link serves every host |
 | P1, all seats: the plans printed proof versions that were not made for the new rows | fixed: each template carries the version its update rows were run on, and the ids are `claude-v2` and `copilot-v2`. With R1 the add row changes again: the ids are `claude-v3` and `copilot-v3`, and the add row names the versions `#stable` itself was run on once the branch existed (§10.5) |
