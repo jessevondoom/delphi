@@ -88,8 +88,6 @@ export function App() {
   const clipped = (t: string) => (t.length > 64 ? t.slice(0, 63) + '…' : t);
   const sections: { key: string; title: string; rows: { label: string; note?: string; on?: boolean; pick?: () => void }[] }[] = [
     { key: 'councils', title: 'Councils', rows: (state?.councils ?? []).map((c, i) => ({ label: clipped(c.proposition), note: phaseNote(c), on: prefs.screen === 'council' && i === council, pick: () => { setCouncilPick(i); update({ screen: 'council' }); } })).reverse() },
-    { key: 'projects', title: 'Projects', rows: (info?.projects ?? []).map((p) => ({ label: p.name, note: p.home ? 'home workspace' : tilde(p.root) })) },
-    { key: 'sessions', title: 'Console sessions', rows: (state?.sessions ?? []).slice(-5).reverse().map((s, i) => ({ label: s.id, note: `${s.turns} turns · ${s.reason}`, on: i === 0 })) },
   ].filter((s) => s.rows.length > 0);
 
   return (
