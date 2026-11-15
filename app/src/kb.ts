@@ -16,7 +16,28 @@ export type Doc = { path: string; collection: string; status: string; stale: boo
 export const searchTarget = (q: string, kind?: string, limit = 20): string =>
   `/v1/search?q=${encodeURIComponent(q.trim())}&limit=${limit}&facets=1${kind ? `&kind=${encodeURIComponent(kind)}` : ''}`;
 export const docTarget = (path: string): string => `/v1/doc?path=${encodeURIComponent(path)}`;
-export const listTarget = (limit = 50, kind?: string): string => `/v1/documents?limit=${limit}${kind ? `&kind=${encodeURIComponent(kind)}` : ''}`;
+/** A listing of the newest documents; `where` narrows it to one kind or one collection and `offset` asks for a later page. */
+export const listTarget = (limit = 50, kind?: string, where: { collection?: string; offset?: number } = {}): string =>
+  `/v1/documents?limit=${limit}${kind ? `&kind=${encodeURIComponent(kind)}` : ''}${where.collection ? `&collection=${encodeURIComponent(where.collection)}` : ''}${where.offset ? `&offset=${where.offset}` : ''}`;
+
+/** The most rows the daemon sends for one listing. */
+export const LIST_PAGE = 200;
+/**
+ * Every row of a listing, read a page at a time until a short page: the daemon sends at most `LIST_PAGE` rows, newest
+ * first, so one read of a large knowledge base leaves the older documents out. Stops at `most` rows. A page the daemon
+ * refuses ends the read with that status and the rows so far.
+ */
+export async function listAll(read: (target: string) => Promise<{ status: number; body: unknown }>, where: { kind?: string; collection?: string }, most = 5000): Promise<{ status: number; rows: DocRow[] }> {
+  const rows: DocRow[] = [];
+  while (rows.length < most) {
+    const r = await read(listTarget(LIST_PAGE, where.kind, { collection: where.collection, offset: rows.length }));
+    if (r.status !== 200) return { status: r.status, rows };
+    const page = Array.isArray(r.body) ? (r.body as DocRow[]) : [];
+    rows.push(...page);
+    if (page.length < LIST_PAGE) break;
+  }
+  return { status: 200, rows };
+}
 
 /** A document named in the address (`?doc=missions/m/report.md`): a link straight to its page. Only a plain relative path. */
 export function docInAddress(search: string): string {
