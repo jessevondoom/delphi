@@ -408,10 +408,31 @@ fn copilot_tools(delphi: &[&str]) -> String {
     format!("tools: [{}]\n", all.join(", "))
 }
 
-/// The tool list of a read-only Claude Code worker: the seats' read-only built-ins and Delphi's read tools, under both server names.
-fn claude_worker_tools() -> String {
+/// The Delphi tools a research worker may call beyond the read tools (spec 113 §4 item 1): ask for research and read it, and hand what
+/// it found to Delphi. Each stages content or reads a job; none changes a file, runs a command or approves anything. `record_finding`
+/// (spec 116) is on it because the scout's and the investigator's charters end every investigation with it.
+const WORKER_CAPTURE_TOOLS: &[&str] = &["request_research", "research_status", "research_result", "record_research", "record_finding", "propose_kb_entry", "propose_note", "record_session_summary"];
+/// The red-team's charter names three of them (its source ladder: `request_research`, `propose_kb_entry`, `record_session_summary`); it
+/// gets those and the two that read a research job back, and nothing else (spec 113 §4 item 2).
+const RED_TEAM_CAPTURE_TOOLS: &[&str] = &["request_research", "research_status", "research_result", "propose_kb_entry", "record_session_summary"];
+
+/// The Delphi tools a read-only worker of `role` may call: the read tools, and for the roles whose charter sends research back to
+/// Delphi, the capture tools.
+pub fn worker_tools(role: &str) -> Vec<&'static str> {
+    let mut out = WORKER_READ_TOOLS.to_vec();
+    out.extend_from_slice(match role {
+        "scout" | "investigator" => WORKER_CAPTURE_TOOLS,
+        "red-team" => RED_TEAM_CAPTURE_TOOLS,
+        _ => &[],
+    });
+    out
+}
+
+/// The tool list of a read-only Claude Code worker: the seats' read-only built-ins and the role's Delphi tools, under both server names.
+fn claude_worker_tools(role: &str) -> String {
     let mut all: Vec<String> = vec!["Read".into(), "Grep".into(), "Glob".into()];
-    all.extend(["mcp__plugin_delphi_delphi__", "mcp__delphi__"].iter().flat_map(|p| WORKER_READ_TOOLS.iter().map(move |t| format!("{p}{t}"))));
+    let tools = worker_tools(role);
+    all.extend(["mcp__plugin_delphi_delphi__", "mcp__delphi__"].iter().flat_map(|p| tools.iter().map(move |t| format!("{p}{t}"))));
     all.join(", ")
 }
 
@@ -429,6 +450,12 @@ fn worker_body(role: &str, inherits_tools: bool, host: &str, inline: Option<&Inl
         "Do the task you were given, as this role. You work read-only: read and search files with `exec_command` only to read (for example `cat`, `rg`, `ls`), and change nothing: no `apply_patch`, no command that writes a file or changes state; say what should change instead.".to_string()
     } else {
         "Do the task you were given, as this role. You work read-only: do not change files or run commands; say what should change instead.".to_string()
+    };
+    // Spec 113 §4: a research worker hands what it found to Delphi; those tools stage content and change no file.
+    let scope = if !inherits_tools && worker_tools(role).contains(&"record_research") {
+        format!("{scope} Delphi's capture tools change no file: hand Delphi what you found (`record_research` for a piece of research, before you answer) as your role's pack says.")
+    } else {
+        scope
     };
     if let Some(p) = inline {
         // Spec 106 §11 G2 item 2: the pack travels in the file, for a host whose subagent start cannot add it; `get_agent` with
@@ -522,13 +549,13 @@ pub fn worker_file_with(host: &str, role: &str, models: &BTreeMap<String, String
     let md_mark = mark.as_ref().map(|m| format!("<!-- {m} -->\n")).unwrap_or_default();
     Ok(match host {
         "claude-code" => {
-            let tools = if *inherits { String::new() } else { format!("tools: {}\n", claude_worker_tools()) };
+            let tools = if *inherits { String::new() } else { format!("tools: {}\n", claude_worker_tools(role)) };
             (format!("agents/{role}-worker.md").into(), format!("---\nname: {role}-worker\ndescription: {desc}\n{}{tools}---\n\n{md_mark}{body}", claude_color_line(role)))
         }
         "copilot" => {
             // Spec 110 §8.1: a Copilot agent file with no tool list gets every tool, so a read-only worker names its tools (A4 of 106).
             let m = model.map(|m| format!("model: {}\n", quoted(&m))).unwrap_or_default();
-            let tools = if *inherits { String::new() } else { copilot_tools(WORKER_READ_TOOLS) };
+            let tools = if *inherits { String::new() } else { copilot_tools(&worker_tools(role)) };
             (format!("agents/delphi-{role}-worker.agent.md").into(), format!("---\nname: delphi-{role}-worker\ndescription: {desc}\n{m}{tools}---\n\n{md_mark}{body}"))
         }
         "agy" => (
@@ -1039,6 +1066,29 @@ mod tests {
         v
     }
 
+    /// Spec 113 §4 item 2 (AC-5): every role's charter (`agents/<role>/AGENT.md`) and its committed Claude Code worker file: a Delphi tool
+    /// the charter names in backticks must be on the worker's `tools:` list (a worker with no list inherits the session's tools). It failed
+    /// on the worker files as they were before spec 113, which listed none of the capture tools the scout's, the investigator's and the
+    /// red-team's charters name.
+    #[test]
+    fn every_delphi_tool_a_charter_names_is_on_its_workers_list() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let delphi_tools: Vec<String> = crate::mcp_host::tools().as_array().unwrap().iter().filter_map(|t| t["name"].as_str().map(String::from)).collect();
+        let mut missing = Vec::new();
+        for (role, _) in WORKER_ROLES {
+            let charter = std::fs::read_to_string(root.join(format!("agents/{role}/AGENT.md"))).unwrap();
+            let worker = std::fs::read_to_string(root.join(format!("{PLUGIN_DIR}/agents/{role}-worker.md"))).unwrap_or_else(|_| panic!("{role}: no committed worker file"));
+            let Some(list) = worker.lines().find_map(|l| l.strip_prefix("tools: ")) else { continue };
+            let listed: Vec<&str> = list.split(", ").filter_map(|t| t.strip_prefix("mcp__delphi__")).collect();
+            for name in &delphi_tools {
+                if charter.contains(&format!("`{name}`")) && !listed.contains(&name.as_str()) {
+                    missing.push(format!("{role}: {name}"));
+                }
+            }
+        }
+        assert!(missing.is_empty(), "a charter names a Delphi tool its worker cannot call (regenerate with `delphi docs ecosystem --write` after changing mcp_hosts::worker_tools): {missing:?}");
+    }
+
     #[test]
     fn the_role_table_matches_the_manifests() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -1123,7 +1173,10 @@ mod tests {
                     if !inherits {
                         let tools = t.lines().find_map(|l| l.strip_prefix("tools: ")).unwrap();
                         assert!(tools.starts_with("Read, Grep, Glob, ") && !tools.contains("Edit") && !tools.contains("Write") && !tools.contains("Bash"), "{ctx}: {tools}");
-                        assert!(tools.contains("mcp__plugin_delphi_delphi__get_agent") && tools.contains("mcp__delphi__get_agent") && !tools.contains("propose") && !tools.contains("council_submit"), "{ctx}");
+                        assert!(tools.contains("mcp__plugin_delphi_delphi__get_agent") && tools.contains("mcp__delphi__get_agent") && !tools.contains("council_submit"), "{ctx}");
+                        // Spec 113 §4: only the research roles may stage content, and only through the capture tools.
+                        assert_eq!(tools.contains("propose"), matches!(*role, "scout" | "investigator" | "red-team"), "{ctx}");
+                        assert!(!tools.contains("propose_council_record") && !tools.contains("request_test_authorization") && !tools.contains("handoff_put"), "{ctx}");
                     }
                 }
                 assert_eq!(t.contains("You work read-only"), !inherits, "{ctx}");
@@ -1285,9 +1338,11 @@ mod tests {
             assert_eq!(tools.is_none(), *inherits, "{role}");
             if let Some(tools) = tools {
                 assert!(tools.starts_with("tools: [\"read\", \"search\", \"delphi/get_agent\""), "{role}: {tools}");
-                for wide in ["bash", "shell", "edit", "apply_patch", "task", "\"*\"", "propose", "council_submit"] {
+                for wide in ["bash", "shell", "edit", "apply_patch", "task", "\"*\"", "council_submit", "propose_council_record", "handoff_put"] {
                     assert!(!tools.contains(wide), "{role}: {wide}");
                 }
+                // Spec 113 §4: only the research roles may stage content, through the capture tools.
+                assert_eq!(tools.contains("propose"), matches!(*role, "scout" | "investigator" | "red-team"), "{role}: {tools}");
             }
             let (_, c) = worker_file("codex", role, &none()).unwrap();
             assert_eq!(c.contains("with `exec_command` only to read") && c.contains("no `apply_patch`"), !inherits, "{role}");
