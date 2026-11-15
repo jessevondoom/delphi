@@ -158,7 +158,7 @@ async fn a_wake_from_a_timer_set_under_untrusted_input_starts_untrusted_and_need
 
 #[tokio::test]
 async fn a_repeating_timer_that_slept_wakes_once_and_a_timer_for_a_disabled_role_is_dropped_with_a_reason() {
-    let f = setup(vec![Step::text("ok")], 5.0, |s| s.enabled_agents.retain(|a| a != "strategist"));
+    let f = setup(vec![Step::text("ok")], 5.0, |s| s.forbidden_agents.push("strategist".into()));
     let svc = EngineService::new(f.engine.clone(), "m1");
     svc.adopt(f.m.clone());
     let now = (f.engine.clock_unix)();
@@ -170,7 +170,7 @@ async fn a_repeating_timer_that_slept_wakes_once_and_a_timer_for_a_disabled_role
     let fired = events_of(&f, "timer.fired");
     assert_eq!((fired.len(), fired[0].payload["missed"].as_i64(), fired[0].payload["late_by_secs"].as_i64()), (1, Some(3), Some(1000)), "one wake, not a burst");
     let failed = events_of(&f, "timer.failed");
-    assert!(failed.len() == 1 && failed[0].payload["reason"].as_str().unwrap().contains("no longer an enabled role"), "{:?}", failed);
+    assert!(failed.len() == 1 && failed[0].payload["reason"].as_str().unwrap().contains("no longer an available role"), "{:?}", failed);
     let pending = f.engine.timers.pending();
     assert_eq!((pending.len(), pending[0].id.as_str(), pending[0].due_unix), (1, "tm_0001", now + 300 + 4 * 300));
 }

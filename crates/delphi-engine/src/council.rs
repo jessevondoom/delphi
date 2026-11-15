@@ -1139,12 +1139,12 @@ impl Engine {
         f
     }
 
-    /// Can a Council be seated at all (`specs/098` §5)? Every default seat must be an enabled role and at least one model family must
+    /// Can a Council be seated at all (`specs/098` §5)? Every default seat must be a role that can be given work (`specs/063` §3.1) and at least one model family must
     /// be usable. Judged before a Council is raised for a host, so the host gets the typed `seats_unavailable` answer at once instead
     /// of a task that fails later. The reason is fixed text naming a role or a fact, never anything a caller wrote.
     pub(crate) fn council_seatable(&self) -> Result<(), String> {
-        if let Some(r) = DEFAULT_SEATS.iter().find(|r| !self.settings.enabled_agents.contains(&r.to_string())) {
-            return Err(format!("`{r}` is not an enabled role, so the default Council cannot be seated"));
+        if let Some(r) = DEFAULT_SEATS.iter().find(|r| !self.can_work(r)) {
+            return Err(format!("`{r}` is not an available role, so the default Council cannot be seated"));
         }
         if self.available_families().is_empty() {
             return Err("no model family is usable right now, so no Council seat can be seated".to_string());
@@ -1394,8 +1394,8 @@ impl Engine {
         if uniq.len() != roles.len() || roles.len() < 3 || roles.len() > 5 {
             return Ok((Status::Escalated("a Council has 3 to 5 distinct seats".into()), String::new()));
         }
-        if let Some(bad) = roles.iter().find(|r| *r == "orchestrator" || !self.settings.enabled_agents.contains(r)) {
-            return Ok((Status::Escalated(format!("`{}` cannot take a Council seat (the Orchestrator is the arbiter, and every seat must be an enabled role)", bad)), String::new()));
+        if let Some(bad) = roles.iter().find(|r| *r == "orchestrator" || !self.can_work(r)) {
+            return Ok((Status::Escalated(format!("`{}` cannot take a Council seat (the Orchestrator is the arbiter, and every seat must be an available role)", bad)), String::new()));
         }
         // `--tier` raises the seats; it never lowers them (`specs/003` §4.2).
         if let Some(want) = &opts.tier {
@@ -1581,7 +1581,7 @@ impl Engine {
             e
         };
         // A verdict that ends in prose is a checkbox: it ends in a decision and the steps that follow (`specs/003` §4.2).
-        let step_roles: Vec<String> = self.settings.enabled_agents.iter().filter(|r| *r != "orchestrator").cloned().collect();
+        let step_roles: Vec<String> = self.working_roles().into_iter().filter(|r| r != "orchestrator").collect();
         let labels: Vec<String> = if decision.escalation.is_some() { decision.options.iter().map(|(l, _)| l.clone()).collect() } else { Vec::new() };
         let mut follow = crate::council_next::parse(&synthesis, &step_roles, &labels);
         if follow.steps.is_empty() && decision.escalation.is_none() {
@@ -2579,7 +2579,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn bad_councils_are_refused_before_any_model_call() {
         let f = crate::testkit::setup(vec![], 50.0, |_| {});
-        for (seats, why) in [(vec!["architect", "red-team"], "3 to 5"), (vec!["architect", "red-team", "red-team"], "3 to 5"), (vec!["architect", "red-team", "orchestrator"], "arbiter"), (vec!["architect", "red-team", "poet"], "enabled role")] {
+        for (seats, why) in [(vec!["architect", "red-team"], "3 to 5"), (vec!["architect", "red-team", "red-team"], "3 to 5"), (vec!["architect", "red-team", "orchestrator"], "arbiter"), (vec!["architect", "red-team", "poet"], "available role")] {
             let out = f.engine.run_council(&f.m, f.m.next_task_id(), "Queue or cron?", CouncilOpts { seats: seats.iter().map(|s| s.to_string()).collect(), author_family: None, lenses: false, tier: None }).await.unwrap();
             assert!(matches!(&out.status, Status::Escalated(w) if w.contains(why)), "{:?}: {:?}", seats, out.status);
         }
@@ -2595,10 +2595,25 @@ pub(crate) mod tests {
         two_families(&ok);
         assert_eq!(ok.engine.council_seatable(), Ok(()));
         for role in DEFAULT_SEATS {
-            let f = crate::testkit::setup(vec![], 50.0, |s| s.enabled_agents.retain(|r| r != role));
+            let f = crate::testkit::setup(vec![], 50.0, |s| s.forbidden_agents.push(role.to_string()));
             let why = f.engine.council_seatable().unwrap_err();
-            assert!(why.contains(&format!("`{role}` is not an enabled role")), "{role}: {why}");
+            assert!(why.contains(&format!("`{role}` is not an available role")), "{role}: {why}");
         }
+        // `[agents] interactive` names whom the operator addresses, not who can work (`specs/063` §3.1): a workspace that
+        // lists the orchestrator alone still seats a Council, as it still dispatches.
+        let alone = crate::testkit::setup(vec![], 50.0, |s| {
+            s.interactive_agents = vec!["orchestrator".into()];
+            s.enabled_agents = vec!["orchestrator".into()];
+        });
+        two_families(&alone);
+        assert_eq!(alone.engine.council_seatable(), Ok(()));
+        // A fleet narrowed to the interactive roles reaches no seat.
+        let narrowed = crate::testkit::setup(vec![], 50.0, |s| {
+            s.fleet = "interactive".into();
+            s.interactive_agents = vec!["orchestrator".into()];
+        });
+        two_families(&narrowed);
+        assert!(narrowed.engine.council_seatable().unwrap_err().contains("`architect` is not an available role"));
     }
 
     #[tokio::test]

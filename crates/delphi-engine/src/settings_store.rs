@@ -103,15 +103,15 @@ impl Setting {
 }
 
 /// A key and a value, as the tool, the command and the RPC give them, checked: or what is wrong and what can be set.
-pub fn parse(key: &str, value: &Value, enabled: &[String]) -> Result<Setting, String> {
+pub fn parse(key: &str, value: &Value, roles: &[String]) -> Result<Setting, String> {
     let text = match value {
         Value::String(s) => s.trim().to_string(),
         Value::Number(n) => n.to_string(),
         _ => String::new(),
     };
     if let Some(role) = key.strip_prefix("role_tier.") {
-        if !enabled.iter().any(|r| r == role) {
-            return Err(format!("`{}` is not an enabled role (enabled: {})", role, enabled.join(", ")));
+        if !roles.iter().any(|r| r == role) {
+            return Err(format!("`{}` is not an available role (available: {})", role, roles.join(", ")));
         }
         return match text.as_str() {
             "default" | "reset" => Ok(Setting::RoleTier { role: role.into(), tier: None }),
@@ -219,7 +219,7 @@ mod tests {
         assert_eq!(parse("role_tier.architect", &json!("frontier"), &enabled()).unwrap(), Setting::RoleTier { role: "architect".into(), tier: Some("frontier".into()) });
         assert_eq!(parse("role_tier.architect", &json!("default"), &enabled()).unwrap(), Setting::RoleTier { role: "architect".into(), tier: None });
         assert!(parse("role_tier.architect", &json!("huge"), &enabled()).unwrap_err().contains("not a tier"));
-        assert!(parse("role_tier.scribe", &json!("fast"), &enabled()).unwrap_err().contains("not an enabled role"));
+        assert!(parse("role_tier.scribe", &json!("fast"), &enabled()).unwrap_err().contains("not an available role"));
         assert_eq!(parse("mission_budget_usd", &json!("12.5"), &enabled()).unwrap(), Setting::MissionBudget { usd: 12.5 });
         assert_eq!(parse("mission_budget_usd", &json!(20), &enabled()).unwrap(), Setting::MissionBudget { usd: 20.0 });
         assert!(parse("mission_budget_usd", &json!("-1"), &enabled()).is_err() && parse("mission_budget_usd", &json!("20000"), &enabled()).is_err());
