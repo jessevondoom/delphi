@@ -62,7 +62,7 @@ delphi app log                           # what paired, what was refused, what w
 - A key is recorded in `operator/app-keys.json` under your Delphi home, which no agent can read or write. A key unused for 180 days is removed.
 - The grants are `read` (what the app reads today) and `request`. A key gets both when it is paired, and gets a new grant only when you give it: an update of the app or of Delphi never adds one.
 
-Not built yet: `delphi app` does not start the app in this build (it says so; the place where it starts a process must first be added to the list of such places), and the `request` grant has no methods, so a paired app can do nothing an unpaired one cannot. The window does not yet say whether it is paired.
+Not built yet: the `request` grant has no methods, so a paired app can do nothing an unpaired one cannot. The window does not yet say whether it is paired.
 
 ### Where the app keeps its key, and what an unsigned app gets from the keychain
 

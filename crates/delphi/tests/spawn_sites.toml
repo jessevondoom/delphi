@@ -102,6 +102,11 @@ count = 3
 class = "sandbox"
 
 [[site]]
+file = "crates/delphi/src/app_cmd.rs"
+count = 1
+class = "operator-cli"
+
+[[site]]
 file = "crates/delphi/src/bundle_add.rs"
 count = 1
 class = "self"
