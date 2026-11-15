@@ -2,7 +2,7 @@
 
 # Console
 
-20 specs. [All groups](./index.md).
+21 specs. [All groups](./index.md).
 
 ## 005-console-and-narrator-tui
 
@@ -167,6 +167,21 @@ Several agents answering one question improves quality and puts a specialist on 
 **096: The console's left deck shows work and changes, not thinking** · approved (per source at `bf361838a66b`) · tier 0 · [source](../../specs/096-console-deck-change-log.md)
 
 _No standard scope section; open the spec._
+
+## 111-the-desktop-app-a-read-only-window-on-the-daemon
+
+**111: The desktop app: a read-only window on the daemon for activity, councils, the knowledge base and work output** · approved (per source at `1703a7bf50f2`) · tier 0 · [source](../../specs/111-the-desktop-app-a-read-only-window-on-the-daemon.md)
+
+**source excerpt, untrusted** · `specs/111-the-desktop-app-a-read-only-window-on-the-daemon.md` lines 26-31
+
+```text
+| # | Observation (code on `host-experience`, 2026-11-14) |
+| :-- | :-- |
+| D-1 | The work moved to the hosts. The host-experience program (specs 104 to 110) put about 10,400 lines into the engine and about 110 into the console. A conversation with a role now happens in Claude Code, Codex, Gemini CLI or Copilot. |
+| D-2 | What no host shows is what an operator of a team needs: activity across sessions, a council's deliberation, the knowledge base, and what the team produced. These are documents, lists and graphs, which a character grid draws badly. |
+| D-3 | The console costs about 9,400 lines of TypeScript, 7,700 lines of tests and 114 golden screens, its own CI job on a pinned runtime, and a compile on four release targets. Its real-terminal checklist is blank for all nine terminals. |
+| D-4 | The daemon already serves a read-only client. The narrator socket issues its token to a client with no terminal, offers twelve read methods and refuses everything else, and `observe.state` is the folded state every client shows. |
+```
 
 ## ui-wireframes-and-blueprints
 
