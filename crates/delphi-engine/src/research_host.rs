@@ -1,21 +1,22 @@
 //! The daemon's side of `request_research` (`specs/066` §6, §7): the live search, fetch, scout, validator and library that
 //! [`crate::research_run`] is generic over, and the identity a result carries.
 //!
-//! Fetching is the existing trusted fetcher, which refuses any host not on the trusted lists, so egress is limited to listed
-//! hosts on top of the per-role scope. The validator only re-reads a claim's own sources and checks that its quote is still
-//! there; it returns a verdict and nothing else.
+//! Fetching reaches a host on the trusted lists and, beyond them, only an address a search of this run returned (`specs/098` §7.5
+//! item 7a), on top of the per-role scope. A page is fetched once per run (`specs/112` §4.3): the snapshot the scout read is held
+//! ([`Held`]) and is the one the library keeps and hashes and the validator checks. The validator looks for a claim's quote in the
+//! text the run read; it fetches nothing and returns a verdict and nothing else.
 
 use crate::engine::Engine;
 use crate::research::{clip, scout_ipr, words};
-use crate::research_jobs::{Egress, JobCtx};
+use crate::research_jobs::JobCtx;
 use crate::research_observed::{Allowance, Observed, WiderFetch};
 use crate::research_run::{BoxFut, ClaimRec, Extracted, Library, Page, Scout, Validator, Verdict, Web};
 use delphi_adapter::research::search::{search, ProviderSpec, Row, SearchError};
-use delphi_adapter::research::transport::{HttpTransport, Transport};
+use delphi_adapter::research::transport::Transport;
 use delphi_adapter::research::trusted::TrustedList;
 use delphi_core::research::{role_look, role_look_light, Identity};
 use serde_json::{json, Value};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -31,21 +32,101 @@ fn blocking<T>(f: impl FnOnce() -> T) -> T {
     }
 }
 
+/// The pages one run fetched, by the address each was read at, with the snapshot the fetcher built (`specs/112` §4.3). The library
+/// takes its capture from here, so the text the scout read is the text that is hashed and kept, and no page is fetched twice. It
+/// lives as long as the run's [`LiveWeb`]. It is bounded: a run reads at most its page cap and a few corroboration pages.
+#[derive(Default)]
+pub struct Held {
+    inner: std::sync::Mutex<BTreeMap<String, crate::fact_fetch::Snapshot>>,
+}
+
+/// More pages than any run reads (`research_run::page_cap` plus the corroboration pass); past it nothing more is held, and a page
+/// that is not held is not captured.
+const MAX_HELD: usize = 64;
+
+impl Held {
+    fn put(&self, url: &str, snap: crate::fact_fetch::Snapshot) {
+        let mut m = self.inner.lock().unwrap();
+        if m.len() < MAX_HELD || m.contains_key(url) {
+            m.insert(url.to_string(), snap);
+        }
+    }
+
+    /// The snapshot this run read at `url`, only when its text is `text`: what is captured is what was read.
+    pub fn read_as(&self, url: &str, text: &str) -> Option<crate::fact_fetch::Snapshot> {
+        self.inner.lock().unwrap().get(url).filter(|s| s.text.for_daemon() == text).cloned()
+    }
+
+    pub fn len(&self) -> usize {
+        self.inner.lock().unwrap().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
 pub struct LiveWeb {
-    pub transport: Arc<HttpTransport>,
+    pub transport: Arc<dyn Transport>,
     pub list: Arc<TrustedList>,
     pub engines: Vec<ProviderSpec>,
     /// The caps of the wider fetch (`specs/098` §7.5 item 7a), always on since the `ladder` flag was pulled (§13.2).
     pub wider: WiderFetch,
     /// The URLs this run's searches returned; the fetcher reaches these and nothing else beyond the trusted list.
     pub observed: Arc<Observed>,
+    /// The pages this run fetched; the run's library captures from it (`specs/112` §4.3).
+    pub held: Arc<Held>,
     allowance: Allowance,
     queries: AtomicUsize,
 }
 
 impl LiveWeb {
-    pub fn new(transport: Arc<HttpTransport>, list: Arc<TrustedList>, engines: Vec<ProviderSpec>, wider: WiderFetch) -> LiveWeb {
-        LiveWeb { transport, list, engines, allowance: Allowance::new(wider.clone()), wider, observed: Arc::new(Observed::new()), queries: AtomicUsize::new(0) }
+    pub fn new(transport: Arc<dyn Transport>, list: Arc<TrustedList>, engines: Vec<ProviderSpec>, wider: WiderFetch) -> LiveWeb {
+        LiveWeb { transport, list, engines, allowance: Allowance::new(wider.clone()), wider, observed: Arc::new(Observed::new()), held: Arc::new(Held::default()), queries: AtomicUsize::new(0) }
+    }
+
+    /// The one place a provider search is run, and so the one place its results are remembered (`specs/112` §4.5): [`Web::search`] and
+    /// [`Web::search_via`] both come here, so whichever the runner calls, an address the search returned may be fetched under the rule
+    /// of `specs/098` §7.5 item 7a, and the run's `research.observed` event has something to record.
+    fn provider_search(&self, query: &str) -> Result<delphi_adapter::research::search::Found, String> {
+        let n = self.queries.fetch_add(1, Ordering::SeqCst) + 1;
+        let found = blocking(|| search(self.transport.as_ref(), &self.engines, query)).map_err(|e| search_failure_token(&e).to_string())?;
+        self.remember(n, &found);
+        Ok(found)
+    }
+
+    /// One fetch of one address through the daemon's own fetcher ([`crate::fact_fetch`]: https on 443, public addresses only, the
+    /// connection pinned, a redirect to another origin not followed, a size cap, text only, and the cloaking check).
+    fn snapshot(&self, url: &str) -> Result<crate::fact_fetch::Snapshot, crate::fact_fetch::FetchError> {
+        // Tests only: a canned page stands in for the network, after the list, the observed-set test and the caps have run.
+        #[cfg(test)]
+        if let Some(answer) = canned::serve(url) {
+            return answer;
+        }
+        let policy = crate::fact_fetch::FetchPolicy::default();
+        blocking(|| run_async(crate::fact_fetch::fetch_snapshot_checked(&policy, url))).map(|(snap, _)| snap)
+    }
+
+    /// A page on the trusted lists. Every hop is checked against the lists, as the trusted fetcher has always done: the daemon's fetcher
+    /// follows no redirect to another origin, so a redirect to another listed host is taken up here, one hop at a time, and a redirect
+    /// to a host that is not listed ends the fetch.
+    fn fetch_listed(&self, url: &str) -> Result<crate::fact_fetch::Snapshot, String> {
+        use delphi_adapter::research::fetch::{FetchError, MAX_HOPS};
+        let mut at = url.to_string();
+        for _ in 0..=MAX_HOPS {
+            if self.list.allows_url(&at).is_none() {
+                return Err(format!("{:?}", FetchError::OffList(crate::research_run::host_of(&at))));
+            }
+            match self.snapshot(&at) {
+                Ok(snap) => return Ok(snap),
+                Err(e) if e.refusal == crate::fact_fetch::Refusal::CrossOriginRedirect => match e.redirects.for_daemon().last() {
+                    Some(r) => at = r.to.clone(),
+                    None => return Err(e.to_string()),
+                },
+                Err(e) => return Err(e.to_string()),
+            }
+        }
+        Err(format!("{:?}", FetchError::TooManyRedirects))
     }
 
     /// The set is built here, from what the provider returned and nothing else (`specs/098` §7.5 item 7a): `n` is the query's number in
@@ -65,20 +146,14 @@ impl LiveWeb {
     /// ([`crate::fact_fetch`]: https on 443, public addresses only, the connection pinned, a redirect to another origin not followed,
     /// a size cap, text only, and the cloaking check), inside the per-host and per-run caps. A page that shows the daemon something
     /// other than it shows a browser is refused. Nothing a page says becomes a URL to fetch.
-    fn fetch_offlist(&self, url: &str) -> Result<Page, String> {
+    fn fetch_offlist(&self, url: &str) -> Result<crate::fact_fetch::Snapshot, String> {
         let prov = self.observed.get(url).ok_or_else(|| "not_observed".to_string())?;
         self.allowance.take(&prov.url).map_err(|w| w.to_string())?;
-        // Tests only: a canned page stands in for the network, after the observed-set test and the caps have run.
-        #[cfg(test)]
-        if let Some((_, text)) = canned::PAGES.lock().unwrap().iter().find(|(u, _)| *u == prov.url) {
-            return Ok(Page { url: prov.url.clone(), text: text.clone() });
-        }
-        let policy = crate::fact_fetch::FetchPolicy::default();
-        let (snap, _) = blocking(|| run_async(crate::fact_fetch::fetch_snapshot_checked(&policy, &prov.url))).map_err(|e| e.to_string())?;
+        let snap = self.snapshot(&prov.url).map_err(|e| e.to_string())?;
         if snap.cloaked {
             return Err("cloaked".to_string());
         }
-        Ok(Page { url: snap.final_url.for_daemon().clone(), text: snap.text.for_daemon().clone() })
+        Ok(snap)
     }
 }
 
@@ -88,6 +163,45 @@ impl LiveWeb {
 pub(crate) mod canned {
     #[cfg(test)]
     pub(crate) static PAGES: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+    /// Every address a canned page was served for, once per fetch: what a test counts to see that a page is fetched once per run.
+    #[cfg(test)]
+    pub(crate) static SERVED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+    /// The canned page for `url`, as the fetcher would have answered, and one more entry in [`SERVED`]. A canned text that starts
+    /// `REDIRECT ` stands for a redirect to the address after it on another origin, which the daemon's fetcher refuses to follow.
+    #[cfg(test)]
+    pub(crate) fn serve(url: &str) -> Option<Result<crate::fact_fetch::Snapshot, crate::fact_fetch::FetchError>> {
+        let text = PAGES.lock().unwrap().iter().find(|(u, _)| u == url).map(|(_, t)| t.clone())?;
+        SERVED.lock().unwrap().push(url.to_string());
+        Some(match text.strip_prefix("REDIRECT ") {
+            Some(to) => Err(crate::fact_fetch::test_cross_origin_refusal(url, to)),
+            None => Ok(crate::fact_fetch::test_text_snapshot(url, &text)),
+        })
+    }
+
+    /// A search engine for tests: it answers every query with these addresses, in the form a SearXNG instance does, so the provider
+    /// search itself runs ([`engine_spec`] is the engine to configure with it).
+    #[cfg(test)]
+    pub(crate) struct Engine(pub Vec<String>);
+
+    #[cfg(test)]
+    impl delphi_adapter::research::transport::Transport for Engine {
+        fn get(&self, _url: &str, _headers: &[(&str, &str)], _max_bytes: usize, _timeout: std::time::Duration) -> Result<delphi_adapter::research::transport::Response, String> {
+            let rows: Vec<serde_json::Value> = self.0.iter().map(|u| serde_json::json!({"title": "t", "url": u, "content": "s"})).collect();
+            Ok(delphi_adapter::research::transport::Response { status: 200, location: None, content_type: Some("application/json".into()), body: serde_json::json!({"results": rows}).to_string().into_bytes(), truncated: false })
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn engine_spec() -> delphi_adapter::research::search::ProviderSpec {
+        delphi_adapter::research::search::ProviderSpec { provider: delphi_adapter::research::search::Provider::Searxng, key: None, base_url: Some("https://searx.example.org/".into()), cx: None }
+    }
+
+    /// How many times the canned page for `url` was fetched.
+    #[cfg(test)]
+    pub(crate) fn served(url: &str) -> usize {
+        SERVED.lock().unwrap().iter().filter(|u| *u == url).count()
+    }
 }
 
 /// Run an async fetch to its end from the blocking side of the research code. A thread of its own, so it works whatever runtime
@@ -109,14 +223,11 @@ pub fn search_failure_token(e: &SearchError) -> &'static str {
 
 impl Web for LiveWeb {
     fn search(&self, query: &str) -> Result<Vec<Row>, String> {
-        let n = self.queries.fetch_add(1, Ordering::SeqCst) + 1;
-        let found = blocking(|| search(self.transport.as_ref() as &dyn Transport, &self.engines, query)).map_err(|e| search_failure_token(&e).to_string())?;
-        self.remember(n, &found);
-        Ok(found.rows)
+        self.provider_search(query).map(|found| found.rows)
     }
 
     fn search_via(&self, query: &str) -> Result<(Vec<Row>, Option<String>), String> {
-        blocking(|| search(self.transport.as_ref() as &dyn Transport, &self.engines, query).map(|f| (f.rows, Some(f.provider.name().to_string()))).map_err(|e| search_failure_token(&e).to_string()))
+        self.provider_search(query).map(|found| (found.rows, Some(found.provider.name().to_string())))
     }
 
     fn is_trusted(&self, url: &str) -> bool {
@@ -134,13 +245,13 @@ impl Web for LiveWeb {
         self.observed.get(url).map(|p| p.label())
     }
 
+    /// The one fetch of a page in a run (`specs/112` §4.3). What it returns is what the scout reads, and the snapshot behind it is held
+    /// for the library's capture, so the stored hash is of the text that was read. Nothing later in the run fetches the page again.
     fn fetch(&self, url: &str) -> Result<Page, String> {
-        if !self.is_trusted(url) && self.reaches(url) {
-            return self.fetch_offlist(url);
-        }
-        let p = blocking(|| delphi_adapter::research::fetch::fetch(self.transport.as_ref() as &dyn Transport, &self.list, url)).map_err(|e| format!("{e:?}"))?;
-        let (_, text) = crate::fact_fetch::extract_text(p.body.as_bytes(), "text/html");
-        Ok(Page { url: p.url, text })
+        let snap = if !self.is_trusted(url) && self.reaches(url) { self.fetch_offlist(url)? } else { self.fetch_listed(url)? };
+        let page = Page { url: snap.final_url.for_daemon().clone(), text: snap.text.for_daemon().clone() };
+        self.held.put(&page.url, snap);
+        Ok(page)
     }
 }
 
@@ -200,17 +311,17 @@ impl Scout for LiveScout {
     }
 }
 
-pub struct LiveValidator {
-    pub web: Arc<LiveWeb>,
-}
+/// The check (`specs/112` §4.3, §4.4): the claim's quote is looked for in the text this run read for the claim's sources. It has no
+/// web and fetches nothing, so what is checked is what the scout read and what the library hashed. Each page looked at is one step of
+/// the check's own budget.
+pub struct LiveValidator;
 
 impl Validator for LiveValidator {
-    fn check<'a>(&'a self, ctx: &'a JobCtx, claim: &'a ClaimRec) -> BoxFut<'a, Result<Verdict, String>> {
+    fn check<'a>(&'a self, ctx: &'a JobCtx, claim: &'a ClaimRec, pages: &'a [&'a Page]) -> BoxFut<'a, Result<Verdict, String>> {
         Box::pin(async move {
             let q = words(&claim.x.quote);
-            for url in claim.source_urls.iter().take(2) {
-                ctx.egress("validator", Egress::Fetch, url)?;
-                let Ok(p) = self.web.fetch(url) else { continue };
+            for p in pages.iter().take(2) {
+                ctx.check_step().map_err(|_| "the step budget for the check is spent".to_string())?;
                 if format!(" {} ", words(&p.text)).contains(&format!(" {} ", q)) {
                     return Ok(Verdict::Supports);
                 }
@@ -274,6 +385,9 @@ pub struct LiveLibrary {
     pub label: String,
     /// `[research] retractions` and the local snapshot (`specs/101` §4): a source this run captures is checked against it. Off checks nothing.
     pub retractions: crate::retractions::Policy,
+    /// The pages the run's web fetched (`specs/112` §4.3). A page the run read is captured from here and never fetched again. `None`
+    /// captures no page that was read: there is nothing to take it from, and it is not fetched a second time.
+    pub held: Option<Arc<Held>>,
 }
 
 impl Library for LiveLibrary {
@@ -281,11 +395,18 @@ impl Library for LiveLibrary {
         std::fs::read_to_string(&self.ledger).unwrap_or_default().lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()).filter_map(|v| v["fingerprint"].as_str().map(String::from)).collect()
     }
 
-    fn capture<'a>(&'a self, url: &'a str, _text: &'a str, _trusted: bool) -> BoxFut<'a, Result<String, String>> {
+    /// A page the run read is kept from the snapshot the run's one fetch built, so the stored hash is of the text the scout read and no
+    /// request is made here (`specs/112` §4.3). A page the run did not read with this text is refused, not fetched again. Only an empty
+    /// `text` (a chained work's landing address, which the run never reads; `specs/101` §6 item 8) is fetched here, once.
+    fn capture<'a>(&'a self, url: &'a str, text: &'a str, _trusted: bool) -> BoxFut<'a, Result<String, String>> {
         Box::pin(async move {
             let lib = crate::library::Library::in_home(&self.home).with_retractions(self.retractions.clone());
-            let s = lib.add_url(&crate::fact_fetch::FetchPolicy::default(), url, &crate::library::AddOpts::default(), &crate::library::Budgets::default()).await?;
-            Ok(s.id)
+            let (opts, budgets) = (crate::library::AddOpts::default(), crate::library::Budgets::default());
+            if text.is_empty() {
+                return Ok(lib.add_url(&crate::fact_fetch::FetchPolicy::default(), url, &opts, &budgets).await?.id);
+            }
+            let snap = self.held.as_ref().and_then(|h| h.read_as(url, text)).ok_or_else(|| "the page was not read in this run with this text; it is not fetched a second time".to_string())?;
+            Ok(lib.add_fetched(url, &snap, &opts, &budgets)?.id)
         })
     }
 
@@ -466,7 +587,7 @@ mod tests {
     #[test]
     fn a_lead_is_one_capped_line_written_once_with_no_control_characters() {
         let dir = tempfile::tempdir().unwrap();
-        let lib = LiveLibrary { home: dir.path().to_path_buf(), ledger: dir.path().join("research/host-claims.jsonl"), label: "host:test".into(), retractions: crate::retractions::Policy::off() };
+        let lib = LiveLibrary { home: dir.path().to_path_buf(), ledger: dir.path().join("research/host-claims.jsonl"), label: "host:test".into(), retractions: crate::retractions::Policy::off(), held: None };
         let row = Row { title: format!("A title\u{7}with{}", "t".repeat(500)), url: "https://blog.example/a".into(), snippet: format!("snippet\u{1b}[31m{}", "s".repeat(900)) };
         lib.note_lead(&row).unwrap();
         lib.note_lead(&row).unwrap();
@@ -580,7 +701,7 @@ mod tests {
 
     fn live(per_host: usize, per_run: usize) -> LiveWeb {
         let list = TrustedList::parse("[[source]]\nhost = \"who.int\"\nreuse = \"full\"\n", None).unwrap();
-        LiveWeb::new(Arc::new(HttpTransport::new().unwrap()), Arc::new(list), vec![], WiderFetch { per_host, per_run })
+        LiveWeb::new(Arc::new(delphi_adapter::research::transport::HttpTransport::new().unwrap()), Arc::new(list), vec![], WiderFetch { per_host, per_run })
     }
 
     fn canned(url: &str, text: &str) {
@@ -693,6 +814,102 @@ mod tests {
         assert_eq!(card["related"], "card-s1d.example");
     }
 
+    // ---- `specs/112` R3: search results are remembered, one fetch per page, the check reads what was read ----
+
+    /// A web whose provider search answers with `urls` (the real `search` runs over a canned engine), with `who.int` on the trusted list.
+    fn searching(urls: &[&str]) -> LiveWeb {
+        let list = TrustedList::parse("[[source]]\nhost = \"who.int\"\nreuse = \"full\"\n\n[[source]]\nhost = \"nih.gov\"\nreuse = \"full\"\n", None).unwrap();
+        LiveWeb::new(Arc::new(canned::Engine(urls.iter().map(|u| u.to_string()).collect())), Arc::new(list), vec![canned::engine_spec()], WiderFetch { per_host: 2, per_run: 10 })
+    }
+
+    /// AC-5, both directions, on the live web: `search_via` (the call the runner makes) records what it returned, so that address may
+    /// be fetched; an address no search of this run returned may not, whoever asks and however close it is to one that was.
+    #[test]
+    fn search_via_remembers_what_it_returned_and_nothing_else_becomes_fetchable() {
+        let (returned, never) = ("https://r3-returned.example/paper?id=1", "https://r3-never.example/paper");
+        canned(returned, "the page a search returned");
+        canned(never, "would be read if the gate were missing");
+        let w = searching(&[returned]);
+        assert!(!w.can_fetch(returned), "before any search nothing off the list is reachable");
+        let (rows, via) = w.search_via("a question").unwrap();
+        assert_eq!((rows.len(), via.as_deref()), (1, Some("searxng")));
+        assert!(w.can_fetch(returned), "a result of this run's own search is reachable (`specs/098` §7.5 item 7a)");
+        assert_eq!(w.provenance(returned).as_deref(), Some("search:searxng#1"), "labelled with the provider and the query's number, never the query");
+        assert_eq!(w.fetch(returned).unwrap().text, "the page a search returned");
+        assert_eq!(w.observed.snapshot().len(), 1, "what the run's `research.observed` event records");
+        for u in [never, "https://r3-returned.example/paper?id=2", "https://r3-returned.example/", "http://r3-returned.example/paper?id=1"] {
+            assert!(!w.can_fetch(u), "{u} was not returned by a search of this run");
+            assert!(w.fetch(u).unwrap_err().contains("OffList"), "{u}");
+        }
+        assert_eq!(canned::served(never), 0, "an address no search returned is never requested");
+        // Another run's web did not make that search: the address is not reachable from it.
+        let other = searching(&[]);
+        other.search_via("a question").unwrap();
+        assert!(!other.can_fetch(returned) && other.fetch(returned).is_err());
+        assert_eq!(canned::served(returned), 1);
+        // `search` and `search_via` are the same provider search: both number their queries and both remember.
+        let both = searching(&["https://r3-both.example/a"]);
+        both.search("one").unwrap();
+        both.search_via("two").unwrap();
+        assert_eq!(both.provenance("https://r3-both.example/a").as_deref(), Some("search:searxng#1"), "the first search to return an address keeps it");
+        assert_eq!(both.queries.load(Ordering::SeqCst), 2);
+    }
+
+    /// AC-6 on the live side: the run's one fetch builds the snapshot; the library keeps that snapshot and the check reads that text.
+    /// Neither asks the network again, so the stored hash is of the text the scout read.
+    #[tokio::test]
+    async fn a_page_is_fetched_once_and_what_was_read_is_what_is_hashed_captured_and_checked() {
+        use sha2::{Digest, Sha256};
+        let home = tempfile::tempdir().unwrap();
+        let url = "https://r3-once.example/study";
+        let text = "Aspirin lowers fever in adults, according to the trial.";
+        canned(url, text);
+        let w = searching(&[url]);
+        w.search_via("does aspirin lower fever").unwrap();
+        let page = w.fetch(url).unwrap();
+        assert_eq!((page.url.as_str(), page.text.as_str()), (url, text));
+        let lib = LiveLibrary { home: home.path().to_path_buf(), ledger: home.path().join("research/host-claims.jsonl"), label: "t".into(), retractions: crate::retractions::Policy::off(), held: Some(w.held.clone()) };
+        let id = lib.capture(&page.url, &page.text, false).await.unwrap();
+        let meta = crate::library::Library::in_home(home.path()).read_meta(&id).unwrap();
+        let hash: String = Sha256::digest(text.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(meta["content_hash"], json!(format!("sha256:{hash}")), "the stored hash is of what the scout read");
+        assert_eq!(meta["canonical_url"], json!(url));
+        // the check: the quote is found in the text that was read, and nothing is fetched
+        let ctx = JobCtx::with_budget(5);
+        let x = Extracted { subject: "aspirin".into(), predicate: "lowers".into(), object: "fever".into(), scope: String::new(), time: String::new(), quote: "lowers fever in adults".into(), locator: url.into() };
+        let claim = ClaimRec { id: "c".into(), fingerprint: "f".into(), group: "g".into(), x, source_ids: vec![id.clone()], source_urls: vec![url.into()], from_trusted: false, state: delphi_core::research::ClaimState::Captured, retrieved: "2026-11-14".into(), support: Default::default(), contested: false };
+        assert_eq!(LiveValidator.check(&ctx, &claim, &[&page]).await.unwrap(), Verdict::Supports);
+        assert_eq!(LiveValidator.check(&ctx, &claim, &[]).await.unwrap(), Verdict::Inconclusive, "with no page of the run to read, the check does not go and get one");
+        assert_eq!((ctx.steps(), ctx.check_steps()), (0, 1), "the check counts against its own budget and never the search's");
+        assert_eq!(canned::served(url), 1, "one fetch: the capture and the check asked for nothing");
+        // a text the run did not read at that address is refused, not fetched; and so is a page with no held snapshot at all
+        assert!(lib.capture(&page.url, "some other text", false).await.is_err());
+        let unheld = LiveLibrary { held: None, ..LiveLibrary { home: home.path().to_path_buf(), ledger: home.path().join("l.jsonl"), label: "t".into(), retractions: crate::retractions::Policy::off(), held: None } };
+        assert!(unheld.capture(&page.url, &page.text, false).await.is_err());
+        assert_eq!(canned::served(url), 1);
+    }
+
+    /// A trusted page is read through the daemon's fetcher too. A redirect to another listed host is followed one hop at a time, each
+    /// hop checked against the lists; a redirect to a host that is not listed ends the fetch and its target is never requested.
+    #[test]
+    fn a_trusted_page_follows_a_redirect_only_to_a_listed_host() {
+        let w = searching(&[]);
+        canned("https://who.int/r3-moved", "REDIRECT https://www.who.int/r3-moved");
+        canned("https://www.who.int/r3-moved", "the page at its new address");
+        let page = w.fetch("https://who.int/r3-moved").unwrap();
+        assert_eq!((page.url.as_str(), page.text.as_str()), ("https://www.who.int/r3-moved", "the page at its new address"));
+        assert!(w.held.read_as("https://www.who.int/r3-moved", "the page at its new address").is_some(), "held under the address it was read at");
+        canned("https://who.int/r3-away", "REDIRECT https://r3-elsewhere.example/landing");
+        canned("https://r3-elsewhere.example/landing", "would be read if the hop were not checked");
+        assert!(w.fetch("https://who.int/r3-away").unwrap_err().contains("OffList"));
+        assert_eq!(canned::served("https://r3-elsewhere.example/landing"), 0);
+        // a loop of listed hosts ends
+        canned("https://who.int/r3-loop", "REDIRECT https://nih.gov/r3-loop");
+        canned("https://nih.gov/r3-loop", "REDIRECT https://who.int/r3-loop");
+        assert!(w.fetch("https://who.int/r3-loop").unwrap_err().contains("TooManyRedirects"));
+        assert_eq!(w.allowance.used(), 0, "a trusted page takes none of the wider fetch's allowance");
+    }
+
     // ---- citation chaining, the live side (`specs/101` §6) ----
 
     /// A source as the fetcher leaves it: public, a hash, a DOI on its record. `edit` changes the record before it is written back.
@@ -712,7 +929,7 @@ mod tests {
     }
 
     fn live_library(home: &std::path::Path) -> LiveLibrary {
-        LiveLibrary { home: home.to_path_buf(), ledger: home.join("ledger.jsonl"), label: "t".into(), retractions: crate::retractions::Policy::off() }
+        LiveLibrary { home: home.to_path_buf(), ledger: home.join("ledger.jsonl"), label: "t".into(), retractions: crate::retractions::Policy::off(), held: None }
     }
 
     #[test]

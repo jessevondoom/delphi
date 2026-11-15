@@ -56,7 +56,11 @@
     "budget_used": {
       "type": "object",
       "required": ["steps"],
-      "properties": { "steps": { "type": "integer", "minimum": 0 }, "ms": { "type": "integer", "minimum": 0 } },
+      "properties": {
+        "steps": { "type": "integer", "minimum": 0 },
+        "check_steps": { "type": "integer", "minimum": 0, "description": "Steps of the check, which has a budget of its own: a quarter of the run's, at least two (specs/112 section 4.4). Never counted in `steps`." },
+        "ms": { "type": "integer", "minimum": 0 }
+      },
       "additionalProperties": false
     },
     "answered_by": { "type": "string", "minLength": 1 },

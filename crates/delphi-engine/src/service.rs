@@ -710,11 +710,11 @@ impl EngineService {
             let web = Arc::new(crate::research_host::LiveWeb::new(Arc::new(transport), Arc::new(list), engines, wider.clone()));
             let sites = web.list.site_filters();
             let scout = crate::research_host::LiveScout(engine.clone());
-            let validator = crate::research_host::LiveValidator { web: web.clone() };
+            let validator = crate::research_host::LiveValidator;
             let retractions = crate::retractions::Policy::load(&home.join("library"), engine.settings.retractions);
             let retractions_line = engine.settings.retractions.then(|| retractions.status_line(&delphi_core::time::now_rfc3339(), engine.settings.retractions_stale_days));
             let refresh_home = home.clone();
-            let library = crate::research_host::LiveLibrary { home, ledger: wsd.join("research/host-claims.jsonl"), label, retractions };
+            let library = crate::research_host::LiveLibrary { home, ledger: wsd.join("research/host-claims.jsonl"), label, retractions, held: Some(web.held.clone()) };
             let redactor = delphi_core::redact::Redactor::new();
             // Citation chaining (`specs/101` §6): the index exists only when the switch is on; off, nothing is ever sent to it.
             let cites = engine.settings.chain.enabled.then(|| crate::research_host::LiveCites::new(crate::fact_fetch::FetchPolicy::default(), engine.settings.chain.endpoint.clone()).with_doi_endpoint(engine.settings.chain.doi_endpoint.clone()));

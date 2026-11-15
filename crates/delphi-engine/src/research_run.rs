@@ -84,14 +84,19 @@ pub enum Verdict {
 }
 
 pub trait Validator: Send + Sync {
-    /// Check `claim` against the sources named in it. Fetches go through `ctx` under the validator's scope. The verdict is all it returns.
-    fn check<'a>(&'a self, ctx: &'a JobCtx, claim: &'a ClaimRec) -> BoxFut<'a, Result<Verdict, String>>;
+    /// Check `claim` against `pages`: the pages this run read for the claim's sources, with the text the scout read (`specs/112` §4.3).
+    /// The check fetches nothing: a page is fetched once per run, and what was read is what is checked. Its steps are counted through
+    /// `ctx` against the check's own budget (`JobCtx::check_step`, §4.4). The verdict is all it returns.
+    fn check<'a>(&'a self, ctx: &'a JobCtx, claim: &'a ClaimRec, pages: &'a [&'a Page]) -> BoxFut<'a, Result<Verdict, String>>;
 }
 
 pub trait Library: Send + Sync {
     /// Fingerprints of claims the library already holds.
     fn known_fingerprints(&self) -> BTreeSet<String>;
     /// Keep a fetched page as a source, `not validated`; returns its source id. `trusted` is provenance for the capture policy.
+    /// `text` is the text the run read, and it is that text which is kept and hashed: the library does not fetch the page again
+    /// (`specs/112` §4.3). An empty `text` is a page the run never read (a chained work's landing address, `specs/101` §6 item 8); the
+    /// library fetches that one itself, once.
     fn capture<'a>(&'a self, url: &'a str, text: &'a str, trusted: bool) -> BoxFut<'a, Result<String, String>>;
     /// Stage a claim by capture on contact (`specs/052`): `noted` unless a check is queued.
     fn stage_claim(&self, claim: &ClaimRec) -> Result<(), String>;
@@ -165,6 +170,11 @@ pub fn page_cap(depth: Depth) -> usize {
         Depth::Survey => 6,
         Depth::Deep => 10,
     }
+}
+
+/// The host of a URL, for a refusal that names it; empty when the URL has none.
+pub(crate) fn host_of(url: &str) -> String {
+    host(url)
 }
 
 fn host(url: &str) -> String {
@@ -571,6 +581,8 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     queries.sort_by_key(|q| q.kind != QueryKind::Trusted);
     let mut set = ClaimSet::new(deps.library.known_fingerprints());
     let (mut seen, mut claims, mut spent) = (Seen::default(), Vec::<ClaimRec>::new(), false);
+    // Every page the run read, with the text it read: the check works from these and fetches nothing (`specs/112` §4.3).
+    let mut read: Vec<Page> = Vec::new();
     let (mut pages_read, mut trusted_kept) = (0usize, 0usize);
     let retrieved = day();
     let mut cov = Rungs::default();
@@ -674,6 +686,7 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
             }
             if ingest(deps, question, &page, trusted, &retrieved, &mut set, &mut claims).await {
                 log.kept(li);
+                read.push(page);
             } else {
                 log.dropped(li, "capture_failed", 1);
             }
@@ -766,6 +779,7 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
                     let trusted = deps.web.is_trusted(&page.url);
                     if ingest(deps, question, &page, trusted, &retrieved, &mut set, &mut claims).await {
                         log.kept(li);
+                        read.push(page);
                     } else {
                         log.dropped(li, "capture_failed", 1);
                     }
@@ -778,17 +792,21 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     // step budget; it keeps leads and moves no claim.
     let chain_stats = if deps.chain.is_some() && !spent { chain_pass(ctx, deps, &claims, &mut seen, &mut cov, &mut log, &mut spent).await } else { None };
 
-    // The validator works through the queue, trusted sources first, until the budget says stop.
+    // The validator works through the queue, trusted sources first, until the check's own budget says stop (`specs/112` §4.4): a quarter
+    // of the run's steps, at least two, counted apart from the search, so a search that spent every step still leaves the check its own.
+    // It is handed the pages this run read for the claim and fetches nothing (§4.3).
+    let mut check_spent = false;
     for i in validation_order(&claims) {
-        if spent {
+        if check_spent {
             break;
         }
         claims[i].state = ClaimState::Queued;
-        match deps.validator.check(ctx, &claims[i]).await {
+        let pages: Vec<&Page> = read.iter().filter(|p| claims[i].source_urls.contains(&p.url)).collect();
+        match deps.validator.check(ctx, &claims[i], &pages).await {
             Ok(Verdict::Supports) if independent(&claims[i]) => claims[i].state = ClaimState::Confirmed,
             Ok(Verdict::Contradicts) => claims[i].state = ClaimState::Refuted,
             Ok(_) => {}
-            Err(e) if e.contains("budget") => spent = true,
+            Err(e) if e.contains("budget") => check_spent = true,
             Err(_) => {}
         }
     }
@@ -833,11 +851,11 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
         "claims": claim_values, "citations": claims.iter().flat_map(|c| c.source_urls.iter().cloned()).collect::<BTreeSet<_>>(),
         "source_ids": source_ids, "kb_hits": set.kb_hits(), "new_claims": set.new_claims(), "contradictions": conflicts,
         "freshness": {"retrieved": retrieved, "last_checked": retrieved},
-        "budget_used": {"steps": ctx.steps()},
+        "budget_used": {"steps": ctx.steps(), "check_steps": ctx.check_steps()},
         "answered_by": "scout", "consulted": ["scout", "validator"],
     });
     result["search_log"] = log.to_json();
-    Ok(if spent { Finish::Partial(result) } else { Finish::Done(result) })
+    Ok(if spent || check_spent { Finish::Partial(result) } else { Finish::Done(result) })
 }
 
 #[cfg(test)]
@@ -910,15 +928,21 @@ mod tests {
         }
     }
 
+    /// A claim's id and the pages the check was handed for it, as `(url, text)`.
+    type Handed = (String, Vec<(String, String)>);
+
     struct FakeValidator {
         verdict: Verdict,
         asked: Mutex<Vec<String>>,
+        /// For each claim checked: the pages the runner handed over, as `(url, text)`.
+        handed: Mutex<Vec<Handed>>,
     }
     impl Validator for FakeValidator {
-        fn check<'a>(&'a self, ctx: &'a JobCtx, claim: &'a ClaimRec) -> BoxFut<'a, Result<Verdict, String>> {
+        fn check<'a>(&'a self, ctx: &'a JobCtx, claim: &'a ClaimRec, pages: &'a [&'a Page]) -> BoxFut<'a, Result<Verdict, String>> {
             Box::pin(async move {
-                ctx.egress("validator", Egress::Fetch, &claim.source_urls[0])?;
+                ctx.check_step().map_err(|_| "the step budget for the check is spent".to_string())?;
                 self.asked.lock().unwrap().push(claim.id.clone());
+                self.handed.lock().unwrap().push((claim.id.clone(), pages.iter().map(|p| (p.url.clone(), p.text.clone())).collect()));
                 Ok(self.verdict)
             })
         }
@@ -1062,7 +1086,7 @@ mod tests {
                 ("https://nih.gov/b".to_string(), vec![x("fever")]),
                 ("https://blog.example/a".to_string(), vec![x("headaches")]),
             ]));
-            Fixture { retractions: None, cites: None, bounds: (1, 2, 10, 30), pages: 0, web, scout, validator: FakeValidator { verdict, asked: Default::default() }, lib: FakeLib::default(), redactor: Redactor::new(), sites: vec!["who.int".into(), "nih.gov".into()], thin_below: 3, support: Params::default(), host_searches: Vec::new() }
+            Fixture { retractions: None, cites: None, bounds: (1, 2, 10, 30), pages: 0, web, scout, validator: FakeValidator { verdict, asked: Default::default(), handed: Default::default() }, lib: FakeLib::default(), redactor: Redactor::new(), sites: vec!["who.int".into(), "nih.gov".into()], thin_below: 3, support: Params::default(), host_searches: Vec::new() }
         }
         fn deps(&self) -> Deps<'_> {
             Deps { web: &self.web, scout: &self.scout, validator: &self.validator, library: &self.lib, redactor: &self.redactor, sites: &self.sites, thin_below: self.thin_below, support: &self.support, host_searches: &self.host_searches, retractions: self.retractions, chain: self.cites.as_ref().map(|c| ChainPlan { cites: c, depth: self.bounds.0, fanout: self.bounds.1, max_per_seed: self.bounds.2, max_calls: self.bounds.3, max_pages: self.pages }) }
@@ -1922,5 +1946,96 @@ mod tests {
         let (_, v) = value(run_research(&ctx(Depth::Quick), "does aspirin reduce fever", Depth::Quick, &f.deps()).await.unwrap());
         assert!(v["search_log"]["flow"]["not_kept"]["page_cap"].as_u64().unwrap_or(0) > 0, "a quick run reads a handful of pages: {}", v["search_log"]);
         assert_balanced(&v);
+    }
+
+    // ---- `specs/112` R3: one fetch per page, the check's own budget, a result of the run's own search is fetched ----
+
+    /// AC-6: every page is asked of the web once in a run, the corroboration pass and the check included, and the check is handed the
+    /// very text the run read for each of the claim's sources.
+    #[tokio::test]
+    async fn a_page_is_fetched_once_per_run_and_the_check_is_handed_the_text_that_was_read() {
+        let mut f = three_origins();
+        f.validator.verdict = Verdict::Supports;
+        let c = ctx(Depth::Deep);
+        let (_, v) = value(run_research(&c, "does aspirin reduce fever", Depth::Deep, &f.deps()).await.unwrap());
+        let fetched = f.web.fetched.lock().unwrap().clone();
+        let once: BTreeSet<&String> = fetched.iter().collect();
+        assert!(!fetched.is_empty() && once.len() == fetched.len(), "a page was fetched twice: {fetched:?}");
+        let handed = f.validator.handed.lock().unwrap().clone();
+        assert!(!handed.is_empty(), "{v}");
+        for (claim, pages) in &handed {
+            assert!(!pages.is_empty(), "claim {claim} was checked against nothing");
+            for (url, text) in pages {
+                assert_eq!(f.web.pages.get(url), Some(text), "the check read something other than what the run read at {url}");
+            }
+        }
+        // the pages handed over are the claim's own sources and no others
+        let fever = fever(&v);
+        let (_, pages) = handed.iter().find(|(id, _)| Some(id.as_str()) == fever["id"].as_str()).expect("the fever claim was checked");
+        assert_eq!(pages.len(), fever["source_ids"].as_array().unwrap().len(), "{pages:?}");
+        assert_eq!(c.check_steps() as usize, handed.len(), "each check is one step of the check's own budget");
+        assert_eq!(v["budget_used"]["check_steps"].as_u64(), Some(c.check_steps() as u64));
+    }
+
+    /// `specs/112` §4.4: the check does not take from the search and the search does not take from the check.
+    #[tokio::test]
+    async fn the_check_has_its_own_steps_whatever_the_search_spent() {
+        // The search spends every step of a small budget: the check still runs, on its own.
+        let f = Fixture::new(Verdict::Inconclusive);
+        let c = JobCtx::with_budget(3);
+        let (partial, v) = value(run_research(&c, "does aspirin reduce fever", Depth::Deep, &f.deps()).await.unwrap());
+        assert!(partial, "{v}");
+        assert_eq!(c.steps(), 3, "the search spent its budget");
+        assert!(!f.validator.asked.lock().unwrap().is_empty(), "the check ran although the search had no step left");
+        // Many claims: the check stops at its own budget, the search's count is untouched by it, and the run says it is partial.
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        f.scout.0.insert("https://who.int/a".into(), ["fever", "pain", "swelling", "clotting", "inflammation", "aches"].map(x).to_vec());
+        let c = ctx(Depth::Quick);
+        let before_check = {
+            let probe = ctx(Depth::Quick);
+            let g = Fixture::new(Verdict::Inconclusive);
+            run_research(&probe, "does aspirin reduce fever", Depth::Quick, &g.deps()).await.unwrap();
+            probe.steps()
+        };
+        let (partial, v) = value(run_research(&c, "does aspirin reduce fever", Depth::Quick, &f.deps()).await.unwrap());
+        assert_eq!(f.validator.asked.lock().unwrap().len() as u32, c.max_check_steps(), "the check stops at a quarter of the run's steps, at least two");
+        assert_eq!(c.max_check_steps(), 2);
+        assert_eq!(c.steps(), before_check, "checking more claims costs the search nothing");
+        assert!(partial, "claims were left unchecked: {v}");
+    }
+
+    /// AC-5, through the runner and the live web: a search of this run returns one address off the trusted list and the runner fetches
+    /// it (`specs/098` §7.5 item 7a now takes effect, because `search_via` remembers); an address no search of the run returned is
+    /// never fetched, and is not reachable from the next run either.
+    #[tokio::test]
+    async fn the_runner_fetches_an_off_list_result_of_its_own_search_and_nothing_no_search_returned() {
+        use crate::research_host::{canned, LiveWeb};
+        use crate::research_observed::WiderFetch;
+        let (returned, never) = ("https://r3-run-returned.example/study", "https://r3-run-never.example/study");
+        for (u, t) in [(returned, "off-list page text"), (never, "would be read if the gate were missing")] {
+            canned::PAGES.lock().unwrap().push((u.to_string(), t.to_string()));
+        }
+        let list = || std::sync::Arc::new(delphi_adapter::research::trusted::TrustedList::parse("[[source]]\nhost = \"who.int\"\nreuse = \"full\"\n", None).unwrap());
+        let live = LiveWeb::new(Arc::new(canned::Engine(vec![returned.to_string()])), list(), vec![canned::engine_spec()], WiderFetch { per_host: 2, per_run: 10 });
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        f.scout.0.insert(returned.into(), vec![x("fever")]);
+        f.scout.0.insert(never.into(), vec![x("chills")]);
+        let c = ctx(Depth::Survey);
+        let (_, v) = value(run_research(&c, "does aspirin reduce fever", Depth::Survey, &Deps { web: &live, ..f.deps() }).await.unwrap());
+        assert_eq!(canned::served(returned), 1, "the runner fetched the result of its own search, once: {v}");
+        assert!(f.lib.captured.lock().unwrap().iter().any(|(u, trusted)| u == returned && !trusted), "captured, and not as a trusted page");
+        assert!(c.fetched_via_list().iter().any(|(u, via)| u == returned && via.starts_with("search:searxng#")), "{:?}", c.fetched_via_list());
+        assert_eq!(v["claims"].as_array().unwrap().len(), 1, "{v}");
+        assert!(["noted", "checking"].contains(&v["claims"][0]["knowledge_status"].as_str().unwrap()), "an off-list page's claim is never more than noted or being checked: {v}");
+        assert_eq!(rung_of(&v, "web")["kept"], 1);
+        assert!(!live.observed.snapshot().is_empty(), "the run has something for its `research.observed` event");
+        assert_eq!(canned::served(never), 0);
+        // The other direction: a run whose search did not return that address does not fetch it; it is not even a result.
+        let other = LiveWeb::new(Arc::new(canned::Engine(vec![])), list(), vec![canned::engine_spec()], WiderFetch { per_host: 2, per_run: 10 });
+        let g = Fixture::new(Verdict::Inconclusive);
+        let (_, v) = value(run_research(&ctx(Depth::Survey), "does aspirin reduce fever", Depth::Survey, &Deps { web: &other, ..g.deps() }).await.unwrap());
+        assert!(v["claims"].as_array().unwrap().is_empty() && g.lib.captured.lock().unwrap().is_empty(), "{v}");
+        assert!(!other.can_fetch(returned) && !other.can_fetch(never));
+        assert_eq!((canned::served(returned), canned::served(never)), (1, 0));
     }
 }

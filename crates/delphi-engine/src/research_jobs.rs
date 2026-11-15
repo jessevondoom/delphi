@@ -108,13 +108,16 @@ struct Activity {
 pub struct JobCtx {
     max_steps: u32,
     steps: AtomicU32,
+    /// The check's own budget (`specs/112` §4.4): the validator's steps are counted here and never against the search.
+    check_max: u32,
+    check_steps: AtomicU32,
     trail: Mutex<Trail>,
     activity: Mutex<Activity>,
 }
 
 impl JobCtx {
     pub fn with_budget(max_steps: u32) -> JobCtx {
-        JobCtx { max_steps, steps: AtomicU32::new(0), trail: Mutex::new(Trail::default()), activity: Mutex::new(Activity { last: Instant::now(), recent: VecDeque::new() }) }
+        JobCtx { max_steps, steps: AtomicU32::new(0), check_max: check_budget(max_steps), check_steps: AtomicU32::new(0), trail: Mutex::new(Trail::default()), activity: Mutex::new(Activity { last: Instant::now(), recent: VecDeque::new() }) }
     }
 
     /// Note that the job just made a call of this kind.
@@ -142,6 +145,25 @@ impl JobCtx {
         self.steps.load(Ordering::SeqCst)
     }
 
+    /// Count one step of the check. It has a budget of its own ([`check_budget`]) and takes nothing from the search (`specs/112` §4.4).
+    pub fn check_step(&self) -> Result<(), BudgetSpent> {
+        let n = self.check_steps.fetch_add(1, Ordering::SeqCst);
+        if n >= self.check_max {
+            self.check_steps.store(self.check_max, Ordering::SeqCst);
+            Err(BudgetSpent)
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn check_steps(&self) -> u32 {
+        self.check_steps.load(Ordering::SeqCst)
+    }
+
+    pub fn max_check_steps(&self) -> u32 {
+        self.check_max
+    }
+
     /// Check `role`'s scope for `tool` and count the step; the query or URL is recorded, or the refusal is.
     pub fn egress(&self, role: &str, tool: Egress, what: &str) -> Result<(), String> {
         let mut t = self.trail.lock().unwrap();
@@ -152,7 +174,12 @@ impl JobCtx {
             return Err(e);
         }
         drop(t);
-        self.step().map_err(|_| "the step budget for this depth is spent".to_string())?;
+        // The validator's steps are the check's (`specs/112` §4.4); every other role spends the run's.
+        if role == "validator" {
+            self.check_step().map_err(|_| "the step budget for the check is spent".to_string())?;
+        } else {
+            self.step().map_err(|_| "the step budget for this depth is spent".to_string())?;
+        }
         let mut t = self.trail.lock().unwrap();
         push_capped(if tool == Egress::Search { &mut t.queries } else { &mut t.fetched }, what);
         drop(t);
@@ -179,6 +206,11 @@ impl JobCtx {
             t.fetched_via.push((url.chars().take(300).collect(), via.chars().take(80).collect()));
         }
     }
+}
+
+/// The step budget of the check (`specs/112` §4.4): a quarter of the run's, and at least two.
+pub fn check_budget(max_steps: u32) -> u32 {
+    (max_steps / 4).max(2)
 }
 
 fn push_capped(list: &mut Vec<String>, s: &str) {
@@ -294,7 +326,7 @@ impl Jobs {
         let ahead = if j.state == State::Queued { jobs.values().filter(|o| o.state == State::Queued && o.queued < j.queued).count() } else { 0 };
         Some(json!({
             "research_id": id, "status": j.state.as_str(), "depth": j.depth, "queued_ahead": ahead,
-            "steps": j.ctx.steps(), "max_steps": j.depth.max_steps(),
+            "steps": j.ctx.steps(), "max_steps": j.depth.max_steps(), "check_steps": j.ctx.check_steps(), "max_check_steps": j.ctx.max_check_steps(),
             "queries": t.queries, "fetched": t.fetched, "refused": t.refused,
             "fetched_via": t.fetched_via.iter().map(|(u, v)| json!({"url": u, "via": v})).collect::<Vec<_>>(),
             "error": j.error,
@@ -402,6 +434,22 @@ mod tests {
         assert_eq!(ctx.steps(), 2);
         let t = ctx.trail.lock().unwrap();
         assert_eq!((t.queries.len(), t.fetched.len(), t.refused.len()), (1, 1, 1));
+    }
+
+    /// `specs/112` §4.4: the check has a quarter of the run's steps, at least two, and neither budget takes from the other.
+    #[test]
+    fn the_check_has_a_budget_of_its_own_that_the_search_cannot_spend() {
+        assert_eq!([Depth::Quick, Depth::Survey, Depth::Deep].map(|d| check_budget(d.max_steps())), [2, 3, 7]);
+        assert_eq!((check_budget(0), check_budget(8), check_budget(9)), (2, 2, 2));
+        let ctx = JobCtx::with_budget(4);
+        while ctx.egress("scout", Egress::Fetch, "https://a.example/").is_ok() {}
+        assert_eq!((ctx.steps(), ctx.check_steps()), (4, 0), "the search spent its own budget and none of the check's");
+        assert!(ctx.egress("validator", Egress::Fetch, "https://a.example/").is_ok(), "a spent search budget leaves the check its steps");
+        assert!(ctx.check_step().is_ok());
+        let over = ctx.egress("validator", Egress::Fetch, "https://a.example/").unwrap_err();
+        assert!(over.contains("budget"), "{over}");
+        assert!(ctx.check_step().is_err());
+        assert_eq!((ctx.steps(), ctx.check_steps(), ctx.max_check_steps()), (4, 2, 2), "the check never adds to the run's steps");
     }
 
     #[tokio::test]
