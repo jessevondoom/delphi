@@ -185,7 +185,7 @@ pub fn confirmation(host: &str, plan: &str) -> String {
 }
 
 fn usage() -> i32 {
-    eprintln!("usage: delphi connect claude-code|copilot|codex|gemini [--dry-run | --status | --remove]");
+    eprintln!("usage: delphi connect claude-code|copilot|codex|gemini [--dry-run | --status | --remove]\n       delphi connect claude-code --theme [--dry-run | --remove] [--light | --dark]");
     2
 }
 
@@ -202,6 +202,22 @@ pub fn cmd(args: &[String]) -> i32 {
         }
         let models = crate::host_models(args, host).unwrap_or_default();
         return crate::connect_files::cmd(host, status, dry, remove, &models);
+    }
+    // Spec 106 §12 G7: Claude Code's theme is its own small step, with its own plan and a [Y/n], not the typed phrase.
+    if rest.contains(&"--theme") {
+        if *host != "claude-code" {
+            eprintln!("delphi connect: `--theme` is for claude-code, the one host with colours a theme can set");
+            return 2;
+        }
+        let Some(home) = std::env::var("HOME").ok().filter(|h| Path::new(h).is_absolute()) else {
+            eprintln!("delphi connect: HOME is unset or not an absolute path");
+            return 2;
+        };
+        let flags: Vec<&str> = rest.iter().copied().filter(|a| a.starts_with("--")).collect();
+        if rest.iter().filter(|a| !a.starts_with("--")).count() != 1 {
+            return usage();
+        }
+        return crate::connect_theme::cmd(&flags, Path::new(&home), &crate::home::delphi_home(None));
     }
     let Some(t) = template(host) else {
         eprintln!("delphi connect: `{}` is not a host connect supports (claude-code, copilot, codex, gemini); use the manual commands from `delphi mcp --print-config {}`", sanitize(host), sanitize(host));
@@ -284,6 +300,8 @@ pub fn cmd(args: &[String]) -> i32 {
                 // Spec 106 §12 G6 item 3: a role's name is bold in the host's own text with `badge_style = "markdown"`, and in colour in a
                 // status line Delphi never writes for you.
                 println!("tip: `[mcp] badge_style = \"markdown\"` in config.toml makes a role's name bold where it signs; for a status line naming the adopted role in its colour, add \"statusLine\": {{\"type\": \"command\", \"command\": \"delphi mcp --statusline --host claude-code\"}} to Claude Code's settings.json yourself");
+                // Spec 106 §12 G7: offer the role colours once, here, where the operator is already at a terminal.
+                crate::connect_theme::offer(home, &delphi_home);
             }
             0
         }

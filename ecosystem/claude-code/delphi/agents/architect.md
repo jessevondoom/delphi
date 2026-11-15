@@ -2,7 +2,7 @@
 name: architect
 description: "Delphi architect seat for a Council Panel (Systems Architect, Creative Designer & Spec Author). Use only when the delphi-council skill or the user asks for this seat; it briefs itself from Delphi and returns a stance."
 model: opus
-color: cyan
+color: blue
 tools: Read, Grep, Glob, mcp__plugin_delphi_delphi__council_brief, mcp__plugin_delphi_delphi__council_submit, mcp__plugin_delphi_delphi__get_agent, mcp__plugin_delphi_delphi__search_memory, mcp__plugin_delphi_delphi__kb_retrieve, mcp__delphi__council_brief, mcp__delphi__council_submit, mcp__delphi__get_agent, mcp__delphi__search_memory, mcp__delphi__kb_retrieve
 ---
 
