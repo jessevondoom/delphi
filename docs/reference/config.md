@@ -160,6 +160,7 @@ Which sites the job may read is not here: it is `context/sources/trusted.toml` (
 | `[library.pages] per_day` | `20` | pages built in one day (a cache hit costs nothing). The validator tokens a page uses also count against the validator's share ([`specs/040`](../../specs/040-validator-role-and-fact-ratification.md) §20) |
 | `[library.pages] min_ttl_days` | `1` | the shortest cache lifetime, in days, the daemon accepts for a page ([`specs/097`](../../specs/097-encyclopedia-search-pages.md)) |
 | `[library.pages] max_ttl_days` | `365` | the longest; the `writer` proposes a lifetime from how fast the topic changes and the daemon keeps it within these bounds |
+| `[library.pages] auto_rebuild` | `true` | topic pages that are due (a claim or source they cite changed, a new claim carries their topic, or their lifetime passed) are rebuilt while the daemon is idle, within `per_day` ([`specs/117`](../../specs/117-the-encyclopedia-in-the-desktop-app-topic-pages-navigation-and-a-view-of-agent-memory.md) §2 item 3); `false` leaves rebuilding to `delphi pages rebuild` |
 
 ## Away mode and hooks ◆
 

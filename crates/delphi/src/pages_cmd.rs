@@ -18,7 +18,12 @@ const USAGE: &str = "usage:
   delphi pages search <question words...> [--internal | --external] [--json] [--home <dir>]
   delphi pages expand <question words...> [--json] [--home <dir>]
   delphi pages list [--json] [--home <dir>]
-  delphi pages pin|unpin <key> [--home <dir>]";
+  delphi pages pin|unpin <key> [--home <dir>]
+  delphi pages new <title words...> [--home <dir>]
+  delphi pages topics [--json] [--home <dir>]
+  delphi pages topic <slug> [--version <stamp>] [--json] [--home <dir>]
+  delphi pages versions <slug> [--json] [--home <dir>]
+  delphi pages rebuild <slug> [--home <dir>]";
 
 fn value_of(args: &[String], name: &str) -> Result<Option<String>, String> {
     match args.iter().position(|a| a == name) {
@@ -28,7 +33,7 @@ fn value_of(args: &[String], name: &str) -> Result<Option<String>, String> {
 }
 
 fn positional(args: &[String]) -> Vec<&String> {
-    args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && (*i == 0 || !["--draft", "--style", "--note", "--home", "--workspace"].contains(&args[*i - 1].as_str()))).map(|(_, a)| a).collect()
+    args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && (*i == 0 || !["--draft", "--style", "--note", "--home", "--workspace", "--version"].contains(&args[*i - 1].as_str()))).map(|(_, a)| a).collect()
 }
 
 fn report(findings: &[Finding]) {
@@ -110,6 +115,40 @@ fn expand(home: &Path, ws_dir: &Path, query: &str, as_json: bool) -> i32 {
             1
         }
     }
+}
+
+/// `delphi pages rebuild <slug>`: the daemon rebuilds one topic's page (`specs/117` §2 item 2); it calls the writer and the validator.
+fn rebuild(home: &Path, ws_dir: &Path, slug: &str) -> i32 {
+    use delphi_core::spawn::{connect_or_spawn, SpawnOptions};
+    let Some(exe) = crate::chat::daemon_exe() else {
+        eprintln!("delphi pages rebuild: cannot locate this program to start the daemon");
+        return 4;
+    };
+    let mut attached = match connect_or_spawn(&SpawnOptions { home, workspace: ws_dir, daemon_exe: &exe, extra_args: vec![], prefix_args: vec!["__core".into()], own_version: Some(env!("CARGO_PKG_VERSION")) }) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("delphi pages rebuild: {}", e);
+            return 4;
+        }
+    };
+    let r = attached.client.call("pages.rebuild", json!({"slug": slug}));
+    if attached.spawned {
+        let _ = attached.client.call("daemon.shutdown", json!({}));
+    }
+    match r {
+        Ok(v) => {
+            println!("{} version {} · {} · {}", slug, v["version"], v["outcome"].as_str().unwrap_or(""), v["change"].as_str().unwrap_or(""));
+            if v["outcome"] == "claims_only" { 1 } else { 0 }
+        }
+        Err(e) => {
+            eprintln!("delphi pages rebuild: {}", e);
+            1
+        }
+    }
+}
+
+fn now_unix() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
 pub fn cli(args: &[String], home: &Path, ws_dir: Option<&Path>) -> i32 {
@@ -214,6 +253,88 @@ pub fn cli(args: &[String], home: &Path, ws_dir: Option<&Path>) -> i32 {
                     1
                 }
             }
+        }
+        Some("new") if !pos.is_empty() => {
+            if crate::xenia_terminal::inside_an_agent_seat() {
+                eprintln!("delphi pages new: refused; a topic is the operator's to make and this process was started by an agent seat");
+                return 2;
+            }
+            let title = pos.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ");
+            match lib.topic_create(&title, delphi_engine::library::topics::Origin::Operator, now_unix()) {
+                Ok(e) => {
+                    println!("topic {} ({}); its page is built when the daemon is idle, or now with `delphi pages rebuild {}`", e.slug, e.title, e.slug);
+                    0
+                }
+                Err(e) => {
+                    eprintln!("delphi pages new: {}", e);
+                    1
+                }
+            }
+        }
+        Some("topics") => {
+            let ctx = delphi_engine::library::topics::DueCtx { ws: ws_dir, now: now_unix(), index: true };
+            let topics = lib.topic_pages(&ctx);
+            if rest.iter().any(|a| a == "--json") {
+                println!("{}", json!(topics.iter().map(|t| t.to_json()).collect::<Vec<_>>()));
+                return 0;
+            }
+            if topics.is_empty() {
+                println!("no topics yet: a research run makes one, or `delphi pages new <title>`");
+            }
+            for t in &topics {
+                let built = t.built.map(|b| format!("version {}, built {}", t.version, delphi_engine::library::page_meta::ymd(b))).unwrap_or_else(|| "not built".into());
+                println!("{}  {}  {}{}", t.slug, built, t.title, t.due.as_ref().map(|d| format!("  (due: {})", d)).unwrap_or_default());
+            }
+            0
+        }
+        Some("topic") if pos.len() == 1 => {
+            let version = match value_of(rest, "--version") {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("delphi pages topic: {}", e);
+                    return 2;
+                }
+            };
+            let ctx = delphi_engine::library::topics::DueCtx { ws: ws_dir, now: now_unix(), index: true };
+            let Some((e, md)) = lib.topic_get(pos[0], version.as_deref(), &ctx) else {
+                eprintln!("delphi pages topic: no topic `{}`{}", pos[0], version.map(|v| format!(" with a version `{}`", v)).unwrap_or_default());
+                return 1;
+            };
+            if rest.iter().any(|a| a == "--json") {
+                let mut v = e.to_json();
+                v["markdown"] = json!(md);
+                println!("{}", v);
+                return 0;
+            }
+            if let Some(c) = &e.change {
+                println!("changed: {}", c);
+            }
+            if md.is_empty() {
+                println!("{} is not built yet", e.slug);
+            }
+            print!("{}", md);
+            0
+        }
+        Some("versions") if pos.len() == 1 => {
+            let Some(vs) = lib.topic_versions(pos[0]) else {
+                eprintln!("delphi pages versions: no topic `{}`", pos[0]);
+                return 1;
+            };
+            if rest.iter().any(|a| a == "--json") {
+                println!("{}", json!(vs));
+                return 0;
+            }
+            if vs.is_empty() {
+                println!("no earlier version of {}", pos[0]);
+            }
+            for v in &vs {
+                println!("{}  {}", v["version"].as_str().unwrap_or(""), v["change"].as_str().unwrap_or(""));
+            }
+            0
+        }
+        Some("rebuild") if pos.len() == 1 => {
+            let Some(ws) = ws_dir else { return 4 };
+            rebuild(home, ws, pos[0])
         }
         Some("dispute") if pos.len() == 1 => {
             if crate::xenia_terminal::inside_an_agent_seat() {
