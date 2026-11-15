@@ -3,7 +3,7 @@ import { Agent, Mascot } from '../Badge.tsx';
 import { DocView } from '../DocView.tsx';
 import { spec } from '../avatar.ts';
 import type { Bridge } from '../bridge.ts';
-import { docInAddress, listTarget, type DocRow } from '../kb.ts';
+import { docInAddress, listAll, type DocRow } from '../kb.ts';
 import { skillRows, teamRows } from '../team.ts';
 import type { Info } from '../types.ts';
 
@@ -24,17 +24,19 @@ export function Team({ bridge, info, light }: Props) {
   useEffect(() => {
     if (!bridge) return;
     let gone = false;
-    const list = (target: string, set: (d: DocRow[]) => void) =>
-      bridge.kb(target).then((r) => { if (gone) return; if (r.status === 200) set(r.body as DocRow[]); else setProblem(`The knowledge base answered ${r.status}.`); }).catch((e: unknown) => { if (!gone) setProblem(String(e)); });
-    void list(listTarget(200), setDocs);
-    void list(listTarget(200, 'skill'), setSkills);
+    // Asked for by collection and by kind, and read to the end: the newest documents of the whole knowledge base hold
+    // only the manifests that changed lately.
+    const list = (where: { kind?: string; collection?: string }, set: (d: DocRow[]) => void) =>
+      listAll((t) => bridge.kb(t), where).then((r) => { if (gone) return; if (r.rows.length) set(r.rows); if (r.status !== 200) setProblem(`The knowledge base answered ${r.status}.`); }).catch((e: unknown) => { if (!gone) setProblem(String(e)); });
+    void list({ collection: 'agents' }, setDocs);
+    void list({ kind: 'skill' }, setSkills);
     bridge.session().then((s) => { if (!gone) setSession(s); }).catch(() => {});
     return () => { gone = true; };
   }, [bridge]);
 
   const known = spec(info).roles;
   const agents = useMemo(() => teamRows(docs, session), [docs, session]);
-  const skillList = useMemo(() => skillRows(skills.length ? skills : docs).filter((s) => !filter.trim() || s.name.toLowerCase().includes(filter.trim().toLowerCase())), [skills, docs, filter]);
+  const skillList = useMemo(() => skillRows(skills).filter((s) => !filter.trim() || s.name.toLowerCase().includes(filter.trim().toLowerCase())), [skills, docs, filter]);
 
   if (open) {
     const role = agents.find((a) => a.path === open)?.role;
