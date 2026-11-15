@@ -182,7 +182,12 @@
         "quote": { "type": "string" },
         "locator": { "type": "string" },
         "retrieved": { "type": "string" },
-        "licence": { "type": "string" },
+        "licence": { "type": "string", "description": "The first source's licence as the library records it (specs/119 section 6 item 1); `unknown` when it does not say." },
+        "sources": {
+          "type": "array",
+          "description": "Each source the claim was found in, with its licence and how the library keeps it (full, excerpts, pointer; unknown when it cannot say).",
+          "items": { "type": "object", "required": ["id", "licence", "kept"], "properties": { "id": { "type": "string" }, "licence": { "type": "string" }, "kept": { "type": "string" } }, "additionalProperties": false }
+        },
         "knowledge_status": { "enum": ["noted", "corroborated", "substantiated", "vetted", "checking", "validated", "contested", "disproved", "retired"], "description": "`corroborated`: three or more independent origins state it, counted by code (specs/098 section 7.6). Weaker than `validated`; it raises nothing else and is never read as a reason to trust or permit anything." },
         "corroboration": {
           "type": "object",

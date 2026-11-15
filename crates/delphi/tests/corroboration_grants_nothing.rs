@@ -341,7 +341,9 @@ fn an_archived_copy_is_a_locator_that_only_the_library_the_command_and_the_setti
     // `specs/101` §5 and §12 item 6: a copy taken from a web archive adds no origin and no trusted source, and nothing reads the mark,
     // the lookup or its outcome as a criterion for promotion, trust, tool access or approval. The library stores and skips it
     // (`library_archive.rs`, `library_claims.rs`), the registry lists its channel (`egress.rs`, `library.rs`), the operator's command and the
-    // settings carry it (`sources_cmd.rs`, `engine.rs`, `boot.rs`). Any other file naming it fails here and a reviewer has to ask why.
+    // settings carry it (`sources_cmd.rs`, `engine.rs`, `boot.rs`), and a research run's keep step carries the settings into the library's
+    // lookup of a page the run found gone that a claim rests on (`research_host.rs`, `specs/119` §4; the outcome is only an id, read by
+    // nothing). Any other file naming it fails here and a reviewer has to ask why.
     let root = root();
     let mut files = Vec::new();
     rust_files(&root.join("crates"), &mut files);
@@ -354,6 +356,7 @@ fn an_archived_copy_is_a_locator_that_only_the_library_the_command_and_the_setti
         "crates/delphi-engine/src/engine.rs",
         "crates/delphi-engine/src/boot.rs",
         "crates/delphi/src/sources_cmd.rs",
+        "crates/delphi-engine/src/research_host.rs",
     ];
     let mut stray = Vec::new();
     for f in &files {

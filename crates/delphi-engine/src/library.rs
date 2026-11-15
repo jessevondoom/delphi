@@ -43,6 +43,8 @@ pub mod page_meta;
 pub mod page_search;
 #[path = "library_page_validate.rs"]
 pub mod page_validate;
+#[path = "library_topics.rs"]
+pub mod topics;
 #[path = "library_reading.rs"]
 mod reading;
 #[path = "library_workspace.rs"]
@@ -54,6 +56,8 @@ mod recheck;
 pub use recheck::Recheck;
 #[path = "library_archive.rs"]
 pub mod archive;
+#[path = "library_private.rs"]
+pub mod private;
 pub use archive::{ArchiveConfig, ArchiveOutcome};
 
 const MIB: u64 = 1024 * 1024;
@@ -117,6 +121,10 @@ pub struct AddOpts {
     pub raise_source: Option<u64>,
     /// Capture and decode licensed inline image assets into `assets/` for encyclopedia pages.
     pub save_images: bool,
+    /// `[library] unknown_licence = "private_text"` (`specs/119` §3 item 2): a fetched page whose licence is unknown or closed, and
+    /// whose text was read whole, is kept in full as a private source (`kept_privately`), never as a pointer. Set by the research
+    /// run's keep step from the operator's setting, and only when the page shows no rights notice (§3 item 3).
+    pub keep_closed_privately: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -210,6 +218,12 @@ pub struct Library {
     /// which is the library as spec 098 left it. The caller that has the operator's `[research] retractions` sets it with
     /// [`Library::with_retractions`].
     retractions: crate::retractions::Policy,
+    /// The knowledge-base passages and findings a topic page's material holds (`specs/117` §2 item 4): the only ones a page check
+    /// on this library resolves. Empty unless the caller sets them with [`Library::with_records`].
+    records: Vec<page_check::KbRecord>,
+    /// The topic slugs a topic page's `## See also` may name (`specs/117` §2 item 5). `None`: the page is not a topic's, and its
+    /// sections are not checked as one.
+    topic_slugs: Option<std::collections::BTreeSet<String>>,
 }
 
 /// A short stable id from the canonical URL or identifier, not from content (`specs/055` §3.2).
@@ -338,7 +352,19 @@ struct Prepared {
 
 impl Library {
     pub fn in_home(home: &Path) -> Library {
-        Library { root: home.join("library"), support: crate::corroboration::Params::default(), retractions: crate::retractions::Policy::off() }
+        Library { root: home.join("library"), support: crate::corroboration::Params::default(), retractions: crate::retractions::Policy::off(), records: Vec::new(), topic_slugs: None }
+    }
+
+    /// The same library, whose page check resolves `[s-kb-...]` and `[f-...]` markers against `records` (and nothing else).
+    pub fn with_records(mut self, records: Vec<page_check::KbRecord>) -> Library {
+        self.records = records;
+        self
+    }
+
+    /// The same library, whose page check also checks a topic page's key terms, start here and see also against `slugs`.
+    pub fn with_topic_slugs(mut self, slugs: std::collections::BTreeSet<String>) -> Library {
+        self.topic_slugs = Some(slugs);
+        self
     }
 
     /// The same library counting corroboration with the operator's numbers.
@@ -405,6 +431,28 @@ impl Library {
             .collect()
     }
 
+    /// The sources kept as excerpts that the knowledge index may read (`specs/119` §3 item 6): not private, not purged, held as
+    /// excerpts, by their `excerpts.md` (the passages only, never their context).
+    pub fn indexable_excerpts(&self) -> Vec<(String, PathBuf)> {
+        self.list()
+            .into_iter()
+            .filter(|(_, m)| !is_private(m) && m["purged"].is_null() && m["capture_level"] == "excerpts")
+            .map(|(id, _)| {
+                let p = self.source_dir(&id).join("excerpts.md");
+                (id, p)
+            })
+            .filter(|(_, p)| p.is_file())
+            .collect()
+    }
+
+    /// The bytes of a source's kept text (`source.md`), 0 when none is held. A size; no text.
+    pub(crate) fn held_text_bytes(&self, id: &str) -> u64 {
+        if !valid_id(id) {
+            return 0;
+        }
+        std::fs::metadata(self.source_dir(id).join("source.md")).map(|m| m.len()).unwrap_or(0)
+    }
+
     fn log(&self, event: &str, data: Value) {
         use std::io::Write;
         let line = json!({"ts": delphi_core::time::now_rfc3339(), "event": event, "data": data});
@@ -452,7 +500,7 @@ impl Library {
         }
         let licence = p.meta.get("licence").and_then(Value::as_str).unwrap_or("unknown").to_string();
         let asset_bytes = p.assets.as_deref().map(dir_bytes).unwrap_or(0);
-        let (level, notes) = self.decide(&p.meta, p.requested, p.text.as_deref(), asset_bytes, p.imported, b)?;
+        let (mut level, notes) = self.decide(&p.meta, p.requested, p.text.as_deref(), asset_bytes, p.imported, b)?;
         if let Some(t) = &p.text {
             p.meta.insert("work_bytes".into(), json!(t.len()));
         }
@@ -463,6 +511,11 @@ impl Library {
         self.ensure().map_err(|e| e.to_string())?;
         let old = self.read_meta(&p.id);
         let old_level = old.as_ref().and_then(|m| m["capture_level"].as_str()).and_then(Level::parse);
+        // Passages a research run kept (`specs/119` §3 item 6) make a pointer an excerpts source; capturing the page again as a pointer
+        // keeps them, so the same page read again is the same capture and a changed one carries them forward.
+        if level == Level::Pointer && old_level == Some(Level::Excerpts) && old.as_ref().is_some_and(|o| o["purged"].is_null()) && !self.excerpts(&p.id).is_empty() {
+            level = Level::Excerpts;
+        }
         let old_text = std::fs::read_to_string(self.source_dir(&p.id).join("source.md")).ok();
         let now = delphi_core::time::now_rfc3339();
         if let Some(o) = &old {
@@ -533,7 +586,7 @@ impl Library {
             if level != Level::Pointer {
                 let empty = json!([]);
                 if let Some(x) = p.excerpts.as_ref().or((level == Level::Excerpts).then_some(&empty)) {
-                    self.write_json(&stage.join("excerpts.json"), x)?;
+                    self.write_excerpts(&stage, &Value::Object(p.meta.clone()), x.as_array().map(Vec::as_slice).unwrap_or_default())?;
                 }
             }
             if let Some(a) = &p.assets {
@@ -740,6 +793,14 @@ impl Library {
         if over {
             notes.push(format!("the page is over the {}-byte text limit; kept as a pointer", limit));
             requested = Some(Level::Pointer);
+        }
+        // `specs/119` §3 item 2: under `private_text` a page that no licence lets the library keep whole is kept whole as a private source.
+        let closed = !matches!(classify(&licence), Licence::Open { .. } | Licence::Internal);
+        if opts.keep_closed_privately && closed && requested.is_none() && text.is_some() && !is_private(&Value::Object(meta.clone())) {
+            meta.insert("private".into(), json!(true));
+            meta.insert("kept_privately".into(), json!("unknown_licence"));
+            notes.push("no licence lets the library keep this page whole; kept in full as a private source (`[library] unknown_licence = \"private_text\"`)".into());
+            requested = Some(Level::Full);
         }
         let mut temp_assets = None;
         if opts.save_images {
